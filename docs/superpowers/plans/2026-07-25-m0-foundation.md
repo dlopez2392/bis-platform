@@ -768,7 +768,7 @@ git add -A && git commit -m "feat: createClientAccount server action (Clerk org 
 **Interfaces:**
 - Consumes: `listAccounts`/`serviceDb` (Task 6), `createClientAccount` (Task 7), Clerk `<OrganizationSwitcher />`.
 
-- [ ] **Step 1: Accounts page**
+- [x] **Step 1: Accounts page**
 
 `apps/web/src/app/dashboard/accounts/page.tsx`:
 ```tsx
@@ -814,7 +814,9 @@ export default async function AccountsPage() {
 }
 ```
 
-- [ ] **Step 2: Nav + switcher in dashboard layout**
+- [x] **Step 2: Nav + switcher in dashboard layout**
+
+(`OrganizationSwitcher` and `UserButton` both confirmed exported from `@clerk/nextjs` v7.6.1 — no rename, plan code used as written.)
 
 Replace `apps/web/src/app/dashboard/layout.tsx` body:
 ```tsx
@@ -854,7 +856,16 @@ Run: `pnpm --filter web dev`, then:
 3. The OrganizationSwitcher lists "Test Client One" and switching works.
 4. `pnpm check` green.
 
-- [ ] **Step 4: Commit**
+Headless half DONE (left unchecked — the acceptance test is the signed-in flow, which needs a real browser):
+- `pnpm --filter web build` passes; `/dashboard` and `/dashboard/accounts` both compile as dynamic (`ƒ`) routes — this is what proves the `@bis/db` exports + `transpilePackages` patch from Task 7 actually resolves at build time, not just under `tsc`.
+- Dev server fetches (unauthenticated, browser-like `Accept`, after satisfying Clerk's dev-browser handshake): `/` 200, `/sign-in` 200, `/dashboard` 307 → `/sign-in?redirect_url=…`, `/dashboard/accounts` 307 → `/sign-in?redirect_url=…`. Neither 200 body contains the service-role key.
+- `pnpm check` green (2 files / 6 tests).
+
+Two headless-testing gotchas worth keeping: (a) port 3000 was occupied by an unrelated process, so `next dev` fell back to **3001** — always read the port out of the dev log rather than assuming 3000; (b) a bare `fetch` (`Accept: */*`) makes Clerk's `auth.protect()` treat the request as an API call and answer **404 instead of a redirect** — you must send `Accept: text/html` *and* carry the `__clerk_db_jwt` dev-browser cookie from the handshake, or the protected-route check reports a misleading result.
+
+STILL OWED BY DANLO (browser): create "Test Client One" on `/dashboard/accounts` and confirm the row + Clerk org + Supabase `accounts` row + `account.created` event + switcher entry.
+
+- [x] **Step 4: Commit**
 
 ```bash
 git add -A && git commit -m "feat: agency dashboard — accounts list, create form, org switcher"
