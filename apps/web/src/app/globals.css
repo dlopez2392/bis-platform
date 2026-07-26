@@ -25,3 +25,26 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Chrome on Windows ignores page color-scheme for select popups unless the
+   control itself declares it; paint options explicitly as belt-and-suspenders. */
+select,
+input,
+textarea {
+  color-scheme: light;
+}
+select option {
+  background-color: #ffffff;
+  color: #171717;
+}
+@media (prefers-color-scheme: dark) {
+  select,
+  input,
+  textarea {
+    color-scheme: dark;
+  }
+  select option {
+    background-color: #171717;
+    color: #ededed;
+  }
+}
