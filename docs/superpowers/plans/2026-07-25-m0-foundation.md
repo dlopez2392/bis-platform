@@ -585,7 +585,7 @@ git add -A && git commit -m "test(db): RLS cross-tenant isolation suite (forged 
   - `createAccount(db, input: { clerkOrgId: string; name: string; timezone?: string; actorId: string }): Promise<{ id: string }>`
   - `listAccounts(db): Promise<Array<{ id: string; name: string; clerk_org_id: string; status: string; timezone: string; created_at: string }>>`
 
-- [ ] **Step 1: Deps + service client**
+- [x] **Step 1: Deps + service client**
 
 ```bash
 pnpm --filter @bis/db add @supabase/supabase-js
@@ -604,7 +604,7 @@ export function serviceDb(): SupabaseClient {
 }
 ```
 
-- [ ] **Step 2: Write failing tests**
+- [x] **Step 2: Write failing tests**
 
 `packages/db/src/test/accounts.test.ts`:
 ```ts
@@ -635,7 +635,9 @@ describe("accounts service", () => {
 
 Run: `pnpm --filter @bis/db test` → Expected: FAIL (`accounts.ts` missing).
 
-- [ ] **Step 3: Implement**
+Fail-first confirmed: `Error: Cannot find module '../accounts' imported from .../src/test/accounts.test.ts` (1 suite failed, RLS suite still 5 passed).
+
+- [x] **Step 3: Implement**
 
 `packages/db/src/accounts.ts`:
 ```ts
@@ -680,11 +682,13 @@ export { serviceDb } from "./service";
 export { createAccount, listAccounts } from "./accounts";
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `pnpm --filter @bis/db test` → Expected: all pass (RLS suite + accounts suite).
 
-- [ ] **Step 5: Commit**
+Result: 2 files / 6 tests passing (5 RLS + 1 accounts); `pnpm check` green. Two environment notes: (a) `packages/db/.env` needed `NEXT_PUBLIC_SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` added (copied from `apps/web/.env.local`; file stays git-ignored); (b) vitest isolates each test file, so `dotenv/config` loaded via `src/test/db.ts` does NOT reach `accounts.test.ts` — first run failed with "Supabase service env vars missing". Fixed by adding `import "dotenv/config";` to `accounts.test.ts` (same pattern as `db.ts`). Test rows are inserted and deleted for real via service role; post-run DB check confirmed 0 leftover `org_test_%` accounts and 0 events.
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add -A && git commit -m "feat(db): serviceDb + accounts service with account.created event"
