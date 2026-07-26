@@ -49,7 +49,8 @@ describe("RLS tenant isolation", () => {
       await seedTwoAccounts(c);
       await actAs(c, { app_role: "agency_admin" });
       const { rows } = await c.query("select clerk_org_id from accounts order by clerk_org_id");
-      expect(rows.map((r: any) => r.clerk_org_id)).toEqual(["org_A", "org_B"]);
+      // real accounts may exist in the dev DB; agency must see the seeded ones among them
+      expect(rows.map((r: any) => r.clerk_org_id)).toEqual(expect.arrayContaining(["org_A", "org_B"]));
     }));
 
   it("events are append-only even for agency", () =>
