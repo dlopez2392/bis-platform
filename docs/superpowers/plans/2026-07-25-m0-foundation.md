@@ -38,7 +38,7 @@
 **Interfaces:**
 - Produces: workspace layout `apps/*`, `packages/*`; root scripts `check`, `test`, `typecheck` used by every later task.
 
-- [ ] **Step 1: Author root files**
+- [x] **Step 1: Author root files**
 
 `package.json`:
 ```json
@@ -119,7 +119,7 @@ pnpm --filter web dev
 pnpm check   # tsc + vitest, must be green before commit
 ```
 
-- [ ] **Step 2: Verify**
+- [x] **Step 2: Verify**
 
 Run: `pnpm install && pnpm check`
 Expected: install succeeds; `check` passes trivially (no packages yet print "No projects matched the filters" — that is OK/green).

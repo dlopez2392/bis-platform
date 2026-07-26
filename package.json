@@ -1,0 +1,11 @@
+{
+  "name": "bis-platform",
+  "private": true,
+  "engines": { "node": ">=22" },
+  "packageManager": "pnpm@10.13.1",
+  "scripts": {
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "check": "pnpm typecheck && pnpm test"
+  }
+}
