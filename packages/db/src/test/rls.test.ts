@@ -61,4 +61,28 @@ describe("RLS tenant isolation", () => {
       await expect(c.query("delete from events")).rejects.toThrow();
       void ids; void actAsOwner;
     }));
+
+  it("CRM tables are tenant-isolated (contacts as representative)", () =>
+    withRollback(async (c) => {
+      const { a, b } = await seedTwoAccounts(c);
+      await c.query(
+        "insert into contacts (account_id, first_name) values ($1,'Alice'),($2,'Bob')", [a, b]);
+      await actAs(c, { org_id: "org_A" });
+      const { rows } = await c.query("select first_name from contacts");
+      expect(rows.map((r: any) => r.first_name)).toEqual(["Alice"]);
+      await expect(
+        c.query("insert into contacts (account_id, first_name) values ($1,'Mallory')", [b])
+      ).rejects.toThrow(/row-level security/);
+    }));
+
+  it("agency sees CRM rows across accounts", () =>
+    withRollback(async (c) => {
+      const { a, b } = await seedTwoAccounts(c);
+      await c.query(
+        "insert into contacts (account_id, first_name) values ($1,'Alice'),($2,'Bob')", [a, b]);
+      await actAs(c, { app_role: "agency_admin" });
+      const { rows } = await c.query(
+        "select first_name from contacts where account_id in ($1,$2)", [a, b]);
+      expect(rows.map((r: any) => r.first_name).sort()).toEqual(["Alice", "Bob"]);
+    }));
 });
