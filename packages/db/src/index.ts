@@ -6,3 +6,5 @@ export { createContact, updateContact, listContacts, getContact,
 export { addNote, listNotes, addTask, listContactTasks, completeTask } from "./activities";
 export { listCustomFields, createCustomField, listCustomValues, upsertCustomValue,
          ensureDefaultPipeline, listPipelinesWithStages, type CustomFieldDef } from "./crm-config";
+export { createOpportunity, moveOpportunityStage, setOpportunityStatus,
+         listBoard, listContactOpportunities } from "./opportunities";
