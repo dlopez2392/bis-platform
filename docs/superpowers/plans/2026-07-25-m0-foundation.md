@@ -124,7 +124,7 @@ pnpm check   # tsc + vitest, must be green before commit
 Run: `pnpm install && pnpm check`
 Expected: install succeeds; `check` passes trivially (no packages yet print "No projects matched the filters" — that is OK/green).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add -A && git commit -m "chore: monorepo scaffold (pnpm workspace, strict TS base, env template)"
@@ -141,14 +141,14 @@ git add -A && git commit -m "chore: monorepo scaffold (pnpm workspace, strict TS
 **Interfaces:**
 - Produces: app `web`; `pnpm --filter web dev|build`; route group `src/app/`.
 
-- [ ] **Step 1: Scaffold**
+- [x] **Step 1: Scaffold**
 
 Run (repo root):
 ```bash
 pnpm dlx create-next-app@latest apps/web --ts --tailwind --eslint --app --src-dir --use-pnpm --no-import-alias
 ```
 
-- [ ] **Step 2: Wire into workspace**
+- [x] **Step 2: Wire into workspace**
 
 In `apps/web/package.json` set `"name": "web"` and add to scripts:
 ```json
@@ -160,7 +160,7 @@ In `apps/web/tsconfig.json` add at top level:
 ```
 (keep the generated `compilerOptions`; base only tightens strictness).
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run: `pnpm install && pnpm --filter web build && pnpm check`
 Expected: build succeeds; typecheck green.
