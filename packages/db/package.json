@@ -1,0 +1,13 @@
+{
+  "name": "@bis/db",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "db:push": "supabase db push --db-url \"$SUPABASE_DB_URL\""
+  },
+  "devDependencies": {
+    "supabase": "^2.0.0",
+    "typescript": "^5.6.0"
+  }
+}

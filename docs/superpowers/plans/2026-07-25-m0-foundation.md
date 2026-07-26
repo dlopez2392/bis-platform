@@ -280,7 +280,7 @@ git add -A && git commit -m "feat: Clerk auth, protected dashboard, agency_admin
 **Interfaces:**
 - Produces: tables `agencies`, `accounts`, `users`, `memberships`, `events`; SQL helpers `app.jwt()`, `app.is_agency()`, `app.current_account_id()`. Tasks 5–8 and all M1 plans build on these exact names.
 
-- [ ] **Step 1: Package scaffold**
+- [x] **Step 1: Package scaffold**
 
 `packages/db/package.json`:
 ```json
@@ -301,7 +301,7 @@ git add -A && git commit -m "feat: Clerk auth, protected dashboard, agency_admin
 ```
 Run: `pnpm install && cd packages/db && pnpm exec supabase init` (accept defaults; no local stack needed — we push to the cloud dev project).
 
-- [ ] **Step 2: Migration 0001**
+- [x] **Step 2: Migration 0001**
 
 `packages/db/supabase/migrations/0001_tenancy.sql`:
 ```sql
@@ -416,7 +416,7 @@ revoke update, delete on public.events from authenticated;
 insert into public.agencies (name) values ('BIS');
 ```
 
-- [ ] **Step 3: Apply + verify**
+- [x] **Step 3: Apply + verify**
 
 Run (Git Bash, repo root; `SUPABASE_DB_URL` exported):
 ```bash
@@ -424,7 +424,9 @@ cd packages/db && pnpm db:push
 ```
 Expected: `Applying migration 0001_tenancy.sql... Finished`. Spot-check in Supabase Studio: five tables exist, `agencies` has one row `BIS`, RLS shows "enabled" on all five.
 
-- [ ] **Step 4: Commit**
+Applied 2026-07-26. Verified by query: all five tables `rowsecurity=true`, 8 policies, `agencies` = 1 row `BIS`, `authenticated` has no UPDATE/DELETE on `events`. Notes: (a) pnpm runs scripts through cmd.exe on Windows so `"$SUPABASE_DB_URL"` did not expand — added root `.npmrc` with `shell-emulator=true`; (b) `SUPABASE_DB_URL` in `apps/web/.env.local` pointed at `aws-1-us-east-1.pooler.supabase.com` (Supavisor: "tenant/user not found") — corrected to `aws-0-us-east-1`; (c) a Docker warning about caching the migrations catalog is emitted after the migration applies and is harmless.
+
+- [x] **Step 4: Commit**
 
 ```bash
 git add -A && git commit -m "feat(db): tenancy spine, events log, RLS policies + BIS seed"
