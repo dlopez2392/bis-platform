@@ -23,7 +23,9 @@ export default async function AccountsPage() {
         <tbody>
           {accounts.map(a => (
             <tr key={a.id} className="border-b">
-              <td className="py-2">{a.name}</td>
+              <td className="py-2">
+                <a className="underline" href={`/dashboard/accounts/${a.id}/contacts`}>{a.name}</a>
+              </td>
               <td>{a.status}</td>
               <td>{a.timezone}</td>
               <td>{new Date(a.created_at).toLocaleDateString()}</td>
