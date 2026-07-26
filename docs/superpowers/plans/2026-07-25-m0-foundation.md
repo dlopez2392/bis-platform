@@ -165,7 +165,7 @@ In `apps/web/tsconfig.json` add at top level:
 Run: `pnpm install && pnpm --filter web build && pnpm check`
 Expected: build succeeds; typecheck green.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add -A && git commit -m "feat: Next.js app scaffold (apps/web)"
@@ -183,7 +183,7 @@ git add -A && git commit -m "feat: Next.js app scaffold (apps/web)"
 **Interfaces:**
 - Produces: `requireAgency(): Promise<{ userId: string }>` (throws redirect if `app_role !== 'agency_admin'`); `sessionClaims` shape `{ org_id?: string; app_role?: string }` — Tasks 6–8 rely on these names.
 
-- [ ] **Step 1: Install + provider**
+- [x] **Step 1: Install + provider**
 
 ```bash
 pnpm --filter web add @clerk/nextjs
@@ -197,7 +197,7 @@ import { ClerkProvider } from "@clerk/nextjs";
 ```
 (Wrap the entire `<html>` element in `<ClerkProvider>` per Clerk App Router docs.)
 
-- [ ] **Step 2: Middleware + sign-in page**
+- [x] **Step 2: Middleware + sign-in page**
 
 `apps/web/src/middleware.ts`:
 ```ts
@@ -222,7 +222,7 @@ export default function Page() {
 }
 ```
 
-- [ ] **Step 3: Agency guard + dashboard stub**
+- [x] **Step 3: Agency guard + dashboard stub**
 
 `apps/web/src/lib/auth.ts`:
 ```ts
@@ -261,7 +261,9 @@ export default function DashboardPage() {
 Run: `pnpm --filter web dev` → visit `http://localhost:3000/dashboard`
 Expected: redirected to sign-in; after signing in WITHOUT `app_role` metadata → bounced to `/`; after danlo sets `public_metadata.app_role = "agency_admin"` (USER SETUP #1) and re-signs-in → dashboard renders. Then `pnpm check` green.
 
-- [ ] **Step 5: Commit**
+Headless half DONE: `/` 200, `/sign-in` 200, `/dashboard` unauthenticated → 307 to Clerk sign-in; `pnpm check` green. Signed-in half (no-`app_role` bounce → `/`, then `agency_admin` → dashboard renders) still needs danlo in a real browser after the Clerk session-claims + `public_metadata` setup.
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add -A && git commit -m "feat: Clerk auth, protected dashboard, agency_admin guard"
