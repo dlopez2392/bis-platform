@@ -444,7 +444,7 @@ git add -A && git commit -m "feat(db): tenancy spine, events log, RLS policies +
 - Consumes: schema + helpers from Task 4 (`app.jwt()` claims `org_id`/`app_role`).
 - Produces: `withRollback(fn)` and `actAs(client, claims)` test utilities reused by every future package's DB tests.
 
-- [ ] **Step 1: Deps + config**
+- [x] **Step 1: Deps + config**
 
 ```bash
 pnpm --filter @bis/db add -D vitest pg @types/pg dotenv
@@ -457,7 +457,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({ test: { include: ["src/**/*.test.ts"], testTimeout: 20000 } });
 ```
 
-- [ ] **Step 2: Test utilities**
+- [x] **Step 2: Test utilities**
+
+(`dotenv/config` resolves from cwd, so the suite reads `packages/db/.env` — a git-ignored copy of the `SUPABASE_DB_URL` line from `apps/web/.env.local`.)
 
 `packages/db/src/test/db.ts`:
 ```ts
@@ -487,7 +489,7 @@ export async function actAsOwner(c: Client) {
 }
 ```
 
-- [ ] **Step 3: Write the failing-then-passing isolation tests**
+- [x] **Step 3: Write the failing-then-passing isolation tests**
 
 `packages/db/src/test/rls.test.ts`:
 ```ts
@@ -556,12 +558,14 @@ describe("RLS tenant isolation", () => {
 });
 ```
 
-- [ ] **Step 4: Run**
+- [x] **Step 4: Run**
 
 Run: `pnpm --filter @bis/db test`
 Expected: 5 passing. If `role "authenticated" does not exist` — you are pointed at a non-Supabase DB; fix `SUPABASE_DB_URL`. If the append-only test fails on UPDATE succeeding, the `revoke` in migration 0001 didn't apply — re-run `pnpm db:push`.
 
-- [ ] **Step 5: Commit**
+Result: 5/5 passing. First run failed 4/5 with `permission denied for schema app` — migration 0001 never granted `usage on schema app` to the app roles, so every policy that calls an `app.*` helper errored instead of evaluating. Fixed forward with `packages/db/supabase/migrations/0002_app_schema_grants.sql` (usage + execute for `authenticated`, `anon`, `service_role`), pushed, then green.
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add -A && git commit -m "test(db): RLS cross-tenant isolation suite (forged claims, append-only events)"
