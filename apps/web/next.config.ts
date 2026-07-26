@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // @bis/db ships TypeScript source (no build step); Next must compile it.
+  transpilePackages: ["@bis/db"],
 };
 
 export default nextConfig;

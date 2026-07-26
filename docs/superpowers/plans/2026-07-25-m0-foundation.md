@@ -706,13 +706,15 @@ git add -A && git commit -m "feat(db): serviceDb + accounts service with account
 - Consumes: `requireAgency` (Task 3), `serviceDb`/`createAccount` (Task 6), Clerk backend `clerkClient`.
 - Produces: server action `createClientAccount(formData: FormData): Promise<void>` — used by Task 8's form. Field names: `name` (required), `timezone` (optional).
 
-- [ ] **Step 1: Wire workspace dep**
+- [x] **Step 1: Wire workspace dep**
 
 ```bash
 pnpm --filter web add "@bis/db@workspace:*"
 ```
 
-- [ ] **Step 2: Implement the action**
+Plan gap patched here (authorized): `@bis/db` has no build step and `packages/db/package.json` declared no entry point, so `import { serviceDb } from "@bis/db"` resolved to nothing. Added `"exports": { ".": "./src/index.ts" }` to `packages/db/package.json` and `transpilePackages: ["@bis/db"]` to `apps/web/next.config.ts` so both `tsc` and Next compile the TS source directly.
+
+- [x] **Step 2: Implement the action**
 
 `apps/web/src/app/dashboard/accounts/actions.ts`:
 ```ts
@@ -742,12 +744,14 @@ export async function createClientAccount(formData: FormData): Promise<void> {
 }
 ```
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run: `pnpm check`
 Expected: typecheck green (behavioral verification happens in Task 8's manual pass — the action needs the form UI).
 
-- [ ] **Step 4: Commit**
+Result: green — both workspace projects typecheck clean, 2 files / 6 tests passing.
+
+- [x] **Step 4: Commit**
 
 ```bash
 git add -A && git commit -m "feat: createClientAccount server action (Clerk org + tenant row, rollback on failure)"
