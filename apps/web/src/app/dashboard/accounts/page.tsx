@@ -1,5 +1,6 @@
 import { serviceDb, listAccounts } from "@bis/db";
 import { createClientAccount } from "./actions";
+import { SubmitButton } from "./submit-button";
 
 export const dynamic = "force-dynamic";
 
@@ -13,9 +14,7 @@ export default async function AccountsPage() {
           className="rounded border px-3 py-2" />
         <input name="timezone" defaultValue="America/Chicago"
           className="rounded border px-3 py-2" />
-        <button type="submit" className="rounded bg-black px-4 py-2 text-white">
-          Create account
-        </button>
+        <SubmitButton>Create account</SubmitButton>
       </form>
       <table className="w-full text-left text-sm">
         <thead><tr className="border-b">
