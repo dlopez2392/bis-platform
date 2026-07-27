@@ -32,11 +32,9 @@ function isNavActive(pathname: string, href: string, exact = false) {
 
 export function AppSidebar({
   accounts,
-  activeAccountId,
   defaultCollapsed,
 }: {
   accounts: AccountOption[];
-  activeAccountId?: string;
   defaultCollapsed: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
@@ -48,6 +46,8 @@ export function AppSidebar({
     document.cookie = `sidebar_collapsed=${next}; path=/; max-age=31536000; samesite=lax`;
   }
 
+  const match = pathname.match(/^\/dashboard\/accounts\/([^/]+)/);
+  const activeAccountId = match?.[1];
   const base = activeAccountId ? `/dashboard/accounts/${activeAccountId}` : null;
   const items: NavItem[] = base
     ? [
