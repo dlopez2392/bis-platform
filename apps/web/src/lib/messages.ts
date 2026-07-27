@@ -74,6 +74,8 @@ export const m = {
   "pipeline.title": "Opportunities",
   "pipeline.add": "Add opportunity",
   "pipeline.moveFailed": "Could not move that opportunity. Refresh and try again.",
+  "pipeline.updateFailed": "Could not save that opportunity. Try again.",
+  "pipeline.createFailed": "Could not add that opportunity. Check the details and try again.",
   "pipeline.empty.title": "No opportunities yet",
   "pipeline.empty.body": "Add your first deal to start tracking the pipeline.",
   "pipeline.name": "Opportunity name",

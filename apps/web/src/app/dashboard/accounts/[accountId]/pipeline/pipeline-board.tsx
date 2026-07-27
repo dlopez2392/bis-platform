@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { formatCurrency, contactDisplayName } from "@/lib/format";
 import { m } from "@/lib/messages";
+import { OpportunityDrawer } from "./opportunity-drawer";
 
 export type BoardOpportunity = {
   id: string;
@@ -45,15 +46,16 @@ export function PipelineBoard({
   board,
   accountId,
   moveAction,
-  onOpen,
+  updateAction,
 }: {
   board: BoardColumn[];
   accountId: string;
   moveAction: (formData: FormData) => Promise<void>;
-  onOpen?: (opp: BoardOpportunity) => void;
+  updateAction: (formData: FormData) => Promise<void>;
 }) {
   const [, startTransition] = useTransition();
   const [dragging, setDragging] = useState<BoardOpportunity | null>(null);
+  const [editing, setEditing] = useState<BoardOpportunity | null>(null);
 
   const [optimistic, applyMove] = useOptimistic(
     board,
@@ -111,25 +113,33 @@ export function PipelineBoard({
   }
 
   return (
-    <DndContext
-      sensors={sensors}
-      onDragStart={(e) => {
-        const id = String(e.active.id);
-        const found = optimistic.flatMap((c) => c.opportunities).find((o) => o.id === id);
-        setDragging(found ?? null);
-      }}
-      onDragEnd={handleDragEnd}
-      onDragCancel={() => setDragging(null)}
-    >
-      <div className="flex gap-4 overflow-x-auto pb-4">
-        {optimistic.map((col, i) => (
-          <Column key={col.stage.id} column={col} index={i} onOpen={onOpen} />
-        ))}
-      </div>
-      <DragOverlay>
-        {dragging ? <CardBody opp={dragging} dragging /> : null}
-      </DragOverlay>
-    </DndContext>
+    <>
+      <DndContext
+        sensors={sensors}
+        onDragStart={(e) => {
+          const id = String(e.active.id);
+          const found = optimistic.flatMap((c) => c.opportunities).find((o) => o.id === id);
+          setDragging(found ?? null);
+        }}
+        onDragEnd={handleDragEnd}
+        onDragCancel={() => setDragging(null)}
+      >
+        <div className="flex gap-4 overflow-x-auto pb-4">
+          {optimistic.map((col, i) => (
+            <Column key={col.stage.id} column={col} index={i} onOpen={setEditing} />
+          ))}
+        </div>
+        <DragOverlay>
+          {dragging ? <CardBody opp={dragging} dragging /> : null}
+        </DragOverlay>
+      </DndContext>
+      <OpportunityDrawer
+        accountId={accountId}
+        opportunity={editing}
+        onClose={() => setEditing(null)}
+        action={updateAction}
+      />
+    </>
   );
 }
 
