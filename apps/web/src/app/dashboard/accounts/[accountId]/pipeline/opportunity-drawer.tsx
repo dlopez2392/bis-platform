@@ -83,9 +83,9 @@ export function OpportunityDrawer({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="open">open</SelectItem>
-                  <SelectItem value="won">won</SelectItem>
-                  <SelectItem value="lost">lost</SelectItem>
+                  <SelectItem value="open">{m["pipeline.status.open"]}</SelectItem>
+                  <SelectItem value="won">{m["pipeline.status.won"]}</SelectItem>
+                  <SelectItem value="lost">{m["pipeline.status.lost"]}</SelectItem>
                 </SelectContent>
               </Select>
             </div>

@@ -82,6 +82,9 @@ export const m = {
   "pipeline.value": "Value",
   "pipeline.contact": "Contact",
   "pipeline.status": "Status",
+  "pipeline.status.open": "Open",
+  "pipeline.status.won": "Won",
+  "pipeline.status.lost": "Lost",
 } as const;
 
 export type MessageKey = keyof typeof m;
