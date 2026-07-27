@@ -102,6 +102,28 @@ export const m = {
   "contact.noActivity": "No activity yet",
   "contact.noActivityBody": "Notes, tasks, and deals will appear here.",
   "contact.noOpportunities": "None yet.",
+
+  "settings.title": "Settings",
+  "settings.customFields": "Custom fields",
+  "settings.customFieldsBody": "Extra fields captured on every contact.",
+  "settings.customValues": "Custom values",
+  "settings.customValuesBody": "Template variables, referenced as {{custom_values.key}} from M1c on.",
+  "settings.fieldName": "Field name",
+  "settings.fieldKey": "field_key",
+  "settings.dataType": "Type",
+  "settings.dataType.text": "Text",
+  "settings.dataType.number": "Number",
+  "settings.dataType.date": "Date",
+  "settings.dataType.checkbox": "Checkbox",
+  "settings.dataType.singleSelect": "Single select",
+  "settings.options": "Options, comma, separated",
+  "settings.addField": "Add field",
+  "settings.valueName": "Name",
+  "settings.valueKey": "value_key",
+  "settings.value": "Value",
+  "settings.saveValue": "Save value",
+  "settings.noFields": "No custom fields yet",
+  "settings.noValues": "No custom values yet",
 } as const;
 
 export type MessageKey = keyof typeof m;
