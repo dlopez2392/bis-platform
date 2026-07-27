@@ -28,6 +28,14 @@ export const m = {
   "empty.conversations.body": "Unified SMS and email threads will land here.",
   "empty.calendar.title": "Calendar is coming in M1b",
   "empty.calendar.body": "Booking and appointment management will land here.",
+
+  "accounts.title": "Companies",
+  "accounts.add": "Add company",
+  "accounts.name": "Business name",
+  "accounts.timezone": "Timezone",
+  "accounts.empty.title": "No companies yet",
+  "accounts.empty.body": "Add your first company to start tracking contacts and deals.",
+  "accounts.created": "Added {date}",
 } as const;
 
 export type MessageKey = keyof typeof m;

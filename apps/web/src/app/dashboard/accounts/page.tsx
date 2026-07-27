@@ -1,41 +1,59 @@
+import Link from "next/link";
+import { Building2 } from "lucide-react";
 import { serviceDb, listAccounts } from "@bis/db";
 import { createClientAccount } from "./actions";
-import { SubmitButton } from "./submit-button";
+import { CreateAccountDialog } from "./create-account-dialog";
+import { PageHeader } from "@/components/page-header";
+import { EmptyState } from "@/components/empty-state";
+import { Badge } from "@/components/ui/badge";
+import { formatDate } from "@/lib/format";
+import { m } from "@/lib/messages";
 
 export const dynamic = "force-dynamic";
 
 export default async function AccountsPage() {
   const accounts = await listAccounts(serviceDb());
   return (
-    <div className="space-y-8">
-      <h1 className="text-2xl font-semibold">Client Accounts</h1>
-      <form action={createClientAccount} className="flex gap-2">
-        <input name="name" placeholder="Business name" required
-          className="rounded border px-3 py-2" />
-        <input name="timezone" defaultValue="America/Chicago"
-          className="rounded border px-3 py-2" />
-        <SubmitButton>Create account</SubmitButton>
-      </form>
-      <table className="w-full text-left text-sm">
-        <thead><tr className="border-b">
-          <th className="py-2">Name</th><th>Status</th><th>Timezone</th><th>Created</th>
-        </tr></thead>
-        <tbody>
-          {accounts.map(a => (
-            <tr key={a.id} className="border-b">
-              <td className="py-2">
-                <a className="underline" href={`/dashboard/accounts/${a.id}/contacts`}>{a.name}</a>
-              </td>
-              <td>{a.status}</td>
-              <td>{a.timezone}</td>
-              <td>{new Date(a.created_at).toLocaleDateString()}</td>
-            </tr>
-          ))}
-          {accounts.length === 0 && (
-            <tr><td colSpan={4} className="py-6 text-gray-500">No client accounts yet.</td></tr>
-          )}
-        </tbody>
-      </table>
-    </div>
+    <>
+      <PageHeader
+        title={m["accounts.title"]}
+        count={`${accounts.length}`}
+        actions={<CreateAccountDialog action={createClientAccount} />}
+      />
+      <div className="p-6">
+        {accounts.length === 0 ? (
+          <EmptyState
+            icon={Building2}
+            title={m["accounts.empty.title"]}
+            body={m["accounts.empty.body"]}
+          />
+        ) : (
+          <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {accounts.map((a) => (
+              <li key={a.id}>
+                <Link
+                  href={`/dashboard/accounts/${a.id}/contacts`}
+                  className="block rounded-lg border border-border bg-card p-5 transition-colors hover:border-primary/40"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="flex size-9 items-center justify-center rounded-md bg-primary/10 text-primary">
+                      <Building2 className="size-4" aria-hidden />
+                    </span>
+                    <Badge variant={a.status === "active" ? "secondary" : "outline"}>
+                      {a.status}
+                    </Badge>
+                  </div>
+                  <p className="mt-4 truncate font-medium text-card-foreground">{a.name}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">{a.timezone}</p>
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    {m["accounts.created"].replace("{date}", formatDate(a.created_at))}
+                  </p>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </>
   );
 }
