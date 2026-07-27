@@ -74,6 +74,7 @@ export async function updateOpportunity(
   input: { name?: string; value?: number; status?: "open" | "won" | "lost" },
   actorId: string,
 ): Promise<void> {
+  if (input.name === undefined && input.value === undefined && input.status === undefined) return;
   const row: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (input.name !== undefined) row.name = input.name;
   if (input.value !== undefined) row.monetary_value = input.value;
