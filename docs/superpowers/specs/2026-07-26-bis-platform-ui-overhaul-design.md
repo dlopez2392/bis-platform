@@ -192,7 +192,8 @@ The rule this enforces: **no hardcoded user-facing string in a component.** That
 
 | Package | Why | Note |
 |---|---|---|
-| `shadcn/ui` components | Radix primitives, copied into the repo | Not a runtime dependency; brings `@radix-ui/*`, `class-variance-authority`, `clsx`, `tailwind-merge` |
+| `shadcn/ui` components | Radix primitives, copied into the repo | Not a runtime dependency; brings `radix-ui`, `class-variance-authority`, `clsx`, `tailwind-merge`, `cmdk`, `sonner` |
+| `tw-animate-css` | Supplies the `animate-in` / `slide-in-from-*` utilities the new-york Dialog, Sheet, Popover, DropdownMenu, and Tooltip emit | **Added during Task 2, approved by the controller.** CSS-only, imported from `globals.css`, lives in `devDependencies`. Without it those classes resolve to nothing and every overlay loses its enter/exit motion |
 | `lucide-react` | Icons | shadcn's assumption; closest to the reference's icon language |
 | `dnd-kit` | Board drag-and-drop | ~10kb; the accessible option, with keyboard dragging |
 | `next-themes` | `.dark` class management | Small; avoids hand-rolling theme persistence |
