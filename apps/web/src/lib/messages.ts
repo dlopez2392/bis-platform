@@ -36,6 +36,7 @@ export const m = {
   "accounts.empty.title": "No companies yet",
   "accounts.empty.body": "Add your first company to start tracking contacts and deals.",
   "accounts.created": "Added {date}",
+  "accounts.createFailed": "Could not create that company. Check the name and try again.",
 } as const;
 
 export type MessageKey = keyof typeof m;

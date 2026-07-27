@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useFormStatus } from "react-dom";
 import { Plus } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -45,8 +46,12 @@ export function CreateAccountDialog({
         </DialogHeader>
         <form
           action={async (formData) => {
-            await action(formData);
-            setOpen(false);
+            try {
+              await action(formData);
+              setOpen(false);
+            } catch {
+              toast.error(m["accounts.createFailed"]);
+            }
           }}
           className="space-y-4"
         >
