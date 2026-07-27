@@ -1,50 +1,126 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:is(.dark *));
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-  color-scheme: light dark;
+  --radius: 0.625rem;
+
+  --background: #f8f8fb;
+  --foreground: #18181b;
+  --card: #ffffff;
+  --card-foreground: #18181b;
+  --popover: #ffffff;
+  --popover-foreground: #18181b;
+
+  --primary: #7c3aed;
+  --primary-foreground: #ffffff;
+  --secondary: #f1f1f5;
+  --secondary-foreground: #27272a;
+  --muted: #f1f1f5;
+  --muted-foreground: #6b7280;
+  --accent: #0891b2;
+  --accent-foreground: #ffffff;
+
+  --destructive: #dc2626;
+  --success: #16a34a;
+  --warning: #d97706;
+
+  --border: #e4e4e7;
+  --input: #e4e4e7;
+  --ring: #7c3aed;
+
+  /* Sidebar is dark in both themes — it does not invert. */
+  --sidebar: #1e1b2e;
+  --sidebar-foreground: #d4d4d8;
+  --sidebar-accent: #8b5cf6;
+  --sidebar-border: #2e2a42;
+
+  --stage-1: #8b5cf6;
+  --stage-2: #0891b2;
+  --stage-3: #2563eb;
+  --stage-4: #0d9488;
+  --stage-5: #16a34a;
+  --stage-6: #d97706;
+}
+
+.dark {
+  --background: #0f0f14;
+  --foreground: #ededed;
+  --card: #17171f;
+  --card-foreground: #ededed;
+  --popover: #17171f;
+  --popover-foreground: #ededed;
+
+  --primary: #8b5cf6;
+  --primary-foreground: #ffffff;
+  --secondary: #232330;
+  --secondary-foreground: #ededed;
+  --muted: #232330;
+  --muted-foreground: #a1a1aa;
+  --accent: #22d3ee;
+  --accent-foreground: #0f0f14;
+
+  --destructive: #ef4444;
+  --success: #22c55e;
+  --warning: #f59e0b;
+
+  --border: #2a2a37;
+  --input: #2a2a37;
+  --ring: #8b5cf6;
+
+  --sidebar: #131120;
+  --sidebar-foreground: #d4d4d8;
+  --sidebar-accent: #a78bfa;
+  --sidebar-border: #262238;
+
+  --stage-1: #a78bfa;
+  --stage-2: #22d3ee;
+  --stage-3: #60a5fa;
+  --stage-4: #2dd4bf;
+  --stage-5: #4ade80;
+  --stage-6: #fbbf24;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-stage-1: var(--stage-1);
+  --color-stage-2: var(--stage-2);
+  --color-stage-3: var(--stage-3);
+  --color-stage-4: var(--stage-4);
+  --color-stage-5: var(--stage-5);
+  --color-stage-6: var(--stage-6);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
-}
-
-/* Chrome on Windows ignores page color-scheme for select popups unless the
-   control itself declares it; paint options explicitly as belt-and-suspenders. */
-select,
-input,
-textarea {
-  color-scheme: light;
-}
-select option {
-  background-color: #ffffff;
-  color: #171717;
-}
-@media (prefers-color-scheme: dark) {
-  select,
-  input,
-  textarea {
-    color-scheme: dark;
-  }
-  select option {
-    background-color: #171717;
-    color: #ededed;
-  }
+  font-family: var(--font-sans), system-ui, sans-serif;
 }
