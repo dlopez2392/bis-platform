@@ -3,7 +3,8 @@ import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
 import { ensureDefaultPipeline } from "../crm-config";
-import { createOpportunity, moveOpportunityStage, setOpportunityStatus,
+import { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
+         updateOpportunity, setOpportunityStatus,
          listBoard, listContactOpportunities } from "../opportunities";
 
 describe("opportunities", () => {
@@ -39,5 +40,40 @@ describe("opportunities", () => {
       const { data: ev } = await db.from("events").select("type").eq("account_id", accountId)
         .in("type", ["opportunity.created", "opportunity.status_changed"]);
       expect(ev).toHaveLength(2);
+    }));
+
+  it("moves an opportunity to an explicit stage", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Move" }, "user_test");
+      const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+      const { id } = await createOpportunity(db, accountId,
+        { contactId, pipelineId, name: "Deal", value: 100 }, "user_test");
+      const board = await listBoard(db, accountId, pipelineId);
+      const targetStageId = board[2]!.stage.id;
+
+      await moveOpportunityToStage(db, accountId, id, targetStageId, "user_test");
+
+      const after = await listBoard(db, accountId, pipelineId);
+      expect(after[2]!.opportunities).toHaveLength(1);
+      expect(after[2]!.opportunities[0]!.id).toBe(id);
+      expect(after[0]!.opportunities).toHaveLength(0);
+    }));
+
+  it("updates name, value, and status together", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Update" }, "user_test");
+      const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+      const { id } = await createOpportunity(db, accountId,
+        { contactId, pipelineId, name: "Old", value: 100 }, "user_test");
+
+      await updateOpportunity(
+        db, accountId, id, { name: "New", value: 250, status: "won" }, "user_test",
+      );
+
+      const { data } = await db.from("opportunities")
+        .select("name, monetary_value, status").eq("id", id).single();
+      expect(data!.name).toBe("New");
+      expect(Number(data!.monetary_value)).toBe(250);
+      expect(data!.status).toBe("won");
     }));
 });
