@@ -49,6 +49,27 @@ export const m = {
   "account.contacts": "Contacts",
   "account.openOpps": "Open opportunities",
   "account.pipelineValue": "Pipeline value",
+
+  "contacts.title": "Contacts",
+  "contacts.add": "Add contact",
+  "contacts.search": "Search name, email, phone…",
+  "contacts.col.name": "Contact name",
+  "contacts.col.phone": "Phone",
+  "contacts.col.email": "Email",
+  "contacts.col.company": "Business name",
+  "contacts.col.created": "Created",
+  "contacts.empty.title": "No contacts yet",
+  "contacts.empty.body": "Add a contact or import a list to get started.",
+  "contacts.noMatches.title": "No matches",
+  "contacts.noMatches.body": "Try a different name, email, or phone number.",
+  "contacts.firstName": "First name",
+  "contacts.lastName": "Last name",
+  "contacts.email": "Email",
+  "contacts.phone": "Phone",
+  "contacts.page": "Page {current} of {total}",
+  "contacts.createFailed": "Could not add that contact. Check the details and try again.",
+  "common.prev": "Prev",
+  "common.next": "Next",
 } as const;
 
 export type MessageKey = keyof typeof m;
