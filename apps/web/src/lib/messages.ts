@@ -23,6 +23,7 @@ export const m = {
   "common.sort": "Sort",
   "common.none": "—",
   "common.saving": "Saving…",
+  "common.unavailable": "—",
 
   "empty.conversations.title": "Conversations are coming in M1b",
   "empty.conversations.body": "Unified SMS and email threads will land here.",
