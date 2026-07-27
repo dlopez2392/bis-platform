@@ -89,6 +89,8 @@ export const m = {
   "contact.details": "Contact Details",
   "contact.tags": "Tags",
   "contact.addTag": "add tag",
+  "contact.clearField": "—",
+  "contact.removeTag": "Remove {name}",
   "contact.opportunities": "Opportunities",
   "contact.activity": "Activity",
   "contact.notes": "Notes",

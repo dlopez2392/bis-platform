@@ -16,7 +16,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { m } from "@/lib/messages";
 import { SubmitButton } from "../../../submit-button";
-import { updateContactAction, addTagAction, removeTagAction } from "./actions";
+import { updateContactAction, addTagAction, removeTagAction, CLEAR_FIELD_SENTINEL } from "./actions";
 
 type Contact = NonNullable<Awaited<ReturnType<typeof getContact>>>;
 type Tag = Awaited<ReturnType<typeof listContactTags>>[number];
@@ -95,6 +95,7 @@ export function ContactFieldsPanel({
                               <SelectValue placeholder={m["common.none"]} />
                             </SelectTrigger>
                             <SelectContent>
+                              <SelectItem value={CLEAR_FIELD_SENTINEL}>{m["contact.clearField"]}</SelectItem>
                               {d.options.map((o) => (
                                 <SelectItem key={o} value={o}>
                                   {o}
@@ -137,7 +138,12 @@ export function ContactFieldsPanel({
               <form key={t.id} action={removeTagAction} className="inline-flex">
                 {hidden}
                 <input type="hidden" name="tagId" value={t.id} />
-                <button type="submit" className="group" title={t.name} aria-label={`Remove ${t.name}`}>
+                <button
+                  type="submit"
+                  className="group"
+                  title={t.name}
+                  aria-label={m["contact.removeTag"].replace("{name}", t.name)}
+                >
                   <Badge variant="secondary" className="gap-1 pr-1.5">
                     {t.name}
                     <X className="size-3 text-muted-foreground group-hover:text-foreground" aria-hidden />
