@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireAgency } from "@/lib/auth";
-import { serviceDb, createOpportunity, moveOpportunityStage, setOpportunityStatus } from "@bis/db";
+import { serviceDb, createOpportunity, moveOpportunityToStage, updateOpportunity } from "@bis/db";
 
 function base(formData: FormData) {
   const accountId = String(formData.get("accountId") ?? "");
@@ -22,19 +22,36 @@ export async function createOpportunityAction(formData: FormData): Promise<void>
   revalidatePath(path);
 }
 
-export async function moveOppAction(formData: FormData): Promise<void> {
+export async function moveOppToStageAction(formData: FormData): Promise<void> {
   const { userId } = await requireAgency();
   const { accountId, path } = base(formData);
-  const dir = String(formData.get("direction")) === "left" ? "left" as const : "right" as const;
-  await moveOpportunityStage(serviceDb(), accountId, String(formData.get("oppId")), dir, userId);
+  const oppId = String(formData.get("oppId") ?? "");
+  const toStageId = String(formData.get("toStageId") ?? "");
+  if (!oppId || !toStageId) throw new Error("oppId and toStageId required");
+  await moveOpportunityToStage(serviceDb(), accountId, oppId, toStageId, userId);
   revalidatePath(path);
 }
 
-export async function setOppStatusAction(formData: FormData): Promise<void> {
+export async function updateOpportunityAction(formData: FormData): Promise<void> {
   const { userId } = await requireAgency();
   const { accountId, path } = base(formData);
-  const status = String(formData.get("status"));
-  if (status !== "open" && status !== "won" && status !== "lost") throw new Error("bad status");
-  await setOpportunityStatus(serviceDb(), accountId, String(formData.get("oppId")), status, userId);
+  const oppId = String(formData.get("oppId") ?? "");
+  if (!oppId) throw new Error("oppId required");
+  const status = String(formData.get("status") ?? "");
+  if (status && status !== "open" && status !== "won" && status !== "lost") {
+    throw new Error("bad status");
+  }
+  const rawValue = formData.get("value");
+  await updateOpportunity(
+    serviceDb(),
+    accountId,
+    oppId,
+    {
+      name: String(formData.get("name") ?? "").trim() || undefined,
+      value: rawValue === null || rawValue === "" ? undefined : Number(rawValue),
+      status: (status || undefined) as "open" | "won" | "lost" | undefined,
+    },
+    userId,
+  );
   revalidatePath(path);
 }

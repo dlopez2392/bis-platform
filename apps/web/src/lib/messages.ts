@@ -70,6 +70,16 @@ export const m = {
   "contacts.createFailed": "Could not add that contact. Check the details and try again.",
   "common.prev": "Prev",
   "common.next": "Next",
+
+  "pipeline.title": "Opportunities",
+  "pipeline.add": "Add opportunity",
+  "pipeline.moveFailed": "Could not move that opportunity. Refresh and try again.",
+  "pipeline.empty.title": "No opportunities yet",
+  "pipeline.empty.body": "Add your first deal to start tracking the pipeline.",
+  "pipeline.name": "Opportunity name",
+  "pipeline.value": "Value",
+  "pipeline.contact": "Contact",
+  "pipeline.status": "Status",
 } as const;
 
 export type MessageKey = keyof typeof m;
