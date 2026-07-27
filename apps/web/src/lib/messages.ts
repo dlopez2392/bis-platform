@@ -85,6 +85,21 @@ export const m = {
   "pipeline.status.open": "Open",
   "pipeline.status.won": "Won",
   "pipeline.status.lost": "Lost",
+
+  "contact.details": "Contact Details",
+  "contact.tags": "Tags",
+  "contact.addTag": "add tag",
+  "contact.opportunities": "Opportunities",
+  "contact.activity": "Activity",
+  "contact.notes": "Notes",
+  "contact.tasks": "Tasks",
+  "contact.addNote": "Add a note…",
+  "contact.addTask": "New task…",
+  "contact.done": "done",
+  "contact.company": "Company",
+  "contact.noActivity": "No activity yet",
+  "contact.noActivityBody": "Notes, tasks, and deals will appear here.",
+  "contact.noOpportunities": "None yet.",
 } as const;
 
 export type MessageKey = keyof typeof m;
