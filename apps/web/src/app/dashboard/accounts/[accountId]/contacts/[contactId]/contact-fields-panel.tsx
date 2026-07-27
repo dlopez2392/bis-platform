@@ -16,7 +16,8 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { m } from "@/lib/messages";
 import { SubmitButton } from "../../../submit-button";
-import { updateContactAction, addTagAction, removeTagAction, CLEAR_FIELD_SENTINEL } from "./actions";
+import { updateContactAction, addTagAction, removeTagAction } from "./actions";
+import { CLEAR_FIELD_SENTINEL } from "./constants";
 
 type Contact = NonNullable<Awaited<ReturnType<typeof getContact>>>;
 type Tag = Awaited<ReturnType<typeof listContactTags>>[number];

@@ -1,12 +1,10 @@
+"use server";
+
 import { revalidatePath } from "next/cache";
 import { requireAgency } from "@/lib/auth";
 import { serviceDb, updateContact, addTagToContact, removeTagFromContact,
          addNote, addTask, completeTask, listCustomFields } from "@bis/db";
-
-/** Sentinel value used by the single_select custom-field control to mean
- *  "cleared" — Radix Select cannot represent an empty-string item value,
- *  so this stands in for the native `<option value="">` reset option. */
-export const CLEAR_FIELD_SENTINEL = "__clear__";
+import { CLEAR_FIELD_SENTINEL } from "./constants";
 
 function ids(formData: FormData) {
   const accountId = String(formData.get("accountId") ?? "");
@@ -16,7 +14,6 @@ function ids(formData: FormData) {
 }
 
 export async function updateContactAction(formData: FormData): Promise<void> {
-  "use server";
   const { userId } = await requireAgency();
   const { accountId, contactId, path } = ids(formData);
   const db = serviceDb();
@@ -38,7 +35,6 @@ export async function updateContactAction(formData: FormData): Promise<void> {
 }
 
 export async function addTagAction(formData: FormData): Promise<void> {
-  "use server";
   await requireAgency();
   const { accountId, contactId, path } = ids(formData);
   const tag = String(formData.get("tag") ?? "");
@@ -47,7 +43,6 @@ export async function addTagAction(formData: FormData): Promise<void> {
 }
 
 export async function removeTagAction(formData: FormData): Promise<void> {
-  "use server";
   await requireAgency();
   const { accountId, contactId, path } = ids(formData);
   await removeTagFromContact(serviceDb(), accountId, contactId, String(formData.get("tagId")));
@@ -55,7 +50,6 @@ export async function removeTagAction(formData: FormData): Promise<void> {
 }
 
 export async function addNoteAction(formData: FormData): Promise<void> {
-  "use server";
   const { userId } = await requireAgency();
   const { accountId, contactId, path } = ids(formData);
   const body = String(formData.get("body") ?? "").trim();
@@ -64,7 +58,6 @@ export async function addNoteAction(formData: FormData): Promise<void> {
 }
 
 export async function addTaskAction(formData: FormData): Promise<void> {
-  "use server";
   const { userId } = await requireAgency();
   const { accountId, contactId, path } = ids(formData);
   const title = String(formData.get("title") ?? "").trim();
@@ -75,7 +68,6 @@ export async function addTaskAction(formData: FormData): Promise<void> {
 }
 
 export async function completeTaskAction(formData: FormData): Promise<void> {
-  "use server";
   const { userId } = await requireAgency();
   const { accountId, path } = ids(formData);
   await completeTask(serviceDb(), accountId, String(formData.get("taskId")), userId);
