@@ -64,7 +64,6 @@ export function ActivityTimeline({
     ),
   ].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
 
-  let lastDay = "";
 
   return (
     <Card className="flex flex-col">
@@ -97,10 +96,11 @@ export function ActivityTimeline({
           />
         ) : (
           <ol className="space-y-3">
-            {items.map((item) => {
+            {items.map((item, i) => {
               const day = formatDate(item.at);
-              const showSeparator = day !== lastDay;
-              lastDay = day;
+              // Derive the separator from the previous item rather than a
+              // carried variable — mutating during render is not safe.
+              const showSeparator = i === 0 || day !== formatDate(items[i - 1]!.at);
               return (
                 <li key={`${item.kind}-${item.id}`}>
                   {showSeparator ? (
