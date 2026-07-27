@@ -1499,6 +1499,9 @@ Append to `apps/web/src/lib/messages.ts`:
   "contacts.lastName": "Last name",
   "contacts.email": "Email",
   "contacts.phone": "Phone",
+  "contacts.page": "Page {current} of {total}",
+  "common.prev": "Prev",
+  "common.next": "Next",
 ```
 
 - [ ] **Step 2: Create the add-contact dialog**
@@ -1722,7 +1725,9 @@ export function ContactsTable({ rows, base }: { rows: ContactRow[]; base: string
       </Table>
       <div className="flex items-center justify-between border-t border-border px-4 py-3 text-sm text-muted-foreground">
         <span>
-          Page {current + 1} of {pageCount}
+          {m["contacts.page"]
+            .replace("{current}", String(current + 1))
+            .replace("{total}", String(pageCount))}
         </span>
         <div className="flex gap-2">
           <Button
@@ -1731,7 +1736,7 @@ export function ContactsTable({ rows, base }: { rows: ContactRow[]; base: string
             disabled={current === 0}
             onClick={() => setPage(current - 1)}
           >
-            Prev
+            {m["common.prev"]}
           </Button>
           <Button
             variant="outline"
@@ -1739,7 +1744,7 @@ export function ContactsTable({ rows, base }: { rows: ContactRow[]; base: string
             disabled={current >= pageCount - 1}
             onClick={() => setPage(current + 1)}
           >
-            Next
+            {m["common.next"]}
           </Button>
         </div>
       </div>
@@ -1761,7 +1766,7 @@ function SortButton({ label, onClick }: { label: string; onClick: () => void }) 
 }
 ```
 
-The pagination strings "Page X of Y", "Prev", "Next" are the one sanctioned exception to the no-hardcoded-strings rule in this task — add them to `messages.ts` as `contacts.page`, `common.prev`, `common.next` and reference them instead. Do this before committing.
+Every visible string in this component comes from `m` — there is no exception to the no-hardcoded-strings constraint here.
 
 - [ ] **Step 4: Rewrite the page**
 
