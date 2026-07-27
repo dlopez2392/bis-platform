@@ -21,6 +21,15 @@ import { m } from "@/lib/messages";
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
 
+// Active when pathname matches href exactly, or is nested under it (href + "/…").
+// Pass exact=true for items whose href is a strict prefix of a sibling item's
+// href (e.g. the agency-scope "/dashboard" footer link, which every dashboard
+// route is nested under) so only one nav item is ever active at a time.
+function isNavActive(pathname: string, href: string, exact = false) {
+  if (exact) return pathname === href;
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
 export function AppSidebar({
   accounts,
   activeAccountId,
@@ -64,7 +73,7 @@ export function AppSidebar({
       <div className={cn("flex items-center", collapsed ? "justify-center" : "justify-between")}>
         {collapsed ? null : (
           <Link href="/dashboard" className="px-1 text-sm font-semibold text-white">
-            BIS
+            {m["shell.brand"]}
           </Link>
         )}
         <button
@@ -93,7 +102,7 @@ export function AppSidebar({
             key={item.href}
             item={item}
             collapsed={collapsed}
-            active={pathname.startsWith(item.href)}
+            active={isNavActive(pathname, item.href)}
           />
         ))}
       </nav>
@@ -102,7 +111,7 @@ export function AppSidebar({
         <SidebarLink
           item={footer}
           collapsed={collapsed}
-          active={pathname.startsWith(footer.href)}
+          active={isNavActive(pathname, footer.href, !base)}
         />
       </div>
     </aside>

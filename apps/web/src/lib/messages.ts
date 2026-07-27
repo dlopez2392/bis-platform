@@ -7,6 +7,7 @@ export const m = {
   "nav.settings": "Settings",
   "nav.accounts": "Companies",
 
+  "shell.brand": "BIS",
   "shell.switchAccount": "Switch company",
   "shell.searchAccounts": "Search companies…",
   "shell.noAccounts": "No companies yet",
