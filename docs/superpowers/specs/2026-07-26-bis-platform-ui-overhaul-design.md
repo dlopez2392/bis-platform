@@ -90,7 +90,9 @@ Top to bottom:
 3. **Global search** — input with a `⌘K` / `Ctrl K` affordance.
 4. **Nav** — five account-scoped items: Dashboard, Contacts, Opportunities, Conversations, Calendar. Settings is the sixth, pinned to the sidebar footer and separated by a rule.
 
-Agency-scope nav is two items: Accounts, Settings.
+Agency-scope nav is two items: Companies and Dashboard.
+
+Not Settings. There is no agency-level settings surface to point at and no reason to invent one — Clerk's `OrganizationSwitcher` and `UserButton` in the topbar already own org and user settings, and per-account CRM configuration has its own screen inside the account workspace. Dashboard earns the slot instead: it is the cross-account overview, and it gives a one-click path back to agency level from inside a company. *(Amended 2026-07-26 during Task 4, after review caught the original "Accounts + Settings" wording pointing at a route that does not exist.)*
 
 ### Topbar
 
