@@ -146,7 +146,9 @@ Column headers become discrete cards showing stage name, opportunity count, and 
 
 **Drag-and-drop** via `dnd-kit`. The board becomes a client component fed serialized data from its server parent. `useOptimistic` applies the move immediately so cards never snap back, with the existing `moveOppAction` behind it and a revert plus toast on failure.
 
-**Inline editing** via a card detail drawer: click a card to edit name, value, owner, and status without leaving the board. Saves through a server action.
+**Inline editing** via a card detail drawer: click a card to edit name, value, and status without leaving the board. Saves through a server action.
+
+Owner is deliberately excluded. `opportunities.assigned_to` exists (`0003_crm_core.sql:85`) and references `public.users(id)`, but `@bis/db` exposes no user accessor and no screen creates users — an owner picker would mean building user management, which §3 lists as a non-goal. Owner editing moves to M1b alongside real user records.
 
 The `◀` / `▶` buttons and the inline `status` select + `set` button are removed. `moveOppAction`'s direction-based signature is extended to accept a target stage id — drag needs an absolute destination, not a relative step.
 
@@ -173,6 +175,8 @@ Unchanged. RSC plus server actions; no new data layer, no client fetching librar
 The two client components are the pipeline board and the opportunity drawer. Both receive serialized props from server parents and mutate through existing server actions. `revalidatePath` continues to reconcile after optimistic updates.
 
 `moveOppAction` gains a target-stage parameter (§6.6). No other action signature changes.
+
+`listBoard`'s return type widens to expose `stage.position`, which it already selects — the board needs it client-side to assign stage colors by index. No query change.
 
 ---
 
