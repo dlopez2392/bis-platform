@@ -37,6 +37,12 @@ export const m = {
   "accounts.empty.body": "Add your first company to start tracking contacts and deals.",
   "accounts.created": "Added {date}",
   "accounts.createFailed": "Could not create that company. Check the name and try again.",
+
+  "dashboard.title": "Dashboard",
+  "dashboard.companies": "Companies",
+  "dashboard.contacts": "Contacts",
+  "dashboard.openOpps": "Open opportunities",
+  "dashboard.pipelineValue": "Pipeline value",
 } as const;
 
 export type MessageKey = keyof typeof m;
