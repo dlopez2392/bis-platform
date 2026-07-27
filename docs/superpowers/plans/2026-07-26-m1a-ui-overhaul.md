@@ -8,6 +8,25 @@
 
 **Tech Stack:** Next 16.2.11 (App Router), React 19.2.4, Tailwind v4, shadcn/ui + Radix, lucide-react, dnd-kit, next-themes, Clerk, Supabase, Vitest, Playwright.
 
+## Dialog and drawer submit pattern
+
+**Every** dialog or drawer in this plan that submits a server action uses this pattern. Task 5's review found the naive version crashes the page: `createClientAccount` throws on validation and Clerk failures, there is no `error.tsx` anywhere under `apps/web/src/app/`, and an uncaught throw in a form action destroys the surface and everything the user typed.
+
+```tsx
+action={async (formData) => {
+  try {
+    await action(formData);
+    setOpen(false);
+  } catch {
+    toast.error(m["<scope>.createFailed"]);
+  }
+}}
+```
+
+`import { toast } from "sonner";` — the package directly, because `@/components/ui/sonner` exports only `Toaster`. On failure the surface stays open with the user's input intact, because React does not remount the form when the handler catches.
+
+This binds Task 5 (done), **Task 8's `AddContactDialog`**, and **Task 11's `OpportunityDrawer` and `AddOpportunityDialog`**. Each needs its own failure-message key in `messages.ts`. Do not add `error.tsx` boundaries or inline field validation — the toast plus a preserved surface is the whole pattern.
+
 ## Global Constraints
 
 - Package manager is **pnpm 10.13.1**; Node **>= 22**. Never use npm or yarn.
