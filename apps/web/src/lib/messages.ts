@@ -14,6 +14,15 @@ export const m = {
   "shell.search": "Search",
   "shell.collapse": "Collapse sidebar",
   "shell.expand": "Expand sidebar",
+  "shell.backToAgency": "Back to companies",
+
+  "landing.title": "BIS Platform",
+  "landing.tagline": "The all-in-one client platform by Bespoke Intelligent Solutions.",
+  "landing.signIn": "Sign in",
+  "landing.goToDashboard": "Go to dashboard",
+  "landing.signOut": "Sign out",
+  "landing.noAccess.title": "No access yet",
+  "landing.noAccess.body": "This account isn't set up as an agency admin. Sign out to try a different account, or contact your BIS administrator.",
 
   "common.save": "Save",
   "common.cancel": "Cancel",

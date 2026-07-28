@@ -13,6 +13,7 @@ import {
   Building2,
   PanelLeftClose,
   PanelLeft,
+  ArrowLeft,
   type LucideIcon,
 } from "lucide-react";
 import { AccountSwitcher, type AccountOption } from "@/components/account-switcher";
@@ -63,6 +64,12 @@ export function AppSidebar({
     ? { href: `${base}/settings`, label: m["nav.settings"], icon: Settings }
     : { href: "/dashboard", label: m["nav.dashboard"], icon: LayoutDashboard };
 
+  // Only shown inside an account. Its href ("/dashboard/accounts") is a
+  // string prefix of every in-account route, so — like the footer's
+  // agency-scope link — it needs an exact match or it would light up
+  // alongside whichever account nav item is actually active.
+  const backToAgency: NavItem = { href: "/dashboard/accounts", label: m["shell.backToAgency"], icon: ArrowLeft };
+
   return (
     <aside
       className={cn(
@@ -95,6 +102,16 @@ export function AppSidebar({
         activeAccountId={activeAccountId}
         collapsed={collapsed}
       />
+
+      {base ? (
+        <div className="border-b border-sidebar-border pb-2">
+          <SidebarLink
+            item={backToAgency}
+            collapsed={collapsed}
+            active={isNavActive(pathname, backToAgency.href, true)}
+          />
+        </div>
+      ) : null}
 
       <nav className="flex flex-1 flex-col gap-0.5">
         {items.map((item) => (
