@@ -4,6 +4,7 @@ import { serviceDb, getContact, listContactTags, listNotes, listContactTasks,
 import { PageHeader } from "@/components/page-header";
 import { contactDisplayName, formatCurrency } from "@/lib/format";
 import { m } from "@/lib/messages";
+import { STATUS_LABEL } from "@/lib/labels";
 import { ContactFieldsPanel } from "./contact-fields-panel";
 import { ActivityTimeline } from "./activity-timeline";
 
@@ -54,7 +55,7 @@ export default async function ContactDetailPage({
                 <li key={o.id} className="rounded-md border border-border p-2">
                   <p className="truncate font-medium">{o.name}</p>
                   <p className="text-xs text-muted-foreground">
-                    {formatCurrency(Number(o.monetary_value))} · {o.status}
+                    {formatCurrency(Number(o.monetary_value))} · {STATUS_LABEL[o.status] ?? o.status}
                   </p>
                 </li>
               ))}

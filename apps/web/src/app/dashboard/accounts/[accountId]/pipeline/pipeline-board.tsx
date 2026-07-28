@@ -13,10 +13,12 @@ import {
   type DragEndEvent,
 } from "@dnd-kit/core";
 import { useState } from "react";
+import { Inbox } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { formatCurrency, contactDisplayName } from "@/lib/format";
 import { m } from "@/lib/messages";
+import { EmptyState } from "@/components/empty-state";
 import { OpportunityDrawer } from "./opportunity-drawer";
 
 export type BoardOpportunity = {
@@ -112,8 +114,19 @@ export function PipelineBoard({
     });
   }
 
+  const isEmpty = optimistic.every((col) => col.opportunities.length === 0);
+
   return (
     <>
+      {isEmpty ? (
+        <div className="mb-4">
+          <EmptyState
+            icon={Inbox}
+            title={m["pipeline.empty.title"]}
+            body={m["pipeline.empty.body"]}
+          />
+        </div>
+      ) : null}
       <DndContext
         sensors={sensors}
         onDragStart={(e) => {

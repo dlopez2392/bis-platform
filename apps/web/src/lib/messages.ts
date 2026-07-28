@@ -38,6 +38,9 @@ export const m = {
   "accounts.empty.body": "Add your first company to start tracking contacts and deals.",
   "accounts.created": "Added {date}",
   "accounts.createFailed": "Could not create that company. Check the name and try again.",
+  "accounts.status.active": "Active",
+  "accounts.status.paused": "Paused",
+  "accounts.status.archived": "Archived",
 
   "dashboard.title": "Dashboard",
   "dashboard.companies": "Companies",
@@ -102,6 +105,7 @@ export const m = {
   "contact.noActivity": "No activity yet",
   "contact.noActivityBody": "Notes, tasks, and deals will appear here.",
   "contact.noOpportunities": "None yet.",
+  "contact.noName": "(no name)",
 
   "settings.title": "Settings",
   "settings.customFields": "Custom fields",
@@ -124,6 +128,14 @@ export const m = {
   "settings.saveValue": "Save value",
   "settings.noFields": "No custom fields yet",
   "settings.noValues": "No custom values yet",
+
+  "error.title": "Something went wrong",
+  "error.body": "We couldn't complete that action. Your changes may not have been saved.",
+  "error.retry": "Try again",
+
+  "notFound.title": "Page not found",
+  "notFound.body": "That page doesn't exist or may have moved.",
+  "notFound.back": "Back to dashboard",
 } as const;
 
 export type MessageKey = keyof typeof m;

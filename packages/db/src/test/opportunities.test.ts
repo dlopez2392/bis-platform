@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
+import { createAccount } from "../accounts";
 import { createContact } from "../contacts";
 import { ensureDefaultPipeline } from "../crm-config";
 import { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
@@ -104,6 +105,43 @@ describe("opportunities", () => {
       const { data: after } = await db.from("opportunities")
         .select("stage_id").eq("id", id).single();
       expect(after!.stage_id).toBe(before!.stage_id);
+    }));
+
+  it("rejects creating an opportunity for a contact from a different account", () =>
+    withTestAccount(async (db, accountId) => {
+      const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+
+      // A second, unrelated account with its own contact — the realistic
+      // attack shape: a contact id that is real but belongs to someone else.
+      const { id: otherAccountId } = await createAccount(db, {
+        clerkOrgId: `org_test_${Math.random().toString(36).slice(2, 10)}`,
+        name: "Other Co",
+        actorId: "user_test",
+      });
+      try {
+        const { id: foreignContactId } = await createContact(
+          db, otherAccountId, { firstName: "Foreign" }, "user_test",
+        );
+
+        await expect(
+          createOpportunity(db, accountId,
+            { contactId: foreignContactId, pipelineId, name: "Cross-account", value: 100 },
+            "user_test"),
+        ).rejects.toThrow("contact not in account");
+
+        const { data: opps } = await db.from("opportunities")
+          .select("id").eq("account_id", accountId);
+        expect(opps).toHaveLength(0);
+      } finally {
+        // FK order matters: accounts.id is referenced by events (and would
+        // be by contacts) with no ON DELETE CASCADE — deleting the account
+        // first leaves it dangling instead of erroring, since the JS client
+        // doesn't throw on a failed delete unless the error is checked.
+        await db.from("events").delete().eq("account_id", otherAccountId);
+        await db.from("contacts").delete().eq("account_id", otherAccountId);
+        const { error: delErr } = await db.from("accounts").delete().eq("id", otherAccountId);
+        if (delErr) throw new Error(`cleanup failed: ${delErr.message}`);
+      }
     }));
 
   it("updateOpportunity with no fields is a no-op: no write, no event", () =>

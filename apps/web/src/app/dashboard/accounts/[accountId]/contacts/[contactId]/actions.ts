@@ -25,7 +25,10 @@ export async function updateContactAction(formData: FormData): Promise<void> {
     else if (raw !== null && String(raw) !== "" && String(raw) !== CLEAR_FIELD_SENTINEL) custom[d.field_key] =
       d.data_type === "number" ? Number(raw) : String(raw);
   }
-  const val = (k: string) => String(formData.get(k) ?? "").trim() || undefined;
+  const val = (k: string) => {
+    const v = formData.get(k);
+    return v === null ? undefined : String(v).trim();
+  };
   await updateContact(db, accountId, contactId, {
     firstName: val("firstName"), lastName: val("lastName"),
     email: val("email"), phone: val("phone"), companyName: val("companyName"),

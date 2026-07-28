@@ -20,6 +20,9 @@ export async function createOpportunity(
   actorId: string,
 ): Promise<{ id: string }> {
   const stages = await stagesOf(db, accountId, input.pipelineId);
+  const { data: contact } = await db.from("contacts")
+    .select("id").eq("account_id", accountId).eq("id", input.contactId).maybeSingle();
+  if (!contact) throw new Error("contact not in account");
   const { data, error } = await db.from("opportunities")
     .insert({ account_id: accountId, contact_id: input.contactId, pipeline_id: input.pipelineId,
               stage_id: stages[0]!.id, name: input.name, monetary_value: input.value ?? 0 })

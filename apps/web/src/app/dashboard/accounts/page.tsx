@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { formatDate } from "@/lib/format";
 import { m } from "@/lib/messages";
+import { ACCOUNT_STATUS_LABEL } from "@/lib/labels";
 
 export const dynamic = "force-dynamic";
 
@@ -41,7 +42,7 @@ export default async function AccountsPage() {
                       <Building2 className="size-4" aria-hidden />
                     </span>
                     <Badge variant={a.status === "active" ? "secondary" : "outline"}>
-                      {a.status}
+                      {ACCOUNT_STATUS_LABEL[a.status] ?? a.status}
                     </Badge>
                   </div>
                   <p className="mt-4 truncate font-medium text-card-foreground">{a.name}</p>

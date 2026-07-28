@@ -5,9 +5,10 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { EmptyState } from "@/components/empty-state";
-import { formatCurrency, formatDate, formatDateTime } from "@/lib/format";
+import { formatCurrency, formatDate, formatDateUTC, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
+import { STATUS_LABEL } from "@/lib/labels";
 import { SubmitButton } from "../../../submit-button";
 import { addNoteAction, addTaskAction, completeTaskAction } from "./actions";
 
@@ -156,7 +157,7 @@ function TimelineRow({ item, hidden }: { item: TimelineItem; hidden: React.React
             {item.dueAt ? (
               <span className="flex items-center gap-1">
                 <CalendarClock className="size-3" aria-hidden />
-                {formatDate(item.dueAt)}
+                {formatDateUTC(item.dueAt)}
               </span>
             ) : null}
           </div>
@@ -180,7 +181,7 @@ function TimelineRow({ item, hidden }: { item: TimelineItem; hidden: React.React
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-card-foreground">{item.name}</p>
         <p className="mt-1 text-xs text-muted-foreground">
-          {formatCurrency(item.value)} · {item.status} · {formatDateTime(item.at)}
+          {formatCurrency(item.value)} · {STATUS_LABEL[item.status] ?? item.status} · {formatDateTime(item.at)}
         </p>
       </div>
     </div>
