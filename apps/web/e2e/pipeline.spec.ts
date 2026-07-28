@@ -1,11 +1,15 @@
 import { test, expect } from "@playwright/test";
+import { SEEDED_ACCOUNT_NAME, openAccountByName } from "./support";
 
 test("dragging an opportunity persists after reload", async ({ page }) => {
-  await page.goto("/dashboard/accounts");
-  // Target the company card by its own test id rather than a broad
-  // `href*="/contacts"` substring match — see contacts.spec.ts for why that
-  // locator is ambiguous.
-  await page.locator('[data-testid^="account-"]').first().click();
+  // This spec needs an account with a real opportunity to drag, not just
+  // any company — a positional `.first()` over the account cards picked
+  // whichever one rendered first, which landed on an empty account (no
+  // opportunity cards, nothing to drag) once stray empty accounts existed
+  // alongside the seeded one. Target the seeded account explicitly by name;
+  // openAccountByName skips with a clear reason if it isn't present rather
+  // than silently continuing against the wrong account.
+  await openAccountByName(page, SEEDED_ACCOUNT_NAME);
   await page.getByRole("link", { name: "Opportunities" }).click();
   await expect(page).toHaveURL(/\/pipeline$/);
 

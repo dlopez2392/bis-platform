@@ -36,4 +36,24 @@ describe("crm config", () => {
       expect(pipelines[0]!.stages.map(s => s.name)).toEqual(
         ["New Lead", "Contacted", "Appointment", "Quote Sent", "Closed"]);
     }));
+
+  // Regression test for the real bug: two concurrent first-loads of the
+  // pipeline page (both hitting the lookup before either insert lands)
+  // used to each create a "Sales" pipeline for the same account. Sequential
+  // calls above can't reproduce that — the first call's insert is always
+  // visible to the second call's lookup when nothing overlaps in-flight.
+  // This fires both calls without awaiting between them so their lookups
+  // race the same way the two page loads did.
+  it("ensureDefaultPipeline is idempotent under concurrent calls", () =>
+    withTestAccount(async (db, accountId) => {
+      const [p1, p2] = await Promise.all([
+        ensureDefaultPipeline(db, accountId),
+        ensureDefaultPipeline(db, accountId),
+      ]);
+      expect(p2.pipelineId).toBe(p1.pipelineId);
+      const pipelines = await listPipelinesWithStages(db, accountId);
+      expect(pipelines).toHaveLength(1);
+      expect(pipelines[0]!.stages.map(s => s.name)).toEqual(
+        ["New Lead", "Contacted", "Appointment", "Quote Sent", "Closed"]);
+    }));
 });
