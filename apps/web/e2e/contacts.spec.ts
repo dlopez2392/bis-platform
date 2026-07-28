@@ -2,11 +2,11 @@ import { test, expect } from "@playwright/test";
 
 test("contacts table renders and sorts", async ({ page }) => {
   await page.goto("/dashboard/accounts");
-  // The accounts grid is the only place on this page that links into a
-  // company's contacts list — the sidebar's own nav links come first in DOM
-  // order but never point at /contacts, so scope by href instead of
-  // grabbing the first link on the page.
-  await page.locator('a[href*="/contacts"]').first().click();
+  // `a[href*="/contacts"]' is not unambiguous: it's a substring match, and
+  // nothing on the page guarantees the first such anchor is a company card
+  // rather than some other future link that merely mentions "/contacts" in
+  // its href. Target the company card by its own test id instead.
+  await page.locator('[data-testid^="account-"]').first().click();
   await expect(page).toHaveURL(/\/contacts$/);
 
   const table = page.getByRole("table");

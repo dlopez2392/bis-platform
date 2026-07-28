@@ -33,6 +33,7 @@ export default async function AccountsPage() {
               <li key={a.id}>
                 <Link
                   href={`/dashboard/accounts/${a.id}/contacts`}
+                  data-testid={`account-${a.id}`}
                   className="block rounded-lg border border-border bg-card p-5 transition-colors hover:border-primary/40"
                 >
                   <div className="flex items-start justify-between gap-3">
