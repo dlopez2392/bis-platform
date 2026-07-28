@@ -5,7 +5,8 @@
   "packageManager": "pnpm@10.13.1",
   "scripts": {
     "typecheck": "pnpm -r --if-present typecheck",
+    "lint": "pnpm -r --if-present lint",
     "test": "pnpm -r --if-present test",
-    "check": "pnpm typecheck && pnpm test"
+    "check": "pnpm typecheck && pnpm lint && pnpm test"
   }
 }
