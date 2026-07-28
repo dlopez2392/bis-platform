@@ -36,12 +36,10 @@ export function ContactFieldsPanel({
   fieldDefs: CustomFieldDef[];
 }) {
   const custom = (contact.custom ?? {}) as Record<string, unknown>;
-  const hidden = (
-    <>
-      <input type="hidden" name="accountId" value={accountId} />
-      <input type="hidden" name="contactId" value={contactId} />
-    </>
-  );
+  const hidden = <input type="hidden" name="contactId" value={contactId} />;
+  const boundUpdateContact = updateContactAction.bind(null, accountId);
+  const boundAddTag = addTagAction.bind(null, accountId);
+  const boundRemoveTag = removeTagAction.bind(null, accountId);
 
   return (
     <div className="space-y-4">
@@ -50,7 +48,7 @@ export function ContactFieldsPanel({
           <CardTitle className="text-sm">{m["contact.details"]}</CardTitle>
         </CardHeader>
         <CardContent>
-          <form action={updateContactAction} className="space-y-3">
+          <form action={boundUpdateContact} className="space-y-3">
             {hidden}
             <div className="space-y-1.5">
               <Label htmlFor="firstName">{m["contacts.firstName"]}</Label>
@@ -136,7 +134,7 @@ export function ContactFieldsPanel({
         <CardContent>
           <div className="flex flex-wrap items-center gap-2">
             {tags.map((t) => (
-              <form key={t.id} action={removeTagAction} className="inline-flex">
+              <form key={t.id} action={boundRemoveTag} className="inline-flex">
                 {hidden}
                 <input type="hidden" name="tagId" value={t.id} />
                 <button
@@ -152,7 +150,7 @@ export function ContactFieldsPanel({
                 </button>
               </form>
             ))}
-            <form action={addTagAction} className="inline-flex items-center gap-1">
+            <form action={boundAddTag} className="inline-flex items-center gap-1">
               {hidden}
               <Input name="tag" placeholder={m["contact.addTag"]} className="h-7 w-28 text-xs" />
               <Button type="submit" size="icon-xs" variant="outline" aria-label={m["contact.addTag"]}>

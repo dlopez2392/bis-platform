@@ -6,16 +6,15 @@ import { serviceDb, updateContact, addTagToContact, removeTagFromContact,
          addNote, addTask, completeTask, listCustomFields } from "@bis/db";
 import { CLEAR_FIELD_SENTINEL } from "./constants";
 
-function ids(formData: FormData) {
-  const accountId = String(formData.get("accountId") ?? "");
+function ids(accountId: string, formData: FormData) {
   const contactId = String(formData.get("contactId") ?? "");
-  if (!accountId || !contactId) throw new Error("ids missing");
-  return { accountId, contactId, path: `/dashboard/accounts/${accountId}/contacts/${contactId}` };
+  if (!contactId) throw new Error("contactId missing");
+  return { contactId, path: `/dashboard/accounts/${accountId}/contacts/${contactId}` };
 }
 
-export async function updateContactAction(formData: FormData): Promise<void> {
+export async function updateContactAction(accountId: string, formData: FormData): Promise<void> {
   const { userId } = await requireAgency();
-  const { accountId, contactId, path } = ids(formData);
+  const { contactId, path } = ids(accountId, formData);
   const db = serviceDb();
   const defs = await listCustomFields(db, accountId, "contact");
   const custom: Record<string, unknown> = {};
@@ -37,32 +36,32 @@ export async function updateContactAction(formData: FormData): Promise<void> {
   revalidatePath(path);
 }
 
-export async function addTagAction(formData: FormData): Promise<void> {
+export async function addTagAction(accountId: string, formData: FormData): Promise<void> {
   await requireAgency();
-  const { accountId, contactId, path } = ids(formData);
+  const { contactId, path } = ids(accountId, formData);
   const tag = String(formData.get("tag") ?? "");
   if (tag.trim()) await addTagToContact(serviceDb(), accountId, contactId, tag);
   revalidatePath(path);
 }
 
-export async function removeTagAction(formData: FormData): Promise<void> {
+export async function removeTagAction(accountId: string, formData: FormData): Promise<void> {
   await requireAgency();
-  const { accountId, contactId, path } = ids(formData);
+  const { contactId, path } = ids(accountId, formData);
   await removeTagFromContact(serviceDb(), accountId, contactId, String(formData.get("tagId")));
   revalidatePath(path);
 }
 
-export async function addNoteAction(formData: FormData): Promise<void> {
+export async function addNoteAction(accountId: string, formData: FormData): Promise<void> {
   const { userId } = await requireAgency();
-  const { accountId, contactId, path } = ids(formData);
+  const { contactId, path } = ids(accountId, formData);
   const body = String(formData.get("body") ?? "").trim();
   if (body) await addNote(serviceDb(), accountId, contactId, body, userId);
   revalidatePath(path);
 }
 
-export async function addTaskAction(formData: FormData): Promise<void> {
+export async function addTaskAction(accountId: string, formData: FormData): Promise<void> {
   const { userId } = await requireAgency();
-  const { accountId, contactId, path } = ids(formData);
+  const { contactId, path } = ids(accountId, formData);
   const title = String(formData.get("title") ?? "").trim();
   const dueAt = String(formData.get("dueAt") ?? "");
   if (title) await addTask(serviceDb(), accountId,
@@ -70,9 +69,9 @@ export async function addTaskAction(formData: FormData): Promise<void> {
   revalidatePath(path);
 }
 
-export async function completeTaskAction(formData: FormData): Promise<void> {
+export async function completeTaskAction(accountId: string, formData: FormData): Promise<void> {
   const { userId } = await requireAgency();
-  const { accountId, path } = ids(formData);
+  const { path } = ids(accountId, formData);
   await completeTask(serviceDb(), accountId, String(formData.get("taskId")), userId);
   revalidatePath(path);
 }

@@ -34,12 +34,10 @@ function Submit() {
 }
 
 export function AddOpportunityDialog({
-  accountId,
   pipelineId,
   contacts,
   action,
 }: {
-  accountId: string;
   pipelineId: string;
   contacts: { id: string; name: string }[];
   action: (formData: FormData) => Promise<void>;
@@ -68,7 +66,6 @@ export function AddOpportunityDialog({
           }}
           className="space-y-4"
         >
-          <input type="hidden" name="accountId" value={accountId} />
           <input type="hidden" name="pipelineId" value={pipelineId} />
           <div className="space-y-2">
             <Label htmlFor="contactId">{m["pipeline.contact"]}</Label>

@@ -32,12 +32,10 @@ function Submit() {
 }
 
 export function OpportunityDrawer({
-  accountId,
   opportunity,
   onClose,
   action,
 }: {
-  accountId: string;
   opportunity: BoardOpportunity | null;
   onClose: () => void;
   action: (formData: FormData) => Promise<void>;
@@ -60,7 +58,6 @@ export function OpportunityDrawer({
             }}
             className="flex flex-1 flex-col gap-4"
           >
-            <input type="hidden" name="accountId" value={accountId} />
             <input type="hidden" name="oppId" value={opportunity.id} />
             <div className="space-y-2">
               <Label htmlFor="name">{m["pipeline.name"]}</Label>

@@ -21,13 +21,14 @@ export default async function ContactsPage({
   const { q } = await searchParams;
   const contacts = await listContacts(serviceDb(), accountId, { search: q });
   const base = `/dashboard/accounts/${accountId}/contacts`;
+  const boundCreateContact = createContactAction.bind(null, accountId);
 
   return (
     <>
       <PageHeader
         title={m["contacts.title"]}
         count={`${contacts.length}`}
-        actions={<AddContactDialog accountId={accountId} action={createContactAction} />}
+        actions={<AddContactDialog action={boundCreateContact} />}
         search={
           <form action={base}>
             <Input

@@ -34,12 +34,10 @@ export function ActivityTimeline({
   tasks: Task[];
   opportunities: Opportunity[];
 }) {
-  const hidden = (
-    <>
-      <input type="hidden" name="accountId" value={accountId} />
-      <input type="hidden" name="contactId" value={contactId} />
-    </>
-  );
+  const hidden = <input type="hidden" name="contactId" value={contactId} />;
+  const boundAddTask = addTaskAction.bind(null, accountId);
+  const boundAddNote = addNoteAction.bind(null, accountId);
+  const boundCompleteTask = completeTaskAction.bind(null, accountId);
 
   const items: TimelineItem[] = [
     ...notes.map((n): TimelineItem => ({ kind: "note", id: n.id, at: n.created_at, body: n.body })),
@@ -73,7 +71,7 @@ export function ActivityTimeline({
       </CardHeader>
       <CardContent className="space-y-4">
         <form
-          action={addTaskAction}
+          action={boundAddTask}
           aria-label={m["contact.tasks"]}
           className="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-border p-2"
         >
@@ -111,7 +109,7 @@ export function ActivityTimeline({
                       <Separator className="flex-1" />
                     </div>
                   ) : null}
-                  <TimelineRow item={item} hidden={hidden} />
+                  <TimelineRow item={item} hidden={hidden} completeAction={boundCompleteTask} />
                 </li>
               );
             })}
@@ -119,7 +117,7 @@ export function ActivityTimeline({
         )}
       </CardContent>
       <CardFooter className="border-t border-border pt-4">
-        <form action={addNoteAction} aria-label={m["contact.notes"]} className="flex w-full gap-2">
+        <form action={boundAddNote} aria-label={m["contact.notes"]} className="flex w-full gap-2">
           {hidden}
           <Input name="body" placeholder={m["contact.addNote"]} className="flex-1" />
           <SubmitButton>{m["common.add"]}</SubmitButton>
@@ -129,7 +127,15 @@ export function ActivityTimeline({
   );
 }
 
-function TimelineRow({ item, hidden }: { item: TimelineItem; hidden: React.ReactNode }) {
+function TimelineRow({
+  item,
+  hidden,
+  completeAction,
+}: {
+  item: TimelineItem;
+  hidden: React.ReactNode;
+  completeAction: (formData: FormData) => Promise<void>;
+}) {
   if (item.kind === "note") {
     return (
       <div className="flex gap-3 rounded-lg border border-border bg-card p-3">
@@ -163,7 +169,7 @@ function TimelineRow({ item, hidden }: { item: TimelineItem; hidden: React.React
           </div>
         </div>
         {!done ? (
-          <form action={completeTaskAction} className="shrink-0">
+          <form action={completeAction} className="shrink-0">
             {hidden}
             <input type="hidden" name="taskId" value={item.id} />
             <Button type="submit" variant="outline" size="xs">

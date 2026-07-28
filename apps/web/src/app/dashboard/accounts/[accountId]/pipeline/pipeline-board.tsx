@@ -46,12 +46,10 @@ const STAGE_BAR = [
 
 export function PipelineBoard({
   board,
-  accountId,
   moveAction,
   updateAction,
 }: {
   board: BoardColumn[];
-  accountId: string;
   moveAction: (formData: FormData) => Promise<void>;
   updateAction: (formData: FormData) => Promise<void>;
 }) {
@@ -103,7 +101,6 @@ export function PipelineBoard({
     startTransition(async () => {
       applyMove({ oppId, toStageId });
       const formData = new FormData();
-      formData.set("accountId", accountId);
       formData.set("oppId", oppId);
       formData.set("toStageId", toStageId);
       try {
@@ -147,7 +144,6 @@ export function PipelineBoard({
         </DragOverlay>
       </DndContext>
       <OpportunityDrawer
-        accountId={accountId}
         opportunity={editing}
         onClose={() => setEditing(null)}
         action={updateAction}

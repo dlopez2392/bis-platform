@@ -24,6 +24,10 @@ export default async function PipelinePage({
   const total = board.reduce((s, c) => s + c.totalValue, 0);
   const count = board.reduce((s, c) => s + c.opportunities.length, 0);
 
+  const boundCreate = createOpportunityAction.bind(null, accountId);
+  const boundMove = moveOppToStageAction.bind(null, accountId);
+  const boundUpdate = updateOpportunityAction.bind(null, accountId);
+
   return (
     <>
       <PageHeader
@@ -31,19 +35,17 @@ export default async function PipelinePage({
         count={`${count} · ${formatCurrency(total)}`}
         actions={
           <AddOpportunityDialog
-            accountId={accountId}
             pipelineId={pipelineId}
             contacts={contacts.map((c) => ({ id: c.id, name: contactDisplayName(c) }))}
-            action={createOpportunityAction}
+            action={boundCreate}
           />
         }
       />
       <div className="p-6">
         <PipelineBoard
           board={board}
-          accountId={accountId}
-          moveAction={moveOppToStageAction}
-          updateAction={updateOpportunityAction}
+          moveAction={boundMove}
+          updateAction={boundUpdate}
         />
       </div>
     </>

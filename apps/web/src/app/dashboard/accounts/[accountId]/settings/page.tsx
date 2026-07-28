@@ -35,6 +35,8 @@ export default async function CrmSettingsPage({
     listCustomFields(db, accountId, "contact"),
     listCustomValues(db, accountId),
   ]);
+  const boundCreateField = createFieldAction.bind(null, accountId);
+  const boundUpsertValue = upsertValueAction.bind(null, accountId);
   return (
     <>
       <PageHeader title={m["settings.title"]} />
@@ -45,8 +47,7 @@ export default async function CrmSettingsPage({
             <CardDescription>{m["settings.customFieldsBody"]}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
-            <form action={createFieldAction} className="space-y-3">
-              <input type="hidden" name="accountId" value={accountId} />
+            <form action={boundCreateField} className="space-y-3">
               <div className="space-y-1.5">
                 <Label htmlFor="field-name">{m["settings.fieldName"]}</Label>
                 <Input id="field-name" name="name" required />
@@ -107,8 +108,7 @@ export default async function CrmSettingsPage({
             <CardDescription>{m["settings.customValuesBody"]}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
-            <form action={upsertValueAction} className="space-y-3">
-              <input type="hidden" name="accountId" value={accountId} />
+            <form action={boundUpsertValue} className="space-y-3">
               <div className="space-y-1.5">
                 <Label htmlFor="value-name">{m["settings.valueName"]}</Label>
                 <Input id="value-name" name="name" required />

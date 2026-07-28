@@ -4,37 +4,32 @@ import { revalidatePath } from "next/cache";
 import { requireAgency } from "@/lib/auth";
 import { serviceDb, createOpportunity, moveOpportunityToStage, updateOpportunity } from "@bis/db";
 
-function base(formData: FormData) {
-  const accountId = String(formData.get("accountId") ?? "");
-  if (!accountId) throw new Error("accountId missing");
-  return { accountId, path: `/dashboard/accounts/${accountId}/pipeline` };
+function pathFor(accountId: string) {
+  return `/dashboard/accounts/${accountId}/pipeline`;
 }
 
-export async function createOpportunityAction(formData: FormData): Promise<void> {
+export async function createOpportunityAction(accountId: string, formData: FormData): Promise<void> {
   const { userId } = await requireAgency();
-  const { accountId, path } = base(formData);
   const name = String(formData.get("name") ?? "").trim();
   const contactId = String(formData.get("contactId") ?? "");
   const pipelineId = String(formData.get("pipelineId") ?? "");
   if (!name || !contactId || !pipelineId) throw new Error("name, contact, pipeline required");
   await createOpportunity(serviceDb(), accountId,
     { contactId, pipelineId, name, value: Number(formData.get("value") ?? 0) || 0 }, userId);
-  revalidatePath(path);
+  revalidatePath(pathFor(accountId));
 }
 
-export async function moveOppToStageAction(formData: FormData): Promise<void> {
+export async function moveOppToStageAction(accountId: string, formData: FormData): Promise<void> {
   const { userId } = await requireAgency();
-  const { accountId, path } = base(formData);
   const oppId = String(formData.get("oppId") ?? "");
   const toStageId = String(formData.get("toStageId") ?? "");
   if (!oppId || !toStageId) throw new Error("oppId and toStageId required");
   await moveOpportunityToStage(serviceDb(), accountId, oppId, toStageId, userId);
-  revalidatePath(path);
+  revalidatePath(pathFor(accountId));
 }
 
-export async function updateOpportunityAction(formData: FormData): Promise<void> {
+export async function updateOpportunityAction(accountId: string, formData: FormData): Promise<void> {
   const { userId } = await requireAgency();
-  const { accountId, path } = base(formData);
   const oppId = String(formData.get("oppId") ?? "");
   if (!oppId) throw new Error("oppId required");
   const status = String(formData.get("status") ?? "");
@@ -53,5 +48,5 @@ export async function updateOpportunityAction(formData: FormData): Promise<void>
     },
     userId,
   );
-  revalidatePath(path);
+  revalidatePath(pathFor(accountId));
 }
