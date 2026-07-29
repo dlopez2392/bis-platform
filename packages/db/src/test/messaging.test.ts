@@ -22,6 +22,23 @@ describe("messaging", () => {
       expect(convos).toHaveLength(1);
     }));
 
+  it("ensureConversation is safe under a concurrent race: one creator, one event", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Grace" }, "user_test");
+
+      const [a, b] = await Promise.all([
+        ensureConversation(db, accountId, contactId, "user_test"),
+        ensureConversation(db, accountId, contactId, "user_test"),
+      ]);
+
+      expect(a.id).toBe(b.id);
+      expect([a.created, b.created].filter(Boolean)).toHaveLength(1);
+
+      const { data: ev } = await db.from("events").select("type").eq("account_id", accountId)
+        .eq("type", "conversation.created");
+      expect(ev).toHaveLength(1);
+    }));
+
   it("createMessage writes the row and bumps last_message_at", () =>
     withTestAccount(async (db, accountId) => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
@@ -40,6 +57,21 @@ describe("messaging", () => {
       const [summary] = await listConversations(db, accountId);
       expect(summary!.lastMessageAt).not.toBeNull();
       expect(summary!.lastMessagePreview).toContain("First contact");
+    }));
+
+  it("createMessage emits message.created for a successfully inserted message", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+
+      const { id: messageId } = await createMessage(db, accountId, {
+        conversationId: convo.id, channel: "email", direction: "outbound", body: "hi",
+      }, "user_test");
+
+      const { data: ev } = await db.from("events").select("type, payload")
+        .eq("account_id", accountId).eq("type", "message.created");
+      expect(ev).toHaveLength(1);
+      expect((ev![0]!.payload as { messageId: string }).messageId).toBe(messageId);
     }));
 
   it("updateMessageStatus records a provider id and an error", () =>

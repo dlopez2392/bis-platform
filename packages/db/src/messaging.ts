@@ -39,18 +39,34 @@ export async function ensureConversation(
   if (findErr) throw new Error(`conversation lookup failed: ${findErr.message}`);
   if (existing) return { id: existing.id, created: false };
 
-  // `conversations_account_contact_unique` makes this safe under concurrency:
-  // two callers can both miss the lookup, and the loser's insert conflicts
-  // rather than creating a duplicate thread.
+  // Plain insert, not upsert: PostgREST's upsert response can't distinguish
+  // "I inserted" from "I updated on conflict", so two callers racing past the
+  // lookup above would both get created: true and both emit
+  // conversation.created — one automation firing twice for one conversation.
+  // `conversations_account_contact_unique` still keeps the row itself safe;
+  // we just need the loser's insert to fail visibly (23505) instead of
+  // silently upserting, so only the actual winner emits.
   const { data, error } = await db.from("conversations")
-    .upsert({ account_id: accountId, contact_id: contactId },
-            { onConflict: "account_id,contact_id" })
+    .insert({ account_id: accountId, contact_id: contactId })
     .select("id").single();
-  if (error || !data) throw new Error(`ensureConversation failed: ${error?.message}`);
 
-  await emit(db, accountId, "conversation.created", actorId,
-    { conversationId: data.id, contactId });
-  return { id: data.id, created: true };
+  if (!error) {
+    if (!data) throw new Error("ensureConversation failed: insert returned no row");
+    await emit(db, accountId, "conversation.created", actorId,
+      { conversationId: data.id, contactId });
+    return { id: data.id, created: true };
+  }
+
+  if (error.code !== "23505") throw new Error(`ensureConversation failed: ${error.message}`);
+
+  // Lost the race: another caller's insert won between our lookup and our
+  // insert. Re-select rather than emit — this call did not create anything.
+  const { data: winner, error: reselectErr } = await db.from("conversations")
+    .select("id").eq("account_id", accountId).eq("contact_id", contactId).single();
+  if (reselectErr || !winner) {
+    throw new Error(`conversation re-select after conflict failed: ${reselectErr?.message}`);
+  }
+  return { id: winner.id, created: false };
 }
 
 export async function createMessage(
@@ -68,13 +84,25 @@ export async function createMessage(
     .select("id").single();
   if (error || !data) throw new Error(`createMessage failed: ${error?.message}`);
 
+  // Emit before the conversation touch, not after: the message row genuinely
+  // exists at this point, so the event must exist too, or nothing downstream
+  // (automations, activity feeds) ever learns this message happened.
+  await emit(db, accountId, "message.created", actorId,
+    { messageId: data.id, conversationId: input.conversationId, channel: input.channel });
+
+  // The touch is best-effort and deliberately non-fatal. The message is real
+  // and visible either way (row + event both exist above); if this update
+  // fails, only the inbox's sort order and preview go stale, and that
+  // self-heals on the conversation's next message. Throwing here would be
+  // worse: the caller would mark a message "failed" that was actually
+  // written successfully.
   const { error: touchErr } = await db.from("conversations")
     .update({ last_message_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq("account_id", accountId).eq("id", input.conversationId);
-  if (touchErr) throw new Error(`conversation touch failed: ${touchErr.message}`);
+  if (touchErr) {
+    console.error(`conversation touch failed for ${input.conversationId}: ${touchErr.message}`);
+  }
 
-  await emit(db, accountId, "message.created", actorId,
-    { messageId: data.id, conversationId: input.conversationId, channel: input.channel });
   return { id: data.id };
 }
 
