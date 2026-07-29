@@ -39,6 +39,13 @@ describe("resend webhook", () => {
     expect(updateMock).toHaveBeenCalledWith(expect.anything(), "prov_1", "delivered");
   });
 
+  it("maps a failed event to the failed status", async () => {
+    verifyMock.mockReturnValue({ type: "email.failed", data: { email_id: "prov_fail" } });
+    const res = await POST(req({}));
+    expect(res.status).toBe(200);
+    expect(updateMock).toHaveBeenCalledWith(expect.anything(), "prov_fail", "failed");
+  });
+
   it("is idempotent across a replayed event", async () => {
     verifyMock.mockReturnValue({ type: "email.opened", data: { email_id: "prov_2" } });
     await POST(req({}));

@@ -7,6 +7,7 @@ const STATUS_BY_EVENT: Record<string, MessageStatus> = {
   "email.opened": "opened",
   "email.bounced": "bounced",
   "email.complained": "bounced",
+  "email.failed": "failed",
 };
 
 export async function POST(request: Request): Promise<Response> {
