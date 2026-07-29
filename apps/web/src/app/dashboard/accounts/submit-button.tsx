@@ -1,16 +1,14 @@
 "use client";
 
 import { useFormStatus } from "react-dom";
+import { Button } from "@/components/ui/button";
+import { m } from "@/lib/messages";
 
 export function SubmitButton({ children }: { children: React.ReactNode }) {
   const { pending } = useFormStatus();
   return (
-    <button
-      type="submit"
-      disabled={pending}
-      className="rounded bg-black px-4 py-2 text-white disabled:cursor-not-allowed disabled:opacity-50"
-    >
-      {pending ? "Creating…" : children}
-    </button>
+    <Button type="submit" disabled={pending}>
+      {pending ? m["common.saving"] : children}
+    </Button>
   );
 }

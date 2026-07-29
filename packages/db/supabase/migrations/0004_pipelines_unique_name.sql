@@ -1,0 +1,19 @@
+-- Fix: ensureDefaultPipeline() did a lookup-then-insert with no uniqueness
+-- guard. Two concurrent first-loads of the (force-dynamic) pipeline page for
+-- the same account both missed the lookup and both inserted a "Sales"
+-- pipeline, producing two pipeline rows (each with its own 5 stages) for one
+-- account. The lookup also had no `order by`, so which duplicate the board
+-- picked on any given render was nondeterministic — opportunities appeared
+-- to vanish and reappear across reloads depending on which row won a bare
+-- `limit(1)`. This happened in the dev database and was cleaned up by hand;
+-- this migration makes it structurally impossible to recur.
+--
+-- Safety: `create unique index` fails outright (does not silently drop or
+-- merge rows) if any (account_id, name) pair is already duplicated in the
+-- table. Checked the dev database directly before writing this migration —
+-- one account, one "Sales" pipeline, zero duplicates — so this is safe to
+-- apply as-is here. It is NOT safe to blind-apply to any environment that
+-- might already contain duplicate pipeline names for the same account;
+-- such duplicates must be reconciled (which row stays, what happens to its
+-- stages/opportunities) as a manual decision before this index can be added.
+create unique index pipelines_account_name_unique on public.pipelines (account_id, name);

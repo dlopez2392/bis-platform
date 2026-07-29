@@ -1,9 +1,11 @@
 import "dotenv/config";
 import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
+import { createAccount } from "../accounts";
 import { createContact } from "../contacts";
 import { ensureDefaultPipeline } from "../crm-config";
-import { createOpportunity, moveOpportunityStage, setOpportunityStatus,
+import { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
+         updateOpportunity, setOpportunityStatus,
          listBoard, listContactOpportunities } from "../opportunities";
 
 describe("opportunities", () => {
@@ -39,5 +41,120 @@ describe("opportunities", () => {
       const { data: ev } = await db.from("events").select("type").eq("account_id", accountId)
         .in("type", ["opportunity.created", "opportunity.status_changed"]);
       expect(ev).toHaveLength(2);
+    }));
+
+  it("moves an opportunity to an explicit stage", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Move" }, "user_test");
+      const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+      const { id } = await createOpportunity(db, accountId,
+        { contactId, pipelineId, name: "Deal", value: 100 }, "user_test");
+      const board = await listBoard(db, accountId, pipelineId);
+      const targetStageId = board[2]!.stage.id;
+
+      await moveOpportunityToStage(db, accountId, id, targetStageId, "user_test");
+
+      const after = await listBoard(db, accountId, pipelineId);
+      expect(after[2]!.opportunities).toHaveLength(1);
+      expect(after[2]!.opportunities[0]!.id).toBe(id);
+      expect(after[0]!.opportunities).toHaveLength(0);
+    }));
+
+  it("updates name, value, and status together", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Update" }, "user_test");
+      const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+      const { id } = await createOpportunity(db, accountId,
+        { contactId, pipelineId, name: "Old", value: 100 }, "user_test");
+
+      await updateOpportunity(
+        db, accountId, id, { name: "New", value: 250, status: "won" }, "user_test",
+      );
+
+      const { data } = await db.from("opportunities")
+        .select("name, monetary_value, status").eq("id", id).single();
+      expect(data!.name).toBe("New");
+      expect(Number(data!.monetary_value)).toBe(250);
+      expect(data!.status).toBe("won");
+    }));
+
+  it("rejects moving to a stage from a different pipeline and leaves stage_id unchanged", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Guard" }, "user_test");
+      const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+      const { id } = await createOpportunity(db, accountId,
+        { contactId, pipelineId, name: "Protected", value: 300 }, "user_test");
+
+      const { data: before } = await db.from("opportunities")
+        .select("stage_id").eq("id", id).single();
+
+      // A second pipeline in the same account — the realistic attack shape: a stage id
+      // that is valid in the account but does not belong to this opportunity's pipeline.
+      const { data: otherPipeline, error: pErr } = await db.from("pipelines")
+        .insert({ account_id: accountId, name: "Other Pipeline" }).select("id").single();
+      if (pErr || !otherPipeline) throw new Error(`other pipeline create failed: ${pErr?.message}`);
+      const { data: foreignStage, error: sErr } = await db.from("pipeline_stages")
+        .insert({ account_id: accountId, pipeline_id: otherPipeline.id, name: "Foreign Stage", position: 0 })
+        .select("id").single();
+      if (sErr || !foreignStage) throw new Error(`foreign stage create failed: ${sErr?.message}`);
+
+      await expect(
+        moveOpportunityToStage(db, accountId, id, foreignStage.id, "user_test"),
+      ).rejects.toThrow("stage not in pipeline");
+
+      const { data: after } = await db.from("opportunities")
+        .select("stage_id").eq("id", id).single();
+      expect(after!.stage_id).toBe(before!.stage_id);
+    }));
+
+  it("rejects creating an opportunity for a contact from a different account", () =>
+    withTestAccount(async (db, accountId) => {
+      const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+
+      // A second, unrelated account with its own contact — the realistic
+      // attack shape: a contact id that is real but belongs to someone else.
+      const { id: otherAccountId } = await createAccount(db, {
+        clerkOrgId: `org_test_${Math.random().toString(36).slice(2, 10)}`,
+        name: "Other Co",
+        actorId: "user_test",
+      });
+      try {
+        const { id: foreignContactId } = await createContact(
+          db, otherAccountId, { firstName: "Foreign" }, "user_test",
+        );
+
+        await expect(
+          createOpportunity(db, accountId,
+            { contactId: foreignContactId, pipelineId, name: "Cross-account", value: 100 },
+            "user_test"),
+        ).rejects.toThrow("contact not in account");
+
+        const { data: opps } = await db.from("opportunities")
+          .select("id").eq("account_id", accountId);
+        expect(opps).toHaveLength(0);
+      } finally {
+        // FK order matters: accounts.id is referenced by events (and would
+        // be by contacts) with no ON DELETE CASCADE — deleting the account
+        // first leaves it dangling instead of erroring, since the JS client
+        // doesn't throw on a failed delete unless the error is checked.
+        await db.from("events").delete().eq("account_id", otherAccountId);
+        await db.from("contacts").delete().eq("account_id", otherAccountId);
+        const { error: delErr } = await db.from("accounts").delete().eq("id", otherAccountId);
+        if (delErr) throw new Error(`cleanup failed: ${delErr.message}`);
+      }
+    }));
+
+  it("updateOpportunity with no fields is a no-op: no write, no event", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "NoOp" }, "user_test");
+      const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+      const { id } = await createOpportunity(db, accountId,
+        { contactId, pipelineId, name: "Untouched", value: 50 }, "user_test");
+
+      await updateOpportunity(db, accountId, id, {}, "user_test");
+
+      const { data: ev } = await db.from("events").select("type").eq("account_id", accountId)
+        .eq("type", "opportunity.updated");
+      expect(ev).toHaveLength(0);
     }));
 });

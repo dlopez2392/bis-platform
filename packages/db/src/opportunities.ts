@@ -20,6 +20,9 @@ export async function createOpportunity(
   actorId: string,
 ): Promise<{ id: string }> {
   const stages = await stagesOf(db, accountId, input.pipelineId);
+  const { data: contact } = await db.from("contacts")
+    .select("id").eq("account_id", accountId).eq("id", input.contactId).maybeSingle();
+  if (!contact) throw new Error("contact not in account");
   const { data, error } = await db.from("opportunities")
     .insert({ account_id: accountId, contact_id: input.contactId, pipeline_id: input.pipelineId,
               stage_id: stages[0]!.id, name: input.name, monetary_value: input.value ?? 0 })
@@ -48,6 +51,45 @@ export async function moveOpportunityStage(
   if (uErr) throw new Error(uErr.message);
   await emit(db, accountId, "opportunity.stage_changed", actorId,
     { opportunityId: oppId, from: opp.stage_id, to: next.id });
+}
+
+export async function moveOpportunityToStage(
+  db: SupabaseClient, accountId: string, oppId: string,
+  toStageId: string, actorId: string,
+): Promise<void> {
+  const { data: opp, error } = await db.from("opportunities")
+    .select("id, pipeline_id, stage_id").eq("account_id", accountId).eq("id", oppId).single();
+  if (error || !opp) throw new Error(`opportunity not found: ${error?.message}`);
+  if (opp.stage_id === toStageId) return;
+  const stages = await stagesOf(db, accountId, opp.pipeline_id);
+  if (!stages.some(s => s.id === toStageId)) throw new Error("stage not in pipeline");
+  const { error: uErr } = await db.from("opportunities")
+    .update({ stage_id: toStageId, stage_changed_at: new Date().toISOString(),
+              updated_at: new Date().toISOString() })
+    .eq("account_id", accountId).eq("id", oppId);
+  if (uErr) throw new Error(uErr.message);
+  await emit(db, accountId, "opportunity.stage_changed", actorId,
+    { opportunityId: oppId, from: opp.stage_id, to: toStageId });
+}
+
+export async function updateOpportunity(
+  db: SupabaseClient, accountId: string, oppId: string,
+  input: { name?: string; value?: number; status?: "open" | "won" | "lost" },
+  actorId: string,
+): Promise<void> {
+  if (input.name === undefined && input.value === undefined && input.status === undefined) return;
+  const row: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (input.name !== undefined) row.name = input.name;
+  if (input.value !== undefined) row.monetary_value = input.value;
+  if (input.status !== undefined) {
+    row.status = input.status;
+    row.status_changed_at = new Date().toISOString();
+  }
+  const { error } = await db.from("opportunities")
+    .update(row).eq("account_id", accountId).eq("id", oppId);
+  if (error) throw new Error(error.message);
+  await emit(db, accountId, "opportunity.updated", actorId,
+    { opportunityId: oppId, fields: Object.keys(input) });
 }
 
 export async function setOpportunityStatus(

@@ -53,20 +53,55 @@ export async function upsertCustomValue(
 
 const DEFAULT_STAGES = ["New Lead", "Contacted", "Appointment", "Quote Sent", "Closed"];
 
+/**
+ * Deterministically picks "the" pipeline for an account when one already
+ * exists: earliest-created first, id as a stable tiebreaker. A bare
+ * `limit(1)` with no `order by` picks nondeterministically between rows,
+ * which is how a stray duplicate "Sales" pipeline once caused the board to
+ * show different opportunities across reloads.
+ */
+async function earliestPipelineId(db: SupabaseClient, accountId: string): Promise<string | null> {
+  const { data, error } = await db.from("pipelines")
+    .select("id").eq("account_id", accountId)
+    .order("created_at", { ascending: true }).order("id", { ascending: true })
+    .limit(1);
+  if (error) throw new Error(`pipeline lookup failed: ${error.message}`);
+  return data && data.length > 0 ? data[0]!.id : null;
+}
+
 export async function ensureDefaultPipeline(
   db: SupabaseClient, accountId: string,
 ): Promise<{ pipelineId: string }> {
-  const { data: existing } = await db.from("pipelines")
-    .select("id").eq("account_id", accountId).limit(1);
-  if (existing && existing.length > 0) return { pipelineId: existing[0]!.id };
-  const { data: p, error } = await db.from("pipelines")
-    .insert({ account_id: accountId, name: "Sales" }).select("id").single();
-  if (error || !p) throw new Error(`pipeline create failed: ${error?.message}`);
-  const { error: sErr } = await db.from("pipeline_stages").insert(
-    DEFAULT_STAGES.map((name, i) => ({
-      account_id: accountId, pipeline_id: p.id, name, position: i })));
-  if (sErr) throw new Error(`stages create failed: ${sErr.message}`);
-  return { pipelineId: p.id };
+  const existing = await earliestPipelineId(db, accountId);
+  if (existing) return { pipelineId: existing };
+
+  // `pipelines_account_name_unique` (migration 0004) makes (account_id,
+  // name) unique. Two concurrent callers can both pass the check above and
+  // both reach here; ignoreDuplicates turns this into an
+  // `ON CONFLICT (account_id, name) DO NOTHING`, so at most one of them
+  // actually inserts a row instead of both succeeding and leaving two
+  // "Sales" pipelines for the same account.
+  const { data: inserted, error } = await db.from("pipelines")
+    .upsert({ account_id: accountId, name: "Sales" },
+            { onConflict: "account_id,name", ignoreDuplicates: true })
+    .select("id");
+  if (error) throw new Error(`pipeline create failed: ${error.message}`);
+
+  if (inserted && inserted.length > 0) {
+    const pipelineId = inserted[0]!.id;
+    const { error: sErr } = await db.from("pipeline_stages").insert(
+      DEFAULT_STAGES.map((name, i) => ({
+        account_id: accountId, pipeline_id: pipelineId, name, position: i })));
+    if (sErr) throw new Error(`stages create failed: ${sErr.message}`);
+    return { pipelineId };
+  }
+
+  // Lost the race: the conflicting insert was skipped, meaning another
+  // concurrent caller's row won. Re-read (same deterministic order) to
+  // return that winner instead of the row we failed to create.
+  const won = await earliestPipelineId(db, accountId);
+  if (!won) throw new Error("pipeline lookup failed: no pipeline found after conflicting insert");
+  return { pipelineId: won };
 }
 
 export async function listPipelinesWithStages(db: SupabaseClient, accountId: string) {
