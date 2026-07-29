@@ -7,6 +7,7 @@ import { m } from "@/lib/messages";
 import { STATUS_LABEL } from "@/lib/labels";
 import { ContactFieldsPanel } from "./contact-fields-panel";
 import { ActivityTimeline } from "./activity-timeline";
+import { sendEmailAction } from "../../conversations/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -39,9 +40,11 @@ export default async function ContactDetailPage({
         <ActivityTimeline
           accountId={accountId}
           contactId={contactId}
+          contactHasEmail={Boolean(contact.email)}
           notes={notes}
           tasks={tasks}
           opportunities={opps}
+          emailAction={sendEmailAction.bind(null, accountId)}
         />
         <aside className="rounded-lg border border-border bg-card p-4">
           <p className="mb-3 text-sm font-medium text-card-foreground">

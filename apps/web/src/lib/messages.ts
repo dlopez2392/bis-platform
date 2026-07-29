@@ -148,6 +148,14 @@ export const m = {
 
   "theme.toggle": "Toggle light and dark mode",
   "pipeline.dropHere": "Drop an opportunity here",
+
+  "compose.note": "Note",
+  "compose.email": "Email",
+  "compose.subject": "Subject",
+  "compose.emailPlaceholder": "Write an email…",
+  "compose.send": "Send",
+  "compose.sendFailed": "Could not send that email. It is saved as failed in the thread.",
+  "compose.noEmailOnContact": "This contact has no email address.",
 } as const;
 
 export type MessageKey = keyof typeof m;
