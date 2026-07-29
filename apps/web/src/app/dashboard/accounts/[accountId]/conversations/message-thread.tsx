@@ -15,7 +15,13 @@ export function MessageThread({
   composer: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col rounded-lg border border-border bg-card">
+    // The thread pane is bounded to the viewport (topbar h-14 = 56px + the
+    // title-only PageHeader here = 69px + the conversations grid's p-6 top/
+    // bottom padding = 48px) only from `lg` up, where the two-column layout
+    // applies — that's what lets the inner overflow-y-auto region actually
+    // engage instead of growing the whole page. Below `lg` the panes stack,
+    // where a fixed cap would look wrong, so it's left unbounded there.
+    <div className="flex flex-col rounded-lg border border-border bg-card lg:max-h-[calc(100vh-173px)]">
       <div className="border-b border-border px-4 py-3">
         <p className="text-sm font-medium text-card-foreground">{contactName}</p>
       </div>
