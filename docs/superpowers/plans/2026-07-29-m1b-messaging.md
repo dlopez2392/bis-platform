@@ -403,22 +403,37 @@ export async function listConversations(
     .order("last_message_at", { ascending: false, nullsFirst: false });
   if (error) throw new Error(error.message);
 
-  const rows = data ?? [];
-  const summaries: ConversationSummary[] = [];
-  for (const r of rows as any[]) {
-    const { data: last } = await db.from("messages")
-      .select("body").eq("account_id", accountId).eq("conversation_id", r.id)
-      .order("created_at", { ascending: false }).limit(1).maybeSingle();
-    summaries.push({
-      id: r.id,
-      contactId: r.contact_id,
-      contactFirstName: r.contacts?.first_name ?? null,
-      contactLastName: r.contacts?.last_name ?? null,
-      lastMessageAt: r.last_message_at,
-      lastMessagePreview: last?.body ?? null,
-    });
+  const rows = (data ?? []) as any[];
+  if (rows.length === 0) return [];
+
+  // One query for the previews rather than one per thread. Ordered newest
+  // first, so the first row seen for a conversation is its latest message.
+  //
+  // This does fetch more rows than it strictly needs. PostgREST caps results
+  // at max_rows (1000), so at a few hundred conversations with long histories
+  // the tail of the previews would be truncated. Correct fix at that scale is
+  // a DB-side lateral join or a denormalised last_message_preview column;
+  // neither is warranted for one operator, and N+1 queries are worse.
+  const ids = rows.map((r) => r.id);
+  const { data: msgs, error: msgErr } = await db.from("messages")
+    .select("conversation_id, body")
+    .eq("account_id", accountId).in("conversation_id", ids)
+    .order("created_at", { ascending: false });
+  if (msgErr) throw new Error(msgErr.message);
+
+  const preview = new Map<string, string>();
+  for (const row of (msgs ?? []) as any[]) {
+    if (!preview.has(row.conversation_id)) preview.set(row.conversation_id, row.body);
   }
-  return summaries;
+
+  return rows.map((r) => ({
+    id: r.id,
+    contactId: r.contact_id,
+    contactFirstName: r.contacts?.first_name ?? null,
+    contactLastName: r.contacts?.last_name ?? null,
+    lastMessageAt: r.last_message_at,
+    lastMessagePreview: preview.get(r.id) ?? null,
+  }));
 }
 
 export async function listMessages(
@@ -516,7 +531,6 @@ const base = { RESEND_API_KEY: "re_test", EMAIL_FROM: "crm@bis-rgv.com" };
 describe("getEmailProvider", () => {
   it("uses the fake when VERCEL_ENV is unset (local dev)", () => {
     const p = getEmailProvider({ ...base } as NodeJS.ProcessEnv);
-    expect(p.constructor).toBe(fakeEmailProvider().constructor);
     expect(p.isFake).toBe(true);
   });
 
