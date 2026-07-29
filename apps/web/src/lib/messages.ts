@@ -147,6 +147,7 @@ export const m = {
   "notFound.back": "Back to dashboard",
 
   "theme.toggle": "Toggle light and dark mode",
+  "pipeline.dropHere": "Drop an opportunity here",
 } as const;
 
 export type MessageKey = keyof typeof m;
