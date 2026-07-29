@@ -31,6 +31,7 @@ export function MessageComposer({
             key={value}
             type="button"
             onClick={() => setMode(value)}
+            aria-pressed={mode === value}
             className={cn(
               "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
               mode === value
@@ -52,10 +53,11 @@ export function MessageComposer({
             try {
               await (isEmail ? emailAction : noteAction)(formData);
             } catch {
-              toast.error(isEmail ? m["compose.sendFailed"] : m["contact.addNote"]);
+              toast.error(isEmail ? m["compose.sendFailed"] : m["compose.noteFailed"]);
             }
           }}
           className="space-y-2"
+          aria-label={isEmail ? m["compose.email"] : m["compose.note"]}
         >
           <input type="hidden" name="contactId" value={contactId} />
           {isEmail ? (

@@ -155,6 +155,7 @@ export const m = {
   "compose.emailPlaceholder": "Write an email…",
   "compose.send": "Send",
   "compose.sendFailed": "Could not send that email. It is saved as failed in the thread.",
+  "compose.noteFailed": "Could not save that note. Try again.",
   "compose.noEmailOnContact": "This contact has no email address.",
 } as const;
 
