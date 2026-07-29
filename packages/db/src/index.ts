@@ -9,3 +9,6 @@ export { listCustomFields, createCustomField, listCustomValues, upsertCustomValu
 export { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
          updateOpportunity, setOpportunityStatus,
          listBoard, listContactOpportunities } from "./opportunities";
+export { ensureConversation, createMessage, updateMessageStatus,
+         updateMessageStatusByProviderId, listConversations, listMessages,
+         type MessageStatus, type NewMessage, type ConversationSummary } from "./messaging";
