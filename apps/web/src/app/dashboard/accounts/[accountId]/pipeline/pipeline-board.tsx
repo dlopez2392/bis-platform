@@ -176,13 +176,24 @@ function Column({
       <div
         ref={setNodeRef}
         className={cn(
-          "flex min-h-32 flex-col gap-2 rounded-lg p-1 transition-colors",
-          isOver && "bg-primary/5 ring-1 ring-primary/30",
+          // The column body needs to read as a column even with nothing in
+          // it — otherwise the board is just floating headers over dead space
+          // and there is no visible target to drag onto.
+          "flex min-h-64 flex-1 flex-col gap-2 rounded-lg border border-dashed p-2 transition-colors",
+          isOver
+            ? "border-primary/50 bg-primary/5"
+            : "border-border/70 bg-muted/40",
         )}
       >
-        {column.opportunities.map((opp) => (
-          <DraggableCard key={opp.id} opp={opp} onOpen={onOpen} />
-        ))}
+        {column.opportunities.length === 0 ? (
+          <p className="m-auto px-2 text-center text-xs text-muted-foreground">
+            {m["pipeline.dropHere"]}
+          </p>
+        ) : (
+          column.opportunities.map((opp) => (
+            <DraggableCard key={opp.id} opp={opp} onOpen={onOpen} />
+          ))
+        )}
       </div>
     </div>
   );

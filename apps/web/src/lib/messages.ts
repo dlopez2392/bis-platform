@@ -145,6 +145,9 @@ export const m = {
   "notFound.title": "Page not found",
   "notFound.body": "That page doesn't exist or may have moved.",
   "notFound.back": "Back to dashboard",
+
+  "theme.toggle": "Toggle light and dark mode",
+  "pipeline.dropHere": "Drop an opportunity here",
 } as const;
 
 export type MessageKey = keyof typeof m;
