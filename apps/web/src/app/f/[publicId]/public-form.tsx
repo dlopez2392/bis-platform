@@ -45,7 +45,17 @@ export function PublicForm({
     if (window.parent !== window) {
       window.parent.postMessage({ type: "bis-form-redirect", url: state.redirectUrl }, "*");
     } else {
-      window.location.href = state.redirectUrl;
+      // redirectUrl is operator-configured free text (the form's success
+      // redirect setting), not something this component can trust blindly —
+      // only ever navigate the top-level page to http(s); anything else
+      // (e.g. a `javascript:` URL) is ignored rather than executed.
+      let scheme: string | null = null;
+      try {
+        scheme = new URL(state.redirectUrl, window.location.href).protocol;
+      } catch {
+        scheme = null;
+      }
+      if (scheme === "http:" || scheme === "https:") window.location.href = state.redirectUrl;
     }
   }, [state]);
 

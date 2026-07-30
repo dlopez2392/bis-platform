@@ -10,6 +10,13 @@ export const MIN_FILL_MS = 2000;
 export const RATE_LIMIT_MAX = 5;
 export const RATE_LIMIT_WINDOW_MS = 600_000;
 export const DUPLICATE_WINDOW_MS = 60_000;
+/**
+ * A render token older than this is rejected outright. There is no shared
+ * replay store in this deployment (see `verifyRenderToken`), so this bound —
+ * plus binding the token to the form it was minted for — is the accepted
+ * scope: not single-use, but not eternal or transferable either.
+ */
+export const MAX_TOKEN_AGE_MS = 30 * 60_000;
 
 export const ATTRIBUTION_KEYS = [
   "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
@@ -38,23 +45,41 @@ function sign(payload: string): string {
   return createHmac("sha256", tokenKey()).update(payload).digest("base64url");
 }
 
-/** `<issuedAtMs>.<nonce>.<hmac>` — planted in the page, returned on submit. */
-export function signRenderToken(nowMs: number, nonce: string = randomUUID()): string {
+/**
+ * `<issuedAtMs>.<nonce>.<hmac>` — planted in the page, returned on submit.
+ * `publicId` is folded into the HMAC input only, not into the wire format:
+ * the token a browser sees and echoes back is unchanged shape, but the
+ * signature it carries is no longer valid for any other form.
+ */
+export function signRenderToken(
+  nowMs: number, publicId: string, nonce: string = randomUUID(),
+): string {
   const payload = `${nowMs}.${nonce}`;
-  return `${payload}.${sign(payload)}`;
+  return `${payload}.${sign(`${publicId}.${payload}`)}`;
 }
 
 export type RenderTokenResult =
   | { ok: true; elapsedMs: number }
-  | { ok: false; reason: "malformed" | "bad_signature" };
+  | { ok: false; reason: "malformed" | "bad_signature" | "expired" };
 
-export function verifyRenderToken(token: string, nowMs: number): RenderTokenResult {
+/**
+ * Verifies a render token against the exact `publicId` it must have been
+ * minted for and rejects anything older than `MAX_TOKEN_AGE_MS`.
+ *
+ * This is deliberately NOT single-use — doing that would need a shared replay
+ * store (e.g. a row per issued nonce), which this deployment does not have.
+ * The accepted scope is a 30-minute validity window plus per-form binding: a
+ * token cannot outlive a normal page visit and cannot be replayed against a
+ * different form, but a valid token can still be resubmitted more than once
+ * within its window against the form it was minted for.
+ */
+export function verifyRenderToken(token: string, nowMs: number, publicId: string): RenderTokenResult {
   if (typeof token !== "string") return { ok: false, reason: "malformed" };
   const parts = token.split(".");
   if (parts.length !== 3) return { ok: false, reason: "malformed" };
   const [issuedAt, nonce, signature] = parts as [string, string, string];
 
-  const expected = sign(`${issuedAt}.${nonce}`);
+  const expected = sign(`${publicId}.${issuedAt}.${nonce}`);
   const got = Buffer.from(signature);
   const want = Buffer.from(expected);
   if (got.length !== want.length || !timingSafeEqual(got, want)) {
@@ -63,7 +88,9 @@ export function verifyRenderToken(token: string, nowMs: number): RenderTokenResu
 
   const ms = Number(issuedAt);
   if (!Number.isFinite(ms)) return { ok: false, reason: "malformed" };
-  return { ok: true, elapsedMs: nowMs - ms };
+  const elapsedMs = nowMs - ms;
+  if (elapsedMs > MAX_TOKEN_AGE_MS) return { ok: false, reason: "expired" };
+  return { ok: true, elapsedMs };
 }
 
 /**

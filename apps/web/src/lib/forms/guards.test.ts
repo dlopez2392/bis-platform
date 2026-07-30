@@ -1,9 +1,13 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import {
   HONEYPOT_FIELD, MIN_FILL_MS, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS, DUPLICATE_WINDOW_MS,
+  MAX_TOKEN_AGE_MS,
   signRenderToken, verifyRenderToken, hashIp, hashAnswers, parseAttribution,
   isValidEmail, isValidPhone,
 } from "./guards";
+
+const FORM_A = "form_a11111111";
+const FORM_B = "form_b22222222";
 
 beforeAll(() => { process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-key"; });
 
@@ -17,8 +21,8 @@ describe("form guards", () => {
   });
 
   it("a signed render token verifies and reports elapsed time", () => {
-    const token = signRenderToken(1_000_000);
-    const result = verifyRenderToken(token, 1_005_000);
+    const token = signRenderToken(1_000_000, FORM_A);
+    const result = verifyRenderToken(token, 1_005_000, FORM_A);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.elapsedMs).toBe(5000);
   });
@@ -26,19 +30,38 @@ describe("form guards", () => {
   it("a tampered timestamp fails the signature instead of buying time", () => {
     // The whole point: a bot that rewrites the issued-at to look like it filled
     // the form slowly must not get through.
-    const token = signRenderToken(Date.now());
+    const token = signRenderToken(Date.now(), FORM_A);
     const [, nonce, sig] = token.split(".");
     const forged = `1.${nonce}.${sig}`;
 
-    const result = verifyRenderToken(forged, Date.now());
+    const result = verifyRenderToken(forged, Date.now(), FORM_A);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("bad_signature");
   });
 
   it("a malformed token is rejected without throwing", () => {
     for (const bad of ["", "nope", "a.b", "a.b.c.d"]) {
-      expect(verifyRenderToken(bad, Date.now()).ok).toBe(false);
+      expect(verifyRenderToken(bad, Date.now(), FORM_A).ok).toBe(false);
     }
+  });
+
+  it("a token older than MAX_TOKEN_AGE_MS is rejected as expired", () => {
+    const issuedAt = 1_000_000;
+    const token = signRenderToken(issuedAt, FORM_A);
+
+    const justInside = verifyRenderToken(token, issuedAt + MAX_TOKEN_AGE_MS, FORM_A);
+    expect(justInside.ok).toBe(true);
+
+    const justOutside = verifyRenderToken(token, issuedAt + MAX_TOKEN_AGE_MS + 1, FORM_A);
+    expect(justOutside.ok).toBe(false);
+    if (!justOutside.ok) expect(justOutside.reason).toBe("expired");
+  });
+
+  it("a token minted for one form fails verification against a different form", () => {
+    const token = signRenderToken(1_000_000, FORM_A);
+    const result = verifyRenderToken(token, 1_005_000, FORM_B);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("bad_signature");
   });
 
   it("hashIp is stable, opaque, and never the raw address", () => {
@@ -115,8 +138,8 @@ describe("form guards", () => {
   it("verifyRenderToken rejects non-string input without throwing", () => {
     const badInputs: unknown[] = [undefined, null, 12345, {}, ["a", "b", "c"]];
     for (const bad of badInputs) {
-      expect(() => verifyRenderToken(bad as unknown as string, Date.now())).not.toThrow();
-      expect(verifyRenderToken(bad as unknown as string, Date.now())).toEqual({
+      expect(() => verifyRenderToken(bad as unknown as string, Date.now(), FORM_A)).not.toThrow();
+      expect(verifyRenderToken(bad as unknown as string, Date.now(), FORM_A)).toEqual({
         ok: false,
         reason: "malformed",
       });

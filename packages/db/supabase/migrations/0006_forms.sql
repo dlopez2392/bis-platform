@@ -45,7 +45,8 @@ create table public.form_submissions (
   -- makes an old submission unreadable.
   answers jsonb not null default '[]'::jsonb,
   attribution jsonb not null default '{}'::jsonb,
-  -- {given, text, at}. `text` is the exact consent copy displayed: proving
+  -- [{key, given, text, at}, ...] — one entry per consent field on the form,
+  -- not just the first. `text` is the exact consent copy displayed: proving
   -- consent later requires knowing what the person agreed to, not just that a
   -- box was ticked.
   consent jsonb,

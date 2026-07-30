@@ -13,7 +13,8 @@ const ANSWERS = [{ key: "email", label: "Email", value: "lead@example.com" }];
 const INPUT = {
   answers: ANSWERS, attribution: { utm_source: "google" }, locale: "en",
   ipHash: "hash_a", userAgent: "vitest", answersHash: "ah_1",
-  consent: { given: true, text: "I agree to be contacted.", at: "2026-07-29T00:00:00.000Z" },
+  consent: [{ key: "consent", given: true, text: "I agree to be contacted.",
+              at: "2026-07-29T00:00:00.000Z" }],
 };
 
 async function form(db: any, accountId: string) {
@@ -32,7 +33,7 @@ describe("form submissions", () => {
       expect(rows[0]!.id).toBe(id);
       expect(rows[0]!.answers).toEqual(ANSWERS);
       expect(rows[0]!.attribution).toEqual({ utm_source: "google" });
-      expect(rows[0]!.consent!.text).toBe("I agree to be contacted.");
+      expect(rows[0]!.consent![0]!.text).toBe("I agree to be contacted.");
       expect(rows[0]!.spam_reason).toBeNull();
 
       const { data: ev } = await db.from("events").select("type")

@@ -137,12 +137,17 @@ export async function updateForm(
     { formId, fields: Object.keys(patch) });
 }
 
-export type SubmissionConsent = { given: boolean; text: string; at: string };
+// `key` identifies which consent field this is: a form can have more than one
+// (e.g. "contact me" and "share with partners"), each enforced independently
+// by `validate` and each recorded independently here — never collapsed to
+// just the first, since that would mean the pipeline compels an agreement
+// (the second checkbox) it cannot later prove was ever given.
+export type SubmissionConsent = { key: string; given: boolean; text: string; at: string };
 
 export type SubmissionInput = {
   answers: { key: string; label: string; value: string }[];
   attribution?: Record<string, string>;
-  consent?: SubmissionConsent | null;
+  consent?: SubmissionConsent[] | null;
   locale?: string;
   ipHash?: string;
   userAgent?: string;
@@ -155,7 +160,7 @@ export type SubmissionRow = {
   contact_id: string | null;
   answers: { key: string; label: string; value: string }[];
   attribution: Record<string, string>;
-  consent: SubmissionConsent | null;
+  consent: SubmissionConsent[] | null;
   locale: string | null;
   spam_reason: "honeypot" | "too_fast" | "rate_limited" | null;
   processing_error: string | null;
