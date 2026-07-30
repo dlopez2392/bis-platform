@@ -25,3 +25,10 @@ export const MESSAGE_STATUS_LABEL: Record<string, string> = {
   bounced: m["conversations.status.bounced"],
   failed: m["conversations.status.failed"],
 };
+
+/** Form `status` column -> display label. */
+export const FORM_STATUS_LABEL: Record<string, string> = {
+  draft: m["forms.status.draft"],
+  published: m["forms.status.published"],
+  archived: m["forms.status.archived"],
+};
