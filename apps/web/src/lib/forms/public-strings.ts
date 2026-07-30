@@ -10,6 +10,7 @@ const STRINGS = {
     invalidPhone: "Enter a valid phone number.",
     consentRequired: "Please check this box to continue.",
     unavailable: "Something went wrong. Please try again.",
+    tokenExpired: "This form expired. Please refresh the page and submit again.",
     optional: "optional",
   },
   es: {
@@ -21,6 +22,7 @@ const STRINGS = {
     invalidPhone: "Escribe un número de teléfono válido.",
     consentRequired: "Marca esta casilla para continuar.",
     unavailable: "Algo salió mal. Vuelve a intentarlo.",
+    tokenExpired: "Este formulario venció. Actualiza la página y envíalo de nuevo.",
     optional: "opcional",
   },
 } as const;

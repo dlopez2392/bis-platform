@@ -98,16 +98,20 @@ function successFor(form: FormRow, locale: "en" | "es"): SubmitResult {
  *     rate-limit count vs. a full contact/conversation/notify run), so wall
  *     clock timing is NOT guaranteed identical between paths. That gap is a
  *     known, accepted limitation — do not "fix" it by adding artificial
- *     delays, and do not describe the two paths as indistinguishable.
+ *     delays, and do not describe the two paths as indistinguishable. One
+ *     deliberate exception to the same-body guarantee: an expired render
+ *     token returns its own `invalid` result instead of the shared success
+ *     body, because that costs a real, distracted visitor their lead for no
+ *     security benefit — a bot already reads its own token's age in plaintext
+ *     off the token itself, so telling it "expired" is not new information.
  *  3. The submission row is written before any enrichment, and everything after
  *     it is best-effort. A lead is never lost to a notification failure.
  */
 export async function submitFormAction(
   publicId: string, _prev: SubmitResult, formData: FormData,
 ): Promise<SubmitResult> {
-  const db = serviceDb();
-
   try {
+    const db = serviceDb();
     const form = await getPublishedFormByPublicId(db, publicId);
     // Draft, archived and never-existed are all the same answer on purpose.
     if (!form) return { status: "error" };
@@ -180,7 +184,25 @@ export async function submitFormAction(
     }
 
     const token = verifyRenderToken(String(formData.get(RENDER_TOKEN_FIELD) ?? ""), Date.now(), publicId);
-    if (!token.ok || token.elapsedMs < MIN_FILL_MS) {
+    if (!token.ok) {
+      // A genuinely expired token is not a spam signal — it is a visitor who
+      // left the tab open past MAX_TOKEN_AGE_MS, and recording their real lead
+      // as `too_fast` while showing them a success message loses it silently.
+      // The one thing that lets them recover is telling them to refresh: this
+      // leaks nothing a bot doesn't already know, since `issuedAt` is plaintext
+      // in the token it holds.
+      if (token.reason === "expired") {
+        return { status: "invalid", fieldErrors: {}, formError: s.tokenExpired };
+      }
+      // `malformed`/`bad_signature` are still folded into the `too_fast`
+      // spam_reason below (the CHECK constraint permits only honeypot/
+      // too_fast/rate_limited), but the real cause is worth keeping in logs —
+      // a forged signature and a fast fill are not the same thing.
+      console.warn(`form ${form.id} render token rejected (${token.reason})`);
+      await recordRejectedSubmission(db, accountId, form.id, { ...base, spamReason: "too_fast" });
+      return successFor(form, locale);
+    }
+    if (token.elapsedMs < MIN_FILL_MS) {
       await recordRejectedSubmission(db, accountId, form.id, { ...base, spamReason: "too_fast" });
       return successFor(form, locale);
     }
@@ -249,13 +271,14 @@ async function enrich(
   // costs a real lead, but so is a silent inbox when the CRM write itself is
   // what failed.
   try {
-    // Dedupe is deliberately on email alone, unverified — this was reviewed
-    // and accepted, not missed. Anyone who knows a client's contact email can
-    // attach a message or fill blanks on that contact's record through this
-    // public path. What makes that acceptable: the writes land on the
+    // Dedupe is deliberately on email OR phone (see `findDuplicate` in
+    // packages/db/src/contacts.ts), unverified — this was reviewed and
+    // accepted, not missed. Anyone who knows a client's contact email or phone
+    // can attach a message or fill blanks on that contact's record through
+    // this public path. What makes that acceptable: the writes land on the
     // contact's own timeline with form provenance, visible to the operator,
     // and nothing here is ever read back to the submitter. Do not "fix" this
-    // by requiring email verification without re-opening that review.
+    // by requiring verification of either field without re-opening that review.
     const created = await createContact(db, accountId, {
       firstName: byKind.get("core.first_name") || undefined,
       lastName: byKind.get("core.last_name") || undefined,
@@ -303,7 +326,13 @@ async function enrich(
   }
 
   if (errors.length > 0) {
-    await setSubmissionProcessingError(db, accountId, submissionId, errors.join("; "));
+    // Truncated per-component, not after joining: `setSubmissionProcessingError`
+    // caps the final string at 500 chars, and the notify error — the one that
+    // means nobody was told about the lead, more operationally urgent than a
+    // CRM-write failure — is appended last, so a single post-join truncation
+    // is exactly what cuts it away.
+    await setSubmissionProcessingError(db, accountId, submissionId,
+      errors.map((e) => e.slice(0, 240)).join("; "));
   }
 }
 

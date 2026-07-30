@@ -92,6 +92,10 @@ export function PublicForm({
             <Field key={field.key} field={field} error={errors[field.key]} strings={strings} />
           ))}
 
+          {state.status === "invalid" && state.formError ? (
+            <p role="alert" className="bis-form-error">{state.formError}</p>
+          ) : null}
+
           {state.status === "error" ? (
             <p role="alert" className="bis-form-error">{strings.unavailable}</p>
           ) : null}
