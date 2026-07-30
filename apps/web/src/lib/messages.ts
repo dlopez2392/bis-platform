@@ -34,8 +34,6 @@ export const m = {
   "common.saving": "Saving…",
   "common.unavailable": "—",
 
-  "empty.conversations.title": "Conversations are coming in M1b",
-  "empty.conversations.body": "Unified SMS and email threads will land here.",
   "empty.calendar.title": "Calendar is coming in M1b",
   "empty.calendar.body": "Booking and appointment management will land here.",
 
@@ -148,6 +146,28 @@ export const m = {
 
   "theme.toggle": "Toggle light and dark mode",
   "pipeline.dropHere": "Drop an opportunity here",
+
+  "compose.note": "Note",
+  "compose.email": "Email",
+  "compose.subject": "Subject",
+  "compose.emailPlaceholder": "Write an email…",
+  "compose.send": "Send",
+  "compose.sending": "Sending…",
+  "compose.sent": "Email sent.",
+  "compose.sendFailed": "Could not send that email. It is saved as failed in the thread.",
+  "compose.sendRejected": "Could not send that email. Check the contact has an email address.",
+  "compose.noteFailed": "Could not save that note. Try again.",
+  "compose.noEmailOnContact": "This contact has no email address.",
+
+  "conversations.empty.title": "No conversations yet",
+  "conversations.empty.body": "Email a contact from their timeline and the thread will appear here.",
+  "conversations.pickThread": "Select a conversation to read it.",
+  "conversations.status.queued": "Queued",
+  "conversations.status.sent": "Sent",
+  "conversations.status.delivered": "Delivered",
+  "conversations.status.opened": "Opened",
+  "conversations.status.bounced": "Bounced",
+  "conversations.status.failed": "Failed",
 } as const;
 
 export type MessageKey = keyof typeof m;

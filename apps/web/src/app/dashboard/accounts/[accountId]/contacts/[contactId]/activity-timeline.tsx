@@ -9,8 +9,8 @@ import { formatCurrency, formatDate, formatDateUTC, formatDateTime } from "@/lib
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { STATUS_LABEL } from "@/lib/labels";
-import { SubmitButton } from "../../../submit-button";
 import { addNoteAction, addTaskAction, completeTaskAction } from "./actions";
+import { MessageComposer } from "./message-composer";
 
 type Note = Awaited<ReturnType<typeof listNotes>>[number];
 type Task = Awaited<ReturnType<typeof listContactTasks>>[number];
@@ -24,15 +24,19 @@ type TimelineItem =
 export function ActivityTimeline({
   accountId,
   contactId,
+  contactHasEmail,
   notes,
   tasks,
   opportunities,
+  emailAction,
 }: {
   accountId: string;
   contactId: string;
+  contactHasEmail: boolean;
   notes: Note[];
   tasks: Task[];
   opportunities: Opportunity[];
+  emailAction: (formData: FormData) => Promise<void>;
 }) {
   const hidden = <input type="hidden" name="contactId" value={contactId} />;
   const boundAddTask = addTaskAction.bind(null, accountId);
@@ -117,11 +121,12 @@ export function ActivityTimeline({
         )}
       </CardContent>
       <CardFooter className="border-t border-border pt-4">
-        <form action={boundAddNote} aria-label={m["contact.notes"]} className="flex w-full gap-2">
-          {hidden}
-          <Input name="body" placeholder={m["contact.addNote"]} className="flex-1" />
-          <SubmitButton>{m["common.add"]}</SubmitButton>
-        </form>
+        <MessageComposer
+          contactId={contactId}
+          contactHasEmail={contactHasEmail}
+          noteAction={boundAddNote}
+          emailAction={emailAction}
+        />
       </CardFooter>
     </Card>
   );

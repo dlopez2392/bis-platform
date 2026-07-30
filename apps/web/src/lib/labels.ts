@@ -15,3 +15,13 @@ export const ACCOUNT_STATUS_LABEL: Record<string, string> = {
   paused: m["accounts.status.paused"],
   archived: m["accounts.status.archived"],
 };
+
+/** Message `status` column -> display label. */
+export const MESSAGE_STATUS_LABEL: Record<string, string> = {
+  queued: m["conversations.status.queued"],
+  sent: m["conversations.status.sent"],
+  delivered: m["conversations.status.delivered"],
+  opened: m["conversations.status.opened"],
+  bounced: m["conversations.status.bounced"],
+  failed: m["conversations.status.failed"],
+};
