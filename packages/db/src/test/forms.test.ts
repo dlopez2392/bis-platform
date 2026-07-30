@@ -70,6 +70,37 @@ describe("forms", () => {
       expect(summary!.submissionCount).toBe(1);
     }));
 
+  it("listForms excludes blocked (spam_reason set) rows from the submission count", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id } = await createForm(db, accountId, { name: "A", fields: FIELDS }, "user_test");
+      await db.from("form_submissions").insert([
+        { account_id: accountId, form_id: id, answers: [] },
+        { account_id: accountId, form_id: id, answers: [] },
+        { account_id: accountId, form_id: id, answers: [], spam_reason: "honeypot" },
+        { account_id: accountId, form_id: id, answers: [], spam_reason: "too_fast" },
+        { account_id: accountId, form_id: id, answers: [], spam_reason: "rate_limited" },
+      ]);
+
+      const [summary] = await listForms(db, accountId);
+      // 5 rows total in the table, only 2 are genuine.
+      expect(summary!.submissionCount).toBe(2);
+    }));
+
+  it("listForms still lists a form with zero genuine submissions among blocked-only rows", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id } = await createForm(db, accountId, { name: "All blocked", fields: FIELDS }, "user_test");
+      await db.from("form_submissions").insert({
+        account_id: accountId, form_id: id, answers: [], spam_reason: "honeypot",
+      });
+
+      // The form itself must not disappear from the list just because none of
+      // its submissions were genuine — only the count should read 0.
+      const summaries = await listForms(db, accountId);
+      const mine = summaries.find((s) => s.id === id);
+      expect(mine).toBeDefined();
+      expect(mine!.submissionCount).toBe(0);
+    }));
+
   it("updateForm cannot reach a form in another account", () =>
     withTestAccount(async (db, accountId) => {
       const { id } = await createForm(db, accountId, { name: "A", fields: FIELDS }, "user_test");

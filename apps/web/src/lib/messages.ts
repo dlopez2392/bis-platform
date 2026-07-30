@@ -217,7 +217,12 @@ export const m = {
   // of blocked attempts; that would understate spam volume to the operator.
   "forms.blocked": "Blocked event",
   "forms.spamReason.honeypot": "Hidden field was filled in — a sign of an automated submission.",
-  "forms.spamReason.too_fast": "Submitted too quickly to have been filled out by a person.",
+  // The stored enum value is "too_fast", but the same reason is also recorded
+  // for a missing, malformed, or forged render token (see submitFormAction in
+  // apps/web/src/app/f/[publicId]/actions.ts) — a real person just filling
+  // the form quickly is only one of the three causes, so the copy has to
+  // cover all of them honestly rather than naming only the first.
+  "forms.spamReason.too_fast": "Submitted too quickly, or with a missing or invalid form token, to have been filled out by a person.",
   "forms.spamReason.rate_limited": "Too many submissions from this source in a short time.",
   "forms.needsAttention": "Needs attention",
   "forms.contact": "Contact",

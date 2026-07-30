@@ -77,6 +77,46 @@ describe("contacts service", () => {
       expect(b.id).toBe(a.id);
     }));
 
+  it("createContact treats % and _ in email as literal characters, not ILIKE wildcards", () =>
+    withTestAccount(async (db, accountId) => {
+      // A pre-existing, unrelated contact. Before `findDuplicate` escaped its
+      // ILIKE operand, an attacker-supplied "%@example.com" would match this
+      // row (ILIKE '%@example.com' matches any address ending "@example.com"),
+      // hijacking it — the exact bug this test guards against.
+      const real = await createContact(db, accountId,
+        { firstName: "Real", lastName: "Customer", email: "real.customer@example.com" }, "user_test");
+
+      const first = await createContact(
+        db, accountId, { firstName: "Wildcard", email: "%@example.com" }, "user_test");
+      expect(first.existing).toBe(false);
+      expect(first.id).not.toBe(real.id);
+
+      // Submitting the identical literal string again still dedupes onto
+      // itself normally — the fix makes "%" literal, it does not disable
+      // dedupe for values that happen to contain one.
+      const second = await createContact(
+        db, accountId, { firstName: "Wildcard again", email: "%@example.com" }, "user_test");
+      expect(second.existing).toBe(true);
+      expect(second.id).toBe(first.id);
+      expect(second.id).not.toBe(real.id);
+
+      // Total across this test: two distinct contacts (the real one, and the
+      // wildcard one) — never merged together.
+      const { data: all } = await db.from("contacts").select("id").eq("account_id", accountId);
+      expect(all).toHaveLength(2);
+    }));
+
+  it("createContact treats a leading underscore in email as literal, not an ILIKE single-char wildcard", () =>
+    withTestAccount(async (db, accountId) => {
+      const real = await createContact(db, accountId,
+        { firstName: "Real", email: "a@example.com" }, "user_test");
+
+      const wildcard = await createContact(
+        db, accountId, { firstName: "Wildcard", email: "_@example.com" }, "user_test");
+      expect(wildcard.existing).toBe(false);
+      expect(wildcard.id).not.toBe(real.id);
+    }));
+
   it("createContact records a system actor when asked", () =>
     withTestAccount(async (db, accountId) => {
       await createContact(db, accountId, { firstName: "Lead" }, "form", "system");

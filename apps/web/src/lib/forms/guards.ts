@@ -132,7 +132,15 @@ export function parseAttribution(params: URLSearchParams): Record<string, string
 // Deliberately excludes " ' , and whitespace. Beyond being invalid in an
 // address, those are exactly the characters that break out of a PostgREST
 // filter, and this value reaches the contact dedupe lookup from a public form.
-const EMAIL_RE = /^[^\s@,"'<>]+@[^\s@,"'<>]+\.[a-z]{2,}$/i;
+//
+// Also excludes % and _: those are not PostgREST filter-grammar characters,
+// but they are SQL ILIKE *pattern wildcards*, and the contact dedupe lookup
+// (`findDuplicate` in packages/db/src/contacts.ts) matches this value with
+// ILIKE. `packages/db` now escapes them defensively before they reach ILIKE,
+// but rejecting them here means a wildcard address is refused as invalid
+// input at the public boundary instead of silently sanitized — a stranger
+// cannot submit `%@%.com` and have it treated as a real address at all.
+const EMAIL_RE = /^[^\s@,"'<>%_]+@[^\s@,"'<>%_]+\.[a-z]{2,}$/i;
 // Leading "(" (as in "(956) 555-0101") is accepted alongside a leading digit
 // or "+" — the RGV-common way to write a US number with an area code.
 const PHONE_RE = /^\+?[0-9(][0-9()\-.\s]{5,19}$/;

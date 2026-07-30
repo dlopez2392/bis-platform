@@ -36,13 +36,27 @@ function toRow(input: Partial<ContactInput>) {
  * written instead of anything visibly failing. Both branches below check
  * `error` and throw, so a broken lookup can no longer masquerade as "no
  * match."
+ *
+ * `email` still reaches `.ilike()`, and `.ilike()`'s operand is a SQL ILIKE
+ * *pattern*, not a plain equality value — parameterizing it (above) stops it
+ * from escaping PostgREST's filter grammar, but does nothing about `%`/`_`,
+ * which ILIKE itself interprets as wildcards. `guards.ts`'s `EMAIL_RE` now
+ * rejects both at the public form boundary, but this lookup is also reached
+ * by the authenticated operator path (typing an email into the CRM directly),
+ * which has no such validation. `escapeLikePattern` neutralizes both
+ * characters (and a literal backslash, which would otherwise itself become an
+ * escape) so the email is matched as a literal string either way.
  */
+function escapeLikePattern(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
 async function findDuplicate(
   db: SupabaseClient, accountId: string, email?: string, phone?: string,
 ): Promise<string | null> {
   if (email) {
     const { data, error } = await db.from("contacts").select("id")
-      .eq("account_id", accountId).ilike("email", email).limit(1);
+      .eq("account_id", accountId).ilike("email", escapeLikePattern(email)).limit(1);
     if (error) throw new Error(`contact dedupe failed: ${error.message}`);
     if (data && data.length > 0) return data[0]!.id;
   }

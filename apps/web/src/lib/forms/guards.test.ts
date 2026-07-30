@@ -134,6 +134,23 @@ describe("form guards", () => {
     expect(isValidEmail("trailing@dot.")).toBe(false);
   });
 
+  it("email validation rejects SQL ILIKE wildcards, which the dedupe lookup matches as patterns", () => {
+    // Verified live against the old regex: all four of these passed it, and
+    // `%`/`_` are wildcards to the ILIKE the value reaches in
+    // packages/db/src/contacts.ts#findDuplicate — a stranger submitting one of
+    // these on a public form could dedupe onto an arbitrary existing contact.
+    expect(isValidEmail("%@%.com")).toBe(false);
+    expect(isValidEmail("%@example.com")).toBe(false);
+    expect(isValidEmail("a%@bis-rgv.com")).toBe(false);
+    expect(isValidEmail("_@example.com")).toBe(false);
+    // An ordinary address with none of the excluded characters still passes.
+    // (Note this regex excludes `_` entirely, including inside an otherwise
+    // normal local part like "john_doe@example.com" — a deliberate, accepted
+    // tradeoff against a real, if less common, address shape, made because
+    // `_` reaches the same ILIKE dedupe lookup as `%` does.)
+    expect(isValidEmail("maria@example.com")).toBe(true);
+  });
+
   it("phone validation accepts real-world formats and rejects junk", () => {
     expect(isValidPhone("+1 (956) 555-0101")).toBe(true);
     expect(isValidPhone("956.555.0101")).toBe(true);

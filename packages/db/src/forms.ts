@@ -85,6 +85,7 @@ export async function listForms(
   const { data, error } = await db.from("forms")
     .select("id, public_id, name, status, created_at, form_submissions(count)")
     .eq("account_id", accountId)
+    .is("form_submissions.spam_reason", null)
     .order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
   return ((data ?? []) as any[]).map((r) => ({
