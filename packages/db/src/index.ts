@@ -12,8 +12,12 @@ export { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
          listBoard, listContactOpportunities } from "./opportunities";
 export { ensureConversation, createMessage, updateMessageStatus,
          updateMessageStatusByProviderId, listConversations, listMessages,
+         incrementUnreadCount, clearUnreadCount,
          type MessageStatus, type NewMessage, type ConversationSummary } from "./messaging";
 export { newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId,
-         updateForm,
+         updateForm, createSubmission, recordRejectedSubmission, countRecentSubmissions,
+         shouldRecordRateLimit, findRecentDuplicate, linkSubmissionContact,
+         setSubmissionProcessingError, emitFormSubmitted, listSubmissions, listContactSubmissions,
          type FormField, type FormFieldKind, type FormTheme, type FormStatus,
-         type FormRow, type FormSummary } from "./forms";
+         type FormRow, type FormSummary,
+         type SubmissionInput, type SubmissionRow, type SubmissionConsent } from "./forms";
