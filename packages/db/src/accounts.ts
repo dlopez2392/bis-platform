@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { emit } from "./events";
 
 export async function createAccount(
   db: SupabaseClient,
@@ -14,12 +15,7 @@ export async function createAccount(
     .single();
   if (error || !account) throw new Error(`createAccount failed: ${error?.message}`);
 
-  const { error: evErr } = await db.from("events").insert({
-    account_id: account.id, type: "account.created",
-    actor_type: "user", actor_id: input.actorId,
-    payload: { name: input.name },
-  });
-  if (evErr) throw new Error(`event emit failed: ${evErr.message}`);
+  await emit(db, account.id, "account.created", input.actorId, { name: input.name });
   return { id: account.id };
 }
 

@@ -1,4 +1,5 @@
 export { serviceDb } from "./service";
+export { emit, type ActorType } from "./events";
 export { createAccount, listAccounts } from "./accounts";
 export { createContact, updateContact, listContacts, getContact,
          addTagToContact, removeTagFromContact, listContactTags,

@@ -40,4 +40,49 @@ describe("contacts service", () => {
       const tags = await listContactTags(db, accountId, id);
       expect(tags.map(t => t.name)).toEqual(["vip"]);
     }));
+
+  it("createContact tolerates PostgREST filter syntax in email AND phone", () =>
+    withTestAccount(async (db, accountId) => {
+      // Both fields must be present: the old dedupe interpolated them into a
+      // single .or() filter only in that case, so an email-only submission
+      // took an already-safe .ilike() branch and proved nothing. From a public
+      // form both of these strings are attacker-controlled.
+      const hostile = `a"),phone.eq."x`;
+      const first = await createContact(
+        db, accountId, { firstName: "Nefarious", email: hostile, phone: `1"),email.ilike."%` },
+        "user_test");
+      expect(first.existing).toBe(false);
+
+      const second = await createContact(
+        db, accountId, { firstName: "Nefarious", email: hostile, phone: `1"),email.ilike."%` },
+        "user_test");
+      expect(second.existing).toBe(true);
+      expect(second.id).toBe(first.id);
+    }));
+
+  it("createContact tolerates filter syntax in an email-only submission", () =>
+    withTestAccount(async (db, accountId) => {
+      const hostile = `a"),phone.eq."x`;
+      const first = await createContact(db, accountId, { email: hostile }, "user_test");
+      const second = await createContact(db, accountId, { email: hostile }, "user_test");
+      expect(second.existing).toBe(true);
+      expect(second.id).toBe(first.id);
+    }));
+
+  it("createContact dedupes on phone when only a phone is given", () =>
+    withTestAccount(async (db, accountId) => {
+      const a = await createContact(db, accountId, { phone: "956-555-0101" }, "user_test");
+      const b = await createContact(db, accountId, { phone: "956-555-0101" }, "user_test");
+      expect(b.existing).toBe(true);
+      expect(b.id).toBe(a.id);
+    }));
+
+  it("createContact records a system actor when asked", () =>
+    withTestAccount(async (db, accountId) => {
+      await createContact(db, accountId, { firstName: "Lead" }, "form", "system");
+      const { data } = await db.from("events").select("actor_type, actor_id")
+        .eq("account_id", accountId).eq("type", "contact.created");
+      expect(data![0]!.actor_type).toBe("system");
+      expect(data![0]!.actor_id).toBe("form");
+    }));
 });

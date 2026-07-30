@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { emit } from "./events";
 
 export type MessageStatus =
   | "queued" | "sent" | "delivered" | "opened" | "bounced" | "failed";
@@ -22,15 +23,6 @@ export type ConversationSummary = {
 
 const MESSAGE_COLS =
   "id, conversation_id, channel, direction, status, provider_message_id, subject, body, error, created_at";
-
-async function emit(
-  db: SupabaseClient, accountId: string, type: string, actorId: string, payload: object,
-  actorType: "user" | "system" | "ai" = "user",
-) {
-  const { error } = await db.from("events").insert({
-    account_id: accountId, type, actor_type: actorType, actor_id: actorId, payload });
-  if (error) throw new Error(`event emit failed: ${error.message}`);
-}
 
 // Providers deliver webhook events at-least-once and without an ordering
 // guarantee, so the same event can replay and a later-firing event (e.g.

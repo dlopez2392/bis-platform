@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { emit, type ActorType } from "./events";
 
 export type ContactInput = {
   firstName?: string; lastName?: string; email?: string; phone?: string;
@@ -19,41 +20,69 @@ function toRow(input: Partial<ContactInput>) {
   return row;
 }
 
-async function emit(db: SupabaseClient, accountId: string, type: string, actorId: string, payload: object) {
-  const { error } = await db.from("events").insert({
-    account_id: accountId, type, actor_type: "user", actor_id: actorId, payload });
-  if (error) throw new Error(`event emit failed: ${error.message}`);
+/**
+ * Two plain filters instead of one interpolated `.or()` string.
+ *
+ * The previous form built `email.ilike."${email}",phone.eq."${phone}"` by
+ * interpolation. That was safe only because every caller was an operator
+ * typing into the CRM; a public form makes this value attacker-controlled, and
+ * an email containing `"` or `,` breaks out of PostgREST's filter grammar.
+ * `.eq`/`.ilike` send their operand as a parameter, so nothing can escape it.
+ * Two round trips instead of one is the right price.
+ *
+ * The previous form also discarded the query's `error` (`const { data: dupe }
+ * = await q`), so a filter that failed to parse silently became "no duplicate
+ * found" rather than a thrown error — a second, duplicate contact row got
+ * written instead of anything visibly failing. Both branches below check
+ * `error` and throw, so a broken lookup can no longer masquerade as "no
+ * match."
+ */
+async function findDuplicate(
+  db: SupabaseClient, accountId: string, email?: string, phone?: string,
+): Promise<string | null> {
+  if (email) {
+    const { data, error } = await db.from("contacts").select("id")
+      .eq("account_id", accountId).ilike("email", email).limit(1);
+    if (error) throw new Error(`contact dedupe failed: ${error.message}`);
+    if (data && data.length > 0) return data[0]!.id;
+  }
+  if (phone) {
+    const { data, error } = await db.from("contacts").select("id")
+      .eq("account_id", accountId).eq("phone", phone).limit(1);
+    if (error) throw new Error(`contact dedupe failed: ${error.message}`);
+    if (data && data.length > 0) return data[0]!.id;
+  }
+  return null;
 }
 
 export async function createContact(
   db: SupabaseClient, accountId: string, input: ContactInput, actorId: string,
+  actorType: ActorType = "user",
 ): Promise<{ id: string; existing: boolean }> {
   const email = input.email?.trim().toLowerCase();
   const phone = input.phone?.trim();
-  if (email || phone) {
-    let q = db.from("contacts").select("id").eq("account_id", accountId).limit(1);
-    if (email && phone) q = q.or(`email.ilike."${email}",phone.eq."${phone}"`);
-    else if (email) q = q.ilike("email", email);
-    else q = q.eq("phone", phone!);
-    const { data: dupe } = await q;
-    if (dupe && dupe.length > 0) return { id: dupe[0]!.id, existing: true };
-  }
+  const dupe = await findDuplicate(db, accountId, email || undefined, phone || undefined);
+  if (dupe) return { id: dupe, existing: true };
+
   const { data, error } = await db.from("contacts")
     .insert({ account_id: accountId, ...toRow(input) }).select("id").single();
   if (error || !data) throw new Error(`createContact failed: ${error?.message}`);
-  await emit(db, accountId, "contact.created", actorId, { contactId: data.id, email, phone });
+  await emit(db, accountId, "contact.created", actorId, { contactId: data.id, email, phone },
+    actorType);
   return { id: data.id, existing: false };
 }
 
 export async function updateContact(
   db: SupabaseClient, accountId: string, contactId: string,
   input: Partial<ContactInput>, actorId: string,
+  actorType: ActorType = "user",
 ): Promise<void> {
   const { error } = await db.from("contacts")
     .update({ ...toRow(input), updated_at: new Date().toISOString() })
     .eq("account_id", accountId).eq("id", contactId);
   if (error) throw new Error(`updateContact failed: ${error.message}`);
-  await emit(db, accountId, "contact.updated", actorId, { contactId, fields: Object.keys(input) });
+  await emit(db, accountId, "contact.updated", actorId, { contactId, fields: Object.keys(input) },
+    actorType);
 }
 
 export async function listContacts(

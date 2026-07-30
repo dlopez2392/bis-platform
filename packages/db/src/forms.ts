@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { emit } from "./events";
 
 export type FormFieldKind =
   | "core.first_name" | "core.last_name" | "core.email" | "core.phone" | "core.company_name"
@@ -56,15 +57,6 @@ export function newPublicId(): string {
   let out = "";
   for (const b of bytes) out += ALPHABET[b % ALPHABET.length];
   return out;
-}
-
-async function emit(
-  db: SupabaseClient, accountId: string, type: string, actorId: string, payload: object,
-  actorType: "user" | "system" | "ai" = "user",
-) {
-  const { error } = await db.from("events").insert({
-    account_id: accountId, type, actor_type: actorType, actor_id: actorId, payload });
-  if (error) throw new Error(`event emit failed: ${error.message}`);
 }
 
 export async function createForm(

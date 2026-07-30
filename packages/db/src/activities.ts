@@ -1,19 +1,15 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-
-async function emit(db: SupabaseClient, accountId: string, type: string, actorId: string, payload: object) {
-  const { error } = await db.from("events").insert({
-    account_id: accountId, type, actor_type: "user", actor_id: actorId, payload });
-  if (error) throw new Error(`event emit failed: ${error.message}`);
-}
+import { emit, type ActorType } from "./events";
 
 export async function addNote(
   db: SupabaseClient, accountId: string, contactId: string, body: string, actorId: string,
+  actorType: ActorType = "user",
 ): Promise<{ id: string }> {
   const { data, error } = await db.from("notes")
     .insert({ account_id: accountId, contact_id: contactId, body, author_id: actorId })
     .select("id").single();
   if (error || !data) throw new Error(`addNote failed: ${error?.message}`);
-  await emit(db, accountId, "note.created", actorId, { contactId, noteId: data.id });
+  await emit(db, accountId, "note.created", actorId, { contactId, noteId: data.id }, actorType);
   return { id: data.id };
 }
 
@@ -29,13 +25,15 @@ export async function listNotes(db: SupabaseClient, accountId: string, contactId
 export async function addTask(
   db: SupabaseClient, accountId: string,
   input: { contactId?: string; title: string; dueAt?: string }, actorId: string,
+  actorType: ActorType = "user",
 ): Promise<{ id: string }> {
   const { data, error } = await db.from("tasks")
     .insert({ account_id: accountId, contact_id: input.contactId ?? null,
               title: input.title, due_at: input.dueAt ?? null })
     .select("id").single();
   if (error || !data) throw new Error(`addTask failed: ${error?.message}`);
-  await emit(db, accountId, "task.created", actorId, { taskId: data.id, contactId: input.contactId });
+  await emit(db, accountId, "task.created", actorId,
+    { taskId: data.id, contactId: input.contactId }, actorType);
   return { id: data.id };
 }
 
@@ -50,10 +48,11 @@ export async function listContactTasks(db: SupabaseClient, accountId: string, co
 
 export async function completeTask(
   db: SupabaseClient, accountId: string, taskId: string, actorId: string,
+  actorType: ActorType = "user",
 ): Promise<void> {
   const { error } = await db.from("tasks")
     .update({ completed_at: new Date().toISOString() })
     .eq("account_id", accountId).eq("id", taskId);
   if (error) throw new Error(error.message);
-  await emit(db, accountId, "task.completed", actorId, { taskId });
+  await emit(db, accountId, "task.completed", actorId, { taskId }, actorType);
 }
