@@ -98,13 +98,32 @@ describe("form submissions", () => {
       const formId = await form(db, accountId);
       await createSubmission(db, accountId, formId, INPUT);
 
-      // Latest row is a real submission, so the first over-limit hit is worth
+      const inWindow = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+
+      // No marker yet in this window, so the first over-limit hit is worth
       // recording.
-      expect(await shouldRecordRateLimit(db, formId, "hash_a")).toBe(true);
+      expect(await shouldRecordRateLimit(db, formId, "hash_a", inWindow)).toBe(true);
       await recordRejectedSubmission(db, accountId, formId, { ...INPUT, spamReason: "rate_limited" });
 
-      // Latest row is already the marker, so the rest of the burst adds nothing.
-      expect(await shouldRecordRateLimit(db, formId, "hash_a")).toBe(false);
+      // A marker already exists in this window, so the rest of the burst adds nothing.
+      expect(await shouldRecordRateLimit(db, formId, "hash_a", inWindow)).toBe(false);
+    }));
+
+  it("shouldRecordRateLimit only sees a marker inside the given window", () =>
+    withTestAccount(async (db, accountId) => {
+      const formId = await form(db, accountId);
+      await createSubmission(db, accountId, formId, INPUT);
+      await recordRejectedSubmission(db, accountId, formId, { ...INPUT, spamReason: "rate_limited" });
+
+      const now = Date.now();
+      const inWindow = new Date(now - 10 * 60 * 1000).toISOString();
+      // The marker falls inside this window, so it suppresses another.
+      expect(await shouldRecordRateLimit(db, formId, "hash_a", inWindow)).toBe(false);
+
+      // A window that starts after the marker was written excludes it —
+      // a new burst in a later window gets its own marker again.
+      const laterWindow = new Date(now + 60 * 1000).toISOString();
+      expect(await shouldRecordRateLimit(db, formId, "hash_a", laterWindow)).toBe(true);
     }));
 
   it("findRecentDuplicate matches the same answers from the same ip", () =>

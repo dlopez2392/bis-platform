@@ -230,21 +230,27 @@ export async function countRecentSubmissions(
 }
 
 /**
- * True when the newest row for this (form, ip) is not already a rate_limited
- * marker. Without this, every request in a burst would insert another marker,
- * each one raising the window count, and the table would grow without bound
- * for as long as the bot kept going. One marker per burst is enough to make
- * the throttling visible.
+ * True when no rate_limited marker has been recorded for this (form, ip)
+ * since `sinceIso`. Pass the same window start used for countRecentSubmissions
+ * so a marker written for one burst suppresses further markers for the rest
+ * of that window, while a later window still gets its own.
+ *
+ * This is a check-then-act race, not a hard cap: concurrent requests can all
+ * run this SELECT before any of their markers commit, so more than one
+ * marker can land in the same window. That is accepted, not fixed, because
+ * rate-limit *enforcement* lives in countRecentSubmissions, which counts
+ * every row regardless of spam_reason — a bot cannot escape throttling by
+ * winning this race, it can only inflate the blocked-count and, bounded by
+ * concurrency-per-window rather than by request count, table growth.
  */
 export async function shouldRecordRateLimit(
-  db: SupabaseClient, formId: string, ipHash: string,
+  db: SupabaseClient, formId: string, ipHash: string, sinceIso: string,
 ): Promise<boolean> {
-  const { data, error } = await db.from("form_submissions").select("spam_reason")
-    .eq("form_id", formId).eq("ip_hash", ipHash)
-    .order("created_at", { ascending: false }).limit(1);
+  const { data, error } = await db.from("form_submissions").select("id")
+    .eq("form_id", formId).eq("ip_hash", ipHash).eq("spam_reason", "rate_limited")
+    .gte("created_at", sinceIso).limit(1);
   if (error) throw new Error(`shouldRecordRateLimit failed: ${error.message}`);
-  if (!data || data.length === 0) return true;
-  return data[0]!.spam_reason !== "rate_limited";
+  return !data || data.length === 0;
 }
 
 export async function findRecentDuplicate(
