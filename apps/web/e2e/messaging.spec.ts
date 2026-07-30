@@ -46,6 +46,11 @@ test("email sent from a contact appears in the thread and in Conversations", asy
   // screen that actually surfaces it.
   await page.getByRole("link", { name: "Conversations" }).click();
   await expect(page).toHaveURL(/\/conversations/);
+  // The screen no longer auto-opens the newest thread — doing so marked a fresh
+  // inbound lead read before anyone looked at it — so a thread has to be picked.
+  // Matched by href rather than contact name because this spec walks in through
+  // "the first contact in the table" and never learns whose thread it is.
+  await page.locator("a[href*='?c=']").first().click();
   await expect(page.getByText(subject).first()).toBeVisible();
   await expect(page.getByText("Sent").first()).toBeVisible();
   await expect(page.getByText("Sent by the e2e suite.").first()).toBeVisible();

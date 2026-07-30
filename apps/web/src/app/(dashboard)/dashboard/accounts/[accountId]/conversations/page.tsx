@@ -40,8 +40,12 @@ export default async function ConversationsPage({
   }
 
   const base = `/dashboard/accounts/${accountId}/conversations`;
-  const activeId = c ?? conversations[0]!.id;
-  const active = conversations.find((conversation) => conversation.id === activeId);
+  // No auto-selection. Falling back to conversations[0] meant that simply
+  // landing on this screen opened the newest thread, which — now that opening a
+  // thread clears its unread count — marked the newest inbound lead as read
+  // before anyone had chosen to look at it. The badge is only worth anything if
+  // it survives until a real open.
+  const active = c ? conversations.find((conversation) => conversation.id === c) : undefined;
   const messages = active ? await listMessages(db, accountId, active.id) : [];
 
   return (
