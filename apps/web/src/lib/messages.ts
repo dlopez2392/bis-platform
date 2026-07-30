@@ -152,7 +152,10 @@ export const m = {
   "compose.subject": "Subject",
   "compose.emailPlaceholder": "Write an email…",
   "compose.send": "Send",
+  "compose.sending": "Sending…",
+  "compose.sent": "Email sent.",
   "compose.sendFailed": "Could not send that email. It is saved as failed in the thread.",
+  "compose.sendRejected": "Could not send that email. Check the contact has an email address.",
   "compose.noteFailed": "Could not save that note. Try again.",
   "compose.noEmailOnContact": "This contact has no email address.",
 

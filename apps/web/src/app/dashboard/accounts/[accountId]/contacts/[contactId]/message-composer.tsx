@@ -2,10 +2,11 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
+import { isSendRejected } from "../../conversations/send-errors";
+import { EmailSendButton } from "../../conversations/send-button";
 
 type Mode = "note" | "email";
 
@@ -52,8 +53,13 @@ export function MessageComposer({
           action={async (formData) => {
             try {
               await (isEmail ? emailAction : noteAction)(formData);
-            } catch {
-              toast.error(isEmail ? m["compose.sendFailed"] : m["compose.noteFailed"]);
+              if (isEmail) toast.success(m["compose.sent"]);
+            } catch (e) {
+              if (!isEmail) {
+                toast.error(m["compose.noteFailed"]);
+              } else {
+                toast.error(isSendRejected(e) ? m["compose.sendRejected"] : m["compose.sendFailed"]);
+              }
             }
           }}
           className="space-y-2"
@@ -70,9 +76,15 @@ export function MessageComposer({
               className="flex-1"
               required
             />
-            <Button type="submit" variant={isEmail ? "default" : "outline"}>
-              {isEmail ? m["compose.send"] : m["common.add"]}
-            </Button>
+            {/* Disables while pending. The note form this replaced had that
+                protection via SubmitButton; sending is the slowest action in
+                the app and the only one that mails a real person, so a
+                double-click here costs a duplicate email. */}
+            <EmailSendButton
+              label={isEmail ? m["compose.send"] : m["common.add"]}
+              pendingLabel={isEmail ? m["compose.sending"] : m["common.saving"]}
+              variant={isEmail ? "default" : "outline"}
+            />
           </div>
         </form>
       )}

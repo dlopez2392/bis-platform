@@ -1,8 +1,16 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { getEmailProvider } from "./index";
 import { fakeEmailProvider } from "./fake";
 
 const base = { RESEND_API_KEY: "re_test", EMAIL_FROM: "crm@bis-rgv.com" };
+
+// getEmailProvider reads NODE_ENV from the real process env (not from the
+// injectable `env` param), so exercising the production branch means
+// stubbing the real process.env.NODE_ENV — and restoring it, or every test
+// file that runs after this one in the same worker inherits the stub.
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("getEmailProvider", () => {
   it("uses the fake when VERCEL_ENV is unset (local dev)", () => {
@@ -16,8 +24,15 @@ describe("getEmailProvider", () => {
   });
 
   it("uses the real provider only in production", () => {
+    vi.stubEnv("NODE_ENV", "production");
     const p = getEmailProvider({ ...base, VERCEL_ENV: "production" } as unknown as NodeJS.ProcessEnv);
     expect(p.isFake).toBe(false);
+  });
+
+  it("stays on the fake when VERCEL_ENV=production but NODE_ENV is not production — the `vercel env pull` scenario", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const p = getEmailProvider({ ...base, VERCEL_ENV: "production" } as unknown as NodeJS.ProcessEnv);
+    expect(p.isFake).toBe(true);
   });
 
   it("allows a real send outside production only when a single recipient is allowlisted", () => {

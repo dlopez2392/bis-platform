@@ -25,11 +25,28 @@ const MESSAGE_COLS =
 
 async function emit(
   db: SupabaseClient, accountId: string, type: string, actorId: string, payload: object,
+  actorType: "user" | "system" | "ai" = "user",
 ) {
   const { error } = await db.from("events").insert({
-    account_id: accountId, type, actor_type: "user", actor_id: actorId, payload });
+    account_id: accountId, type, actor_type: actorType, actor_id: actorId, payload });
   if (error) throw new Error(`event emit failed: ${error.message}`);
 }
+
+// Providers deliver webhook events at-least-once and without an ordering
+// guarantee, so the same event can replay and a later-firing event (e.g.
+// "delivered") can arrive after an earlier one in the lifecycle (e.g.
+// "opened") that actually happened first on the provider's side. Rank the
+// scale so a write only ever moves status forward. bounced/failed are
+// terminal outcomes and share the top rank, so either always wins over an
+// earlier in-flight status but a duplicate of either is still a no-op.
+const STATUS_RANK: Record<MessageStatus, number> = {
+  queued: 0,
+  sent: 1,
+  delivered: 2,
+  opened: 3,
+  bounced: 4,
+  failed: 4,
+};
 
 export async function ensureConversation(
   db: SupabaseClient, accountId: string, contactId: string, actorId: string,
@@ -133,14 +150,26 @@ export async function updateMessageStatusByProviderId(
   db: SupabaseClient, providerMessageId: string, status: MessageStatus,
 ): Promise<{ updated: boolean }> {
   const { data, error } = await db.from("messages")
-    .update({ status, updated_at: new Date().toISOString() })
+    .select("id, account_id, status")
     .eq("provider_message_id", providerMessageId)
-    .select("id, account_id").maybeSingle();
+    .maybeSingle();
   if (error) throw new Error(`updateMessageStatusByProviderId failed: ${error.message}`);
   if (!data) return { updated: false };
 
+  // Out-of-order or replayed event: the row already reflects an equal or
+  // later point in the lifecycle. Leave it alone — no write, no event —
+  // rather than regress the status or log a duplicate.
+  if (STATUS_RANK[status] <= STATUS_RANK[data.status as MessageStatus]) {
+    return { updated: true };
+  }
+
+  const { error: updateErr } = await db.from("messages")
+    .update({ status, updated_at: new Date().toISOString() })
+    .eq("id", data.id);
+  if (updateErr) throw new Error(`updateMessageStatusByProviderId failed: ${updateErr.message}`);
+
   await emit(db, data.account_id, "message.status_changed", "system",
-    { messageId: data.id, status, providerMessageId });
+    { messageId: data.id, status, providerMessageId }, "system");
   return { updated: true };
 }
 

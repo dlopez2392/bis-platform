@@ -1,9 +1,10 @@
 "use client";
 
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { m } from "@/lib/messages";
+import { isSendRejected } from "./send-errors";
+import { EmailSendButton } from "./send-button";
 
 // The Conversations thread has no note concept — every message here is an
 // outbound email — so this is a plain email form rather than the note/email
@@ -21,8 +22,9 @@ export function EmailComposer({
       action={async (formData) => {
         try {
           await action(formData);
-        } catch {
-          toast.error(m["compose.sendFailed"]);
+          toast.success(m["compose.sent"]);
+        } catch (e) {
+          toast.error(isSendRejected(e) ? m["compose.sendRejected"] : m["compose.sendFailed"]);
         }
       }}
       className="space-y-2"
@@ -37,7 +39,7 @@ export function EmailComposer({
           className="flex-1"
           required
         />
-        <Button type="submit">{m["compose.send"]}</Button>
+        <EmailSendButton />
       </div>
     </form>
   );

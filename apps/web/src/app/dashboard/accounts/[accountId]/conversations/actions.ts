@@ -6,18 +6,23 @@ import {
   serviceDb, getContact, ensureConversation, createMessage, updateMessageStatus,
 } from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
+// A prefix on `.message` rather than an Error subclass: thrown Errors are
+// serialized across the server-action boundary and do not keep a custom
+// prototype chain on the way back to the client. Lives in its own module
+// because a "use server" file may only export async functions.
+import { sendRejected as rejectSend } from "./send-errors";
 
 export async function sendEmailAction(accountId: string, formData: FormData): Promise<void> {
   const { userId } = await requireAgency();
   const contactId = String(formData.get("contactId") ?? "");
   const subject = String(formData.get("subject") ?? "").trim();
   const body = String(formData.get("body") ?? "").trim();
-  if (!contactId || !body) throw new Error("contactId and body required");
+  if (!contactId || !body) rejectSend("contactId and body required");
 
   const db = serviceDb();
   const contact = await getContact(db, accountId, contactId);
-  if (!contact) throw new Error("contact not in account");
-  if (!contact.email) throw new Error("contact has no email address");
+  if (!contact) rejectSend("contact not in account");
+  if (!contact.email) rejectSend("contact has no email address");
 
   const convo = await ensureConversation(db, accountId, contactId, userId);
 
@@ -30,19 +35,30 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
 
   const { data: account } = await db.from("accounts").select("name").eq("id", accountId).maybeSingle();
 
+  // Only the send itself is guarded: once send() has succeeded the email is
+  // gone and irrevocably out the door, so a failure recording that (a rare
+  // DB error) must never be re-labeled "failed" here — that would tell the
+  // operator a delivered email didn't go out, and drop the provider message
+  // id the delivery webhook needs to correlate against.
+  let providerMessageId: string;
   try {
-    const { providerMessageId } = await getEmailProvider().send({
+    ({ providerMessageId } = await getEmailProvider().send({
       to: contact.email,
       fromName: account?.name ?? "BIS",
       subject: subject || "(no subject)",
       body,
-    });
-    await updateMessageStatus(db, accountId, messageId, "sent", { providerMessageId }, userId);
+    }));
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown send failure";
     await updateMessageStatus(db, accountId, messageId, "failed", { error: message }, userId);
+    // The failed row must be visible without a manual reload — the toast
+    // that follows this throw says exactly that.
+    revalidatePath(`/dashboard/accounts/${accountId}/contacts/${contactId}`);
+    revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
     throw e;
   }
+
+  await updateMessageStatus(db, accountId, messageId, "sent", { providerMessageId }, userId);
 
   revalidatePath(`/dashboard/accounts/${accountId}/contacts/${contactId}`);
   revalidatePath(`/dashboard/accounts/${accountId}/conversations`);

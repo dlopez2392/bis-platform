@@ -20,7 +20,15 @@ export { fakeEmailProvider } from "./fake";
 export function getEmailProvider(env: NodeJS.ProcessEnv = process.env): EmailProvider {
   const apiKey = env.RESEND_API_KEY ?? "";
   const from = env.EMAIL_FROM ?? "";
-  const isProduction = env.VERCEL_ENV === "production";
+  // Both signals are required, not just VERCEL_ENV. `vercel env pull
+  // --environment=production` writes VERCEL_ENV="production" AND the real
+  // RESEND_API_KEY into a local env file; `next dev` would then load both
+  // and this guard would wave a laptop run through as production. NODE_ENV
+  // closes that hole because it is read from the real process env here
+  // (never from the injectable `env` param above) — Next.js hardcodes
+  // NODE_ENV=development under `next dev` and refuses to let a `.env` file
+  // override it, so it cannot be pulled or spoofed the way VERCEL_ENV can.
+  const isProduction = env.VERCEL_ENV === "production" && process.env.NODE_ENV === "production";
 
   if (isProduction) {
     if (!apiKey || !from) throw new Error("RESEND_API_KEY and EMAIL_FROM are required in production");

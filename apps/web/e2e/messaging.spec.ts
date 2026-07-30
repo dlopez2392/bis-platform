@@ -1,4 +1,11 @@
 import { test, expect } from "@playwright/test";
+import { config as loadEnv } from "dotenv";
+import { serviceDb } from "@bis/db";
+
+// Playwright's config passes env to the webServer, not to this process, so the
+// service-role credentials have to be loaded explicitly for cleanup.
+loadEnv({ path: "apps/web/.env.local" });
+loadEnv({ path: ".env.local" });
 
 // Pinned by name, not position — same reasoning as contact-detail.spec.ts:
 // "first card" on /dashboard/accounts broke once stray accounts existed
@@ -15,11 +22,11 @@ test("email sent from a contact appears in the thread and in Conversations", asy
   await page.getByRole("table").getByRole("link").first().click();
   await expect(page).toHaveURL(/\/contacts\/[0-9a-f-]{36}$/);
 
-  // This spec writes a real conversation + message row to the shared dev
-  // database and does not clean up after itself (there is no delete path
-  // in this milestone). A timestamp-based subject keeps it from colliding
-  // with rows a previous run left behind — without it, `getByText(subject)`
-  // could match a stale row instead of (or in addition to) this run's.
+  // This spec writes real rows to the shared dev database. `ensureConversation`
+  // is unique per (account, contact), so runs reuse one thread and it is the
+  // *messages* that accumulate — those are deleted at the end of this test.
+  // The timestamped subject both scopes that cleanup and stops assertions
+  // from matching a row a crashed earlier run left behind.
   const subject = `E2E ${Date.now()}`;
   await page.getByRole("button", { name: "Email" }).click();
   await page.getByPlaceholder("Subject").fill(subject);
@@ -42,4 +49,10 @@ test("email sent from a contact appears in the thread and in Conversations", asy
   await expect(page.getByText(subject).first()).toBeVisible();
   await expect(page.getByText("Sent").first()).toBeVisible();
   await expect(page.getByText("Sent by the e2e suite.").first()).toBeVisible();
+
+  // Delete only the rows this run created, matched by its unique subject.
+  // Nothing else is touched — the seeded account, contact and opportunity
+  // must survive, and the conversation row is shared with future runs.
+  const { error } = await serviceDb().from("messages").delete().eq("subject", subject);
+  expect(error, `cleanup failed: ${error?.message}`).toBeNull();
 });

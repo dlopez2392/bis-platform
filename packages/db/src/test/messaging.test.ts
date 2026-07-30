@@ -115,6 +115,64 @@ describe("messaging", () => {
       expect(miss.updated).toBe(false);
     }));
 
+  it("updateMessageStatusByProviderId logs the webhook update as the system actor, not a user", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      const { id } = await createMessage(db, accountId, {
+        conversationId: convo.id, channel: "email", direction: "outbound", body: "x",
+      }, "user_test");
+      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId: "prov_actor" }, "user_test");
+
+      await updateMessageStatusByProviderId(db, "prov_actor", "delivered");
+
+      const { data: ev } = await db.from("events").select("actor_type, actor_id")
+        .eq("account_id", accountId).eq("type", "message.status_changed")
+        .order("created_at", { ascending: false }).limit(1);
+      expect(ev![0]!.actor_type).toBe("system");
+      expect(ev![0]!.actor_id).toBe("system");
+    }));
+
+  it("updateMessageStatusByProviderId does not regress status when a later event arrives out of order", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      const { id } = await createMessage(db, accountId, {
+        conversationId: convo.id, channel: "email", direction: "outbound", body: "x",
+      }, "user_test");
+      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId: "prov_order" }, "user_test");
+
+      await updateMessageStatusByProviderId(db, "prov_order", "opened");
+      // "delivered" is earlier than "opened" on the lifecycle scale — a
+      // provider replay or reorder must not revert the row.
+      await updateMessageStatusByProviderId(db, "prov_order", "delivered");
+
+      const [msg] = await listMessages(db, accountId, convo.id);
+      expect(msg!.status).toBe("opened");
+    }));
+
+  it("updateMessageStatusByProviderId treats a replayed event as a true no-op: no second event row", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      const { id } = await createMessage(db, accountId, {
+        conversationId: convo.id, channel: "email", direction: "outbound", body: "x",
+      }, "user_test");
+      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId: "prov_replay" }, "user_test");
+
+      await updateMessageStatusByProviderId(db, "prov_replay", "delivered");
+      await updateMessageStatusByProviderId(db, "prov_replay", "delivered");
+
+      const [msg] = await listMessages(db, accountId, convo.id);
+      expect(msg!.status).toBe("delivered");
+
+      const { data: ev } = await db.from("events").select("id")
+        .eq("account_id", accountId).eq("type", "message.status_changed");
+      // One from the initial "sent" write above, one from the first
+      // "delivered" — the replayed second call must not add a third.
+      expect(ev).toHaveLength(2);
+    }));
+
   it("listConversations orders most-recent first", () =>
     withTestAccount(async (db, accountId) => {
       const a = await createContact(db, accountId, { firstName: "Older" }, "user_test");
