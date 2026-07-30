@@ -1,0 +1,19 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Embed host — manual verification</title>
+<style>
+  body { margin: 0; font: 16px/1.5 system-ui, sans-serif; background: #f4f4f5; }
+  main { max-width: 640px; margin: 40px auto; padding: 24px; background: #fff; border-radius: 12px; }
+  /* A deliberately hostile reset: proves host CSS cannot reach into the iframe. */
+  input, textarea, button { all: revert; font-size: 40px !important; }
+</style>
+<main>
+  <h1>Pretend client site</h1>
+  <p>The form below is embedded. Host CSS sets a 40px font on inputs; if the
+     form is unaffected, style isolation is working.</p>
+  <!-- REPLACE data-form with a published form's public_id -->
+  <script src="http://localhost:3000/embed.js"
+          data-form="REPLACE_ME"
+          data-locale="en"
+          data-title="Quote request"></script>
+</main>
