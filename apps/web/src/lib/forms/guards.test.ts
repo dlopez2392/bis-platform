@@ -59,6 +59,20 @@ describe("form guards", () => {
       .not.toBe(hashAnswers(a));
   });
 
+  it("hashAnswers does not collide a single field's value with a field boundary", () => {
+    // Unescaped "key=value&key=value" joins let a value containing "&"/"="
+    // imitate a second field. One free-text message with a pasted query
+    // string must not hash the same as two genuinely different fields.
+    const oneFieldWithDelimiters = [
+      { key: "message", label: "Message", value: "a=b&x=y" },
+    ];
+    const twoSeparateFields = [
+      { key: "message", label: "Message", value: "a=b" },
+      { key: "x", label: "X", value: "y" },
+    ];
+    expect(hashAnswers(oneFieldWithDelimiters)).not.toBe(hashAnswers(twoSeparateFields));
+  });
+
   it("parseAttribution keeps the tracking keys and the host page, drops the rest", () => {
     const params = new URLSearchParams({
       utm_source: "google", utm_medium: "cpc", gclid: "abc123",
@@ -76,7 +90,14 @@ describe("form guards", () => {
   it("email validation rejects the characters that break a PostgREST filter", () => {
     expect(isValidEmail("maria@example.com")).toBe(true);
     expect(isValidEmail("maria+quote@sub.example.co")).toBe(true);
-    expect(isValidEmail(`a"),phone.eq."x`)).toBe(false);
+    // Otherwise well-formed addresses (has "@", has a dotted TLD) that carry
+    // one of the excluded characters — these must be rejected because of the
+    // character, not merely because they lack an "@". A payload with no "@"
+    // at all (e.g. `a"),phone.eq."x`) would pass this assertion even with a
+    // naive `.+@.+\..+` regex that has none of the intended exclusions.
+    expect(isValidEmail('ma"ria@example.com')).toBe(false);
+    expect(isValidEmail("ma<ria>@example.com")).toBe(false);
+    expect(isValidEmail(`a"),phone.eq."x@example.com`)).toBe(false);
     expect(isValidEmail("a,b@example.com")).toBe(false);
     expect(isValidEmail("no-at-sign")).toBe(false);
     expect(isValidEmail("trailing@dot.")).toBe(false);
@@ -85,7 +106,43 @@ describe("form guards", () => {
   it("phone validation accepts real-world formats and rejects junk", () => {
     expect(isValidPhone("+1 (956) 555-0101")).toBe(true);
     expect(isValidPhone("956.555.0101")).toBe(true);
+    // Common RGV formatting: parenthesized area code with no leading "+"/digit.
+    expect(isValidPhone("(956) 555-0101")).toBe(true);
     expect(isValidPhone("12345")).toBe(false);
     expect(isValidPhone("call me")).toBe(false);
+  });
+
+  it("verifyRenderToken rejects non-string input without throwing", () => {
+    const badInputs: unknown[] = [undefined, null, 12345, {}, ["a", "b", "c"]];
+    for (const bad of badInputs) {
+      expect(() => verifyRenderToken(bad as unknown as string, Date.now())).not.toThrow();
+      expect(verifyRenderToken(bad as unknown as string, Date.now())).toEqual({
+        ok: false,
+        reason: "malformed",
+      });
+    }
+  });
+
+  it("isValidEmail rejects non-string input without throwing", () => {
+    const badInputs: unknown[] = [undefined, null, 12345, {}, ["a@example.com"]];
+    for (const bad of badInputs) {
+      expect(() => isValidEmail(bad as unknown as string)).not.toThrow();
+      expect(isValidEmail(bad as unknown as string)).toBe(false);
+    }
+  });
+
+  it("isValidPhone rejects non-string input without throwing", () => {
+    const badInputs: unknown[] = [undefined, null, 9565550101, {}, ["9565550101"]];
+    for (const bad of badInputs) {
+      expect(() => isValidPhone(bad as unknown as string)).not.toThrow();
+      expect(isValidPhone(bad as unknown as string)).toBe(false);
+    }
+  });
+
+  it("hashAnswers coerces a non-string value to empty rather than throwing", () => {
+    const withBadValue = [{ key: "message", label: "Message", value: 12345 as unknown as string }];
+    const withEmptyValue = [{ key: "message", label: "Message", value: "" }];
+    expect(() => hashAnswers(withBadValue)).not.toThrow();
+    expect(hashAnswers(withBadValue)).toBe(hashAnswers(withEmptyValue));
   });
 });

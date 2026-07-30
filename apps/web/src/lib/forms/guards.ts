@@ -49,6 +49,7 @@ export type RenderTokenResult =
   | { ok: false; reason: "malformed" | "bad_signature" };
 
 export function verifyRenderToken(token: string, nowMs: number): RenderTokenResult {
+  if (typeof token !== "string") return { ok: false, reason: "malformed" };
   const parts = token.split(".");
   if (parts.length !== 3) return { ok: false, reason: "malformed" };
   const [issuedAt, nonce, signature] = parts as [string, string, string];
@@ -65,17 +66,31 @@ export function verifyRenderToken(token: string, nowMs: number): RenderTokenResu
   return { ok: true, elapsedMs: nowMs - ms };
 }
 
-/** Rate limiting needs equality only, so the raw address is never stored. */
+/**
+ * Rate limiting needs equality only, so the raw address is never stored.
+ *
+ * Keyed with the same secret as the render token (HMAC, not a plain hash) so
+ * that recovering an address requires the secret. An unkeyed SHA-256 over a
+ * public label is not a one-way function here: the IPv4 space is only ~4.3
+ * billion values, small enough that anyone holding this source could
+ * precompute a full reverse table and undo it for every stored hash.
+ */
 export function hashIp(ip: string): string {
-  return createHash("sha256").update(`bis-form-ip:${ip}`).digest("hex").slice(0, 32);
+  return createHmac("sha256", tokenKey()).update(`bis-form-ip:${ip}`).digest("hex").slice(0, 32);
 }
 
 export function hashAnswers(answers: { key: string; value: string }[]): string {
-  const normalized = answers
-    .map((a) => `${a.key}=${a.value.trim().toLowerCase()}`)
-    .sort()
-    .join("&");
-  return createHash("sha256").update(normalized).digest("hex").slice(0, 32);
+  // [key, normalizedValue] pairs, JSON-serialized rather than joined with "="
+  // and "&" — those characters can appear inside a value (e.g. a pasted URL
+  // with a query string), and an unescaped join lets two different
+  // submissions serialize to the identical string. JSON.stringify quotes each
+  // element, so no value can imitate a field boundary.
+  const pairs: [string, string][] = answers.map((a) => {
+    const raw = typeof a.value === "string" ? a.value : "";
+    return [a.key, raw.trim().toLowerCase()];
+  });
+  pairs.sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
+  return createHash("sha256").update(JSON.stringify(pairs)).digest("hex").slice(0, 32);
 }
 
 export function parseAttribution(params: URLSearchParams): Record<string, string> {
@@ -91,13 +106,17 @@ export function parseAttribution(params: URLSearchParams): Record<string, string
 // address, those are exactly the characters that break out of a PostgREST
 // filter, and this value reaches the contact dedupe lookup from a public form.
 const EMAIL_RE = /^[^\s@,"'<>]+@[^\s@,"'<>]+\.[a-z]{2,}$/i;
-const PHONE_RE = /^\+?[0-9][0-9()\-.\s]{5,19}$/;
+// Leading "(" (as in "(956) 555-0101") is accepted alongside a leading digit
+// or "+" — the RGV-common way to write a US number with an area code.
+const PHONE_RE = /^\+?[0-9(][0-9()\-.\s]{5,19}$/;
 
 export function isValidEmail(value: string): boolean {
+  if (typeof value !== "string") return false;
   return EMAIL_RE.test(value.trim());
 }
 
 export function isValidPhone(value: string): boolean {
+  if (typeof value !== "string") return false;
   const trimmed = value.trim();
   if (!PHONE_RE.test(trimmed)) return false;
   return trimmed.replace(/\D/g, "").length >= 7;
