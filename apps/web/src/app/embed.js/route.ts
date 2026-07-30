@@ -6,7 +6,7 @@ import { EMBED_SCRIPT } from "@/lib/forms/embed-script";
 export async function GET(): Promise<Response> {
   return new Response(EMBED_SCRIPT, {
     headers: {
-      "content-type": "application/javascript; charset=utf-8",
+      "content-type": "text/javascript; charset=utf-8",
       "cache-control": "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400",
     },
   });

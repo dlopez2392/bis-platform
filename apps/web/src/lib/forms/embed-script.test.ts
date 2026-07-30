@@ -34,6 +34,44 @@ function run(attrs: Record<string, string>, hostUrl: string, referrer = "") {
   return { iframe, inserted, win, send: (event: any) => listener?.(event) };
 }
 
+/**
+ * Two independent `<script data-form>` embeds on one host page share a single
+ * real `window` — both `addEventListener("message", ...)` calls land on the
+ * same target and BOTH listeners run for every message. The single-embed
+ * `run()` fake only keeps the last-registered listener, which can't exercise
+ * that. This fake keeps an array of listeners (like a real window would) and
+ * a separate iframe/script/document per embed, so a message's source check
+ * is what proves isolation, not test plumbing.
+ */
+function runTwoEmbeds(hostUrl: string) {
+  const listeners: Listener[] = [];
+  const win: any = {
+    location: { search: new URL(hostUrl).search, href: hostUrl },
+    addEventListener: (type: string, fn: Listener) => { if (type === "message") listeners.push(fn); },
+    top: { location: { href: "" } },
+  };
+  win.parent = win;
+
+  function install(formId: string) {
+    const iframe: any = { style: {}, setAttribute: (k: string, v: string) => { iframe[k] = v; }, contentWindow: { id: "iframe-" + formId } };
+    const script = {
+      src: "https://platform.example.com/embed.js",
+      getAttribute: (name: string) => (name === "data-form" ? formId : null),
+      parentNode: { insertBefore: () => {} },
+      nextSibling: null,
+    };
+    const document = { currentScript: script, referrer: "", createElement: () => iframe };
+    new Function("window", "document", "URL", "URLSearchParams", EMBED_SCRIPT)(
+      win, document, URL, URLSearchParams);
+    return iframe;
+  }
+
+  const iframeA = install("form-a");
+  const iframeB = install("form-b");
+
+  return { iframeA, iframeB, send: (event: any) => { for (const fn of listeners) fn(event); } };
+}
+
 const ORIGIN = "https://platform.example.com";
 
 describe("embed script", () => {
@@ -86,8 +124,26 @@ describe("embed script", () => {
     expect(win.top.location.href).toBe("https://client.example/thanks");
   });
 
+  it("ignores a redirect message with a javascript: URL — does not navigate", () => {
+    const { iframe, send, win } = run({ "data-form": "abc123def456" }, "https://client.example/");
+    const before = win.top.location.href;
+    send({ source: iframe.contentWindow, origin: ORIGIN,
+           data: { type: "bis-form-redirect", url: "javascript:alert(1)" } });
+    expect(win.top.location.href).toBe(before);
+  });
+
   it("does nothing without a data-form attribute", () => {
     const { inserted } = run({}, "https://client.example/");
     expect(inserted).toHaveLength(0);
+  });
+
+  it("keeps two embeds on one host page isolated — a height message from the first iframe only resizes the first", () => {
+    const { iframeA, iframeB, send } = runTwoEmbeds("https://client.example/");
+    const beforeB = iframeB.style.height;
+
+    send({ source: iframeA.contentWindow, origin: ORIGIN, data: { type: "bis-form-height", height: 900 } });
+
+    expect(iframeA.style.height).toBe("900px");
+    expect(iframeB.style.height).toBe(beforeB);
   });
 });

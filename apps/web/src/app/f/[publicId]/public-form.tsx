@@ -6,6 +6,22 @@ import { HONEYPOT_FIELD, RENDER_TOKEN_FIELD } from "@/lib/forms/guards";
 import type { PublicStrings } from "@/lib/forms/public-strings";
 import { IDLE, type SubmitResult } from "./submit-result";
 
+// redirectUrl is operator-configured free text (the form's success redirect
+// setting), not something either the standalone page or the iframe embed can
+// trust blindly — only ever hand off http(s); anything else (e.g. a
+// `javascript:` URL) is dropped rather than executed or forwarded to the
+// embed script. Shared so both destinations apply the identical rule instead
+// of duplicating the literal comparison.
+function isSafeRedirectUrl(url: string): boolean {
+  let scheme: string | null = null;
+  try {
+    scheme = new URL(url, window.location.href).protocol;
+  } catch {
+    scheme = null;
+  }
+  return scheme === "http:" || scheme === "https:";
+}
+
 export function PublicForm({
   fields,
   theme,
@@ -42,20 +58,15 @@ export function PublicForm({
   // A redirect fired inside a 300px iframe navigates the iframe, not the page.
   useEffect(() => {
     if (state.status !== "success" || !state.redirectUrl) return;
+    // Gate both destinations on the same check: don't post a message the
+    // embed script will only discard, and don't navigate the standalone page
+    // to a scheme it shouldn't. This is also the backstop if a future embed
+    // consumer ever forgets to check the scheme on its own side.
+    if (!isSafeRedirectUrl(state.redirectUrl)) return;
     if (window.parent !== window) {
       window.parent.postMessage({ type: "bis-form-redirect", url: state.redirectUrl }, "*");
     } else {
-      // redirectUrl is operator-configured free text (the form's success
-      // redirect setting), not something this component can trust blindly —
-      // only ever navigate the top-level page to http(s); anything else
-      // (e.g. a `javascript:` URL) is ignored rather than executed.
-      let scheme: string | null = null;
-      try {
-        scheme = new URL(state.redirectUrl, window.location.href).protocol;
-      } catch {
-        scheme = null;
-      }
-      if (scheme === "http:" || scheme === "https:") window.location.href = state.redirectUrl;
+      window.location.href = state.redirectUrl;
     }
   }, [state]);
 

@@ -40,6 +40,22 @@ export const EMBED_SCRIPT = `(function () {
   iframe.setAttribute("loading", "lazy");
   script.parentNode.insertBefore(iframe, script.nextSibling);
 
+  // The redirect message crosses a trust boundary: this script runs on a
+  // client's page, in that page's origin. It must not assume the payload is
+  // safe just because our own iframe usually sends it — a compromised or
+  // buggy sender is not this script's problem to inherit. Only ever hand
+  // http(s) to window.top.location; anything else (a bare "javascript:"
+  // string included) is dropped. Parse defensively: a malformed or exotic
+  // URL should be ignored, not throw inside the message handler.
+  function isHttpUrl(url) {
+    try {
+      var scheme = new URL(url, window.location.href).protocol;
+      return scheme === "http:" || scheme === "https:";
+    } catch (e) {
+      return false;
+    }
+  }
+
   window.addEventListener("message", function (event) {
     // Both checks matter. Without the source check any script or frame on the
     // host page could resize or navigate this embed.
@@ -56,7 +72,7 @@ export const EMBED_SCRIPT = `(function () {
 
     // A redirect fired inside the iframe would navigate the iframe. The point
     // of a redirect success mode is to move the visitor's page.
-    if (data.type === "bis-form-redirect" && typeof data.url === "string") {
+    if (data.type === "bis-form-redirect" && typeof data.url === "string" && isHttpUrl(data.url)) {
       try { window.top.location.href = data.url; }
       catch (e) { window.location.href = data.url; }
     }
