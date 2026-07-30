@@ -79,7 +79,7 @@ export function hashIp(ip: string): string {
   return createHmac("sha256", tokenKey()).update(`bis-form-ip:${ip}`).digest("hex").slice(0, 32);
 }
 
-export function hashAnswers(answers: { key: string; value: string }[]): string {
+export function hashAnswers(answers: { key: string; value: string; label?: string }[]): string {
   // [key, normalizedValue] pairs, JSON-serialized rather than joined with "="
   // and "&" — those characters can appear inside a value (e.g. a pasted URL
   // with a query string), and an unescaped join lets two different
