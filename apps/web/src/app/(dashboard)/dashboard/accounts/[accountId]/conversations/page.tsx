@@ -7,7 +7,8 @@ import { m } from "@/lib/messages";
 import { ConversationList } from "./conversation-list";
 import { MessageThread } from "./message-thread";
 import { EmailComposer } from "./email-composer";
-import { sendEmailAction } from "./actions";
+import { MarkRead } from "./mark-read";
+import { sendEmailAction, markConversationReadAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -49,19 +50,26 @@ export default async function ConversationsPage({
       <div className="grid gap-4 p-6 lg:grid-cols-[320px_minmax(0,1fr)]">
         <ConversationList conversations={conversations} base={base} activeId={active?.id} />
         {active ? (
-          <MessageThread
-            messages={messages}
-            contactName={contactDisplayName({
-              first_name: active.contactFirstName,
-              last_name: active.contactLastName,
-            })}
-            composer={
-              <EmailComposer
-                contactId={active.contactId}
-                action={sendEmailAction.bind(null, accountId)}
-              />
-            }
-          />
+          <div className="min-w-0">
+            <MarkRead
+              conversationId={active.id}
+              unreadCount={active.unreadCount}
+              action={markConversationReadAction.bind(null, accountId)}
+            />
+            <MessageThread
+              messages={messages}
+              contactName={contactDisplayName({
+                first_name: active.contactFirstName,
+                last_name: active.contactLastName,
+              })}
+              composer={
+                <EmailComposer
+                  contactId={active.contactId}
+                  action={sendEmailAction.bind(null, accountId)}
+                />
+              }
+            />
+          </div>
         ) : (
           <div className="flex items-center justify-center rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
             {m["conversations.pickThread"]}

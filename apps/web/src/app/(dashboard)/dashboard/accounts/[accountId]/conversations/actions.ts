@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireAgency } from "@/lib/auth";
 import {
   serviceDb, getContact, ensureConversation, createMessage, updateMessageStatus,
+  clearUnreadCount,
 } from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
 // A prefix on `.message` rather than an Error subclass: thrown Errors are
@@ -61,5 +62,13 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
   await updateMessageStatus(db, accountId, messageId, "sent", { providerMessageId }, userId);
 
   revalidatePath(`/dashboard/accounts/${accountId}/contacts/${contactId}`);
+  revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
+}
+
+export async function markConversationReadAction(
+  accountId: string, conversationId: string,
+): Promise<void> {
+  await requireAgency();
+  await clearUnreadCount(serviceDb(), accountId, conversationId);
   revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
 }

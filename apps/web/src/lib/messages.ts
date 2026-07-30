@@ -229,6 +229,12 @@ export const m = {
   "forms.kind.message": "Message (starts a conversation)",
   "forms.kind.consent": "Consent checkbox",
   "forms.invalidRedirectUrl": "Redirect URL must start with http:// or https://.",
+
+  "conversations.unread": "unread",
+  "conversations.channel.form": "Form submission",
+  "conversations.channel.email": "Email",
+  "conversations.channel.note": "Note",
+  "contact.formSubmission": "Form submission",
 } as const;
 
 export type MessageKey = keyof typeof m;

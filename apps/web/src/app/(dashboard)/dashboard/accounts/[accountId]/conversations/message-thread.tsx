@@ -1,6 +1,6 @@
 import type { listMessages } from "@bis/db";
 import { formatDateTime } from "@/lib/format";
-import { MESSAGE_STATUS_LABEL } from "@/lib/labels";
+import { MESSAGE_STATUS_LABEL, MESSAGE_CHANNEL_LABEL } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 
 type Message = Awaited<ReturnType<typeof listMessages>>[number];
@@ -39,8 +39,13 @@ export function MessageThread({
             ) : null}
             <p className="whitespace-pre-wrap text-sm text-card-foreground">{message.body}</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              {formatDateTime(message.created_at)} ·{" "}
-              {MESSAGE_STATUS_LABEL[message.status] ?? message.status}
+              {formatDateTime(message.created_at)}
+              {message.channel !== "email" ? (
+                <> · {MESSAGE_CHANNEL_LABEL[message.channel] ?? message.channel}</>
+              ) : null}
+              {message.direction === "outbound" ? (
+                <> · {MESSAGE_STATUS_LABEL[message.status] ?? message.status}</>
+              ) : null}
             </p>
           </div>
         ))}

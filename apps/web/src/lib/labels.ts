@@ -32,3 +32,11 @@ export const FORM_STATUS_LABEL: Record<string, string> = {
   published: m["forms.status.published"],
   archived: m["forms.status.archived"],
 };
+
+/** Message `channel` column -> display label. A form submission must never be
+ *  labelled "Note": the words are the contact's own, not the operator's. */
+export const MESSAGE_CHANNEL_LABEL: Record<string, string> = {
+  email: m["conversations.channel.email"],
+  form: m["conversations.channel.form"],
+  note: m["conversations.channel.note"],
+};

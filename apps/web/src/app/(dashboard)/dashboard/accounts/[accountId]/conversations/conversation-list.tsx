@@ -1,6 +1,8 @@
 import Link from "next/link";
 import type { ConversationSummary } from "@bis/db";
+import { Badge } from "@/components/ui/badge";
 import { contactDisplayName, formatDateTime } from "@/lib/format";
+import { m } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 
 export function ConversationList({
@@ -29,12 +31,24 @@ export function ConversationList({
             )}
           >
             <span className="flex items-center justify-between gap-2">
-              <span className="truncate font-medium text-card-foreground">{name}</span>
-              {conversation.lastMessageAt ? (
-                <span className="shrink-0 text-xs text-muted-foreground">
-                  {formatDateTime(conversation.lastMessageAt)}
-                </span>
-              ) : null}
+              <span className={cn(
+                "truncate text-card-foreground",
+                conversation.unreadCount > 0 ? "font-semibold" : "font-medium",
+              )}>
+                {name}
+              </span>
+              <span className="flex shrink-0 items-center gap-1.5">
+                {conversation.unreadCount > 0 ? (
+                  <Badge aria-label={`${conversation.unreadCount} ${m["conversations.unread"]}`}>
+                    {conversation.unreadCount}
+                  </Badge>
+                ) : null}
+                {conversation.lastMessageAt ? (
+                  <span className="text-xs text-muted-foreground">
+                    {formatDateTime(conversation.lastMessageAt)}
+                  </span>
+                ) : null}
+              </span>
             </span>
             <span className="truncate text-xs text-muted-foreground">
               {conversation.lastMessagePreview}
