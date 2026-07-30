@@ -1,5 +1,5 @@
-import { CalendarClock, CheckSquare, DollarSign, History, Square, StickyNote } from "lucide-react";
-import type { listNotes, listContactTasks, listContactOpportunities } from "@bis/db";
+import { CalendarClock, CheckSquare, DollarSign, FileText, History, Square, StickyNote } from "lucide-react";
+import type { listNotes, listContactTasks, listContactOpportunities, listContactSubmissions } from "@bis/db";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -15,11 +15,14 @@ import { MessageComposer } from "./message-composer";
 type Note = Awaited<ReturnType<typeof listNotes>>[number];
 type Task = Awaited<ReturnType<typeof listContactTasks>>[number];
 type Opportunity = Awaited<ReturnType<typeof listContactOpportunities>>[number];
+type Submission = Awaited<ReturnType<typeof listContactSubmissions>>[number];
 
 type TimelineItem =
   | { kind: "note"; id: string; at: string; body: string }
   | { kind: "task"; id: string; at: string; title: string; dueAt: string | null; completedAt: string | null }
-  | { kind: "opportunity"; id: string; at: string; name: string; value: number; status: string };
+  | { kind: "opportunity"; id: string; at: string; name: string; value: number; status: string }
+  | { kind: "submission"; id: string; at: string; formName: string;
+      answers: { key: string; label: string; value: string }[] };
 
 export function ActivityTimeline({
   accountId,
@@ -28,6 +31,7 @@ export function ActivityTimeline({
   notes,
   tasks,
   opportunities,
+  submissions,
   emailAction,
 }: {
   accountId: string;
@@ -36,6 +40,7 @@ export function ActivityTimeline({
   notes: Note[];
   tasks: Task[];
   opportunities: Opportunity[];
+  submissions: Submission[];
   emailAction: (formData: FormData) => Promise<void>;
 }) {
   const hidden = <input type="hidden" name="contactId" value={contactId} />;
@@ -63,6 +68,15 @@ export function ActivityTimeline({
         name: o.name,
         value: Number(o.monetary_value),
         status: o.status,
+      }),
+    ),
+    ...submissions.map(
+      (s): TimelineItem => ({
+        kind: "submission",
+        id: s.id,
+        at: s.created_at,
+        formName: s.formName,
+        answers: s.answers.filter((a) => a.value),
       }),
     ),
   ].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
@@ -182,6 +196,28 @@ function TimelineRow({
             </Button>
           </form>
         ) : null}
+      </div>
+    );
+  }
+
+  if (item.kind === "submission") {
+    return (
+      <div className="flex gap-3 rounded-lg border border-border bg-card p-3">
+        <FileText className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-card-foreground">
+            {m["contact.formSubmission"]} · {item.formName}
+          </p>
+          <dl className="mt-1 space-y-0.5">
+            {item.answers.map((answer) => (
+              <div key={answer.key} className="flex gap-2 text-sm">
+                <dt className="shrink-0 text-muted-foreground">{answer.label}:</dt>
+                <dd className="min-w-0 break-words text-card-foreground">{answer.value}</dd>
+              </div>
+            ))}
+          </dl>
+          <p className="mt-1 text-xs text-muted-foreground">{formatDateTime(item.at)}</p>
+        </div>
       </div>
     );
   }

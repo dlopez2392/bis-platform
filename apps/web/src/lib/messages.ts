@@ -4,6 +4,7 @@ export const m = {
   "nav.opportunities": "Opportunities",
   "nav.conversations": "Conversations",
   "nav.calendar": "Calendar",
+  "nav.forms": "Forms",
   "nav.settings": "Settings",
   "nav.accounts": "Companies",
 
@@ -34,7 +35,7 @@ export const m = {
   "common.saving": "Saving…",
   "common.unavailable": "—",
 
-  "empty.calendar.title": "Calendar is coming in M1b",
+  "empty.calendar.title": "Calendar is coming in M2",
   "empty.calendar.body": "Booking and appointment management will land here.",
 
   "accounts.title": "Companies",
@@ -168,6 +169,77 @@ export const m = {
   "conversations.status.opened": "Opened",
   "conversations.status.bounced": "Bounced",
   "conversations.status.failed": "Failed",
+
+  "forms.title": "Forms",
+  "forms.add": "New form",
+  "forms.name": "Form name",
+  "forms.empty.title": "No forms yet",
+  "forms.empty.body": "Build a form, embed it on the client's website, and leads land here automatically.",
+  "forms.submissions": "Submissions",
+  "forms.status.draft": "Draft",
+  "forms.status.published": "Published",
+  "forms.status.archived": "Archived",
+  "forms.fields": "Fields",
+  "forms.addField": "Add field",
+  "forms.fieldLabel": "Label",
+  "forms.fieldRequired": "Required",
+  "forms.moveUp": "Move up",
+  "forms.moveDown": "Move down",
+  "forms.removeField": "Remove field",
+  "forms.noFields": "Add at least one field before publishing.",
+  "forms.settings": "Settings",
+  "forms.locale": "Language",
+  "forms.notifyEmails": "Notify these addresses",
+  "forms.notifyHint": "Comma-separated. Leave blank for no email notification.",
+  "forms.successMode": "After submitting",
+  "forms.successModeMessage": "Show a message",
+  "forms.successModeRedirect": "Redirect to a URL",
+  "forms.successMessage": "Success message",
+  "forms.redirectUrl": "Redirect URL",
+  "forms.accent": "Accent color",
+  "forms.transparent": "Transparent background",
+  "forms.status": "Status",
+  "forms.duplicateFieldKey": "A field with this key already exists on the form.",
+  "forms.invalidFields": "Fields must be valid: each needs a key, kind, label, and required flag.",
+  "forms.embed": "Embed",
+  "forms.embedHint": "Paste this where the form should appear. Published forms only.",
+  "forms.embedNotPublished": "Publish the form to get its embed snippet.",
+  "forms.copy": "Copy",
+  "forms.copied": "Copied",
+  "forms.publicLink": "Direct link",
+  "forms.saved": "Saved",
+  "forms.saveFailed": "Could not save the form.",
+  "forms.noSubmissions": "No submissions yet.",
+  // Deliberately NOT "Blocked": rate-limit hoisting means one recorded marker
+  // suppresses further markers for the rest of the window, so a count of these
+  // rows is a count of events recorded, not attempts made — a burst of 10,000
+  // requests from one IP can surface as ~6 rows. Never present this as a total
+  // of blocked attempts; that would understate spam volume to the operator.
+  "forms.blocked": "Blocked event",
+  "forms.spamReason.honeypot": "Hidden field was filled in — a sign of an automated submission.",
+  // The stored enum value is "too_fast", but the same reason is also recorded
+  // for a missing, malformed, or forged render token (see submitFormAction in
+  // apps/web/src/app/f/[publicId]/actions.ts) — a real person just filling
+  // the form quickly is only one of the three causes, so the copy has to
+  // cover all of them honestly rather than naming only the first.
+  "forms.spamReason.too_fast": "Submitted too quickly, or with a missing or invalid form token, to have been filled out by a person.",
+  "forms.spamReason.rate_limited": "Too many submissions from this source in a short time.",
+  "forms.needsAttention": "Needs attention",
+  "forms.contact": "Contact",
+  "forms.kind.core.first_name": "First name",
+  "forms.kind.core.last_name": "Last name",
+  "forms.kind.core.email": "Email",
+  "forms.kind.core.phone": "Phone",
+  "forms.kind.core.company_name": "Company",
+  "forms.kind.message": "Message (starts a conversation)",
+  "forms.kind.consent": "Consent checkbox",
+  "forms.invalidRedirectUrl": "Redirect URL must start with http:// or https://.",
+
+  "conversations.unread": "unread",
+  "conversations.channel.form": "Form submission",
+  "conversations.channel.email": "Email",
+  "conversations.channel.note": "Note",
+  "contact.formSubmission": "Form submission",
 } as const;
 
 export type MessageKey = keyof typeof m;

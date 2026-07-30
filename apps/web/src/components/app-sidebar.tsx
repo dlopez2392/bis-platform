@@ -9,6 +9,7 @@ import {
   KanbanSquare,
   MessagesSquare,
   Calendar,
+  FileText,
   Settings,
   Building2,
   PanelLeftClose,
@@ -56,6 +57,7 @@ export function AppSidebar({
         { href: `${base}/contacts`, label: m["nav.contacts"], icon: Users },
         { href: `${base}/pipeline`, label: m["nav.opportunities"], icon: KanbanSquare },
         { href: `${base}/conversations`, label: m["nav.conversations"], icon: MessagesSquare },
+        { href: `${base}/forms`, label: m["nav.forms"], icon: FileText },
         { href: `${base}/calendar`, label: m["nav.calendar"], icon: Calendar },
       ]
     : [{ href: "/dashboard/accounts", label: m["nav.accounts"], icon: Building2 }];

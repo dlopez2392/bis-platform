@@ -7,7 +7,8 @@ import { m } from "@/lib/messages";
 import { ConversationList } from "./conversation-list";
 import { MessageThread } from "./message-thread";
 import { EmailComposer } from "./email-composer";
-import { sendEmailAction } from "./actions";
+import { MarkRead } from "./mark-read";
+import { sendEmailAction, markConversationReadAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -39,8 +40,12 @@ export default async function ConversationsPage({
   }
 
   const base = `/dashboard/accounts/${accountId}/conversations`;
-  const activeId = c ?? conversations[0]!.id;
-  const active = conversations.find((conversation) => conversation.id === activeId);
+  // No auto-selection. Falling back to conversations[0] meant that simply
+  // landing on this screen opened the newest thread, which — now that opening a
+  // thread clears its unread count — marked the newest inbound lead as read
+  // before anyone had chosen to look at it. The badge is only worth anything if
+  // it survives until a real open.
+  const active = c ? conversations.find((conversation) => conversation.id === c) : undefined;
   const messages = active ? await listMessages(db, accountId, active.id) : [];
 
   return (
@@ -49,19 +54,26 @@ export default async function ConversationsPage({
       <div className="grid gap-4 p-6 lg:grid-cols-[320px_minmax(0,1fr)]">
         <ConversationList conversations={conversations} base={base} activeId={active?.id} />
         {active ? (
-          <MessageThread
-            messages={messages}
-            contactName={contactDisplayName({
-              first_name: active.contactFirstName,
-              last_name: active.contactLastName,
-            })}
-            composer={
-              <EmailComposer
-                contactId={active.contactId}
-                action={sendEmailAction.bind(null, accountId)}
-              />
-            }
-          />
+          <div className="min-w-0">
+            <MarkRead
+              conversationId={active.id}
+              unreadCount={active.unreadCount}
+              action={markConversationReadAction.bind(null, accountId)}
+            />
+            <MessageThread
+              messages={messages}
+              contactName={contactDisplayName({
+                first_name: active.contactFirstName,
+                last_name: active.contactLastName,
+              })}
+              composer={
+                <EmailComposer
+                  contactId={active.contactId}
+                  action={sendEmailAction.bind(null, accountId)}
+                />
+              }
+            />
+          </div>
         ) : (
           <div className="flex items-center justify-center rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
             {m["conversations.pickThread"]}

@@ -1,0 +1,26 @@
+.bis-form { font: 400 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: #18181b; padding: 16px; }
+.bis-form-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.bis-form-row label { font-size: 13px; font-weight: 500; }
+.bis-form-optional { font-weight: 400; color: #71717a; }
+.bis-form input[type="text"], .bis-form input[type="email"], .bis-form input[type="tel"], .bis-form textarea {
+  width: 100%; box-sizing: border-box; padding: 8px 10px; font: inherit;
+  border: 1px solid #d4d4d8; border-radius: var(--radius); background: #fff; color: inherit;
+}
+.bis-form input:focus, .bis-form textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+.bis-form-consent { flex-direction: row; align-items: flex-start; gap: 8px; }
+.bis-form-consent label { font-weight: 400; }
+.bis-form-submit {
+  padding: 9px 18px; font: inherit; font-weight: 500; color: #fff; cursor: pointer;
+  background: var(--accent); border: 0; border-radius: var(--radius);
+}
+.bis-form-submit[disabled] { opacity: 0.6; cursor: default; }
+.bis-form-error { margin: 0; font-size: 12px; color: #b91c1c; }
+.bis-form-success { margin: 0; padding: 16px 0; font-size: 15px; }
+/* Off-screen, not display:none — some bots skip hidden inputs but fill
+   anything else they find. */
+.bis-form-hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+.dark .bis-form { color: #fafafa; }
+.dark .bis-form input[type="text"], .dark .bis-form input[type="email"],
+.dark .bis-form input[type="tel"], .dark .bis-form textarea {
+  background: #18181b; border-color: #3f3f46;
+}

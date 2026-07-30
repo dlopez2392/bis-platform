@@ -1,10 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-
-async function emit(db: SupabaseClient, accountId: string, type: string, actorId: string, payload: object) {
-  const { error } = await db.from("events").insert({
-    account_id: accountId, type, actor_type: "user", actor_id: actorId, payload });
-  if (error) throw new Error(`event emit failed: ${error.message}`);
-}
+import { emit, type ActorType } from "./events";
 
 async function stagesOf(db: SupabaseClient, accountId: string, pipelineId: string) {
   const { data, error } = await db.from("pipeline_stages")
@@ -18,6 +13,7 @@ export async function createOpportunity(
   db: SupabaseClient, accountId: string,
   input: { contactId: string; pipelineId: string; name: string; value?: number },
   actorId: string,
+  actorType: ActorType = "user",
 ): Promise<{ id: string }> {
   const stages = await stagesOf(db, accountId, input.pipelineId);
   const { data: contact } = await db.from("contacts")
@@ -29,13 +25,14 @@ export async function createOpportunity(
     .select("id").single();
   if (error || !data) throw new Error(`createOpportunity failed: ${error?.message}`);
   await emit(db, accountId, "opportunity.created", actorId,
-    { opportunityId: data.id, contactId: input.contactId, value: input.value ?? 0 });
+    { opportunityId: data.id, contactId: input.contactId, value: input.value ?? 0 }, actorType);
   return { id: data.id };
 }
 
 export async function moveOpportunityStage(
   db: SupabaseClient, accountId: string, oppId: string,
   direction: "left" | "right", actorId: string,
+  actorType: ActorType = "user",
 ): Promise<void> {
   const { data: opp, error } = await db.from("opportunities")
     .select("id, pipeline_id, stage_id").eq("account_id", accountId).eq("id", oppId).single();
@@ -50,12 +47,13 @@ export async function moveOpportunityStage(
     .eq("account_id", accountId).eq("id", oppId);
   if (uErr) throw new Error(uErr.message);
   await emit(db, accountId, "opportunity.stage_changed", actorId,
-    { opportunityId: oppId, from: opp.stage_id, to: next.id });
+    { opportunityId: oppId, from: opp.stage_id, to: next.id }, actorType);
 }
 
 export async function moveOpportunityToStage(
   db: SupabaseClient, accountId: string, oppId: string,
   toStageId: string, actorId: string,
+  actorType: ActorType = "user",
 ): Promise<void> {
   const { data: opp, error } = await db.from("opportunities")
     .select("id, pipeline_id, stage_id").eq("account_id", accountId).eq("id", oppId).single();
@@ -69,13 +67,14 @@ export async function moveOpportunityToStage(
     .eq("account_id", accountId).eq("id", oppId);
   if (uErr) throw new Error(uErr.message);
   await emit(db, accountId, "opportunity.stage_changed", actorId,
-    { opportunityId: oppId, from: opp.stage_id, to: toStageId });
+    { opportunityId: oppId, from: opp.stage_id, to: toStageId }, actorType);
 }
 
 export async function updateOpportunity(
   db: SupabaseClient, accountId: string, oppId: string,
   input: { name?: string; value?: number; status?: "open" | "won" | "lost" },
   actorId: string,
+  actorType: ActorType = "user",
 ): Promise<void> {
   if (input.name === undefined && input.value === undefined && input.status === undefined) return;
   const row: Record<string, unknown> = { updated_at: new Date().toISOString() };
@@ -89,19 +88,21 @@ export async function updateOpportunity(
     .update(row).eq("account_id", accountId).eq("id", oppId);
   if (error) throw new Error(error.message);
   await emit(db, accountId, "opportunity.updated", actorId,
-    { opportunityId: oppId, fields: Object.keys(input) });
+    { opportunityId: oppId, fields: Object.keys(input) }, actorType);
 }
 
 export async function setOpportunityStatus(
   db: SupabaseClient, accountId: string, oppId: string,
   status: "open" | "won" | "lost", actorId: string,
+  actorType: ActorType = "user",
 ): Promise<void> {
   const { error } = await db.from("opportunities")
     .update({ status, status_changed_at: new Date().toISOString(),
               updated_at: new Date().toISOString() })
     .eq("account_id", accountId).eq("id", oppId);
   if (error) throw new Error(error.message);
-  await emit(db, accountId, "opportunity.status_changed", actorId, { opportunityId: oppId, status });
+  await emit(db, accountId, "opportunity.status_changed", actorId,
+    { opportunityId: oppId, status }, actorType);
 }
 
 export async function listBoard(db: SupabaseClient, accountId: string, pipelineId: string) {

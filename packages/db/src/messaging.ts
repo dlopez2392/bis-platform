@@ -1,12 +1,16 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { emit, type ActorType } from "./events";
 
 export type MessageStatus =
   | "queued" | "sent" | "delivered" | "opened" | "bounced" | "failed";
 
 export type NewMessage = {
   conversationId: string;
-  channel: "email";
-  direction: "outbound";
+  // 'form' arrives with M1c: a form submission is the platform's first inbound
+  // message. 'note' is not reused for it — that means "the operator wrote this
+  // internally" in the UI, and a lead's own words are not an internal note.
+  channel: "email" | "form";
+  direction: "outbound" | "inbound";
   subject?: string;
   body: string;
 };
@@ -18,19 +22,11 @@ export type ConversationSummary = {
   contactLastName: string | null;
   lastMessageAt: string | null;
   lastMessagePreview: string | null;
+  unreadCount: number;
 };
 
 const MESSAGE_COLS =
   "id, conversation_id, channel, direction, status, provider_message_id, subject, body, error, created_at";
-
-async function emit(
-  db: SupabaseClient, accountId: string, type: string, actorId: string, payload: object,
-  actorType: "user" | "system" | "ai" = "user",
-) {
-  const { error } = await db.from("events").insert({
-    account_id: accountId, type, actor_type: actorType, actor_id: actorId, payload });
-  if (error) throw new Error(`event emit failed: ${error.message}`);
-}
 
 // Providers deliver webhook events at-least-once and without an ordering
 // guarantee, so the same event can replay and a later-firing event (e.g.
@@ -50,6 +46,7 @@ const STATUS_RANK: Record<MessageStatus, number> = {
 
 export async function ensureConversation(
   db: SupabaseClient, accountId: string, contactId: string, actorId: string,
+  actorType: ActorType = "user",
 ): Promise<{ id: string; created: boolean }> {
   const { data: existing, error: findErr } = await db.from("conversations")
     .select("id").eq("account_id", accountId).eq("contact_id", contactId).maybeSingle();
@@ -70,7 +67,7 @@ export async function ensureConversation(
   if (!error) {
     if (!data) throw new Error("ensureConversation failed: insert returned no row");
     await emit(db, accountId, "conversation.created", actorId,
-      { conversationId: data.id, contactId });
+      { conversationId: data.id, contactId }, actorType);
     return { id: data.id, created: true };
   }
 
@@ -88,6 +85,7 @@ export async function ensureConversation(
 
 export async function createMessage(
   db: SupabaseClient, accountId: string, input: NewMessage, actorId: string,
+  actorType: ActorType = "user",
 ): Promise<{ id: string }> {
   const { data, error } = await db.from("messages")
     .insert({
@@ -105,7 +103,8 @@ export async function createMessage(
   // exists at this point, so the event must exist too, or nothing downstream
   // (automations, activity feeds) ever learns this message happened.
   await emit(db, accountId, "message.created", actorId,
-    { messageId: data.id, conversationId: input.conversationId, channel: input.channel });
+    { messageId: data.id, conversationId: input.conversationId, channel: input.channel },
+    actorType);
 
   // The touch is best-effort and deliberately non-fatal. The message is real
   // and visible either way (row + event both exist above); if this update
@@ -173,11 +172,33 @@ export async function updateMessageStatusByProviderId(
   return { updated: true };
 }
 
+/**
+ * Atomic, via a SQL function. PostgREST cannot express `set x = x + 1`, and a
+ * read-modify-write from here would silently lose a count when two submissions
+ * land at once.
+ */
+export async function incrementUnreadCount(
+  db: SupabaseClient, accountId: string, conversationId: string,
+): Promise<void> {
+  const { error } = await db.rpc("increment_conversation_unread", {
+    p_account_id: accountId, p_conversation_id: conversationId });
+  if (error) throw new Error(`incrementUnreadCount failed: ${error.message}`);
+}
+
+export async function clearUnreadCount(
+  db: SupabaseClient, accountId: string, conversationId: string,
+): Promise<void> {
+  const { error } = await db.from("conversations")
+    .update({ unread_count: 0, updated_at: new Date().toISOString() })
+    .eq("account_id", accountId).eq("id", conversationId);
+  if (error) throw new Error(`clearUnreadCount failed: ${error.message}`);
+}
+
 export async function listConversations(
   db: SupabaseClient, accountId: string,
 ): Promise<ConversationSummary[]> {
   const { data, error } = await db.from("conversations")
-    .select("id, contact_id, last_message_at, contacts(first_name, last_name)")
+    .select("id, contact_id, last_message_at, unread_count, contacts(first_name, last_name)")
     .eq("account_id", accountId)
     .order("last_message_at", { ascending: false, nullsFirst: false });
   if (error) throw new Error(error.message);
@@ -212,6 +233,7 @@ export async function listConversations(
     contactLastName: r.contacts?.last_name ?? null,
     lastMessageAt: r.last_message_at,
     lastMessagePreview: preview.get(r.id) ?? null,
+    unreadCount: r.unread_count ?? 0,
   }));
 }
 

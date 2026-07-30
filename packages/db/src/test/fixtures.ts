@@ -11,7 +11,8 @@ export async function withTestAccount(fn: (db: SupabaseClient, accountId: string
   try {
     await fn(db, id);
   } finally {
-    for (const table of ["events", "messages", "conversations", "contact_tags", "notes", "tasks",
+    for (const table of ["events", "form_submissions", "forms", "messages", "conversations",
+                         "contact_tags", "notes", "tasks",
                          "opportunities", "pipeline_stages", "pipelines", "custom_fields",
                          "custom_values", "tags", "contacts"]) {
       await db.from(table).delete().eq("account_id", id);

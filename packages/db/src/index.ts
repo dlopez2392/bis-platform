@@ -1,4 +1,5 @@
 export { serviceDb } from "./service";
+export { emit, type ActorType } from "./events";
 export { createAccount, listAccounts } from "./accounts";
 export { createContact, updateContact, listContacts, getContact,
          addTagToContact, removeTagFromContact, listContactTags,
@@ -11,4 +12,12 @@ export { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
          listBoard, listContactOpportunities } from "./opportunities";
 export { ensureConversation, createMessage, updateMessageStatus,
          updateMessageStatusByProviderId, listConversations, listMessages,
+         incrementUnreadCount, clearUnreadCount,
          type MessageStatus, type NewMessage, type ConversationSummary } from "./messaging";
+export { newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId,
+         updateForm, createSubmission, recordRejectedSubmission, countRecentSubmissions,
+         shouldRecordRateLimit, findRecentDuplicate, linkSubmissionContact,
+         setSubmissionProcessingError, emitFormSubmitted, listSubmissions, listContactSubmissions,
+         type FormField, type FormFieldKind, type FormTheme, type FormStatus,
+         type FormRow, type FormSummary,
+         type SubmissionInput, type SubmissionRow, type SubmissionConsent } from "./forms";
