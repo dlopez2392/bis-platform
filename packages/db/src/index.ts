@@ -12,3 +12,7 @@ export { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
 export { ensureConversation, createMessage, updateMessageStatus,
          updateMessageStatusByProviderId, listConversations, listMessages,
          type MessageStatus, type NewMessage, type ConversationSummary } from "./messaging";
+export { newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId,
+         updateForm,
+         type FormField, type FormFieldKind, type FormTheme, type FormStatus,
+         type FormRow, type FormSummary } from "./forms";
