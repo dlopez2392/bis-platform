@@ -9,8 +9,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { SubmitButton } from "../../../submit-button";
 import { m } from "@/lib/messages";
+import { defaultFieldKey } from "@/lib/forms/editor-helpers";
 
 const CORE_KINDS = [
   "core.first_name", "core.last_name", "core.email", "core.phone", "core.company_name",
@@ -22,10 +30,6 @@ function kindLabel(kind: string, customFields: CustomFieldDef[]): string {
   if (m[key]) return m[key] as string;
   const fieldKey = kind.slice("custom.".length);
   return customFields.find((f) => f.field_key === fieldKey)?.name ?? fieldKey;
-}
-
-function defaultKey(kind: string): string {
-  return kind.startsWith("custom.") ? kind.slice("custom.".length) : kind.replace("core.", "");
 }
 
 export function FormEditor({
@@ -46,8 +50,17 @@ export function FormEditor({
   ];
 
   function addField(kind: string) {
+    const key = defaultFieldKey(kind);
+    // Belt-and-braces: namespacing custom keys (custom_<field_key>) already
+    // makes a core/custom collision impossible, but refuse outright rather
+    // than silently producing a second field FormData would drop the answer
+    // for, in case some future kind ever generates a duplicate key.
+    if (fields.some((f) => f.key === key)) {
+      toast.error(m["forms.duplicateFieldKey"]);
+      return;
+    }
     setFields((current) => [...current, {
-      key: defaultKey(kind), kind: kind as FormField["kind"],
+      key, kind: kind as FormField["kind"],
       label: kindLabel(kind, customFields), required: false,
     }]);
   }
@@ -145,11 +158,15 @@ export function FormEditor({
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="form-locale">{m["forms.locale"]}</Label>
-            <select id="form-locale" name="locale" defaultValue={form.locale_default}
-                    className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
-              <option value="en">English</option>
-              <option value="es">Español</option>
-            </select>
+            <Select name="locale" defaultValue={form.locale_default}>
+              <SelectTrigger id="form-locale" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="en">English</SelectItem>
+                <SelectItem value="es">Español</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-1.5 sm:col-span-2">
             <Label htmlFor="form-notify">{m["forms.notifyEmails"]}</Label>
@@ -158,12 +175,16 @@ export function FormEditor({
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="form-success-mode">{m["forms.successMode"]}</Label>
-            <select id="form-success-mode" name="successMode" defaultValue={form.success_mode}
-                    onChange={(e) => setSuccessMode(e.target.value as "message" | "redirect")}
-                    className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
-              <option value="message">{m["forms.successModeMessage"]}</option>
-              <option value="redirect">{m["forms.successModeRedirect"]}</option>
-            </select>
+            <Select name="successMode" defaultValue={form.success_mode}
+                    onValueChange={(value) => setSuccessMode(value as "message" | "redirect")}>
+              <SelectTrigger id="form-success-mode" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="message">{m["forms.successModeMessage"]}</SelectItem>
+                <SelectItem value="redirect">{m["forms.successModeRedirect"]}</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           {successMode === "redirect" ? (
             <div className="space-y-1.5">
@@ -192,12 +213,17 @@ export function FormEditor({
 
       <div className="flex flex-wrap items-center gap-2">
         <SubmitButton>{m["common.save"]}</SubmitButton>
-        {(["draft", "published", "archived"] as const).map((value) => (
-          <label key={value} className="flex items-center gap-1.5 text-sm text-muted-foreground">
-            <input type="radio" name="status" value={value} defaultChecked={form.status === value} />
-            {m[`forms.status.${value}` as keyof typeof m] as string}
-          </label>
-        ))}
+        <Label htmlFor="form-status" className="sr-only">{m["forms.status"]}</Label>
+        <Select name="status" defaultValue={form.status}>
+          <SelectTrigger id="form-status" className="w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="draft">{m["forms.status.draft"]}</SelectItem>
+            <SelectItem value="published">{m["forms.status.published"]}</SelectItem>
+            <SelectItem value="archived">{m["forms.status.archived"]}</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
     </form>
   );

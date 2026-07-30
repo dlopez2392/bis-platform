@@ -3,8 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAgency } from "@/lib/auth";
-import { serviceDb, createForm, updateForm, type FormField, type FormStatus } from "@bis/db";
+import { serviceDb, createForm, getForm, updateForm, type FormField, type FormStatus } from "@bis/db";
 import { m } from "@/lib/messages";
+import { isValidFormFieldList, mergeFormTheme } from "@/lib/forms/editor-helpers";
 
 export async function createFormAction(accountId: string, formData: FormData): Promise<void> {
   const { userId } = await requireAgency();
@@ -33,11 +34,17 @@ export async function saveFormAction(accountId: string, formData: FormData): Pro
 
   // The editor posts the field list as JSON: it is an ordered array of objects,
   // which flat form fields cannot express without inventing an encoding.
+  // Validated for shape, not just parseability: a tampered hidden input could
+  // otherwise post e.g. `[{}]`, which parses fine and passes the "at least
+  // one field before publishing" gate below, producing a published form with
+  // a broken field.
   let fields: FormField[];
   try {
-    fields = JSON.parse(String(formData.get("fields") ?? "[]")) as FormField[];
+    const parsed: unknown = JSON.parse(String(formData.get("fields") ?? "[]"));
+    if (!isValidFormFieldList(parsed)) throw new Error("invalid field shape");
+    fields = parsed;
   } catch {
-    throw new Error("fields must be valid JSON");
+    throw new Error(m["forms.invalidFields"]);
   }
 
   const status = String(formData.get("status") ?? "draft") as FormStatus;
@@ -68,15 +75,30 @@ export async function saveFormAction(accountId: string, formData: FormData): Pro
     }
   }
 
-  await updateForm(serviceDb(), accountId, formId, {
+  const db = serviceDb();
+
+  // `updateForm` writes `theme` as a full JSONB column replace, not a merge,
+  // and this editor has no control for `theme.mode` or `theme.radius` even
+  // though both are live (the public page toggles a dark class on
+  // `theme.mode === "dark"`, and the form sets `--radius` from
+  // `theme.radius`). Fetching the current row and merging keeps whatever
+  // this editor doesn't manage untouched, instead of silently and
+  // permanently erasing it the first time an operator opens the editor and
+  // clicks Save. Do not "simplify" this back to a literal object — that
+  // reintroduces the clobber. (`updateForm` itself keeps its replace
+  // semantics, since other callers pass a complete object on purpose.)
+  const current = await getForm(db, accountId, formId);
+  if (!current) throw new Error("updateForm failed: form not found in account");
+  const theme = mergeFormTheme(current.theme, {
+    accent: String(formData.get("accent") ?? "") || undefined,
+    transparentBackground: formData.get("transparent") === "on",
+  });
+
+  await updateForm(db, accountId, formId, {
     name: String(formData.get("name") ?? "").trim(),
     status,
     fields,
-    theme: {
-      accent: String(formData.get("accent") ?? "") || undefined,
-      transparentBackground: formData.get("transparent") === "on",
-      mode: "light",
-    },
+    theme,
     success_mode: formData.get("successMode") === "redirect" ? "redirect" : "message",
     success_message: String(formData.get("successMessage") ?? "").trim() || null,
     redirect_url: redirectUrl || null,

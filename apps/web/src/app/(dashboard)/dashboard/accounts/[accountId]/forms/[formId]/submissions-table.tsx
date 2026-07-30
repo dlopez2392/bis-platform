@@ -23,7 +23,12 @@ export function SubmissionsTable({
                     {formatDateTime(submission.created_at)}
                   </span>
                   {submission.spam_reason ? (
-                    <Badge variant="secondary">{m["forms.blocked"]}</Badge>
+                    <Badge
+                      variant="secondary"
+                      title={m[`forms.spamReason.${submission.spam_reason}` as keyof typeof m] as string}
+                    >
+                      {m["forms.blocked"]}
+                    </Badge>
                   ) : null}
                   {/* Surfaced, not swallowed: the lead was saved but part of the
                       enrichment failed, and somebody has to know. */}
