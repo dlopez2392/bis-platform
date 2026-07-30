@@ -15,8 +15,17 @@ const FIELDS = [
 describe("forms", () => {
   it("newPublicId is url-safe and long enough to not be guessable", () => {
     const id = newPublicId();
-    expect(id).toMatch(/^[a-z2-9]{12}$/);
+    // The alphabet deliberately drops the characters a person misreads when
+    // copying an id off a screen or a phone call: l/1, o/0. Spell the class
+    // out rather than [a-z2-9], which still admits l and o and so would pass
+    // even if the exclusion were dropped.
+    expect(id).toMatch(/^[a-km-np-z2-9]{12}$/);
     expect(newPublicId()).not.toBe(id);
+    // One id is 12 draws from 32 characters, so a single sample has a ~68%
+    // chance of containing no ambiguous character by luck alone. Sample enough
+    // to make that vanishingly unlikely.
+    const many = Array.from({ length: 200 }, () => newPublicId()).join("");
+    expect(many).not.toMatch(/[lo01]/);
   });
 
   it("createForm starts as a draft and emits form.created", () =>

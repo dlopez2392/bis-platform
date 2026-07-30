@@ -82,6 +82,14 @@ describe("form guards", () => {
       .not.toBe(hashAnswers(a));
   });
 
+  it("hashAnswers ignores the label, which the operator can rename at any time", () => {
+    // The test above uses the same labels on both sides, so it would pass even
+    // if label were part of the digest. Duplicate detection has to survive an
+    // operator renaming a field between two identical submissions.
+    expect(hashAnswers([{ key: "email", label: "Email", value: "lead@example.com" }]))
+      .toBe(hashAnswers([{ key: "email", label: "Your email", value: "lead@example.com" }]));
+  });
+
   it("hashAnswers does not collide a single field's value with a field boundary", () => {
     // Unescaped "key=value&key=value" joins let a value containing "&"/"="
     // imitate a second field. One free-text message with a pasted query
