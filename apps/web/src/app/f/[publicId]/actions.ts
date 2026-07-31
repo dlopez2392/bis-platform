@@ -295,14 +295,24 @@ async function enrich(
 
     await linkSubmissionContact(db, accountId, submissionId, contactId);
 
+    // Every lead opens a conversation, not only the ones that wrote something.
+    // Gating this on a non-empty message field meant a form without one — or
+    // with one left blank — produced a contact row and a notification email and
+    // NOTHING in Conversations, the only screen that flags a new lead as
+    // unread. That is precisely the "leads in a database rather than in front
+    // of a person" failure the unread badge exists to prevent, and it hit the
+    // shortest, highest-converting forms hardest. With no message to carry, the
+    // thread carries what the person actually submitted.
     const messageField = form.fields.find((f) => f.kind === MESSAGE_KIND);
     const messageBody = messageField
       ? answers.find((a) => a.key === messageField.key)?.value ?? "" : "";
-    if (messageBody) {
+    const threadBody = messageBody
+      || answers.filter((a) => a.value).map((a) => `${a.label}: ${a.value}`).join("\n");
+    if (threadBody) {
       const convo = await ensureConversation(db, accountId, contactId, "form", "system");
       await createMessage(db, accountId, {
         conversationId: convo.id, channel: "form", direction: "inbound",
-        subject: form.name, body: messageBody,
+        subject: form.name, body: threadBody,
       }, "form", "system");
       await incrementUnreadCount(db, accountId, convo.id);
     }
@@ -435,11 +445,22 @@ async function notify(
   const { data: account } = await db.from("accounts").select("name")
     .eq("id", form.account_id).maybeSingle();
 
+  // Each recipient is independent. Awaiting them in a bare loop meant the first
+  // provider failure — one bad address, one rejected domain — threw out of the
+  // loop and every later recipient silently heard nothing about the lead.
+  // Failures are collected and rethrown together so `enrich` still records them
+  // in `processing_error`, but only the addresses that actually failed are lost.
   const provider = getEmailProvider();
+  const failures: string[] = [];
   for (const to of form.notify_emails) {
-    await provider.send({
-      to, fromName: account?.name ?? "BIS",
-      subject: `New lead: ${form.name}`, body,
-    });
+    try {
+      await provider.send({
+        to, fromName: account?.name ?? "BIS",
+        subject: `New lead: ${form.name}`, body,
+      });
+    } catch (e) {
+      failures.push(`${to} (${e instanceof Error ? e.message : String(e)})`);
+    }
   }
+  if (failures.length > 0) throw new Error(`send failed for ${failures.join(", ")}`);
 }

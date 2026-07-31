@@ -1,8 +1,10 @@
 import Link from "next/link";
+import { Check, X } from "lucide-react";
 import type { SubmissionRow } from "@bis/db";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatDateTime } from "@/lib/format";
+import { normalizeConsent } from "@/lib/forms/consent";
 import { m } from "@/lib/messages";
 
 export function SubmissionsTable({
@@ -54,11 +56,45 @@ export function SubmissionsTable({
                     </div>
                   ))}
                 </dl>
+                {/* The pipeline stores the exact copy the person was shown, per
+                    consent field, precisely so it can be produced later. Until
+                    this rendered it, that evidence lived only in the database
+                    and no operator could answer "prove they agreed". */}
+                <ConsentList consent={submission.consent} />
               </li>
             ))}
           </ul>
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function ConsentList({ consent }: { consent: SubmissionRow["consent"] }) {
+  const entries = normalizeConsent(consent);
+  if (entries.length === 0) return null;
+
+  return (
+    <ul className="mt-1.5 space-y-1 border-t border-border pt-1.5">
+      {entries.map((entry) => (
+        <li key={entry.key} className="flex gap-1.5 text-xs">
+          {entry.given ? (
+            <Check className="mt-0.5 size-3.5 shrink-0 text-primary" aria-hidden />
+          ) : (
+            <X className="mt-0.5 size-3.5 shrink-0 text-destructive" aria-hidden />
+          )}
+          <span className="min-w-0">
+            {/* The icon carries the meaning, so a screen reader needs the word. */}
+            <span className="sr-only">
+              {entry.given ? m["forms.consentGiven"] : m["forms.consentNotGiven"]}:{" "}
+            </span>
+            <span className="break-words text-card-foreground">{entry.text}</span>
+            {entry.at ? (
+              <span className="text-muted-foreground"> · {formatDateTime(entry.at)}</span>
+            ) : null}
+          </span>
+        </li>
+      ))}
+    </ul>
   );
 }

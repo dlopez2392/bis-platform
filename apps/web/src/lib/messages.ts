@@ -225,6 +225,10 @@ export const m = {
   "forms.spamReason.too_fast": "Submitted too quickly, or with a missing or invalid form token, to have been filled out by a person.",
   "forms.spamReason.rate_limited": "Too many submissions from this source in a short time.",
   "forms.needsAttention": "Needs attention",
+  // Every submission stores the exact consent copy so it can be proved later.
+  // That is only true if somebody can read it back — see submissions-table.tsx.
+  "forms.consentGiven": "Agreed",
+  "forms.consentNotGiven": "Not agreed",
   "forms.contact": "Contact",
   "forms.kind.core.first_name": "First name",
   "forms.kind.core.last_name": "Last name",
