@@ -42,6 +42,17 @@ export function PublicForm({
   const [state, formAction, pending] = useActionState(action, IDLE);
   const rootRef = useRef<HTMLDivElement>(null);
 
+  // `app/f/layout.tsx` cannot read `?locale=` (no access to searchParams in a
+  // root layout) and the locale can also be overridden per-request by that
+  // query param, so the server always emits `<html lang="en">`. This corrects
+  // it after hydration for whichever locale actually resolved — screen readers
+  // and translation tooling see the honest language, just one tick late. The
+  // server-emitted value is the known, accepted gap here, not something this
+  // effect can close.
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
+
   // Report height to the embedding page. The iframe cannot size itself, so
   // without this the form is either clipped or floats in dead space.
   useEffect(() => {
