@@ -9,9 +9,24 @@ const countRecentSubmissionsMock = vi.fn();
 const shouldRecordRateLimitMock = vi.fn();
 const findRecentDuplicateMock = vi.fn();
 const setSubmissionProcessingErrorMock = vi.fn();
+const createContactMock = vi.fn();
+const ensureConversationMock = vi.fn();
+const createMessageMock = vi.fn();
+const incrementUnreadCountMock = vi.fn();
+
+const sendMock = vi.fn();
+vi.mock("@/lib/email", () => ({
+  getEmailProvider: () => ({ send: (...a: unknown[]) => sendMock(...a) }),
+}));
 
 vi.mock("@bis/db", () => ({
-  serviceDb: () => ({}),
+  // Chainable only as far as the one direct query the action makes outside the
+  // mocked helpers: notify()'s account-name lookup.
+  serviceDb: () => ({
+    from: () => ({
+      select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { name: "Acme" } }) }) }),
+    }),
+  }),
   getPublishedFormByPublicId: (...a: unknown[]) => getPublishedFormByPublicIdMock(...a),
   createSubmission: (...a: unknown[]) => createSubmissionMock(...a),
   recordRejectedSubmission: (...a: unknown[]) => recordRejectedSubmissionMock(...a),
@@ -21,12 +36,12 @@ vi.mock("@bis/db", () => ({
   linkSubmissionContact: vi.fn(),
   setSubmissionProcessingError: (...a: unknown[]) => setSubmissionProcessingErrorMock(...a),
   emitFormSubmitted: vi.fn(),
-  createContact: vi.fn(),
+  createContact: (...a: unknown[]) => createContactMock(...a),
   updateContact: vi.fn(),
   getContact: vi.fn(),
-  ensureConversation: vi.fn(),
-  createMessage: vi.fn(),
-  incrementUnreadCount: vi.fn(),
+  ensureConversation: (...a: unknown[]) => ensureConversationMock(...a),
+  createMessage: (...a: unknown[]) => createMessageMock(...a),
+  incrementUnreadCount: (...a: unknown[]) => incrementUnreadCountMock(...a),
 }));
 
 import { headers } from "next/headers";
@@ -71,6 +86,11 @@ beforeEach(() => {
   shouldRecordRateLimitMock.mockReset().mockResolvedValue(true);
   findRecentDuplicateMock.mockReset().mockResolvedValue(null);
   setSubmissionProcessingErrorMock.mockReset();
+  sendMock.mockReset().mockResolvedValue(undefined);
+  createContactMock.mockReset().mockResolvedValue({ id: "contact_1", existing: false });
+  ensureConversationMock.mockReset().mockResolvedValue({ id: "convo_1" });
+  createMessageMock.mockReset().mockResolvedValue({ id: "msg_1" });
+  incrementUnreadCountMock.mockReset();
 });
 
 describe("submitFormAction — expired render token (lead-loss regression)", () => {
@@ -113,6 +133,59 @@ describe("submitFormAction — expired render token (lead-loss regression)", () 
     expect(result.status).toBe("success");
     expect(createSubmissionMock).toHaveBeenCalledTimes(1);
     expect(recordRejectedSubmissionMock).not.toHaveBeenCalled();
+  });
+
+  it("a lead with no message field still opens a conversation", async () => {
+    // The gate used to be `if (messageBody)`, so a short form — name and email,
+    // the highest-converting kind — produced a contact and an email and
+    // NOTHING in Conversations, the only screen that flags a lead as unread.
+    const fields = [
+      { key: "first_name", kind: "core.first_name", label: "Name", required: true },
+      { key: "email", kind: "core.email", label: "Email", required: true },
+    ];
+    getPublishedFormByPublicIdMock.mockResolvedValue(formRow({ fields }));
+    const token = signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
+
+    const result = await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token, locale: "en",
+      first_name: "Maria", email: "maria@example.com",
+    }));
+
+    expect(result.status).toBe("success");
+    expect(ensureConversationMock).toHaveBeenCalledTimes(1);
+    // The thread carries what the person actually submitted, so an operator
+    // opening it sees the lead rather than an empty bubble.
+    expect(createMessageMock).toHaveBeenCalledWith(
+      expect.anything(), "acct_1",
+      expect.objectContaining({
+        channel: "form", direction: "inbound",
+        body: "Name: Maria\nEmail: maria@example.com",
+      }),
+      "form", "system",
+    );
+    expect(incrementUnreadCountMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("one notify recipient's failure does not silence the others", async () => {
+    // The loop used to await each send bare, so the first provider failure —
+    // one bad address, one rejected domain — threw out of the loop and every
+    // later recipient heard nothing about the lead at all.
+    getPublishedFormByPublicIdMock.mockResolvedValue(
+      formRow({ notify_emails: ["first@bis-rgv.com", "second@bis-rgv.com"] }));
+    sendMock.mockReset()
+      .mockRejectedValueOnce(new Error("provider rejected the recipient"))
+      .mockResolvedValueOnce(undefined);
+
+    const token = signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
+    const result = await submitFormAction(
+      PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token, locale: "en" }));
+
+    expect(result.status).toBe("success");
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(sendMock.mock.calls[1]![0]).toMatchObject({ to: "second@bis-rgv.com" });
+    // And the one that did fail is still on the record, not swallowed.
+    expect(setSubmissionProcessingErrorMock).toHaveBeenCalledWith(
+      expect.anything(), "acct_1", "sub_1", expect.stringContaining("first@bis-rgv.com"));
   });
 
   it("a malformed/forged token is still recorded as too_fast spam (unchanged behavior)", async () => {

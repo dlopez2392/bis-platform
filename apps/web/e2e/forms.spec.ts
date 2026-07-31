@@ -12,6 +12,14 @@ loadEnv({ path: ".env.local" });
 // seeded one.
 const ACCOUNT_NAME = "Test Client One";
 
+// Both specs drive the whole loop — build a form, publish it, submit it as a
+// stranger, read the lead back on three screens — against a dev server that
+// compiles each route on first hit, and they deliberately wait out the 2s
+// fill-time guard. That lands at ~30s, so the default 30s budget makes a pass
+// or a failure depend on compile luck rather than on the product: this file
+// timed out on one run and passed the next with no code change between them.
+test.describe.configure({ timeout: 120_000 });
+
 // Runs in a `finally`, not at the end of the test body. A failure partway
 // through leaves a stray contact in the shared dev database, and the very next
 // spec — contact-detail.spec, which opens "the first contact in the table" —
@@ -52,7 +60,18 @@ async function publish(page: Page): Promise<string> {
   return new URL(href!).pathname;
 }
 
-async function newPublishedForm(page: Page, formName: string): Promise<string> {
+// Adds a consent checkbox and renames it to something unique per run. The label
+// is what gets stored as the consent TEXT on every submission, so a unique one
+// is what lets the assertion prove the STORED copy came back, rather than
+// matching some other element that happens to say "consent".
+async function addConsentField(page: Page, label: string): Promise<void> {
+  await page.getByRole("button", { name: "Consent checkbox" }).click();
+  await page.getByLabel("Label — consent").fill(label);
+}
+
+async function newPublishedForm(
+  page: Page, formName: string, consentLabel?: string,
+): Promise<string> {
   await page.goto("/dashboard/accounts");
   await page.getByRole("link", { name: new RegExp(ACCOUNT_NAME, "i") }).first().click();
   await expect(page).toHaveURL(/\/contacts$/);
@@ -64,6 +83,8 @@ async function newPublishedForm(page: Page, formName: string): Promise<string> {
   await page.getByLabel("Form name").fill(formName);
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(page).toHaveURL(/\/forms\/[0-9a-f-]{36}$/);
+
+  if (consentLabel) await addConsentField(page, consentLabel);
 
   return publish(page);
 }
@@ -78,15 +99,19 @@ test("a published form captures a lead into the CRM", async ({ page }) => {
   const leadEmail = `e2e-${stamp}@example.com`;
   const messageBody = `Deck quote please (${stamp}).`;
 
+  const consentLabel = `I agree to be contacted (${stamp})`;
+
   try {
-    const publicPath = await newPublishedForm(page, formName);
-    const accountId = new URL(page.url()).pathname.split("/")[3]!;
+    const publicPath = await newPublishedForm(page, formName, consentLabel);
+    const editorUrl = page.url();
+    const accountId = new URL(editorUrl).pathname.split("/")[3]!;
 
     // --- The public side, as a stranger -------------------------------
     await page.goto(publicPath);
     await page.getByLabel("Name").fill(leadName);
     await page.getByLabel("Email").fill(leadEmail);
     await page.getByLabel(/How can we help/).fill(messageBody);
+    await page.getByLabel(consentLabel).check();
 
     // The fill-time guard rejects anything faster than MIN_FILL_MS (2s), and a
     // rejected submission is indistinguishable from success — so a spec that
@@ -141,6 +166,14 @@ test("a published form captures a lead into the CRM", async ({ page }) => {
     await page.goto(`/dashboard/accounts/${accountId}/contacts/${contact!.id}`);
     await expect(page.getByText(formName).first()).toBeVisible();
     await expect(page.getByText(messageBody).first()).toBeVisible();
+
+    // --- And the consent copy is readable back -------------------------
+    // The pipeline stores the exact wording the person agreed to so it can be
+    // produced on request. That is only true if it renders: it lives on the
+    // form's submissions list. getByText does not match an input's VALUE, so
+    // the editor's own label field above it cannot satisfy this.
+    await page.goto(editorUrl);
+    await expect(page.getByText(consentLabel)).toBeVisible();
   } finally {
     // Only this run's rows, in FK order. The seeded account, its contacts and
     // its opportunities must all survive.
