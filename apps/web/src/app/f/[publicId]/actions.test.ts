@@ -136,6 +136,45 @@ describe("submitFormAction — expired render token (lead-loss regression)", () 
     expect(result.status).toBe("success");
     expect(createSubmissionMock).toHaveBeenCalledTimes(1);
     expect(recordRejectedSubmissionMock).not.toHaveBeenCalled();
+    // Asserting the submission row alone let the thread quietly go missing:
+    // this form has no fields at all, so it takes the same all-blank path the
+    // test below pins, and for a while it created no conversation whatsoever.
+    expect(ensureConversationMock).toHaveBeenCalledTimes(1);
+    expect(createMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a submission with every field blank still opens a conversation", async () => {
+    // The third body tier, and the one that has already been broken twice: an
+    // earlier version wrapped the whole conversation block in `if (threadBody)`
+    // while the fallback was still an empty string, so a submission carrying no
+    // answers produced a contact and a notification and nothing in
+    // Conversations — silently reproducing the exact bug that block was added
+    // to fix. Every field here is optional so an all-blank submission is
+    // genuinely accepted rather than turned away by validation.
+    const fields = [
+      { key: "first_name", kind: "core.first_name", label: "Name", required: false },
+      { key: "company_name", kind: "core.company_name", label: "Company", required: false },
+    ];
+    getPublishedFormByPublicIdMock.mockResolvedValue(formRow({ fields }));
+    const token = signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
+
+    const result = await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token, locale: "en",
+      first_name: "", company_name: "",
+    }));
+
+    expect(result.status).toBe("success");
+    expect(ensureConversationMock).toHaveBeenCalledTimes(1);
+    expect(incrementUnreadCountMock).toHaveBeenCalledTimes(1);
+    // `messages.body` is `not null`, so the fallback has to say something real.
+    expect(createMessageMock).toHaveBeenCalledWith(
+      expect.anything(), "acct_1",
+      expect.objectContaining({
+        channel: "form", direction: "inbound",
+        body: 'New submission on "Test Form".',
+      }),
+      "form", "system",
+    );
   });
 
   it("a lead with no message field still opens a conversation", async () => {
