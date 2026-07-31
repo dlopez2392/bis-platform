@@ -301,21 +301,25 @@ async function enrich(
     // NOTHING in Conversations, the only screen that flags a new lead as
     // unread. That is precisely the "leads in a database rather than in front
     // of a person" failure the unread badge exists to prevent, and it hit the
-    // shortest, highest-converting forms hardest. With no message to carry, the
-    // thread carries what the person actually submitted.
+    // shortest, highest-converting forms hardest. Three-tier fallback for the
+    // body: the message field's own answer when there is one; otherwise a
+    // readable "Label: value" line per other answered field, so the thread
+    // shows what the person actually submitted; and only when NEITHER exists
+    // (every field left blank) a fixed line naming the form — `messages.body`
+    // is `not null`, and an empty bubble would be worse than a stated one.
     const messageField = form.fields.find((f) => f.kind === MESSAGE_KIND);
     const messageBody = messageField
       ? answers.find((a) => a.key === messageField.key)?.value ?? "" : "";
-    const threadBody = messageBody
-      || answers.filter((a) => a.value).map((a) => `${a.label}: ${a.value}`).join("\n");
-    if (threadBody) {
-      const convo = await ensureConversation(db, accountId, contactId, "form", "system");
-      await createMessage(db, accountId, {
-        conversationId: convo.id, channel: "form", direction: "inbound",
-        subject: form.name, body: threadBody,
-      }, "form", "system");
-      await incrementUnreadCount(db, accountId, convo.id);
-    }
+    const answeredLines = answers.filter((a) => a.value)
+      .map((a) => `${a.label}: ${a.value}`).join("\n");
+    const threadBody = messageBody || answeredLines || `New submission on "${form.name}".`;
+
+    const convo = await ensureConversation(db, accountId, contactId, "form", "system");
+    await createMessage(db, accountId, {
+      conversationId: convo.id, channel: "form", direction: "inbound",
+      subject: form.name, body: threadBody,
+    }, "form", "system");
+    await incrementUnreadCount(db, accountId, convo.id);
 
     await emitFormSubmitted(db, accountId, { formId: form.id, submissionId, contactId });
   } catch (e) {
