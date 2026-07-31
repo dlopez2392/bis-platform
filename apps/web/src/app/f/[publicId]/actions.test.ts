@@ -46,7 +46,10 @@ vi.mock("@bis/db", () => ({
 
 import { headers } from "next/headers";
 import { submitFormAction } from "./actions";
-import { signRenderToken, MAX_TOKEN_AGE_MS, MIN_FILL_MS, RENDER_TOKEN_FIELD } from "@/lib/forms/guards";
+import {
+  signRenderToken, MAX_TOKEN_AGE_MS, MIN_FILL_MS, RENDER_TOKEN_FIELD,
+  HONEYPOT_FIELD, RATE_LIMIT_MAX,
+} from "@/lib/forms/guards";
 import { IDLE } from "./submit-result";
 
 const PUBLIC_ID = "form_test1234";
@@ -198,5 +201,68 @@ describe("submitFormAction — expired render token (lead-loss regression)", () 
       expect.anything(), "acct_1", "form_row_1",
       expect.objectContaining({ spamReason: "too_fast" }),
     );
+  });
+});
+
+describe("submitFormAction — guard-ordering regressions (the two M1c Criticals)", () => {
+  // A field with `required: true` is the only way to make `validate` ever
+  // produce an error — a `fields: []` form (every other test in this file)
+  // can never fail validation, so it cannot exercise either ordering below.
+  const REQUIRED_KEY = "name";
+  function formWithRequiredField(overrides: Record<string, unknown> = {}) {
+    return formRow({
+      fields: [{ key: REQUIRED_KEY, kind: "core.first_name", label: "Name", required: true }],
+      ...overrides,
+    });
+  }
+
+  it("validation runs before the honeypot guard: a honeypot-filled submission with a blank required field is just as invalid as one without the honeypot", async () => {
+    // If a spam guard ran first, filling the honeypot alongside a blank
+    // required field would return `success` while the same request with the
+    // honeypot empty returns `invalid` — a single-request-pair oracle a bot
+    // can use to identify the honeypot field by watching the response flip.
+    // Neither request below carries a render token: validate() must reject
+    // both before any guard that would care about one is ever reached.
+    getPublishedFormByPublicIdMock.mockResolvedValue(formWithRequiredField());
+
+    const withHoneypot = await submitFormAction(
+      PUBLIC_ID, IDLE, fd({ [HONEYPOT_FIELD]: "gotcha", locale: "en" }));
+    const withoutHoneypot = await submitFormAction(PUBLIC_ID, IDLE, fd({ locale: "en" }));
+
+    expect(withHoneypot.status).toBe("invalid");
+    expect(withoutHoneypot.status).toBe("invalid");
+    if (withHoneypot.status === "invalid" && withoutHoneypot.status === "invalid") {
+      expect(withHoneypot.fieldErrors).toEqual(withoutHoneypot.fieldErrors);
+      expect(withHoneypot.fieldErrors[REQUIRED_KEY]).toBeTruthy();
+    }
+    // The response flip is exactly what must not happen — and separately,
+    // nothing was written for either request.
+    expect(createSubmissionMock).not.toHaveBeenCalled();
+    expect(recordRejectedSubmissionMock).not.toHaveBeenCalled();
+  });
+
+  it("the rate limit runs before the honeypot guard: once over the limit, a honeypot-filled submission is recorded rate_limited, not honeypot", async () => {
+    // If honeypot ran first, a well-formed request with the honeypot filled
+    // would write a `honeypot` row on every single request forever, with
+    // nothing capping it — exactly the unbounded growth the rate-limit
+    // marker exists to prevent, just reached on the branch a real bot hits
+    // most often.
+    getPublishedFormByPublicIdMock.mockResolvedValue(formWithRequiredField());
+    countRecentSubmissionsMock.mockResolvedValue(RATE_LIMIT_MAX);
+
+    const result = await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [REQUIRED_KEY]: "Maria", [HONEYPOT_FIELD]: "gotcha", locale: "en",
+    }));
+
+    expect(result.status).toBe("success"); // same body every blocked path gets
+    expect(recordRejectedSubmissionMock).toHaveBeenCalledWith(
+      expect.anything(), "acct_1", "form_row_1",
+      expect.objectContaining({ spamReason: "rate_limited" }),
+    );
+    expect(recordRejectedSubmissionMock).not.toHaveBeenCalledWith(
+      expect.anything(), "acct_1", "form_row_1",
+      expect.objectContaining({ spamReason: "honeypot" }),
+    );
+    expect(createSubmissionMock).not.toHaveBeenCalled();
   });
 });
