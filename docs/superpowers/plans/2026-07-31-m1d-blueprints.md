@@ -1496,8 +1496,7 @@ export function ChecklistPanel({
 `checklist/page.tsx` loads state and renders the panel inside the shell:
 
 ```tsx
-import { notFound } from "next/navigation";
-import { serviceDb, listChecklistState, listForms } from "@bis/db";
+import { serviceDb, listChecklistState, countFormsMissingNotify } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { mergeChecklist } from "@/lib/checklist-catalogue";
 import { m } from "@/lib/messages";
@@ -1511,9 +1510,9 @@ export default async function ChecklistPage({
 }: { params: Promise<{ accountId: string }> }) {
   const { accountId } = await params;
   const db = serviceDb();
-  const [rows, forms] = await Promise.all([
+  const [rows, formsMissingNotify] = await Promise.all([
     listChecklistState(db, accountId),
-    listForms(db, accountId),
+    countFormsMissingNotify(db, accountId),
   ]);
   return (
     <>
@@ -1521,7 +1520,7 @@ export default async function ChecklistPage({
       <div className="max-w-2xl p-6">
         <ChecklistPanel
           entries={mergeChecklist(rows)}
-          formsMissingNotify={0}
+          formsMissingNotify={formsMissingNotify}
           setAction={setChecklistItemAction.bind(null, accountId)}
           addAction={addChecklistItemAction.bind(null, accountId)}
         />
@@ -1531,7 +1530,7 @@ export default async function ChecklistPage({
 }
 ```
 
-`listForms` returns no `notify_emails`, so `formsMissingNotify` needs a direct count. Add to `packages/db/src/forms.ts`:
+`listForms` returns no `notify_emails`, so the count above needs its own query. Add to `packages/db/src/forms.ts`:
 
 ```ts
 export async function countFormsMissingNotify(
@@ -1545,7 +1544,7 @@ export async function countFormsMissingNotify(
 }
 ```
 
-Export it, use it in place of the `0` above, and drop the unused `listForms` import if it is no longer needed.
+Export it from `packages/db/src/index.ts`. The page above already imports and uses it.
 
 Then render the same panel on the account Dashboard, above the existing content, only while `remaining > 0` — a finished checklist should stop occupying the screen.
 
