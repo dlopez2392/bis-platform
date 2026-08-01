@@ -24,3 +24,5 @@ export { newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId
 export { captureBlueprint, listBlueprints, getBlueprint, blueprintKey, applyBlueprint,
          BUNDLE_SCHEMA_VERSION,
          type BlueprintBundle, type BlueprintRow, type BlueprintSummary, type ApplyReport } from "./blueprints";
+export { listChecklistState, setChecklistItem, addCustomChecklistItem,
+         type ChecklistStateRow } from "./checklist";

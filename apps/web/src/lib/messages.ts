@@ -244,6 +244,26 @@ export const m = {
   "conversations.channel.email": "Email",
   "conversations.channel.note": "Note",
   "contact.formSubmission": "Form submission",
+
+  // Every item but form_notify happens outside the platform. The help text
+  // must say so plainly — implying the app performs these is a lie it would
+  // tell daily.
+  "checklist.phone_number.title": "Buy a phone number",
+  "checklist.phone_number.help":
+    "Done in Telnyx. Calling and SMS arrive in M2 — until then this is a record that the number exists.",
+  "checklist.a2p_registration.title": "Register A2P 10DLC brand and campaign",
+  "checklist.a2p_registration.help":
+    "Done with the carriers via Telnyx. Expect days to weeks; start it early because nothing you do here speeds it up.",
+  "checklist.email_domain.title": "Add a sending subdomain and DKIM",
+  "checklist.email_domain.help":
+    "Done in Resend, then the DNS records at the domain host. A subdomain keeps this client's sending reputation separate.",
+  "checklist.form_notify.title": "Set the notification address on each form",
+  "checklist.form_notify.help":
+    "Done here. Forms applied from a blueprint deliberately start with an empty notify list so leads cannot reach the previous client.",
+  "checklist.gbp_connect.title": "Connect Google Business Profile",
+  "checklist.gbp_connect.help": "Done in Google. Review management arrives in M5.",
+  "checklist.invite_owner.title": "Invite the business owner",
+  "checklist.invite_owner.help": "Done in Clerk until per-account roles exist.",
 } as const;
 
 export type MessageKey = keyof typeof m;
