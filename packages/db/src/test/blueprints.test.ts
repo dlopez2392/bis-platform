@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
-import { createContact } from "../contacts";
+import { createContact, addTagToContact } from "../contacts";
 import { createCustomField, upsertCustomValue, ensureDefaultPipeline } from "../crm-config";
 import { createForm, updateForm } from "../forms";
 import { captureBlueprint, listBlueprints, getBlueprint } from "../blueprints";
@@ -75,5 +75,62 @@ describe("blueprint capture", () => {
         .eq("account_id", accountId).eq("type", "blueprint.captured");
       expect(data).toHaveLength(1);
       expect(data![0]!.actor_type).toBe("user");
+    }));
+
+  it("gives distinct keys to two names that slug to the same string", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(
+        db, accountId, { firstName: "Case", email: "case-collision@example.com" }, "user_test");
+      // "Hot Lead" -> "hot lead" and "hot-lead" are two distinct, legal tag
+      // names (tags has unique(account_id, name), and both pass it) that both
+      // slug to "hot_lead" — the exact collision blueprintKey's old docstring
+      // claimed was unreachable.
+      await addTagToContact(db, accountId, contactId, "Hot Lead");
+      await addTagToContact(db, accountId, contactId, "hot-lead");
+
+      const { id } = await captureBlueprint(db, accountId, { name: "Collision Case" }, "user_test");
+      const bp = await getBlueprint(db, id);
+
+      const tagKeys = bp!.assets.tags.map((t) => t.key).sort();
+      expect(tagKeys).toEqual(["tag:hot_lead", "tag:hot_lead_2"]);
+      // Distinct keys, not a merge: both source names must still be present.
+      expect(bp!.assets.tags.map((t) => t.name).sort()).toEqual(["hot lead", "hot-lead"]);
+    }));
+
+  it("recapturing an unchanged account produces identical keys both times", () =>
+    withTestAccount(async (db, accountId) => {
+      await seedConfig(db, accountId);
+      const { id: contactId } = await createContact(
+        db, accountId, { firstName: "Case", email: "case-determinism@example.com" }, "user_test");
+      await addTagToContact(db, accountId, contactId, "Hot Lead");
+      await addTagToContact(db, accountId, contactId, "hot-lead");
+
+      // Two independent captures of the same, unchanged account. Nothing is
+      // created or modified in between, so buildBundle's queries re-read the
+      // exact same rows both times — the id tiebreaker on every ordering is
+      // what makes the resulting key sequence (including the "_2" collision
+      // suffix above) come out byte-identical rather than depending on
+      // whatever order Postgres happens to return equal-position rows in.
+      const first = await captureBlueprint(db, accountId, { name: "Determinism A" }, "user_test");
+      const firstBp = await getBlueprint(db, first.id);
+      const second = await captureBlueprint(db, accountId, { name: "Determinism B" }, "user_test");
+      const secondBp = await getBlueprint(db, second.id);
+
+      expect(secondBp!.assets).toEqual(firstBp!.assets);
+    }));
+
+  it("buildBundle fails loud, naming the query, instead of persisting an incomplete bundle", () =>
+    withTestAccount(async (db) => {
+      // An invalid account id makes every one of buildBundle's six queries
+      // error at the database (invalid uuid input) rather than match zero
+      // rows — a real, unmocked query failure. Before the fix this fell
+      // through `?? []` on all six and captureBlueprint would have happily
+      // saved an empty bundle under this name.
+      await expect(
+        captureBlueprint(db, "not-a-uuid", { name: "Should Never Save" }, "user_test"),
+      ).rejects.toThrow(/pipelines query failed/);
+
+      const { data } = await db.from("blueprints").select("id").eq("name", "Should Never Save");
+      expect(data).toHaveLength(0);
     }));
 });

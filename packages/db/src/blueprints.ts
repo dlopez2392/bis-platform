@@ -33,12 +33,45 @@ export type BlueprintSummary = Pick<BlueprintRow, "id" | "name" | "version" | "c
 const BLUEPRINT_COLS =
   "id, agency_id, name, version, source_account_id, assets, created_at, updated_at";
 
-/** Stable, human-readable key derived from a name. Two assets with the same
- *  name in one account would already be rejected by their own unique indexes,
- *  so collisions here are not reachable. */
+/**
+ * Stable, human-readable key derived from a name: lowercased, non-alnum runs
+ * collapsed to `_`, truncated to 40 chars. NOT guaranteed unique on its own.
+ * Several source tables have no unique constraint on `name` at all
+ * (`pipeline_stages`, `forms` — the latter deliberately, per migration 0006's
+ * own comment about a cross-tenant uniqueness fight over names like
+ * "contact"). And even where a name *is* unique per account (`tags`;
+ * `pipelines` via migration 0004), the slug transform is lossy: "Hot Lead"
+ * and "hot-lead" are two distinct, legal names that both produce
+ * `tag:hot_lead`, and so does any pair of names differing only past the
+ * 40-char truncation. Callers that assemble a set of these keys for one
+ * bundle (see `buildBundle`'s `makeKeyer`) must de-duplicate within that set.
+ */
 export function blueprintKey(prefix: string, name: string): string {
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 40);
   return `${prefix}:${slug || "item"}`;
+}
+
+/**
+ * Wraps `blueprintKey` with in-bundle de-duplication. `blueprintKey` alone
+ * can produce the same string for two distinct assets (see its docstring);
+ * this keeps a per-capture record of every key already handed out and
+ * appends `_2`, `_3`, ... to later collisions so every asset in the bundle
+ * still gets a distinct key. Must be a fresh instance per `buildBundle` call
+ * (module-level state would leak across accounts/captures); its behavior is
+ * deterministic given a fixed call order, which is why every query below
+ * orders by `id` as a tiebreaker — without that, Postgres could return
+ * equal-position/equal-timestamp rows in a different order on the next
+ * capture and the `_2` suffix would land on a different row each time,
+ * breaking the idempotency that `blueprint_key` exists to provide.
+ */
+function makeKeyer() {
+  const seen = new Map<string, number>();
+  return (prefix: string, name: string): string => {
+    const base = blueprintKey(prefix, name);
+    const count = (seen.get(base) ?? 0) + 1;
+    seen.set(base, count);
+    return count === 1 ? base : `${base}_${count}`;
+  };
 }
 
 export async function captureBlueprint(
@@ -75,42 +108,68 @@ export async function captureBlueprint(
 }
 
 async function buildBundle(db: SupabaseClient, accountId: string): Promise<BlueprintBundle> {
+  // Every ordering below ends in `.order("id")`: none of the primary sort
+  // columns (position, name, value_key, created_at) is guaranteed distinct
+  // (position defaults to 0 for every row; created_at can tie under fast
+  // concurrent inserts), so without an id tiebreaker Postgres is free to
+  // return equal-key rows in a different order on every call. That would
+  // make makeKeyer's `_2`/`_3` disambiguation land on a different asset each
+  // capture, breaking the idempotency `blueprint_key` exists to provide.
   const [pipelines, stages, fields, tags, values, forms] = await Promise.all([
-    db.from("pipelines").select("id, name, position").eq("account_id", accountId).order("position"),
-    db.from("pipeline_stages").select("pipeline_id, name, position").eq("account_id", accountId).order("position"),
-    db.from("custom_fields").select("model, field_key, name, data_type, options, position").eq("account_id", accountId).order("position"),
-    db.from("tags").select("name").eq("account_id", accountId).order("name"),
-    db.from("custom_values").select("value_key, name").eq("account_id", accountId).order("value_key"),
-    db.from("forms").select("name, fields, theme, success_mode, success_message, redirect_url, locale_default").eq("account_id", accountId).order("created_at"),
+    db.from("pipelines").select("id, name, position").eq("account_id", accountId)
+      .order("position").order("id"),
+    db.from("pipeline_stages").select("id, pipeline_id, name, position").eq("account_id", accountId)
+      .order("position").order("id"),
+    db.from("custom_fields").select("id, model, field_key, name, data_type, options, position").eq("account_id", accountId)
+      .order("position").order("id"),
+    db.from("tags").select("id, name").eq("account_id", accountId)
+      .order("name").order("id"),
+    db.from("custom_values").select("id, value_key, name").eq("account_id", accountId)
+      .order("value_key").order("id"),
+    db.from("forms").select("id, name, fields, theme, success_mode, success_message, redirect_url, locale_default").eq("account_id", accountId)
+      .order("created_at").order("id"),
   ]);
 
+  // Fail loud: a transient failure, permissions problem, or RLS
+  // misconfiguration on any one of these must not fall through to `?? []`
+  // below and silently produce an incomplete bundle that captureBlueprint
+  // then persists and reports as success.
+  const queries = [
+    ["pipelines", pipelines], ["pipeline_stages", stages], ["custom_fields", fields],
+    ["tags", tags], ["custom_values", values], ["forms", forms],
+  ] as const;
+  for (const [label, result] of queries) {
+    if (result.error) throw new Error(`buildBundle: ${label} query failed: ${result.error.message}`);
+  }
+
   const stageRows = (stages.data ?? []) as any[];
+  const key = makeKeyer();
 
   return {
     schemaVersion: BUNDLE_SCHEMA_VERSION,
     pipelines: ((pipelines.data ?? []) as any[]).map((p) => ({
-      key: blueprintKey("pipeline", p.name), name: p.name, position: p.position,
+      key: key("pipeline", p.name), name: p.name, position: p.position,
       stages: stageRows.filter((s) => s.pipeline_id === p.id).map((s) => ({
-        key: blueprintKey("stage", `${p.name}_${s.name}`), name: s.name, position: s.position,
+        key: key("stage", `${p.name}_${s.name}`), name: s.name, position: s.position,
       })),
     })),
     customFields: ((fields.data ?? []) as any[]).map((f) => ({
-      key: blueprintKey("field", `${f.model}_${f.field_key}`), model: f.model,
+      key: key("field", `${f.model}_${f.field_key}`), model: f.model,
       fieldKey: f.field_key, name: f.name, dataType: f.data_type,
       options: f.options ?? [], position: f.position,
     })),
     tags: ((tags.data ?? []) as any[]).map((t) => ({
-      key: blueprintKey("tag", t.name), name: t.name,
+      key: key("tag", t.name), name: t.name,
     })),
     // `value` is not read at all — carrying the previous tenant's value would
     // defeat the entire point of custom values as the cloning primitive.
     customValues: ((values.data ?? []) as any[]).map((v) => ({
-      key: blueprintKey("value", v.value_key), valueKey: v.value_key, name: v.name,
+      key: key("value", v.value_key), valueKey: v.value_key, name: v.name,
     })),
     // publicId and notify_emails are not selected above, so they cannot leak
     // into the bundle even by accident.
     forms: ((forms.data ?? []) as any[]).map((f) => ({
-      key: blueprintKey("form", f.name), name: f.name, fields: f.fields ?? [],
+      key: key("form", f.name), name: f.name, fields: f.fields ?? [],
       theme: f.theme ?? {}, successMode: f.success_mode,
       successMessage: f.success_message, redirectUrl: f.redirect_url,
       localeDefault: f.locale_default,
