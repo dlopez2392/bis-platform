@@ -7,6 +7,7 @@ export const m = {
   "nav.forms": "Forms",
   "nav.settings": "Settings",
   "nav.accounts": "Companies",
+  "nav.blueprints": "Blueprints",
 
   "shell.brand": "BIS",
   "shell.switchAccount": "Switch company",
@@ -264,6 +265,19 @@ export const m = {
   "checklist.gbp_connect.help": "Done in Google. Review management arrives in M5.",
   "checklist.invite_owner.title": "Invite the business owner",
   "checklist.invite_owner.help": "Done in Clerk until per-account roles exist.",
+
+  "blueprints.title": "Blueprints",
+  "blueprints.empty.title": "No blueprints yet",
+  "blueprints.empty.body": "Set an account up the way you like it, then save its configuration here to reuse on the next client.",
+  "blueprints.version": "Version",
+  "blueprints.captured": "Captured",
+  "blueprints.applied": "Applied to",
+  "blueprints.appliedCount": "accounts",
+  "blueprints.save": "Save as blueprint",
+  "blueprints.saveHint": "Copies this account's pipelines, custom fields, tags, custom values and forms. Never contacts, conversations, or anything with a credential in it.",
+  "blueprints.name": "Blueprint name",
+  "blueprints.saved": "Blueprint saved",
+  "blueprints.saveFailed": "Could not save the blueprint.",
 } as const;
 
 export type MessageKey = keyof typeof m;

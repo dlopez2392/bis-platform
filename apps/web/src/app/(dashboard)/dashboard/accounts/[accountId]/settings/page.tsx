@@ -2,6 +2,8 @@ import { Braces, SlidersHorizontal } from "lucide-react";
 import { serviceDb, listCustomFields, listCustomValues, type CustomFieldDef } from "@bis/db";
 import { SubmitButton } from "../../submit-button";
 import { createFieldAction, upsertValueAction } from "./actions";
+import { SaveBlueprintDialog } from "./save-blueprint-dialog";
+import { captureBlueprintAction } from "../../../blueprints/actions";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,7 +41,10 @@ export default async function CrmSettingsPage({
   const boundUpsertValue = upsertValueAction.bind(null, accountId);
   return (
     <>
-      <PageHeader title={m["settings.title"]} />
+      <PageHeader
+        title={m["settings.title"]}
+        actions={<SaveBlueprintDialog action={captureBlueprintAction.bind(null, accountId)} />}
+      />
       <div className="grid gap-6 p-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
