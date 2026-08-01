@@ -18,6 +18,7 @@ export { newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId
          updateForm, createSubmission, recordRejectedSubmission, countRecentSubmissions,
          shouldRecordRateLimit, findRecentDuplicate, linkSubmissionContact,
          setSubmissionProcessingError, emitFormSubmitted, listSubmissions, listContactSubmissions,
+         countFormsMissingNotify,
          type FormField, type FormFieldKind, type FormTheme, type FormStatus,
          type FormRow, type FormSummary,
          type SubmissionInput, type SubmissionRow, type SubmissionConsent } from "./forms";

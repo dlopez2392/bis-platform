@@ -270,6 +270,16 @@ export const m = {
   "checklist.invite_owner.title": "Invite the business owner",
   "checklist.invite_owner.help": "Done in Clerk until per-account roles exist.",
 
+  "checklist.title": "Activation checklist",
+  "checklist.body": "What's left before this company is live.",
+  "checklist.external": "Done outside BIS",
+  "checklist.formNotify": "forms still have no notification address",
+  "checklist.addItem": "Add a step",
+  "checklist.addPlaceholder": "Something else this client needs…",
+  "checklist.complete": "Everything on the checklist is done.",
+  "checklist.remaining": "remaining",
+  "checklist.open": "Open",
+
   "blueprints.title": "Blueprints",
   "blueprints.empty.title": "No blueprints yet",
   "blueprints.empty.body": "Set an account up the way you like it, then save its configuration here to reuse on the next client.",

@@ -308,6 +308,21 @@ export async function listSubmissions(
   return (data ?? []) as unknown as SubmissionRow[];
 }
 
+/**
+ * `listForms` returns no `notify_emails`, so the checklist's "forms still
+ * have no notification address" warning needs its own count rather than a
+ * derived one.
+ */
+export async function countFormsMissingNotify(
+  db: SupabaseClient, accountId: string,
+): Promise<number> {
+  const { count, error } = await db.from("forms")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId).eq("notify_emails", "{}");
+  if (error) throw new Error(`countFormsMissingNotify failed: ${error.message}`);
+  return count ?? 0;
+}
+
 export async function listContactSubmissions(
   db: SupabaseClient, accountId: string, contactId: string,
 ): Promise<(SubmissionRow & { formName: string })[]> {
