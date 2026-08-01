@@ -64,7 +64,14 @@ describe("blueprint capture", () => {
       expect(bp!.version).toBe(2);
       expect(bp!.assets.customFields.map((f) => f.fieldKey).sort()).toEqual(["proj_type", "roof_age"]);
 
-      expect(await listBlueprints(db)).toHaveLength(1);
+      // `blueprints` is agency-scoped (no account_id column — see migration
+      // 0007), so listBlueprints(db) returns every blueprint in the agency,
+      // including ones this test did not create (other tests' fixtures,
+      // manual QA rows, etc). Scope to this test's own name rather than
+      // asserting on the agency's whole collection.
+      const named = (await listBlueprints(db)).filter((b) => b.name === "Contractor Starter");
+      expect(named).toHaveLength(1);
+      expect(named[0]!.id).toBe(second.id);
     }));
 
   it("capture emits an event against the source account", () =>
