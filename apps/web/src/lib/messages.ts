@@ -50,6 +50,10 @@ export const m = {
   "accounts.status.active": "Active",
   "accounts.status.paused": "Paused",
   "accounts.status.archived": "Archived",
+  "accounts.blueprint": "Apply a blueprint",
+  "accounts.blueprintNone": "Don't apply one",
+  "accounts.blueprintHint": "Copies configuration into the new company. You can apply one later instead.",
+  "accounts.blueprintPartial": "The company was created, but some blueprint items did not apply. Open it and apply the blueprint again.",
 
   "dashboard.title": "Dashboard",
   "dashboard.companies": "Companies",
