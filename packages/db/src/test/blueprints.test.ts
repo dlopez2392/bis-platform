@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
+import { serviceDb } from "../service";
 import { createContact, addTagToContact } from "../contacts";
 import { createCustomField, upsertCustomValue, ensureDefaultPipeline } from "../crm-config";
 import { createForm, updateForm } from "../forms";
@@ -97,6 +98,31 @@ describe("blueprint capture", () => {
       expect(bp!.assets.tags.map((t) => t.name).sort()).toEqual(["hot lead", "hot-lead"]);
     }));
 
+  it("gives distinct keys when a third name's natural slug matches a suffixed collision", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(
+        db, accountId, { firstName: "Case", email: "case-collision-3way@example.com" }, "user_test");
+      // "Hot Lead" and "hot-lead" both slug to "tag:hot_lead" (same collision
+      // as above), but "Hot Lead 2" is a third, unrelated tag whose OWN
+      // natural slug is "tag:hot_lead_2" — exactly the string a per-base
+      // counter would hand to whichever of the first two is processed
+      // second. A correct keyer must notice that key is already taken (by
+      // "Hot Lead 2" itself, or by the collision pair, depending on
+      // processing order) and keep incrementing past it so all three stay
+      // distinct.
+      await addTagToContact(db, accountId, contactId, "Hot Lead");
+      await addTagToContact(db, accountId, contactId, "hot-lead");
+      await addTagToContact(db, accountId, contactId, "Hot Lead 2");
+
+      const { id } = await captureBlueprint(db, accountId, { name: "Collision Case 3-Way" }, "user_test");
+      const bp = await getBlueprint(db, id);
+
+      const tagKeys = bp!.assets.tags.map((t) => t.key);
+      expect(new Set(tagKeys).size).toBe(3);
+      // Distinct keys, not a merge: all three source names must still be present.
+      expect(bp!.assets.tags.map((t) => t.name).sort()).toEqual(["hot lead", "hot lead 2", "hot-lead"]);
+    }));
+
   it("recapturing an unchanged account produces identical keys both times", () =>
     withTestAccount(async (db, accountId) => {
       await seedConfig(db, accountId);
@@ -119,18 +145,19 @@ describe("blueprint capture", () => {
       expect(secondBp!.assets).toEqual(firstBp!.assets);
     }));
 
-  it("buildBundle fails loud, naming the query, instead of persisting an incomplete bundle", () =>
-    withTestAccount(async (db) => {
-      // An invalid account id makes every one of buildBundle's six queries
-      // error at the database (invalid uuid input) rather than match zero
-      // rows — a real, unmocked query failure. Before the fix this fell
-      // through `?? []` on all six and captureBlueprint would have happily
-      // saved an empty bundle under this name.
-      await expect(
-        captureBlueprint(db, "not-a-uuid", { name: "Should Never Save" }, "user_test"),
-      ).rejects.toThrow(/pipelines query failed/);
+  it("buildBundle fails loud, naming the query, instead of persisting an incomplete bundle", async () => {
+    // An invalid account id makes every one of buildBundle's six queries
+    // error at the database (invalid uuid input) rather than match zero
+    // rows — a real, unmocked query failure. Before the fix this fell
+    // through `?? []` on all six and captureBlueprint would have happily
+    // saved an empty bundle under this name. No account fixture needed:
+    // "not-a-uuid" never reaches a real account row.
+    const db = serviceDb();
+    await expect(
+      captureBlueprint(db, "not-a-uuid", { name: "Should Never Save" }, "user_test"),
+    ).rejects.toThrow(/pipelines query failed/);
 
-      const { data } = await db.from("blueprints").select("id").eq("name", "Should Never Save");
-      expect(data).toHaveLength(0);
-    }));
+    const { data } = await db.from("blueprints").select("id").eq("name", "Should Never Save");
+    expect(data).toHaveLength(0);
+  });
 });

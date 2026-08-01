@@ -54,23 +54,35 @@ export function blueprintKey(prefix: string, name: string): string {
 /**
  * Wraps `blueprintKey` with in-bundle de-duplication. `blueprintKey` alone
  * can produce the same string for two distinct assets (see its docstring);
- * this keeps a per-capture record of every key already handed out and
- * appends `_2`, `_3`, ... to later collisions so every asset in the bundle
- * still gets a distinct key. Must be a fresh instance per `buildBundle` call
- * (module-level state would leak across accounts/captures); its behavior is
- * deterministic given a fixed call order, which is why every query below
- * orders by `id` as a tiebreaker — without that, Postgres could return
- * equal-position/equal-timestamp rows in a different order on the next
- * capture and the `_2` suffix would land on a different row each time,
- * breaking the idempotency that `blueprint_key` exists to provide.
+ * this tracks the full set of keys already *emitted* (not just a per-base
+ * count) and, on a collision, keeps incrementing the numeric suffix past any
+ * value already in use — including bases claimed by an unrelated name — so
+ * every asset in the bundle still gets a distinct key. A per-base counter
+ * alone is not enough: e.g. "Hot Lead" and "hot-lead" both slug to
+ * `tag:hot_lead`, and a third, unrelated tag "Hot Lead 2" slugs on its own
+ * to `tag:hot_lead_2` — the exact string a naive counter would hand the
+ * second of the first two, producing two assets sharing one key. Checking
+ * membership in the emitted-key set (not the base) is what catches that.
+ * Must be a fresh instance per `buildBundle` call (module-level state would
+ * leak across accounts/captures); its behavior is deterministic given a
+ * fixed call order, which is why every query below orders by `id` as a
+ * tiebreaker — without that, Postgres could return equal-position/
+ * equal-timestamp rows in a different order on the next capture and the
+ * suffix would land on a different row each time, breaking the idempotency
+ * that `blueprint_key` exists to provide.
  */
 function makeKeyer() {
-  const seen = new Map<string, number>();
+  const used = new Set<string>();
   return (prefix: string, name: string): string => {
     const base = blueprintKey(prefix, name);
-    const count = (seen.get(base) ?? 0) + 1;
-    seen.set(base, count);
-    return count === 1 ? base : `${base}_${count}`;
+    let candidate = base;
+    let n = 1;
+    while (used.has(candidate)) {
+      n++;
+      candidate = `${base}_${n}`;
+    }
+    used.add(candidate);
+    return candidate;
   };
 }
 
