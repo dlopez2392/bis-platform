@@ -4,7 +4,7 @@ import { serviceDb } from "../service";
 import { createContact, addTagToContact } from "../contacts";
 import { createCustomField, upsertCustomValue, ensureDefaultPipeline } from "../crm-config";
 import { createForm, updateForm } from "../forms";
-import { captureBlueprint, listBlueprints, getBlueprint } from "../blueprints";
+import { captureBlueprint, listBlueprints, getBlueprint, applyBlueprint } from "../blueprints";
 
 async function seedConfig(db: any, accountId: string) {
   await ensureDefaultPipeline(db, accountId);
@@ -160,4 +160,130 @@ describe("blueprint capture", () => {
     const { data } = await db.from("blueprints").select("id").eq("name", "Should Never Save");
     expect(data).toHaveLength(0);
   });
+});
+
+describe("blueprint apply", () => {
+  it("applies configuration, and applying twice creates nothing twice", () =>
+    withTestAccount(async (db, sourceId) => {
+      await seedConfig(db, sourceId);
+      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: "Starter" }, "user_test");
+
+      await withTestAccount(async (db2, targetId) => {
+        const first = await applyBlueprint(db2, targetId, blueprintId, "user_test");
+        expect(first.failed).toHaveLength(0);
+        expect(first.created.length).toBeGreaterThan(0);
+
+        const countAll = async () => {
+          const t = async (table: string) => {
+            const { data } = await db2.from(table).select("id").eq("account_id", targetId);
+            return data?.length ?? 0;
+          };
+          return {
+            pipelines: await t("pipelines"), stages: await t("pipeline_stages"),
+            fields: await t("custom_fields"), values: await t("custom_values"),
+            forms: await t("forms"),
+          };
+        };
+        const afterFirst = await countAll();
+        expect(afterFirst.pipelines).toBeGreaterThan(0);
+        expect(afterFirst.forms).toBe(1);
+
+        // The whole point of the partial unique index.
+        const second = await applyBlueprint(db2, targetId, blueprintId, "user_test");
+        expect(second.created).toHaveLength(0);
+        expect(second.skipped.length).toBeGreaterThan(0);
+        expect(await countAll()).toEqual(afterFirst);
+      });
+    }));
+
+  it("an applied form is a draft with its own public id and no notify address", () =>
+    withTestAccount(async (db, sourceId) => {
+      const { formId } = await seedConfig(db, sourceId);
+      const { data: source } = await db.from("forms").select("public_id").eq("id", formId).single();
+      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: "Starter" }, "user_test");
+
+      await withTestAccount(async (db2, targetId) => {
+        await applyBlueprint(db2, targetId, blueprintId, "user_test");
+        const { data: applied } = await db2.from("forms")
+          .select("public_id, notify_emails, status, origin, blueprint_key")
+          .eq("account_id", targetId).single();
+
+        // Sharing a token would collide on the global unique index — and if it
+        // somehow did not, one client's URL would serve another's form.
+        expect(applied!.public_id).not.toBe(source!.public_id);
+        expect(applied!.notify_emails).toEqual([]);
+        // Never publish a public URL because someone picked from a dropdown.
+        expect(applied!.status).toBe("draft");
+        expect(applied!.origin).toBe("blueprint");
+        expect(applied!.blueprint_key).toBeTruthy();
+      });
+    }));
+
+  it("applied custom values keep their key and name but not the source value", () =>
+    withTestAccount(async (db, sourceId) => {
+      await seedConfig(db, sourceId);
+      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: "Starter" }, "user_test");
+
+      await withTestAccount(async (db2, targetId) => {
+        await applyBlueprint(db2, targetId, blueprintId, "user_test");
+        const { data } = await db2.from("custom_values")
+          .select("value_key, name, value").eq("account_id", targetId).single();
+        expect(data!.value_key).toBe("business_name");
+        expect(data!.name).toBe("Business name");
+        expect(data!.value).toBe("");
+      });
+    }));
+
+  it("clones no live data and emits blueprint.applied on the target", () =>
+    withTestAccount(async (db, sourceId) => {
+      await seedConfig(db, sourceId);
+      await createContact(db, sourceId, { firstName: "Maria", email: "maria@example.com" }, "user_test");
+      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: "Starter" }, "user_test");
+
+      await withTestAccount(async (db2, targetId) => {
+        await applyBlueprint(db2, targetId, blueprintId, "user_test");
+
+        const { data: contacts } = await db2.from("contacts").select("id").eq("account_id", targetId);
+        expect(contacts).toHaveLength(0);
+
+        const { data: ev } = await db2.from("events").select("payload, actor_type")
+          .eq("account_id", targetId).eq("type", "blueprint.applied");
+        expect(ev).toHaveLength(1);
+        expect((ev![0]!.payload as any).blueprintId).toBe(blueprintId);
+        expect((ev![0]!.payload as any).version).toBe(1);
+      });
+    }));
+
+  it("a form referencing a custom field resolves because fields apply first", () =>
+    withTestAccount(async (db, sourceId) => {
+      await ensureDefaultPipeline(db, sourceId);
+      await createCustomField(db, sourceId, {
+        model: "contact", fieldKey: "proj_type", name: "Project type", dataType: "text",
+      });
+      await createForm(db, sourceId, {
+        name: "Quote", fields: [
+          { key: "custom_proj_type", kind: "custom.proj_type", label: "Project type", required: false },
+        ],
+      }, "user_test");
+      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: "Starter" }, "user_test");
+
+      await withTestAccount(async (db2, targetId) => {
+        const report = await applyBlueprint(db2, targetId, blueprintId, "user_test");
+        expect(report.failed).toHaveLength(0);
+
+        const { data: field } = await db2.from("custom_fields")
+          .select("field_key").eq("account_id", targetId).single();
+        const { data: form } = await db2.from("forms")
+          .select("fields").eq("account_id", targetId).single();
+        expect(field!.field_key).toBe("proj_type");
+        expect((form!.fields as any[])[0].kind).toBe("custom.proj_type");
+      });
+    }));
+
+  it("reports a missing blueprint instead of throwing", () =>
+    withTestAccount(async (db, accountId) => {
+      await expect(
+        applyBlueprint(db, accountId, "00000000-0000-0000-0000-000000000000", "user_test"),
+      ).rejects.toThrow(/not found/i);
+    }));
 });

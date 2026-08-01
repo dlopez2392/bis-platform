@@ -21,6 +21,6 @@ export { newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId
          type FormField, type FormFieldKind, type FormTheme, type FormStatus,
          type FormRow, type FormSummary,
          type SubmissionInput, type SubmissionRow, type SubmissionConsent } from "./forms";
-export { captureBlueprint, listBlueprints, getBlueprint, blueprintKey,
+export { captureBlueprint, listBlueprints, getBlueprint, blueprintKey, applyBlueprint,
          BUNDLE_SCHEMA_VERSION,
-         type BlueprintBundle, type BlueprintRow, type BlueprintSummary } from "./blueprints";
+         type BlueprintBundle, type BlueprintRow, type BlueprintSummary, type ApplyReport } from "./blueprints";

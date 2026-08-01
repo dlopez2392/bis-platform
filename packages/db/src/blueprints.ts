@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit } from "./events";
 import type { FormField, FormTheme } from "./forms";
+import { newPublicId } from "./forms";
 
 /** Shape of the `assets` jsonb. Bumped only when this format changes — distinct
  *  from `blueprints.version`, which counts recaptures of the contents. */
@@ -219,4 +220,135 @@ export async function getBlueprint(
     .eq("id", blueprintId).maybeSingle();
   if (error) throw new Error(error.message);
   return (data as unknown as BlueprintRow | null) ?? null;
+}
+
+export type ApplyReport = {
+  created: string[];   // blueprint keys written by this run
+  skipped: string[];   // already present from an earlier apply
+  failed: { key: string; error: string }[];
+};
+
+/**
+ * Applies a blueprint's configuration to an account.
+ *
+ * Per-asset, not all-or-nothing: PostgREST gives no cross-table transaction, so
+ * a failure records itself in the report and the remaining assets still apply.
+ * That is only safe because this is idempotent — the remedy for a partial apply
+ * is to apply again, and the partial unique index on (account_id,
+ * blueprint_key) guarantees the second run creates nothing twice.
+ *
+ * Order is load-bearing: a form's fields reference custom fields by
+ * `custom.<field_key>`, and stages need their pipeline's id.
+ */
+export async function applyBlueprint(
+  db: SupabaseClient, accountId: string, blueprintId: string, actorId: string,
+): Promise<ApplyReport> {
+  const blueprint = await getBlueprint(db, blueprintId);
+  if (!blueprint) throw new Error("applyBlueprint failed: blueprint not found");
+
+  const report: ApplyReport = { created: [], skipped: [], failed: [] };
+  const a = blueprint.assets;
+
+  const step = async (key: string, fn: () => Promise<"created" | "skipped">) => {
+    try {
+      const outcome = await fn();
+      (outcome === "created" ? report.created : report.skipped).push(key);
+    } catch (e) {
+      report.failed.push({ key, error: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
+  /** Insert unless this (account, blueprint_key) already exists. Returns the
+   *  row id either way so dependents (stages) can attach to it. Only valid for
+   *  the five tables migration 0007 gave a `blueprint_key`/`origin` column and
+   *  a partial unique index on (account_id, blueprint_key): pipelines,
+   *  pipeline_stages, custom_fields, tags, forms. */
+  const upsert = async (
+    table: string, key: string, row: Record<string, unknown>,
+  ): Promise<{ id: string; created: boolean }> => {
+    const { data: existing, error: findErr } = await db.from(table).select("id")
+      .eq("account_id", accountId).eq("blueprint_key", key).maybeSingle();
+    if (findErr) throw new Error(`${table} lookup failed: ${findErr.message}`);
+    if (existing) return { id: existing.id, created: false };
+
+    const { data, error } = await db.from(table)
+      .insert({ ...row, account_id: accountId, blueprint_key: key, origin: "blueprint" })
+      .select("id").single();
+    if (error || !data) throw new Error(`${table} insert failed: ${error?.message}`);
+    return { id: data.id, created: true };
+  };
+
+  for (const f of a.customFields ?? []) {
+    await step(f.key, async () => {
+      const { created } = await upsert("custom_fields", f.key, {
+        model: f.model, field_key: f.fieldKey, name: f.name,
+        data_type: f.dataType, options: f.options, position: f.position,
+      });
+      return created ? "created" : "skipped";
+    });
+  }
+
+  for (const t of a.tags ?? []) {
+    await step(t.key, async () => {
+      const { created } = await upsert("tags", t.key, { name: t.name });
+      return created ? "created" : "skipped";
+    });
+  }
+
+  // custom_values did NOT get a blueprint_key/origin column in migration 0007
+  // (its array is `['pipelines','pipeline_stages','custom_fields','tags',
+  // 'forms']` — custom_values is deliberately absent because it already has a
+  // real unique constraint, `unique (account_id, value_key)`, from 0003). So
+  // idempotency here rests on that existing constraint instead of the shared
+  // `upsert` helper above, which would otherwise select/insert a
+  // `blueprint_key` column this table does not have.
+  for (const v of a.customValues ?? []) {
+    await step(v.key, async () => {
+      const { data: existing, error: findErr } = await db.from("custom_values").select("id")
+        .eq("account_id", accountId).eq("value_key", v.valueKey).maybeSingle();
+      if (findErr) throw new Error(`custom_values lookup failed: ${findErr.message}`);
+      if (existing) return "skipped";
+
+      // Empty value, always. The key and name are the reusable part.
+      const { error } = await db.from("custom_values")
+        .insert({ account_id: accountId, value_key: v.valueKey, name: v.name, value: "" });
+      if (error) throw new Error(`custom_values insert failed: ${error.message}`);
+      return "created";
+    });
+  }
+
+  for (const p of a.pipelines ?? []) {
+    await step(p.key, async () => {
+      const pipeline = await upsert("pipelines", p.key, { name: p.name, position: p.position });
+      for (const s of p.stages) {
+        await upsert("pipeline_stages", s.key, {
+          pipeline_id: pipeline.id, name: s.name, position: s.position,
+        });
+      }
+      return pipeline.created ? "created" : "skipped";
+    });
+  }
+
+  for (const f of a.forms ?? []) {
+    await step(f.key, async () => {
+      const { created } = await upsert("forms", f.key, {
+        // A fresh token every time: cloning it would collide on the global
+        // unique index, and an empty notify list means leads cannot be routed
+        // to the account this blueprint was captured from.
+        public_id: newPublicId(),
+        name: f.name, status: "draft", fields: f.fields, theme: f.theme,
+        success_mode: f.successMode, success_message: f.successMessage,
+        redirect_url: f.redirectUrl, notify_emails: [], locale_default: f.localeDefault,
+      });
+      return created ? "created" : "skipped";
+    });
+  }
+
+  await emit(db, accountId, "blueprint.applied", actorId, {
+    blueprintId, name: blueprint.name, version: blueprint.version,
+    created: report.created.length, skipped: report.skipped.length,
+    failed: report.failed.length,
+  });
+
+  return report;
 }
