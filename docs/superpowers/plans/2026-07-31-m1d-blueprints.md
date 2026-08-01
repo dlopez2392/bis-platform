@@ -786,7 +786,7 @@ describe("checklist state", () => {
 
   it("a custom item stores its own title and gets a custom: key", () =>
     withTestAccount(async (db, accountId) => {
-      const { itemKey } = await addCustomChecklistItem(db, accountId, "Order branded signage", "user_test");
+      const { itemKey } = await addCustomChecklistItem(db, accountId, "Order branded signage");
       expect(itemKey).toMatch(/^custom:/);
 
       const [row] = await listChecklistState(db, accountId);
@@ -857,15 +857,16 @@ export async function setChecklistItem(
   if (error) throw new Error(`setChecklistItem failed: ${error.message}`);
 }
 
-/** Custom items carry their own title because no catalogue entry defines them. */
+/** Custom items carry their own title because no catalogue entry defines them.
+ *  Takes no actorId: adding an item records no actor — only completing one
+ *  does, via `done_by`. */
 export async function addCustomChecklistItem(
-  db: SupabaseClient, accountId: string, title: string, actorId: string,
+  db: SupabaseClient, accountId: string, title: string,
 ): Promise<{ itemKey: string }> {
   const itemKey = `custom:${randomUUID()}`;
   const { error } = await db.from("checklist_items")
     .insert({ account_id: accountId, item_key: itemKey, title, position: 100 });
   if (error) throw new Error(`addCustomChecklistItem failed: ${error.message}`);
-  void actorId;
   return { itemKey };
 }
 ```
@@ -1383,11 +1384,13 @@ export async function setChecklistItemAction(
 export async function addChecklistItemAction(
   accountId: string, formData: FormData,
 ): Promise<void> {
-  const { userId } = await requireAgency();
+  // No userId needed: adding an item records no actor. Only completing one
+  // does, via done_by.
+  await requireAgency();
   const title = String(formData.get("title") ?? "").trim();
   if (!title) throw new Error("title required");
 
-  await addCustomChecklistItem(serviceDb(), accountId, title, userId);
+  await addCustomChecklistItem(serviceDb(), accountId, title);
 
   revalidatePath(`/dashboard/accounts/${accountId}/checklist`);
   revalidatePath(`/dashboard/accounts/${accountId}/dashboard`);
@@ -1512,8 +1515,6 @@ export default async function ChecklistPage({
     listChecklistState(db, accountId),
     listForms(db, accountId),
   ]);
-  if (!rows && !forms) notFound();
-
   return (
     <>
       <PageHeader title={m["checklist.title"]} />
