@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useFormStatus } from "react-dom";
 import { unstable_rethrow } from "next/navigation";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
@@ -25,15 +24,7 @@ import {
 } from "@/components/ui/select";
 import { m } from "@/lib/messages";
 import { NO_BLUEPRINT_SENTINEL } from "./constants";
-
-function Submit() {
-  const { pending } = useFormStatus();
-  return (
-    <Button type="submit" disabled={pending}>
-      {pending ? m["common.saving"] : m["common.save"]}
-    </Button>
-  );
-}
+import { SubmitButton } from "./submit-button";
 
 export function CreateAccountDialog({
   action,
@@ -97,7 +88,7 @@ export function CreateAccountDialog({
             </div>
           ) : null}
           <DialogFooter>
-            <Submit />
+            <SubmitButton>{m["common.add"]}</SubmitButton>
           </DialogFooter>
         </form>
       </DialogContent>

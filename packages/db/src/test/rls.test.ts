@@ -85,4 +85,67 @@ describe("RLS tenant isolation", () => {
         "select first_name from contacts where account_id in ($1,$2)", [a, b]);
       expect(rows.map((r: any) => r.first_name).sort()).toEqual(["Alice", "Bob"]);
     }));
+
+  // `blueprints` (migration 0007) is the one table in the schema with no
+  // account_id column at all: its policy is app.is_agency() alone, not the
+  // app.is_agency() or account_id = app.current_account_id() pattern every
+  // other table uses. No account-scoped table's test exercises that policy
+  // shape, so it gets its own pair here, mirroring the accounts/events
+  // pattern above as closely as this table's shape allows.
+  it("blueprints are agency-scoped: an account member sees none and cannot insert one", () =>
+    withRollback(async (c) => {
+      const { rows: [agency] } = await c.query("select id from agencies limit 1");
+      const { a } = await seedTwoAccounts(c);
+      await c.query(
+        "insert into blueprints (agency_id, name, source_account_id) values ($1,'RLS Blueprint Probe',$2)",
+        [agency.id, a]);
+
+      await actAs(c, { org_id: "org_A" });
+      const { rows } = await c.query(
+        "select name from blueprints where name = 'RLS Blueprint Probe'");
+      expect(rows).toHaveLength(0);
+      await expect(
+        c.query("insert into blueprints (agency_id, name) values ($1,'Should Never Land')", [agency.id])
+      ).rejects.toThrow(/row-level security/);
+    }));
+
+  it("agency sees blueprints", () =>
+    withRollback(async (c) => {
+      const { rows: [agency] } = await c.query("select id from agencies limit 1");
+      await c.query(
+        "insert into blueprints (agency_id, name) values ($1,'RLS Blueprint Probe 2')", [agency.id]);
+      await actAs(c, { app_role: "agency_admin" });
+      const { rows } = await c.query(
+        "select name from blueprints where name = 'RLS Blueprint Probe 2'");
+      expect(rows).toHaveLength(1);
+    }));
+
+  // `checklist_items` (migration 0007) follows the ordinary account-scoped
+  // shape (app.is_agency() or account_id = app.current_account_id()), same
+  // as contacts above, but nothing else in this file exercised it.
+  it("checklist_items are tenant-isolated like other account-scoped tables", () =>
+    withRollback(async (c) => {
+      const { a, b } = await seedTwoAccounts(c);
+      await c.query(
+        "insert into checklist_items (account_id, item_key) values ($1,'phone_number'),($2,'phone_number')",
+        [a, b]);
+      await actAs(c, { org_id: "org_A" });
+      const { rows } = await c.query("select account_id from checklist_items");
+      expect(new Set(rows.map((r: any) => r.account_id)).size).toBe(1);
+      await expect(
+        c.query("insert into checklist_items (account_id, item_key) values ($1,'a2p_registration')", [b])
+      ).rejects.toThrow(/row-level security/);
+    }));
+
+  it("agency sees checklist_items across accounts", () =>
+    withRollback(async (c) => {
+      const { a, b } = await seedTwoAccounts(c);
+      await c.query(
+        "insert into checklist_items (account_id, item_key) values ($1,'phone_number'),($2,'phone_number')",
+        [a, b]);
+      await actAs(c, { app_role: "agency_admin" });
+      const { rows } = await c.query(
+        "select account_id from checklist_items where account_id in ($1,$2)", [a, b]);
+      expect(rows.map((r: any) => r.account_id).sort()).toEqual([a, b].sort());
+    }));
 });
