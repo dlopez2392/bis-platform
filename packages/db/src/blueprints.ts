@@ -199,8 +199,12 @@ export async function listBlueprints(db: SupabaseClient): Promise<BlueprintSumma
   if (rows.length === 0) return [];
 
   // One query for all apply counts rather than one per blueprint.
-  const { data: applied } = await db.from("events")
+  const { data: applied, error: appliedErr } = await db.from("events")
     .select("payload").eq("type", "blueprint.applied");
+  // Fail loud: a transient failure here must not fall through to `?? []`
+  // below and silently report `appliedCount: 0` for every blueprint, as
+  // though that were a fact rather than a lost query.
+  if (appliedErr) throw new Error(`listBlueprints: events query failed: ${appliedErr.message}`);
   const counts = new Map<string, number>();
   for (const e of (applied ?? []) as any[]) {
     const id = e.payload?.blueprintId;

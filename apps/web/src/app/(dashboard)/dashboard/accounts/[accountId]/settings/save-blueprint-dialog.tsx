@@ -21,7 +21,10 @@ export function SaveBlueprintDialog({ action }: { action: (formData: FormData) =
         <form
           action={async (formData) => {
             try { await action(formData); toast.success(m["blueprints.saved"]); setOpen(false); }
-            catch { toast.error(m["blueprints.saveFailed"]); }
+            catch (e) {
+              console.error("save-blueprint-dialog: save failed", e);
+              toast.error(m["blueprints.saveFailed"]);
+            }
           }}
           className="space-y-4"
         >
