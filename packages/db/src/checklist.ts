@@ -15,7 +15,7 @@ export async function listChecklistState(
 ): Promise<ChecklistStateRow[]> {
   const { data, error } = await db.from("checklist_items").select(COLS)
     .eq("account_id", accountId).order("position").order("created_at");
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(`listChecklistState failed: ${error.message}`);
   return (data ?? []) as unknown as ChecklistStateRow[];
 }
 
