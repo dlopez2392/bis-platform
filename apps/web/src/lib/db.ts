@@ -1,6 +1,5 @@
 import { auth } from "@clerk/nextjs/server";
-import { userDb } from "@bis/db";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { userDb, type SupabaseClient } from "@bis/db";
 
 /**
  * The Supabase client for anything a signed-in human can reach.
