@@ -29,6 +29,12 @@ export async function createClientAccount(formData: FormData): Promise<void> {
   // instead of "" when nothing is picked (see ./constants.ts).
   const rawBlueprintId = String(formData.get("blueprintId") ?? "").trim();
   const blueprintId = rawBlueprintId === NO_BLUEPRINT_SENTINEL ? "" : rawBlueprintId;
+  // Carried to the checklist page via a query param so a failed or partial
+  // apply is never invisible: before this, a total failure (the `catch`
+  // below) or a partial one (`report.failed.length > 0`) both ended on the
+  // exact same "success" redirect a clean apply does, and the only trace was
+  // a `console.error` nobody but the running server ever sees.
+  let applyOutcome: "ok" | "partial" = "ok";
   if (blueprintId) {
     // Deliberately after creation and deliberately non-fatal: the company is
     // already real, and apply is idempotent, so the remedy for a partial run is
@@ -36,14 +42,16 @@ export async function createClientAccount(formData: FormData): Promise<void> {
     try {
       const report = await applyBlueprint(serviceDb(), id, blueprintId, userId);
       if (report.failed.length > 0) {
+        applyOutcome = "partial";
         console.error(`blueprint ${blueprintId} partially applied to ${id}:`,
           report.failed.map((f) => `${f.key}: ${f.error}`).join("; "));
       }
     } catch (e) {
+      applyOutcome = "partial";
       console.error(`blueprint apply failed for account ${id}: ${String(e)}`);
     }
   }
 
   revalidatePath("/dashboard/accounts");
-  redirect(`/dashboard/accounts/${id}/checklist`);
+  redirect(`/dashboard/accounts/${id}/checklist${applyOutcome === "partial" ? "?apply=partial" : ""}`);
 }

@@ -9,8 +9,13 @@ export const dynamic = "force-dynamic";
 
 export default async function ChecklistPage({
   params,
-}: { params: Promise<{ accountId: string }> }) {
+  searchParams,
+}: {
+  params: Promise<{ accountId: string }>;
+  searchParams: Promise<{ apply?: string }>;
+}) {
   const { accountId } = await params;
+  const { apply } = await searchParams;
   const db = serviceDb();
   const [rows, formsMissingNotify] = await Promise.all([
     listChecklistState(db, accountId),
@@ -19,7 +24,15 @@ export default async function ChecklistPage({
   return (
     <>
       <PageHeader title={m["checklist.title"]} />
-      <div className="max-w-2xl p-6">
+      <div className="max-w-2xl space-y-4 p-6">
+        {apply === "partial" ? (
+          <p
+            role="alert"
+            className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning"
+          >
+            {m["accounts.blueprintPartial"]}
+          </p>
+        ) : null}
         <ChecklistPanel
           entries={mergeChecklist(rows)}
           formsMissingNotify={formsMissingNotify}
