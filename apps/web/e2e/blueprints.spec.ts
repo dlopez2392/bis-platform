@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb } from "@bis/db";
+import { clerkClient } from "@clerk/nextjs/server";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -122,8 +123,24 @@ test("a blueprint captured from one company applies to a new one", async ({ page
       .toBe("referral_source");
   } finally {
     // Cleanup: this writes real rows to the shared dev database.
-    const { data: acct } = await db.from("accounts").select("id").eq("name", companyName).single();
+    const { data: acct } = await db.from("accounts")
+      .select("id, clerk_org_id").eq("name", companyName).single();
     if (acct) {
+      // createClientAccount (accounts/actions.ts) makes a real
+      // organizations.createOrganization call before the account row ever
+      // exists; nothing here used to clean it up, so every run of this test
+      // left an orphan "E2E Co <stamp>" org in the shared Clerk dev instance.
+      // Resilient on purpose: a failed delete (rate limit, org already
+      // gone, credentials hiccup) must not throw out of a `finally` and mask
+      // whatever real assertion failure the `try` block above hit.
+      if (acct.clerk_org_id) {
+        try {
+          const clerk = await clerkClient();
+          await clerk.organizations.deleteOrganization(acct.clerk_org_id);
+        } catch (e) {
+          console.error(`blueprints.spec cleanup: failed to delete Clerk org ${acct.clerk_org_id}: ${String(e)}`);
+        }
+      }
       for (const t of ["checklist_items", "events", "form_submissions", "forms",
                        "pipeline_stages", "pipelines", "custom_fields", "custom_values",
                        "tags", "contacts"]) {
