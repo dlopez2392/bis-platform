@@ -22,6 +22,9 @@ importers:
       '@dnd-kit/core':
         specifier: ^6.3.1
         version: 6.3.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@supabase/supabase-js':
+        specifier: ^2.110.8
+        version: 2.110.8
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1

@@ -1,15 +1,19 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
 import { SignOutButton } from "@clerk/nextjs";
 import { ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { m } from "@/lib/messages";
-import type { AppClaims } from "@/lib/auth";
+import { resolveClientAccount, type AppClaims } from "@/lib/auth";
 
 export default async function Home() {
   const { userId, sessionClaims } = await auth();
   const claims = sessionClaims as AppClaims | null;
   const hasAccess = claims?.app_role === "agency_admin";
+
+  const clientAccount = await resolveClientAccount();
+  if (clientAccount) redirect(`/dashboard/accounts/${clientAccount.id}/dashboard`);
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background px-6 text-center">

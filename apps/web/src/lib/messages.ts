@@ -26,6 +26,11 @@ export const m = {
   "landing.noAccess.title": "No access yet",
   "landing.noAccess.body": "This account isn't set up as an agency admin. Sign out to try a different account, or contact your BIS administrator.",
 
+  "clientAccess.off.title": "Access has been turned off",
+  "clientAccess.off.body": "Your access to this account has been turned off. Contact your account manager if you think this is a mistake.",
+  "clientAccess.none.title": "No account linked",
+  "clientAccess.none.body": "Your sign-in isn't linked to a company account yet. Contact your account manager.",
+
   "common.save": "Save",
   "common.cancel": "Cancel",
   "common.add": "Add",
