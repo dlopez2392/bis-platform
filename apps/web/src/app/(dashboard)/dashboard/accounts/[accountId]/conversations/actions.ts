@@ -1,9 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireAgency } from "@/lib/auth";
+import { requireAccountAccess } from "@/lib/auth";
+import { dbForRequest } from "@/lib/db";
 import {
-  serviceDb, getContact, ensureConversation, createMessage, updateMessageStatus,
+  getContact, ensureConversation, createMessage, updateMessageStatus,
   clearUnreadCount,
 } from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
@@ -14,13 +15,13 @@ import { getEmailProvider } from "@/lib/email";
 import { sendRejected as rejectSend } from "./send-errors";
 
 export async function sendEmailAction(accountId: string, formData: FormData): Promise<void> {
-  const { userId } = await requireAgency();
+  const { userId } = await requireAccountAccess(accountId);
   const contactId = String(formData.get("contactId") ?? "");
   const subject = String(formData.get("subject") ?? "").trim();
   const body = String(formData.get("body") ?? "").trim();
   if (!contactId || !body) rejectSend("contactId and body required");
 
-  const db = serviceDb();
+  const db = await dbForRequest();
   const contact = await getContact(db, accountId, contactId);
   if (!contact) rejectSend("contact not in account");
   if (!contact.email) rejectSend("contact has no email address");
@@ -68,7 +69,7 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
 export async function markConversationReadAction(
   accountId: string, conversationId: string,
 ): Promise<void> {
-  await requireAgency();
-  await clearUnreadCount(serviceDb(), accountId, conversationId);
+  await requireAccountAccess(accountId);
+  await clearUnreadCount(await dbForRequest(), accountId, conversationId);
   revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
 }

@@ -2,17 +2,18 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireAgency } from "@/lib/auth";
-import { serviceDb, createForm, getForm, updateForm, type FormField, type FormStatus } from "@bis/db";
+import { requireAccountAccess } from "@/lib/auth";
+import { dbForRequest } from "@/lib/db";
+import { createForm, getForm, updateForm, type FormField, type FormStatus } from "@bis/db";
 import { m } from "@/lib/messages";
 import { isValidFormFieldList, mergeFormTheme } from "@/lib/forms/editor-helpers";
 
 export async function createFormAction(accountId: string, formData: FormData): Promise<void> {
-  const { userId } = await requireAgency();
+  const { userId } = await requireAccountAccess(accountId);
   const name = String(formData.get("name") ?? "").trim();
   if (!name) throw new Error("name required");
 
-  const { id } = await createForm(serviceDb(), accountId, {
+  const { id } = await createForm(await dbForRequest(), accountId, {
     name,
     // A form with no fields cannot be published, so seed the three that every
     // lead form needs rather than opening an empty editor.
@@ -28,7 +29,7 @@ export async function createFormAction(accountId: string, formData: FormData): P
 }
 
 export async function saveFormAction(accountId: string, formData: FormData): Promise<void> {
-  const { userId } = await requireAgency();
+  const { userId } = await requireAccountAccess(accountId);
   const formId = String(formData.get("formId") ?? "");
   if (!formId) throw new Error("formId required");
 
@@ -75,7 +76,7 @@ export async function saveFormAction(accountId: string, formData: FormData): Pro
     }
   }
 
-  const db = serviceDb();
+  const db = await dbForRequest();
 
   // `updateForm` writes `theme` as a full JSONB column replace, not a merge,
   // and this editor has no control for `theme.mode` or `theme.radius` even
