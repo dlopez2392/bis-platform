@@ -1,12 +1,17 @@
 import { describe, it, expect } from "vitest";
 import { withRollback, actAs, actAsOwner } from "./db";
 
+// client_access_enabled defaults to false (migration 0008), so these
+// accounts are marked enabled explicitly -- every existing test here uses
+// the org_id claim to model an authenticated in-account client, which since
+// 0008 requires the switch to be on for current_account_id() to resolve
+// anything. The disabled case gets its own dedicated seeding below.
 async function seedTwoAccounts(c: any) {
   const { rows: [agency] } = await c.query("select id from agencies limit 1");
   const { rows: [a] } = await c.query(
-    "insert into accounts (agency_id, clerk_org_id, name) values ($1,'org_A','Alpha') returning id", [agency.id]);
+    "insert into accounts (agency_id, clerk_org_id, name, client_access_enabled) values ($1,'org_A','Alpha',true) returning id", [agency.id]);
   const { rows: [b] } = await c.query(
-    "insert into accounts (agency_id, clerk_org_id, name) values ($1,'org_B','Bravo') returning id", [agency.id]);
+    "insert into accounts (agency_id, clerk_org_id, name, client_access_enabled) values ($1,'org_B','Bravo',true) returning id", [agency.id]);
   await c.query(
     "insert into events (account_id, type, actor_type, payload) values ($1,'account.created','system','{}'),($2,'account.created','system','{}')",
     [a.id, b.id]);
@@ -148,4 +153,67 @@ describe("RLS tenant isolation", () => {
         "select account_id from checklist_items where account_id in ($1,$2)", [a, b]);
       expect(rows.map((r: any) => r.account_id).sort()).toEqual([a, b].sort());
     }));
+
+  it("a client sees its own account only when client access is enabled", async () => {
+    await withRollback(async (c) => {
+      await actAsOwner(c);
+      const { rows: [agency] } = await c.query(
+        "insert into public.agencies (name) values ('T') returning id",
+      );
+      const { rows: [mine] } = await c.query(
+        `insert into public.accounts (agency_id, clerk_org_id, name, client_access_enabled)
+         values ($1, 'org_mine', 'Mine', true) returning id`, [agency.id],
+      );
+      const { rows: [theirs] } = await c.query(
+        `insert into public.accounts (agency_id, clerk_org_id, name, client_access_enabled)
+         values ($1, 'org_theirs', 'Theirs', true) returning id`, [agency.id],
+      );
+      await c.query(
+        `insert into public.contacts (account_id, first_name) values ($1,'A'), ($2,'B')`,
+        [mine.id, theirs.id],
+      );
+
+      await actAs(c, { org_id: "org_mine" });
+      const { rows } = await c.query("select account_id from public.contacts");
+      expect(rows).toHaveLength(1);
+      expect(rows[0].account_id).toBe(mine.id);
+      expect(rows.map((r) => r.account_id)).not.toContain(theirs.id);
+    });
+  });
+
+  it("a client sees nothing when client access is disabled", async () => {
+    await withRollback(async (c) => {
+      await actAsOwner(c);
+      const { rows: [agency] } = await c.query(
+        "insert into public.agencies (name) values ('T') returning id",
+      );
+      const { rows: [acct] } = await c.query(
+        `insert into public.accounts (agency_id, clerk_org_id, name, client_access_enabled)
+         values ($1, 'org_off', 'Off', false) returning id`, [agency.id],
+      );
+      await c.query("insert into public.contacts (account_id, first_name) values ($1,'A')", [acct.id]);
+
+      await actAs(c, { org_id: "org_off" });
+      const { rows } = await c.query("select id from public.contacts");
+      expect(rows).toHaveLength(0);
+    });
+  });
+
+  it("the agency still sees every account regardless of the flag", async () => {
+    await withRollback(async (c) => {
+      await actAsOwner(c);
+      const { rows: [agency] } = await c.query(
+        "insert into public.agencies (name) values ('T') returning id",
+      );
+      const { rows: [acct] } = await c.query(
+        `insert into public.accounts (agency_id, clerk_org_id, name, client_access_enabled)
+         values ($1, 'org_off2', 'Off', false) returning id`, [agency.id],
+      );
+      await c.query("insert into public.contacts (account_id, first_name) values ($1,'A')", [acct.id]);
+
+      await actAs(c, { app_role: "agency_admin" });
+      const { rows } = await c.query("select account_id from public.contacts");
+      expect(rows.map((r) => r.account_id)).toContain(acct.id);
+    });
+  });
 });
