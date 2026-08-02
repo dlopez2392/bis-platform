@@ -16,6 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 
 export const dynamic = "force-dynamic";
@@ -32,7 +33,7 @@ export default async function CrmSettingsPage({
   params,
 }: { params: Promise<{ accountId: string }> }) {
   const { accountId } = await params;
-  const db = serviceDb();
+  const db = await dbForRequest();
   const [fields, values, blueprints] = await Promise.all([
     listCustomFields(db, accountId, "contact"),
     listCustomValues(db, accountId),
@@ -40,7 +41,15 @@ export default async function CrmSettingsPage({
     // capture happens. Passed down so the save dialog can warn before a
     // recapture silently overwrites an existing blueprint's bundle: capture
     // has no version history and no undo.
-    listBlueprints(db),
+    //
+    // Deliberately on serviceDb(), not the request-scoped db above:
+    // blueprints RLS is `app.is_agency()` alone (agency-only resource), so a
+    // client user's RLS-enforcing token would see zero rows here, silently
+    // breaking the recapture-overwrite warning for them. Flagged in the M2
+    // task-4 report as a cross-account (cross-tenant, agency-wide) read on
+    // an in-account surface — worth the owner's judgment on whether clients
+    // should see this at all.
+    listBlueprints(serviceDb()),
   ]);
   const boundCreateField = createFieldAction.bind(null, accountId);
   const boundUpsertValue = upsertValueAction.bind(null, accountId);

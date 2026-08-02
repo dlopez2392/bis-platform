@@ -1,8 +1,9 @@
-import { serviceDb, ensureDefaultPipeline, listBoard, listContacts } from "@bis/db";
+import { ensureDefaultPipeline, listBoard, listContacts } from "@bis/db";
 import { moveOppToStageAction, updateOpportunityAction, createOpportunityAction } from "./actions";
 import { PipelineBoard } from "./pipeline-board";
 import { AddOpportunityDialog } from "./add-opportunity-dialog";
 import { PageHeader } from "@/components/page-header";
+import { dbForRequest } from "@/lib/db";
 import { formatCurrency, contactDisplayName } from "@/lib/format";
 import { m } from "@/lib/messages";
 
@@ -14,7 +15,7 @@ export default async function PipelinePage({
   params: Promise<{ accountId: string }>;
 }) {
   const { accountId } = await params;
-  const db = serviceDb();
+  const db = await dbForRequest();
   const { pipelineId } = await ensureDefaultPipeline(db, accountId);
   const [board, contacts] = await Promise.all([
     listBoard(db, accountId, pipelineId),

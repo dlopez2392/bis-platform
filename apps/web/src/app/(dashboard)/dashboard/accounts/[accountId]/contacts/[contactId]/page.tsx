@@ -1,8 +1,9 @@
 import { notFound } from "next/navigation";
-import { serviceDb, getContact, listContactTags, listNotes, listContactTasks,
+import { getContact, listContactTags, listNotes, listContactTasks,
          listCustomFields, listContactOpportunities, listContactSubmissions } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { contactDisplayName, formatCurrency } from "@/lib/format";
+import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 import { STATUS_LABEL } from "@/lib/labels";
 import { ContactFieldsPanel } from "./contact-fields-panel";
@@ -15,7 +16,7 @@ export default async function ContactDetailPage({
   params,
 }: { params: Promise<{ accountId: string; contactId: string }> }) {
   const { accountId, contactId } = await params;
-  const db = serviceDb();
+  const db = await dbForRequest();
   const contact = await getContact(db, accountId, contactId);
   if (!contact) notFound();
   const [tags, notes, tasks, fieldDefs, opps, submissions] = await Promise.all([

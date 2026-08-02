@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { ListChecks } from "lucide-react";
-import { serviceDb, listChecklistState, countFormsMissingNotify } from "@bis/db";
+import { listChecklistState, countFormsMissingNotify } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { StatTile } from "@/components/stat-tile";
+import { dbForRequest } from "@/lib/db";
 import { formatCurrency } from "@/lib/format";
 import { mergeChecklist } from "@/lib/checklist-catalogue";
 import { m } from "@/lib/messages";
@@ -17,7 +18,7 @@ export default async function AccountDashboardPage({
   params: Promise<{ accountId: string }>;
 }) {
   const { accountId } = await params;
-  const db = serviceDb();
+  const db = await dbForRequest();
   const [contacts, opps, checklistRows, formsMissingNotify] = await Promise.all([
     db.from("contacts").select("id", { count: "exact", head: true }).eq("account_id", accountId),
     // PostgREST caps rows at max_rows (1000). Above that, this sum and count
@@ -32,22 +33,18 @@ export default async function AccountDashboardPage({
   ]);
 
   if (contacts.error) {
-    console.error("account dashboard: contacts count query failed", contacts.error);
+    throw new Error(`account dashboard: contacts count query failed: ${contacts.error.message}`);
   }
   if (opps.error) {
-    console.error("account dashboard: opportunities query failed", opps.error);
+    throw new Error(`account dashboard: opportunities query failed: ${opps.error.message}`);
   }
 
-  const contactsValue = contacts.error
-    ? m["common.unavailable"]
-    : String(contacts.count ?? 0);
+  const contactsValue = String(contacts.count ?? 0);
 
   const open = opps.data ?? [];
   const value = open.reduce((sum, o) => sum + Number(o.monetary_value), 0);
-  const openOppsValue = opps.error ? m["common.unavailable"] : String(open.length);
-  const pipelineValueDisplay = opps.error
-    ? m["common.unavailable"]
-    : formatCurrency(value);
+  const openOppsValue = String(open.length);
+  const pipelineValueDisplay = formatCurrency(value);
 
   const checklistEntries = mergeChecklist(checklistRows);
   const checklistRemaining = checklistEntries.filter((e) => !e.done).length;
