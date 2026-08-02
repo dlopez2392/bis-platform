@@ -40,6 +40,27 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     // so waiting for it proves the write has landed.
     await expect(page.getByText("Blueprint saved")).toBeVisible({ timeout: 20_000 });
 
+    // GAP 1: the overwrite warning is the only thing standing between an
+    // operator and permanently destroying a previous capture's bundle — a
+    // recapture under the same name replaces it with no version history and
+    // no undo. `existing` (name/version pairs) is fetched once per page load
+    // by the settings Server Component, so reload first to pick up the
+    // blueprint just captured, then reopen the dialog and retype its exact
+    // name. Matched on its exact rendered text rather than role="alert" —
+    // Next.js's own App Router route announcer (#__next-route-announcer__,
+    // present on every page once a client-side navigation has occurred) also
+    // carries role="alert", so that role alone is ambiguous here.
+    const overwriteWarningText = `"${blueprintName}" already exists (version 1)`;
+    await page.reload();
+    await page.getByRole("button", { name: "Save as blueprint" }).click();
+    await page.getByLabel("Blueprint name").fill(blueprintName);
+    await expect(page.getByText(overwriteWarningText)).toBeVisible();
+
+    // A name that was never captured must not trigger it — a warning that
+    // always shows is as useless as one that never does.
+    await page.getByLabel("Blueprint name").fill(`${blueprintName} v2`);
+    await expect(page.getByText(overwriteWarningText)).toHaveCount(0);
+
     await page.goto("/dashboard/blueprints");
     await expect(page.getByText(blueprintName)).toBeVisible();
 
@@ -57,11 +78,27 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     // comfortably longer than the suite's default 10s expect timeout, so this
     // one wait gets an explicit allowance instead.
     await expect(page).toHaveURL(/\/checklist$/, { timeout: 30_000 });
+    // Reused below (GAP 2 / GAP 3) so those checks don't need their own DB
+    // round trip — this is the fresh account's own checklist route.
+    const accountId = new URL(page.url()).pathname.split("/")[3];
     // The checklist route renders "Activation checklist" twice: once as the
     // page's own <h1> (PageHeader) and again inside ChecklistPanel's CardTitle
     // — both real, both correct, so a plain getByText is ambiguous under
     // Playwright's strict mode. Target the page heading specifically.
     await expect(page.getByRole("heading", { name: "Activation checklist" })).toBeVisible();
+
+    // GAP 2: accounts.blueprintPartial is a pure function of the `apply`
+    // search param on this route — it needs no forced applyBlueprint failure
+    // to exercise (the failure-*detection* path is already covered at the db
+    // layer in actions.ts). Direct navigation with ?apply=partial must show
+    // the banner; the same route without it must not, or an operator would
+    // see (or silently miss) a data-loss warning unrelated to what actually
+    // happened during this account's creation. Matched on text, not
+    // role="alert" — see the GAP 1 comment above on the route announcer.
+    await page.goto(`/dashboard/accounts/${accountId}/checklist?apply=partial`);
+    await expect(page.getByText(/did not apply/i)).toBeVisible();
+    await page.goto(`/dashboard/accounts/${accountId}/checklist`);
+    await expect(page.getByText(/did not apply/i)).toHaveCount(0);
 
     // setChecklistItemAction is a raw (unwrapped) form action — clicking submit
     // fires a real POST that Next.js's router intercepts, but page.click() only
@@ -78,6 +115,19 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     await page.reload();
     await expect(page.getByRole("button", { name: "Buy a phone number" }))
       .toHaveAttribute("aria-pressed", "true");
+
+    // GAP 3: on the account dashboard, ChecklistPanel's title links back to
+    // the full checklist route (via the titleHref prop) so an unfinished
+    // checklist stays reachable from the summary view. This account only has
+    // "phone_number" ticked — 5 of 6 catalogue items remain — so the panel
+    // renders in its non-compact form with the link. If titleHref stopped
+    // being passed, CardTitle would render the plain string instead and no
+    // such link would exist at all.
+    await page.goto(`/dashboard/accounts/${accountId}/dashboard`);
+    const checklistTitleLink = page.getByRole("link", { name: "Activation checklist" });
+    await expect(checklistTitleLink).toBeVisible();
+    await expect(checklistTitleLink)
+      .toHaveAttribute("href", `/dashboard/accounts/${accountId}/checklist`);
 
     // Everything above is generic post-account-creation behavior: the
     // checklist route, its heading, and the toggle-persists-after-reload

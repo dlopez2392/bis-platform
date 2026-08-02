@@ -63,7 +63,13 @@ export function SaveBlueprintDialog({
                 className="rounded-md border border-warning/40 bg-warning/10 px-2.5 py-1.5 text-xs text-warning"
               >
                 {m["blueprints.overwriteWarning"]
-                  .replace("{name}", collision.name)
+                  // collision.name is a user-typed blueprint name used here as a
+                  // *replacement* string, where $&, $$ and $` are special to
+                  // String.replace — a blueprint literally named "$&" would
+                  // splice the matched "{name}" back into the warning instead
+                  // of being shown. A replacer function's return value is
+                  // inserted literally, with no special-sequence handling.
+                  .replace("{name}", () => collision.name)
                   .replace("{version}", String(collision.version))}
               </p>
             ) : null}
