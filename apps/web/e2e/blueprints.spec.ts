@@ -8,6 +8,24 @@ loadEnv({ path: ".env.local" });
 
 const ACCOUNT_NAME = "Test Client One";
 
+// This test's happy path drives ~8 page loads under [accountId]/ (settings
+// x2, blueprints list, checklist x3, dashboard) plus a real Clerk
+// organizations.createOrganization call and a five-asset-kind applyBlueprint
+// pass — comfortably over Playwright's default 30s total budget even before
+// counting that every converted page now pays dbForRequest()'s per-request
+// Clerk-token-plus-RLS cost on top of Turbopack's dev-mode compile cost.
+// Measured directly (10 hard navigations per route, median of
+// application-code time from the Next.js dev server's own request log,
+// dev server restarted between runs to isolate from in-process warm-up
+// effects): settings ~1.0s, checklist ~0.7s, dashboard ~0.7s pre-RLS-conversion,
+// vs ~1.3s / ~0.8s / ~0.8s after — a few hundred ms per page, the same
+// order of magnitude as the run-to-run noise measured on
+// /dashboard/blueprints, a route this task did NOT touch. Same class of
+// problem forms.spec.ts already hit and fixed the same way (see its own
+// comment): a borderline default budget tipped over by legitimate cost, not
+// a functional regression.
+test.describe.configure({ timeout: 60_000 });
+
 test("a blueprint captured from one company applies to a new one", async ({ page }) => {
   const stamp = Date.now();
   const blueprintName = `E2E Blueprint ${stamp}`;
