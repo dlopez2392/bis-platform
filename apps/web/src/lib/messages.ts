@@ -53,7 +53,7 @@ export const m = {
   "accounts.blueprint": "Apply a blueprint",
   "accounts.blueprintNone": "Don't apply one",
   "accounts.blueprintHint": "Copies configuration into the new company. You can apply one later instead.",
-  "accounts.blueprintPartial": "The company was created, but some blueprint items did not apply. Open it and apply the blueprint again.",
+  "accounts.blueprintPartial": "The company was created, but some blueprint items did not apply. Check its Settings and add anything missing by hand.",
 
   "dashboard.title": "Dashboard",
   "dashboard.companies": "Companies",
@@ -279,6 +279,7 @@ export const m = {
   "checklist.complete": "Everything on the checklist is done.",
   "checklist.remaining": "remaining",
   "checklist.open": "Open",
+  "checklist.reviewLink": "Checklist complete — review",
 
   "blueprints.title": "Blueprints",
   "blueprints.empty.title": "No blueprints yet",
@@ -292,6 +293,7 @@ export const m = {
   "blueprints.name": "Blueprint name",
   "blueprints.saved": "Blueprint saved",
   "blueprints.saveFailed": "Could not save the blueprint.",
+  "blueprints.overwriteWarning": "\"{name}\" already exists (version {version}). Saving will replace it — there is no version history and no undo.",
 } as const;
 
 export type MessageKey = keyof typeof m;
