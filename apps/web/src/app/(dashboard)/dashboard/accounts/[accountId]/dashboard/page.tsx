@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { ListChecks } from "lucide-react";
 import { serviceDb, listChecklistState, countFormsMissingNotify } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { StatTile } from "@/components/stat-tile";
@@ -61,9 +63,22 @@ export default async function AccountDashboardPage({
               formsMissingNotify={formsMissingNotify}
               setAction={setChecklistItemAction.bind(null, accountId)}
               addAction={addChecklistItemAction.bind(null, accountId)}
+              titleHref={`/dashboard/accounts/${accountId}/checklist`}
             />
           </div>
-        ) : null}
+        ) : (
+          // A finished checklist should not compete with the rest of the
+          // dashboard, but it still has to stay reachable — un-ticking an
+          // item, adding a custom step, or just reviewing what was done had
+          // no path back in once the panel above stopped rendering.
+          <Link
+            href={`/dashboard/accounts/${accountId}/checklist`}
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <ListChecks className="size-3.5" aria-hidden />
+            {m["checklist.reviewLink"]}
+          </Link>
+        )}
         <div className="grid gap-4 sm:grid-cols-3">
           <StatTile label={m["account.contacts"]} value={contactsValue} />
           <StatTile label={m["account.openOpps"]} value={openOppsValue} />

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { ExternalLink } from "lucide-react";
 import type { ChecklistEntry } from "@/lib/checklist-catalogue";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,12 +8,16 @@ import { Badge } from "@/components/ui/badge";
 import { m } from "@/lib/messages";
 
 export function ChecklistPanel({
-  entries, formsMissingNotify, setAction, addAction,
+  entries, formsMissingNotify, setAction, addAction, titleHref,
 }: {
   entries: ChecklistEntry[];
   formsMissingNotify: number;
   setAction: (formData: FormData) => Promise<void>;
   addAction: (formData: FormData) => Promise<void>;
+  /** When set, the panel title links to the full checklist route — used on
+   *  the account dashboard, where this panel is one of several things on the
+   *  page, so a finished checklist still needs a way back in. */
+  titleHref?: string;
 }) {
   const remaining = entries.filter((e) => !e.done).length;
 
@@ -20,7 +25,11 @@ export function ChecklistPanel({
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center justify-between gap-2 text-sm">
-          {m["checklist.title"]}
+          {titleHref ? (
+            <Link href={titleHref} className="hover:underline">{m["checklist.title"]}</Link>
+          ) : (
+            m["checklist.title"]
+          )}
           {remaining > 0 ? (
             <Badge variant="secondary">{remaining} {m["checklist.remaining"]}</Badge>
           ) : null}
