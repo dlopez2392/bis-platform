@@ -7,6 +7,26 @@ const CLERK_API = "https://api.clerk.com/v1";
 // The only Clerk user in this dev instance: danlopez508@gmail.com, app_role: agency_admin.
 const DEV_USER_ID = "user_3H2QKPdnekiD0smDzYRIdDlf7am";
 
+// This suite hits the real Clerk API and the real hosted Supabase project --
+// it has no local/hermetic mode. Skip loudly rather than fail hard when the
+// credentials it needs aren't present, so a missing .env doesn't masquerade
+// as a broken build for anyone (or any CI job) that isn't set up for it.
+const hasCredentials =
+  Boolean(process.env.CLERK_SECRET_KEY) &&
+  Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL) &&
+  Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+
+if (!hasCredentials) {
+  // eslint-disable-next-line no-console
+  console.warn(
+    "\n[user-client.integration.test.ts] SKIPPED: missing CLERK_SECRET_KEY, " +
+      "NEXT_PUBLIC_SUPABASE_URL, and/or NEXT_PUBLIC_SUPABASE_ANON_KEY. " +
+      "This suite proves real Clerk<->Supabase RLS and cannot run hermetically -- " +
+      "a skip here is NOT a pass. Set those env vars and run " +
+      "`pnpm --filter @bis/db test:integration` to actually exercise it.\n"
+  );
+}
+
 interface MintedSession {
   token: string;
   sessionId: string;
@@ -59,14 +79,13 @@ async function revokeSession(sessionId: string): Promise<void> {
   }
 }
 
-describe("userDb", () => {
+describe.skipIf(!hasCredentials)("userDb", () => {
   it("authenticates a real Clerk token against PostgREST, and RLS lets the agency admin read accounts", async () => {
     const { token, sessionId } = await mintSession();
     try {
       const db = userDb(token);
       const { data, error } = await db.from("accounts").select("id, name");
       if (error) throw new Error(`accounts select failed: ${JSON.stringify(error)}`);
-      expect(error).toBeNull();
 
       // The only Clerk user is the agency admin: app.is_agency() short-circuits
       // the account-scoped branch, so they legitimately see every account (20
@@ -96,7 +115,6 @@ describe("userDb", () => {
     const db = createClient(url, anon, { auth: { persistSession: false } });
     const { data, error } = await db.from("accounts").select("id, name");
     if (error) throw new Error(`accounts select failed: ${JSON.stringify(error)}`);
-    expect(error).toBeNull();
     expect(data).toEqual([]);
   });
 });
