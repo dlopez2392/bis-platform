@@ -4,7 +4,7 @@ import { serviceDb } from "../service";
 import { createContact, addTagToContact } from "../contacts";
 import { createCustomField, upsertCustomValue, ensureDefaultPipeline } from "../crm-config";
 import { createForm, updateForm } from "../forms";
-import { captureBlueprint, listBlueprints, getBlueprint, applyBlueprint } from "../blueprints";
+import { captureBlueprint, listBlueprints, getBlueprint, applyBlueprint, BUNDLE_SCHEMA_VERSION } from "../blueprints";
 
 async function seedConfig(db: any, accountId: string) {
   await ensureDefaultPipeline(db, accountId);
@@ -226,6 +226,33 @@ describe("blueprint apply", () => {
       });
     }));
 
+  it("an applied form never carries the source tenant's redirect or success copy", () =>
+    withTestAccount(async (db, sourceId) => {
+      const { formId } = await seedConfig(db, sourceId);
+      // The exact failure mode from the review: a redirect and a thank-you
+      // message authored for (and naming) the SOURCE tenant. If either
+      // cloned verbatim, every lead on the applied form would either land on
+      // the wrong business's website or be thanked by the wrong business's
+      // name.
+      await updateForm(db, sourceId, formId, {
+        success_mode: "redirect",
+        redirect_url: "https://acmedecks.example/thank-you",
+        success_message: "Thanks for reaching out to Acme Decks!",
+      }, "user_test");
+      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: "Starter" }, "user_test");
+
+      await withTestAccount(async (db2, targetId) => {
+        await applyBlueprint(db2, targetId, blueprintId, "user_test");
+        const { data: applied } = await db2.from("forms")
+          .select("success_mode, success_message, redirect_url")
+          .eq("account_id", targetId).single();
+
+        expect(applied!.success_mode).toBe("message");
+        expect(applied!.redirect_url).toBeNull();
+        expect(applied!.success_message).toBeNull();
+      });
+    }));
+
   it("applied custom values keep their key and name but not the source value", () =>
     withTestAccount(async (db, sourceId) => {
       await seedConfig(db, sourceId);
@@ -287,10 +314,31 @@ describe("blueprint apply", () => {
       });
     }));
 
-  it("reports a missing blueprint instead of throwing", () =>
+  it("throws naming a missing blueprint, rather than reporting it as a per-asset failure", () =>
     withTestAccount(async (db, accountId) => {
       await expect(
         applyBlueprint(db, accountId, "00000000-0000-0000-0000-000000000000", "user_test"),
       ).rejects.toThrow(/not found/i);
+    }));
+
+  it("refuses to apply a bundle whose schemaVersion does not match this build's", () =>
+    withTestAccount(async (db, sourceId) => {
+      await seedConfig(db, sourceId);
+      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: "Stale Schema" }, "user_test");
+
+      // Simulate a bundle captured under a future/older format. Before this
+      // guard, applyBlueprint never inspected schemaVersion at all — it just
+      // read each key with `?? []`, so a renamed key would silently apply
+      // fewer assets and still report success.
+      const stale = await getBlueprint(db, blueprintId);
+      await db.from("blueprints")
+        .update({ assets: { ...stale!.assets, schemaVersion: BUNDLE_SCHEMA_VERSION + 1 } })
+        .eq("id", blueprintId);
+
+      await withTestAccount(async (db2, targetId) => {
+        await expect(
+          applyBlueprint(db2, targetId, blueprintId, "user_test"),
+        ).rejects.toThrow(/schemaVersion/i);
+      });
     }));
 });

@@ -16,7 +16,15 @@ export type BlueprintBundle = {
   tags: { key: string; name: string }[];
   /** `value` is deliberately absent: it is per-tenant by definition. */
   customValues: { key: string; valueKey: string; name: string }[];
-  /** `publicId` and `notifyEmails` are deliberately absent. See the spec §4. */
+  /** `publicId` and `notifyEmails` are deliberately absent. See the spec §4.
+   *  `successMode`/`successMessage`/`redirectUrl` ARE still captured here —
+   *  unlike the two above, they are not stripped from the bundle itself, to
+   *  keep this a smaller change with no `BUNDLE_SCHEMA_VERSION` bump. But
+   *  `applyBlueprint` never writes them through: a redirect or thank-you
+   *  message authored for the source tenant would silently point at, or
+   *  name, the wrong business on every account this blueprint is applied to
+   *  — the exact failure mode `notifyEmails` was excluded to prevent. See
+   *  the forms loop below and the spec §4. */
   forms: { key: string; name: string; fields: FormField[]; theme: FormTheme;
            successMode: string; successMessage: string | null;
            redirectUrl: string | null; localeDefault: string }[];
@@ -95,8 +103,12 @@ export async function captureBlueprint(
   const { data: agency, error: agErr } = await db.from("agencies").select("id").limit(1).single();
   if (agErr || !agency) throw new Error(`agency row missing: ${agErr?.message}`);
 
-  const { data: existing } = await db.from("blueprints").select("id, version")
+  const { data: existing, error: existingErr } = await db.from("blueprints").select("id, version")
     .eq("agency_id", agency.id).eq("name", input.name).maybeSingle();
+  // Fail loud: falling through to the insert branch below on a lost lookup
+  // surfaces as "duplicate key value violates unique constraint" instead of
+  // naming the query that actually failed.
+  if (existingErr) throw new Error(`captureBlueprint: existing blueprint lookup failed: ${existingErr.message}`);
 
   if (existing) {
     const version = existing.version + 1;
@@ -250,6 +262,19 @@ export async function applyBlueprint(
   const blueprint = await getBlueprint(db, blueprintId);
   if (!blueprint) throw new Error("applyBlueprint failed: blueprint not found");
 
+  // The spec (§8) claims a stale bundle is detectable; nothing previously
+  // checked this. Every bundle is v1 today, so this was latent — but the day
+  // a v2 renames a key, applying a v1 bundle would otherwise silently apply
+  // fewer assets and report success with an empty `created` list,
+  // indistinguishable from an already-applied blueprint.
+  if (blueprint.assets.schemaVersion !== BUNDLE_SCHEMA_VERSION) {
+    throw new Error(
+      `applyBlueprint failed: blueprint "${blueprint.name}" was captured under bundle ` +
+      `schemaVersion ${blueprint.assets.schemaVersion}, but this build expects ` +
+      `${BUNDLE_SCHEMA_VERSION}. Recapture it to upgrade the bundle.`,
+    );
+  }
+
   const report: ApplyReport = { created: [], skipped: [], failed: [] };
   const a = blueprint.assets;
 
@@ -341,8 +366,20 @@ export async function applyBlueprint(
         // to the account this blueprint was captured from.
         public_id: newPublicId(),
         name: f.name, status: "draft", fields: f.fields, theme: f.theme,
-        success_mode: f.successMode, success_message: f.successMessage,
-        redirect_url: f.redirectUrl, notify_emails: [], locale_default: f.localeDefault,
+        // success_mode/success_message/redirect_url are deliberately NOT
+        // cloned from the bundle, even though the bundle still carries them
+        // (see BlueprintBundle's forms field). A redirect authored for the
+        // source tenant would send every lead on this cloned form to the
+        // SOURCE tenant's website; a success message authored for the source
+        // tenant would thank the visitor by the wrong business's name. Both
+        // fail exactly as silently as the notify_emails case the design spec
+        // calls out — the operator has to notice and fix it, same as they do
+        // for notify_emails today. Every applied form starts as a plain
+        // message using the platform's generic default (see `successFor` in
+        // apps/web/src/app/f/[publicId]/actions.ts), which the operator can
+        // override.
+        success_mode: "message", success_message: null,
+        redirect_url: null, notify_emails: [], locale_default: f.localeDefault,
       });
       return created ? "created" : "skipped";
     });
