@@ -39,6 +39,31 @@ export async function requireAccountAccess(
   return { userId, isAgency: false };
 }
 
+/**
+ * Guards the two surfaces inside an account that are agency work *about* the
+ * client rather than client data: Settings (which will hold the
+ * client-access switch itself) and the activation checklist. Navigation
+ * hides both from a client, but hiding a link is not authorization — a
+ * client who knows the URL still satisfies `requireAccountAccess` for their
+ * own account and RLS along with it.
+ *
+ * Builds on `requireAccountAccess` rather than re-deriving its checks, then
+ * additionally rejects a non-agency caller. Redirects to the client's own
+ * account dashboard rather than the agency's, and never 403s — same reasoning
+ * as `requireAccountAccess`: a 403 would confirm the surface exists for this
+ * account rather than simply not being reachable by this caller. By the time
+ * `isAgency` is false here, `requireAccountAccess` has already established
+ * `accountId` is the caller's own account, so that is exactly where the
+ * redirect sends them.
+ */
+export async function requireAgencyOnlyAccountAccess(
+  accountId: string,
+): Promise<{ userId: string }> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) redirect(`/dashboard/accounts/${accountId}/dashboard`);
+  return { userId };
+}
+
 /** The client's own account, or null for the agency admin / an unlinked user. */
 export async function resolveClientAccount(): Promise<{ id: string; name: string } | null> {
   const { sessionClaims } = await auth();

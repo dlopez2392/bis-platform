@@ -1,14 +1,14 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireAccountAccess } from "@/lib/auth";
+import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { setChecklistItem, addCustomChecklistItem } from "@bis/db";
 
 export async function setChecklistItemAction(
   accountId: string, formData: FormData,
 ): Promise<void> {
-  const { userId } = await requireAccountAccess(accountId);
+  const { userId } = await requireAgencyOnlyAccountAccess(accountId);
   const itemKey = String(formData.get("itemKey") ?? "");
   if (!itemKey) throw new Error("itemKey required");
 
@@ -24,7 +24,7 @@ export async function addChecklistItemAction(
 ): Promise<void> {
   // No userId needed: adding an item records no actor. Only completing one
   // does, via done_by.
-  await requireAccountAccess(accountId);
+  await requireAgencyOnlyAccountAccess(accountId);
   const title = String(formData.get("title") ?? "").trim();
   if (!title) throw new Error("title required");
 

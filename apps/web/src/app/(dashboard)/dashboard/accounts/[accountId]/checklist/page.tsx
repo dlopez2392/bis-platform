@@ -1,5 +1,6 @@
 import { listChecklistState, countFormsMissingNotify } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
+import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { mergeChecklist } from "@/lib/checklist-catalogue";
 import { m } from "@/lib/messages";
@@ -17,6 +18,7 @@ export default async function ChecklistPage({
 }) {
   const { accountId } = await params;
   const { apply } = await searchParams;
+  await requireAgencyOnlyAccountAccess(accountId);
   const db = await dbForRequest();
   const [rows, formsMissingNotify] = await Promise.all([
     listChecklistState(db, accountId),

@@ -1,12 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireAccountAccess } from "@/lib/auth";
+import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { createCustomField, upsertCustomValue, type CustomFieldDef } from "@bis/db";
 
 export async function createFieldAction(accountId: string, formData: FormData): Promise<void> {
-  await requireAccountAccess(accountId);
+  await requireAgencyOnlyAccountAccess(accountId);
   const dataType = String(formData.get("dataType")) as CustomFieldDef["data_type"];
   const options = String(formData.get("options") ?? "")
     .split(",").map(s => s.trim()).filter(Boolean);
@@ -20,7 +20,7 @@ export async function createFieldAction(accountId: string, formData: FormData): 
 }
 
 export async function upsertValueAction(accountId: string, formData: FormData): Promise<void> {
-  await requireAccountAccess(accountId);
+  await requireAgencyOnlyAccountAccess(accountId);
   await upsertCustomValue(await dbForRequest(), accountId, {
     valueKey: String(formData.get("valueKey") ?? "").trim(),
     name: String(formData.get("name") ?? "").trim(),

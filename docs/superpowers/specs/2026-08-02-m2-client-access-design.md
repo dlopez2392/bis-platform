@@ -110,7 +110,7 @@ This is a **development** instance (`environment_type: "development"`), and the 
 
 | Surface | Client | Rationale |
 |---|---|---|
-| Every page under `[accountId]/`, and the 21 server actions across its 7 action files | **`userDb()`** — carries the caller's Clerk token, RLS applies | Both audiences reach these. `is_agency()` passes the agency through the same policies. |
+| Every page under `[accountId]/`, and the 18 server actions across its 7 action files | **`userDb()`** — carries the caller's Clerk token, RLS applies | Both audiences reach these. `is_agency()` passes the agency through the same policies. |
 | Agency-only: accounts list, Blueprints, account creation | `serviceDb()` | No client can reach them; account creation writes before any org exists. |
 | Anonymous: `/f/[publicId]`, `/api/webhooks/resend` | `serviceDb()` | No user token exists to carry. |
 
@@ -162,7 +162,7 @@ Two surfaces sit inside an account but are agency work *about* the client rather
 
 **Task 1 stands alone: prove the Clerk↔Supabase JWT integration end to end.** Configure Supabase to trust Clerk's JWKS, build `userDb()`, and demonstrate a real client token reading its own account's rows and failing to read another's — against the live database, not a forged-claims test.
 
-If third-party auth does not behave as expected with these claims, that must surface on day one, not after 21 server actions have been converted.
+If third-party auth does not behave as expected with these claims, that must surface on day one, not after 18 server actions have been converted.
 
 Everything else follows: the migration and guard, the `userDb()` conversion, UI role-branching, invites, then tests and rollout.
 
@@ -170,7 +170,7 @@ Everything else follows: the migration and guard, the `userDb()` conversion, UI 
 
 - **`rls.test.ts`** gains a client identity: reads its own account across every tenant table, cannot read another's, and — the new assertion — **cannot read anything when `client_access_enabled` is false**. That last one is what proves §3.3 is real rather than cosmetic.
 - **E2E**: a client signs in, sees six nav items and no agency chrome, and is bounced when typing another account's URL. Requires a second seeded account and a client user — genuine fixture work, not a line of setup.
-- **The existing agency E2E must pass unchanged.** It is the regression signal that converting 21 actions to `userDb()` did not break the agency's own use of the same pages.
+- **The existing agency E2E must pass unchanged.** It is the regression signal that converting 18 actions to `userDb()` did not break the agency's own use of the same pages.
 
 ## 11. Rollout
 

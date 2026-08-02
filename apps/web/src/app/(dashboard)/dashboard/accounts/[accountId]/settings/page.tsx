@@ -17,6 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { dbForRequest } from "@/lib/db";
+import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { m } from "@/lib/messages";
 
 export const dynamic = "force-dynamic";
@@ -33,6 +34,7 @@ export default async function CrmSettingsPage({
   params,
 }: { params: Promise<{ accountId: string }> }) {
   const { accountId } = await params;
+  await requireAgencyOnlyAccountAccess(accountId);
   const db = await dbForRequest();
   const [fields, values, blueprints] = await Promise.all([
     listCustomFields(db, accountId, "contact"),
