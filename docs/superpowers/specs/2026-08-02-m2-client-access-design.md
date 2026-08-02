@@ -66,7 +66,22 @@ language sql stable security definer set search_path = public as $$
 $$;
 ```
 
-Every tenant policy already reads through this function, so all of them inherit the switch from a single change. Flipping a client off cuts their database access, rather than merely hiding a page.
+Every tenant policy reads through this function, with one exception: `accounts_member_read` (0001_tenancy.sql) matched on the org claim directly --
+
+```sql
+create policy accounts_member_read on public.accounts
+  for select to authenticated using (clerk_org_id = app.jwt()->>'org_id');
+```
+
+-- rather than through `app.current_account_id()`, so it did not inherit the switch from the change above. Migration `0009_accounts_member_read_client_access.sql` brings it into line by adding the same gate directly to that policy:
+
+```sql
+create policy accounts_member_read on public.accounts
+  for select to authenticated
+  using (clerk_org_id = app.jwt()->>'org_id' and client_access_enabled);
+```
+
+With that fix, every tenant policy -- either through `app.current_account_id()` or, for this one exception, an explicit `client_access_enabled` check -- inherits the switch. Flipping a client off cuts their database access, rather than merely hiding a page.
 
 Agency access is unaffected: policies are `app.is_agency() or account_id = app.current_account_id()`, and `is_agency()` short-circuits before the second branch is evaluated.
 

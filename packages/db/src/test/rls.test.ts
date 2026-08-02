@@ -216,4 +216,55 @@ describe("RLS tenant isolation", () => {
       expect(rows.map((r) => r.account_id)).toContain(acct.id);
     });
   });
+
+  // Gap closed by migration 0009: accounts_member_read (0001_tenancy.sql)
+  // matched on the org claim directly rather than through
+  // app.current_account_id(), so it never picked up the client_access_enabled
+  // gate 0008 added to that function. A disabled client could still select
+  // their own accounts row even though every other tenant table correctly
+  // returned nothing for them. Both halves matter here: without the enabled
+  // case, this test would still pass if the policy were simply broken
+  // (denying everyone), which would hide the real bug in a different way.
+  it("accounts_member_read: a disabled client gets zero rows from public.accounts", async () => {
+    await withRollback(async (c) => {
+      await actAsOwner(c);
+      const { rows: [agency] } = await c.query(
+        "insert into public.agencies (name) values ('T') returning id",
+      );
+      await c.query(
+        `insert into public.accounts (agency_id, clerk_org_id, name, client_access_enabled)
+         values ($1, 'org_member_read_off', 'MemberReadOff', false)`, [agency.id],
+      );
+
+      await actAs(c, { org_id: "org_member_read_off" });
+      const { rows } = await c.query("select * from public.accounts");
+      expect(rows).toHaveLength(0);
+    });
+  });
+
+  it("accounts_member_read: an enabled client gets exactly their own one row from public.accounts", async () => {
+    await withRollback(async (c) => {
+      await actAsOwner(c);
+      const { rows: [agency] } = await c.query(
+        "insert into public.agencies (name) values ('T') returning id",
+      );
+      const { rows: [mine] } = await c.query(
+        `insert into public.accounts (agency_id, clerk_org_id, name, client_access_enabled)
+         values ($1, 'org_member_read_on', 'MemberReadOn', true) returning id`, [agency.id],
+      );
+      // A second account in the same agency, disabled -- must never appear
+      // for the enabled client, proving the row is scoped by org_id and not
+      // just "any account with the flag on".
+      await c.query(
+        `insert into public.accounts (agency_id, clerk_org_id, name, client_access_enabled)
+         values ($1, 'org_member_read_other', 'Other', true)`, [agency.id],
+      );
+
+      await actAs(c, { org_id: "org_member_read_on" });
+      const { rows } = await c.query("select * from public.accounts");
+      expect(rows).toHaveLength(1);
+      expect(rows[0].id).toBe(mine.id);
+      expect(rows[0].clerk_org_id).toBe("org_member_read_on");
+    });
+  });
 });
