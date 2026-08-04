@@ -25,11 +25,13 @@ function InviteButton({ disabled }: { disabled: boolean }) {
 export function ClientAccessPanel({
   enabled,
   members,
+  membersUnavailable = false,
   setAccessAction,
   inviteAction,
 }: {
   enabled: boolean;
   members: ClientAccessMember[];
+  membersUnavailable?: boolean;
   setAccessAction: (formData: FormData) => Promise<void>;
   inviteAction: (formData: FormData) => Promise<{ ok: true } | { ok: false; error: string }>;
 }) {
@@ -49,7 +51,9 @@ export function ClientAccessPanel({
 
         <div className="space-y-2">
           <p className="text-sm font-medium text-card-foreground">{m["clientAccess.members"]}</p>
-          {members.length === 0 ? (
+          {membersUnavailable ? (
+            <p className="text-sm text-destructive">{m["clientAccess.membersUnavailable"]}</p>
+          ) : members.length === 0 ? (
             <p className="text-sm text-muted-foreground">{m["common.none"]}</p>
           ) : (
             <ul className="space-y-2">

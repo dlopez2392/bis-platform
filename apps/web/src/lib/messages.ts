@@ -41,6 +41,7 @@ export const m = {
   "clientAccess.inviteSent": "Invitation sent",
   "clientAccess.inviteFailed": "Could not send the invitation",
   "clientAccess.disabledHint": "Turn client access on before inviting anyone.",
+  "clientAccess.membersUnavailable": "Member list unavailable right now — the switch above still works.",
 
   "common.save": "Save",
   "common.cancel": "Cancel",

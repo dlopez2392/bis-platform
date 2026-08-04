@@ -66,15 +66,32 @@ export default async function CrmSettingsPage({
   // only source of truth for who is seated in this account's organization,
   // so the member list is read live from the Backend API rather than a
   // local table.
+  //
+  // Unguarded, this call takes the whole page offline on any Clerk 4xx/5xx/
+  // rate-limit — including for an accounts row whose Clerk org has been
+  // deleted out from under it, which has already happened on this project.
+  // That would be uniquely bad here: this is the only page hosting the
+  // client-access switch, so an agency admin who needed to reach it to turn
+  // access OFF would be unable to load the page at all. Fail soft instead —
+  // empty member list, inline note, switch renders regardless.
   const clerk = await clerkClient();
-  const membershipList = account.clerk_org_id
-    ? await clerk.organizations.getOrganizationMembershipList({ organizationId: account.clerk_org_id })
-    : null;
-  const members: ClientAccessMember[] = (membershipList?.data ?? []).map((membership) => ({
-    id: membership.id,
-    email: membership.publicUserData?.identifier ?? m["common.unavailable"],
-    role: membership.role.replace(/^org:/, "").replace(/^\w/, (c) => c.toUpperCase()),
-  }));
+  let members: ClientAccessMember[] = [];
+  let membersUnavailable = false;
+  if (account.clerk_org_id) {
+    try {
+      const membershipList = await clerk.organizations.getOrganizationMembershipList({
+        organizationId: account.clerk_org_id,
+      });
+      members = membershipList.data.map((membership) => ({
+        id: membership.id,
+        email: membership.publicUserData?.identifier ?? m["common.unavailable"],
+        role: membership.role.replace(/^org:/, "").replace(/^\w/, (c) => c.toUpperCase()),
+      }));
+    } catch (e) {
+      console.error(`settings: member list fetch failed for org ${account.clerk_org_id}: ${String(e)}`);
+      membersUnavailable = true;
+    }
+  }
 
   const boundCreateField = createFieldAction.bind(null, accountId);
   const boundUpsertValue = upsertValueAction.bind(null, accountId);
@@ -95,6 +112,7 @@ export default async function CrmSettingsPage({
         <ClientAccessPanel
           enabled={account.client_access_enabled}
           members={members}
+          membersUnavailable={membersUnavailable}
           setAccessAction={boundSetAccess}
           inviteAction={boundInvite}
         />
