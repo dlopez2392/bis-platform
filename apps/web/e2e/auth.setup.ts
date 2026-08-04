@@ -1,7 +1,30 @@
 import { clerk, clerkSetup } from "@clerk/testing/playwright";
 import { test as setup } from "@playwright/test";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { config as loadEnv } from "dotenv";
+import { clerkClient } from "@clerk/nextjs/server";
+import { serviceDb, createAccount, setClientAccess } from "@bis/db";
+
+// Needed for the client-fixture setup below, which calls serviceDb() and
+// clerkClient() directly from the Playwright test runner process (not
+// through a Next.js request), so nothing auto-loads apps/web/.env.local for
+// it the way `next dev` does for the app itself. Matches blueprints.spec.ts's
+// own loadEnv calls, including the same two paths for the same reason: this
+// file runs with apps/web as cwd (`pnpm --filter web test:e2e`), so the
+// first path is a defensive no-op for a repo-root invocation and the second
+// is the one that actually resolves.
+loadEnv({ path: "apps/web/.env.local" });
+loadEnv({ path: ".env.local" });
 
 const AUTH_FILE = "e2e/.auth/state.json";
+const CLIENT_AUTH_FILE = "e2e/.auth/client-state.json";
+// Sidecar record of what the client-fixture setup below created. Playwright
+// setup projects run once, before every spec file, with no teardown hook
+// that fires *after* a spec has consumed the state — so creation has to
+// happen here and cleanup has to happen in client-access.spec.ts's own
+// `finally`, per the task's cleanup requirement. This file is how the spec
+// learns which account/org/user are its to delete.
+const CLIENT_FIXTURE_FILE = "e2e/.auth/client-fixture.json";
 
 // Runs once before the real specs. Signs in as the one real Clerk user on
 // this dev instance (danlopez508@gmail.com) via a Backend-API-minted
@@ -40,4 +63,99 @@ setup("authenticate as agency_admin", async ({ page }) => {
   await page.waitForURL(/\/dashboard\/accounts$/);
 
   await page.context().storageState({ path: AUTH_FILE });
+});
+
+// A second, isolated identity for client-access.spec.ts: a Clerk user with
+// NO app_role in public_metadata (absent means client — the design's
+// fail-closed rule, see docs/superpowers/specs/2026-08-02-m2-client-access-design.md
+// section 2), a member of a fresh, throwaway org, backed by a fresh
+// accounts row with client_access_enabled = true. Everything created here —
+// the Clerk user, the Clerk org, and the Postgres account row — is deleted
+// by client-access.spec.ts's own finally block, not by this file. This
+// setup test only arranges the fixture and signs in; see CLIENT_FIXTURE_FILE
+// above for why cleanup can't live here too.
+setup("authenticate as client user (no app_role)", async ({ page }) => {
+  await clerkSetup();
+
+  const stamp = Date.now();
+  // example.com is IANA-reserved for documentation/testing and never
+  // resolves to a real mailbox. (A first attempt used the also-reserved
+  // .test TLD, but Clerk's own email-format validator rejected it outright
+  // — "form_param_format_invalid" — before any account was ever created, so
+  // this is the corrected choice.) Backend-API-created users have their
+  // email auto-verified (no verification mail sent), and nothing here ever
+  // calls the invitation endpoint, so no mail goes out to anyone regardless.
+  const email = `e2e-client-${stamp}@example.com`;
+  const companyName = `E2E Client Co ${stamp}`;
+
+  const clerk_ = await clerkClient();
+
+  const user = await clerk_.users.createUser({
+    emailAddress: [email],
+    firstName: "E2E",
+    lastName: "Client",
+    skipPasswordRequirement: true,
+    skipLegalChecks: true,
+  });
+  // Belt-and-suspenders on the fixture's one load-bearing property: nothing
+  // above ever set publicMetadata, so this should always be empty, but the
+  // whole spec's meaning depends on this user actually being an
+  // absent-app_role client — worth failing loudly here rather than
+  // discovering it as a mysteriously-agency-scoped test later.
+  if (user.publicMetadata && "app_role" in user.publicMetadata) {
+    throw new Error(
+      `client fixture setup: newly created user ${user.id} unexpectedly carries app_role ` +
+      `(${JSON.stringify(user.publicMetadata)}) — the spec needs an absent claim, not just a falsy one`,
+    );
+  }
+
+  // createdBy makes the new user an org:admin member automatically — no
+  // separate createOrganizationMembership call needed.
+  const org = await clerk_.organizations.createOrganization({
+    name: companyName,
+    createdBy: user.id,
+  });
+
+  const db = serviceDb();
+  const { id: accountId } = await createAccount(db, {
+    clerkOrgId: org.id,
+    name: companyName,
+    actorId: user.id,
+  });
+  await setClientAccess(db, accountId, true, user.id);
+
+  mkdirSync("e2e/.auth", { recursive: true });
+  writeFileSync(
+    CLIENT_FIXTURE_FILE,
+    JSON.stringify({ accountId, clerkOrgId: org.id, clerkUserId: user.id, email, companyName }),
+  );
+
+  // Same ticket-based sign-in as the agency flow above: clerk.signIn looks
+  // the user up by email via the Backend API and mints a real sign-in
+  // token — no password, no email code, and no second user is created.
+  await page.goto("/sign-in");
+  await clerk.signIn({ page, emailAddress: email });
+
+  // force_organization_selection is now false (Task 3), so unlike the
+  // agency flow above, no "Choose an organization" task screen interrupts
+  // sign-in — but that also means nothing sets this session's active
+  // organization automatically. Without an active org, the session token
+  // carries no org_id claim, and every guard in lib/auth.ts that reads
+  // claims.org_id would treat this user as unlinked rather than as this
+  // account's client. Set it explicitly, the same call Clerk's own
+  // <OrganizationSwitcher/> makes when a user picks an org.
+  await page.evaluate(async (organizationId) => {
+    const clerkGlobal = (
+      window as unknown as {
+        Clerk?: { setActive(params: { organization: string }): Promise<void> };
+      }
+    ).Clerk;
+    if (!clerkGlobal) throw new Error("client fixture setup: window.Clerk did not load");
+    await clerkGlobal.setActive({ organization: organizationId });
+  }, org.id);
+
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+
+  await page.context().storageState({ path: CLIENT_AUTH_FILE });
 });
