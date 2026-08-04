@@ -3,7 +3,7 @@ import { test as setup } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { clerkClient } from "@clerk/nextjs/server";
-import { serviceDb, createAccount, setClientAccess } from "@bis/db";
+import { serviceDb, createAccount, setClientAccess, createContact } from "@bis/db";
 
 // Needed for the client-fixture setup below, which calls serviceDb() and
 // clerkClient() directly from the Playwright test runner process (not
@@ -18,12 +18,15 @@ loadEnv({ path: ".env.local" });
 
 const AUTH_FILE = "e2e/.auth/state.json";
 const CLIENT_AUTH_FILE = "e2e/.auth/client-state.json";
-// Sidecar record of what the client-fixture setup below created. Playwright
-// setup projects run once, before every spec file, with no teardown hook
-// that fires *after* a spec has consumed the state — so creation has to
-// happen here and cleanup has to happen in client-access.spec.ts's own
-// `finally`, per the task's cleanup requirement. This file is how the spec
-// learns which account/org/user are its to delete.
+// Sidecar record of what the client-fixture setup below created. Read by
+// client-access.spec.ts to know which account to assert against, and by
+// auth.teardown.ts (the "setup" project's `teardown` project — see
+// playwright.config.ts) to know what to delete. Deletion lives in the
+// teardown project rather than the spec's own `finally` specifically so it
+// still runs when the spec that consumes the fixture isn't part of the run
+// at all (e.g. `test:e2e blueprints.spec.ts`, or any --grep): the "setup"
+// project has no test filter, so this fixture is created on every
+// invocation regardless, and a filtered run used to leak it.
 const CLIENT_FIXTURE_FILE = "e2e/.auth/client-fixture.json";
 
 // Runs once before the real specs. Signs in as the one real Clerk user on
@@ -69,11 +72,12 @@ setup("authenticate as agency_admin", async ({ page }) => {
 // NO app_role in public_metadata (absent means client — the design's
 // fail-closed rule, see docs/superpowers/specs/2026-08-02-m2-client-access-design.md
 // section 2), a member of a fresh, throwaway org, backed by a fresh
-// accounts row with client_access_enabled = true. Everything created here —
-// the Clerk user, the Clerk org, and the Postgres account row — is deleted
-// by client-access.spec.ts's own finally block, not by this file. This
-// setup test only arranges the fixture and signs in; see CLIENT_FIXTURE_FILE
-// above for why cleanup can't live here too.
+// accounts row with client_access_enabled = true and one seeded contact.
+// Everything created here — the Clerk user, the Clerk org, the Postgres
+// account row, and the seeded contact — is deleted by auth.teardown.ts, not
+// by this file. This setup test only arranges the fixture and signs in; see
+// CLIENT_FIXTURE_FILE above for why cleanup lives in the teardown project
+// instead.
 setup("authenticate as client user (no app_role)", async ({ page }) => {
   await clerkSetup();
 
@@ -124,10 +128,25 @@ setup("authenticate as client user (no app_role)", async ({ page }) => {
   });
   await setClientAccess(db, accountId, true, user.id);
 
+  // One real row in the client's own account. Without this,
+  // client-access.spec.ts had no positive assertion that a client can see
+  // ANY of their own data — every check in it was an absence check (no
+  // canary name, no agency chrome, a redirect on the "off" case), all of
+  // which pass trivially if userDb()/RLS quietly stopped returning rows for
+  // this account too (e.g. a 404 from [accountId]/layout.tsx's notFound()).
+  // A visible full name (see contactDisplayName in lib/format.ts) makes the
+  // new assertion in the spec a straightforward getByText check.
+  const contactFirstName = "E2E";
+  const contactLastName = `Fixture ${stamp}`;
+  const contactName = `${contactFirstName} ${contactLastName}`;
+  await createContact(
+    db, accountId, { firstName: contactFirstName, lastName: contactLastName }, user.id,
+  );
+
   mkdirSync("e2e/.auth", { recursive: true });
   writeFileSync(
     CLIENT_FIXTURE_FILE,
-    JSON.stringify({ accountId, clerkOrgId: org.id, clerkUserId: user.id, email, companyName }),
+    JSON.stringify({ accountId, clerkOrgId: org.id, clerkUserId: user.id, email, companyName, contactName }),
   );
 
   // Same ticket-based sign-in as the agency flow above: clerk.signIn looks

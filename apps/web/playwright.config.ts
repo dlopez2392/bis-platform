@@ -20,7 +20,14 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   projects: [
-    { name: "setup", testMatch: /auth\.setup\.ts/ },
+    { name: "setup", testMatch: /auth\.setup\.ts/, teardown: "teardown" },
+    // Runs after every "chromium" test finishes, regardless of which spec
+    // files were selected — a plain finally in a spec only fires when that
+    // spec is part of the run. See auth.teardown.ts for why that matters:
+    // "setup" has no test filter of its own, so it creates the client-access
+    // fixture (a real Clerk user + org + Postgres rows) on every invocation,
+    // even one that never runs client-access.spec.ts.
+    { name: "teardown", testMatch: /auth\.teardown\.ts/ },
     {
       name: "chromium",
       testMatch: /.*\.spec\.ts/,
