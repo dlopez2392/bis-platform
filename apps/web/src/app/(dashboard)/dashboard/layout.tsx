@@ -40,7 +40,15 @@ export default async function DashboardLayout({
     // account URL ever reached that more precise guard.
     const state = await resolveClientAccessState();
     if (state.status === "off") redirect("/no-access?reason=off");
-    if (state.status === "none") redirect("/");
+    // Was `redirect("/")`, which lands on landing.noAccess.body — copy
+    // written for the agency ("This account isn't set up as an agency
+    // admin..."). A client with no resolvable account at all needs the
+    // same explicit no-access page as the "off" case above, just the
+    // other reason, so it reads as a provisioning gap rather than an
+    // error (design spec section 8). "/" still correctly serves a
+    // signed-in user with no app_role and no org at all — this redirect
+    // only fires once we already know the caller isn't the agency.
+    if (state.status === "none") redirect("/no-access?reason=none");
   }
 
   const [accounts, cookieStore] = await Promise.all([
@@ -57,7 +65,7 @@ export default async function DashboardLayout({
         isAgency={isAgency}
       />
       <div className="flex min-w-0 flex-1 flex-col">
-        <Topbar />
+        <Topbar isAgency={isAgency} />
         <main className="min-w-0 flex-1">{children}</main>
       </div>
     </div>
