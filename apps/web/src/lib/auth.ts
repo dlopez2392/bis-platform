@@ -64,12 +64,35 @@ export async function requireAgencyOnlyAccountAccess(
   return { userId };
 }
 
-/** The client's own account, or null for the agency admin / an unlinked user. */
-export async function resolveClientAccount(): Promise<{ id: string; name: string } | null> {
+/**
+ * Like resolveClientAccount below, but distinguishes *why* a non-agency
+ * caller has no account to land in: "off" (a real account exists for this
+ * org, but its client-access switch is off) vs "none" (no account is
+ * linked to this org at all). A caller that only needs "do I have
+ * somewhere to send this person" can use resolveClientAccount's collapsed
+ * null; a caller that needs to route "off" to the explicit
+ * /no-access?reason=off page (design spec section 8 — flipping access off
+ * mid-session must show that page, not fall through to a generic message)
+ * needs this instead.
+ */
+export async function resolveClientAccessState(): Promise<
+  | { status: "agency" }
+  | { status: "ok"; id: string; name: string }
+  | { status: "off" }
+  | { status: "none" }
+> {
   const { sessionClaims } = await auth();
   const claims = sessionClaims as AppClaims;
-  if (claims?.app_role === "agency_admin" || !claims?.org_id) return null;
+  if (claims?.app_role === "agency_admin") return { status: "agency" };
+  if (!claims?.org_id) return { status: "none" };
   const account = await getAccountByOrgId(serviceDb(), claims.org_id);
-  if (!account || !account.client_access_enabled) return null;
-  return { id: account.id, name: account.name };
+  if (!account) return { status: "none" };
+  if (!account.client_access_enabled) return { status: "off" };
+  return { status: "ok", id: account.id, name: account.name };
+}
+
+/** The client's own account, or null for the agency admin / an unlinked user. */
+export async function resolveClientAccount(): Promise<{ id: string; name: string } | null> {
+  const state = await resolveClientAccessState();
+  return state.status === "ok" ? { id: state.id, name: state.name } : null;
 }

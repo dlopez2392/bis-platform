@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
 import { serviceDb, listAccounts } from "@bis/db";
-import { resolveClientAccount, type AppClaims } from "@/lib/auth";
+import { resolveClientAccessState, type AppClaims } from "@/lib/auth";
 import { AppSidebar } from "@/components/app-sidebar";
 import { Topbar } from "@/components/topbar";
 
@@ -29,8 +29,18 @@ export default async function DashboardLayout({
   const isAgency = claims.app_role === "agency_admin";
 
   if (!isAgency) {
-    const clientAccount = await resolveClientAccount();
-    if (!clientAccount) redirect("/");
+    // Distinguish "off" from "none" here rather than collapsing both to a
+    // redirect to "/" — without this, a client whose access was just
+    // turned off (a real account, switch flipped false) landed on the
+    // same generic "not set up as an agency admin" message an unlinked
+    // user sees, instead of the explicit /no-access?reason=off page
+    // [accountId]/layout.tsx already shows for the same situation one
+    // level down. This layout runs first, so it was the one place that
+    // distinction was getting lost before a client with a specific
+    // account URL ever reached that more precise guard.
+    const state = await resolveClientAccessState();
+    if (state.status === "off") redirect("/no-access?reason=off");
+    if (state.status === "none") redirect("/");
   }
 
   const [accounts, cookieStore] = await Promise.all([
