@@ -1,12 +1,18 @@
 import { serviceDb, listAccounts } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { StatTile } from "@/components/stat-tile";
+import { requireAgency } from "@/lib/auth";
 import { formatCurrency } from "@/lib/format";
 import { m } from "@/lib/messages";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
+  // Agency-only: aggregate stats across every account. The parent layout
+  // admits clients into the /dashboard tree (for their own account under
+  // [accountId]/), so this leaf must guard itself rather than rely solely
+  // on that shared choke point.
+  await requireAgency();
   const db = serviceDb();
   const [accounts, contactCount, openOpps] = await Promise.all([
     listAccounts(db),

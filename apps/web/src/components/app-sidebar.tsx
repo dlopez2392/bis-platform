@@ -36,9 +36,11 @@ function isNavActive(pathname: string, href: string, exact = false) {
 export function AppSidebar({
   accounts,
   defaultCollapsed,
+  isAgency,
 }: {
   accounts: AccountOption[];
   defaultCollapsed: boolean;
+  isAgency: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const pathname = usePathname();
@@ -66,14 +68,20 @@ export function AppSidebar({
         { href: "/dashboard/blueprints", label: m["nav.blueprints"], icon: Layers },
       ];
 
-  const footer: NavItem = base
-    ? { href: `${base}/settings`, label: m["nav.settings"], icon: Settings }
-    : { href: "/dashboard", label: m["nav.dashboard"], icon: LayoutDashboard };
+  // A client has no agency scope to return to, so there is no footer item
+  // for them at all — not Settings (agency-only, see requireAgencyOnlyAccountAccess),
+  // not the agency's own top-level Dashboard link.
+  const footer: NavItem | null = !isAgency
+    ? null
+    : base
+      ? { href: `${base}/settings`, label: m["nav.settings"], icon: Settings }
+      : { href: "/dashboard", label: m["nav.dashboard"], icon: LayoutDashboard };
 
-  // Only shown inside an account. Its href ("/dashboard/accounts") is a
-  // string prefix of every in-account route, so — like the footer's
-  // agency-scope link — it needs an exact match or it would light up
-  // alongside whichever account nav item is actually active.
+  // Only shown inside an account, and only for the agency — a client has
+  // nothing to go "back" to. Its href ("/dashboard/accounts") is a string
+  // prefix of every in-account route, so — like the footer's agency-scope
+  // link — it needs an exact match or it would light up alongside whichever
+  // account nav item is actually active.
   const backToAgency: NavItem = { href: "/dashboard/accounts", label: m["shell.backToAgency"], icon: ArrowLeft };
 
   return (
@@ -103,13 +111,15 @@ export function AppSidebar({
         </button>
       </div>
 
-      <AccountSwitcher
-        accounts={accounts}
-        activeAccountId={activeAccountId}
-        collapsed={collapsed}
-      />
+      {isAgency ? (
+        <AccountSwitcher
+          accounts={accounts}
+          activeAccountId={activeAccountId}
+          collapsed={collapsed}
+        />
+      ) : null}
 
-      {base ? (
+      {isAgency && base ? (
         <div className="border-b border-sidebar-border pb-2">
           <SidebarLink
             item={backToAgency}
@@ -130,13 +140,15 @@ export function AppSidebar({
         ))}
       </nav>
 
-      <div className="border-t border-sidebar-border pt-2">
-        <SidebarLink
-          item={footer}
-          collapsed={collapsed}
-          active={isNavActive(pathname, footer.href, !base)}
-        />
-      </div>
+      {footer ? (
+        <div className="border-t border-sidebar-border pt-2">
+          <SidebarLink
+            item={footer}
+            collapsed={collapsed}
+            active={isNavActive(pathname, footer.href, !base)}
+          />
+        </div>
+      ) : null}
     </aside>
   );
 }

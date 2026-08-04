@@ -6,6 +6,7 @@ import { CreateAccountDialog } from "./create-account-dialog";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
+import { requireAgency } from "@/lib/auth";
 import { formatDate } from "@/lib/format";
 import { m } from "@/lib/messages";
 import { ACCOUNT_STATUS_LABEL } from "@/lib/labels";
@@ -13,6 +14,10 @@ import { ACCOUNT_STATUS_LABEL } from "@/lib/labels";
 export const dynamic = "force-dynamic";
 
 export default async function AccountsPage() {
+  // Agency-only: every client company's name, status, and creation date. The
+  // parent layout admits clients into the /dashboard tree, so this leaf must
+  // guard itself rather than rely solely on that shared choke point.
+  await requireAgency();
   const [accounts, blueprints] = await Promise.all([
     listAccounts(serviceDb()),
     listBlueprints(serviceDb()),
