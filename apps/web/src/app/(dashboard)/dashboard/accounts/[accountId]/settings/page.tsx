@@ -1,8 +1,10 @@
 import { Braces, SlidersHorizontal } from "lucide-react";
+import { clerkClient } from "@clerk/nextjs/server";
 import { serviceDb, listCustomFields, listCustomValues, listBlueprints, type CustomFieldDef } from "@bis/db";
 import { SubmitButton } from "../../submit-button";
-import { createFieldAction, upsertValueAction } from "./actions";
+import { createFieldAction, upsertValueAction, setClientAccessAction, inviteClientAdminAction } from "./actions";
 import { SaveBlueprintDialog } from "./save-blueprint-dialog";
+import { ClientAccessPanel, type ClientAccessMember } from "./client-access-panel";
 import { captureBlueprintAction } from "../../../blueprints/actions";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
@@ -36,7 +38,7 @@ export default async function CrmSettingsPage({
   const { accountId } = await params;
   await requireAgencyOnlyAccountAccess(accountId);
   const db = await dbForRequest();
-  const [fields, values, blueprints] = await Promise.all([
+  const [fields, values, blueprints, account] = await Promise.all([
     listCustomFields(db, accountId, "contact"),
     listCustomValues(db, accountId),
     // Agency-wide, not account-scoped — this account is just where the
@@ -52,9 +54,32 @@ export default async function CrmSettingsPage({
     // an in-account surface — worth the owner's judgment on whether clients
     // should see this at all.
     listBlueprints(serviceDb()),
+    db.from("accounts").select("clerk_org_id, client_access_enabled").eq("id", accountId).maybeSingle()
+      .then(({ data, error }) => {
+        if (error) throw new Error(`settings: account lookup failed: ${error.message}`);
+        if (!data) throw new Error("settings: account not found");
+        return data;
+      }),
   ]);
+
+  // No Clerk->Postgres member sync exists (see design doc §7) — Clerk is the
+  // only source of truth for who is seated in this account's organization,
+  // so the member list is read live from the Backend API rather than a
+  // local table.
+  const clerk = await clerkClient();
+  const membershipList = account.clerk_org_id
+    ? await clerk.organizations.getOrganizationMembershipList({ organizationId: account.clerk_org_id })
+    : null;
+  const members: ClientAccessMember[] = (membershipList?.data ?? []).map((membership) => ({
+    id: membership.id,
+    email: membership.publicUserData?.identifier ?? m["common.unavailable"],
+    role: membership.role.replace(/^org:/, "").replace(/^\w/, (c) => c.toUpperCase()),
+  }));
+
   const boundCreateField = createFieldAction.bind(null, accountId);
   const boundUpsertValue = upsertValueAction.bind(null, accountId);
+  const boundSetAccess = setClientAccessAction.bind(null, accountId);
+  const boundInvite = inviteClientAdminAction.bind(null, accountId);
   return (
     <>
       <PageHeader
@@ -66,110 +91,118 @@ export default async function CrmSettingsPage({
           />
         }
       />
-      <div className="grid gap-6 p-6 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>{m["settings.customFields"]}</CardTitle>
-            <CardDescription>{m["settings.customFieldsBody"]}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <form action={boundCreateField} className="space-y-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="field-name">{m["settings.fieldName"]}</Label>
-                <Input id="field-name" name="name" required />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="field-key">{m["settings.fieldKey"]}</Label>
-                <Input id="field-key" name="fieldKey" required pattern="[a-z0-9_]+" />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="field-type">{m["settings.dataType"]}</Label>
-                <Select name="dataType" defaultValue="text">
-                  <SelectTrigger id="field-type" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="text">{m["settings.dataType.text"]}</SelectItem>
-                    <SelectItem value="number">{m["settings.dataType.number"]}</SelectItem>
-                    <SelectItem value="date">{m["settings.dataType.date"]}</SelectItem>
-                    <SelectItem value="checkbox">{m["settings.dataType.checkbox"]}</SelectItem>
-                    <SelectItem value="single_select">{m["settings.dataType.singleSelect"]}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="field-options">{m["settings.options"]}</Label>
-                <Input id="field-options" name="options" />
-              </div>
-              <SubmitButton>{m["settings.addField"]}</SubmitButton>
-            </form>
+      <div className="space-y-6 p-6">
+        <ClientAccessPanel
+          enabled={account.client_access_enabled}
+          members={members}
+          setAccessAction={boundSetAccess}
+          inviteAction={boundInvite}
+        />
+        <div className="grid gap-6 lg:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle>{m["settings.customFields"]}</CardTitle>
+              <CardDescription>{m["settings.customFieldsBody"]}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <form action={boundCreateField} className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="field-name">{m["settings.fieldName"]}</Label>
+                  <Input id="field-name" name="name" required />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="field-key">{m["settings.fieldKey"]}</Label>
+                  <Input id="field-key" name="fieldKey" required pattern="[a-z0-9_]+" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="field-type">{m["settings.dataType"]}</Label>
+                  <Select name="dataType" defaultValue="text">
+                    <SelectTrigger id="field-type" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="text">{m["settings.dataType.text"]}</SelectItem>
+                      <SelectItem value="number">{m["settings.dataType.number"]}</SelectItem>
+                      <SelectItem value="date">{m["settings.dataType.date"]}</SelectItem>
+                      <SelectItem value="checkbox">{m["settings.dataType.checkbox"]}</SelectItem>
+                      <SelectItem value="single_select">{m["settings.dataType.singleSelect"]}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="field-options">{m["settings.options"]}</Label>
+                  <Input id="field-options" name="options" />
+                </div>
+                <SubmitButton>{m["settings.addField"]}</SubmitButton>
+              </form>
 
-            {fields.length === 0 ? (
-              <EmptyState icon={SlidersHorizontal} title={m["settings.noFields"]} />
-            ) : (
-              <ul className="space-y-2">
-                {fields.map((f) => (
-                  <li
-                    key={f.id}
-                    className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border p-3 text-sm"
-                  >
-                    <span className="font-medium text-card-foreground">{f.name}</span>
-                    <code className="font-mono text-xs text-muted-foreground">{f.field_key}</code>
-                    <span className="text-xs text-muted-foreground">
-                      · {DATA_TYPE_LABEL[f.data_type]}
-                    </span>
-                    {f.options.length > 0 && (
-                      <span className="text-xs text-muted-foreground">[{f.options.join(", ")}]</span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
+              {fields.length === 0 ? (
+                <EmptyState icon={SlidersHorizontal} title={m["settings.noFields"]} />
+              ) : (
+                <ul className="space-y-2">
+                  {fields.map((f) => (
+                    <li
+                      key={f.id}
+                      className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border p-3 text-sm"
+                    >
+                      <span className="font-medium text-card-foreground">{f.name}</span>
+                      <code className="font-mono text-xs text-muted-foreground">{f.field_key}</code>
+                      <span className="text-xs text-muted-foreground">
+                        · {DATA_TYPE_LABEL[f.data_type]}
+                      </span>
+                      {f.options.length > 0 && (
+                        <span className="text-xs text-muted-foreground">[{f.options.join(", ")}]</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>{m["settings.customValues"]}</CardTitle>
-            <CardDescription>{m["settings.customValuesBody"]}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <form action={boundUpsertValue} className="space-y-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="value-name">{m["settings.valueName"]}</Label>
-                <Input id="value-name" name="name" required />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="value-key">{m["settings.valueKey"]}</Label>
-                <Input id="value-key" name="valueKey" required pattern="[a-z0-9_]+" />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="value-value">{m["settings.value"]}</Label>
-                <Input id="value-value" name="value" />
-              </div>
-              <SubmitButton>{m["settings.saveValue"]}</SubmitButton>
-            </form>
+          <Card>
+            <CardHeader>
+              <CardTitle>{m["settings.customValues"]}</CardTitle>
+              <CardDescription>{m["settings.customValuesBody"]}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <form action={boundUpsertValue} className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="value-name">{m["settings.valueName"]}</Label>
+                  <Input id="value-name" name="name" required />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="value-key">{m["settings.valueKey"]}</Label>
+                  <Input id="value-key" name="valueKey" required pattern="[a-z0-9_]+" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="value-value">{m["settings.value"]}</Label>
+                  <Input id="value-value" name="value" />
+                </div>
+                <SubmitButton>{m["settings.saveValue"]}</SubmitButton>
+              </form>
 
-            {values.length === 0 ? (
-              <EmptyState icon={Braces} title={m["settings.noValues"]} />
-            ) : (
-              <ul className="space-y-2">
-                {values.map((v) => (
-                  <li
-                    key={v.id}
-                    className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border p-3 text-sm"
-                  >
-                    <span className="font-medium text-card-foreground">{v.name}</span>
-                    <code className="font-mono text-xs text-muted-foreground">{v.value_key}</code>
-                    <span className="text-xs text-muted-foreground">
-                      = {v.value || m["common.none"]}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
+              {values.length === 0 ? (
+                <EmptyState icon={Braces} title={m["settings.noValues"]} />
+              ) : (
+                <ul className="space-y-2">
+                  {values.map((v) => (
+                    <li
+                      key={v.id}
+                      className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border p-3 text-sm"
+                    >
+                      <span className="font-medium text-card-foreground">{v.name}</span>
+                      <code className="font-mono text-xs text-muted-foreground">{v.value_key}</code>
+                      <span className="text-xs text-muted-foreground">
+                        = {v.value || m["common.none"]}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </>
   );

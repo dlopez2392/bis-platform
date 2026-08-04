@@ -31,6 +31,17 @@ export const m = {
   "clientAccess.none.title": "No account linked",
   "clientAccess.none.body": "Your sign-in isn't linked to a company account yet. Contact your account manager.",
 
+  "clientAccess.title": "Client access",
+  "clientAccess.body": "When on, invited users at this company can sign in and see this account only.",
+  "clientAccess.enable": "Turn on",
+  "clientAccess.disable": "Turn off",
+  "clientAccess.members": "Members",
+  "clientAccess.invite": "Invite",
+  "clientAccess.inviteEmail": "Email address",
+  "clientAccess.inviteSent": "Invitation sent",
+  "clientAccess.inviteFailed": "Could not send the invitation",
+  "clientAccess.disabledHint": "Turn client access on before inviting anyone.",
+
   "common.save": "Save",
   "common.cancel": "Cancel",
   "common.add": "Add",
