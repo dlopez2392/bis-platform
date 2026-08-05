@@ -27,3 +27,21 @@ export async function listAccounts(db: SupabaseClient) {
   if (error) throw new Error(error.message);
   return data;
 }
+
+export async function setClientAccess(
+  db: SupabaseClient, accountId: string, enabled: boolean, actorId: string,
+): Promise<void> {
+  const { error } = await db.from("accounts")
+    .update({ client_access_enabled: enabled }).eq("id", accountId);
+  if (error) throw new Error(`setClientAccess failed: ${error.message}`);
+  await emit(db, accountId, enabled ? "account.client_access_enabled" : "account.client_access_disabled", actorId, {});
+}
+
+export async function getAccountByOrgId(
+  db: SupabaseClient, clerkOrgId: string,
+): Promise<{ id: string; name: string; client_access_enabled: boolean } | null> {
+  const { data, error } = await db.from("accounts")
+    .select("id, name, client_access_enabled").eq("clerk_org_id", clerkOrgId).maybeSingle();
+  if (error) throw new Error(`getAccountByOrgId failed: ${error.message}`);
+  return data ?? null;
+}

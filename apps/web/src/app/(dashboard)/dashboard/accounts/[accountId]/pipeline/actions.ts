@@ -1,35 +1,36 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireAgency } from "@/lib/auth";
-import { serviceDb, createOpportunity, moveOpportunityToStage, updateOpportunity } from "@bis/db";
+import { requireAccountAccess } from "@/lib/auth";
+import { dbForRequest } from "@/lib/db";
+import { createOpportunity, moveOpportunityToStage, updateOpportunity } from "@bis/db";
 
 function pathFor(accountId: string) {
   return `/dashboard/accounts/${accountId}/pipeline`;
 }
 
 export async function createOpportunityAction(accountId: string, formData: FormData): Promise<void> {
-  const { userId } = await requireAgency();
+  const { userId } = await requireAccountAccess(accountId);
   const name = String(formData.get("name") ?? "").trim();
   const contactId = String(formData.get("contactId") ?? "");
   const pipelineId = String(formData.get("pipelineId") ?? "");
   if (!name || !contactId || !pipelineId) throw new Error("name, contact, pipeline required");
-  await createOpportunity(serviceDb(), accountId,
+  await createOpportunity(await dbForRequest(), accountId,
     { contactId, pipelineId, name, value: Number(formData.get("value") ?? 0) || 0 }, userId);
   revalidatePath(pathFor(accountId));
 }
 
 export async function moveOppToStageAction(accountId: string, formData: FormData): Promise<void> {
-  const { userId } = await requireAgency();
+  const { userId } = await requireAccountAccess(accountId);
   const oppId = String(formData.get("oppId") ?? "");
   const toStageId = String(formData.get("toStageId") ?? "");
   if (!oppId || !toStageId) throw new Error("oppId and toStageId required");
-  await moveOpportunityToStage(serviceDb(), accountId, oppId, toStageId, userId);
+  await moveOpportunityToStage(await dbForRequest(), accountId, oppId, toStageId, userId);
   revalidatePath(pathFor(accountId));
 }
 
 export async function updateOpportunityAction(accountId: string, formData: FormData): Promise<void> {
-  const { userId } = await requireAgency();
+  const { userId } = await requireAccountAccess(accountId);
   const oppId = String(formData.get("oppId") ?? "");
   if (!oppId) throw new Error("oppId required");
   const status = String(formData.get("status") ?? "");
@@ -38,7 +39,7 @@ export async function updateOpportunityAction(accountId: string, formData: FormD
   }
   const rawValue = formData.get("value");
   await updateOpportunity(
-    serviceDb(),
+    await dbForRequest(),
     accountId,
     oppId,
     {

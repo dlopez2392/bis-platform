@@ -1,8 +1,9 @@
 import { MessagesSquare } from "lucide-react";
-import { serviceDb, listConversations, listMessages } from "@bis/db";
+import { listConversations, listMessages } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { contactDisplayName } from "@/lib/format";
+import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 import { ConversationList } from "./conversation-list";
 import { MessageThread } from "./message-thread";
@@ -21,7 +22,7 @@ export default async function ConversationsPage({
 }) {
   const { accountId } = await params;
   const { c } = await searchParams;
-  const db = serviceDb();
+  const db = await dbForRequest();
   const conversations = await listConversations(db, accountId);
 
   if (conversations.length === 0) {

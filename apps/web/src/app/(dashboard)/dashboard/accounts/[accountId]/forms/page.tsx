@@ -1,10 +1,11 @@
 import Link from "next/link";
 import { FileText } from "lucide-react";
-import { serviceDb, listForms } from "@bis/db";
+import { listForms } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { formatDateTime } from "@/lib/format";
+import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 import { FORM_STATUS_LABEL } from "@/lib/labels";
 import { NewFormDialog } from "./new-form-dialog";
@@ -16,7 +17,8 @@ export default async function FormsPage({
   params,
 }: { params: Promise<{ accountId: string }> }) {
   const { accountId } = await params;
-  const forms = await listForms(serviceDb(), accountId);
+  const db = await dbForRequest();
+  const forms = await listForms(db, accountId);
 
   return (
     <>

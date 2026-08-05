@@ -1,11 +1,12 @@
 import { notFound } from "next/navigation";
 import { headers } from "next/headers";
-import { serviceDb, getForm, listSubmissions, listCustomFields } from "@bis/db";
+import { getForm, listSubmissions, listCustomFields } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { FormEditor } from "./form-editor";
 import { EmbedSnippet } from "./embed-snippet";
 import { SubmissionsTable } from "./submissions-table";
 import { saveFormAction } from "../actions";
+import { dbForRequest } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +14,7 @@ export default async function FormEditorPage({
   params,
 }: { params: Promise<{ accountId: string; formId: string }> }) {
   const { accountId, formId } = await params;
-  const db = serviceDb();
+  const db = await dbForRequest();
   const form = await getForm(db, accountId, formId);
   if (!form) notFound();
 

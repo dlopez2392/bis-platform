@@ -1,11 +1,12 @@
 import { Users } from "lucide-react";
-import { serviceDb, listContacts } from "@bis/db";
+import { listContacts } from "@bis/db";
 import { createContactAction } from "./actions";
 import { ContactsTable } from "./contacts-table";
 import { AddContactDialog } from "./add-contact-dialog";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { Input } from "@/components/ui/input";
+import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +20,8 @@ export default async function ContactsPage({
 }) {
   const { accountId } = await params;
   const { q } = await searchParams;
-  const contacts = await listContacts(serviceDb(), accountId, { search: q });
+  const db = await dbForRequest();
+  const contacts = await listContacts(db, accountId, { search: q });
   const base = `/dashboard/accounts/${accountId}/contacts`;
   const boundCreateContact = createContactAction.bind(null, accountId);
 

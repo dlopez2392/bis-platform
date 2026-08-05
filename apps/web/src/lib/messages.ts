@@ -26,6 +26,23 @@ export const m = {
   "landing.noAccess.title": "No access yet",
   "landing.noAccess.body": "This account isn't set up as an agency admin. Sign out to try a different account, or contact your BIS administrator.",
 
+  "clientAccess.off.title": "Access has been turned off",
+  "clientAccess.off.body": "Your access to this account has been turned off. Contact your account manager if you think this is a mistake.",
+  "clientAccess.none.title": "No account linked",
+  "clientAccess.none.body": "Your sign-in isn't linked to a company account yet. Contact your account manager.",
+
+  "clientAccess.title": "Client access",
+  "clientAccess.body": "When on, invited users at this company can sign in and see this account only.",
+  "clientAccess.enable": "Turn on",
+  "clientAccess.disable": "Turn off",
+  "clientAccess.members": "Members",
+  "clientAccess.invite": "Invite",
+  "clientAccess.inviteEmail": "Email address",
+  "clientAccess.inviteSent": "Invitation sent",
+  "clientAccess.inviteFailed": "Could not send the invitation",
+  "clientAccess.disabledHint": "Turn client access on before inviting anyone.",
+  "clientAccess.membersUnavailable": "Member list unavailable right now — the switch above still works.",
+
   "common.save": "Save",
   "common.cancel": "Cancel",
   "common.add": "Add",

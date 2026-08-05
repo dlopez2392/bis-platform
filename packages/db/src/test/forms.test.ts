@@ -133,9 +133,12 @@ describe("forms", () => {
   it("RLS hides another tenant's forms from an authenticated caller", () =>
     withRollback(async (c: Client) => {
       const { rows: [agency] } = await c.query("select id from agencies limit 1");
+      // client_access_enabled defaults to false (migration 0008); this test
+      // reads through the org_id claim, which since 0008 requires the
+      // switch to be on for current_account_id() to resolve anything.
       const mk = async (org: string) => {
         const { rows } = await c.query(
-          "insert into accounts (agency_id, clerk_org_id, name) values ($1,$2,$2) returning id",
+          "insert into accounts (agency_id, clerk_org_id, name, client_access_enabled) values ($1,$2,$2,true) returning id",
           [agency.id, org]);
         return rows[0].id as string;
       };
