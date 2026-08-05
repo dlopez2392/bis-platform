@@ -12,11 +12,14 @@ export async function withTestAccount(fn: (db: SupabaseClient, accountId: string
     await fn(db, id);
   } finally {
     for (const table of ["events", "form_submissions", "forms", "messages", "conversations",
-                         "contact_tags", "notes", "tasks",
+                         "checklist_items", "contact_tags", "notes", "tasks",
                          "opportunities", "pipeline_stages", "pipelines", "custom_fields",
                          "custom_values", "tags", "contacts"]) {
       await db.from(table).delete().eq("account_id", id);
     }
+    // `blueprints` has no account_id — it is agency-scoped — so it cannot ride
+    // the account-scoped loop above.
+    await db.from("blueprints").delete().eq("source_account_id", id);
     await db.from("accounts").delete().eq("id", id);
   }
 }

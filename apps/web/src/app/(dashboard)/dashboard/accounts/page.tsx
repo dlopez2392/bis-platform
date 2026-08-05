@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Building2 } from "lucide-react";
-import { serviceDb, listAccounts } from "@bis/db";
+import { serviceDb, listAccounts, listBlueprints } from "@bis/db";
 import { createClientAccount } from "./actions";
 import { CreateAccountDialog } from "./create-account-dialog";
 import { PageHeader } from "@/components/page-header";
@@ -13,13 +13,16 @@ import { ACCOUNT_STATUS_LABEL } from "@/lib/labels";
 export const dynamic = "force-dynamic";
 
 export default async function AccountsPage() {
-  const accounts = await listAccounts(serviceDb());
+  const [accounts, blueprints] = await Promise.all([
+    listAccounts(serviceDb()),
+    listBlueprints(serviceDb()),
+  ]);
   return (
     <>
       <PageHeader
         title={m["accounts.title"]}
         count={`${accounts.length}`}
-        actions={<CreateAccountDialog action={createClientAccount} />}
+        actions={<CreateAccountDialog action={createClientAccount} blueprints={blueprints} />}
       />
       <div className="p-6">
         {accounts.length === 0 ? (

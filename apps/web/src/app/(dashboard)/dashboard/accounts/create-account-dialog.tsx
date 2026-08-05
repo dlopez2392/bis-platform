@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useFormStatus } from "react-dom";
+import { unstable_rethrow } from "next/navigation";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -15,21 +15,23 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { m } from "@/lib/messages";
-
-function Submit() {
-  const { pending } = useFormStatus();
-  return (
-    <Button type="submit" disabled={pending}>
-      {pending ? m["common.saving"] : m["common.save"]}
-    </Button>
-  );
-}
+import { NO_BLUEPRINT_SENTINEL } from "./constants";
+import { SubmitButton } from "./submit-button";
 
 export function CreateAccountDialog({
   action,
+  blueprints,
 }: {
   action: (formData: FormData) => Promise<void>;
+  blueprints: { id: string; name: string }[];
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -49,7 +51,12 @@ export function CreateAccountDialog({
             try {
               await action(formData);
               setOpen(false);
-            } catch {
+            } catch (e) {
+              // A successful create ends in redirect(), which Next.js
+              // implements by throwing a special control-flow error.
+              // Rethrow it so the navigation actually happens instead of
+              // being swallowed here and misreported as a failed create.
+              unstable_rethrow(e);
               toast.error(m["accounts.createFailed"]);
             }
           }}
@@ -63,8 +70,25 @@ export function CreateAccountDialog({
             <Label htmlFor="timezone">{m["accounts.timezone"]}</Label>
             <Input id="timezone" name="timezone" defaultValue="America/Chicago" />
           </div>
+          {blueprints.length > 0 ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="acct-blueprint">{m["accounts.blueprint"]}</Label>
+              <Select name="blueprintId" defaultValue={NO_BLUEPRINT_SENTINEL}>
+                <SelectTrigger id="acct-blueprint" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_BLUEPRINT_SENTINEL}>{m["accounts.blueprintNone"]}</SelectItem>
+                  {blueprints.map((b) => (
+                    <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">{m["accounts.blueprintHint"]}</p>
+            </div>
+          ) : null}
           <DialogFooter>
-            <Submit />
+            <SubmitButton>{m["common.add"]}</SubmitButton>
           </DialogFooter>
         </form>
       </DialogContent>

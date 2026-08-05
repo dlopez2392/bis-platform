@@ -1,7 +1,9 @@
 import { Braces, SlidersHorizontal } from "lucide-react";
-import { serviceDb, listCustomFields, listCustomValues, type CustomFieldDef } from "@bis/db";
+import { serviceDb, listCustomFields, listCustomValues, listBlueprints, type CustomFieldDef } from "@bis/db";
 import { SubmitButton } from "../../submit-button";
 import { createFieldAction, upsertValueAction } from "./actions";
+import { SaveBlueprintDialog } from "./save-blueprint-dialog";
+import { captureBlueprintAction } from "../../../blueprints/actions";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,15 +33,28 @@ export default async function CrmSettingsPage({
 }: { params: Promise<{ accountId: string }> }) {
   const { accountId } = await params;
   const db = serviceDb();
-  const [fields, values] = await Promise.all([
+  const [fields, values, blueprints] = await Promise.all([
     listCustomFields(db, accountId, "contact"),
     listCustomValues(db, accountId),
+    // Agency-wide, not account-scoped — this account is just where the
+    // capture happens. Passed down so the save dialog can warn before a
+    // recapture silently overwrites an existing blueprint's bundle: capture
+    // has no version history and no undo.
+    listBlueprints(db),
   ]);
   const boundCreateField = createFieldAction.bind(null, accountId);
   const boundUpsertValue = upsertValueAction.bind(null, accountId);
   return (
     <>
-      <PageHeader title={m["settings.title"]} />
+      <PageHeader
+        title={m["settings.title"]}
+        actions={
+          <SaveBlueprintDialog
+            action={captureBlueprintAction.bind(null, accountId)}
+            existing={blueprints.map((b) => ({ name: b.name, version: b.version }))}
+          />
+        }
+      />
       <div className="grid gap-6 p-6 lg:grid-cols-2">
         <Card>
           <CardHeader>

@@ -12,6 +12,7 @@ import {
   FileText,
   Settings,
   Building2,
+  Layers,
   PanelLeftClose,
   PanelLeft,
   ArrowLeft,
@@ -60,7 +61,10 @@ export function AppSidebar({
         { href: `${base}/forms`, label: m["nav.forms"], icon: FileText },
         { href: `${base}/calendar`, label: m["nav.calendar"], icon: Calendar },
       ]
-    : [{ href: "/dashboard/accounts", label: m["nav.accounts"], icon: Building2 }];
+    : [
+        { href: "/dashboard/accounts", label: m["nav.accounts"], icon: Building2 },
+        { href: "/dashboard/blueprints", label: m["nav.blueprints"], icon: Layers },
+      ];
 
   const footer: NavItem = base
     ? { href: `${base}/settings`, label: m["nav.settings"], icon: Settings }

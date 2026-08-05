@@ -4,6 +4,7 @@ import { withTestAccount } from "./fixtures";
 import { withRollback, actAs } from "./db";
 import {
   newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId, updateForm,
+  countFormsMissingNotify,
 } from "../forms";
 
 const FIELDS = [
@@ -108,6 +109,25 @@ describe("forms", () => {
         updateForm(db, "00000000-0000-0000-0000-000000000000", id, { name: "X" }, "user_test"),
       ).rejects.toThrow(/not found/i);
       expect((await getForm(db, accountId, id))!.name).toBe("A");
+    }));
+
+  it("countFormsMissingNotify counts only forms whose notify_emails is still empty", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: bareId } = await createForm(db, accountId, { name: "No notify" }, "user_test");
+      const { id: notifiedId } = await createForm(db, accountId, { name: "Notified" }, "user_test");
+
+      // Both forms start with the schema default '{}' — count reflects that.
+      expect(await countFormsMissingNotify(db, accountId)).toBe(2);
+
+      await updateForm(db, accountId, notifiedId, { notify_emails: ["owner@example.com"] }, "user_test");
+      expect(await countFormsMissingNotify(db, accountId)).toBe(1);
+
+      // Clearing it back to empty must be visible too — proves the query
+      // reads live state, not just the schema default.
+      await updateForm(db, accountId, notifiedId, { notify_emails: [] }, "user_test");
+      expect(await countFormsMissingNotify(db, accountId)).toBe(2);
+      // Both forms present, neither miscounted as the other's account.
+      expect(await getForm(db, accountId, bareId)).not.toBeNull();
     }));
 
   it("RLS hides another tenant's forms from an authenticated caller", () =>

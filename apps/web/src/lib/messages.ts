@@ -7,6 +7,7 @@ export const m = {
   "nav.forms": "Forms",
   "nav.settings": "Settings",
   "nav.accounts": "Companies",
+  "nav.blueprints": "Blueprints",
 
   "shell.brand": "BIS",
   "shell.switchAccount": "Switch company",
@@ -49,6 +50,10 @@ export const m = {
   "accounts.status.active": "Active",
   "accounts.status.paused": "Paused",
   "accounts.status.archived": "Archived",
+  "accounts.blueprint": "Apply a blueprint",
+  "accounts.blueprintNone": "Don't apply one",
+  "accounts.blueprintHint": "Copies configuration into the new company. You can apply one later instead.",
+  "accounts.blueprintPartial": "The company was created, but some blueprint items did not apply. Check its Settings and add anything missing by hand.",
 
   "dashboard.title": "Dashboard",
   "dashboard.companies": "Companies",
@@ -244,6 +249,51 @@ export const m = {
   "conversations.channel.email": "Email",
   "conversations.channel.note": "Note",
   "contact.formSubmission": "Form submission",
+
+  // Every item but form_notify happens outside the platform. The help text
+  // must say so plainly — implying the app performs these is a lie it would
+  // tell daily.
+  "checklist.phone_number.title": "Buy a phone number",
+  "checklist.phone_number.help":
+    "Done in Telnyx. Calling and SMS arrive in M2 — until then this is a record that the number exists.",
+  "checklist.a2p_registration.title": "Register A2P 10DLC brand and campaign",
+  "checklist.a2p_registration.help":
+    "Done with the carriers via Telnyx. Expect days to weeks; start it early because nothing you do here speeds it up.",
+  "checklist.email_domain.title": "Add a sending subdomain and DKIM",
+  "checklist.email_domain.help":
+    "Done in Resend, then the DNS records at the domain host. A subdomain keeps this client's sending reputation separate.",
+  "checklist.form_notify.title": "Set the notification address on each form",
+  "checklist.form_notify.help":
+    "Done here. Forms applied from a blueprint deliberately start with an empty notify list so leads cannot reach the previous client.",
+  "checklist.gbp_connect.title": "Connect Google Business Profile",
+  "checklist.gbp_connect.help": "Done in Google. Review management arrives in M5.",
+  "checklist.invite_owner.title": "Invite the business owner",
+  "checklist.invite_owner.help": "Done in Clerk until per-account roles exist.",
+
+  "checklist.title": "Activation checklist",
+  "checklist.body": "What's left before this company is live.",
+  "checklist.external": "Done outside BIS",
+  "checklist.formNotify": "forms still have no notification address",
+  "checklist.addItem": "Add a step",
+  "checklist.addPlaceholder": "Something else this client needs…",
+  "checklist.complete": "Everything on the checklist is done.",
+  "checklist.remaining": "remaining",
+  "checklist.open": "Open",
+  "checklist.reviewLink": "Checklist complete — review",
+
+  "blueprints.title": "Blueprints",
+  "blueprints.empty.title": "No blueprints yet",
+  "blueprints.empty.body": "Set an account up the way you like it, then save its configuration here to reuse on the next client.",
+  "blueprints.version": "Version",
+  "blueprints.captured": "Captured",
+  "blueprints.applied": "Applied to",
+  "blueprints.appliedCount": "accounts",
+  "blueprints.save": "Save as blueprint",
+  "blueprints.saveHint": "Copies this account's pipelines, custom fields, tags, custom values and forms. Never contacts, conversations, or anything with a credential in it.",
+  "blueprints.name": "Blueprint name",
+  "blueprints.saved": "Blueprint saved",
+  "blueprints.saveFailed": "Could not save the blueprint.",
+  "blueprints.overwriteWarning": "\"{name}\" already exists (version {version}). Saving will replace it — there is no version history and no undo.",
 } as const;
 
 export type MessageKey = keyof typeof m;
