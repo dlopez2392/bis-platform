@@ -55,10 +55,25 @@ async function withTestAccount(fn: (accountId: string) => Promise<void>) {
   try {
     await fn(accountId);
   } finally {
-    for (const table of ["events", "form_submissions", "forms", "contacts"]) {
-      await db.from(table).delete().eq("account_id", accountId);
+    // Mirrors packages/db's withTestAccount list, in the same FK order.
+    // It previously omitted messages and conversations, which M1c began
+    // creating for every lead ("every lead opens a thread") AFTER this list
+    // was written — so the accounts delete failed on a foreign key and the
+    // row survived. Because none of these deletes checked .error, that
+    // failed silently on every run: 11 orphaned "Fixture Co (returning
+    // lead)" accounts had accumulated in the shared dev database, visible
+    // in the real accounts list, before anyone noticed.
+    for (const table of ["events", "form_submissions", "forms", "messages", "conversations",
+                         "checklist_items", "contact_tags", "notes", "tasks",
+                         "opportunities", "pipeline_stages", "pipelines", "custom_fields",
+                         "custom_values", "tags", "contacts"]) {
+      const { error } = await db.from(table).delete().eq("account_id", accountId);
+      if (error) throw new Error(`test cleanup: ${table} delete failed: ${error.message}`);
     }
-    await db.from("accounts").delete().eq("id", accountId);
+    // Fail loud here above all: a surviving account row is what leaks into
+    // the shared dev database and shows up in the agency's own UI.
+    const { error } = await db.from("accounts").delete().eq("id", accountId);
+    if (error) throw new Error(`test cleanup: accounts delete failed: ${error.message}`);
   }
 }
 

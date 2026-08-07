@@ -76,6 +76,7 @@ export default async function CrmSettingsPage({
   // empty member list, inline note, switch renders regardless.
   const clerk = await clerkClient();
   let members: ClientAccessMember[] = [];
+  let pendingInvites: ClientAccessMember[] = [];
   let membersUnavailable = false;
   if (account.clerk_org_id) {
     try {
@@ -86,6 +87,21 @@ export default async function CrmSettingsPage({
         id: membership.id,
         email: membership.publicUserData?.identifier ?? m["common.unavailable"],
         role: membership.role.replace(/^org:/, "").replace(/^\w/, (c) => c.toUpperCase()),
+      }));
+
+      // Pending invitations too. Without these the panel lists only people who
+      // have already ACCEPTED, so after inviting someone the agency sees no
+      // change at all — the success toast is transient and gone on reload,
+      // leaving no way to tell whether an invite was ever sent. Re-inviting
+      // the same address then fails with the generic error.
+      const invitationList = await clerk.organizations.getOrganizationInvitationList({
+        organizationId: account.clerk_org_id,
+        status: ["pending"],
+      });
+      pendingInvites = invitationList.data.map((invitation) => ({
+        id: invitation.id,
+        email: invitation.emailAddress,
+        role: invitation.role.replace(/^org:/, "").replace(/^\w/, (c) => c.toUpperCase()),
       }));
     } catch (e) {
       console.error(`settings: member list fetch failed for org ${account.clerk_org_id}: ${String(e)}`);
@@ -112,6 +128,7 @@ export default async function CrmSettingsPage({
         <ClientAccessPanel
           enabled={account.client_access_enabled}
           members={members}
+          pendingInvites={pendingInvites}
           membersUnavailable={membersUnavailable}
           setAccessAction={boundSetAccess}
           inviteAction={boundInvite}

@@ -77,6 +77,14 @@ test("a client sees only their own account, and nothing when access is off", asy
   ).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Switch company" })).toHaveCount(0);
 
+  // The client must still be able to tell WHICH company they are in. Hiding
+  // the switcher above removed the only element that displayed the account
+  // name, so a client saw nothing but the agency's own "BIS" branding and
+  // could not identify the account. Every other assertion in this file is
+  // about what should be ABSENT, which is exactly why that shipped unnoticed
+  // — this is the one that fails if the name disappears again.
+  await expect(page.getByText(fixture.companyName, { exact: true })).toBeVisible();
+
   // 4. Navigating to another account's URL redirects to their own
   // account, and the other account's data never renders. "Test Client
   // One" is the one account in this environment seeded with real,

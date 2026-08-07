@@ -27,6 +27,7 @@ export default async function DashboardLayout({
   if (!userId) redirect("/sign-in");
   const claims = sessionClaims as AppClaims;
   const isAgency = claims.app_role === "agency_admin";
+  let clientState: Awaited<ReturnType<typeof resolveClientAccessState>> | null = null;
 
   if (!isAgency) {
     // Distinguish "off" from "none" here rather than collapsing both to a
@@ -38,7 +39,8 @@ export default async function DashboardLayout({
     // level down. This layout runs first, so it was the one place that
     // distinction was getting lost before a client with a specific
     // account URL ever reached that more precise guard.
-    const state = await resolveClientAccessState();
+    clientState = await resolveClientAccessState();
+    const state = clientState;
     if (state.status === "off") redirect("/no-access?reason=off");
     // Was `redirect("/")`, which lands on landing.noAccess.body — copy
     // written for the agency ("This account isn't set up as an agency
@@ -63,6 +65,7 @@ export default async function DashboardLayout({
         accounts={accounts.map((a) => ({ id: a.id, name: a.name, timezone: a.timezone }))}
         defaultCollapsed={collapsed}
         isAgency={isAgency}
+        clientAccountName={clientState?.status === "ok" ? clientState.name : undefined}
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar isAgency={isAgency} />

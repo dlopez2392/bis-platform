@@ -25,12 +25,17 @@ function InviteButton({ disabled }: { disabled: boolean }) {
 export function ClientAccessPanel({
   enabled,
   members,
+  pendingInvites = [],
   membersUnavailable = false,
   setAccessAction,
   inviteAction,
 }: {
   enabled: boolean;
   members: ClientAccessMember[];
+  /** Invited but not yet accepted. Listed alongside members because the
+   *  success toast is transient — without these, an agency that invited
+   *  someone sees no trace of it after a reload. */
+  pendingInvites?: ClientAccessMember[];
   membersUnavailable?: boolean;
   setAccessAction: (formData: FormData) => Promise<void>;
   inviteAction: (formData: FormData) => Promise<{ ok: true } | { ok: false; error: string }>;
@@ -53,7 +58,7 @@ export function ClientAccessPanel({
           <p className="text-sm font-medium text-card-foreground">{m["clientAccess.members"]}</p>
           {membersUnavailable ? (
             <p className="text-sm text-destructive">{m["clientAccess.membersUnavailable"]}</p>
-          ) : members.length === 0 ? (
+          ) : members.length === 0 && pendingInvites.length === 0 ? (
             <p className="text-sm text-muted-foreground">{m["common.none"]}</p>
           ) : (
             <ul className="space-y-2">
@@ -64,6 +69,18 @@ export function ClientAccessPanel({
                 >
                   <span className="font-medium text-card-foreground">{member.email}</span>
                   <Badge variant="secondary" className="font-normal">{member.role}</Badge>
+                </li>
+              ))}
+              {pendingInvites.map((invite) => (
+                <li
+                  key={invite.id}
+                  className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-dashed border-border p-3 text-sm"
+                >
+                  <span className="font-medium text-muted-foreground">{invite.email}</span>
+                  <Badge variant="secondary" className="font-normal">{invite.role}</Badge>
+                  <Badge variant="outline" className="font-normal">
+                    {m["clientAccess.invitePending"]}
+                  </Badge>
                 </li>
               ))}
             </ul>
