@@ -140,7 +140,9 @@ Apply returns a per-asset report: **created**, **skipped** (already present from
 | `gbp_connect` | Connect Google Business Profile | External; needs M5 |
 | `invite_owner` | Invite the business owner | |
 
-**The copy must say these are things you do elsewhere.** Every item except `form_notify` is external setup the platform cannot perform, and implying otherwise would be a lie the UI tells daily. `form_notify` gets one live touch: the panel shows a real count of forms with an empty notify address.
+**The copy must say these are things you do elsewhere.** Items marked `external` are setup the platform cannot perform, and implying otherwise would be a lie the UI tells daily.
+
+Two items are *not* external. `form_notify` gets one live touch: the panel shows a real count of forms with an empty notify address. And **as of M2, `invite_owner` is no longer external** — inviting the business owner is done in that company's Settings under Client access, not in the Clerk dashboard, so it kept a "Done outside BIS" badge that had become false.
 
 ---
 

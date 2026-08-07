@@ -10,9 +10,14 @@ describe("checklist catalogue", () => {
       expect(item.help.length).toBeGreaterThan(0);
       expect(typeof item.external).toBe("boolean");
     }
-    expect(CHECKLIST_CATALOGUE.filter((i) => i.external).length)
-      .toBe(CHECKLIST_CATALOGUE.length - 1); // only form_notify is internal
-    expect(CHECKLIST_CATALOGUE.find((i) => i.key === "form_notify")!.external).toBe(false);
+    // Assert the exact SET of internal items, not a count. A count plus a
+    // spot-check on form_notify would still pass if some other item were
+    // wrongly marked internal and form_notify external — the two errors
+    // cancel. These two are the only ones the platform performs itself:
+    // form_notify shows a live count of forms with no notify address, and
+    // invite_owner moved in-app in M2 (Settings, under Client access).
+    expect(CHECKLIST_CATALOGUE.filter((i) => !i.external).map((i) => i.key).sort())
+      .toEqual(["form_notify", "invite_owner"]);
   });
 
   it("merges catalogue items with stored state, including untouched ones", () => {

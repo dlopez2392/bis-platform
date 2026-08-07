@@ -22,8 +22,12 @@ export const CHECKLIST_CATALOGUE: CatalogueItem[] = [
     help: m["checklist.form_notify.help"], external: false },
   { key: "gbp_connect", title: m["checklist.gbp_connect.title"],
     help: m["checklist.gbp_connect.help"], external: true },
+  // Not external as of M2: inviting the owner is done in this company's
+  // Settings under Client access, not in the Clerk dashboard. Leaving
+  // external:true would keep the "Done outside BIS" badge on an item the
+  // platform now performs itself.
   { key: "invite_owner", title: m["checklist.invite_owner.title"],
-    help: m["checklist.invite_owner.help"], external: true },
+    help: m["checklist.invite_owner.help"], external: false },
 ];
 
 export type ChecklistEntry = {

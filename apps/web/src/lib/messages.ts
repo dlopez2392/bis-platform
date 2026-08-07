@@ -39,6 +39,7 @@ export const m = {
   "clientAccess.invite": "Invite",
   "clientAccess.inviteEmail": "Email address",
   "clientAccess.inviteSent": "Invitation sent",
+  "clientAccess.invitePending": "Invited",
   "clientAccess.inviteFailed": "Could not send the invitation",
   "clientAccess.disabledHint": "Turn client access on before inviting anyone.",
   "clientAccess.membersUnavailable": "Member list unavailable right now — the switch above still works.",
@@ -285,7 +286,7 @@ export const m = {
   "checklist.gbp_connect.title": "Connect Google Business Profile",
   "checklist.gbp_connect.help": "Done in Google. Review management arrives in M5.",
   "checklist.invite_owner.title": "Invite the business owner",
-  "checklist.invite_owner.help": "Done in Clerk until per-account roles exist.",
+  "checklist.invite_owner.help": "Done in this company's Settings, under Client access. Turn access on, then invite them by email.",
 
   "checklist.title": "Activation checklist",
   "checklist.body": "What's left before this company is live.",
