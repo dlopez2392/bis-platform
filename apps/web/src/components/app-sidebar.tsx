@@ -37,10 +37,16 @@ export function AppSidebar({
   accounts,
   defaultCollapsed,
   isAgency,
+  clientAccountName,
 }: {
   accounts: AccountOption[];
   defaultCollapsed: boolean;
   isAgency: boolean;
+  /** The client's own company name. Undefined for the agency, which gets the
+   *  switcher instead. Clients have no switcher — hiding it removed the only
+   *  place the account name appeared, so they could not tell which company
+   *  they were looking at, and the only branding on screen was the agency's. */
+  clientAccountName?: string;
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const pathname = usePathname();
@@ -117,6 +123,26 @@ export function AppSidebar({
           activeAccountId={activeAccountId}
           collapsed={collapsed}
         />
+      ) : clientAccountName ? (
+        // Same slot and spacing as the switcher, so the nav below sits where it
+        // does for the agency — but no border, hover or chevron, because there
+        // is nothing to switch to and it must not look clickable.
+        <div
+          className={cn(
+            "flex w-full items-center gap-2 px-2 py-2 text-sidebar-foreground",
+            collapsed && "justify-center px-0",
+          )}
+          title={collapsed ? clientAccountName : undefined}
+        >
+          <span className="flex size-7 shrink-0 items-center justify-center rounded bg-sidebar-accent/20 text-sidebar-accent">
+            <Building2 className="size-4" aria-hidden />
+          </span>
+          {collapsed ? null : (
+            <span className="block min-w-0 flex-1 truncate text-sm font-medium">
+              {clientAccountName}
+            </span>
+          )}
+        </div>
       ) : null}
 
       {isAgency && base ? (
