@@ -1,3 +1,5 @@
+import { cache } from "react";
+import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
@@ -5,6 +7,37 @@ import { serviceDb, listAccounts, getBranding, brandLogoUrl } from "@bis/db";
 import { resolveClientAccessState, type AppClaims } from "@/lib/auth";
 import { AppSidebar } from "@/components/app-sidebar";
 import { Topbar } from "@/components/topbar";
+
+// generateMetadata and the layout body below are separate invocations that
+// need the same two answers. React's cache() dedupes them within a request, so
+// branding a client's tab title costs no additional queries — without it, every
+// dashboard navigation would run the account lookup and the branding read
+// twice. For the agency, resolveClientAccessState returns on the role claim
+// alone and never reaches the database at all.
+const getClientState = cache(resolveClientAccessState);
+const getClientBranding = cache((accountId: string) => getBranding(serviceDb(), accountId));
+
+/**
+ * The browser tab is chrome too. It read "BIS Platform" for everyone, which
+ * put the agency's name in front of a client on every screen — the same leak
+ * this milestone removes from the sidebar, just in the one piece of the window
+ * the app does not draw itself.
+ *
+ * The agency's own tab is untouched, and a client with no branding falls back
+ * to their company name rather than to the agency's.
+ */
+export async function generateMetadata(): Promise<Metadata> {
+  const state = await getClientState();
+  if (state.status !== "ok") return {};
+  const branding = await getClientBranding(state.id);
+  return {
+    title: branding.brandName ?? state.name,
+    // The root layout's description names Bespoke Intelligent Solutions
+    // outright. Dropped rather than rewritten: a client's workspace has no
+    // business carrying the agency's marketing copy in its <head>.
+    description: null,
+  };
+}
 
 // Shared chrome for both audiences. Authorization for what's INSIDE an
 // account is handled by [accountId]/layout.tsx's requireAccountAccess; this
@@ -39,7 +72,7 @@ export default async function DashboardLayout({
     // level down. This layout runs first, so it was the one place that
     // distinction was getting lost before a client with a specific
     // account URL ever reached that more precise guard.
-    clientState = await resolveClientAccessState();
+    clientState = await getClientState();
     const state = clientState;
     if (state.status === "off") redirect("/no-access?reason=off");
     // Was `redirect("/")`, which lands on landing.noAccess.body — copy
@@ -59,7 +92,7 @@ export default async function DashboardLayout({
     // Only a client's chrome wears a brand. The agency's stays BIS on purpose,
     // so this read never happens for them — there is nothing to resolve.
     clientState?.status === "ok"
-      ? getBranding(serviceDb(), clientState.id)
+      ? getClientBranding(clientState.id)
       : Promise.resolve(null),
   ]);
   const collapsed = cookieStore.get("sidebar_collapsed")?.value === "true";

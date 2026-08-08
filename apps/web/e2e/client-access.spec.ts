@@ -111,6 +111,10 @@ test("a client sees only their own account, and nothing when access is off", asy
   // from live QA: "the only branding says BIS — the AGENCY's name".
   await expect(sidebar.getByText("BIS", { exact: true })).toHaveCount(0);
 
+  // Including the browser tab, which the app does not draw but does control,
+  // and which read "BIS Platform" on every screen a client ever saw.
+  await expect(page).toHaveTitle(fixture.brandName);
+
   // 4. Navigating to another account's URL redirects to their own
   // account, and the other account's data never renders. "Test Client
   // One" is the one account in this environment seeded with real,
