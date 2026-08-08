@@ -7,6 +7,7 @@ import { createCustomField, upsertCustomValue, setClientAccess, setBranding,
          getBranding, uploadBrandLogo, removeBrandLogo, serviceDb,
          type CustomFieldDef } from "@bis/db";
 import { sniffImageType, MAX_LOGO_BYTES } from "@/lib/branding/validate-logo";
+import { parseHexColor } from "@/lib/branding/color";
 import { m } from "@/lib/messages";
 
 export async function createFieldAction(accountId: string, formData: FormData): Promise<void> {
@@ -67,6 +68,16 @@ export async function setBrandingAction(
   const { userId } = await requireAgencyOnlyAccountAccess(accountId);
 
   const brandName = String(formData.get("brandName") ?? "").trim() || null;
+
+  // Empty clears it, exactly like brandName above. Anything present must be a
+  // real hex color: this string ends up in a CSS custom property on a page
+  // anonymous strangers load, so "looks close enough" is not a standard.
+  const rawColor = String(formData.get("brandColor") ?? "").trim();
+  const brandColor = rawColor === "" ? null : parseHexColor(rawColor);
+  if (rawColor !== "" && brandColor === null) {
+    return { ok: false, error: m["branding.badColor"] };
+  }
+
   const file = formData.get("logo");
 
   let brandLogoPath: string | undefined;
@@ -99,7 +110,7 @@ export async function setBrandingAction(
       serviceDb(), accountId,
       // brandLogoPath is omitted, not nulled, when no new file was sent:
       // editing the display name must not delete the logo already set.
-      brandLogoPath ? { brandName, brandLogoPath } : { brandName },
+      brandLogoPath ? { brandName, brandLogoPath, brandColor } : { brandName, brandColor },
       userId,
     );
   } catch (e) {

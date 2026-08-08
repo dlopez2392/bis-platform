@@ -57,6 +57,10 @@ export const m = {
   "branding.tooLarge": "That file is larger than 512 KB.",
   "branding.noLogo": "No logo set",
   "branding.currentLogo": "Current logo",
+  "branding.color": "Brand color",
+  "branding.colorHint": "Used for buttons and highlights on their lead forms and in their sidebar. Leave blank for the default.",
+  "branding.badColor": "Enter a color as a hex code, like #0f766e.",
+  "branding.colorPreview": "Preview",
 
   "common.save": "Save",
   "common.cancel": "Cancel",

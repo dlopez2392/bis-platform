@@ -141,6 +141,7 @@ export default async function CrmSettingsPage({
         />
         <BrandingPanel
           brandName={branding.brandName}
+          brandColor={branding.brandColor}
           logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
           action={boundSetBranding}
         />

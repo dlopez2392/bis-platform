@@ -10,10 +10,12 @@ import { m } from "@/lib/messages";
 
 export function BrandingPanel({
   brandName,
+  brandColor,
   logoUrl,
   action,
 }: {
   brandName: string | null;
+  brandColor: string | null;
   /** Already resolved server-side. The panel must not build this itself —
    *  brandLogoUrl lives in @bis/db, and importing that here would pull the
    *  service-role client into the browser bundle. */
@@ -23,6 +25,7 @@ export function BrandingPanel({
   // Bumped on success to reset the file input, so the chosen filename stops
   // being displayed next to a preview that has already moved on to it.
   const [fileKey, setFileKey] = useState(0);
+  const [color, setColor] = useState(brandColor ?? "");
 
   return (
     <Card>
@@ -62,6 +65,32 @@ export function BrandingPanel({
               accept="image/png,image/jpeg,image/webp"
             />
             <p className="text-xs text-muted-foreground">{m["branding.logoHint"]}</p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="brand-color">{m["branding.color"]}</Label>
+            <div className="flex items-center gap-2">
+              {/* The TEXT field is what submits. A bare <input type="color">
+                  always posts a value whether or not anyone touched it — that
+                  is exactly how every form in this database ended up storing an
+                  explicit violet nobody chose. The picker only writes here. */}
+              <Input
+                id="brand-color"
+                name="brandColor"
+                value={color}
+                onChange={(e) => setColor(e.target.value)}
+                placeholder="#0f766e"
+                className="font-mono"
+              />
+              <input
+                type="color"
+                aria-label={m["branding.color"]}
+                value={/^#[0-9a-fA-F]{6}$/.test(color) ? color : "#6d28d9"}
+                onChange={(e) => setColor(e.target.value)}
+                className="h-9 w-12 shrink-0 rounded-md border border-border bg-background p-1"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">{m["branding.colorHint"]}</p>
           </div>
 
           <div className="space-y-1.5">
