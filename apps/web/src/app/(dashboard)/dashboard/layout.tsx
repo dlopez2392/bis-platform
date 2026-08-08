@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
-import { serviceDb, listAccounts } from "@bis/db";
+import { serviceDb, listAccounts, getBranding, brandLogoUrl } from "@bis/db";
 import { resolveClientAccessState, type AppClaims } from "@/lib/auth";
 import { AppSidebar } from "@/components/app-sidebar";
 import { Topbar } from "@/components/topbar";
@@ -53,9 +53,14 @@ export default async function DashboardLayout({
     if (state.status === "none") redirect("/no-access?reason=none");
   }
 
-  const [accounts, cookieStore] = await Promise.all([
+  const [accounts, cookieStore, branding] = await Promise.all([
     isAgency ? listAccounts(serviceDb()) : Promise.resolve([]),
     cookies(),
+    // Only a client's chrome wears a brand. The agency's stays BIS on purpose,
+    // so this read never happens for them — there is nothing to resolve.
+    clientState?.status === "ok"
+      ? getBranding(serviceDb(), clientState.id)
+      : Promise.resolve(null),
   ]);
   const collapsed = cookieStore.get("sidebar_collapsed")?.value === "true";
 
@@ -66,6 +71,8 @@ export default async function DashboardLayout({
         defaultCollapsed={collapsed}
         isAgency={isAgency}
         clientAccountName={clientState?.status === "ok" ? clientState.name : undefined}
+        clientBrandName={branding?.brandName ?? undefined}
+        clientLogoUrl={branding?.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : undefined}
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar isAgency={isAgency} />
