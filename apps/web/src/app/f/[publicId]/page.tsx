@@ -52,7 +52,7 @@ export default async function PublicFormPage({
   // brand it needed exactly one query to succeed, and letting a decorative
   // second query send a stranger to f/error.tsx would mean a database blip
   // costs the client the customer — the one thing they are paying us for.
-  let branding: Branding = { brandName: null, brandLogoPath: null };
+  let branding: Branding = { brandName: null, brandLogoPath: null, brandColor: null };
   try {
     branding = await getBranding(serviceDb(), form.account_id);
   } catch (e) {
