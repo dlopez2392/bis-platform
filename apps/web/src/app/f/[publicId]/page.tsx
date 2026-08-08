@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { serviceDb, getPublishedFormByPublicId, getBranding, brandLogoUrl } from "@bis/db";
+import { serviceDb, getPublishedFormByPublicId, getBranding, brandLogoUrl,
+         type Branding } from "@bis/db";
 import { signRenderToken, parseAttribution } from "@/lib/forms/guards";
 import { publicStrings, normalizeLocale } from "@/lib/forms/public-strings";
 import { PublicForm } from "./public-form";
@@ -43,9 +44,20 @@ export default async function PublicFormPage({
   // A second read: getPublishedFormByPublicId selects from `forms` alone, so
   // the owning company's branding has to be fetched by the form's account_id.
   // serviceDb() as everywhere else on this route — the visitor is anonymous
-  // and has no token of their own. Throws on a query fault, like the rest of
-  // this file; an account with no branding simply reads as unbranded.
-  const branding = await getBranding(serviceDb(), form.account_id);
+  // and has no token of their own.
+  //
+  // Caught, unlike the form read above, because the two are not equally
+  // important. Without the form there is nothing to render; without the logo
+  // there is a form that still captures the lead. Before this page carried a
+  // brand it needed exactly one query to succeed, and letting a decorative
+  // second query send a stranger to f/error.tsx would mean a database blip
+  // costs the client the customer — the one thing they are paying us for.
+  let branding: Branding = { brandName: null, brandLogoPath: null };
+  try {
+    branding = await getBranding(serviceDb(), form.account_id);
+  } catch (e) {
+    console.error(`public form ${publicId}: branding read failed for account ${form.account_id}: ${String(e)}`);
+  }
 
   const flat = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {

@@ -95,8 +95,18 @@ export async function setBranding(
   if (input.brandLogoPath !== undefined) patch.brand_logo_path = input.brandLogoPath;
   if (Object.keys(patch).length === 0) return;
 
-  const { error } = await db.from("accounts").update(patch).eq("id", accountId);
+  // `.select("id")` so the update reports WHICH rows it touched. Without it,
+  // PostgREST returns no error and no rows for an account that does not exist,
+  // which is indistinguishable from success -- and the caller would report a
+  // save that changed nothing. Today an emit against a missing account_id
+  // happens to fail the events foreign key and throw, but that is incidental:
+  // events are audit data, and the day emitting becomes best-effort this goes
+  // silent. Two milestones on this project have already lost work to a write
+  // that reported success while matching nothing.
+  const { data, error } = await db.from("accounts")
+    .update(patch).eq("id", accountId).select("id");
   if (error) throw new Error(`setBranding failed: ${error.message}`);
+  if (!data?.length) throw new Error(`setBranding: no account ${accountId}`);
   await emit(db, accountId, "account.branding_updated", actorId, {});
 }
 
@@ -107,7 +117,12 @@ export async function setBranding(
  * surface already falls back, and the public lead form calls this for an
  * anonymous visitor -- 500ing a customer's page over a missing account would
  * be a worse failure than showing them the form without a logo. A genuine
- * query fault still throws, per the milestone's fail-loud rule.
+ * query fault still throws, per the milestone's fail-loud rule; callers on
+ * customer-facing paths catch it and degrade to unbranded.
+ *
+ * Deliberately the opposite of setBranding above, which now throws when it
+ * matches nothing. A read that finds nothing has a correct answer -- "not
+ * branded". A write that changes nothing does not.
  */
 export async function getBranding(
   db: SupabaseClient, accountId: string,

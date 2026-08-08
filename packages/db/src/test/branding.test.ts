@@ -75,4 +75,16 @@ describe("branding service", () => {
     expect(await getBranding(db, "00000000-0000-0000-0000-000000000000"))
       .toEqual({ brandName: null, brandLogoPath: null });
   });
+
+  // The write is deliberately the opposite of the read above. PostgREST
+  // returns no error and no rows when an update matches nothing, so without
+  // an explicit check this reported success while changing nothing. The
+  // events foreign key happens to catch it today, but events are audit data
+  // and that protection is incidental -- this pins the intended behaviour.
+  it("refuses to report success when the account does not exist", async () => {
+    const db = serviceDb();
+    await expect(
+      setBranding(db, "00000000-0000-0000-0000-000000000000", { brandName: "Ghost Co" }, "user_test"),
+    ).rejects.toThrow(/no account/);
+  });
 });

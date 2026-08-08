@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
-import { serviceDb, listAccounts, getBranding, brandLogoUrl } from "@bis/db";
+import { serviceDb, listAccounts, getBranding, brandLogoUrl, type Branding } from "@bis/db";
 import { resolveClientAccessState, type AppClaims } from "@/lib/auth";
 import { AppSidebar } from "@/components/app-sidebar";
 import { Topbar } from "@/components/topbar";
@@ -15,7 +15,26 @@ import { Topbar } from "@/components/topbar";
 // twice. For the agency, resolveClientAccessState returns on the role claim
 // alone and never reaches the database at all.
 const getClientState = cache(resolveClientAccessState);
-const getClientBranding = cache((accountId: string) => getBranding(serviceDb(), accountId));
+
+/**
+ * Branding is decoration, so a fault reading it must not cost the client their
+ * whole dashboard. Every surface downstream already renders an unbranded
+ * account correctly — that is the fallback the milestone was built around — so
+ * degrading to it is strictly better than an error page. Logged, never
+ * swallowed silently.
+ *
+ * This is not a retreat from the fail-loud rule: that rule is about never
+ * passing off missing data as real data. Nothing here is presented as branding
+ * that is not branding.
+ */
+const getClientBranding = cache(async (accountId: string): Promise<Branding> => {
+  try {
+    return await getBranding(serviceDb(), accountId);
+  } catch (e) {
+    console.error(`dashboard: branding read failed for account ${accountId}: ${String(e)}`);
+    return { brandName: null, brandLogoPath: null };
+  }
+});
 
 /**
  * The browser tab is chrome too. It read "BIS Platform" for everyone, which
