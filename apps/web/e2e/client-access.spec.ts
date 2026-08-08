@@ -32,6 +32,9 @@ type ClientFixture = {
   email: string;
   companyName: string;
   contactName: string;
+  brandName: string;
+  brandLogoPath: string;
+  formPublicId: string;
 };
 
 test("a client sees only their own account, and nothing when access is off", async ({ page }) => {
@@ -83,7 +86,30 @@ test("a client sees only their own account, and nothing when access is off", asy
   // could not identify the account. Every other assertion in this file is
   // about what should be ABSENT, which is exactly why that shipped unnoticed
   // — this is the one that fails if the name disappears again.
-  await expect(page.getByText(fixture.companyName, { exact: true })).toBeVisible();
+  //
+  // M3 replaces the assertion PR #8 added here rather than sitting beside it.
+  // That one checked for the *account* name; branding now takes precedence, so
+  // keeping both would leave two assertions contradicting each other about the
+  // same slot. brandName is a distinct string from companyName in the fixture
+  // precisely so this can tell which column the sidebar actually read.
+  const sidebar = page.locator("aside");
+  await expect(sidebar.getByText(fixture.brandName, { exact: true })).toBeVisible();
+  await expect(sidebar.getByText(fixture.companyName, { exact: true })).toHaveCount(0);
+
+  // The logo, and proof a customer's browser can actually load it — the src
+  // being right is not the same as the bytes being reachable. This is served
+  // from a public Storage bucket, so an anonymous GET is the real test.
+  const logo = sidebar.locator("img");
+  await expect(logo).toBeVisible();
+  const logoSrc = await logo.getAttribute("src");
+  expect(logoSrc).toContain(fixture.brandLogoPath);
+  const logoRes = await page.request.get(logoSrc!);
+  expect(logoRes.status()).toBe(200);
+
+  // The agency's own name must be gone from the client's chrome entirely.
+  // This is the milestone's headline promise, and the one thing danlo flagged
+  // from live QA: "the only branding says BIS — the AGENCY's name".
+  await expect(sidebar.getByText("BIS", { exact: true })).toHaveCount(0);
 
   // 4. Navigating to another account's URL redirects to their own
   // account, and the other account's data never renders. "Test Client
@@ -129,4 +155,37 @@ test("a client sees only their own account, and nothing when access is off", asy
   await page.goto(`/dashboard/accounts/${fixture.accountId}/dashboard`);
   await expect(page).toHaveURL(/\/no-access\?reason=off$/);
   await expect(page.getByText("Access has been turned off")).toBeVisible();
+});
+
+// The client's own CUSTOMERS — people with no relationship to BIS at all, and
+// the audience this milestone ultimately exists for.
+test.describe("the public lead form wears the client's brand", () => {
+  // Explicitly no storage state. The file-level test.use above signs in as the
+  // client fixture, and reusing that here would prove nothing about what an
+  // anonymous visitor sees — which is the only thing this page ever serves.
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test("an anonymous visitor sees the company's brand above the form", async ({ page }) => {
+    const fixture = JSON.parse(
+      readFileSync("e2e/.auth/client-fixture.json", "utf-8"),
+    ) as ClientFixture;
+
+    await page.goto(`/f/${fixture.formPublicId}`);
+
+    // The form itself still renders — otherwise a 404 would satisfy every
+    // "BIS is absent" check below without proving anything.
+    await expect(page.locator(".bis-form form")).toBeVisible();
+
+    await expect(page.getByText(fixture.brandName, { exact: true })).toBeVisible();
+    const logo = page.locator(".bis-form-brand-logo");
+    await expect(logo).toBeVisible();
+    const logoSrc = await logo.getAttribute("src");
+    expect(logoSrc).toContain(fixture.brandLogoPath);
+    expect((await page.request.get(logoSrc!)).status()).toBe(200);
+
+    // Neither the agency's name nor the agency's internal label for this
+    // company belongs on a page their customers see.
+    await expect(page.getByText("BIS", { exact: true })).toHaveCount(0);
+    await expect(page.getByText(fixture.companyName, { exact: true })).toHaveCount(0);
+  });
 });

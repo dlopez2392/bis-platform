@@ -2,7 +2,7 @@ import { test as teardown } from "@playwright/test";
 import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { clerkClient } from "@clerk/nextjs/server";
-import { serviceDb, setClientAccess } from "@bis/db";
+import { serviceDb, setClientAccess, removeBrandLogo } from "@bis/db";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -16,6 +16,9 @@ type ClientFixture = {
   email: string;
   companyName: string;
   contactName: string;
+  brandName?: string;
+  brandLogoPath?: string;
+  formPublicId?: string;
 };
 
 // The `teardown` project attached to "setup" (see playwright.config.ts).
@@ -48,10 +51,26 @@ teardown("delete the client-access e2e fixture", async () => {
     console.error(`e2e teardown: restore client_access_enabled failed: ${String(e)}`);
   }
 
+  // The uploaded logo lives in Storage, not Postgres, so deleting the accounts
+  // row leaves it behind. Nothing else references it once the row is gone, so
+  // a miss here is an object that no path can ever reach again.
+  if (fixture.brandLogoPath) {
+    try {
+      await removeBrandLogo(db, fixture.brandLogoPath);
+    } catch (e) {
+      console.error(`e2e teardown: failed to delete brand logo ${fixture.brandLogoPath}: ${String(e)}`);
+    }
+  }
+
   try {
     // contacts has no ON DELETE behavior on its account_id FK
     // (0003_crm_core.sql), so it must be cleared before the accounts row
-    // itself, same as events.
+    // itself, same as events. Forms are the same shape, and the fixture now
+    // publishes one for the public-form branding assertion -- without this the
+    // accounts delete below fails on the FK, which this project has already
+    // watched happen SILENTLY once.
+    await db.from("form_submissions").delete().eq("account_id", fixture.accountId);
+    await db.from("forms").delete().eq("account_id", fixture.accountId);
     await db.from("contacts").delete().eq("account_id", fixture.accountId);
     await db.from("events").delete().eq("account_id", fixture.accountId);
     const { error: delErr } = await db.from("accounts").delete().eq("id", fixture.accountId);

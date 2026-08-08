@@ -3,7 +3,8 @@ import { test as setup } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { clerkClient } from "@clerk/nextjs/server";
-import { serviceDb, createAccount, setClientAccess, createContact } from "@bis/db";
+import { serviceDb, createAccount, setClientAccess, createContact,
+         setBranding, uploadBrandLogo, createForm, updateForm } from "@bis/db";
 
 // Needed for the client-fixture setup below, which calls serviceDb() and
 // clerkClient() directly from the Playwright test runner process (not
@@ -28,6 +29,16 @@ const CLIENT_AUTH_FILE = "e2e/.auth/client-state.json";
 // project has no test filter, so this fixture is created on every
 // invocation regardless, and a filtered run used to leak it.
 const CLIENT_FIXTURE_FILE = "e2e/.auth/client-fixture.json";
+
+// A real 24x24 solid-blue PNG, built chunk by chunk with valid CRCs. Genuine
+// bytes on purpose: the upload path identifies format by decoded magic bytes,
+// so a renamed or hand-waved blob would be rejected exactly as an attacker's
+// would be. Big enough to have a real bounding box, so "the logo renders" is
+// an assertion a 1x1 pixel could not honestly support.
+const E2E_LOGO_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAIAAABvFaqvAAAAH0lEQVR4nGPQz39LFcQwatCoQaMGjRo0atCoQQNvEAA+eHju9d5YpgAAAABJRU5ErkJggg==",
+  "base64",
+);
 
 // Runs once before the real specs. Signs in as the one real Clerk user on
 // this dev instance (danlopez508@gmail.com) via a Backend-API-minted
@@ -143,10 +154,33 @@ setup("authenticate as client user (no app_role)", async ({ page }) => {
     db, accountId, { firstName: contactFirstName, lastName: contactLastName }, user.id,
   );
 
+  // Branding for M3. brandName is deliberately NOT derived from companyName:
+  // the whole point of the column is that what a client's customers see is a
+  // different string from the agency's internal label, and an assertion that
+  // cannot tell the two apart would pass even if the sidebar were still
+  // reading accounts.name.
+  const brandName = `Rio Roofing ${stamp}`;
+  const brandLogoPath = await uploadBrandLogo(db, accountId, E2E_LOGO_PNG, "image/png");
+  await setBranding(db, accountId, { brandName, brandLogoPath }, user.id);
+
+  // A published form on that account, so the public /f/<publicId> page has
+  // something to render the brand above. Published, not draft: the route 404s
+  // on anything else.
+  const { id: formId, publicId: formPublicId } = await createForm(
+    db, accountId,
+    {
+      name: `E2E Brand Form ${stamp}`,
+      fields: [{ key: "email", kind: "core.email", label: "Email", required: true }],
+    },
+    user.id,
+  );
+  await updateForm(db, accountId, formId, { status: "published" }, user.id);
+
   mkdirSync("e2e/.auth", { recursive: true });
   writeFileSync(
     CLIENT_FIXTURE_FILE,
-    JSON.stringify({ accountId, clerkOrgId: org.id, clerkUserId: user.id, email, companyName, contactName }),
+    JSON.stringify({ accountId, clerkOrgId: org.id, clerkUserId: user.id, email, companyName,
+                    contactName, brandName, brandLogoPath, formPublicId }),
   );
 
   // Same ticket-based sign-in as the agency flow above: clerk.signIn looks
