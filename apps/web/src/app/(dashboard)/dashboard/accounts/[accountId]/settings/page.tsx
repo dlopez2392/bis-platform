@@ -1,10 +1,13 @@
 import { Braces, SlidersHorizontal } from "lucide-react";
 import { clerkClient } from "@clerk/nextjs/server";
-import { serviceDb, listCustomFields, listCustomValues, listBlueprints, type CustomFieldDef } from "@bis/db";
+import { serviceDb, listCustomFields, listCustomValues, listBlueprints, getBranding,
+         brandLogoUrl, type CustomFieldDef } from "@bis/db";
 import { SubmitButton } from "../../submit-button";
-import { createFieldAction, upsertValueAction, setClientAccessAction, inviteClientAdminAction } from "./actions";
+import { createFieldAction, upsertValueAction, setClientAccessAction, inviteClientAdminAction,
+         setBrandingAction } from "./actions";
 import { SaveBlueprintDialog } from "./save-blueprint-dialog";
 import { ClientAccessPanel, type ClientAccessMember } from "./client-access-panel";
+import { BrandingPanel } from "./branding-panel";
 import { captureBlueprintAction } from "../../../blueprints/actions";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
@@ -38,7 +41,7 @@ export default async function CrmSettingsPage({
   const { accountId } = await params;
   await requireAgencyOnlyAccountAccess(accountId);
   const db = await dbForRequest();
-  const [fields, values, blueprints, account] = await Promise.all([
+  const [fields, values, blueprints, account, branding] = await Promise.all([
     listCustomFields(db, accountId, "contact"),
     listCustomValues(db, accountId),
     // Agency-wide, not account-scoped — this account is just where the
@@ -60,6 +63,7 @@ export default async function CrmSettingsPage({
         if (!data) throw new Error("settings: account not found");
         return data;
       }),
+    getBranding(db, accountId),
   ]);
 
   // No Clerk->Postgres member sync exists (see design doc §7) — Clerk is the
@@ -113,6 +117,8 @@ export default async function CrmSettingsPage({
   const boundUpsertValue = upsertValueAction.bind(null, accountId);
   const boundSetAccess = setClientAccessAction.bind(null, accountId);
   const boundInvite = inviteClientAdminAction.bind(null, accountId);
+  // accountId is bound here, server-side. It must never travel as a form field.
+  const boundSetBranding = setBrandingAction.bind(null, accountId);
   return (
     <>
       <PageHeader
@@ -132,6 +138,11 @@ export default async function CrmSettingsPage({
           membersUnavailable={membersUnavailable}
           setAccessAction={boundSetAccess}
           inviteAction={boundInvite}
+        />
+        <BrandingPanel
+          brandName={branding.brandName}
+          logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
+          action={boundSetBranding}
         />
         <div className="grid gap-6 lg:grid-cols-2">
           <Card>
