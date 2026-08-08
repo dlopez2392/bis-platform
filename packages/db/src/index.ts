@@ -29,3 +29,5 @@ export { captureBlueprint, listBlueprints, getBlueprint, blueprintKey, applyBlue
          type BlueprintBundle, type BlueprintRow, type BlueprintSummary, type ApplyReport } from "./blueprints";
 export { listChecklistState, setChecklistItem, addCustomChecklistItem,
          type ChecklistStateRow } from "./checklist";
+export { uploadBrandLogo, removeBrandLogo, brandLogoUrl, setBranding, getBranding,
+         type Branding } from "./branding";

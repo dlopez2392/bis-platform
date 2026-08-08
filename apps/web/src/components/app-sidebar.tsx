@@ -38,6 +38,8 @@ export function AppSidebar({
   defaultCollapsed,
   isAgency,
   clientAccountName,
+  clientBrandName,
+  clientLogoUrl,
 }: {
   accounts: AccountOption[];
   defaultCollapsed: boolean;
@@ -47,6 +49,13 @@ export function AppSidebar({
    *  place the account name appeared, so they could not tell which company
    *  they were looking at, and the only branding on screen was the agency's. */
   clientAccountName?: string;
+  /** What this company's own customers call it, when the agency has set it.
+   *  Takes precedence over clientAccountName, which stays the agency's
+   *  internal label ("Rio Roofing — trial") and is not for the client's eyes. */
+  clientBrandName?: string;
+  /** Already resolved server-side — see BrandingPanel for why this is a URL
+   *  and not a storage path. */
+  clientLogoUrl?: string;
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const pathname = usePathname();
@@ -90,6 +99,11 @@ export function AppSidebar({
   // account nav item is actually active.
   const backToAgency: NavItem = { href: "/dashboard/accounts", label: m["shell.backToAgency"], icon: ArrowLeft };
 
+  // What the identity block below calls this company. The brand name is what
+  // their own customers know them by; the account name is the agency's
+  // internal label and only stands in when no brand is set.
+  const clientLabel = clientBrandName ?? clientAccountName;
+
   return (
     <aside
       className={cn(
@@ -97,8 +111,23 @@ export function AppSidebar({
         collapsed ? "w-16" : "w-56",
       )}
     >
-      <div className={cn("flex items-center", collapsed ? "justify-center" : "justify-between")}>
-        {collapsed ? null : (
+      <div
+        className={cn(
+          "flex items-center",
+          collapsed ? "justify-center" : isAgency ? "justify-between" : "justify-end",
+        )}
+      >
+        {/* The agency's wordmark, and only the agency's. A client used to see
+            "BIS" here — the single most visible instance of the problem this
+            milestone exists to fix — with the company they were actually in
+            named in smaller type directly below it. Rather than print their
+            brand twice in a 224px column, the identity block below is the one
+            place a client's brand appears. It renders in both collapsed and
+            expanded states, which this row does not.
+
+            It was also a dead link for them: "/dashboard" is agency-only and
+            bounces a client straight back out. */}
+        {collapsed || !isAgency ? null : (
           <Link href="/dashboard" className="px-1 text-sm font-semibold text-white">
             {m["shell.brand"]}
           </Link>
@@ -123,7 +152,7 @@ export function AppSidebar({
           activeAccountId={activeAccountId}
           collapsed={collapsed}
         />
-      ) : clientAccountName ? (
+      ) : clientLabel ? (
         // Same slot and spacing as the switcher, so the nav below sits where it
         // does for the agency — but no border, hover or chevron, because there
         // is nothing to switch to and it must not look clickable.
@@ -132,14 +161,37 @@ export function AppSidebar({
             "flex w-full items-center gap-2 px-2 py-2 text-sidebar-foreground",
             collapsed && "justify-center px-0",
           )}
-          title={collapsed ? clientAccountName : undefined}
+          title={collapsed ? clientLabel : undefined}
         >
-          <span className="flex size-7 shrink-0 items-center justify-center rounded bg-sidebar-accent/20 text-sidebar-accent">
-            <Building2 className="size-4" aria-hidden />
+          <span
+            className={cn(
+              "flex size-7 shrink-0 items-center justify-center overflow-hidden rounded",
+              // A logo is artwork with its own background, usually drawn for a
+              // light one. Sitting it on a white chip keeps a dark-on-
+              // transparent mark legible against this dark sidebar; the tinted
+              // chip stays for the generic icon, which is drawn to suit it.
+              clientLogoUrl ? "bg-white p-0.5" : "bg-sidebar-accent/20 text-sidebar-accent",
+            )}
+          >
+            {clientLogoUrl ? (
+              // Plain <img>, as in BrandingPanel: a small asset already on a
+              // public CDN path. object-contain so a wide or tall logo is
+              // letterboxed into the chip rather than cropped or stretched.
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={clientLogoUrl}
+                // Decorative when the name is right beside it; the accessible
+                // name when collapsed hides that text.
+                alt={collapsed ? clientLabel : ""}
+                className="size-full object-contain"
+              />
+            ) : (
+              <Building2 className="size-4" aria-hidden />
+            )}
           </span>
           {collapsed ? null : (
             <span className="block min-w-0 flex-1 truncate text-sm font-medium">
-              {clientAccountName}
+              {clientLabel}
             </span>
           )}
         </div>
