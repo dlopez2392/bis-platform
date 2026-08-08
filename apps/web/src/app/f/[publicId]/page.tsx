@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { serviceDb, getPublishedFormByPublicId } from "@bis/db";
+import { serviceDb, getPublishedFormByPublicId, getBranding, brandLogoUrl } from "@bis/db";
 import { signRenderToken, parseAttribution } from "@/lib/forms/guards";
 import { publicStrings, normalizeLocale } from "@/lib/forms/public-strings";
 import { PublicForm } from "./public-form";
+import { FormBrand } from "./form-brand";
 import { submitFormAction } from "./actions";
 import "./form.css";
 
@@ -39,6 +40,13 @@ export default async function PublicFormPage({
   // A draft, an archived form and a token that never existed are the same 404.
   if (!form) notFound();
 
+  // A second read: getPublishedFormByPublicId selects from `forms` alone, so
+  // the owning company's branding has to be fetched by the form's account_id.
+  // serviceDb() as everywhere else on this route — the visitor is anonymous
+  // and has no token of their own. Throws on a query fault, like the rest of
+  // this file; an account with no branding simply reads as unbranded.
+  const branding = await getBranding(serviceDb(), form.account_id);
+
   const flat = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
     if (typeof value === "string") flat.set(key, value);
@@ -48,6 +56,10 @@ export default async function PublicFormPage({
 
   return (
     <main className={form.theme.mode === "dark" ? "dark" : undefined}>
+      <FormBrand
+        name={branding.brandName}
+        logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
+      />
       <PublicForm
         fields={form.fields}
         theme={form.theme}
