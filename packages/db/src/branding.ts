@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit } from "./events";
 
@@ -15,21 +16,49 @@ const EXT: Record<string, string> = {
 /**
  * Stores a brand logo. SERVER ONLY — takes the service-role client.
  *
- * The path is derived from accountId, never from the uploaded filename: a
- * client-controlled path is how an upload escapes its own prefix.
+ * The path is derived from accountId and the bytes themselves, never from the
+ * uploaded filename: a client-controlled path is how an upload escapes its own
+ * prefix.
+ *
+ * Content-addressed rather than a fixed `logo.png` per account, because this
+ * bucket is public and therefore CDN-cached. Overwriting a fixed path in place
+ * leaves the URL unchanged, so the edge keeps serving the OLD image — to the
+ * agency admin who just uploaded, and to the client's own customers on the
+ * public lead form, for as long as the cache entry lives. That is the same
+ * edge-cache behaviour that produced a false positive during this milestone's
+ * storage proof; here it would look like "the upload silently did nothing".
+ * A digest in the filename means a changed image is always a changed URL.
+ *
+ * Re-uploading identical bytes lands on the same path, which `upsert` makes
+ * idempotent. The caller is responsible for removing the account's previous
+ * object once the new path is committed — see removeBrandLogo.
  */
 export async function uploadBrandLogo(
   db: SupabaseClient, accountId: string, bytes: Uint8Array, contentType: string,
 ): Promise<string> {
   const ext = EXT[contentType];
   if (!ext) throw new Error(`uploadBrandLogo: unsupported content type ${contentType}`);
-  const path = `${accountId}/logo.${ext}`;
+  const digest = createHash("sha256").update(bytes).digest("hex").slice(0, 16);
+  const path = `${accountId}/logo-${digest}.${ext}`;
   const { error } = await db.storage.from(BUCKET).upload(path, bytes, {
     contentType,
-    upsert: true, // replacing a logo overwrites in place; no delete path in v0
+    upsert: true,
   });
   if (error) throw new Error(`uploadBrandLogo failed: ${error.message}`);
   return path;
+}
+
+/**
+ * Deletes one stored object. SERVER ONLY.
+ *
+ * Used to sweep up an account's previous logo after a replacement is safely
+ * recorded. Callers should treat a failure here as cosmetic — an orphaned
+ * object costs a few KB, whereas failing the save would lose the branding the
+ * user actually asked for.
+ */
+export async function removeBrandLogo(db: SupabaseClient, path: string): Promise<void> {
+  const { error } = await db.storage.from(BUCKET).remove([path]);
+  if (error) throw new Error(`removeBrandLogo failed: ${error.message}`);
 }
 
 export function brandLogoUrl(path: string): string {
