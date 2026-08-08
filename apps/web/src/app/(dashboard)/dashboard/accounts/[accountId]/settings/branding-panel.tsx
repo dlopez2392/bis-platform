@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SubmitButton } from "../../submit-button";
 import { m } from "@/lib/messages";
+import { FORM_ACCENT_FALLBACK } from "@/lib/branding/color";
 
 export function BrandingPanel({
   brandName,
@@ -85,7 +86,7 @@ export function BrandingPanel({
               <input
                 type="color"
                 aria-label={m["branding.color"]}
-                value={/^#[0-9a-fA-F]{6}$/.test(color) ? color : "#6d28d9"}
+                value={/^#[0-9a-fA-F]{6}$/.test(color) ? color : FORM_ACCENT_FALLBACK}
                 onChange={(e) => setColor(e.target.value)}
                 className="h-9 w-12 shrink-0 rounded-md border border-border bg-background p-1"
               />
