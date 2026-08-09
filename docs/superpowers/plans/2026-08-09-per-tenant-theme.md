@@ -324,15 +324,18 @@ git commit -m "fix(blueprints): stop copying a tenant's form theme across accoun
 
 **Files:**
 - Create: `apps/web/src/lib/branding/neutral-ramps.ts`, `apps/web/src/lib/branding/theme.ts`
-- Test: `apps/web/src/lib/branding/theme.test.ts`
+- Modify: `apps/web/src/lib/branding/color.ts` — add `ensureContrast` beside the private helpers it needs
+- Test: `apps/web/src/lib/branding/theme.test.ts`, `apps/web/src/lib/branding/color.test.ts`
 
 **Interfaces:**
-- Consumes: `parseHexColor`, `contrastRatio`, `readableTextOn`, `relativeLuminance` from `@/lib/branding/color`.
+- Consumes: `parseHexColor`, `contrastRatio`, `readableTextOn` from `@/lib/branding/color`.
 - Produces:
   - `NEUTRAL_RAMPS: Record<NeutralName, Ramp>`
-  - `ensureContrast(hex: string, against: string, target: number): string | null`
+  - `ensureContrast(hex: string, against: string, target: number): string | null` — **exported from `color.ts`, not `theme.ts`**
   - `deriveTheme(inputs: ThemeInputs, mode: "light" | "dark"): ResolvedTheme | null`
   - types `NeutralName`, `CornerName`, `TypeName`, `ModeName`, `ThemeInputs`, `ResolvedTheme`
+
+**Decision taken before execution:** `ensureContrast` lives in `color.ts`. It is colour math, and the four helpers it needs — `channels`, `rgbToHsl`, `hueToRgb`, `hslToHex` — are already private there. Copying them into `theme.ts` would duplicate a logic block verbatim. **Do not rewrite `lightenForSidebar` in terms of it**: that function's `0.95` lightness ceiling and upward-only walk are pinned by existing tests in `color.test.ts`, and re-expressing it is a behaviour change disguised as a cleanup. Leave it exactly as it is, directly above its own generalization, so the overlap is visible to the next reader.
 
 Every value below was verified numerically before this plan was written: all three ladders clear fg/bg at 16–17:1, muted text at 5.8–6.9:1 on card while staying quieter than the primary foreground, and sidebar text at over 12:1. **Do not retune these by eye** — the sweep in Step 5 is what holds them.
 
@@ -396,7 +399,7 @@ Create `apps/web/src/lib/branding/theme.test.ts`:
 import { describe, it, expect } from "vitest";
 import { contrastRatio } from "./color";
 import { NEUTRAL_RAMPS, type NeutralName } from "./neutral-ramps";
-import { deriveTheme, ensureContrast, type CornerName, type TypeName } from "./theme";
+import { deriveTheme, type CornerName, type TypeName } from "./theme";
 
 const NEUTRALS: NeutralName[] = ["warm", "cool", "slate"];
 const CORNERS: CornerName[] = ["sharp", "soft", "round"];
@@ -501,6 +504,11 @@ describe("deriveTheme", () => {
   });
 });
 
+```
+
+And append this block to the EXISTING `apps/web/src/lib/branding/color.test.ts`, since `ensureContrast` ships in `color.ts` (see the decision above). It needs `ensureContrast` added to that file's existing import from `./color`:
+
+```ts
 describe("ensureContrast", () => {
   it("lightens a dark colour on a dark surface", () => {
     const out = ensureContrast("#1e3a8a", "#111721", 3)!;
@@ -532,9 +540,50 @@ describe("ensureContrast", () => {
 Run: `pnpm --filter web test -- theme.test.ts`
 Expected: FAIL, `Failed to resolve import "./theme"`.
 
-- [ ] **Step 4: Write the derivation**
+- [ ] **Step 4: Add `ensureContrast` to `color.ts`**
 
-Create `apps/web/src/lib/branding/theme.ts`:
+Append to `apps/web/src/lib/branding/color.ts`, directly below `lightenForSidebar` so the two sit together. `lightenForSidebar` itself is **not** touched — its `LIGHTEN_CEILING` of 0.95 and upward-only walk are pinned by that file's existing tests, and re-expressing it in terms of this function would be a behaviour change wearing a cleanup's clothes:
+
+```ts
+const CONTRAST_STEP = 0.02;
+
+/**
+ * Walks lightness until `hex` clears `target` against `against`, preserving
+ * hue and saturation exactly — a dark navy becomes a lighter navy, never a
+ * more convenient hue.
+ *
+ * The general form of lightenForSidebar above, which does the same walk
+ * against one hardcoded background. It lives here rather than in theme.ts
+ * because the channel and HSL helpers it needs are already here, and copying
+ * them would duplicate a logic block verbatim.
+ *
+ * Tries the direction with more headroom first, then the other: a near-white
+ * brand on a light background has to DARKEN, and a single upward walk is
+ * exactly why an earlier draft reported pure white as unliftable.
+ *
+ * Returns null when neither direction reaches the target, so the caller can
+ * fall back to a default rather than ship something unreadable.
+ */
+export function ensureContrast(hex: string, against: string, target: number): string | null {
+  if (contrastRatio(hex, against) >= target) return hex;
+  const [h, s, start] = rgbToHsl(...channels(hex));
+  const directions = 1 - start >= start ? [1, -1] : [-1, 1];
+  for (const dir of directions) {
+    let l = start;
+    let out = hex;
+    for (let i = 0; i < 100 && contrastRatio(out, against) < target; i++) {
+      const next = l + dir * CONTRAST_STEP;
+      if (next > 1 || next < 0) break;
+      l = next;
+      out = hslToHex(h, s, l);
+    }
+    if (contrastRatio(out, against) >= target) return out;
+  }
+  return null;
+}
+```
+
+Then write the derivation. Create `apps/web/src/lib/branding/theme.ts`:
 
 ```ts
 /**
@@ -546,7 +595,7 @@ Create `apps/web/src/lib/branding/theme.ts`:
  * theme.test.ts is what makes "an unreadable screen is impossible" a fact
  * rather than an intention.
  */
-import { contrastRatio, parseHexColor, readableTextOn } from "./color";
+import { contrastRatio, ensureContrast, parseHexColor, readableTextOn } from "./color";
 import { NEUTRAL_RAMPS, SIDEBAR_FOREGROUND, type NeutralName } from "./neutral-ramps";
 
 export type { NeutralName };
@@ -593,82 +642,6 @@ const BIS = {
   light: { primary: "#7c3aed", accent: "#0891b2", ring: "#7c3aed", sidebarAccent: "#8b5cf6" },
   dark:  { primary: "#8b5cf6", accent: "#22d3ee", ring: "#8b5cf6", sidebarAccent: "#a78bfa" },
 } as const;
-
-const STEP = 0.02;
-
-function channels(hex: string): [number, number, number] {
-  const n = parseInt(hex.slice(1), 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-}
-
-function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
-  const rn = r / 255, gn = g / 255, bn = b / 255;
-  const max = Math.max(rn, gn, bn), min = Math.min(rn, gn, bn);
-  const l = (max + min) / 2;
-  const d = max - min;
-  if (d === 0) return [0, 0, l];
-  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-  const h =
-    max === rn ? ((gn - bn) / d + (gn < bn ? 6 : 0)) / 6
-    : max === gn ? ((bn - rn) / d + 2) / 6
-    : ((rn - gn) / d + 4) / 6;
-  return [h, s, l];
-}
-
-function hueToRgb(p: number, q: number, t: number): number {
-  if (t < 0) t += 1;
-  if (t > 1) t -= 1;
-  if (t < 1 / 6) return p + (q - p) * 6 * t;
-  if (t < 1 / 2) return q;
-  if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
-  return p;
-}
-
-function hslToHex(h: number, s: number, l: number): string {
-  let r: number, g: number, b: number;
-  if (s === 0) {
-    r = g = b = l;
-  } else {
-    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-    const p = 2 * l - q;
-    r = hueToRgb(p, q, h + 1 / 3);
-    g = hueToRgb(p, q, h);
-    b = hueToRgb(p, q, h - 1 / 3);
-  }
-  const to = (v: number) => Math.round(v * 255).toString(16).padStart(2, "0");
-  return `#${to(r)}${to(g)}${to(b)}`;
-}
-
-/**
- * Walks lightness until `hex` clears `target` against `against`, preserving
- * hue and saturation exactly — a dark navy becomes a lighter navy, never a
- * more convenient hue. This generalizes lightenForSidebar, which does the
- * same thing against one hardcoded background.
- *
- * Tries the direction with more headroom first, then the other: a near-white
- * brand on a light background has to DARKEN, and a single upward walk is why
- * an earlier draft of this function reported pure white as unliftable.
- *
- * Returns null when neither direction reaches the target, so the caller can
- * fall back to a BIS default rather than ship something unreadable.
- */
-export function ensureContrast(hex: string, against: string, target: number): string | null {
-  if (contrastRatio(hex, against) >= target) return hex;
-  const [h, s, start] = rgbToHsl(...channels(hex));
-  const directions = 1 - start >= start ? [1, -1] : [-1, 1];
-  for (const dir of directions) {
-    let l = start;
-    let out = hex;
-    for (let i = 0; i < 100 && contrastRatio(out, against) < target; i++) {
-      const next = l + dir * STEP;
-      if (next > 1 || next < 0) break;
-      l = next;
-      out = hslToHex(h, s, l);
-    }
-    if (contrastRatio(out, against) >= target) return out;
-  }
-  return null;
-}
 
 /**
  * Null means "emit nothing" — the shell then renders exactly the tokens
@@ -750,7 +723,7 @@ Temporarily change `mutedForeground: steps.mutedFg` to `mutedForeground: steps.b
 - [ ] **Step 7: Commit**
 
 ```bash
-git add apps/web/src/lib/branding/neutral-ramps.ts apps/web/src/lib/branding/theme.ts apps/web/src/lib/branding/theme.test.ts
+git add apps/web/src/lib/branding/neutral-ramps.ts apps/web/src/lib/branding/theme.ts apps/web/src/lib/branding/theme.test.ts apps/web/src/lib/branding/color.ts apps/web/src/lib/branding/color.test.ts
 git commit -m "feat(branding): derive a full token set from five inputs with contrast guaranteed"
 ```
 
@@ -1454,32 +1427,96 @@ import { themeStyle } from "@/lib/branding/theme-style";
   }, previewMode);
 ```
 
-Four radio groups, each a plain `<fieldset>` of native radios so an empty value is expressible and no extra primitive is needed. Neutral, shown once — repeat the shape for corners, typeface and mode with their own state setter, `name`, and label keys:
+**Decision taken before execution:** one local `RadioRow`, used four times, rather than four near-identical `<fieldset>` blocks. Native radios inside a `<fieldset>`, so an empty value stays expressible and no new UI primitive is needed. Define it in the same file, above `BrandingPanel`:
 
 ```tsx
-          <fieldset className="space-y-1.5">
-            <legend className="text-sm font-medium">{m["branding.neutral"]}</legend>
-            <div className="flex flex-wrap gap-3">
-              {([
-                ["", m["branding.themeDefault"]],
-                ["warm", m["branding.neutralWarm"]],
-                ["cool", m["branding.neutralCool"]],
-                ["slate", m["branding.neutralSlate"]],
-              ] as const).map(([value, label]) => (
-                <label key={value} className="flex items-center gap-1.5 text-sm">
-                  <input
-                    type="radio"
-                    name="brandNeutral"
-                    value={value}
-                    checked={neutral === value}
-                    onChange={() => setNeutral(value)}
-                  />
-                  {label}
-                </label>
-              ))}
-            </div>
-            <p className="text-xs text-muted-foreground">{m["branding.neutralHint"]}</p>
-          </fieldset>
+function RadioRow({
+  legend, name, value, onChange, options, hint,
+}: {
+  legend: string;
+  name: string;
+  value: string;
+  onChange: (next: string) => void;
+  /** "" is always first: it is how the operator clears the input again. */
+  options: readonly (readonly [string, string])[];
+  hint?: string;
+}) {
+  return (
+    <fieldset className="space-y-1.5">
+      <legend className="text-sm font-medium">{legend}</legend>
+      <div className="flex flex-wrap gap-3">
+        {options.map(([optionValue, label]) => (
+          <label key={optionValue} className="flex items-center gap-1.5 text-sm">
+            <input
+              type="radio"
+              name={name}
+              value={optionValue}
+              checked={value === optionValue}
+              onChange={() => onChange(optionValue)}
+            />
+            {label}
+          </label>
+        ))}
+      </div>
+      {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
+    </fieldset>
+  );
+}
+```
+
+Then four usages, after the colour field:
+
+```tsx
+          <RadioRow
+            legend={m["branding.neutral"]}
+            name="brandNeutral"
+            value={neutral}
+            onChange={setNeutral}
+            hint={m["branding.neutralHint"]}
+            options={[
+              ["", m["branding.themeDefault"]],
+              ["warm", m["branding.neutralWarm"]],
+              ["cool", m["branding.neutralCool"]],
+              ["slate", m["branding.neutralSlate"]],
+            ]}
+          />
+          <RadioRow
+            legend={m["branding.corners"]}
+            name="brandCorners"
+            value={corners}
+            onChange={setCorners}
+            options={[
+              ["", m["branding.themeDefault"]],
+              ["sharp", m["branding.cornersSharp"]],
+              ["soft", m["branding.cornersSoft"]],
+              ["round", m["branding.cornersRound"]],
+            ]}
+          />
+          <RadioRow
+            legend={m["branding.type"]}
+            name="brandType"
+            value={typeface}
+            onChange={setTypeface}
+            options={[
+              ["", m["branding.themeDefault"]],
+              ["geist", m["branding.typeGeist"]],
+              ["inter", m["branding.typeInter"]],
+              ["serif", m["branding.typeSerif"]],
+            ]}
+          />
+          <RadioRow
+            legend={m["branding.mode"]}
+            name="brandMode"
+            value={mode}
+            onChange={setMode}
+            hint={m["branding.modeHint"]}
+            options={[
+              ["", m["branding.themeDefault"]],
+              ["light", m["branding.modeLight"]],
+              ["dark", m["branding.modeDark"]],
+              ["follow", m["branding.modeFollow"]],
+            ]}
+          />
 ```
 
 Replace the whole preview block with the specimen. It keeps the two existing swatches — they are what proves the sidebar lightening — and adds real chrome around them:
