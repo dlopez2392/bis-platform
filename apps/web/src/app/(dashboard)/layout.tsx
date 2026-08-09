@@ -17,9 +17,20 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+// The two tenant-selectable faces carry `preload: false`, and that is the
+// whole point of declaring them here rather than assuming the browser is
+// clever. next/font/google defaults to `preload: true`, which emits a
+// <link rel="preload" as="font"> for EVERY family declared in the root
+// layout on EVERY route — measured on a production build, not assumed. Most
+// tenants use neither of these, so preloading both would have made every
+// visitor download two font files nothing on the page paints with. With
+// preload off they are still in the stylesheet and still fetched the moment
+// a tenant's `--font-sans` points at one; only the eager hint is dropped.
+// Geist stays preloaded because it is the default and is always painted.
 const inter = Inter({
   variable: "--font-inter",
   subsets: ["latin"],
+  preload: false,
 });
 
 // A serif that holds up at table-row sizes, not a display face. Swappable:
@@ -27,6 +38,7 @@ const inter = Inter({
 const sourceSerif = Source_Serif_4({
   variable: "--font-source-serif",
   subsets: ["latin"],
+  preload: false,
 });
 
 export const metadata: Metadata = {
