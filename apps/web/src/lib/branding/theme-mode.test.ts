@@ -30,6 +30,13 @@ describe("resolveThemeMode", () => {
     expect(resolveThemeMode("dark;position:fixed", "light")).toEqual({ serverMode: "light", providerDefault: "light" });
   });
 
+  // The two fall-throughs crossed. "system" is a plausible cookie value —
+  // next-themes uses that word — and it must not be mistaken for a mode the
+  // server can paint, while `follow` still has to reach the OS.
+  it("falls through an invalid cookie to follow's own answer", () => {
+    expect(resolveThemeMode("system", "follow")).toEqual({ serverMode: "light", providerDefault: "system" });
+  });
+
   it("names the cookie", () => {
     expect(THEME_COOKIE).toBe("bis-theme");
   });
