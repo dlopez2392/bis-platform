@@ -19,7 +19,13 @@ export const FORM_ACCENT_FALLBACK = "#6d28d9";
 export const SIDEBAR_BG = "#1e1b2e";
 /** WCAG 1.4.11 for non-text UI components, which is what these accents are. */
 const SIDEBAR_MIN_RATIO = 3;
-const LIGHTEN_STEP = 0.02;
+/**
+ * The per-iteration lightness step for every walk in this module —
+ * `lightenForSidebar`'s single-direction climb and `ensureContrast`'s
+ * two-direction search both used their own `0.02` constant; one value now
+ * serves both callers since neither's behaviour depends on the other's.
+ */
+const LIGHTNESS_STEP = 0.02;
 const LIGHTEN_CEILING = 0.95;
 
 /**
@@ -118,7 +124,7 @@ export function lightenForSidebar(hex: string): string {
   let l = startL;
   let out = hex;
   while (contrastRatio(out, SIDEBAR_BG) < SIDEBAR_MIN_RATIO && l < LIGHTEN_CEILING) {
-    l = Math.min(LIGHTEN_CEILING, l + LIGHTEN_STEP);
+    l = Math.min(LIGHTEN_CEILING, l + LIGHTNESS_STEP);
     out = hslToHex(h, s, l);
   }
   return out;
@@ -143,8 +149,6 @@ export function resolveSidebarAccent(brandColor: string | null): string | null {
   const c = parseHexColor(brandColor);
   return c ? lightenForSidebar(c) : null;
 }
-
-const CONTRAST_STEP = 0.02;
 
 /**
  * Walks lightness until `hex` clears `target` against `against`, preserving
@@ -171,7 +175,7 @@ export function ensureContrast(hex: string, against: string, target: number): st
     let l = start;
     let out = hex;
     for (let i = 0; i < 100 && contrastRatio(out, against) < target; i++) {
-      const next = l + dir * CONTRAST_STEP;
+      const next = l + dir * LIGHTNESS_STEP;
       if (next > 1 || next < 0) break;
       l = next;
       out = hslToHex(h, s, l);

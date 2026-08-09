@@ -61,11 +61,40 @@ const FONT: Record<TypeName, string> = {
  * saturation lifted by ensureContrast("#8b5cf6", "#ffffff", 4.5) — the same
  * mechanism used everywhere else in this module, so white text (matching
  * globals.css's own hardcoded --primary-foreground) clears 4.5:1 (4.660:1).
+ *
+ * dark.ring is ALSO #8452f5, not globals.css's literal #8b5cf6. Before the
+ * primary fix above, primary and ring were both #8b5cf6 — equal by
+ * construction. Lifting only primary would have left them silently
+ * divergent, so ring was moved to match. This is consistency, not a contrast
+ * repair: ring carries no text label, so 3:1 (which #8b5cf6 already clears)
+ * was never the problem. theme.test.ts reads globals.css's `.dark` block
+ * directly and asserts both tokens still equal these two constants.
  */
-const BIS = {
+export const BIS = {
   light: { primary: "#7c3aed", accent: "#0891b2", ring: "#7c3aed", sidebarAccent: "#8b5cf6" },
-  dark:  { primary: "#8452f5", accent: "#22d3ee", ring: "#8b5cf6", sidebarAccent: "#a78bfa" },
+  dark:  { primary: "#8452f5", accent: "#22d3ee", ring: "#8452f5", sidebarAccent: "#a78bfa" },
 } as const;
+
+/**
+ * A brand colour has two jobs on a button: be visible against the card it
+ * sits on, and carry a legible label. Lifting for the first alone is what let
+ * a 4.46:1 label through — the same failure globals.css's dark primary had.
+ */
+function liftForLabel(hex: string, surface: string): string | null {
+  const visible = ensureContrast(hex, surface, 3);
+  if (!visible) return null;
+  if (Math.max(contrastRatio(visible, "#ffffff"), contrastRatio(visible, "#111111")) >= 4.5) {
+    return visible;
+  }
+  // Push far enough for one of the two labels to work, then re-check that the
+  // result is still visible on the surface. Darkening is tried first because a
+  // white label is the one these mid-tone brands can usually reach.
+  for (const label of ["#ffffff", "#111111"] as const) {
+    const moved = ensureContrast(visible, label, 4.5);
+    if (moved && contrastRatio(moved, surface) >= 3) return moved;
+  }
+  return null;
+}
 
 /**
  * Null means "emit nothing" — the shell then renders exactly the tokens
@@ -87,10 +116,15 @@ export function deriveTheme(
   const bis = BIS[mode];
   const brand = parseHexColor(inputs.color);
 
-  // Each accent lands on a different surface, so each is lifted against the
-  // surface it actually sits on rather than against one representative.
-  const primary = (brand && ensureContrast(brand, steps.card, 3)) ?? bis.primary;
-  const accent = (brand && ensureContrast(brand, steps.card, 3)) ?? bis.accent;
+  // primary and accent both sit under a button label, so they share one
+  // brand-driven colour lifted by liftForLabel — visible on the card AND
+  // legible underneath white or near-black text — rather than each being
+  // lifted independently against the same surface for no reason. ring and
+  // sidebarAccent carry no label; they stay non-text UI at 3:1, each lifted
+  // separately against the surface it actually lands on.
+  const brandAccent = brand ? liftForLabel(brand, steps.card) : null;
+  const primary = brandAccent ?? bis.primary;
+  const accent = brandAccent ?? bis.accent;
   const sidebarAccent = (brand && ensureContrast(brand, ramp.sidebar, 3)) ?? bis.sidebarAccent;
 
   // The ring appears on both the page background and on cards, so clearing

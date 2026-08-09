@@ -74,7 +74,15 @@
 
   --border: #2a2a37;
   --input: #2a2a37;
-  --ring: #8b5cf6;
+
+  /* Was #8b5cf6, same as --primary above before that value was lifted for
+     label contrast. --ring carries no text label — 3:1 was never the
+     problem here, and #8b5cf6 already clears it — but it silently drifted
+     out of sync with --primary when only --primary moved. Kept equal again
+     for consistency, not a contrast repair. Keep it equal to
+     BIS.dark.ring in branding/theme.ts; branding/theme.test.ts reads this
+     file and asserts both stay in sync. */
+  --ring: #8452f5;
 
   --sidebar: #131120;
   --sidebar-foreground: #d4d4d8;

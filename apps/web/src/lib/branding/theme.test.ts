@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { contrastRatio } from "./color";
 import { NEUTRAL_RAMPS, type NeutralName } from "./neutral-ramps";
-import { deriveTheme, type CornerName, type TypeName } from "./theme";
+import { deriveTheme, BIS, type CornerName, type TypeName } from "./theme";
 
 const NEUTRALS: NeutralName[] = ["warm", "cool", "slate"];
 const CORNERS: CornerName[] = ["sharp", "soft", "round"];
@@ -11,7 +14,19 @@ const MODES = ["light", "dark"] as const;
 // Black and white are the interesting ones: an achromatic input can only move
 // along lightness, and white has to DARKEN on a light background while black
 // has to lighten. A one-directional walk passes the rest and fails these two.
-const ADVERSARIAL = [null, "#000000", "#ffffff", "#fde047", "#808080", "#1e3a8a", "#6d28d9"];
+//
+// #8b5cf6 and #068d1a are the dead luminance band (~0.183-0.200 relative
+// luminance): each clears 3:1 against a white card on its own, so a
+// derivation that only lifted for visibility (the pre-fix `ensureContrast`
+// path) would pass them straight through — and then fail on-primary here,
+// since neither white (4.46:1 / measured similarly for the green) nor
+// #111111 reaches 4.5:1 on either one. #8b5cf6 is the exact hex this bug was
+// found through (also globals.css's OLD, since-fixed, hardcoded dark
+// --primary — see BIS.dark's comment in theme.ts).
+const ADVERSARIAL = [
+  null, "#000000", "#ffffff", "#fde047", "#808080", "#1e3a8a", "#6d28d9",
+  "#8b5cf6", "#068d1a",
+];
 
 describe("deriveTheme", () => {
   it("returns null when nothing is set, so today's rendering is untouched", () => {
@@ -33,6 +48,35 @@ describe("deriveTheme", () => {
       { color: null, neutral: "warm", corners: null, type: null, mode: null }, "light",
     );
     expect(t?.background).toBe(NEUTRAL_RAMPS.warm.light.bg);
+  });
+
+  // The gate above was only ever exercised through `neutral`. Each of the
+  // other three flags has to engage the theme on its own too, or a tenant
+  // that sets only corners/type/mode would silently see no changes at all.
+  it("engages via corners alone", () => {
+    const t = deriveTheme(
+      { color: null, neutral: null, corners: "sharp", type: null, mode: null }, "light",
+    );
+    expect(t).not.toBeNull();
+    expect(t?.radius).toBe("0.125rem");
+  });
+
+  it("engages via type alone", () => {
+    const t = deriveTheme(
+      { color: null, neutral: null, corners: null, type: "inter", mode: null }, "light",
+    );
+    expect(t).not.toBeNull();
+    expect(t?.fontSans).toBe("var(--font-inter)");
+  });
+
+  it("engages via mode alone", () => {
+    const t = deriveTheme(
+      { color: null, neutral: null, corners: null, type: null, mode: "dark" }, "light",
+    );
+    expect(t).not.toBeNull();
+    // mode's only job here is to open the gate — neutral/corners/type still
+    // fall back to their defaults since none of them was set.
+    expect(t?.background).toBe(NEUTRAL_RAMPS.slate.light.bg);
   });
 
   it("keeps the sidebar dark in light mode", () => {
@@ -103,5 +147,33 @@ describe("deriveTheme", () => {
               expect(contrastRatio(t.mutedForeground, t.background), `muted quieter ${where}`)
                 .toBeLessThan(contrastRatio(t.foreground, t.background));
             }
+  });
+});
+
+// BIS.dark.primary and globals.css's `.dark { --primary: ... }` must stay
+// equal (same for ring) — theme.ts's own comment says so, but a comment
+// enforces nothing. This reads the live CSS file and checks it against the
+// constants actually used at derivation time, so the two cannot drift apart
+// again without a red test.
+describe("globals.css / BIS.dark parity", () => {
+  const cssPath = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../app/(dashboard)/globals.css",
+  );
+  const css = readFileSync(cssPath, "utf8");
+  const darkBlock = css.match(/\.dark\s*\{([^}]*)\}/)?.[1];
+
+  it("finds the .dark block", () => {
+    expect(darkBlock).toBeTruthy();
+  });
+
+  it("keeps --primary equal to BIS.dark.primary", () => {
+    const value = darkBlock?.match(/--primary:\s*(#[0-9a-fA-F]{6});/)?.[1];
+    expect(value?.toLowerCase()).toBe(BIS.dark.primary);
+  });
+
+  it("keeps --ring equal to BIS.dark.ring", () => {
+    const value = darkBlock?.match(/--ring:\s*(#[0-9a-fA-F]{6});/)?.[1];
+    expect(value?.toLowerCase()).toBe(BIS.dark.ring);
   });
 });
