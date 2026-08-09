@@ -143,3 +143,40 @@ export function resolveSidebarAccent(brandColor: string | null): string | null {
   const c = parseHexColor(brandColor);
   return c ? lightenForSidebar(c) : null;
 }
+
+const CONTRAST_STEP = 0.02;
+
+/**
+ * Walks lightness until `hex` clears `target` against `against`, preserving
+ * hue and saturation exactly — a dark navy becomes a lighter navy, never a
+ * more convenient hue.
+ *
+ * The general form of lightenForSidebar above, which does the same walk
+ * against one hardcoded background. It lives here rather than in theme.ts
+ * because the channel and HSL helpers it needs are already here, and copying
+ * them would duplicate a logic block verbatim.
+ *
+ * Tries the direction with more headroom first, then the other: a near-white
+ * brand on a light background has to DARKEN, and a single upward walk is
+ * exactly why an earlier draft reported pure white as unliftable.
+ *
+ * Returns null when neither direction reaches the target, so the caller can
+ * fall back to a default rather than ship something unreadable.
+ */
+export function ensureContrast(hex: string, against: string, target: number): string | null {
+  if (contrastRatio(hex, against) >= target) return hex;
+  const [h, s, start] = rgbToHsl(...channels(hex));
+  const directions = 1 - start >= start ? [1, -1] : [-1, 1];
+  for (const dir of directions) {
+    let l = start;
+    let out = hex;
+    for (let i = 0; i < 100 && contrastRatio(out, against) < target; i++) {
+      const next = l + dir * CONTRAST_STEP;
+      if (next > 1 || next < 0) break;
+      l = next;
+      out = hslToHex(h, s, l);
+    }
+    if (contrastRatio(out, against) >= target) return out;
+  }
+  return null;
+}
