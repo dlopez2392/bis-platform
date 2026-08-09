@@ -23,9 +23,15 @@ const MODES = ["light", "dark"] as const;
 // #111111 reaches 4.5:1 on either one. #8b5cf6 is the exact hex this bug was
 // found through (also globals.css's OLD, since-fixed, hardcoded dark
 // --primary — see BIS.dark's comment in theme.ts).
+// #cc986c is the worst case measured before primary was lifted against BOTH
+// card and background: on the light `cool` ramp it cleared 3:1 on the card
+// alone but landed at only 2.84:1 against the page background — a button
+// the old single-surface lift would have shipped. Kept alongside the
+// dead-luminance-band entries above, which cover a different failure mode
+// (visible but unable to carry either label).
 const ADVERSARIAL = [
   null, "#000000", "#ffffff", "#fde047", "#808080", "#1e3a8a", "#6d28d9",
-  "#8b5cf6", "#068d1a",
+  "#8b5cf6", "#068d1a", "#cc986c",
 ];
 
 describe("deriveTheme", () => {
@@ -137,11 +143,28 @@ describe("deriveTheme", () => {
               expect(contrastRatio(t.accentForeground, t.accent), `on accent ${where}`).toBeGreaterThanOrEqual(4.5);
               expect(contrastRatio(t.sidebarForeground, t.sidebar), `sidebar text ${where}`).toBeGreaterThanOrEqual(4.5);
 
+              // primary as text: text-primary links and the `link`
+              // Button/Badge variants render it directly on BOTH the card
+              // and the page background, so both are held to the 4.5:1 text
+              // floor — not 3:1, which is exactly what let a 2.84:1 button
+              // (#cc986c on the light `cool` background) through undetected
+              // before this fix.
+              expect(contrastRatio(t.primary, t.card), `primary on card ${where}`).toBeGreaterThanOrEqual(4.5);
+              expect(contrastRatio(t.primary, t.background), `primary on bg ${where}`).toBeGreaterThanOrEqual(4.5);
+
               // non-text UI
-              expect(contrastRatio(t.primary, t.card), `primary on card ${where}`).toBeGreaterThanOrEqual(3);
               expect(contrastRatio(t.ring, t.background), `ring on bg ${where}`).toBeGreaterThanOrEqual(3);
               expect(contrastRatio(t.ring, t.card), `ring on card ${where}`).toBeGreaterThanOrEqual(3);
               expect(contrastRatio(t.sidebarAccent, t.sidebar), `sidebar accent ${where}`).toBeGreaterThanOrEqual(3);
+
+              // accent is always the ramp's own subtle/fg pair now (never
+              // brand-derived — see theme.ts), so these aren't a WCAG floor:
+              // a "subtle" hover fill is deliberately close in lightness to
+              // its surroundings by design. They guard against accent
+              // silently collapsing into the exact surface it sits on/near,
+              // which would make a dropdown/command-palette hover a no-op.
+              expect(contrastRatio(t.accent, t.background), `accent vs bg ${where}`).toBeGreaterThan(1);
+              expect(contrastRatio(t.accent, t.card), `accent vs card ${where}`).toBeGreaterThan(1);
 
               // hierarchy: muted text must stay quieter than primary text
               expect(contrastRatio(t.mutedForeground, t.background), `muted quieter ${where}`)

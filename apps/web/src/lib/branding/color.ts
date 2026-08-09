@@ -160,9 +160,15 @@ export function resolveSidebarAccent(brandColor: string | null): string | null {
  * because the channel and HSL helpers it needs are already here, and copying
  * them would duplicate a logic block verbatim.
  *
- * Tries the direction with more headroom first, then the other: a near-white
- * brand on a light background has to DARKEN, and a single upward walk is
- * exactly why an earlier draft reported pure white as unliftable.
+ * Tries the direction that moves AWAY from `against`'s own lightness first,
+ * then the other: darken when `hex` starts at or below `against`'s
+ * lightness, lighten when it starts above — moving further from `against` is
+ * what increases contrast against it. (An earlier version tried whichever
+ * direction had more lightness headroom left, a heuristic with no relation
+ * to `against` at all; because both directions are always tried, it never
+ * produced a wrong final answer, only up to ~36 wasted iterations when
+ * `against` was near-white or near-black and the headroom guess picked
+ * backwards.)
  *
  * Returns null when neither direction reaches the target, so the caller can
  * fall back to a default rather than ship something unreadable.
@@ -170,7 +176,8 @@ export function resolveSidebarAccent(brandColor: string | null): string | null {
 export function ensureContrast(hex: string, against: string, target: number): string | null {
   if (contrastRatio(hex, against) >= target) return hex;
   const [h, s, start] = rgbToHsl(...channels(hex));
-  const directions = 1 - start >= start ? [1, -1] : [-1, 1];
+  const [, , againstLightness] = rgbToHsl(...channels(against));
+  const directions = start <= againstLightness ? [-1, 1] : [1, -1];
   for (const dir of directions) {
     let l = start;
     let out = hex;

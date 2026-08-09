@@ -52,48 +52,98 @@ const FONT: Record<TypeName, string> = {
 /**
  * What globals.css uses today, per mode. Every fallback lands here.
  *
- * dark.primary is NOT globals.css's literal #8b5cf6 (its .dark --primary).
- * That hex is only readable at 4.234:1 against white and 4.459:1 against
- * #111111 — under readableTextOn's own 4.5:1 floor no matter which text
- * colour it picks, which the sweep in theme.test.ts caught (27 failures, all
- * `mode=dark, color=null`, isolated to this one constant — verified nothing
- * else in the ramp or derivation was at fault). #8452f5 is the same hue and
- * saturation lifted by ensureContrast("#8b5cf6", "#ffffff", 4.5) — the same
- * mechanism used everywhere else in this module, so white text (matching
- * globals.css's own hardcoded --primary-foreground) clears 4.5:1 (4.660:1).
+ * dark.primary has been lifted from globals.css's original literal #8b5cf6
+ * TWICE, for two different failures.
  *
- * dark.ring is ALSO #8452f5, not globals.css's literal #8b5cf6. Before the
- * primary fix above, primary and ring were both #8b5cf6 — equal by
- * construction. Lifting only primary would have left them silently
- * divergent, so ring was moved to match. This is consistency, not a contrast
- * repair: ring carries no text label, so 3:1 (which #8b5cf6 already clears)
- * was never the problem. theme.test.ts reads globals.css's `.dark` block
- * directly and asserts both tokens still equal these two constants.
+ * First: #8b5cf6 paired with white at only 4.234:1, and with #111111 at
+ * 4.459:1 — under readableTextOn's own 4.5:1 floor no matter which text
+ * colour it picks. The very first sweep caught this (27 failures, all
+ * `mode=dark, color=null`). #8452f5 is the same hue and saturation lifted by
+ * ensureContrast("#8b5cf6", "#ffffff", 4.5), so white text clears 4.5:1
+ * (4.660:1).
+ *
+ * Second: once the sweep started asserting `primary` ITSELF — not just its
+ * label — at 4.5:1 against every ramp's card AND page background (a
+ * stronger bar than the 3:1 a plain button fill used to need; see
+ * `liftForLabel`), #8452f5 fell short there: only 3.71–4.10:1 against the
+ * three dark ramps' six card/background surfaces. #996ff7 is #8452f5's hue
+ * and saturation lifted against whichever of those six was hardest at each
+ * step, until all six clear 4.5:1 (4.919–5.429:1 measured). White no longer
+ * clears on it (3.517:1) — its label is now #111111 (5.369:1), matching
+ * both `readableTextOn(primary)` at derivation time and globals.css's own
+ * hardcoded `--primary-foreground` for `.dark`.
+ *
+ * dark.ring tracks dark.primary through both lifts, for the same reason each
+ * time: before the first lift, primary and ring were both #8b5cf6 — equal by
+ * construction. Lifting only primary would leave them silently divergent, so
+ * ring moved to match each time. This is consistency, not a contrast repair:
+ * ring carries no text label, so 3:1 (which #8b5cf6 already cleared) was
+ * never the problem, either time. theme.test.ts reads globals.css's `.dark`
+ * block directly and asserts both tokens still equal these two constants.
  */
 export const BIS = {
-  light: { primary: "#7c3aed", accent: "#0891b2", ring: "#7c3aed", sidebarAccent: "#8b5cf6" },
-  dark:  { primary: "#8452f5", accent: "#22d3ee", ring: "#8452f5", sidebarAccent: "#a78bfa" },
+  light: { primary: "#7c3aed", ring: "#7c3aed", sidebarAccent: "#8b5cf6" },
+  dark:  { primary: "#996ff7", ring: "#996ff7", sidebarAccent: "#a78bfa" },
 } as const;
 
 /**
- * A brand colour has two jobs on a button: be visible against the card it
- * sits on, and carry a legible label. Lifting for the first alone is what let
- * a 4.46:1 label through — the same failure globals.css's dark primary had.
+ * A brand colour used as `primary` has three jobs, not one: be visible
+ * against the card it sits on, be visible against the page background it
+ * ALSO sits on directly (`text-primary` is 12px link text and the `link`
+ * Button/Badge variants in 10 files — not only a button fill), and still
+ * carry a legible label when it is a button's fill. 4.5:1 as text subsumes
+ * the 3:1 a plain button background would need, so there is one threshold,
+ * not two.
+ *
+ * Lifting for visibility against the card alone is what let a 2.84:1 button
+ * through on the page background (`#cc986c` on the light `cool` ramp) — the
+ * card and the background are not interchangeable; see
+ * `liftUntilReadableOnBoth`. Lifting for visibility without the label check
+ * is what separately let a 4.46:1 label through — the same failure
+ * globals.css's dark primary had.
  */
-function liftForLabel(hex: string, surface: string): string | null {
-  const visible = ensureContrast(hex, surface, 3);
+function liftForLabel(hex: string, card: string, background: string): string | null {
+  const visible = liftUntilReadableOnBoth(hex, card, background);
   if (!visible) return null;
   if (Math.max(contrastRatio(visible, "#ffffff"), contrastRatio(visible, "#111111")) >= 4.5) {
     return visible;
   }
   // Push far enough for one of the two labels to work, then re-check that the
-  // result is still visible on the surface. Darkening is tried first because a
+  // result still clears BOTH surfaces. Darkening is tried first because a
   // white label is the one these mid-tone brands can usually reach.
   for (const label of ["#ffffff", "#111111"] as const) {
     const moved = ensureContrast(visible, label, 4.5);
-    if (moved && contrastRatio(moved, surface) >= 3) return moved;
+    if (moved && contrastRatio(moved, card) >= 4.5 && contrastRatio(moved, background) >= 4.5) {
+      return moved;
+    }
   }
   return null;
+}
+
+/**
+ * Lifts `hex` until it clears 4.5:1 against BOTH `card` and `background`.
+ *
+ * Which surface binds is never assumed, because it flips between modes: in
+ * light mode `background` is darker than `card`, so clearing white does not
+ * clear the page; in dark mode `card` is lighter than `background`, so
+ * `card` binds instead. Both surfaces sit on the same side of the brand
+ * colour though (darkening in light mode improves both at once; lightening
+ * in dark mode does too), so re-lifting against whichever of the two is
+ * currently the harder one converges in a couple of steps — bounded
+ * generously at 10 so a future ramp change can't spin this.
+ */
+function liftUntilReadableOnBoth(hex: string, card: string, background: string): string | null {
+  let out = hex;
+  for (let i = 0; i < 10; i++) {
+    const cardRatio = contrastRatio(out, card);
+    const bgRatio = contrastRatio(out, background);
+    if (cardRatio >= 4.5 && bgRatio >= 4.5) return out;
+    const harder = cardRatio <= bgRatio ? card : background;
+    const moved = ensureContrast(out, harder, 4.5);
+    if (!moved) return null;
+    out = moved;
+  }
+  return contrastRatio(out, card) >= 4.5 && contrastRatio(out, background) >= 4.5 ? out : null;
 }
 
 /**
@@ -116,15 +166,23 @@ export function deriveTheme(
   const bis = BIS[mode];
   const brand = parseHexColor(inputs.color);
 
-  // primary and accent both sit under a button label, so they share one
-  // brand-driven colour lifted by liftForLabel — visible on the card AND
-  // legible underneath white or near-black text — rather than each being
-  // lifted independently against the same surface for no reason. ring and
-  // sidebarAccent carry no label; they stay non-text UI at 3:1, each lifted
-  // separately against the surface it actually lands on.
-  const brandAccent = brand ? liftForLabel(brand, steps.card) : null;
-  const primary = brandAccent ?? bis.primary;
-  const accent = brandAccent ?? bis.accent;
+  // primary is the only token the brand still drives. It doubles as text
+  // (text-primary links, the `link` Button/Badge variants) on two different
+  // surfaces (card and page background), so it is lifted once against both
+  // by liftForLabel — 4.5:1 as text subsumes the 3:1 a plain button fill
+  // would need.
+  //
+  // accent is NOT brand-driven: it is the hover/focus surface for
+  // outline/ghost buttons, dropdown-menu items, command-palette items and
+  // badges — not an accent stripe — so filling it with the brand at full
+  // strength made every menu row loud. It takes the ramp's own subtle/fg
+  // pair instead, the same relationship secondary/secondaryForeground
+  // already has, which is what this token means everywhere else in shadcn.
+  //
+  // ring and sidebarAccent still carry no label; they stay non-text UI at
+  // 3:1, each lifted separately against the surface it actually lands on.
+  const primary = (brand && liftForLabel(brand, steps.card, steps.bg)) ?? bis.primary;
+  const accent = steps.subtle;
   const sidebarAccent = (brand && ensureContrast(brand, ramp.sidebar, 3)) ?? bis.sidebarAccent;
 
   // The ring appears on both the page background and on cards, so clearing
@@ -153,7 +211,10 @@ export function deriveTheme(
     // sweep asserts both ways.
     mutedForeground: steps.mutedFg,
     accent,
-    accentForeground: readableTextOn(accent),
+    // Not readableTextOn: accent is now always the ramp's own subtle step
+    // (never brand-driven, see above), and its foreground is the ramp's own
+    // fg — the exact pairing secondaryForeground/secondary already uses.
+    accentForeground: steps.fg,
     border: steps.border,
     input: steps.border,
     ring,

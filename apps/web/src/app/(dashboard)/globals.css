@@ -20,7 +20,11 @@
   --muted: #f1f1f5;
   --muted-foreground: #6b7280;
   --accent: #0891b2;
-  --accent-foreground: #ffffff;
+  /* Was #ffffff, which pairs with #0891b2 at 3.68:1 — below AA, live on
+     every dropdown item hover, outline button hover and command-palette
+     selection. Found by measurement, not by eye: readableTextOn("#0891b2")
+     independently picks #111111, which clears 5.13:1. */
+  --accent-foreground: #111111;
 
   --destructive: #dc2626;
   --success: #16a34a;
@@ -52,15 +56,19 @@
   --popover: #17171f;
   --popover-foreground: #ededed;
 
-  /* Was #8b5cf6, which pairs with white at 4.23:1 — below AA for the 14px
-     labels our buttons use, and no text colour clears 4.5:1 on it at all
-     (near-black reaches only 4.46:1). Found by the contrast sweep in
-     branding/theme.test.ts, not by review. This value is the same hue and
-     saturation lifted until white clears: 4.66:1. Keep it equal to
-     BIS.dark.primary in branding/theme.ts, so a dark tenant with no brand
-     colour and a dark agency view stay the same violet. */
-  --primary: #8452f5;
-  --primary-foreground: #ffffff;
+  /* Lifted twice. First from #8b5cf6 (paired with white at only 4.23:1,
+     below AA — found by the contrast sweep in branding/theme.test.ts, not
+     by review) to #8452f5, same hue/saturation, until white cleared 4.66:1.
+     Then, once the sweep started requiring `primary` itself — not just its
+     label — to clear 4.5:1 against every ramp's card AND page background,
+     #8452f5 fell short there too (3.71-4.10:1 against the three dark
+     ramps' surfaces), so it was lifted again to #996ff7, until all six
+     card/background pairs clear 4.5:1 (4.92-5.43:1 measured). Keep equal to
+     BIS.dark.primary in branding/theme.ts. */
+  --primary: #996ff7;
+  /* White no longer clears 4.5:1 on the lifted #996ff7 (3.52:1) —
+     readableTextOn("#996ff7") picks #111111 instead (5.37:1). */
+  --primary-foreground: #111111;
   --secondary: #232330;
   --secondary-foreground: #ededed;
   --muted: #232330;
@@ -75,14 +83,15 @@
   --border: #2a2a37;
   --input: #2a2a37;
 
-  /* Was #8b5cf6, same as --primary above before that value was lifted for
-     label contrast. --ring carries no text label — 3:1 was never the
-     problem here, and #8b5cf6 already clears it — but it silently drifted
-     out of sync with --primary when only --primary moved. Kept equal again
-     for consistency, not a contrast repair. Keep it equal to
-     BIS.dark.ring in branding/theme.ts; branding/theme.test.ts reads this
-     file and asserts both stay in sync. */
-  --ring: #8452f5;
+  /* Tracks --primary above through both of its lifts, for the same reason
+     each time: before the first lift, primary and ring were both #8b5cf6 —
+     equal by construction — and lifting only primary would leave them
+     silently divergent. --ring carries no text label, so 3:1 (which
+     #8b5cf6 already cleared) was never the problem, either time — this is
+     consistency, not a contrast repair. Keep it equal to BIS.dark.ring in
+     branding/theme.ts; branding/theme.test.ts reads this file and asserts
+     both stay in sync. */
+  --ring: #996ff7;
 
   --sidebar: #131120;
   --sidebar-foreground: #d4d4d8;
