@@ -8,7 +8,14 @@ const HEX = /^#[0-9a-f]{6}$/i;
 
 /** BIS violet. What an unbranded form has always used. */
 export const FORM_ACCENT_FALLBACK = "#6d28d9";
-/** --sidebar in globals.css. The sidebar is dark in BOTH themes by design. */
+/**
+ * The sidebar is dark in BOTH themes by design, but not equally dark:
+ * globals.css sets `--sidebar` to #1e1b2e in light and #131120 in dark.
+ * This pins the LIGHTER of the two deliberately — clearing 3:1 against it
+ * also clears it against the darker one, so one constant is safe for both.
+ * If `--sidebar` is ever retuned, re-check that this is still the lighter
+ * value or the guarantee below quietly stops holding.
+ */
 export const SIDEBAR_BG = "#1e1b2e";
 /** WCAG 1.4.11 for non-text UI components, which is what these accents are. */
 const SIDEBAR_MIN_RATIO = 3;

@@ -61,6 +61,8 @@ export const m = {
   "branding.colorHint": "Used for buttons and highlights on their lead forms and in their sidebar. Leave blank for the default.",
   "branding.badColor": "Enter a color as a hex code, like #0f766e.",
   "branding.colorPreview": "Preview",
+  "branding.previewSubmit": "Submit",
+  "branding.previewSidebar": "Sidebar",
 
   "common.save": "Save",
   "common.cancel": "Cancel",

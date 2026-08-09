@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useRef } from "react";
 import type { FormField, FormTheme } from "@bis/db";
 import { HONEYPOT_FIELD, RENDER_TOKEN_FIELD } from "@/lib/forms/guards";
+import { resolveFormRadius } from "@/lib/forms/safe-theme";
 import type { PublicStrings } from "@/lib/forms/public-strings";
 import { IDLE, type SubmitResult } from "./submit-result";
 
@@ -99,7 +100,11 @@ export function PublicForm({
         // docs/superpowers/specs/2026-08-08-brand-color-design.md section 2.1.
         "--accent": accent.accent,
         "--accent-foreground": accent.accentForeground,
-        "--radius": theme.radius ?? "0.5rem",
+        // Validated for the same reason the accent is: React does not strip
+        // `;` from a style value, so an unvalidated one appends arbitrary CSS
+        // declarations to this element — on a page the client's own customers
+        // load. theme.radius is raw stored JSONB and a client can write it.
+        "--radius": resolveFormRadius(theme.radius),
         background: theme.transparentBackground ? "transparent" : undefined,
       } as React.CSSProperties}
     >

@@ -85,22 +85,48 @@ path with **no validation at all** — `forms/actions.ts` stores
 `url(https://evil.example/pixel.png)` substitutes into `background:
 var(--accent)` and causes the customer's browser to issue that request.
 
-It is **not XSS**: per the CSS Variables spec a `var()` substitution that
-produces an invalid value makes the declaration invalid at computed-value time
-rather than re-parsing the declaration block, so no new declaration can be
-injected. It *is* an unvetted outbound request, a tracking vector, and a
-defacement vector on the least-trusted surface in the product. Note the forms
-editor is reachable by **client** users, not only the agency.
+**⚠️ CORRECTED 2026-08-08 after the whole-branch review.** This section
+originally argued the blast radius was limited because, per the CSS Variables
+spec, a `var()` substitution producing an invalid value makes the declaration
+invalid at computed-value time rather than re-parsing the declaration block.
+**That analyses the wrong layer and understated the impact.** These values are
+written by React into a serialized `style` **attribute**, and React does not
+strip `;` from a style value. Verified against this repo's React 19.2.4:
 
-Removing the `theme.accent` read (§9) retires that path. The replacement is
+```
+style={{ "--accent": "#6d28d9", "--radius": "0.5rem; background: url(https://evil.example/x.png)" }}
+→ <div style="--accent:#6d28d9;--radius:0.5rem; background: url(https://evil.example/x.png)">
+```
+
+So an unvalidated value yields **arbitrary additional CSS declarations on that
+element** — an outbound request via `url()`, or whole-page defacement via
+`position:fixed;inset:0`. The conclusion "not XSS" still holds, but for a
+different reason than originally given: React entity-escapes quotes, so nothing
+can break out of the attribute, and CSS cannot execute script. The real barrier
+is **attribute escaping**, not `var()` semantics.
+
+Reachability is not theoretical: migration 0006 grants `for all to
+authenticated` on a client's own forms, so a **client** user can write
+`forms.theme` directly with the publishable key and their own token — planting
+CSS on the page their own customers load. Blueprint capture copies `theme`
+verbatim and apply writes it into other accounts, so a tampered form can
+propagate across tenants through an agency action.
+
+Removing the `theme.accent` read (§9) retires that vector. The replacement is
 validated at both ends:
 
 - **On write** — `parseHexColor` at the Settings action boundary. Anything that
   is not exactly `#rrggbb` is rejected with `m["branding.badColor"]`.
 - **On read, again** — both render paths re-validate before emitting, via the
   §5.1 resolvers rather than each surface doing it by hand. A value that fails is
-  treated as unset. Nothing unvalidated reaches CSS, even if a row is written by
-  some future path that forgets to check.
+  treated as unset.
+
+**`theme.radius` is validated for the same reason**, by `resolveFormRadius` in
+`apps/web/src/lib/forms/safe-theme.ts` — it sits on the very next line of the
+same style object and was the one remaining unvalidated path into it. It accepts
+only a plain non-negative CSS length (`/^\d+(\.\d+)?(px|rem|em|%)$/`) and falls
+back to `0.5rem`; `calc()` and `var()` are refused because this module cannot
+prove they carry no smuggled declaration.
 
 Rejected examples the tests must cover: `red`, `#abc`, `#GGGGGG`, `rgb(0,0,0)`,
 `url(https://x)`, `#6d28d9; background:url(x)`, `var(--x)`, empty, whitespace.
