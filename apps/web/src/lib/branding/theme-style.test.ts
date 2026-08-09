@@ -22,6 +22,7 @@ describe("themeStyle", () => {
   it("does not re-emit the radii globals.css derives", () => {
     const style = themeStyle(theme) as Record<string, string>;
     expect(style["--radius-sm"]).toBeUndefined();
+    expect(style["--radius-md"]).toBeUndefined();
     expect(style["--radius-lg"]).toBeUndefined();
   });
 

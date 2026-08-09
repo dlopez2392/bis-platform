@@ -1,5 +1,26 @@
 import { describe, it, expect } from "vitest";
-import { resolveFormRadius, FORM_RADIUS_FALLBACK } from "./safe-theme";
+import { resolveCssLength, resolveFormRadius, FORM_RADIUS_FALLBACK } from "./safe-theme";
+
+// Covered only indirectly until now — through themeStyle, and through
+// resolveFormRadius's tests of the same regex under a different name. The
+// tenant theme calls this one directly with its own fallback, so it gets its
+// own tests rather than inheriting confidence from its sibling.
+describe("resolveCssLength", () => {
+  it("accepts the same plain lengths and returns the caller's fallback", () => {
+    for (const good of ["0.5rem", "8px", "1.25em", "50%", "0px"]) {
+      expect(resolveCssLength(good, "9rem")).toBe(good);
+    }
+    expect(resolveCssLength("", "9rem")).toBe("9rem");
+    expect(resolveCssLength(undefined, "9rem")).toBe("9rem");
+    expect(resolveCssLength(null, "9rem")).toBe("9rem");
+  });
+
+  it("refuses a smuggled declaration and CSS it cannot prove is safe", () => {
+    for (const bad of ["9px;position:fixed", "calc(1rem + 2px)", "var(--x)", "1", "-4px", "8 px"]) {
+      expect(resolveCssLength(bad, "9rem"), bad).toBe("9rem");
+    }
+  });
+});
 
 describe("resolveFormRadius", () => {
   it("accepts a plain CSS length with an allowed unit", () => {
