@@ -52,7 +52,14 @@
   --popover: #17171f;
   --popover-foreground: #ededed;
 
-  --primary: #8b5cf6;
+  /* Was #8b5cf6, which pairs with white at 4.23:1 — below AA for the 14px
+     labels our buttons use, and no text colour clears 4.5:1 on it at all
+     (near-black reaches only 4.46:1). Found by the contrast sweep in
+     branding/theme.test.ts, not by review. This value is the same hue and
+     saturation lifted until white clears: 4.66:1. Keep it equal to
+     BIS.dark.primary in branding/theme.ts, so a dark tenant with no brand
+     colour and a dark agency view stay the same violet. */
+  --primary: #8452f5;
   --primary-foreground: #ffffff;
   --secondary: #232330;
   --secondary-foreground: #ededed;
