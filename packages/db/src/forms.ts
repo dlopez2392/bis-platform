@@ -15,7 +15,6 @@ export type FormField = {
 };
 
 export type FormTheme = {
-  accent?: string;
   radius?: string;
   mode?: "light" | "dark" | "auto";
   transparentBackground?: boolean;

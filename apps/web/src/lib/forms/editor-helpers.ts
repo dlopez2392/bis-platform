@@ -34,18 +34,17 @@ export function defaultFieldKey(kind: string): string {
  * the editor and clicks Save. Do not "simplify" this back to a literal
  * object — that reintroduces the clobber.
  *
- * `accent` and `transparentBackground` are exactly what the editor manages,
- * so they are always taken from `edits`, including the ability to clear
- * `accent` (an `undefined` value is dropped by `JSON.stringify`, clearing it
- * in storage).
+ * `transparentBackground` is what the editor manages, so it is always taken
+ * from `edits`. `accent` used to live here too; the account's brand color
+ * replaced it (see the 2026-08-08 brand-color spec), so the editor no longer
+ * writes it and stored values are left in place, unread.
  */
 export function mergeFormTheme(
   stored: FormTheme | undefined,
-  edits: { accent: string | undefined; transparentBackground: boolean },
+  edits: { transparentBackground: boolean },
 ): FormTheme {
   return {
     ...(stored ?? {}),
-    accent: edits.accent,
     transparentBackground: edits.transparentBackground,
   };
 }

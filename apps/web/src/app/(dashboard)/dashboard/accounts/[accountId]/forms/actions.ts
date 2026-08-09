@@ -91,7 +91,6 @@ export async function saveFormAction(accountId: string, formData: FormData): Pro
   const current = await getForm(db, accountId, formId);
   if (!current) throw new Error("updateForm failed: form not found in account");
   const theme = mergeFormTheme(current.theme, {
-    accent: String(formData.get("accent") ?? "") || undefined,
     transparentBackground: formData.get("transparent") === "on",
   });
 

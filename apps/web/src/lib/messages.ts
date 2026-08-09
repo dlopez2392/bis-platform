@@ -237,7 +237,6 @@ export const m = {
   "forms.successModeRedirect": "Redirect to a URL",
   "forms.successMessage": "Success message",
   "forms.redirectUrl": "Redirect URL",
-  "forms.accent": "Accent color",
   "forms.transparent": "Transparent background",
   "forms.status": "Status",
   "forms.duplicateFieldKey": "A field with this key already exists on the form.",
