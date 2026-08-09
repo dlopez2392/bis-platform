@@ -10,7 +10,8 @@
 .bis-form-consent { flex-direction: row; align-items: flex-start; gap: 8px; }
 .bis-form-consent label { font-weight: 400; }
 .bis-form-submit {
-  padding: 9px 18px; font: inherit; font-weight: 500; color: #fff; cursor: pointer;
+  padding: 9px 18px; font: inherit; font-weight: 500; cursor: pointer;
+  color: var(--accent-foreground, #fff);
   background: var(--accent); border: 0; border-radius: var(--radius);
 }
 .bis-form-submit[disabled] { opacity: 0.6; cursor: default; }

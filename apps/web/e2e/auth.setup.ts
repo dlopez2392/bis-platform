@@ -161,7 +161,12 @@ setup("authenticate as client user (no app_role)", async ({ page }) => {
   // reading accounts.name.
   const brandName = `Rio Roofing ${stamp}`;
   const brandLogoPath = await uploadBrandLogo(db, accountId, E2E_LOGO_PNG, "image/png");
-  await setBranding(db, accountId, { brandName, brandLogoPath }, user.id);
+  // Chosen deliberately: it renders differently on the two surfaces — as
+  // itself on the public form, lightened to #3a62d4 on the dark sidebar
+  // (it scores only 1.62:1 there unlightened) — so this one fixture proves
+  // both resolveFormAccent and resolveSidebarAccent. See client-access.spec.ts.
+  const brandColor = "#1e3a8a";
+  await setBranding(db, accountId, { brandName, brandLogoPath, brandColor }, user.id);
 
   // A published form on that account, so the public /f/<publicId> page has
   // something to render the brand above. Published, not draft: the route 404s
@@ -180,7 +185,7 @@ setup("authenticate as client user (no app_role)", async ({ page }) => {
   writeFileSync(
     CLIENT_FIXTURE_FILE,
     JSON.stringify({ accountId, clerkOrgId: org.id, clerkUserId: user.id, email, companyName,
-                    contactName, brandName, brandLogoPath, formPublicId }),
+                    contactName, brandName, brandLogoPath, brandColor, formPublicId }),
   );
 
   // Same ticket-based sign-in as the agency flow above: clerk.signIn looks

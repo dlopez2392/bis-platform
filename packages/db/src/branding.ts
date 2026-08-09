@@ -67,10 +67,11 @@ export function brandLogoUrl(path: string): string {
   return `${base}/storage/v1/object/public/${BUCKET}/${path}`;
 }
 
-/** What a surface needs to wear a company's brand. Both null = not branded. */
+/** What a surface needs to wear a company's brand. All null = not branded. */
 export type Branding = {
   brandName: string | null;
   brandLogoPath: string | null;
+  brandColor: string | null;
 };
 
 /**
@@ -87,12 +88,13 @@ export type Branding = {
 export async function setBranding(
   db: SupabaseClient,
   accountId: string,
-  input: { brandName?: string | null; brandLogoPath?: string | null },
+  input: { brandName?: string | null; brandLogoPath?: string | null; brandColor?: string | null },
   actorId: string,
 ): Promise<void> {
   const patch: Record<string, string | null> = {};
   if (input.brandName !== undefined) patch.brand_name = input.brandName;
   if (input.brandLogoPath !== undefined) patch.brand_logo_path = input.brandLogoPath;
+  if (input.brandColor !== undefined) patch.brand_color = input.brandColor;
   if (Object.keys(patch).length === 0) return;
 
   // `.select("id")` so the update reports WHICH rows it touched. Without it,
@@ -128,10 +130,11 @@ export async function getBranding(
   db: SupabaseClient, accountId: string,
 ): Promise<Branding> {
   const { data, error } = await db.from("accounts")
-    .select("brand_name, brand_logo_path").eq("id", accountId).maybeSingle();
+    .select("brand_name, brand_logo_path, brand_color").eq("id", accountId).maybeSingle();
   if (error) throw new Error(`getBranding failed: ${error.message}`);
   return {
     brandName: data?.brand_name ?? null,
     brandLogoPath: data?.brand_logo_path ?? null,
+    brandColor: data?.brand_color ?? null,
   };
 }

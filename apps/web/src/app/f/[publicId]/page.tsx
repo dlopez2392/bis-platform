@@ -4,6 +4,7 @@ import { serviceDb, getPublishedFormByPublicId, getBranding, brandLogoUrl,
          type Branding } from "@bis/db";
 import { signRenderToken, parseAttribution } from "@/lib/forms/guards";
 import { publicStrings, normalizeLocale } from "@/lib/forms/public-strings";
+import { resolveFormAccent } from "@/lib/branding/color";
 import { PublicForm } from "./public-form";
 import { FormBrand } from "./form-brand";
 import { submitFormAction } from "./actions";
@@ -52,7 +53,7 @@ export default async function PublicFormPage({
   // brand it needed exactly one query to succeed, and letting a decorative
   // second query send a stranger to f/error.tsx would mean a database blip
   // costs the client the customer — the one thing they are paying us for.
-  let branding: Branding = { brandName: null, brandLogoPath: null };
+  let branding: Branding = { brandName: null, brandLogoPath: null, brandColor: null };
   try {
     branding = await getBranding(serviceDb(), form.account_id);
   } catch (e) {
@@ -65,6 +66,7 @@ export default async function PublicFormPage({
   }
 
   const locale = normalizeLocale(flat.get("locale") ?? undefined, form.locale_default);
+  const accent = resolveFormAccent(branding.brandColor);
 
   return (
     <main className={form.theme.mode === "dark" ? "dark" : undefined}>
@@ -75,6 +77,7 @@ export default async function PublicFormPage({
       <PublicForm
         fields={form.fields}
         theme={form.theme}
+        accent={accent}
         locale={locale}
         strings={publicStrings(locale)}
         // Signed server-side at render: a bot that rewrites this to look like a

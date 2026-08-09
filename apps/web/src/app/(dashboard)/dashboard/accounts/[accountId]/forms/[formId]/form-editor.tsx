@@ -199,11 +199,6 @@ export function FormEditor({
                      defaultValue={form.success_message ?? ""} />
             </div>
           )}
-          <div className="space-y-1.5">
-            <Label htmlFor="form-accent">{m["forms.accent"]}</Label>
-            <Input id="form-accent" name="accent" type="color"
-                   defaultValue={form.theme.accent ?? "#6d28d9"} className="h-9 w-20 p-1" />
-          </div>
           <label className="flex items-end gap-2 pb-1.5 text-sm">
             <Checkbox name="transparent" defaultChecked={form.theme.transparentBackground} />
             {m["forms.transparent"]}

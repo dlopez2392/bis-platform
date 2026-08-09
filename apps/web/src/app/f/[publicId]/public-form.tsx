@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useRef } from "react";
 import type { FormField, FormTheme } from "@bis/db";
 import { HONEYPOT_FIELD, RENDER_TOKEN_FIELD } from "@/lib/forms/guards";
+import { resolveFormRadius } from "@/lib/forms/safe-theme";
 import type { PublicStrings } from "@/lib/forms/public-strings";
 import { IDLE, type SubmitResult } from "./submit-result";
 
@@ -25,6 +26,7 @@ function isSafeRedirectUrl(url: string): boolean {
 export function PublicForm({
   fields,
   theme,
+  accent,
   locale,
   strings,
   renderToken,
@@ -33,6 +35,8 @@ export function PublicForm({
 }: {
   fields: FormField[];
   theme: FormTheme;
+  /** Resolved server-side from the account's brand color, already validated. */
+  accent: { accent: string; accentForeground: string };
   locale: "en" | "es";
   strings: PublicStrings;
   renderToken: string;
@@ -90,8 +94,17 @@ export function PublicForm({
       style={{
         // Themed rather than inheriting the host page: an iframe cannot read the
         // host's CSS, so these are what stop the form looking pasted in.
-        "--accent": theme.accent ?? "#6d28d9",
-        "--radius": theme.radius ?? "0.5rem",
+        //
+        // The accent comes from the ACCOUNT's brand color, not from
+        // theme.accent — a company has one brand, not one per form. See
+        // docs/superpowers/specs/2026-08-08-brand-color-design.md section 2.1.
+        "--accent": accent.accent,
+        "--accent-foreground": accent.accentForeground,
+        // Validated for the same reason the accent is: React does not strip
+        // `;` from a style value, so an unvalidated one appends arbitrary CSS
+        // declarations to this element — on a page the client's own customers
+        // load. theme.radius is raw stored JSONB and a client can write it.
+        "--radius": resolveFormRadius(theme.radius),
         background: theme.transparentBackground ? "transparent" : undefined,
       } as React.CSSProperties}
     >

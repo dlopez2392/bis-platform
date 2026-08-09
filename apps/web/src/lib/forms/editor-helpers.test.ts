@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import type { FormTheme } from "@bis/db";
 import { defaultFieldKey, mergeFormTheme, isValidFormFieldList } from "./editor-helpers";
 
 describe("defaultFieldKey", () => {
@@ -18,22 +19,23 @@ describe("defaultFieldKey", () => {
 });
 
 describe("mergeFormTheme", () => {
-  it("preserves mode and radius the editor does not manage", () => {
-    const stored = { mode: "dark" as const, radius: "1rem", accent: "#111111", transparentBackground: true };
-    const merged = mergeFormTheme(stored, { accent: "#222222", transparentBackground: false });
-    expect(merged).toEqual({ mode: "dark", radius: "1rem", accent: "#222222", transparentBackground: false });
+  it("keeps keys the editor does not manage", () => {
+    const stored = { mode: "dark" as const, radius: "1rem", transparentBackground: true };
+    const merged = mergeFormTheme(stored, { transparentBackground: false });
+    expect(merged).toEqual({ mode: "dark", radius: "1rem", transparentBackground: false });
   });
 
-  it("defaults to nothing extra when no theme was ever stored", () => {
-    const merged = mergeFormTheme(undefined, { accent: "#6d28d9", transparentBackground: false });
-    expect(merged).toEqual({ accent: "#6d28d9", transparentBackground: false });
+  it("handles an absent stored theme", () => {
+    const merged = mergeFormTheme(undefined, { transparentBackground: false });
+    expect(merged).toEqual({ transparentBackground: false });
   });
 
-  it("clears accent when the edit supplies undefined", () => {
-    const stored = { mode: "dark" as const, accent: "#111111", transparentBackground: false };
-    const merged = mergeFormTheme(stored, { accent: undefined, transparentBackground: false });
-    expect(merged.accent).toBeUndefined();
-    expect(merged.mode).toBe("dark");
+  // A form saved before the brand color replaced per-form accents keeps its
+  // stored accent key untouched. Nothing reads it; no migration rewrites it.
+  it("leaves a legacy accent key in place without reading it", () => {
+    const stored = { accent: "#111111", transparentBackground: false } as FormTheme;
+    const merged = mergeFormTheme(stored, { transparentBackground: true });
+    expect((merged as Record<string, unknown>).accent).toBe("#111111");
   });
 });
 

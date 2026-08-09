@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
 import { serviceDb, listAccounts, getBranding, brandLogoUrl, type Branding } from "@bis/db";
 import { resolveClientAccessState, type AppClaims } from "@/lib/auth";
+import { resolveSidebarAccent } from "@/lib/branding/color";
 import { AppSidebar } from "@/components/app-sidebar";
 import { Topbar } from "@/components/topbar";
 
@@ -32,7 +33,7 @@ const getClientBranding = cache(async (accountId: string): Promise<Branding> => 
     return await getBranding(serviceDb(), accountId);
   } catch (e) {
     console.error(`dashboard: branding read failed for account ${accountId}: ${String(e)}`);
-    return { brandName: null, brandLogoPath: null };
+    return { brandName: null, brandLogoPath: null, brandColor: null };
   }
 });
 
@@ -125,6 +126,7 @@ export default async function DashboardLayout({
         clientAccountName={clientState?.status === "ok" ? clientState.name : undefined}
         clientBrandName={branding?.brandName ?? undefined}
         clientLogoUrl={branding?.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : undefined}
+        clientAccentColor={resolveSidebarAccent(branding?.brandColor ?? null) ?? undefined}
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar isAgency={isAgency} />

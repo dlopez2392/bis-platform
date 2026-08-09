@@ -22,3 +22,14 @@ test("account switcher navigates into a company", async ({ page }) => {
   await first.click();
   await expect(page).toHaveURL(/\/dashboard\/accounts\/[^/]+\/contacts/);
 });
+
+// The agency's sidebar keeps the globals.css accent — brand colors are a
+// client-only override. client-access.spec.ts pins the branded case
+// (rgb(58, 98, 212), a lightened brand); this pins the no-op branch, which is
+// otherwise verified only by reading. Computed style, not a class name: a
+// class assertion passes whether or not the custom property was set.
+test("the agency sidebar keeps the default accent", async ({ page }) => {
+  await page.goto("/dashboard/accounts");
+  await expect(page.locator("aside nav span.bg-sidebar-accent").first())
+    .toHaveCSS("background-color", "rgb(139, 92, 246)"); // #8b5cf6
+});

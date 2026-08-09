@@ -13,6 +13,7 @@ describe("branding service", () => {
       expect(await getBranding(db, accountId)).toEqual({
         brandName: "Rio Roofing",
         brandLogoPath: `${accountId}/logo.png`,
+        brandColor: null,
       });
 
       const { data: ev } = await db.from("events").select("type, actor_type, actor_id")
@@ -36,6 +37,7 @@ describe("branding service", () => {
       expect(await getBranding(db, accountId)).toEqual({
         brandName: "Rio Roofing Co",
         brandLogoPath: `${accountId}/logo.png`,
+        brandColor: null,
       });
 
       // Spreading an optional variable that happens to be undefined is the
@@ -55,6 +57,7 @@ describe("branding service", () => {
       expect(await getBranding(db, accountId)).toEqual({
         brandName: "Rio Roofing",
         brandLogoPath: null,
+        brandColor: null,
       });
     });
   });
@@ -63,7 +66,9 @@ describe("branding service", () => {
     await withTestAccount(async (db, accountId) => {
       await setBranding(db, accountId, {}, "user_test");
 
-      expect(await getBranding(db, accountId)).toEqual({ brandName: null, brandLogoPath: null });
+      expect(await getBranding(db, accountId)).toEqual({
+        brandName: null, brandLogoPath: null, brandColor: null,
+      });
       const { count } = await db.from("events").select("id", { count: "exact", head: true })
         .eq("account_id", accountId).eq("type", "account.branding_updated");
       expect(count).toBe(0);
@@ -73,7 +78,7 @@ describe("branding service", () => {
   it("reads an account that does not exist as unbranded", async () => {
     const db = serviceDb();
     expect(await getBranding(db, "00000000-0000-0000-0000-000000000000"))
-      .toEqual({ brandName: null, brandLogoPath: null });
+      .toEqual({ brandName: null, brandLogoPath: null, brandColor: null });
   });
 
   // The write is deliberately the opposite of the read above. PostgREST
@@ -86,5 +91,26 @@ describe("branding service", () => {
     await expect(
       setBranding(db, "00000000-0000-0000-0000-000000000000", { brandName: "Ghost Co" }, "user_test"),
     ).rejects.toThrow(/no account/);
+  });
+
+  it("writes and reads brand_color", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await setBranding(db, accountId, { brandColor: "#1e3a8a" }, "user_test");
+      expect((await getBranding(db, accountId)).brandColor).toBe("#1e3a8a");
+    });
+  });
+
+  it("leaves brandColor alone when omitted, and clears it on explicit null", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await setBranding(db, accountId, { brandColor: "#1e3a8a" }, "user_test");
+
+      // Same load-bearing distinction as brandLogoPath: the Settings action
+      // omits fields it is not editing, and omission must not wipe them.
+      await setBranding(db, accountId, { brandName: "Rio Roofing" }, "user_test");
+      expect((await getBranding(db, accountId)).brandColor).toBe("#1e3a8a");
+
+      await setBranding(db, accountId, { brandColor: null }, "user_test");
+      expect((await getBranding(db, accountId)).brandColor).toBeNull();
+    });
   });
 });

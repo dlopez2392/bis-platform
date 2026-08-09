@@ -40,6 +40,7 @@ export function AppSidebar({
   clientAccountName,
   clientBrandName,
   clientLogoUrl,
+  clientAccentColor,
 }: {
   accounts: AccountOption[];
   defaultCollapsed: boolean;
@@ -56,6 +57,11 @@ export function AppSidebar({
   /** Already resolved server-side — see BrandingPanel for why this is a URL
    *  and not a storage path. */
   clientLogoUrl?: string;
+  /** Already lightened server-side to stay visible on the dark sidebar.
+   *  Undefined for the agency and for an unbranded client, both of which keep
+   *  the globals.css tokens — including their deliberate light/dark tuning,
+   *  which a flat override would discard. */
+  clientAccentColor?: string;
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const pathname = usePathname();
@@ -106,6 +112,9 @@ export function AppSidebar({
 
   return (
     <aside
+      style={clientAccentColor
+        ? ({ "--sidebar-accent": clientAccentColor } as React.CSSProperties)
+        : undefined}
       className={cn(
         "flex shrink-0 flex-col gap-3 bg-sidebar p-3 text-sidebar-foreground transition-[width] duration-200",
         collapsed ? "w-16" : "w-56",

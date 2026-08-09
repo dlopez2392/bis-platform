@@ -140,7 +140,12 @@ export default async function CrmSettingsPage({
           inviteAction={boundInvite}
         />
         <BrandingPanel
+          // Remount when the stored colour changes, so the panel's own state
+          // cannot carry one account's value into another's field on a
+          // client-side navigation between two settings pages.
+          key={branding.brandColor ?? ""}
           brandName={branding.brandName}
+          brandColor={branding.brandColor}
           logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
           action={boundSetBranding}
         />
