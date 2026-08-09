@@ -18,6 +18,7 @@ type ClientFixture = {
   contactName: string;
   brandName?: string;
   brandLogoPath?: string;
+  brandColor: string;
   formPublicId?: string;
 };
 

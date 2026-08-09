@@ -34,6 +34,7 @@ type ClientFixture = {
   contactName: string;
   brandName: string;
   brandLogoPath: string;
+  brandColor: string;
   formPublicId: string;
 };
 
@@ -105,6 +106,13 @@ test("a client sees only their own account, and nothing when access is off", asy
   expect(logoSrc).toContain(fixture.brandLogoPath);
   const logoRes = await page.request.get(logoSrc!);
   expect(logoRes.status()).toBe(200);
+
+  // Computed style, not a class name: a class assertion passes while the
+  // custom property is unset, which is exactly the failure being guarded.
+  // #1e3a8a scores 1.62:1 on the dark sidebar and is lightened to #3a62d4 to
+  // clear 3:1 — so this value ALSO proves the lightening ran.
+  await expect(sidebar.locator("nav span.bg-sidebar-accent").first())
+    .toHaveCSS("background-color", "rgb(58, 98, 212)");
 
   // The agency's own name must be gone from the client's chrome entirely.
   // This is the milestone's headline promise, and the one thing danlo flagged
@@ -186,6 +194,12 @@ test.describe("the public lead form wears the client's brand", () => {
     const logoSrc = await logo.getAttribute("src");
     expect(logoSrc).toContain(fixture.brandLogoPath);
     expect((await page.request.get(logoSrc!)).status()).toBe(200);
+
+    // The form shows the brand color as chosen, unlightened — the same value
+    // the sidebar had to lighten. One fixture, two resolvers, both proved.
+    const submit = page.locator(".bis-form-submit");
+    await expect(submit).toHaveCSS("background-color", "rgb(30, 58, 138)");
+    await expect(submit).toHaveCSS("color", "rgb(255, 255, 255)");
 
     // Neither the agency's name nor the agency's internal label for this
     // company belongs on a page their customers see.
