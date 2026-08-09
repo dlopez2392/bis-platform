@@ -25,6 +25,7 @@ function isSafeRedirectUrl(url: string): boolean {
 export function PublicForm({
   fields,
   theme,
+  accent,
   locale,
   strings,
   renderToken,
@@ -33,6 +34,8 @@ export function PublicForm({
 }: {
   fields: FormField[];
   theme: FormTheme;
+  /** Resolved server-side from the account's brand color, already validated. */
+  accent: { accent: string; accentForeground: string };
   locale: "en" | "es";
   strings: PublicStrings;
   renderToken: string;
@@ -90,7 +93,12 @@ export function PublicForm({
       style={{
         // Themed rather than inheriting the host page: an iframe cannot read the
         // host's CSS, so these are what stop the form looking pasted in.
-        "--accent": theme.accent ?? "#6d28d9",
+        //
+        // The accent comes from the ACCOUNT's brand color, not from
+        // theme.accent — a company has one brand, not one per form. See
+        // docs/superpowers/specs/2026-08-08-brand-color-design.md section 2.1.
+        "--accent": accent.accent,
+        "--accent-foreground": accent.accentForeground,
         "--radius": theme.radius ?? "0.5rem",
         background: theme.transparentBackground ? "transparent" : undefined,
       } as React.CSSProperties}
