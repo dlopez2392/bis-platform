@@ -29,3 +29,13 @@ export function resolveFormRadius(radius: string | undefined | null): string {
   const v = radius.trim();
   return CSS_LENGTH.test(v) ? v : FORM_RADIUS_FALLBACK;
 }
+
+/**
+ * The same rule resolveFormRadius applies, with the caller's fallback. Shared
+ * rather than reimplemented: one place decides what a safe CSS length is.
+ */
+export function resolveCssLength(value: string | undefined | null, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const v = value.trim();
+  return CSS_LENGTH.test(v) ? v : fallback;
+}
