@@ -6,6 +6,10 @@ import { auth } from "@clerk/nextjs/server";
 import { serviceDb, listAccounts, getBranding, brandLogoUrl, type Branding } from "@bis/db";
 import { resolveClientAccessState, type AppClaims } from "@/lib/auth";
 import { resolveSidebarAccent } from "@/lib/branding/color";
+import { deriveTheme } from "@/lib/branding/theme";
+import { themeStyle } from "@/lib/branding/theme-style";
+import { themeInputsFrom } from "@/lib/branding/tenant-theme";
+import { resolveThemeMode, THEME_COOKIE } from "@/lib/branding/theme-mode";
 import { AppSidebar } from "@/components/app-sidebar";
 import { Topbar } from "@/components/topbar";
 
@@ -120,8 +124,25 @@ export default async function DashboardLayout({
   ]);
   const collapsed = cookieStore.get("sidebar_collapsed")?.value === "true";
 
+  // The agency's chrome stays BIS. Not by a conditional inside the derivation
+  // -- by never having a theme to emit, so there is no branch to invert later.
+  const inputs = themeInputsFrom(branding);
+  const { serverMode } = resolveThemeMode(
+    cookieStore.get(THEME_COOKIE)?.value,
+    inputs.mode,
+  );
+  const theme = deriveTheme(inputs, serverMode);
+
   return (
-    <div className="flex min-h-screen">
+    <div
+      className="flex min-h-screen"
+      // A style ATTRIBUTE, not a generated stylesheet: tenant values in CSS
+      // text would lose React's entity-escaping, which is the only reason the
+      // finding in the brand-colour spec stops at "integrity" and not "XSS".
+      // data-tenant-theme is how e2e asserts both its presence for a themed
+      // client and its ABSENCE for the agency.
+      {...(theme ? { style: themeStyle(theme), "data-tenant-theme": "" } : {})}
+    >
       <AppSidebar
         accounts={accounts.map((a) => ({ id: a.id, name: a.name, timezone: a.timezone }))}
         defaultCollapsed={collapsed}
