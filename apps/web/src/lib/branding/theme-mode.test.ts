@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveThemeMode, THEME_COOKIE } from "./theme-mode";
+import { cookieModeToPersist, resolveThemeMode, THEME_COOKIE } from "./theme-mode";
 
 describe("resolveThemeMode", () => {
   it("lets the user's stored choice win over the tenant default", () => {
@@ -39,5 +39,31 @@ describe("resolveThemeMode", () => {
 
   it("names the cookie", () => {
     expect(THEME_COOKIE).toBe("bis-theme");
+  });
+});
+
+// This shipped broken once and an e2e fixture caught it: the sync effect wrote
+// the cookie for whatever next-themes resolved, on every route. /sign-in has no
+// tenant to ask, so it resolved "light" and wrote it before the user had even
+// signed in — and because the cookie outranks brand_mode, a company that chose
+// a dark default would never have seen one.
+describe("cookieModeToPersist", () => {
+  it("persists the OS answer only when the tenant asked to follow the device", () => {
+    expect(cookieModeToPersist("system", "dark")).toBe("dark");
+    expect(cookieModeToPersist("system", "light")).toBe("light");
+  });
+
+  // The destructive case. A tenant default is something the server re-reads on
+  // every request; copying it into the cookie makes it indistinguishable from a
+  // deliberate user choice and pins the tenant's own setting out of effect.
+  it("never echoes a tenant default back as if the user had chosen it", () => {
+    expect(cookieModeToPersist("dark", "dark")).toBeNull();
+    expect(cookieModeToPersist("light", "light")).toBeNull();
+  });
+
+  it("writes nothing before next-themes has resolved, or for a value it cannot use", () => {
+    expect(cookieModeToPersist(undefined, undefined)).toBeNull();
+    expect(cookieModeToPersist("system", undefined)).toBeNull();
+    expect(cookieModeToPersist("system", "system")).toBeNull();
   });
 });

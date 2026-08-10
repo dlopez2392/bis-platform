@@ -166,7 +166,13 @@ setup("authenticate as client user (no app_role)", async ({ page }) => {
   // (it scores only 1.62:1 there unlightened) — so this one fixture proves
   // both resolveFormAccent and resolveSidebarAccent. See client-access.spec.ts.
   const brandColor = "#1e3a8a";
-  await setBranding(db, accountId, { brandName, brandLogoPath, brandColor }, user.id);
+  await setBranding(db, accountId, {
+    brandName, brandLogoPath, brandColor,
+    // One fixture, both halves: a dark default proves the mode path, and
+    // #1e3a8a (already the fixture's colour, at 1.62:1 on a dark sidebar)
+    // proves the lift ran, exactly as it does for the sidebar accent today.
+    brandNeutral: "warm", brandCorners: "round", brandMode: "dark",
+  }, user.id);
 
   // A published form on that account, so the public /f/<publicId> page has
   // something to render the brand above. Published, not draft: the route 404s
