@@ -365,7 +365,13 @@ export async function applyBlueprint(
         // unique index, and an empty notify list means leads cannot be routed
         // to the account this blueprint was captured from.
         public_id: newPublicId(),
-        name: f.name, status: "draft", fields: f.fields, theme: f.theme,
+        name: f.name, status: "draft", fields: f.fields,
+        // NOT f.theme. Theme values are tenant-controlled CSS input that
+        // reaches a style attribute; carrying them across accounts is the same
+        // class of leak as cloning notify_emails, and it is how a hostile
+        // radius became reachable in the first place. A form applied from a
+        // blueprint inherits its own account's brand instead.
+        theme: {},
         // success_mode/success_message/redirect_url are deliberately NOT
         // cloned from the bundle, even though the bundle still carries them
         // (see BlueprintBundle's forms field). A redirect authored for the
