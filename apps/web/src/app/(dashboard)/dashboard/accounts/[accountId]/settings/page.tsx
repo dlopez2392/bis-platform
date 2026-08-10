@@ -140,10 +140,19 @@ export default async function CrmSettingsPage({
           inviteAction={boundInvite}
         />
         <BrandingPanel
-          // Remount when the stored colour changes, so the panel's own state
-          // cannot carry one account's value into another's field on a
-          // client-side navigation between two settings pages.
-          key={branding.brandColor ?? ""}
+          // Remount when the ACCOUNT changes, so the panel's own state cannot
+          // carry one account's values into another's fields on a client-side
+          // navigation between two settings pages.
+          //
+          // This used to key on the stored colour, which worked only while
+          // colour was the panel's single piece of state. It now holds five,
+          // and two accounts that both have no colour share the key "" — so
+          // navigating between them reused the component instance and carried
+          // account A's radio selections into account B's form, ready to be
+          // saved over B's real values. The account id is the actual invariant
+          // this panel belongs to; keying on a value it happens to display was
+          // always a proxy for it.
+          key={accountId}
           brandName={branding.brandName}
           brandColor={branding.brandColor}
           brandNeutral={branding.brandNeutral}

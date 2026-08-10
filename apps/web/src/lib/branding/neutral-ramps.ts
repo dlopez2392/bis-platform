@@ -9,7 +9,16 @@
  * there. A light-mode tenant with a light sidebar would silently move the
  * background the 3:1 accent guarantee is measured against.
  */
-export type NeutralName = "warm" | "cool" | "slate";
+/**
+ * The array is the source and the type is derived from it, not the other way
+ * round and not two hand-kept lists. The Settings action needs something it
+ * can call `.includes()` on to validate a form field, so both forms have to
+ * exist — and a duplicated literal list is a list that drifts. Adding a name
+ * here without adding its ladder below fails typecheck, because NEUTRAL_RAMPS
+ * is a Record over this type.
+ */
+export const NEUTRAL_NAMES = ["warm", "cool", "slate"] as const;
+export type NeutralName = (typeof NEUTRAL_NAMES)[number];
 
 export type RampSteps = {
   bg: string; card: string; subtle: string;

@@ -11,18 +11,26 @@ import { contrastRatio, ensureContrast, parseHexColor, readableTextOn } from "./
 import { NEUTRAL_RAMPS, SIDEBAR_FOREGROUND, type NeutralName } from "./neutral-ramps";
 
 export type { NeutralName };
-export type CornerName = "sharp" | "soft" | "round";
-export type TypeName = "geist" | "inter" | "serif";
-export type ModeName = "light" | "dark" | "follow";
 
 // The closed sets, as values rather than types: the Settings action needs
 // something it can call `.includes()` on to validate a form field, and the
 // database enforces the same four sets with check constraints. This exists so
 // a typo in the form returns a readable message instead of a Postgres error.
-export const NEUTRAL_NAMES = ["warm", "cool", "slate"] as const;
+//
+// Each type is DERIVED from its array rather than written beside it. They were
+// two hand-kept lists for one commit, which is one commit longer than a
+// duplicated literal set survives before drifting — and a name present in the
+// array but missing from the type would pass the action's validation and then
+// be refused by the database, which is the one failure mode this validation
+// exists to prevent. NEUTRAL_NAMES lives in neutral-ramps.ts beside the
+// ladders its members index.
+export { NEUTRAL_NAMES } from "./neutral-ramps";
 export const CORNER_NAMES = ["sharp", "soft", "round"] as const;
+export type CornerName = (typeof CORNER_NAMES)[number];
 export const TYPE_NAMES = ["geist", "inter", "serif"] as const;
+export type TypeName = (typeof TYPE_NAMES)[number];
 export const MODE_NAMES = ["light", "dark", "follow"] as const;
+export type ModeName = (typeof MODE_NAMES)[number];
 
 /**
  * The one decision behind every field on the Settings branding form: blank

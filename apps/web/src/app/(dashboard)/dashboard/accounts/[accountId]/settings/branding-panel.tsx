@@ -221,20 +221,26 @@ export function BrandingPanel({
           <div className="space-y-1.5">
             <div className="flex items-center gap-3">
               <p className="text-sm font-medium text-card-foreground">{m["branding.colorPreview"]}</p>
-              <div className="flex gap-2">
-                {(["light", "dark"] as const).map((pm) => (
-                  <button
-                    key={pm}
-                    type="button"
-                    onClick={() => setPreviewMode(pm)}
-                    className={`rounded-md border px-2 py-0.5 text-xs ${
-                      previewMode === pm ? "border-primary text-primary" : "border-border text-muted-foreground"
-                    }`}
-                  >
-                    {pm === "light" ? m["branding.previewLight"] : m["branding.previewDark"]}
-                  </button>
-                ))}
-              </div>
+              {/* Only shown when there is a derived theme to switch. With no
+                  theme the preview below is the two-swatch fallback, which has
+                  no light and dark form — a control that changes nothing is
+                  worse than no control, because it reads as broken. */}
+              {previewTheme ? (
+                <div className="flex gap-2">
+                  {(["light", "dark"] as const).map((pm) => (
+                    <button
+                      key={pm}
+                      type="button"
+                      onClick={() => setPreviewMode(pm)}
+                      className={`rounded-md border px-2 py-0.5 text-xs ${
+                        previewMode === pm ? "border-primary text-primary" : "border-border text-muted-foreground"
+                      }`}
+                    >
+                      {pm === "light" ? m["branding.previewLight"] : m["branding.previewDark"]}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
 
             {previewTheme ? (
