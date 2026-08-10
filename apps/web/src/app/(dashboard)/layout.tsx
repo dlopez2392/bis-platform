@@ -5,6 +5,7 @@ import { ClerkProvider } from "@clerk/nextjs";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { resolveThemeMode, THEME_COOKIE } from "@/lib/branding/theme-mode";
+import { getTenantThemeInputs } from "@/lib/branding/tenant-theme-reader";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -58,20 +59,29 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  // Only the cookie is read here, and `null` is passed for the tenant's own
-  // default: this layout also wraps /sign-in and /no-access, where there is no
-  // tenant to ask. A tenant's default reaches next-themes through the cookie
-  // the sync component writes on first resolve.
+  // This layout also wraps /sign-in and /no-access, where there is no tenant
+  // to ask -- and, same as the dashboard shell, no tenant for a signed-out
+  // caller or the agency either. getTenantThemeInputs (a shared,
+  // request-cached reader in lib/branding/tenant-theme-reader.ts) degrades to
+  // "no tenant" quietly in all four cases: it never throws and never
+  // redirects, so this layout gains no new failure mode and the redirects
+  // stay owned by dashboard/layout.tsx.
   //
-  // NOT YET TRUE, and deliberately so — the tenant half of this milestone is a
-  // later task: nothing calls resolveThemeMode with a real brand_mode yet, and
-  // no derived tokens are emitted anywhere. Once the dashboard shell resolves
-  // the same two facts through this same function, the tokens it emits and the
-  // class next-themes sets here will agree by construction. Until then this
-  // call decides one thing only: which class the document starts with.
-  const cookieStore = await cookies();
+  // The two layouts now resolve the SAME (cookie, brandMode) pair through the
+  // SAME resolveThemeMode: this one for the class next-themes puts on <html>,
+  // the dashboard shell for the tokens it paints. They cannot disagree except
+  // in the one documented case -- brand_mode "follow" with no cookie yet to
+  // override it, where the server paints light and hands next-themes "system"
+  // on purpose. For a /dashboard/* request the tenant read itself is not
+  // doubled: getTenantThemeInputs is cache()'d and the shell imports the same
+  // binding, so React dedupes the underlying account and branding reads to
+  // one each per request.
+  const [cookieStore, inputs] = await Promise.all([
+    cookies(),
+    getTenantThemeInputs(),
+  ]);
   const { providerDefault } = resolveThemeMode(
-    cookieStore.get(THEME_COOKIE)?.value, null,
+    cookieStore.get(THEME_COOKIE)?.value, inputs.mode,
   );
 
   return (
