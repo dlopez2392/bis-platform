@@ -8,6 +8,7 @@
  * into a browser bundle for the same reason.
  */
 import { cache } from "react";
+import { unstable_rethrow } from "next/navigation";
 import { cookies } from "next/headers";
 import { serviceDb, getBranding } from "@bis/db";
 import type { Branding } from "@bis/db";
@@ -70,6 +71,13 @@ export const getTenantThemeInputs = cache(async (): Promise<ThemeInputs> => {
     const branding = await getTenantBranding(state.id);
     return themeInputsFrom(branding);
   } catch (e) {
+    // Next's own control-flow errors travel as exceptions: the dynamic-usage
+    // bailout that `auth()` can raise while prerendering, plus redirect() and
+    // notFound(). Catching those turns framework signals into a silent
+    // "unbranded" answer. unstable_rethrow is the documented way to let them
+    // through while still degrading on a genuine fault -- and a genuine fault
+    // here must degrade, because the root layout renders /sign-in too.
+    unstable_rethrow(e);
     console.error(`tenant-theme: theme inputs read failed: ${String(e)}`);
     return themeInputsFrom(null);
   }
@@ -127,12 +135,17 @@ export type RequestTheme = {
  * tenant, light mode" rather than take either page down.
  */
 export const getRequestTheme = cache(async (): Promise<RequestTheme> => {
-  try {
-    const [cookieStore, inputs] = await Promise.all([cookies(), getTenantThemeInputs()]);
-    return { inputs, ...pickRequestThemeMode(cookieStore.get(THEME_COOKIE)?.value, inputs) };
-  } catch (e) {
-    console.error(`tenant-theme: request theme read failed: ${String(e)}`);
-    const inputs = themeInputsFrom(null);
-    return { inputs, ...pickRequestThemeMode(undefined, inputs) };
-  }
+  // No try/catch here, deliberately. `cookies()` THROWS BY DESIGN while Next
+  // is prerendering — that throw is how a route gets marked dynamic, not a
+  // failure — and an earlier version of this function wrapped it, swallowing
+  // a framework control-flow signal and printing
+  // "request theme read failed" on every build. The routes happened to stay
+  // dynamic anyway, which is exactly what makes that kind of bug survive a
+  // green build: it worked by accident, not by contract.
+  //
+  // Nothing here needs catching. getTenantThemeInputs already degrades to
+  // "no tenant" on a real fault of its own and re-throws Next's signals, and
+  // a cookie read has no failure mode of its own worth a fallback.
+  const [cookieStore, inputs] = await Promise.all([cookies(), getTenantThemeInputs()]);
+  return { inputs, ...pickRequestThemeMode(cookieStore.get(THEME_COOKIE)?.value, inputs) };
 });
