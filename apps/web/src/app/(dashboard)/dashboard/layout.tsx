@@ -5,23 +5,27 @@ import { auth } from "@clerk/nextjs/server";
 import { serviceDb, listAccounts, brandLogoUrl } from "@bis/db";
 import type { AppClaims } from "@/lib/auth";
 import { resolveSidebarAccent } from "@/lib/branding/color";
-import { deriveTheme } from "@/lib/branding/theme";
-import { themeStyle } from "@/lib/branding/theme-style";
-import { getTenantAccessState, getTenantBranding, getRequestTheme } from "@/lib/branding/tenant-theme-reader";
+import { getTenantAccessState, getTenantBranding } from "@/lib/branding/tenant-theme-reader";
 import { AppSidebar } from "@/components/app-sidebar";
 import { Topbar } from "@/components/topbar";
 
 // generateMetadata and the layout body below are separate invocations that
-// need the same answers the root layout now also needs for the very same
-// tenant -- getTenantAccessState, getTenantBranding, and getRequestTheme
-// (apps/web/src/lib/branding/tenant-theme-reader.ts) are the shared,
+// need the same answers the root layout also needs for the very same tenant
+// -- getTenantAccessState and getTenantBranding (in
+// apps/web/src/lib/branding/tenant-theme-reader.ts) are the shared,
 // request-cached readers both layouts import, so a /dashboard/* request
 // resolves the caller and reads their branding exactly once no matter how
-// many of these three call them. getRequestTheme is also the ONLY place
-// resolveThemeMode gets invoked for the request -- this file no longer calls
-// it directly, or reads the theme cookie itself. For the agency,
-// resolveClientAccessState returns on the role claim alone and never reaches
-// the database at all.
+// many of these two call them. The root layout also calls getRequestTheme
+// there -- the ONLY place resolveThemeMode gets invoked for the request, and
+// the ONLY place the derived token set is emitted, on <body>. This file has
+// no theme of its own to emit: it used to paint a themed div here, but
+// body's own CSS (globals.css's `background`/`color`/`font-family` on the
+// `body` selector) resolves custom properties against body's OWN values, not
+// a descendant's, so overriding them on a div inside body changed nothing --
+// and every Radix portal plus Sonner's Toaster mount straight into
+// document.body, outside that div, so they stayed unbranded too. For the
+// agency, resolveClientAccessState returns on the role claim alone and never
+// reaches the database at all.
 
 /**
  * The browser tab is chrome too. It read "BIS Platform" for everyone, which
@@ -92,7 +96,7 @@ export default async function DashboardLayout({
     if (state.status === "none") redirect("/no-access?reason=none");
   }
 
-  const [accounts, cookieStore, branding, requestTheme] = await Promise.all([
+  const [accounts, cookieStore, branding] = await Promise.all([
     isAgency ? listAccounts(serviceDb()) : Promise.resolve([]),
     cookies(),
     // Only a client's chrome wears a brand. The agency's stays BIS on purpose,
@@ -100,33 +104,11 @@ export default async function DashboardLayout({
     clientState?.status === "ok"
       ? getTenantBranding(clientState.id)
       : Promise.resolve(null),
-    // Same tenant, same reader the root layout used to pick the class it put
-    // on <html> before this component ever ran -- and the same resolved mode,
-    // not just the same inputs: this is the one place resolveThemeMode gets
-    // invoked for the request, and both layouts now go through it instead of
-    // each holding their own call site. Cached: this reuses the exact
-    // getTenantAccessState()/getTenantBranding(id) promises already resolved
-    // above (and, for a /dashboard/* request, already resolved once more by
-    // the root layout), so this line costs no additional query.
-    getRequestTheme(),
   ]);
   const collapsed = cookieStore.get("sidebar_collapsed")?.value === "true";
 
-  const { inputs, serverMode } = requestTheme;
-  // The agency's chrome stays BIS. Not by a conditional inside the derivation
-  // -- by never having a theme to emit, so there is no branch to invert later.
-  const theme = deriveTheme(inputs, serverMode);
-
   return (
-    <div
-      className="flex min-h-screen"
-      // A style ATTRIBUTE, not a generated stylesheet: tenant values in CSS
-      // text would lose React's entity-escaping, which is the only reason the
-      // finding in the brand-colour spec stops at "integrity" and not "XSS".
-      // data-tenant-theme is how e2e asserts both its presence for a themed
-      // client and its ABSENCE for the agency.
-      {...(theme ? { style: themeStyle(theme), "data-tenant-theme": "" } : {})}
-    >
+    <div className="flex min-h-screen">
       <AppSidebar
         accounts={accounts.map((a) => ({ id: a.id, name: a.name, timezone: a.timezone }))}
         defaultCollapsed={collapsed}

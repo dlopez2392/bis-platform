@@ -3,6 +3,8 @@ import { Geist, Geist_Mono, Inter, Source_Serif_4 } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
+import { deriveTheme } from "@/lib/branding/theme";
+import { themeStyle } from "@/lib/branding/theme-style";
 import { getRequestTheme } from "@/lib/branding/tenant-theme-reader";
 import "./globals.css";
 
@@ -67,15 +69,18 @@ export default async function RootLayout({
   //
   // This is the ONLY place either layout resolves a theme mode now: this
   // layout takes `providerDefault` for the class next-themes puts on <html>,
-  // the dashboard shell takes `serverMode` from the exact same call for the
-  // tokens it paints. They cannot disagree except in the one documented case
+  // and (below) `serverMode` from the exact same call to derive the tokens it
+  // now also paints. They cannot disagree except in the one documented case
   // -- brand_mode "follow" with no cookie yet to override it, where the
   // server paints light and hands next-themes "system" on purpose. For a
   // /dashboard/* request the tenant read itself is not doubled:
-  // getRequestTheme is cache()'d and the shell imports the same binding, so
-  // React dedupes the underlying account, branding, and cookie reads to one
-  // each per request.
-  const { providerDefault } = await getRequestTheme();
+  // getRequestTheme is cache()'d and the dashboard shell imports the same
+  // binding, so React dedupes the underlying account, branding, and cookie
+  // reads to one each per request.
+  const { inputs, serverMode, providerDefault } = await getRequestTheme();
+  // The agency's chrome stays BIS. Not by a conditional inside the derivation
+  // -- by never having a theme to emit, so there is no branch to invert later.
+  const theme = deriveTheme(inputs, serverMode);
 
   return (
     <ClerkProvider>
@@ -84,7 +89,30 @@ export default async function RootLayout({
         suppressHydrationWarning
         className={`${geistSans.variable} ${geistMono.variable} ${inter.variable} ${sourceSerif.variable} h-full antialiased`}
       >
-        <body suppressHydrationWarning className="min-h-full flex flex-col">
+        <body
+          suppressHydrationWarning
+          className="min-h-full flex flex-col"
+          // Emitted HERE, on <body>, and not on a themed div further down the
+          // tree (where it lived until this fix). globals.css declares
+          // `background`/`color`/`font-family` directly on the `body`
+          // selector, which resolves custom properties against body's OWN
+          // `:root` values -- overriding those properties on a descendant
+          // changes nothing about body's rendering, so brand_type never
+          // applied and the page canvas + base text stayed BIS underneath a
+          // tenant's warm cards. Radix's Portal (dropdown-menu, dialog,
+          // popover, select, tooltip, sheet) and Sonner's Toaster below also
+          // mount into document.body, OUTSIDE that old div -- so every
+          // portalled surface stayed BIS too. Putting the attribute on body
+          // itself covers all of it: body's own CSS, and everything a portal
+          // ever mounts as body's direct child.
+          //
+          // A style ATTRIBUTE, not a generated stylesheet: tenant values in
+          // CSS text would lose React's entity-escaping, which is the only
+          // reason the finding in the brand-colour spec stops at "integrity"
+          // and not "XSS". data-tenant-theme is how e2e asserts both its
+          // presence for a themed client and its ABSENCE for the agency.
+          {...(theme ? { style: themeStyle(theme), "data-tenant-theme": "" } : {})}
+        >
           <ThemeProvider defaultTheme={providerDefault}>
             {children}
             <Toaster richColors position="bottom-right" />

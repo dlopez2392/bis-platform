@@ -45,10 +45,14 @@ describe("pickRequestThemeMode", () => {
     });
   });
 
-  it("still lets a stored choice beat follow", () => {
+  // See theme-mode.test.ts for why this changed: providerDefault must stay
+  // "system" for a `follow` tenant no matter what the cookie says, or
+  // next-themes stops tracking the OS the moment ThemeCookieSync writes its
+  // first snapshot. The cookie still wins for serverMode.
+  it("keeps providerDefault at system for follow even once a cookie exists", () => {
     expect(pickRequestThemeMode("dark", inputsWithMode("follow"))).toEqual({
       serverMode: "dark",
-      providerDefault: "dark",
+      providerDefault: "system",
     });
   });
 });
