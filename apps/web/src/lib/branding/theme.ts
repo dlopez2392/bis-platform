@@ -15,6 +15,36 @@ export type CornerName = "sharp" | "soft" | "round";
 export type TypeName = "geist" | "inter" | "serif";
 export type ModeName = "light" | "dark" | "follow";
 
+// The closed sets, as values rather than types: the Settings action needs
+// something it can call `.includes()` on to validate a form field, and the
+// database enforces the same four sets with check constraints. This exists so
+// a typo in the form returns a readable message instead of a Postgres error.
+export const NEUTRAL_NAMES = ["warm", "cool", "slate"] as const;
+export const CORNER_NAMES = ["sharp", "soft", "round"] as const;
+export const TYPE_NAMES = ["geist", "inter", "serif"] as const;
+export const MODE_NAMES = ["light", "dark", "follow"] as const;
+
+/**
+ * The one decision behind every field on the Settings branding form: blank
+ * clears the input (`null`, so `setBranding` leaves-or-clears it correctly —
+ * see the `undefined` vs `null` distinction in `@bis/db`'s `setBranding`),
+ * a member of the closed set passes through unchanged, and anything else is
+ * rejected (`false`) so the caller can return `m["branding.badTheme"]`
+ * instead of letting a typo reach the database's check constraint.
+ *
+ * Pulled out of the action itself (which can only touch `FormData`, not a
+ * bare string, and is a `"use server"` module that may export only async
+ * functions) so the actual branching logic is a plain function this file's
+ * own test suite can exercise directly.
+ */
+export function parseAllowlisted<T extends readonly string[]>(
+  raw: string, allowed: T,
+): T[number] | null | false {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  return (allowed as readonly string[]).includes(trimmed) ? (trimmed as T[number]) : false;
+}
+
 export type ThemeInputs = {
   color: string | null;
   neutral: NeutralName | null;

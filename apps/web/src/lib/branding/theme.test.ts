@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { contrastRatio } from "./color";
 import { NEUTRAL_RAMPS, type NeutralName } from "./neutral-ramps";
-import { deriveTheme, BIS, type CornerName, type TypeName } from "./theme";
+import { deriveTheme, parseAllowlisted, NEUTRAL_NAMES, BIS, type CornerName, type TypeName } from "./theme";
 
 const NEUTRALS: NeutralName[] = ["warm", "cool", "slate"];
 const CORNERS: CornerName[] = ["sharp", "soft", "round"];
@@ -179,6 +179,37 @@ describe("deriveTheme", () => {
               expect(contrastRatio(t.mutedForeground, t.background), `muted quieter ${where}`)
                 .toBeLessThan(contrastRatio(t.foreground, t.background));
             }
+  });
+});
+
+// The Settings action's own gate before a value reaches setBranding: blank
+// clears the field, a member of the closed set passes through, anything else
+// is rejected so a typo returns a message instead of a Postgres constraint
+// violation. Exercised here directly because the action itself can only be
+// driven through FormData inside a "use server" module.
+describe("parseAllowlisted", () => {
+  it("treats an empty string as clearing the input", () => {
+    expect(parseAllowlisted("", NEUTRAL_NAMES)).toBeNull();
+  });
+
+  it("trims before deciding, so an empty selection never becomes a stray string", () => {
+    expect(parseAllowlisted("   ", NEUTRAL_NAMES)).toBeNull();
+  });
+
+  it("passes through a member of the allowed set", () => {
+    expect(parseAllowlisted("warm", NEUTRAL_NAMES)).toBe("warm");
+  });
+
+  it("trims surrounding whitespace off an otherwise valid value", () => {
+    expect(parseAllowlisted("  cool  ", NEUTRAL_NAMES)).toBe("cool");
+  });
+
+  it("rejects anything outside the closed set", () => {
+    expect(parseAllowlisted("mauve", NEUTRAL_NAMES)).toBe(false);
+  });
+
+  it("is case-sensitive, so a mismatched case is rejected rather than silently normalized", () => {
+    expect(parseAllowlisted("WARM", NEUTRAL_NAMES)).toBe(false);
   });
 });
 

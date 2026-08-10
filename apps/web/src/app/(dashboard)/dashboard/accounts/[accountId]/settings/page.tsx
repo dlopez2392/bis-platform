@@ -146,6 +146,10 @@ export default async function CrmSettingsPage({
           key={branding.brandColor ?? ""}
           brandName={branding.brandName}
           brandColor={branding.brandColor}
+          brandNeutral={branding.brandNeutral}
+          brandCorners={branding.brandCorners}
+          brandType={branding.brandType}
+          brandMode={branding.brandMode}
           logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
           action={boundSetBranding}
         />
