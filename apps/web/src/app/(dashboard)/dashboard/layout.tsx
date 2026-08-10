@@ -33,7 +33,10 @@ const getClientBranding = cache(async (accountId: string): Promise<Branding> => 
     return await getBranding(serviceDb(), accountId);
   } catch (e) {
     console.error(`dashboard: branding read failed for account ${accountId}: ${String(e)}`);
-    return { brandName: null, brandLogoPath: null, brandColor: null };
+    return {
+      brandName: null, brandLogoPath: null, brandColor: null,
+      brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
+    };
   }
 });
 
