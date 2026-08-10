@@ -7,19 +7,21 @@ import type { AppClaims } from "@/lib/auth";
 import { resolveSidebarAccent } from "@/lib/branding/color";
 import { deriveTheme } from "@/lib/branding/theme";
 import { themeStyle } from "@/lib/branding/theme-style";
-import { getTenantAccessState, getTenantBranding, getTenantThemeInputs } from "@/lib/branding/tenant-theme-reader";
-import { resolveThemeMode, THEME_COOKIE } from "@/lib/branding/theme-mode";
+import { getTenantAccessState, getTenantBranding, getRequestTheme } from "@/lib/branding/tenant-theme-reader";
 import { AppSidebar } from "@/components/app-sidebar";
 import { Topbar } from "@/components/topbar";
 
 // generateMetadata and the layout body below are separate invocations that
 // need the same answers the root layout now also needs for the very same
-// tenant -- getTenantAccessState, getTenantBranding, and getTenantThemeInputs
+// tenant -- getTenantAccessState, getTenantBranding, and getRequestTheme
 // (apps/web/src/lib/branding/tenant-theme-reader.ts) are the shared,
 // request-cached readers both layouts import, so a /dashboard/* request
 // resolves the caller and reads their branding exactly once no matter how
-// many of these three call them. For the agency, resolveClientAccessState
-// returns on the role claim alone and never reaches the database at all.
+// many of these three call them. getRequestTheme is also the ONLY place
+// resolveThemeMode gets invoked for the request -- this file no longer calls
+// it directly, or reads the theme cookie itself. For the agency,
+// resolveClientAccessState returns on the role claim alone and never reaches
+// the database at all.
 
 /**
  * The browser tab is chrome too. It read "BIS Platform" for everyone, which
@@ -90,7 +92,7 @@ export default async function DashboardLayout({
     if (state.status === "none") redirect("/no-access?reason=none");
   }
 
-  const [accounts, cookieStore, branding, inputs] = await Promise.all([
+  const [accounts, cookieStore, branding, requestTheme] = await Promise.all([
     isAgency ? listAccounts(serviceDb()) : Promise.resolve([]),
     cookies(),
     // Only a client's chrome wears a brand. The agency's stays BIS on purpose,
@@ -99,18 +101,18 @@ export default async function DashboardLayout({
       ? getTenantBranding(clientState.id)
       : Promise.resolve(null),
     // Same tenant, same reader the root layout used to pick the class it put
-    // on <html> before this component ever ran. Cached: this calls the exact
+    // on <html> before this component ever ran -- and the same resolved mode,
+    // not just the same inputs: this is the one place resolveThemeMode gets
+    // invoked for the request, and both layouts now go through it instead of
+    // each holding their own call site. Cached: this reuses the exact
     // getTenantAccessState()/getTenantBranding(id) promises already resolved
     // above (and, for a /dashboard/* request, already resolved once more by
     // the root layout), so this line costs no additional query.
-    getTenantThemeInputs(),
+    getRequestTheme(),
   ]);
   const collapsed = cookieStore.get("sidebar_collapsed")?.value === "true";
 
-  const { serverMode } = resolveThemeMode(
-    cookieStore.get(THEME_COOKIE)?.value,
-    inputs.mode,
-  );
+  const { inputs, serverMode } = requestTheme;
   // The agency's chrome stays BIS. Not by a conditional inside the derivation
   // -- by never having a theme to emit, so there is no branch to invert later.
   const theme = deriveTheme(inputs, serverMode);

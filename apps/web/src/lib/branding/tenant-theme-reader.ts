@@ -8,10 +8,12 @@
  * into a browser bundle for the same reason.
  */
 import { cache } from "react";
+import { cookies } from "next/headers";
 import { serviceDb, getBranding } from "@bis/db";
 import type { Branding } from "@bis/db";
 import { resolveClientAccessState } from "@/lib/auth";
 import { themeInputsFrom } from "./tenant-theme";
+import { resolveThemeMode, THEME_COOKIE } from "./theme-mode";
 import type { ThemeInputs } from "./theme";
 
 /**
@@ -70,5 +72,67 @@ export const getTenantThemeInputs = cache(async (): Promise<ThemeInputs> => {
   } catch (e) {
     console.error(`tenant-theme: theme inputs read failed: ${String(e)}`);
     return themeInputsFrom(null);
+  }
+});
+
+/**
+ * The decision resolveThemeMode makes, pulled out of getRequestTheme below so
+ * it can be unit-tested directly: given the raw cookie value and this
+ * tenant's already-resolved inputs, which mode the server paints
+ * (`serverMode`) and which default next-themes gets (`providerDefault`). A
+ * hook or request-bound body cannot be honestly tested in this repo -- that
+ * is exactly why the previous attempt at covering this duplication resorted
+ * to hand-written stand-ins in theme-mode.test.ts (1:1 copies of two call
+ * sites) instead of testing a real one. This IS the real call site now, and
+ * it is small enough to test without cookies() or the database.
+ */
+export function pickRequestThemeMode(
+  cookie: string | undefined,
+  inputs: ThemeInputs,
+): { serverMode: "light" | "dark"; providerDefault: "light" | "dark" | "system" } {
+  return resolveThemeMode(cookie, inputs.mode);
+}
+
+export type RequestTheme = {
+  inputs: ThemeInputs;
+  serverMode: "light" | "dark";
+  providerDefault: "light" | "dark" | "system";
+};
+
+/**
+ * The one place resolveThemeMode is invoked for a request. The root layout
+ * and the dashboard shell used to each write their own
+ * `resolveThemeMode(cookie, inputs.mode)` line -- one call per file, free to
+ * drift the moment either one changed without the other, which is exactly
+ * what happened: the root layout shipped with a hardcoded `null` where its
+ * tenant's mode belonged. Both now call this instead and take whichever half
+ * they need: the root layout takes `providerDefault` (the class next-themes
+ * puts on `<html>`); the dashboard shell takes `serverMode` and `inputs` (to
+ * derive the token set it paints). There is no longer a second place either
+ * fact could disagree with the other.
+ *
+ * cache()'d for the same reason as `getTenantAccessState`/`getTenantBranding`
+ * above, and importing THIS exact binding is what makes that dedupe real --
+ * see the doc comment on `getTenantAccessState`. React keys the memo on the
+ * wrapped function's identity, not its source, so a second `cache(...)`
+ * wrapped around the same logic in a different file would not share this
+ * one's memo. Both layouts must import `getRequestTheme` itself, not
+ * reimplement it.
+ *
+ * Never throws. Same posture as `getTenantThemeInputs`, which this calls and
+ * which already degrades to "no tenant" on any fault of its own -- this
+ * function's own try/catch exists for the one thing that reader doesn't
+ * cover, reading the cookie store. Either way, the root layout renders
+ * `/sign-in` and `/no-access` too, so a fault here must degrade to "no
+ * tenant, light mode" rather than take either page down.
+ */
+export const getRequestTheme = cache(async (): Promise<RequestTheme> => {
+  try {
+    const [cookieStore, inputs] = await Promise.all([cookies(), getTenantThemeInputs()]);
+    return { inputs, ...pickRequestThemeMode(cookieStore.get(THEME_COOKIE)?.value, inputs) };
+  } catch (e) {
+    console.error(`tenant-theme: request theme read failed: ${String(e)}`);
+    const inputs = themeInputsFrom(null);
+    return { inputs, ...pickRequestThemeMode(undefined, inputs) };
   }
 });

@@ -1,11 +1,9 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Inter, Source_Serif_4 } from "next/font/google";
-import { cookies } from "next/headers";
 import { ClerkProvider } from "@clerk/nextjs";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
-import { resolveThemeMode, THEME_COOKIE } from "@/lib/branding/theme-mode";
-import { getTenantThemeInputs } from "@/lib/branding/tenant-theme-reader";
+import { getRequestTheme } from "@/lib/branding/tenant-theme-reader";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -61,28 +59,23 @@ export default async function RootLayout({
 }>) {
   // This layout also wraps /sign-in and /no-access, where there is no tenant
   // to ask -- and, same as the dashboard shell, no tenant for a signed-out
-  // caller or the agency either. getTenantThemeInputs (a shared,
-  // request-cached reader in lib/branding/tenant-theme-reader.ts) degrades to
-  // "no tenant" quietly in all four cases: it never throws and never
+  // caller or the agency either. getRequestTheme (the shared, request-cached
+  // reader in lib/branding/tenant-theme-reader.ts) degrades to "no tenant,
+  // light mode" quietly in all four cases: it never throws and never
   // redirects, so this layout gains no new failure mode and the redirects
   // stay owned by dashboard/layout.tsx.
   //
-  // The two layouts now resolve the SAME (cookie, brandMode) pair through the
-  // SAME resolveThemeMode: this one for the class next-themes puts on <html>,
-  // the dashboard shell for the tokens it paints. They cannot disagree except
-  // in the one documented case -- brand_mode "follow" with no cookie yet to
-  // override it, where the server paints light and hands next-themes "system"
-  // on purpose. For a /dashboard/* request the tenant read itself is not
-  // doubled: getTenantThemeInputs is cache()'d and the shell imports the same
-  // binding, so React dedupes the underlying account and branding reads to
-  // one each per request.
-  const [cookieStore, inputs] = await Promise.all([
-    cookies(),
-    getTenantThemeInputs(),
-  ]);
-  const { providerDefault } = resolveThemeMode(
-    cookieStore.get(THEME_COOKIE)?.value, inputs.mode,
-  );
+  // This is the ONLY place either layout resolves a theme mode now: this
+  // layout takes `providerDefault` for the class next-themes puts on <html>,
+  // the dashboard shell takes `serverMode` from the exact same call for the
+  // tokens it paints. They cannot disagree except in the one documented case
+  // -- brand_mode "follow" with no cookie yet to override it, where the
+  // server paints light and hands next-themes "system" on purpose. For a
+  // /dashboard/* request the tenant read itself is not doubled:
+  // getRequestTheme is cache()'d and the shell imports the same binding, so
+  // React dedupes the underlying account, branding, and cookie reads to one
+  // each per request.
+  const { providerDefault } = await getRequestTheme();
 
   return (
     <ClerkProvider>
