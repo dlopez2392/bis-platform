@@ -14,6 +14,7 @@ describe("branding service", () => {
         brandName: "Rio Roofing",
         brandLogoPath: `${accountId}/logo.png`,
         brandColor: null,
+        brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
       });
 
       const { data: ev } = await db.from("events").select("type, actor_type, actor_id")
@@ -38,6 +39,7 @@ describe("branding service", () => {
         brandName: "Rio Roofing Co",
         brandLogoPath: `${accountId}/logo.png`,
         brandColor: null,
+        brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
       });
 
       // Spreading an optional variable that happens to be undefined is the
@@ -58,6 +60,7 @@ describe("branding service", () => {
         brandName: "Rio Roofing",
         brandLogoPath: null,
         brandColor: null,
+        brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
       });
     });
   });
@@ -68,6 +71,7 @@ describe("branding service", () => {
 
       expect(await getBranding(db, accountId)).toEqual({
         brandName: null, brandLogoPath: null, brandColor: null,
+        brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
       });
       const { count } = await db.from("events").select("id", { count: "exact", head: true })
         .eq("account_id", accountId).eq("type", "account.branding_updated");
@@ -78,7 +82,10 @@ describe("branding service", () => {
   it("reads an account that does not exist as unbranded", async () => {
     const db = serviceDb();
     expect(await getBranding(db, "00000000-0000-0000-0000-000000000000"))
-      .toEqual({ brandName: null, brandLogoPath: null, brandColor: null });
+      .toEqual({
+        brandName: null, brandLogoPath: null, brandColor: null,
+        brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
+      });
   });
 
   // The write is deliberately the opposite of the read above. PostgREST
@@ -111,6 +118,36 @@ describe("branding service", () => {
 
       await setBranding(db, accountId, { brandColor: null }, "user_test");
       expect((await getBranding(db, accountId)).brandColor).toBeNull();
+    });
+  });
+
+  it("round-trips all four theme inputs", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await setBranding(db, accountId, {
+        brandNeutral: "warm", brandCorners: "round",
+        brandType: "serif", brandMode: "dark",
+      }, "user_test");
+
+      expect(await getBranding(db, accountId)).toEqual({
+        brandName: null, brandLogoPath: null, brandColor: null,
+        brandNeutral: "warm", brandCorners: "round",
+        brandType: "serif", brandMode: "dark",
+      });
+    });
+  });
+
+  // The security claim in the spec is "dead at the source". That is a claim
+  // about the DATABASE, so it has to be proven by a write that is refused --
+  // reading the migration proves nothing.
+  it("refuses a value outside the closed set", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await expect(setBranding(db, accountId,
+        // The shape a hostile value would take: a real enum member with a
+        // smuggled declaration behind a semicolon.
+        { brandCorners: "round;position:fixed;inset:0" as never }, "user_test",
+      )).rejects.toThrow(/setBranding failed/);
+
+      expect((await getBranding(db, accountId)).brandCorners).toBeNull();
     });
   });
 });

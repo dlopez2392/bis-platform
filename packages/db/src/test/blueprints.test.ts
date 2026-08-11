@@ -5,6 +5,7 @@ import { createContact, addTagToContact } from "../contacts";
 import { createCustomField, upsertCustomValue, ensureDefaultPipeline } from "../crm-config";
 import { createForm, updateForm } from "../forms";
 import { captureBlueprint, listBlueprints, getBlueprint, applyBlueprint, BUNDLE_SCHEMA_VERSION } from "../blueprints";
+import { setBranding, getBranding } from "../branding";
 
 async function seedConfig(db: any, accountId: string) {
   await ensureDefaultPipeline(db, accountId);
@@ -339,6 +340,48 @@ describe("blueprint apply", () => {
         await expect(
           applyBlueprint(db2, targetId, blueprintId, "user_test"),
         ).rejects.toThrow(/schemaVersion/i);
+      });
+    }));
+
+  // forms.theme is tenant-controlled CSS input, and migration 0006 grants a
+  // client `for all` on their own forms. Cloning it verbatim carried one
+  // tenant's style values into another account -- the notify_emails failure
+  // mode by a different door, and the reachability half of the finding in
+  // 2026-08-08-brand-color-design.md.
+  it("does not carry a captured form theme into the target account", () =>
+    withTestAccount(async (db, sourceId) => {
+      const { id: formId } = await createForm(db, sourceId, { name: "Themed form" }, "user_test");
+      await updateForm(db, sourceId, formId, {
+        theme: { mode: "dark", radius: "9px;position:fixed;inset:0" },
+      }, "user_test");
+      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: "Themed" }, "user_test");
+
+      await withTestAccount(async (db2, targetId) => {
+        await applyBlueprint(db2, targetId, blueprintId, "user_test");
+        const { data } = await db2.from("forms").select("theme").eq("account_id", targetId);
+        expect(data).toHaveLength(1);
+        expect(data![0]!.theme).toEqual({});
+      });
+    }));
+
+  // The other half of spec §7: a brand does not travel with a blueprint at
+  // all. Nothing in blueprints.ts selects the brand_* columns today, so this
+  // passes on the first run -- it exists so a later milestone adding
+  // branding to a bundle has to argue with a red test instead of shipping
+  // one client dressed as another.
+  it("leaves the target account's own branding alone", () =>
+    withTestAccount(async (db, sourceId) => {
+      await setBranding(db, sourceId, {
+        brandName: "Rio Roofing", brandColor: "#1e3a8a", brandNeutral: "warm",
+      }, "user_test");
+      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: "Branded" }, "user_test");
+
+      await withTestAccount(async (db2, targetId) => {
+        await applyBlueprint(db2, targetId, blueprintId, "user_test");
+        expect(await getBranding(db2, targetId)).toEqual({
+          brandName: null, brandLogoPath: null, brandColor: null,
+          brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
+        });
       });
     }));
 });

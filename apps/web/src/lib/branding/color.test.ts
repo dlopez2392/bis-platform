@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   parseHexColor, contrastRatio, readableTextOn, lightenForSidebar,
   resolveFormAccent, resolveSidebarAccent, FORM_ACCENT_FALLBACK, SIDEBAR_BG,
+  ensureContrast,
 } from "./color";
 
 describe("parseHexColor", () => {
@@ -105,5 +106,57 @@ describe("resolvers", () => {
       accent: "#1e3a8a", accentForeground: "#ffffff",
     });
     expect(resolveSidebarAccent("#1e3a8a")).toBe("#3a62d4");
+  });
+});
+
+describe("ensureContrast", () => {
+  it("lightens a dark colour on a dark surface", () => {
+    const out = ensureContrast("#1e3a8a", "#111721", 3)!;
+    expect(contrastRatio(out, "#111721")).toBeGreaterThanOrEqual(3);
+    expect(out).not.toBe("#1e3a8a");
+  });
+
+  it("darkens a light colour on a light surface", () => {
+    const out = ensureContrast("#ffffff", "#f8fafc", 3)!;
+    expect(contrastRatio(out, "#f8fafc")).toBeGreaterThanOrEqual(3);
+  });
+
+  it("returns the input untouched when it already clears", () => {
+    expect(ensureContrast("#000000", "#ffffff", 3)).toBe("#000000");
+  });
+
+  // A synthetic target, NOT one of the ramps: every real ladder can lift every
+  // adversarial colour to 3:1 (verified), so no ramp value reaches this branch.
+  // Asserting it against a real surface would produce a test that passes for
+  // the wrong reason and invites someone to "fix" working code.
+  it("gives up rather than returning something unreadable", () => {
+    expect(ensureContrast("#808080", "#808080", 21)).toBeNull();
+  });
+
+  // The hue/saturation-preservation guarantee (color.ts's own doc comment,
+  // and the reason lightenForSidebar and ensureContrast both walk lightness
+  // only) was never actually checked anywhere. Hue is computed here rather
+  // than imported, since rgbToHsl is a private helper of color.ts.
+  it("preserves hue when it lifts a colour", () => {
+    function hueDegrees(hex: string): number {
+      const n = parseInt(hex.slice(1), 16);
+      const r = ((n >> 16) & 255) / 255;
+      const g = ((n >> 8) & 255) / 255;
+      const b = (n & 255) / 255;
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const d = max - min;
+      if (d === 0) return 0; // achromatic; undefined hue, treated as 0
+      const h =
+        max === r ? ((g - b) / d + (g < b ? 6 : 0)) / 6
+        : max === g ? ((b - r) / d + 2) / 6
+        : ((r - g) / d + 4) / 6;
+      return h * 360;
+    }
+
+    const input = "#1e3a8a";
+    const out = ensureContrast(input, "#111721", 3)!;
+    expect(out).not.toBe(input); // confirms the walk actually ran
+    expect(Math.abs(hueDegrees(out) - hueDegrees(input))).toBeLessThan(1);
   });
 });

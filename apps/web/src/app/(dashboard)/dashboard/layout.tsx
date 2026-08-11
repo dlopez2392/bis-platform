@@ -1,41 +1,31 @@
-import { cache } from "react";
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
-import { serviceDb, listAccounts, getBranding, brandLogoUrl, type Branding } from "@bis/db";
-import { resolveClientAccessState, type AppClaims } from "@/lib/auth";
+import { serviceDb, listAccounts, brandLogoUrl } from "@bis/db";
+import type { AppClaims } from "@/lib/auth";
 import { resolveSidebarAccent } from "@/lib/branding/color";
+import { getTenantAccessState, getTenantBranding } from "@/lib/branding/tenant-theme-reader";
 import { AppSidebar } from "@/components/app-sidebar";
 import { Topbar } from "@/components/topbar";
 
 // generateMetadata and the layout body below are separate invocations that
-// need the same two answers. React's cache() dedupes them within a request, so
-// branding a client's tab title costs no additional queries — without it, every
-// dashboard navigation would run the account lookup and the branding read
-// twice. For the agency, resolveClientAccessState returns on the role claim
-// alone and never reaches the database at all.
-const getClientState = cache(resolveClientAccessState);
-
-/**
- * Branding is decoration, so a fault reading it must not cost the client their
- * whole dashboard. Every surface downstream already renders an unbranded
- * account correctly — that is the fallback the milestone was built around — so
- * degrading to it is strictly better than an error page. Logged, never
- * swallowed silently.
- *
- * This is not a retreat from the fail-loud rule: that rule is about never
- * passing off missing data as real data. Nothing here is presented as branding
- * that is not branding.
- */
-const getClientBranding = cache(async (accountId: string): Promise<Branding> => {
-  try {
-    return await getBranding(serviceDb(), accountId);
-  } catch (e) {
-    console.error(`dashboard: branding read failed for account ${accountId}: ${String(e)}`);
-    return { brandName: null, brandLogoPath: null, brandColor: null };
-  }
-});
+// need the same answers the root layout also needs for the very same tenant
+// -- getTenantAccessState and getTenantBranding (in
+// apps/web/src/lib/branding/tenant-theme-reader.ts) are the shared,
+// request-cached readers both layouts import, so a /dashboard/* request
+// resolves the caller and reads their branding exactly once no matter how
+// many of these two call them. The root layout also calls getRequestTheme
+// there -- the ONLY place resolveThemeMode gets invoked for the request, and
+// the ONLY place the derived token set is emitted, on <body>. This file has
+// no theme of its own to emit: it used to paint a themed div here, but
+// body's own CSS (globals.css's `background`/`color`/`font-family` on the
+// `body` selector) resolves custom properties against body's OWN values, not
+// a descendant's, so overriding them on a div inside body changed nothing --
+// and every Radix portal plus Sonner's Toaster mount straight into
+// document.body, outside that div, so they stayed unbranded too. For the
+// agency, resolveClientAccessState returns on the role claim alone and never
+// reaches the database at all.
 
 /**
  * The browser tab is chrome too. It read "BIS Platform" for everyone, which
@@ -47,9 +37,9 @@ const getClientBranding = cache(async (accountId: string): Promise<Branding> => 
  * to their company name rather than to the agency's.
  */
 export async function generateMetadata(): Promise<Metadata> {
-  const state = await getClientState();
+  const state = await getTenantAccessState();
   if (state.status !== "ok") return {};
-  const branding = await getClientBranding(state.id);
+  const branding = await getTenantBranding(state.id);
   return {
     title: branding.brandName ?? state.name,
     // The root layout's description names Bespoke Intelligent Solutions
@@ -80,7 +70,7 @@ export default async function DashboardLayout({
   if (!userId) redirect("/sign-in");
   const claims = sessionClaims as AppClaims;
   const isAgency = claims.app_role === "agency_admin";
-  let clientState: Awaited<ReturnType<typeof resolveClientAccessState>> | null = null;
+  let clientState: Awaited<ReturnType<typeof getTenantAccessState>> | null = null;
 
   if (!isAgency) {
     // Distinguish "off" from "none" here rather than collapsing both to a
@@ -92,7 +82,7 @@ export default async function DashboardLayout({
     // level down. This layout runs first, so it was the one place that
     // distinction was getting lost before a client with a specific
     // account URL ever reached that more precise guard.
-    clientState = await getClientState();
+    clientState = await getTenantAccessState();
     const state = clientState;
     if (state.status === "off") redirect("/no-access?reason=off");
     // Was `redirect("/")`, which lands on landing.noAccess.body — copy
@@ -112,7 +102,7 @@ export default async function DashboardLayout({
     // Only a client's chrome wears a brand. The agency's stays BIS on purpose,
     // so this read never happens for them — there is nothing to resolve.
     clientState?.status === "ok"
-      ? getClientBranding(clientState.id)
+      ? getTenantBranding(clientState.id)
       : Promise.resolve(null),
   ]);
   const collapsed = cookieStore.get("sidebar_collapsed")?.value === "true";

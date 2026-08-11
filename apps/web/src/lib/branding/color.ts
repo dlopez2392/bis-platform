@@ -19,7 +19,13 @@ export const FORM_ACCENT_FALLBACK = "#6d28d9";
 export const SIDEBAR_BG = "#1e1b2e";
 /** WCAG 1.4.11 for non-text UI components, which is what these accents are. */
 const SIDEBAR_MIN_RATIO = 3;
-const LIGHTEN_STEP = 0.02;
+/**
+ * The per-iteration lightness step for every walk in this module —
+ * `lightenForSidebar`'s single-direction climb and `ensureContrast`'s
+ * two-direction search both used their own `0.02` constant; one value now
+ * serves both callers since neither's behaviour depends on the other's.
+ */
+const LIGHTNESS_STEP = 0.02;
 const LIGHTEN_CEILING = 0.95;
 
 /**
@@ -118,7 +124,7 @@ export function lightenForSidebar(hex: string): string {
   let l = startL;
   let out = hex;
   while (contrastRatio(out, SIDEBAR_BG) < SIDEBAR_MIN_RATIO && l < LIGHTEN_CEILING) {
-    l = Math.min(LIGHTEN_CEILING, l + LIGHTEN_STEP);
+    l = Math.min(LIGHTEN_CEILING, l + LIGHTNESS_STEP);
     out = hslToHex(h, s, l);
   }
   return out;
@@ -142,4 +148,46 @@ export function resolveFormAccent(
 export function resolveSidebarAccent(brandColor: string | null): string | null {
   const c = parseHexColor(brandColor);
   return c ? lightenForSidebar(c) : null;
+}
+
+/**
+ * Walks lightness until `hex` clears `target` against `against`, preserving
+ * hue and saturation exactly — a dark navy becomes a lighter navy, never a
+ * more convenient hue.
+ *
+ * The general form of lightenForSidebar above, which does the same walk
+ * against one hardcoded background. It lives here rather than in theme.ts
+ * because the channel and HSL helpers it needs are already here, and copying
+ * them would duplicate a logic block verbatim.
+ *
+ * Tries the direction that moves AWAY from `against`'s own lightness first,
+ * then the other: darken when `hex` starts at or below `against`'s
+ * lightness, lighten when it starts above — moving further from `against` is
+ * what increases contrast against it. (An earlier version tried whichever
+ * direction had more lightness headroom left, a heuristic with no relation
+ * to `against` at all; because both directions are always tried, it never
+ * produced a wrong final answer, only up to ~36 wasted iterations when
+ * `against` was near-white or near-black and the headroom guess picked
+ * backwards.)
+ *
+ * Returns null when neither direction reaches the target, so the caller can
+ * fall back to a default rather than ship something unreadable.
+ */
+export function ensureContrast(hex: string, against: string, target: number): string | null {
+  if (contrastRatio(hex, against) >= target) return hex;
+  const [h, s, start] = rgbToHsl(...channels(hex));
+  const [, , againstLightness] = rgbToHsl(...channels(against));
+  const directions = start <= againstLightness ? [-1, 1] : [1, -1];
+  for (const dir of directions) {
+    let l = start;
+    let out = hex;
+    for (let i = 0; i < 100 && contrastRatio(out, against) < target; i++) {
+      const next = l + dir * LIGHTNESS_STEP;
+      if (next > 1 || next < 0) break;
+      l = next;
+      out = hslToHex(h, s, l);
+    }
+    if (contrastRatio(out, against) >= target) return out;
+  }
+  return null;
 }

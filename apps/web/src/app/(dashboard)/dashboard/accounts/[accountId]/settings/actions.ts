@@ -8,6 +8,7 @@ import { createCustomField, upsertCustomValue, setClientAccess, setBranding,
          type CustomFieldDef } from "@bis/db";
 import { sniffImageType, MAX_LOGO_BYTES } from "@/lib/branding/validate-logo";
 import { parseHexColor } from "@/lib/branding/color";
+import { CORNER_NAMES, MODE_NAMES, NEUTRAL_NAMES, TYPE_NAMES, parseAllowlisted } from "@/lib/branding/theme";
 import { m } from "@/lib/messages";
 
 export async function createFieldAction(accountId: string, formData: FormData): Promise<void> {
@@ -78,6 +79,23 @@ export async function setBrandingAction(
     return { ok: false, error: m["branding.badColor"] };
   }
 
+  // A closed set on the way in as well as in the column. The constraint is the
+  // real guarantee; this exists so a typo in the form returns a message
+  // instead of a Postgres error the operator cannot act on.
+  function pickOne<T extends readonly string[]>(
+    field: string, allowed: T,
+  ): T[number] | null | false {
+    return parseAllowlisted(String(formData.get(field) ?? ""), allowed);
+  }
+
+  const brandNeutral = pickOne("brandNeutral", NEUTRAL_NAMES);
+  const brandCorners = pickOne("brandCorners", CORNER_NAMES);
+  const brandType = pickOne("brandType", TYPE_NAMES);
+  const brandMode = pickOne("brandMode", MODE_NAMES);
+  if (brandNeutral === false || brandCorners === false || brandType === false || brandMode === false) {
+    return { ok: false, error: m["branding.badTheme"] };
+  }
+
   const file = formData.get("logo");
 
   let brandLogoPath: string | undefined;
@@ -110,7 +128,9 @@ export async function setBrandingAction(
       serviceDb(), accountId,
       // brandLogoPath is omitted, not nulled, when no new file was sent:
       // editing the display name must not delete the logo already set.
-      brandLogoPath ? { brandName, brandLogoPath, brandColor } : { brandName, brandColor },
+      brandLogoPath
+        ? { brandName, brandLogoPath, brandColor, brandNeutral, brandCorners, brandType, brandMode }
+        : { brandName, brandColor, brandNeutral, brandCorners, brandType, brandMode },
       userId,
     );
   } catch (e) {

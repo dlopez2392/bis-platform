@@ -72,6 +72,10 @@ export type Branding = {
   brandName: string | null;
   brandLogoPath: string | null;
   brandColor: string | null;
+  brandNeutral: "warm" | "cool" | "slate" | null;
+  brandCorners: "sharp" | "soft" | "round" | null;
+  brandType: "geist" | "inter" | "serif" | null;
+  brandMode: "light" | "dark" | "follow" | null;
 };
 
 /**
@@ -88,13 +92,21 @@ export type Branding = {
 export async function setBranding(
   db: SupabaseClient,
   accountId: string,
-  input: { brandName?: string | null; brandLogoPath?: string | null; brandColor?: string | null },
+  input: {
+    brandName?: string | null; brandLogoPath?: string | null; brandColor?: string | null;
+    brandNeutral?: Branding["brandNeutral"]; brandCorners?: Branding["brandCorners"];
+    brandType?: Branding["brandType"]; brandMode?: Branding["brandMode"];
+  },
   actorId: string,
 ): Promise<void> {
   const patch: Record<string, string | null> = {};
   if (input.brandName !== undefined) patch.brand_name = input.brandName;
   if (input.brandLogoPath !== undefined) patch.brand_logo_path = input.brandLogoPath;
   if (input.brandColor !== undefined) patch.brand_color = input.brandColor;
+  if (input.brandNeutral !== undefined) patch.brand_neutral = input.brandNeutral;
+  if (input.brandCorners !== undefined) patch.brand_corners = input.brandCorners;
+  if (input.brandType !== undefined) patch.brand_type = input.brandType;
+  if (input.brandMode !== undefined) patch.brand_mode = input.brandMode;
   if (Object.keys(patch).length === 0) return;
 
   // `.select("id")` so the update reports WHICH rows it touched. Without it,
@@ -130,11 +142,16 @@ export async function getBranding(
   db: SupabaseClient, accountId: string,
 ): Promise<Branding> {
   const { data, error } = await db.from("accounts")
-    .select("brand_name, brand_logo_path, brand_color").eq("id", accountId).maybeSingle();
+    .select("brand_name, brand_logo_path, brand_color, brand_neutral, brand_corners, brand_type, brand_mode")
+    .eq("id", accountId).maybeSingle();
   if (error) throw new Error(`getBranding failed: ${error.message}`);
   return {
     brandName: data?.brand_name ?? null,
     brandLogoPath: data?.brand_logo_path ?? null,
     brandColor: data?.brand_color ?? null,
+    brandNeutral: data?.brand_neutral ?? null,
+    brandCorners: data?.brand_corners ?? null,
+    brandType: data?.brand_type ?? null,
+    brandMode: data?.brand_mode ?? null,
   };
 }
