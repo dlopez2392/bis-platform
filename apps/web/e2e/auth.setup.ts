@@ -171,7 +171,13 @@ setup("authenticate as client user (no app_role)", async ({ page }) => {
     // One fixture, both halves: a dark default proves the mode path, and
     // #1e3a8a (already the fixture's colour, at 1.62:1 on a dark sidebar)
     // proves the lift ran, exactly as it does for the sidebar accent today.
-    brandNeutral: "warm", brandCorners: "round", brandMode: "dark",
+    // brandType is set on purpose. It was the one input left unset here, and
+    // that is exactly why a final review — not a test — caught that the
+    // typeface never applied at all: globals.css declares font-family on
+    // `body`, and the tokens used to be emitted on a div inside it, so
+    // overriding --font-sans below body changed nothing. A fixture that
+    // exercises four of five inputs proves four of five inputs.
+    brandNeutral: "warm", brandCorners: "round", brandMode: "dark", brandType: "serif",
   }, user.id);
 
   // A published form on that account, so the public /f/<publicId> page has

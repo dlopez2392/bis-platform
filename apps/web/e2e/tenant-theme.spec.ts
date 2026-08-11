@@ -43,6 +43,29 @@ const prop = (selector: string, name: string) => (page: Page) =>
     (el, n) => getComputedStyle(el).getPropertyValue(n).trim(), name,
   );
 
+/**
+ * What the element is actually PAINTED with, which is a different question
+ * from what custom property it carries — and the difference is not academic.
+ *
+ * Every assertion in this file used to read a custom property. They all passed
+ * while a tenant's typeface applied nowhere and its page canvas stayed BIS,
+ * because globals.css declares `background`, `color` and `font-family` on
+ * `body` while the tokens were being emitted on a div inside it: the property
+ * was genuinely set, and genuinely consumed by nobody. Reading a resolved
+ * `background-color` is the assertion that can tell those two states apart.
+ */
+const painted = (selector: string, name: "background-color" | "color" | "font-family") =>
+  (page: Page) =>
+    page.locator(selector).first().evaluate(
+      (el, n) => getComputedStyle(el).getPropertyValue(n).trim(), name,
+    );
+
+/** `#12100e` → `rgb(18, 16, 14)`, the form getComputedStyle reports. */
+function rgb(hex: string): string {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
+}
+
 // This spec's own precondition, established rather than assumed.
 //
 // client-access.spec.ts ends by turning the fixture account's client access
@@ -71,8 +94,21 @@ test.describe("tenant theme", () => {
     const fixture = readClientFixture();
     await page.goto(`/dashboard/accounts/${fixture.accountId}/contacts`);
 
+    // The property is set...
     const bg = await prop("[data-tenant-theme]", "--background")(page);
     expect(bg).toBe(NEUTRAL_RAMPS.warm.dark.bg);
+
+    // ...and something actually paints with it. These two assertions disagreed
+    // for the whole milestone until the tokens moved onto <body>: the property
+    // was set on a div, while the declaration consuming it lived on body.
+    expect(await painted("body", "background-color")(page))
+      .toBe(rgb(NEUTRAL_RAMPS.warm.dark.bg));
+    expect(await painted("body", "color")(page))
+      .toBe(rgb(NEUTRAL_RAMPS.warm.dark.fg));
+
+    // brand_type = "serif" on this fixture. next/font emits a generated family
+    // name, so match the family rather than an exact string.
+    expect(await painted("body", "font-family")(page)).toMatch(/source.serif/i);
 
     const radius = await prop("[data-tenant-theme]", "--radius")(page);
     expect(radius).toBe("1rem");
