@@ -11,6 +11,7 @@ import { FORM_ACCENT_FALLBACK, SIDEBAR_BG, resolveFormAccent,
          resolveSidebarAccent } from "@/lib/branding/color";
 import { deriveTheme, type CornerName, type ModeName, type NeutralName, type TypeName } from "@/lib/branding/theme";
 import { themeStyle } from "@/lib/branding/theme-style";
+import { MAX_LOGO_BYTES } from "@/lib/branding/validate-logo";
 
 /** "" is always first: it is how the operator clears the input again. */
 function RadioRow({
@@ -110,6 +111,17 @@ export function BrandingPanel({
       <CardContent>
         <form
           action={async (formData) => {
+            // Refuse an oversized logo here, before the request leaves the
+            // browser. Next caps a Server Action body at 1 MB and answers 413
+            // itself, so for exactly the files our 512 KB rule exists to reject,
+            // the action never ran and production showed a bare "something went
+            // wrong" with no idea what to change. The server still enforces the
+            // same limit twice — this is the message, not the guarantee.
+            const picked = formData.get("logo");
+            if (picked instanceof File && picked.size > MAX_LOGO_BYTES) {
+              toast.error(m["branding.tooLarge"]);
+              return;
+            }
             const result = await action(formData);
             if (result.ok) {
               toast.success(m["branding.saved"]);
