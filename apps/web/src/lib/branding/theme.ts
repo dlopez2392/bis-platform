@@ -81,7 +81,7 @@ const RADIUS: Record<CornerName, string> = {
 };
 
 /** A closed set, so this never carries user text into a CSS value. */
-const FONT: Record<TypeName, string> = {
+export const FONT: Record<TypeName, string> = {
   geist: "var(--font-geist-sans)",
   inter: "var(--font-inter)",
   serif: "var(--font-source-serif)",

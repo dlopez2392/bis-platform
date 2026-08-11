@@ -3,8 +3,9 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { contrastRatio } from "./color";
-import { NEUTRAL_RAMPS, type NeutralName } from "./neutral-ramps";
-import { deriveTheme, parseAllowlisted, NEUTRAL_NAMES, BIS, type CornerName, type TypeName } from "./theme";
+import { NEUTRAL_RAMPS, SIDEBAR_FOREGROUND, type NeutralName } from "./neutral-ramps";
+import { deriveTheme, parseAllowlisted, NEUTRAL_NAMES, BIS, FONT, type CornerName, type TypeName } from "./theme";
+import { FONT_ALLOWLIST, SAFE_STYLE_FALLBACKS } from "./theme-style";
 
 const NEUTRALS: NeutralName[] = ["warm", "cool", "slate"];
 const CORNERS: CornerName[] = ["sharp", "soft", "round"];
@@ -238,5 +239,68 @@ describe("globals.css / BIS.dark parity", () => {
   it("keeps --ring equal to BIS.dark.ring", () => {
     const value = darkBlock?.match(/--ring:\s*(#[0-9a-fA-F]{6});/)?.[1];
     expect(value?.toLowerCase()).toBe(BIS.dark.ring);
+  });
+
+  // The dark block covered two tokens; every other value duplicated between
+  // globals.css and TypeScript had nothing crossing it. Each of these is a
+  // fallback a tenant lands on when an input is unset or a value fails
+  // validation, so a drift here is invisible until an unbranded account looks
+  // subtly wrong next to a branded one.
+  const rootBlock = css.match(/:root\s*\{([^}]*)\}/)?.[1];
+  const declared = (block: string | undefined, token: string) =>
+    block?.match(new RegExp(`--${token}:\\s*(#[0-9a-fA-F]{6});`))?.[1]?.toLowerCase();
+
+  it("finds the :root block", () => {
+    expect(rootBlock).toBeTruthy();
+  });
+
+  it.each([
+    ["primary", () => BIS.light.primary],
+    ["ring", () => BIS.light.ring],
+    ["sidebar-accent", () => BIS.light.sidebarAccent],
+  ])("keeps :root --%s equal to its BIS.light constant", (token, expected) => {
+    expect(declared(rootBlock, token)).toBe(expected());
+  });
+
+  it("keeps .dark --sidebar-accent equal to BIS.dark.sidebarAccent", () => {
+    expect(declared(darkBlock, "sidebar-accent")).toBe(BIS.dark.sidebarAccent);
+  });
+
+  // SIDEBAR_FOREGROUND is deliberately mode-independent, so BOTH blocks must
+  // agree with the one constant — the sidebar does not invert.
+  it("keeps --sidebar-foreground equal to SIDEBAR_FOREGROUND in both modes", () => {
+    expect(declared(rootBlock, "sidebar-foreground")).toBe(SIDEBAR_FOREGROUND);
+    expect(declared(darkBlock, "sidebar-foreground")).toBe(SIDEBAR_FOREGROUND);
+  });
+
+  // themeStyle falls back to these when a value fails validation. They are
+  // globals.css's own light values, and they are written out again in
+  // theme-style.ts where nothing checked them.
+  it("keeps themeStyle's validation fallbacks equal to the light defaults", () => {
+    expect(declared(rootBlock, "background")).toBe(SAFE_STYLE_FALLBACKS.color);
+    const radius = rootBlock?.match(/--radius:\s*([0-9.]+rem);/)?.[1];
+    expect(radius).toBe(SAFE_STYLE_FALLBACKS.radius);
+  });
+});
+
+// Three hand-kept lists that must name the same four font variables: the
+// derivation's FONT map, the allowlist themeStyle validates against, and the
+// `variable:` names the root layout hands next/font. A typo in any one of them
+// makes a tenant's typeface silently fall back with no error anywhere — which
+// is close to how brand_type managed to be inert for the whole milestone.
+describe("font variable names agree across the three places that hold them", () => {
+  const layout = readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "../../app/(dashboard)/layout.tsx"),
+    "utf8",
+  );
+
+  it.each(Object.entries(FONT))("%s resolves to a variable the root layout declares", (_name, value) => {
+    const varName = value.match(/var\((--[a-z-]+)\)/)?.[1];
+    expect(varName, `FONT value ${value} is not a var() reference`).toBeTruthy();
+    expect(layout).toContain(`variable: "${varName}"`);
+  });
+
+  it("allows exactly the values FONT can produce", () => {
+    expect([...FONT_ALLOWLIST].sort()).toEqual(Object.values(FONT).sort());
   });
 });

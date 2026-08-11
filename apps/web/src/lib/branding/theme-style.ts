@@ -14,17 +14,17 @@ import { resolveCssLength } from "@/lib/forms/safe-theme";
 import type { ResolvedTheme } from "./theme";
 
 /** globals.css's own light values, used when a token fails validation. */
-const SAFE = {
+export const SAFE_STYLE_FALLBACKS = {
   color: "#f8f8fb",
   radius: "0.625rem",
   fontSans: "var(--font-geist-sans)",
 } as const;
 
-const FONT_ALLOWLIST = new Set([
+export const FONT_ALLOWLIST = new Set([
   "var(--font-geist-sans)", "var(--font-inter)", "var(--font-source-serif)",
 ]);
 
-const c = (v: string) => parseHexColor(v) ?? SAFE.color;
+const c = (v: string) => parseHexColor(v) ?? SAFE_STYLE_FALLBACKS.color;
 
 export function themeStyle(theme: ResolvedTheme): CSSProperties {
   return {
@@ -52,10 +52,10 @@ export function themeStyle(theme: ResolvedTheme): CSSProperties {
     // Not re-emitting --radius-sm/md/lg: globals.css derives them with calc()
     // over var(--radius), and custom properties are substituted per element,
     // so overriding the base is enough.
-    "--radius": resolveCssLength(theme.radius, SAFE.radius),
+    "--radius": resolveCssLength(theme.radius, SAFE_STYLE_FALLBACKS.radius),
     // An allowlist rather than a pattern. This value is a var() reference,
     // which resolveCssLength correctly refuses, and it never contains user
     // text -- deriveTheme builds it from a closed set.
-    "--font-sans": FONT_ALLOWLIST.has(theme.fontSans) ? theme.fontSans : SAFE.fontSans,
+    "--font-sans": FONT_ALLOWLIST.has(theme.fontSans) ? theme.fontSans : SAFE_STYLE_FALLBACKS.fontSans,
   } as CSSProperties;
 }
