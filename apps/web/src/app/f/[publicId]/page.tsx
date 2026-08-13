@@ -4,7 +4,7 @@ import { serviceDb, getPublishedFormByPublicId, getBranding, brandLogoUrl,
          type Branding } from "@bis/db";
 import { signRenderToken, parseAttribution } from "@/lib/forms/guards";
 import { publicStrings, normalizeLocale } from "@/lib/forms/public-strings";
-import { resolveFormAccent } from "@/lib/branding/color";
+import { publicFormTheme } from "@/lib/branding/public-form-theme";
 import { PublicForm } from "./public-form";
 import { FormBrand } from "./form-brand";
 import { submitFormAction } from "./actions";
@@ -69,10 +69,22 @@ export default async function PublicFormPage({
   }
 
   const locale = normalizeLocale(flat.get("locale") ?? undefined, form.locale_default);
-  const accent = resolveFormAccent(branding.brandColor);
+  // The account's theme, not the form's. `theme.mode` and `theme.radius` are
+  // still stored and still copied by blueprints, and are deliberately no
+  // longer read: a company has one brand, not one per form — the same call
+  // that removed the per-form accent picker in the brand-colour milestone.
+  const { style, darkCss, themed } = publicFormTheme(
+    branding, form.theme.transparentBackground ?? false,
+  );
 
   return (
-    <main className={form.theme.mode === "dark" ? "dark" : undefined}>
+    // The tokens ride on <main>, the one element on this route that paints a
+    // surface, and `data-tenant-theme` is both the dark rule's selector and
+    // the e2e hook — the same attribute the workspace exposes on <body>.
+    <main className="bis-form-page" style={style} {...(themed ? { "data-tenant-theme": "" } : {})}>
+      {/* Only a `follow` tenant emits this: the visitor's own device decides,
+          which no server-rendered style attribute can answer on its own. */}
+      {darkCss ? <style>{darkCss}</style> : null}
       <FormBrand
         name={branding.brandName}
         logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
@@ -80,7 +92,6 @@ export default async function PublicFormPage({
       <PublicForm
         fields={form.fields}
         theme={form.theme}
-        accent={accent}
         locale={locale}
         strings={publicStrings(locale)}
         // Signed server-side at render: a bot that rewrites this to look like a

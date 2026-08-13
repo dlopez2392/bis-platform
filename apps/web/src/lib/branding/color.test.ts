@@ -1,8 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   parseHexColor, contrastRatio, readableTextOn, lightenForSidebar,
-  resolveFormAccent, resolveSidebarAccent, FORM_ACCENT_FALLBACK, SIDEBAR_BG,
-  ensureContrast,
+  resolveSidebarAccent, FORM_ACCENT_FALLBACK, SIDEBAR_BG, ensureContrast,
 } from "./color";
 
 describe("parseHexColor", () => {
@@ -82,29 +81,21 @@ describe("lightenForSidebar", () => {
   });
 });
 
-describe("resolvers", () => {
-  it("falls back to BIS violet with white text when unset", () => {
-    expect(resolveFormAccent(null)).toEqual({
-      accent: FORM_ACCENT_FALLBACK, accentForeground: "#ffffff",
-    });
+// The form half of this block moved to public-form-theme.test.ts with
+// resolveFormAccent itself — same three cases (unset, an invalid stored value,
+// a valid one), now asserted against the resolver the form actually uses.
+describe("resolveSidebarAccent", () => {
+  it("leaves the sidebar's own tokens alone when unset", () => {
     expect(resolveSidebarAccent(null)).toBeNull();
   });
 
   // The second half of the validate-twice rule. A row written by some future
   // path that forgot to check must not reach CSS.
   it("treats an invalid stored value as unset", () => {
-    expect(resolveFormAccent("url(https://evil.example/x.png)")).toEqual({
-      accent: FORM_ACCENT_FALLBACK, accentForeground: "#ffffff",
-    });
     expect(resolveSidebarAccent("red")).toBeNull();
   });
 
-  it("resolves a valid color differently for each surface", () => {
-    // Same brand, two answers: the form shows it as-is, the sidebar lightens
-    // it to stay visible on a dark background.
-    expect(resolveFormAccent("#1e3a8a")).toEqual({
-      accent: "#1e3a8a", accentForeground: "#ffffff",
-    });
+  it("lightens a valid colour to stay visible on the dark sidebar", () => {
     expect(resolveSidebarAccent("#1e3a8a")).toBe("#3a62d4");
   });
 });

@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, setClientAccess } from "@bis/db";
-import { SEEDED_ACCOUNT_NAME } from "./support";
+import { SEEDED_ACCOUNT_NAME, hexOf, paintedContrast } from "./support";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -195,11 +195,29 @@ test.describe("the public lead form wears the client's brand", () => {
     expect(logoSrc).toContain(fixture.brandLogoPath);
     expect((await page.request.get(logoSrc!)).status()).toBe(200);
 
-    // The form shows the brand color as chosen, unlightened — the same value
-    // the sidebar had to lighten. One fixture, two resolvers, both proved.
+    // This used to assert the brand colour arrived RAW here — `rgb(30, 58,
+    // 138)`, "as chosen, unlightened", against the sidebar's lightened copy.
+    // M4b ended that: the fixture is a themed tenant (warm / dark) and
+    // #1e3a8a scores 1.64:1 on its own dark background, so the CTA is lifted
+    // for the surfaces it actually lands on. The unlifted value is still
+    // pinned — it moved to public-form-theme.spec.ts, which asserts it on an
+    // account with no theme controls set, where it remains exactly true.
+    //
+    // What belongs in THIS spec is the milestone's own claim: the client's
+    // brand reaches their customers' page, and it is readable there. Both are
+    // measured rather than compared to a literal, so the assertion cannot be
+    // satisfied by freezing whichever hex the derivation currently returns.
     const submit = page.locator(".bis-form-submit");
-    await expect(submit).toHaveCSS("background-color", "rgb(30, 58, 138)");
-    await expect(submit).toHaveCSS("color", "rgb(255, 255, 255)");
+    const fill = await submit.evaluate((el) => getComputedStyle(el).backgroundColor);
+    const label = await submit.evaluate((el) => getComputedStyle(el).color);
+    const canvas = await page.locator("main").evaluate((el) => getComputedStyle(el).backgroundColor);
+
+    // BIS violet is what an account with no brand colour gets. Anything else
+    // means this company's own colour reached the page their customers load.
+    expect(hexOf(fill)).not.toBe("#6d28d9");
+    // WCAG 1.4.11 for the button itself, 1.4.3 for the word inside it.
+    expect(paintedContrast(fill, canvas)).toBeGreaterThanOrEqual(3);
+    expect(paintedContrast(label, fill)).toBeGreaterThanOrEqual(4.5);
 
     // Neither the agency's name nor the agency's internal label for this
     // company belongs on a page their customers see.

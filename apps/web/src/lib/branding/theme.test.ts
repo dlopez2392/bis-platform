@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import type { Branding } from "@bis/db";
 import { contrastRatio } from "./color";
+import { publicFormTheme } from "./public-form-theme";
 import { NEUTRAL_RAMPS, SIDEBAR_FOREGROUND, type NeutralName } from "./neutral-ramps";
 import { deriveTheme, parseAllowlisted, NEUTRAL_NAMES, BIS, FONT, type CornerName, type TypeName } from "./theme";
 import { FONT_ALLOWLIST, SAFE_STYLE_FALLBACKS } from "./theme-style";
@@ -183,6 +185,94 @@ describe("deriveTheme", () => {
   });
 });
 
+// The public form joins the sweep rather than getting a private one of its
+// own. It is the only surface a client's own CUSTOMERS see, it paints the
+// same derived tokens, and this sweep is what found two AA defects that were
+// live in production — a per-file version of it would be the copy that drifts.
+describe("the public form clears its thresholds for every combination", () => {
+  const row = (over: Partial<Branding>): Branding => ({
+    brandName: null, brandLogoPath: null, brandColor: null,
+    brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
+    ...over,
+  });
+
+  it("keeps the CTA, its label and the body text legible everywhere", () => {
+    for (const neutral of NEUTRALS)
+      for (const corners of CORNERS)
+        for (const type of TYPES)
+          for (const mode of MODES)
+            for (const color of ADVERSARIAL) {
+              const { style, formAccent } = publicFormTheme(row({
+                brandNeutral: neutral, brandCorners: corners, brandType: type,
+                brandMode: mode, brandColor: color,
+              }), false);
+              const s = style as unknown as Record<string, string>;
+              const where = `${neutral}/${corners}/${type}/${mode}/${color}`;
+
+              // The CTA is two things wearing one colour: the Submit fill on
+              // the page and the focus outline on an input filled with --card.
+              // 3:1 is WCAG 1.4.11 for a non-text UI component.
+              expect(contrastRatio(formAccent.accent, s["--background"]!), `cta on bg ${where}`)
+                .toBeGreaterThanOrEqual(3);
+              expect(contrastRatio(formAccent.accent, s["--card"]!), `cta outline on input ${where}`)
+                .toBeGreaterThanOrEqual(3);
+              expect(contrastRatio(formAccent.accentForeground, formAccent.accent), `cta label ${where}`)
+                .toBeGreaterThanOrEqual(4.5);
+
+              // Asserted through the tokens the FORM actually emits, not
+              // through deriveTheme's return value: the question here is
+              // whether the values that reach this page's style attribute are
+              // legible, which is a different question from whether the
+              // derivation computed legible ones.
+              expect(contrastRatio(s["--foreground"]!, s["--background"]!), `body text ${where}`)
+                .toBeGreaterThanOrEqual(4.5);
+              expect(contrastRatio(s["--muted-foreground"]!, s["--background"]!), `optional label ${where}`)
+                .toBeGreaterThanOrEqual(4.5);
+
+              // The message under a field that says the address is wrong.
+              // form.css's own red is 2.93:1 on every dark ramp, which is what
+              // this sweep caught — brand_mode is what made it reachable.
+              expect(contrastRatio(s["--form-error"]!, s["--background"]!), `error text ${where}`)
+                .toBeGreaterThanOrEqual(4.5);
+
+              // 🔴 RECORDED, NOT MET: WCAG 1.4.11 asks 3:1 for an input's
+              // visual boundary and NOTHING in this product reaches it — the
+              // ramps' border/card lands at 1.29–1.36:1 and the literal this
+              // form used before the theme (#d4d4d8 on #ffffff) at 1.478:1.
+              // Asserting 3:1 here would fail every combination and would be
+              // a change to the shared ramps, i.e. to the whole dashboard,
+              // which M4b does not own. The floor asserted is the one that
+              // holds: the border must not collapse into the fill. Raising it
+              // is a design-system item, not a form item.
+              expect(contrastRatio(s["--border"]!, s["--card"]!), `input boundary visible ${where}`)
+                .toBeGreaterThanOrEqual(1.25);
+            }
+  });
+
+  it("emits the same CTA the dark rule would, for a follow tenant in dark", () => {
+    // The pairs above are checked per fixed mode. `follow` carries a second,
+    // separately-derived set in a media rule, and nothing else would notice
+    // if that set were computed against the wrong surfaces.
+    for (const neutral of NEUTRALS)
+      for (const color of ADVERSARIAL) {
+        const css = publicFormTheme(row({
+          brandNeutral: neutral, brandMode: "follow", brandColor: color,
+        }), false).darkCss!;
+        const cta = css.match(/--form-accent:(#[0-9a-f]{6})/)![1]!;
+        const label = css.match(/--form-accent-foreground:(#[0-9a-f]{6})/)![1]!;
+        const error = css.match(/--form-error:(#[0-9a-f]{6})/)![1]!;
+        const where = `${neutral}/follow/${color}`;
+        expect(contrastRatio(error, NEUTRAL_RAMPS[neutral].dark.bg), `dark error text ${where}`)
+          .toBeGreaterThanOrEqual(4.5);
+        expect(contrastRatio(cta, NEUTRAL_RAMPS[neutral].dark.bg), `dark cta on bg ${where}`)
+          .toBeGreaterThanOrEqual(3);
+        expect(contrastRatio(cta, NEUTRAL_RAMPS[neutral].dark.card), `dark cta on input ${where}`)
+          .toBeGreaterThanOrEqual(3);
+        expect(contrastRatio(label, cta), `dark cta label ${where}`).toBeGreaterThanOrEqual(4.5);
+      }
+  });
+});
+
 // The Settings action's own gate before a value reaches setBranding: blank
 // clears the field, a member of the closed set passes through, anything else
 // is rejected so a typo returns a message instead of a Postgres constraint
@@ -289,15 +379,26 @@ describe("globals.css / BIS.dark parity", () => {
 // makes a tenant's typeface silently fall back with no error anywhere — which
 // is close to how brand_type managed to be inert for the whole milestone.
 describe("font variable names agree across the three places that hold them", () => {
-  const layout = readFileSync(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), "../../app/(dashboard)/layout.tsx"),
-    "utf8",
+  const read = (relative: string) => readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), relative), "utf8",
   );
+  // BOTH root layouts. `app/f` is a separate tree with its own <html> and
+  // never sees the dashboard's font declarations, so a face declared in one
+  // and not the other resolves to nothing on that route and the tenant's
+  // typeface falls back with no error anywhere — which is close to how
+  // brand_type managed to be inert for the whole of M4a.
+  const layouts = {
+    dashboard: read("../../app/(dashboard)/layout.tsx"),
+    publicForm: read("../../app/f/layout.tsx"),
+  };
 
-  it.each(Object.entries(FONT))("%s resolves to a variable the root layout declares", (_name, value) => {
+  it.each(
+    Object.entries(FONT).flatMap(([name, value]) =>
+      Object.entries(layouts).map(([where, source]) => [name, where, value, source] as const)),
+  )("%s resolves to a variable the %s root layout declares", (_name, _where, value, source) => {
     const varName = value.match(/var\((--[a-z-]+)\)/)?.[1];
     expect(varName, `FONT value ${value} is not a var() reference`).toBeTruthy();
-    expect(layout).toContain(`variable: "${varName}"`);
+    expect(source).toContain(`variable: "${varName}"`);
   });
 
   it("allows exactly the values FONT can produce", () => {

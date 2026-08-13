@@ -7,8 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SubmitButton } from "../../submit-button";
 import { m } from "@/lib/messages";
-import { FORM_ACCENT_FALLBACK, SIDEBAR_BG, resolveFormAccent,
-         resolveSidebarAccent } from "@/lib/branding/color";
+import { FORM_ACCENT_FALLBACK, SIDEBAR_BG, resolveSidebarAccent } from "@/lib/branding/color";
+import { publicFormTheme } from "@/lib/branding/public-form-theme";
 import { deriveTheme, type CornerName, type ModeName, type NeutralName, type TypeName } from "@/lib/branding/theme";
 import { themeStyle } from "@/lib/branding/theme-style";
 import { MAX_LOGO_BYTES } from "@/lib/branding/validate-logo";
@@ -90,7 +90,21 @@ export function BrandingPanel({
   // cannot predict — a dark brand is lightened to stay legible on a dark
   // sidebar, and spec §5.1 accepted that hue-preserving shift specifically on
   // the grounds that this preview would show it before saving.
-  const previewAccent = resolveFormAccent(color);
+  // The unthemed swatch below previews the PUBLIC FORM's Submit button, so it
+  // goes through the public form's own resolver rather than resolveFormAccent.
+  // M4b made those two answers differ: the form now lifts the brand colour
+  // until it is visible on what it sits on and can carry a legible label, so
+  // a colour in the dead luminance band (#8b5cf6 and its neighbours) renders
+  // differently there than the raw value this used to show. A preview that
+  // shows the input rather than the outcome is the thing this panel exists
+  // not to be.
+  //
+  // Safe in a client component for the reason the module is written that way:
+  // it is pure, and `Branding` crosses into it as a type only.
+  const previewAccent = publicFormTheme({
+    brandName: null, brandLogoPath: null, brandColor: color,
+    brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
+  }, false).formAccent;
   const previewSidebar = resolveSidebarAccent(color);
 
   // The same function the shell calls, on the same inputs. A second
