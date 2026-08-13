@@ -130,19 +130,16 @@ export function lightenForSidebar(hex: string): string {
   return out;
 }
 
-/**
- * The public form's accent and the text color that stays legible on it.
- *
- * Re-validates rather than trusting the stored value — the second half of the
- * validate-on-write-and-on-read rule. Surfaces call this instead of deriving
- * their own, so none of them can forget.
+/*
+ * `resolveFormAccent` lived here until M4b: the brand colour re-validated,
+ * plus whichever of white or near-black was legible on it. It is gone rather
+ * than left beside its replacement, because a function that still looks like
+ * the answer is how a caller finds the wrong one. `publicFormTheme` in
+ * public-form-theme.ts is the answer — it does the same two things and then
+ * lifts, which is the half this one was missing: a brand colour is not
+ * necessarily visible on the surface it lands on, and #8b5cf6 could not carry
+ * either label at 4.5:1 no matter which one this picked.
  */
-export function resolveFormAccent(
-  brandColor: string | null,
-): { accent: string; accentForeground: string } {
-  const accent = parseHexColor(brandColor) ?? FORM_ACCENT_FALLBACK;
-  return { accent, accentForeground: readableTextOn(accent) };
-}
 
 /** The sidebar's accent, or null to leave today's light/dark-tuned tokens alone. */
 export function resolveSidebarAccent(brandColor: string | null): string | null {

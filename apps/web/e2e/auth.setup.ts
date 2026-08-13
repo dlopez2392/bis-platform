@@ -164,7 +164,10 @@ setup("authenticate as client user (no app_role)", async ({ page }) => {
   // Chosen deliberately: it renders differently on the two surfaces — as
   // itself on the public form, lightened to #3a62d4 on the dark sidebar
   // (it scores only 1.62:1 there unlightened) — so this one fixture proves
-  // both resolveFormAccent and resolveSidebarAccent. See client-access.spec.ts.
+  // both the public form's CTA resolver and resolveSidebarAccent. Since M4b
+  // this account is also THEMED (below), so the form lifts it too rather than
+  // painting it raw — public-form-theme.spec.ts covers the raw value on the
+  // unthemed path. See client-access.spec.ts.
   const brandColor = "#1e3a8a";
   await setBranding(db, accountId, {
     brandName, brandLogoPath, brandColor,
