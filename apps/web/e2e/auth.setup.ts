@@ -5,6 +5,7 @@ import { config as loadEnv } from "dotenv";
 import { clerkClient } from "@clerk/nextjs/server";
 import { serviceDb, createAccount, setClientAccess, createContact,
          setBranding, uploadBrandLogo, createForm, updateForm } from "@bis/db";
+import { sweepStaleFixtures, formatSweepReport } from "./fixtures/sweep";
 
 // Needed for the client-fixture setup below, which calls serviceDb() and
 // clerkClient() directly from the Playwright test runner process (not
@@ -91,6 +92,27 @@ setup("authenticate as agency_admin", async ({ page }) => {
 // instead.
 setup("authenticate as client user (no app_role)", async ({ page }) => {
   await clerkSetup();
+
+  // Clean up before creating, because cleaning up after is optional.
+  // auth.teardown only runs when a suite COMPLETES, so every Ctrl-C, crashed
+  // dev server or process-level timeout strands a real Clerk user, a real
+  // Clerk org, real rows and a PUBLIC Storage object in the shared dev
+  // environment — permanently, since nothing afterwards knows they existed.
+  // This is the pass that makes those bounded: it deletes only names this
+  // suite mints and only after 30 minutes, so a concurrently-running suite's
+  // fixture is never touched (see fixtures/stale.ts, which owns that
+  // decision and is unit-tested).
+  //
+  // Wrapped so a sweep failure can never fail a run that would otherwise
+  // pass. Housekeeping must not become a new way for the suite to go red.
+  try {
+    const report = await sweepStaleFixtures({ dryRun: false });
+    const swept = report.accounts.length + report.clerkUsers.length
+      + report.clerkOrgs.length + report.orphanObjects.length;
+    if (swept > 0) console.log(formatSweepReport(report, false));
+  } catch (e) {
+    console.error(`e2e setup: fixture sweep failed (continuing): ${String(e)}`);
+  }
 
   const stamp = Date.now();
   // example.com is IANA-reserved for documentation/testing and never
