@@ -1,21 +1,63 @@
-.bis-form { font: 400 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: #18181b; padding: 16px; }
+/* Every value a tenant can theme is `var(--token, <what this file used to
+   hardcode>)`. An account with no theme controls set emits no token set at
+   all, so the fallbacks are what renders — byte for byte what this page
+   looked like before M4b. public-form-theme.test.ts reads this file and pins
+   each fallback against FORM_CSS_FALLBACKS; they are two copies of one value
+   in two languages, and nothing crossing between them is how brand_type
+   managed to be inert for the whole of M4a. */
+
+/* The only element that paints a surface. `.bis-form` deliberately paints
+   none of its own: a themed form should be today's form in the tenant's
+   colours, not a card floating on a page, and a non-transparent embed must
+   not show a two-tone rectangle inside its iframe.
+
+   The theme's tokens ride on this element's style attribute, so `--background`
+   is only ever set here when there is a token set to paint; a transparent
+   embed and an unthemed form both fall through to `transparent`, which leaves
+   the browser canvas (white, standalone) or the host page (embedded) showing,
+   exactly as before.
+
+   min-height so a dark tenant's standalone page is one colour to the bottom
+   of the viewport rather than a painted block above white. The embed sizes
+   its iframe from .bis-form's own height, so this costs an embed nothing. */
+.bis-form-page {
+  background: var(--background, transparent);
+  min-height: 100vh;
+}
+.bis-form {
+  font: 400 15px/1.5 var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+  color: var(--foreground, #18181b);
+  padding: 16px;
+}
 .bis-form-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
 .bis-form-row label { font-size: 13px; font-weight: 500; }
-.bis-form-optional { font-weight: 400; color: #71717a; }
+.bis-form-optional { font-weight: 400; color: var(--muted-foreground, #71717a); }
 .bis-form input[type="text"], .bis-form input[type="email"], .bis-form input[type="tel"], .bis-form textarea {
   width: 100%; box-sizing: border-box; padding: 8px 10px; font: inherit;
-  border: 1px solid #d4d4d8; border-radius: var(--radius); background: #fff; color: inherit;
+  border: 1px solid var(--border, #d4d4d8); border-radius: var(--radius, 0.5rem);
+  background: var(--card, #ffffff); color: inherit;
 }
-.bis-form input:focus, .bis-form textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+/* --form-accent, not --accent: in the derived token set --accent is the ramp's
+   own subtle HOVER surface and is deliberately not brand-driven, so painting
+   the Submit button with it would turn every client's CTA into a pale grey
+   block — with a green test suite, since the property would be set and
+   consumed exactly as written. The form's brand accent gets its own name. */
+.bis-form input:focus, .bis-form textarea:focus {
+  outline: 2px solid var(--form-accent, #6d28d9); outline-offset: 1px;
+  border-color: var(--form-accent, #6d28d9);
+}
 .bis-form-consent { flex-direction: row; align-items: flex-start; gap: 8px; }
 .bis-form-consent label { font-weight: 400; }
 .bis-form-submit {
   padding: 9px 18px; font: inherit; font-weight: 500; cursor: pointer;
-  color: var(--accent-foreground, #fff);
-  background: var(--accent); border: 0; border-radius: var(--radius);
+  color: var(--form-accent-foreground, #ffffff);
+  background: var(--form-accent, #6d28d9); border: 0; border-radius: var(--radius, 0.5rem);
 }
 .bis-form-submit[disabled] { opacity: 0.6; cursor: default; }
-.bis-form-error { margin: 0; font-size: 12px; color: #b91c1c; }
+/* Lifted per mode by the module: this red is 6.1:1 on a light page and only
+   2.93:1 on all three dark ramps — under AA, on the sentence that tells a
+   customer their email address is wrong. */
+.bis-form-error { margin: 0; font-size: 12px; color: var(--form-error, #b91c1c); }
 .bis-form-success { margin: 0; padding: 16px 0; font-size: 15px; }
 /* Off-screen, not display:none — some bots skip hidden inputs but fill
    anything else they find. */
@@ -25,15 +67,13 @@
    below brings its own 16px top. */
 .bis-form-brand {
   display: flex; align-items: center; gap: 10px; padding: 16px 16px 0;
-  font: 400 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: #18181b;
+  font: 400 15px/1.5 var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+  color: var(--foreground, #18181b);
 }
 /* Capped in both directions so a large upload cannot dominate the page a
    customer came to in order to fill in a form. */
 .bis-form-brand-logo { max-height: 40px; max-width: 180px; width: auto; height: auto; object-fit: contain; }
 .bis-form-brand-name { font-size: 17px; font-weight: 600; }
-.dark .bis-form { color: #fafafa; }
-.dark .bis-form-brand { color: #fafafa; }
-.dark .bis-form input[type="text"], .dark .bis-form input[type="email"],
-.dark .bis-form input[type="tel"], .dark .bis-form textarea {
-  background: #18181b; border-color: #3f3f46;
-}
+/* The `.dark` block that used to live here is gone. The dark token set now
+   carries the mode itself — one table of values, validated once — so there is
+   no class to toggle and no second set of literals to keep in step with it. */

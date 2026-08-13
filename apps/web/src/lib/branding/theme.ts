@@ -135,13 +135,24 @@ export const BIS = {
  *
  * Lifting for visibility against the card alone is what let a 2.84:1 button
  * through on the page background (`#cc986c` on the light `cool` ramp) — the
- * card and the background are not interchangeable; see
- * `liftUntilReadableOnBoth`. Lifting for visibility without the label check
- * is what separately let a 4.46:1 label through — the same failure
- * globals.css's dark primary had.
+ * card and the background are not interchangeable; see `liftAgainstBoth`.
+ * Lifting for visibility without the label check is what separately let a
+ * 4.46:1 label through — the same failure globals.css's dark primary had.
+ *
+ * `visibility` is a parameter because the two callers owe different floors
+ * for the same two-part problem. `primary` needs 4.5:1 because it doubles as
+ * link text. The public form's CTA is a button fill and nothing else, so it
+ * owes 1.4.11's 3:1 — but its LABEL still owes 4.5:1, and that half is not
+ * negotiable by the element's role. The public form reached this code by
+ * failing exactly that: `#8b5cf6` sits in the luminance band where 3:1 on
+ * white passes untouched and then neither white (4.459:1) nor #111111 clears
+ * 4.5:1 on the result. That is a live AA defect on today's form, which never
+ * lifted for the label at all.
  */
-function liftForLabel(hex: string, card: string, background: string): string | null {
-  const visible = liftUntilReadableOnBoth(hex, card, background);
+export function liftForLabel(
+  hex: string, card: string, background: string, visibility: number,
+): string | null {
+  const visible = liftAgainstBoth(hex, card, background, visibility);
   if (!visible) return null;
   if (Math.max(contrastRatio(visible, "#ffffff"), contrastRatio(visible, "#111111")) >= 4.5) {
     return visible;
@@ -151,7 +162,9 @@ function liftForLabel(hex: string, card: string, background: string): string | n
   // white label is the one these mid-tone brands can usually reach.
   for (const label of ["#ffffff", "#111111"] as const) {
     const moved = ensureContrast(visible, label, 4.5);
-    if (moved && contrastRatio(moved, card) >= 4.5 && contrastRatio(moved, background) >= 4.5) {
+    if (moved
+        && contrastRatio(moved, card) >= visibility
+        && contrastRatio(moved, background) >= visibility) {
       return moved;
     }
   }
@@ -159,7 +172,7 @@ function liftForLabel(hex: string, card: string, background: string): string | n
 }
 
 /**
- * Lifts `hex` until it clears 4.5:1 against BOTH `card` and `background`.
+ * Lifts `hex` until it clears `target` against BOTH `a` and `b`.
  *
  * Which surface binds is never assumed, because it flips between modes: in
  * light mode `background` is darker than `card`, so clearing white does not
@@ -169,19 +182,28 @@ function liftForLabel(hex: string, card: string, background: string): string | n
  * in dark mode does too), so re-lifting against whichever of the two is
  * currently the harder one converges in a couple of steps — bounded
  * generously at 10 so a future ramp change can't spin this.
+ *
+ * `target` is a parameter rather than the 4.5 it was written with, because
+ * `liftForLabel` now serves the public form's CTA at the 3:1 non-text floor
+ * as well as `primary` at 4.5:1. One walk with a threshold argument, rather
+ * than a second copy that can drift from this one. Not exported: callers
+ * outside this file want `liftForLabel`, which is this walk PLUS the label
+ * check — and the form arrived here by being given only the first half.
  */
-function liftUntilReadableOnBoth(hex: string, card: string, background: string): string | null {
+function liftAgainstBoth(
+  hex: string, a: string, b: string, target: number,
+): string | null {
   let out = hex;
   for (let i = 0; i < 10; i++) {
-    const cardRatio = contrastRatio(out, card);
-    const bgRatio = contrastRatio(out, background);
-    if (cardRatio >= 4.5 && bgRatio >= 4.5) return out;
-    const harder = cardRatio <= bgRatio ? card : background;
-    const moved = ensureContrast(out, harder, 4.5);
+    const aRatio = contrastRatio(out, a);
+    const bRatio = contrastRatio(out, b);
+    if (aRatio >= target && bRatio >= target) return out;
+    const harder = aRatio <= bRatio ? a : b;
+    const moved = ensureContrast(out, harder, target);
     if (!moved) return null;
     out = moved;
   }
-  return contrastRatio(out, card) >= 4.5 && contrastRatio(out, background) >= 4.5 ? out : null;
+  return contrastRatio(out, a) >= target && contrastRatio(out, b) >= target ? out : null;
 }
 
 /**
@@ -219,7 +241,7 @@ export function deriveTheme(
   //
   // ring and sidebarAccent still carry no label; they stay non-text UI at
   // 3:1, each lifted separately against the surface it actually lands on.
-  const primary = (brand && liftForLabel(brand, steps.card, steps.bg)) ?? bis.primary;
+  const primary = (brand && liftForLabel(brand, steps.card, steps.bg, 4.5)) ?? bis.primary;
   const accent = steps.subtle;
   const sidebarAccent = (brand && ensureContrast(brand, ramp.sidebar, 3)) ?? bis.sidebarAccent;
 

@@ -3,7 +3,6 @@
 import { useActionState, useEffect, useRef } from "react";
 import type { FormField, FormTheme } from "@bis/db";
 import { HONEYPOT_FIELD, RENDER_TOKEN_FIELD } from "@/lib/forms/guards";
-import { resolveFormRadius } from "@/lib/forms/safe-theme";
 import type { PublicStrings } from "@/lib/forms/public-strings";
 import { IDLE, type SubmitResult } from "./submit-result";
 
@@ -26,7 +25,6 @@ function isSafeRedirectUrl(url: string): boolean {
 export function PublicForm({
   fields,
   theme,
-  accent,
   locale,
   strings,
   renderToken,
@@ -35,8 +33,6 @@ export function PublicForm({
 }: {
   fields: FormField[];
   theme: FormTheme;
-  /** Resolved server-side from the account's brand color, already validated. */
-  accent: { accent: string; accentForeground: string };
   locale: "en" | "es";
   strings: PublicStrings;
   renderToken: string;
@@ -92,19 +88,15 @@ export function PublicForm({
       ref={rootRef}
       className="bis-form"
       style={{
-        // Themed rather than inheriting the host page: an iframe cannot read the
-        // host's CSS, so these are what stop the form looking pasted in.
+        // The account's tokens — accent, corners, typeface, surfaces — are
+        // emitted once on <main> by page.tsx and inherit down here. They are
+        // deliberately NOT re-emitted on this element: an inline custom
+        // property set here would outrank the `prefers-color-scheme: dark`
+        // rule that a `follow` tenant's page carries, and that tenant's form
+        // would stay light on a dark device with everything appearing to work.
         //
-        // The accent comes from the ACCOUNT's brand color, not from
-        // theme.accent — a company has one brand, not one per form. See
-        // docs/superpowers/specs/2026-08-08-brand-color-design.md section 2.1.
-        "--accent": accent.accent,
-        "--accent-foreground": accent.accentForeground,
-        // Validated for the same reason the accent is: React does not strip
-        // `;` from a style value, so an unvalidated one appends arbitrary CSS
-        // declarations to this element — on a page the client's own customers
-        // load. theme.radius is raw stored JSONB and a client can write it.
-        "--radius": resolveFormRadius(theme.radius),
+        // This stays because it is the form's own setting, not the account's:
+        // the host page owns the backdrop when the operator says so.
         background: theme.transparentBackground ? "transparent" : undefined,
       } as React.CSSProperties}
     >

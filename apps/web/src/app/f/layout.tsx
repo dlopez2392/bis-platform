@@ -1,4 +1,27 @@
 import type { Metadata } from "next";
+import { Geist, Inter, Source_Serif_4 } from "next/font/google";
+
+// The three faces `brand_type` can name, declared here because this tree has
+// its own root layout and never sees the dashboard's. `deriveTheme` emits
+// `var(--font-geist-sans)` and friends; without these declarations those
+// variables resolve to nothing on this route and a tenant's typeface silently
+// falls back — the same inert-token failure M4a shipped for a whole milestone.
+//
+// All three carry `preload: false`, and unlike the dashboard that includes the
+// default. Geist is preloaded there because it is always painted; here it is
+// not — an unthemed form paints the system stack and downloads no font at all,
+// which is the majority of embeds. Preloading it would spend a font request on
+// most visitors for a face nothing on their page uses.
+//
+// The stated cost: a tenant who engages the theme by setting only, say, a
+// neutral still resolves to FONT.geist, so their form now downloads a font
+// where it downloaded none. That follows from "any one control engages the
+// whole theme", which is how the workspace already behaves.
+const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"], preload: false });
+const inter = Inter({ variable: "--font-inter", subsets: ["latin"], preload: false });
+const sourceSerif = Source_Serif_4({
+  variable: "--font-source-serif", subsets: ["latin"], preload: false,
+});
 
 export const metadata: Metadata = {
   title: "Form",
@@ -30,7 +53,10 @@ export default function PublicFormLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="en" className={`${geistSans.variable} ${inter.variable} ${sourceSerif.variable}`}>
+      {/* Still transparent, and still no globals.css: the token set is painted
+          on <main> by the page, so an embed with no theme — or a transparent
+          one — keeps showing the host page through it. */}
       <body style={{ margin: 0, background: "transparent" }}>{children}</body>
     </html>
   );

@@ -26,13 +26,14 @@ export function defaultFieldKey(kind: string): string {
  * does not expose (`mode`, `radius`) instead of replacing the whole object.
  *
  * `updateForm` writes `theme` as a full JSONB column replace, not a merge, and
- * the editor has no control for `theme.mode` or `theme.radius` even though
- * both are live: the public page toggles a dark class on `theme.mode ===
- * "dark"`, and the form sets `--radius` from `theme.radius`. Building the
- * patch from a literal object here would silently and permanently erase
- * those keys for any form that carries them the first time an operator opens
- * the editor and clicks Save. Do not "simplify" this back to a literal
- * object — that reintroduces the clobber.
+ * the editor has never had a control for `theme.mode` or `theme.radius`.
+ * As of M4b neither is READ either — the account's tenant theme carries the
+ * form's mode and corners, the same call that retired the per-form accent —
+ * so preserving them no longer protects live behaviour. It is kept because
+ * they are still stored, still copied across accounts by blueprint capture
+ * and apply, and quietly erasing a column's contents on the first Save after
+ * a deploy is not a thing a save should do. Do not "simplify" this back to a
+ * literal object.
  *
  * `transparentBackground` is what the editor manages, so it is always taken
  * from `edits`. `accent` used to live here too; the account's brand color

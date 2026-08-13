@@ -7,8 +7,10 @@
  * when there is nothing to show.
  *
  * Styled from form.css rather than the dashboard's Tailwind tokens: this route
- * carries its own stylesheet and its own dark handling (`form.theme.mode`), and
- * is deliberately not part of the dashboard's token system.
+ * carries its own stylesheet and its own root layout. It does read the same
+ * derived tenant tokens as of M4b — form.css's `var(--token, <literal>)`
+ * fallbacks are how it renders when an account has no theme — but it is still
+ * deliberately outside the dashboard's Tailwind layer and its globals.css.
  */
 export function FormBrand({
   name,

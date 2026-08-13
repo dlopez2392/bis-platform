@@ -13,26 +13,19 @@
  * See docs/superpowers/specs/2026-08-08-brand-color-design.md §4.
  */
 
-/** What `public-form.tsx` has always used for `--radius`. */
-export const FORM_RADIUS_FALLBACK = "0.5rem";
-
 const CSS_LENGTH = /^\d+(\.\d+)?(px|rem|em|%)$/;
 
 /**
- * Accepts only a plain, unit-bearing, non-negative CSS length. Anything
- * else — including a technically-valid CSS value such as `calc()` or
- * `var()`, which this module has no way to prove is free of a smuggled
- * declaration — falls back.
- */
-export function resolveFormRadius(radius: string | undefined | null): string {
-  if (typeof radius !== "string") return FORM_RADIUS_FALLBACK;
-  const v = radius.trim();
-  return CSS_LENGTH.test(v) ? v : FORM_RADIUS_FALLBACK;
-}
-
-/**
- * The same rule resolveFormRadius applies, with the caller's fallback. Shared
- * rather than reimplemented: one place decides what a safe CSS length is.
+ * Accepts only a plain, unit-bearing, non-negative CSS length, and returns
+ * the caller's fallback for anything else — including a technically-valid CSS
+ * value such as `calc()` or `var()`, which this module has no way to prove is
+ * free of a smuggled declaration.
+ *
+ * `resolveFormRadius`, the public form's own wrapper around this same regex,
+ * is gone with M4b: the form's corners now arrive with the tenant token set,
+ * validated by `themeStyle` through this function, and `forms.theme.radius`
+ * is no longer read by anything. One caller-agnostic rule, one place that
+ * decides what a safe CSS length is.
  */
 export function resolveCssLength(value: string | undefined | null, fallback: string): string {
   if (typeof value !== "string") return fallback;
