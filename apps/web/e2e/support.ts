@@ -1,4 +1,24 @@
 import { type Page, test } from "@playwright/test";
+import { contrastRatio } from "../src/lib/branding/color";
+
+/**
+ * `rgb(30, 58, 138)` — what getComputedStyle reports — back to `#1e3a8a`, so
+ * a painted colour can be measured rather than only compared to a literal.
+ *
+ * This exists because M4b made the exact value a tenant's Submit button wears
+ * a DERIVED one: it is lifted for the tenant's own surfaces, so pinning a hex
+ * in a spec would either duplicate the derivation or freeze whichever answer
+ * it happened to give. The property worth asserting is that it stays legible.
+ */
+export function hexOf(cssColor: string): string {
+  const [r, g, b] = cssColor.match(/\d+/g)!.map(Number) as [number, number, number];
+  return `#${[r, g, b].map((c) => c.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** The contrast ratio between two colours as getComputedStyle reports them. */
+export function paintedContrast(a: string, b: string): number {
+  return contrastRatio(hexOf(a), hexOf(b));
+}
 
 /**
  * The one account seeded in this environment with real data: one contact
