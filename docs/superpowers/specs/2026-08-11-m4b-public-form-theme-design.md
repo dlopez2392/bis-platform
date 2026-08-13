@@ -273,3 +273,45 @@ cost the project a stranded Clerk identity and a public file in Storage.
   call site, because React does not strip `;` from a style value.
 - The agency's own chrome stays BIS by having no theme to emit — not by a
   conditional. The same holds here: an unthemed account takes the `null` path.
+
+## 13. What implementation changed about this spec (2026-08-12)
+
+Recorded here rather than silently, because a spec that no longer describes
+the code is worse than no spec.
+
+1. **`style` is never null.** §4 has it null for an unthemed account. That
+   would have dropped the brand colour off the CTA — an account with a colour
+   and no theme controls is the majority case, and it paints that colour
+   today. The token set is what varies; the CTA pair is always emitted, and
+   `themed` (not nullness) drives `data-tenant-theme`.
+2. **The CTA custom properties are emitted on `<main>`, not by
+   `public-form.tsx`.** §8 assigns them to the form element. An inline style
+   there outranks the `prefers-color-scheme` rule on the ancestor, so a
+   `follow` tenant's CTA would have been pinned to its light value on a dark
+   device. One element carries the whole set.
+3. **The dark block carries `!important`, and `darkCss` is the whole `@media`
+   rule** rather than its declarations. Same cause: the light tokens are an
+   inline attribute on the element the rule selects, and inline beats any
+   author rule. Without it the block parses, matches, and changes nothing.
+   Returning the complete rule keeps the selector beside the values it scopes.
+4. **`--form-error` was added.** Not in this spec at all. `form.css`'s
+   validation red is 6.1:1 on a light page and **2.93:1 on all three dark
+   ramps** — the message telling a customer their email address is wrong. Only
+   `brand_mode` makes it reachable, so it is lifted per mode.
+5. **The CTA lift is `liftForLabel`, not the bare two-surface walk.** §6.2
+   asks for 3:1 visibility. That alone ships a 4.459:1 label on `#8b5cf6` (and
+   its neighbours in the dead luminance band), which is a **live AA defect on
+   today's form** — `resolveFormAccent` never lifted for the label at all.
+   `liftForLabel` took a visibility parameter instead of being duplicated.
+6. **The unthemed CTA is lifted too**, resolving §3's "byte-identical" against
+   §6.2's "lift against `#fff`" in favour of §6.2. Only colours that could not
+   be seen on white, or could not carry a label, move at all.
+7. **Input border vs input fill is asserted at 1.25:1, not §10's 3:1.**
+   Measured: the ramps land at 1.29–1.36:1 and today's form literal at
+   1.478:1. **Nothing in this product meets 1.4.11 for an input's boundary**,
+   the dashboard included; asserting 3:1 would fail every combination and the
+   fix is a change to the shared ramps, which M4b does not own. Recorded as a
+   design-system item.
+8. **`resolveFormAccent` is deleted**, and the Settings preview's unthemed
+   swatch now calls `publicFormTheme` — it was previewing a colour the form no
+   longer paints.
