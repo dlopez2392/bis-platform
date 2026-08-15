@@ -7,7 +7,7 @@ import { createFieldAction, upsertValueAction, setClientAccessAction, inviteClie
 import { setBrandingAction } from "../branding/actions";
 import { SaveBlueprintDialog } from "./save-blueprint-dialog";
 import { ClientAccessPanel, type ClientAccessMember } from "./client-access-panel";
-import { BrandingPanel } from "./branding-panel";
+import { BrandingPanel } from "@/components/branding-panel";
 import { captureBlueprintAction } from "../../../blueprints/actions";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";

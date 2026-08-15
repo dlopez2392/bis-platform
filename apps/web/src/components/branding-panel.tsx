@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { SubmitButton } from "../../submit-button";
+import { SubmitButton } from "@/app/(dashboard)/dashboard/accounts/submit-button";
 import { m } from "@/lib/messages";
 import { FORM_ACCENT_FALLBACK, SIDEBAR_BG, resolveSidebarAccent } from "@/lib/branding/color";
 import { publicFormTheme } from "@/lib/branding/public-form-theme";
