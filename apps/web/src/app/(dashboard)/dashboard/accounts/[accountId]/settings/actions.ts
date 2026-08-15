@@ -3,12 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { requireAgencyOnlyAccountAccess, requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
-import { createCustomField, upsertCustomValue, setClientAccess, setBranding,
-         getBranding, uploadBrandLogo, removeBrandLogo, serviceDb,
+import { createCustomField, upsertCustomValue, setClientAccess, serviceDb,
          type CustomFieldDef } from "@bis/db";
-import { sniffImageType, MAX_LOGO_BYTES } from "@/lib/branding/validate-logo";
-import { parseHexColor } from "@/lib/branding/color";
-import { CORNER_NAMES, MODE_NAMES, NEUTRAL_NAMES, TYPE_NAMES, parseAllowlisted } from "@/lib/branding/theme";
 import { m } from "@/lib/messages";
 
 export async function createFieldAction(accountId: string, formData: FormData): Promise<void> {
@@ -62,99 +58,6 @@ export async function setClientAccessAction(accountId: string, formData: FormDat
  * serviceDb() is correct here, as it is elsewhere in this file: Settings is
  * agency-only, and a Storage write needs the service role.
  */
-export async function setBrandingAction(
-  accountId: string,
-  formData: FormData,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const { userId } = await requireAgencyOnlyAccountAccess(accountId);
-
-  const brandName = String(formData.get("brandName") ?? "").trim() || null;
-
-  // Empty clears it, exactly like brandName above. Anything present must be a
-  // real hex color: this string ends up in a CSS custom property on a page
-  // anonymous strangers load, so "looks close enough" is not a standard.
-  const rawColor = String(formData.get("brandColor") ?? "").trim();
-  const brandColor = rawColor === "" ? null : parseHexColor(rawColor);
-  if (rawColor !== "" && brandColor === null) {
-    return { ok: false, error: m["branding.badColor"] };
-  }
-
-  // A closed set on the way in as well as in the column. The constraint is the
-  // real guarantee; this exists so a typo in the form returns a message
-  // instead of a Postgres error the operator cannot act on.
-  function pickOne<T extends readonly string[]>(
-    field: string, allowed: T,
-  ): T[number] | null | false {
-    return parseAllowlisted(String(formData.get(field) ?? ""), allowed);
-  }
-
-  const brandNeutral = pickOne("brandNeutral", NEUTRAL_NAMES);
-  const brandCorners = pickOne("brandCorners", CORNER_NAMES);
-  const brandType = pickOne("brandType", TYPE_NAMES);
-  const brandMode = pickOne("brandMode", MODE_NAMES);
-  if (brandNeutral === false || brandCorners === false || brandType === false || brandMode === false) {
-    return { ok: false, error: m["branding.badTheme"] };
-  }
-
-  const file = formData.get("logo");
-
-  let brandLogoPath: string | undefined;
-  let previousLogoPath: string | null = null;
-  if (file instanceof File && file.size > 0) {
-    // Read before the write, so the old object can be swept up afterwards.
-    previousLogoPath = (await getBranding(serviceDb(), accountId)).brandLogoPath;
-    if (file.size > MAX_LOGO_BYTES) return { ok: false, error: m["branding.tooLarge"] };
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    // Re-check against what actually arrived. file.size is metadata; this is
-    // the payload, and only one of the two is what gets stored.
-    if (bytes.length > MAX_LOGO_BYTES) return { ok: false, error: m["branding.tooLarge"] };
-    // Sniff the real bytes. file.type is browser-supplied and the filename is
-    // client-controlled; neither is evidence of anything.
-    const contentType = sniffImageType(bytes);
-    if (!contentType) return { ok: false, error: m["branding.badFormat"] };
-    try {
-      brandLogoPath = await uploadBrandLogo(serviceDb(), accountId, bytes, contentType);
-    } catch (e) {
-      // A Storage outage should not take the Settings page down with a red
-      // screen — the panel renders this inline and the rest of the page, which
-      // includes the client-access switch, stays usable.
-      console.error(`setBranding: logo upload failed for account ${accountId}: ${String(e)}`);
-      return { ok: false, error: m["branding.saveFailed"] };
-    }
-  }
-
-  try {
-    await setBranding(
-      serviceDb(), accountId,
-      // brandLogoPath is omitted, not nulled, when no new file was sent:
-      // editing the display name must not delete the logo already set.
-      brandLogoPath
-        ? { brandName, brandLogoPath, brandColor, brandNeutral, brandCorners, brandType, brandMode }
-        : { brandName, brandColor, brandNeutral, brandCorners, brandType, brandMode },
-      userId,
-    );
-  } catch (e) {
-    console.error(`setBranding: write failed for account ${accountId}: ${String(e)}`);
-    return { ok: false, error: m["branding.saveFailed"] };
-  }
-
-  // Only after the new path is durably recorded, and never fatal: an orphaned
-  // object costs a few KB, while failing here would report a save that in fact
-  // succeeded. Deliberately skipped when the paths match — re-uploading the
-  // same image resolves to the same content-addressed path, and deleting it
-  // would delete the logo that was just saved.
-  if (brandLogoPath && previousLogoPath && previousLogoPath !== brandLogoPath) {
-    try {
-      await removeBrandLogo(serviceDb(), previousLogoPath);
-    } catch (e) {
-      console.error(`setBranding: orphaned previous logo ${previousLogoPath}: ${String(e)}`);
-    }
-  }
-
-  revalidatePath(`/dashboard/accounts/${accountId}/settings`);
-  return { ok: true };
-}
-
 export async function inviteClientAdminAction(
   accountId: string,
   formData: FormData,
