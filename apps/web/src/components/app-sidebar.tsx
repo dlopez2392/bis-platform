@@ -16,6 +16,7 @@ import {
   PanelLeftClose,
   PanelLeft,
   ArrowLeft,
+  Palette,
   type LucideIcon,
 } from "lucide-react";
 import { AccountSwitcher, type AccountOption } from "@/components/account-switcher";
@@ -83,6 +84,14 @@ export function AppSidebar({
         { href: `${base}/conversations`, label: m["nav.conversations"], icon: MessagesSquare },
         { href: `${base}/forms`, label: m["nav.forms"], icon: FileText },
         { href: `${base}/calendar`, label: m["nav.calendar"], icon: Calendar },
+        // Clients only. The agency reaches the same panel from Settings,
+        // beside the things only they can do; giving them both would be two
+        // doors to one form in the same sidebar. The route itself still
+        // works for the agency — hiding a link is not authorization, and a
+        // 404 there would be a thing to debug later rather than a boundary.
+        ...(isAgency
+          ? []
+          : [{ href: `${base}/branding`, label: m["nav.branding"], icon: Palette }]),
       ]
     : [
         { href: "/dashboard/accounts", label: m["nav.accounts"], icon: Building2 },
