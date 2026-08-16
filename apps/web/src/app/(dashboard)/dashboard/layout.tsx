@@ -46,6 +46,19 @@ export async function generateMetadata(): Promise<Metadata> {
     // outright. Dropped rather than rewritten: a client's workspace has no
     // business carrying the agency's marketing copy in its <head>.
     description: null,
+    // The last piece of the tab. M3 fixed the title and deliberately left the
+    // icon, so a client's staff read their own company name all day beside
+    // the agency's mark. Emitted only when they actually have a logo —
+    // omitting the key lets the app's own icon stand, which is the right
+    // fallback for an unbranded client and for the agency.
+    //
+    // Their uploaded logo as-is: it has already passed the magic-byte
+    // allowlist, and the alternative is generating a second, square,
+    // favicon-sized derivative at upload time — a resize pipeline this
+    // milestone does not need. Browsers scale it.
+    ...(branding.brandLogoPath
+      ? { icons: { icon: brandLogoUrl(branding.brandLogoPath) } }
+      : {}),
   };
 }
 

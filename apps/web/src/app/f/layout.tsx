@@ -25,6 +25,11 @@ const sourceSerif = Source_Serif_4({
 
 export const metadata: Metadata = {
   title: "Form",
+  // `app/` is a separate root layout tree from the dashboard's, so this one
+  // needs its own default now that the icon is config rather than a file
+  // convention (see (dashboard)/layout.tsx for why it moved). The form's own
+  // page overrides this with the client's logo when they have one.
+  icons: { icon: "/favicon.ico" },
 };
 
 /**
