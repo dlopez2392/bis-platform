@@ -381,6 +381,12 @@ describe("blueprint apply", () => {
         expect(await getBranding(db2, targetId)).toEqual({
           brandName: null, brandLogoPath: null, brandColor: null,
           brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
+          // Included for the same reason as the rest, and it matters more than
+          // the rest: a cloned reply-to would send a NEW client's customers to
+          // the PREVIOUS client, which is the notify_emails leak one step
+          // worse. buildBundle never reads `accounts` at all, so nothing has to
+          // exclude it — this assertion is what would notice if that changed.
+          replyToEmail: null,
         });
       });
     }));

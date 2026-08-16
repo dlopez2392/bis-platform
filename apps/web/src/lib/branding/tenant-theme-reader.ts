@@ -44,6 +44,7 @@ export const getTenantBranding = cache(async (accountId: string): Promise<Brandi
     return {
       brandName: null, brandLogoPath: null, brandColor: null,
       brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
+      replyToEmail: null,
     };
   }
 });

@@ -148,6 +148,12 @@ test.describe("a client edits their branding in the browser", () => {
       // is ambiguous under strict mode. The text field is the one that submits
       // (see the comment in branding-panel.tsx).
       await page.locator("#brand-color").fill("#0f766e");
+      // The reply-to rides the same write, and it is the only assertion in the
+      // suite that exercises its COLUMN GRANT: a client's save runs as the
+      // RLS-enforced client, so a column missing from migration 0014's grant is
+      // filtered out here and nowhere else. The agency, writing through the
+      // service role, would never see it.
+      await page.locator("#reply-to-email").fill("hello@rioroofing.com");
       await page.getByRole("button", { name: "Save" }).click();
 
       await expect(page.getByText("Branding updated")).toBeVisible();
@@ -156,8 +162,12 @@ test.describe("a client edits their branding in the browser", () => {
       await expect
         .poll(async () => (await getBranding(serviceDb(), accountId)).brandColor)
         .toBe("#0f766e");
+      await expect
+        .poll(async () => (await getBranding(serviceDb(), accountId)).replyToEmail)
+        .toBe("hello@rioroofing.com");
     } finally {
-      await setBranding(serviceDb(), accountId, { brandColor: before.brandColor }, clerkUserId);
+      await setBranding(serviceDb(), accountId,
+        { brandColor: before.brandColor, replyToEmail: before.replyToEmail }, clerkUserId);
     }
   });
 });

@@ -12,6 +12,7 @@ import {
 const NONE: Branding = {
   brandName: null, brandLogoPath: null, brandColor: null,
   brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
+  replyToEmail: null,
 };
 
 const branding = (over: Partial<Branding>): Branding => ({ ...NONE, ...over });

@@ -10,6 +10,7 @@ import {
   type FormField, type FormRow,
 } from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
+import { normalizeReplyTo } from "@/lib/email/reply-to";
 import {
   HONEYPOT_FIELD, RENDER_TOKEN_FIELD, MIN_FILL_MS, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS,
   DUPLICATE_WINDOW_MS, verifyRenderToken, hashIp, hashAnswers, parseAttribution,
@@ -334,7 +335,9 @@ async function enrich(
   // this is the fake provider and delivers nothing, which is what keeps e2e
   // honest.
   try {
-    await notify(db, form, contactId, answers);
+    // byKind is already built above; the customer's address is the value of
+    // whichever field this form uses for core.email, or "" if it asks for none.
+    await notify(db, form, contactId, answers, byKind.get("core.email") ?? "");
   } catch (e) {
     errors.push(`notify: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -434,6 +437,18 @@ async function setAttribution(
 async function notify(
   db: ReturnType<typeof serviceDb>, form: FormRow, contactId: string | null,
   answers: { key: string; label: string; value: string }[],
+  /**
+   * The address the visitor gave, or "" when this form asks for none.
+   *
+   * The recipient of this email is the CLIENT, so the reply has to travel the
+   * other way — to the customer. Without it, Reply goes to crm@bis-rgv.com: a
+   * mailbox the client does not own and the customer never hears from.
+   *
+   * Attacker-chosen and harmless. The Resend SDK takes this as a JSON field
+   * rather than a raw header, so there is nothing to inject, and the worst a
+   * submitter can nominate is their own address — which is the point.
+   */
+  leadEmail: string,
 ): Promise<void> {
   if (form.notify_emails.length === 0) return;
   const body = [
@@ -461,6 +476,7 @@ async function notify(
       await provider.send({
         to, fromName: account?.name ?? "BIS",
         subject: `New lead: ${form.name}`, body,
+        replyTo: normalizeReplyTo(leadEmail),
       });
     } catch (e) {
       failures.push(`${to} (${e instanceof Error ? e.message : String(e)})`);

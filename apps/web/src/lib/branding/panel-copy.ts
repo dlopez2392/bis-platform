@@ -25,6 +25,10 @@ export type PanelCopy = {
   /** A radio OPTION label, not a hint — "Follow their device" reads as a third
    *  party's device when the reader is the company itself. */
   modeFollow: string;
+  /** Where a reply goes. The agency wording names the BIS mailbox as the
+   *  fallback; the client's says "us", because naming our own mailbox to a
+   *  client explains nothing and describes plumbing they do not have. */
+  replyToHint: string;
 };
 
 const AGENCY: PanelCopy = {
@@ -35,6 +39,7 @@ const AGENCY: PanelCopy = {
   neutralHint: m["branding.neutralHint"],
   modeHint: m["branding.modeHint"],
   modeFollow: m["branding.modeFollow"],
+  replyToHint: m["branding.replyToHint"],
 };
 
 const CLIENT: PanelCopy = {
@@ -45,6 +50,7 @@ const CLIENT: PanelCopy = {
   neutralHint: m["branding.clientNeutralHint"],
   modeHint: m["branding.clientModeHint"],
   modeFollow: m["branding.clientModeFollow"],
+  replyToHint: m["branding.clientReplyToHint"],
 };
 
 export function panelCopy(audience: BrandingAudience): PanelCopy {

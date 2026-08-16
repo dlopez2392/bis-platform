@@ -21,6 +21,12 @@ import { dbForRequest } from "@/lib/db";
 import { sniffImageType, MAX_LOGO_BYTES } from "@/lib/branding/validate-logo";
 import { parseHexColor } from "@/lib/branding/color";
 import { CORNER_NAMES, MODE_NAMES, NEUTRAL_NAMES, TYPE_NAMES, parseAllowlisted } from "@/lib/branding/theme";
+// The public form's own validator, reused deliberately rather than a second
+// regex. Its rejections are stricter than RFC (no % or _) for a reason
+// recorded there: those are ILIKE metacharacters in contact dedupe. The extra
+// strictness costs nothing for an address we only ever hand to Resend, and one
+// email regex that drifts from another is worse than one that is strict.
+import { isValidEmail } from "@/lib/forms/guards";
 import { m } from "@/lib/messages";
 
 export async function setBrandingAction(
@@ -43,6 +49,16 @@ export async function setBrandingAction(
   const brandColor = rawColor === "" ? null : parseHexColor(rawColor);
   if (rawColor !== "" && brandColor === null) {
     return { ok: false, error: m["branding.badColor"] };
+  }
+
+  // Empty clears it, like brandName and brandColor above. A malformed address
+  // is refused here rather than stored: it is handed to Resend on every send,
+  // and a bad one fails silently at the provider — long after anyone is
+  // looking at this form.
+  const rawReplyTo = String(formData.get("replyToEmail") ?? "").trim();
+  const replyToEmail = rawReplyTo === "" ? null : rawReplyTo;
+  if (replyToEmail !== null && !isValidEmail(replyToEmail)) {
+    return { ok: false, error: m["branding.badReplyTo"] };
   }
 
   // A closed set on the way in as well as in the column. The constraint is the
@@ -101,8 +117,10 @@ export async function setBrandingAction(
       // brandLogoPath is omitted, not nulled, when no new file was sent:
       // editing the display name must not delete the logo already set.
       brandLogoPath
-        ? { brandName, brandLogoPath, brandColor, brandNeutral, brandCorners, brandType, brandMode }
-        : { brandName, brandColor, brandNeutral, brandCorners, brandType, brandMode },
+        ? { brandName, brandLogoPath, brandColor, brandNeutral, brandCorners, brandType, brandMode,
+            replyToEmail }
+        : { brandName, brandColor, brandNeutral, brandCorners, brandType, brandMode,
+            replyToEmail },
       userId,
     );
   } catch (e) {

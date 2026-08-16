@@ -19,6 +19,9 @@ const BRANDING_COLUMNS = [
   "brand_name",
   "brand_neutral",
   "brand_type",
+  // Not visual branding, and it belongs here for the same reason as the rest:
+  // a client edits it on the same page, through the same RLS-enforced write.
+  "reply_to_email",
 ].sort();
 
 // `withRollback` is the connection helper this package exposes (with `actAs`
@@ -26,7 +29,7 @@ const BRANDING_COLUMNS = [
 // INSIDE the callback. These are pure `select`s against the catalog, so the
 // rollback it wraps them in costs nothing.
 describe("accounts column privileges for authenticated", () => {
-  it("grants UPDATE on exactly the seven branding columns", async () => {
+  it("grants UPDATE on exactly the columns a client may write", async () => {
     await withRollback(async (c) => {
       const { rows } = await c.query<{ column_name: string }>(
         `select column_name
