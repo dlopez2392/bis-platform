@@ -11,6 +11,9 @@ import {
 } from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
+import { originFrom } from "@/lib/email/origin";
+import { emailBrand } from "@/lib/email/templates/shell";
+import { leadAlertEmail } from "@/lib/email/templates/lead-alert";
 import {
   HONEYPOT_FIELD, RENDER_TOKEN_FIELD, MIN_FILL_MS, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS,
   DUPLICATE_WINDOW_MS, verifyRenderToken, hashIp, hashAnswers, parseAttribution,
@@ -228,7 +231,7 @@ export async function submitFormAction(
     // `enrich` itself keeps the notification independent of everything else
     // it does, so this is a last-resort net, not the primary handling. -------
     try {
-      await enrich(db, form, submissionId, answers, base.attribution);
+      await enrich(db, form, submissionId, answers, base.attribution, originFrom(h));
     } catch (e) {
       const message = e instanceof Error ? e.message : "unknown enrichment failure";
       await setSubmissionProcessingError(db, accountId, submissionId, message);
@@ -253,6 +256,10 @@ async function enrich(
   db: ReturnType<typeof serviceDb>, form: FormRow, submissionId: string,
   answers: { key: string; label: string; value: string }[],
   attribution: Record<string, string>,
+  /** Absolute origin for links in the alert, or null when the request carried
+   *  no host. Threaded from the action because headers() is readable only
+   *  there, not in this helper. */
+  origin: string | null,
 ): Promise<void> {
   const accountId = form.account_id;
   const byKind = new Map(form.fields.map((f) => [f.kind, answers.find((a) => a.key === f.key)?.value ?? ""]));
@@ -337,7 +344,7 @@ async function enrich(
   try {
     // byKind is already built above; the customer's address is the value of
     // whichever field this form uses for core.email, or "" if it asks for none.
-    await notify(db, form, contactId, answers, byKind.get("core.email") ?? "");
+    await notify(db, form, contactId, answers, byKind.get("core.email") ?? "", origin);
   } catch (e) {
     errors.push(`notify: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -449,20 +456,40 @@ async function notify(
    * submitter can nominate is their own address — which is the point.
    */
   leadEmail: string,
+  /** Absolute origin for the contact link, or null when the request carried no
+   *  host. Threaded from the action because headers() is only readable there. */
+  origin: string | null,
 ): Promise<void> {
   if (form.notify_emails.length === 0) return;
-  const body = [
-    `New submission on "${form.name}".`,
-    "",
-    ...answers.filter((a) => a.value).map((a) => `${a.label}: ${a.value}`),
-    "",
-    contactId
-      ? `Contact: /dashboard/accounts/${form.account_id}/contacts/${contactId}`
-      : "Contact record was not created for this submission — see its processing_error.",
-  ].join("\n");
 
-  const { data: account } = await db.from("accounts").select("name")
+  // One row, both jobs: the display name and everything the template needs to
+  // wear the company's brand. getBranding() here would be a second round trip
+  // to a row this query already returns.
+  const { data: account } = await db.from("accounts")
+    .select("name, brand_name, brand_logo_path, brand_color, brand_neutral, brand_corners, brand_type, brand_mode")
     .eq("id", form.account_id).maybeSingle();
+
+  const brand = emailBrand({
+    brandName: account?.brand_name ?? null,
+    brandLogoPath: account?.brand_logo_path ?? null,
+    brandColor: account?.brand_color ?? null,
+    brandNeutral: account?.brand_neutral ?? null,
+    brandCorners: account?.brand_corners ?? null,
+    brandType: account?.brand_type ?? null,
+    brandMode: account?.brand_mode ?? null,
+    replyToEmail: null,
+  }, account?.name ?? "BIS");
+
+  const { html, text: body } = leadAlertEmail({
+    brand,
+    formName: form.name,
+    answers: answers.filter((a) => a.value).map((a) => ({ label: a.label, value: a.value })),
+    // Absolute or nothing. The bare `/dashboard/...` path this replaces was not
+    // a link in any client, and falling back to it would restore the defect.
+    contactUrl: origin && contactId
+      ? `${origin}/dashboard/accounts/${form.account_id}/contacts/${contactId}`
+      : null,
+  });
 
   // Each recipient is independent. Awaiting them in a bare loop meant the first
   // provider failure — one bad address, one rejected domain — threw out of the
@@ -474,8 +501,10 @@ async function notify(
   for (const to of form.notify_emails) {
     try {
       await provider.send({
-        to, fromName: account?.name ?? "BIS",
-        subject: `New lead: ${form.name}`, body,
+        // brand.name, not account.name: `accounts.name` is the agency's
+        // internal label for this company and is not for the client's eyes.
+        to, fromName: brand.name,
+        subject: `New lead: ${form.name}`, body, html,
         replyTo: normalizeReplyTo(leadEmail),
       });
     } catch (e) {
