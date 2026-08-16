@@ -46,11 +46,20 @@ export const m = {
   "clientAccess.membersUnavailable": "Member list unavailable right now — the switch above still works.",
 
   "branding.title": "Branding",
-  // The client-facing pair. branding.body above is written for someone
-  // looking at a company that is not theirs ("this company's users"),
-  // which reads wrong on the company's own page.
+  // The client-facing SET. Every string the panel shows that names whose
+  // brand it is needs one of these, not just the heading and body: the agency
+  // wording is written for someone looking at a company that is not theirs
+  // ("this company's users", "their sidebar"), which reads wrong — and in the
+  // case of nameHint discloses a concept only the agency has — on the
+  // company's own page. Pair them in panel-copy.ts; a hint added to one
+  // audience and forgotten on the other is a failing test there.
   "branding.clientTitle": "Your branding",
   "branding.clientBody": "What your team sees in this workspace, and what your customers see on your lead forms.",
+  "branding.clientNameHint": "What your own customers see on your lead forms and in this workspace.",
+  "branding.clientColorHint": "Used for buttons and highlights on your lead forms and in this sidebar. Leave blank for the default.",
+  "branding.clientNeutralHint": "The greys behind your content. Warm leans beige, cool leans blue, slate is neutral.",
+  "branding.clientModeHint": "What your team sees on a first visit. Each person can still switch it.",
+  "branding.clientModeFollow": "Follow the device",
   "branding.body": "Shown to this company's users in place of the BIS name and mark, and on their public lead forms.",
   "branding.name": "Display name",
   "branding.nameHint": "What this company's own customers see. Your internal name for them stays private.",

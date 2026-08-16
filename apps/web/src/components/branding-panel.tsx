@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { SubmitButton } from "@/app/(dashboard)/dashboard/accounts/submit-button";
 import { m } from "@/lib/messages";
 import { FORM_ACCENT_FALLBACK, SIDEBAR_BG, resolveSidebarAccent } from "@/lib/branding/color";
+import { panelCopy, type BrandingAudience } from "@/lib/branding/panel-copy";
 import { publicFormTheme } from "@/lib/branding/public-form-theme";
 import { deriveTheme, type CornerName, type ModeName, type NeutralName, type TypeName } from "@/lib/branding/theme";
 import { themeStyle } from "@/lib/branding/theme-style";
@@ -47,12 +48,15 @@ function RadioRow({
 }
 
 export function BrandingPanel({
-  // Optional, and defaulted to the agency's wording so the Settings card is
-  // byte-identical to what it rendered before. The client's own page passes
-  // its own pair: `branding.body` reads "Shown to THIS COMPANY's users…",
-  // which is written for someone looking at a company that isn't theirs.
-  title = m["branding.title"],
-  description = m["branding.body"],
+  // WHO is reading, which selects every string that names whose brand this is
+  // — see panel-copy.ts. Defaulted to the agency so the Settings card is
+  // byte-identical to what it rendered before.
+  //
+  // This was two props (title + description) and that was the bug: it made the
+  // heading configurable and left five hints hardcoded in the agency's voice,
+  // so the client's own page told them the colour applies to "their sidebar".
+  // One audience switch cannot be half-applied.
+  audience = "agency",
   brandName,
   brandColor,
   brandNeutral,
@@ -62,8 +66,7 @@ export function BrandingPanel({
   logoUrl,
   action,
 }: {
-  title?: string;
-  description?: string;
+  audience?: BrandingAudience;
   brandName: string | null;
   brandColor: string | null;
   brandNeutral: NeutralName | null;
@@ -76,6 +79,8 @@ export function BrandingPanel({
   logoUrl: string | null;
   action: (formData: FormData) => Promise<{ ok: true } | { ok: false; error: string }>;
 }) {
+  const copy = panelCopy(audience);
+
   // Bumped on success to reset the file input, so the chosen filename stops
   // being displayed next to a preview that has already moved on to it.
   const [fileKey, setFileKey] = useState(0);
@@ -127,8 +132,12 @@ export function BrandingPanel({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
+        {/* The client's page is this panel and nothing else, and its
+            PageHeader already prints the same string — rendering both put
+            "Your branding" on screen twice, stacked. In Settings the panel is
+            one card among several and needs its own heading. */}
+        {audience === "agency" ? <CardTitle>{copy.title}</CardTitle> : null}
+        <CardDescription>{copy.description}</CardDescription>
       </CardHeader>
       <CardContent>
         <form
@@ -157,7 +166,7 @@ export function BrandingPanel({
           <div className="space-y-1.5">
             <Label htmlFor="brand-name">{m["branding.name"]}</Label>
             <Input id="brand-name" name="brandName" defaultValue={brandName ?? ""} />
-            <p className="text-xs text-muted-foreground">{m["branding.nameHint"]}</p>
+            <p className="text-xs text-muted-foreground">{copy.nameHint}</p>
           </div>
 
           <div className="space-y-1.5">
@@ -198,7 +207,7 @@ export function BrandingPanel({
                 className="h-9 w-12 shrink-0 rounded-md border border-border bg-background p-1"
               />
             </div>
-            <p className="text-xs text-muted-foreground">{m["branding.colorHint"]}</p>
+            <p className="text-xs text-muted-foreground">{copy.colorHint}</p>
           </div>
 
           <RadioRow
@@ -206,7 +215,7 @@ export function BrandingPanel({
             name="brandNeutral"
             value={neutral}
             onChange={setNeutral}
-            hint={m["branding.neutralHint"]}
+            hint={copy.neutralHint}
             options={[
               ["", m["branding.themeDefault"]],
               ["warm", m["branding.neutralWarm"]],
@@ -243,12 +252,12 @@ export function BrandingPanel({
             name="brandMode"
             value={mode}
             onChange={setMode}
-            hint={m["branding.modeHint"]}
+            hint={copy.modeHint}
             options={[
               ["", m["branding.themeDefault"]],
               ["light", m["branding.modeLight"]],
               ["dark", m["branding.modeDark"]],
-              ["follow", m["branding.modeFollow"]],
+              ["follow", copy.modeFollow],
             ]}
           />
 

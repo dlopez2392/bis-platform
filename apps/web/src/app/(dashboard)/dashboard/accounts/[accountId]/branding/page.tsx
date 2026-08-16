@@ -46,8 +46,10 @@ export default async function BrandingPage({
         // client-side navigation and save them over real values. The Settings
         // page keys on the same invariant, for the same reason.
         key={accountId}
-        title={m["branding.clientTitle"]}
-        description={m["branding.clientBody"]}
+        // Selects the whole client-voice copy set, not just the heading —
+        // see panel-copy.ts. The panel suppresses its own card title for this
+        // audience, because the PageHeader above already prints it.
+        audience="client"
         brandName={branding.brandName}
         brandColor={branding.brandColor}
         brandNeutral={branding.brandNeutral}
