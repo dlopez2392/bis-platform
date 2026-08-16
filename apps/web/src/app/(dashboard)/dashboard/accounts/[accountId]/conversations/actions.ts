@@ -8,6 +8,7 @@ import {
   clearUnreadCount,
 } from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
+import { normalizeReplyTo } from "@/lib/email/reply-to";
 // A prefix on `.message` rather than an Error subclass: thrown Errors are
 // serialized across the server-action boundary and do not keep a custom
 // prototype chain on the way back to the client. Lives in its own module
@@ -35,7 +36,10 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
     subject: subject || undefined, body,
   }, userId);
 
-  const { data: account } = await db.from("accounts").select("name").eq("id", accountId).maybeSingle();
+  // Both values come from the one row this already read — the reply-to costs
+  // no extra query.
+  const { data: account } = await db.from("accounts")
+    .select("name, reply_to_email").eq("id", accountId).maybeSingle();
 
   // Only the send itself is guarded: once send() has succeeded the email is
   // gone and irrevocably out the door, so a failure recording that (a rare
@@ -49,6 +53,11 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
       fromName: account?.name ?? "BIS",
       subject: subject || "(no subject)",
       body,
+      // This goes out from crm@bis-rgv.com wearing the company's name, so
+      // without this the customer's reply reaches the BIS mailbox and the
+      // company that wrote to them never sees it. Unset omits the header,
+      // which is what every account does until someone fills the field in.
+      replyTo: normalizeReplyTo(account?.reply_to_email),
     }));
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown send failure";
