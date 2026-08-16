@@ -58,6 +58,7 @@ export function BrandingPanel({
   // One audience switch cannot be half-applied.
   audience = "agency",
   brandName,
+  replyToEmail,
   brandColor,
   brandNeutral,
   brandCorners,
@@ -68,6 +69,7 @@ export function BrandingPanel({
 }: {
   audience?: BrandingAudience;
   brandName: string | null;
+  replyToEmail: string | null;
   brandColor: string | null;
   brandNeutral: NeutralName | null;
   brandCorners: CornerName | null;
@@ -183,6 +185,21 @@ export function BrandingPanel({
               accept="image/png,image/jpeg,image/webp"
             />
             <p className="text-xs text-muted-foreground">{m["branding.logoHint"]}</p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="reply-to-email">{m["branding.replyTo"]}</Label>
+            {/* type="email" for the keyboard and the browser's own nudge only.
+                The address is validated server-side in setBrandingAction: this
+                is a client component and must not import @/lib/forms/guards,
+                which pulls node:crypto into the browser bundle. */}
+            <Input
+              id="reply-to-email"
+              name="replyToEmail"
+              type="email"
+              defaultValue={replyToEmail ?? ""}
+            />
+            <p className="text-xs text-muted-foreground">{copy.replyToHint}</p>
           </div>
 
           <div className="space-y-1.5">

@@ -51,6 +51,7 @@ export default async function BrandingPage({
         // audience, because the PageHeader above already prints it.
         audience="client"
         brandName={branding.brandName}
+        replyToEmail={branding.replyToEmail}
         brandColor={branding.brandColor}
         brandNeutral={branding.brandNeutral}
         brandCorners={branding.brandCorners}

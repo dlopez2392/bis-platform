@@ -154,6 +154,7 @@ export default async function CrmSettingsPage({
           // always a proxy for it.
           key={accountId}
           brandName={branding.brandName}
+          replyToEmail={branding.replyToEmail}
           brandColor={branding.brandColor}
           brandNeutral={branding.brandNeutral}
           brandCorners={branding.brandCorners}
