@@ -52,6 +52,15 @@ const sourceSerif = Source_Serif_4({
 export const metadata: Metadata = {
   title: "BIS Platform",
   description: "The all-in-one client platform by Bespoke Intelligent Solutions.",
+  // Declared here rather than as `app/favicon.ico`, and that is the whole
+  // reason a client can have their own. A file-convention icon is emitted for
+  // every route in the tree and takes precedence over the metadata object, so
+  // a nested generateMetadata could not override it — measured: the client's
+  // workspace kept serving /favicon.ico with the icons key set. The file now
+  // lives in public/ at the same URL, so nothing about the agency's own tab
+  // changes; it is simply overridable now, and dashboard/layout.tsx overrides
+  // it for a branded client.
+  icons: { icon: "/favicon.ico" },
 };
 
 export default async function RootLayout({

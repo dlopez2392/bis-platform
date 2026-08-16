@@ -161,3 +161,68 @@ test.describe("a client edits their branding in the browser", () => {
     }
   });
 });
+
+/**
+ * The tab. M3 gave a client's workspace its own TITLE and deliberately left
+ * the icon, so their staff read their own company name all day beside the
+ * agency's mark — and their customers loaded a lead form wearing it too.
+ *
+ * Asserted as the resolved `href` of the icon link, not as the presence of a
+ * metadata key: the point is what the browser is told to fetch. The fixture's
+ * logo path is a content-addressed object under its own account id, so the
+ * href containing that account id is the proof it is THIS client's logo and
+ * not some other account's.
+ */
+test.describe("the browser tab carries the client's own mark", () => {
+  test("on their workspace and on the form their customers load", async ({ browser, baseURL }) => {
+    const { accountId } = fixture();
+
+    const signedIn = await browser.newContext({
+      storageState: "e2e/.auth/client-state.json", baseURL,
+    });
+    try {
+      const page = await signedIn.newPage();
+      await page.goto(`/dashboard/accounts/${accountId}/contacts`);
+      const icon = await page.locator('link[rel~="icon"]').first()
+        .getAttribute("href");
+      expect(icon, "a branded client's workspace tab").toContain(accountId);
+      expect(icon).toContain("brand-logos");
+    } finally {
+      await signedIn.close();
+    }
+
+    // The agency's own tab is unchanged. This is the regression guard for the
+    // icon moving from `app/favicon.ico` (a file convention) to public/ plus a
+    // metadata key — the move is what makes a per-client override possible,
+    // and the way it could go wrong silently is the agency ending up with a
+    // 404 for an icon nobody looks at closely.
+    const agency = await browser.newContext({
+      storageState: "e2e/.auth/state.json", baseURL,
+    });
+    try {
+      const page = await agency.newPage();
+      await page.goto("/dashboard/accounts");
+      const icon = await page.locator('link[rel~="icon"]').first().getAttribute("href");
+      expect(icon, "the agency keeps the BIS mark").toBe("/favicon.ico");
+      expect((await page.request.get("/favicon.ico")).status(),
+        "and it is actually served").toBe(200);
+    } finally {
+      await agency.close();
+    }
+
+    // Anonymous, like a real visitor: the public form is the surface this
+    // milestone exists for.
+    const anon = await browser.newContext({ baseURL });
+    try {
+      const page = await anon.newPage();
+      const { formPublicId } = JSON.parse(
+        readFileSync("e2e/.auth/client-fixture.json", "utf-8"),
+      ) as { formPublicId: string };
+      await page.goto(`/f/${formPublicId}`);
+      const icon = await page.locator('link[rel~="icon"]').first().getAttribute("href");
+      expect(icon, "the client's own customers see the client's mark").toContain(accountId);
+    } finally {
+      await anon.close();
+    }
+  });
+});

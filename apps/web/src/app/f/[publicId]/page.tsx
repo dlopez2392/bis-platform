@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { cache } from "react";
 import { notFound } from "next/navigation";
 import { serviceDb, getPublishedFormByPublicId, getBranding, brandLogoUrl,
          type Branding } from "@bis/db";
@@ -12,14 +13,64 @@ import "./form.css";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Next invokes generateMetadata and the component below separately for the
+ * SAME request, and both need the same two rows. `cache()` makes that one
+ * query each rather than two — the technique M3 used to give a client's tab
+ * their own title at zero extra cost.
+ *
+ * This matters more here than on the dashboard: this page is anonymous, it is
+ * `force-dynamic`, and it is the one page in the product a client's customers
+ * load. Doubling its queries to decorate a browser tab would be a bad trade.
+ */
+const loadForm = cache(
+  (publicId: string) => getPublishedFormByPublicId(serviceDb(), publicId),
+);
+
+/**
+ * Null on failure rather than throwing, for the reason the component already
+ * documents: without the form there is nothing to render, but without the
+ * branding there is still a form that captures the lead. A database blip must
+ * not cost the client the customer.
+ */
+const loadBranding = cache(async (accountId: string, publicId: string) => {
+  try {
+    return await getBranding(serviceDb(), accountId);
+  } catch (e) {
+    console.error(`public form ${publicId}: branding read failed for account ${accountId}: ${String(e)}`);
+    return null;
+  }
+});
+
+const UNBRANDED: Branding = {
+  brandName: null, brandLogoPath: null, brandColor: null,
+  brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
+};
+
 // Every client's form is reachable only by knowing its opaque publicId, and
 // the URL itself is never meant to be a discoverable destination — indexing
 // it would let a form (and, via its query string, tracking parameters and
 // referrer) surface directly in search results for someone who never visited
 // the client's actual site.
-export const metadata: Metadata = {
-  robots: { index: false, follow: false },
-};
+//
+// Now a function rather than a constant, so the tab can carry the client's
+// own icon. `robots` is unchanged and unconditional — it is the one thing
+// here that must not depend on a database read succeeding.
+export async function generateMetadata(
+  { params }: { params: Promise<{ publicId: string }> },
+): Promise<Metadata> {
+  const robots = { index: false, follow: false };
+  const { publicId } = await params;
+  const form = await loadForm(publicId);
+  if (!form) return { robots };
+  const branding = await loadBranding(form.account_id, publicId);
+  return {
+    robots,
+    ...(branding?.brandLogoPath
+      ? { icons: { icon: brandLogoUrl(branding.brandLogoPath) } }
+      : {}),
+  };
+}
 
 // A plain (non-component) helper so the impure `Date.now()` call is not
 // lexically inside the component body: react-hooks/purity flags any impure
@@ -38,7 +89,9 @@ export default async function PublicFormPage({
 }) {
   const { publicId } = await params;
   const query = await searchParams;
-  const form = await getPublishedFormByPublicId(serviceDb(), publicId);
+  // Through the cached reader above, so generateMetadata's identical read for
+  // this request costs nothing.
+  const form = await loadForm(publicId);
   // A draft, an archived form and a token that never existed are the same 404.
   if (!form) notFound();
 
@@ -47,21 +100,13 @@ export default async function PublicFormPage({
   // serviceDb() as everywhere else on this route — the visitor is anonymous
   // and has no token of their own.
   //
-  // Caught, unlike the form read above, because the two are not equally
-  // important. Without the form there is nothing to render; without the logo
-  // there is a form that still captures the lead. Before this page carried a
-  // brand it needed exactly one query to succeed, and letting a decorative
-  // second query send a stranger to f/error.tsx would mean a database blip
-  // costs the client the customer — the one thing they are paying us for.
-  let branding: Branding = {
-    brandName: null, brandLogoPath: null, brandColor: null,
-    brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
-  };
-  try {
-    branding = await getBranding(serviceDb(), form.account_id);
-  } catch (e) {
-    console.error(`public form ${publicId}: branding read failed for account ${form.account_id}: ${String(e)}`);
-  }
+  // Caught inside loadBranding, unlike the form read above, because the two
+  // are not equally important. Without the form there is nothing to render;
+  // without the logo there is a form that still captures the lead. Letting a
+  // decorative second query send a stranger to f/error.tsx would mean a
+  // database blip costs the client the customer — the one thing they are
+  // paying us for.
+  const branding: Branding = (await loadBranding(form.account_id, publicId)) ?? UNBRANDED;
 
   const flat = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
