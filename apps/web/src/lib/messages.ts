@@ -6,6 +6,7 @@ export const m = {
   "nav.calendar": "Calendar",
   "nav.forms": "Forms",
   "nav.settings": "Settings",
+  "nav.branding": "Branding",
   "nav.accounts": "Companies",
   "nav.blueprints": "Blueprints",
 
@@ -45,6 +46,11 @@ export const m = {
   "clientAccess.membersUnavailable": "Member list unavailable right now — the switch above still works.",
 
   "branding.title": "Branding",
+  // The client-facing pair. branding.body above is written for someone
+  // looking at a company that is not theirs ("this company's users"),
+  // which reads wrong on the company's own page.
+  "branding.clientTitle": "Your branding",
+  "branding.clientBody": "What your team sees in this workspace, and what your customers see on your lead forms.",
   "branding.body": "Shown to this company's users in place of the BIS name and mark, and on their public lead forms.",
   "branding.name": "Display name",
   "branding.nameHint": "What this company's own customers see. Your internal name for them stays private.",

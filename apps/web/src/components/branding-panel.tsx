@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { SubmitButton } from "../../submit-button";
+import { SubmitButton } from "@/app/(dashboard)/dashboard/accounts/submit-button";
 import { m } from "@/lib/messages";
 import { FORM_ACCENT_FALLBACK, SIDEBAR_BG, resolveSidebarAccent } from "@/lib/branding/color";
 import { publicFormTheme } from "@/lib/branding/public-form-theme";
@@ -47,6 +47,12 @@ function RadioRow({
 }
 
 export function BrandingPanel({
+  // Optional, and defaulted to the agency's wording so the Settings card is
+  // byte-identical to what it rendered before. The client's own page passes
+  // its own pair: `branding.body` reads "Shown to THIS COMPANY's users…",
+  // which is written for someone looking at a company that isn't theirs.
+  title = m["branding.title"],
+  description = m["branding.body"],
   brandName,
   brandColor,
   brandNeutral,
@@ -56,6 +62,8 @@ export function BrandingPanel({
   logoUrl,
   action,
 }: {
+  title?: string;
+  description?: string;
   brandName: string | null;
   brandColor: string | null;
   brandNeutral: NeutralName | null;
@@ -119,8 +127,8 @@ export function BrandingPanel({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{m["branding.title"]}</CardTitle>
-        <CardDescription>{m["branding.body"]}</CardDescription>
+        <CardTitle>{title}</CardTitle>
+        <CardDescription>{description}</CardDescription>
       </CardHeader>
       <CardContent>
         <form

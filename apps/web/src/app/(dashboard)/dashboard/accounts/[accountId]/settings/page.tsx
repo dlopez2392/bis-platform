@@ -3,11 +3,11 @@ import { clerkClient } from "@clerk/nextjs/server";
 import { serviceDb, listCustomFields, listCustomValues, listBlueprints, getBranding,
          brandLogoUrl, type CustomFieldDef } from "@bis/db";
 import { SubmitButton } from "../../submit-button";
-import { createFieldAction, upsertValueAction, setClientAccessAction, inviteClientAdminAction,
-         setBrandingAction } from "./actions";
+import { createFieldAction, upsertValueAction, setClientAccessAction, inviteClientAdminAction } from "./actions";
+import { setBrandingAction } from "../branding/actions";
 import { SaveBlueprintDialog } from "./save-blueprint-dialog";
 import { ClientAccessPanel, type ClientAccessMember } from "./client-access-panel";
-import { BrandingPanel } from "./branding-panel";
+import { BrandingPanel } from "@/components/branding-panel";
 import { captureBlueprintAction } from "../../../blueprints/actions";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";

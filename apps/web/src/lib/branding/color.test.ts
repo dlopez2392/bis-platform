@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   parseHexColor, contrastRatio, readableTextOn, lightenForSidebar,
-  resolveSidebarAccent, FORM_ACCENT_FALLBACK, SIDEBAR_BG, ensureContrast,
+  resolveSidebarAccent, SIDEBAR_BG, ensureContrast,
 } from "./color";
 
 describe("parseHexColor", () => {

@@ -1,0 +1,163 @@
+import { test, expect } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { config as loadEnv } from "dotenv";
+import { serviceDb, setBranding, getBranding, setClientAccess } from "@bis/db";
+
+// Same two paths, same reason, as auth.setup.ts: this file calls serviceDb()
+// and the Clerk API from the Playwright runner process, not through a Next
+// request, so nothing auto-loads the env for it.
+loadEnv({ path: "apps/web/.env.local" });
+loadEnv({ path: ".env.local" });
+
+type ClientFixture = { accountId: string; clerkUserId: string };
+const fixture = (): ClientFixture =>
+  JSON.parse(readFileSync("e2e/.auth/client-fixture.json", "utf-8")) as ClientFixture;
+
+/** The agency's own seeded account — the "someone else" in the negative case. */
+const OTHER_ACCOUNT = "45240784-a70e-43a0-8a0c-0027c7073f98";
+
+/**
+ * A real Clerk session token for the fixture's CLIENT user, minted the same
+ * two-call way packages/db's user-client integration test does.
+ *
+ * Not stubbed. The whole boundary is Clerk's claims meeting Supabase's
+ * policies, so a hand-made JWT would prove nothing about either — it would
+ * only prove that a token this test invented is accepted or rejected.
+ */
+async function mintClientToken(userId: string): Promise<string> {
+  const sk = process.env.CLERK_SECRET_KEY;
+  if (!sk) throw new Error("CLERK_SECRET_KEY missing — this spec cannot run hermetically");
+  const headers = { Authorization: `Bearer ${sk}`, "Content-Type": "application/json" };
+
+  const session = (await (await fetch("https://api.clerk.com/v1/sessions", {
+    method: "POST", headers, body: JSON.stringify({ user_id: userId }),
+  })).json()) as { id?: string };
+  if (!session.id) throw new Error(`could not create a Clerk session for ${userId}`);
+
+  const token = (await (await fetch(
+    `https://api.clerk.com/v1/sessions/${session.id}/tokens`, { method: "POST", headers },
+  )).json()) as { jwt?: string };
+  if (!token.jwt) throw new Error("Clerk returned no jwt");
+  return token.jwt;
+}
+
+/** PostgREST, called directly with the client's own token. */
+async function patchAccount(
+  token: string, accountId: string, body: Record<string, unknown>,
+): Promise<{ status: number; rows: unknown[] }> {
+  const res = await fetch(
+    `${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/accounts?id=eq.${accountId}&select=id`,
+    {
+      method: "PATCH",
+      headers: {
+        apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        Prefer: "return=representation",
+      },
+      body: JSON.stringify(body),
+    },
+  );
+  const rows = res.ok ? ((await res.json()) as unknown[]) : [];
+  return { status: res.status, rows };
+}
+
+/**
+ * This spec's own precondition, established rather than assumed — the same
+ * beforeAll tenant-theme.spec.ts needs, for the same reason.
+ *
+ * client-access.spec.ts ends by switching this fixture's client access OFF and
+ * deliberately does not restore it (auth.teardown deletes the whole fixture
+ * afterwards, so from that spec's point of view there is nothing to tidy).
+ * "client-branding" sorts after "client-access", so on a full run this file
+ * inherited a disabled account — and `accounts_member_update` requires
+ * `client_access_enabled`, so every write below was correctly refused and the
+ * suite read as a broken feature rather than a disabled session.
+ *
+ * Worth stating plainly: that failure was the policy working. A spec that
+ * passes or fails on filename order is a spec that proves nothing either way.
+ */
+test.beforeAll(async () => {
+  const { accountId, clerkUserId } = fixture();
+  await setClientAccess(serviceDb(), accountId, true, clerkUserId);
+});
+
+/**
+ * The M2 lesson governs this file. Every assertion in that milestone's client
+ * spec was absence-based, and all five passed while the client's entire CRM
+ * was a 404 — absence proves nothing on its own. So the positive case comes
+ * FIRST here: without it, every negative below would pass just as happily
+ * against a client that can write nothing at all.
+ */
+test.describe("a client's branding boundary, at the database", () => {
+  test("writes its own branding columns, and nothing else, on its own row only", async () => {
+    const { accountId, clerkUserId } = fixture();
+    const token = await mintClientToken(clerkUserId);
+    const before = await getBranding(serviceDb(), accountId);
+    const otherBefore = await getBranding(serviceDb(), OTHER_ACCOUNT);
+
+    try {
+      // 1. THE POSITIVE CASE.
+      const own = await patchAccount(token, accountId, { brand_color: "#123456" });
+      expect(own.rows, "a client must be able to write its own branding").toHaveLength(1);
+      expect((await getBranding(serviceDb(), accountId)).brandColor).toBe("#123456");
+
+      // 2. Another company's branding. RLS FILTERS rather than throwing, so
+      //    the tell is zero rows on a 2xx — not an error status.
+      const other = await patchAccount(token, OTHER_ACCOUNT, { brand_color: "#654321" });
+      expect(other.rows, "another company's row must be invisible to this update").toHaveLength(0);
+      expect((await getBranding(serviceDb(), OTHER_ACCOUNT)).brandColor).toBe(otherBefore.brandColor);
+
+      // 3. The escalation the column grant exists to stop. Without it a client
+      //    could switch their own access back on after the agency turned it
+      //    off — the policy alone is row-scoped and would permit this.
+      const escalate = await patchAccount(token, accountId, { client_access_enabled: true });
+      expect(escalate.status, "client_access_enabled must be refused by privilege")
+        .toBeGreaterThanOrEqual(400);
+
+      // 4. `name` is the agency's private label for this company, not theirs.
+      const rename = await patchAccount(token, accountId, { name: "renamed by client" });
+      expect(rename.status, "the agency's internal label must be refused")
+        .toBeGreaterThanOrEqual(400);
+    } finally {
+      // Unconditional, and it covers the case this test exists to disprove:
+      // if assertion 2 ever fails, the agency's real account has been written
+      // to, and leaving it that way would be worse than the failing test.
+      await setBranding(serviceDb(), accountId, { brandColor: before.brandColor }, clerkUserId);
+      await setBranding(serviceDb(), OTHER_ACCOUNT,
+        { brandColor: otherBefore.brandColor }, clerkUserId);
+    }
+  });
+});
+
+test.describe("a client edits their branding in the browser", () => {
+  test.use({ storageState: "e2e/.auth/client-state.json" });
+
+  test("changes the colour from their own Branding page and it persists", async ({ page }) => {
+    const { accountId, clerkUserId } = fixture();
+    const before = await getBranding(serviceDb(), accountId);
+
+    try {
+      await page.goto(`/dashboard/accounts/${accountId}/branding`);
+
+      // The nav item exists for a client — the surface, not just the route.
+      await expect(page.getByRole("link", { name: "Branding" })).toBeVisible();
+
+      // `#brand-color`, NOT getByLabel("Brand color"): the text field and the
+      // colour picker beside it share that accessible name, so a label query
+      // is ambiguous under strict mode. The text field is the one that submits
+      // (see the comment in branding-panel.tsx).
+      await page.locator("#brand-color").fill("#0f766e");
+      await page.getByRole("button", { name: "Save" }).click();
+
+      await expect(page.getByText("Branding updated")).toBeVisible();
+
+      // The database, not the toast. A toast proves a response, not a write.
+      await expect
+        .poll(async () => (await getBranding(serviceDb(), accountId)).brandColor)
+        .toBe("#0f766e");
+    } finally {
+      await setBranding(serviceDb(), accountId, { brandColor: before.brandColor }, clerkUserId);
+    }
+  });
+});
