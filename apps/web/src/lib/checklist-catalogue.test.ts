@@ -17,7 +17,7 @@ describe("checklist catalogue", () => {
     // form_notify shows a live count of forms with no notify address, and
     // invite_owner moved in-app in M2 (Settings, under Client access).
     expect(CHECKLIST_CATALOGUE.filter((i) => !i.external).map((i) => i.key).sort())
-      .toEqual(["form_notify", "invite_owner"]);
+      .toEqual(["form_notify", "invite_owner", "reply_to"]);
   });
 
   it("merges catalogue items with stored state, including untouched ones", () => {

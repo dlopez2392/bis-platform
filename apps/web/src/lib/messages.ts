@@ -64,6 +64,8 @@ export const m = {
   "branding.replyToHint": "Where replies land when this company emails a contact, and when they reply to one of their own lead alerts. Leave blank and those replies come to the BIS mailbox instead.",
   "branding.clientReplyToHint": "Where replies land when you email a contact, and when you reply to one of your lead alerts. Leave blank and those replies come to us instead of you.",
   "branding.badReplyTo": "Enter an email address, like hello@yourcompany.com.",
+  "checklist.reply_to.title": "Set a reply-to address",
+  "checklist.reply_to.help": "In this company's Branding, add the address their replies should reach. Until it is set, a customer replying to their email — or the company replying to its own lead alert — reaches the BIS mailbox instead.",
   "branding.body": "Shown to this company's users in place of the BIS name and mark, and on their public lead forms.",
   "branding.name": "Display name",
   "branding.nameHint": "What this company's own customers see. Your internal name for them stays private.",

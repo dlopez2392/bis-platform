@@ -20,6 +20,11 @@ export const CHECKLIST_CATALOGUE: CatalogueItem[] = [
     help: m["checklist.email_domain.help"], external: true, href: "https://resend.com/domains" },
   { key: "form_notify", title: m["checklist.form_notify.title"],
     help: m["checklist.form_notify.help"], external: false },
+  // Not external: this is done in this app, on the company's Branding page.
+  // No href — the catalogue is a static module with no account id in scope, so
+  // the help text names the destination instead, as every internal item does.
+  { key: "reply_to", title: m["checklist.reply_to.title"],
+    help: m["checklist.reply_to.help"], external: false },
   { key: "gbp_connect", title: m["checklist.gbp_connect.title"],
     help: m["checklist.gbp_connect.help"], external: true },
   // Not external as of M2: inviting the owner is done in this company's
