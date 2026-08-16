@@ -65,13 +65,19 @@ test("a client sees only their own account, and nothing when access is off", asy
   await page.goto(`/dashboard/accounts/${fixture.accountId}/contacts`);
   await expect(page.getByText(fixture.contactName)).toBeVisible();
 
-  // 3. The sidebar shows exactly the six in-account items, and no "Back
-  // to agency", Blueprints, Settings, or account switcher.
-  const navLinks = page.locator("aside nav a");
-  await expect(navLinks).toHaveCount(6);
-  for (const label of [
-    "Dashboard", "Contacts", "Opportunities", "Conversations", "Forms", "Calendar",
-  ]) {
+  // 3. The sidebar shows exactly the client's own items, and no "Back to
+  // agency", Blueprints, Settings, or account switcher.
+  //
+  // An EXACT SET, not a count. M4c added Branding as a seventh item, and a
+  // bare `toHaveCount(7)` would then pass just as happily if Branding were
+  // missing and Blueprints had appeared in its place — two opposite errors
+  // cancelling, which is the weak shape this project already had to fix once
+  // in checklist-catalogue.test.ts.
+  const CLIENT_NAV = [
+    "Dashboard", "Contacts", "Opportunities", "Conversations", "Forms", "Calendar", "Branding",
+  ];
+  await expect(page.locator("aside nav a")).toHaveText(CLIENT_NAV);
+  for (const label of CLIENT_NAV) {
     await expect(page.getByRole("link", { name: label, exact: true })).toBeVisible();
   }
   await expect(page.getByRole("link", { name: "Settings", exact: true })).toHaveCount(0);
