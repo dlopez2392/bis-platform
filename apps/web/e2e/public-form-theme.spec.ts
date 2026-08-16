@@ -89,6 +89,51 @@ test.describe("the public form wears the tenant theme", () => {
     expect(paintedContrast(label, cta)).toBeGreaterThanOrEqual(4.5);
   });
 
+  /**
+   * The measure. Found by LOOKING at the page, which is the only way it could
+   * have been found: standalone, the form sat at the top-left of a full-bleed
+   * viewport with a single email field painted 1232px wide. Every gate was
+   * green — nothing here was ever wrong, it was simply never bounded.
+   *
+   * NOT a card, and this test must not become one. form.css is deliberate
+   * that a themed form is "today's form in the tenant's colours, not a card
+   * floating on a page", because a non-transparent embed must not show a
+   * two-tone rectangle inside its iframe. A measure paints no surface; it only
+   * stops the line length.
+   *
+   * Both halves are load-bearing. The wide case is the defect. The narrow case
+   * is the EMBED — an iframe is already narrower than any sane measure, and if
+   * the rule ever binds there it would strand the form in a column inside a
+   * frame the host page sized. A max-width that is too small passes the first
+   * assertion and fails the second.
+   */
+  test("the standalone page gives the form a measure, and an embed-width viewport still fills",
+    async ({ page }) => {
+      const fixture = readClientFixture();
+      const box = async (selector: string) => {
+        const b = await page.locator(selector).boundingBox();
+        if (!b) throw new Error(`${selector} has no box — it did not render`);
+        return b;
+      };
+
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto(`/f/${fixture.formPublicId}`);
+
+      const form = await box(".bis-form");
+      const brand = await box(".bis-form-brand");
+      expect(form.width, "a desktop visitor gets a line length, not the viewport")
+        .toBeLessThanOrEqual(640);
+      expect(form.x, "and it is centred rather than pinned to the left edge").toBeGreaterThan(100);
+      // The brand header is a SIBLING of the form, not inside it, so it needs
+      // the same measure or the logo hangs left of the fields it belongs to.
+      expect(Math.abs(brand.x - form.x), "the brand header tracks the form").toBeLessThanOrEqual(1);
+
+      await page.setViewportSize({ width: 420, height: 800 });
+      await page.reload();
+      expect((await box(".bis-form")).width, "an embed-width viewport still fills")
+        .toBeGreaterThan(380);
+    });
+
   test("an unthemed account renders what this page rendered before M4b", async ({ page }) => {
     const fixture = readClientFixture();
     const db = serviceDb();

@@ -74,6 +74,30 @@
    customer came to in order to fill in a form. */
 .bis-form-brand-logo { max-height: 40px; max-width: 180px; width: auto; height: auto; object-fit: contain; }
 .bis-form-brand-name { font-size: 17px; font-weight: 600; }
+/* THE MEASURE, and the reason it is not a card.
+
+   Standalone, `.bis-form-page` is the whole viewport, and until this rule the
+   form stretched with it: on a 1280px desktop a single email field painted
+   1232px wide, which reads as an unfinished page to the stranger a client sent
+   the link to. It was never wrong, only unbounded — every gate was green, and
+   it took looking at the page to see it.
+
+   A max-width, deliberately, and NOT a surface: `.bis-form` above paints none
+   of its own on purpose, so a non-transparent embed never shows a two-tone
+   rectangle inside its iframe. This rule paints nothing either.
+
+   It also costs a typical embed nothing — an iframe is narrower than the
+   measure, so the rule simply does not bind. Both directions are pinned in
+   public-form-theme.spec.ts, at 1280px (bounded and centred) and at 420px
+   (still fills), because a measure set too small passes the first and fails
+   the second.
+
+   The brand header is a SIBLING of the form, not a child, so it needs the same
+   two properties or the logo hangs to the left of the fields it belongs to. */
+.bis-form-brand, .bis-form {
+  max-width: 34rem;
+  margin-inline: auto;
+}
 /* The `.dark` block that used to live here is gone. The dark token set now
    carries the mode itself — one table of values, validated once — so there is
    no class to toggle and no second set of literals to keep in step with it. */
