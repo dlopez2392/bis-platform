@@ -305,3 +305,47 @@ describe("submitFormAction — guard-ordering regressions (the two M1c Criticals
     expect(createSubmissionMock).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Where a reply to "New lead" goes.
+ *
+ * The recipient here is the CLIENT, so the reply has to travel the other way —
+ * to the customer who just asked for a quote. Until now every one of these
+ * replied to crm@bis-rgv.com, which is a mailbox the customer will never hear
+ * from and the client does not own.
+ */
+describe("submitFormAction — the lead notification replies to the customer", () => {
+  it("sets reply-to to the address the visitor submitted", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(formRow({
+      fields: [{ key: "email", kind: "core.email", label: "Email", required: true }],
+      notify_emails: ["owner@rioroofing.com"],
+    }));
+    const token = signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
+
+    const result = await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token, locale: "en", email: "customer@example.com",
+    }));
+
+    expect(result.status).toBe("success");
+    expect(sendMock).toHaveBeenCalledWith(expect.objectContaining({
+      to: "owner@rioroofing.com",
+      replyTo: "customer@example.com",
+    }));
+  });
+
+  it("omits reply-to when the form asks for no email address", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(formRow({
+      fields: [{ key: "phone", kind: "core.phone", label: "Phone", required: true }],
+      notify_emails: ["owner@rioroofing.com"],
+    }));
+    const token = signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
+
+    await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token, locale: "en", phone: "956-555-0101",
+    }));
+
+    expect(sendMock).toHaveBeenCalled();
+    // Absent, NOT empty: `replyTo: ""` is a header with no value.
+    expect(sendMock.mock.calls[0]![0].replyTo).toBeUndefined();
+  });
+});
