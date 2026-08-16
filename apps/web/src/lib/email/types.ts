@@ -4,6 +4,14 @@ export type SendEmailInput = {
   replyTo?: string;
   subject: string;
   body: string;
+  /** The rich part. Optional so every existing caller is unchanged: absent
+   *  means a text-only send, exactly as before.
+   *
+   *  Never send this WITHOUT `body`. The text alternative is what keeps a
+   *  branded message out of the spam bucket and readable in a text client, and
+   *  it is composed deliberately by each template rather than derived by
+   *  stripping tags. */
+  html?: string;
 };
 
 export type SendEmailResult = { providerMessageId: string };
