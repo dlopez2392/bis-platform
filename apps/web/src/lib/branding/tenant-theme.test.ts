@@ -10,6 +10,7 @@ const FULL: Branding = {
   brandCorners: "round",
   brandType: "serif",
   brandMode: "dark",
+  replyToEmail: null,
 };
 
 const COLOR_ONLY: Branding = {
@@ -20,6 +21,7 @@ const COLOR_ONLY: Branding = {
   brandCorners: null,
   brandType: null,
   brandMode: null,
+  replyToEmail: null,
 };
 
 describe("themeInputsFrom", () => {

@@ -45,6 +45,7 @@ const loadBranding = cache(async (accountId: string, publicId: string) => {
 const UNBRANDED: Branding = {
   brandName: null, brandLogoPath: null, brandColor: null,
   brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
+  replyToEmail: null,
 };
 
 // Every client's form is reachable only by knowing its opaque publicId, and

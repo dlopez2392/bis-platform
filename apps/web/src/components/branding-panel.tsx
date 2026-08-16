@@ -117,6 +117,7 @@ export function BrandingPanel({
   const previewAccent = publicFormTheme({
     brandName: null, brandLogoPath: null, brandColor: color,
     brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
+    replyToEmail: null,
   }, false).formAccent;
   const previewSidebar = resolveSidebarAccent(color);
 

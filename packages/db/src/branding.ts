@@ -76,6 +76,15 @@ export type Branding = {
   brandCorners: "sharp" | "soft" | "round" | null;
   brandType: "geist" | "inter" | "serif" | null;
   brandMode: "light" | "dark" | "follow" | null;
+  /** Where a reply to this company's outbound mail should go.
+   *
+   *  Not visual branding, and it rides this type deliberately. The client's
+   *  own /branding page is safe to expose because it reads branding and
+   *  NOTHING else -- a property of what it reads rather than of a conditional,
+   *  so there is no branch for a future edit to get wrong. A second accessor
+   *  would cost exactly that property for one column. Extract it the day M4d
+   *  grows a real email identity (custom domain, per-account From). */
+  replyToEmail: string | null;
 };
 
 /**
@@ -96,6 +105,7 @@ export async function setBranding(
     brandName?: string | null; brandLogoPath?: string | null; brandColor?: string | null;
     brandNeutral?: Branding["brandNeutral"]; brandCorners?: Branding["brandCorners"];
     brandType?: Branding["brandType"]; brandMode?: Branding["brandMode"];
+    replyToEmail?: string | null;
   },
   actorId: string,
 ): Promise<void> {
@@ -107,6 +117,7 @@ export async function setBranding(
   if (input.brandCorners !== undefined) patch.brand_corners = input.brandCorners;
   if (input.brandType !== undefined) patch.brand_type = input.brandType;
   if (input.brandMode !== undefined) patch.brand_mode = input.brandMode;
+  if (input.replyToEmail !== undefined) patch.reply_to_email = input.replyToEmail;
   if (Object.keys(patch).length === 0) return;
 
   // `.select("id")` so the update reports WHICH rows it touched. Without it,
@@ -142,7 +153,7 @@ export async function getBranding(
   db: SupabaseClient, accountId: string,
 ): Promise<Branding> {
   const { data, error } = await db.from("accounts")
-    .select("brand_name, brand_logo_path, brand_color, brand_neutral, brand_corners, brand_type, brand_mode")
+    .select("brand_name, brand_logo_path, brand_color, brand_neutral, brand_corners, brand_type, brand_mode, reply_to_email")
     .eq("id", accountId).maybeSingle();
   if (error) throw new Error(`getBranding failed: ${error.message}`);
   return {
@@ -153,5 +164,6 @@ export async function getBranding(
     brandCorners: data?.brand_corners ?? null,
     brandType: data?.brand_type ?? null,
     brandMode: data?.brand_mode ?? null,
+    replyToEmail: data?.reply_to_email ?? null,
   };
 }

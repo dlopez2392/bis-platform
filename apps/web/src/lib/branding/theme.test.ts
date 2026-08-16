@@ -193,6 +193,7 @@ describe("the public form clears its thresholds for every combination", () => {
   const row = (over: Partial<Branding>): Branding => ({
     brandName: null, brandLogoPath: null, brandColor: null,
     brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
+    replyToEmail: null,
     ...over,
   });
 

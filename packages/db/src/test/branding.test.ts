@@ -15,6 +15,7 @@ describe("branding service", () => {
         brandLogoPath: `${accountId}/logo.png`,
         brandColor: null,
         brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
+        replyToEmail: null,
       });
 
       const { data: ev } = await db.from("events").select("type, actor_type, actor_id")
@@ -22,6 +23,23 @@ describe("branding service", () => {
       expect(ev).toMatchObject({
         type: "account.branding_updated", actor_type: "user", actor_id: "user_test",
       });
+    });
+  });
+
+  it("writes, reads back and clears the reply-to address", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await setBranding(db, accountId, { replyToEmail: "hello@rioroofing.com" }, "user_test");
+      expect((await getBranding(db, accountId)).replyToEmail).toBe("hello@rioroofing.com");
+
+      // `undefined` means leave alone: the panel omits fields it did not edit,
+      // and a company editing its display name must not lose the address its
+      // customers reply to.
+      await setBranding(db, accountId, { brandName: "Rio Roofing" }, "user_test");
+      expect((await getBranding(db, accountId)).replyToEmail).toBe("hello@rioroofing.com");
+
+      // An explicit null clears it, which is how the form's empty field reads.
+      await setBranding(db, accountId, { replyToEmail: null }, "user_test");
+      expect((await getBranding(db, accountId)).replyToEmail).toBeNull();
     });
   });
 
@@ -40,6 +58,7 @@ describe("branding service", () => {
         brandLogoPath: `${accountId}/logo.png`,
         brandColor: null,
         brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
+        replyToEmail: null,
       });
 
       // Spreading an optional variable that happens to be undefined is the
@@ -61,6 +80,7 @@ describe("branding service", () => {
         brandLogoPath: null,
         brandColor: null,
         brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
+        replyToEmail: null,
       });
     });
   });
@@ -72,6 +92,7 @@ describe("branding service", () => {
       expect(await getBranding(db, accountId)).toEqual({
         brandName: null, brandLogoPath: null, brandColor: null,
         brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
+        replyToEmail: null,
       });
       const { count } = await db.from("events").select("id", { count: "exact", head: true })
         .eq("account_id", accountId).eq("type", "account.branding_updated");
@@ -85,6 +106,7 @@ describe("branding service", () => {
       .toEqual({
         brandName: null, brandLogoPath: null, brandColor: null,
         brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
+        replyToEmail: null,
       });
   });
 
@@ -132,6 +154,7 @@ describe("branding service", () => {
         brandName: null, brandLogoPath: null, brandColor: null,
         brandNeutral: "warm", brandCorners: "round",
         brandType: "serif", brandMode: "dark",
+        replyToEmail: null,
       });
     });
   });
