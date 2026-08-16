@@ -9,6 +9,8 @@ import {
 } from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
+import { emailBrand } from "@/lib/email/templates/shell";
+import { outboundEmail } from "@/lib/email/templates/outbound";
 // A prefix on `.message` rather than an Error subclass: thrown Errors are
 // serialized across the server-action boundary and do not keep a custom
 // prototype chain on the way back to the client. Lives in its own module
@@ -36,10 +38,25 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
     subject: subject || undefined, body,
   }, userId);
 
-  // Both values come from the one row this already read — the reply-to costs
-  // no extra query.
+  // One row, three jobs: the display name, the reply-to, and everything the
+  // template needs to wear the company's brand. getBranding() here would be a
+  // second round trip to a row this query already returns.
   const { data: account } = await db.from("accounts")
-    .select("name, reply_to_email").eq("id", accountId).maybeSingle();
+    .select("name, reply_to_email, brand_name, brand_logo_path, brand_color, brand_neutral, brand_corners, brand_type, brand_mode")
+    .eq("id", accountId).maybeSingle();
+
+  const brand = emailBrand({
+    brandName: account?.brand_name ?? null,
+    brandLogoPath: account?.brand_logo_path ?? null,
+    brandColor: account?.brand_color ?? null,
+    brandNeutral: account?.brand_neutral ?? null,
+    brandCorners: account?.brand_corners ?? null,
+    brandType: account?.brand_type ?? null,
+    brandMode: account?.brand_mode ?? null,
+    replyToEmail: account?.reply_to_email ?? null,
+  }, account?.name ?? "BIS");
+
+  const { html, text } = outboundEmail({ brand, body });
 
   // Only the send itself is guarded: once send() has succeeded the email is
   // gone and irrevocably out the door, so a failure recording that (a rare
@@ -50,9 +67,13 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
   try {
     ({ providerMessageId } = await getEmailProvider().send({
       to: contact.email,
-      fromName: account?.name ?? "BIS",
+      // The BRAND name. `accounts.name` is the agency's internal label for this
+      // company ("Rio Roofing — trial") and was reaching the customer's From
+      // line on every message.
+      fromName: brand.name,
       subject: subject || "(no subject)",
-      body,
+      body: text,
+      html,
       // This goes out from crm@bis-rgv.com wearing the company's name, so
       // without this the customer's reply reaches the BIS mailbox and the
       // company that wrote to them never sees it. Unset omits the header,
