@@ -14,8 +14,18 @@ vi.mock("@/lib/email", () => ({
  * re-mocked, and read through a closure so the factory sees the current value
  * at call time rather than at module-init time.
  */
-const accountRow: { name: string; reply_to_email: string | null } = {
-  name: "Rio Roofing", reply_to_email: null,
+const accountRow: {
+  name: string; reply_to_email: string | null; brand_name: string | null;
+  brand_logo_path: string | null; brand_color: string | null;
+  brand_neutral: string | null; brand_corners: string | null;
+  brand_type: string | null; brand_mode: string | null;
+} = {
+  // `name` is the AGENCY's internal label for this company; brand_name is what
+  // its customers are allowed to see. They differ here on purpose, so the From
+  // line can be asserted against the right one of the two.
+  name: "Rio Roofing — trial", reply_to_email: null, brand_name: "Rio Roofing",
+  brand_logo_path: null, brand_color: null, brand_neutral: null,
+  brand_corners: null, brand_type: null, brand_mode: null,
 };
 vi.mock("@/lib/db", () => ({
   dbForRequest: async () => ({
@@ -46,6 +56,7 @@ vi.mock("@/lib/db", () => ({
 }));
 
 vi.mock("@bis/db", () => ({
+  brandLogoUrl: (path: string) => `https://cdn.test/${path}`,
   getContact: async () => ({ id: "contact_1", email: "customer@example.com" }),
   ensureConversation: async () => ({ id: "convo_1" }),
   createMessage: async () => ({ id: "msg_1" }),
@@ -64,6 +75,7 @@ function fd(entries: Record<string, string>) {
 beforeEach(() => {
   sendMock.mockReset().mockResolvedValue({ providerMessageId: "pm_1" });
   accountRow.reply_to_email = null;
+  accountRow.brand_name = "Rio Roofing";
 });
 
 /**
@@ -93,5 +105,30 @@ describe("sendEmailAction — where the customer's reply goes", () => {
     expect(sendMock).toHaveBeenCalled();
     // Absent, NOT empty. Every account starts unset, so this is the common path.
     expect(sendMock.mock.calls[0]![0].replyTo).toBeUndefined();
+  });
+});
+
+describe("sendEmailAction — the customer sees the brand, never the internal label", () => {
+  it("sends html and text and uses the brand name", async () => {
+    await sendEmailAction("acct_1", fd({
+      contactId: "contact_1", subject: "Hi", body: "Quote attached",
+    }));
+
+    const sent = sendMock.mock.calls[0]![0];
+    expect(sent.html).toContain("Rio Roofing");
+    expect(sent.body).toBe("Quote attached");
+    // accounts.name is "Rio Roofing — trial": the agency's private label, which
+    // has been going out in the From line of every message a customer receives.
+    expect(sent.fromName).toBe("Rio Roofing");
+  });
+
+  it("falls back to the account name when no brand name is set", async () => {
+    accountRow.brand_name = null;
+
+    await sendEmailAction("acct_1", fd({
+      contactId: "contact_1", subject: "Hi", body: "Quote attached",
+    }));
+
+    expect(sendMock.mock.calls[0]![0].fromName).toBe("Rio Roofing — trial");
   });
 });

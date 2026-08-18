@@ -21,12 +21,18 @@ vi.mock("@/lib/email", () => ({
 
 vi.mock("@bis/db", () => ({
   // Chainable only as far as the one direct query the action makes outside the
-  // mocked helpers: notify()'s account-name lookup.
+  // mocked helpers: notify()'s account lookup, which now carries the branding
+  // columns the alert template needs as well as the name.
   serviceDb: () => ({
     from: () => ({
-      select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { name: "Acme" } }) }) }),
+      select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: {
+        name: "Acme", brand_name: "Rio Roofing", brand_logo_path: null,
+        brand_color: null, brand_neutral: null, brand_corners: null,
+        brand_type: null, brand_mode: null,
+      } }) }) }),
     }),
   }),
+  brandLogoUrl: (path: string) => `https://cdn.test/${path}`,
   getPublishedFormByPublicId: (...a: unknown[]) => getPublishedFormByPublicIdMock(...a),
   createSubmission: (...a: unknown[]) => createSubmissionMock(...a),
   recordRejectedSubmission: (...a: unknown[]) => recordRejectedSubmissionMock(...a),
@@ -347,5 +353,53 @@ describe("submitFormAction — the lead notification replies to the customer", (
     expect(sendMock).toHaveBeenCalled();
     // Absent, NOT empty: `replyTo: ""` is a header with no value.
     expect(sendMock.mock.calls[0]![0].replyTo).toBeUndefined();
+  });
+});
+
+/**
+ * The alert a client actually receives.
+ *
+ * Both assertions below were impossible before: there was no html part, and
+ * the link was a bare path that no email client renders as a link.
+ */
+describe("submitFormAction — the lead alert is branded and linkable", () => {
+  it("sends html and text, with an absolute contact link in both", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(formRow({
+      fields: [{ key: "email", kind: "core.email", label: "Email", required: true }],
+      notify_emails: ["owner@rioroofing.com"],
+    }));
+    vi.mocked(headers).mockResolvedValue(new Headers({
+      "user-agent": "test-agent", host: "crm.example.com", "x-forwarded-proto": "https",
+    }) as never);
+    const token = signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
+
+    await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token, locale: "en", email: "customer@example.com",
+    }));
+
+    const sent = sendMock.mock.calls[0]![0];
+    const url = "https://crm.example.com/dashboard/accounts/acct_1/contacts/contact_1";
+    expect(sent.html).toContain(url);
+    expect(sent.body).toContain(url);
+    // The brand name, never accounts.name — that is the agency's private label.
+    expect(sent.fromName).toBe("Rio Roofing");
+    expect(sent.body.length).toBeGreaterThan(0);
+  });
+
+  it("still sends the lead when there is no host to build a link from", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(formRow({
+      fields: [{ key: "email", kind: "core.email", label: "Email", required: true }],
+      notify_emails: ["owner@rioroofing.com"],
+    }));
+    vi.mocked(headers).mockResolvedValue(new Headers({ "user-agent": "test-agent" }) as never);
+    const token = signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
+
+    await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token, locale: "en", email: "customer@example.com",
+    }));
+
+    const sent = sendMock.mock.calls[0]![0];
+    expect(sent.body).toContain("customer@example.com");
+    expect(sent.body).not.toContain("/dashboard/");
   });
 });
