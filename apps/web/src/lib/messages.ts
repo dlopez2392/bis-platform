@@ -330,6 +330,8 @@ export const m = {
   "conversations.channel.form": "Form submission",
   "conversations.channel.email": "Email",
   "conversations.channel.note": "Note",
+  "contact.emailSent": "Email sent",
+  "contact.emailReceived": "Email received",
   "contact.formSubmission": "Form submission",
 
   // Every item but form_notify happens outside the platform. The help text

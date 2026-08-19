@@ -13,7 +13,7 @@ export { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
          updateOpportunity, setOpportunityStatus,
          listBoard, listContactOpportunities } from "./opportunities";
 export { ensureConversation, createMessage, updateMessageStatus,
-         updateMessageStatusByProviderId, listConversations, listMessages,
+         updateMessageStatusByProviderId, listConversations, listMessages, listContactMessages,
          incrementUnreadCount, clearUnreadCount,
          type MessageStatus, type NewMessage, type ConversationSummary } from "./messaging";
 export { newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId,

@@ -1,5 +1,6 @@
-import { CalendarClock, CheckSquare, DollarSign, FileText, History, Square, StickyNote } from "lucide-react";
-import type { listNotes, listContactTasks, listContactOpportunities, listContactSubmissions } from "@bis/db";
+import { CalendarClock, CheckSquare, DollarSign, FileText, History, Mail, Square, StickyNote } from "lucide-react";
+import type { listNotes, listContactTasks, listContactOpportunities, listContactSubmissions,
+              listContactMessages } from "@bis/db";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -16,13 +17,16 @@ type Note = Awaited<ReturnType<typeof listNotes>>[number];
 type Task = Awaited<ReturnType<typeof listContactTasks>>[number];
 type Opportunity = Awaited<ReturnType<typeof listContactOpportunities>>[number];
 type Submission = Awaited<ReturnType<typeof listContactSubmissions>>[number];
+type ContactMessage = Awaited<ReturnType<typeof listContactMessages>>[number];
 
 type TimelineItem =
   | { kind: "note"; id: string; at: string; body: string }
   | { kind: "task"; id: string; at: string; title: string; dueAt: string | null; completedAt: string | null }
   | { kind: "opportunity"; id: string; at: string; name: string; value: number; status: string }
   | { kind: "submission"; id: string; at: string; formName: string;
-      answers: { key: string; label: string; value: string }[] };
+      answers: { key: string; label: string; value: string }[] }
+  | { kind: "message"; id: string; at: string; direction: string; subject: string | null;
+      body: string; status: string };
 
 export function ActivityTimeline({
   accountId,
@@ -32,6 +36,7 @@ export function ActivityTimeline({
   tasks,
   opportunities,
   submissions,
+  messages,
   emailAction,
 }: {
   accountId: string;
@@ -41,6 +46,10 @@ export function ActivityTimeline({
   tasks: Task[];
   opportunities: Opportunity[];
   submissions: Submission[];
+  /** Every message exchanged with this contact. Before these were passed, an
+   *  email sent from THIS page appeared only in Conversations — the record it
+   *  was sent from showed nothing. */
+  messages: ContactMessage[];
   emailAction: (formData: FormData) => Promise<void>;
 }) {
   const hidden = <input type="hidden" name="contactId" value={contactId} />;
@@ -77,6 +86,17 @@ export function ActivityTimeline({
         at: s.created_at,
         formName: s.formName,
         answers: s.answers.filter((a) => a.value),
+      }),
+    ),
+    ...messages.map(
+      (msg): TimelineItem => ({
+        kind: "message",
+        id: msg.id,
+        at: msg.created_at,
+        direction: msg.direction,
+        subject: msg.subject,
+        body: msg.body,
+        status: msg.status,
       }),
     ),
   ].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
@@ -196,6 +216,31 @@ function TimelineRow({
             </Button>
           </form>
         ) : null}
+      </div>
+    );
+  }
+
+  if (item.kind === "message") {
+    const outbound = item.direction === "outbound";
+    return (
+      <div className="flex gap-3 rounded-lg border border-border bg-card p-3">
+        <Mail className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-card-foreground">
+            {outbound ? m["contact.emailSent"] : m["contact.emailReceived"]}
+            {item.subject ? ` · ${item.subject}` : ""}
+          </p>
+          <p className="mt-1 whitespace-pre-wrap break-words text-sm text-card-foreground">
+            {item.body}
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {formatDateTime(item.at)}
+            {/* The status is the honest part: "sent" is what the provider
+                accepted, and a `failed` message must not look delivered on
+                the record the operator trusts. */}
+            {outbound ? ` · ${item.status}` : ""}
+          </p>
+        </div>
       </div>
     );
   }

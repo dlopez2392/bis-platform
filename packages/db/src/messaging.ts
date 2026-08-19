@@ -237,6 +237,30 @@ export async function listConversations(
   }));
 }
 
+/**
+ * Every message exchanged with one contact, oldest first.
+ *
+ * `listMessages` needs a conversation id, which the contact detail page does
+ * not have and should not have to look up itself — that gap is why a sent
+ * email appeared in Conversations and nowhere on the contact's own record.
+ *
+ * Two reads rather than an embedded join, because conversations are
+ * ONE-PER-CONTACT (see `ensureConversation`): the lookup is a single row by a
+ * unique pair, and going through `listMessages` keeps one definition of what a
+ * message row looks like. A contact who has never been messaged has no
+ * conversation row at all — the common case — and reads as an empty list
+ * rather than an error.
+ */
+export async function listContactMessages(
+  db: SupabaseClient, accountId: string, contactId: string,
+) {
+  const { data: conversation, error } = await db.from("conversations")
+    .select("id").eq("account_id", accountId).eq("contact_id", contactId).maybeSingle();
+  if (error) throw new Error(`listContactMessages failed: ${error.message}`);
+  if (!conversation) return [];
+  return listMessages(db, accountId, conversation.id as string);
+}
+
 export async function listMessages(
   db: SupabaseClient, accountId: string, conversationId: string,
 ) {
