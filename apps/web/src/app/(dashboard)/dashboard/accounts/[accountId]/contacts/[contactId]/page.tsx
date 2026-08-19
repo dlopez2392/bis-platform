@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { getContact, listContactTags, listNotes, listContactTasks,
-         listCustomFields, listContactOpportunities, listContactSubmissions } from "@bis/db";
+         listCustomFields, listContactOpportunities, listContactSubmissions,
+         listContactMessages } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { contactDisplayName, formatCurrency } from "@/lib/format";
 import { dbForRequest } from "@/lib/db";
@@ -19,13 +20,14 @@ export default async function ContactDetailPage({
   const db = await dbForRequest();
   const contact = await getContact(db, accountId, contactId);
   if (!contact) notFound();
-  const [tags, notes, tasks, fieldDefs, opps, submissions] = await Promise.all([
+  const [tags, notes, tasks, fieldDefs, opps, submissions, messages] = await Promise.all([
     listContactTags(db, accountId, contactId),
     listNotes(db, accountId, contactId),
     listContactTasks(db, accountId, contactId),
     listCustomFields(db, accountId, "contact"),
     listContactOpportunities(db, accountId, contactId),
     listContactSubmissions(db, accountId, contactId),
+    listContactMessages(db, accountId, contactId),
   ]);
 
   return (
@@ -47,6 +49,7 @@ export default async function ContactDetailPage({
           tasks={tasks}
           opportunities={opps}
           submissions={submissions}
+          messages={messages}
           emailAction={sendEmailAction.bind(null, accountId)}
         />
         <aside className="rounded-lg border border-border bg-card p-4">
