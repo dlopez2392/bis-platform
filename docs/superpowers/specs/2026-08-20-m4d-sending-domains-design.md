@@ -259,7 +259,56 @@ behaviour is byte-identical either way. The widening is inert until §6 lands �
 which also means it can be verified on its own, uncoupled from this milestone,
 and a failure there cannot be confused with a bug in this one.
 
-## 9. Surfaces
+## 9. Authentication is the milestone's real dependency — and we cannot see it fail
+
+Found 2026-08-20 while proving the key swap, and it reframes what this milestone
+depends on.
+
+A test message sent from `crm@bis-rgv.com` to a Gmail address was **accepted by
+Google and never appeared** — not in the inbox, not in spam, not in trash,
+confirmed by three searches. Every system we own reported success:
+
+| source | says |
+|---|---|
+| `messages.status` | `delivered` |
+| `events` | `sent` → `delivered`, no bounce, no complaint |
+| Resend dashboard | Sent 7:33 PM, **Delivered** 7:33 PM |
+| the recipient | nothing |
+
+Resend's own Insights names the cause: **`bis-rgv.com` has no valid DMARC
+record.** `delivered` means the receiving server ACCEPTED the message. What
+Google then does with it is invisible to the sender.
+
+**🔴 This is the `notified_at` failure shape, and M4d ships straight into it.**
+The whole point of a per-client sending domain is a client's mail landing in
+their customer's inbox. Every client domain will therefore need **SPF + DKIM +
+DMARC**, not merely the DKIM that verification gives you — and when it is
+missing, nothing in this platform can tell. Our database will read `delivered`,
+Resend will read `delivered`, and the customer will never have seen it. The
+preflight in §7 does not catch this either: it proves the domain is *verified*,
+which is a different property from *authenticated well enough to land*.
+
+**Consequences for this milestone:**
+
+1. `checklist.email_domain` currently reads *"Add a sending subdomain and
+   DKIM… Done in Resend, then the DNS records at the domain host."* **DKIM
+   alone is not enough and the copy now teaches the wrong thing.** It must name
+   DMARC as a required record, not an optional hardening step. This is no longer
+   a copy tweak folded into §10 — it is the difference between a client's mail
+   landing and vanishing.
+2. **Resend's per-domain Insights is the only place this is visible**, and it is
+   agency-run (decision 1), so checking it belongs in the onboarding process for
+   every client domain — after verification, before the client sends anything
+   real.
+3. **Do not add a "deliverability" indicator to the product on the strength of
+   `delivered`.** It would be the most confidently wrong thing on the screen.
+
+**Not in scope to fix in code**, and deliberately so: DNS records are the
+agency's job under decision 1, and there is no API surface here worth building
+to watch them. What changes is the checklist copy and what the agency is told to
+do. Recorded rather than solved.
+
+## 10. Surfaces
 
 - **Agency Settings** — a small card of its own ("Sending address"), fed by the
   new accessor. Shows the current address or the platform default, and the
@@ -270,7 +319,7 @@ and a failure there cannot be confused with a bug in this one.
   verifying in Resend and adding DNS. Setting the address is the step after,
   and the copy should say so. No new catalogue item; the existing one grows.
 
-## 10. Testing
+## 11. Testing
 
 - **Address resolution** — null → `EMAIL_FROM`; set → the account's address.
   Mutation-check by forcing the fallback and watching the override test fail.
@@ -286,7 +335,7 @@ and a failure there cannot be confused with a bug in this one.
 House rule applies throughout: an assertion is not evidence until it has been
 watched to fail against the defect it claims to catch.
 
-## 11. Out of scope, recorded
+## 12. Out of scope, recorded
 
 - **Resend Domains API** in any form — creation, DNS-record display, verification
   polling.
@@ -297,7 +346,7 @@ watched to fail against the defect it claims to catch.
 - **Bounce reasons**, still discarded by the Resend webhook. Adjacent, separate.
 - **The lead alert's from-address** (§3), until M7 makes it a real leak.
 
-## 12. Migration note
+## 13. Migration note
 
 Migration **0015**. `alter table public.accounts add column from_email text;` —
 nullable, no default, no grant. Last applied migration in the shared dev
