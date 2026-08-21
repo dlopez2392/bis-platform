@@ -42,7 +42,7 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
   // template needs to wear the company's brand. getBranding() here would be a
   // second round trip to a row this query already returns.
   const { data: account } = await db.from("accounts")
-    .select("name, reply_to_email, brand_name, brand_logo_path, brand_color, brand_neutral, brand_corners, brand_type, brand_mode")
+    .select("name, reply_to_email, from_email, brand_name, brand_logo_path, brand_color, brand_neutral, brand_corners, brand_type, brand_mode")
     .eq("id", accountId).maybeSingle();
 
   const brand = emailBrand({
@@ -71,6 +71,10 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
       // company ("Rio Roofing — trial") and was reaching the customer's From
       // line on every message.
       fromName: brand.name,
+      // The client's own domain, when they have one. Undefined falls back to
+      // EMAIL_FROM inside the provider, which is every account until the agency
+      // sets one — and stays the behaviour for the lead alert always (spec §3).
+      fromAddress: account?.from_email ?? undefined,
       subject: subject || "(no subject)",
       body: text,
       html,

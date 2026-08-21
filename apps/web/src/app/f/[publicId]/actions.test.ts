@@ -402,4 +402,24 @@ describe("submitFormAction — the lead alert is branded and linkable", () => {
     expect(sent.body).toContain("customer@example.com");
     expect(sent.body).not.toContain("/dashboard/");
   });
+
+  it("sends the lead alert from the platform address, never the client's domain", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(formRow({
+      fields: [{ key: "email", kind: "core.email", label: "Email", required: true }],
+      notify_emails: ["owner@rioroofing.com"],
+    }));
+    const token = signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
+
+    await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token, locale: "en", email: "customer@example.com",
+    }));
+
+    // Deliberate, and load-bearing: this message goes to the CLIENT'S OWN
+    // STAFF. acme.com -> acme.com through a third-party sender is the shape
+    // corporate filters treat as internal spoofing, and nothing downstream
+    // retries a lead alert — notified_at records an attempt, not a receipt.
+    // See spec §3.
+    expect(sendMock).toHaveBeenCalled();
+    expect(sendMock.mock.calls[0]![0].fromAddress).toBeUndefined();
+  });
 });
