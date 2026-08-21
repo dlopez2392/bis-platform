@@ -1,6 +1,14 @@
 export type SendEmailInput = {
   to: string;
   fromName: string;
+  /** Overrides the provider's configured from-address for THIS SEND only.
+   *
+   *  Optional so every existing caller is unchanged: absent means the platform
+   *  address, exactly as before. That is what keeps the lead alert on
+   *  crm@bis-rgv.com without it having to say so — see spec §3, where sending
+   *  a client's own staff mail from their own domain is a deliverability risk
+   *  on the one message that must never be quarantined. */
+  fromAddress?: string;
   replyTo?: string;
   subject: string;
   body: string;

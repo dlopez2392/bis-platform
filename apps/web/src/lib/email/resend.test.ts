@@ -39,4 +39,26 @@ describe("resendEmailProvider", () => {
     expect(sendMock.mock.calls[0]![0].text).toBe("plain");
     expect(sendMock.mock.calls[0]![0].html).toBeUndefined();
   });
+
+  it("sends from the per-send address when one is given", async () => {
+    const provider = resendEmailProvider("re_test", "crm@bis-rgv.com");
+    await provider.send({
+      to: "customer@example.com", fromName: "Acme Corp",
+      fromAddress: "leads@acme.com",
+      subject: "Hi", body: "plain",
+    });
+
+    expect(sendMock.mock.calls[0]![0].from).toBe("Acme Corp <leads@acme.com>");
+  });
+
+  // The fallback every unset account relies on, and the lead alert always.
+  it("falls back to the configured address when none is given", async () => {
+    const provider = resendEmailProvider("re_test", "crm@bis-rgv.com");
+    await provider.send({
+      to: "customer@example.com", fromName: "Acme Corp",
+      subject: "Hi", body: "plain",
+    });
+
+    expect(sendMock.mock.calls[0]![0].from).toBe("Acme Corp <crm@bis-rgv.com>");
+  });
 });

@@ -16,7 +16,7 @@ class ResendEmailProvider implements EmailProvider {
   async send(input: SendEmailInput): Promise<SendEmailResult> {
     const to = this.redirectTo ?? input.to;
     const { data, error } = await this.#client.emails.send({
-      from: `${input.fromName} <${this.#fromAddress}>`,
+      from: `${input.fromName} <${input.fromAddress ?? this.#fromAddress}>`,
       to,
       replyTo: input.replyTo,
       subject: input.subject,
