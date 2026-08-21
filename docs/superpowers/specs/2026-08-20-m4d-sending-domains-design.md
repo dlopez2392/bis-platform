@@ -221,10 +221,43 @@ column grant the only thing standing between a client and another tenant's
 verified domain. The two changes ship together, so the structural boundary in §4
 has to be right the first time.
 
-⚠️ The scope above is recorded from the key's creation on 2026-07-31 and has not
-been re-checked. **Confirm it in the Resend dashboard before planning around
-it** — if the key is already broader, this section is a no-op rather than a
-blocker.
+✅ **Confirmed narrow by danlo, 2026-08-20.** The key is scoped to
+`bis-rgv.com`. This is a live blocker, not a hypothetical one.
+
+### The scope cannot be widened — the key must be replaced
+
+Resend exposes `PATCH /api-keys/{id}`, but it accepts **`name` only**.
+`permission` and `domain_id` are fixed at creation (`domain_id` is documented on
+create as "restrict an API key to send emails only from a specific domain").
+There is no path from a restricted key to an unrestricted one; there is only a
+new key.
+
+**Procedure, in this order — the order is what avoids an outage window:**
+
+1. **Create** a new key in the Resend dashboard. Permission **`sending_access`**,
+   not full access — least privilege still applies, and nothing in this codebase
+   manages domains or keys at runtime. Leave the domain restriction **empty**;
+   that is the entire point of the change.
+2. **Swap it into Vercel** on `RESEND_API_KEY`, **Production** only, and
+   **Remove then Add New rather than adding over the existing name** — Vercel
+   silently no-ops an Add on a name that already exists, which cost three
+   debugging rounds when the webhook secret was set. Mark the new value
+   **Sensitive**. That flag is load-bearing, not hygiene: it is what stops
+   `vercel env pull --environment=production` from handing a real key to a local
+   `next dev`, which is the precise hole the two-signal send guard exists for.
+3. **Deploy fresh.** An environment change does not reach deployments that
+   already exist.
+4. **Prove it before retiring anything** — one real submission against a
+   production form, and confirm the lead alert is delivered. That is how the
+   pipeline was proven on 2026-08-18 and it exercises the new key end to end.
+5. **Only then delete the old key.** Deleting first opens a window where the
+   platform cannot send at all.
+
+**Doing this before M4d ships is safe and worth doing early.** No code reads a
+per-account from-address yet, so every send still resolves to `EMAIL_FROM` and
+behaviour is byte-identical either way. The widening is inert until §6 lands —
+which also means it can be verified on its own, uncoupled from this milestone,
+and a failure there cannot be confused with a bug in this one.
 
 ## 9. Surfaces
 
