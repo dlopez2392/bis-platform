@@ -78,8 +78,11 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
       subject: subject || "(no subject)",
       body: text,
       html,
-      // This goes out from crm@bis-rgv.com wearing the company's name, so
-      // without this the customer's reply reaches the BIS mailbox and the
+      // Where the customer's reply lands, and it depends on the line above.
+      // Unset, the reply follows the From address: the BIS mailbox while this
+      // account still sends from crm@bis-rgv.com, and the client's own
+      // sending domain once from_email is set — which for the send-only
+      // subdomain we recommend usually has no mailbox at all. Either way the
       // company that wrote to them never sees it. Unset omits the header,
       // which is what every account does until someone fills the field in.
       replyTo: normalizeReplyTo(account?.reply_to_email),

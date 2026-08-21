@@ -153,7 +153,15 @@ fromAddress?: string;
 ```
 
 Optional for the same reason `html?` was — every existing caller keeps working
-untouched. `ResendEmailProvider.send` resolves `input.fromAddress ?? this.#fromAddress`.
+untouched. `ResendEmailProvider.send` resolves
+`input.fromAddress?.trim() || this.#fromAddress`.
+
+> **Changed deliberately during implementation.** This section originally
+> specified `input.fromAddress ?? this.#fromAddress`. `??` only falls back on
+> `null`/`undefined`, so an empty or whitespace-only string survives it and the
+> provider composes a From line of `Acme Corp <>`. The shipped code uses
+> `?.trim() ||` instead, and three tests pin the blank, whitespace-only and
+> undefined cases. Do not "restore" the `??`.
 
 `getEmailProvider`'s production guard is unchanged: `EMAIL_FROM` stays required,
 because it remains the fallback for every unset account and the only address the
@@ -176,12 +184,22 @@ Addressing it to the signed-in admin needs no new configuration and puts the
 failure in front of the person who caused it. It uses the existing
 sending-scoped key — the property agency-run provisioning was chosen to keep.
 
-**Known hole, documented rather than fought:** outside production
-`getEmailProvider` returns the fake, so the preflight delivers nothing and
-validates nothing. A dev or preview save always succeeds regardless of the
-address. This follows from the send guard, whose two-signal requirement
+**Known hole, closed by failing loudly:** outside production
+`getEmailProvider` returns the fake, which delivers nothing and so can validate
+nothing. This follows from the send guard, whose two-signal requirement
 (`VERCEL_ENV` *and* `NODE_ENV`) must never be weakened to make a test more
-convenient. The consequence to record: **a green save outside production is not
+convenient.
+
+> **Changed deliberately during implementation.** This section originally said
+> a dev or preview save "always succeeds regardless of the address" — i.e. the
+> fake was to resolve and the write to go through. That would report a
+> verification that never happened, which is the exact class of lie this gate
+> exists to prevent. `verifyFromAddress` therefore **throws** on
+> `provider.isFake` ("A sending address cannot be verified outside production,
+> because email is suppressed there"), the column is not written, and a test
+> pins it. Do not read this section as an instruction to remove that throw.
+
+The consequence to record either way: **a green save outside production is not
 evidence the domain is verified**, and the only real proof is a production save.
 
 **The gate's load-bearing assumption, checked 2026-08-20:** Resend's error

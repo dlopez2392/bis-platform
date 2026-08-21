@@ -82,9 +82,11 @@ beforeEach(() => {
 });
 
 /**
- * Mail goes out FROM crm@bis-rgv.com carrying the company's display name, so
- * without a reply-to the customer's reply reaches BIS and the company that
- * wrote to them never sees it. That is the gap this pair pins.
+ * Without a reply-to, the customer's reply follows the From address — the
+ * BIS mailbox while this account still sends from crm@bis-rgv.com, and the
+ * client's own sending domain once from_email is set, which for a send-only
+ * subdomain usually has no mailbox at all. Either way the company that wrote
+ * to them never sees it. That is the gap this pair pins.
  */
 describe("sendEmailAction — where the customer's reply goes", () => {
   it("replies to the company's own address when one is set", async () => {

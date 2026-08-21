@@ -65,7 +65,7 @@ export const m = {
   "branding.clientReplyToHint": "Where replies land when you email a contact, and when you reply to one of your lead alerts. Leave blank and those replies come to us instead of you.",
   "branding.badReplyTo": "Enter an email address, like hello@yourcompany.com.",
   "checklist.reply_to.title": "Set a reply-to address",
-  "checklist.reply_to.help": "In this company's Branding, add the address their replies should reach. Until it is set, a customer replying to their email — or the company replying to its own lead alert — reaches the BIS mailbox instead.",
+  "checklist.reply_to.help": "In this company's Branding, add the address their replies should reach, and do it before setting a sending address. Until it is set, a reply lands wherever the mail came from: the BIS mailbox while they still send from the platform address, and their own sending domain once one is set — which for the send-only subdomain recommended above usually has no mailbox at all, so the reply bounces or vanishes.",
   "branding.body": "Shown to this company's users in place of the BIS name and mark, and on their public lead forms.",
   "branding.name": "Display name",
   "branding.nameHint": "What this company's own customers see. Your internal name for them stays private.",
@@ -224,12 +224,22 @@ export const m = {
   "settings.saveValue": "Save value",
   "settings.noFields": "No custom fields yet",
   "settings.noValues": "No custom values yet",
+  // The CARD's heading, deliberately not the field's. Both used to read
+  // "Sending address", which put the same words on screen twice, stacked —
+  // the duplication branding-panel.tsx was changed to avoid. The field keeps
+  // the precise name (two e2e specs address it by that accessible label);
+  // the card gets the broader one.
+  "settings.sendingIdentity": "Outgoing email",
   "settings.sendingAddress": "Sending address",
-  "settings.sendingAddressBody": "The address this company's email to their customers goes out from. Verify the domain in Resend and add its DNS records first — setting an address sends a test message and fails if the domain is not verified. Clearing it has no such check.",
+  "settings.sendingAddressBody": "The address this company's email to their customers goes out from. Verify the domain in Resend and add its DNS records first — setting an address sends a test message and fails if the domain is not verified. Clearing it has no such check. Set the reply-to address in Branding first: without one, a customer's reply goes to this sending address, and a send-only subdomain usually cannot receive mail.",
   "settings.sendingAddressPlaceholder": "leads@theircompany.com",
   "settings.sendingAddressDefault": "Using the platform address (crm@bis-rgv.com).",
   "settings.sendingAddressSaved": "Sending address updated",
   "settings.sendingAddressBad": "Enter an email address, like leads@theircompany.com.",
+  // Last resort only. The whole point of the card's error path is that the
+  // provider's own wording reaches the operator — this covers a throw that
+  // carried no message at all.
+  "settings.sendingAddressSaveFailed": "Could not save the sending address. Try again.",
 
   "error.title": "Something went wrong",
   "error.body": "We couldn't complete that action. Your changes may not have been saved.",
@@ -356,7 +366,7 @@ export const m = {
     "Done with the carriers via Telnyx. Expect days to weeks; start it early because nothing you do here speeds it up.",
   "checklist.email_domain.title": "Add a sending subdomain, DKIM and DMARC",
   "checklist.email_domain.help":
-    "Done in Resend, then the DNS records at the domain host. DKIM alone is not enough — without a DMARC record the receiving server accepts the mail and may discard it, and every system here will still say delivered. Check the domain's Insights in Resend before the client sends anything real. A subdomain keeps this client's sending reputation separate.",
+    "Done in Resend, then the DNS records at the domain host. DKIM alone is not enough — without a DMARC record the receiving server accepts the mail and may discard it, and every system here will still say delivered. Check the domain's Insights in Resend before the client sends anything real. A subdomain keeps this client's sending reputation separate. Once the domain is verified, set it as the Sending address in this company's Settings — until you do, their mail still goes out from the platform address.",
   "checklist.form_notify.title": "Set the notification address on each form",
   "checklist.form_notify.help":
     "Done here. Forms applied from a blueprint deliberately start with an empty notify list so leads cannot reach the previous client.",

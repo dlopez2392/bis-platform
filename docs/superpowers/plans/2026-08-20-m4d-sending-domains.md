@@ -829,8 +829,11 @@ has_column_privilege('authenticated', 'public.accounts', 'from_email',     'SELE
 
 ```ts
 /**
- * Agency-only, and there is no column grant that would let a client reach this
- * even if the guard were removed (spec §5) — the boundary is enforced twice.
+ * Agency-only, and this write goes through serviceDb(), which is bound by
+ * neither RLS nor column grants — so the guard on the first line is the ONLY
+ * gate on it (spec §5). Migration 0015 grants `authenticated` no UPDATE on
+ * from_email precisely so that no client-reachable path to this column exists;
+ * removing the guard would create one. This is NOT a boundary enforced twice.
  *
  * The preflight runs BEFORE the write, so a domain that is not verified in
  * Resend never reaches the column. Storing it first and letting the send fail
