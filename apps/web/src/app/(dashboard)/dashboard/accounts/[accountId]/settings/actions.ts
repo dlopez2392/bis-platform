@@ -111,53 +111,75 @@ export async function inviteClientAdminAction(
 }
 
 /**
- * Agency-only, and there is no column grant that would let a client reach this
- * even if the guard were removed (spec §5) — the boundary is enforced twice.
+ * Agency-only, and BOTH writes below go through serviceDb() — which is bound
+ * by neither RLS nor column grants — so the requireAgencyOnlyAccountAccess
+ * guard on the first line is the ONLY gate on this write. Nothing in the
+ * database is standing behind it. Do not read the grant story below as
+ * redundancy.
+ *
+ * Migration 0015 grants `authenticated` no UPDATE on accounts.from_email
+ * precisely so that no client-reachable path to this column exists at all: a
+ * client able to write its own sending address could send mail as another
+ * client of the same agency, the exact impersonation 0015 exists to prevent.
+ * Removing the guard above, or granting the column so the write could move to
+ * dbForRequest(), would each create that path. The read
+ * (getSendingIdentity in page.tsx) stays on dbForRequest() — SELECT on
+ * from_email IS granted to authenticated, and the read should stay
+ * RLS-enforced.
  *
  * The preflight runs BEFORE the write, so a domain that is not verified in
  * Resend never reaches the column. Storing it first and letting the send fail
  * later would break every outbound email for that client, invisibly.
  *
- * Both writes below use serviceDb(), not dbForRequest(), same as
- * setClientAccessAction above: migration 0015 deliberately grants NO
- * `authenticated` UPDATE on accounts.from_email, because a client able to
- * write its own sending address could send mail as another client of the
- * same agency — the exact impersonation 0015 exists to prevent. The
- * app-level requireAgencyOnlyAccountAccess guard above is therefore the only
- * gate on this write; granting the column instead would reopen that vector.
- * The read (getSendingIdentity in page.tsx) stays on dbForRequest() — SELECT
- * on from_email IS granted to authenticated, and the read should stay
- * RLS-enforced.
+ * Returns a result rather than throwing, for the reason setBrandingAction
+ * does: the provider's own wording ("The acme.com domain is not verified.
+ * Please, add and verify your domain.") is the single most useful string in
+ * this feature, and a throw from a server action reaches the operator as a
+ * generic error boundary — or, in production, a redacted digest. preflight.ts
+ * deliberately does not wrap that message; this is what puts it on screen.
  */
-export async function setFromEmailAction(accountId: string, formData: FormData): Promise<void> {
+export async function setFromEmailAction(
+  accountId: string, formData: FormData,
+): Promise<{ ok: true } | { ok: false; error: string }> {
   const { userId } = await requireAgencyOnlyAccountAccess(accountId);
   const raw = String(formData.get("fromEmail") ?? "").trim();
 
   if (!raw) {
     await setFromEmail(serviceDb(), accountId, null, userId);
     revalidatePath(`/dashboard/accounts/${accountId}/settings`);
-    return;
+    return { ok: true };
   }
 
   if (!isValidEmail(raw)) {
-    throw new Error(m["settings.sendingAddressBad"]);
+    return { ok: false, error: m["settings.sendingAddressBad"] };
   }
 
-  // To the admin making the change: no new configuration, and the failure
-  // lands in front of the person who caused it.
-  const clerk = await clerkClient();
-  const admin = await clerk.users.getUser(userId);
-  const adminEmail = admin.primaryEmailAddress?.emailAddress;
-  if (!adminEmail) throw new Error("Cannot verify a sending address without an admin email address.");
+  try {
+    // To the admin making the change: no new configuration, and the failure
+    // lands in front of the person who caused it.
+    const clerk = await clerkClient();
+    const admin = await clerk.users.getUser(userId);
+    const adminEmail = admin.primaryEmailAddress?.emailAddress;
+    if (!adminEmail) {
+      return { ok: false, error: "Cannot verify a sending address without an admin email address." };
+    }
 
-  // Verify-then-write, through the seam that PINS that order (Task 5). Calling
-  // verifyFromAddress and setFromEmail directly here would work identically and
-  // be untestable — this workspace has no server-action harness, so the seam is
-  // the only place the ordering can be proven.
-  const db = serviceDb();
-  await saveVerifiedFromAddress(
-    getEmailProvider(), raw, adminEmail,
-    (address) => setFromEmail(db, accountId, address, userId),
-  );
+    // Verify-then-write, through the seam that PINS that order (Task 5). Calling
+    // verifyFromAddress and setFromEmail directly here would work identically and
+    // be untestable — this workspace has no server-action harness, so the seam is
+    // the only place the ordering can be proven.
+    const db = serviceDb();
+    await saveVerifiedFromAddress(
+      getEmailProvider(), raw, adminEmail,
+      (address) => setFromEmail(db, accountId, address, userId),
+    );
+  } catch (e) {
+    console.error(`setFromEmail: save failed for account ${accountId}: ${String(e)}`);
+    // The provider's message, verbatim and unwrapped — it names the domain and
+    // says what to do about it.
+    return { ok: false, error: e instanceof Error ? e.message : m["settings.sendingAddressSaveFailed"] };
+  }
+
   revalidatePath(`/dashboard/accounts/${accountId}/settings`);
+  return { ok: true };
 }
