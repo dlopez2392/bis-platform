@@ -19,18 +19,28 @@ describe("verifyFromAddress", () => {
   });
 
   /**
-   * The property this whole gate exists for. Resend rejects an unverified
-   * sender with a synchronous 403 validation_error carrying "The domain.com
-   * domain is not verified" — so the caller must see THAT wording, not a
-   * message this module invented. See spec §7.
+   * The property this whole gate exists for, asserted as IDENTITY rather than
+   * a substring match.
+   *
+   * Resend rejects an unverified sender with a synchronous 403 whose message
+   * names the domain and states the remedy — "The acme.com domain is not
+   * verified. Please, add and verify your domain." That wording is the only
+   * thing telling an operator what went wrong, so it must arrive untouched.
+   *
+   * A `toThrow(/regex/)` assertion cannot express that: it passes just as
+   * happily against an implementation that wraps or re-prefixes the message,
+   * which is the exact defect this test is here to catch. `toBe` on the thrown
+   * object is what makes wrapping impossible.
    */
-  it("rethrows the provider's own message so the operator sees Resend's wording", async () => {
-    const send = vi.fn().mockRejectedValue(
-      new Error("The acme.com domain is not verified. Please, add and verify your domain."),
+  it("rethrows the provider's own error object untouched, so the operator sees Resend's wording", async () => {
+    const original = new Error(
+      "The acme.com domain is not verified. Please, add and verify your domain.",
     );
+    const send = vi.fn().mockRejectedValue(original);
+
     await expect(
       verifyFromAddress(providerThat(send), "leads@acme.com", "admin@bis-rgv.com"),
-    ).rejects.toThrow(/acme\.com domain is not verified/);
+    ).rejects.toBe(original);
   });
 
   /**
