@@ -90,7 +90,7 @@ Above `BRANDING_COLUMNS`, add:
 
 - [ ] **Step 2: Run it and confirm it PASSES for the wrong reason**
 
-Run: `pnpm --filter @bis/db test -- client-branding-grants --run`
+Run: `pnpm --filter @bis/db exec vitest run client-branding-grants`
 Expected: PASS — the column does not exist yet, so it cannot be granted. This is why Step 5's mutation is the real proof, not this run.
 
 - [ ] **Step 3: Write the migration**
@@ -144,7 +144,7 @@ Run against the database:
 grant update (from_email) on public.accounts to authenticated;
 ```
 
-Run: `pnpm --filter @bis/db test -- client-branding-grants --run`
+Run: `pnpm --filter @bis/db exec vitest run client-branding-grants`
 Expected: **FAIL** — the not-granted test returns a `from_email` row. Then revert:
 
 ```sql
@@ -238,7 +238,7 @@ This is the pattern `branding.test.ts` uses — verified, not assumed. `withTest
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `pnpm --filter @bis/db test -- sending-identity --run`
+Run: `pnpm --filter @bis/db exec vitest run sending-identity`
 Expected: FAIL — `Cannot find module '../sending-identity'`.
 
 - [ ] **Step 3: Write the accessor**
@@ -317,7 +317,7 @@ export { getSendingIdentity, setFromEmail, type SendingIdentity } from "./sendin
 
 - [ ] **Step 5: Run to verify it passes**
 
-Run: `pnpm --filter @bis/db test -- sending-identity --run`
+Run: `pnpm --filter @bis/db exec vitest run sending-identity`
 Expected: PASS (4 tests).
 
 - [ ] **Step 6: Mutation-check the no-account assertion**
@@ -330,7 +330,7 @@ Temporarily delete the two lines:
 
 and change `.select("id")` to nothing (`.update({...}).eq("id", accountId)`).
 
-Run: `pnpm --filter @bis/db test -- sending-identity --run`
+Run: `pnpm --filter @bis/db exec vitest run sending-identity`
 Expected: **FAIL** on "throws rather than reporting success". Restore both lines, re-run: PASS.
 
 - [ ] **Step 7: Commit**
@@ -379,11 +379,27 @@ Append to `apps/web/src/lib/email/resend.test.ts`, inside the existing `describe
 
     expect(sendMock.mock.calls[0]![0].from).toBe("Acme Corp <crm@bis-rgv.com>");
   });
+
+  /**
+   * Blank is absence, not a value. `??` would pass an empty string straight
+   * through and compose `Acme Corp <>` — a malformed header on a client's
+   * customer-facing mail. Whitespace counts as blank for the same reason.
+   */
+  it.each(["", "   "])("falls back when the address is blank (%j)", async (blank) => {
+    const provider = resendEmailProvider("re_test", "crm@bis-rgv.com");
+    await provider.send({
+      to: "customer@example.com", fromName: "Acme Corp",
+      fromAddress: blank,
+      subject: "Hi", body: "plain",
+    });
+
+    expect(sendMock.mock.calls[0]![0].from).toBe("Acme Corp <crm@bis-rgv.com>");
+  });
 ```
 
 - [ ] **Step 2: Run to verify the first fails**
 
-Run: `pnpm --filter web test -- resend.test.ts --run`
+Run: `pnpm --filter web exec vitest run resend.test.ts`
 Expected: the override test FAILS (typecheck rejects `fromAddress`, or `from` is `Acme Corp <crm@bis-rgv.com>`). The fallback test PASSES already — it pins existing behaviour.
 
 - [ ] **Step 3: Add the optional field**
@@ -406,18 +422,36 @@ In `apps/web/src/lib/email/types.ts`, add to `SendEmailInput` after `fromName`:
 In `apps/web/src/lib/email/resend.ts`, change the `from` line inside `send`:
 
 ```ts
-      from: `${input.fromName} <${input.fromAddress ?? this.#fromAddress}>`,
+      // `?.trim() ||`, deliberately NOT `??`. An empty string is neither null
+      // nor undefined, so `??` would let it through and compose the malformed
+      // header `Acme Corp <>` instead of falling back to the platform address.
+      // Blank is not a value here — it means "no address given".
+      //
+      // The check lives in the provider rather than at each call site so it
+      // cannot be bypassed by a caller that forgets to normalise, the lead
+      // alert included. This repo has already paid for the other shape once:
+      // `normalizeReplyTo` exists because an unset column is null, a cleared
+      // form field is "", and a form with no email question yields "" — three
+      // spellings of the same absence.
+      from: `${input.fromName} <${input.fromAddress?.trim() || this.#fromAddress}>`,
 ```
 
 - [ ] **Step 5: Run to verify both pass**
 
-Run: `pnpm --filter web test -- resend.test.ts --run`
+Run: `pnpm --filter web exec vitest run resend.test.ts`
 Expected: PASS (4 tests).
 
-- [ ] **Step 6: Mutation-check the fallback**
+- [ ] **Step 6: Mutation-check the fallback, twice**
 
-Change the line to `` from: `${input.fromName} <${input.fromAddress}>` `` (drop the fallback).
-Run the file. Expected: **FAIL** on "falls back to the configured address" with `from` reading `Acme Corp <undefined>`. Restore, re-run: PASS.
+Two separate mutations, each applied alone and reverted:
+
+**(a) Drop the fallback entirely** — `` from: `${input.fromName} <${input.fromAddress}>` ``.
+Expected: **FAIL** on "falls back to the configured address" with `from` reading `Acme Corp <undefined>`.
+
+**(b) Weaken `?.trim() ||` back to `??`** — `` from: `${input.fromName} <${input.fromAddress ?? this.#fromAddress}>` ``.
+Expected: **FAIL** on both blank cases with `from` reading `Acme Corp <>` and `Acme Corp <   >`. This is the mutation that proves the blank guard is load-bearing rather than decorative — without it the test passes against `??` and pins nothing.
+
+Restore after each, re-run: PASS.
 
 - [ ] **Step 7: Commit**
 
@@ -575,7 +609,7 @@ describe("verifyFromAddress", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `pnpm --filter web test -- preflight --run`
+Run: `pnpm --filter web exec vitest run preflight`
 Expected: FAIL — `Cannot find module './preflight'`.
 
 - [ ] **Step 3: Write the gate**
@@ -628,7 +662,7 @@ export async function verifyFromAddress(
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `pnpm --filter web test -- preflight --run`
+Run: `pnpm --filter web exec vitest run preflight`
 Expected: PASS (3 tests).
 
 - [ ] **Step 5: Mutation-check the fake guard**
@@ -677,7 +711,7 @@ Add `saveVerifiedFromAddress` to the import at the top of the file.
 
 - [ ] **Step 7: Run to verify it fails**
 
-Run: `pnpm --filter web test -- preflight --run`
+Run: `pnpm --filter web exec vitest run preflight`
 Expected: FAIL — `saveVerifiedFromAddress` is not exported.
 
 - [ ] **Step 8: Write the seam**
@@ -711,7 +745,7 @@ export async function saveVerifiedFromAddress(
 
 - [ ] **Step 9: Run to verify it passes**
 
-Run: `pnpm --filter web test -- preflight --run`
+Run: `pnpm --filter web exec vitest run preflight`
 Expected: PASS (5 tests).
 
 - [ ] **Step 10: Mutation-check the ordering**
@@ -940,7 +974,7 @@ with:
 
 - [ ] **Step 2: Run the messages guard**
 
-Run: `pnpm --filter web test -- messages.test.ts --run`
+Run: `pnpm --filter web exec vitest run messages.test.ts`
 Expected: PASS. `checklist.email_domain.help` is not on the roadmap-label allowlist and must not acquire a label.
 
 - [ ] **Step 3: Write the absence assertion**
