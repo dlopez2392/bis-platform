@@ -184,15 +184,22 @@ address. This follows from the send guard, whose two-signal requirement
 convenient. The consequence to record: **a green save outside production is not
 evidence the domain is verified**, and the only real proof is a production save.
 
-An implementation question to settle with a real call, not an assumption:
-whether Resend rejects an unverified sender **synchronously** on
-`emails.send`, or accepts and fails asynchronously via webhook. The design above
-depends on synchronous rejection. If it turns out to be asynchronous, the
-preflight cannot gate the write at all, and the honest fallback is to accept the
-value and let the existing `failed` message status surface the problem — the
-weaker option, but an honest one, and better than a gate that reports a
-verification it did not perform. **Settle this with a real call before building
-the gate, not after.**
+**The gate's load-bearing assumption, checked 2026-08-20:** Resend's error
+reference documents an unverified sender as a **synchronous `validation_error`
+with HTTP 403** — *"The `domain.com` domain is not verified. Please, add and
+verify your domain."* It is returned on the `emails.send` call itself, not
+delivered later by webhook. So the preflight can gate the write, and the error
+it surfaces is already phrased for the person reading it.
+
+⚠️ That is **documentation, not a real call.** It is strong enough to plan
+against and not strong enough to skip proving: the first task that touches the
+preflight should trigger the 403 once against the production key and record the
+actual payload shape, because the action has to read the error's *message* to be
+worth anything, and error shapes are exactly what SDKs restructure between
+versions. If it turns out to be asynchronous after all, the gate is not
+buildable and the honest fallback is to accept the value and let the existing
+`failed` message status surface the problem — weaker, but better than a gate
+that reports a verification it never performed.
 
 ## 8. The API key scope — a blocker before any of this works
 
