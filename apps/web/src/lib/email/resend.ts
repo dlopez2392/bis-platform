@@ -16,7 +16,18 @@ class ResendEmailProvider implements EmailProvider {
   async send(input: SendEmailInput): Promise<SendEmailResult> {
     const to = this.redirectTo ?? input.to;
     const { data, error } = await this.#client.emails.send({
-      from: `${input.fromName} <${input.fromAddress ?? this.#fromAddress}>`,
+      // `?.trim() ||`, deliberately NOT `??`. An empty string is neither null
+      // nor undefined, so `??` would let it through and compose the malformed
+      // header `Acme Corp <>` instead of falling back to the platform address.
+      // Blank is not a value here — it means "no address given".
+      //
+      // The check lives in the provider rather than at each call site so it
+      // cannot be bypassed by a caller that forgets to normalise, the lead
+      // alert included. This repo has already paid for the other shape once:
+      // `normalizeReplyTo` exists because an unset column is null, a cleared
+      // form field is "", and a form with no email question yields "" — three
+      // spellings of the same absence.
+      from: `${input.fromName} <${input.fromAddress?.trim() || this.#fromAddress}>`,
       to,
       replyTo: input.replyTo,
       subject: input.subject,

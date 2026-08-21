@@ -61,4 +61,20 @@ describe("resendEmailProvider", () => {
 
     expect(sendMock.mock.calls[0]![0].from).toBe("Acme Corp <crm@bis-rgv.com>");
   });
+
+  /**
+   * Blank is absence, not a value. `??` would pass an empty string straight
+   * through and compose `Acme Corp <>` — a malformed header on a client's
+   * customer-facing mail. Whitespace counts as blank for the same reason.
+   */
+  it.each(["", "   "])("falls back when the address is blank (%j)", async (blank) => {
+    const provider = resendEmailProvider("re_test", "crm@bis-rgv.com");
+    await provider.send({
+      to: "customer@example.com", fromName: "Acme Corp",
+      fromAddress: blank,
+      subject: "Hi", body: "plain",
+    });
+
+    expect(sendMock.mock.calls[0]![0].from).toBe("Acme Corp <crm@bis-rgv.com>");
+  });
 });
