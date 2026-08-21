@@ -32,8 +32,8 @@
 | `apps/web/src/lib/email/types.ts` | **Modify** — `fromAddress?` on `SendEmailInput` |
 | `apps/web/src/lib/email/resend.ts` | **Modify** — resolve `input.fromAddress ?? this.#fromAddress` |
 | `apps/web/src/lib/email/resend.test.ts` | **Modify** — override and fallback |
-| `apps/web/src/lib/email/preflight.ts` | **Create** — `verifyFromAddress`, the save gate |
-| `apps/web/src/lib/email/preflight.test.ts` | **Create** — gate behaviour |
+| `apps/web/src/lib/email/preflight.ts` | **Create** — `verifyFromAddress` (the gate) and `saveVerifiedFromAddress` (the verify-then-write ordering, pinned here because `apps/web` has no server-action harness) |
+| `apps/web/src/lib/email/preflight.test.ts` | **Create** — gate behaviour and the ordering seam |
 | `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts` | **Modify** — pass the account's `from_email` |
 | `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts` | **Modify** — `setFromEmailAction` |
 | `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/sending-address-card.tsx` | **Create** — the agency-only card |
@@ -126,13 +126,15 @@ alter table public.accounts add column from_email text;
 -- so this stays pinned rather than resting on this comment.
 ```
 
-- [ ] **Step 4: Apply the migration**
+- [ ] **Step 4: STOP — the controller applies this migration, not you**
 
-Run: `pnpm --filter @bis/db exec supabase db push` — **or** apply `0015_from_email.sql` through the Supabase SQL editor if the CLI is not linked.
+🔴 **Do not run any DDL. Do not run `supabase db push`. Do not execute this SQL by any route.**
 
-⚠️ There is exactly ONE Supabase project and production reads it, so this changes production's schema. That is safe here **only** because the column is nullable with no default and nothing reads it until Task 4: no existing row changes meaning.
+There is exactly ONE Supabase project and **production reads it**, so applying 0015 changes production's schema. danlo's standing decision for this milestone is that the controller executes it directly, where it is auditable, rather than an autonomous agent.
 
-Verify: `select column_name from information_schema.columns where table_name='accounts' and column_name='from_email';` returns one row.
+Write the file, then report **DONE_WITH_CONCERNS** with the note "0015 written, awaiting controller apply". The controller applies it and re-dispatches you for Step 5.
+
+*(For the record — the change is safe because the column is nullable with no default and nothing reads it until Task 4: no existing row changes meaning.)*
 
 - [ ] **Step 5: Mutation-check the assertion**
 
@@ -634,7 +636,96 @@ Expected: PASS (3 tests).
 Delete the `if (provider.isFake) { ... }` block.
 Run the file. Expected: **FAIL** on "refuses to certify anything when the provider is the fake". Restore, re-run: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Write the failing test for the ordering seam**
+
+The load-bearing property of the whole gate is the ORDER: a rejected address must never reach the column. That ordering lives in the server action, which this workspace has no harness to test — so it is extracted here, as a dependency-free function, where it can be pinned.
+
+Append to `apps/web/src/lib/email/preflight.test.ts`:
+
+```ts
+describe("saveVerifiedFromAddress", () => {
+  it("writes only after the address has been proven to send", async () => {
+    const send = vi.fn().mockResolvedValue({ providerMessageId: "re_1" });
+    const write = vi.fn().mockResolvedValue(undefined);
+
+    await saveVerifiedFromAddress(providerThat(send), "leads@acme.com", "admin@bis-rgv.com", write);
+
+    expect(send).toHaveBeenCalled();
+    expect(write).toHaveBeenCalledWith("leads@acme.com");
+  });
+
+  /**
+   * THE assertion this seam exists for. Storing an address whose domain is not
+   * verified breaks every outbound email for that client, and the breakage is
+   * invisible until a customer does not reply. Swapping these two lines is a
+   * one-character edit that no other test in this repo would notice.
+   */
+  it("never writes when the address cannot send", async () => {
+    const send = vi.fn().mockRejectedValue(new Error("The acme.com domain is not verified."));
+    const write = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      saveVerifiedFromAddress(providerThat(send), "leads@acme.com", "admin@bis-rgv.com", write),
+    ).rejects.toThrow(/not verified/);
+
+    expect(write).not.toHaveBeenCalled();
+  });
+});
+```
+
+Add `saveVerifiedFromAddress` to the import at the top of the file.
+
+- [ ] **Step 7: Run to verify it fails**
+
+Run: `pnpm --filter web test -- preflight --run`
+Expected: FAIL — `saveVerifiedFromAddress` is not exported.
+
+- [ ] **Step 8: Write the seam**
+
+Append to `apps/web/src/lib/email/preflight.ts`:
+
+```ts
+/**
+ * Verify, then write — in that order, and never the other way round.
+ *
+ * The ordering is the entire safety property: an address whose domain is not
+ * verified must never reach the column, because storing one breaks every
+ * outbound email for that client and stays invisible until a customer does not
+ * reply. Swapping these two awaits is a trivial edit, which is exactly why it
+ * is pinned by a test rather than by a comment in a server action.
+ *
+ * `write` is a callback rather than a db handle so this stays dependency-free
+ * and unit-testable — apps/web has no server-action harness, so a seam that
+ * needed one could not be covered at all.
+ */
+export async function saveVerifiedFromAddress(
+  provider: EmailProvider,
+  fromAddress: string,
+  to: string,
+  write: (fromAddress: string) => Promise<void>,
+): Promise<void> {
+  await verifyFromAddress(provider, fromAddress, to);
+  await write(fromAddress);
+}
+```
+
+- [ ] **Step 9: Run to verify it passes**
+
+Run: `pnpm --filter web test -- preflight --run`
+Expected: PASS (5 tests).
+
+- [ ] **Step 10: Mutation-check the ordering**
+
+Swap the two lines in `saveVerifiedFromAddress` so the write runs first:
+
+```ts
+  await write(fromAddress);
+  await verifyFromAddress(provider, fromAddress, to);
+```
+
+Run the file. Expected: **FAIL** on "never writes when the address cannot send". Restore the correct order, re-run: PASS.
+
+- [ ] **Step 11: Commit**
 
 ```bash
 git add apps/web/src/lib/email/preflight.ts apps/web/src/lib/email/preflight.test.ts
@@ -676,10 +767,12 @@ In `settings/actions.ts`, add the imports and the action:
 
 ```ts
 import { clerkClient } from "@clerk/nextjs/server";
-import { getSendingIdentity, setFromEmail } from "@bis/db";
+import { setFromEmail } from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
-import { verifyFromAddress } from "@/lib/email/preflight";
+import { saveVerifiedFromAddress } from "@/lib/email/preflight";
 ```
+
+⚠️ Import exactly these. `getSendingIdentity` belongs in `page.tsx` (Step 4), not here — an unused import fails lint, and `pnpm check` runs lint.
 
 ```ts
 /**
@@ -711,13 +804,26 @@ export async function setFromEmailAction(accountId: string, formData: FormData):
   const adminEmail = admin.primaryEmailAddress?.emailAddress;
   if (!adminEmail) throw new Error("Cannot verify a sending address without an admin email address.");
 
-  await verifyFromAddress(getEmailProvider(), raw, adminEmail);
-  await setFromEmail(await dbForRequest(), accountId, raw, userId);
+  // Verify-then-write, through the seam that PINS that order (Task 5). Calling
+  // verifyFromAddress and setFromEmail directly here would work identically and
+  // be untestable — this workspace has no server-action harness, so the seam is
+  // the only place the ordering can be proven.
+  const db = await dbForRequest();
+  await saveVerifiedFromAddress(
+    getEmailProvider(), raw, adminEmail,
+    (address) => setFromEmail(db, accountId, address, userId),
+  );
   revalidatePath(`/dashboard/accounts/${accountId}/settings`);
 }
 ```
 
-⚠️ **A known coverage limit, recorded rather than hidden.** The load-bearing property here is the ORDER — `verifyFromAddress` must complete before `setFromEmail` runs, so a rejected address never reaches the column. `apps/web` has no server-action unit harness (the same limitation the brand-colour milestone recorded), so nothing pins that ordering and a future edit could swap the two lines with every suite still green. Task 5 covers the gate in isolation and Task 2 covers the write in isolation; the seam between them rests on the comment above it. **Do not "fix" this by weakening the send guard to make the action testable.** If a reviewer wants it pinned, the cheap option is extracting the two-step sequence into a plain async function taking both as parameters — worth doing only if the review asks.
+The ordering (verify before write) is pinned by `saveVerifiedFromAddress`'s tests in Task 5, not by this action. That is deliberate: `apps/web` has no server-action unit harness, so the sequence was extracted to where it can be proven. **Do not inline `verifyFromAddress` + `setFromEmail` here** — it would behave identically and silently drop the coverage. **Do not weaken the send guard to make this action testable.**
+
+Also add to the imports at the top of this file:
+
+```ts
+import { saveVerifiedFromAddress } from "@/lib/email/preflight";
+```
 
 `m`, `requireAgencyOnlyAccountAccess`, `dbForRequest` and `revalidatePath` are already imported in this file — verified. Note it carries a file-level `"use server"`, which may export **async functions only**: a sync helper or a const added here fails the build. Put any helper in a sibling module.
 
