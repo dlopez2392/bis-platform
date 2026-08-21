@@ -31,3 +31,4 @@ export { listChecklistState, setChecklistItem, addCustomChecklistItem,
          type ChecklistStateRow } from "./checklist";
 export { uploadBrandLogo, removeBrandLogo, brandLogoUrl, setBranding, getBranding,
          type Branding } from "./branding";
+export { getSendingIdentity, setFromEmail, type SendingIdentity } from "./sending-identity";
