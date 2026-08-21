@@ -15,7 +15,8 @@ vi.mock("@/lib/email", () => ({
  * at call time rather than at module-init time.
  */
 const accountRow: {
-  name: string; reply_to_email: string | null; brand_name: string | null;
+  name: string; reply_to_email: string | null; from_email: string | null;
+  brand_name: string | null;
   brand_logo_path: string | null; brand_color: string | null;
   brand_neutral: string | null; brand_corners: string | null;
   brand_type: string | null; brand_mode: string | null;
@@ -23,7 +24,8 @@ const accountRow: {
   // `name` is the AGENCY's internal label for this company; brand_name is what
   // its customers are allowed to see. They differ here on purpose, so the From
   // line can be asserted against the right one of the two.
-  name: "Rio Roofing — trial", reply_to_email: null, brand_name: "Rio Roofing",
+  name: "Rio Roofing — trial", reply_to_email: null, from_email: null,
+  brand_name: "Rio Roofing",
   brand_logo_path: null, brand_color: null, brand_neutral: null,
   brand_corners: null, brand_type: null, brand_mode: null,
 };
@@ -75,6 +77,7 @@ function fd(entries: Record<string, string>) {
 beforeEach(() => {
   sendMock.mockReset().mockResolvedValue({ providerMessageId: "pm_1" });
   accountRow.reply_to_email = null;
+  accountRow.from_email = null;
   accountRow.brand_name = "Rio Roofing";
 });
 
@@ -105,6 +108,40 @@ describe("sendEmailAction — where the customer's reply goes", () => {
     expect(sendMock).toHaveBeenCalled();
     // Absent, NOT empty. Every account starts unset, so this is the common path.
     expect(sendMock.mock.calls[0]![0].replyTo).toBeUndefined();
+  });
+});
+
+/**
+ * f/[publicId]/actions.test.ts pins that account.from_email must NOT reach
+ * the lead alert's fromAddress — an absence check (spec §3). Absence alone
+ * proves nothing about THIS send path: it would stay green whether
+ * from_email is correctly selected and forwarded here, silently dropped
+ * from the `.select` string, or never read at all. This project has been
+ * bitten by exactly that asymmetry before — a spec that passed five absence
+ * checks while the feature under test was entirely broken. This pair is the
+ * positive counterpart: it proves the column is actually selected and
+ * actually reaches the customer-facing send.
+ */
+describe("sendEmailAction — the client's own sending domain, when they have one", () => {
+  it("sends from the client's own domain when the account has set one", async () => {
+    accountRow.from_email = "leads@acme.com";
+
+    await sendEmailAction("acct_1", fd({
+      contactId: "contact_1", subject: "Hi", body: "Quote attached",
+    }));
+
+    expect(sendMock).toHaveBeenCalledWith(expect.objectContaining({
+      fromAddress: "leads@acme.com",
+    }));
+  });
+
+  it("omits the from-address when the account has not set one, falling back to EMAIL_FROM", async () => {
+    await sendEmailAction("acct_1", fd({
+      contactId: "contact_1", subject: "Hi", body: "Quote attached",
+    }));
+
+    expect(sendMock).toHaveBeenCalled();
+    expect(sendMock.mock.calls[0]![0].fromAddress).toBeUndefined();
   });
 });
 
