@@ -119,7 +119,7 @@ export const m = {
   "common.saving": "Saving…",
   "common.unavailable": "—",
 
-  "empty.calendar.title": "Calendar is coming in M2",
+  "empty.calendar.title": "Calendar isn't available yet",
   "empty.calendar.body": "Booking and appointment management will land here.",
 
   "accounts.title": "Companies",
@@ -268,7 +268,12 @@ export const m = {
   "forms.add": "New form",
   "forms.name": "Form name",
   "forms.empty.title": "No forms yet",
-  "forms.empty.body": "Build a form, embed it on the client's website, and leads land here automatically.",
+  // "your website", not "the client's": Forms is one of the six items in a
+  // CLIENT's own sidebar, so the agency's word for them was being read by
+  // them. Second person is already this shell's in-account voice — see
+  // "pipeline.empty.body" ("your first deal"), which the agency also reads
+  // from inside a company's workspace.
+  "forms.empty.body": "Build a form, embed it on your website, and leads land here automatically.",
   "forms.submissions": "Submissions",
   "forms.status.draft": "Draft",
   "forms.status.published": "Published",
