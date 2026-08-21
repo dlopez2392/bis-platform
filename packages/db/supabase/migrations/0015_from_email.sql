@@ -1,0 +1,26 @@
+-- The address a client's outbound email leaves FROM.
+--
+-- Today everything sends as EMAIL_FROM (crm@bis-rgv.com) with the client's
+-- brand as the display name, so a customer sees "Acme Corp <crm@bis-rgv.com>".
+-- The name is theirs and the domain is ours.
+--
+-- Nullable, no default. Every existing account starts unset, and unset is a
+-- documented state rather than a gap: the send path falls back to EMAIL_FROM,
+-- which is exactly the behaviour today.
+alter table public.accounts add column from_email text;
+
+-- ⚠️ THE ABSENT GRANT IS THE POINT. DO NOT "FIX" THIS BY ADDING ONE.
+--
+-- 0013 revoked UPDATE on public.accounts from `authenticated` and granted it
+-- back on a named list, and 0014 added reply_to_email to that list, obeying
+-- 0013's warning that "adding a branding column later means adding it here."
+--
+-- This column inverts that warning deliberately. It is AGENCY-ONLY, because
+-- Resend accepts a send from any domain verified on our account -- not only
+-- the one belonging to the tenant making the request. A client able to write
+-- this column could set another BIS client's verified domain and send mail as
+-- that company, without touching a single row belonging to them. RLS, which is
+-- this platform's whole isolation story, would never see it.
+--
+-- client-branding-grants.test.ts names from_email in its not-granted assertion
+-- so this stays pinned rather than resting on this comment.

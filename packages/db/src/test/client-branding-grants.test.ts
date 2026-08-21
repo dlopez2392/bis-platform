@@ -11,6 +11,15 @@ import { withRollback } from "./db";
  * agency and silently fails for clients; adding a NON-branding column to the
  * grant is an escalation. Both directions have to go red here.
  */
+/**
+ * `from_email` is deliberately NOT in this list and must never be added.
+ * Resend accepts a send from any domain verified on OUR account, not only the
+ * requesting tenant's — so a client able to write this column could send as
+ * another BIS client, without touching a single row of theirs, which means RLS
+ * never sees it. The exact-set test above cannot catch its addition on its own
+ * (a column with no grant simply does not appear), so the second test names it
+ * explicitly. See spec §5.
+ */
 const BRANDING_COLUMNS = [
   "brand_color",
   "brand_corners",
@@ -53,7 +62,7 @@ describe("accounts column privileges for authenticated", () => {
             and table_schema = 'public'
             and table_name = 'accounts'
             and privilege_type = 'UPDATE'
-            and column_name in ('client_access_enabled', 'name', 'clerk_org_id', 'agency_id')`,
+            and column_name in ('client_access_enabled', 'name', 'clerk_org_id', 'agency_id', 'from_email')`,
       );
       expect(rows).toEqual([]);
     });
