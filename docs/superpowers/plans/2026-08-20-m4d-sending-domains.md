@@ -18,7 +18,8 @@
 - **Never weaken the send guard.** Both `VERCEL_ENV === "production"` and `process.env.NODE_ENV === "production"` stay required in `getEmailProvider`.
 - **`emit` signature is `emit(db, accountId, type, actorId, payload, actorType = "user")`** — verified in `packages/db/src/events.ts:14`.
 - **`withRollback` returns void.** Every assertion goes INSIDE its callback. A previous plan on this project invented a `withConnection` helper that does not exist.
-- **House test rule:** an assertion is not evidence until it has been watched to fail against the defect it claims to catch. Every task below names its mutation.
+- **Writes to `from_email` go through `serviceDb()`, reads through `dbForRequest()`.** The column carries no `authenticated` UPDATE grant by design, and `dbForRequest()` always runs as `authenticated` — so a write through it fails for everyone, agency included. SELECT *is* granted, so the read stays RLS-enforced. Precedent: `setClientAccessAction`.
+- **House test rule:** an assertion is not evidence until it has been watched to fail against the defect it claims to catch. Every task below names its mutation — and "every task" should be read as **every assertion that carries a property**, not one token mutation per task.
 
 ## File Structure
 
@@ -801,12 +802,30 @@ In `settings/actions.ts`, add the imports and the action:
 
 ```ts
 import { clerkClient } from "@clerk/nextjs/server";
-import { setFromEmail } from "@bis/db";
+import { setFromEmail } from "@bis/db";          // `serviceDb` is already imported in this file
 import { getEmailProvider } from "@/lib/email";
 import { saveVerifiedFromAddress } from "@/lib/email/preflight";
+import { isValidEmail } from "@/lib/forms/guards";
 ```
 
 ⚠️ Import exactly these. `getSendingIdentity` belongs in `page.tsx` (Step 4), not here — an unused import fails lint, and `pnpm check` runs lint.
+
+🔴 **THE WRITE MUST USE `serviceDb()`, NOT `dbForRequest()`. This is not a style choice and getting it wrong makes the whole feature silently non-functional.**
+
+`dbForRequest()` always returns `userDb(token)`, which runs as the Postgres role `authenticated` — there is no agency special-case in `lib/db.ts`. Migration 0015 deliberately grants that role **no** UPDATE on `from_email`, so a write through it can never succeed for anyone, agency admin included. Verified against the live database:
+
+```
+has_column_privilege('authenticated', 'public.accounts', 'from_email',     'UPDATE') -> false
+has_column_privilege('authenticated', 'public.accounts', 'reply_to_email', 'UPDATE') -> true
+has_column_privilege('service_role',  'public.accounts', 'from_email',     'UPDATE') -> true
+has_column_privilege('authenticated', 'public.accounts', 'from_email',     'SELECT') -> true
+```
+
+`setClientAccessAction` in this same file already establishes the precedent for exactly this shape — a column deliberately excluded from the grant list, written through `serviceDb()` and gated by an app-level agency check instead, because the database cannot be the gate when the column is ungranted.
+
+**The READ stays on `dbForRequest()`.** SELECT *is* granted, and the read should remain RLS-enforced.
+
+⚠️ **No unit test can catch this.** `withTestAccount` hands tests `serviceDb()`, which is bound by neither column grants nor RLS, so the accessor's own suite passes either way. This was caught only by the Task 6 review, and it is why the review gate exists.
 
 ```ts
 /**
@@ -822,12 +841,17 @@ export async function setFromEmailAction(accountId: string, formData: FormData):
   const raw = String(formData.get("fromEmail") ?? "").trim();
 
   if (!raw) {
-    await setFromEmail(await dbForRequest(), accountId, null, userId);
+    await setFromEmail(serviceDb(), accountId, null, userId);
     revalidatePath(`/dashboard/accounts/${accountId}/settings`);
     return;
   }
 
-  if (!/^[^@\s]+@[^@\s.]+\.[^@\s]+$/.test(raw)) {
+  // The shared validator, not a second regex. `branding/actions.ts` validates
+  // reply_to_email — the same category of address, also only ever handed to
+  // Resend — with this exact helper, and says why: one email regex that drifts
+  // from another is worse than one that is strict. Safe to import here because
+  // this module is server-only.
+  if (!isValidEmail(raw)) {
     throw new Error(m["settings.sendingAddressBad"]);
   }
 
@@ -842,7 +866,7 @@ export async function setFromEmailAction(accountId: string, formData: FormData):
   // verifyFromAddress and setFromEmail directly here would work identically and
   // be untestable — this workspace has no server-action harness, so the seam is
   // the only place the ordering can be proven.
-  const db = await dbForRequest();
+  const db = serviceDb();
   await saveVerifiedFromAddress(
     getEmailProvider(), raw, adminEmail,
     (address) => setFromEmail(db, accountId, address, userId),
