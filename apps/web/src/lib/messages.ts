@@ -225,7 +225,7 @@ export const m = {
   "settings.noFields": "No custom fields yet",
   "settings.noValues": "No custom values yet",
   "settings.sendingAddress": "Sending address",
-  "settings.sendingAddressBody": "The address this company's email to their customers goes out from. Verify the domain in Resend and add its DNS records first — saving sends a test message and fails if the domain is not verified.",
+  "settings.sendingAddressBody": "The address this company's email to their customers goes out from. Verify the domain in Resend and add its DNS records first — setting an address sends a test message and fails if the domain is not verified. Clearing it has no such check.",
   "settings.sendingAddressPlaceholder": "leads@theircompany.com",
   "settings.sendingAddressDefault": "Using the platform address (crm@bis-rgv.com).",
   "settings.sendingAddressSaved": "Sending address updated",

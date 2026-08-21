@@ -8,6 +8,10 @@ import { createCustomField, upsertCustomValue, setClientAccess, setFromEmail, se
          type CustomFieldDef } from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
 import { saveVerifiedFromAddress } from "@/lib/email/preflight";
+// The public form's own validator, reused deliberately rather than a second
+// regex — the same reasoning branding/actions.ts records: one email regex
+// that drifts from another is worse than one that is strict.
+import { isValidEmail } from "@/lib/forms/guards";
 import { m } from "@/lib/messages";
 
 export async function createFieldAction(accountId: string, formData: FormData): Promise<void> {
@@ -113,18 +117,29 @@ export async function inviteClientAdminAction(
  * The preflight runs BEFORE the write, so a domain that is not verified in
  * Resend never reaches the column. Storing it first and letting the send fail
  * later would break every outbound email for that client, invisibly.
+ *
+ * Both writes below use serviceDb(), not dbForRequest(), same as
+ * setClientAccessAction above: migration 0015 deliberately grants NO
+ * `authenticated` UPDATE on accounts.from_email, because a client able to
+ * write its own sending address could send mail as another client of the
+ * same agency — the exact impersonation 0015 exists to prevent. The
+ * app-level requireAgencyOnlyAccountAccess guard above is therefore the only
+ * gate on this write; granting the column instead would reopen that vector.
+ * The read (getSendingIdentity in page.tsx) stays on dbForRequest() — SELECT
+ * on from_email IS granted to authenticated, and the read should stay
+ * RLS-enforced.
  */
 export async function setFromEmailAction(accountId: string, formData: FormData): Promise<void> {
   const { userId } = await requireAgencyOnlyAccountAccess(accountId);
   const raw = String(formData.get("fromEmail") ?? "").trim();
 
   if (!raw) {
-    await setFromEmail(await dbForRequest(), accountId, null, userId);
+    await setFromEmail(serviceDb(), accountId, null, userId);
     revalidatePath(`/dashboard/accounts/${accountId}/settings`);
     return;
   }
 
-  if (!/^[^@\s]+@[^@\s.]+\.[^@\s]+$/.test(raw)) {
+  if (!isValidEmail(raw)) {
     throw new Error(m["settings.sendingAddressBad"]);
   }
 
@@ -139,7 +154,7 @@ export async function setFromEmailAction(accountId: string, formData: FormData):
   // verifyFromAddress and setFromEmail directly here would work identically and
   // be untestable — this workspace has no server-action harness, so the seam is
   // the only place the ordering can be proven.
-  const db = await dbForRequest();
+  const db = serviceDb();
   await saveVerifiedFromAddress(
     getEmailProvider(), raw, adminEmail,
     (address) => setFromEmail(db, accountId, address, userId),
