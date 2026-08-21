@@ -354,9 +354,9 @@ export const m = {
   "checklist.a2p_registration.title": "Register A2P 10DLC brand and campaign",
   "checklist.a2p_registration.help":
     "Done with the carriers via Telnyx. Expect days to weeks; start it early because nothing you do here speeds it up.",
-  "checklist.email_domain.title": "Add a sending subdomain and DKIM",
+  "checklist.email_domain.title": "Add a sending subdomain, DKIM and DMARC",
   "checklist.email_domain.help":
-    "Done in Resend, then the DNS records at the domain host. A subdomain keeps this client's sending reputation separate.",
+    "Done in Resend, then the DNS records at the domain host. DKIM alone is not enough — without a DMARC record the receiving server accepts the mail and may discard it, and every system here will still say delivered. Check the domain's Insights in Resend before the client sends anything real. A subdomain keeps this client's sending reputation separate.",
   "checklist.form_notify.title": "Set the notification address on each form",
   "checklist.form_notify.help":
     "Done here. Forms applied from a blueprint deliberately start with an empty notify list so leads cannot reach the previous client.",

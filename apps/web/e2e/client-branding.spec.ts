@@ -143,6 +143,11 @@ test.describe("a client edits their branding in the browser", () => {
       // The nav item exists for a client — the surface, not just the route.
       await expect(page.getByRole("link", { name: "Branding" })).toBeVisible();
 
+      // A client must never see or set the sending address. The structural
+      // guarantee is that the column carries no grant (spec §5); this is the
+      // surface-level half of the same boundary.
+      await expect(page.getByLabel("Sending address")).toHaveCount(0);
+
       // `#brand-color`, NOT getByLabel("Brand color"): the text field and the
       // colour picker beside it share that accessible name, so a label query
       // is ambiguous under strict mode. The text field is the one that submits
