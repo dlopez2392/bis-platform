@@ -224,6 +224,12 @@ export const m = {
   "settings.saveValue": "Save value",
   "settings.noFields": "No custom fields yet",
   "settings.noValues": "No custom values yet",
+  "settings.sendingAddress": "Sending address",
+  "settings.sendingAddressBody": "The address this company's email to their customers goes out from. Verify the domain in Resend and add its DNS records first — saving sends a test message and fails if the domain is not verified.",
+  "settings.sendingAddressPlaceholder": "leads@theircompany.com",
+  "settings.sendingAddressDefault": "Using the platform address (crm@bis-rgv.com).",
+  "settings.sendingAddressSaved": "Sending address updated",
+  "settings.sendingAddressBad": "Enter an email address, like leads@theircompany.com.",
 
   "error.title": "Something went wrong",
   "error.body": "We couldn't complete that action. Your changes may not have been saved.",

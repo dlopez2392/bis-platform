@@ -1,10 +1,13 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { clerkClient } from "@clerk/nextjs/server";
 import { requireAgencyOnlyAccountAccess, requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
-import { createCustomField, upsertCustomValue, setClientAccess, serviceDb,
+import { createCustomField, upsertCustomValue, setClientAccess, setFromEmail, serviceDb,
          type CustomFieldDef } from "@bis/db";
+import { getEmailProvider } from "@/lib/email";
+import { saveVerifiedFromAddress } from "@/lib/email/preflight";
 import { m } from "@/lib/messages";
 
 export async function createFieldAction(accountId: string, formData: FormData): Promise<void> {
@@ -101,4 +104,45 @@ export async function inviteClientAdminAction(
 
   revalidatePath(`/dashboard/accounts/${accountId}/settings`);
   return { ok: true };
+}
+
+/**
+ * Agency-only, and there is no column grant that would let a client reach this
+ * even if the guard were removed (spec §5) — the boundary is enforced twice.
+ *
+ * The preflight runs BEFORE the write, so a domain that is not verified in
+ * Resend never reaches the column. Storing it first and letting the send fail
+ * later would break every outbound email for that client, invisibly.
+ */
+export async function setFromEmailAction(accountId: string, formData: FormData): Promise<void> {
+  const { userId } = await requireAgencyOnlyAccountAccess(accountId);
+  const raw = String(formData.get("fromEmail") ?? "").trim();
+
+  if (!raw) {
+    await setFromEmail(await dbForRequest(), accountId, null, userId);
+    revalidatePath(`/dashboard/accounts/${accountId}/settings`);
+    return;
+  }
+
+  if (!/^[^@\s]+@[^@\s.]+\.[^@\s]+$/.test(raw)) {
+    throw new Error(m["settings.sendingAddressBad"]);
+  }
+
+  // To the admin making the change: no new configuration, and the failure
+  // lands in front of the person who caused it.
+  const clerk = await clerkClient();
+  const admin = await clerk.users.getUser(userId);
+  const adminEmail = admin.primaryEmailAddress?.emailAddress;
+  if (!adminEmail) throw new Error("Cannot verify a sending address without an admin email address.");
+
+  // Verify-then-write, through the seam that PINS that order (Task 5). Calling
+  // verifyFromAddress and setFromEmail directly here would work identically and
+  // be untestable — this workspace has no server-action harness, so the seam is
+  // the only place the ordering can be proven.
+  const db = await dbForRequest();
+  await saveVerifiedFromAddress(
+    getEmailProvider(), raw, adminEmail,
+    (address) => setFromEmail(db, accountId, address, userId),
+  );
+  revalidatePath(`/dashboard/accounts/${accountId}/settings`);
 }

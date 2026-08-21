@@ -1,12 +1,14 @@
 import { Braces, SlidersHorizontal } from "lucide-react";
 import { clerkClient } from "@clerk/nextjs/server";
 import { serviceDb, listCustomFields, listCustomValues, listBlueprints, getBranding,
-         brandLogoUrl, type CustomFieldDef } from "@bis/db";
+         getSendingIdentity, brandLogoUrl, type CustomFieldDef } from "@bis/db";
 import { SubmitButton } from "../../submit-button";
-import { createFieldAction, upsertValueAction, setClientAccessAction, inviteClientAdminAction } from "./actions";
+import { createFieldAction, upsertValueAction, setClientAccessAction, inviteClientAdminAction,
+         setFromEmailAction } from "./actions";
 import { setBrandingAction } from "../branding/actions";
 import { SaveBlueprintDialog } from "./save-blueprint-dialog";
 import { ClientAccessPanel, type ClientAccessMember } from "./client-access-panel";
+import { SendingAddressCard } from "./sending-address-card";
 import { BrandingPanel } from "@/components/branding-panel";
 import { captureBlueprintAction } from "../../../blueprints/actions";
 import { PageHeader } from "@/components/page-header";
@@ -41,7 +43,7 @@ export default async function CrmSettingsPage({
   const { accountId } = await params;
   await requireAgencyOnlyAccountAccess(accountId);
   const db = await dbForRequest();
-  const [fields, values, blueprints, account, branding] = await Promise.all([
+  const [fields, values, blueprints, account, branding, sendingIdentity] = await Promise.all([
     listCustomFields(db, accountId, "contact"),
     listCustomValues(db, accountId),
     // Agency-wide, not account-scoped — this account is just where the
@@ -64,6 +66,7 @@ export default async function CrmSettingsPage({
         return data;
       }),
     getBranding(db, accountId),
+    getSendingIdentity(db, accountId),
   ]);
 
   // No Clerk->Postgres member sync exists (see design doc §7) — Clerk is the
@@ -119,6 +122,7 @@ export default async function CrmSettingsPage({
   const boundInvite = inviteClientAdminAction.bind(null, accountId);
   // accountId is bound here, server-side. It must never travel as a form field.
   const boundSetBranding = setBrandingAction.bind(null, accountId);
+  const boundSetFromEmail = setFromEmailAction.bind(null, accountId);
   return (
     <>
       <PageHeader
@@ -162,6 +166,10 @@ export default async function CrmSettingsPage({
           brandMode={branding.brandMode}
           logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
           action={boundSetBranding}
+        />
+        <SendingAddressCard
+          fromEmail={sendingIdentity.fromEmail}
+          action={boundSetFromEmail}
         />
         <div className="grid gap-6 lg:grid-cols-2">
           <Card>
