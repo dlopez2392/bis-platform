@@ -19,17 +19,50 @@ vi.mock("@/lib/email", () => ({
   getEmailProvider: () => ({ send: (...a: unknown[]) => sendMock(...a) }),
 }));
 
+/**
+ * The row behind notify()'s account lookup.
+ *
+ * `from_email` is deliberately POPULATED and distinctive. Nothing in the
+ * shipped `.select(...)` asks for it, so a projecting mock filters it out and
+ * the alert's `fromAddress` stays undefined — but the moment someone adds the
+ * column to the query and forwards it, the absence assertion below sees
+ * "leads@acme.com" rather than a value that was never reachable in the first
+ * place. See the mock's own note.
+ */
+const accountRow = {
+  name: "Acme", from_email: "leads@acme.com",
+  brand_name: "Rio Roofing", brand_logo_path: null,
+  brand_color: null, brand_neutral: null, brand_corners: null,
+  brand_type: null, brand_mode: null,
+};
+
 vi.mock("@bis/db", () => ({
   // Chainable only as far as the one direct query the action makes outside the
   // mocked helpers: notify()'s account lookup, which now carries the branding
   // columns the alert template needs as well as the name.
   serviceDb: () => ({
     from: () => ({
-      select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: {
-        name: "Acme", brand_name: "Rio Roofing", brand_logo_path: null,
-        brand_color: null, brand_neutral: null, brand_corners: null,
-        brand_type: null, brand_mode: null,
-      } }) }) }),
+      /**
+       * Projects to exactly the columns asked for, and that is load-bearing —
+       * the same shape conversations/actions.test.ts uses, and for the same
+       * reason. The first version of this mock ignored its argument and
+       * returned a fixed row with no `from_email` key at all, so
+       * `account?.from_email` was `undefined` under EVERY implementation and
+       * the absence assertion at the bottom of this file could not fail. A
+       * mock more permissive than PostgREST tests nothing about the query.
+       */
+      select: (cols: string) => ({
+        eq: () => ({
+          maybeSingle: async () => {
+            const wanted = cols.split(",").map((c) => c.trim());
+            return {
+              data: Object.fromEntries(
+                Object.entries(accountRow).filter(([key]) => wanted.includes(key)),
+              ),
+            };
+          },
+        }),
+      }),
     }),
   }),
   brandLogoUrl: (path: string) => `https://cdn.test/${path}`,
@@ -419,6 +452,14 @@ describe("submitFormAction — the lead alert is branded and linkable", () => {
     // corporate filters treat as internal spoofing, and nothing downstream
     // retries a lead alert — notified_at records an attempt, not a receipt.
     // See spec §3.
+    //
+    // This can now actually fail. The @bis/db mock above PROJECTS to the
+    // columns the query asks for, and `accountRow.from_email` is populated
+    // with "leads@acme.com" on purpose — so adding the column to notify()'s
+    // `.select(...)` and forwarding it as `fromAddress` (the shape the sibling
+    // conversations action uses, 400 lines away) turns this into a visible
+    // value rather than the `undefined` it was under every implementation
+    // while the mock ignored its argument.
     expect(sendMock).toHaveBeenCalled();
     expect(sendMock.mock.calls[0]![0].fromAddress).toBeUndefined();
   });
