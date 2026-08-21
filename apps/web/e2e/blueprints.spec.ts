@@ -45,6 +45,16 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     await page.getByRole("link", { name: new RegExp(ACCOUNT_NAME, "i") }).first().click();
     await page.getByRole("link", { name: "Settings" }).click();
 
+    // The positive counterpart to client-branding.spec.ts's absence check —
+    // that spec proves a CLIENT never sees this field on their own /branding
+    // page, but nothing anywhere proved an AGENCY admin does on Settings.
+    // Without this, renaming settings.sendingAddress (say to "Sending
+    // email") would leave that absence assertion passing forever: it would
+    // no longer be checking for a field that exists under any name. Locked
+    // to the identical getByLabel string on purpose, so a rename breaks
+    // THIS assertion first — which is what keeps the other one honest.
+    await expect(page.getByLabel("Sending address")).toBeVisible();
+
     await page.getByRole("button", { name: "Save as blueprint" }).click();
     await page.getByLabel("Blueprint name").fill(blueprintName);
     await page.getByRole("button", { name: "Save", exact: true }).click();
