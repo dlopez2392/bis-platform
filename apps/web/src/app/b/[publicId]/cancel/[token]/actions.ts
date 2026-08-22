@@ -7,7 +7,7 @@ import {
 } from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
 import { emailBrand } from "@/lib/email/templates/shell";
-import { formatWhen } from "../../actions";
+import { formatWhen } from "@/lib/booking/time";
 import { m } from "@/lib/messages";
 
 export type CancelResult = { ok: true } | { ok: false; error: string };

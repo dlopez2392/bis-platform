@@ -4,7 +4,7 @@ import { getEmailProvider } from "@/lib/email";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { bookingReminderEmail } from "@/lib/email/templates/booking";
-import { safeZone, formatWhen } from "@/app/b/[publicId]/actions";
+import { safeZone, formatWhen } from "@/lib/booking/time";
 
 export const dynamic = "force-dynamic";
 

@@ -5,7 +5,7 @@ import {
   serviceDb, getBranding, brandLogoUrl, type Branding,
 } from "@bis/db";
 import { publicFormTheme } from "@/lib/branding/public-form-theme";
-import { safeZone, formatWhen } from "../../actions";
+import { safeZone, formatWhen } from "@/lib/booking/time";
 import { lookupBookingByToken } from "./actions";
 import { CancelForm } from "./cancel-form";
 import { m } from "@/lib/messages";

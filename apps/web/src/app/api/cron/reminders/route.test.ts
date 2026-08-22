@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// `route.ts` reuses `safeZone`/`formatWhen` from the sibling public-booking
-// actions module (per the task brief), which is a "use server" file that
-// imports `next/headers` at its own top level — mocked here the same way
+// `route.ts` reuses `safeZone`/`formatWhen` from the shared
+// `@/lib/booking/time` module (moved out of the sibling public-booking
+// actions file — a "use server" file can only export async functions, and
+// these two are sync). `next/headers` is mocked here the same way
 // `cancel/[token]/actions.test.ts` mocks it, even though this route itself
 // never calls `headers()`.
 vi.mock("next/headers", () => ({ headers: vi.fn() }));
