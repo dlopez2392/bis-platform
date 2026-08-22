@@ -43,6 +43,17 @@ const bookingLookupResultRef: {
 } = { current: { data: null, error: null } };
 const accountErrorRef: { current: { message: string } | null } = { current: null };
 
+// The CRITICAL fix's own mock: `notify_emails` keyed by `calendars.id`
+// (`row.calendar_id`), completely independent of `getCalendarByPublicIdMock`
+// below — that separation IS the test. If `confirmCancelAction` regressed to
+// resolving recipients via `getCalendarByPublicId(db, publicId)` instead of
+// this table, the cross-tenant test would see `getCalendarByPublicIdMock`'s
+// planted (wrong) address instead of this one.
+const calendarNotifyRowsRef: { current: Record<string, { notify_emails: string[] }> } = {
+  current: { cal_1: { notify_emails: ["owner@acme.com"] } },
+};
+const calendarLookupErrorRef: { current: { message: string } | null } = { current: null };
+
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({
     from: (table: string) => {
@@ -80,6 +91,30 @@ vi.mock("@bis/db", () => ({
           },
         };
       }
+      if (table === "calendars") {
+        // `loadCalendarNotifyEmails`'s own table — keyed by `.eq("id", ...)`,
+        // i.e. `row.calendar_id`. Column-projected like the "accounts" branch
+        // above, so a query that asked for more than `notify_emails` would be
+        // visible to a test rather than silently satisfied.
+        return {
+          select: (cols: string) => ({
+            eq: (_col: string, id: string) => ({
+              maybeSingle: async () => {
+                if (calendarLookupErrorRef.current) {
+                  return { data: null, error: calendarLookupErrorRef.current };
+                }
+                const row = calendarNotifyRowsRef.current[id];
+                if (!row) return { data: null, error: null };
+                const wanted = cols.split(",").map((c) => c.trim());
+                return {
+                  data: Object.fromEntries(Object.entries(row).filter(([key]) => wanted.includes(key))),
+                  error: null,
+                };
+              },
+            }),
+          }),
+        };
+      }
       throw new Error(`unexpected table "${table}" in test mock`);
     },
   }),
@@ -93,6 +128,7 @@ vi.mock("@bis/db", () => ({
 
 import { confirmCancelAction, lookupBookingByToken } from "./actions";
 import { serviceDb } from "@bis/db";
+import { m } from "@/lib/messages";
 
 const PUBLIC_ID = "cal_test1234";
 const TOKEN = "tok_abc123";
@@ -133,6 +169,8 @@ beforeEach(() => {
   bookingsUpdateMock.mockReset();
   bookingLookupResultRef.current = { data: null, error: null };
   accountErrorRef.current = null;
+  calendarNotifyRowsRef.current = { cal_1: { notify_emails: ["owner@acme.com"] } };
+  calendarLookupErrorRef.current = null;
 });
 
 describe("lookupBookingByToken — the page-level, read-only lookup", () => {
@@ -251,19 +289,59 @@ describe("confirmCancelAction — a notify-send failure never turns a committed 
   });
 });
 
-describe("confirmCancelAction — a disabled calendar does not block a cancellation", () => {
-  it("cancel still succeeds and still notifies, even though the calendar has since been disabled (mutation: gate this action on `calendar.enabled` → FAILS)", async () => {
-    getCalendarByPublicIdMock.mockResolvedValue(calendarRow({ enabled: false }));
+describe("confirmCancelAction — IMPORTANT: a failed cancel is no longer silent", () => {
+  it("an error thrown before the cancel commits (outer catch) returns ok:false with the exact genericError message CancelForm renders", async () => {
+    cancelBookingByTokenMock.mockRejectedValue(new Error("db down"));
+
+    const result = await confirmCancelAction(PUBLIC_ID, TOKEN);
+
+    expect(result).toEqual({ ok: false, error: m["booking.cancel.genericError"] });
+  });
+});
+
+describe("confirmCancelAction — CRITICAL: notify recipients come from row.calendar_id, never the URL's publicId", () => {
+  it("a booking whose calendar_id belongs to account A still notifies A's own notify_emails, even when the action is invoked with a DIFFERENT company's publicId in the URL (mutation: revert to publicId-derived lookup → FAILS)", async () => {
+    // The booking's real calendar (cal_1) belongs to Company A and its
+    // notify_emails is the default `owner@acme.com` set in beforeEach. The
+    // URL segment, meanwhile, claims to be some OTHER company's public
+    // calendar id — exactly what an attacker swaps in on a copied cancel
+    // link. `getCalendarByPublicIdMock` is wired to resolve THAT calendar
+    // with a distinct, deliberately different address: if the fix regressed
+    // to `getCalendarByPublicId(db, publicId)`, this is the value the send
+    // would carry instead.
+    getCalendarByPublicIdMock.mockResolvedValue(
+      calendarRow({ id: "cal_evil", public_id: "evil-companyb-public-id", notify_emails: ["staffB@company-b.com"] }),
+    );
+
+    const result = await confirmCancelAction("evil-companyb-public-id", TOKEN);
+
+    expect(result).toEqual({ ok: true });
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock.mock.calls[0]![0].to).toBe("owner@acme.com");
+    expect(sendMock.mock.calls[0]![0].to).not.toBe("staffB@company-b.com");
+  });
+
+  it("never calls getCalendarByPublicId at all — recipients are resolved by row.calendar_id alone", async () => {
+    await confirmCancelAction(PUBLIC_ID, TOKEN);
+
+    expect(getCalendarByPublicIdMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("confirmCancelAction — a calendar-row lookup problem never turns a committed cancel into a reported failure", () => {
+  it("loadCalendarNotifyEmails's own query erroring still returns ok:true, with the thread append already made (same best-effort shape as the notify-send failure above)", async () => {
+    calendarLookupErrorRef.current = { message: "db blip" };
 
     const result = await confirmCancelAction(PUBLIC_ID, TOKEN);
 
     expect(result).toEqual({ ok: true });
     expect(cancelBookingByTokenMock).toHaveBeenCalled();
-    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(createMessageMock).toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
   });
 
-  it("a calendar that no longer resolves at all (null) still leaves the cancel itself intact — only the notify is skipped", async () => {
-    getCalendarByPublicIdMock.mockResolvedValue(null);
+  it("a calendar row that no longer exists (deleted) still leaves the cancel itself intact — only the notify is skipped", async () => {
+    calendarNotifyRowsRef.current = {};
 
     const result = await confirmCancelAction(PUBLIC_ID, TOKEN);
 

@@ -1,7 +1,7 @@
 "use server";
 
 import {
-  serviceDb, cancelBookingByToken, getCalendarByPublicId, getContact,
+  serviceDb, cancelBookingByToken, getContact,
   ensureConversation, createMessage, incrementUnreadCount, type BookingRow,
   type Branding,
 } from "@bis/db";
@@ -74,6 +74,32 @@ async function loadAccount(
 }
 
 /**
+ * CRITICAL: notify recipients must be resolved from `row.calendar_id` — the
+ * calendar the booking ACTUALLY belongs to — never from the URL's
+ * `publicId`. `publicId` is a caller-supplied path segment; anyone holding a
+ * legitimate cancel link can edit it to name a different company's public
+ * calendar id while the token in that same URL still resolves to (and
+ * cancels) their OWN booking. Resolving recipients via
+ * `getCalendarByPublicId(db, publicId)` would then notify a STRANGER's staff
+ * with this contact's name, time and note, while the real company never
+ * hears the booking was cancelled at all — cross-tenant PII disclosure.
+ * `calendar_id` is intrinsic to the row `cancelBookingByToken` already
+ * returned above; nothing in the request URL can steer it.
+ *
+ * Narrower than `getCalendarByPublicId`'s full `CalendarRow` on purpose —
+ * `notify_emails` is the only thing this needs, so that's the one column
+ * requested, not a public-path accessor repurposed for an internal lookup.
+ */
+async function loadCalendarNotifyEmails(
+  db: ReturnType<typeof serviceDb>, calendarId: string,
+): Promise<string[]> {
+  const { data, error } = await db.from("calendars")
+    .select("notify_emails").eq("id", calendarId).maybeSingle();
+  if (error) throw new Error(`loadCalendarNotifyEmails(${calendarId}) failed: ${error.message}`);
+  return (data as { notify_emails?: string[] } | null)?.notify_emails ?? [];
+}
+
+/**
  * The cancel-by-link submit path, and the ONLY place in this route tree that
  * mutates — `page.tsx`'s GET is a pure read (see `lookupBookingByToken`
  * above). A mail scanner that prefetches every link in an inbox to check for
@@ -117,14 +143,14 @@ export async function confirmCancelAction(publicId: string, token: string): Prom
       }, ACTOR_ID, ACTOR_TYPE);
       await incrementUnreadCount(db, row.account_id, convo.id);
 
-      // `getCalendarByPublicId` leaves `enabled` for its caller to check
-      // (same split the public booking page draws) — and this caller
-      // deliberately never checks it. A disabled calendar stops NEW bookings
-      // (`submitBookingAction` gates on `enabled`); it must never stop
-      // cancelling a booking that already exists. Cancelling closes
-      // something out, it doesn't open anything new.
-      const calendar = await getCalendarByPublicId(db, publicId);
-      if (calendar && calendar.notify_emails.length > 0) {
+      // `loadCalendarNotifyEmails` selects only `notify_emails` — no
+      // `enabled` column at all, deliberately: a disabled calendar stops NEW
+      // bookings (`submitBookingAction` gates on `enabled`); it must never
+      // stop cancelling a booking that already exists. Cancelling closes
+      // something out, it doesn't open anything new, so there is nothing
+      // left here to gate on.
+      const notifyEmails = await loadCalendarNotifyEmails(db, row.calendar_id);
+      if (notifyEmails.length > 0) {
         const brand = emailBrand({
           brandName: account?.brand_name ?? null, brandLogoPath: account?.brand_logo_path ?? null,
           brandColor: account?.brand_color ?? null, brandNeutral: account?.brand_neutral ?? null,
@@ -142,7 +168,7 @@ export async function confirmCancelAction(publicId: string, token: string): Prom
 
         const provider = getEmailProvider();
         const failures: string[] = [];
-        for (const to of calendar.notify_emails) {
+        for (const to of notifyEmails) {
           try {
             // No fromAddress — same deliverability reasoning as the booking
             // alert (`b/[publicId]/actions.ts`): this goes to the client's

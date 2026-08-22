@@ -1,14 +1,25 @@
 import type { Metadata } from "next";
+import { cache } from "react";
 import { notFound } from "next/navigation";
 import {
   serviceDb, getBranding, brandLogoUrl, type Branding,
 } from "@bis/db";
 import { publicFormTheme } from "@/lib/branding/public-form-theme";
 import { safeZone, formatWhen } from "../../actions";
-import { lookupBookingByToken, confirmCancelAction } from "./actions";
+import { lookupBookingByToken } from "./actions";
+import { CancelForm } from "./cancel-form";
 import { m } from "@/lib/messages";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * MINOR fix: `generateMetadata` and the page component below both run
+ * against the SAME request and both need this exact row — same double-fetch
+ * shape, and the same `cache()` fix, `b/[publicId]/page.tsx`'s own
+ * `loadCalendar` already applies. One query, not two, on a route that is
+ * anonymous, `force-dynamic`, and reachable by anyone holding the link.
+ */
+const loadBooking = cache((token: string) => lookupBookingByToken(serviceDb(), token));
 
 const UNBRANDED: Branding = {
   brandName: null, brandLogoPath: null, brandColor: null,
@@ -47,7 +58,7 @@ export async function generateMetadata(
 ): Promise<Metadata> {
   const robots = { index: false, follow: false };
   const { publicId, token } = await params;
-  const row = await lookupBookingByToken(serviceDb(), token);
+  const row = await loadBooking(token);
   if (!row) return { robots };
   const branding = await loadBranding(row.account_id, publicId, token);
   return {
@@ -67,20 +78,6 @@ export async function generateMetadata(
  * prefetch silently cancel a booking nobody asked to cancel.
  */
 
-/**
- * An inline Server Action (the `"use server"` directive as its own first
- * statement is what makes this legal in a Server Component file that is not
- * itself `"use server"`), rather than passing `confirmCancelAction` to the
- * form directly. `<form action>` requires a function returning
- * `void | Promise<void>`; `confirmCancelAction` returns `CancelResult` for
- * `actions.test.ts` to assert against. This is the thin adapter between the
- * two shapes, not a second copy of the mutation.
- */
-async function submitCancel(publicId: string, token: string): Promise<void> {
-  "use server";
-  await confirmCancelAction(publicId, token);
-}
-
 export default async function CancelBookingPage({
   params,
 }: {
@@ -88,13 +85,14 @@ export default async function CancelBookingPage({
 }) {
   const { publicId, token } = await params;
 
-  // `lookupBookingByToken` is a plain SELECT (see its own doc comment) — this
-  // is what lets the four states below (unknown / cancelled / booked / past)
-  // be told apart on a GET, unlike the accessor the form action below calls,
-  // which deliberately collapses "unknown" and "already cancelled" into one
-  // `null` for its own (idempotent-cancel) purpose. THIS module never calls
-  // that mutating accessor at all — see `actions.test.ts`'s structural test.
-  const row = await lookupBookingByToken(serviceDb(), token);
+  // `lookupBookingByToken` (via the `loadBooking` cache wrapper above) is a
+  // plain SELECT — this is what lets the four states below (unknown /
+  // cancelled / booked / past) be told apart on a GET, unlike the accessor
+  // `CancelForm`'s submit calls, which deliberately collapses "unknown" and
+  // "already cancelled" into one `null` for its own (idempotent-cancel)
+  // purpose. THIS module never calls that mutating accessor at all — see
+  // `actions.test.ts`'s structural test.
+  const row = await loadBooking(token);
   if (!row) notFound();
 
   const branding = (await loadBranding(row.account_id, publicId, token)) ?? UNBRANDED;
@@ -129,21 +127,13 @@ export default async function CancelBookingPage({
         ) : isPast ? (
           <p role="status" className="bis-cancel-title">{m["booking.cancel.pastTitle"]}</p>
         ) : (
-          <>
-            <p className="bis-cancel-title">{m["booking.cancel.confirmTitle"]}</p>
-            {/* A plain server-action form, no client component: React/Next
-                progressively enhance this into a fetch-based submit, and
-                without JS it still posts and re-renders this same server
-                component — which is enough, because a successful cancel just
-                means `row.status` reads "cancelled" on the very next render,
-                landing this visitor on the `isCancelled` branch above with no
-                separate "success" state to keep in sync with it. */}
-            <form action={submitCancel.bind(null, publicId, token)}>
-              <button type="submit" className="bis-cancel-submit">
-                {m["booking.cancel.confirmButton"]}
-              </button>
-            </form>
-          </>
+          // `CancelForm` is the one client component on this route: the
+          // GET-time state above (cancelled / past / unknown-via-notFound)
+          // stays server-rendered, but a failed submit needs somewhere to
+          // hold and show `CancelResult.error` — the plain server-action
+          // form this replaced discarded that result entirely, which is
+          // exactly the "a failed cancel is silent" bug this fixes.
+          <CancelForm publicId={publicId} token={token} />
         )}
       </div>
     </main>
@@ -171,4 +161,6 @@ const CANCEL_CSS = `
   background: var(--form-accent, #6d28d9); color: var(--form-accent-foreground, #ffffff);
   padding: 10px 18px; cursor: pointer;
 }
+.bis-cancel-submit:disabled { opacity: 0.6; cursor: not-allowed; }
+.bis-cancel-error { color: #b91c1c; margin: 12px 0 0; }
 `;
