@@ -119,6 +119,18 @@ describe("bookingConfirmationEmail", () => {
     });
     expect(text.trim().length).toBeGreaterThan(0);
   });
+
+  it("omits the cancel line/anchor entirely when cancelUrl is empty", () => {
+    const { html, text } = bookingConfirmationEmail({
+      brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY, cancelUrl: "",
+    });
+    expect(html).not.toContain("<a href");
+    expect(html.toLowerCase()).not.toContain("cancel this booking");
+    expect(text.toLowerCase()).not.toContain("cancel this booking");
+    // Losing the cancel link must never lose the booking confirmation itself.
+    expect(html).toContain(WHEN_BOOKER);
+    expect(text).toContain(WHEN_BOOKER);
+  });
 });
 
 describe("bookingReminderEmail", () => {
@@ -147,5 +159,16 @@ describe("bookingReminderEmail", () => {
       brand, whenBookerZone: WHEN_BOOKER, cancelUrl: CANCEL_URL,
     });
     expect(text.trim().length).toBeGreaterThan(0);
+  });
+
+  it("omits the cancel line/anchor entirely when cancelUrl is empty", () => {
+    const { html, text } = bookingReminderEmail({
+      brand, whenBookerZone: WHEN_BOOKER, cancelUrl: "",
+    });
+    expect(html).not.toContain("<a href");
+    expect(html.toLowerCase()).not.toContain("cancel this booking");
+    expect(text.toLowerCase()).not.toContain("cancel this booking");
+    expect(html).toContain(WHEN_BOOKER);
+    expect(text).toContain(WHEN_BOOKER);
   });
 });

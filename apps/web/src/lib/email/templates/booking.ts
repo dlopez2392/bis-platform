@@ -92,10 +92,20 @@ export function bookingConfirmationEmail(input: BookingConfirmationInput):
     : `<p style="margin:0 0 4px;font-size:16px;">${escapeHtml(input.whenBookerZone)}</p>
        <p style="margin:0 0 16px;color:#71717a;">${escapeHtml(input.whenCompanyZone)} for us</p>`;
 
+  // `cancelUrl` arrives "" when the triggering request carried no host
+  // header (`originFrom` returns null — see `b/[publicId]/actions.ts`). An
+  // anchor built on an empty href is not a broken link in most clients, it's
+  // a link back to the CURRENT page — worse than no link at all in a sent
+  // email. Omitted entirely rather than rendered disabled, matching how
+  // `booking-page.tsx` already treats the same empty string in-app.
+  const cancelHtml = input.cancelUrl
+    ? `<p style="margin:0;"><a href="${escapeHtml(input.cancelUrl)}" style="color:#71717a;">Cancel this booking</a></p>`
+    : "";
+
   const html = shell(input.brand, `
     <p style="margin:0 0 12px;">You're booked in.</p>
     ${whenHtml}
-    <p style="margin:0;"><a href="${escapeHtml(input.cancelUrl)}" style="color:#71717a;">Cancel this booking</a></p>
+    ${cancelHtml}
   `);
 
   const text = [
@@ -103,8 +113,7 @@ export function bookingConfirmationEmail(input: BookingConfirmationInput):
     "",
     input.whenBookerZone,
     ...(sameZone ? [] : [`${input.whenCompanyZone} for us`]),
-    "",
-    `Cancel this booking: ${input.cancelUrl}`,
+    ...(input.cancelUrl ? ["", `Cancel this booking: ${input.cancelUrl}`] : []),
   ].join("\n");
 
   return { html, text };
@@ -126,18 +135,23 @@ export type BookingReminderInput = {
  */
 export function bookingReminderEmail(input: BookingReminderInput):
   { html: string; text: string } {
+  // Same reasoning as `bookingConfirmationEmail`'s `cancelHtml`: an empty
+  // `cancelUrl` gets no anchor at all, never one pointing nowhere.
+  const cancelHtml = input.cancelUrl
+    ? `<p style="margin:0;"><a href="${escapeHtml(input.cancelUrl)}" style="color:#71717a;">Cancel this booking</a></p>`
+    : "";
+
   const html = shell(input.brand, `
     <p style="margin:0 0 12px;">This is a reminder for your upcoming booking.</p>
     <p style="margin:0 0 16px;font-size:16px;">${escapeHtml(input.whenBookerZone)}</p>
-    <p style="margin:0;"><a href="${escapeHtml(input.cancelUrl)}" style="color:#71717a;">Cancel this booking</a></p>
+    ${cancelHtml}
   `);
 
   const text = [
     "This is a reminder for your upcoming booking.",
     "",
     input.whenBookerZone,
-    "",
-    `Cancel this booking: ${input.cancelUrl}`,
+    ...(input.cancelUrl ? ["", `Cancel this booking: ${input.cancelUrl}`] : []),
   ].join("\n");
 
   return { html, text };

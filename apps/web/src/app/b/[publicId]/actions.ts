@@ -64,7 +64,7 @@ function str(formData: FormData, key: string): string {
  *  email subject. A crafted contact name carrying `\r`/`\n`/`\t` is still a
  *  valid name for the booking itself — only the subject line needs this. */
 function stripSubjectControlChars(value: string): string {
-  return value.replace(/[\r\n\t]/g, "");
+  return value.replace(/[\r\n\t]+/g, " ");
 }
 
 /**
@@ -346,42 +346,6 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       console.error(`booking ${bookingId} conversation/thread/formatting failed: ${String(e)}`);
     }
 
-    const brand = emailBrand({
-      brandName: account?.brand_name ?? null, brandLogoPath: account?.brand_logo_path ?? null,
-      brandColor: account?.brand_color ?? null, brandNeutral: account?.brand_neutral ?? null,
-      brandCorners: account?.brand_corners ?? null, brandType: account?.brand_type ?? null,
-      brandMode: account?.brand_mode ?? null, replyToEmail: null,
-    }, account?.name ?? "BIS");
-
-    const origin = originFrom(h);
-    const provider = getEmailProvider();
-
-    if (calendar.notify_emails.length > 0) {
-      const contactUrl = origin ? `${origin}/dashboard/accounts/${calendar.account_id}/contacts/${contactId}` : null;
-      const { html, text } = bookingAlertEmail({
-        brand, whenCompanyZone, contactName, note: note || null, contactUrl,
-      });
-      const failures: string[] = [];
-      for (const to of calendar.notify_emails) {
-        try {
-          // No fromAddress: the same deliverability reasoning as the lead
-          // alert (spec §3) — this message goes to the CLIENT'S OWN staff,
-          // and sending client-domain-to-client-domain through a third-party
-          // sender is the shape corporate filters treat as spoofing.
-          await provider.send({
-            to, fromName: brand.name,
-            subject: `New booking: ${stripSubjectControlChars(contactName)}`,
-            body: text, html,
-          });
-        } catch (e) {
-          failures.push(`${to} (${e instanceof Error ? e.message : String(e)})`);
-        }
-      }
-      if (failures.length > 0) {
-        console.error(`booking ${bookingId} alert send failed for ${failures.join(", ")}`);
-      }
-    }
-
     // `originFrom` can legitimately return null (a request with no host
     // header); the naive template literal used to coerce that into the
     // literal string "null" landing in a sent confirmation email
@@ -390,8 +354,62 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     // without a link when `cancelUrl` is "" (the same empty string the
     // honeypot/too-fast branches above already return), so this reuses an
     // existing, already-handled shape instead of inventing a new one.
-    const cancelUrl = origin ? `${origin}/b/${publicId}/cancel/${cancelToken}` : "";
+    //
+    // Computed here, above the email try below, and from a function that
+    // cannot throw (`originFrom` only reads headers, never builds a
+    // provider) — the booking is already real by this point (`createBooking`
+    // above committed), so the response this action returns must carry a
+    // real cancelUrl regardless of whether anything past this line succeeds.
+    const cancelUrl = originFrom(h) ? `${originFrom(h)}/b/${publicId}/cancel/${cancelToken}` : "";
+
+    // Everything below is best-effort, structurally, not just by convention:
+    // `getEmailProvider()` THROWS the moment RESEND_API_KEY/EMAIL_FROM is
+    // missing or rotated in production (see `preflight.ts`). Uncaught, that
+    // exception used to reach the outer catch at the bottom of this function
+    // and turn an already-committed booking into a reported "Something went
+    // wrong" — the booking stayed real, the booker was told it wasn't, and
+    // nobody (not the client's staff, not the booker) was ever notified. One
+    // try around brand/origin/provider/the alert loop/the confirmation keeps
+    // ANY post-insert failure here — not just a single recipient's send,
+    // which already has its own catch below — from ever reaching that outer
+    // catch again.
     try {
+      const brand = emailBrand({
+        brandName: account?.brand_name ?? null, brandLogoPath: account?.brand_logo_path ?? null,
+        brandColor: account?.brand_color ?? null, brandNeutral: account?.brand_neutral ?? null,
+        brandCorners: account?.brand_corners ?? null, brandType: account?.brand_type ?? null,
+        brandMode: account?.brand_mode ?? null, replyToEmail: null,
+      }, account?.name ?? "BIS");
+
+      const origin = originFrom(h);
+      const provider = getEmailProvider();
+
+      if (calendar.notify_emails.length > 0) {
+        const contactUrl = origin ? `${origin}/dashboard/accounts/${calendar.account_id}/contacts/${contactId}` : null;
+        const { html, text } = bookingAlertEmail({
+          brand, whenCompanyZone, contactName, note: note || null, contactUrl,
+        });
+        const failures: string[] = [];
+        for (const to of calendar.notify_emails) {
+          try {
+            // No fromAddress: the same deliverability reasoning as the lead
+            // alert (spec §3) — this message goes to the CLIENT'S OWN staff,
+            // and sending client-domain-to-client-domain through a third-party
+            // sender is the shape corporate filters treat as spoofing.
+            await provider.send({
+              to, fromName: brand.name,
+              subject: `New booking: ${stripSubjectControlChars(contactName)}`,
+              body: text, html,
+            });
+          } catch (e) {
+            failures.push(`${to} (${e instanceof Error ? e.message : String(e)})`);
+          }
+        }
+        if (failures.length > 0) {
+          console.error(`booking ${bookingId} alert send failed for ${failures.join(", ")}`);
+        }
+      }
+
       const { html, text } = bookingConfirmationEmail({ brand, whenBookerZone, whenCompanyZone, cancelUrl });
       await provider.send({
         to: email, fromName: brand.name, fromAddress: account?.from_email ?? undefined,
@@ -399,7 +417,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
         body: text, html,
       });
     } catch (e) {
-      console.error(`booking ${bookingId} confirmation send failed: ${String(e)}`);
+      console.error("booking emails failed", e);
     }
 
     return { ok: true, cancelUrl };

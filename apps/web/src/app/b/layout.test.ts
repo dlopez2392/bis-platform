@@ -6,15 +6,22 @@ import { renderToStaticMarkup } from "react-dom/server";
 // real export outside a Next build throws ("Geist is not a function"), proven
 // by running this test unmocked before adding this. The real Next.js Jest
 // preset auto-mocks this module the same way for the same reason; there is no
-// vitest equivalent here, so it's mocked by hand. Each mock returns a distinct
-// `__variable`-bearing class name — the same marker `next/font` itself mangles
-// into every generated class — so the assertion below (three occurrences)
-// still proves all three `next/font` declarations survive onto the element,
-// not just that the layout renders at all.
+// vitest equivalent here, so it's mocked by hand.
+//
+// PROJECTING, not fixed-return: the recorded lesson ("Assert a PAINTED value,
+// never a CSS custom property") applies to the mock itself, not just the
+// assertion. A mock that ignores its call args (the shape this file used to
+// have) makes renaming `--font-geist-sans` to anything else in `layout.tsx`
+// — the exact defect C1 exists to catch — invisible; every mocked face
+// returns the same fixed string no matter what `variable`/`preload` it was
+// called with. `mk` instead folds the call's own args into the returned
+// class name, so the assertion below can only pass if `layout.tsx` actually
+// passed the real variable names and `preload: false`.
+const mk = (tag: string) => (o: { variable: string; preload?: boolean }) => (
+  { variable: `__variable_${tag}_${o.variable}_preload-${o.preload}` }
+);
 vi.mock("next/font/google", () => ({
-  Geist: () => ({ variable: "__variable_geist_mock" }),
-  Inter: () => ({ variable: "__variable_inter_mock" }),
-  Source_Serif_4: () => ({ variable: "__variable_sourceserif_mock" }),
+  Geist: mk("geist"), Inter: mk("inter"), Source_Serif_4: mk("serif"),
 }));
 
 const { default: PublicBookingLayout } = await import("./layout");
@@ -28,19 +35,19 @@ const { default: PublicBookingLayout } = await import("./layout");
  * one thing that regresses if C1 is ever reverted.
  */
 describe("PublicBookingLayout", () => {
-  it("renders <html lang=\"en\"> carrying all three font variable classNames, and a zero-margin <body>", () => {
+  it("renders <html lang=\"en\"> carrying all three real font variable names at preload:false, and a zero-margin <body>", () => {
     const markup = renderToStaticMarkup(
       createElement(PublicBookingLayout, null, createElement("p", null, "content")),
     );
 
     expect(markup).toContain("lang=\"en\"");
-    // One `className` occurrence on <html> holding all three; `__variable` is
-    // the marker `next/font/google` mangles into each generated class name
-    // (e.g. `__variable_xxxxxx`), so three occurrences means all three
-    // `next/font` declarations (Geist, Inter, Source Serif 4) survived onto
-    // the element, not just one of them.
-    const variableOccurrences = markup.match(/__variable/g) ?? [];
-    expect(variableOccurrences.length).toBe(3);
+    // Each occurrence proves the EXACT variable name and preload value
+    // `layout.tsx` passed to `next/font/google` — not merely that three font
+    // calls happened (mutation: rename `--font-geist-sans` in `layout.tsx` to
+    // anything else → this goes red; the old fixed-string mock could not).
+    expect(markup).toContain("__variable_geist_--font-geist-sans_preload-false");
+    expect(markup).toContain("__variable_inter_--font-inter_preload-false");
+    expect(markup).toContain("__variable_serif_--font-source-serif_preload-false");
 
     expect(markup).toContain("margin:0");
     expect(markup).toContain("content");

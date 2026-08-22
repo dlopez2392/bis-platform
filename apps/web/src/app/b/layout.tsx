@@ -49,8 +49,12 @@ export default function PublicBookingLayout({
   return (
     <html lang="en" className={`${geistSans.variable} ${inter.variable} ${sourceSerif.variable}`}>
       {/* The token set is painted on <main> by the page (`publicFormTheme`),
-          same as `/f` — this stays transparent so an unthemed calendar shows
-          nothing but its own content. */}
+          same as `/f`. Unlike `/f`, though, `/b` has no `background:
+          "transparent"` here: `/f` is embedded in someone else's iframe, so
+          its body must let the host page show through an unthemed form.
+          `/b` is a destination a visitor navigates to directly — there is no
+          host page underneath to reveal, so an unthemed calendar just paints
+          its own background like any other page. */}
       <body style={{ margin: 0 }}>{children}</body>
     </html>
   );

@@ -12,8 +12,21 @@ const createMessageMock = vi.fn();
 const incrementUnreadCountMock = vi.fn();
 
 const sendMock = vi.fn();
+// `emailProviderThrowsRef` lets one test simulate `getEmailProvider()`
+// throwing — the real function does exactly that in production when
+// RESEND_API_KEY/EMAIL_FROM is missing or rotated (see `preflight.ts`).
+// `vi.hoisted` for the same reason `accountErrorRef` below needs it: `vi.mock`
+// factories are hoisted above all other module-level code.
+const { emailProviderThrowsRef } = vi.hoisted(() => ({
+  emailProviderThrowsRef: { current: false },
+}));
 vi.mock("@/lib/email", () => ({
-  getEmailProvider: () => ({ send: (...a: unknown[]) => sendMock(...a) }),
+  getEmailProvider: () => {
+    if (emailProviderThrowsRef.current) {
+      throw new Error("RESEND_API_KEY is not set");
+    }
+    return { send: (...a: unknown[]) => sendMock(...a) };
+  },
 }));
 
 const ACCOUNT_ID = "acct_1";
@@ -176,6 +189,7 @@ beforeEach(() => {
   incrementUnreadCountMock.mockReset();
   sendMock.mockReset().mockResolvedValue(undefined);
   accountErrorRef.current = null;
+  emailProviderThrowsRef.current = false;
 });
 
 describe("submitBookingAction — spam gates (each mutation named)", () => {
@@ -400,6 +414,25 @@ describe("submitBookingAction — SlotTakenError", () => {
     expect(result).toEqual({ ok: false, error: m["booking.public.slotTaken"], slotTaken: true });
     expect(ensureConversationMock).not.toHaveBeenCalled();
     expect(createMessageMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("submitBookingAction — a post-insert email failure never reaches the outer catch (merge-hold)", () => {
+  it("getEmailProvider() throwing still returns ok:true with the real cancelUrl, keeps every write made before it, and sends nothing (mutation: remove the structural try/catch around the email block → FAILS, the booking becomes a reported failure)", async () => {
+    emailProviderThrowsRef.current = true;
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+
+    // No `host` header in this suite's default `headers()` mock, so
+    // `originFrom` returns null and `cancelUrl` is the already-handled empty
+    // string — still `ok:true`, never the outer catch's generic error.
+    expect(result).toEqual({ ok: true, cancelUrl: "" });
+    expect(createContactMock).toHaveBeenCalled();
+    expect(createBookingMock).toHaveBeenCalled();
+    expect(ensureConversationMock).toHaveBeenCalled();
+    expect(createMessageMock).toHaveBeenCalled();
+    expect(incrementUnreadCountMock).toHaveBeenCalled();
     expect(sendMock).not.toHaveBeenCalled();
   });
 });
