@@ -68,6 +68,26 @@ describe("booking accessors", () => {
     });
   });
 
+  /**
+   * The public booking route (a later task) calls createBooking with no
+   * signed-in user — this is the actor_type='user' bug class from events.ts's
+   * own comment, reproduced here rather than trusted to the route's own tests.
+   */
+  it("createBooking threads actorType through to the booking.created event", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId,
+        { firstName: "Public", email: "public-booker@example.com" }, "user_test");
+      const booking = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date("2027-03-05T15:00:00Z"),
+          endsAt: new Date("2027-03-05T16:00:00Z") }, "public", "system");
+      const { data: ev } = await db.from("events").select("actor_type")
+        .eq("account_id", accountId).eq("type", "booking.created");
+      expect(ev).toHaveLength(1);
+      expect(ev![0]!.actor_type).toBe("system");
+    });
+  });
+
   it("reminder window: due exactly once, stamped after send", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");

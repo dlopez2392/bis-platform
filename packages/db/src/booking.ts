@@ -71,6 +71,7 @@ export function newCancelToken(): string {
  */
 export async function getOrCreateCalendar(
   db: SupabaseClient, accountId: string, actorId: string,
+  actorType: ActorType = "user",
 ): Promise<CalendarRow> {
   const { data: existing, error: findErr } = await db.from("calendars")
     .select(CALENDAR_COLS).eq("account_id", accountId).maybeSingle();
@@ -84,7 +85,7 @@ export async function getOrCreateCalendar(
   if (!error) {
     if (!data) throw new Error("getOrCreateCalendar failed: insert returned no row");
     const row = data as unknown as CalendarRow;
-    await emit(db, accountId, "calendar.created", actorId, { calendarId: row.id });
+    await emit(db, accountId, "calendar.created", actorId, { calendarId: row.id }, actorType);
     return row;
   }
 
@@ -125,6 +126,7 @@ export async function updateCalendarSettings(
   if (patch.maxAdvanceDays !== undefined) row.max_advance_days = patch.maxAdvanceDays;
   if (patch.openHours !== undefined) row.open_hours = patch.openHours;
   if (patch.notifyEmails !== undefined) row.notify_emails = patch.notifyEmails;
+  if (Object.keys(row).length === 0) return;
   row.updated_at = new Date().toISOString();
 
   // `.select("id")` so the update reports WHICH rows it touched. PostgREST
@@ -172,6 +174,7 @@ export class SlotTakenError extends Error {
  */
 export async function createBooking(
   db: SupabaseClient, accountId: string, input: CreateBookingInput, actorId: string,
+  actorType: ActorType = "user",
 ): Promise<{ id: string; cancelToken: string }> {
   const cancelToken = newCancelToken();
   const { data, error } = await db.from("bookings")
@@ -199,7 +202,7 @@ export async function createBooking(
   }
 
   await emit(db, accountId, "booking.created", actorId,
-    { bookingId: data.id, calendarId: input.calendarId, contactId: input.contactId });
+    { bookingId: data.id, calendarId: input.calendarId, contactId: input.contactId }, actorType);
   return { id: data.id, cancelToken };
 }
 
