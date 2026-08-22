@@ -49,7 +49,7 @@ const FORM_COLS =
 // Crockford-ish: no l, o, 0 or 1, so a token read off a screen or a phone call
 // cannot be mistyped into a different form. 32 symbols divides 256 exactly, so
 // the modulo below is unbiased.
-const ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789";
+export const ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789";
 
 export function newPublicId(): string {
   const bytes = randomBytes(12);

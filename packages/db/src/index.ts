@@ -32,3 +32,9 @@ export { listChecklistState, setChecklistItem, addCustomChecklistItem,
 export { uploadBrandLogo, removeBrandLogo, brandLogoUrl, setBranding, getBranding,
          type Branding } from "./branding";
 export { getSendingIdentity, setFromEmail, type SendingIdentity } from "./sending-identity";
+export { getOrCreateCalendar, getCalendarByPublicId, updateCalendarSettings,
+         listBookedRanges, createBooking, cancelBookingByToken, setBookingStatus,
+         listUpcomingBookings, countRecentBookings, listDueReminders, stampReminderSent,
+         newCancelToken, SlotTakenError,
+         type CalendarRow, type BookingRow, type BookingStatus, type CalendarSettingsPatch,
+         type CreateBookingInput, type DueReminder } from "./booking";
