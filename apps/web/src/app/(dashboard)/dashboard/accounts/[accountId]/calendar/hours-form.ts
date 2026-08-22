@@ -24,7 +24,14 @@ export type HoursRow = { day: WeekdayKey; from: string; to: string };
 export function openHoursToRows(openHours: OpenHours): HoursRow[] {
   return FORM_DAYS.map((day) => {
     const interval = openHours[day]?.[0];
-    return { day, from: interval?.[0] ?? "", to: interval?.[1] ?? "" };
+    // The engine's only spelling for "open until midnight" is "24:00", never
+    // "00:00" — mirrored back to "00:00" for display because `<input
+    // type="time">` cannot render or accept "24:00" at all (see
+    // `rowsToOpenHours` below). Any interval this form itself ever wrote is
+    // safe to reverse this way: it never writes "24:00" as anything but a
+    // midnight close.
+    const to = interval?.[1] === "24:00" ? "00:00" : interval?.[1];
+    return { day, from: interval?.[0] ?? "", to: to ?? "" };
   });
 }
 
@@ -47,7 +54,18 @@ export function rowsToOpenHours(rows: HoursRow[]): OpenHours {
   const raw: Record<string, [string, string][]> = {};
   for (const row of rows) {
     if (!row.from || !row.to) continue;
-    raw[row.day] = [[row.from, row.to]];
+    // `<input type="time">` cannot emit "24:00" — the picker only offers
+    // 00:00 through 23:59 — but "24:00" is the engine's ONLY spelling for
+    // "open until midnight" (`normalizeOpenHours`/`computeSlots` treat a
+    // "00:00" close as `to <= from`, indistinguishable from a zero-length or
+    // reversed interval, and drop it). An operator saving 22:00-00:00 used to
+    // have that interval silently dropped — a closed day, behind a green
+    // toast — because the form has no way to type what the engine needs.
+    // Remapped here, before `normalizeOpenHours` ever sees it, so a
+    // genuinely reversed pair (`to <= from` for any other reason) is still
+    // exactly the garbage that gate drops.
+    const to = row.to === "00:00" ? "24:00" : row.to;
+    raw[row.day] = [[row.from, to]];
   }
   return normalizeOpenHours(raw);
 }

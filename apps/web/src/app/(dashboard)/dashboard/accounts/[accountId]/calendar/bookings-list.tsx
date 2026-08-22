@@ -36,7 +36,11 @@ function dayKey(iso: string, timeZone: string): string {
 }
 
 function dayHeading(iso: string, timeZone: string): string {
-  return new Intl.DateTimeFormat(undefined, {
+  // "en-US", never `undefined` (the house pattern — see `lib/format.ts`):
+  // this dashboard route renders server-side first, so an `undefined` locale
+  // resolves to the SERVER's locale during SSR and the operator's BROWSER
+  // locale after hydration — a mismatch for every es-* operator.
+  return new Intl.DateTimeFormat("en-US", {
     weekday: "long", month: "long", day: "numeric", timeZone,
   }).format(new Date(iso));
 }
@@ -50,7 +54,7 @@ function dayHeading(iso: string, timeZone: string): string {
  *  zero-length appointment on any day that crosses midnight or lands in
  *  that hour. */
 function timeRange(startsAt: string, endsAt: string, timeZone: string): string {
-  const fmt = new Intl.DateTimeFormat(undefined, {
+  const fmt = new Intl.DateTimeFormat("en-US", {
     month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone,
   });
   return `${fmt.format(new Date(startsAt))} → ${fmt.format(new Date(endsAt))}`;

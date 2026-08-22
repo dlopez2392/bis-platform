@@ -13,10 +13,12 @@ export const EMBED_SCRIPT = `(function () {
   var publicId = script.getAttribute("data-form");
   var path = "/f/";
   var minHeight = "420";
+  var defaultTitle = "Form";
   if (!publicId) {
     publicId = script.getAttribute("data-booking");
     path = "/b/";
     minHeight = "560";
+    defaultTitle = "Booking";
   }
   if (!publicId) return;
 
@@ -44,7 +46,7 @@ export const EMBED_SCRIPT = `(function () {
   iframe.style.border = "0";
   iframe.style.display = "block";
   iframe.style.height = (script.getAttribute("data-min-height") || minHeight) + "px";
-  iframe.setAttribute("title", script.getAttribute("data-title") || "Form");
+  iframe.setAttribute("title", script.getAttribute("data-title") || defaultTitle);
   iframe.setAttribute("loading", "lazy");
   script.parentNode.insertBefore(iframe, script.nextSibling);
 

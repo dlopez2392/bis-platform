@@ -10,6 +10,7 @@ const createBookingMock = vi.fn();
 const ensureConversationMock = vi.fn();
 const createMessageMock = vi.fn();
 const incrementUnreadCountMock = vi.fn();
+const setAttributionMock = vi.fn();
 
 const sendMock = vi.fn();
 // `emailProviderThrowsRef` lets one test simulate `getEmailProvider()`
@@ -104,6 +105,14 @@ vi.mock("@bis/db", () => ({
   incrementUnreadCount: (...a: unknown[]) => incrementUnreadCountMock(...a),
 }));
 
+// The SAME `setAttribution` helper the sibling public-form action owns (I3)
+// — mocked here rather than let the real one reach `db.from("contacts")`,
+// which the generic `@bis/db` mock above only shapes for the `accounts`
+// read/write pair every other test in this file needs.
+vi.mock("@/app/f/[publicId]/actions", () => ({
+  setAttribution: (...a: unknown[]) => setAttributionMock(...a),
+}));
+
 import { headers } from "next/headers";
 import { computeSlots, type SlotConfig } from "@/lib/booking/slots";
 import { submitBookingAction, getSlotsAction } from "./actions";
@@ -187,6 +196,7 @@ beforeEach(() => {
   ensureConversationMock.mockReset().mockResolvedValue({ id: "convo_1", created: true });
   createMessageMock.mockReset().mockResolvedValue({ id: "msg_1" });
   incrementUnreadCountMock.mockReset();
+  setAttributionMock.mockReset().mockResolvedValue(undefined);
   sendMock.mockReset().mockResolvedValue(undefined);
   accountErrorRef.current = null;
   emailProviderThrowsRef.current = false;
@@ -316,6 +326,61 @@ describe("submitBookingAction — happy path", () => {
   });
 });
 
+describe("submitBookingAction — I3: attribution the embed lifted off the host page", () => {
+  it("a submit carrying utm_source calls setAttribution with it, after createContact, before createBooking", async () => {
+    const order: string[] = [];
+    createContactMock.mockImplementation(async () => {
+      order.push("contact");
+      return { id: "contact_1", existing: false };
+    });
+    setAttributionMock.mockImplementation(async () => {
+      order.push("attribution");
+    });
+    createBookingMock.mockImplementation(async () => {
+      order.push("booking");
+      return { id: "booking_1", cancelToken: "tok_1" };
+    });
+
+    const attribution = new URLSearchParams({ utm_source: "google", utm_medium: "cpc" }).toString();
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ attribution }));
+
+    expect(result.ok).toBe(true);
+    expect(order).toEqual(["contact", "attribution", "booking"]);
+    expect(setAttributionMock).toHaveBeenCalledWith(
+      expect.anything(), ACCOUNT_ID, "contact_1",
+      { utm_source: "google", utm_medium: "cpc" }, true,
+    );
+  });
+
+  it("a submit with no attribution still calls setAttribution, with {} (the forms action's own semantics — setAttribution itself no-ops on empty)", async () => {
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+
+    expect(result.ok).toBe(true);
+    expect(setAttributionMock).toHaveBeenCalledWith(
+      expect.anything(), ACCOUNT_ID, "contact_1", {}, true,
+    );
+  });
+
+  it("passes isNew=false (last-touch only) for a returning contact", async () => {
+    createContactMock.mockResolvedValue({ id: "contact_existing", existing: true });
+
+    await submitBookingAction(PUBLIC_ID, validFormData());
+
+    expect(setAttributionMock).toHaveBeenCalledWith(
+      expect.anything(), ACCOUNT_ID, "contact_existing", {}, false,
+    );
+  });
+
+  it("a setAttribution failure never costs the booking — still ok:true, booking still created", async () => {
+    setAttributionMock.mockRejectedValueOnce(new Error("boom"));
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+
+    expect(result.ok).toBe(true);
+    expect(createBookingMock).toHaveBeenCalled();
+  });
+});
+
 describe("submitBookingAction — I1: the two previously-unpinned guards", () => {
   it("slotStartsAt off the computed grid (a real slot + 17min): slotTaken, no contact, no booking (mutation: skip the availability recheck → FAILS)", async () => {
     const offGrid = new Date(slot.startsAt.getTime() + 17 * 60_000).toISOString();
@@ -402,6 +467,18 @@ describe("submitBookingAction — I4: public fields are bounded", () => {
 
     const alertCall = sendMock.mock.calls[0]![0];
     expect(alertCall.subject).not.toMatch(/[\r\n]/);
+  });
+});
+
+describe("submitBookingAction — M5: the alert subject leads with the when-string", () => {
+  it("subject reads \"New booking: <when> — <name>\", time first, for triage (mutation: revert to name-only → FAILS)", async () => {
+    await submitBookingAction(PUBLIC_ID, validFormData({ firstName: "Maria", lastName: "Lopez" }));
+
+    const alertCall = sendMock.mock.calls[0]![0];
+    // slot.startsAt formatted in the ACCOUNT zone (accountRow.timezone) —
+    // the same `formatWhen` shape the confirmation body already uses.
+    expect(alertCall.subject).toMatch(/^New booking: .+ — Maria Lopez$/);
+    expect(alertCall.subject.indexOf("Maria Lopez")).toBeGreaterThan(alertCall.subject.indexOf("New booking:"));
   });
 });
 

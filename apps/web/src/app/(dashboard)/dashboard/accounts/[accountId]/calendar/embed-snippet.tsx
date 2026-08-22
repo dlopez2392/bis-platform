@@ -15,7 +15,7 @@ export function EmbedSnippet({
 }: { origin: string; publicId: string; enabled: boolean }) {
   const [copied, setCopied] = useState(false);
   const snippet =
-    `<script src="${origin}/embed.js"\n        data-booking="${publicId}"\n        height="560"></script>`;
+    `<script src="${origin}/embed.js"\n        data-booking="${publicId}"\n        data-min-height="560"></script>`;
   const link = `${origin}/b/${publicId}`;
 
   return (

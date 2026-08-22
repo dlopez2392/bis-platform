@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import {
   serviceDb, getCalendarByPublicId, getBranding, brandLogoUrl, type Branding,
 } from "@bis/db";
-import { signRenderToken } from "@/lib/forms/guards";
+import { signRenderToken, parseAttribution } from "@/lib/forms/guards";
 import { partsInZone } from "@/lib/booking/slots";
 import { publicFormTheme } from "@/lib/branding/public-form-theme";
 import { BookingPage } from "./booking-page";
@@ -89,11 +89,13 @@ function issueRenderToken(publicId: string): string {
 }
 
 export default async function PublicBookingPage({
-  params,
+  params, searchParams,
 }: {
   params: Promise<{ publicId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { publicId } = await params;
+  const query = await searchParams;
   const calendar = await loadCalendar(publicId);
   // A disabled calendar, an archived one and a token that never existed are
   // all the same 404 — `getCalendarByPublicId` deliberately leaves `enabled`
@@ -105,6 +107,21 @@ export default async function PublicBookingPage({
   const timezone = await loadTimezone(calendar.account_id);
 
   const { style, darkCss, themed } = publicFormTheme(branding, false);
+
+  // Same shape as `f/[publicId]/page.tsx`'s identical block: `embed.js`
+  // lifts utm_*/gclid/fbclid off the HOST page (the iframe's own URL can
+  // never see them) and forwards them here as query params. Re-encoded
+  // through `parseAttribution` before it ever reaches the client, so the
+  // hidden field this page hands `BookingPage` already carries only the
+  // allow-listed keys, each already capped — `submitBookingAction` parses it
+  // again at submit time regardless, but this is not the boundary that
+  // guards anything; it just keeps a crafted query string from bloating a
+  // hidden input.
+  const flat = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (typeof value === "string") flat.set(key, value);
+  }
+  const attribution = new URLSearchParams(parseAttribution(flat)).toString();
 
   const today = partsInZone(new Date(), timezone);
   const todayKey = `${today.y}-${pad(today.m)}-${pad(today.d)}`;
@@ -128,6 +145,7 @@ export default async function PublicBookingPage({
         todayKey={todayKey}
         maxAdvanceDays={calendar.max_advance_days}
         renderToken={issueRenderToken(publicId)}
+        attribution={attribution}
         getSlots={getSlotsAction.bind(null, publicId)}
         submit={submitBookingAction.bind(null, publicId)}
       />

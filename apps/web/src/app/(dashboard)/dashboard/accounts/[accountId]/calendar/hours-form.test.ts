@@ -52,4 +52,25 @@ describe("openHoursToRows / rowsToOpenHours", () => {
     );
     expect(rowsToOpenHours(rows)).toEqual({});
   });
+
+  it("round-trips a midnight close (22:00-00:00) instead of silently dropping it, while a genuinely reversed pair still drops (I4)", () => {
+    // `<input type="time">` has no way to type "24:00" — the picker only
+    // offers 00:00 through 23:59 — but "24:00" is the ONLY spelling
+    // `normalizeOpenHours`/`computeSlots` accept for "open until midnight".
+    // Without the fix, a "00:00" close reads as `to <= from` (00:00 <= 22:00)
+    // and the whole interval is dropped by `normalizeOpenHours`'s own
+    // garbage-gate — a closed day, behind a green toast.
+    const midnightClose = HOURS_FORM_DAYS.map((day) =>
+      day === "fri" ? { day, from: "22:00", to: "00:00" } : { day, from: "", to: "" },
+    );
+    const openHours = rowsToOpenHours(midnightClose);
+    expect(openHours).toEqual({ fri: [["22:00", "24:00"]] });
+    expect(openHoursToRows(openHours)).toEqual(midnightClose);
+
+    // A genuinely reversed pair is still garbage, midnight fix or not.
+    const reversed = HOURS_FORM_DAYS.map((day) =>
+      day === "tue" ? { day, from: "17:00", to: "09:00" } : { day, from: "", to: "" },
+    );
+    expect(rowsToOpenHours(reversed)).toEqual({});
+  });
 });

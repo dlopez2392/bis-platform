@@ -22,7 +22,12 @@ function addDays(dayKey: string, delta: number): string {
  *  SYSTEM zone by default, and every zone behind UTC would otherwise render
  *  the day before the one this key actually names. */
 function dayLabel(dayKey: string): string {
-  return new Intl.DateTimeFormat(undefined, {
+  // "en-US", never `undefined` (the house pattern — see `lib/format.ts`):
+  // this renders unconditionally on the FIRST paint, server and client
+  // alike, so an `undefined` locale resolves to the SERVER's locale during
+  // SSR and the BROWSER's during hydration — a mismatch for every visitor
+  // whose device isn't set to en-US, es-* included.
+  return new Intl.DateTimeFormat("en-US", {
     weekday: "short", month: "short", day: "numeric", timeZone: "UTC",
   }).format(new Date(`${dayKey}T12:00:00Z`));
 }
@@ -53,11 +58,17 @@ type Props = {
   todayKey: string;
   maxAdvanceDays: number;
   renderToken: string;
+  /** utm_source (and the other utm_* keys), gclid, fbclid — lifted off the
+   *  HOST page by `embed.js`, already run through `parseAttribution`
+   *  server-side by `page.tsx` and re-encoded as a query string — the
+   *  identical shape `f/[publicId]/public-form.tsx` carries in its own
+   *  hidden `attribution` field. */
+  attribution: string;
   getSlots: (dayIso: string) => Promise<{ slots: string[] } | { error: string }>;
   submit: (formData: FormData) => Promise<BookingResult>;
 };
 
-export function BookingPage({ todayKey, maxAdvanceDays, renderToken, getSlots, submit }: Props) {
+export function BookingPage({ todayKey, maxAdvanceDays, renderToken, attribution, getSlots, submit }: Props) {
   const [weekStart, setWeekStart] = useState(todayKey);
   const [selectedDay, setSelectedDay] = useState(todayKey);
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
@@ -240,7 +251,11 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, getSlots, s
           ) : slots && slots.length > 0 ? (
             slots.map((iso) => (
               <button key={iso} type="button" className="bis-booking-slot" onClick={() => setSelectedSlot(iso)}>
-                {new Intl.DateTimeFormat(undefined, {
+                {/* Gated behind `bookerTimezone` resolving (never SSR-rendered — see
+                    the `useSyncExternalStore` note above), but pinned to "en-US"
+                    anyway for the same house-pattern reason `dayLabel` is: no Intl
+                    call on this route should depend on the visitor's own locale. */}
+                {new Intl.DateTimeFormat("en-US", {
                   hour: "numeric", minute: "2-digit", timeZone: bookerTimezone,
                 }).format(new Date(iso))}
               </button>
@@ -252,7 +267,9 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, getSlots, s
       ) : (
         <form onSubmit={handleSubmit} className="bis-booking-form" noValidate>
           <p className="bis-booking-chosen">
-            {new Intl.DateTimeFormat(undefined, {
+            {/* Same reasoning as the slot buttons above: never SSR-rendered
+                (only reachable once `selectedSlot` is set), pinned anyway. */}
+            {new Intl.DateTimeFormat("en-US", {
               weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
               // `bookerTimezone` cannot actually be null here: this branch only
               // renders once `selectedSlot` is set, which only happens via a
@@ -270,6 +287,7 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, getSlots, s
 
           <input type="hidden" name="slotStartsAt" value={selectedSlot} />
           <input type="hidden" name="bookerTimezone" value={bookerTimezone ?? "UTC"} />
+          <input type="hidden" name="attribution" value={attribution} />
           <input type="hidden" name={RENDER_TOKEN_FIELD} value={renderToken} />
           {/* Off-screen rather than display:none, same as the sibling lead
               form's honeypot: some bots skip hidden inputs but fill anything

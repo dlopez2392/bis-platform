@@ -54,7 +54,13 @@ const empty = (): SweepReport =>
 async function deleteAccountCascade(
   db: Db, accountId: string, report: SweepReport,
 ): Promise<void> {
-  for (const table of ["form_submissions", "forms", "contacts", "events"]) {
+  // "bookings" then "calendars" FIRST (M13): migration 0017 made
+  // bookings.account_id/calendar_id/contact_id and calendars.account_id all
+  // `on delete restrict` — the same reason `withTestAccount`'s own cleanup
+  // (packages/db/src/test/fixtures.ts) orders them first. Deleting contacts
+  // before bookings, on a stale fixture account that ever booked anything,
+  // would fail on the FK instead of sweeping the account.
+  for (const table of ["bookings", "calendars", "form_submissions", "forms", "contacts", "events"]) {
     const { error } = await db.from(table).delete().eq("account_id", accountId);
     if (error) report.errors.push(`${table} delete for ${accountId}: ${error.message}`);
   }

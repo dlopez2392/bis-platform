@@ -409,8 +409,13 @@ async function fillBlanks(
  * attribution silently — no `processing_error`, no log, and the outer catch
  * in `enrich` never fired because nothing ever threw. Throwing here lets that
  * catch do its job.
+ *
+ * Exported (not file-private, unlike its neighbours) so `b/[publicId]/
+ * actions.ts` can call the SAME helper for a booking's contact rather than
+ * re-implementing the first-touch/last-touch merge a second time (I3) — one
+ * `contacts.attribution` writer, not two that could drift apart.
  */
-async function setAttribution(
+export async function setAttribution(
   db: ReturnType<typeof serviceDb>, accountId: string, contactId: string,
   attribution: Record<string, string>, isNew: boolean,
 ): Promise<void> {

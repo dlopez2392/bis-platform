@@ -194,5 +194,10 @@ describe("embed script", () => {
              data: { type: "bis-form-redirect", url: "javascript:alert(1)" } });
       expect(win.top.location.href).toBe(before);
     });
+
+    it("defaults the booking iframe's title to \"Booking\", not the shared \"Form\" default (M1)", () => {
+      const { iframe } = run({ "data-booking": "resource-42" }, "https://client.example/book");
+      expect(iframe.title).toBe("Booking");
+    });
   });
 });

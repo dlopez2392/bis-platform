@@ -15,8 +15,11 @@ import { computeSlots, partsInZone, type SlotConfig } from "@/lib/booking/slots"
 import { safeZone, formatWhen } from "@/lib/booking/time";
 import {
   HONEYPOT_FIELD, RENDER_TOKEN_FIELD, MIN_FILL_MS, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS,
-  verifyRenderToken, hashIp, isValidEmail, isValidPhone,
+  verifyRenderToken, hashIp, isValidEmail, isValidPhone, parseAttribution,
 } from "@/lib/forms/guards";
+// The SAME helper the sibling public-form action uses, not a re-implementation
+// (I3) — see its docstring in that file for why it is exported.
+import { setAttribution } from "@/app/f/[publicId]/actions";
 import { m } from "@/lib/messages";
 
 export type BookingResult =
@@ -205,6 +208,13 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     // reach `Intl.DateTimeFormat` after the booking write below has already
     // committed (C2).
     const bookerTimezoneRaw = str(formData, "bookerTimezone") || undefined;
+    // Lifted from the host page by embed.js, passed through by `page.tsx`
+    // and `booking-page.tsx`'s hidden `attribution` field — the exact shape
+    // `f/[publicId]/actions.ts`'s own `submitFormAction` decodes (I3).
+    // Re-run through `parseAttribution` here too: the hidden input is a
+    // plain form value, editable in devtools like any other, so this is the
+    // real allow-list/length boundary, not the one `page.tsx` already applied.
+    const attribution = parseAttribution(new URLSearchParams(str(formData, "attribution")));
 
     // --- Real errors, for real people, before any spam guard -------------
     if (!firstName || !email || !startsAtRaw) {
@@ -280,6 +290,21 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       source: "booking",
     }, ACTOR_ID, ACTOR_TYPE);
     const contactId = created.id;
+
+    // Best-effort, its own try/catch, deliberately BEFORE the booking insert
+    // below rather than folded into the "Best-effort from here" block after
+    // it: attribution belongs to the CONTACT, not to any one booking attempt,
+    // and `created.existing` — which decides first-touch vs. last-touch — is
+    // only available right here. Losing it must never cost anyone their
+    // booking, exactly the reasoning `f/[publicId]/actions.ts`'s own call
+    // documents; unlike that caller's `enrich()`, there is no
+    // `processing_error` column on `bookings` to route this into, so it is
+    // logged instead.
+    try {
+      await setAttribution(db, calendar.account_id, contactId, attribution, !created.existing);
+    } catch (e) {
+      console.error(`booking ${publicId}: setAttribution failed for contact ${contactId}: ${String(e)}`);
+    }
 
     let bookingId: string;
     let cancelToken: string;
@@ -372,7 +397,11 @@ export async function submitBookingAction(publicId: string, formData: FormData):
             // sender is the shape corporate filters treat as spoofing.
             await provider.send({
               to, fromName: brand.name,
-              subject: `New booking: ${stripSubjectControlChars(contactName)}`,
+              // Time first (spec §6): the operator triages a list of these,
+              // and the time is what they scan for, not the name.
+              // `whenCompanyZone` is server-computed from a real timestamp
+              // (never attacker input) so only the name needs stripping.
+              subject: `New booking: ${whenCompanyZone} — ${stripSubjectControlChars(contactName)}`,
               body: text, html,
             });
           } catch (e) {

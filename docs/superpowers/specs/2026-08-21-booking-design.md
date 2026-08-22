@@ -141,9 +141,17 @@ ambiguity survives past the picker.
   name / email / phone / note and a confirm step showing the chosen time in
   both the booker's zone and the company's.
 - **Embed:** `embed.js` gains the booking variant of what it does for forms —
-  iframe with auto-height and host-page attribution. The known `data-target`
-  gap (GTM injections land at the top of `<body>`) is NOT fixed here; it is a
-  recorded forms gap and fixing it once for both is its own small change.
+  a **fixed-height** iframe (`data-min-height`, default 560) and host-page
+  attribution. *(Amended at final review: this section originally promised
+  auto-height, matching the form embed's own resize-on-postMessage behavior.
+  Cut — the booking page has no natural resize signal of its own to auto-fit
+  with the way a form's field count does; the week-strip/slot-grid/form
+  sequence changes height by user interaction, not by content the embed
+  script can observe growing. A fixed, generous default is the shipped
+  behavior; auto-height is a recorded follow-up, not a defect.)* The known
+  `data-target` gap (GTM injections land at the top of `<body>`) is NOT fixed
+  here; it is a recorded forms gap and fixing it once for both is its own
+  small change.
 - Spam: the same three layers as forms — honeypot, signed fill-time token,
   IP rate limit — reused, not reimplemented.
 
@@ -180,7 +188,11 @@ house style.
 `/b/<publicId>/cancel/<token>` — a page, not a bare action: shows the
 booking, one button, then marks `status='cancelled'` (freeing the slot — the
 exclusion constraint only binds `status='booked'`), emails the company, and
-appends to the conversation. An unknown or already-used token 404s.
+appends to the conversation. An unknown token 404s; a replayed token (the
+link clicked again, or twice, after it already cancelled the booking) renders
+an "already cancelled" page instead of 404 *(amended at final review — better
+than 404: the booker followed a real link that DID work the first time, and a
+second visit finding nothing would read as if the cancel itself had failed)*.
 **Reschedule = cancel + rebook.** No separate flow.
 
 ## 7. Reminders — the first scheduled job
