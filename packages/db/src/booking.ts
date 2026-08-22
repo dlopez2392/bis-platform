@@ -42,6 +42,11 @@ export type DueReminder = {
   contactEmail: string | null; contactName: string;
   accountName: string; accountTimezone: string;
   branding: Branding;
+  // Reminders are customer-facing outbound, so they carry the account's
+  // sending address per the M4d decision -- the same shape the booking
+  // confirmation already sends. The lead-alert exclusion (no fromAddress)
+  // applies to STAFF-facing mail only; a booker is not the client's staff.
+  fromEmail: string | null;
 };
 
 const CALENDAR_COLS =
@@ -280,7 +285,7 @@ export async function countRecentBookings(
 
 const ACCOUNT_BRAND_COLS =
   "name, timezone, brand_name, brand_logo_path, brand_color, brand_neutral, " +
-  "brand_corners, brand_type, brand_mode, reply_to_email";
+  "brand_corners, brand_type, brand_mode, reply_to_email, from_email";
 
 /**
  * `nowIso` is caller-injected (the cron route passes real now; tests pin a
@@ -315,7 +320,8 @@ export async function listDueReminders(
   // 15-minute cron, not a hot path, and one account is the real shape today.
   const accountIds = [...new Set(rows.map((r) => r.account_id as string))];
   const accountInfo = new Map<
-    string, { accountName: string; accountTimezone: string; branding: Branding }
+    string,
+    { accountName: string; accountTimezone: string; branding: Branding; fromEmail: string | null }
   >();
   for (const accountId of accountIds) {
     const { data: acctData, error: acctErr } = await db.from("accounts")
@@ -328,7 +334,7 @@ export async function listDueReminders(
       brand_name: string | null; brand_logo_path: string | null; brand_color: string | null;
       brand_neutral: Branding["brandNeutral"]; brand_corners: Branding["brandCorners"];
       brand_type: Branding["brandType"]; brand_mode: Branding["brandMode"];
-      reply_to_email: string | null;
+      reply_to_email: string | null; from_email: string | null;
     };
     accountInfo.set(accountId, {
       accountName: acct.name,
@@ -343,6 +349,7 @@ export async function listDueReminders(
         brandMode: acct.brand_mode ?? null,
         replyToEmail: acct.reply_to_email ?? null,
       },
+      fromEmail: acct.from_email ?? null,
     });
   }
 
@@ -362,6 +369,7 @@ export async function listDueReminders(
       accountName: info.accountName,
       accountTimezone: info.accountTimezone,
       branding: info.branding,
+      fromEmail: info.fromEmail,
     };
   });
 }

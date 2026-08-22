@@ -56,15 +56,14 @@ export async function GET(req: Request): Promise<Response> {
 
       const { html, text } = bookingReminderEmail({ brand, whenBookerZone, cancelUrl });
 
-      // No `fromAddress`: `DueReminder`'s branding join selects
-      // `reply_to_email` but not `from_email` (see `listDueReminders` in
-      // `@bis/db`'s booking.ts — `ACCOUNT_BRAND_COLS` has no `from_email`).
-      // Extending that column list is out of scope here; this send goes out
-      // on the platform's own configured address with the company's
-      // reply-to, same shape as the lead alert.
+      // fromAddress carries the account's sending address: a reminder is
+      // customer-facing outbound, same shape as the booking confirmation
+      // (`submitBookingAction` in `b/[publicId]/actions.ts`) — not the
+      // staff-facing lead alert, which deliberately omits it.
       await provider.send({
         to: reminder.contactEmail,
         fromName: brand.name,
+        fromAddress: reminder.fromEmail ?? undefined,
         replyTo: normalizeReplyTo(reminder.branding.replyToEmail),
         subject: "Reminder: your upcoming booking",
         body: text,

@@ -104,6 +104,9 @@ describe("booking accessors", () => {
           endsAt: new Date("2027-03-04T13:00:00Z") }, "user_test");
       const due = await listDueReminders(db, now.toISOString());
       expect(due.map((d) => d.bookingId)).toEqual([inWindow.id]);
+      // withTestAccount's fixture account never sets from_email, so this
+      // also pins the null case for the M4d sending-address field.
+      expect(due[0]!.fromEmail).toBeNull();
       await stampReminderSent(db, inWindow.id);
       expect(await listDueReminders(db, now.toISOString())).toEqual([]);
     });

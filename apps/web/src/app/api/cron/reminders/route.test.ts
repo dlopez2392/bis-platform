@@ -48,6 +48,7 @@ function reminder(overrides: Record<string, unknown> = {}) {
       brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
       replyToEmail: "owner@acme.com",
     },
+    fromEmail: null,
     ...overrides,
   };
 }
@@ -156,6 +157,28 @@ describe("GET /api/cron/reminders", () => {
     const sendArgs = sendMock.mock.calls[0]![0] as { body: string };
     expect(sendArgs.body).toContain(bookerWhen);
     expect(sendArgs.body).not.toContain(accountWhen);
+  });
+
+  it("carries the account's from_email as fromAddress on the send (M4d: reminders are customer-facing outbound)", async () => {
+    const withFrom = reminder({ fromEmail: "hello@acme.com" });
+    listDueRemindersMock.mockResolvedValue([withFrom]);
+
+    await GET(req(`Bearer ${SECRET}`));
+
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({ fromAddress: "hello@acme.com" }),
+    );
+  });
+
+  it("sends with fromAddress undefined when the account has no from_email set", async () => {
+    const noFrom = reminder({ fromEmail: null });
+    listDueRemindersMock.mockResolvedValue([noFrom]);
+
+    await GET(req(`Bearer ${SECRET}`));
+
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({ fromAddress: undefined }),
+    );
   });
 
   it("counts a reminder with no contact email as a failure, without stamping it", async () => {
