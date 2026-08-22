@@ -42,8 +42,49 @@ function clientIp(h: Headers): string {
   return h.get("x-real-ip") ?? "unknown";
 }
 
+// Bounds on the public fields this route persists or emails. Slice, not
+// reject — an over-long value is not a spam signal, it's still a real booking
+// worth taking. `note` matches `f/[publicId]/actions.ts`'s `collect()`
+// precedent exactly (5000 there is per-answer on a form with many fields;
+// 2000 here is the one free-text field on a booking). `bookerTimezone` is
+// deliberately absent from this map — its own bound is `safeZone`'s 64-char
+// cap below, enforced by rejecting outright rather than truncating a zone
+// name into a different, wrong one.
+const FIELD_MAX: Record<string, number> = {
+  firstName: 500, lastName: 500, email: 500, phone: 500, note: 2000,
+};
+
 function str(formData: FormData, key: string): string {
-  return String(formData.get(key) ?? "").trim();
+  const raw = String(formData.get(key) ?? "").trim();
+  const max = FIELD_MAX[key];
+  return max ? raw.slice(0, max) : raw;
+}
+
+/** Strips characters that could inject additional lines into a rendered
+ *  email subject. A crafted contact name carrying `\r`/`\n`/`\t` is still a
+ *  valid name for the booking itself — only the subject line needs this. */
+function stripSubjectControlChars(value: string): string {
+  return value.replace(/[\r\n\t]/g, "");
+}
+
+/**
+ * Rejects an unusable IANA zone before it can reach `Intl.DateTimeFormat`
+ * mid-flight, after a write has already committed. Empty and implausibly
+ * long strings (no real zone name approaches 64 chars) are rejected outright
+ * without probing; everything else is proven by construction — the same
+ * `Intl.DateTimeFormat` construction `formatWhen` itself uses, just run here,
+ * before the booking exists, instead of there, after it does.
+ */
+function safeZone(tz: string | undefined, fallback: string): string {
+  if (!tz || tz.length > 64) return fallback;
+  try {
+    // Probe only; the constructor itself is the validation, and its result
+    // is discarded on purpose.
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return tz;
+  } catch {
+    return fallback;
+  }
 }
 
 function slotConfigFrom(calendar: CalendarRow, timezone: string): SlotConfig {
@@ -89,12 +130,24 @@ const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 /** The account row every send below needs — timezone for both re-validating
  *  availability and formatting the company-zone when-string, the rest for
  *  branding and the confirmation's from/reply-to. One row, several jobs, the
- *  same economy `notify()` in the sibling form action takes. */
+ *  same economy `notify()` in the sibling form action takes.
+ *
+ *  THROWS on a query error rather than silently falling back to UTC — this
+ *  row's `timezone` feeds BOTH the picker (`getSlotsAction`) and the
+ *  submit-time recheck (`computeAllSlots` in `submitBookingAction`), so a
+ *  transient failure that fell back quietly would make picker and recheck
+ *  agree on the wrong zone rather than disagree: a 09:00-17:00 business
+ *  becomes bookable at 03:00 local with nothing to catch it, because both
+ *  reads made the identical wrong assumption. The outer try/catch in each
+ *  caller already returns the safe answer (a generic error, zero writes) for
+ *  anything this throws — see `submitFormAction`'s equivalent `setAttribution`
+ *  in the sibling form action for the same throw-don't-swallow reasoning. */
 async function loadAccount(db: ReturnType<typeof serviceDb>, accountId: string) {
-  const { data } = await db.from("accounts")
+  const { data, error } = await db.from("accounts")
     .select("name, timezone, from_email, reply_to_email, brand_name, brand_logo_path, "
       + "brand_color, brand_neutral, brand_corners, brand_type, brand_mode")
     .eq("id", accountId).maybeSingle();
+  if (error) throw new Error(`loadAccount(${accountId}) failed: ${error.message}`);
   return data as {
     name: string | null; timezone: string | null;
     from_email: string | null; reply_to_email: string | null;
@@ -173,7 +226,11 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     const phone = str(formData, "phone");
     const note = str(formData, "note");
     const startsAtRaw = str(formData, "slotStartsAt");
-    const bookerTimezone = str(formData, "bookerTimezone") || undefined;
+    // Untrusted until `safeZone` validates it below, against the account's
+    // own zone as fallback — a crafted or malformed value here must never
+    // reach `Intl.DateTimeFormat` after the booking write below has already
+    // committed (C2).
+    const bookerTimezoneRaw = str(formData, "bookerTimezone") || undefined;
 
     // --- Real errors, for real people, before any spam guard -------------
     if (!firstName || !email || !startsAtRaw) {
@@ -201,17 +258,48 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     }
 
     const token = verifyRenderToken(str(formData, RENDER_TOKEN_FIELD), Date.now(), publicId);
-    if (!token.ok || token.elapsedMs < MIN_FILL_MS) {
+    if (!token.ok) {
+      // A genuinely expired token is not a spam signal — it is a real visitor
+      // who left the tab open past MAX_TOKEN_AGE_MS. Returning the shared fake
+      // success here (as `f/[publicId]/actions.ts` documents for its own
+      // identical branch) would tell them "You're booked in." with zero writes:
+      // no booking, no confirmation, and the slot silently withheld from
+      // everyone else too. Telling them to refresh leaks nothing a bot doesn't
+      // already know — `issuedAt` is plaintext in the token it holds.
+      if (token.reason === "expired") {
+        return { ok: false, error: m["booking.public.tokenExpired"] };
+      }
+      // `malformed`/`bad_signature` stay folded into the shared fake success —
+      // unlike `expired`, there is no real visitor on the other end of those.
+      return { ok: true, cancelUrl: "" };
+    }
+    if (token.elapsedMs < MIN_FILL_MS) {
       return { ok: true, cancelUrl: "" };
     }
 
     // --- The booking --------------------------------------------------
     const account = await loadAccount(db, calendar.account_id);
     const timezone = account?.timezone ?? "UTC";
+    const bookerZone = safeZone(bookerTimezoneRaw, timezone);
 
     const startsAt = new Date(startsAtRaw);
     if (Number.isNaN(startsAt.getTime())) return { ok: false, error: m["booking.public.genericError"] };
     const endsAt = new Date(startsAt.getTime() + calendar.slot_duration_minutes * 60_000);
+
+    // App-level re-check BEFORE any write (I2): a rejected instant must never
+    // leave a contact row behind. This used to run after `createContact`,
+    // which meant every "just taken" reply still injected a CRM row — no
+    // booking, no trail beyond a name/email/phone written by whoever last hit
+    // the button, 5-10 minutes apart, one IP. Friendly message with fresh
+    // slots, computed the exact same way the picker itself was;
+    // `bookings_no_overlap` below is the actual guarantee against a race that
+    // lands between this check and the insert — this only saves a doomed
+    // write in the common case.
+    const now = new Date();
+    const stillFree = (await computeAllSlots(db, calendar, timezone, now)).some(
+      (s) => s.startsAt.getTime() === startsAt.getTime() && s.endsAt.getTime() === endsAt.getTime(),
+    );
+    if (!stillFree) return { ok: false, error: m["booking.public.slotTaken"], slotTaken: true };
 
     const created = await createContact(db, calendar.account_id, {
       firstName, lastName: lastName || undefined, email, phone: phone || undefined,
@@ -219,22 +307,12 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     }, ACTOR_ID, ACTOR_TYPE);
     const contactId = created.id;
 
-    // App-level re-check: a friendly "just taken" message with fresh slots,
-    // computed the exact same way the picker itself was. `bookings_no_overlap`
-    // below is the actual guarantee against a race that lands between this
-    // check and the insert — this only saves a doomed write in the common case.
-    const now = new Date();
-    const stillFree = (await computeAllSlots(db, calendar, timezone, now)).some(
-      (s) => s.startsAt.getTime() === startsAt.getTime() && s.endsAt.getTime() === endsAt.getTime(),
-    );
-    if (!stillFree) return { ok: false, error: m["booking.public.slotTaken"], slotTaken: true };
-
     let bookingId: string;
     let cancelToken: string;
     try {
       ({ id: bookingId, cancelToken } = await createBooking(db, calendar.account_id, {
         calendarId: calendar.id, contactId, startsAt, endsAt,
-        note: note || undefined, bookerTimezone, ipHash,
+        note: note || undefined, bookerTimezone: bookerZone, ipHash,
       }, ACTOR_ID, ACTOR_TYPE));
     } catch (e) {
       if (e instanceof SlotTakenError) {
@@ -243,12 +321,20 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       throw e;
     }
 
-    const whenCompanyZone = formatWhen(startsAt, timezone);
-    const whenBookerZone = formatWhen(startsAt, bookerTimezone || timezone);
     const contactName = [firstName, lastName].filter(Boolean).join(" ").trim() || email;
 
-    // --- Best-effort from here: the booking is real. ----------------------
+    // --- Best-effort from here: the booking is real. `whenCompanyZone`/
+    // `whenBookerZone` are computed INSIDE this same try (C2): both zones are
+    // validated by construction (`timezone` is the account's own row,
+    // `bookerZone` already passed `safeZone`'s identical `Intl.DateTimeFormat`
+    // probe), but this keeps it true by structure rather than by trust — a
+    // formatting failure here can no longer escape to the outer catch and turn
+    // a successful insert into a reported failure. -------------------------
+    let whenCompanyZone = "";
+    let whenBookerZone = "";
     try {
+      whenCompanyZone = formatWhen(startsAt, timezone);
+      whenBookerZone = formatWhen(startsAt, bookerZone);
       const convo = await ensureConversation(db, calendar.account_id, contactId, ACTOR_ID, ACTOR_TYPE);
       const body = [`Booking: ${whenCompanyZone}`, ...(note ? [`Note: ${note}`] : [])].join("\n");
       await createMessage(db, calendar.account_id, {
@@ -257,7 +343,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       }, ACTOR_ID, ACTOR_TYPE);
       await incrementUnreadCount(db, calendar.account_id, convo.id);
     } catch (e) {
-      console.error(`booking ${bookingId} conversation/thread failed: ${String(e)}`);
+      console.error(`booking ${bookingId} conversation/thread/formatting failed: ${String(e)}`);
     }
 
     const brand = emailBrand({
@@ -282,7 +368,11 @@ export async function submitBookingAction(publicId: string, formData: FormData):
           // alert (spec §3) — this message goes to the CLIENT'S OWN staff,
           // and sending client-domain-to-client-domain through a third-party
           // sender is the shape corporate filters treat as spoofing.
-          await provider.send({ to, fromName: brand.name, subject: `New booking: ${contactName}`, body: text, html });
+          await provider.send({
+            to, fromName: brand.name,
+            subject: `New booking: ${stripSubjectControlChars(contactName)}`,
+            body: text, html,
+          });
         } catch (e) {
           failures.push(`${to} (${e instanceof Error ? e.message : String(e)})`);
         }
@@ -292,13 +382,15 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       }
     }
 
-    // Verbatim per spec: `originFrom` can legitimately return null (a request
-    // with no host header), which template-literal-coerces to the string
-    // "null" here rather than a relative path. Known, accepted gap — the
-    // confirmation's `cancelUrl` field is not optional the way the lead
-    // alert's `contactUrl` is, and every real request Vercel forwards to this
-    // route carries a host.
-    const cancelUrl = `${origin}/b/${publicId}/cancel/${cancelToken}`;
+    // `originFrom` can legitimately return null (a request with no host
+    // header); the naive template literal used to coerce that into the
+    // literal string "null" landing in a sent confirmation email
+    // ("null/b/.../cancel/..."). Guarded rather than defaulted to some
+    // relative path: `booking-page.tsx` already renders the cancel hint
+    // without a link when `cancelUrl` is "" (the same empty string the
+    // honeypot/too-fast branches above already return), so this reuses an
+    // existing, already-handled shape instead of inventing a new one.
+    const cancelUrl = origin ? `${origin}/b/${publicId}/cancel/${cancelToken}` : "";
     try {
       const { html, text } = bookingConfirmationEmail({ brand, whenBookerZone, whenCompanyZone, cancelUrl });
       await provider.send({

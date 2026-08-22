@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition, type FormEvent } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore, useTransition, type FormEvent } from "react";
 import { HONEYPOT_FIELD, RENDER_TOKEN_FIELD } from "@/lib/forms/guards";
 import { m } from "@/lib/messages";
 import type { BookingResult } from "./actions";
@@ -27,6 +27,27 @@ function dayLabel(dayKey: string): string {
   }).format(new Date(`${dayKey}T12:00:00Z`));
 }
 
+// `useSyncExternalStore`, not `useEffect` + `useState` (I6): the visitor's
+// device zone has no server-side answer, and nothing ever changes it within a
+// session, which is exactly the shape this hook exists for — a value read
+// from outside React, with no live updates to subscribe to. `subscribe`
+// legitimately never fires; `getServerSnapshot` returning `null` is what
+// keeps the server render and the client's FIRST (pre-hydration) render
+// identical, and React itself re-renders with the real `getSnapshot` value
+// right after mount — no manual effect, and no react-hooks/set-state-in-effect
+// finding to justify away. `useEffect`+`setState` was tried here first and
+// hit exactly that rule; this hook is the sanctioned replacement for the same
+// "resolve on mount, without a mismatch" need, not a workaround for the lint.
+function subscribeToNothing(): () => void {
+  return () => {};
+}
+function getBookerTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+function getServerBookerTimezone(): null {
+  return null;
+}
+
 type Props = {
   /** The account-zone calendar day this page was rendered on. */
   todayKey: string;
@@ -46,13 +67,20 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, getSlots, s
   const [result, setResult] = useState<BookingResult | null>(null);
   const [pending, startTransition] = useTransition();
 
-  // Resolved once, client-side only: the visitor's OWN device zone. Every
-  // other Intl call on this route pins an explicit `timeZone` (the account's,
-  // or literal "UTC" for a day key); this is the one exception, by design —
-  // it exists specifically to capture whatever zone the browser is actually
-  // in, and is threaded through both the slot labels below and the hidden
-  // `bookerTimezone` field the submit action stores on the booking.
-  const bookerTimezone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
+  // The visitor's OWN device zone (I6) — see `useSyncExternalStore` above.
+  // `useMemo` still runs during SSR, where there is no browser to ask, so the
+  // server render used the SERVER's zone; the client's first render then
+  // asked the browser and got a different answer, which React reports as a
+  // hydration mismatch and the visitor sees as the day strip and slot times
+  // visibly flipping zones a moment after paint. `null` until React re-renders
+  // with the real snapshot means server and client render IDENTICALLY at
+  // first (nothing zone-dependent shown yet); every other Intl call on this
+  // route pins an explicit `timeZone` (the account's, or literal "UTC" for a
+  // day key) for the same reason — this is the one value that has no
+  // server-side answer at all, by design.
+  const bookerTimezone = useSyncExternalStore(
+    subscribeToNothing, getBookerTimezone, getServerBookerTimezone,
+  );
 
   const lastBookableKey = useMemo(() => addDays(todayKey, maxAdvanceDays), [todayKey, maxAdvanceDays]);
   const weekDays = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
@@ -73,6 +101,15 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, getSlots, s
       } else {
         setSlots(r.slots);
       }
+      setLoadingSlots(false);
+    }).catch((e) => {
+      // Floating promise, uncaught before this (Minors): a rejected server
+      // action left `loadingSlots` true forever — a permanent "…" with no
+      // error and no way out short of reloading the page.
+      if (cancelled) return;
+      console.error(`getSlots(${selectedDay}) failed client-side: ${String(e)}`);
+      setSlotsError(m["booking.public.genericError"]);
+      setSlots(null);
       setLoadingSlots(false);
     });
     return () => {
@@ -101,17 +138,27 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, getSlots, s
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     startTransition(async () => {
-      const r = await submit(formData);
-      setResult(r);
-      if (!r.ok && r.slotTaken) {
-        // The friendly path: drop back to the grid with fresh slots rather
-        // than leaving the visitor staring at a form for a time that is
-        // already gone.
-        setSelectedSlot(null);
-        setLoadingSlots(true);
-        const fresh = await getSlots(selectedDay);
-        if ("slots" in fresh) setSlots(fresh.slots);
-        else setSlotsError(fresh.error);
+      // The other floating server-action promise (Minors): `submit` and the
+      // re-fetch below both run unguarded before this — a rejection either
+      // one threw left `pending` never resolved into a usable state: no
+      // result, no error, just a submit button stuck disabled.
+      try {
+        const r = await submit(formData);
+        setResult(r);
+        if (!r.ok && r.slotTaken) {
+          // The friendly path: drop back to the grid with fresh slots rather
+          // than leaving the visitor staring at a form for a time that is
+          // already gone.
+          setSelectedSlot(null);
+          setLoadingSlots(true);
+          const fresh = await getSlots(selectedDay);
+          if ("slots" in fresh) setSlots(fresh.slots);
+          else setSlotsError(fresh.error);
+          setLoadingSlots(false);
+        }
+      } catch (e2) {
+        console.error(`booking submit failed client-side: ${String(e2)}`);
+        setResult({ ok: false, error: m["booking.public.genericError"] });
         setLoadingSlots(false);
       }
     });
@@ -155,14 +202,22 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, getSlots, s
                 disabled={!canGoNext} aria-label={m["booking.public.nextWeek"]}>›</button>
       </div>
 
-      <p className="bis-booking-tzlabel">{m["booking.public.timezoneLabel"].replace("{zone}", bookerTimezone)}</p>
+      {/* Both this label and the slot times below stay a placeholder until
+          `bookerTimezone` resolves client-side (I6) — rendering either against
+          `null` before then is exactly the SSR/client mismatch this whole
+          state (rather than `useMemo`) exists to avoid; a non-breaking space
+          keeps the label's line height stable rather than collapsing to
+          nothing for that one frame. */}
+      <p className="bis-booking-tzlabel">
+        {bookerTimezone ? m["booking.public.timezoneLabel"].replace("{zone}", bookerTimezone) : " "}
+      </p>
 
       {!selectedSlot ? (
         <div className="bis-booking-slots">
           {result && !result.ok && result.slotTaken ? (
             <p role="alert" className="bis-booking-error">{result.error}</p>
           ) : null}
-          {loadingSlots ? (
+          {loadingSlots || !bookerTimezone ? (
             <p className="bis-booking-empty">…</p>
           ) : slotsError ? (
             <p role="alert" className="bis-booking-error">{slotsError}</p>
@@ -183,7 +238,13 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, getSlots, s
           <p className="bis-booking-chosen">
             {new Intl.DateTimeFormat(undefined, {
               weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
-              timeZone: bookerTimezone,
+              // `bookerTimezone` cannot actually be null here: this branch only
+              // renders once `selectedSlot` is set, which only happens via a
+              // slot button's onClick, and those buttons themselves only
+              // render once `bookerTimezone` has resolved (the `!bookerTimezone`
+              // guard above). The `?? "UTC"` is belt-and-suspenders for the
+              // type checker, not a reachable fallback.
+              timeZone: bookerTimezone ?? "UTC",
             }).format(new Date(selectedSlot))}
             {" — "}
             <button type="button" className="bis-booking-link" onClick={() => setSelectedSlot(null)}>
@@ -192,7 +253,7 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, getSlots, s
           </p>
 
           <input type="hidden" name="slotStartsAt" value={selectedSlot} />
-          <input type="hidden" name="bookerTimezone" value={bookerTimezone} />
+          <input type="hidden" name="bookerTimezone" value={bookerTimezone ?? "UTC"} />
           <input type="hidden" name={RENDER_TOKEN_FIELD} value={renderToken} />
           {/* Off-screen rather than display:none, same as the sibling lead
               form's honeypot: some bots skip hidden inputs but fill anything

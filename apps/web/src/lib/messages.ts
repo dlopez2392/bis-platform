@@ -403,8 +403,6 @@ export const m = {
   // The public booking page — a stranger's own screen, reached at /b/<publicId>
   // with no account context at all. Same audience as forms.* above: no
   // internal roadmap label, ever (messages.test.ts enforces it repo-wide).
-  "booking.public.selectDay": "Pick a day",
-  "booking.public.selectTime": "Pick a time",
   "booking.public.noSlots": "No times available this day.",
   "booking.public.timezoneLabel": "Times shown in {zone}",
   "booking.public.previousWeek": "Previous week",
@@ -418,6 +416,11 @@ export const m = {
   "booking.public.required": "This field is required.",
   "booking.public.invalidEmail": "Enter a valid email address.",
   "booking.public.invalidPhone": "Enter a valid phone number.",
+  // Same deliberate carve-out `f/[publicId]/actions.ts`'s `tokenExpired`
+  // draws: a real visitor who left the tab open, not a spam signal, so this
+  // is the one render-token failure that gets its own honest message instead
+  // of the shared fake success.
+  "booking.public.tokenExpired": "This page has been open a while — please refresh and pick your time again.",
   "booking.public.submit": "Confirm booking",
   "booking.public.submitting": "Booking…",
   "booking.public.changeTime": "Choose a different time",

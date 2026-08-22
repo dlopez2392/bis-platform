@@ -36,18 +36,21 @@ const loadBranding = cache(async (accountId: string, publicId: string) => {
 
 /** `getCalendarByPublicId` selects only the `calendars` row; the account's
  *  timezone — what the day strip and every when-string on this route are
- *  reckoned in — lives on `accounts` and needs its own read. Defaults to
- *  UTC on any failure rather than 404ing a bookable calendar over a decorative
- *  (well, load-bearing-but-recoverable) read: a wrong-but-present zone is
- *  still bookable, just mislabeled, and `submitBookingAction` re-derives the
- *  authoritative zone itself at submit time regardless of what this page showed. */
+ *  reckoned in — lives on `accounts` and needs its own read.
+ *
+ *  THROWS on a query error (I3) rather than falling back to UTC: this used to
+ *  swallow the error and default the whole page's zone silently, on the
+ *  reasoning that a wrong-but-present zone is still bookable, just mislabeled.
+ *  That stopped being the safer choice once `app/b/error.tsx` (I5) existed —
+ *  a generic error screen is a more honest outcome than quietly showing a
+ *  09:00-17:00 business as bookable at 03:00 local with nothing on the page
+ *  to say so. `submitBookingAction` still re-derives the authoritative zone
+ *  itself at submit time regardless of what this page showed, but that is no
+ *  longer a reason to hide a real read failure from the visitor. */
 const loadTimezone = cache(async (accountId: string): Promise<string> => {
-  try {
-    const { data } = await serviceDb().from("accounts").select("timezone").eq("id", accountId).maybeSingle();
-    return (data as { timezone?: string } | null)?.timezone ?? "UTC";
-  } catch {
-    return "UTC";
-  }
+  const { data, error } = await serviceDb().from("accounts").select("timezone").eq("id", accountId).maybeSingle();
+  if (error) throw new Error(`public booking: account timezone read failed for ${accountId}: ${error.message}`);
+  return (data as { timezone?: string } | null)?.timezone ?? "UTC";
 });
 
 const UNBRANDED: Branding = {

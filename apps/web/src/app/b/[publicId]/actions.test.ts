@@ -48,13 +48,17 @@ const accountRow = {
  * package (and whatever env/module surface it would drag in) into this unit
  * test.
  */
-const { MockSlotTakenError } = vi.hoisted(() => ({
+const { MockSlotTakenError, accountErrorRef } = vi.hoisted(() => ({
   MockSlotTakenError: class MockSlotTakenError extends Error {
     constructor(message = "slot already booked") {
       super(message);
       this.name = "SlotTakenError";
     }
   },
+  // Mutable, set by a single I3 test to simulate `accounts.select(...)`
+  // returning `{ data: null, error: {...} }` — reset to null in `beforeEach`
+  // so that one test's failure injection can never bleed into another.
+  accountErrorRef: { current: null as { message: string } | null },
 }));
 
 vi.mock("@bis/db", () => ({
@@ -64,11 +68,13 @@ vi.mock("@bis/db", () => ({
       select: (cols: string) => ({
         eq: () => ({
           maybeSingle: async () => {
+            if (accountErrorRef.current) return { data: null, error: accountErrorRef.current };
             const wanted = cols.split(",").map((c) => c.trim());
             return {
               data: Object.fromEntries(
                 Object.entries(accountRow).filter(([key]) => wanted.includes(key)),
               ),
+              error: null,
             };
           },
         }),
@@ -169,6 +175,7 @@ beforeEach(() => {
   createMessageMock.mockReset().mockResolvedValue({ id: "msg_1" });
   incrementUnreadCountMock.mockReset();
   sendMock.mockReset().mockResolvedValue(undefined);
+  accountErrorRef.current = null;
 });
 
 describe("submitBookingAction — spam gates (each mutation named)", () => {
@@ -214,8 +221,16 @@ describe("submitBookingAction — spam gates (each mutation named)", () => {
 });
 
 describe("submitBookingAction — happy path", () => {
-  it("creates contact, then booking (carrying that contact's id), then conversation, then message, then sends — in that order (mutation: swap createBooking before createContact → FAILS on the contact-id the booking mock received)", async () => {
+  it("re-checks availability, THEN creates contact, then booking (carrying that contact's id), then conversation, then message, then unread, then sends — in that order (mutation: swap createBooking before createContact, or hoist createContact back above the recheck → FAILS)", async () => {
     const order: string[] = [];
+    // `listBookedRangesMock` is what `computeAllSlots` (the I2 recheck) calls
+    // — tracking it here is the only way to prove the recheck runs BEFORE
+    // `createContact` now, not just that `createContact` runs before
+    // `createBooking`.
+    listBookedRangesMock.mockImplementation(async () => {
+      order.push("recheck");
+      return [];
+    });
     createContactMock.mockImplementation(async () => {
       order.push("contact");
       return { id: "contact_1", existing: false };
@@ -232,6 +247,9 @@ describe("submitBookingAction — happy path", () => {
       order.push("message");
       return { id: "msg_1" };
     });
+    incrementUnreadCountMock.mockImplementation(async () => {
+      order.push("unread");
+    });
     sendMock.mockImplementation(async () => {
       order.push("send");
       return undefined;
@@ -240,16 +258,34 @@ describe("submitBookingAction — happy path", () => {
     const result = await submitBookingAction(PUBLIC_ID, validFormData());
 
     expect(result.ok).toBe(true);
-    // contact -> booking -> conversation -> message -> alert send -> confirmation send
-    expect(order).toEqual(["contact", "booking", "conversation", "message", "send", "send"]);
+    // recheck -> contact -> booking -> conversation -> message -> unread -> alert send -> confirmation send
+    expect(order).toEqual(
+      ["recheck", "contact", "booking", "conversation", "message", "unread", "send", "send"],
+    );
     expect(createBookingMock.mock.calls[0]![2]).toMatchObject({ contactId: "contact_1" });
   });
 
-  it("passes the public/system actor pair to createBooking", async () => {
+  it("passes the public/system actor pair to createContact, createBooking and ensureConversation alike", async () => {
     await submitBookingAction(PUBLIC_ID, validFormData());
 
+    expect(createContactMock.mock.calls[0]![3]).toBe("public");
+    expect(createContactMock.mock.calls[0]![4]).toBe("system");
     expect(createBookingMock.mock.calls[0]![3]).toBe("public");
     expect(createBookingMock.mock.calls[0]![4]).toBe("system");
+    expect(ensureConversationMock.mock.calls[0]![3]).toBe("public");
+    expect(ensureConversationMock.mock.calls[0]![4]).toBe("system");
+  });
+
+  it("createBooking receives a server-derived endsAt, the validated booker timezone, and an ipHash", async () => {
+    await submitBookingAction(PUBLIC_ID, validFormData());
+
+    const payload = createBookingMock.mock.calls[0]![2];
+    // slot_duration_minutes is 30 on calendarRow() — endsAt must be derived
+    // from the server's own config, never trusted from the request.
+    expect(payload.endsAt.getTime()).toBe(slot.startsAt.getTime() + 30 * 60_000);
+    expect(payload.bookerTimezone).toBe("America/New_York"); // validFormData's own zone, a real IANA name
+    expect(typeof payload.ipHash).toBe("string");
+    expect(payload.ipHash.length).toBeGreaterThan(0);
   });
 
   it("the conversation message body carries the when-string and the note", async () => {
@@ -263,6 +299,95 @@ describe("submitBookingAction — happy path", () => {
     const body = createMessageMock.mock.calls[0]![2].body as string;
     expect(body).toMatch(/^Booking: /);
     expect(body).toContain("Please call ahead");
+  });
+});
+
+describe("submitBookingAction — I1: the two previously-unpinned guards", () => {
+  it("slotStartsAt off the computed grid (a real slot + 17min): slotTaken, no contact, no booking (mutation: skip the availability recheck → FAILS)", async () => {
+    const offGrid = new Date(slot.startsAt.getTime() + 17 * 60_000).toISOString();
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ slotStartsAt: offGrid }));
+
+    expect(result).toEqual({ ok: false, error: m["booking.public.slotTaken"], slotTaken: true });
+    expect(createContactMock).not.toHaveBeenCalled();
+    expect(createBookingMock).not.toHaveBeenCalled();
+  });
+
+  it("calendar disabled by submit time: generic error, no contact created (mutation: drop the enabled check → FAILS)", async () => {
+    getCalendarByPublicIdMock.mockResolvedValue(calendarRow({ enabled: false }));
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+
+    expect(result).toEqual({ ok: false, error: m["booking.public.genericError"] });
+    expect(createContactMock).not.toHaveBeenCalled();
+    expect(createBookingMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("submitBookingAction — C2: bookerTimezone is validated (safeZone)", () => {
+  it("a bogus bookerTimezone still succeeds; the booking persists the ACCOUNT zone; both sends still fire (mutation: drop safeZone and trust the raw crafted zone → FAILS, throws after the insert)", async () => {
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ bookerTimezone: "Nope/Nowhere" }));
+
+    expect(result.ok).toBe(true);
+    expect(createBookingMock.mock.calls[0]![2]).toMatchObject({ bookerTimezone: accountRow.timezone });
+    expect(sendMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("an oversized bookerTimezone (>64 chars) also falls back to the account zone", async () => {
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ bookerTimezone: "X".repeat(65) }));
+
+    expect(result.ok).toBe(true);
+    expect(createBookingMock.mock.calls[0]![2]).toMatchObject({ bookerTimezone: accountRow.timezone });
+  });
+});
+
+describe("submitBookingAction — C3: an expired render token is a real failure, not a fake success", () => {
+  it("expired token: ok:false with the expiry message, zero writes, zero sends (mutation: fold `expired` back into the fake-success branch → FAILS)", async () => {
+    // MAX_TOKEN_AGE_MS is 30 minutes; 31 minutes is comfortably past it.
+    const expiredToken = signRenderToken(Date.now() - 31 * 60_000, PUBLIC_ID);
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ [RENDER_TOKEN_FIELD]: expiredToken }));
+
+    expect(result).toEqual({ ok: false, error: m["booking.public.tokenExpired"] });
+    expect(createContactMock).not.toHaveBeenCalled();
+    expect(createBookingMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("a malformed token (not expired, just invalid) keeps the shared fake success", async () => {
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ [RENDER_TOKEN_FIELD]: "not-a-token" }));
+
+    expect(result).toEqual({ ok: true, cancelUrl: "" });
+    expect(createContactMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("submitBookingAction — I3: loadAccount does not swallow its query error", () => {
+  it("an account-read failure returns a generic error and creates no contact (mutation: discard `error` and fall back to UTC → FAILS, silently proceeds)", async () => {
+    accountErrorRef.current = { message: "boom" };
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+
+    expect(result).toEqual({ ok: false, error: m["booking.public.genericError"] });
+    expect(createContactMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("submitBookingAction — I4: public fields are bounded", () => {
+  it("a 20k-char note is persisted capped at 2000 chars (mutation: drop the note slice → FAILS)", async () => {
+    const hugeNote = "x".repeat(20_000);
+
+    await submitBookingAction(PUBLIC_ID, validFormData({ note: hugeNote }));
+
+    const persistedNote = createBookingMock.mock.calls[0]![2].note as string;
+    expect(persistedNote.length).toBe(2000);
+  });
+
+  it("a newline-carrying name never reaches the alert email's subject line (mutation: drop the subject control-char strip → FAILS)", async () => {
+    await submitBookingAction(PUBLIC_ID, validFormData({ firstName: "Maria\nBcc: evil@example.com" }));
+
+    const alertCall = sendMock.mock.calls[0]![0];
+    expect(alertCall.subject).not.toMatch(/[\r\n]/);
   });
 });
 
