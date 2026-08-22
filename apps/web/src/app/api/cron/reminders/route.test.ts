@@ -109,10 +109,28 @@ describe("GET /api/cron/reminders", () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body).toEqual({ sent: 1, failed: 1 });
+    expect(body).toEqual({ sent: 1, failed: 1, unstamped: 0 });
     expect(stampReminderSentMock).toHaveBeenCalledTimes(1);
     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_ok");
     expect(stampReminderSentMock).not.toHaveBeenCalledWith(expect.anything(), "bk_fail");
+  });
+
+  it("counts a stamp failure after a successful send as {sent:1,failed:0,unstamped:1}, not a send failure", async () => {
+    // The stamp gets its OWN try/catch: a send that succeeds must count as
+    // sent regardless of whether the follow-up stamp write lands. Folding
+    // this into the outer catch would misreport a stamp failure as a send
+    // failure in triage, and a mutant that removes the inner try/catch would
+    // make this go red (send called once, but {sent:0,failed:1,unstamped:0}).
+    const one = reminder({ bookingId: "bk_unstamped" });
+    listDueRemindersMock.mockResolvedValue([one]);
+    sendMock.mockResolvedValueOnce({ providerMessageId: "p1" });
+    stampReminderSentMock.mockRejectedValueOnce(new Error("db unavailable"));
+
+    const res = await GET(req(`Bearer ${SECRET}`));
+    const body = await res.json();
+
+    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 1 });
+    expect(sendMock).toHaveBeenCalledTimes(1);
   });
 
   it("retries only the survivor on the next invocation, once the mock reflects the earlier stamp", async () => {
@@ -126,7 +144,7 @@ describe("GET /api/cron/reminders", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body).toEqual({ sent: 1, failed: 0 });
+    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0 });
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_fail");
   });
@@ -176,9 +194,11 @@ describe("GET /api/cron/reminders", () => {
 
     await GET(req(`Bearer ${SECRET}`));
 
-    expect(sendMock).toHaveBeenCalledWith(
-      expect.objectContaining({ fromAddress: undefined }),
-    );
+    // objectContaining alone can't distinguish "key absent" from "key present
+    // with value undefined" — a mutant that stops passing fromAddress at all
+    // would still satisfy it. Assert directly on the captured arg.
+    const call = sendMock.mock.calls[0]![0] as { fromAddress?: string };
+    expect(call.fromAddress).toBeUndefined();
   });
 
   it("counts a reminder with no contact email as a failure, without stamping it", async () => {
@@ -188,7 +208,7 @@ describe("GET /api/cron/reminders", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body).toEqual({ sent: 0, failed: 1 });
+    expect(body).toEqual({ sent: 0, failed: 1, unstamped: 0 });
     expect(sendMock).not.toHaveBeenCalled();
     expect(stampReminderSentMock).not.toHaveBeenCalled();
   });

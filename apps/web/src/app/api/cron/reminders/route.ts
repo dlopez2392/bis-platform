@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { serviceDb, listDueReminders, stampReminderSent } from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
@@ -22,7 +23,16 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request): Promise<Response> {
   const secret = process.env.CRON_SECRET;
   if (!secret) return new Response(null, { status: 503 });
-  if (req.headers.get("authorization") !== `Bearer ${secret}`) {
+
+  // Constant-time compare, mirroring guards.ts's verifyRenderToken: a
+  // straight `!==` leaks how many leading bytes matched via response timing,
+  // and this header is a bearer credential, not a public token. Length is
+  // checked first — timingSafeEqual throws on mismatched buffer lengths
+  // rather than returning false, and comparing a wrong-length header would
+  // otherwise be an unhandled crash instead of a clean 401.
+  const got = Buffer.from(req.headers.get("authorization") ?? "");
+  const want = Buffer.from(`Bearer ${secret}`);
+  if (got.length !== want.length || !timingSafeEqual(got, want)) {
     return new Response(null, { status: 401 });
   }
 
@@ -37,13 +47,15 @@ export async function GET(req: Request): Promise<Response> {
 
   let sent = 0;
   let failed = 0;
+  let unstamped = 0;
 
   for (const reminder of reminders) {
     // SEND-THEN-STAMP, never the reverse: `reminder_sent_at` is a dedupe
     // marker, not a record of an attempt. Stamping before a send that then
     // fails would silence that reminder forever — the next cron tick could
-    // never pick it back up. A failure here is counted and logged, and the
-    // row stays unstamped so `listDueReminders` returns it again next tick.
+    // never pick it back up. A send failure here is counted in `failed` and
+    // logged, and the row stays unstamped so `listDueReminders` returns it
+    // again next tick.
     try {
       if (!reminder.contactEmail) {
         throw new Error("no contact email on file");
@@ -70,7 +82,26 @@ export async function GET(req: Request): Promise<Response> {
         html,
       });
 
-      await stampReminderSent(db, reminder.bookingId);
+      // A send that already left the building counts as `sent` no matter
+      // what happens next — folding the stamp into the outer catch would
+      // misreport a stamp failure as a send failure in triage. Its own
+      // try/catch here means a stamp failure can't silently look identical
+      // to a send failure, and can't roll back the `sent` count either.
+      // The cost is real: the row stays unstamped, so `listDueReminders`
+      // treats it as still due and this booker gets a duplicate reminder
+      // next tick. Duplicate over silence is the chosen direction (a repeat
+      // email is recoverable; a reminder that never fires again is not) —
+      // logged distinctly so it's visible in triage instead of masquerading
+      // as either a normal success or a send failure.
+      try {
+        await stampReminderSent(db, reminder.bookingId);
+      } catch (stampErr) {
+        unstamped++;
+        console.error(
+          `reminder sent but NOT stamped for booking ${reminder.bookingId} — may repeat next tick: ${String(stampErr)}`,
+        );
+      }
+
       sent++;
     } catch (e) {
       failed++;
@@ -78,5 +109,5 @@ export async function GET(req: Request): Promise<Response> {
     }
   }
 
-  return Response.json({ sent, failed });
+  return Response.json({ sent, failed, unstamped });
 }

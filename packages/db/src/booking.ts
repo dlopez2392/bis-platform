@@ -295,6 +295,12 @@ const ACCOUNT_BRAND_COLS =
  * The window is `[now+23h, now+24h15m]`, keyed to lead time rather than an
  * equality check, so a missed cron tick is caught by the next one instead of
  * losing the reminder outright.
+ *
+ * That tolerance is bounded, not unlimited: an outage (cron paused, the
+ * route 503ing, etc.) longer than the 75-minute window permanently misses
+ * any booking whose window closed while it was down — there is no recovery
+ * pass that later notices and catches it up. Accepted for v1; revisit if
+ * outages of that length turn out to happen in practice.
  */
 export async function listDueReminders(
   db: SupabaseClient, nowIso: string,
