@@ -47,4 +47,19 @@ describe("booking column privileges for authenticated", () => {
       expect(rows).toEqual([]);
     });
   });
+
+  it("scopes both tenant policies to authenticated, never PUBLIC", async () => {
+    await withRollback(async (c) => {
+      const { rows } = await c.query<{ tablename: string; roles: string }>(
+        `select tablename, roles::text from pg_policies
+          where schemaname = 'public' and tablename in ('calendars','bookings')
+          order by tablename`,
+      );
+      expect(rows).toHaveLength(2);
+      // pg_policies.roles is '{public}' for an unscoped policy — the defect
+      // 0017 exists to correct. Nothing else in this schema asserts policy
+      // scope, which is exactly why 0016 shipped without one.
+      for (const row of rows) expect(row.roles).toBe("{authenticated}");
+    });
+  });
 });
