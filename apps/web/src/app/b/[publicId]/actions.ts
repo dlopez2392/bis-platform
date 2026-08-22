@@ -75,7 +75,12 @@ function stripSubjectControlChars(value: string): string {
  * `Intl.DateTimeFormat` construction `formatWhen` itself uses, just run here,
  * before the booking exists, instead of there, after it does.
  */
-function safeZone(tz: string | undefined, fallback: string): string {
+// Exported for `cancel/[token]/actions.ts` and `cancel/[token]/page.tsx`: the
+// cancel flow needs the exact same "validate a booker-supplied zone against
+// this row's own account zone" guard this action already proved out, on the
+// SAME persisted `booker_timezone` this module wrote at booking time — not a
+// second, divergent copy of the `Intl.DateTimeFormat` probe.
+export function safeZone(tz: string | undefined, fallback: string): string {
   if (!tz || tz.length > 64) return fallback;
   try {
     // Probe only; the constructor itself is the validation, and its result
@@ -159,7 +164,9 @@ async function loadAccount(db: ReturnType<typeof serviceDb>, accountId: string) 
   } | null;
 }
 
-function formatWhen(instant: Date, timeZone: string): string {
+// Exported for the same reason `safeZone` above is: the cancel flow renders
+// and mails the identical "when" shape this route already established.
+export function formatWhen(instant: Date, timeZone: string): string {
   return new Intl.DateTimeFormat("en-US", {
     timeZone, weekday: "short", month: "short", day: "numeric",
     hour: "numeric", minute: "2-digit", timeZoneName: "short",
