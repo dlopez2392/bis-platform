@@ -64,6 +64,18 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, getSlots, s
   const [slots, setSlots] = useState<string[] | null>(null);
   const [slotsError, setSlotsError] = useState<string | null>(null);
   const [loadingSlots, setLoadingSlots] = useState(true);
+  // Bumped by every `selectDay` call and read as a dependency of the fetch
+  // effect below, so that ARMING the loading state and CLEARING it can never
+  // come apart. Before this they could: re-picking the day that was already
+  // selected changes `selectedDay` by nothing, so the effect did not re-run,
+  // no request was ever sent, and the `true` `selectDay` had just written to
+  // `loadingSlots` was never cleared — the slot grid became a permanent "…"
+  // that only a page reload escaped. Today's own chip is the first thing the
+  // week strip offers and starts out selected, so the very first tap a
+  // visitor is most likely to make was the one that hung. Keying the effect
+  // on an always-changing value also makes the error state's "Please try
+  // again." honest: tapping the same day really does re-fetch it.
+  const [reloadNonce, setReloadNonce] = useState(0);
   const [result, setResult] = useState<BookingResult | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -86,11 +98,14 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, getSlots, s
   const weekDays = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
 
   // No synchronous setState in the effect body itself (react-hooks/
-  // set-state-in-effect): the "start loading" reset for a NEW day happens in
-  // `selectDay` below, the event handler that actually changes `selectedDay`
-  // — this effect only reacts to that change and resolves the fetch. The
-  // very first run needs no reset at all, since `loadingSlots`/`slotsError`
-  // already start at their loading-appropriate initial values.
+  // set-state-in-effect): the "start loading" reset happens in `selectDay`
+  // below, the event handler that actually picks a day — this effect only
+  // reacts to that and resolves the fetch. The very first run needs no reset
+  // at all, since `loadingSlots`/`slotsError` already start at their
+  // loading-appropriate initial values. `reloadNonce` is in the dependency
+  // list rather than the body on purpose: it is what guarantees this effect
+  // runs — and therefore that `setLoadingSlots(false)` runs — for EVERY
+  // `selectDay`, including one that re-picks the day already showing.
   useEffect(() => {
     let cancelled = false;
     getSlots(selectedDay).then((r) => {
@@ -115,7 +130,7 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, getSlots, s
     return () => {
       cancelled = true;
     };
-  }, [selectedDay, getSlots]);
+  }, [selectedDay, reloadNonce, getSlots]);
 
   function selectDay(day: string) {
     setSelectedDay(day);
@@ -123,6 +138,7 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, getSlots, s
     setResult(null);
     setLoadingSlots(true);
     setSlotsError(null);
+    setReloadNonce((n) => n + 1);
   }
 
   function goToWeek(delta: number) {
