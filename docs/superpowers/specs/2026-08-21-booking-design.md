@@ -119,8 +119,11 @@ already-booked ranges, and an injected `now`.
   argument rather than setting `process.env.TZ` (Node caches the zone; a UTC
   CI box stays green).
 - A slot is offered iff it fits inside open hours, clears `min_notice`, is
-  inside `max_advance`, and its `[start, end + buffer)` range overlaps no
-  booked range.
+  inside `max_advance`, and does not conflict with a booked range: a
+  candidate conflicts with a booked range when `candStart < bookedEnd +
+  buffer` and `bookedStart < candEnd + buffer` — buffer on both sides,
+  deliberately conservative (corrected during Task 3 review to match the
+  implementation and its tests).
 - DST transition days get explicit test cases: the nonexistent hour, the
   repeated hour, and a booking spanning neither.
 
