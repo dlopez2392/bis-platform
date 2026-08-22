@@ -119,9 +119,6 @@ export const m = {
   "common.saving": "Saving…",
   "common.unavailable": "—",
 
-  "empty.calendar.title": "Calendar isn't available yet",
-  "empty.calendar.body": "Booking and appointment management will land here.",
-
   "accounts.title": "Companies",
   "accounts.add": "Add company",
   "accounts.name": "Business name",
@@ -442,6 +439,61 @@ export const m = {
   "booking.cancel.alreadyCancelledTitle": "This booking has already been cancelled.",
   "booking.cancel.pastTitle": "This booking has already happened.",
   "booking.cancel.genericError": "Something went wrong. Please try again.",
+
+  // The operator Calendar page — /dashboard/accounts/<id>/calendar. Reachable
+  // by BOTH audiences (calendar is the client's own business data, same as
+  // contacts), so every string that names WHOSE calendar it is has to carry
+  // the right voice, same mechanism panel-copy.ts pins for branding: the
+  // agency reads "this company's", the client reads "your".
+  "calendar.title": "Calendar",
+  "calendar.settings.title": "Booking settings",
+  "calendar.settings.clientTitle": "Your booking settings",
+  "calendar.settings.body": "Controls how this company's public booking page behaves.",
+  "calendar.settings.clientBody": "Controls how your public booking page behaves.",
+  "calendar.settings.enabled": "Accept bookings",
+  "calendar.settings.hours": "Hours",
+  "calendar.settings.hoursHint": "Set an open and close time for each day. Leave both blank to close that day.",
+  "calendar.settings.day.mon": "Monday",
+  "calendar.settings.day.tue": "Tuesday",
+  "calendar.settings.day.wed": "Wednesday",
+  "calendar.settings.day.thu": "Thursday",
+  "calendar.settings.day.fri": "Friday",
+  "calendar.settings.day.sat": "Saturday",
+  "calendar.settings.day.sun": "Sunday",
+  "calendar.settings.from": "From",
+  "calendar.settings.to": "To",
+  "calendar.settings.duration": "Appointment length",
+  "calendar.settings.buffer": "Buffer between appointments",
+  "calendar.settings.minNotice": "Minimum notice",
+  "calendar.settings.maxAdvance": "How far ahead people can book",
+  "calendar.settings.notifyEmails": "Notify these addresses",
+  "calendar.settings.notifyEmailsHint": "One address per line. Sent whenever someone books, cancels, or an appointment is coming up.",
+  // The inline warning the checklist's form_notify concern mirrors: an
+  // account that is accepting bookings with nobody listed to hear about them
+  // is a silent failure mode, not a valid configuration to save quietly.
+  "calendar.settings.notifyEmailsWarning": "Booking is on, but no address is listed above — nobody will be notified when someone books.",
+  "calendar.settings.saved": "Booking settings saved",
+  "calendar.settings.saveFailed": "Could not save booking settings.",
+
+  "calendar.bookings.title": "Upcoming bookings",
+  "calendar.bookings.empty": "No upcoming bookings.",
+  "calendar.bookings.note": "Note",
+  "calendar.bookings.cancel": "Cancel",
+  "calendar.bookings.markCompleted": "Mark completed",
+  "calendar.bookings.markNoShow": "No-show",
+  "calendar.bookings.statusUpdated": "Booking updated",
+  "calendar.bookings.statusUpdateFailed": "Could not update this booking.",
+  "calendar.bookings.status.booked": "Booked",
+  "calendar.bookings.status.cancelled": "Cancelled",
+  "calendar.bookings.status.completed": "Completed",
+  "calendar.bookings.status.no_show": "No-show",
+
+  "calendar.embed.title": "Embed",
+  "calendar.embed.hint": "Paste this where the booking widget should appear.",
+  "calendar.embed.disabledHint": "Turn on \"Accept bookings\" above to get the embed snippet.",
+  "calendar.embed.copy": "Copy",
+  "calendar.embed.copied": "Copied",
+  "calendar.embed.publicLink": "Direct link",
 } as const;
 
 export type MessageKey = keyof typeof m;
