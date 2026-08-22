@@ -45,7 +45,17 @@ export function partsInZone(instant: Date, timeZone: string) {
       weekday: "short", year: "numeric", month: "numeric", day: "numeric",
       hour: "numeric", minute: "numeric",
     });
+    // Validate by calling formatToParts once before caching. If construction
+    // produced a broken object (e.g. a test stubbing Intl), we fail here rather
+    // than poison the cache forever with a dead formatter.
+    const p: Record<string, string> = {};
+    for (const part of fmt.formatToParts(instant)) p[part.type] = part.value;
     formatterCache.set(timeZone, fmt);
+    return {
+      y: Number(p.year), m: Number(p.month), d: Number(p.day),
+      hh: Number(p.hour), mi: Number(p.minute),
+      weekday: p.weekday!.toLowerCase().slice(0, 3) as (typeof WEEKDAYS)[number],
+    };
   }
   const p: Record<string, string> = {};
   for (const part of fmt.formatToParts(instant)) p[part.type] = part.value;
@@ -171,8 +181,8 @@ export function computeSlots(config: SlotConfig, booked: Range[], now: Date): Ra
     const horizonDay = addCalendarDays(nowParts.y, nowParts.m, nowParts.d, maxAdvanceDays + 1);
     // Midnight can itself fall inside a spring-forward gap (e.g.
     // America/Havana, Asia/Beirut, America/Santiago all move their clocks
-    // forward AT midnight on some transition day) — bump forward minute by
-    // minute rather than assert non-null. 4 bumps comfortably clears every
+    // forward AT midnight on some transition day) — bump forward hour by
+    // hour rather than assert non-null. 4 bumps comfortably clears every
     // real-world DST jump (the largest observed is 1h, some historical
     // zones used other offsets; this stays generous).
     let horizonEnd: Date | null = null;

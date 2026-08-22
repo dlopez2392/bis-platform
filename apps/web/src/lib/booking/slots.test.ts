@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { computeSlots, zonedTimeToUtc, partsInZone, normalizeOpenHours, type SlotConfig, type OpenHours } from "./slots";
+import { computeSlots, zonedTimeToUtc, partsInZone, normalizeOpenHours, type SlotConfig, type OpenHours, type Range } from "./slots";
 
 const CFG: SlotConfig = {
   timezone: "America/Chicago", slotDurationMinutes: 60, bufferMinutes: 0,
@@ -181,6 +181,28 @@ describe("computeSlots", () => {
       .filter((s) => partsInZone(s.startsAt, cfg.timezone).d === 7)
       .map((s) => partsInZone(s.startsAt, cfg.timezone).hh);
     expect(slots).toEqual([9, 10, 11, 12, 13]); // 11:00 offered by both intervals, kept once
+  });
+
+  // --- M4: fully-booked day returns no slots ---
+  it("returns no slots for a fully-booked day (all hours blocked)", () => {
+    // Monday Sep 7: fully-booked with eight 1-hour ranges covering 09:00-17:00
+    const allBooked: Range[] = [];
+    for (let h = 9; h < 17; h++) {
+      const start = zonedTimeToUtc(2026, 9, 7, h, 0, CFG.timezone)!;
+      const end = zonedTimeToUtc(2026, 9, 7, h + 1, 0, CFG.timezone)!;
+      allBooked.push({ startsAt: start, endsAt: end });
+    }
+
+    // Config: Monday 09:00-17:00 (fully booked), Tuesday still open
+    const cfg = { ...CFG, openHours: { mon: [["09:00", "17:00"]], tue: [["09:00", "12:00"], ["13:00", "17:00"]] } as OpenHours };
+    const slots = computeSlots(cfg, allBooked, NOW);
+
+    // Monday Sep 7 should have no slots
+    const mondaySlots = slots.filter((s) => partsInZone(s.startsAt, cfg.timezone).d === 7);
+    expect(mondaySlots).toHaveLength(0);
+
+    // Other days (Tue Sep 8) should still have slots
+    expect(slots.length).toBeGreaterThan(0);
   });
 
   // --- I3: defensive normalization — the DB has no jsonb CHECK ---
