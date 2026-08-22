@@ -9,7 +9,15 @@
 export const EMBED_SCRIPT = `(function () {
   var script = document.currentScript;
   if (!script) return;
+  // data-form wins when a tag carries both attributes (first-wins, documented).
   var publicId = script.getAttribute("data-form");
+  var path = "/f/";
+  var minHeight = "420";
+  if (!publicId) {
+    publicId = script.getAttribute("data-booking");
+    path = "/b/";
+    minHeight = "560";
+  }
   if (!publicId) return;
 
   var origin = new URL(script.src).origin;
@@ -31,11 +39,11 @@ export const EMBED_SCRIPT = `(function () {
   if (document.referrer) params.set("ref", document.referrer);
 
   var iframe = document.createElement("iframe");
-  iframe.src = origin + "/f/" + encodeURIComponent(publicId) + "?" + params.toString();
+  iframe.src = origin + path + encodeURIComponent(publicId) + "?" + params.toString();
   iframe.style.width = "100%";
   iframe.style.border = "0";
   iframe.style.display = "block";
-  iframe.style.height = (script.getAttribute("data-min-height") || "420") + "px";
+  iframe.style.height = (script.getAttribute("data-min-height") || minHeight) + "px";
   iframe.setAttribute("title", script.getAttribute("data-title") || "Form");
   iframe.setAttribute("loading", "lazy");
   script.parentNode.insertBefore(iframe, script.nextSibling);

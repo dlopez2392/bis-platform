@@ -146,4 +146,53 @@ describe("embed script", () => {
     expect(iframeA.style.height).toBe("900px");
     expect(iframeB.style.height).toBe(beforeB);
   });
+
+  describe("data-booking (booking pages share the same embed script)", () => {
+    it("injects an iframe pointing at the hosted booking page, defaulting min-height to 560", () => {
+      const { iframe, inserted } = run({ "data-booking": "resource-42" }, "https://client.example/book");
+      expect(inserted).toHaveLength(1);
+      expect(iframe.src).toContain(`${ORIGIN}/b/resource-42`);
+      expect(iframe.style.height).toBe("560px");
+    });
+
+    it("respects an explicit data-min-height instead of the 560 booking default", () => {
+      const { iframe } = run(
+        { "data-booking": "resource-42", "data-min-height": "700" },
+        "https://client.example/book",
+      );
+      expect(iframe.style.height).toBe("700px");
+    });
+
+    it("prefers data-form over data-booking when a tag carries both (first-wins)", () => {
+      const { iframe } = run(
+        { "data-form": "form1", "data-booking": "booking1" },
+        "https://client.example/",
+      );
+      expect(iframe.src).toContain(`${ORIGIN}/f/form1`);
+      expect(iframe.src).not.toContain("/b/booking1");
+    });
+
+    it("lifts utm and click ids off the host page url for a booking embed too", () => {
+      const { iframe } = run(
+        { "data-booking": "resource-42" },
+        "https://client.example/book?utm_source=google&utm_medium=cpc",
+      );
+      const url = new URL(iframe.src);
+      expect(url.searchParams.get("utm_source")).toBe("google");
+    });
+
+    it("resizes a booking iframe on a height message from its own iframe", () => {
+      const { iframe, send } = run({ "data-booking": "resource-42" }, "https://client.example/");
+      send({ source: iframe.contentWindow, origin: ORIGIN, data: { type: "bis-form-height", height: 900 } });
+      expect(iframe.style.height).toBe("900px");
+    });
+
+    it("ignores a redirect message with a javascript: URL on a booking embed — does not navigate", () => {
+      const { iframe, send, win } = run({ "data-booking": "resource-42" }, "https://client.example/");
+      const before = win.top.location.href;
+      send({ source: iframe.contentWindow, origin: ORIGIN,
+             data: { type: "bis-form-redirect", url: "javascript:alert(1)" } });
+      expect(win.top.location.href).toBe(before);
+    });
+  });
 });
