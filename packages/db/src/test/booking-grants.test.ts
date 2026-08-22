@@ -20,6 +20,7 @@ const CALENDAR_SETTINGS_COLUMNS = [
   "notify_emails",
   "open_hours",
   "slot_duration_minutes",
+  "updated_at", // stamped by updateCalendarSettings on every save; granted by 0018
 ].sort();
 
 describe("booking column privileges for authenticated", () => {
