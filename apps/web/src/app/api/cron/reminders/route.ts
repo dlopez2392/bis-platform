@@ -9,8 +9,12 @@ import { safeZone, formatWhen } from "@/lib/booking/time";
 export const dynamic = "force-dynamic";
 
 /**
- * The platform's first scheduled job: Vercel hits this every 15 minutes
- * (`vercel.json`'s `crons` entry) to mail bookers a reminder ~24h out.
+ * The platform's first scheduled job: Vercel hits this once a day
+ * (`vercel.json`'s `crons` entry, `0 14 * * *` — the Hobby plan REJECTS any
+ * deployment carrying a sub-daily schedule) to mail bookers a reminder for
+ * every booking in the day ahead. `listDueReminders` sizes its query window
+ * to this cadence; if the schedule ever returns to every-15-minutes, narrow
+ * the window there too or every booker gets their reminder a day early.
  *
  * AUTH is two separate failure modes, not one:
  *  - `CRON_SECRET` unset → 503, zero queries. An unguarded cron route must

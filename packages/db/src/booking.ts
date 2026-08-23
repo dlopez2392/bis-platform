@@ -292,22 +292,28 @@ const ACCOUNT_BRAND_COLS =
  * fixed instant) — never computed from `Date.now()` inside here, or the test
  * suite could not assert the window's edges deterministically.
  *
- * The window is `[now+23h, now+24h15m]`, keyed to lead time rather than an
- * equality check, so a missed cron tick is caught by the next one instead of
- * losing the reminder outright.
+ * The window is `[now, now+25h]` — a full day plus an hour, sized to the
+ * DAILY cron the Vercel Hobby plan allows (it rejects any deployment
+ * carrying a sub-daily schedule; empirically confirmed 2026-08-23). Each
+ * tick covers the whole day ahead, and the 25th hour is tick-timing
+ * tolerance, the same way the original 75-minute window carried 60 minutes
+ * beyond its 15-minute tick. Consecutive daily ticks therefore overlap by
+ * an hour; `reminder_sent_at` dedupes anything the previous tick already
+ * sent. Restoring the 15-minute schedule on a paid plan means narrowing
+ * this back to `[now+23h, now+24h15m]` so reminders land ~24h out again.
  *
  * That tolerance is bounded, not unlimited: an outage (cron paused, the
- * route 503ing, etc.) longer than the 75-minute window permanently misses
- * any booking whose window closed while it was down — there is no recovery
- * pass that later notices and catches it up. Accepted for v1; revisit if
- * outages of that length turn out to happen in practice.
+ * route 503ing, etc.) that delays a tick by more than the spare hour
+ * permanently misses any booking whose start slipped past before the next
+ * tick — there is no recovery pass that later notices and catches it up.
+ * Accepted for v1; revisit if outages of that length turn out to happen.
  */
 export async function listDueReminders(
   db: SupabaseClient, nowIso: string,
 ): Promise<DueReminder[]> {
   const now = new Date(nowIso).getTime();
-  const windowStart = new Date(now + 23 * 60 * 60 * 1000).toISOString();
-  const windowEnd = new Date(now + (24 * 60 + 15) * 60 * 1000).toISOString();
+  const windowStart = new Date(now).toISOString();
+  const windowEnd = new Date(now + 25 * 60 * 60 * 1000).toISOString();
 
   const { data, error } = await db.from("bookings")
     .select(`id, account_id, starts_at, booker_timezone, cancel_token,

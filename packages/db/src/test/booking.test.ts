@@ -105,7 +105,7 @@ describe("booking accessors", () => {
       const now = new Date("2027-03-01T12:00:00Z");
       const inWindow = await createBooking(db, accountId,
         { calendarId: cal.id, contactId,
-          startsAt: new Date("2027-03-02T11:30:00Z"),   // 23.5h ahead — inside [23h, 24h15m]
+          startsAt: new Date("2027-03-02T11:30:00Z"),   // 23.5h ahead — inside [now, now+25h]
           endsAt: new Date("2027-03-02T12:30:00Z") }, "user_test");
       await createBooking(db, accountId,
         { calendarId: cal.id, contactId,
@@ -118,6 +118,31 @@ describe("booking accessors", () => {
       expect(due[0]!.fromEmail).toBeNull();
       await stampReminderSent(db, inWindow.id);
       expect(await listDueReminders(db, now.toISOString())).toEqual([]);
+    });
+  });
+
+  /**
+   * The Hobby-plan fallback (2026-08-23): the cron fires ONCE A DAY, so the
+   * window must cover a full day per tick — [now, now+25h]. The 25th hour is
+   * tick-timing tolerance, the same way the old 75-minute window carried 60
+   * minutes beyond its 15-minute tick; the overlap between consecutive daily
+   * ticks is deduped by reminder_sent_at (pinned in the test above).
+   */
+  it("daily-cron window: due from now through now+25h inclusive, never before or beyond", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId,
+        { firstName: "Daily", email: "daily@example.com" }, "user_test");
+      const now = new Date("2027-03-01T14:00:00Z");
+      const mk = (startsAt: string) => createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date(startsAt),
+          endsAt: new Date(new Date(startsAt).getTime() + 30 * 60 * 1000) }, "user_test");
+      const sameDay = await mk("2027-03-01T16:00:00Z");  // 2h ahead — booked days ago, starts this afternoon
+      const edge = await mk("2027-03-02T15:00:00Z");     // exactly now+25h — inclusive upper edge
+      await mk("2027-03-01T13:00:00Z");                  // 1h in the past — never remind after start
+      await mk("2027-03-02T16:30:00Z");                  // 26.5h ahead — tomorrow's tick's job
+      const due = await listDueReminders(db, now.toISOString());
+      expect(due.map((d) => d.bookingId)).toEqual([sameDay.id, edge.id]);
     });
   });
 
