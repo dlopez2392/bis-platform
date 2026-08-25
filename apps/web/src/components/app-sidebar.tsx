@@ -17,6 +17,7 @@ import {
   PanelLeft,
   ArrowLeft,
   Palette,
+  Phone,
   type LucideIcon,
 } from "lucide-react";
 import { AccountSwitcher, type AccountOption } from "@/components/account-switcher";
@@ -92,6 +93,14 @@ export function AppSidebar({
         ...(isAgency
           ? []
           : [{ href: `${base}/branding`, label: m["nav.branding"], icon: Palette }]),
+        // Agency only — the mirror image of Branding above. The route itself
+        // is still gated independently by requireAgencyOnlyAccountAccess (in
+        // the page) and by the isAgency check inside every action in
+        // ./voice/actions.ts; hiding the link here is convenience, not the
+        // boundary.
+        ...(isAgency
+          ? [{ href: `${base}/voice`, label: m["nav.voice"], icon: Phone }]
+          : []),
       ]
     : [
         { href: "/dashboard/accounts", label: m["nav.accounts"], icon: Building2 },

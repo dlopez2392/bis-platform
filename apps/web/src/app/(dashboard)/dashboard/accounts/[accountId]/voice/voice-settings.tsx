@@ -1,0 +1,235 @@
+"use client";
+
+import { useTransition } from "react";
+import { toast } from "sonner";
+import type { PhoneNumberRow, PhoneNumberStatus, VoiceProfileRow } from "@bis/db";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SubmitButton } from "../../submit-button";
+import { m } from "@/lib/messages";
+import type { ActionResult } from "./actions";
+
+// The DB-side defaults (0019_voice_core.sql) — used whenever no row exists
+// yet, which is the common case for an account that has never been touched:
+// there is no auto-insert trigger, so `getVoiceProfile` returns null until
+// the first save.
+const DEFAULT_PROFILE: Omit<VoiceProfileRow, "id" | "account_id"> = {
+  persona_name: "Sofía",
+  greeting_en: "", greeting_es: "", facts: "", services: "",
+  languages: "both", booking_enabled: true,
+  after_hours: "hours_then_message", enabled: false,
+};
+
+const STATUS_LABEL: Record<PhoneNumberStatus, string> = {
+  provisioned: m["voice.numbers.status.provisioned"],
+  testing: m["voice.numbers.status.testing"],
+  live: m["voice.numbers.status.live"],
+  released: m["voice.numbers.status.released"],
+};
+const STATUS_VALUES: PhoneNumberStatus[] = ["provisioned", "testing", "live", "released"];
+
+function VoiceProfileForm({
+  profile, action,
+}: {
+  profile: VoiceProfileRow | null;
+  action: (formData: FormData) => Promise<ActionResult>;
+}) {
+  const p = profile ?? DEFAULT_PROFILE;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{m["voice.profile.title"]}</CardTitle>
+        <CardDescription>{m["voice.profile.body"]}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form
+          action={async (formData) => {
+            const result = await action(formData);
+            if (result.ok) toast.success(m["voice.profile.saved"]);
+            else toast.error(result.error);
+          }}
+          className="space-y-6"
+        >
+          <div className="space-y-1.5">
+            <Label htmlFor="persona_name">{m["voice.profile.personaName"]}</Label>
+            <Input id="persona_name" name="persona_name" defaultValue={p.persona_name} required />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="greeting_en">{m["voice.profile.greetingEn"]}</Label>
+              <textarea
+                id="greeting_en" name="greeting_en" rows={3} defaultValue={p.greeting_en}
+                className="w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="greeting_es">{m["voice.profile.greetingEs"]}</Label>
+              <textarea
+                id="greeting_es" name="greeting_es" rows={3} defaultValue={p.greeting_es}
+                className="w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="facts">{m["voice.profile.facts"]}</Label>
+            <textarea
+              id="facts" name="facts" rows={5} defaultValue={p.facts}
+              className="w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            />
+            <p className="text-xs text-muted-foreground">{m["voice.profile.factsHint"]}</p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="services">{m["voice.profile.services"]}</Label>
+            <textarea
+              id="services" name="services" rows={3} defaultValue={p.services}
+              className="w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="languages">{m["voice.profile.language"]}</Label>
+              <Select name="languages" defaultValue={p.languages}>
+                <SelectTrigger id="languages" className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="en">{m["voice.profile.language.en"]}</SelectItem>
+                  <SelectItem value="es">{m["voice.profile.language.es"]}</SelectItem>
+                  <SelectItem value="both">{m["voice.profile.language.both"]}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="after_hours">{m["voice.profile.afterHours"]}</Label>
+              <Select name="after_hours" defaultValue={p.after_hours}>
+                <SelectTrigger id="after_hours" className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="hours_then_message">{m["voice.profile.afterHours.hoursThenMessage"]}</SelectItem>
+                  <SelectItem value="message_only">{m["voice.profile.afterHours.messageOnly"]}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Checkbox id="booking_enabled" name="booking_enabled" defaultChecked={p.booking_enabled} />
+            <Label htmlFor="booking_enabled">{m["voice.profile.bookingEnabled"]}</Label>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Checkbox id="enabled" name="enabled" defaultChecked={p.enabled} />
+            <Label htmlFor="enabled">{m["voice.profile.enabled"]}</Label>
+          </div>
+
+          <SubmitButton>{m["voice.profile.save"]}</SubmitButton>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+function NumberStatusSelect({
+  phoneNumber, statusAction,
+}: {
+  phoneNumber: PhoneNumberRow;
+  statusAction: (phoneNumberId: string, status: string) => Promise<ActionResult>;
+}) {
+  const [pending, startTransition] = useTransition();
+
+  function run(status: string) {
+    startTransition(async () => {
+      const result = await statusAction(phoneNumber.id, status);
+      if (result.ok) toast.success(m["voice.numbers.statusUpdated"]);
+      else toast.error(result.error);
+    });
+  }
+
+  return (
+    <Select value={phoneNumber.status} onValueChange={run} disabled={pending}>
+      <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
+      <SelectContent>
+        {STATUS_VALUES.map((v) => (
+          <SelectItem key={v} value={v}>{STATUS_LABEL[v]}</SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+function PhoneNumbersPanel({
+  numbers, assignAction, statusAction,
+}: {
+  numbers: PhoneNumberRow[];
+  assignAction: (formData: FormData) => Promise<ActionResult>;
+  statusAction: (phoneNumberId: string, status: string) => Promise<ActionResult>;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{m["voice.numbers.title"]}</CardTitle>
+        <CardDescription>{m["voice.numbers.body"]}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {numbers.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{m["voice.numbers.empty"]}</p>
+        ) : (
+          <ul className="divide-y divide-border">
+            {numbers.map((n) => (
+              <li key={n.id} className="flex flex-wrap items-center justify-between gap-3 py-2.5">
+                <div>
+                  <p className="text-sm font-medium text-card-foreground">{n.e164}</p>
+                  {n.telnyx_id ? (
+                    <p className="text-xs text-muted-foreground">{n.telnyx_id}</p>
+                  ) : null}
+                </div>
+                <NumberStatusSelect phoneNumber={n} statusAction={statusAction} />
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <form
+          action={async (formData) => {
+            const result = await assignAction(formData);
+            if (result.ok) toast.success(m["voice.numbers.assigned"]);
+            else toast.error(result.error);
+          }}
+          className="space-y-3 border-t border-border pt-4"
+        >
+          <div className="space-y-1.5">
+            <Label htmlFor="e164">{m["voice.numbers.e164"]}</Label>
+            <Input id="e164" name="e164" required />
+            <p className="text-xs text-muted-foreground">{m["voice.numbers.e164Hint"]}</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="telnyxId">{m["voice.numbers.telnyxId"]}</Label>
+            <Input id="telnyxId" name="telnyxId" />
+          </div>
+          <SubmitButton>{m["voice.numbers.assign"]}</SubmitButton>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function VoiceSettings({
+  profile, numbers, saveProfileAction, assignNumberAction, setStatusAction,
+}: {
+  profile: VoiceProfileRow | null;
+  numbers: PhoneNumberRow[];
+  saveProfileAction: (formData: FormData) => Promise<ActionResult>;
+  assignNumberAction: (formData: FormData) => Promise<ActionResult>;
+  setStatusAction: (phoneNumberId: string, status: string) => Promise<ActionResult>;
+}) {
+  return (
+    <div className="space-y-6">
+      <VoiceProfileForm profile={profile} action={saveProfileAction} />
+      <PhoneNumbersPanel numbers={numbers} assignAction={assignNumberAction} statusAction={setStatusAction} />
+    </div>
+  );
+}

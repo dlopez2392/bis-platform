@@ -7,6 +7,7 @@ export const m = {
   "nav.forms": "Forms",
   "nav.settings": "Settings",
   "nav.branding": "Branding",
+  "nav.voice": "Voice",
   "nav.accounts": "Companies",
   "nav.blueprints": "Blueprints",
 
@@ -494,6 +495,55 @@ export const m = {
   "calendar.embed.copy": "Copy",
   "calendar.embed.copied": "Copied",
   "calendar.embed.publicLink": "Direct link",
+
+  // The agency's Voice settings page — /dashboard/accounts/<id>/voice.
+  // Agency-only: requireAccountAccess's isAgency check gates every write,
+  // the nav item is hidden from clients the same way branding is hidden
+  // from the agency, and the page itself gates the read. This is the manual
+  // path that gets the first client's receptionist live before the setup
+  // wizard automates it — plain admin language throughout, no roadmap labels.
+  "voice.title": "Voice Receptionist",
+  "voice.agencyOnly": "Only the agency may manage voice settings.",
+
+  "voice.profile.title": "Voice profile",
+  "voice.profile.body": "What the receptionist says and knows on every call.",
+  "voice.profile.personaName": "Persona name",
+  "voice.profile.greetingEn": "Greeting (English)",
+  "voice.profile.greetingEs": "Greeting (Spanish)",
+  "voice.profile.facts": "Facts",
+  "voice.profile.factsHint": "Hours, pricing, policies — anything a caller might ask about.",
+  "voice.profile.services": "Services",
+  "voice.profile.language": "Language",
+  "voice.profile.language.en": "English only",
+  "voice.profile.language.es": "Spanish only",
+  "voice.profile.language.both": "English and Spanish",
+  "voice.profile.bookingEnabled": "Allow booking appointments on the call",
+  "voice.profile.afterHours": "After hours",
+  "voice.profile.afterHours.hoursThenMessage": "Follow business hours, then take a message",
+  "voice.profile.afterHours.messageOnly": "Always take a message",
+  "voice.profile.enabled": "Receptionist enabled",
+  "voice.profile.save": "Save voice profile",
+  "voice.profile.saved": "Voice profile saved",
+  "voice.profile.saveFailed": "Could not save the voice profile.",
+
+  "voice.numbers.title": "Phone numbers",
+  "voice.numbers.body": "Assign a number and move it live once the profile is ready.",
+  "voice.numbers.assign": "Assign number",
+  "voice.numbers.e164": "Phone number",
+  "voice.numbers.e164Hint": "Any format — normalized automatically.",
+  "voice.numbers.telnyxId": "Telnyx ID (optional)",
+  "voice.numbers.assigned": "Number assigned",
+  "voice.numbers.assignFailed": "Could not assign this number.",
+  "voice.numbers.badE164": "Enter a valid phone number.",
+  "voice.numbers.empty": "No phone numbers assigned yet.",
+  "voice.numbers.status": "Status",
+  "voice.numbers.status.provisioned": "Provisioned",
+  "voice.numbers.status.testing": "Testing",
+  "voice.numbers.status.live": "Live",
+  "voice.numbers.status.released": "Released",
+  "voice.numbers.statusUpdated": "Status updated",
+  "voice.numbers.statusUpdateFailed": "Could not update this number's status.",
+  "voice.numbers.goLiveNeedsProfile": "Fill in the voice profile before going live",
 } as const;
 
 export type MessageKey = keyof typeof m;
