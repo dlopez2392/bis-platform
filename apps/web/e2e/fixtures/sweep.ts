@@ -60,7 +60,8 @@ async function deleteAccountCascade(
   // (packages/db/src/test/fixtures.ts) orders them first. Deleting contacts
   // before bookings, on a stale fixture account that ever booked anything,
   // would fail on the FK instead of sweeping the account.
-  for (const table of ["bookings", "calendars", "form_submissions", "forms", "contacts", "events"]) {
+  for (const table of ["calls", "bookings", "calendars", "form_submissions", "forms", "contacts",
+                       "events", "voice_profiles", "phone_numbers"]) {
     const { error } = await db.from(table).delete().eq("account_id", accountId);
     if (error) report.errors.push(`${table} delete for ${accountId}: ${error.message}`);
   }

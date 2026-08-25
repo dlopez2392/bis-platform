@@ -20,11 +20,12 @@ export async function withTestAccount(fn: (db: SupabaseClient, accountId: string
     // Every delete below checks `.error` and throws (the M1c lesson: a
     // swallowed delete error leaves rows behind, and the next test's unique
     // constraints then fail somewhere else entirely, far from the real cause).
-    for (const table of ["bookings", "calendars", "events", "form_submissions", "forms",
+    for (const table of ["calls", "bookings", "calendars", "events", "form_submissions", "forms",
                          "messages", "conversations",
                          "checklist_items", "contact_tags", "notes", "tasks",
                          "opportunities", "pipeline_stages", "pipelines", "custom_fields",
-                         "custom_values", "tags", "contacts"]) {
+                         "custom_values", "tags", "contacts",
+                         "voice_profiles", "phone_numbers"]) {
       const { error } = await db.from(table).delete().eq("account_id", id);
       if (error) throw new Error(`withTestAccount cleanup failed on ${table}: ${error.message}`);
     }

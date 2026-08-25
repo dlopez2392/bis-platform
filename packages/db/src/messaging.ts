@@ -9,7 +9,7 @@ export type NewMessage = {
   // 'form' arrives with M1c: a form submission is the platform's first inbound
   // message. 'note' is not reused for it — that means "the operator wrote this
   // internally" in the UI, and a lead's own words are not an internal note.
-  channel: "email" | "form";
+  channel: "email" | "form" | "voice";
   direction: "outbound" | "inbound";
   subject?: string;
   body: string;
