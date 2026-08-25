@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const runToolMock = vi.fn();
 vi.mock("./tools/registry", () => ({ runTool: (...a: unknown[]) => runToolMock(...a) }));
@@ -10,6 +10,14 @@ import type { ToolContext } from "./tools/registry";
 const ctx = {} as unknown as ToolContext;
 
 describe("processCallEvent", () => {
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
+  });
+
   it("assistant transcript event appends and produces no actions", async () => {
     const { state, actions } = await processCallEvent(emptyCallState(), ctx,
       { type: "response.output_audio_transcript.done", transcript: "How can I help?" });
@@ -37,12 +45,21 @@ describe("processCallEvent", () => {
       { kind: "send", payload: { type: "response.create" } },
     ]);
   });
-  it("a throwing tool still answers the model instead of crashing the call", async () => {
+  it("an unknown tool name keeps its 'unknown tool' label and logs", async () => {
     runToolMock.mockRejectedValue(new Error("Unknown tool: nope"));
     const { actions } = await processCallEvent(emptyCallState(), ctx,
       { type: "response.function_call_arguments.done", name: "nope", call_id: "fc2", arguments: "{}" });
     expect((actions[0]!.payload as unknown as { item: { output: string } }).item.output)
       .toBe(JSON.stringify({ ok: false, error: "unknown tool" }));
+    expect(consoleErrorSpy).toHaveBeenCalled();
+  });
+  it("a genuine tool failure (e.g. a DB outage mid-booking) is logged and NOT mislabeled as 'unknown tool'", async () => {
+    runToolMock.mockRejectedValue(new Error("db down"));
+    const { actions } = await processCallEvent(emptyCallState(), ctx,
+      { type: "response.function_call_arguments.done", name: "book_appointment", call_id: "fc3", arguments: "{}" });
+    const output = JSON.parse((actions[0]!.payload as unknown as { item: { output: string } }).item.output);
+    expect(output).toEqual({ ok: false, error: "tool failed — apologize and offer to take a message" });
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("voice tool book_appointment failed: Error: db down"));
   });
   it("bad JSON args become {}", async () => {
     runToolMock.mockResolvedValue({ state: emptyCallState(), result: { ok: true } });

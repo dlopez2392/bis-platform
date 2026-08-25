@@ -53,8 +53,12 @@ export async function saveVoiceProfileAction(
   const afterHours = pickOne(String(formData.get("after_hours") ?? "hours_then_message"), AFTER_HOURS_VALUES);
   if (!languages || !afterHours) return { ok: false, error: m["voice.profile.saveFailed"] };
 
+  // The client marks this field `required`, but that is not enforcement — a
+  // blank/whitespace submission (bypassed form, stripped JS) must still land
+  // on a sane name server-side rather than an empty persona.
+  const personaName = String(formData.get("persona_name") ?? "").trim();
   const patch: VoiceProfilePatch = {
-    persona_name: String(formData.get("persona_name") ?? "").trim(),
+    persona_name: personaName || "Sofía",
     greeting_en: String(formData.get("greeting_en") ?? ""),
     greeting_es: String(formData.get("greeting_es") ?? ""),
     facts: String(formData.get("facts") ?? ""),

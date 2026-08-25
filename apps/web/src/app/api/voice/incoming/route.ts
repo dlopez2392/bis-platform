@@ -277,6 +277,13 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
     // permanently rejected.
     let chain: Promise<void> = Promise.resolve();
     ws.on("message", (raw) => {
+      // Post-drain frames must not mutate recorded state or attempt sends on
+      // a torn-down socket: `finish()` has already read `state` (past the
+      // bounded drain above) and handed it to `finishCall` by the time
+      // `settled` flips, so anything arriving after that point is too late
+      // to matter and only risks `ws.send`ing into a socket nobody is
+      // listening to.
+      if (settled) return;
       chain = chain.then(() => handleMessage(raw));
     });
 

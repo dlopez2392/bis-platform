@@ -23,4 +23,19 @@ describe("generateSummary", () => {
     expect(out).toContain("RECORDED");
     expect(out).toContain("no appointment was recorded");
   });
+  it("the request carries an abort signal — a hung connection must not stall finishCall forever", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
+    });
+    await generateSummary(emptyCallState(), { fetchImpl: fetchImpl as unknown as typeof fetch });
+    const init = fetchImpl.mock.calls[0]![1]!;
+    expect(init.signal).toBeDefined();
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+  it("a timeout (AbortSignal firing) still yields the fact-line summary, not a hang", async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new DOMException("The operation timed out.", "TimeoutError"));
+    const out = await generateSummary(emptyCallState(), { fetchImpl: fetchImpl as unknown as typeof fetch });
+    expect(out).toContain("RECORDED");
+    expect(out).toContain("no appointment was recorded");
+  });
 });

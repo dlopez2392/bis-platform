@@ -60,8 +60,19 @@ export async function processCallEvent(
       try {
         const { state: next, result } = await runTool(state, ctx, event.name as ToolName, args);
         return { state: next, actions: functionCallActions(event.call_id, result) };
-      } catch {
-        return { state, actions: functionCallActions(event.call_id, { ok: false, error: "unknown tool" }) };
+      } catch (err) {
+        // Logged unconditionally: a bare swallow here made a DB outage
+        // mid-booking invisible in the logs AND indistinguishable from a
+        // genuinely unknown tool name to the model. `runTool` throws
+        // "Unknown tool: <name>" (registry.ts) for the latter specifically —
+        // anything else is a real failure (DB, network, a tool's own bug)
+        // and gets an honest label instead of the misleading "unknown tool".
+        console.error(`voice tool ${event.name} failed: ${String(err)}`);
+        const message = err instanceof Error ? err.message : String(err);
+        const payload = message.startsWith("Unknown tool")
+          ? { ok: false, error: "unknown tool" }
+          : { ok: false, error: "tool failed — apologize and offer to take a message" };
+        return { state, actions: functionCallActions(event.call_id, payload) };
       }
     }
     default:

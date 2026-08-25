@@ -42,6 +42,13 @@ export async function generateSummary(
             { role: "user", content: buildSummaryInput(state) },
           ],
         }),
+        // A hung connection (never rejects, never resolves) would otherwise
+        // stall `finishCall` until Vercel kills the invocation outright — the
+        // row stays open, no staff alert, and the call never even logs as
+        // lost. 10s is generous for a 3-4 sentence completion; the catch
+        // below already converts any rejection (including this timeout's
+        // AbortError/TimeoutError) into `prose = ""`.
+        signal: AbortSignal.timeout(10_000),
       });
       if (r.ok) {
         const data = await r.json();

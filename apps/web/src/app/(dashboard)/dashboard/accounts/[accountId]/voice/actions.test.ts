@@ -73,6 +73,13 @@ describe("voice settings actions", () => {
     expect(dbMocks.upsertVoiceProfile).toHaveBeenCalledWith({}, "a1",
       expect.objectContaining({ persona_name: "Alex" }), expect.any(String));
   });
+  it("a blank persona_name falls back to Sofía server-side — the client's `required` is not enforcement", async () => {
+    dbMocks.upsertVoiceProfile.mockResolvedValue({});
+    const r = await saveVoiceProfileAction("a1", fd({ persona_name: "  ", languages: "both" }));
+    expect(r).toEqual({ ok: true });
+    expect(dbMocks.upsertVoiceProfile).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ persona_name: "Sofía" }), expect.any(String));
+  });
   it("rejects a non-E164-able number with no db call", async () => {
     const r = await assignNumberAction("a1", fd({ e164: "not-a-number" }));
     expect(r).toMatchObject({ ok: false });

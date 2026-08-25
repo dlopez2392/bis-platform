@@ -475,6 +475,38 @@ describe("runCallLifecycle — Important #5: cap-seconds clamp", () => {
   });
 });
 
+describe("runCallLifecycle — Minor: late frames after settle", () => {
+  it("a frame arriving after the call cap closes the socket is ignored — no further processing or sends", async () => {
+    vi.useFakeTimers();
+    const { lifecycleDone, ws } = await startLifecycle();
+    ws.send = vi.fn();
+    ws.emit("open");
+
+    // Cross the default 240s cap: sends the goodbye, then schedules a close
+    // 5s later via `ws.close()` — a no-op on the fake socket, exactly like
+    // the real `ws` package until ITS OWN "close" event fires in response.
+    await vi.advanceTimersByTimeAsync(240_000);
+    await vi.advanceTimersByTimeAsync(5_000);
+    ws.emit("close", 1000, Buffer.from("cap"));
+    await lifecycleDone;
+
+    (ws.send as ReturnType<typeof vi.fn>).mockClear();
+    runToolMock.mockClear();
+
+    // A frame arrives late — after settle. It must not mutate recorded state
+    // or attempt a send on a torn-down socket.
+    ws.emit("message", JSON.stringify({
+      type: "response.function_call_arguments.done",
+      name: "take_message", call_id: "late1", arguments: "{}",
+    }));
+    await flushMicrotasks();
+
+    expect(runToolMock).not.toHaveBeenCalled();
+    expect(ws.send).not.toHaveBeenCalled();
+    expect(finishCallMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("runCallLifecycle — Minor: WS URL call-id encoding", () => {
   it("encodeURIComponents the call id into the realtime WS URL", async () => {
     const { ws } = await startLifecycle("call/with special?chars");
