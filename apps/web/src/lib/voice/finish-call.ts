@@ -167,29 +167,37 @@ export async function finishCall(
   // cost the call its notification.
   let notified = false;
   if (meaningful) {
-    const callerDisplay = ctx.callerNumber ?? "Unknown caller";
-    const brand = emailBrand(ctx.branding, ctx.accountName);
-    const contactUrl = contactId
-      ? `${ctx.origin}/dashboard/accounts/${ctx.accountId}/contacts/${contactId}`
-      : null;
-    const { html, text } = voiceCallAlertEmail({ brand, outcome, summary, callerDisplay, contactUrl });
-    const provider = getEmailProvider();
+    try {
+      const callerDisplay = ctx.callerNumber ?? "Unknown caller";
+      const brand = emailBrand(ctx.branding, ctx.accountName);
+      const contactUrl = contactId
+        ? `${ctx.origin}/dashboard/accounts/${ctx.accountId}/contacts/${contactId}`
+        : null;
+      const { html, text } = voiceCallAlertEmail({ brand, outcome, summary, callerDisplay, contactUrl });
+      const provider = getEmailProvider();
 
-    const failures: string[] = [];
-    for (const to of ctx.notifyEmails) {
-      try {
-        // No fromAddress: same deliverability reasoning as the booking/lead
-        // alerts — this goes to the CLIENT'S OWN staff, and a client-domain-
-        // to-client-domain send through a third-party sender is the shape
-        // corporate filters treat as spoofing. Platform From only.
-        await provider.send({ to, fromName: brand.name, subject: `Call — ${outcome} — ${callerDisplay}`, body: text, html });
-        notified = true;
-      } catch (e) {
-        failures.push(`${to} (${e instanceof Error ? e.message : String(e)})`);
+      const failures: string[] = [];
+      for (const to of ctx.notifyEmails) {
+        try {
+          // No fromAddress: same deliverability reasoning as the booking/lead
+          // alerts — this goes to the CLIENT'S OWN staff, and a client-domain-
+          // to-client-domain send through a third-party sender is the shape
+          // corporate filters treat as spoofing. Platform From only.
+          await provider.send({ to, fromName: brand.name, subject: `Call — ${outcome} — ${callerDisplay}`, body: text, html });
+          notified = true;
+        } catch (e) {
+          failures.push(`${to} (${e instanceof Error ? e.message : String(e)})`);
+        }
       }
-    }
-    if (failures.length > 0) {
-      console.error(`finishCall ${meta.callRowId ?? "(no row)"}: alert send failed for ${failures.join(", ")}`);
+      if (failures.length > 0) {
+        console.error(`finishCall ${meta.callRowId ?? "(no row)"}: alert send failed for ${failures.join(", ")}`);
+      }
+    } catch (e) {
+      // getEmailProvider() throws synchronously when RESEND_API_KEY or
+      // EMAIL_FROM is missing or rotated in production (see @/lib/email/preflight).
+      // An outer catch keeps config failure from violating never-throws.
+      // Same fix as apps/web/src/app/b/[publicId]/actions.ts.
+      console.error(`finishCall ${meta.callRowId ?? "(no row)"}: staff alert setup failed: ${String(e)}`);
     }
   }
 

@@ -5,8 +5,13 @@ const dbMocks = vi.hoisted(() => ({
   createMessage: vi.fn(), incrementUnreadCount: vi.fn(), emit: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
-const sendMock = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/email", () => ({ getEmailProvider: () => ({ send: (...a: unknown[]) => sendMock(...a) }) }));
+const emailRefs = vi.hoisted(() => ({ providerShouldThrow: false, send: vi.fn() }));
+vi.mock("@/lib/email", () => ({
+  getEmailProvider: () => {
+    if (emailRefs.providerShouldThrow) throw new Error("RESEND_API_KEY missing");
+    return { send: (...a: unknown[]) => emailRefs.send(...a) };
+  },
+}));
 vi.mock("./summary-service", () => ({ generateSummary: vi.fn().mockResolvedValue("RECORDED — test.") }));
 
 import { finishCall, type FinishContext } from "./finish-call";
@@ -23,7 +28,8 @@ const meta = { callRowId: "call1", startedAt: new Date("2027-06-01T12:00:00Z"), 
 
 beforeEach(() => {
   Object.values(dbMocks).forEach((m) => m.mockReset());
-  sendMock.mockReset().mockResolvedValue({ providerMessageId: "x" });
+  emailRefs.providerShouldThrow = false;
+  emailRefs.send.mockReset().mockResolvedValue({ providerMessageId: "x" });
   dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: false });
   dbMocks.ensureConversation.mockResolvedValue({ id: "cv1", created: true });
   dbMocks.createMessage.mockResolvedValue({ id: "m1" });
@@ -41,8 +47,8 @@ describe("finishCall", () => {
     expect(dbMocks.createMessage).toHaveBeenCalledWith({}, "a1",
       expect.objectContaining({ channel: "voice", direction: "inbound" }), "voice", "ai");
     expect(dbMocks.incrementUnreadCount).toHaveBeenCalled();
-    expect(sendMock).toHaveBeenCalledTimes(1);
-    const sent = sendMock.mock.calls[0]![0];
+    expect(emailRefs.send).toHaveBeenCalledTimes(1);
+    const sent = emailRefs.send.mock.calls[0]![0];
     expect(sent.fromAddress).toBeUndefined();              // staff mail: platform From
     expect(dbMocks.finishCallRow).toHaveBeenCalledWith({}, "a1", "call1",
       expect.objectContaining({ outcome: "lead", contactId: "ct1", conversationId: "cv1", durationSecs: 120 }));
@@ -52,7 +58,7 @@ describe("finishCall", () => {
     const r = await finishCall(s, ctx, meta);
     expect(r.outcome).toBe("abandoned");
     expect(dbMocks.createContact).not.toHaveBeenCalled();
-    expect(sendMock).not.toHaveBeenCalled();
+    expect(emailRefs.send).not.toHaveBeenCalled();
     expect(dbMocks.finishCallRow).toHaveBeenCalled();
   });
   it("DB down + email up → stored:false notified:true, and it never throws", async () => {
@@ -66,11 +72,21 @@ describe("finishCall", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     dbMocks.finishCallRow.mockRejectedValue(new Error("db down"));
     dbMocks.createContact.mockRejectedValue(new Error("db down"));
-    sendMock.mockRejectedValue(new Error("mail down"));
+    emailRefs.send.mockRejectedValue(new Error("mail down"));
     const s = withMessage(emptyCallState(), { body: "call me", at: "t" });
     const r = await finishCall(s, ctx, meta);
     expect(r).toMatchObject({ stored: false, notified: false });
     expect(errSpy.mock.calls.some((c) => String(c[0]).includes("CALL LOST"))).toBe(true);
+    errSpy.mockRestore();
+  });
+  it("getEmailProvider() throwing (rotated key) returns ok without throwing, row still written", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    emailRefs.providerShouldThrow = true;
+    const s = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
+      { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
+    const r = await finishCall(s, ctx, meta);
+    expect(r).toMatchObject({ stored: true, notified: false, outcome: "lead" });
+    expect(dbMocks.finishCallRow).toHaveBeenCalled();
     errSpy.mockRestore();
   });
   it("a booked call reuses state.contactId instead of creating a duplicate", async () => {
