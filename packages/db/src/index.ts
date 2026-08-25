@@ -38,3 +38,4 @@ export { getOrCreateCalendar, getCalendarByPublicId, updateCalendarSettings,
          newCancelToken, SlotTakenError,
          type CalendarRow, type BookingRow, type BookingStatus, type CalendarSettingsPatch,
          type CreateBookingInput, type DueReminder } from "./booking";
+export * from "./voice";
