@@ -11,11 +11,12 @@ const dbMocks = vi.hoisted(() => ({
   createContact: vi.fn(), createBooking: vi.fn(),
   setBookingStatus: vi.fn(), getBookingById: vi.fn(),
 }));
+const sendMock = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", async (importOriginal) => {
   const real = await importOriginal<object>();
   return { ...real, ...dbMocks, SlotTakenError: (real as any).SlotTakenError };
 });
-vi.mock("@/lib/email", () => ({ getEmailProvider: () => ({ send: vi.fn() }) }));
+vi.mock("@/lib/email", () => ({ getEmailProvider: () => ({ send: (...a: unknown[]) => sendMock(...a) }) }));
 
 import { runTool, type ToolContext } from "./registry";
 import { emptyCallState } from "../call-state";
@@ -99,6 +100,7 @@ describe("book_appointment", () => {
     computeAllSlotsMock.mockResolvedValue([slot]);
     dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: false });
     dbMocks.createBooking.mockResolvedValue({ id: "bk1", cancelToken: "tok123" });
+    sendMock.mockReset().mockResolvedValue({ providerMessageId: "x" });
   });
 
   it("books an offered slot, mirrors state, remembers the contact", async () => {
@@ -134,6 +136,39 @@ describe("book_appointment", () => {
     const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
       { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana" });
     expect(result).toMatchObject({ ok: false, slotTaken: true });
+  });
+
+  it("happy email path sends confirmation without failing booking", async () => {
+    const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
+    expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
+    expect((result as any).emailFailed).toBeUndefined();
+    expect(sendMock).toHaveBeenCalledOnce();
+    expect(sendMock.mock.calls[0]![0]).toMatchObject({
+      to: "ana@example.com",
+      fromAddress: undefined,
+      subject: "You're booked in",
+      body: expect.any(String),
+    });
+    expect((sendMock.mock.calls[0]![0] as any).body).toBeTruthy();
+  });
+
+  it("send failure never fails the booking", async () => {
+    sendMock.mockRejectedValue(new Error("resend down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
+    errSpy.mockRestore();
+    expect(result).toMatchObject({ ok: true, bookingId: "bk1", emailFailed: true });
+  });
+
+  it("SlotTakenError carries the contact", async () => {
+    const { SlotTakenError } = await import("@bis/db");
+    dbMocks.createBooking.mockRejectedValue(new (SlotTakenError as any)());
+    const { state, result } = await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana" });
+    expect(result).toMatchObject({ ok: false, slotTaken: true });
+    expect(state.contactId).toBe("ct1");
   });
 });
 
