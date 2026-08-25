@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { NextRequest } from "next/server";
 
 // --- openai: fully mocked here (the un-mocked signing test lives in its own
 // file, webhook-signing.test.ts, so it never fights this mock). ------------
@@ -117,12 +118,12 @@ function nonCallEvent() {
   return { id: "evt_2", created_at: Math.floor(Date.now() / 1000), type: "response.completed", data: { id: "resp_1" } };
 }
 
-function req(): Request {
+function req(): NextRequest {
   return new Request("https://x.example/api/voice/incoming", {
     method: "POST",
     headers: { "webhook-id": "id", "webhook-timestamp": "1", "webhook-signature": "v1,irrelevant" },
     body: "raw-body-not-inspected-because-unwrap-is-mocked",
-  }) as unknown as Request;
+  }) as unknown as NextRequest;
 }
 
 const fetchMock = vi.hoisted(() => vi.fn());
@@ -152,7 +153,7 @@ beforeEach(() => {
 describe("POST /api/voice/incoming — step 1: server config", () => {
   it("missing OPENAI_WEBHOOK_SECRET → 500, zero queries, unwrap never called", async () => {
     delete process.env.OPENAI_WEBHOOK_SECRET;
-    const res = await POST(req() as any);
+    const res = await POST(req());
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: "server not configured" });
     expect(unwrapMock).not.toHaveBeenCalled();
@@ -161,7 +162,7 @@ describe("POST /api/voice/incoming — step 1: server config", () => {
 
   it("missing OPENAI_API_KEY → 500, zero queries, unwrap never called", async () => {
     delete process.env.OPENAI_API_KEY;
-    const res = await POST(req() as any);
+    const res = await POST(req());
     expect(res.status).toBe(500);
     expect(unwrapMock).not.toHaveBeenCalled();
   });
@@ -170,7 +171,7 @@ describe("POST /api/voice/incoming — step 1: server config", () => {
 describe("POST /api/voice/incoming — step 2: signature verification", () => {
   it("a signature the SDK rejects → 400 invalid signature", async () => {
     unwrapMock.mockRejectedValue(new Error("bad signature"));
-    const res = await POST(req() as any);
+    const res = await POST(req());
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: "invalid signature" });
   });
@@ -179,7 +180,7 @@ describe("POST /api/voice/incoming — step 2: signature verification", () => {
 describe("POST /api/voice/incoming — step 3: non-call events", () => {
   it("a correctly-signed non-call event → 200 ok:true, no db calls", async () => {
     unwrapMock.mockResolvedValue(nonCallEvent());
-    const res = await POST(req() as any);
+    const res = await POST(req());
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
     expect(getPhoneNumberByE164Mock).not.toHaveBeenCalled();
@@ -190,7 +191,7 @@ describe("POST /api/voice/incoming — step 3: non-call events", () => {
 describe("POST /api/voice/incoming — step 5: unroutable", () => {
   it("no called number on the SIP headers → 200 declined:unroutable, no db calls", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent({ calledNumber: null }));
-    const res = await POST(req() as any);
+    const res = await POST(req());
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, declined: "unroutable" });
     expect(getPhoneNumberByE164Mock).not.toHaveBeenCalled();
@@ -201,7 +202,7 @@ describe("POST /api/voice/incoming — step 6: number resolution", () => {
   it("no matching phone number row → 200 declined:unknown-number", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     getPhoneNumberByE164Mock.mockResolvedValue(null);
-    const res = await POST(req() as any);
+    const res = await POST(req());
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, declined: "unknown-number" });
     expect(getVoiceProfileMock).not.toHaveBeenCalled();
@@ -210,7 +211,7 @@ describe("POST /api/voice/incoming — step 6: number resolution", () => {
   it("a released (not testing/live) number → 200 declined:unknown-number", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     getPhoneNumberByE164Mock.mockResolvedValue({ ...PHONE_ROW, status: "released" });
-    const res = await POST(req() as any);
+    const res = await POST(req());
     expect(await res.json()).toEqual({ ok: true, declined: "unknown-number" });
   });
 });
@@ -219,7 +220,7 @@ describe("POST /api/voice/incoming — step 7: voice profile", () => {
   it("no voice profile row → 200 declined:disabled", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     getVoiceProfileMock.mockResolvedValue(null);
-    const res = await POST(req() as any);
+    const res = await POST(req());
     expect(await res.json()).toEqual({ ok: true, declined: "disabled" });
     expect(countCallsSinceMock).not.toHaveBeenCalled();
   });
@@ -227,7 +228,7 @@ describe("POST /api/voice/incoming — step 7: voice profile", () => {
   it("profile.enabled === false → 200 declined:disabled", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, enabled: false });
-    const res = await POST(req() as any);
+    const res = await POST(req());
     expect(await res.json()).toEqual({ ok: true, declined: "disabled" });
   });
 });
@@ -240,7 +241,7 @@ describe("POST /api/voice/incoming — step 8: call caps", () => {
     // the one that should be declined — 6 here would have been off by one.
     unwrapMock.mockResolvedValue(callIncomingEvent());
     countCallsByCallerSinceMock.mockResolvedValue(5);
-    const res = await POST(req() as any);
+    const res = await POST(req());
     expect(await res.json()).toEqual({ ok: true, declined: "per-number" });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(afterMock).not.toHaveBeenCalled();
@@ -250,7 +251,7 @@ describe("POST /api/voice/incoming — step 8: call caps", () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     countCallsSinceMock.mockRejectedValue(new Error("db down"));
     countCallsByCallerSinceMock.mockRejectedValue(new Error("db down"));
-    const res = await POST(req() as any);
+    const res = await POST(req());
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.declined).toBeUndefined();
@@ -262,7 +263,7 @@ describe("POST /api/voice/incoming — step 8: call caps", () => {
 describe("POST /api/voice/incoming — happy path", () => {
   it("accepts with a FLAT session body, schedules the lifecycle via after(), and acks 200", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent({ callId: "call_xyz" }));
-    const res = await POST(req() as any);
+    const res = await POST(req());
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
@@ -285,7 +286,7 @@ describe("POST /api/voice/incoming — happy path", () => {
 
   it("URL-encodes the call id in the accept endpoint", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent({ callId: "call/with special?chars" }));
-    await POST(req() as any);
+    await POST(req());
     const [url] = fetchMock.mock.calls[0]!;
     expect(String(url)).toContain(encodeURIComponent("call/with special?chars"));
   });
@@ -299,7 +300,7 @@ describe("POST /api/voice/incoming — happy path", () => {
   // `serviceDb()` mock, not the route's behavior.
   it("startCallRow and getOrCreateCalendar are called with the documented shapes", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
-    await POST(req() as any);
+    await POST(req());
     expect(startCallRowMock).toHaveBeenCalledWith(
       expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696" },
     );
@@ -315,7 +316,7 @@ describe("POST /api/voice/incoming — happy path", () => {
 describe("POST /api/voice/incoming — accounts query", () => {
   it("selects from accounts filtered by the resolved account id", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
-    await POST(req() as any);
+    await POST(req());
     expect(dbQuerySpy.fromCalls).toContain("accounts");
     expect(dbQuerySpy.eqCalls).toContainEqual(["id", "acct1"]);
   });
@@ -325,7 +326,7 @@ describe("POST /api/voice/incoming — step 11: accept failure", () => {
   it("accept fetch resolving non-ok → still 200, no lifecycle scheduled", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     fetchMock.mockResolvedValue({ ok: false, status: 500, text: async () => "boom" });
-    const res = await POST(req() as any);
+    const res = await POST(req());
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
     expect(afterMock).not.toHaveBeenCalled();
@@ -334,7 +335,7 @@ describe("POST /api/voice/incoming — step 11: accept failure", () => {
   it("accept fetch throwing outright → still 200, no lifecycle scheduled", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     fetchMock.mockRejectedValue(new Error("network down"));
-    const res = await POST(req() as any);
+    const res = await POST(req());
     expect(res.status).toBe(200);
     expect(afterMock).not.toHaveBeenCalled();
   });
@@ -346,7 +347,7 @@ describe("POST /api/voice/incoming — step 11: accept failure", () => {
   it("accept failure with a call row already open → deletes that row", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     fetchMock.mockResolvedValue({ ok: false, status: 500, text: async () => "boom" });
-    const res = await POST(req() as any);
+    const res = await POST(req());
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
     expect(deleteCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", "call-row-1");
@@ -356,7 +357,7 @@ describe("POST /api/voice/incoming — step 11: accept failure", () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     startCallRowMock.mockRejectedValue(new Error("db down"));
     fetchMock.mockResolvedValue({ ok: false, status: 500, text: async () => "boom" });
-    const res = await POST(req() as any);
+    const res = await POST(req());
     expect(res.status).toBe(200);
     expect(deleteCallRowMock).not.toHaveBeenCalled();
   });
@@ -365,7 +366,7 @@ describe("POST /api/voice/incoming — step 11: accept failure", () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     fetchMock.mockResolvedValue({ ok: false, status: 500, text: async () => "boom" });
     deleteCallRowMock.mockRejectedValue(new Error("row already gone"));
-    const res = await POST(req() as any);
+    const res = await POST(req());
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
   });

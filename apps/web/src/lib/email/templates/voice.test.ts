@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { voiceCallAlertEmail } from "./voice";
 
-const brand = { name: "Rio Roofing", logoUrl: null, accent: "violet" as any };
+const brand = { name: "Rio Roofing", logoUrl: null, accent: { accent: "violet", accentForeground: "#ffffff" } };
 
 describe("voiceCallAlertEmail", () => {
   it("carries outcome, summary and caller in both html and text", () => {

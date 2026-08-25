@@ -13,21 +13,22 @@ const dbMocks = vi.hoisted(() => ({
 }));
 const sendMock = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", async (importOriginal) => {
-  const real = await importOriginal<object>();
-  return { ...real, ...dbMocks, SlotTakenError: (real as any).SlotTakenError };
+  const real = await importOriginal<typeof import("@bis/db")>();
+  return { ...real, ...dbMocks, SlotTakenError: real.SlotTakenError };
 });
 vi.mock("@/lib/email", () => ({ getEmailProvider: () => ({ send: (...a: unknown[]) => sendMock(...a) }) }));
 
-import { runTool, type ToolContext } from "./registry";
+import type { serviceDb, CalendarRow, VoiceProfileRow } from "@bis/db";
+import { runTool, type ToolContext, type ToolName } from "./registry";
 import { emptyCallState } from "../call-state";
 
 const ctx: ToolContext = {
-  db: {} as any, accountId: "a1", accountName: "Rio Roofing",
+  db: {} as unknown as ReturnType<typeof serviceDb>, accountId: "a1", accountName: "Rio Roofing",
   timezone: "America/Chicago",
   calendar: { id: "cal1", account_id: "a1", public_id: "pub1", enabled: true,
     slot_duration_minutes: 60, buffer_minutes: 0, min_notice_hours: 0,
-    max_advance_days: 30, open_hours: {}, notify_emails: [] } as any,
-  profile: { booking_enabled: true } as any,
+    max_advance_days: 30, open_hours: {}, notify_emails: [] } as unknown as CalendarRow,
+  profile: { booking_enabled: true } as unknown as VoiceProfileRow,
   branding: { brandName: null, brandLogoPath: null, brandColor: null, brandNeutral: null,
     brandCorners: null, brandType: null, brandMode: null, replyToEmail: null },
   fromEmail: null, callerNumber: "+19562921696", origin: "https://x.example",
@@ -90,7 +91,8 @@ describe("capture_lead / take_message / log_transcript mutate state only", () =>
     expect(s2.transcript[1]!.role).toBe("caller");
   });
   it("unknown tool name throws (caller converts to an error result)", async () => {
-    await expect(runTool(emptyCallState(), ctx, "nope" as any, {})).rejects.toThrow(/Unknown tool/);
+    await expect(runTool(emptyCallState(), ctx, "nope" as unknown as ToolName, {}))
+      .rejects.toThrow(/Unknown tool/);
   });
 });
 
@@ -132,7 +134,7 @@ describe("book_appointment", () => {
 
   it("maps SlotTakenError to a race answer", async () => {
     const { SlotTakenError } = await import("@bis/db");
-    dbMocks.createBooking.mockRejectedValue(new (SlotTakenError as any)());
+    dbMocks.createBooking.mockRejectedValue(new SlotTakenError());
     const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
       { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana" });
     expect(result).toMatchObject({ ok: false, slotTaken: true });
@@ -142,7 +144,7 @@ describe("book_appointment", () => {
     const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
       { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
     expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
-    expect((result as any).emailFailed).toBeUndefined();
+    expect((result as { emailFailed?: boolean }).emailFailed).toBeUndefined();
     expect(sendMock).toHaveBeenCalledOnce();
     expect(sendMock.mock.calls[0]![0]).toMatchObject({
       to: "ana@example.com",
@@ -150,7 +152,7 @@ describe("book_appointment", () => {
       subject: "You're booked in",
       body: expect.any(String),
     });
-    expect((sendMock.mock.calls[0]![0] as any).body).toBeTruthy();
+    expect((sendMock.mock.calls[0]![0] as { body?: unknown }).body).toBeTruthy();
   });
 
   it("send failure never fails the booking", async () => {
@@ -164,7 +166,7 @@ describe("book_appointment", () => {
 
   it("SlotTakenError carries the contact", async () => {
     const { SlotTakenError } = await import("@bis/db");
-    dbMocks.createBooking.mockRejectedValue(new (SlotTakenError as any)());
+    dbMocks.createBooking.mockRejectedValue(new SlotTakenError());
     const { state, result } = await runTool(emptyCallState(), ctx, "book_appointment",
       { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana" });
     expect(result).toMatchObject({ ok: false, slotTaken: true });

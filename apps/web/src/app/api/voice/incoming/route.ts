@@ -52,7 +52,7 @@ import {
 } from "@bis/db";
 import { extractCallerNumber, extractCalledNumber, sipHeaderNames } from "@/lib/voice/sip-headers";
 import { buildRealtimeSessionConfig, type VoicePromptInput } from "@/lib/voice/session-config";
-import { processCallEvent } from "@/lib/voice/call-events";
+import { processCallEvent, type RealtimeCallEvent } from "@/lib/voice/call-events";
 import { emptyCallState } from "@/lib/voice/call-state";
 import { finishCall, type FinishContext } from "@/lib/voice/finish-call";
 import type { ToolContext } from "@/lib/voice/tools/registry";
@@ -281,7 +281,7 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
     });
 
     async function handleMessage(raw: WebSocket.RawData): Promise<void> {
-      let event: any;
+      let event: RealtimeCallEvent;
       try {
         event = JSON.parse(raw.toString());
       } catch {

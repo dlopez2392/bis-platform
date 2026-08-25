@@ -5,7 +5,21 @@ import { withTranscript, type CallState } from "./call-state";
 
 export interface VoiceAction { kind: "send"; payload: object }
 
-function safeParse(raw: unknown): object {
+// The Realtime WS event shapes this module reads from — a loose subset (only
+// the fields `processCallEvent`'s switch actually touches), not the full
+// OpenAI Realtime event union: the socket can send many event types this
+// module ignores entirely (the `default` branch below), so typing every
+// field of every possible event would document behavior this file doesn't
+// have. `type` drives the switch; the rest are read per-branch.
+export interface RealtimeCallEvent {
+  type?: string;
+  transcript?: string;
+  arguments?: string;
+  name?: string;
+  call_id?: string;
+}
+
+function safeParse(raw: unknown): Record<string, unknown> {
   if (typeof raw !== "string") return {};
   try {
     const v = JSON.parse(raw);
@@ -13,7 +27,7 @@ function safeParse(raw: unknown): object {
   } catch { return {}; }
 }
 
-function functionCallActions(callId: string, result: unknown): VoiceAction[] {
+function functionCallActions(callId: string | undefined, result: unknown): VoiceAction[] {
   return [
     { kind: "send", payload: {
       type: "conversation.item.create",
@@ -24,7 +38,7 @@ function functionCallActions(callId: string, result: unknown): VoiceAction[] {
 }
 
 export async function processCallEvent(
-  state: CallState, ctx: ToolContext, event: any,
+  state: CallState, ctx: ToolContext, event: RealtimeCallEvent,
 ): Promise<{ state: CallState; actions: VoiceAction[] }> {
   switch (event?.type) {
     case "response.output_audio_transcript.done": {

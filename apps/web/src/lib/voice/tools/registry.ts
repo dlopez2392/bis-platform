@@ -36,7 +36,7 @@ const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const REQUIRED_LEAD_FIELDS = ["fullName", "need"] as const;
 
 export async function runTool(
-  state: CallState, ctx: ToolContext, name: ToolName, args: any,
+  state: CallState, ctx: ToolContext, name: ToolName, args: Record<string, unknown>,
 ): Promise<{ state: CallState; result: unknown }> {
   const now = ctx.now?.() ?? new Date();
   switch (name) {
@@ -54,7 +54,7 @@ export async function runTool(
     }
 
     case "find_my_booking": {
-      const phone = toE164(args?.phone) ?? ctx.callerNumber;
+      const phone = toE164(String(args?.phone ?? "")) ?? ctx.callerNumber;
       if (!phone) return { state, result: { found: false } };
       const hit = await findUpcomingBookingForPhone(ctx.db, ctx.accountId, phone, now.toISOString());
       return { state, result: hit ? { found: true, ...hit } : { found: false } };
@@ -73,7 +73,7 @@ export async function runTool(
     case "take_message": {
       const body = String(args?.body ?? "").trim();
       if (!body) return { state, result: { ok: false, error: "message body required" } };
-      const callbackNumber = toE164(args?.callbackNumber) ?? ctx.callerNumber ?? undefined;
+      const callbackNumber = toE164(String(args?.callbackNumber ?? "")) ?? ctx.callerNumber ?? undefined;
       return {
         state: withMessage(state, { body, callbackNumber, at: now.toISOString() }),
         result: { ok: true },
@@ -104,7 +104,7 @@ export async function runTool(
         };
       }
 
-      const phone = toE164(args?.phone) ?? ctx.callerNumber;
+      const phone = toE164(String(args?.phone ?? "")) ?? ctx.callerNumber;
       const email = String(args?.email ?? "").trim() || null;
       if (!phone && !email) {
         return { state, result: { ok: false, error: "need a phone number or an email to book" } };

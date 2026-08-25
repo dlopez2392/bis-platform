@@ -6,13 +6,14 @@ vi.mock("@bis/db", async (importOriginal) => {
   return { ...real, listBookedRanges: (...a: unknown[]) => listBookedRangesMock(...a) };
 });
 
+import type { CalendarRow, serviceDb } from "@bis/db";
 import { computeAllSlots } from "./availability";
 
 const calendar = {
   id: "cal1", account_id: "a1", public_id: "p1", enabled: true,
   slot_duration_minutes: 60, buffer_minutes: 0, min_notice_hours: 0,
   max_advance_days: 2, open_hours: { tue: [["09:00", "12:00"]] }, notify_emails: [],
-} as any;
+} as unknown as CalendarRow;
 
 describe("computeAllSlots", () => {
   it("returns Date ranges for open hours minus booked ranges", async () => {
@@ -21,7 +22,7 @@ describe("computeAllSlots", () => {
       { starts_at: "2027-06-01T09:00:00.000Z", ends_at: "2027-06-01T10:00:00.000Z" },
     ]);
     const now = new Date("2027-06-01T00:00:00Z");
-    const slots = await computeAllSlots({} as any, calendar, "UTC", now);
+    const slots = await computeAllSlots({} as unknown as ReturnType<typeof serviceDb>, calendar, "UTC", now);
     const starts = slots.map((s) => s.startsAt.toISOString());
     expect(starts).toContain("2027-06-01T10:00:00.000Z");
     expect(starts).toContain("2027-06-01T11:00:00.000Z");

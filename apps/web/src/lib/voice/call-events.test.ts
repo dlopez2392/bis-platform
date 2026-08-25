@@ -5,8 +5,9 @@ vi.mock("./tools/registry", () => ({ runTool: (...a: unknown[]) => runToolMock(.
 
 import { processCallEvent } from "./call-events";
 import { emptyCallState } from "./call-state";
+import type { ToolContext } from "./tools/registry";
 
-const ctx = {} as any;
+const ctx = {} as unknown as ToolContext;
 
 describe("processCallEvent", () => {
   it("assistant transcript event appends and produces no actions", async () => {
@@ -40,7 +41,8 @@ describe("processCallEvent", () => {
     runToolMock.mockRejectedValue(new Error("Unknown tool: nope"));
     const { actions } = await processCallEvent(emptyCallState(), ctx,
       { type: "response.function_call_arguments.done", name: "nope", call_id: "fc2", arguments: "{}" });
-    expect((actions[0]!.payload as any).item.output).toBe(JSON.stringify({ ok: false, error: "unknown tool" }));
+    expect((actions[0]!.payload as unknown as { item: { output: string } }).item.output)
+      .toBe(JSON.stringify({ ok: false, error: "unknown tool" }));
   });
   it("bad JSON args become {}", async () => {
     runToolMock.mockResolvedValue({ state: emptyCallState(), result: { ok: true } });

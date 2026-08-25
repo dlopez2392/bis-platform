@@ -14,11 +14,12 @@ vi.mock("@/lib/email", () => ({
 }));
 vi.mock("./summary-service", () => ({ generateSummary: vi.fn().mockResolvedValue("RECORDED — test.") }));
 
+import type { serviceDb } from "@bis/db";
 import { finishCall, type FinishContext } from "./finish-call";
 import { emptyCallState, withLead, withMessage, withTranscript, withBooking } from "./call-state";
 
 const ctx: FinishContext = {
-  db: {} as any, accountId: "a1", accountName: "Rio Roofing",
+  db: {} as unknown as ReturnType<typeof serviceDb>, accountId: "a1", accountName: "Rio Roofing",
   branding: { brandName: null, brandLogoPath: null, brandColor: null, brandNeutral: null,
     brandCorners: null, brandType: null, brandMode: null, replyToEmail: null },
   notifyEmails: ["staff@example.com"], callerNumber: "+19562921696",

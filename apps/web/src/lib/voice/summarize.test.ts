@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildSummaryInput, summaryFactLine, checkSummaryAgainstState, composeSummary } from "./summarize";
-import { emptyCallState, withBooking, withLead, withTranscript } from "./call-state";
+import { emptyCallState, withBooking, withLead } from "./call-state";
 
 describe("layer 1 — buildSummaryInput", () => {
   it("renders (none) markers, never blanks", () => {

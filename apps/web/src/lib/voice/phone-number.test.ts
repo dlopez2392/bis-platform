@@ -11,5 +11,5 @@ describe("toE164", () => {
   ])("%s → %s", (raw, want) => expect(toE164(raw)).toBe(want));
   it.each([["", null], ["12345", null], [null, null], [undefined, null],
     ["12345678901234567890", null]])("invalid %s → null", (raw, want) =>
-    expect(toE164(raw as any)).toBe(want));
+    expect(toE164(raw)).toBe(want));
 });

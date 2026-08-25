@@ -12,6 +12,9 @@
 // timer's actual payload (Important #4 ①), and the WS URL's call-id encoding
 // (the Minors list).
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { NextRequest } from "next/server";
+import type { CallState, MirroredBooking } from "@/lib/voice/call-state";
+import type { TranscriptEvent } from "@bis/db";
 
 // --- ws: a minimal hand-rolled emitter standing in for the socket, so tests
 // can fire open/message/close/error exactly like the real `ws` package
@@ -26,12 +29,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // listener-array emitter sidesteps needing any import at all.
 const { FakeWebSocket, fakeSockets } = vi.hoisted(() => {
   class MiniEmitter {
-    private listeners: Record<string, Array<(...args: any[]) => void>> = {};
-    on(event: string, fn: (...args: any[]) => void) {
+    private listeners: Record<string, Array<(...args: unknown[]) => void>> = {};
+    on(event: string, fn: (...args: unknown[]) => void) {
       (this.listeners[event] ??= []).push(fn);
       return this;
     }
-    emit(event: string, ...args: any[]) {
+    emit(event: string, ...args: unknown[]) {
       for (const fn of this.listeners[event] ?? []) fn(...args);
       return true;
     }
@@ -144,12 +147,12 @@ function callIncomingEvent(callId = "call_abc123") {
   };
 }
 
-function req(): Request {
+function req(): NextRequest {
   return new Request("https://x.example/api/voice/incoming", {
     method: "POST",
     headers: { "webhook-id": "id", "webhook-timestamp": "1", "webhook-signature": "v1,irrelevant" },
     body: "raw-body-not-inspected-because-unwrap-is-mocked",
-  }) as unknown as Request;
+  }) as unknown as NextRequest;
 }
 
 /** Runs the webhook happy path, then invokes the callback `after()` was
@@ -158,7 +161,7 @@ function req(): Request {
  *  runs) and the fake socket the route constructed. */
 async function startLifecycle(callId = "call_abc123"): Promise<{ lifecycleDone: Promise<void>; ws: InstanceType<typeof FakeWebSocket> }> {
   unwrapMock.mockResolvedValue(callIncomingEvent(callId));
-  const res = await POST(req() as any);
+  const res = await POST(req());
   expect(res.status).toBe(200);
   expect(afterMock).toHaveBeenCalledOnce();
   const cb = afterMock.mock.calls[0]![0] as () => Promise<void>;
@@ -208,7 +211,7 @@ describe("runCallLifecycle — Critical #1: serialized message handling", () => 
 
     let resolveTool!: () => void;
     const toolGate = new Promise<void>((resolve) => { resolveTool = resolve; });
-    runToolMock.mockImplementation(async (state: any) => {
+    runToolMock.mockImplementation(async (state: CallState) => {
       await toolGate;
       return { state: { ...state, contactId: "contact-from-tool" }, result: { ok: true } };
     });
@@ -252,7 +255,7 @@ describe("runCallLifecycle — Critical #1: serialized message handling", () => 
     // because frame 1's `state = result.state` (computed from state as it
     // was BEFORE frame 2 ever landed) would otherwise overwrite frame 2's
     // addition on arrival.
-    expect(finalState.transcript.some((t: any) => t.text === "call me back at three")).toBe(true);
+    expect(finalState.transcript.some((t: TranscriptEvent) => t.text === "call me back at three")).toBe(true);
   });
 });
 
@@ -273,7 +276,7 @@ describe("runCallLifecycle — finish() drains in-flight frames on hangup", () =
 
     let resolveTool!: () => void;
     const toolGate = new Promise<void>((resolve) => { resolveTool = resolve; });
-    runToolMock.mockImplementation(async (state: any) => {
+    runToolMock.mockImplementation(async (state: CallState) => {
       await toolGate;
       return {
         state: {
@@ -314,7 +317,7 @@ describe("runCallLifecycle — finish() drains in-flight frames on hangup", () =
     // "booked", not "abandoned". This is the assertion that fails without
     // the drain: `finish()` reads `state` immediately on `close`, before the
     // gated tool call ever resolves.
-    expect(finalState.bookings.some((b: any) => b.status === "booked")).toBe(true);
+    expect(finalState.bookings.some((b: MirroredBooking) => b.status === "booked")).toBe(true);
   });
 
   it("bounded: a wedged tool call does not block finish() forever — finishCall fires with the pre-tool state once the 3000ms bound elapses", async () => {

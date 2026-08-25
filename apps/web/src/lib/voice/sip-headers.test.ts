@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { extractCallerNumber, extractCalledNumber, sipHeaderNames } from "./sip-headers";
 
-const ev = (headers: { name: string; value: string }[]) => ({ call_id: "c1", sip_headers: headers });
+const ev = (headers: { name: unknown; value: string }[]) => ({ call_id: "c1", sip_headers: headers });
 
 describe("extractCallerNumber", () => {
   it("parses tel:, sip:, display names, bare 10/11 digits", () => {
@@ -47,7 +47,7 @@ describe("sipHeaderNames", () => {
     expect(sipHeaderNames({})).toEqual([]);
   });
   it("skips headers with non-string names", () => {
-    expect(sipHeaderNames(ev([{ name: {}, value: "x" }, { name: "To", value: "y" }] as any)))
+    expect(sipHeaderNames(ev([{ name: {}, value: "x" }, { name: "To", value: "y" }])))
       .toEqual(["To"]);
   });
 });

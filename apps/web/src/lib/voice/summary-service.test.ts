@@ -10,7 +10,7 @@ describe("generateSummary", () => {
       ok: true, json: async () => ({ choices: [{ message: { content: "Caller asked about hours. No appointment was recorded." } }] }),
     });
     const s = withTranscript(emptyCallState(), { role: "caller", text: "what are your hours?", at: "t" });
-    const out = await generateSummary(s, { fetchImpl: fetchImpl as any });
+    const out = await generateSummary(s, { fetchImpl: fetchImpl as unknown as typeof fetch });
     const body = JSON.parse(fetchImpl.mock.calls[0]![1]!.body);
     expect(body.model).toBe("gpt-4o-mini");
     expect(body.messages[0].content).toContain("authoritative");
@@ -19,7 +19,7 @@ describe("generateSummary", () => {
   });
   it("a failed request still yields the fact line", async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error("down"));
-    const out = await generateSummary(emptyCallState(), { fetchImpl: fetchImpl as any });
+    const out = await generateSummary(emptyCallState(), { fetchImpl: fetchImpl as unknown as typeof fetch });
     expect(out).toContain("RECORDED");
     expect(out).toContain("no appointment was recorded");
   });
