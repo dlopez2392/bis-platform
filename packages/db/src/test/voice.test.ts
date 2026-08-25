@@ -76,6 +76,25 @@ describe("voice accessors", () => {
     });
   });
 
+  it("deleteCallRow: cross-tenant delete resolves but does not touch another account's row", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: "+19565550136" }, "user_test");
+      const { id } = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: "+19562921696" });
+
+      // A different (fabricated, non-existent) account attempting to delete
+      // this row — the `.eq("account_id", accountId)` guard is the security
+      // property: a cross-tenant call must match zero rows and resolve
+      // (deletion is idempotent by design, per the test above) rather than
+      // deleting across tenants because it also matched on `id` alone.
+      await expect(
+        deleteCallRow(db, "00000000-0000-0000-0000-000000000099", id),
+      ).resolves.toBeUndefined();
+
+      const { count } = await db.from("calls").select("id", { count: "exact", head: true }).eq("id", id);
+      expect(count).toBe(1);
+    });
+  });
+
   it("cap counters count in-flight (unfinished) calls too", async () => {
     await withTestAccount(async (db, accountId) => {
       const num = await assignPhoneNumber(db, accountId, { e164: "+19565550122" }, "user_test");

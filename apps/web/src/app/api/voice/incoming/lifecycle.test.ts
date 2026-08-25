@@ -266,6 +266,94 @@ describe("runCallLifecycle — cap/error idempotency", () => {
   });
 });
 
+describe("runCallLifecycle — finish() drains in-flight frames on hangup", () => {
+  it("a booking that lands right as the caller hangs up is not lost — finishCall sees the POST-tool state", async () => {
+    const { lifecycleDone, ws } = await startLifecycle();
+    ws.emit("open");
+
+    let resolveTool!: () => void;
+    const toolGate = new Promise<void>((resolve) => { resolveTool = resolve; });
+    runToolMock.mockImplementation(async (state: any) => {
+      await toolGate;
+      return {
+        state: {
+          ...state,
+          bookings: [
+            ...state.bookings,
+            {
+              id: "bk1", contactName: "Maria", status: "booked",
+              startsAt: "2027-05-01T15:00:00Z", endsAt: "2027-05-01T15:30:00Z",
+            },
+          ],
+        },
+        result: { ok: true, bookingId: "bk1" },
+      };
+    });
+
+    // A book_appointment call whose tool resolution is deliberately gated —
+    // the ~1s DB write a real booking takes is still in flight when the
+    // caller hangs up.
+    ws.emit("message", JSON.stringify({
+      type: "response.function_call_arguments.done",
+      name: "book_appointment", call_id: "fc1", arguments: "{}",
+    }));
+
+    // The caller hangs up WHILE the tool is still pending.
+    ws.emit("close", 1000, Buffer.from("bye"));
+
+    // The booking lands a moment later — after `close` already fired, but
+    // the record must still reflect it, not the stale pre-tool state.
+    resolveTool();
+    await flushMicrotasks();
+
+    await lifecycleDone;
+
+    expect(finishCallMock).toHaveBeenCalledTimes(1);
+    const finalState = finishCallMock.mock.calls[0]![0];
+    // The booking mirror is present — `classifyOutcome` would read this as
+    // "booked", not "abandoned". This is the assertion that fails without
+    // the drain: `finish()` reads `state` immediately on `close`, before the
+    // gated tool call ever resolves.
+    expect(finalState.bookings.some((b: any) => b.status === "booked")).toBe(true);
+  });
+
+  it("bounded: a wedged tool call does not block finish() forever — finishCall fires with the pre-tool state once the 3000ms bound elapses", async () => {
+    vi.useFakeTimers();
+    const { lifecycleDone, ws } = await startLifecycle();
+    ws.emit("open");
+
+    // A tool that never resolves — a genuinely wedged call.
+    runToolMock.mockImplementation(() => new Promise(() => {}));
+
+    ws.emit("message", JSON.stringify({
+      type: "response.function_call_arguments.done",
+      name: "book_appointment", call_id: "fc1", arguments: "{}",
+    }));
+
+    ws.emit("close", 1000, Buffer.from("bye"));
+
+    // The drain is genuinely bounded, not synchronous: finishCall must NOT
+    // have fired yet immediately after close while the wedged tool call is
+    // still in flight. This is the assertion that fails against the current
+    // (undrained) code — there, `finish()` calls `finishCall` synchronously
+    // on `close`, with no wait at all.
+    expect(finishCallMock).not.toHaveBeenCalled();
+
+    // Still short of the 3000ms bound: still draining.
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(finishCallMock).not.toHaveBeenCalled();
+
+    // Crossing the bound: the drain gives up and finish proceeds with
+    // whatever state existed before the wedged tool call ever started.
+    await vi.advanceTimersByTimeAsync(1);
+    await lifecycleDone;
+
+    expect(finishCallMock).toHaveBeenCalledTimes(1);
+    const finalState = finishCallMock.mock.calls[0]![0];
+    expect(finalState.bookings).toEqual([]);
+  });
+});
+
 describe("runCallLifecycle — Important #4 ①: greeting payload", () => {
   it("default fake timers: the greeting timer sends the exact greeting instruction after open", async () => {
     vi.useFakeTimers();
@@ -309,17 +397,45 @@ describe("runCallLifecycle — Important #5: connect timeout", () => {
     vi.useFakeTimers();
     const { lifecycleDone, ws } = await startLifecycle();
     const terminateSpy = vi.fn();
+    const closeSpy = vi.fn();
     ws.terminate = terminateSpy;
+    ws.close = closeSpy;
     // No `ws.emit("open")` — the socket never comes up.
     await vi.advanceTimersByTimeAsync(15000);
     await lifecycleDone;
 
     expect(terminateSpy).toHaveBeenCalledOnce();
+    // Pin the intent: a dead socket is terminated, not ALSO closed —
+    // `ws.terminate?.() ?? ws.close()` calls both, since `??` only
+    // short-circuits on the left side's own return value being nullish, not
+    // on whether the call happened at all.
+    expect(closeSpy).not.toHaveBeenCalled();
     expect(finishCallMock).toHaveBeenCalledTimes(1);
     const finalState = finishCallMock.mock.calls[0]![0];
     expect(finalState.transcript).toEqual([]);
     expect(finalState.contactId).toBeNull();
     expect(finalState.bookings).toEqual([]);
+  });
+
+  it("open racing in AFTER the connect timeout must not arm greeting/cap timers on a dead socket", async () => {
+    vi.useFakeTimers();
+    const { lifecycleDone, ws } = await startLifecycle();
+    ws.terminate = vi.fn();
+    ws.send = vi.fn();
+
+    // The socket never comes up in time — connect-timeout fires, `finish()`
+    // runs and settles the call.
+    await vi.advanceTimersByTimeAsync(15000);
+    await lifecycleDone;
+
+    // `open` arrives late anyway — a real race between the timeout firing
+    // and the SIP leg finally coming up. Without the `settled` guard this
+    // would arm the greeting timer on a socket `finish()` already tore down.
+    ws.emit("open");
+    await vi.advanceTimersByTimeAsync(900); // past the default greeting delay
+
+    const calls = (ws.send as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.some((c) => String(c[0]).includes("response.create"))).toBe(false);
   });
 
   it("PHONE_CONNECT_TIMEOUT_MS is clamped to the 1000-60000 range", async () => {

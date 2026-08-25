@@ -155,8 +155,29 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       clearTimeout(closeTimer);
       clearTimeout(greetTimer);
       clearTimeout(connectTimer);
+
+      // Drain in-flight frames, but bounded: a wedged frame must not block
+      // the record forever (losing the row is worse than a slightly stale
+      // state). Without this, a frame mid-flight when the caller hangs up
+      // (e.g. a ~1s book_appointment tool call) is lost outright — `finish`
+      // used to read `state` immediately on `close`/`error`, so the call
+      // would record as `abandoned` (no staff alert, no bookingId) even
+      // though the booking landed a moment later. `state` below is read
+      // AFTER this drain, not before it, so that frame's effect survives.
+      await Promise.race([chain, new Promise((r) => setTimeout(r, 3000))]).catch(() => {});
+
       log("call ended", { callId, reason });
 
+      // Honesty note: when `reason` is "connect-timeout", `state` is still
+      // the pristine `emptyCallState()` — the WS never opened, so nothing
+      // was ever mirrored into it — so `classifyOutcome` (inside
+      // `finishCall`, see call-state.ts) reads this as outcome "spam" with
+      // `turn_count: 0`. That combination is the only signal this call ever
+      // existed at all; read it as "never connected", not literal abuse.
+      // Deliberately not a dedicated outcome value: `calls.outcome` carries
+      // a check constraint already applied in production, and widening it
+      // for one log-reading nuance isn't worth a migration.
+      //
       // finishCall is documented never-throws; this catch is belt-and-
       // suspenders against that contract changing out from under this route.
       try {
@@ -180,11 +201,17 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       : 15000;
     connectTimer = setTimeout(() => {
       log("call socket did not open in time — terminating", { callId, connectTimeoutMs });
-      ws.terminate?.() ?? ws.close();
+      ws.terminate();
       void finish("connect-timeout");
     }, connectTimeoutMs);
 
     ws.on("open", () => {
+      // `open` can race in AFTER a connect timeout already fired and settled
+      // the call (dead socket, `finishCall` already ran) — arming the
+      // greeting/cap timers on it would send audio into a socket nobody is
+      // listening to and double up the timer bookkeeping this `finish` call
+      // already tore down.
+      if (settled) return;
       clearTimeout(connectTimer);
       log("call socket open", { callId });
 
