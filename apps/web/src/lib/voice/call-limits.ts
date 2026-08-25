@@ -25,18 +25,21 @@ export function readLimitConfig(env: NodeJS.ProcessEnv = process.env): LimitConf
 }
 
 /**
- * Strictly-greater-than: the Nth call is still allowed, only the (N+1)th is
- * declined. `countCallsSince`/`countCallsByCallerSince` count rows already
- * started today (including THIS call, once its row exists) — but caps are
- * checked before `startCallRow` runs (flow step 8, before step 10), so the
- * count here is calls-before-this-one. A `perNumberPerDay: 5` config must
- * therefore let the 5th call through and decline the 6th, not the reverse.
+ * Non-strict (`>=`), NOT the demo's strictly-greater-than. The counts this
+ * takes are PRIOR-call counts: the route reads them (flow step 8) BEFORE
+ * `startCallRow` (step 10) ever writes a row for the call being decided, so
+ * they never include the call currently in flight — unlike the demo's
+ * INCR-then-check counter, which already counted the current call by the
+ * time it compared. That difference flips the boundary: with
+ * `perNumberPerDay: 5`, the 5th call of the day (4 priors) is still allowed;
+ * the 6th call (5 priors) is declined. Porting the demo's `>` here would be
+ * an off-by-one that let a 6th call through.
  */
 export function decideLimit(counts: { forNumber: number; forAccount: number }, cfg: LimitConfig): LimitVerdict {
   // Per-number first: it is the actionable, loggable reason — a single
   // caller hammering one line, not the account's overall volume.
-  if (counts.forNumber > cfg.perNumberPerDay) return { allowed: false, reason: "per-number" };
-  if (counts.forAccount > cfg.perAccountPerDay) return { allowed: false, reason: "per-account" };
+  if (counts.forNumber >= cfg.perNumberPerDay) return { allowed: false, reason: "per-number" };
+  if (counts.forAccount >= cfg.perAccountPerDay) return { allowed: false, reason: "per-account" };
   return { allowed: true };
 }
 

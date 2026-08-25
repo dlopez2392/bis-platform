@@ -106,6 +106,29 @@ export async function startCallRow(
   return { id: (data as { id: string }).id };
 }
 
+/**
+ * Deletes an unfinished call row — the accept-failure cleanup path in
+ * `/api/voice/incoming`: `startCallRow` fail-opens the call through even
+ * when the row write fails, but the reverse (a row exists, then the OpenAI
+ * accept call fails) must not leave that row behind. An unaccepted call was
+ * never actually answered, so its row must not litter the dashboard or
+ * count against the tenant's daily caps (`countCallsSince`/
+ * `countCallsByCallerSince` count every row regardless of outcome).
+ *
+ * Deliberately does NOT throw on a zero-row match, unlike `finishCallRow`/
+ * `setPhoneNumberStatus` above — those guard against a wrong id silently
+ * no-op'ing on a real bug, but this cleanup path must be idempotent: a
+ * retry, a race with another cleanup attempt, or a call row that never got
+ * written in the first place (`startCallRow` itself failed, fail-open) all
+ * mean "nothing to delete", which is success here, not an error.
+ */
+export async function deleteCallRow(
+  db: SupabaseClient, accountId: string, callId: string,
+): Promise<void> {
+  const { error } = await db.from("calls").delete().eq("id", callId).eq("account_id", accountId);
+  if (error) throw new Error(`deleteCallRow failed: ${error.message}`);
+}
+
 export async function finishCallRow(
   db: SupabaseClient, accountId: string, callId: string, patch: FinishCallPatch,
 ): Promise<void> {

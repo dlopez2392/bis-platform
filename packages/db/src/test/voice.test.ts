@@ -6,7 +6,7 @@ import {
   assignPhoneNumber, getPhoneNumberByE164, setPhoneNumberStatus,
   getVoiceProfile, upsertVoiceProfile,
   startCallRow, finishCallRow, countCallsSince, countCallsByCallerSince,
-  findUpcomingBookingForPhone, getBookingById,
+  findUpcomingBookingForPhone, getBookingById, deleteCallRow,
 } from "../voice";
 
 describe("voice accessors", () => {
@@ -49,6 +49,30 @@ describe("voice accessors", () => {
         outcome: "spam", endedAt: new Date(), durationSecs: 0, turnCount: 0,
         transcript: [], summary: "", language: "en",
       })).rejects.toThrow();
+    });
+  });
+
+  it("deleteCallRow: removes the row; deleting an already-gone id is not an error", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: "+19565550135" }, "user_test");
+      const { id } = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: "+19562921696" });
+
+      await deleteCallRow(db, accountId, id);
+      const { count } = await db.from("calls").select("id", { count: "exact", head: true }).eq("id", id);
+      expect(count).toBe(0);
+
+      // The accept-failure cleanup path in the route calls this from inside
+      // its own try/catch, but a delete that matches zero rows must not
+      // throw in the first place — cleanup for a call row that never got
+      // written (startCallRow itself failed, fail-open) or was already
+      // cleaned up by a previous attempt is "nothing to do", not an error.
+      // Unlike `setPhoneNumberStatus`/`finishCallRow` (which throw on a
+      // zero-row match because a wrong id there is a real bug), deletion is
+      // idempotent by design: deleting nothing IS the desired end state.
+      await expect(deleteCallRow(db, accountId, id)).resolves.toBeUndefined();
+      await expect(
+        deleteCallRow(db, accountId, "00000000-0000-0000-0000-000000000000"),
+      ).resolves.toBeUndefined();
     });
   });
 

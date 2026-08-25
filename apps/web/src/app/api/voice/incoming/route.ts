@@ -47,7 +47,7 @@ import OpenAI from "openai";
 import WebSocket from "ws";
 import {
   serviceDb, getPhoneNumberByE164, getVoiceProfile, countCallsSince, countCallsByCallerSince,
-  startCallRow, getOrCreateCalendar,
+  startCallRow, getOrCreateCalendar, deleteCallRow,
   type Branding,
 } from "@bis/db";
 import { extractCallerNumber, extractCalledNumber, sipHeaderNames } from "@/lib/voice/sip-headers";
@@ -133,9 +133,15 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
   let capTimer: NodeJS.Timeout | undefined;
   let closeTimer: NodeJS.Timeout | undefined;
   let greetTimer: NodeJS.Timeout | undefined;
+  let connectTimer: NodeJS.Timeout | undefined;
   let settled = false;
 
-  const ws = new WebSocket(`wss://api.openai.com/v1/realtime?call_id=${callId}`, {
+  // `callId` is server-controlled (OpenAI's own webhook payload, not a form
+  // field), but it still lands raw in a URL query string here — the same
+  // encodeURIComponent the accept endpoint above already applies, for the
+  // same reason: nothing guarantees its charset, and the tests exercise a
+  // callId with `/` and `?` in it.
+  const ws = new WebSocket(`wss://api.openai.com/v1/realtime?call_id=${encodeURIComponent(callId)}`, {
     headers: { Authorization: `Bearer ${apiKey}` },
   });
 
@@ -148,6 +154,7 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       clearTimeout(capTimer);
       clearTimeout(closeTimer);
       clearTimeout(greetTimer);
+      clearTimeout(connectTimer);
       log("call ended", { callId, reason });
 
       // finishCall is documented never-throws; this catch is belt-and-
@@ -160,7 +167,25 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       resolve();
     };
 
+    // Connect timeout: OpenAI's SIP `accept` can return 200 (the leg is
+    // RINGING — contract #2 in the file header) and the media socket can
+    // still never come up (bad network, a stalled SIP leg). Without this, a
+    // call that never opens hangs the `after()` background invocation for
+    // the full route `maxDuration` with nobody ever getting a `finishCall` —
+    // dead air for the caller AND the platform never learning the call
+    // happened at all. Cleared the moment `open` actually fires.
+    const connectRaw = Number(process.env.PHONE_CONNECT_TIMEOUT_MS);
+    const connectTimeoutMs = Number.isFinite(connectRaw)
+      ? Math.min(Math.max(connectRaw, 1000), 60000)
+      : 15000;
+    connectTimer = setTimeout(() => {
+      log("call socket did not open in time — terminating", { callId, connectTimeoutMs });
+      ws.terminate?.() ?? ws.close();
+      void finish("connect-timeout");
+    }, connectTimeoutMs);
+
     ws.on("open", () => {
+      clearTimeout(connectTimer);
       log("call socket open", { callId });
 
       // Delayed on purpose (contract #2 above): accepting a SIP call returns
@@ -182,7 +207,12 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       // Cost guardrail: hard cap on call length. On fire, ask the model for
       // a brief goodbye, then close the socket ~5s later to let it play out.
       const capRaw = Number(process.env.PHONE_MAX_CALL_SECONDS);
-      const maxSeconds = Number.isFinite(capRaw) && capRaw > 0 ? capRaw : 240;
+      const parsedOrDefault = Number.isFinite(capRaw) && capRaw > 0 ? capRaw : 240;
+      // Clamped to 280s, not the route's full `maxDuration = 300` ceiling
+      // (module top of this file): the goodbye response, the 5s close
+      // delay, and finishCall's own work all still need to land inside the
+      // remaining budget before Fluid Compute kills the invocation outright.
+      const maxSeconds = Math.min(parsedOrDefault, 280);
       capTimer = setTimeout(() => {
         log("call cap reached, sending goodbye", { callId, maxSeconds });
         try {
@@ -200,7 +230,30 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       }, maxSeconds * 1000);
     });
 
-    ws.on("message", async (raw) => {
+    // Serialized on purpose. `ws` never awaits its own event handlers — an
+    // `async (raw) => ...` listener directly on `.on("message", ...)` lets
+    // overlapping frames interleave: frame B's `processCallEvent` can finish
+    // and do `state = result.state` while frame A's is still awaiting a slow
+    // tool call, and when A finally resolves it does the SAME plain
+    // read-modify-write, computed from the `state` variable as it was
+    // BEFORE B ever landed — silently discarding whatever B did (a
+    // transcript line, a `contactId`, a booking mirror). This is the exact
+    // race class the reception demo's own lesson log calls out for any WS
+    // handler that reads then writes shared state across an `await`.
+    //
+    // Chaining every frame onto a running promise makes each one wait for
+    // the previous frame's full effects (the state write AND its outbound
+    // `ws.send`s) before it starts, restoring arrival order without
+    // blocking the event loop between frames — and because the listener
+    // itself never throws (the try/catch inside `handleMessage` swallows
+    // per-frame failures and logs them), the chain can never get stuck
+    // permanently rejected.
+    let chain: Promise<void> = Promise.resolve();
+    ws.on("message", (raw) => {
+      chain = chain.then(() => handleMessage(raw));
+    });
+
+    async function handleMessage(raw: WebSocket.RawData): Promise<void> {
       let event: any;
       try {
         event = JSON.parse(raw.toString());
@@ -217,7 +270,7 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       } catch (e) {
         log("error processing call event", { callId, type: event?.type, error: String(e) });
       }
-    });
+    }
 
     ws.on("close", (code, reason) => {
       void finish(`ws-close:${code}:${reason?.toString() ?? ""}`);
@@ -343,15 +396,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     };
     const sessionConfig = buildRealtimeSessionConfig(promptInput, now);
 
-    try {
-      await acceptCall(callId, apiKey, sessionConfig);
-    } catch (e) {
-      log("failed to accept call", { callId, error: String(e) });
-      return NextResponse.json({ ok: true });
-    }
-    log("call accepted", { callId });
-
-    // --- Step 12: schedule the call-scoped lifecycle, ack immediately -----
+    // --- Step 12: build the call-scoped contexts BEFORE accepting --------
+    // Deliberately built here, ahead of `acceptCall`, rather than after it
+    // succeeds: once the call IS accepted, `after(...)` must be the very
+    // next statement (see below) with zero statements in between that could
+    // throw and leave a live, accepted call with nobody talking to it.
+    // Building contexts first means the only thing left to do after a
+    // successful accept is schedule the lifecycle.
     const branding: Branding = {
       brandName: accountRow.brand_name, brandLogoPath: accountRow.brand_logo_path,
       brandColor: accountRow.brand_color, brandNeutral: accountRow.brand_neutral,
@@ -375,6 +426,27 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       profileLanguage: profile.languages,
     };
 
+    // --- Step 13: accept the call, then IMMEDIATELY schedule the lifecycle
+    try {
+      await acceptCall(callId, apiKey, sessionConfig);
+    } catch (e) {
+      log("failed to accept call", { callId, error: String(e) });
+      // Important #2: an unaccepted call was never actually answered — its
+      // row (opened fail-open at step 10, before we knew accept would
+      // succeed) must not litter the dashboard or count against the
+      // tenant's daily caps. Its own try/catch: a cleanup failure logs and
+      // never changes the 200 ack below — this webhook never surfaces a
+      // stray 5xx (file header).
+      if (callRowId) {
+        try {
+          await deleteCallRow(db, accountId, callRowId);
+        } catch (cleanupErr) {
+          log("accept-failure cleanup: deleteCallRow failed", { callId, callRowId, error: String(cleanupErr) });
+        }
+      }
+      return NextResponse.json({ ok: true });
+    }
+    log("call accepted", { callId });
     after(() => runCallLifecycle({ callId, apiKey, greeting, callRowId, startedAt: now, toolCtx, finishCtx }));
 
     return NextResponse.json({ ok: true });

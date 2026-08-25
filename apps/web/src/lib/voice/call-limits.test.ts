@@ -23,20 +23,28 @@ describe("readLimitConfig", () => {
 });
 
 describe("decideLimit", () => {
+  // Counts are PRIOR-call counts: the route reads them BEFORE `startCallRow`
+  // writes a row for the call currently being decided (flow step 8, before
+  // step 10), so they never include the current call. A `perNumberPerDay: 5`
+  // config means "5 prior calls today are still fine" — the 5th call of the
+  // day (which sees 4 priors) is allowed, and the 6th call (which sees 5
+  // priors) is declined. That is a `>=` boundary on the prior-count, not the
+  // demo's INCR-then-check `>` (which would have been correct only if the
+  // count already included the call being decided).
   it("allows a caller comfortably under both caps", () => {
     expect(decideLimit({ forNumber: 1, forAccount: 1 }, cfg)).toEqual({ allowed: true });
   });
-  it("strictly-greater-than: the 5th call for a number is still allowed", () => {
-    expect(decideLimit({ forNumber: 5, forAccount: 10 }, cfg)).toEqual({ allowed: true });
+  it("4 priors for a number (the 5th call of the day) is still allowed", () => {
+    expect(decideLimit({ forNumber: 4, forAccount: 10 }, cfg)).toEqual({ allowed: true });
   });
-  it("strictly-greater-than: the 6th call for a number is declined", () => {
-    expect(decideLimit({ forNumber: 6, forAccount: 10 }, cfg)).toEqual({ allowed: false, reason: "per-number" });
+  it("5 priors for a number (the 6th call of the day) is declined", () => {
+    expect(decideLimit({ forNumber: 5, forAccount: 10 }, cfg)).toEqual({ allowed: false, reason: "per-number" });
   });
-  it("the 50th call for an account is still allowed", () => {
-    expect(decideLimit({ forNumber: 1, forAccount: 50 }, cfg)).toEqual({ allowed: true });
+  it("49 priors for an account (the 50th call of the day) is still allowed", () => {
+    expect(decideLimit({ forNumber: 1, forAccount: 49 }, cfg)).toEqual({ allowed: true });
   });
-  it("the 51st call for an account is declined", () => {
-    expect(decideLimit({ forNumber: 1, forAccount: 51 }, cfg)).toEqual({ allowed: false, reason: "per-account" });
+  it("50 priors for an account (the 51st call of the day) is declined", () => {
+    expect(decideLimit({ forNumber: 1, forAccount: 50 }, cfg)).toEqual({ allowed: false, reason: "per-account" });
   });
   it("per-number reason wins when both caps are exceeded", () => {
     expect(decideLimit({ forNumber: 99, forAccount: 99 }, cfg)).toEqual({ allowed: false, reason: "per-number" });

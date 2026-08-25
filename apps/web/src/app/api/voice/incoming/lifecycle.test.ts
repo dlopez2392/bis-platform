@@ -1,0 +1,365 @@
+// Coverage for `runCallLifecycle` — the call-scoped WS loop inside
+// `route.ts`. It has no exported symbol of its own (deliberately: it is
+// wired up entirely through `after(() => runCallLifecycle(...))`), so these
+// tests drive it exactly the way production does: POST the webhook, capture
+// the callback `after()` was given, and invoke that callback ourselves to
+// start the lifecycle against a fake, fully-controllable `ws` socket.
+//
+// route.test.ts owns the request-handling surface (steps 1–13, accept
+// success/failure, caps, accounts query). This file owns everything that
+// only happens AFTER a successful accept: the WS message race (Critical #1),
+// the connect timeout and cap-seconds clamp (Important #5), the greeting
+// timer's actual payload (Important #4 ①), and the WS URL's call-id encoding
+// (the Minors list).
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+// --- ws: a minimal hand-rolled emitter standing in for the socket, so tests
+// can fire open/message/close/error exactly like the real `ws` package
+// would, and assert on `send`/`close`/`terminate` calls. `vi.hoisted`
+// because `vi.mock` factories are hoisted above all other module-level code
+// (same reasoning as `actions.test.ts`'s `MockSlotTakenError`) — a plain
+// `class` declared below the `vi.mock` call would be a TDZ error the moment
+// the factory runs. This does NOT use node's own `EventEmitter`: an
+// `import { EventEmitter } from "node:events"` binding is itself hoisted
+// BELOW `vi.hoisted`'s callback by the same transform, so referencing it in
+// here would trip the identical TDZ error one layer down — a plain
+// listener-array emitter sidesteps needing any import at all.
+const { FakeWebSocket, fakeSockets } = vi.hoisted(() => {
+  class MiniEmitter {
+    private listeners: Record<string, Array<(...args: any[]) => void>> = {};
+    on(event: string, fn: (...args: any[]) => void) {
+      (this.listeners[event] ??= []).push(fn);
+      return this;
+    }
+    emit(event: string, ...args: any[]) {
+      for (const fn of this.listeners[event] ?? []) fn(...args);
+      return true;
+    }
+  }
+  class FakeWebSocket extends MiniEmitter {
+    url: string;
+    opts: unknown;
+    send = () => {};
+    close = () => {};
+    terminate = () => {};
+    constructor(url: string, opts: unknown) {
+      super();
+      this.url = url;
+      this.opts = opts;
+    }
+  }
+  return { FakeWebSocket, fakeSockets: { instances: [] as InstanceType<typeof FakeWebSocket>[] } };
+});
+vi.mock("ws", () => ({
+  default: class extends FakeWebSocket {
+    constructor(url: string, opts: unknown) {
+      super(url, opts);
+      fakeSockets.instances.push(this);
+    }
+  },
+}));
+
+// --- openai: fully mocked, same as route.test.ts. --------------------------
+const unwrapMock = vi.hoisted(() => vi.fn());
+vi.mock("openai", () => ({
+  default: class {
+    webhooks = { unwrap: (...a: unknown[]) => unwrapMock(...a) };
+  },
+}));
+
+// --- next/server: `after` becomes a recorder we invoke ourselves. ----------
+const afterMock = vi.hoisted(() => vi.fn());
+vi.mock("next/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/server")>();
+  return { ...actual, after: (cb: () => unknown) => afterMock(cb) };
+});
+
+// --- @/lib/voice/finish-call: mocked so the lifecycle's terminal call is a
+// spy, and its `state` argument is inspectable — the whole point of the
+// Critical #1 race test. -----------------------------------------------
+const finishCallMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/voice/finish-call", () => ({ finishCall: (...a: unknown[]) => finishCallMock(...a) }));
+
+// --- @/lib/voice/tools/registry: `runTool` mocked so one test can make a
+// function-call event's processing arbitrarily slow (a controllable
+// deferred promise) without a real tool doing real DB/email work. ----------
+const runToolMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/voice/tools/registry", () => ({ runTool: (...a: unknown[]) => runToolMock(...a) }));
+
+// --- @bis/db: minimal — just enough to reach a successful accept. ----------
+const getPhoneNumberByE164Mock = vi.hoisted(() => vi.fn());
+const getVoiceProfileMock = vi.hoisted(() => vi.fn());
+vi.mock("@bis/db", () => ({
+  serviceDb: () => ({
+    from: () => ({
+      select: (cols: string) => ({
+        eq: () => ({
+          single: async () => {
+            const row = {
+              name: "Rio Roofing", timezone: "America/Chicago",
+              brand_name: "Rio Roofing Co", brand_logo_path: null, brand_color: null,
+              brand_neutral: null, brand_corners: null, brand_type: null, brand_mode: null,
+              reply_to_email: null, from_email: null,
+            };
+            const wanted = cols.split(",").map((c) => c.trim());
+            return { data: Object.fromEntries(Object.entries(row).filter(([k]) => wanted.includes(k))), error: null };
+          },
+        }),
+      }),
+    }),
+  }),
+  getPhoneNumberByE164: (...a: unknown[]) => getPhoneNumberByE164Mock(...a),
+  getVoiceProfile: (...a: unknown[]) => getVoiceProfileMock(...a),
+  countCallsSince: vi.fn().mockResolvedValue(0),
+  countCallsByCallerSince: vi.fn().mockResolvedValue(0),
+  startCallRow: vi.fn().mockResolvedValue({ id: "call-row-1" }),
+  getOrCreateCalendar: vi.fn().mockResolvedValue({
+    id: "cal1", account_id: "acct1", public_id: "cal_pub1", enabled: true,
+    slot_duration_minutes: 30, buffer_minutes: 0, min_notice_hours: 1, max_advance_days: 14,
+    open_hours: {}, notify_emails: ["staff@rio.example"],
+  }),
+  deleteCallRow: vi.fn(),
+}));
+
+import { POST } from "./route";
+
+const PHONE_ROW = { id: "pn1", account_id: "acct1", e164: "+19565550999", telnyx_id: null, status: "live" as const };
+const PROFILE_ROW = {
+  id: "vp1", account_id: "acct1", persona_name: "Sofía",
+  greeting_en: "Hi, thanks for calling Rio Roofing.", greeting_es: "Hola, gracias por llamar.",
+  facts: "-", services: "-", languages: "en" as const, booking_enabled: true,
+  after_hours: "hours_then_message" as const, enabled: true,
+};
+
+function callIncomingEvent(callId = "call_abc123") {
+  return {
+    id: "evt_1", created_at: Math.floor(Date.now() / 1000), type: "realtime.call.incoming",
+    data: {
+      call_id: callId,
+      sip_headers: [
+        { name: "From", value: "sip:+19562921696@sip.example.com" },
+        { name: "X-BIS-Called", value: "+19565550999" },
+      ],
+    },
+  };
+}
+
+function req(): Request {
+  return new Request("https://x.example/api/voice/incoming", {
+    method: "POST",
+    headers: { "webhook-id": "id", "webhook-timestamp": "1", "webhook-signature": "v1,irrelevant" },
+    body: "raw-body-not-inspected-because-unwrap-is-mocked",
+  }) as unknown as Request;
+}
+
+/** Runs the webhook happy path, then invokes the callback `after()` was
+ *  given — exactly what production's background execution does — and
+ *  returns both the resulting lifecycle promise (resolves once `finish()`
+ *  runs) and the fake socket the route constructed. */
+async function startLifecycle(callId = "call_abc123"): Promise<{ lifecycleDone: Promise<void>; ws: InstanceType<typeof FakeWebSocket> }> {
+  unwrapMock.mockResolvedValue(callIncomingEvent(callId));
+  const res = await POST(req() as any);
+  expect(res.status).toBe(200);
+  expect(afterMock).toHaveBeenCalledOnce();
+  const cb = afterMock.mock.calls[0]![0] as () => Promise<void>;
+  const lifecycleDone = cb();
+  const ws = fakeSockets.instances[fakeSockets.instances.length - 1]!;
+  return { lifecycleDone, ws };
+}
+
+/** Drains the microtask queue generously rather than hand-counting `await`
+ *  hops — `handleMessage` → `processCallEvent` → `runTool` is 3 layers of
+ *  async-function unwinding, each of which costs its own microtask tick to
+ *  propagate a resolution up, and hand-counting is exactly the kind of
+ *  fragile-by-construction thing worth avoiding in a race-condition test. */
+async function flushMicrotasks(times = 20): Promise<void> {
+  for (let i = 0; i < times; i++) await Promise.resolve();
+}
+
+const fetchMock = vi.hoisted(() => vi.fn());
+
+beforeEach(() => {
+  process.env.OPENAI_WEBHOOK_SECRET = "whsec_test";
+  process.env.OPENAI_API_KEY = "sk-test";
+  delete process.env.PHONE_GREETING_DELAY_MS;
+  delete process.env.PHONE_MAX_CALL_SECONDS;
+  delete process.env.PHONE_CONNECT_TIMEOUT_MS;
+
+  unwrapMock.mockReset();
+  afterMock.mockReset();
+  finishCallMock.mockReset().mockResolvedValue({ stored: true, notified: false, outcome: "abandoned" });
+  runToolMock.mockReset();
+  getPhoneNumberByE164Mock.mockReset().mockResolvedValue(PHONE_ROW);
+  getVoiceProfileMock.mockReset().mockResolvedValue(PROFILE_ROW);
+  fetchMock.mockReset().mockResolvedValue({ ok: true, text: async () => "" });
+  vi.stubGlobal("fetch", fetchMock);
+  fakeSockets.instances.length = 0;
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("runCallLifecycle — Critical #1: serialized message handling", () => {
+  it("overlapping frames process in arrival order — a slow function-call never clobbers a transcript event that lands mid-flight", async () => {
+    vi.useFakeTimers();
+    const { lifecycleDone, ws } = await startLifecycle();
+    ws.emit("open");
+
+    let resolveTool!: () => void;
+    const toolGate = new Promise<void>((resolve) => { resolveTool = resolve; });
+    runToolMock.mockImplementation(async (state: any) => {
+      await toolGate;
+      return { state: { ...state, contactId: "contact-from-tool" }, result: { ok: true } };
+    });
+
+    // Frame 1: a function-call event whose tool processing is deliberately
+    // gated open — this is the "slow await mid-read-modify-write" window
+    // the race lives in.
+    ws.emit("message", JSON.stringify({
+      type: "response.function_call_arguments.done",
+      name: "capture_lead", call_id: "fc1", arguments: "{}",
+    }));
+    // Frame 2: arrives immediately behind frame 1, and — unlike frame 1 —
+    // has nothing to await, so under the OLD unserialized handler it would
+    // finish and overwrite `state` LONG before frame 1's tool call resolves.
+    ws.emit("message", JSON.stringify({
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "call me back at three",
+    }));
+
+    // Let any microtasks that don't depend on the gate settle. Frame 2 must
+    // NOT have applied yet — with the fix, it can't even start until frame
+    // 1's handler fully resolves.
+    await flushMicrotasks();
+
+    resolveTool();
+    // Drain the chain fully: frame 1's promise (handleMessage → processCallEvent
+    // → runTool) needs several microtask hops to unwind after the gate opens,
+    // and only once that settles does frame 2 even get SCHEDULED (chained off
+    // frame 1's completion) — flush generously rather than hand-count hops.
+    await flushMicrotasks();
+
+    ws.emit("close", 1000, Buffer.from("done"));
+    await lifecycleDone;
+
+    expect(finishCallMock).toHaveBeenCalledTimes(1);
+    const finalState = finishCallMock.mock.calls[0]![0];
+    // Frame 1's effect (the mirrored tool write) survived...
+    expect(finalState.contactId).toBe("contact-from-tool");
+    // ...AND frame 2's effect (the transcript entry) survived alongside it —
+    // this is the assertion that fails under the old last-write-wins handler,
+    // because frame 1's `state = result.state` (computed from state as it
+    // was BEFORE frame 2 ever landed) would otherwise overwrite frame 2's
+    // addition on arrival.
+    expect(finalState.transcript.some((t: any) => t.text === "call me back at three")).toBe(true);
+  });
+});
+
+describe("runCallLifecycle — cap/error idempotency", () => {
+  it("both close and error firing for the same socket still calls finishCall exactly once", async () => {
+    const { lifecycleDone, ws } = await startLifecycle();
+    ws.emit("close", 1000, Buffer.from(""));
+    ws.emit("error", new Error("boom"));
+    await lifecycleDone;
+    expect(finishCallMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("runCallLifecycle — Important #4 ①: greeting payload", () => {
+  it("default fake timers: the greeting timer sends the exact greeting instruction after open", async () => {
+    vi.useFakeTimers();
+    const { ws } = await startLifecycle();
+    ws.send = vi.fn();
+    ws.emit("open");
+    await vi.advanceTimersByTimeAsync(900);
+    const calls = (ws.send as ReturnType<typeof vi.fn>).mock.calls;
+    const greetingCall = calls.find((c) => String(c[0]).includes("Greet the caller with exactly:"));
+    expect(greetingCall).toBeDefined();
+    expect(String(greetingCall![0])).toContain("Hi, thanks for calling Rio Roofing.");
+  });
+
+  it("languages: es → the greeting timer sends greeting_es", async () => {
+    vi.useFakeTimers();
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, languages: "es" });
+    const { ws } = await startLifecycle();
+    ws.send = vi.fn();
+    ws.emit("open");
+    await vi.advanceTimersByTimeAsync(900);
+    const calls = (ws.send as ReturnType<typeof vi.fn>).mock.calls;
+    const greetingCall = calls.find((c) => String(c[0]).includes("Greet the caller with exactly:"));
+    expect(String(greetingCall![0])).toContain("Hola, gracias por llamar.");
+  });
+
+  it("both greeting_en and greeting_es blank → falls back to the generic greeting naming the account", async () => {
+    vi.useFakeTimers();
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, greeting_en: "  ", greeting_es: "" });
+    const { ws } = await startLifecycle();
+    ws.send = vi.fn();
+    ws.emit("open");
+    await vi.advanceTimersByTimeAsync(900);
+    const calls = (ws.send as ReturnType<typeof vi.fn>).mock.calls;
+    const greetingCall = calls.find((c) => String(c[0]).includes("Greet the caller with exactly:"));
+    expect(String(greetingCall![0])).toContain("Thanks for calling Rio Roofing. How can I help you today?");
+  });
+});
+
+describe("runCallLifecycle — Important #5: connect timeout", () => {
+  it("no open within the timeout → terminates the socket and calls finishCall once with the empty state", async () => {
+    vi.useFakeTimers();
+    const { lifecycleDone, ws } = await startLifecycle();
+    const terminateSpy = vi.fn();
+    ws.terminate = terminateSpy;
+    // No `ws.emit("open")` — the socket never comes up.
+    await vi.advanceTimersByTimeAsync(15000);
+    await lifecycleDone;
+
+    expect(terminateSpy).toHaveBeenCalledOnce();
+    expect(finishCallMock).toHaveBeenCalledTimes(1);
+    const finalState = finishCallMock.mock.calls[0]![0];
+    expect(finalState.transcript).toEqual([]);
+    expect(finalState.contactId).toBeNull();
+    expect(finalState.bookings).toEqual([]);
+  });
+
+  it("PHONE_CONNECT_TIMEOUT_MS is clamped to the 1000-60000 range", async () => {
+    vi.useFakeTimers();
+    process.env.PHONE_CONNECT_TIMEOUT_MS = "500"; // below the 1000 floor
+    const { lifecycleDone, ws } = await startLifecycle();
+    ws.terminate = vi.fn();
+    // Advancing only to just under the clamped floor (1000ms) must NOT fire.
+    await vi.advanceTimersByTimeAsync(999);
+    expect(finishCallMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2);
+    await lifecycleDone;
+    expect(finishCallMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("runCallLifecycle — Important #5: cap-seconds clamp", () => {
+  it("PHONE_MAX_CALL_SECONDS above 280 is clamped to 280, not the route's 300s maxDuration", async () => {
+    vi.useFakeTimers();
+    process.env.PHONE_MAX_CALL_SECONDS = "500";
+    const { ws } = await startLifecycle();
+    ws.send = vi.fn();
+    ws.emit("open");
+
+    // Just under the clamp: no goodbye yet.
+    await vi.advanceTimersByTimeAsync(279_000);
+    expect((ws.send as ReturnType<typeof vi.fn>).mock.calls
+      .some((c) => String(c[0]).includes("brief goodbye"))).toBe(false);
+
+    // Crossing 280s (not the configured 500s) fires the goodbye.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect((ws.send as ReturnType<typeof vi.fn>).mock.calls
+      .some((c) => String(c[0]).includes("brief goodbye"))).toBe(true);
+  });
+});
+
+describe("runCallLifecycle — Minor: WS URL call-id encoding", () => {
+  it("encodeURIComponents the call id into the realtime WS URL", async () => {
+    const { ws } = await startLifecycle("call/with special?chars");
+    expect(ws.url).toContain(encodeURIComponent("call/with special?chars"));
+    expect(ws.url).not.toContain("call/with special?chars");
+  });
+});

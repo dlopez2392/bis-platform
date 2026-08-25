@@ -36,6 +36,12 @@ const countCallsSinceMock = vi.hoisted(() => vi.fn());
 const countCallsByCallerSinceMock = vi.hoisted(() => vi.fn());
 const startCallRowMock = vi.hoisted(() => vi.fn());
 const getOrCreateCalendarMock = vi.hoisted(() => vi.fn());
+const deleteCallRowMock = vi.hoisted(() => vi.fn());
+// Records the route's own inline `accounts` select so a test can assert the
+// query actually hit `accounts` filtered by the resolved account id, not
+// just that SOME `.select().eq().single()` chain was called — a mock that
+// ignored its own arguments would pass under a query aimed at any table.
+const dbQuerySpy = vi.hoisted(() => ({ fromCalls: [] as string[], eqCalls: [] as [string, unknown][] }));
 
 /** The account row behind the route's own inline `accounts` select. Every
  *  column below is distinctive so an assertion on it only passes if the
@@ -50,19 +56,25 @@ const accountRow = {
 
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({
-    from: () => ({
-      select: (cols: string) => ({
-        eq: () => ({
-          single: async () => {
-            const wanted = cols.split(",").map((c) => c.trim());
+    from: (table: string) => {
+      dbQuerySpy.fromCalls.push(table);
+      return {
+        select: (cols: string) => ({
+          eq: (col: string, val: unknown) => {
+            dbQuerySpy.eqCalls.push([col, val]);
             return {
-              data: Object.fromEntries(Object.entries(accountRow).filter(([key]) => wanted.includes(key))),
-              error: null,
+              single: async () => {
+                const wanted = cols.split(",").map((c) => c.trim());
+                return {
+                  data: Object.fromEntries(Object.entries(accountRow).filter(([key]) => wanted.includes(key))),
+                  error: null,
+                };
+              },
             };
           },
         }),
-      }),
-    }),
+      };
+    },
   }),
   getPhoneNumberByE164: (...a: unknown[]) => getPhoneNumberByE164Mock(...a),
   getVoiceProfile: (...a: unknown[]) => getVoiceProfileMock(...a),
@@ -70,6 +82,7 @@ vi.mock("@bis/db", () => ({
   countCallsByCallerSince: (...a: unknown[]) => countCallsByCallerSinceMock(...a),
   startCallRow: (...a: unknown[]) => startCallRowMock(...a),
   getOrCreateCalendar: (...a: unknown[]) => getOrCreateCalendarMock(...a),
+  deleteCallRow: (...a: unknown[]) => deleteCallRowMock(...a),
 }));
 
 import { POST } from "./route";
@@ -128,6 +141,9 @@ beforeEach(() => {
   countCallsByCallerSinceMock.mockReset().mockResolvedValue(1);
   startCallRowMock.mockReset().mockResolvedValue({ id: "call-row-1" });
   getOrCreateCalendarMock.mockReset().mockResolvedValue(CALENDAR_ROW);
+  deleteCallRowMock.mockReset().mockResolvedValue(undefined);
+  dbQuerySpy.fromCalls.length = 0;
+  dbQuerySpy.eqCalls.length = 0;
 
   fetchMock.mockReset().mockResolvedValue({ ok: true, text: async () => "" });
   vi.stubGlobal("fetch", fetchMock);
@@ -217,9 +233,13 @@ describe("POST /api/voice/incoming — step 7: voice profile", () => {
 });
 
 describe("POST /api/voice/incoming — step 8: call caps", () => {
-  it("6 calls for this number today (default cap 5) → declined per-number", async () => {
+  it("5 prior calls for this number today (default cap 5) → declined per-number", async () => {
+    // Counts are PRIOR-call counts (call-limits.ts's `decideLimit` doc
+    // comment): the caps read happens before `startCallRow` ever writes a
+    // row for THIS call, so 5 priors is the 6th call of the day, which is
+    // the one that should be declined — 6 here would have been off by one.
     unwrapMock.mockResolvedValue(callIncomingEvent());
-    countCallsByCallerSinceMock.mockResolvedValue(6);
+    countCallsByCallerSinceMock.mockResolvedValue(5);
     const res = await POST(req() as any);
     expect(await res.json()).toEqual({ ok: true, declined: "per-number" });
     expect(fetchMock).not.toHaveBeenCalled();
@@ -269,6 +289,36 @@ describe("POST /api/voice/incoming — happy path", () => {
     const [url] = fetchMock.mock.calls[0]!;
     expect(String(url)).toContain(encodeURIComponent("call/with special?chars"));
   });
+
+  // Important #4 ②: wiring shapes — asserted here rather than re-deriving
+  // them from mock internals, so a future refactor that silently drops an
+  // argument (e.g. forgetting the "voice"/"ai" actor pair on the calendar
+  // lookup) fails a test instead of only showing up as a wrong-actor row in
+  // production. `expect.anything()` stands in for the `db` positional arg —
+  // asserting its literal shape would just be re-testing this file's own
+  // `serviceDb()` mock, not the route's behavior.
+  it("startCallRow and getOrCreateCalendar are called with the documented shapes", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req() as any);
+    expect(startCallRowMock).toHaveBeenCalledWith(
+      expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696" },
+    );
+    expect(getOrCreateCalendarMock).toHaveBeenCalledWith(expect.anything(), "acct1", "voice", "ai");
+  });
+});
+
+// Minor: the route's own inline `accounts` select (there is no `@bis/db`
+// accessor for it — see the file header's ACCOUNT_COLS comment) is trivial
+// to assert nothing about if the mock ignores its own call arguments. This
+// tightens the mock (see the `dbQuerySpy` definition above) so the test can
+// require the query to have actually hit `accounts` filtered by `id`.
+describe("POST /api/voice/incoming — accounts query", () => {
+  it("selects from accounts filtered by the resolved account id", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req() as any);
+    expect(dbQuerySpy.fromCalls).toContain("accounts");
+    expect(dbQuerySpy.eqCalls).toContainEqual(["id", "acct1"]);
+  });
 });
 
 describe("POST /api/voice/incoming — step 11: accept failure", () => {
@@ -287,5 +337,36 @@ describe("POST /api/voice/incoming — step 11: accept failure", () => {
     const res = await POST(req() as any);
     expect(res.status).toBe(200);
     expect(afterMock).not.toHaveBeenCalled();
+  });
+
+  // Important #2: an unaccepted call must not litter the dashboard or count
+  // against the tenant's daily caps — both `countCallsSince` (this route)
+  // and the dashboard's own call list have no other filter for "was this
+  // ever actually answered".
+  it("accept failure with a call row already open → deletes that row", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    fetchMock.mockResolvedValue({ ok: false, status: 500, text: async () => "boom" });
+    const res = await POST(req() as any);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(deleteCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", "call-row-1");
+  });
+
+  it("accept failure with NO call row (startCallRow itself had failed) → cleanup skipped, not called with null", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    startCallRowMock.mockRejectedValue(new Error("db down"));
+    fetchMock.mockResolvedValue({ ok: false, status: 500, text: async () => "boom" });
+    const res = await POST(req() as any);
+    expect(res.status).toBe(200);
+    expect(deleteCallRowMock).not.toHaveBeenCalled();
+  });
+
+  it("cleanup delete itself throwing → still 200 ack, never surfaces as a 5xx", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    fetchMock.mockResolvedValue({ ok: false, status: 500, text: async () => "boom" });
+    deleteCallRowMock.mockRejectedValue(new Error("row already gone"));
+    const res = await POST(req() as any);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
   });
 });
