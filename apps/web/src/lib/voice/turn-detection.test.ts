@@ -19,4 +19,12 @@ describe("readTurnDetection", () => {
     expect(readTurnDetection({ PHONE_VAD_EAGERNESS: "warp" } as any))
       .toMatchObject({ type: "semantic_vad", eagerness: "medium" });
   });
+  it("blank env vars fall back to defaults, not 0", () => {
+    expect(readTurnDetection({
+      PHONE_TURN_DETECTION: "server", PHONE_VAD_THRESHOLD: "", PHONE_VAD_SILENCE_MS: "   ",
+    } as any)).toEqual({
+      type: "server_vad", threshold: 0.6, prefix_padding_ms: 300, silence_duration_ms: 800,
+      create_response: true, interrupt_response: true,
+    });
+  });
 });

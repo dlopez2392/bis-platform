@@ -34,6 +34,7 @@ export function classifyOutcome(state: CallState): CallOutcome {
 
 export function withBooking(state: CallState, b: MirroredBooking): CallState {
   const booking = { ...b, status: "booked" as const };
+  // If replacing an existing booking, it moves to the array's end; order is not load-bearing.
   return { ...state, bookings: [...state.bookings.filter((x) => x.id !== b.id), booking] };
 }
 

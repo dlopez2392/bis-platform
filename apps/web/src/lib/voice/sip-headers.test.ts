@@ -16,6 +16,9 @@ describe("extractCallerNumber", () => {
       expect(extractCallerNumber(bad)).toBeNull();
     }
   });
+  it("7-digit local number rejects (toE164 enforces 8+ digits)", () => {
+    expect(extractCallerNumber(ev([{ name: "From", value: "<sip:5551234@x>" }]))).toBeNull();
+  });
 });
 
 describe("extractCalledNumber", () => {
@@ -30,6 +33,11 @@ describe("extractCalledNumber", () => {
   it("a To that is only the OpenAI SIP URI (no number) → null", () => {
     expect(extractCalledNumber(ev([{ name: "To", value: "<sip:proj_abc@sip.api.openai.com;transport=tls>" }]))).toBeNull();
   });
+  it("degenerate inputs → null", () => {
+    for (const bad of [null, undefined, {}, { sip_headers: "nope" }, { sip_headers: [] }, 42, { sip_headers: [null] }]) {
+      expect(extractCalledNumber(bad)).toBeNull();
+    }
+  });
 });
 
 describe("sipHeaderNames", () => {
@@ -37,5 +45,9 @@ describe("sipHeaderNames", () => {
     expect(sipHeaderNames(ev([{ name: "From", value: "SECRET" }, { name: "To", value: "SECRET" }])))
       .toEqual(["From", "To"]);
     expect(sipHeaderNames({})).toEqual([]);
+  });
+  it("skips headers with non-string names", () => {
+    expect(sipHeaderNames(ev([{ name: {}, value: "x" }, { name: "To", value: "y" }] as any)))
+      .toEqual(["To"]);
   });
 });

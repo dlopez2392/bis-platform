@@ -15,6 +15,7 @@ const EAGERNESS: Eagerness[] = ["low", "medium", "high", "auto"];
 const DEFAULTS = { eagerness: "medium" as Eagerness, silenceMs: 800, thresholdRaw: 0.6, prefixPaddingMs: 300 };
 
 function num(raw: string | undefined, fallback: number, min: number, max: number): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
   const n = Number(raw);
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, n));
