@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
-import { getOrCreateCalendar, createBooking } from "../booking";
+import { getOrCreateCalendar, createBooking, setBookingStatus } from "../booking";
 import {
   assignPhoneNumber, getPhoneNumberByE164, setPhoneNumberStatus,
   getVoiceProfile, upsertVoiceProfile,
@@ -64,6 +64,28 @@ describe("voice accessors", () => {
     });
   });
 
+  it("setPhoneNumberStatus and upsertVoiceProfile thread actorType through to events", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const row = await assignPhoneNumber(db, accountId, { e164: "+19565550140" }, "voice", "ai");
+      await setPhoneNumberStatus(db, accountId, row.id, "testing", "voice", "ai");
+      await upsertVoiceProfile(db, accountId, { greeting_en: "Hi" }, "voice", "ai");
+      const { data: ev } = await db.from("events").select("type, actor_type")
+        .eq("account_id", accountId);
+      // Should have three events: phone_number.assigned, phone_number.status_changed, voice_profile.updated
+      expect(ev).toBeDefined();
+      const events = ev ?? [];
+      const assigned = events.filter((e: any) => e.type === "phone_number.assigned");
+      const statusChanged = events.filter((e: any) => e.type === "phone_number.status_changed");
+      const profileUpdated = events.filter((e: any) => e.type === "voice_profile.updated");
+      expect(assigned).toHaveLength(1);
+      expect(assigned[0]!.actor_type).toBe("ai");
+      expect(statusChanged).toHaveLength(1);
+      expect(statusChanged[0]!.actor_type).toBe("ai");
+      expect(profileUpdated).toHaveLength(1);
+      expect(profileUpdated[0]!.actor_type).toBe("ai");
+    });
+  });
+
   it("findUpcomingBookingForPhone: matches contact phone, skips past and cancelled", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
@@ -74,6 +96,10 @@ describe("voice accessors", () => {
         startsAt: new Date("2027-04-30T15:00:00Z"), endsAt: new Date("2027-04-30T16:00:00Z") }, "user_test"); // past
       const future = await createBooking(db, accountId, { calendarId: cal.id, contactId,
         startsAt: new Date("2027-05-03T15:00:00Z"), endsAt: new Date("2027-05-03T16:00:00Z") }, "user_test");
+      // Add a cancelled booking earlier than future, but still in the future
+      const cancelled = await createBooking(db, accountId, { calendarId: cal.id, contactId,
+        startsAt: new Date("2027-05-02T15:00:00Z"), endsAt: new Date("2027-05-02T16:00:00Z") }, "user_test");
+      await setBookingStatus(db, accountId, cancelled.id, "cancelled", "user_test");
       const hit = await findUpcomingBookingForPhone(db, accountId, "+19565550130", now.toISOString());
       expect(hit).toMatchObject({ bookingId: future.id });
       expect(await findUpcomingBookingForPhone(db, accountId, "+19999999998", now.toISOString())).toBeNull();

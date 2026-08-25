@@ -54,7 +54,7 @@ export async function assignPhoneNumber(
 
 export async function setPhoneNumberStatus(
   db: SupabaseClient, accountId: string, phoneNumberId: string,
-  status: PhoneNumberStatus, actorId: string,
+  status: PhoneNumberStatus, actorId: string, actorType: ActorType = "user",
 ): Promise<void> {
   const { data, error } = await db.from("phone_numbers")
     .update({ status, updated_at: new Date().toISOString() })
@@ -63,7 +63,7 @@ export async function setPhoneNumberStatus(
   // PostgREST returns no error AND no rows for an update matching nothing —
   // the setBranding lesson. A wrong id/account must be loud.
   if (!data || data.length === 0) throw new Error("setPhoneNumberStatus matched no row");
-  await emit(db, accountId, "phone_number.status_changed", actorId, { phoneNumberId, status });
+  await emit(db, accountId, "phone_number.status_changed", actorId, { phoneNumberId, status }, actorType);
 }
 
 export async function getVoiceProfile(
@@ -76,7 +76,7 @@ export async function getVoiceProfile(
 }
 
 export async function upsertVoiceProfile(
-  db: SupabaseClient, accountId: string, patch: VoiceProfilePatch, actorId: string,
+  db: SupabaseClient, accountId: string, patch: VoiceProfilePatch, actorId: string, actorType: ActorType = "user",
 ): Promise<VoiceProfileRow> {
   const existing = await getVoiceProfile(db, accountId);
   if (!existing) {
@@ -84,14 +84,14 @@ export async function upsertVoiceProfile(
       .insert({ account_id: accountId, ...patch })
       .select(PROFILE_COLS).single();
     if (error || !data) throw new Error(`upsertVoiceProfile insert failed: ${error?.message}`);
-    await emit(db, accountId, "voice_profile.updated", actorId, { fields: Object.keys(patch) });
+    await emit(db, accountId, "voice_profile.updated", actorId, { fields: Object.keys(patch) }, actorType);
     return data as unknown as VoiceProfileRow;
   }
   const { data, error } = await db.from("voice_profiles")
     .update({ ...patch, updated_at: new Date().toISOString() })
     .eq("account_id", accountId).select(PROFILE_COLS).single();
   if (error || !data) throw new Error(`upsertVoiceProfile update failed: ${error?.message}`);
-  await emit(db, accountId, "voice_profile.updated", actorId, { fields: Object.keys(patch) });
+  await emit(db, accountId, "voice_profile.updated", actorId, { fields: Object.keys(patch) }, actorType);
   return data as unknown as VoiceProfileRow;
 }
 
