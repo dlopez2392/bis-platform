@@ -10,7 +10,10 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SubmitButton } from "../../submit-button";
 import { m } from "@/lib/messages";
-import { openHoursToRows, type WeekdayKey } from "./hours-form";
+import {
+  DEFAULT_CLOSE_TIME, DEFAULT_OPEN_TIME, openHoursToRows, seededTime,
+  type WeekdayKey,
+} from "./hours-form";
 import type { ActionResult } from "./actions";
 
 const DAY_LABEL: Record<WeekdayKey, string> = {
@@ -86,6 +89,9 @@ export function CalendarSettings({
                   <Input
                     id={`hours-${row.day}-from`} name={`hours_${row.day}_from`}
                     type="time" defaultValue={row.from} className="w-32"
+                    onFocus={(e) => {
+                      e.currentTarget.value = seededTime(e.currentTarget.value, DEFAULT_OPEN_TIME);
+                    }}
                   />
                   <span className="text-xs text-muted-foreground">{m["calendar.settings.to"]}</span>
                   <Label htmlFor={`hours-${row.day}-to`} className="sr-only">
@@ -94,6 +100,9 @@ export function CalendarSettings({
                   <Input
                     id={`hours-${row.day}-to`} name={`hours_${row.day}_to`}
                     type="time" defaultValue={row.to} className="w-32"
+                    onFocus={(e) => {
+                      e.currentTarget.value = seededTime(e.currentTarget.value, DEFAULT_CLOSE_TIME);
+                    }}
                   />
                 </div>
               ))}

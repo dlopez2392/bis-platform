@@ -13,6 +13,20 @@ export const HOURS_FORM_DAYS: readonly WeekdayKey[] = FORM_DAYS;
 export type HoursRow = { day: WeekdayKey; from: string; to: string };
 
 /**
+ * Chrome anchors an EMPTY `<input type="time">`'s picker at the current
+ * wall-clock time — so an operator opening the picker on a blank day lands
+ * somewhere different every visit. Seeding the field on focus makes the
+ * picker open at the business default instead, while an untouched blank row
+ * still means "closed day". A value the operator already set always wins.
+ */
+export const DEFAULT_OPEN_TIME = "08:00";
+export const DEFAULT_CLOSE_TIME = "18:00";
+
+export function seededTime(current: string, fallback: string): string {
+  return current || fallback;
+}
+
+/**
  * `open_hours` → one row per weekday for the editor. Each weekday collapses
  * to its FIRST open interval only: the settings UI offers a single
  * open/close pair per day, not `computeSlots`'s general list-of-intervals

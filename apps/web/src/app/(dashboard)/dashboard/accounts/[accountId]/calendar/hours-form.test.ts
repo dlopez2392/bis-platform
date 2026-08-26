@@ -1,5 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { HOURS_FORM_DAYS, openHoursToRows, rowsToOpenHours } from "./hours-form";
+import {
+  DEFAULT_OPEN_TIME, DEFAULT_CLOSE_TIME, seededTime,
+  HOURS_FORM_DAYS, openHoursToRows, rowsToOpenHours,
+} from "./hours-form";
+
+describe("seededTime", () => {
+  it("seeds an empty field with the fallback so the picker opens there, never at the wall clock", () => {
+    expect(seededTime("", DEFAULT_OPEN_TIME)).toBe("08:00");
+    expect(seededTime("", DEFAULT_CLOSE_TIME)).toBe("18:00");
+  });
+  it("never overwrites a value the operator already set", () => {
+    expect(seededTime("07:03", DEFAULT_OPEN_TIME)).toBe("07:03");
+    expect(seededTime("00:00", DEFAULT_CLOSE_TIME)).toBe("00:00"); // midnight close stays
+  });
+  it("pins the business defaults", () => {
+    expect(DEFAULT_OPEN_TIME).toBe("08:00");
+    expect(DEFAULT_CLOSE_TIME).toBe("18:00");
+  });
+});
 
 describe("openHoursToRows / rowsToOpenHours", () => {
   it("round-trips a mixed week: some open days, some closed", () => {
