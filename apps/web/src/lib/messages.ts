@@ -3,6 +3,7 @@ export const m = {
   "nav.contacts": "Contacts",
   "nav.opportunities": "Opportunities",
   "nav.conversations": "Conversations",
+  "nav.calls": "Calls",
   "nav.calendar": "Calendar",
   "nav.forms": "Forms",
   "nav.settings": "Settings",
@@ -544,6 +545,32 @@ export const m = {
   "voice.numbers.statusUpdated": "Status updated",
   "voice.numbers.statusUpdateFailed": "Could not update this number's status.",
   "voice.numbers.goLiveNeedsProfile": "Fill in the voice profile before going live",
+
+  // The client-facing Calls log — /dashboard/accounts/<id>/calls. BOTH
+  // audiences: this is the client's own business data (who rang, what the
+  // receptionist did about it), not agency work about the client, so it is
+  // gated by requireAccountAccess like contacts and the calendar are — and
+  // it is the one screen where a client SEES what they are paying for.
+  //
+  // `calls.usage` interpolates like `contacts.page` above: the component
+  // .replace()s the placeholders, so a future translation may reorder them.
+  "calls.title": "Calls",
+  "calls.usage": "{n} of {cap} calls today",
+  "calls.empty.title": "No calls yet",
+  "calls.empty.body":
+    "When your AI receptionist answers a call, it will appear here with its transcript and outcome.",
+  "calls.col.when": "When",
+  "calls.col.caller": "Caller",
+  "calls.col.duration": "Duration",
+  "calls.col.outcome": "Outcome",
+  "calls.col.language": "Language",
+  "calls.older": "Older calls",
+  "calls.unknownCaller": "Unknown caller",
+  "calls.outcome.booked": "Booked",
+  "calls.outcome.lead": "Lead",
+  "calls.outcome.message": "Message",
+  "calls.outcome.abandoned": "Abandoned",
+  "calls.outcome.spam": "Spam",
 } as const;
 
 export type MessageKey = keyof typeof m;

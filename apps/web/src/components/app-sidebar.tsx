@@ -18,6 +18,7 @@ import {
   ArrowLeft,
   Palette,
   Phone,
+  PhoneIncoming,
   type LucideIcon,
 } from "lucide-react";
 import { AccountSwitcher, type AccountOption } from "@/components/account-switcher";
@@ -83,6 +84,13 @@ export function AppSidebar({
         { href: `${base}/contacts`, label: m["nav.contacts"], icon: Users },
         { href: `${base}/pipeline`, label: m["nav.opportunities"], icon: KanbanSquare },
         { href: `${base}/conversations`, label: m["nav.conversations"], icon: MessagesSquare },
+        // BOTH audiences, unlike the agency-only Voice item below: that one
+        // is the settings that configure the receptionist, this is the log of
+        // what it actually did — the client's own business data, and the one
+        // screen where they see what they are paying for. `PhoneIncoming`
+        // rather than `Phone` so it stays distinguishable from Voice in the
+        // agency's sidebar, where both appear.
+        { href: `${base}/calls`, label: m["nav.calls"], icon: PhoneIncoming },
         { href: `${base}/forms`, label: m["nav.forms"], icon: FileText },
         { href: `${base}/calendar`, label: m["nav.calendar"], icon: Calendar },
         // Clients only. The agency reaches the same panel from Settings,
