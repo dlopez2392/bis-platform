@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { generateKeyPairSync, sign as cryptoSign } from "node:crypto";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { GET, POST } from "./route";
 import { utcDayStart } from "@/lib/voice/call-limits";
 
@@ -25,6 +26,7 @@ beforeEach(() => {
   process.env.VOICE_OPENAI_PROJECT_ID = "proj_test123";
   delete process.env.PHONE_MAX_CALLS_PER_NUMBER_PER_DAY;
   delete process.env.PHONE_MAX_CALLS_PER_ACCOUNT_PER_DAY;
+  delete process.env.TELNYX_PUBLIC_KEY;
   lookupMock.mockReset().mockResolvedValue({ id: "pn1", account_id: "a1", e164: "+19565550999", telnyx_id: null, status: "live" });
   // Default: enabled, under the (default 5/day) cap — the pre-existing "dial"
   // tests below never mention a profile or caps, so they need this to still
@@ -182,5 +184,79 @@ describe("texml route — daily call cap refusal (spoken, bilingual)", () => {
     const xml = await res.text();
     expect(xml).toContain("can't take more calls today");
     expect(countCallsByCallerSinceMock).toHaveBeenCalledWith(expect.anything(), "a1", "+19562921696", utcDayStart(new Date()));
+  });
+});
+
+describe("texml route — Telnyx signature validation (TELNYX_PUBLIC_KEY set)", () => {
+  function makeSigned(body: string, timestamp: string) {
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const sig = cryptoSign(null, Buffer.from(`${timestamp}|${body}`, "utf8"), privateKey);
+    const spki = publicKey.export({ format: "der", type: "spki" }) as Buffer;
+    return {
+      publicKeyB64: spki.subarray(spki.length - 32).toString("base64"),
+      signatureB64: sig.toString("base64"),
+    };
+  }
+
+  afterEach(() => {
+    delete process.env.TELNYX_PUBLIC_KEY;
+  });
+
+  it("POST with no signature headers → 403, with a log line", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Any base64 works here — the missing headers short-circuit before the
+    // key is ever parsed.
+    process.env.TELNYX_PUBLIC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    const raw = new URLSearchParams({ To: "+19565550999", From: "+19562921696" }).toString();
+    const res = await POST(new Request("https://x.example/api/voice/texml", {
+      method: "POST", body: raw, headers: { "content-type": "application/x-www-form-urlencoded" },
+    }));
+    expect(res.status).toBe(403);
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("POST with a tampered/invalid signature → 403", async () => {
+    const raw = new URLSearchParams({ To: "+19565550999", From: "+19562921696" }).toString();
+    const ts = "1756300000";
+    const { publicKeyB64, signatureB64 } = makeSigned(raw, ts);
+    process.env.TELNYX_PUBLIC_KEY = publicKeyB64;
+    const res = await POST(new Request("https://x.example/api/voice/texml", {
+      method: "POST",
+      body: raw + "&x=1", // tampered after signing
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "telnyx-timestamp": ts,
+        "telnyx-signature-ed25519": signatureB64,
+      },
+    }));
+    expect(res.status).toBe(403);
+  });
+
+  it("POST with a valid signature → normal XML (Dial present)", async () => {
+    const raw = new URLSearchParams({ To: "+19565550999", From: "+19562921696" }).toString();
+    const ts = "1756300000";
+    const { publicKeyB64, signatureB64 } = makeSigned(raw, ts);
+    process.env.TELNYX_PUBLIC_KEY = publicKeyB64;
+    const res = await POST(new Request("https://x.example/api/voice/texml", {
+      method: "POST",
+      body: raw,
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "telnyx-timestamp": ts,
+        "telnyx-signature-ed25519": signatureB64,
+      },
+    }));
+    expect(res.status).toBe(200);
+    const xml = await res.text();
+    expect(xml).toContain("<Dial answerOnBridge=\"true\">");
+    expect(xml).toContain("X-BIS-Called=%2B19565550999");
+  });
+
+  it("GET → 405 (the diagnostic path closes in hardened mode)", async () => {
+    process.env.TELNYX_PUBLIC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999"));
+    expect(res.status).toBe(405);
+    expect(lookupMock).not.toHaveBeenCalled();
   });
 });

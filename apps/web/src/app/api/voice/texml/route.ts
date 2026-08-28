@@ -15,6 +15,7 @@
 // attempt, never a bypass. A DB failure fails OPEN and dials.
 import { NextResponse } from "next/server";
 import { toE164 } from "@/lib/voice/phone-number";
+import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
 
 export const runtime = "nodejs";
 
@@ -64,12 +65,12 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
       // gets. Caller E164 in logs is a ratified decision (the webhook's
       // "incoming call" log already logs callerNumber) — parity, not a new
       // exposure.
-      console.error(`texml declined refuse-unknown for ${calledE164}, caller ${callerE164 ?? "unknown"}`);
+      console.log(`texml declined refuse-unknown for ${calledE164}, caller ${callerE164 ?? "unknown"}`);
       return { kind: "refuse", languages: "en" };
     }
     const profile = await getVoiceProfile(db, row.account_id);
     if (!profile || !profile.enabled) {
-      console.error(`texml declined refuse-disabled for ${calledE164}, caller ${callerE164 ?? "unknown"}`);
+      console.log(`texml declined refuse-disabled for ${calledE164}, caller ${callerE164 ?? "unknown"}, accountId ${row.account_id}`);
       return { kind: "refuse", languages: profile?.languages ?? "en" };
     }
     // Cap UX only — the caller deserves words, not dead air. The incoming
@@ -86,7 +87,7 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
       ]);
       const verdict = decideLimit({ forNumber, forAccount }, readLimitConfig());
       if (!verdict.allowed) {
-        console.error(`texml declined cap (${verdict.reason}) for ${calledE164}, caller ${callerE164 ?? "unknown"}`);
+        console.log(`texml declined cap (${verdict.reason}) for ${calledE164}, caller ${callerE164 ?? "unknown"}, accountId ${row.account_id}`);
         return { kind: "cap", languages: profile.languages };
       }
     } catch (e) {
@@ -129,17 +130,34 @@ async function respond(calledE164: string | null, callerE164: string | null): Pr
 }
 
 export async function GET(req: Request): Promise<NextResponse> {
+  if (process.env.TELNYX_PUBLIC_KEY?.trim()) {
+    // Hardened mode: Telnyx only ever POSTs; an unauthenticated GET would
+    // hand out the SIP project URI to anyone who finds the route.
+    return new NextResponse(null, { status: 405 });
+  }
   const params = new URL(req.url).searchParams;
   return respond(toE164(params.get("To")), toE164(params.get("From")));
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
-  let to: string | null = null;
-  let from: string | null = null;
-  try {
-    const form = await req.formData();
-    to = String(form.get("To") ?? "") || null;
-    from = String(form.get("From") ?? "") || null;
-  } catch { /* fall through — still dial */ }
+  // req.text() FIRST, always — req.formData() consumes the body and the
+  // Telnyx signature covers the exact raw bytes, not a re-serialized form.
+  const rawBody = await req.text();
+  const publicKey = process.env.TELNYX_PUBLIC_KEY?.trim();
+  if (publicKey) {
+    const ok = verifyTelnyxSignature({
+      rawBody,
+      timestamp: req.headers.get("telnyx-timestamp"),
+      signatureB64: req.headers.get("telnyx-signature-ed25519"),
+      publicKeyB64: publicKey,
+    });
+    if (!ok) {
+      console.error("texml: rejected request with invalid Telnyx signature");
+      return new NextResponse(null, { status: 403 });
+    }
+  }
+  const form = new URLSearchParams(rawBody);
+  const to = form.get("To") || null;
+  const from = form.get("From") || null;
   return respond(toE164(to), toE164(from));
 }
