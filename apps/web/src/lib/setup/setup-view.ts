@@ -1,4 +1,4 @@
-import type { PhoneNumberRow } from "@bis/db";
+import type { PhoneNumberRow, PhoneNumberStatus } from "@bis/db";
 import { goLivePrereqsMet, type SetupStepKey, type SetupStepState } from "./setup-status";
 
 // Pure module, same discipline as setup-status.ts: no db client, no React,
@@ -99,4 +99,20 @@ export function resolveAssignedNumber(
 ): string | null | "unknown" {
   if (numbersReadFailed) return "unknown";
   return numbers.find((n) => n.status !== "released")?.e164 ?? null;
+}
+
+/**
+ * Whether moving THIS number needs the destructive-confirm step
+ * (setup-move-number-button.tsx) instead of a one-click move.
+ *
+ * `testing` and `live` both mean some other client's callers are being
+ * routed to this number right now — the incoming route accepts a call for
+ * either status (api/voice/incoming/route.ts), and `reassignPhoneNumber`
+ * resets status to `provisioned` on the move (packages/db/src/voice.ts), so
+ * taking one of these numbers is putting that client's line out of service,
+ * not just relabeling a row. `provisioned` and `released` numbers answer
+ * nobody either way, so a plain click is enough for those.
+ */
+export function requiresMoveConfirm(status: PhoneNumberStatus): boolean {
+  return status === "testing" || status === "live";
 }

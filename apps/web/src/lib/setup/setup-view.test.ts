@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { deriveSetupStatus, type SetupInputs, type SetupStepKey } from "./setup-status";
 import {
-  buildSetupViews, kindOf, resolveAssignedNumber, READS_BEHIND,
+  buildSetupViews, kindOf, resolveAssignedNumber, requiresMoveConfirm, READS_BEHIND,
   type ReadKey, type SetupStepView,
 } from "./setup-view";
 
@@ -113,5 +113,17 @@ describe("resolveAssignedNumber", () => {
   it("returns null — not 'unknown' — when the read succeeded and no live number exists", () => {
     expect(resolveAssignedNumber([], false)).toBe(null);
     expect(resolveAssignedNumber([{ status: "released", e164: "+19565550100" }], false)).toBe(null);
+  });
+});
+
+describe("requiresMoveConfirm", () => {
+  it("requires the destructive confirm for a number answering real calls right now", () => {
+    expect(requiresMoveConfirm("testing")).toBe(true);
+    expect(requiresMoveConfirm("live")).toBe(true);
+  });
+
+  it("allows a one-click move for a number that answers nobody", () => {
+    expect(requiresMoveConfirm("provisioned")).toBe(false);
+    expect(requiresMoveConfirm("released")).toBe(false);
   });
 });

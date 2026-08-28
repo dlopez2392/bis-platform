@@ -169,15 +169,25 @@ export function SetupPanel({
   // reach the end for an account that is fully live would be lying in the
   // other direction.
   //
-  // Counted on `s.done` alone. For the eight steps with exactly ONE read
-  // behind them (READS_BEHIND, setup-view.ts) that is also the unknown-safe
-  // count: a read that threw feeds deriveSetupStatus a neutral input, so the
-  // step comes back `done: false` and the meter cannot claim progress it did
-  // not verify. `email` is the one two-read step — the account read decides
-  // `done`, the checklist read decides `skipped` — so a settled account row
-  // with `from_email` set is a genuinely verified `done` even while the tick
-  // read failed and its card renders "couldn't check". Counting it there is
-  // right, not a leak.
+  // Counted on `s.done` alone, and that stays unknown-safe for a reason that
+  // has nothing to do with how many reads sit behind a step: in
+  // deriveSetupStatus (setup-status.ts), `done` is a CONJUNCTION over every
+  // read named in that step's READS_BEHIND entry (setup-view.ts) for every
+  // key except `email`. A read that threw feeds deriveSetupStatus a neutral
+  // input, so a conjunctive `done` comes back `false` and the meter cannot
+  // claim progress it did not verify — true for a step with a single read
+  // behind it (hours←calendar) exactly as it is for one with more than one
+  // (go_live←profile AND numbers). `account` sits outside this entirely: it
+  // is hardcoded `done: true` with no read behind it at all, so there is
+  // nothing there that can fail either way.
+  //
+  // `email` is the one key where the conjunction breaks: its READS_BEHIND
+  // entry lists both `account` and `ticks`, but `done` is decided by the
+  // account read (`fromEmail`) alone — the ticks read decides `skipped`, not
+  // `done`. So a settled account row with `from_email` set is a genuinely
+  // verified `done` even while the tick read failed and its own card renders
+  // "couldn't check" — `done: true` and `unknown: true` at once, which no
+  // other step can do. Counting it here is right, not a leak.
   const total = steps.filter((s) => !s.skipped).length;
   const doneCount = steps.filter((s) => s.done).length;
 
@@ -415,7 +425,13 @@ function MovableNumbers({
                 {NUMBER_STATUS_LABEL[n.status]}
               </p>
             </div>
-            <SetupMoveNumberButton action={moveAction} phoneNumberId={n.id} e164={n.e164} />
+            <SetupMoveNumberButton
+              action={moveAction}
+              phoneNumberId={n.id}
+              e164={n.e164}
+              status={n.status}
+              accountName={n.accountName}
+            />
           </li>
         ))}
       </ul>

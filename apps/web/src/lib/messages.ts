@@ -547,6 +547,11 @@ export const m = {
   "voice.numbers.statusUpdateFailed": "Could not update this number's status.",
   "voice.numbers.goLiveNeedsProfile": "Fill in the voice profile before going live",
   "voice.moveFailed": "Couldn't move that number — check it isn't in use and try again.",
+  // Server-side twin of the page's own precondition (setup/page.tsx only
+  // offers the move list when `assignedNumber === null`): a tampered or
+  // stale submission must not be able to give an account a second active
+  // number just because the render it came from went stale.
+  "voice.moveDestinationOccupied": "This client already has a phone number. Release or move it before bringing in another one.",
 
   // The client-facing Calls log — /dashboard/accounts/<id>/calls. BOTH
   // audiences: this is the client's own business data (who rang, what the
@@ -647,6 +652,15 @@ export const m = {
   // way to tell which number each one takes.
   "setup.number.moveHereLabel": "Move {e164} to this client",
   "setup.number.moving": "Moving…",
+  // The destructive-confirm step's button and warning (setup-move-number-
+  // button.tsx), shown only for a `testing`/`live` source number — the ones
+  // where a move takes another client's answering line down. The button
+  // names the consequence, not just the mechanics: "move it" alone reads
+  // like relabeling a row, not shutting off calls for someone paying for
+  // this platform right now.
+  "setup.number.moveConfirm": "Yes, take {e164} out of service and move it",
+  "setup.number.moveConfirmWarning":
+    "{account} stops answering calls on this number the moment you move it.",
   "setup.number.currentlyOn": "currently on {account}",
   // The join to `accounts` came back empty for this row. Says "we don't know
   // whose it is" rather than implying the number belongs to nobody.

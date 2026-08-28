@@ -27,7 +27,7 @@
 import { revalidatePath } from "next/cache";
 import {
   serviceDb, upsertVoiceProfile, assignPhoneNumber, setPhoneNumberStatus, getVoiceProfile,
-  reassignPhoneNumber,
+  reassignPhoneNumber, listPhoneNumbersForAccount,
   type PhoneNumberStatus, type VoiceProfilePatch,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
@@ -125,6 +125,17 @@ export async function assignNumberAction(
  * setup page (force-dynamic, refreshed client-side by the island), and the
  * OTHER account's voice page — the one that just lost a number — is
  * force-dynamic too, so there is no cached render either side to invalidate.
+ *
+ * The destination precondition — "only offer a move when this account has no
+ * active number of its own" — is re-checked HERE too, not just where the
+ * setup page decides whether to render the move list at all
+ * (setup/page.tsx's `assignedNumber === null` gate). That render is exactly
+ * as stale as the go-live prerequisites are the moment it paints (see
+ * goLiveAction's own header, ../setup/actions.ts): a second browser tab, a
+ * number assigned in between, or a bound action called directly can all
+ * reach this function with a destination that is no longer empty. Without
+ * this read a stale submission would give one account two active numbers —
+ * which is not a state `deriveSetupStatus` (setup-status.ts) has a step for.
  */
 export async function moveNumberAction(
   accountId: string, phoneNumberId: string,
@@ -132,8 +143,22 @@ export async function moveNumberAction(
   const { userId, isAgency } = await requireAccountAccess(accountId);
   if (!isAgency) return { ok: false, error: m["voice.agencyOnly"] };
 
+  const db = serviceDb();
+
   try {
-    await reassignPhoneNumber(serviceDb(), phoneNumberId, accountId, userId);
+    const destinationNumbers = await listPhoneNumbersForAccount(db, accountId);
+    // A released number is a former number — it does not count as "already
+    // has one", the same rule the setup page's own read applies.
+    if (destinationNumbers.some((n) => n.status !== "released")) {
+      return { ok: false, error: m["voice.moveDestinationOccupied"] };
+    }
+  } catch (e) {
+    console.error(`moveNumberAction: destination check failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["voice.moveFailed"] };
+  }
+
+  try {
+    await reassignPhoneNumber(db, phoneNumberId, accountId, userId);
   } catch (e) {
     console.error(`moveNumberAction: move failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["voice.moveFailed"] };

@@ -136,10 +136,24 @@ export async function goLiveAction(accountId: string): Promise<ActionResult> {
   if (!target) return { ok: false, error: m["setup.goLive.notReady"] };
 
   try {
-    // Profile first. If the second write fails the line is not live and the
-    // go-live step stays open, which a retry fixes; the reverse order would
-    // put a live number in front of a disabled profile — a real caller
-    // reaching a receptionist that has been told to stay quiet.
+    // Profile first. This order is still the safer one: the REVERSE would
+    // put a live number in front of a disabled profile, meaning a real
+    // caller reaches a receptionist that has been told to stay quiet — a
+    // gap this order cannot produce, because the profile is already enabled
+    // before the number write is even attempted.
+    //
+    // What this order does NOT guarantee is "a failure here leaves the line
+    // not live". The incoming route answers a number at status `testing` OR
+    // `live` once the profile is enabled (api/voice/incoming/route.ts), and
+    // `target` reaching go-live at `testing` is the ordinary case — the
+    // test-call prerequisite needs a reachable number before this action is
+    // even unblocked. So if `upsertVoiceProfile` above succeeds and this
+    // second write then fails, a `target` that was already `testing` is left
+    // fully answering real callers with the profile enabled, while this
+    // action reports `ok: false` and the go-live step still reads "to do".
+    // Only a `target` starting at `provisioned` genuinely stays unreached
+    // through that same failure. Both are real outcomes of the same catch
+    // block; naming only the safe one here would be wrong.
     await upsertVoiceProfile(db, accountId, { enabled: true }, userId);
     await setPhoneNumberStatus(db, accountId, target.id, "live", userId);
   } catch (e) {

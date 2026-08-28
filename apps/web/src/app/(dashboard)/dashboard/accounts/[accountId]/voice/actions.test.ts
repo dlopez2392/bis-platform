@@ -9,7 +9,7 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 const dbMocks = vi.hoisted(() => ({
   upsertVoiceProfile: vi.fn(), assignPhoneNumber: vi.fn(),
   setPhoneNumberStatus: vi.fn(), getVoiceProfile: vi.fn(),
-  reassignPhoneNumber: vi.fn(),
+  reassignPhoneNumber: vi.fn(), listPhoneNumbersForAccount: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({}),
@@ -60,6 +60,10 @@ const fd = (o: Record<string, string>) => {
 beforeEach(() => {
   Object.values(dbMocks).forEach((m) => m.mockReset());
   dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "stuff" });
+  // The empty-destination case, i.e. the ordinary path every other
+  // moveNumberAction test below exercises. Tests that care about an occupied
+  // destination override this explicitly.
+  dbMocks.listPhoneNumbersForAccount.mockResolvedValue([]);
   guardFixture.isAgency = true;
 });
 
@@ -147,5 +151,33 @@ describe("moveNumberAction", () => {
     const r = await moveNumberAction("a1", "pn1");
     expect(r).toEqual({ ok: false, error: m["voice.moveFailed"] });
     errSpy.mockRestore();
+  });
+
+  /**
+   * The server-side twin of setup/page.tsx's own precondition: that page only
+   * renders the move list when the destination has no number, but that render
+   * is stale the moment it paints, and this action is reachable directly. A
+   * released number on the destination does NOT count as occupied — same rule
+   * `resolveAssignedNumber` (setup-view.ts) applies.
+   */
+  it("refuses when the destination already holds a non-released number, without calling reassign", async () => {
+    dbMocks.listPhoneNumbersForAccount.mockResolvedValue([{ id: "pn-existing", status: "testing" }]);
+    const r = await moveNumberAction("a1", "pn1");
+    expect(r).toEqual({ ok: false, error: m["voice.moveDestinationOccupied"] });
+    expect(dbMocks.reassignPhoneNumber).not.toHaveBeenCalled();
+  });
+
+  it("a released number on the destination does not block the move", async () => {
+    dbMocks.listPhoneNumbersForAccount.mockResolvedValue([{ id: "pn-old", status: "released" }]);
+    dbMocks.reassignPhoneNumber.mockResolvedValue({ id: "pn1", account_id: "a1" });
+    const r = await moveNumberAction("a1", "pn1");
+    expect(r).toEqual({ ok: true });
+    expect(dbMocks.reassignPhoneNumber).toHaveBeenCalledWith({}, "pn1", "a1", "user_1");
+  });
+
+  it("a non-agency caller is rejected before the destination is even read", async () => {
+    guardFixture.isAgency = false;
+    await moveNumberAction("a1", "pn1");
+    expect(dbMocks.listPhoneNumbersForAccount).not.toHaveBeenCalled();
   });
 });
