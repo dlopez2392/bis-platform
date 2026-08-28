@@ -118,9 +118,12 @@ else `caller_e164`) · duration · outcome badge (booked / lead / message /
 abandoned / spam) · language badge (EN/ES). Newest first, paginated.
 `calls_account_started_idx` already serves this query.
 
-**Usage meter** at the top: "N of CAP calls this month" with a progress bar,
-reading **the same monthly count call-cap enforcement uses** (one source of
-truth, pinned by a test) — what the meter shows is exactly what the cap sees.
+**Usage meter** at the top: "N of CAP calls today" with a progress bar.
+Corrected against source during planning: cap enforcement is **per-day**
+(`call-limits.ts`, default 50/account/day counted from midnight UTC), not
+monthly — the meter reads **the same daily count enforcement uses**
+(`countCallsSince` from `utcDayStart`, one source of truth, pinned by a test)
+so what the meter shows is exactly what the cap sees.
 
 ### Detail
 
