@@ -32,6 +32,21 @@ export function paintedContrast(a: string, b: string): number {
 export const SEEDED_ACCOUNT_NAME = "Test Client One";
 
 /**
+ * The seeded contact on that account, and the only one guaranteed to carry an
+ * EMAIL ADDRESS — which the composer's email mode requires (with none on file
+ * it renders "no email on this contact" and never shows a Subject field).
+ *
+ * Named rather than taken positionally. `listContacts` orders by `created_at`
+ * descending, so `.first()` means "whoever rang most recently" — and real
+ * voice calls have since created contacts on this shared account from nothing
+ * but a phone number, with `email` null. That is exactly the positional-
+ * locator trap `openAccountByName` above was written for, one level down:
+ * `.first()` was only ever the seeded contact by accident of it being the
+ * only one.
+ */
+export const SEEDED_CONTACT_NAME = "Maria Garcia";
+
+/**
  * Navigates to /dashboard/accounts and opens the card for `accountName`,
  * found by its accessible name rather than position. If no such card is
  * present — a fresh or reset database, or the seed data being renamed —

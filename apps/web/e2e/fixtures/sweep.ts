@@ -47,9 +47,16 @@ const empty = (): SweepReport =>
 /**
  * Child tables first, in the order teardown already proves works: `contacts`
  * and `events` have no ON DELETE behaviour on their `account_id` FK
- * (0003_crm_core.sql), and forms are the same shape. This project has watched
- * an unchecked delete fail SILENTLY and accumulate eleven orphaned accounts,
- * so every step reports its own error rather than letting the caller assume.
+ * (0003_crm_core.sql), and forms are the same shape. `checklist_items` is the
+ * same shape again — no cascade on its `account_id` FK either (migration
+ * 0007) — which is what stranded the account this entry exists to recover:
+ * `setup.spec.ts` writes rows there, and a killed run (Ctrl-C, or a worker
+ * process that dies before its own `afterAll` gets to run) can leave one
+ * behind with nothing else in the suite able to clear it, making the account
+ * PERMANENTLY undeletable by anything downstream of this FK. This project
+ * has watched an unchecked delete fail SILENTLY and accumulate eleven
+ * orphaned accounts, so every step reports its own error rather than letting
+ * the caller assume.
  */
 async function deleteAccountCascade(
   db: Db, accountId: string, report: SweepReport,
@@ -60,8 +67,8 @@ async function deleteAccountCascade(
   // (packages/db/src/test/fixtures.ts) orders them first. Deleting contacts
   // before bookings, on a stale fixture account that ever booked anything,
   // would fail on the FK instead of sweeping the account.
-  for (const table of ["calls", "bookings", "calendars", "form_submissions", "forms", "contacts",
-                       "events", "voice_profiles", "phone_numbers"]) {
+  for (const table of ["calls", "bookings", "calendars", "checklist_items", "form_submissions",
+                       "forms", "contacts", "events", "voice_profiles", "phone_numbers"]) {
     const { error } = await db.from(table).delete().eq("account_id", accountId);
     if (error) report.errors.push(`${table} delete for ${accountId}: ${error.message}`);
   }

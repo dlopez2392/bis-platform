@@ -77,6 +77,11 @@ async function expectStepState(card: Locator, expected: StepState) {
   }
 }
 
+/** Set in `beforeAll` below so `afterAll` can clean up by id even when the
+ *  test body itself never got to run (skip-unset-ids idiom — same as
+ *  `calls.spec.ts`). */
+let accountId = "";
+
 test.describe("the setup wizard, as the agency", () => {
   /**
    * This spec's own precondition, established rather than assumed — the same
@@ -88,136 +93,156 @@ test.describe("the setup wizard, as the agency", () => {
    * would pass for entirely the wrong reason.
    */
   test.beforeAll(async () => {
-    const { accountId, clerkUserId } = fixture();
-    await setClientAccess(serviceDb(), accountId, true, clerkUserId);
+    const f = fixture();
+    accountId = f.accountId;
+    await setClientAccess(serviceDb(), accountId, true, f.clerkUserId);
+  });
+
+  /**
+   * Deletes every `checklist_items` and `calendars` row on the fixture
+   * account — not merely the ones this run wrote. That is safe today only
+   * because the fixture account is created fresh per run (file banner,
+   * reason ①): nothing else ever writes to either table on this account, so
+   * "every row on it" and "every row this spec created" are the same set.
+   *
+   * `afterAll`, not the test body's own `finally` (as this used to be): a
+   * `finally` lives inside the test function, and a per-test timeout can
+   * leave that function suspended mid-await rather than unwound, so the
+   * `finally` never runs; Ctrl-C kills the process outright and neither runs.
+   * `afterAll` is a separate hook Playwright still invokes once the test
+   * settles, same as `calls.spec.ts` uses. It is not a complete fix — a
+   * killed *worker process* skips this too — which is exactly why
+   * `checklist_items` was also added to `fixtures/sweep.ts`'s cascade: that
+   * is the backstop for the case this hook can't cover.
+   *
+   * FK-child-first: `checklist_items` and `calendars` both reference
+   * `accounts`; the former has NO cascade (migration 0007), so a leaked tick
+   * row would make auth.teardown's account delete fail silently — a failure
+   * mode this suite has already watched happen once.
+   *
+   * Errors are logged, not thrown: throwing here must not become a new way
+   * for the suite to go red, and skip-unset-ids means this is a no-op when
+   * `beforeAll` itself never ran.
+   */
+  test.afterAll(async () => {
+    if (!accountId) return;
+    const db = serviceDb();
+    for (const table of ["checklist_items", "calendars"]) {
+      const { error } = await db.from(table).delete().eq("account_id", accountId);
+      if (error) {
+        console.error(`setup e2e cleanup: ${table} delete failed: ${error.message}`);
+      }
+    }
   });
 
   test("nine derived steps, hours that tell the truth, and a gated go-live", async ({ page }) => {
-    const { accountId } = fixture();
     const db = serviceDb();
     const setupUrl = `/dashboard/accounts/${accountId}/setup`;
 
-    try {
-      // --- 1. All nine cards, in order ------------------------------------
-      await page.goto(setupUrl);
-      await expect(page.getByRole("heading", { name: "Client setup", level: 1 })).toBeVisible();
+    // --- 1. All nine cards, in order ------------------------------------
+    await page.goto(setupUrl);
+    await expect(page.getByRole("heading", { name: "Client setup", level: 1 })).toBeVisible();
 
-      // An exact, ORDERED set, not a count: the wizard's whole argument is
-      // that it reads as one path from "nothing" to "live", so a card in the
-      // wrong place is as wrong as a missing one — and two opposite errors
-      // cancelling out is a shape this project has had to fix before.
-      await expect(page.locator("ol > li h2")).toHaveText(STEP_TITLES);
+    // An exact, ORDERED set, not a count: the wizard's whole argument is
+    // that it reads as one path from "nothing" to "live", so a card in the
+    // wrong place is as wrong as a missing one — and two opposite errors
+    // cancelling out is a shape this project has had to fix before.
+    await expect(page.locator("ol > li h2")).toHaveText(STEP_TITLES);
 
-      const card = (title: string) =>
-        page.locator("ol > li").filter({
-          has: page.getByRole("heading", { level: 2, name: title, exact: true }),
-        });
+    const card = (title: string) =>
+      page.locator("ol > li").filter({
+        has: page.getByRole("heading", { level: 2, name: title, exact: true }),
+      });
 
-      // --- 2. Go-live is gated, and says why ------------------------------
-      // Stated as a precondition rather than assumed: `calls.spec.ts` seeds a
-      // phone number onto this same fixture account and deletes it again, so a
-      // leaked row from a killed run would change the blocked list below for a
-      // reason that has nothing to do with the wizard. Failing here says that
-      // out loud instead of failing on a confusing string diff.
-      const { data: preNumbers, error: numbersErr } = await db
-        .from("phone_numbers").select("id").eq("account_id", accountId);
-      if (numbersErr) throw new Error(`setup spec: phone_numbers read failed: ${numbersErr.message}`);
-      expect(
-        preNumbers ?? [],
-        "the fixture account must start with no phone number — a leaked row from calls.spec.ts " +
-        "would change the go-live blocked list",
-      ).toHaveLength(0);
+    // --- 2. Go-live is gated, and says why ------------------------------
+    // Stated as a precondition rather than assumed: `calls.spec.ts` seeds a
+    // phone number onto this same fixture account and deletes it again, so a
+    // leaked row from a killed run would change the blocked list below for a
+    // reason that has nothing to do with the wizard. Failing here says that
+    // out loud instead of failing on a confusing string diff.
+    const { data: preNumbers, error: numbersErr } = await db
+      .from("phone_numbers").select("id").eq("account_id", accountId);
+    if (numbersErr) throw new Error(`setup spec: phone_numbers read failed: ${numbersErr.message}`);
+    expect(
+      preNumbers ?? [],
+      "the fixture account must start with no phone number — a leaked row from calls.spec.ts " +
+      "would change the go-live blocked list",
+    ).toHaveLength(0);
 
-      const goLive = card("Go live");
-      await expect(page.getByRole("button", { name: "Go live" })).toBeDisabled();
-      // Visible prose, not a `title` tooltip: a disabled button takes no
-      // pointer events in several browsers and is out of the tab order, so an
-      // operator staring at a dead button would have nothing to read.
-      await expect(goLive).toContainText(
-        "Finish these steps first: Business hours, Voice profile, Phone number, Test call",
-      );
+    const goLive = card("Go live");
+    await expect(page.getByRole("button", { name: "Go live" })).toBeDisabled();
+    // Visible prose, not a `title` tooltip: a disabled button takes no
+    // pointer events in several browsers and is out of the tab order, so an
+    // operator staring at a dead button would have nothing to read.
+    await expect(goLive).toContainText(
+      "Finish these steps first: Business hours, Voice profile, Phone number, Test call",
+    );
 
-      // --- 3. THE HOURS REGRESSION GUARD ----------------------------------
-      // Exit-gate call #1 greeted a real caller with "no availability" for
-      // every day, from a calendar whose `open_hours` had been wiped while
-      // everything upstream still said it was configured. `enabled` stayed
-      // true throughout — which is exactly why "enabled means configured" is
-      // the wrong question and this card asks a different one.
-      const hours = card("Business hours");
-      await expectStepState(hours, "To do");
+    // --- 3. THE HOURS REGRESSION GUARD ----------------------------------
+    // Exit-gate call #1 greeted a real caller with "no availability" for
+    // every day, from a calendar whose `open_hours` had been wiped while
+    // everything upstream still said it was configured. `enabled` stayed
+    // true throughout — which is exactly why "enabled means configured" is
+    // the wrong question and this card asks a different one.
+    const hours = card("Business hours");
+    await expectStepState(hours, "To do");
 
-      // Written through the service client, read back through the signed-in
-      // agency user's own RLS-enforced session. That asymmetry is the point:
-      // a grant the operator does not have makes this card go "Couldn't
-      // check", and `expectStepState` fails rather than quietly passing.
-      await getOrCreateCalendar(db, accountId, "e2e-setup-spec");
-      await updateCalendarSettings(
-        db, accountId,
-        { enabled: true, openHours: { mon: [["09:00", "17:00"]], tue: [["09:00", "17:00"]] } },
-        "e2e-setup-spec",
-      );
-      await page.reload();
-      await expectStepState(hours, "Done");
+    // Written through the service client, read back through the signed-in
+    // agency user's own RLS-enforced session. That asymmetry is the point:
+    // a grant the operator does not have makes this card go "Couldn't
+    // check", and `expectStepState` fails rather than quietly passing.
+    await getOrCreateCalendar(db, accountId, "e2e-setup-spec");
+    await updateCalendarSettings(
+      db, accountId,
+      { enabled: true, openHours: { mon: [["09:00", "17:00"]], tue: [["09:00", "17:00"]] } },
+      "e2e-setup-spec",
+    );
+    await page.reload();
+    await expectStepState(hours, "Done");
 
-      // The wipe. `enabled` is untouched — only the windows go — so anything
-      // reading the flag alone would still call this configured.
-      await updateCalendarSettings(db, accountId, { openHours: {} }, "e2e-setup-spec");
-      await page.reload();
-      await expectStepState(hours, "To do");
+    // The wipe. `enabled` is untouched — only the windows go — so anything
+    // reading the flag alone would still call this configured.
+    await updateCalendarSettings(db, accountId, { openHours: {} }, "e2e-setup-spec");
+    await page.reload();
+    await expectStepState(hours, "To do");
 
-      // And back, so the card is proven to track the rows in both directions
-      // rather than merely having been red once.
-      await updateCalendarSettings(
-        db, accountId, { openHours: { mon: [["09:00", "17:00"]] } }, "e2e-setup-spec",
-      );
-      await page.reload();
-      await expectStepState(hours, "Done");
+    // And back, so the card is proven to track the rows in both directions
+    // rather than merely having been red once.
+    await updateCalendarSettings(
+      db, accountId, { openHours: { mon: [["09:00", "17:00"]] } }, "e2e-setup-spec",
+    );
+    await page.reload();
+    await expectStepState(hours, "Done");
 
-      // --- 4. The email skip tick persists --------------------------------
-      const email = card("Email identity");
-      await expectStepState(email, "To do");
-      await email.getByRole("button", { name: "Skip for now" }).click();
+    // --- 4. The email skip tick persists --------------------------------
+    const email = card("Email identity");
+    await expectStepState(email, "To do");
+    await email.getByRole("button", { name: "Skip for now" }).click();
 
-      // The database, not the button. A button that changed state proves a
-      // render; this proves the row `setSetupTickAction` was supposed to write
-      // actually landed — and it is the thing a reload can read back.
-      await expect
-        .poll(
-          async () => {
-            const rows = await listChecklistState(db, accountId);
-            return rows.some(
-              (r) => r.item_key === SETUP_TICK_KEYS.emailSkipped && r.done_at !== null,
-            );
-          },
-          { message: "the email-skipped tick should reach checklist_items" },
-        )
-        .toBe(true);
+    // The database, not the button. A button that changed state proves a
+    // render; this proves the row `setSetupTickAction` was supposed to write
+    // actually landed — and it is the thing a reload can read back.
+    await expect
+      .poll(
+        async () => {
+          const rows = await listChecklistState(db, accountId);
+          return rows.some(
+            (r) => r.item_key === SETUP_TICK_KEYS.emailSkipped && r.done_at !== null,
+          );
+        },
+        { message: "the email-skipped tick should reach checklist_items" },
+      )
+      .toBe(true);
 
-      await page.reload();
-      await expectStepState(email, "Skipped");
-      await expect(email.getByRole("button", { name: "Un-skip" })).toBeVisible();
+    await page.reload();
+    await expectStepState(email, "Skipped");
+    await expect(email.getByRole("button", { name: "Un-skip" })).toBeVisible();
 
-      // Skipping leaves the denominator rather than sitting in it forever —
-      // the meter must be able to reach the end for an account that never
-      // configures a sending identity.
-      await expect(page.getByRole("progressbar", { name: "Setup progress" }))
-        .toHaveAttribute("aria-valuetext", /of 8 steps done$/);
-    } finally {
-      // FK-child-first, and only rows this spec created. `checklist_items` and
-      // `calendars` both reference `accounts`; the former has NO cascade
-      // (migration 0007), so a leaked tick row would make auth.teardown's
-      // account delete fail silently — a failure mode this suite has already
-      // watched happen once.
-      //
-      // Logged rather than thrown: throwing from a `finally` REPLACES whatever
-      // assertion failure the block above was already raising.
-      for (const table of ["checklist_items", "calendars"]) {
-        const { error } = await db.from(table).delete().eq("account_id", accountId);
-        if (error) {
-          console.error(`setup e2e cleanup: ${table} delete failed: ${error.message}`);
-        }
-      }
-    }
+    // Skipping leaves the denominator rather than sitting in it forever —
+    // the meter must be able to reach the end for an account that never
+    // configures a sending identity.
+    await expect(page.getByRole("progressbar", { name: "Setup progress" }))
+      .toHaveAttribute("aria-valuetext", /of 8 steps done$/);
   });
 });
 

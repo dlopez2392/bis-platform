@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb } from "@bis/db";
+import { SEEDED_CONTACT_NAME } from "./support";
 
 // Playwright's config passes env to the webServer, not to this process, so the
 // service-role credentials have to be loaded explicitly for cleanup.
@@ -14,16 +15,14 @@ loadEnv({ path: ".env.local" });
 // address, which the send guard requires.
 const ACCOUNT_NAME = "Test Client One";
 
-/**
- * ...and the contact on it that actually has that email address. Named rather
- * than taken positionally: `listContacts` orders by `created_at` descending,
- * so `.first()` means "whoever rang most recently", and real voice calls have
- * since created contacts on this shared account from a phone number alone,
- * with `email` null. The composer correctly refuses to email those — it
- * renders "no email on this contact" instead of a Subject field — so
- * `.first()` had quietly stopped selecting a contact this spec can send from.
- */
-const SEEDED_CONTACT_NAME = "Maria Garcia";
+// SEEDED_CONTACT_NAME (support.ts): ...and the contact on it that actually
+// has that email address. Named rather than taken positionally: `listContacts`
+// orders by `created_at` descending, so `.first()` means "whoever rang most
+// recently", and real voice calls have since created contacts on this shared
+// account from a phone number alone, with `email` null. The composer
+// correctly refuses to email those — it renders "no email on this contact"
+// instead of a Subject field — so `.first()` had quietly stopped selecting a
+// contact this spec can send from.
 
 test("email sent from a contact appears in the thread and in Conversations", async ({ page }) => {
   await page.goto("/dashboard/accounts");
