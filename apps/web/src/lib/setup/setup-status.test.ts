@@ -216,6 +216,14 @@ describe("email", () => {
     expect(email.done).toBe(false);
     expect(email.skipped).toBe(false);
   });
+
+  it("is done and not skipped when fromEmail becomes non-blank despite a stale emailSkipped tick", () => {
+    const email = stepFor(deriveSetupStatus(fullInputs({
+      fromEmail: "hello@acmedental.example", ticks: { emailSkipped: true, forwardingDone: true },
+    })), "email");
+    expect(email.done).toBe(true);
+    expect(email.skipped).toBe(false);
+  });
 });
 
 describe("forwarding", () => {
