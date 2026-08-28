@@ -58,10 +58,18 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
     const db = serviceDb();
     const row = await getPhoneNumberByE164(db, calledE164);
     if (!row || (row.status !== "testing" && row.status !== "live")) {
+      // This decision is now spoken here (TeXML hangs up before dialing), so
+      // the webhook's own "declined: unknown-number" log line never fires
+      // for these calls — this is the only telemetry the cap/refusal path
+      // gets. Caller E164 in logs is a ratified decision (the webhook's
+      // "incoming call" log already logs callerNumber) — parity, not a new
+      // exposure.
+      console.error(`texml declined refuse-unknown for ${calledE164}, caller ${callerE164 ?? "unknown"}`);
       return { kind: "refuse", languages: "en" };
     }
     const profile = await getVoiceProfile(db, row.account_id);
     if (!profile || !profile.enabled) {
+      console.error(`texml declined refuse-disabled for ${calledE164}, caller ${callerE164 ?? "unknown"}`);
       return { kind: "refuse", languages: profile?.languages ?? "en" };
     }
     // Cap UX only — the caller deserves words, not dead air. The incoming
@@ -70,10 +78,15 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
     // only ever waste a dial attempt, never let an over-cap caller through.
     try {
       const dayStart = utcDayStart(new Date());
-      const forAccount = await countCallsSince(db, row.account_id, dayStart);
-      const forNumber = callerE164
-        ? await countCallsByCallerSince(db, row.account_id, callerE164, dayStart) : 0;
-      if (!decideLimit({ forNumber, forAccount }, readLimitConfig()).allowed) {
+      // Independent reads — run them together, this route sits on Telnyx's
+      // carrier answer-deadline.
+      const [forAccount, forNumber] = await Promise.all([
+        countCallsSince(db, row.account_id, dayStart),
+        callerE164 ? countCallsByCallerSince(db, row.account_id, callerE164, dayStart) : Promise.resolve(0),
+      ]);
+      const verdict = decideLimit({ forNumber, forAccount }, readLimitConfig());
+      if (!verdict.allowed) {
+        console.error(`texml declined cap (${verdict.reason}) for ${calledE164}, caller ${callerE164 ?? "unknown"}`);
         return { kind: "cap", languages: profile.languages };
       }
     } catch (e) {

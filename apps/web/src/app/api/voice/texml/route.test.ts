@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { GET, POST } from "./route";
+import { utcDayStart } from "@/lib/voice/call-limits";
 
 const lookupMock = vi.hoisted(() => vi.fn());
 const profileMock = vi.hoisted(() => vi.fn());
@@ -138,10 +139,31 @@ describe("texml route — daily call cap refusal (spoken, bilingual)", () => {
     expect(xml).toContain("<Say language=\"es-MX\">Lo sentimos — hoy ya no podemos atender más llamadas. Por favor llame mañana.</Say>");
     expect(xml).not.toContain("<Dial");
   });
+  it("over the per-account cap (default 50) while the per-caller count is 0 → cap copy, no Dial", async () => {
+    countCallsSinceMock.mockResolvedValue(50);
+    countCallsByCallerSinceMock.mockResolvedValue(0);
+    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19562921696"));
+    const xml = await res.text();
+    expect(xml).toContain("We're sorry");
+    expect(xml).toContain("can't take more calls today");
+    expect(xml).not.toContain("<Dial");
+  });
   it("under cap + enabled → Dial present (existing behavior intact)", async () => {
     countCallsSinceMock.mockResolvedValue(1);
     countCallsByCallerSinceMock.mockResolvedValue(1);
     const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19562921696"));
+    const xml = await res.text();
+    expect(xml).toContain("<Dial answerOnBridge=\"true\">");
+  });
+  it("counts are queried from midnight UTC of today, not an unpinned Date().toISOString()", async () => {
+    const expectedSince = utcDayStart(new Date());
+    await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19562921696"));
+    expect(countCallsSinceMock).toHaveBeenCalledWith(expect.anything(), "a1", expectedSince);
+    expect(countCallsByCallerSinceMock).toHaveBeenCalledWith(expect.anything(), "a1", "+19562921696", expectedSince);
+  });
+  it("getVoiceProfile rejecting fails open — Dial present through the outer catch", async () => {
+    profileMock.mockRejectedValue(new Error("db down"));
+    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999"));
     const xml = await res.text();
     expect(xml).toContain("<Dial answerOnBridge=\"true\">");
   });
@@ -159,6 +181,6 @@ describe("texml route — daily call cap refusal (spoken, bilingual)", () => {
     }));
     const xml = await res.text();
     expect(xml).toContain("can't take more calls today");
-    expect(countCallsByCallerSinceMock).toHaveBeenCalledWith(expect.anything(), "a1", "+19562921696", expect.any(String));
+    expect(countCallsByCallerSinceMock).toHaveBeenCalledWith(expect.anything(), "a1", "+19562921696", utcDayStart(new Date()));
   });
 });
