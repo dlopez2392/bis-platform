@@ -119,10 +119,27 @@ export async function fillContactBlanks(
   const patch: Record<string, unknown> = {};
   const nameIsPlaceholder = row.first_name === "Caller" && blank(row.last_name);
   const incomingFirst = input.firstName?.trim();
+  const incomingLast = input.lastName?.trim();
+
+  // Whether a blank last_name is safe to fill on its own — i.e. without a
+  // first_name write riding along in the same call. "Safe" means there's no
+  // real first name on file to contradict: it's blank, it's our own
+  // "Caller" placeholder, or it already matches the incoming first name
+  // (case-insensitive, trimmed). This is the guard that stops "Smith" from
+  // grafting onto a contact whose actual first name differs from this
+  // caller's — a stranger who merely dedupe-matched on phone.
+  const firstNameCompatible = blank(row.first_name) || nameIsPlaceholder ||
+    (!!incomingFirst && incomingFirst.toLowerCase() === String(row.first_name).trim().toLowerCase());
+
   if (incomingFirst && (blank(row.first_name) || nameIsPlaceholder)) {
     patch.first_name = incomingFirst;
-    const incomingLast = input.lastName?.trim();
     if (incomingLast && blank(row.last_name)) patch.last_name = incomingLast;
+  } else if (incomingLast && blank(row.last_name) && firstNameCompatible) {
+    // Independent fill: first_name isn't being written this call (it's
+    // already a real, non-placeholder name), but last_name can still be
+    // filled on its own — e.g. a contact created as just "John" who a later
+    // caller identifies as "John Smith" must not stay surnameless forever.
+    patch.last_name = incomingLast;
   }
   const incomingEmail = input.email?.trim().toLowerCase();
   if (incomingEmail && blank(row.email)) patch.email = incomingEmail;

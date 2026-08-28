@@ -163,4 +163,22 @@ describe("fillContactBlanks", () => {
       expect(await fillContactBlanks(db, accountId, c.id,
         { firstName: "X", lastName: "Y", email: "x@y.co", phone: "+15550000024" }, "t")).toEqual([]);
     }));
+
+  it("fills a blank last_name independently when the incoming first name matches", () =>
+    withTestAccount(async (db, accountId) => {
+      const c = await createContact(db, accountId, { firstName: "John", phone: "+15550000025" }, "t");
+      const filled = await fillContactBlanks(db, accountId, c.id,
+        { firstName: "John", lastName: "Smith" }, "t");
+      expect(filled).toEqual(["last_name"]);
+      const row = await getContact(db, accountId, c.id);
+      expect(row!.first_name).toBe("John");
+      expect(row!.last_name).toBe("Smith");
+    }));
+
+  it("does NOT graft a last name onto a record whose first name differs from the caller's", () =>
+    withTestAccount(async (db, accountId) => {
+      const c = await createContact(db, accountId, { firstName: "Ana", phone: "+15550000026" }, "t");
+      expect(await fillContactBlanks(db, accountId, c.id,
+        { firstName: "Maria", lastName: "Smith" }, "t")).toEqual([]);
+    }));
 });
