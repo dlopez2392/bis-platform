@@ -2,14 +2,35 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { GET, POST } from "./route";
 
 const lookupMock = vi.hoisted(() => vi.fn());
+const profileMock = vi.hoisted(() => vi.fn());
+const countCallsSinceMock = vi.hoisted(() => vi.fn());
+const countCallsByCallerSinceMock = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({}),
   getPhoneNumberByE164: (...a: unknown[]) => lookupMock(...a),
+  getVoiceProfile: (...a: unknown[]) => profileMock(...a),
+  countCallsSince: (...a: unknown[]) => countCallsSinceMock(...a),
+  countCallsByCallerSince: (...a: unknown[]) => countCallsByCallerSinceMock(...a),
 }));
+
+const ENABLED_PROFILE = {
+  id: "vp1", account_id: "a1", persona_name: "Sofía",
+  greeting_en: "Hi", greeting_es: "Hola", facts: "-", services: "-",
+  languages: "en" as const, booking_enabled: true,
+  after_hours: "hours_then_message" as const, enabled: true,
+};
 
 beforeEach(() => {
   process.env.VOICE_OPENAI_PROJECT_ID = "proj_test123";
+  delete process.env.PHONE_MAX_CALLS_PER_NUMBER_PER_DAY;
+  delete process.env.PHONE_MAX_CALLS_PER_ACCOUNT_PER_DAY;
   lookupMock.mockReset().mockResolvedValue({ id: "pn1", account_id: "a1", e164: "+19565550999", telnyx_id: null, status: "live" });
+  // Default: enabled, under the (default 5/day) cap — the pre-existing "dial"
+  // tests below never mention a profile or caps, so they need this to still
+  // reach `<Dial>` now that classify() checks both.
+  profileMock.mockReset().mockResolvedValue(ENABLED_PROFILE);
+  countCallsSinceMock.mockReset().mockResolvedValue(0);
+  countCallsByCallerSinceMock.mockReset().mockResolvedValue(0);
 });
 
 describe("texml route", () => {
@@ -56,5 +77,88 @@ describe("texml route", () => {
     delete process.env.VOICE_OPENAI_PROJECT_ID;
     const res = await GET(new Request("https://x.example/api/voice/texml"));
     expect(await res.text()).toContain("<Say>");
+  });
+});
+
+describe("texml route — disabled profile refusal (spoken, bilingual)", () => {
+  it("known number + enabled:false profile → spoken refusal, no Dial", async () => {
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, enabled: false, languages: "en" });
+    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999"));
+    const xml = await res.text();
+    expect(xml).toContain("<Say>");
+    expect(xml).toContain("<Hangup/>");
+    expect(xml).not.toContain("<Dial");
+  });
+  it("profile missing entirely → refusal defaults to English", async () => {
+    profileMock.mockResolvedValue(null);
+    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999"));
+    const xml = await res.text();
+    expect(xml).toContain("Sorry, this number can't take your call right now. Please try again later.");
+    expect(xml).not.toContain("<Dial");
+  });
+  it("existing English refusal sentence stays byte-identical", async () => {
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, enabled: false, languages: "en" });
+    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999"));
+    const xml = await res.text();
+    expect(xml).toContain("<Say>Sorry, this number can't take your call right now. Please try again later.</Say>");
+  });
+  it("languages: es → language=\"es-MX\" Say with the Spanish copy, English absent", async () => {
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, enabled: false, languages: "es" });
+    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999"));
+    const xml = await res.text();
+    expect(xml).toContain("<Say language=\"es-MX\">Lo sentimos, este número no puede atender su llamada en este momento. Por favor intente más tarde.</Say>");
+    expect(xml).not.toContain("<Say>Sorry");
+    expect(xml).not.toContain("<Dial");
+  });
+  it("languages: both → English then Spanish, both Say elements present", async () => {
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, enabled: false, languages: "both" });
+    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999"));
+    const xml = await res.text();
+    expect(xml).toContain("<Say>Sorry, this number can't take your call right now. Please try again later.</Say>");
+    expect(xml).toContain("<Say language=\"es-MX\">Lo sentimos, este número no puede atender su llamada en este momento. Por favor intente más tarde.</Say>");
+    // English must come first — order matters for a caller hearing it live.
+    expect(xml.indexOf("Sorry")).toBeLessThan(xml.indexOf("Lo sentimos"));
+  });
+});
+
+describe("texml route — daily call cap refusal (spoken, bilingual)", () => {
+  it("over the per-number cap (default 5) → cap copy, no Dial", async () => {
+    countCallsByCallerSinceMock.mockResolvedValue(5);
+    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19562921696"));
+    const xml = await res.text();
+    expect(xml).toContain("We're sorry");
+    expect(xml).toContain("can't take more calls today");
+    expect(xml).not.toContain("<Dial");
+  });
+  it("cap refusal honors the profile's language (es)", async () => {
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, enabled: true, languages: "es" });
+    countCallsByCallerSinceMock.mockResolvedValue(5);
+    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19562921696"));
+    const xml = await res.text();
+    expect(xml).toContain("<Say language=\"es-MX\">Lo sentimos — hoy ya no podemos atender más llamadas. Por favor llame mañana.</Say>");
+    expect(xml).not.toContain("<Dial");
+  });
+  it("under cap + enabled → Dial present (existing behavior intact)", async () => {
+    countCallsSinceMock.mockResolvedValue(1);
+    countCallsByCallerSinceMock.mockResolvedValue(1);
+    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19562921696"));
+    const xml = await res.text();
+    expect(xml).toContain("<Dial answerOnBridge=\"true\">");
+  });
+  it("cap-count lookup throws → Dial present (fail-open pin)", async () => {
+    countCallsByCallerSinceMock.mockRejectedValue(new Error("db down"));
+    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19562921696"));
+    const xml = await res.text();
+    expect(xml).toContain("<Dial answerOnBridge=\"true\">");
+  });
+  it("POST also reads From from the form body for cap counting", async () => {
+    countCallsByCallerSinceMock.mockResolvedValue(5);
+    const body = new URLSearchParams({ To: "+19565550999", From: "+19562921696" });
+    const res = await POST(new Request("https://x.example/api/voice/texml", {
+      method: "POST", body, headers: { "content-type": "application/x-www-form-urlencoded" },
+    }));
+    const xml = await res.text();
+    expect(xml).toContain("can't take more calls today");
+    expect(countCallsByCallerSinceMock).toHaveBeenCalledWith(expect.anything(), "a1", "+19562921696", expect.any(String));
   });
 });
