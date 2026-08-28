@@ -103,6 +103,13 @@ describe("finishCall", () => {
     expect(dbMocks.fillContactBlanks).toHaveBeenCalledWith({}, "a1", "ct1",
       { firstName: "Ana", lastName: "Ruiz", email: undefined, phone: "+19562921696" }, "voice", "ai");
     expect(r).toMatchObject({ stored: true, notified: true, outcome: "lead" });
+    // Pins the LOCAL try/catch around fillContactBlanks: without it, the
+    // rejection propagates to the outer per-leg catch and silently skips
+    // ensureConversation/createMessage/incrementUnreadCount too — but stored/
+    // notified above come from independent blocks and would stay green either
+    // way, so this is the only thing that actually pins the local catch.
+    expect(dbMocks.ensureConversation).toHaveBeenCalled();
+    expect(dbMocks.createMessage).toHaveBeenCalled();
   });
   it("caller-ID-only path (no lead) backfills the bare phone on dedupe, symmetric shape", async () => {
     dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });

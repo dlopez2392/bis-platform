@@ -193,6 +193,9 @@ describe("book_appointment", () => {
       { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz" });
     errSpy.mockRestore();
     expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
+    // Pins the call site itself, not just the outcome — without this, deleting
+    // the fillContactBlanks call entirely would leave this test green.
+    expect(dbMocks.fillContactBlanks).toHaveBeenCalled();
   });
 
   it("a brand-new contact never calls fillContactBlanks", async () => {
