@@ -99,6 +99,47 @@ export async function updateContact(
     actorType);
 }
 
+/**
+ * Fills ONLY blank fields on an existing contact — the voice dedupe
+ * follow-up (a returning caller's name/email must not stay "Caller"/NULL,
+ * but a misheard name must never clobber a good record). Blank = null or
+ * empty after trim. "Caller" with no last name is our own finish-call
+ * placeholder and counts as blank for the name pair only.
+ * Returns the column names actually written; [] means no update ran.
+ */
+export async function fillContactBlanks(
+  db: SupabaseClient, accountId: string, contactId: string,
+  input: { firstName?: string; lastName?: string; email?: string; phone?: string },
+  actorId: string, actorType: ActorType = "user",
+): Promise<string[]> {
+  const row = await getContact(db, accountId, contactId);
+  if (!row) throw new Error("fillContactBlanks: no such contact");
+  const blank = (v: unknown) => v == null || String(v).trim() === "";
+
+  const patch: Record<string, unknown> = {};
+  const nameIsPlaceholder = row.first_name === "Caller" && blank(row.last_name);
+  const incomingFirst = input.firstName?.trim();
+  if (incomingFirst && (blank(row.first_name) || nameIsPlaceholder)) {
+    patch.first_name = incomingFirst;
+    const incomingLast = input.lastName?.trim();
+    if (incomingLast && blank(row.last_name)) patch.last_name = incomingLast;
+  }
+  const incomingEmail = input.email?.trim().toLowerCase();
+  if (incomingEmail && blank(row.email)) patch.email = incomingEmail;
+  const incomingPhone = input.phone?.trim();
+  if (incomingPhone && blank(row.phone)) patch.phone = incomingPhone;
+
+  const filled = Object.keys(patch);
+  if (filled.length === 0) return [];
+
+  const { error } = await db.from("contacts")
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq("account_id", accountId).eq("id", contactId);
+  if (error) throw new Error(`fillContactBlanks failed: ${error.message}`);
+  await emit(db, accountId, "contact.updated", actorId, { contactId, fields: filled }, actorType);
+  return filled;
+}
+
 export async function listContacts(
   db: SupabaseClient, accountId: string, opts: { search?: string; limit?: number } = {},
 ) {

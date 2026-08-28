@@ -2,7 +2,7 @@ import "dotenv/config";
 import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
 import { createContact, updateContact, listContacts, getContact,
-         addTagToContact, listContactTags } from "../contacts";
+         addTagToContact, listContactTags, fillContactBlanks } from "../contacts";
 
 describe("contacts service", () => {
   it("creates, emits event, dedupes by email", () =>
@@ -124,5 +124,43 @@ describe("contacts service", () => {
         .eq("account_id", accountId).eq("type", "contact.created");
       expect(data![0]!.actor_type).toBe("system");
       expect(data![0]!.actor_id).toBe("form");
+    }));
+});
+
+describe("fillContactBlanks", () => {
+  it("fills only blank fields and reports them", () =>
+    withTestAccount(async (db, accountId) => {
+      const c = await createContact(db, accountId, { firstName: "Ana", phone: "+15550000020" }, "t");
+      const filled = await fillContactBlanks(db, accountId, c.id,
+        { firstName: "Ignored", email: "ANA@Example.com " }, "t");
+      expect(filled.sort()).toEqual(["email"]);
+      const row = await getContact(db, accountId, c.id);
+      expect(row!.first_name).toBe("Ana");            // IRON RULE: not overwritten
+      expect(row!.email).toBe("ana@example.com");     // normalized
+    }));
+
+  it("replaces the 'Caller' placeholder with a real name (lastName rides along)", () =>
+    withTestAccount(async (db, accountId) => {
+      const c = await createContact(db, accountId, { firstName: "Caller", phone: "+15550000021" }, "t");
+      const filled = await fillContactBlanks(db, accountId, c.id,
+        { firstName: "Dan", lastName: "Lopez" }, "t");
+      expect(filled.sort()).toEqual(["first_name", "last_name"]);
+      const row = await getContact(db, accountId, c.id);
+      expect(row!.first_name).toBe("Dan");
+      expect(row!.last_name).toBe("Lopez");
+    }));
+
+  it("does NOT treat a real first name with blank last name as a placeholder", () =>
+    withTestAccount(async (db, accountId) => {
+      const c = await createContact(db, accountId, { firstName: "Madonna", phone: "+15550000022" }, "t");
+      expect(await fillContactBlanks(db, accountId, c.id, { firstName: "Dan" }, "t")).toEqual([]);
+    }));
+
+  it("no-ops cleanly when nothing is blank (no update, no event)", () =>
+    withTestAccount(async (db, accountId) => {
+      const c = await createContact(db, accountId,
+        { firstName: "A", lastName: "B", email: "a@b.co", phone: "+15550000023" }, "t");
+      expect(await fillContactBlanks(db, accountId, c.id,
+        { firstName: "X", lastName: "Y", email: "x@y.co", phone: "+15550000024" }, "t")).toEqual([]);
     }));
 });

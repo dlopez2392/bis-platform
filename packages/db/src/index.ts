@@ -4,7 +4,7 @@ export type { SupabaseClient } from "@supabase/supabase-js";
 export { emit, type ActorType } from "./events";
 export { createAccount, listAccounts, setClientAccess, getAccountByOrgId } from "./accounts";
 export { createContact, updateContact, listContacts, getContact,
-         addTagToContact, removeTagFromContact, listContactTags,
+         addTagToContact, removeTagFromContact, listContactTags, fillContactBlanks,
          type ContactInput } from "./contacts";
 export { addNote, listNotes, addTask, listContactTasks, completeTask } from "./activities";
 export { listCustomFields, createCustomField, listCustomValues, upsertCustomValue,
