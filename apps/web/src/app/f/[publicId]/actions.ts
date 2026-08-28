@@ -19,6 +19,7 @@ import {
   DUPLICATE_WINDOW_MS, verifyRenderToken, hashIp, hashAnswers, parseAttribution,
   isValidEmail, isValidPhone,
 } from "@/lib/forms/guards";
+import { toE164 } from "@/lib/voice/phone-number";
 import { publicStrings, normalizeLocale } from "@/lib/forms/public-strings";
 import type { SubmitResult } from "./submit-result";
 
@@ -287,11 +288,19 @@ async function enrich(
     // contact's own timeline with form provenance, visible to the operator,
     // and nothing here is ever read back to the submitter. Do not "fix" this
     // by requiring verification of either field without re-opening that review.
+    // Hoisted: `fillBlanks` below applies the identical rule to its own read
+    // of `byKind.get("core.phone")` for a returning contact, so both sites
+    // stay obviously in lockstep rather than drift into two implementations
+    // of the same normalization.
+    const rawPhone = byKind.get("core.phone") || "";
     const created = await createContact(db, accountId, {
       firstName: byKind.get("core.first_name") || undefined,
       lastName: byKind.get("core.last_name") || undefined,
       email: byKind.get("core.email") || undefined,
-      phone: byKind.get("core.phone") || undefined,
+      // Voice stores E.164; storing web input as-typed made the same person
+      // two contacts and hid web submissions from find_my_booking. Parseable →
+      // E.164, unparseable → as typed (never mangled, never rejected here).
+      phone: rawPhone ? (toE164(rawPhone) ?? rawPhone) : undefined,
       companyName: byKind.get("core.company_name") || undefined,
       source: `form: ${form.name}`,
       custom,
@@ -373,12 +382,17 @@ async function fillBlanks(
   const current = await getContact(db, accountId, contactId);
   if (!current) return;
 
+  // Same E.164-at-the-boundary rule the create path applies (see its comment
+  // in `enrich`) — a blank existing phone getting filled from a later
+  // submission must land normalized too, or the same person ends up with
+  // differently-formatted numbers depending on which submission filled it.
+  const rawPhone = byKind.get("core.phone") ?? "";
   const patch: Record<string, string> = {};
   const pairs: [string, keyof typeof current, string][] = [
     ["firstName", "first_name", byKind.get("core.first_name") ?? ""],
     ["lastName", "last_name", byKind.get("core.last_name") ?? ""],
     ["email", "email", byKind.get("core.email") ?? ""],
-    ["phone", "phone", byKind.get("core.phone") ?? ""],
+    ["phone", "phone", rawPhone ? (toE164(rawPhone) ?? rawPhone) : ""],
     ["companyName", "company_name", byKind.get("core.company_name") ?? ""],
   ];
   for (const [input, column, incoming] of pairs) {

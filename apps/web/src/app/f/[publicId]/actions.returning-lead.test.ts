@@ -149,8 +149,11 @@ describe("submitFormAction — returning lead (fillBlanks + setAttribution)", ()
         const contact = rows![0]!;
         expect(contact.id).toBe(created!.id);
 
-        // Blank fields got filled from the second submission.
-        expect(contact.phone).toBe("956-555-0101");
+        // Blank fields got filled from the second submission — normalized to
+        // E.164 at the boundary (voice stores E.164; a web-typed phone left
+        // as-is made the same person two contacts and hid web leads from
+        // `find_my_booking`).
+        expect(contact.phone).toBe("+19565550101");
         expect(contact.company_name).toBe("Acme Co");
         // Fields that were already populated survived the second submission's
         // different values untouched.

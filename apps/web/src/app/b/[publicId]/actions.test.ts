@@ -545,6 +545,32 @@ describe("submitBookingAction — the alert and the confirmation are not the sam
   });
 });
 
+describe("submitBookingAction — phone normalized to E.164 at the boundary", () => {
+  // Voice stores phones as E.164; web previously stored whatever the booker
+  // typed, so the same person became two contacts and `find_my_booking`
+  // couldn't see web bookings. A parseable number must reach `createContact`
+  // already in E.164 (mutation: drop the `toE164` call → FAILS, sees the raw
+  // "(956) 555-1234").
+  it("a parseable US number reaches createContact as E.164", async () => {
+    await submitBookingAction(PUBLIC_ID, validFormData({ phone: "(956) 555-1234" }));
+
+    expect(createContactMock.mock.calls[0]![2]).toMatchObject({ phone: "+19565551234" });
+  });
+
+  // `isValidPhone` (apps/web/src/lib/forms/guards.ts) accepts a bare 7-digit
+  // string ("5551234" clears its digit-count>=7 floor and PHONE_RE), but
+  // `toE164` (apps/web/src/lib/voice/phone-number.ts) returns null for
+  // anything under 8 digits — so this input genuinely reaches the `?? phone`
+  // fallback rather than exercising unreachable code (mutation: mangle the
+  // fallback into `?? ""` or reject it outright → FAILS).
+  it("a 7-digit number isValidPhone accepts but toE164 cannot parse passes through unchanged, never rejected", async () => {
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ phone: "5551234" }));
+
+    expect(result.ok).toBe(true);
+    expect(createContactMock.mock.calls[0]![2]).toMatchObject({ phone: "5551234" });
+  });
+});
+
 describe("getSlotsAction", () => {
   it("returns ISO slots for a valid day on an enabled calendar", async () => {
     const dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: accountRow.timezone })

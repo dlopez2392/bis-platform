@@ -395,6 +395,47 @@ describe("submitFormAction — the lead notification replies to the customer", (
  * Both assertions below were impossible before: there was no html part, and
  * the link was a bare path that no email client renders as a link.
  */
+describe("submitFormAction — phone normalized to E.164 at the boundary (create path)", () => {
+  // Voice stores phones as E.164; web previously stored whatever the visitor
+  // typed, so the same person became two contacts and `find_my_booking`
+  // couldn't see web submissions. A parseable number must reach
+  // `createContact` already in E.164 (mutation: drop the `toE164` call →
+  // FAILS, sees the raw "956-555-1234").
+  it("a parseable US number reaches createContact as E.164", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(formRow({
+      fields: [{ key: "phone", kind: "core.phone", label: "Phone", required: false }],
+    }));
+    const token = signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
+
+    const result = await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token, locale: "en", phone: "956-555-1234",
+    }));
+
+    expect(result.status).toBe("success");
+    expect(createContactMock.mock.calls[0]![2]).toMatchObject({ phone: "+19565551234" });
+  });
+
+  // `isValidPhone` (apps/web/src/lib/forms/guards.ts) accepts a bare 7-digit
+  // string ("5551234" clears its digit-count>=7 floor and PHONE_RE), but
+  // `toE164` (apps/web/src/lib/voice/phone-number.ts) returns null for
+  // anything under 8 digits — so this input genuinely reaches the `?? rawPhone`
+  // fallback rather than exercising unreachable code (mutation: mangle the
+  // fallback into `?? ""` or reject it outright → FAILS).
+  it("a 7-digit number isValidPhone accepts but toE164 cannot parse passes through unchanged, never rejected", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(formRow({
+      fields: [{ key: "phone", kind: "core.phone", label: "Phone", required: false }],
+    }));
+    const token = signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
+
+    const result = await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token, locale: "en", phone: "5551234",
+    }));
+
+    expect(result.status).toBe("success");
+    expect(createContactMock.mock.calls[0]![2]).toMatchObject({ phone: "5551234" });
+  });
+});
+
 describe("submitFormAction — the lead alert is branded and linkable", () => {
   it("sends html and text, with an absolute contact link in both", async () => {
     getPublishedFormByPublicIdMock.mockResolvedValue(formRow({
