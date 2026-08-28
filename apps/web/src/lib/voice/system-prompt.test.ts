@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildSystemPrompt } from "./system-prompt";
+import type { VoicePromptInput } from "./session-config";
 
 const base = {
   personaName: "Sofía", businessName: "Rio Roofing",
@@ -11,6 +12,10 @@ const base = {
   afterHours: "hours_then_message" as const, callerNumber: "+19562921696",
 };
 const now = new Date("2027-06-01T15:00:00Z");
+
+function baseInput(overrides: Partial<VoicePromptInput> = {}): VoicePromptInput {
+  return { ...base, ...overrides };
+}
 
 describe("buildSystemPrompt", () => {
   it("carries identity disclosure, business fence, and the hard limits", () => {
@@ -40,5 +45,20 @@ describe("buildSystemPrompt", () => {
     const p = buildSystemPrompt({ ...base, personaName: "Alex" }, now);
     expect(p).toContain("Alex");
     expect(p).not.toContain("Sofía");
+  });
+  it("email rule demands per-character read-back and disambiguates spoken symbol words", () => {
+    const p = buildSystemPrompt(baseInput({ bookingEnabled: true }), now);
+    expect(p).toMatch(/character by character/i);
+    expect(p).toMatch(/'plus'/);
+    expect(p).toMatch(/nonexistent address/);
+  });
+  it("failed bookings must capture_lead before take_message", () => {
+    const p = buildSystemPrompt(baseInput({ bookingEnabled: true }), now);
+    expect(p).toMatch(/FIRST call capture_lead/);
+    expect(p).toMatch(/Never end a call knowing the caller's name/);
+  });
+  it("booking-disabled prompt carries neither booking rule", () => {
+    const p = buildSystemPrompt(baseInput({ bookingEnabled: false }), now);
+    expect(p).not.toMatch(/FIRST call capture_lead/);
   });
 });
