@@ -34,6 +34,22 @@ type CallerFields = Pick<CallListRow, "caller_e164" | "contact">;
  * perfectly good phone number: a call can create a contact from nothing but a
  * spoken email address, so a nameless linked contact is a real shape here.
  */
+/**
+ * The list's own "when" — same option shape as `lib/booking/time.ts`'s
+ * `formatWhen` (locale pinned to "en-US", zone pinned to the account's own,
+ * not the viewer's) plus `year: "numeric"`. NOT a parameter added to
+ * `formatWhen` itself: that formatter also renders confirmation and reminder
+ * emails about a booking days out, where every date is implicitly "this
+ * year" and a year would be clutter. This list scrolls back across years —
+ * without one, a call from 2024 and one from 2026 render identically.
+ */
+export function formatCallTime(iso: string, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone, weekday: "short", month: "short", day: "numeric", year: "numeric",
+    hour: "numeric", minute: "2-digit", timeZoneName: "short",
+  }).format(new Date(iso));
+}
+
 export function callerLabel(row: CallerFields): string {
   const name = [row.contact?.first_name, row.contact?.last_name]
     .map((part) => part?.trim() ?? "")

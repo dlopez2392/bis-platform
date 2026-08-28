@@ -11,14 +11,9 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
-// The account-zone timestamp formatter the booking flow already established.
-// Reused rather than re-derived: a second "format an instant in the account's
-// timezone" helper is exactly how two surfaces start disagreeing about what
-// time something happened.
-import { formatWhen } from "@/lib/booking/time";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
-import { callerLabel, formatDuration } from "./format";
+import { callerLabel, formatCallTime, formatDuration } from "./format";
 
 /**
  * Outcome treatment. The hue lives in the DOT and the chip's border/tint, not
@@ -108,8 +103,10 @@ export function CallsTable({
             // Whether the label is a real identity or the withheld-number
             // fallback — read off the row rather than by comparing the label
             // back against its own message, so a copy change cannot silently
-            // restyle every row.
-            const known = Boolean(row.contact_id || row.caller_e164?.trim());
+            // restyle every row. Only reached when `row.contact_id` is
+            // already falsy (see the branch below), so that disjunct would
+            // never be the one making this true.
+            const known = Boolean(row.caller_e164?.trim());
 
             return (
               <TableRow key={row.id} className="group">
@@ -118,7 +115,7 @@ export function CallsTable({
                     href={callHref}
                     className="font-medium tabular-nums transition-colors hover:text-primary"
                   >
-                    {formatWhen(new Date(row.started_at), timezone)}
+                    {formatCallTime(row.started_at, timezone)}
                   </Link>
                 </TableCell>
 

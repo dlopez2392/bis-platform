@@ -54,6 +54,18 @@ describe("CallsTable", () => {
     expect(tokyo).toContain("Aug 26");
   });
 
+  it("includes the YEAR, and pins it to the account's own zone rather than the instant's UTC date", () => {
+    // A New Year's Eve instant: still 2025 in Chicago, already 2026 in Tokyo.
+    // A year merely appended from the UTC timestamp — rather than one the
+    // Intl formatter derives inside the account's own zone — would print the
+    // same year in both columns and this test would not be able to tell.
+    const nye: CallListRow = { ...ROW, id: "c-nye", started_at: "2025-12-31T23:15:00+00:00" };
+    expect(render([nye], { timezone: "America/Chicago" })).toContain("2025");
+    const tokyo = render([nye], { timezone: "Asia/Tokyo" });
+    expect(tokyo).toContain("Jan 1");
+    expect(tokyo).toContain("2026");
+  });
+
   it("renders the shapes that have no contact, no duration, or no caller ID", () => {
     const rows: CallListRow[] = [
       { ...ROW, id: "c2", contact_id: null, contact: null, duration_secs: null, outcome: "lead" },

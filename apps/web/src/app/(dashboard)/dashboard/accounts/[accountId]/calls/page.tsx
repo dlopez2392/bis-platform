@@ -47,8 +47,16 @@ export default async function CallsPage({
   await requireAccountAccess(accountId);
   const db = await dbForRequest();
 
+  // Validated once, reused twice: as the query's own cursor below, and as
+  // the signal that decides which empty state a zero-row result means (see
+  // the render below). An unparseable `?before=` is dropped by `cursorFrom`
+  // and so, correctly, reads as "no cursor" here too — a mistyped URL falls
+  // back to page one rather than to the false "no calls yet" reading a
+  // client scrolled fifty-deep into their own history would otherwise get.
+  const cursor = cursorFrom(before);
+
   const [rows, todayCount, account] = await Promise.all([
-    listCalls(db, accountId, { limit: PAGE_SIZE, before: cursorFrom(before) }),
+    listCalls(db, accountId, { limit: PAGE_SIZE, before: cursor }),
     // The SAME function the incoming-call webhook counts with, over the SAME
     // UTC day floor it enforces against. A second, "obvious" formula here
     // (local midnight, ended calls only, …) would let this meter disagree
@@ -78,7 +86,13 @@ export default async function CallsPage({
       <PageHeader title={m["calls.title"]} />
       <div className="space-y-6 p-6">
         <UsageMeter used={todayCount} cap={cap} />
-        {rows.length === 0 ? (
+        {rows.length === 0 && !cursor ? (
+          // The COLD-START reading of zero rows: no `?before=` cursor, so
+          // this is page one and there is nothing behind it either — a
+          // client who has genuinely never had a call. A cursored zero
+          // (below) means the opposite: real history, just none older than
+          // the cursor, and `CallsTable` with zero rows renders its headers
+          // and no pager rather than this.
           <EmptyState
             icon={PhoneIncoming}
             title={m["calls.empty.title"]}
@@ -121,6 +135,12 @@ function UsageMeter({ used, cap }: { used: number; cap: number }) {
   // set apart typographically while the sentence — including the order of its
   // parts — stays entirely in the message catalogue.
   const parts = m["calls.usage"].split(/(\{n\}|\{cap\})/);
+  // Also the progressbar's accessible value below — as `aria-valuetext`, not
+  // a second `aria-label`. A label here would duplicate this same sentence,
+  // which sits right next to the bar as visible text: a screen reader would
+  // announce it once for the paragraph and again for the bar it describes.
+  // `aria-valuetext` replaces the numeric "N of M" AT would otherwise
+  // synthesize from `aria-valuenow`/`aria-valuemax`, so it reads once.
   const plain = m["calls.usage"].replace("{n}", String(used)).replace("{cap}", String(cap));
 
   return (
@@ -150,7 +170,7 @@ function UsageMeter({ used, cap }: { used: number; cap: number }) {
         aria-valuemin={0}
         aria-valuemax={denominator}
         aria-valuenow={Math.min(used, denominator)}
-        aria-label={plain}
+        aria-valuetext={plain}
         className="h-1.5 w-full overflow-hidden rounded-full bg-muted sm:w-56"
       >
         <div className={cn("h-full rounded-full", tone.fill)} style={{ width: `${percent}%` }} />
