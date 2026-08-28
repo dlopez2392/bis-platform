@@ -14,9 +14,9 @@ optional hardening upgrade you can do later, on your own schedule.
 
 Two URLs everything below points at:
 
-- Production: `https://bis-platform-six.vercel.app`
-- Webhook (OpenAI → us): `https://bis-platform-six.vercel.app/api/voice/incoming`
-- TeXML (Telnyx → us): `https://bis-platform-six.vercel.app/api/voice/texml`
+- Production: `https://app.bis-rgv.com`
+- Webhook (OpenAI → us): `https://app.bis-rgv.com/api/voice/incoming`
+- TeXML (Telnyx → us): `https://app.bis-rgv.com/api/voice/texml`
 
 ---
 
@@ -30,7 +30,7 @@ that's meaningful in billing/usage dashboards.
 2. Note its **project id** (`proj_…`) — this is `VOICE_OPENAI_PROJECT_ID`.
 3. Inside that project → **API keys** → create a key. This is `OPENAI_API_KEY`.
 4. Inside that project → **Settings → Webhooks** → add an endpoint:
-   - URL: `https://bis-platform-six.vercel.app/api/voice/incoming`
+   - URL: `https://app.bis-rgv.com/api/voice/incoming`
    - Event: `realtime.call.incoming`
 5. Note the endpoint's signing secret (`whsec_…`) — this is `OPENAI_WEBHOOK_SECRET`.
 
@@ -79,7 +79,7 @@ Production deployment's "Redeployed" timestamp is AFTER these were saved.
    hardened activation procedure" below) but it is optional, and flipping
    Voice Method to POST outside that procedure's order breaks every call —
    read it before touching this setting.
-3. **Webhook URL**: `https://bis-platform-six.vercel.app/api/voice/texml`
+3. **Webhook URL**: `https://app.bis-rgv.com/api/voice/texml`
 4. **Inbound**: enable the **OPUS** codec.
 5. **Outbound**: attach the account's existing **OVP** (Outbound Voice
    Profile) — the same one other Telnyx numbers on this account already use.
