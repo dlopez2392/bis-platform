@@ -11,6 +11,7 @@ import { ClientAccessPanel, type ClientAccessMember } from "./client-access-pane
 import { SendingAddressCard } from "./sending-address-card";
 import { BrandingPanel } from "@/components/branding-panel";
 import { captureBlueprintAction } from "../../../blueprints/actions";
+import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,8 +40,15 @@ const DATA_TYPE_LABEL: Record<CustomFieldDef["data_type"], string> = {
 
 export default async function CrmSettingsPage({
   params,
-}: { params: Promise<{ accountId: string }> }) {
+  searchParams,
+}: {
+  params: Promise<{ accountId: string }>;
+  searchParams: Promise<{ from?: string }>;
+}) {
   const { accountId } = await params;
+  // Set by the setup wizard's links, and by nothing else — the breadcrumb
+  // below appears only for someone who arrived mid-flow.
+  const { from } = await searchParams;
   await requireAgencyOnlyAccountAccess(accountId);
   const db = await dbForRequest();
   const [fields, values, blueprints, account, branding, sendingIdentity] = await Promise.all([
@@ -125,6 +133,7 @@ export default async function CrmSettingsPage({
   const boundSetFromEmail = setFromEmailAction.bind(null, accountId);
   return (
     <>
+      {from === "setup" ? <BackToSetup accountId={accountId} /> : null}
       <PageHeader
         title={m["settings.title"]}
         actions={

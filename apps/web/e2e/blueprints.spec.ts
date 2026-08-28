@@ -99,21 +99,22 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     await page.getByRole("option", { name: blueprintName }).click();
     await page.getByRole("button", { name: "Add", exact: true }).click();
 
-    // The onboarding path ends on the checklist, not on a blank dashboard.
+    // The onboarding path ends on the SETUP wizard, not on a blank dashboard
+    // and no longer on the checklist — a brand-new account has nothing on it,
+    // and the wizard is the screen that says what is missing and where to go
+    // and do it (see createClientAccount's redirect).
     // createClientAccount does a real Clerk organizations.createOrganization
     // API call, then createAccount, then a full applyBlueprint pass (five
     // asset kinds, each a sequential upsert-lookup-then-insert round trip) —
     // comfortably longer than the suite's default 10s expect timeout, so this
     // one wait gets an explicit allowance instead.
-    await expect(page).toHaveURL(/\/checklist$/, { timeout: 30_000 });
+    await expect(page).toHaveURL(/\/setup$/, { timeout: 30_000 });
     // Reused below (GAP 2 / GAP 3) so those checks don't need their own DB
-    // round trip — this is the fresh account's own checklist route.
+    // round trip — this is the fresh account's own id.
     const accountId = new URL(page.url()).pathname.split("/")[3];
-    // The checklist route renders "Activation checklist" twice: once as the
-    // page's own <h1> (PageHeader) and again inside ChecklistPanel's CardTitle
-    // — both real, both correct, so a plain getByText is ambiguous under
-    // Playwright's strict mode. Target the page heading specifically.
-    await expect(page.getByRole("heading", { name: "Activation checklist" })).toBeVisible();
+    // "Client setup" appears once, as the page's own <h1> (PageHeader) — the
+    // setup panel's cards carry per-step headings instead.
+    await expect(page.getByRole("heading", { name: "Client setup" })).toBeVisible();
 
     // GAP 2: accounts.blueprintPartial is a pure function of the `apply`
     // search param on this route — it needs no forced applyBlueprint failure
@@ -123,10 +124,20 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     // see (or silently miss) a data-loss warning unrelated to what actually
     // happened during this account's creation. Matched on text, not
     // role="alert" — see the GAP 1 comment above on the route announcer.
-    await page.goto(`/dashboard/accounts/${accountId}/checklist?apply=partial`);
+    //
+    // Checked on the SETUP route, because that is where the redirect now
+    // lands and therefore the only place the banner would ever be seen after
+    // a real partial apply. The checklist route keeps its own copy of the
+    // block for direct visits.
+    await page.goto(`/dashboard/accounts/${accountId}/setup?apply=partial`);
     await expect(page.getByText(/did not apply/i)).toBeVisible();
-    await page.goto(`/dashboard/accounts/${accountId}/checklist`);
+    await page.goto(`/dashboard/accounts/${accountId}/setup`);
     await expect(page.getByText(/did not apply/i)).toHaveCount(0);
+
+    // The checklist is still a live route with its own state — reached
+    // directly now rather than by redirect.
+    await page.goto(`/dashboard/accounts/${accountId}/checklist`);
+    await expect(page.getByRole("heading", { name: "Activation checklist" })).toBeVisible();
 
     // setChecklistItemAction is a raw (unwrapped) form action — clicking submit
     // fires a real POST that Next.js's router intercepts, but page.click() only

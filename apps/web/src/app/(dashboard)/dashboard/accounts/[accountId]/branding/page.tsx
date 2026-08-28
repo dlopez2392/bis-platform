@@ -1,5 +1,6 @@
 import { getBranding, brandLogoUrl, serviceDb } from "@bis/db";
 import { BrandingPanel } from "@/components/branding-panel";
+import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
 import { requireAccountAccess } from "@/lib/auth";
 import { m } from "@/lib/messages";
@@ -23,8 +24,16 @@ export const dynamic = "force-dynamic";
  */
 export default async function BrandingPage({
   params,
-}: { params: Promise<{ accountId: string }> }) {
+  searchParams,
+}: {
+  params: Promise<{ accountId: string }>;
+  searchParams: Promise<{ from?: string }>;
+}) {
   const { accountId } = await params;
+  // Set by the setup wizard's links, and by nothing else — the breadcrumb
+  // below appears only for someone who arrived mid-flow. The wizard is
+  // agency-only, so a client reaching their own branding page never sees it.
+  const { from } = await searchParams;
   // Redirects a client asking for another account to their own, and refuses a
   // client whose access is switched off. The agency passes straight through —
   // they reach the same panel from Settings, so this route works for them too
@@ -39,6 +48,7 @@ export default async function BrandingPage({
 
   return (
     <div className="space-y-6">
+      {from === "setup" ? <BackToSetup accountId={accountId} /> : null}
       <PageHeader title={m["branding.clientTitle"]} />
       <BrandingPanel
         // Remount when the ACCOUNT changes, so the panel's own state cannot

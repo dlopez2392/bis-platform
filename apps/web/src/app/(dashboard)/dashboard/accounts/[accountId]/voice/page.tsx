@@ -1,4 +1,5 @@
 import { serviceDb, getVoiceProfile, type PhoneNumberRow } from "@bis/db";
+import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
 import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { m } from "@/lib/messages";
@@ -24,8 +25,15 @@ export const dynamic = "force-dynamic";
  */
 export default async function VoicePage({
   params,
-}: { params: Promise<{ accountId: string }> }) {
+  searchParams,
+}: {
+  params: Promise<{ accountId: string }>;
+  searchParams: Promise<{ from?: string }>;
+}) {
   const { accountId } = await params;
+  // Set by the setup wizard's links, and by nothing else — the breadcrumb
+  // below appears only for someone who arrived mid-flow.
+  const { from } = await searchParams;
   await requireAgencyOnlyAccountAccess(accountId);
 
   const db = serviceDb();
@@ -45,6 +53,7 @@ export default async function VoicePage({
 
   return (
     <>
+      {from === "setup" ? <BackToSetup accountId={accountId} /> : null}
       <PageHeader title={m["voice.title"]} />
       <div className="max-w-2xl space-y-6 p-6">
         <VoiceSettings

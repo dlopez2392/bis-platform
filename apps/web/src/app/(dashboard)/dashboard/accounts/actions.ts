@@ -29,7 +29,7 @@ export async function createClientAccount(formData: FormData): Promise<void> {
   // instead of "" when nothing is picked (see ./constants.ts).
   const rawBlueprintId = String(formData.get("blueprintId") ?? "").trim();
   const blueprintId = rawBlueprintId === NO_BLUEPRINT_SENTINEL ? "" : rawBlueprintId;
-  // Carried to the checklist page via a query param so a failed or partial
+  // Carried to the setup page via a query param so a failed or partial
   // apply is never invisible: before this, a total failure (the `catch`
   // below) or a partial one (`report.failed.length > 0`) both ended on the
   // exact same "success" redirect a clean apply does, and the only trace was
@@ -53,5 +53,10 @@ export async function createClientAccount(formData: FormData): Promise<void> {
   }
 
   revalidatePath("/dashboard/accounts");
-  redirect(`/dashboard/accounts/${id}/checklist${applyOutcome === "partial" ? "?apply=partial" : ""}`);
+  // The setup wizard, not the checklist: a brand-new account has nothing on
+  // it, and the wizard is the surface that says — from live rows rather than
+  // from a list of reminders — what is missing and where to go and do it.
+  // The checklist route stays reachable and keeps its own copy of the banner
+  // below; it is just no longer where onboarding lands.
+  redirect(`/dashboard/accounts/${id}/setup${applyOutcome === "partial" ? "?apply=partial" : ""}`);
 }

@@ -9,6 +9,7 @@ export const m = {
   "nav.settings": "Settings",
   "nav.branding": "Branding",
   "nav.voice": "Voice",
+  "nav.setup": "Setup",
   "nav.accounts": "Companies",
   "nav.blueprints": "Blueprints",
 
@@ -593,6 +594,55 @@ export const m = {
   "calls.detail.assistant": "Assistant",
   "calls.detail.caller": "Caller",
   "calls.detail.noTranscript": "No transcript was recorded for this call.",
+
+  "setup.title": "Client setup",
+  "setup.backToSetup": "Back to setup",
+  "setup.progress": "{done} of {total} steps done",
+  "setup.progressLabel": "Setup progress",
+  "setup.nextUp": "Next up",
+  "setup.state.done": "Done",
+  "setup.state.open": "To do",
+  "setup.state.skipped": "Skipped",
+  // Never "not done". A read that threw tells us nothing about the step it
+  // was going to answer for, and the whole point of this page is that a green
+  // tick means the thing is actually true.
+  "setup.state.unknown": "Couldn't check — reload to retry",
+  "setup.step.account.title": "Create the account",
+  "setup.step.account.help": "This company exists — you're looking at it.",
+  "setup.step.branding.title": "Branding",
+  "setup.step.branding.help":
+    "Set the brand name your client's customers will see on every email and page.",
+  "setup.step.hours.title": "Business hours",
+  "setup.step.hours.help":
+    "Enable the calendar and set open hours — without them, callers hear \"no availability\" for every day.",
+  "setup.step.voice_profile.title": "Voice profile",
+  "setup.step.voice_profile.help":
+    "Greeting, business facts, and persona for the AI receptionist.",
+  "setup.step.number.title": "Phone number",
+  "setup.step.number.help":
+    "Assign a BIS number to this client. Buy numbers in the Telnyx dashboard, then assign here.",
+  "setup.step.email.title": "Email identity",
+  "setup.step.email.help":
+    "Send from the client's own domain. Optional — until it's set, mail sends from the platform address.",
+  "setup.step.email.skip": "Skip for now",
+  "setup.step.email.unskip": "Un-skip",
+  "setup.step.forwarding.title": "Call forwarding",
+  "setup.step.forwarding.help":
+    "The client forwards their business line to the number below at their carrier. Tick when confirmed.",
+  "setup.step.forwarding.tick": "Forwarding is set up",
+  "setup.step.forwarding.untick": "Not set up yet",
+  "setup.step.forwarding.noNumber": "Assign a number first — there is nothing to forward to yet.",
+  "setup.step.test_call.title": "Test call",
+  "setup.step.test_call.help":
+    "Call the assigned number. The call will appear on the Calls page and turn this step green.",
+  "setup.step.go_live.title": "Go live",
+  "setup.step.go_live.help":
+    "Enables the receptionist and marks the number live. Callers get real answers from here on.",
+  "setup.goLive.button": "Go live",
+  "setup.goLive.blocked": "Finish these steps first: {steps}",
+  "setup.viewCalls": "View calls",
+  "setup.openStep": "Open",
+  "setup.tickFailed": "Could not save that. Reload and try again.",
 } as const;
 
 export type MessageKey = keyof typeof m;

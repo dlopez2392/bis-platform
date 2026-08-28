@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 import { serviceDb, getOrCreateCalendar, listUpcomingBookings } from "@bis/db";
+import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
@@ -13,8 +14,15 @@ export const dynamic = "force-dynamic";
 
 export default async function CalendarPage({
   params,
-}: { params: Promise<{ accountId: string }> }) {
+  searchParams,
+}: {
+  params: Promise<{ accountId: string }>;
+  searchParams: Promise<{ from?: string }>;
+}) {
   const { accountId } = await params;
+  // Set by the setup wizard's links, and by nothing else — the breadcrumb
+  // below appears only for someone who arrived mid-flow.
+  const { from } = await searchParams;
   // Both audiences — calendar is the client's own business data, the same
   // class of surface `requireAccountAccess` already gates contacts with.
   const { userId, isAgency } = await requireAccountAccess(accountId);
@@ -53,6 +61,7 @@ export default async function CalendarPage({
 
   return (
     <>
+      {from === "setup" ? <BackToSetup accountId={accountId} /> : null}
       <PageHeader title={m["calendar.title"]} />
       <div className="grid gap-6 p-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div className="space-y-6">

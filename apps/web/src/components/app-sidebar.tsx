@@ -19,6 +19,7 @@ import {
   Palette,
   Phone,
   PhoneIncoming,
+  ListChecks,
   type LucideIcon,
 } from "lucide-react";
 import { AccountSwitcher, type AccountOption } from "@/components/account-switcher";
@@ -106,8 +107,16 @@ export function AppSidebar({
         // the page) and by the isAgency check inside every action in
         // ./voice/actions.ts; hiding the link here is convenience, not the
         // boundary.
+        //
+        // Setup sits directly after Voice for the same reason: it is agency
+        // work ABOUT the client (requireAgencyOnlyAccountAccess gates the
+        // route itself), and it is the screen that sends an operator into
+        // Voice, Calendar, Branding and Settings in the first place.
         ...(isAgency
-          ? [{ href: `${base}/voice`, label: m["nav.voice"], icon: Phone }]
+          ? [
+              { href: `${base}/voice`, label: m["nav.voice"], icon: Phone },
+              { href: `${base}/setup`, label: m["nav.setup"], icon: ListChecks },
+            ]
           : []),
       ]
     : [
