@@ -27,14 +27,6 @@ export function formatDuration(secs: number | null): string {
 type CallerFields = Pick<CallListRow, "caller_e164" | "contact">;
 
 /**
- * Who rang: the matched contact's name, else the number they rang from, else
- * "Unknown caller" (a withheld/blocked caller ID writes `caller_e164` null).
- *
- * NOT `contactDisplayName`, whose "(no name)" fallback would win over a
- * perfectly good phone number: a call can create a contact from nothing but a
- * spoken email address, so a nameless linked contact is a real shape here.
- */
-/**
  * The list's own "when" — same option shape as `lib/booking/time.ts`'s
  * `formatWhen` (locale pinned to "en-US", zone pinned to the account's own,
  * not the viewer's) plus `year: "numeric"`. NOT a parameter added to
@@ -50,6 +42,14 @@ export function formatCallTime(iso: string, timeZone: string): string {
   }).format(new Date(iso));
 }
 
+/**
+ * Who rang: the matched contact's name, else the number they rang from, else
+ * "Unknown caller" (a withheld/blocked caller ID writes `caller_e164` null).
+ *
+ * NOT `contactDisplayName`, whose "(no name)" fallback would win over a
+ * perfectly good phone number: a call can create a contact from nothing but a
+ * spoken email address, so a nameless linked contact is a real shape here.
+ */
 export function callerLabel(row: CallerFields): string {
   const name = [row.contact?.first_name, row.contact?.last_name]
     .map((part) => part?.trim() ?? "")

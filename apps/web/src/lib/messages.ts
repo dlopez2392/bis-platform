@@ -556,6 +556,10 @@ export const m = {
   // .replace()s the placeholders, so a future translation may reorder them.
   "calls.title": "Calls",
   "calls.usage": "{n} of {cap} calls today",
+  // The meter's accessible NAME. Deliberately not the sentence above: that is
+  // already the bar's `aria-valuetext`, and reusing it would have a screen
+  // reader read the same count twice in a row.
+  "calls.usageLabel": "Daily call usage",
   "calls.empty.title": "No calls yet",
   "calls.empty.body":
     "When your AI receptionist answers a call, it will appear here with its transcript and outcome.",
@@ -571,6 +575,24 @@ export const m = {
   "calls.outcome.message": "Message",
   "calls.outcome.abandoned": "Abandoned",
   "calls.outcome.spam": "Spam",
+
+  // A single call — /dashboard/accounts/<id>/calls/<callId>. The transcript
+  // surface: the one place a client can read what their receptionist actually
+  // said, rather than take our word for what it did.
+  //
+  // `calls.detail.caller` / `.assistant` label the two sides of the
+  // conversation. "Assistant" rather than a product name or the voice's
+  // own persona: the client's staff need to read the log knowing which turns
+  // were the machine's, and a friendly name blurs exactly that line.
+  "calls.detail.title": "Call",
+  "calls.detail.summary": "Summary",
+  "calls.detail.transcript": "Transcript",
+  "calls.detail.viewContact": "View contact",
+  "calls.detail.viewConversation": "View conversation",
+  "calls.detail.viewBooking": "View booking",
+  "calls.detail.assistant": "Assistant",
+  "calls.detail.caller": "Caller",
+  "calls.detail.noTranscript": "No transcript was recorded for this call.",
 } as const;
 
 export type MessageKey = keyof typeof m;

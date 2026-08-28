@@ -135,12 +135,17 @@ function UsageMeter({ used, cap }: { used: number; cap: number }) {
   // set apart typographically while the sentence — including the order of its
   // parts — stays entirely in the message catalogue.
   const parts = m["calls.usage"].split(/(\{n\}|\{cap\})/);
-  // Also the progressbar's accessible value below — as `aria-valuetext`, not
-  // a second `aria-label`. A label here would duplicate this same sentence,
-  // which sits right next to the bar as visible text: a screen reader would
-  // announce it once for the paragraph and again for the bar it describes.
-  // `aria-valuetext` replaces the numeric "N of M" AT would otherwise
-  // synthesize from `aria-valuenow`/`aria-valuemax`, so it reads once.
+  // The progressbar's accessible VALUE below — as `aria-valuetext`, not as its
+  // name. A name carrying this same sentence would duplicate the visible
+  // paragraph beside it: a screen reader would announce it once for the
+  // paragraph and again for the bar it describes. `aria-valuetext` replaces
+  // the numeric "N of M" AT would otherwise synthesize from
+  // `aria-valuenow`/`aria-valuemax`, so it reads once.
+  //
+  // The bar still needs a NAME as well as a value — a `progressbar` with none
+  // is announced as an unlabelled progress bar — so it carries a short
+  // `aria-label` that says what is being measured rather than restating the
+  // count.
   const plain = m["calls.usage"].replace("{n}", String(used)).replace("{cap}", String(cap));
 
   return (
@@ -167,6 +172,7 @@ function UsageMeter({ used, cap }: { used: number; cap: number }) {
 
       <div
         role="progressbar"
+        aria-label={m["calls.usageLabel"]}
         aria-valuemin={0}
         aria-valuemax={denominator}
         aria-valuenow={Math.min(used, denominator)}
