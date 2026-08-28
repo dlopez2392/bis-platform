@@ -15,15 +15,44 @@ export type HoursRow = { day: WeekdayKey; from: string; to: string };
 /**
  * Chrome anchors an EMPTY `<input type="time">`'s picker at the current
  * wall-clock time — so an operator opening the picker on a blank day lands
- * somewhere different every visit. Seeding the field on focus makes the
- * picker open at the business default instead, while an untouched blank row
- * still means "closed day". A value the operator already set always wins.
+ * somewhere different every visit. Writing the business default into the
+ * field just before the picker opens makes it open there instead.
  */
 export const DEFAULT_OPEN_TIME = "08:00";
 export const DEFAULT_CLOSE_TIME = "18:00";
 
-export function seededTime(current: string, fallback: string): string {
-  return current || fallback;
+/**
+ * Seeds one blank time field. **The trigger is the entire safety story**, and
+ * it lives in `calendar-settings.tsx`: this is wired to `onPointerDown` —
+ * a pointer going down ON the field, which is how the picker gets opened —
+ * and never to `onFocus`.
+ *
+ * The first version of this (`2cf6f25`) seeded on focus, and focus is not
+ * consent. Merely TABBING across a closed day's two fields left "08:00" and
+ * "18:00" sitting in them, and `rowsToOpenHours` below writes any day whose
+ * BOTH sides are non-blank — so tab-through plus Save silently opened the
+ * business on a day the operator never meant to open, and the receptionist
+ * started offering appointments on it. A seven-row grid is traversed by Tab
+ * by construction, so that was every keyboard pass through this form. (It
+ * also made the field unclearable by `fill("")`, which focuses first: that
+ * is how the e2e suite found it.)
+ *
+ * Nothing ever clears a seeded field again, on blur or otherwise. "Opened the
+ * picker and walked away" and "opened the picker and chose the 08:00 it was
+ * already showing" are indistinguishable from the DOM — Chrome fires no
+ * `input` event for a pick that does not change the value — so a
+ * clear-on-blur, however it is gated, eats exactly the choice this feature
+ * exists to make easy. What remains is narrow and visible: both sides of one
+ * day must be pointer-opened, and the 08:00/18:00 are sitting in the row in
+ * front of the operator when Save is pressed.
+ *
+ * Takes the element rather than returning a string so the "already has a
+ * value" case is a genuine no-op — a same-string assignment to a live input
+ * is still a write.
+ */
+export function seedTimeOnPickerOpen(input: { value: string }, fallback: string): void {
+  if (input.value !== "") return; // a value the operator already set always wins
+  input.value = fallback;
 }
 
 /**

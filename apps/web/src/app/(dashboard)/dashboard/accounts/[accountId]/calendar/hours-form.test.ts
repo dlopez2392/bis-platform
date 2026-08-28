@@ -1,18 +1,64 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_OPEN_TIME, DEFAULT_CLOSE_TIME, seededTime,
+  DEFAULT_OPEN_TIME, DEFAULT_CLOSE_TIME, seedTimeOnPickerOpen,
   HOURS_FORM_DAYS, openHoursToRows, rowsToOpenHours,
 } from "./hours-form";
 
-describe("seededTime", () => {
+/**
+ * Stands in for the `<input type="time">` the real handler is handed
+ * (`e.currentTarget`), but COUNTS writes as well as recording them. "Did not
+ * change the value" is the weaker assertion; the invariant that matters is
+ * that the handler does not touch the DOM node at all when the operator
+ * already has a value in it — a same-string assignment to a live input is
+ * still a write, and this is the only level at which that is observable.
+ */
+function fakeTimeInput(initial: string) {
+  let current = initial;
+  let writes = 0;
+  return {
+    get value() { return current; },
+    set value(next: string) { writes += 1; current = next; },
+    get writeCount() { return writes; },
+  };
+}
+
+describe("seedTimeOnPickerOpen", () => {
   it("seeds an empty field with the fallback so the picker opens there, never at the wall clock", () => {
-    expect(seededTime("", DEFAULT_OPEN_TIME)).toBe("08:00");
-    expect(seededTime("", DEFAULT_CLOSE_TIME)).toBe("18:00");
+    const from = fakeTimeInput("");
+    seedTimeOnPickerOpen(from, DEFAULT_OPEN_TIME);
+    expect(from.value).toBe("08:00");
+
+    const to = fakeTimeInput("");
+    seedTimeOnPickerOpen(to, DEFAULT_CLOSE_TIME);
+    expect(to.value).toBe("18:00");
   });
-  it("never overwrites a value the operator already set", () => {
-    expect(seededTime("07:03", DEFAULT_OPEN_TIME)).toBe("07:03");
-    expect(seededTime("00:00", DEFAULT_CLOSE_TIME)).toBe("00:00"); // midnight close stays
+
+  it("never touches a value the operator already set", () => {
+    const typed = fakeTimeInput("07:03");
+    seedTimeOnPickerOpen(typed, DEFAULT_OPEN_TIME);
+    expect(typed.value).toBe("07:03");
+    expect(typed.writeCount).toBe(0);
+
+    // A midnight close is a real, deliberate value (rowsToOpenHours remaps it
+    // to the engine's "24:00"), not an empty field wearing a zero.
+    const midnight = fakeTimeInput("00:00");
+    seedTimeOnPickerOpen(midnight, DEFAULT_CLOSE_TIME);
+    expect(midnight.value).toBe("00:00");
+    expect(midnight.writeCount).toBe(0);
   });
+
+  it("seeds once and then leaves the field alone — nothing re-seeds or re-clears it", () => {
+    // The operator opens the picker on a blank day (seed), picks 09:30, then
+    // opens it again. The second open must be a no-op: this handler is the
+    // only thing that writes to the field, and it is deliberately one-way.
+    const field = fakeTimeInput("");
+    seedTimeOnPickerOpen(field, DEFAULT_OPEN_TIME);
+    field.value = "09:30";
+    seedTimeOnPickerOpen(field, DEFAULT_OPEN_TIME);
+    expect(field.value).toBe("09:30");
+    expect(field.writeCount).toBe(2); // the seed and the operator's own pick
+  });
+
   it("pins the business defaults", () => {
     expect(DEFAULT_OPEN_TIME).toBe("08:00");
     expect(DEFAULT_CLOSE_TIME).toBe("18:00");

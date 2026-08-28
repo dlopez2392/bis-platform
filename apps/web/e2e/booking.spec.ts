@@ -177,6 +177,38 @@ test("a stranger books, the operator sees it, the slot dies and revives", async 
       await page.locator(`#hours-${day}-from`).fill("");
       await page.locator(`#hours-${day}-to`).fill("");
     }
+
+    // --- The 08:00/18:00 seed fires on a deliberate pointer-open ONLY ------
+    // Pinned here because the first version of that seed (`2cf6f25`) fired on
+    // plain FOCUS, and this journey is what found it: `fill("")` focuses
+    // before it writes, so the loop above could not clear a field that
+    // re-seeded itself ("Malformed value"). The product half is worse than
+    // the test half — a day whose two sides are both non-blank is an OPEN day
+    // to `rowsToOpenHours`, so tabbing across a closed row and pressing Save
+    // put the business on the schedule for it. Saturday stays closed for the
+    // rest of this journey, so it is the honest row to prove it on.
+    const satFrom = page.locator("#hours-sat-from");
+    const satTo = page.locator("#hours-sat-to");
+    await satFrom.focus();
+    await satTo.focus();                    // ...which blurs sat-from
+    await page.locator("#notifyEmails").focus(); // ...which blurs sat-to
+    await expect(satFrom, "tabbing through a closed day must not open it").toHaveValue("");
+    await expect(satTo, "tabbing through a closed day must not open it").toHaveValue("");
+
+    // A pointer going down on the field still seeds it — the operator's own
+    // fix, the reason any of this exists. (Center-click lands on a time
+    // segment, not the clock affordance, so no native picker is left open.)
+    await satFrom.click();
+    await expect(satFrom).toHaveValue("08:00");
+    await satTo.click();
+    await expect(satTo).toHaveValue("18:00");
+    // And a seeded field is still clearable, which is the whole test-half
+    // regression: Saturday goes back to closed for the rest of the journey.
+    await satFrom.fill("");
+    await satTo.fill("");
+    await expect(satFrom).toHaveValue("");
+    await expect(satTo).toHaveValue("");
+
     for (const day of ["mon", "tue", "wed", "thu", "fri"] as const) {
       await page.locator(`#hours-${day}-from`).fill("09:00");
       await page.locator(`#hours-${day}-to`).fill("17:00");
