@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { serviceDb, listDueReminders, stampReminderSent } from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
+import { configuredOrigin } from "@/lib/email/origin";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { bookingReminderEmail } from "@/lib/email/templates/booking";
@@ -42,8 +43,12 @@ export async function GET(req: Request): Promise<Response> {
 
   // No headers()/originFrom here — this is a cron invocation, not a browser
   // request forwarded through Vercel's edge, so there is no forwarded-host
-  // chain to trust or distrust. req.url's origin IS the deployment's own.
-  const origin = new URL(req.url).origin;
+  // chain to trust or distrust. APP_ORIGIN wins when set (the custom domain,
+  // matching what a real visitor's Host header carries); req.url's origin is
+  // only the FALLBACK — and that fallback IS the deployment's own vercel.app
+  // URL, the exact link/sender mismatch Gmail silently discarded mail over
+  // (closed 2026-08-27; see origin.ts's doc comment).
+  const origin = configuredOrigin() ?? new URL(req.url).origin;
 
   const db = serviceDb();
   const reminders = await listDueReminders(db, new Date().toISOString());

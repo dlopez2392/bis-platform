@@ -57,6 +57,7 @@ import { emptyCallState } from "@/lib/voice/call-state";
 import { finishCall, type FinishContext } from "@/lib/voice/finish-call";
 import type { ToolContext } from "@/lib/voice/tools/registry";
 import { readLimitConfig, decideLimit, utcDayStart } from "@/lib/voice/call-limits";
+import { configuredOrigin } from "@/lib/email/origin";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -445,9 +446,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     };
     // Cron-route precedent (`api/cron/reminders/route.ts`): this is a
     // webhook invocation, not a browser request forwarded through Vercel's
-    // edge, so there is no forwarded-host chain to trust or distrust —
-    // req.url's origin IS the deployment's own.
-    const origin = new URL(req.url).origin;
+    // edge, so there is no forwarded-host chain to trust or distrust.
+    // APP_ORIGIN wins when set (the custom domain); req.url's origin is only
+    // the FALLBACK — and that fallback IS the deployment's own vercel.app
+    // URL, the exact link/sender mismatch Gmail silently discarded mail over
+    // (closed 2026-08-27; see origin.ts's doc comment).
+    const origin = configuredOrigin() ?? new URL(req.url).origin;
 
     const toolCtx: ToolContext = {
       db, accountId, accountName: accountRow.name, timezone: accountRow.timezone,

@@ -72,6 +72,7 @@ beforeEach(() => {
   stampReminderSentMock.mockReset().mockResolvedValue(undefined);
   sendMock.mockReset().mockResolvedValue({ providerMessageId: "prov_1" });
   process.env.CRON_SECRET = SECRET;
+  delete process.env.APP_ORIGIN;
 });
 
 describe("GET /api/cron/reminders", () => {
@@ -158,6 +159,23 @@ describe("GET /api/cron/reminders", () => {
 
     const sendArgs = sendMock.mock.calls[0]![0] as { body: string };
     expect(sendArgs.body).toContain(`${ORIGIN}/b/cal_pub_xyz/cancel/tok_zzz999`);
+  });
+
+  // The deliverability-saga fix (2026-08-27): a cron tick has no browser
+  // behind it, so req.url's origin is the deployment's own vercel.app URL —
+  // exactly the link/sender mismatch Gmail silently discarded mail over. When
+  // APP_ORIGIN is set it must win over that request-derived origin, same as
+  // the prior test proves the request-derived fallback still works when unset.
+  it("builds the cancel url from APP_ORIGIN instead of the request's origin when it's set", async () => {
+    process.env.APP_ORIGIN = "https://app.bis-rgv.com";
+    const one = reminder({ calendarPublicId: "cal_pub_xyz", cancelToken: "tok_zzz999" });
+    listDueRemindersMock.mockResolvedValue([one]);
+
+    await GET(req(`Bearer ${SECRET}`));
+
+    const sendArgs = sendMock.mock.calls[0]![0] as { body: string };
+    expect(sendArgs.body).toContain("https://app.bis-rgv.com/b/cal_pub_xyz/cancel/tok_zzz999");
+    expect(sendArgs.body).not.toContain(ORIGIN);
   });
 
   it("formats the when-string in the BOOKER's stored zone, distinct from the account's zone", async () => {
