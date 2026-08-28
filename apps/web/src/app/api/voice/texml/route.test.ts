@@ -202,7 +202,7 @@ describe("texml route — Telnyx signature validation (TELNYX_PUBLIC_KEY set)", 
     delete process.env.TELNYX_PUBLIC_KEY;
   });
 
-  it("POST with no signature headers → 403, with a log line", async () => {
+  it("POST with no signature headers → 403, logged as missing-headers with the claimed To/From", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     // Any base64 works here — the missing headers short-circuit before the
     // key is ever parsed.
@@ -212,13 +212,15 @@ describe("texml route — Telnyx signature validation (TELNYX_PUBLIC_KEY set)", 
       method: "POST", body: raw, headers: { "content-type": "application/x-www-form-urlencoded" },
     }));
     expect(res.status).toBe(403);
-    expect(errSpy).toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("missing-headers"));
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("+19565550999"));
     errSpy.mockRestore();
   });
 
-  it("POST with a tampered/invalid signature → 403", async () => {
+  it("POST with a tampered/invalid signature → 403, logged as invalid-signature with the claimed To/From", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const raw = new URLSearchParams({ To: "+19565550999", From: "+19562921696" }).toString();
-    const ts = "1756300000";
+    const ts = String(Math.floor(Date.now() / 1000));
     const { publicKeyB64, signatureB64 } = makeSigned(raw, ts);
     process.env.TELNYX_PUBLIC_KEY = publicKeyB64;
     const res = await POST(new Request("https://x.example/api/voice/texml", {
@@ -231,11 +233,13 @@ describe("texml route — Telnyx signature validation (TELNYX_PUBLIC_KEY set)", 
       },
     }));
     expect(res.status).toBe(403);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("invalid-signature"));
+    errSpy.mockRestore();
   });
 
   it("POST with a valid signature → normal XML (Dial present)", async () => {
     const raw = new URLSearchParams({ To: "+19565550999", From: "+19562921696" }).toString();
-    const ts = "1756300000";
+    const ts = String(Math.floor(Date.now() / 1000));
     const { publicKeyB64, signatureB64 } = makeSigned(raw, ts);
     process.env.TELNYX_PUBLIC_KEY = publicKeyB64;
     const res = await POST(new Request("https://x.example/api/voice/texml", {
@@ -253,10 +257,57 @@ describe("texml route — Telnyx signature validation (TELNYX_PUBLIC_KEY set)", 
     expect(xml).toContain("X-BIS-Called=%2B19565550999");
   });
 
+  it("POST with a stale timestamp (now-400s) → 403 even with an otherwise-valid signature", async () => {
+    const raw = new URLSearchParams({ To: "+19565550999", From: "+19562921696" }).toString();
+    const stale = String(Math.floor(Date.now() / 1000) - 400);
+    const { publicKeyB64, signatureB64 } = makeSigned(raw, stale);
+    process.env.TELNYX_PUBLIC_KEY = publicKeyB64;
+    const res = await POST(new Request("https://x.example/api/voice/texml", {
+      method: "POST",
+      body: raw,
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "telnyx-timestamp": stale,
+        "telnyx-signature-ed25519": signatureB64,
+      },
+    }));
+    expect(res.status).toBe(403);
+  });
+
   it("GET → 405 (the diagnostic path closes in hardened mode)", async () => {
     process.env.TELNYX_PUBLIC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
     const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999"));
     expect(res.status).toBe(405);
     expect(lookupMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("texml route — guarded body read (Finding B)", () => {
+  afterEach(() => {
+    delete process.env.TELNYX_PUBLIC_KEY;
+  });
+
+  it("a body-read failure with the key SET fails closed (403), never a 500", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    process.env.TELNYX_PUBLIC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    const req = new Request("https://x.example/api/voice/texml", {
+      method: "POST", body: "To=%2B19565550999", headers: { "content-type": "application/x-www-form-urlencoded" },
+    });
+    vi.spyOn(req, "text").mockRejectedValue(new Error("stream error"));
+    const res = await POST(req);
+    expect(res.status).toBe(403);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("failed to read request body"));
+    errSpy.mockRestore();
+  });
+
+  it("a body-read failure with the key UNSET fails open — dials (old behavior preserved)", async () => {
+    const req = new Request("https://x.example/api/voice/texml", {
+      method: "POST", body: "To=%2B19565550999", headers: { "content-type": "application/x-www-form-urlencoded" },
+    });
+    vi.spyOn(req, "text").mockRejectedValue(new Error("stream error"));
+    const res = await POST(req);
+    const xml = await res.text();
+    expect(xml).toContain("<Dial answerOnBridge=\"true\">");
+    expect(xml).not.toContain("X-BIS-Called");
   });
 });

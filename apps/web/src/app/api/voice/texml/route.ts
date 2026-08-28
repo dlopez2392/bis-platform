@@ -131,8 +131,11 @@ async function respond(calledE164: string | null, callerE164: string | null): Pr
 
 export async function GET(req: Request): Promise<NextResponse> {
   if (process.env.TELNYX_PUBLIC_KEY?.trim()) {
-    // Hardened mode: Telnyx only ever POSTs; an unauthenticated GET would
-    // hand out the SIP project URI to anyone who finds the route.
+    // Hardened mode: signature enforcement requires the TeXML app's Voice
+    // Method flipped to POST first (see voice-setup runbook) — with the key
+    // set, GET is closed entirely (405) because a GET has no signed body;
+    // setting the key while the app still uses GET would 405 every live
+    // call.
     return new NextResponse(null, { status: 405 });
   }
   const params = new URL(req.url).searchParams;
@@ -142,22 +145,38 @@ export async function GET(req: Request): Promise<NextResponse> {
 export async function POST(req: Request): Promise<NextResponse> {
   // req.text() FIRST, always — req.formData() consumes the body and the
   // Telnyx signature covers the exact raw bytes, not a re-serialized form.
-  const rawBody = await req.text();
+  // Guarded: a body-read failure must not 500 where the old code fell
+  // through to a dial — treat it as an empty body instead. That then flows
+  // correctly either way: with the key set, an empty body fails the
+  // signature check → 403 (fail-closed, correct for the auth path); with
+  // the key unset, an empty body parses to no To/From → dial (the old
+  // fail-open behavior, unchanged).
+  let rawBody = "";
+  try {
+    rawBody = await req.text();
+  } catch (e) {
+    console.error(`texml: failed to read request body: ${String(e)}`);
+  }
+  const form = new URLSearchParams(rawBody);
+  // Attacker-claimed values, parsed before the signature check below has a
+  // chance to pass — they're only trustworthy once it does, but they're
+  // still worth logging on rejection so a 403 line says who claimed to be
+  // calling whom. Named claimedTo/claimedFrom to keep that honest.
+  const claimedTo = form.get("To") || null;
+  const claimedFrom = form.get("From") || null;
   const publicKey = process.env.TELNYX_PUBLIC_KEY?.trim();
   if (publicKey) {
-    const ok = verifyTelnyxSignature({
-      rawBody,
-      timestamp: req.headers.get("telnyx-timestamp"),
-      signatureB64: req.headers.get("telnyx-signature-ed25519"),
-      publicKeyB64: publicKey,
-    });
+    const timestamp = req.headers.get("telnyx-timestamp");
+    const signatureB64 = req.headers.get("telnyx-signature-ed25519");
+    if (!timestamp || !signatureB64) {
+      console.error(`texml: rejected request (missing-headers), claimedTo ${claimedTo ?? "none"}, claimedFrom ${claimedFrom ?? "none"}`);
+      return new NextResponse(null, { status: 403 });
+    }
+    const ok = verifyTelnyxSignature({ rawBody, timestamp, signatureB64, publicKeyB64: publicKey });
     if (!ok) {
-      console.error("texml: rejected request with invalid Telnyx signature");
+      console.error(`texml: rejected request (invalid-signature), claimedTo ${claimedTo ?? "none"}, claimedFrom ${claimedFrom ?? "none"}`);
       return new NextResponse(null, { status: 403 });
     }
   }
-  const form = new URLSearchParams(rawBody);
-  const to = form.get("To") || null;
-  const from = form.get("From") || null;
-  return respond(toE164(to), toE164(from));
+  return respond(toE164(claimedTo), toE164(claimedFrom));
 }

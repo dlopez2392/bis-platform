@@ -14,20 +14,52 @@ function makeSigned(body: string, timestamp: string) {
 
 describe("verifyTelnyxSignature", () => {
   const body = "To=%2B19565061545&From=%2B19562921696";
-  const ts = "1756300000";
   it("accepts a valid signature", () => {
-    const { publicKeyB64, signatureB64 } = makeSigned(body, ts);
-    expect(verifyTelnyxSignature({ rawBody: body, timestamp: ts, signatureB64, publicKeyB64 })).toBe(true);
+    const fresh = String(Math.floor(Date.now() / 1000));
+    const { publicKeyB64, signatureB64 } = makeSigned(body, fresh);
+    expect(verifyTelnyxSignature({ rawBody: body, timestamp: fresh, signatureB64, publicKeyB64 })).toBe(true);
   });
   it("rejects a tampered body", () => {
-    const { publicKeyB64, signatureB64 } = makeSigned(body, ts);
-    expect(verifyTelnyxSignature({ rawBody: body + "&x=1", timestamp: ts, signatureB64, publicKeyB64 })).toBe(false);
+    const fresh = String(Math.floor(Date.now() / 1000));
+    const { publicKeyB64, signatureB64 } = makeSigned(body, fresh);
+    expect(verifyTelnyxSignature({ rawBody: body + "&x=1", timestamp: fresh, signatureB64, publicKeyB64 })).toBe(false);
   });
   it("rejects a wrong timestamp, missing headers, and garbage keys without throwing", () => {
-    const { publicKeyB64, signatureB64 } = makeSigned(body, ts);
+    const fresh = String(Math.floor(Date.now() / 1000));
+    const { publicKeyB64, signatureB64 } = makeSigned(body, fresh);
     expect(verifyTelnyxSignature({ rawBody: body, timestamp: "999", signatureB64, publicKeyB64 })).toBe(false);
     expect(verifyTelnyxSignature({ rawBody: body, timestamp: null, signatureB64, publicKeyB64 })).toBe(false);
-    expect(verifyTelnyxSignature({ rawBody: body, timestamp: ts, signatureB64: null, publicKeyB64 })).toBe(false);
-    expect(verifyTelnyxSignature({ rawBody: body, timestamp: ts, signatureB64, publicKeyB64: "!!!" })).toBe(false);
+    expect(verifyTelnyxSignature({ rawBody: body, timestamp: fresh, signatureB64: null, publicKeyB64 })).toBe(false);
+    expect(verifyTelnyxSignature({ rawBody: body, timestamp: fresh, signatureB64, publicKeyB64: "!!!" })).toBe(false);
+  });
+
+  describe("replay window (Finding A)", () => {
+    it("accepts a fresh timestamp, signature generated over that same fresh timestamp", () => {
+      const fresh = String(Math.floor(Date.now() / 1000));
+      const { publicKeyB64, signatureB64 } = makeSigned(body, fresh);
+      expect(verifyTelnyxSignature({ rawBody: body, timestamp: fresh, signatureB64, publicKeyB64 })).toBe(true);
+    });
+    it("rejects a stale timestamp (now - 400s) even with a VALID signature over it", () => {
+      const stale = String(Math.floor(Date.now() / 1000) - 400);
+      const { publicKeyB64, signatureB64 } = makeSigned(body, stale);
+      expect(verifyTelnyxSignature({ rawBody: body, timestamp: stale, signatureB64, publicKeyB64 })).toBe(false);
+    });
+    it("rejects a future timestamp (now + 400s) even with a VALID signature over it", () => {
+      const future = String(Math.floor(Date.now() / 1000) + 400);
+      const { publicKeyB64, signatureB64 } = makeSigned(body, future);
+      expect(verifyTelnyxSignature({ rawBody: body, timestamp: future, signatureB64, publicKeyB64 })).toBe(false);
+    });
+    it("rejects a non-numeric timestamp", () => {
+      const fresh = String(Math.floor(Date.now() / 1000));
+      const { publicKeyB64, signatureB64 } = makeSigned(body, fresh);
+      expect(verifyTelnyxSignature({ rawBody: body, timestamp: "not-a-number", signatureB64, publicKeyB64 })).toBe(false);
+    });
+    it("toleranceSeconds override widens the window", () => {
+      const stale = String(Math.floor(Date.now() / 1000) - 400);
+      const { publicKeyB64, signatureB64 } = makeSigned(body, stale);
+      expect(verifyTelnyxSignature({
+        rawBody: body, timestamp: stale, signatureB64, publicKeyB64, toleranceSeconds: 500,
+      })).toBe(true);
+    });
   });
 });
