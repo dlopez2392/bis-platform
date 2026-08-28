@@ -1,7 +1,10 @@
 import { Fragment } from "react";
 import Link from "next/link";
 import { AlertTriangle, ArrowRight, Check, Minus, Rocket } from "lucide-react";
-import type { SetupStepKey, SetupStepState } from "@/lib/setup/setup-status";
+import type { SetupStepKey } from "@/lib/setup/setup-status";
+import {
+  GO_LIVE_PREREQ_KEYS, kindOf, type SetupStepView, type StateKind,
+} from "@/lib/setup/setup-view";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
@@ -33,26 +36,6 @@ import { SetupTickButton } from "./setup-tick-button";
 export type SetupTick = "emailSkipped" | "forwardingDone";
 export type SetupTickAction = (tick: SetupTick, done: boolean) => Promise<{ ok: boolean }>;
 
-/**
- * A derived step plus whether the read behind it actually answered.
- *
- * `unknown` is not a fourth value of `done` — it sits beside it deliberately,
- * so that no arm of the render can accidentally treat a failed read as a
- * negative answer and no future edit can collapse the two.
- */
-export type SetupStepView = SetupStepState & { unknown: boolean };
-
-/**
- * Mirrors the keys `goLivePrereqsMet` checks (lib/setup/setup-status.ts).
- * Duplicated here — and imported from here by the page — because that
- * function returns a boolean and this panel has to NAME the unmet steps for
- * `setup.goLive.blocked`. One list, two readers; keep it in sync with that
- * function's body.
- */
-export const GO_LIVE_PREREQ_KEYS: readonly SetupStepKey[] = [
-  "hours", "voice_profile", "number", "test_call",
-];
-
 const STEP_COPY: Record<SetupStepKey, { title: string; help: string }> = {
   account: { title: m["setup.step.account.title"], help: m["setup.step.account.help"] },
   branding: { title: m["setup.step.branding.title"], help: m["setup.step.branding.help"] },
@@ -77,8 +60,6 @@ const STEP_PATH: Partial<Record<SetupStepKey, string>> = {
   number: "/voice?from=setup",
   email: "/settings?from=setup",
 };
-
-type StateKind = "done" | "open" | "next" | "skipped" | "unknown";
 
 const TONE: Record<StateKind, { marker: string; card: string; chip: string; dot: string }> = {
   done: {
@@ -123,19 +104,6 @@ const STATE_LABEL: Record<StateKind, string> = {
   unknown: m["setup.state.unknown"],
 };
 
-/**
- * `unknown` is checked FIRST and `done` only after it. A step whose read
- * threw can still be carrying `done: false` from the neutral input the page
- * fed the derive function — reading that as "To do" would quietly turn a
- * failure into an answer.
- */
-function kindOf(step: SetupStepView, isNext: boolean): StateKind {
-  if (step.unknown) return "unknown";
-  if (step.done) return "done";
-  if (step.skipped) return "skipped";
-  return isNext ? "next" : "open";
-}
-
 export function SetupPanel({
   accountId, steps, prereqsMet, assignedNumber, tickAction,
 }: {
@@ -144,9 +112,12 @@ export function SetupPanel({
   /** From `goLivePrereqsMet`, narrowed by the page so an unverifiable
    *  prerequisite also counts as unmet. */
   prereqsMet: boolean;
-  /** First non-released number on the account, or null. What the client's
-   *  carrier forwards to and what a test call dials. */
-  assignedNumber: string | null;
+  /** First non-released number on the account; `null` if there genuinely is
+   *  none yet; `"unknown"` if the numbers read itself failed — a third state
+   *  so the forwarding card can't mistake a failed read for "go assign a
+   *  number", which is what a plain `null` would look like from here. What
+   *  the client's carrier forwards to and what a test call dials. */
+  assignedNumber: string | null | "unknown";
   tickAction: SetupTickAction;
 }) {
   const base = `/dashboard/accounts/${accountId}`;
@@ -165,9 +136,10 @@ export function SetupPanel({
   // something that may already be fine.
   const nextKey = steps.find((s) => !s.done && !s.skipped && !s.unknown)?.key ?? null;
 
-  const blocked = steps.filter(
-    (s) => GO_LIVE_PREREQ_KEYS.includes(s.key) && (!s.done || s.unknown),
-  );
+  // `!s.done` alone catches unknown steps too — the neutral inputs fed to
+  // deriveSetupStatus for a failed read never mark a step done, so
+  // `unknown: true` always carries `done: false`.
+  const blocked = steps.filter((s) => GO_LIVE_PREREQ_KEYS.includes(s.key) && !s.done);
   const blockedReason = prereqsMet
     ? null
     : m["setup.goLive.blocked"].replace(
@@ -357,7 +329,7 @@ function StepActions({
   kind: StateKind;
   base: string;
   href: string | null;
-  assignedNumber: string | null;
+  assignedNumber: string | null | "unknown";
   tickAction: SetupTickAction;
   prereqsMet: boolean;
   blockedReason: string | null;
@@ -366,6 +338,13 @@ function StepActions({
    *  row. Prose belongs in `note` below it, not among them. */
   const rows: React.ReactNode[] = [];
   let note: React.ReactNode = null;
+
+  // The actual e164, or null for BOTH "no number yet" and "couldn't check" —
+  // collapsed here because every chip site below already renders nothing for
+  // null, which is the right behaviour for "couldn't check" too. Only the
+  // forwarding card's `note` below needs to tell the two apart, so it reads
+  // `assignedNumber` directly rather than this narrowed value.
+  const e164 = assignedNumber === "unknown" ? null : assignedNumber;
 
   // A finished step keeps its door — the agency still edits branding and
   // hours long after setup — but it stops shouting: ghost rather than
@@ -385,13 +364,18 @@ function StepActions({
     );
   }
 
-  if (step.key === "number" && assignedNumber) {
-    rows.unshift(<NumberChip key="e164" e164={assignedNumber} />);
+  if (step.key === "number" && e164) {
+    rows.unshift(<NumberChip key="e164" e164={e164} />);
   }
 
   if (step.key === "forwarding") {
-    if (assignedNumber) {
-      rows.unshift(<NumberChip key="e164" e164={assignedNumber} />);
+    if (assignedNumber === "unknown") {
+      // Distinct from the no-number case below: telling the operator to go
+      // "assign a number first" would be wrong here — one may well already
+      // be assigned, the numbers read just didn't answer this render.
+      note = m["setup.step.forwarding.unknownNumber"];
+    } else if (e164) {
+      rows.unshift(<NumberChip key="e164" e164={e164} />);
     } else {
       // The help copy says "the number below" — when there is no number
       // below, saying so is the whole content of this card.
@@ -434,7 +418,7 @@ function StepActions({
   }
 
   if (step.key === "test_call") {
-    if (assignedNumber) rows.unshift(<NumberChip key="e164" e164={assignedNumber} />);
+    if (e164) rows.unshift(<NumberChip key="e164" e164={e164} />);
     rows.push(
       <Link
         key="calls"

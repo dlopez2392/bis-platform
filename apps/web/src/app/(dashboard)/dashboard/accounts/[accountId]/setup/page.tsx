@@ -5,36 +5,15 @@ import {
 import { PageHeader } from "@/components/page-header";
 import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
-import {
-  deriveSetupStatus, goLivePrereqsMet, SETUP_TICK_KEYS,
-  type SetupStepKey,
-} from "@/lib/setup/setup-status";
+import { deriveSetupStatus, SETUP_TICK_KEYS } from "@/lib/setup/setup-status";
+import { buildSetupViews, resolveAssignedNumber, type ReadKey } from "@/lib/setup/setup-view";
 import { m } from "@/lib/messages";
-import { SetupPanel, GO_LIVE_PREREQ_KEYS, type SetupStepView } from "./setup-panel";
+import { SetupPanel } from "./setup-panel";
 import { setSetupTickAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
 type AccountRow = { name: string; brand_name: string | null; from_email: string | null };
-
-/** Which read each step's answer depends on. A step whose read did not settle
- *  renders "couldn't check" — never "done", and never "to do" either, since a
- *  read that threw answered neither question. */
-const READS_BEHIND: Record<SetupStepKey, readonly ReadKey[]> = {
-  account: [],
-  branding: ["account"],
-  hours: ["calendar"],
-  voice_profile: ["profile"],
-  number: ["numbers"],
-  // Both: `from_email` decides done, the stored tick decides skipped.
-  email: ["account", "ticks"],
-  forwarding: ["ticks"],
-  test_call: ["calls"],
-  // Mirrors the derive function: profile.enabled AND a number at status live.
-  go_live: ["profile", "numbers"],
-};
-
-type ReadKey = "account" | "calendar" | "profile" | "numbers" | "ticks" | "calls";
 
 /**
  * The guided path from a bare account row to a receptionist taking real
@@ -134,23 +113,13 @@ export default async function SetupPage({
     },
   });
 
-  const views: SetupStepView[] = steps.map((step) => ({
-    ...step,
-    unknown: READS_BEHIND[step.key].some((read) => failed[read]),
-  }));
+  const { views, prereqsMet } = buildSetupViews(steps, failed);
 
-  // An unverifiable prerequisite is not a met one. `goLivePrereqsMet` is the
-  // authority on WHICH steps gate going live; this narrows its answer with
-  // the one thing a pure function over derived rows cannot know — that some
-  // of those rows never arrived.
-  const prereqsMet =
-    goLivePrereqsMet(steps) &&
-    !views.some((v) => GO_LIVE_PREREQ_KEYS.includes(v.key) && v.unknown);
-
-  // What the client's carrier forwards to, and what a test call dials. A
-  // released number is a former number — forwarding a live business line to
-  // one is how a client's calls go nowhere.
-  const assignedNumber = numbers.find((n) => n.status !== "released")?.e164 ?? null;
+  // What the client's carrier forwards to, and what a test call dials —
+  // three states, not two: `resolveAssignedNumber` returns "unknown" rather
+  // than null when the numbers read itself failed, so the forwarding card
+  // can tell those apart (setup-panel.tsx).
+  const assignedNumber = resolveAssignedNumber(numbers, failed.numbers);
 
   return (
     <>

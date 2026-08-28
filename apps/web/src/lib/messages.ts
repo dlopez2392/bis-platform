@@ -632,6 +632,7 @@ export const m = {
   "setup.step.forwarding.tick": "Forwarding is set up",
   "setup.step.forwarding.untick": "Not set up yet",
   "setup.step.forwarding.noNumber": "Assign a number first — there is nothing to forward to yet.",
+  "setup.step.forwarding.unknownNumber": "Couldn't check the assigned number — reload to retry.",
   "setup.step.test_call.title": "Test call",
   "setup.step.test_call.help":
     "Call the assigned number. The call will appear on the Calls page and turn this step green.",
