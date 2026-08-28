@@ -125,4 +125,12 @@ describe("finishCall", () => {
     expect(dbMocks.finishCallRow).toHaveBeenCalledWith({}, "a1", "call1",
       expect.objectContaining({ outcome: "booked", contactId: "ct-existing", bookingId: "bk1" }));
   });
+  it("a bilingual-profile call whose caller turns are Spanish stores language: es on the row", async () => {
+    const s = withLead(withTranscript(emptyCallState(),
+      { role: "caller", text: "hola, necesito una cita para mañana por favor", at: "t" }),
+      { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
+    await finishCall(s, ctx, meta);
+    expect(dbMocks.finishCallRow).toHaveBeenCalledWith({}, "a1", "call1",
+      expect.objectContaining({ language: "es" }));
+  });
 });

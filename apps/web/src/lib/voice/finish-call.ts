@@ -8,6 +8,7 @@ import { getEmailProvider } from "@/lib/email";
 import { voiceCallAlertEmail } from "@/lib/email/templates/voice";
 import type { CallState } from "./call-state";
 import { classifyOutcome } from "./call-state";
+import { detectSpokenLanguage } from "./language";
 import { generateSummary } from "./summary-service";
 import { summaryFactLine } from "./summarize";
 import { toE164 } from "./phone-number";
@@ -234,7 +235,7 @@ export async function finishCall(
         turnCount: state.transcript.length,
         transcript: state.transcript,
         summary,
-        language: ctx.profileLanguage === "es" ? "es" : "en",
+        language: detectSpokenLanguage(state.transcript, ctx.profileLanguage),
         contactId: contactId ?? undefined,
         conversationId: conversationId ?? undefined,
         bookingId,
