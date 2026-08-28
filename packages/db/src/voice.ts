@@ -231,6 +231,45 @@ export async function reassignPhoneNumber(
   return data as PhoneNumberRow;
 }
 
+export type CallListRow = {
+  id: string; started_at: string; duration_secs: number | null;
+  outcome: CallOutcome; language: "en" | "es"; caller_e164: string | null;
+  contact_id: string | null;
+  contact: { first_name: string | null; last_name: string | null } | null;
+};
+export type CallDetailRow = CallListRow & {
+  ended_at: string | null; turn_count: number; transcript: TranscriptEvent[];
+  summary: string; conversation_id: string | null; booking_id: string | null;
+};
+
+const CALL_LIST_COLS =
+  "id, started_at, duration_secs, outcome, language, caller_e164, contact_id, " +
+  "contact:contacts(first_name, last_name)";
+const CALL_DETAIL_COLS =
+  CALL_LIST_COLS + ", ended_at, turn_count, transcript, summary, conversation_id, booking_id";
+
+export async function listCalls(
+  db: SupabaseClient, accountId: string, opts: { limit?: number; before?: string } = {},
+): Promise<CallListRow[]> {
+  let q = db.from("calls").select(CALL_LIST_COLS)
+    .eq("account_id", accountId)
+    .order("started_at", { ascending: false })
+    .limit(opts.limit ?? 50);
+  if (opts.before) q = q.lt("started_at", opts.before);
+  const { data, error } = await q;
+  if (error) throw new Error(`listCalls failed: ${error.message}`);
+  return (data ?? []) as unknown as CallListRow[];
+}
+
+export async function getCall(
+  db: SupabaseClient, accountId: string, callId: string,
+): Promise<CallDetailRow | null> {
+  const { data, error } = await db.from("calls").select(CALL_DETAIL_COLS)
+    .eq("account_id", accountId).eq("id", callId).maybeSingle();
+  if (error) throw new Error(`getCall failed: ${error.message}`);
+  return (data as unknown as CallDetailRow | null) ?? null;
+}
+
 export async function getBookingById(
   db: SupabaseClient, accountId: string, bookingId: string,
 ): Promise<{ id: string; contact_id: string; calendar_id: string; starts_at: string; ends_at: string; status: string } | null> {

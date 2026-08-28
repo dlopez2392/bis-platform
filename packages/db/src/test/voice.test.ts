@@ -8,6 +8,7 @@ import {
   startCallRow, finishCallRow, countCallsSince, countCallsByCallerSince,
   findUpcomingBookingForPhone, getBookingById, deleteCallRow,
   listPhoneNumbersForAccount, listAllPhoneNumbers, reassignPhoneNumber,
+  listCalls, getCall,
 } from "../voice";
 
 describe("voice accessors", () => {
@@ -198,6 +199,44 @@ describe("listPhoneNumbersForAccount / listAllPhoneNumbers / reassignPhoneNumber
       expect(await getCalendarForAccount(db, accountFresh)).toBeNull();
       await getOrCreateCalendar(db, accountFresh, "user_test");
       expect((await getCalendarForAccount(db, accountFresh))?.account_id).toBe(accountFresh);
+    });
+  });
+});
+
+describe("listCalls / getCall", () => {
+  it("lists newest-first, embeds the contact name, respects limit and before-cursor", async () => {
+    await withTestAccount(async (db, accountA) => {
+      const n = await assignPhoneNumber(db, accountA, { e164: "+15550000010" }, "user_test");
+      const c = await createContact(db, accountA, { firstName: "Maria", lastName: "Garcia", phone: "+15550000011" }, "user_test");
+      const r1 = await startCallRow(db, accountA, { phoneNumberId: n.id, callerE164: "+15550000011" });
+      await finishCallRow(db, accountA, r1.id, {
+        outcome: "booked", endedAt: new Date(), durationSecs: 62, turnCount: 9,
+        transcript: [{ role: "caller", text: "hola", at: new Date().toISOString() }],
+        summary: "s", language: "es", contactId: c.id,
+      });
+      const r2 = await startCallRow(db, accountA, { phoneNumberId: n.id, callerE164: null });
+
+      const rows = await listCalls(db, accountA);
+      expect(rows[0]!.id).toBe(r2.id);                       // newest first
+      const booked = rows.find((r) => r.id === r1.id)!;
+      expect(booked.contact?.first_name).toBe("Maria");
+      expect(booked.language).toBe("es");
+
+      const paged = await listCalls(db, accountA, { before: rows[0]!.started_at, limit: 1 });
+      expect(paged.map((r) => r.id)).toEqual([r1.id]);
+    });
+  });
+
+  it("getCall returns the full row for the account and null cross-account or unknown", async () => {
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db2, accountB) => {
+        const n = await assignPhoneNumber(db, accountA, { e164: "+15550000012" }, "user_test");
+        const r = await startCallRow(db, accountA, { phoneNumberId: n.id, callerE164: null });
+        const detail = await getCall(db, accountA, r.id);
+        expect(detail?.transcript).toEqual([]);
+        expect(await getCall(db, accountB, r.id)).toBeNull();  // tenant boundary
+        expect(await getCall(db, accountA, "00000000-0000-0000-0000-000000000000")).toBeNull();
+      });
     });
   });
 });
