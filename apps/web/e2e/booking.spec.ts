@@ -195,6 +195,18 @@ test("a stranger books, the operator sees it, the slot dies and revives", async 
     await expect(satFrom, "tabbing through a closed day must not open it").toHaveValue("");
     await expect(satTo, "tabbing through a closed day must not open it").toHaveValue("");
 
+    // A bare pointerdown, with no accompanying click, is what actually
+    // discriminates `onPointerDown` from a regression to `onClick`:
+    // Playwright's `.click()` below dispatches a full
+    // pointerdown+mousedown+mouseup+click sequence, so it would still fire
+    // an `onClick` handler too and prove nothing about which one is really
+    // wired. `#hours-sat-to` is still blank and untouched here — seeding it
+    // is only observable if `onPointerDown` is the real handler. `button: 0`
+    // matches the primary-button guard in `calendar-settings.tsx`, the same
+    // as a real left-click would report.
+    await page.dispatchEvent("#hours-sat-to", "pointerdown", { bubbles: true, cancelable: true, button: 0 });
+    await expect(satTo, "a bare pointerdown must seed the field — onClick would not fire here").toHaveValue("18:00");
+
     // A pointer going down on the field still seeds it — the operator's own
     // fix, the reason any of this exists. (Center-click lands on a time
     // segment, not the clock affordance, so no native picker is left open.)

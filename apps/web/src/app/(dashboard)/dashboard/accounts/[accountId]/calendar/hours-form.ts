@@ -23,9 +23,9 @@ export const DEFAULT_CLOSE_TIME = "18:00";
 
 /**
  * Seeds one blank time field. **The trigger is the entire safety story**, and
- * it lives in `calendar-settings.tsx`: this is wired to `onPointerDown` —
- * a pointer going down ON the field, which is how the picker gets opened —
- * and never to `onFocus`.
+ * it lives in `calendar-settings.tsx`: this is wired to `onPointerDown`
+ * (guarded there to the primary button — a right- or middle-click never
+ * opens a picker, so it never seeds one either) and never to `onFocus`.
  *
  * The first version of this (`2cf6f25`) seeded on focus, and focus is not
  * consent. Merely TABBING across a closed day's two fields left "08:00" and
@@ -37,20 +37,32 @@ export const DEFAULT_CLOSE_TIME = "18:00";
  * also made the field unclearable by `fill("")`, which focuses first: that
  * is how the e2e suite found it.)
  *
+ * `onPointerDown` is honest about intent on a mouse — button-down ON the
+ * field is a deliberate press — but it is a WEAKER signal on touch. A
+ * pointerdown fires at touch-start, before the browser has resolved whether
+ * the gesture is a tap or a scroll, so a finger that lands on a blank field
+ * only to scroll the page past it seeds that field without ever focusing it
+ * or opening anything. Two such scroll-starts landing on one closed day's
+ * two fields reproduce the original tab-through defect by accident. This is
+ * accepted, not fixed, for now: unlike the tab-through case, the seeded
+ * 08:00/18:00 are sitting in the row in front of the operator when Save is
+ * pressed, so the failure is visible rather than silent. If it bites in
+ * practice, the real remedy is a per-row "Closed" control that makes a day's
+ * open/closed state its own explicit input, independent of whether its two
+ * time fields happen to be blank — not a change to this trigger.
+ *
  * Nothing ever clears a seeded field again, on blur or otherwise. "Opened the
  * picker and walked away" and "opened the picker and chose the 08:00 it was
  * already showing" are indistinguishable from the DOM — Chrome fires no
  * `input` event for a pick that does not change the value — so a
  * clear-on-blur, however it is gated, eats exactly the choice this feature
- * exists to make easy. What remains is narrow and visible: both sides of one
- * day must be pointer-opened, and the 08:00/18:00 are sitting in the row in
- * front of the operator when Save is pressed.
+ * exists to make easy.
  *
  * Takes the element rather than returning a string so the "already has a
  * value" case is a genuine no-op — a same-string assignment to a live input
  * is still a write.
  */
-export function seedTimeOnPickerOpen(input: { value: string }, fallback: string): void {
+export function seedTimeOnPickerOpen(input: Pick<HTMLInputElement, "value">, fallback: string): void {
   if (input.value !== "") return; // a value the operator already set always wins
   input.value = fallback;
 }

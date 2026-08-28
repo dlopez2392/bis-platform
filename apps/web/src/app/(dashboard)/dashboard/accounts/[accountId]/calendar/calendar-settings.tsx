@@ -93,8 +93,12 @@ export function CalendarSettings({
                     // `seedTimeOnPickerOpen`. Pointerdown runs before the
                     // browser's own default action for the press, so the
                     // picker is already looking at 08:00 when it opens, while
-                    // a focus ring arriving by Tab changes nothing.
-                    onPointerDown={(e) => { seedTimeOnPickerOpen(e.currentTarget, DEFAULT_OPEN_TIME); }}
+                    // a focus ring arriving by Tab changes nothing. Guarded
+                    // to the primary button: a right- or middle-click never
+                    // opens the picker, so a write here would have no
+                    // purpose and would just be one more way to seed a field
+                    // the operator never meant to touch.
+                    onPointerDown={(e) => { if (e.button !== 0) return; seedTimeOnPickerOpen(e.currentTarget, DEFAULT_OPEN_TIME); }}
                   />
                   <span className="text-xs text-muted-foreground">{m["calendar.settings.to"]}</span>
                   <Label htmlFor={`hours-${row.day}-to`} className="sr-only">
@@ -103,7 +107,7 @@ export function CalendarSettings({
                   <Input
                     id={`hours-${row.day}-to`} name={`hours_${row.day}_to`}
                     type="time" defaultValue={row.to} className="w-32"
-                    onPointerDown={(e) => { seedTimeOnPickerOpen(e.currentTarget, DEFAULT_CLOSE_TIME); }}
+                    onPointerDown={(e) => { if (e.button !== 0) return; seedTimeOnPickerOpen(e.currentTarget, DEFAULT_CLOSE_TIME); }}
                   />
                 </div>
               ))}

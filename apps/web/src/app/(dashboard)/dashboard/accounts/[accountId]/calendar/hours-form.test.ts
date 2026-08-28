@@ -54,9 +54,10 @@ describe("seedTimeOnPickerOpen", () => {
     const field = fakeTimeInput("");
     seedTimeOnPickerOpen(field, DEFAULT_OPEN_TIME);
     field.value = "09:30";
+    const writesBeforeReopen = field.writeCount; // the seed + the operator's own pick
     seedTimeOnPickerOpen(field, DEFAULT_OPEN_TIME);
     expect(field.value).toBe("09:30");
-    expect(field.writeCount).toBe(2); // the seed and the operator's own pick
+    expect(field.writeCount).toBe(writesBeforeReopen); // second call wrote nothing
   });
 
   it("pins the business defaults", () => {
