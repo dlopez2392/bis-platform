@@ -2,6 +2,21 @@ import { test, expect } from "@playwright/test";
 
 const ACCOUNT_NAME = "Test Client One";
 
+/**
+ * The seeded contact on that account, and the only one guaranteed to carry an
+ * EMAIL ADDRESS — which the composer's email mode requires (with none on file
+ * it renders "no email on this contact" and never shows a Subject field).
+ *
+ * Named rather than taken positionally. `listContacts` orders by `created_at`
+ * descending, so `.first()` means "whoever rang most recently" — and real
+ * voice calls have since created contacts on this shared account from nothing
+ * but a phone number, with `email` null. That is exactly the positional-
+ * locator trap `openAccountByName` (support.ts) was written for, one level
+ * down: `.first()` was only ever the seeded contact by accident of it being
+ * the only one.
+ */
+const SEEDED_CONTACT_NAME = "Maria Garcia";
+
 // Opening a contact was never covered: the contacts spec asserts the table
 // renders and sorts, then stops. A 404 on this route reached the owner.
 test("opening a contact from the table renders the detail screen", async ({ page }) => {
@@ -44,7 +59,9 @@ test("opening a contact from the table renders the detail screen", async ({ page
 test("an email sent from a contact appears on that contact's timeline", async ({ page }) => {
   await page.goto("/dashboard/accounts");
   await page.getByRole("link", { name: new RegExp(ACCOUNT_NAME, "i") }).first().click();
-  await page.getByRole("table").getByRole("link").first().click();
+  // By name, not by position — see SEEDED_CONTACT_NAME above. This test needs
+  // a contact the app is willing to email.
+  await page.getByRole("table").getByRole("link", { name: SEEDED_CONTACT_NAME }).click();
   await expect(page).toHaveURL(/\/contacts\/[0-9a-f-]{36}$/);
 
   const body = `Timeline check ${Date.now()}`;

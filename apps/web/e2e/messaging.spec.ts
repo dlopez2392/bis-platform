@@ -14,12 +14,23 @@ loadEnv({ path: ".env.local" });
 // address, which the send guard requires.
 const ACCOUNT_NAME = "Test Client One";
 
+/**
+ * ...and the contact on it that actually has that email address. Named rather
+ * than taken positionally: `listContacts` orders by `created_at` descending,
+ * so `.first()` means "whoever rang most recently", and real voice calls have
+ * since created contacts on this shared account from a phone number alone,
+ * with `email` null. The composer correctly refuses to email those — it
+ * renders "no email on this contact" instead of a Subject field — so
+ * `.first()` had quietly stopped selecting a contact this spec can send from.
+ */
+const SEEDED_CONTACT_NAME = "Maria Garcia";
+
 test("email sent from a contact appears in the thread and in Conversations", async ({ page }) => {
   await page.goto("/dashboard/accounts");
   await page.getByRole("link", { name: new RegExp(ACCOUNT_NAME, "i") }).first().click();
   await expect(page).toHaveURL(/\/contacts$/);
 
-  await page.getByRole("table").getByRole("link").first().click();
+  await page.getByRole("table").getByRole("link", { name: SEEDED_CONTACT_NAME }).click();
   await expect(page).toHaveURL(/\/contacts\/[0-9a-f-]{36}$/);
 
   // This spec writes real rows to the shared dev database. `ensureConversation`
@@ -48,9 +59,11 @@ test("email sent from a contact appears in the thread and in Conversations", asy
   await expect(page).toHaveURL(/\/conversations/);
   // The screen no longer auto-opens the newest thread — doing so marked a fresh
   // inbound lead read before anyone looked at it — so a thread has to be picked.
-  // Matched by href rather than contact name because this spec walks in through
-  // "the first contact in the table" and never learns whose thread it is.
-  await page.locator("a[href*='?c=']").first().click();
+  // Picked by WHOSE it is, now that this spec walks in through a named contact
+  // rather than "the first row in the table": voice calls have since opened
+  // conversations of their own on this account, so "the first thread" is a
+  // position in a list this spec never asserts the order of.
+  await page.locator("a[href*='?c=']").filter({ hasText: SEEDED_CONTACT_NAME }).first().click();
   await expect(page.getByText(subject).first()).toBeVisible();
   await expect(page.getByText("Sent").first()).toBeVisible();
   await expect(page.getByText("Sent by the e2e suite.").first()).toBeVisible();

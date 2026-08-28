@@ -73,8 +73,17 @@ test("a client sees only their own account, and nothing when access is off", asy
   // missing and Blueprints had appeared in its place — two opposite errors
   // cancelling, which is the weak shape this project already had to fix once
   // in checklist-catalogue.test.ts.
+  //
+  // "Calls" is the eighth, added by the voice milestone and DELIBERATELY shown
+  // to both audiences (app-sidebar.tsx): the Voice item beside it in the
+  // agency's sidebar is the settings that configure the receptionist, while
+  // this is the log of what it actually did — the client's own business data,
+  // and the one screen where they see what they are paying for. That the list
+  // is exact is exactly why it had to be updated here rather than loosened:
+  // `calls.spec.ts` asserts the same item from the other direction.
   const CLIENT_NAV = [
-    "Dashboard", "Contacts", "Opportunities", "Conversations", "Forms", "Calendar", "Branding",
+    "Dashboard", "Contacts", "Opportunities", "Conversations", "Calls", "Forms", "Calendar",
+    "Branding",
   ];
   await expect(page.locator("aside nav a")).toHaveText(CLIENT_NAV);
   for (const label of CLIENT_NAV) {
