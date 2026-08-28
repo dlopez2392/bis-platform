@@ -95,6 +95,16 @@ export async function goLiveAction(accountId: string): Promise<ActionResult> {
     // brandName/fromEmail decide the branding and email steps, and neither
     // gates go-live (see goLivePrereqsMet) — so nulls here rather than a
     // sixth read whose answer this function would then ignore.
+    //
+    // The checklist read above is the deliberate exception to that: today's
+    // prereq set ignores the two ticks as well, so by the same argument it
+    // could be dropped for a hardcoded pair of `false`s. It is not, because
+    // the two failure modes are not the same size. A transient checklist
+    // failure costs one honest "try again" and a reload. Hardcoding `false`
+    // costs nothing until someone adds `forwarding` to goLivePrereqsMet — and
+    // then go-live becomes permanently impossible for every account, while
+    // the panel insists the operator finish a step whose tick is already set.
+    // A read that is redundant now is cheaper than that.
     steps = deriveSetupStatus({
       brandName: null,
       fromEmail: null,
