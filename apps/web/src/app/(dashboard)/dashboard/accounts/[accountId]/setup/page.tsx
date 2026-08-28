@@ -1,6 +1,6 @@
 import {
   getCalendarForAccount, getVoiceProfile, listPhoneNumbersForAccount,
-  listChecklistState, countCallsSince,
+  listChecklistState, countCallsSince, listAllPhoneNumbers,
 } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
@@ -8,8 +8,9 @@ import { dbForRequest } from "@/lib/db";
 import { deriveSetupStatus, SETUP_TICK_KEYS } from "@/lib/setup/setup-status";
 import { buildSetupViews, resolveAssignedNumber, type ReadKey } from "@/lib/setup/setup-view";
 import { m } from "@/lib/messages";
-import { SetupPanel } from "./setup-panel";
-import { setSetupTickAction } from "./actions";
+import { SetupPanel, type MovableNumber } from "./setup-panel";
+import { setSetupTickAction, goLiveAction } from "./actions";
+import { moveNumberAction } from "../voice/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -121,6 +122,28 @@ export default async function SetupPage({
   // can tell those apart (setup-panel.tsx).
   const assignedNumber = resolveAssignedNumber(numbers, failed.numbers);
 
+  // Only when the numbers read actually answered "this account has none".
+  // Never on `"unknown"`: offering to move a number into an account that may
+  // already have one is how another tenant's live line gets taken to fix a
+  // problem that was only ever a failed read. Its own failure is swallowed to
+  // an empty list — the number step still has its primary path (buy in
+  // Telnyx, assign on the Voice page), so a broken cross-account read must not
+  // take the whole wizard down with it.
+  let movableNumbers: MovableNumber[] = [];
+  if (assignedNumber === null) {
+    try {
+      const all = await listAllPhoneNumbers(db);
+      movableNumbers = all
+        .filter((n) => n.account_id !== accountId)
+        .map((n) => ({
+          id: n.id, e164: n.e164, status: n.status,
+          accountName: n.account?.name ?? null,
+        }));
+    } catch (e) {
+      console.error(`setup: cross-account number read failed for account ${accountId}: ${String(e)}`);
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -150,8 +173,14 @@ export default async function SetupPage({
           steps={views}
           prereqsMet={prereqsMet}
           assignedNumber={assignedNumber}
-          // accountId bound server-side — it must never travel as a form field.
+          movableNumbers={movableNumbers}
+          // accountId bound server-side on all three — it must never travel
+          // as a form field. For moveNumberAction that binding is what makes
+          // the account the DESTINATION rather than something the browser
+          // gets to name.
           tickAction={setSetupTickAction.bind(null, accountId)}
+          goLiveAction={goLiveAction.bind(null, accountId)}
+          moveNumberAction={moveNumberAction.bind(null, accountId)}
         />
       </div>
     </>

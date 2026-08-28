@@ -1,20 +1,26 @@
 import { Fragment } from "react";
 import Link from "next/link";
 import { AlertTriangle, ArrowRight, Check, Minus, Rocket } from "lucide-react";
+import type { PhoneNumberStatus } from "@bis/db";
 import type { SetupStepKey } from "@/lib/setup/setup-status";
 import {
   GO_LIVE_PREREQ_KEYS, kindOf, type SetupStepView, type StateKind,
 } from "@/lib/setup/setup-view";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { SetupTickButton } from "./setup-tick-button";
+import { SetupGoLiveButton } from "./setup-go-live-button";
+import { SetupMoveNumberButton } from "./setup-move-number-button";
 
 /**
  * The wizard, as one path rather than nine cards.
  *
- * Everything here is server-rendered except the two tick buttons (see
- * ./setup-tick-button.tsx). The visual argument the layout makes:
+ * Everything here is server-rendered except the four buttons that write: the
+ * two ticks (./setup-tick-button.tsx), go-live (./setup-go-live-button.tsx)
+ * and move-number (./setup-move-number-button.tsx). Each is its own island
+ * calling a Result-typed action, so a refusal arrives as a value to render
+ * rather than a rejected promise. The visual argument the layout makes:
  *
  * ① A spine. A hairline rail threads the nine markers top to bottom, so the
  *   page reads as a sequence with a beginning and an end — "nothing" to
@@ -35,6 +41,33 @@ import { SetupTickButton } from "./setup-tick-button";
 
 export type SetupTick = "emailSkipped" | "forwardingDone";
 export type SetupTickAction = (tick: SetupTick, done: boolean) => Promise<{ ok: boolean }>;
+
+type ActionResult = { ok: true } | { ok: false; error: string };
+/** accountId already bound server-side — it must never travel as an argument
+ *  from the browser. */
+export type SetupGoLiveAction = () => Promise<ActionResult>;
+/** Likewise: the caller picks WHICH number, never which account receives it. */
+export type SetupMoveNumberAction = (phoneNumberId: string) => Promise<ActionResult>;
+
+/** A number sitting on some other account that this one could take over.
+ *  `accountName` is null when the join to `accounts` came back empty. */
+export type MovableNumber = {
+  id: string;
+  e164: string;
+  status: PhoneNumberStatus;
+  accountName: string | null;
+};
+
+/** Status shown beside every movable number, using the Voice page's own
+ *  labels. Not decoration: "Live" here means some other client's callers are
+ *  reaching that line right now, and one click would take it away from them.
+ *  The operator has to be able to see that before they press. */
+const NUMBER_STATUS_LABEL: Record<PhoneNumberStatus, string> = {
+  provisioned: m["voice.numbers.status.provisioned"],
+  testing: m["voice.numbers.status.testing"],
+  live: m["voice.numbers.status.live"],
+  released: m["voice.numbers.status.released"],
+};
 
 const STEP_COPY: Record<SetupStepKey, { title: string; help: string }> = {
   account: { title: m["setup.step.account.title"], help: m["setup.step.account.help"] },
@@ -105,12 +138,15 @@ const STATE_LABEL: Record<StateKind, string> = {
 };
 
 export function SetupPanel({
-  accountId, steps, prereqsMet, assignedNumber, tickAction,
+  accountId, steps, prereqsMet, assignedNumber, movableNumbers,
+  tickAction, goLiveAction, moveNumberAction,
 }: {
   accountId: string;
   steps: SetupStepView[];
   /** From `goLivePrereqsMet`, narrowed by the page so an unverifiable
-   *  prerequisite also counts as unmet. */
+   *  prerequisite also counts as unmet. Gates the go-live button's `disabled`
+   *  and nothing else — the action re-derives all of this from live rows at
+   *  click time, which is where the rule is actually enforced. */
   prereqsMet: boolean;
   /** First non-released number on the account; `null` if there genuinely is
    *  none yet; `"unknown"` if the numbers read itself failed — a third state
@@ -118,15 +154,30 @@ export function SetupPanel({
    *  number", which is what a plain `null` would look like from here. What
    *  the client's carrier forwards to and what a test call dials. */
   assignedNumber: string | null | "unknown";
+  /** Other accounts' numbers, offered on the number step when this account
+   *  has none. Empty when it already has one, when the cross-account read
+   *  failed, or when there is genuinely nothing to move. */
+  movableNumbers: MovableNumber[];
   tickAction: SetupTickAction;
+  goLiveAction: SetupGoLiveAction;
+  moveNumberAction: SetupMoveNumberAction;
 }) {
   const base = `/dashboard/accounts/${accountId}`;
 
   // A skipped step leaves the denominator rather than sitting in it forever:
   // the email identity is genuinely optional, and a meter that could never
   // reach the end for an account that is fully live would be lying in the
-  // other direction. Unknown steps stay counted and stay un-done — we do not
-  // know, so the meter must not claim progress.
+  // other direction.
+  //
+  // Counted on `s.done` alone. For the eight steps with exactly ONE read
+  // behind them (READS_BEHIND, setup-view.ts) that is also the unknown-safe
+  // count: a read that threw feeds deriveSetupStatus a neutral input, so the
+  // step comes back `done: false` and the meter cannot claim progress it did
+  // not verify. `email` is the one two-read step — the account read decides
+  // `done`, the checklist read decides `skipped` — so a settled account row
+  // with `from_email` set is a genuinely verified `done` even while the tick
+  // read failed and its card renders "couldn't check". Counting it there is
+  // right, not a leak.
   const total = steps.filter((s) => !s.skipped).length;
   const doneCount = steps.filter((s) => s.done).length;
 
@@ -136,10 +187,20 @@ export function SetupPanel({
   // something that may already be fine.
   const nextKey = steps.find((s) => !s.done && !s.skipped && !s.unknown)?.key ?? null;
 
-  // `!s.done` alone catches unknown steps too — the neutral inputs fed to
-  // deriveSetupStatus for a failed read never mark a step done, so
-  // `unknown: true` always carries `done: false`.
-  const blocked = steps.filter((s) => GO_LIVE_PREREQ_KEYS.includes(s.key) && !s.done);
+  // `!s.done` alone is sufficient TODAY, and `|| s.unknown` is the insurance.
+  // The reason it is sufficient is narrow: each of the four
+  // GO_LIVE_PREREQ_KEYS has exactly ONE read behind it (hours←calendar,
+  // voice_profile←profile, number←numbers, test_call←calls), so a failed read
+  // feeds deriveSetupStatus a neutral input and the step comes back
+  // `done: false`. That is a property of those four keys — NOT a general rule
+  // about `unknown`: `email` reads two sources and can carry `done: true`
+  // alongside `unknown: true`. Give go-live a two-read prerequisite one day
+  // and `!s.done` would silently stop naming it in the blocked list while
+  // `prereqsMet` (which checks `unknown` itself, setup-view.ts) still refused
+  // — an operator staring at a dead button with no reason under it.
+  const blocked = steps.filter(
+    (s) => GO_LIVE_PREREQ_KEYS.includes(s.key) && (!s.done || s.unknown),
+  );
   const blockedReason = prereqsMet
     ? null
     : m["setup.goLive.blocked"].replace(
@@ -234,7 +295,10 @@ export function SetupPanel({
                   base={base}
                   href={path ? `${base}${path}` : null}
                   assignedNumber={assignedNumber}
+                  movableNumbers={movableNumbers}
                   tickAction={tickAction}
+                  goLiveAction={goLiveAction}
+                  moveNumberAction={moveNumberAction}
                   prereqsMet={prereqsMet}
                   blockedReason={blockedReason}
                 />
@@ -322,15 +386,56 @@ function NumberChip({ e164 }: { e164: string }) {
   );
 }
 
+/** The offer on the number step when this account has none of its own: every
+ *  number that lives on another account, with whose it is and what it is
+ *  currently doing, so an operator cannot take a live line out from under
+ *  another client without seeing that is what they are doing. Buying a fresh
+ *  number stays the primary path — it is the card's own help text and its
+ *  "Open" link to the Voice page; this is the alternative underneath. */
+function MovableNumbers({
+  numbers, moveAction,
+}: {
+  numbers: MovableNumber[];
+  moveAction: SetupMoveNumberAction;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-muted/30 p-3">
+      <p className="text-xs font-medium text-muted-foreground">{m["setup.number.moveTitle"]}</p>
+      <ul className="mt-1 divide-y divide-border">
+        {numbers.map((n) => (
+          <li key={n.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+            <div className="min-w-0">
+              <NumberChip e164={n.e164} />
+              <p className="mt-1 text-xs text-muted-foreground">
+                {m["setup.number.currentlyOn"].replace(
+                  "{account}",
+                  n.accountName ?? m["setup.number.unknownAccount"],
+                )}
+                {" · "}
+                {NUMBER_STATUS_LABEL[n.status]}
+              </p>
+            </div>
+            <SetupMoveNumberButton action={moveAction} phoneNumberId={n.id} e164={n.e164} />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function StepActions({
-  step, kind, base, href, assignedNumber, tickAction, prereqsMet, blockedReason,
+  step, kind, base, href, assignedNumber, movableNumbers,
+  tickAction, goLiveAction, moveNumberAction, prereqsMet, blockedReason,
 }: {
   step: SetupStepView;
   kind: StateKind;
   base: string;
   href: string | null;
   assignedNumber: string | null | "unknown";
+  movableNumbers: MovableNumber[];
   tickAction: SetupTickAction;
+  goLiveAction: SetupGoLiveAction;
+  moveNumberAction: SetupMoveNumberAction;
   prereqsMet: boolean;
   blockedReason: string | null;
 }) {
@@ -338,6 +443,9 @@ function StepActions({
    *  row. Prose belongs in `note` below it, not among them. */
   const rows: React.ReactNode[] = [];
   let note: React.ReactNode = null;
+  /** A block that needs its own box rather than a slot on the controls row —
+   *  currently only the movable-number list. */
+  let panel: React.ReactNode = null;
 
   // The actual e164, or null for BOTH "no number yet" and "couldn't check" —
   // collapsed here because every chip site below already renders nothing for
@@ -364,8 +472,16 @@ function StepActions({
     );
   }
 
-  if (step.key === "number" && e164) {
-    rows.unshift(<NumberChip key="e164" e164={e164} />);
+  if (step.key === "number") {
+    if (e164) {
+      rows.unshift(<NumberChip key="e164" e164={e164} />);
+    } else if (assignedNumber === null && movableNumbers.length > 0) {
+      // Only when the read actually answered "none". Offering to move a
+      // number into an account that may already have one — which is what
+      // `assignedNumber === "unknown"` means — is how a live line gets
+      // stolen from the tenant next door to fix a problem that isn't there.
+      panel = <MovableNumbers numbers={movableNumbers} moveAction={moveNumberAction} />;
+    }
   }
 
   if (step.key === "forwarding") {
@@ -433,14 +549,11 @@ function StepActions({
 
   if (step.key === "go_live" && !step.done) {
     rows.push(
-      // Rendered disabled on purpose: the action that flips the receptionist
-      // on is Task 14's, and a button that looks live but does nothing is
-      // worse than one that plainly cannot be pressed yet. The reason below
-      // is the part that carries information today.
-      <Button key="golive" type="button" disabled title={blockedReason ?? undefined}>
-        <Rocket aria-hidden />
-        {m["setup.goLive.button"]}
-      </Button>,
+      // `disabled` is courtesy only. goLiveAction re-derives every
+      // prerequisite from live rows at click time and refuses on its own
+      // evidence, which is why it is safe to drive this attribute from a
+      // render that went stale the moment it painted.
+      <SetupGoLiveButton key="golive" action={goLiveAction} disabled={!prereqsMet} />,
     );
   }
 
@@ -450,7 +563,7 @@ function StepActions({
   const showReason =
     step.key === "go_live" && !step.done && !prereqsMet && blockedReason !== null;
 
-  if (rows.length === 0 && note === null && !showReason) return null;
+  if (rows.length === 0 && note === null && panel === null && !showReason) return null;
 
   return (
     <div className="mt-3 space-y-2">
@@ -462,6 +575,7 @@ function StepActions({
           several browsers and is out of the tab order, so `title` alone would
           hide the one sentence that says what is still missing. */}
       {showReason ? <p className="text-sm text-muted-foreground">{blockedReason}</p> : null}
+      {panel}
     </div>
   );
 }

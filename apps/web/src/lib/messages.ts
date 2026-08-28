@@ -546,6 +546,7 @@ export const m = {
   "voice.numbers.statusUpdated": "Status updated",
   "voice.numbers.statusUpdateFailed": "Could not update this number's status.",
   "voice.numbers.goLiveNeedsProfile": "Fill in the voice profile before going live",
+  "voice.moveFailed": "Couldn't move that number — check it isn't in use and try again.",
 
   // The client-facing Calls log — /dashboard/accounts/<id>/calls. BOTH
   // audiences: this is the client's own business data (who rang, what the
@@ -639,8 +640,26 @@ export const m = {
   "setup.step.go_live.title": "Go live",
   "setup.step.go_live.help":
     "Enables the receptionist and marks the number live. Callers get real answers from here on.",
+  "setup.number.moveTitle": "Or move a number from another client",
+  "setup.number.moveHere": "Move here",
+  // Accessible name. Every row's visible label is the same two words, so
+  // without this a screen reader reads a list of identical buttons with no
+  // way to tell which number each one takes.
+  "setup.number.moveHereLabel": "Move {e164} to this client",
+  "setup.number.moving": "Moving…",
+  "setup.number.currentlyOn": "currently on {account}",
+  // The join to `accounts` came back empty for this row. Says "we don't know
+  // whose it is" rather than implying the number belongs to nobody.
+  "setup.number.unknownAccount": "an account we couldn't name",
   "setup.goLive.button": "Go live",
+  "setup.goLive.pending": "Going live…",
   "setup.goLive.blocked": "Finish these steps first: {steps}",
+  "setup.goLive.denied": "Only the agency can take a client live.",
+  "setup.goLive.notReady": "Not everything is ready — finish the open steps above.",
+  // Deliberately NOT "not ready": that sentence blames the client's setup,
+  // and this one covers a read or a write that failed on our side. Telling an
+  // operator to go fix hours that are already fine is the worse error.
+  "setup.goLive.failed": "Couldn't take this client live just now. Reload and try again.",
   "setup.viewCalls": "View calls",
   "setup.openStep": "Open",
   "setup.tickFailed": "Could not save that. Reload and try again.",

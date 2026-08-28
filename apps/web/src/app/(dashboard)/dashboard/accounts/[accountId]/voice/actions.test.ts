@@ -9,6 +9,7 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 const dbMocks = vi.hoisted(() => ({
   upsertVoiceProfile: vi.fn(), assignPhoneNumber: vi.fn(),
   setPhoneNumberStatus: vi.fn(), getVoiceProfile: vi.fn(),
+  reassignPhoneNumber: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({}),
@@ -45,7 +46,10 @@ vi.mock("@/lib/auth", () => ({
   requireAccountAccess: async () => ({ userId: "user_1", isAgency: guardFixture.isAgency }),
 }));
 
-import { saveVoiceProfileAction, assignNumberAction, setNumberStatusAction } from "./actions";
+import { m } from "@/lib/messages";
+import {
+  saveVoiceProfileAction, assignNumberAction, setNumberStatusAction, moveNumberAction,
+} from "./actions";
 
 const fd = (o: Record<string, string>) => {
   const f = new FormData();
@@ -108,5 +112,40 @@ describe("voice settings actions", () => {
     const r = await setNumberStatusAction("a1", "pn1", "banana");
     expect(r).toMatchObject({ ok: false });
     expect(dbMocks.setPhoneNumberStatus).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Called from the setup wizard's number step, not this page — but it belongs
+ * here, with the guard and the result shape every other `phone_numbers` write
+ * uses. `reassignPhoneNumber` moves a row BETWEEN accounts, so the caller's
+ * own account is not the only tenant it touches; `serviceDb()` bypasses RLS
+ * for both sides, which makes the `isAgency` check below the only thing
+ * standing behind it.
+ */
+describe("moveNumberAction", () => {
+  it("a non-agency caller is rejected before any db call", async () => {
+    guardFixture.isAgency = false;
+    const r = await moveNumberAction("a1", "pn1");
+    expect(r).toEqual({ ok: false, error: m["voice.agencyOnly"] });
+    expect(dbMocks.reassignPhoneNumber).not.toHaveBeenCalled();
+  });
+
+  it("moves the number to the calling account through serviceDb", async () => {
+    dbMocks.reassignPhoneNumber.mockResolvedValue({ id: "pn1", account_id: "a1" });
+    const r = await moveNumberAction("a1", "pn1");
+    expect(r).toEqual({ ok: true });
+    // Argument order is load-bearing: (db, phoneNumberId, toAccountId, actor).
+    // Swapping the two ids would move a number to itself and emit on the wrong
+    // timelines, with no error anywhere.
+    expect(dbMocks.reassignPhoneNumber).toHaveBeenCalledWith({}, "pn1", "a1", "user_1");
+  });
+
+  it("reports a thrown reassign rather than rejecting into the caller", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.reassignPhoneNumber.mockRejectedValue(new Error("matched no row"));
+    const r = await moveNumberAction("a1", "pn1");
+    expect(r).toEqual({ ok: false, error: m["voice.moveFailed"] });
+    errSpy.mockRestore();
   });
 });

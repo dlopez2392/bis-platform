@@ -27,6 +27,7 @@
 import { revalidatePath } from "next/cache";
 import {
   serviceDb, upsertVoiceProfile, assignPhoneNumber, setPhoneNumberStatus, getVoiceProfile,
+  reassignPhoneNumber,
   type PhoneNumberStatus, type VoiceProfilePatch,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
@@ -103,6 +104,40 @@ export async function assignNumberAction(
   }
 
   revalidatePath(`/dashboard/accounts/${accountId}/voice`);
+  return { ok: true };
+}
+
+/**
+ * Moves an existing number onto `accountId` — pressed from the setup
+ * wizard's number step, but it lives here because it is a `phone_numbers`
+ * write and belongs with the guard and result shape the rest of this file
+ * uses.
+ *
+ * The widest write in the file: `reassignPhoneNumber` takes a row OFF another
+ * tenant, and `serviceDb()` bypasses RLS on both sides, so the `isAgency`
+ * check is the only thing standing between a client session and another
+ * client's phone line. Checked before the db call, which is what the test
+ * pins. `accountId` is the DESTINATION and comes from the bound server-side
+ * argument, never a form field — a caller can choose which number to take,
+ * never which account to give it to.
+ *
+ * No revalidatePath: unlike the actions above, this one is pressed from the
+ * setup page (force-dynamic, refreshed client-side by the island), and the
+ * OTHER account's voice page — the one that just lost a number — is
+ * force-dynamic too, so there is no cached render either side to invalidate.
+ */
+export async function moveNumberAction(
+  accountId: string, phoneNumberId: string,
+): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["voice.agencyOnly"] };
+
+  try {
+    await reassignPhoneNumber(serviceDb(), phoneNumberId, accountId, userId);
+  } catch (e) {
+    console.error(`moveNumberAction: move failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["voice.moveFailed"] };
+  }
   return { ok: true };
 }
 
