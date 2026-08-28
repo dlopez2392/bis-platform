@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { ChevronRight, ArrowRight } from "lucide-react";
-import type { CallListRow, CallOutcome } from "@bis/db";
+import type { CallListRow } from "@bis/db";
 import {
   Table,
   TableBody,
@@ -13,47 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
-import { callerLabel, formatCallTime, formatDuration } from "./format";
-
-/**
- * Outcome treatment. The hue lives in the DOT and the chip's border/tint, not
- * in the label text: `--success` on a light surface measures ~3.4:1, which is
- * below AA for text this size, and this table is the one screen a client reads
- * top to bottom. A colored dot is a graphical object, held to 3:1, and it
- * carries the same "which outcome is this" signal at a glance.
- *
- * `booked` is the positive one and is the only outcome with a filled chip —
- * it should be the thing the eye finds first in a column of fifty rows.
- * `abandoned` and `spam` deliberately recede: they are the rows a client
- * should NOT be drawn to.
- */
-const OUTCOMES: Record<CallOutcome, { label: string; dot: string; chip: string }> = {
-  booked: {
-    label: m["calls.outcome.booked"],
-    dot: "bg-success",
-    chip: "border-success/30 bg-success/10 text-foreground",
-  },
-  lead: {
-    label: m["calls.outcome.lead"],
-    dot: "bg-primary",
-    chip: "border-primary/30 bg-primary/5 text-foreground",
-  },
-  message: {
-    label: m["calls.outcome.message"],
-    dot: "bg-accent",
-    chip: "border-accent/30 bg-accent/5 text-foreground",
-  },
-  abandoned: {
-    label: m["calls.outcome.abandoned"],
-    dot: "bg-muted-foreground/60",
-    chip: "border-border bg-transparent text-muted-foreground",
-  },
-  spam: {
-    label: m["calls.outcome.spam"],
-    dot: "bg-destructive",
-    chip: "border-destructive/25 bg-transparent text-muted-foreground",
-  },
-};
+import { callerLabel, formatCallTime, formatDuration, OUTCOMES } from "./format";
 
 const HEAD = "px-4 text-xs font-medium tracking-wider text-muted-foreground uppercase";
 const CELL = "px-4 py-3";

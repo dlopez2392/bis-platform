@@ -95,6 +95,33 @@ describe("setSetupTickAction", () => {
       {}, "a1", "setup:forwarding_done", { done: false }, "user_1",
     );
   });
+
+  it("reports a failed write rather than rejecting into the client island", async () => {
+    // Uncaught, this REJECTS the server action — the client island's
+    // `toast.error(m["setup.tickFailed"])` branch for `{ok:false}` is dead
+    // code unless the write's own failure is caught and reported as a value,
+    // the same idiom goLiveAction uses for its own writes below.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.setChecklistItem.mockRejectedValue(new Error("boom"));
+    const r = await setSetupTickAction("a1", "emailSkipped", true);
+    expect(r).toEqual({ ok: false });
+    errSpy.mockRestore();
+  });
+
+  it("refuses a tick key that isn't in the catalogue, without touching the db", async () => {
+    // `SETUP_TICK_KEYS[tick]` trusts a compile-time `keyof` on a value that
+    // actually arrives over the wire from a browser — nothing stops a
+    // tampered submission from sending `"constructor"` or any other
+    // prototype-chain property name. The runtime guard is what stands
+    // between that and `setChecklistItem` being called with `undefined`.
+    const r = await setSetupTickAction(
+      "a1",
+      "constructor" as unknown as "emailSkipped",
+      true,
+    );
+    expect(r).toEqual({ ok: false });
+    expect(dbMocks.setChecklistItem).not.toHaveBeenCalled();
+  });
 });
 
 /**

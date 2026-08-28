@@ -9,7 +9,7 @@ import {
   Timer,
   UserRound,
 } from "lucide-react";
-import { getCall, type CallOutcome } from "@bis/db";
+import { getCall } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
@@ -18,48 +18,11 @@ import { dbForRequest } from "@/lib/db";
 import { safeZone } from "@/lib/booking/time";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
-import { callerLabel, formatCallTime, formatDuration } from "../format";
+import { callerLabel, formatCallTime, formatDuration, OUTCOMES } from "../format";
 import { splitSummaryBlocks, type SummaryBlock } from "./summary-blocks";
 import { TranscriptView } from "./transcript-view";
 
 export const dynamic = "force-dynamic";
-
-/**
- * The same treatment the list uses, reduced to what a single badge needs. Kept
- * in step with `calls-table.tsx` deliberately: a client arrives here by
- * clicking a row, and an outcome that changed colour on the way in would read
- * as a different outcome.
- *
- * The hue lives in the dot and the chip, never in the label text — `--success`
- * on a light surface measures ~3.4:1, below AA for text this size.
- */
-const OUTCOMES: Record<CallOutcome, { label: string; dot: string; chip: string }> = {
-  booked: {
-    label: m["calls.outcome.booked"],
-    dot: "bg-success",
-    chip: "border-success/30 bg-success/10 text-foreground",
-  },
-  lead: {
-    label: m["calls.outcome.lead"],
-    dot: "bg-primary",
-    chip: "border-primary/30 bg-primary/5 text-foreground",
-  },
-  message: {
-    label: m["calls.outcome.message"],
-    dot: "bg-accent",
-    chip: "border-accent/30 bg-accent/5 text-foreground",
-  },
-  abandoned: {
-    label: m["calls.outcome.abandoned"],
-    dot: "bg-muted-foreground/60",
-    chip: "border-border bg-transparent text-muted-foreground",
-  },
-  spam: {
-    label: m["calls.outcome.spam"],
-    dot: "bg-destructive",
-    chip: "border-destructive/25 bg-transparent text-muted-foreground",
-  },
-};
 
 const CARD = "overflow-hidden rounded-lg border border-border bg-card";
 const CARD_HEAD =

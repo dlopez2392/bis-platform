@@ -33,6 +33,21 @@ export type ActionResult = { ok: true } | { ok: false; error: string };
  * db call, which is what actions.test.ts pins (the not-called assertion, not
  * the return value, is the boundary). Result-typed rather than throwing, like
  * every other voice-era action.
+ *
+ * Two more checks stand between the wire and the write, both load-bearing:
+ *
+ * `Object.hasOwn(SETUP_TICK_KEYS, tick)` — `tick`'s TYPE is a compile-time
+ * `keyof`, but the VALUE crossing a server-action boundary is whatever a
+ * browser sends, typed or not. `SETUP_TICK_KEYS["constructor"]` does not
+ * throw — it resolves up the prototype chain to `Object`'s constructor
+ * function — so without this the call below would run with that as the
+ * item key instead of refusing.
+ *
+ * The try/catch — the goLiveAction idiom in this same file. Uncaught, a
+ * failed `setChecklistItem` REJECTS this server action, which the client
+ * island's `toast.error(m["setup.tickFailed"])` branch for `{ok:false}` can
+ * never see: a rejected server action surfaces as an unhandled error, not
+ * the Result this function's own signature promises.
  */
 export async function setSetupTickAction(
   accountId: string,
@@ -42,7 +57,14 @@ export async function setSetupTickAction(
   const { userId, isAgency } = await requireAccountAccess(accountId);
   if (!isAgency) return { ok: false };
 
-  await setChecklistItem(serviceDb(), accountId, SETUP_TICK_KEYS[tick], { done }, userId);
+  if (!Object.hasOwn(SETUP_TICK_KEYS, tick)) return { ok: false };
+
+  try {
+    await setChecklistItem(serviceDb(), accountId, SETUP_TICK_KEYS[tick], { done }, userId);
+  } catch (e) {
+    console.error(`setSetupTickAction: write failed for account ${accountId}, tick ${tick}: ${String(e)}`);
+    return { ok: false };
+  }
   return { ok: true };
 }
 

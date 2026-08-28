@@ -54,18 +54,32 @@ export function SetupMoveNumberButton({
 }) {
   const router = useRouter();
   const [confirming, setConfirming] = useState(false);
+  // `useFormStatus` inside the confirm button below sees this same submit as
+  // pending, but Cancel sits OUTSIDE that `<form>` (see its own comment), so
+  // it has no way to read that state — `useFormStatus` only answers for
+  // descendants of the form it belongs to. Without a copy of "pending" up
+  // here, Cancel stays clickable for the whole round trip: a click during
+  // that window collapses this view back to "Move here" while the reassign
+  // is still running server-side, and a second click re-opens the confirm
+  // step and can fire a second, concurrent submit for the same number.
+  const [isPending, setIsPending] = useState(false);
   const needsConfirm = requiresMoveConfirm(status);
 
   const submit = async () => {
-    const result = await action(phoneNumberId);
-    if (!result.ok) {
-      toast.error(result.error);
-      setConfirming(false);
-      return;
+    setIsPending(true);
+    try {
+      const result = await action(phoneNumberId);
+      if (!result.ok) {
+        toast.error(result.error);
+        setConfirming(false);
+        return;
+      }
+      // The number step flips to done and this whole list disappears —
+      // both are re-derived by the refresh, nothing is patched locally.
+      router.refresh();
+    } finally {
+      setIsPending(false);
     }
-    // The number step flips to done and this whole list disappears —
-    // both are re-derived by the refresh, nothing is patched locally.
-    router.refresh();
   };
 
   if (needsConfirm && !confirming) {
@@ -98,7 +112,13 @@ export function SetupMoveNumberButton({
         <form action={submit}>
           <ConfirmMoveButton e164={e164} />
         </form>
-        <Button type="button" variant="ghost" size="sm" onClick={() => setConfirming(false)}>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={isPending}
+          onClick={() => setConfirming(false)}
+        >
           {m["common.cancel"]}
         </Button>
       </div>

@@ -1,5 +1,51 @@
-import type { CallListRow } from "@bis/db";
+import type { CallListRow, CallOutcome } from "@bis/db";
 import { m } from "@/lib/messages";
+
+/**
+ * Outcome treatment, shared by the list (`calls-table.tsx`) and the detail
+ * page (`[callId]/page.tsx`) — a client arrives at the detail page by
+ * clicking a row, and an outcome that changed colour or label on the way in
+ * would read as a different outcome. This used to be defined twice, byte-
+ * identical, with a comment in each copy asking a reviewer to keep them in
+ * sync; nothing ever enforced that, so it is one map now.
+ *
+ * The hue lives in the DOT and the chip's border/tint, never in the label
+ * text: `--success` on a light surface measures ~3.4:1, below AA for text
+ * this size. A colored dot is a graphical object, held to 3:1, and it carries
+ * the same "which outcome is this" signal at a glance.
+ *
+ * `booked` is the positive one and is the only outcome with a filled chip —
+ * it should be the thing the eye finds first in a column of fifty rows.
+ * `abandoned` and `spam` deliberately recede: they are the rows a client
+ * should NOT be drawn to.
+ */
+export const OUTCOMES: Record<CallOutcome, { label: string; dot: string; chip: string }> = {
+  booked: {
+    label: m["calls.outcome.booked"],
+    dot: "bg-success",
+    chip: "border-success/30 bg-success/10 text-foreground",
+  },
+  lead: {
+    label: m["calls.outcome.lead"],
+    dot: "bg-primary",
+    chip: "border-primary/30 bg-primary/5 text-foreground",
+  },
+  message: {
+    label: m["calls.outcome.message"],
+    dot: "bg-accent",
+    chip: "border-accent/30 bg-accent/5 text-foreground",
+  },
+  abandoned: {
+    label: m["calls.outcome.abandoned"],
+    dot: "bg-muted-foreground/60",
+    chip: "border-border bg-transparent text-muted-foreground",
+  },
+  spam: {
+    label: m["calls.outcome.spam"],
+    dot: "bg-destructive",
+    chip: "border-destructive/25 bg-transparent text-muted-foreground",
+  },
+};
 
 /** What a cell shows when there is no duration to show. Exported so the call
  *  detail page (Task 11) renders the same placeholder as the list rather than

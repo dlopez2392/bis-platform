@@ -11,16 +11,23 @@ import { m } from "@/lib/messages";
  * Pinned to the ACCOUNT's zone, like every other timestamp on this page, and
  * to "en-US" for the same reason `formatCallTime` is: an SSR/client locale
  * disagreement would rewrite the string after hydration.
+ *
+ * Returns the parsed `ms` alongside the label, not just the label: the
+ * caller needs that same instant again to build the `<time>` element's
+ * `dateTime` attribute, and re-running `Date.parse` a second time on `at`
+ * for that would be parsing the same jsonb-sourced string twice against the
+ * one guard below that establishes it is even parseable.
  */
-function turnClock(at: string, timeZone: string): string | null {
+function turnClock(at: string, timeZone: string): { label: string; ms: number } | null {
   // `at` arrives out of a jsonb column. A row written by an older shape — or
   // by a test fixture — can hold anything, and `Intl` would render the string
   // "Invalid Date" rather than throw. No timestamp is better than that.
   const ms = Date.parse(at);
   if (Number.isNaN(ms)) return null;
-  return new Intl.DateTimeFormat("en-US", {
+  const label = new Intl.DateTimeFormat("en-US", {
     timeZone, hour: "numeric", minute: "2-digit", second: "2-digit",
   }).format(new Date(ms));
+  return { label, ms };
 }
 
 /** Same defensive read: `transcript` is jsonb, so nothing in the type system
@@ -113,8 +120,21 @@ export function TranscriptView({
                   // Full `--muted-foreground`, not a faded one. At 11px this is
                   // small text and has to clear 4.5:1 — #6b7280 on the card
                   // measures 4.83:1, and every step of fading it drops below.
-                  <time dateTime={turn.at} className="tabular-nums text-muted-foreground">
-                    {clock}
+                  //
+                  // `dateTime` is `new Date(clock.ms).toISOString()`, not
+                  // `turn.at` as-is: `turn.at` is a Postgres timestamp with
+                  // microsecond precision, and HTML's datetime grammar caps
+                  // fractional seconds at 3 digits — a browser or assistive
+                  // tech parsing this attribute per spec sees an invalid
+                  // value. `clock.ms` is the same instant already parsed for
+                  // the clock text above; `toISOString()` reformats it to
+                  // milliseconds, the grammar this attribute actually
+                  // requires.
+                  <time
+                    dateTime={new Date(clock.ms).toISOString()}
+                    className="tabular-nums text-muted-foreground"
+                  >
+                    {clock.label}
                   </time>
                 ) : null}
               </div>
