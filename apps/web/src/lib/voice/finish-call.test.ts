@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const dbMocks = vi.hoisted(() => ({
   finishCallRow: vi.fn(), createContact: vi.fn(), ensureConversation: vi.fn(),
   createMessage: vi.fn(), incrementUnreadCount: vi.fn(), emit: vi.fn(),
+  fillContactBlanks: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const emailRefs = vi.hoisted(() => ({ providerShouldThrow: false, send: vi.fn() }));
@@ -35,6 +36,7 @@ beforeEach(() => {
   dbMocks.ensureConversation.mockResolvedValue({ id: "cv1", created: true });
   dbMocks.createMessage.mockResolvedValue({ id: "m1" });
   dbMocks.finishCallRow.mockResolvedValue(undefined);
+  dbMocks.fillContactBlanks.mockResolvedValue([]);
 });
 
 describe("finishCall", () => {
@@ -89,6 +91,25 @@ describe("finishCall", () => {
     expect(r).toMatchObject({ stored: true, notified: false, outcome: "lead" });
     expect(dbMocks.finishCallRow).toHaveBeenCalled();
     errSpy.mockRestore();
+  });
+  it("lead path dedupe onto an existing contact backfills blanks (rejection still stores + alerts)", async () => {
+    dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+    dbMocks.fillContactBlanks.mockRejectedValue(new Error("db down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const s = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
+      { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
+    const r = await finishCall(s, ctx, meta);
+    errSpy.mockRestore();
+    expect(dbMocks.fillContactBlanks).toHaveBeenCalledWith({}, "a1", "ct1",
+      { firstName: "Ana", lastName: "Ruiz", email: undefined, phone: "+19562921696" }, "voice", "ai");
+    expect(r).toMatchObject({ stored: true, notified: true, outcome: "lead" });
+  });
+  it("caller-ID-only path (no lead) backfills the bare phone on dedupe, symmetric shape", async () => {
+    dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+    const s = withMessage(emptyCallState(), { body: "call me", at: "t" });
+    await finishCall(s, ctx, meta);
+    expect(dbMocks.fillContactBlanks).toHaveBeenCalledWith({}, "a1", "ct1",
+      { phone: "+19562921696" }, "voice", "ai");
   });
   it("a booked call reuses state.contactId instead of creating a duplicate", async () => {
     const s = { ...withBooking(emptyCallState(), { id: "bk1", contactName: "Ana", startsAt: "x", endsAt: "y" }), contactId: "ct-existing" };

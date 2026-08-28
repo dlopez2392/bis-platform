@@ -1,6 +1,6 @@
 import type { serviceDb, Branding, CallOutcome } from "@bis/db";
 import {
-  createContact, ensureConversation, createMessage, incrementUnreadCount,
+  createContact, fillContactBlanks, ensureConversation, createMessage, incrementUnreadCount,
   finishCallRow, emit,
 } from "@bis/db";
 import { emailBrand } from "@/lib/email/templates/shell";
@@ -93,6 +93,16 @@ async function resolveContactId(state: CallState, ctx: FinishContext): Promise<s
       email: fields.email,
       source: "voice",
     }, ACTOR_ID, ACTOR_TYPE);
+    if (created.existing) {
+      try {
+        await fillContactBlanks(ctx.db, ctx.accountId, created.id,
+          { firstName: firstName || undefined, lastName, email: fields.email,
+            phone: toE164(fields.callbackNumber) ?? ctx.callerNumber ?? undefined },
+          ACTOR_ID, ACTOR_TYPE);
+      } catch (e) {
+        console.error(`finishCall fillContactBlanks failed for ${created.id}: ${String(e)}`);
+      }
+    }
     return created.id;
   }
 
@@ -102,6 +112,15 @@ async function resolveContactId(state: CallState, ctx: FinishContext): Promise<s
       phone: ctx.callerNumber,
       source: "voice",
     }, ACTOR_ID, ACTOR_TYPE);
+    if (created.existing) {
+      try {
+        await fillContactBlanks(ctx.db, ctx.accountId, created.id,
+          { phone: ctx.callerNumber ?? undefined },
+          ACTOR_ID, ACTOR_TYPE);
+      } catch (e) {
+        console.error(`finishCall fillContactBlanks failed for ${created.id}: ${String(e)}`);
+      }
+    }
     return created.id;
   }
 

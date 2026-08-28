@@ -2,7 +2,7 @@
 import {
   serviceDb,
   findUpcomingBookingForPhone,
-  createContact, createBooking, SlotTakenError, setBookingStatus, getBookingById,
+  createContact, fillContactBlanks, createBooking, SlotTakenError, setBookingStatus, getBookingById,
   type CalendarRow, type VoiceProfileRow, type Branding,
 } from "@bis/db";
 import { computeAllSlots, dayKeyInZone } from "@/lib/booking/availability";
@@ -124,6 +124,18 @@ export async function runTool(
           { firstName, lastName, phone: phone ?? undefined, email: email ?? undefined, source: "voice" },
           "voice", "ai");
         contactId = created.id;
+        if (created.existing) {
+          // Dedupe returns the existing row untouched — backfill blanks so a
+          // repeat caller stops being "Caller" with no email (the unsendable-
+          // reminder casualty). Failure here must NEVER fail the booking.
+          try {
+            await fillContactBlanks(ctx.db, ctx.accountId, contactId,
+              { firstName, lastName, email: email ?? undefined, phone: phone ?? undefined },
+              "voice", "ai");
+          } catch (e) {
+            console.error(`voice fillContactBlanks failed for ${contactId}: ${String(e)}`);
+          }
+        }
       }
 
       let bookingId: string; let cancelToken: string;

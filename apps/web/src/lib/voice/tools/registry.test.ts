@@ -10,6 +10,7 @@ const dbMocks = vi.hoisted(() => ({
   findUpcomingBookingForPhone: vi.fn(),
   createContact: vi.fn(), createBooking: vi.fn(),
   setBookingStatus: vi.fn(), getBookingById: vi.fn(),
+  fillContactBlanks: vi.fn(),
 }));
 const sendMock = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", async (importOriginal) => {
@@ -102,6 +103,7 @@ describe("book_appointment", () => {
     computeAllSlotsMock.mockResolvedValue([slot]);
     dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: false });
     dbMocks.createBooking.mockResolvedValue({ id: "bk1", cancelToken: "tok123" });
+    dbMocks.fillContactBlanks.mockResolvedValue([]);
     sendMock.mockReset().mockResolvedValue({ providerMessageId: "x" });
   });
 
@@ -171,6 +173,33 @@ describe("book_appointment", () => {
       { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana" });
     expect(result).toMatchObject({ ok: false, slotTaken: true });
     expect(state.contactId).toBe("ct1");
+  });
+
+  it("dedupe onto an existing contact backfills blanks with the split name + email + phone", async () => {
+    dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+    const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
+    expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
+    expect(dbMocks.fillContactBlanks).toHaveBeenCalledWith({}, "a1", "ct1",
+      { firstName: "Ana", lastName: "Ruiz", email: "ana@example.com", phone: "+19562921696" },
+      "voice", "ai");
+  });
+
+  it("never-break pin: fillContactBlanks rejecting still yields a successful booking", async () => {
+    dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+    dbMocks.fillContactBlanks.mockRejectedValue(new Error("db down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz" });
+    errSpy.mockRestore();
+    expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
+  });
+
+  it("a brand-new contact never calls fillContactBlanks", async () => {
+    dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: false });
+    await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz" });
+    expect(dbMocks.fillContactBlanks).not.toHaveBeenCalled();
   });
 });
 
