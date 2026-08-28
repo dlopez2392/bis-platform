@@ -182,6 +182,55 @@ export async function findUpcomingBookingForPhone(
   return row ? { bookingId: row.id, startsAt: row.starts_at } : null;
 }
 
+export async function listPhoneNumbersForAccount(
+  db: SupabaseClient, accountId: string,
+): Promise<PhoneNumberRow[]> {
+  const { data, error } = await db.from("phone_numbers")
+    .select(PHONE_COLS).eq("account_id", accountId).order("created_at");
+  if (error) throw new Error(`listPhoneNumbersForAccount failed: ${error.message}`);
+  return (data ?? []) as PhoneNumberRow[];
+}
+
+/** Agency surface only (the wizard's number step). RLS's app.is_agency()
+ *  branch is what makes this visible cross-account under dbForRequest. */
+export async function listAllPhoneNumbers(
+  db: SupabaseClient,
+): Promise<(PhoneNumberRow & { account: { name: string } | null })[]> {
+  const { data, error } = await db.from("phone_numbers")
+    .select(`${PHONE_COLS}, account:accounts(name)`).order("created_at");
+  if (error) throw new Error(`listAllPhoneNumbers failed: ${error.message}`);
+  return (data ?? []) as unknown as (PhoneNumberRow & { account: { name: string } | null })[];
+}
+
+/**
+ * Moves a number to another account. NOT release-then-assign: e164 is
+ * globally unique (0019), so a second insert can never express a move.
+ * Status resets to 'provisioned' — a moved number must walk the wizard's
+ * test-call + go-live steps again before it is live for the new tenant.
+ * Emits on BOTH accounts so each timeline records its side of the move.
+ */
+export async function reassignPhoneNumber(
+  db: SupabaseClient, phoneNumberId: string, toAccountId: string,
+  actorId: string, actorType: ActorType = "user",
+): Promise<PhoneNumberRow> {
+  const { data: current, error: readErr } = await db.from("phone_numbers")
+    .select(PHONE_COLS).eq("id", phoneNumberId).maybeSingle();
+  if (readErr) throw new Error(`reassignPhoneNumber read failed: ${readErr.message}`);
+  if (!current) throw new Error("reassignPhoneNumber matched no row");
+  const from = current as PhoneNumberRow;
+
+  const { data, error } = await db.from("phone_numbers")
+    .update({ account_id: toAccountId, status: "provisioned", updated_at: new Date().toISOString() })
+    .eq("id", phoneNumberId).select(PHONE_COLS).single();
+  if (error || !data) throw new Error(`reassignPhoneNumber failed: ${error?.message}`);
+
+  await emit(db, from.account_id, "phone_number.released", actorId,
+    { phoneNumberId, e164: from.e164, movedTo: toAccountId }, actorType);
+  await emit(db, toAccountId, "phone_number.assigned", actorId,
+    { phoneNumberId, e164: from.e164, movedFrom: from.account_id }, actorType);
+  return data as PhoneNumberRow;
+}
+
 export async function getBookingById(
   db: SupabaseClient, accountId: string, bookingId: string,
 ): Promise<{ id: string; contact_id: string; calendar_id: string; starts_at: string; ends_at: string; status: string } | null> {

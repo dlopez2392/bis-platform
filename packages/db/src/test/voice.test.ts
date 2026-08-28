@@ -1,12 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
-import { getOrCreateCalendar, createBooking, setBookingStatus } from "../booking";
+import { getOrCreateCalendar, createBooking, setBookingStatus, getCalendarForAccount } from "../booking";
 import {
   assignPhoneNumber, getPhoneNumberByE164, setPhoneNumberStatus,
   getVoiceProfile, upsertVoiceProfile,
   startCallRow, finishCallRow, countCallsSince, countCallsByCallerSince,
   findUpcomingBookingForPhone, getBookingById, deleteCallRow,
+  listPhoneNumbersForAccount, listAllPhoneNumbers, reassignPhoneNumber,
 } from "../voice";
 
 describe("voice accessors", () => {
@@ -148,6 +149,55 @@ describe("voice accessors", () => {
       expect(await findUpcomingBookingForPhone(db, accountId, "+19999999998", now.toISOString())).toBeNull();
       const row = await getBookingById(db, accountId, future.id);
       expect(row).toMatchObject({ contact_id: contactId, status: "booked" });
+    });
+  });
+});
+
+describe("listPhoneNumbersForAccount / listAllPhoneNumbers / reassignPhoneNumber", () => {
+  it("lists only the account's numbers, oldest first", async () => {
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db2, accountB) => {
+        const a = await assignPhoneNumber(db, accountA, { e164: "+15550000001" }, "user_test");
+        await assignPhoneNumber(db, accountB, { e164: "+15550000002" }, "user_test");
+        const rows = await listPhoneNumbersForAccount(db, accountA);
+        expect(rows.map((r) => r.id)).toEqual([a.id]);
+      });
+    });
+  });
+
+  it("listAllPhoneNumbers returns every account's numbers with the account name embedded", async () => {
+    await withTestAccount(async (db, accountA) => {
+      await assignPhoneNumber(db, accountA, { e164: "+15550000003" }, "user_test");
+      const all = await listAllPhoneNumbers(db);
+      const mine = all.find((r) => r.e164 === "+15550000003");
+      expect(mine?.account?.name).toBeTruthy();
+    });
+  });
+
+  it("reassignPhoneNumber moves the row to the target account and resets status to provisioned", async () => {
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db2, accountB) => {
+        const n = await assignPhoneNumber(db, accountA, { e164: "+15550000004", status: "live" }, "user_test");
+        const moved = await reassignPhoneNumber(db, n.id, accountB, "user_test");
+        expect(moved.account_id).toBe(accountB);
+        expect(moved.status).toBe("provisioned");
+        expect((await listPhoneNumbersForAccount(db, accountA)).find((r) => r.id === n.id)).toBeUndefined();
+      });
+    });
+  });
+
+  it("reassignPhoneNumber throws on an unknown id", async () => {
+    await withTestAccount(async (db, accountB) => {
+      await expect(reassignPhoneNumber(db, "00000000-0000-0000-0000-000000000000", accountB, "user_test"))
+        .rejects.toThrow(/matched no row|not found/);
+    });
+  });
+
+  it("getCalendarForAccount returns null when no calendar exists, the row after getOrCreateCalendar", async () => {
+    await withTestAccount(async (db, accountFresh) => {
+      expect(await getCalendarForAccount(db, accountFresh)).toBeNull();
+      await getOrCreateCalendar(db, accountFresh, "user_test");
+      expect((await getCalendarForAccount(db, accountFresh))?.account_id).toBe(accountFresh);
     });
   });
 });

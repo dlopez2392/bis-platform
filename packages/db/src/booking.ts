@@ -106,6 +106,17 @@ export async function getOrCreateCalendar(
   return winner as unknown as CalendarRow;
 }
 
+/** Read-only sibling of getOrCreateCalendar for render paths — the setup
+ *  page must never CREATE a calendar as a side effect of looking at it. */
+export async function getCalendarForAccount(
+  db: SupabaseClient, accountId: string,
+): Promise<CalendarRow | null> {
+  const { data, error } = await db.from("calendars")
+    .select(CALENDAR_COLS).eq("account_id", accountId).maybeSingle();
+  if (error) throw new Error(`getCalendarForAccount failed: ${error.message}`);
+  return (data as CalendarRow | null) ?? null;
+}
+
 /**
  * Public path. Enabled OR not — the caller (the public page, the embed)
  * checks `enabled` and 404s on false, exactly the way `getPublishedFormByPublicId`
