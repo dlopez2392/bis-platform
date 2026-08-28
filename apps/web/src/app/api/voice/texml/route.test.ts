@@ -217,6 +217,22 @@ describe("texml route — Telnyx signature validation (TELNYX_PUBLIC_KEY set)", 
     errSpy.mockRestore();
   });
 
+  it("POST with a log-injection attempt in claimed To/From → sanitized to \"none\", never the raw value", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    process.env.TELNYX_PUBLIC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    const raw = new URLSearchParams({
+      To: "not-a-number\ntexml: rejected request (forged) fake-decline-line",
+      From: "also-garbage",
+    }).toString();
+    const res = await POST(new Request("https://x.example/api/voice/texml", {
+      method: "POST", body: raw, headers: { "content-type": "application/x-www-form-urlencoded" },
+    }));
+    expect(res.status).toBe(403);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("claimedTo none, claimedFrom none"));
+    expect(errSpy).not.toHaveBeenCalledWith(expect.stringContaining("forged"));
+    errSpy.mockRestore();
+  });
+
   it("POST with a tampered/invalid signature → 403, logged as invalid-signature with the claimed To/From", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const raw = new URLSearchParams({ To: "+19565550999", From: "+19562921696" }).toString();

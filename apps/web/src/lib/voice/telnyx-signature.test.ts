@@ -24,13 +24,32 @@ describe("verifyTelnyxSignature", () => {
     const { publicKeyB64, signatureB64 } = makeSigned(body, fresh);
     expect(verifyTelnyxSignature({ rawBody: body + "&x=1", timestamp: fresh, signatureB64, publicKeyB64 })).toBe(false);
   });
-  it("rejects a wrong timestamp, missing headers, and garbage keys without throwing", () => {
+  it("rejects a frozen/out-of-window timestamp (via the freshness gate), missing headers, and garbage keys without throwing", () => {
     const fresh = String(Math.floor(Date.now() / 1000));
     const { publicKeyB64, signatureB64 } = makeSigned(body, fresh);
+    // "999" (year-1970 epoch seconds) is rejected by the freshness gate
+    // before crypto ever runs — this is NOT a timestamp-binding case; see
+    // the "timestamp binding" describe below for that property.
     expect(verifyTelnyxSignature({ rawBody: body, timestamp: "999", signatureB64, publicKeyB64 })).toBe(false);
     expect(verifyTelnyxSignature({ rawBody: body, timestamp: null, signatureB64, publicKeyB64 })).toBe(false);
     expect(verifyTelnyxSignature({ rawBody: body, timestamp: fresh, signatureB64: null, publicKeyB64 })).toBe(false);
     expect(verifyTelnyxSignature({ rawBody: body, timestamp: fresh, signatureB64, publicKeyB64: "!!!" })).toBe(false);
+  });
+
+  describe("timestamp binding", () => {
+    it("rejects when the signature was computed over a different (but still fresh) timestamp than the one presented", () => {
+      const now = Math.floor(Date.now() / 1000);
+      const signedOver = String(now - 10);
+      const { publicKeyB64, signatureB64 } = makeSigned(body, signedOver);
+      // Sanity control: verified against the exact timestamp it was signed
+      // over, this same signature is valid — proves the rejection below is
+      // the timestamp-binding property, not a broken fixture.
+      expect(verifyTelnyxSignature({ rawBody: body, timestamp: signedOver, signatureB64, publicKeyB64 })).toBe(true);
+      // Both timestamps are inside the 300s freshness window, so this isn't
+      // the freshness gate rejecting — the signature simply doesn't cover
+      // the timestamp being presented.
+      expect(verifyTelnyxSignature({ rawBody: body, timestamp: String(now), signatureB64, publicKeyB64 })).toBe(false);
+    });
   });
 
   describe("replay window (Finding A)", () => {

@@ -168,13 +168,21 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (publicKey) {
     const timestamp = req.headers.get("telnyx-timestamp");
     const signatureB64 = req.headers.get("telnyx-signature-ed25519");
+    // Sanitized through toE164 before logging — claimedTo/claimedFrom are
+    // still unauthenticated at this point (that's the whole reason we're
+    // rejecting), so raw interpolation would let a prober inject newlines or
+    // control characters into the log stream and forge fake decline lines of
+    // unbounded length. toE164 collapses anything that isn't a real phone
+    // number to null, logged as "none".
+    const safeTo = toE164(claimedTo) ?? "none";
+    const safeFrom = toE164(claimedFrom) ?? "none";
     if (!timestamp || !signatureB64) {
-      console.error(`texml: rejected request (missing-headers), claimedTo ${claimedTo ?? "none"}, claimedFrom ${claimedFrom ?? "none"}`);
+      console.error(`texml: rejected request (missing-headers), claimedTo ${safeTo}, claimedFrom ${safeFrom}`);
       return new NextResponse(null, { status: 403 });
     }
     const ok = verifyTelnyxSignature({ rawBody, timestamp, signatureB64, publicKeyB64: publicKey });
     if (!ok) {
-      console.error(`texml: rejected request (invalid-signature), claimedTo ${claimedTo ?? "none"}, claimedFrom ${claimedFrom ?? "none"}`);
+      console.error(`texml: rejected request (invalid-signature), claimedTo ${safeTo}, claimedFrom ${safeFrom}`);
       return new NextResponse(null, { status: 403 });
     }
   }
