@@ -55,6 +55,11 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   );
 
   if (input.bookingEnabled) {
+    if (input.meetingType === "video") {
+      lines.push(
+        "- Appointments at this business happen over a VIDEO CALL. Tell the caller early that their appointment is a video meeting and that you need an email address to send their meeting link — for video appointments an email is required to book; if they cannot provide one, take a message instead. Never read a web link aloud; say the link arrives by email.",
+      );
+    }
     lines.push(
       "- check_availability(date) — list open times for a date before offering any.",
       "- book_appointment(startsAt, name, email, phone, notes) — book only a time check_availability returned.",

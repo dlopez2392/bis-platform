@@ -8,6 +8,7 @@ import {
 import { computeAllSlots, dayKeyInZone } from "@/lib/booking/availability";
 import { toE164 } from "../phone-number";
 import { getEmailProvider } from "@/lib/email";
+import { getMeetingProvider } from "@/lib/meetings/provider";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { bookingConfirmationEmail } from "@/lib/email/templates/booking";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
@@ -126,6 +127,17 @@ export async function runTool(
         };
       }
 
+      // Video calendars are stricter still: `emailDeclined: true` is NOT an
+      // escape hatch here — there is no meeting link without an address to
+      // send it to, and no video call without the link. This runs AFTER the
+      // gate above (not merged into it) so a caller who never mentioned email
+      // at all still gets the generic "ask them" nudge first; only once the
+      // model has attested a decline does this more specific refusal fire.
+      if (ctx.calendar.meeting_type === "video" && !email) {
+        return { state, result: { ok: false,
+          error: "This is a video appointment — an email is required for the meeting link. If the caller cannot give one, do not book: use take_message so a human can arrange it." } };
+      }
+
       const wanted = String(args?.startsAt ?? "");
       const all = await computeAllSlots(ctx.db, ctx.calendar, ctx.timezone, now);
       const slot = all.find((s) => s.startsAt.toISOString() === new Date(wanted).toISOString());
@@ -154,12 +166,31 @@ export async function runTool(
         }
       }
 
+      // Video room, mirroring `b/[publicId]/actions.ts`'s Task 3 pin: a
+      // provider that is absent (unconfigured) or that THROWS must never
+      // cost anyone their booking — best-effort, one call, one try/catch,
+      // `meetingUrl` simply stays `undefined` on either path. Never logs the
+      // url, on failure (there isn't one) or on success (no story needed).
+      let meetingUrl: string | undefined;
+      if (ctx.calendar.meeting_type === "video") {
+        const meetingProvider = getMeetingProvider();
+        if (meetingProvider) {
+          try {
+            ({ url: meetingUrl } = await meetingProvider.createMeetingRoom(
+              { bookingId: ctx.calendar.public_id, endsAt: slot.endsAt }));
+          } catch (e) {
+            console.error(`voice booking: createMeetingRoom failed for calendar ${ctx.calendar.id}: ${String(e)}`);
+          }
+        }
+      }
+
       let bookingId: string; let cancelToken: string;
       try {
         ({ id: bookingId, cancelToken } = await createBooking(ctx.db, ctx.accountId, {
           calendarId: ctx.calendar.id, contactId,
           startsAt: slot.startsAt, endsAt: slot.endsAt,
           note: String(args?.notes ?? "").trim() || undefined,
+          meetingUrl,
         }, "voice", "ai"));
       } catch (e) {
         if (e instanceof SlotTakenError) {
@@ -175,7 +206,7 @@ export async function runTool(
           const whenCompanyZone = formatWhen(slot.startsAt, ctx.timezone);
           const cancelUrl = `${ctx.origin}/b/${ctx.calendar.public_id}/cancel/${cancelToken}`;
           const { html, text } = bookingConfirmationEmail({
-            brand, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl,
+            brand, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl, meetingUrl,
           });
           await getEmailProvider().send({
             to: email, fromName: brand.name, fromAddress: ctx.fromEmail ?? undefined,

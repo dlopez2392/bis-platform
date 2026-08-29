@@ -18,6 +18,8 @@ vi.mock("@bis/db", async (importOriginal) => {
   return { ...real, ...dbMocks, SlotTakenError: real.SlotTakenError };
 });
 vi.mock("@/lib/email", () => ({ getEmailProvider: () => ({ send: (...a: unknown[]) => sendMock(...a) }) }));
+const meetingProviderMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/meetings/provider", () => ({ getMeetingProvider: (...a: unknown[]) => meetingProviderMock(...a) }));
 
 import type { serviceDb, CalendarRow, VoiceProfileRow } from "@bis/db";
 import { runTool, type ToolContext, type ToolName } from "./registry";
@@ -28,7 +30,7 @@ const ctx: ToolContext = {
   timezone: "America/Chicago",
   calendar: { id: "cal1", account_id: "a1", public_id: "pub1", enabled: true,
     slot_duration_minutes: 60, buffer_minutes: 0, min_notice_hours: 0,
-    max_advance_days: 30, open_hours: {}, notify_emails: [] } as unknown as CalendarRow,
+    max_advance_days: 30, open_hours: {}, notify_emails: [], meeting_type: "in_person" } as unknown as CalendarRow,
   profile: { booking_enabled: true } as unknown as VoiceProfileRow,
   branding: { brandName: null, brandLogoPath: null, brandColor: null, brandNeutral: null,
     brandCorners: null, brandType: null, brandMode: null, replyToEmail: null },
@@ -36,7 +38,11 @@ const ctx: ToolContext = {
   now: () => new Date("2027-06-01T12:00:00Z"),
 };
 
-beforeEach(() => { Object.values(dbMocks).forEach((m) => m.mockReset()); computeAllSlotsMock.mockReset(); });
+beforeEach(() => {
+  Object.values(dbMocks).forEach((m) => m.mockReset());
+  computeAllSlotsMock.mockReset();
+  meetingProviderMock.mockReset().mockReturnValue(null);
+});
 
 describe("check_availability", () => {
   it("returns ISO starts for the requested day only, in the account zone", async () => {
@@ -223,6 +229,59 @@ describe("book_appointment", () => {
     await runTool(emptyCallState(), ctx, "book_appointment",
       { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true });
     expect(dbMocks.fillContactBlanks).not.toHaveBeenCalled();
+  });
+
+  describe("video calendars", () => {
+    const videoCtx: ToolContext = {
+      ...ctx,
+      calendar: { ...ctx.calendar, meeting_type: "video" } as unknown as CalendarRow,
+    };
+
+    it("refuses emailDeclined:true on a video calendar — an email is required for the link", async () => {
+      const { result } = await runTool(emptyCallState(), videoCtx, "book_appointment",
+        { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true });
+      expect(result).toMatchObject({ ok: false });
+      expect(String((result as { error?: string }).error)).toMatch(/video appointment.*email/i);
+      expect(dbMocks.createBooking).not.toHaveBeenCalled();
+    });
+
+    it("books, mints a room, and puts the url in the confirmation email when a real email is given", async () => {
+      meetingProviderMock.mockReturnValue({
+        createMeetingRoom: vi.fn().mockResolvedValue({ url: "https://video.example/room1" }),
+      });
+      const { result } = await runTool(emptyCallState(), videoCtx, "book_appointment",
+        { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
+      expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
+      expect(dbMocks.createBooking).toHaveBeenCalledWith({}, "a1",
+        expect.objectContaining({ meetingUrl: "https://video.example/room1" }), "voice", "ai");
+      expect(sendMock).toHaveBeenCalledOnce();
+      expect((sendMock.mock.calls[0]![0] as { html?: string }).html).toContain("https://video.example/room1");
+    });
+
+    it("never-fail pin: a throwing provider still books, just without a url", async () => {
+      meetingProviderMock.mockReturnValue({
+        createMeetingRoom: vi.fn().mockRejectedValue(new Error("daily down")),
+      });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { result } = await runTool(emptyCallState(), videoCtx, "book_appointment",
+        { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
+      // Never logs the url on failure — there isn't one — and never logs one
+      // on success either (see registry.ts); only asserted here for the
+      // failure path since that's the branch this test exercises.
+      const loggedUrl = errSpy.mock.calls.some((c) => String(c[0] ?? "").includes("https://"));
+      errSpy.mockRestore();
+      expect(loggedUrl).toBe(false);
+      expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
+      expect(dbMocks.createBooking).toHaveBeenCalledWith({}, "a1",
+        expect.objectContaining({ meetingUrl: undefined }), "voice", "ai");
+    });
+
+    it("regression pin: non-video calendars still book on emailDeclined:true as before", async () => {
+      const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
+        { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true });
+      expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
+      expect(meetingProviderMock).not.toHaveBeenCalled();
+    });
   });
 });
 

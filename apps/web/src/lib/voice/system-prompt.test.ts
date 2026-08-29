@@ -10,6 +10,7 @@ const base = {
   languages: "both" as const, bookingEnabled: true,
   timezone: "America/Chicago", slotDurationMinutes: 60,
   afterHours: "hours_then_message" as const, callerNumber: "+19562921696",
+  meetingType: "in_person" as const,
 };
 const now = new Date("2027-06-01T15:00:00Z");
 
@@ -68,5 +69,20 @@ describe("buildSystemPrompt", () => {
   it("booking-disabled prompt carries neither booking rule", () => {
     const p = buildSystemPrompt(baseInput({ bookingEnabled: false }), now);
     expect(p).not.toMatch(/FIRST call capture_lead/);
+  });
+  it("video meetingType adds the video line inside the booking-enabled branch", () => {
+    const p = buildSystemPrompt(baseInput({ meetingType: "video" }), now);
+    expect(p).toMatch(/VIDEO CALL/);
+    expect(p).toMatch(/Never read a web link aloud/);
+  });
+  it("non-video meetingType omits the video line", () => {
+    const p = buildSystemPrompt(baseInput({ meetingType: "in_person" }), now);
+    expect(p).not.toMatch(/VIDEO CALL/);
+    const pPhone = buildSystemPrompt(baseInput({ meetingType: "phone" }), now);
+    expect(pPhone).not.toMatch(/VIDEO CALL/);
+  });
+  it("booking-disabled branch never carries the video line even when meetingType is video", () => {
+    const p = buildSystemPrompt(baseInput({ bookingEnabled: false, meetingType: "video" }), now);
+    expect(p).not.toMatch(/VIDEO CALL/);
   });
 });

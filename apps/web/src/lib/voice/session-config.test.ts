@@ -6,6 +6,7 @@ const base = {
   facts: "-", services: "-", languages: "both" as const, bookingEnabled: true,
   timezone: "America/Chicago", slotDurationMinutes: 60,
   afterHours: "hours_then_message" as const, callerNumber: null,
+  meetingType: "in_person" as const,
 };
 
 // Loosely mirrors the FLAT session shape `buildRealtimeSessionConfig`

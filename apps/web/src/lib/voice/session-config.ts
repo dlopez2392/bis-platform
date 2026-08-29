@@ -14,6 +14,7 @@ export type VoicePromptInput = {
   timezone: string; slotDurationMinutes: number;
   afterHours: "hours_then_message" | "message_only";
   callerNumber: string | null;
+  meetingType: "in_person" | "phone" | "video";
 };
 
 export function buildRealtimeSessionConfig(input: VoicePromptInput, now: Date) {

@@ -427,7 +427,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       facts: profile.facts, services: profile.services, languages: profile.languages,
       bookingEnabled: profile.booking_enabled, timezone: accountRow.timezone,
       slotDurationMinutes: calendar.slot_duration_minutes, afterHours: profile.after_hours,
-      callerNumber,
+      callerNumber, meetingType: calendar.meeting_type,
     };
     const sessionConfig = buildRealtimeSessionConfig(promptInput, now);
 
