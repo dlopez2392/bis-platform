@@ -52,6 +52,14 @@ describe("buildSystemPrompt", () => {
     expect(p).toMatch(/'plus'/);
     expect(p).toMatch(/nonexistent address/);
   });
+  it("the email-confirmation ask is its own line-initial step, not buried in the mechanics rule", () => {
+    // Regression: 2026-08-28's first real call skipped the email offer. The
+    // ask had been folded mid-paragraph into the EMAIL ADDRESSES read-back
+    // rule, and the model stopped treating it as a step. It must LEAD a
+    // bullet of its own.
+    const p = buildSystemPrompt(baseInput({ bookingEnabled: true }), now);
+    expect(p).toMatch(/^- BEFORE you book: ask once whether they would like an email confirmation/m);
+  });
   it("failed bookings must capture_lead before take_message", () => {
     const p = buildSystemPrompt(baseInput({ bookingEnabled: true }), now);
     expect(p).toMatch(/FIRST call capture_lead/);
