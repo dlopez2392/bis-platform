@@ -15,7 +15,10 @@ import { withRollback } from "./db";
 const CALENDAR_SETTINGS_COLUMNS = [
   "buffer_minutes",
   "enabled",
+  "followup_body",     // client-editable settings knob, granted by 0022
+  "followup_enabled",  // client-editable settings knob, granted by 0022
   "max_advance_days",
+  "meeting_type",      // client-editable settings knob, granted by 0022
   "min_notice_hours",
   "notify_emails",
   "open_hours",

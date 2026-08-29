@@ -6,6 +6,7 @@ import {
   getOrCreateCalendar, getCalendarByPublicId, updateCalendarSettings,
   createBooking, cancelBookingByToken, setBookingStatus,
   listBookedRanges, listUpcomingBookings, listDueReminders, stampReminderSent,
+  listDueFollowups, stampFollowupSent,
   SlotTakenError,
 } from "../booking";
 
@@ -231,6 +232,155 @@ describe("booking accessors", () => {
       expect(namedRow?.contact_name).toBe("Ana Ruiz");
       expect(namedRow?.contact_email).toBe("ana@example.com");
       expect(blankRow?.contact_name).toBe("Unknown");
+    });
+  });
+
+  it("calendar defaults for meeting_type/followup_enabled/followup_body", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      expect(cal.meeting_type).toBe("in_person");
+      expect(cal.followup_enabled).toBe(false);
+      expect(cal.followup_body).toBe("");
+    });
+  });
+
+  it("updateCalendarSettings round-trips meetingType/followupEnabled/followupBody", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await getOrCreateCalendar(db, accountId, "user_test");
+      await updateCalendarSettings(db, accountId,
+        { meetingType: "video", followupEnabled: true, followupBody: "Thanks for meeting!" }, "user_test");
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      expect(cal.meeting_type).toBe("video");
+      expect(cal.followup_enabled).toBe(true);
+      expect(cal.followup_body).toBe("Thanks for meeting!");
+    });
+  });
+
+  it("createBooking persists meetingUrl when given, leaves it null otherwise", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId,
+        { firstName: "Video", email: "video-meeting@example.com" }, "user_test");
+      const withUrl = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date("2027-04-01T15:00:00Z"),
+          endsAt: new Date("2027-04-01T16:00:00Z"), meetingUrl: "https://meet.example.com/abc" }, "user_test");
+      const withoutUrl = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date("2027-04-02T15:00:00Z"),
+          endsAt: new Date("2027-04-02T16:00:00Z") }, "user_test");
+      const { data } = await db.from("bookings").select("id, meeting_url")
+        .in("id", [withUrl.id, withoutUrl.id]);
+      const rowWith = data!.find((r) => r.id === withUrl.id);
+      const rowWithout = data!.find((r) => r.id === withoutUrl.id);
+      expect(rowWith!.meeting_url).toBe("https://meet.example.com/abc");
+      expect(rowWithout!.meeting_url).toBeNull();
+    });
+  });
+
+  /**
+   * `listDueFollowups` looks BACKWARD from `now` on `ends_at` (mirrors
+   * `listDueReminders`' forward window, same 25h daily-cron tolerance):
+   * booked + follow-ups enabled + ended within the last 25h + not yet
+   * stamped -> due. Cancelled, already-stamped, ended >25h ago, and
+   * not-yet-ended bookings are all excluded. A contact with no email still
+   * comes back (contactEmail: null) -- the route decides to skip+log it.
+   */
+  it("listDueFollowups: due on ended-within-window, excludes cancelled/stamped/too-old/future", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      await updateCalendarSettings(db, accountId,
+        { followupEnabled: true, followupBody: "How did it go?" }, "user_test");
+      const { id: contactId } = await createContact(db, accountId,
+        { firstName: "Followup", email: "followup-due@example.com" }, "user_test");
+      const { id: noEmailContactId } = await createContact(db, accountId,
+        { firstName: "NoEmail" }, "user_test");
+
+      const now = new Date("2027-03-10T12:00:00Z");
+
+      const due = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId,
+          startsAt: new Date("2027-03-10T09:30:00Z"),
+          endsAt: new Date("2027-03-10T10:00:00Z") },        // ended 2h ago
+        "user_test");
+      const noEmailDue = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId: noEmailContactId,
+          startsAt: new Date("2027-03-10T10:15:00Z"),
+          endsAt: new Date("2027-03-10T10:45:00Z") },        // ended 1h15m ago
+        "user_test");
+      const toCancel = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId,
+          startsAt: new Date("2027-03-10T08:00:00Z"),
+          endsAt: new Date("2027-03-10T08:30:00Z") },        // ended 3.5h ago, but cancelled
+        "user_test");
+      await cancelBookingByToken(db, toCancel.cancelToken);
+      const toStamp = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId,
+          startsAt: new Date("2027-03-10T07:00:00Z"),
+          endsAt: new Date("2027-03-10T07:30:00Z") },        // ended 4.5h ago, but already stamped
+        "user_test");
+      await stampFollowupSent(db, toStamp.id);
+      const tooOld = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId,
+          startsAt: new Date("2027-03-09T09:00:00Z"),
+          endsAt: new Date("2027-03-09T09:30:00Z") },        // ended 26.5h ago
+        "user_test");
+      const future = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId,
+          startsAt: new Date("2027-03-10T12:30:00Z"),
+          endsAt: new Date("2027-03-10T13:00:00Z") },        // ends in the future
+        "user_test");
+
+      const dueList = await listDueFollowups(db, now.toISOString());
+      const ids = dueList.map((d) => d.bookingId);
+      expect(ids).toContain(due.id);
+      expect(ids).toContain(noEmailDue.id);
+      expect(ids).not.toContain(toCancel.id);
+      expect(ids).not.toContain(toStamp.id);
+      expect(ids).not.toContain(tooOld.id);
+      expect(ids).not.toContain(future.id);
+
+      const dueRow = dueList.find((d) => d.bookingId === due.id);
+      expect(dueRow?.contactEmail).toBe("followup-due@example.com");
+      expect(dueRow?.followupBody).toBe("How did it go?");
+      expect(dueRow?.fromEmail).toBeNull();       // fixture account never sets from_email
+      expect(dueRow?.replyToEmail).toBeNull();    // fixture account never sets reply_to_email
+
+      const noEmailRow = dueList.find((d) => d.bookingId === noEmailDue.id);
+      expect(noEmailRow?.contactEmail).toBeNull();
+    });
+  });
+
+  it("listDueFollowups excludes a calendar with follow-ups disabled", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test"); // followup_enabled defaults false
+      const { id: contactId } = await createContact(db, accountId,
+        { firstName: "Disabled", email: "followup-disabled@example.com" }, "user_test");
+      const now = new Date("2027-03-12T12:00:00Z");
+      await createBooking(db, accountId,
+        { calendarId: cal.id, contactId,
+          startsAt: new Date("2027-03-12T09:30:00Z"),
+          endsAt: new Date("2027-03-12T10:00:00Z") }, "user_test");     // ended 2h ago
+      expect(await listDueFollowups(db, now.toISOString())).toEqual([]);
+    });
+  });
+
+  it("stampFollowupSent sets the stamp and a second call is idempotent", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId,
+        { firstName: "Stamp", email: "stamp-followup@example.com" }, "user_test");
+      const booking = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date("2027-03-15T15:00:00Z"),
+          endsAt: new Date("2027-03-15T16:00:00Z") }, "user_test");
+
+      await stampFollowupSent(db, booking.id);
+      const { data: first } = await db.from("bookings")
+        .select("followup_sent_at").eq("id", booking.id).single();
+      expect(first!.followup_sent_at).not.toBeNull();
+
+      await expect(stampFollowupSent(db, booking.id)).resolves.toBeUndefined();
+      const { data: second } = await db.from("bookings")
+        .select("followup_sent_at").eq("id", booking.id).single();
+      expect(second!.followup_sent_at).not.toBeNull();
     });
   });
 });

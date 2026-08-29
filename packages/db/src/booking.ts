@@ -10,6 +10,8 @@ export type CalendarRow = {
   min_notice_hours: number; max_advance_days: number;
   open_hours: Record<string, [string, string][]>;
   notify_emails: string[];
+  meeting_type: "in_person" | "phone" | "video";
+  followup_enabled: boolean; followup_body: string;
 };
 
 export type BookingStatus = "booked" | "cancelled" | "completed" | "no_show";
@@ -19,6 +21,7 @@ export type BookingRow = {
   starts_at: string; ends_at: string; status: BookingStatus;
   note: string | null; cancel_token: string; booker_timezone: string | null;
   reminder_sent_at: string | null;
+  meeting_url: string | null; followup_sent_at: string | null;
 };
 
 export type CalendarSettingsPatch = Partial<{
@@ -29,11 +32,14 @@ export type CalendarSettingsPatch = Partial<{
   maxAdvanceDays: number;
   openHours: Record<string, [string, string][]>;
   notifyEmails: string[];
+  meetingType: "in_person" | "phone" | "video";
+  followupEnabled: boolean;
+  followupBody: string;
 }>;
 
 export type CreateBookingInput = {
   calendarId: string; contactId: string; startsAt: Date; endsAt: Date;
-  note?: string; bookerTimezone?: string; ipHash?: string;
+  note?: string; bookerTimezone?: string; ipHash?: string; meetingUrl?: string;
 };
 
 export type DueReminder = {
@@ -49,13 +55,23 @@ export type DueReminder = {
   fromEmail: string | null;
 };
 
+export type DueFollowup = {
+  bookingId: string; accountId: string; startsAt: string;
+  contactEmail: string | null; contactName: string;
+  accountName: string; accountTimezone: string;
+  branding: Branding;
+  fromEmail: string | null; replyToEmail: string | null;
+  followupBody: string;
+};
+
 const CALENDAR_COLS =
   "id, account_id, public_id, enabled, slot_duration_minutes, buffer_minutes, " +
-  "min_notice_hours, max_advance_days, open_hours, notify_emails";
+  "min_notice_hours, max_advance_days, open_hours, notify_emails, " +
+  "meeting_type, followup_enabled, followup_body";
 
 const BOOKING_COLS =
   "id, account_id, calendar_id, contact_id, starts_at, ends_at, status, note, " +
-  "cancel_token, booker_timezone, reminder_sent_at";
+  "cancel_token, booker_timezone, reminder_sent_at, meeting_url, followup_sent_at";
 
 // Same shape as newPublicId in forms.ts, but twice the length (24 bytes, not
 // 12): this token rides an email link with no rate limit protecting it, so it
@@ -142,6 +158,9 @@ export async function updateCalendarSettings(
   if (patch.maxAdvanceDays !== undefined) row.max_advance_days = patch.maxAdvanceDays;
   if (patch.openHours !== undefined) row.open_hours = patch.openHours;
   if (patch.notifyEmails !== undefined) row.notify_emails = patch.notifyEmails;
+  if (patch.meetingType !== undefined) row.meeting_type = patch.meetingType;
+  if (patch.followupEnabled !== undefined) row.followup_enabled = patch.followupEnabled;
+  if (patch.followupBody !== undefined) row.followup_body = patch.followupBody;
   if (Object.keys(row).length === 0) return;
   row.updated_at = new Date().toISOString();
 
@@ -204,6 +223,7 @@ export async function createBooking(
       cancel_token: cancelToken,
       booker_timezone: input.bookerTimezone ?? null,
       ip_hash: input.ipHash ?? null,
+      meeting_url: input.meetingUrl ?? null,
     })
     .select("id").single();
 
@@ -409,4 +429,105 @@ export async function stampReminderSent(db: SupabaseClient, bookingId: string): 
     .update({ reminder_sent_at: new Date().toISOString() })
     .eq("id", bookingId);
   if (error) throw new Error(`stampReminderSent failed: ${error.message}`);
+}
+
+/**
+ * Follow-ups look BACKWARD from `now` on `ends_at` -- the mirror image of
+ * `listDueReminders`' forward window on `starts_at`, same 25h daily-cron
+ * tolerance and the same rationale (see that function's comment): a booking
+ * becomes due the moment its meeting ends and stays due for 25h, so a
+ * missed/late tick still catches it, but an outage longer than that
+ * permanently misses it. `calendars!inner(...)` + `.eq("calendars.followup_enabled", true)`
+ * is what makes a calendar with follow-ups turned off never surface here,
+ * mirroring how reminders don't filter on the calendar at all (a booking
+ * calendar's own `enabled` flag is a different knob -- the public page's
+ * on/off switch, not the follow-up feature's).
+ */
+export async function listDueFollowups(
+  db: SupabaseClient, nowIso: string,
+): Promise<DueFollowup[]> {
+  const now = new Date(nowIso).getTime();
+  const windowStart = new Date(now - 25 * 60 * 60 * 1000).toISOString();
+  const windowEnd = new Date(now).toISOString();
+
+  const { data, error } = await db.from("bookings")
+    .select(`id, account_id, starts_at,
+             calendars!inner(followup_body),
+             contacts(first_name, last_name, email)`)
+    .eq("status", "booked").is("followup_sent_at", null)
+    .eq("calendars.followup_enabled", true)
+    .gte("ends_at", windowStart).lte("ends_at", windowEnd)
+    .order("starts_at", { ascending: true });
+  if (error) throw new Error(`listDueFollowups failed: ${error.message}`);
+
+  const rows = (data ?? []) as any[];
+  if (rows.length === 0) return [];
+
+  // Same one-query-per-account cache as listDueReminders, plus replyToEmail
+  // pulled alongside it: DueFollowup carries it top-level (not just nested
+  // in branding) so the follow-up sender can set a Reply-To without digging
+  // into branding the way the reminder path does.
+  const accountIds = [...new Set(rows.map((r) => r.account_id as string))];
+  const accountInfo = new Map<
+    string,
+    { accountName: string; accountTimezone: string; branding: Branding;
+      fromEmail: string | null; replyToEmail: string | null }
+  >();
+  for (const accountId of accountIds) {
+    const { data: acctData, error: acctErr } = await db.from("accounts")
+      .select(ACCOUNT_BRAND_COLS).eq("id", accountId).single();
+    if (acctErr || !acctData) {
+      throw new Error(`listDueFollowups: account lookup failed for ${accountId}: ${acctErr?.message}`);
+    }
+    const acct = acctData as unknown as {
+      name: string; timezone: string;
+      brand_name: string | null; brand_logo_path: string | null; brand_color: string | null;
+      brand_neutral: Branding["brandNeutral"]; brand_corners: Branding["brandCorners"];
+      brand_type: Branding["brandType"]; brand_mode: Branding["brandMode"];
+      reply_to_email: string | null; from_email: string | null;
+    };
+    accountInfo.set(accountId, {
+      accountName: acct.name,
+      accountTimezone: acct.timezone,
+      branding: {
+        brandName: acct.brand_name ?? null,
+        brandLogoPath: acct.brand_logo_path ?? null,
+        brandColor: acct.brand_color ?? null,
+        brandNeutral: acct.brand_neutral ?? null,
+        brandCorners: acct.brand_corners ?? null,
+        brandType: acct.brand_type ?? null,
+        brandMode: acct.brand_mode ?? null,
+        replyToEmail: acct.reply_to_email ?? null,
+      },
+      fromEmail: acct.from_email ?? null,
+      replyToEmail: acct.reply_to_email ?? null,
+    });
+  }
+
+  return rows.map((r) => {
+    const info = accountInfo.get(r.account_id as string)!;
+    const contactName = [r.contacts?.first_name, r.contacts?.last_name]
+      .filter(Boolean).join(" ").trim();
+    return {
+      bookingId: r.id,
+      accountId: r.account_id,
+      startsAt: r.starts_at,
+      contactEmail: r.contacts?.email ?? null,
+      contactName: contactName || "Unknown",
+      accountName: info.accountName,
+      accountTimezone: info.accountTimezone,
+      branding: info.branding,
+      fromEmail: info.fromEmail,
+      replyToEmail: info.replyToEmail,
+      followupBody: r.calendars?.followup_body ?? "",
+    };
+  });
+}
+
+/** Send-then-stamp, same reasoning as stampReminderSent: stamp only after a confirmed send. */
+export async function stampFollowupSent(db: SupabaseClient, bookingId: string): Promise<void> {
+  const { error } = await db.from("bookings")
+    .update({ followup_sent_at: new Date().toISOString() })
+    .eq("id", bookingId);
+  if (error) throw new Error(`stampFollowupSent failed: ${error.message}`);
 }

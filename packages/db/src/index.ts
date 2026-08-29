@@ -35,7 +35,8 @@ export { getSendingIdentity, setFromEmail, type SendingIdentity } from "./sendin
 export { getOrCreateCalendar, getCalendarForAccount, getCalendarByPublicId, updateCalendarSettings,
          listBookedRanges, createBooking, cancelBookingByToken, setBookingStatus,
          listUpcomingBookings, countRecentBookings, listDueReminders, stampReminderSent,
+         listDueFollowups, stampFollowupSent,
          newCancelToken, SlotTakenError,
          type CalendarRow, type BookingRow, type BookingStatus, type CalendarSettingsPatch,
-         type CreateBookingInput, type DueReminder } from "./booking";
+         type CreateBookingInput, type DueReminder, type DueFollowup } from "./booking";
 export * from "./voice";
