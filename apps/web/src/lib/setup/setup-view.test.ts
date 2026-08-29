@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { deriveSetupStatus, type SetupInputs, type SetupStepKey } from "./setup-status";
 import {
-  buildSetupViews, kindOf, resolveAssignedNumber, requiresMoveConfirm, READS_BEHIND,
-  type ReadKey, type SetupStepView,
+  buildSetupViews, kindOf, resolveAssignedNumber, requiresMoveConfirm, canEnableTestCalls,
+  READS_BEHIND, type ReadKey, type SetupStepView,
 } from "./setup-view";
 
 // Same fully-configured fixture setup-status.test.ts uses: every step reads
@@ -97,22 +97,41 @@ describe("READS_BEHIND", () => {
 
 describe("resolveAssignedNumber", () => {
   it("returns 'unknown' when the numbers read failed, regardless of what's in the array", () => {
-    expect(resolveAssignedNumber([{ status: "live", e164: "+19565550111" }], true)).toBe("unknown");
+    expect(
+      resolveAssignedNumber([{ id: "n1", status: "live", e164: "+19565550111" }], true),
+    ).toBe("unknown");
     expect(resolveAssignedNumber([], true)).toBe("unknown");
   });
 
-  it("returns the first non-released number's e164 when the read succeeded", () => {
+  it("returns the first non-released number's id/e164/status when the read succeeded", () => {
     expect(
       resolveAssignedNumber(
-        [{ status: "released", e164: "+19565550100" }, { status: "live", e164: "+19565550111" }],
+        [
+          { id: "n0", status: "released", e164: "+19565550100" },
+          { id: "n1", status: "live", e164: "+19565550111" },
+        ],
         false,
       ),
-    ).toBe("+19565550111");
+    ).toEqual({ id: "n1", e164: "+19565550111", status: "live" });
   });
 
   it("returns null — not 'unknown' — when the read succeeded and no live number exists", () => {
     expect(resolveAssignedNumber([], false)).toBe(null);
-    expect(resolveAssignedNumber([{ status: "released", e164: "+19565550100" }], false)).toBe(null);
+    expect(
+      resolveAssignedNumber([{ id: "n0", status: "released", e164: "+19565550100" }], false),
+    ).toBe(null);
+  });
+});
+
+describe("canEnableTestCalls", () => {
+  it("offers the button only for a provisioned number", () => {
+    expect(canEnableTestCalls("provisioned")).toBe(true);
+  });
+
+  it("does not offer it for a number already answering calls, or a former number", () => {
+    expect(canEnableTestCalls("testing")).toBe(false);
+    expect(canEnableTestCalls("live")).toBe(false);
+    expect(canEnableTestCalls("released")).toBe(false);
   });
 });
 

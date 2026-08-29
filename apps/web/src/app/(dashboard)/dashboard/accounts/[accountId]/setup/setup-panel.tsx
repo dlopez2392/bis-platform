@@ -4,7 +4,8 @@ import { AlertTriangle, ArrowRight, Check, Minus, Rocket } from "lucide-react";
 import type { PhoneNumberStatus } from "@bis/db";
 import type { SetupStepKey } from "@/lib/setup/setup-status";
 import {
-  GO_LIVE_PREREQ_KEYS, kindOf, type SetupStepView, type StateKind,
+  GO_LIVE_PREREQ_KEYS, kindOf, canEnableTestCalls, type SetupStepView, type StateKind,
+  type AssignedNumber,
 } from "@/lib/setup/setup-view";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -12,15 +13,17 @@ import { m } from "@/lib/messages";
 import { SetupTickButton } from "./setup-tick-button";
 import { SetupGoLiveButton } from "./setup-go-live-button";
 import { SetupMoveNumberButton } from "./setup-move-number-button";
+import { SetupEnableTestCallsButton } from "./setup-enable-test-calls-button";
 
 /**
  * The wizard, as one path rather than nine cards.
  *
- * Everything here is server-rendered except the four buttons that write: the
- * two ticks (./setup-tick-button.tsx), go-live (./setup-go-live-button.tsx)
- * and move-number (./setup-move-number-button.tsx). Each is its own island
- * calling a Result-typed action, so a refusal arrives as a value to render
- * rather than a rejected promise. The visual argument the layout makes:
+ * Everything here is server-rendered except the five buttons that write: the
+ * two ticks (./setup-tick-button.tsx), go-live (./setup-go-live-button.tsx),
+ * move-number (./setup-move-number-button.tsx), and enable-test-calls
+ * (./setup-enable-test-calls-button.tsx). Each is its own island calling a
+ * Result-typed action, so a refusal arrives as a value to render rather than
+ * a rejected promise. The visual argument the layout makes:
  *
  * ① A spine. A hairline rail threads the nine markers top to bottom, so the
  *   page reads as a sequence with a beginning and an end — "nothing" to
@@ -48,6 +51,11 @@ type ActionResult = { ok: true } | { ok: false; error: string };
 export type SetupGoLiveAction = () => Promise<ActionResult>;
 /** Likewise: the caller picks WHICH number, never which account receives it. */
 export type SetupMoveNumberAction = (phoneNumberId: string) => Promise<ActionResult>;
+/** `setNumberStatusAction` (voice/actions.ts) with `accountId` already bound
+ *  server-side, same reasoning as the two above — only WHICH number and WHAT
+ *  status travel from the browser. Used today for exactly one status value:
+ *  the enable-test-calls button always calls it with `"testing"`. */
+export type SetNumberStatusAction = (phoneNumberId: string, status: string) => Promise<ActionResult>;
 
 /** A number sitting on some other account that this one could take over.
  *  `accountName` is null when the join to `accounts` came back empty. */
@@ -139,7 +147,7 @@ const STATE_LABEL: Record<StateKind, string> = {
 
 export function SetupPanel({
   accountId, steps, prereqsMet, assignedNumber, movableNumbers,
-  tickAction, goLiveAction, moveNumberAction,
+  tickAction, goLiveAction, moveNumberAction, enableTestCallsAction,
 }: {
   accountId: string;
   steps: SetupStepView[];
@@ -148,12 +156,13 @@ export function SetupPanel({
    *  and nothing else — the action re-derives all of this from live rows at
    *  click time, which is where the rule is actually enforced. */
   prereqsMet: boolean;
-  /** First non-released number on the account; `null` if there genuinely is
-   *  none yet; `"unknown"` if the numbers read itself failed — a third state
-   *  so the forwarding card can't mistake a failed read for "go assign a
-   *  number", which is what a plain `null` would look like from here. What
-   *  the client's carrier forwards to and what a test call dials. */
-  assignedNumber: string | null | "unknown";
+  /** First non-released number on the account, WITH its status; `null` if
+   *  there genuinely is none yet; `"unknown"` if the numbers read itself
+   *  failed — a third state so the forwarding card can't mistake a failed
+   *  read for "go assign a number", which is what a plain `null` would look
+   *  like from here. What the client's carrier forwards to and what a test
+   *  call dials. */
+  assignedNumber: AssignedNumber | null | "unknown";
   /** Other accounts' numbers, offered on the number step when this account
    *  has none. Empty when it already has one, when the cross-account read
    *  failed, or when there is genuinely nothing to move. */
@@ -161,6 +170,7 @@ export function SetupPanel({
   tickAction: SetupTickAction;
   goLiveAction: SetupGoLiveAction;
   moveNumberAction: SetupMoveNumberAction;
+  enableTestCallsAction: SetNumberStatusAction;
 }) {
   const base = `/dashboard/accounts/${accountId}`;
 
@@ -309,6 +319,7 @@ export function SetupPanel({
                   tickAction={tickAction}
                   goLiveAction={goLiveAction}
                   moveNumberAction={moveNumberAction}
+                  enableTestCallsAction={enableTestCallsAction}
                   prereqsMet={prereqsMet}
                   blockedReason={blockedReason}
                 />
@@ -396,6 +407,16 @@ function NumberChip({ e164 }: { e164: string }) {
   );
 }
 
+/** The assigned number's status, beside its chip on the number and test-call
+ *  cards (the two the wizard's exit gate found operators needed it on). Same
+ *  labels the Voice page and the movable-numbers list already use — never a
+ *  new vocabulary for the same four values. */
+function NumberStatusChip({ status }: { status: PhoneNumberStatus }) {
+  return (
+    <span className="text-xs text-muted-foreground">{NUMBER_STATUS_LABEL[status]}</span>
+  );
+}
+
 /** The offer on the number step when this account has none of its own: every
  *  number that lives on another account, with whose it is and what it is
  *  currently doing, so an operator cannot take a live line out from under
@@ -441,17 +462,18 @@ function MovableNumbers({
 
 function StepActions({
   step, kind, base, href, assignedNumber, movableNumbers,
-  tickAction, goLiveAction, moveNumberAction, prereqsMet, blockedReason,
+  tickAction, goLiveAction, moveNumberAction, enableTestCallsAction, prereqsMet, blockedReason,
 }: {
   step: SetupStepView;
   kind: StateKind;
   base: string;
   href: string | null;
-  assignedNumber: string | null | "unknown";
+  assignedNumber: AssignedNumber | null | "unknown";
   movableNumbers: MovableNumber[];
   tickAction: SetupTickAction;
   goLiveAction: SetupGoLiveAction;
   moveNumberAction: SetupMoveNumberAction;
+  enableTestCallsAction: SetNumberStatusAction;
   prereqsMet: boolean;
   blockedReason: string | null;
 }) {
@@ -463,12 +485,13 @@ function StepActions({
    *  currently only the movable-number list. */
   let panel: React.ReactNode = null;
 
-  // The actual e164, or null for BOTH "no number yet" and "couldn't check" —
-  // collapsed here because every chip site below already renders nothing for
-  // null, which is the right behaviour for "couldn't check" too. Only the
-  // forwarding card's `note` below needs to tell the two apart, so it reads
-  // `assignedNumber` directly rather than this narrowed value.
-  const e164 = assignedNumber === "unknown" ? null : assignedNumber;
+  // The actual number, or null for BOTH "no number yet" and "couldn't
+  // check" — collapsed here because every chip site below already renders
+  // nothing for null, which is the right behaviour for "couldn't check" too.
+  // Only the forwarding card's `note` below needs to tell the two apart, so
+  // it reads `assignedNumber` directly rather than this narrowed value.
+  const number = assignedNumber === "unknown" ? null : assignedNumber;
+  const e164 = number?.e164 ?? null;
 
   // A finished step keeps its door — the agency still edits branding and
   // hours long after setup — but it stops shouting: ghost rather than
@@ -489,8 +512,9 @@ function StepActions({
   }
 
   if (step.key === "number") {
-    if (e164) {
-      rows.unshift(<NumberChip key="e164" e164={e164} />);
+    if (number) {
+      rows.unshift(<NumberChip key="e164" e164={number.e164} />);
+      rows.push(<NumberStatusChip key="status" status={number.status} />);
     } else if (assignedNumber === null && movableNumbers.length > 0) {
       // Only when the read actually answered "none". Offering to move a
       // number into an account that may already have one — which is what
@@ -550,7 +574,29 @@ function StepActions({
   }
 
   if (step.key === "test_call") {
-    if (e164) rows.unshift(<NumberChip key="e164" e164={e164} />);
+    if (number) {
+      // No `unshift` needed here (unlike the number step below): the
+      // test-call card has no "Open" link, so `rows` is still empty.
+      rows.push(
+        <NumberChip key="e164" e164={number.e164} />,
+        <NumberStatusChip key="status" status={number.status} />,
+      );
+      // What pressing (or having pressed) the button actually does — see
+      // canEnableTestCalls (setup-view.ts) and Task 8's callAnswerable for
+      // why `testing` needs no further caveat here.
+      if (canEnableTestCalls(number.status)) {
+        note = m["setup.testCall.provisionedNote"];
+        rows.push(
+          <SetupEnableTestCallsButton
+            key="enable"
+            action={enableTestCallsAction}
+            phoneNumberId={number.id}
+          />,
+        );
+      } else if (number.status === "testing") {
+        note = m["setup.testCall.testingNote"];
+      }
+    }
     rows.push(
       <Link
         key="calls"

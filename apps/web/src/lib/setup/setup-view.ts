@@ -84,6 +84,12 @@ export function kindOf(step: SetupStepView, isNext: boolean): StateKind {
   return isNext ? "next" : "open";
 }
 
+/** The number the carrier forwards to and a test call dials, together with
+ *  its status — never `released`, since `resolveAssignedNumber` filters those
+ *  out below exactly as it always has. `id` is what `setNumberStatusAction`
+ *  (voice/actions.ts) takes to flip it out of `provisioned`. */
+export type AssignedNumber = { id: string; e164: string; status: PhoneNumberStatus };
+
 /**
  * What the client's carrier forwards to, and what a test call dials. Three
  * states, not two: `null` means "no number exists yet, go assign one";
@@ -94,11 +100,25 @@ export function kindOf(step: SetupStepView, isNext: boolean): StateKind {
  * one is how a client's calls go nowhere.
  */
 export function resolveAssignedNumber(
-  numbers: Pick<PhoneNumberRow, "status" | "e164">[],
+  numbers: Pick<PhoneNumberRow, "id" | "status" | "e164">[],
   numbersReadFailed: boolean,
-): string | null | "unknown" {
+): AssignedNumber | null | "unknown" {
   if (numbersReadFailed) return "unknown";
-  return numbers.find((n) => n.status !== "released")?.e164 ?? null;
+  const found = numbers.find((n) => n.status !== "released");
+  return found ? { id: found.id, e164: found.e164, status: found.status } : null;
+}
+
+/**
+ * Whether the test-call card should offer the "Enable test calls" button —
+ * the wizard's own exit-gate finding this task fixes: an operator who
+ * finished every other step still had a number sitting `provisioned`,
+ * answering nobody, with nothing on this page saying so or offering to fix
+ * it. `testing` and `live` both already answer calls (`callAnswerable`,
+ * lib/voice/accept-gate.ts — `testing` regardless of the receptionist
+ * toggle, since Task 8), so only `provisioned` needs the button.
+ */
+export function canEnableTestCalls(status: PhoneNumberStatus): boolean {
+  return status === "provisioned";
 }
 
 /**

@@ -651,6 +651,19 @@ export const m = {
   "setup.step.test_call.title": "Test call",
   "setup.step.test_call.help":
     "Call the assigned number. The call will appear on the Calls page and turn this step green.",
+  // Shown only for a `provisioned` number — assigned but not yet answering
+  // anything. The button below fixes exactly this.
+  "setup.testCall.provisionedNote":
+    "This number isn't answering calls yet. Enable test calls to have it start answering immediately — no need to go live first.",
+  // Shown once the button above has been pressed. "works the moment you
+  // pressed it" is deliberate, not "works after a delay": `testing` answers
+  // regardless of the receptionist toggle (see the accept-gate predicate),
+  // so there is nothing else this number is waiting on.
+  "setup.testCall.testingNote":
+    "This number is answering calls now, for testing — it works even before you go live. Go live makes it permanent.",
+  "setup.testCall.enable": "Enable test calls",
+  "setup.testCall.enabling": "Enabling…",
+  "setup.testCall.enableFailed": "Could not enable test calls for this number. Try again.",
   "setup.step.go_live.title": "Go live",
   "setup.step.go_live.help":
     "Enables the receptionist and marks the number live. Callers get real answers from here on.",

@@ -10,7 +10,7 @@ import { buildSetupViews, resolveAssignedNumber, type ReadKey } from "@/lib/setu
 import { m } from "@/lib/messages";
 import { SetupPanel, type MovableNumber } from "./setup-panel";
 import { setSetupTickAction, goLiveAction } from "./actions";
-import { moveNumberAction } from "../voice/actions";
+import { moveNumberAction, setNumberStatusAction } from "../voice/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -181,6 +181,7 @@ export default async function SetupPage({
           tickAction={setSetupTickAction.bind(null, accountId)}
           goLiveAction={goLiveAction.bind(null, accountId)}
           moveNumberAction={moveNumberAction.bind(null, accountId)}
+          enableTestCallsAction={setNumberStatusAction.bind(null, accountId)}
         />
       </div>
     </>
