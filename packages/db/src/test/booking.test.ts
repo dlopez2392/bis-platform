@@ -117,8 +117,27 @@ describe("booking accessors", () => {
       // withTestAccount's fixture account never sets from_email, so this
       // also pins the null case for the M4d sending-address field.
       expect(due[0]!.fromEmail).toBeNull();
+      // No meetingUrl was given to this booking — in_person default, so null.
+      expect(due[0]!.meetingUrl).toBeNull();
       await stampReminderSent(db, inWindow.id);
       expect(await listDueReminders(db, now.toISOString())).toEqual([]);
+    });
+  });
+
+  it("listDueReminders carries meetingUrl through for a video booking, straight off the row", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId,
+        { firstName: "Video", email: "video-reminder@example.com" }, "user_test");
+      const now = new Date("2027-03-01T12:00:00Z");
+      const booking = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId,
+          startsAt: new Date("2027-03-02T11:30:00Z"),
+          endsAt: new Date("2027-03-02T12:30:00Z"),
+          meetingUrl: "https://meet.example.com/reminder-room" }, "user_test");
+      const due = await listDueReminders(db, now.toISOString());
+      expect(due.map((d) => d.bookingId)).toEqual([booking.id]);
+      expect(due[0]!.meetingUrl).toBe("https://meet.example.com/reminder-room");
     });
   });
 

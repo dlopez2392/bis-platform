@@ -139,6 +139,19 @@ export function BookingsList({
                         >
                           {b.contact_name}
                         </Link>
+                        {b.meeting_url ? (
+                          // New tab, never navigating the operator away from
+                          // their own dashboard — same reasoning as the
+                          // contact link staying in-app while this one leaves it.
+                          <a
+                            href={b.meeting_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-primary underline"
+                          >
+                            {m["calendar.bookings.join"]}
+                          </a>
+                        ) : null}
                       </div>
                       {b.note ? (
                         <p className="text-sm text-muted-foreground">

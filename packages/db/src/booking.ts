@@ -53,6 +53,11 @@ export type DueReminder = {
   // confirmation already sends. The lead-alert exclusion (no fromAddress)
   // applies to STAFF-facing mail only; a booker is not the client's staff.
   fromEmail: string | null;
+  /** Same discipline as `CreateBookingInput.meetingUrl`: whatever room was
+   *  minted at booking time (or null for in_person/phone, or a video booking
+   *  whose provider failed) -- the reminder route passes this straight into
+   *  `bookingReminderEmail`, never re-derives it. */
+  meetingUrl: string | null;
 };
 
 export type DueFollowup = {
@@ -347,7 +352,7 @@ export async function listDueReminders(
   const windowEnd = new Date(now + 25 * 60 * 60 * 1000).toISOString();
 
   const { data, error } = await db.from("bookings")
-    .select(`id, account_id, starts_at, booker_timezone, cancel_token,
+    .select(`id, account_id, starts_at, booker_timezone, cancel_token, meeting_url,
              calendars(public_id), contacts(first_name, last_name, email)`)
     .eq("status", "booked").is("reminder_sent_at", null)
     .gte("starts_at", windowStart).lte("starts_at", windowEnd)
@@ -413,6 +418,7 @@ export async function listDueReminders(
       accountTimezone: info.accountTimezone,
       branding: info.branding,
       fromEmail: info.fromEmail,
+      meetingUrl: r.meeting_url ?? null,
     };
   });
 }

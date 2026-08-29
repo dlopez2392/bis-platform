@@ -12,6 +12,7 @@ import { getMeetingProvider } from "@/lib/meetings/provider";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { bookingConfirmationEmail } from "@/lib/email/templates/booking";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
+import { isValidEmail } from "@/lib/forms/guards";
 import { formatWhen } from "@/lib/booking/time";
 import {
   type CallState, withLead, withMessage, withTranscript, withBooking, withBookingCancelled,
@@ -133,9 +134,22 @@ export async function runTool(
       // gate above (not merged into it) so a caller who never mentioned email
       // at all still gets the generic "ask them" nudge first; only once the
       // model has attested a decline does this more specific refusal fire.
-      if (ctx.calendar.meeting_type === "video" && !email) {
-        return { state, result: { ok: false,
-          error: "This is a video appointment — an email is required for the meeting link. If the caller cannot give one, do not book: use take_message so a human can arrange it." } };
+      if (ctx.calendar.meeting_type === "video") {
+        if (!email) {
+          return { state, result: { ok: false,
+            error: "This is a video appointment — an email is required for the meeting link. If the caller cannot give one, do not book: use take_message so a human can arrange it." } };
+        }
+        // A gate on non-empty alone let a garbled address ("no", a typo
+        // missing the @, etc.) through and mint a booking whose confirmation
+        // — the ONLY place the meeting link lives — could never be delivered.
+        // Same shape rule the public booking form already enforces
+        // (`isValidEmail`, `@/lib/forms/guards`), applied here on the video
+        // path specifically because a bad address is silent failure for a
+        // video booking in a way it isn't for phone-only ones.
+        if (!isValidEmail(email)) {
+          return { state, result: { ok: false,
+            error: "That email address doesn't look right for the video meeting link. Read it back to the caller character by character — including confirming whether \"plus\" means a literal + sign — then call book_appointment again." } };
+        }
       }
 
       const wanted = String(args?.startsAt ?? "");
@@ -239,12 +253,33 @@ export async function runTool(
       const all = await computeAllSlots(ctx.db, ctx.calendar, ctx.timezone, now);
       const slot = all.find((s) => s.startsAt.toISOString() === new Date(wanted).toISOString());
       if (!slot) return { state, result: { ok: false, error: "that time isn't available" } };
+
+      // Video calendars need a NEW room sized to the NEW slot — the old
+      // row's room expires at the OLD endsAt+1h, so it is never reused or
+      // copied forward here. Same best-effort idiom as book_appointment,
+      // five lines up in that case: an absent or throwing provider never
+      // costs the caller their reschedule, `meetingUrl` simply stays
+      // `undefined` on either path, and neither path ever logs a url.
+      let meetingUrl: string | undefined;
+      if (ctx.calendar.meeting_type === "video") {
+        const meetingProvider = getMeetingProvider();
+        if (meetingProvider) {
+          try {
+            ({ url: meetingUrl } = await meetingProvider.createMeetingRoom(
+              { bookingId: ctx.calendar.public_id, endsAt: slot.endsAt }));
+          } catch (e) {
+            console.error(`voice reschedule: createMeetingRoom failed for calendar ${ctx.calendar.id}: ${String(e)}`);
+          }
+        }
+      }
+
       // Book the NEW slot first — never leave the caller with nothing.
       let newId: string;
       try {
         ({ id: newId } = await createBooking(ctx.db, ctx.accountId, {
           calendarId: old.calendar_id, contactId: old.contact_id,
           startsAt: slot.startsAt, endsAt: slot.endsAt,
+          meetingUrl,
         }, "voice", "ai"));
       } catch (e) {
         if (e instanceof SlotTakenError) return { state, result: { ok: false, slotTaken: true, error: "that time was just taken" } };

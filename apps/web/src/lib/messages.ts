@@ -481,6 +481,7 @@ export const m = {
   "calendar.bookings.title": "Upcoming bookings",
   "calendar.bookings.empty": "No upcoming bookings.",
   "calendar.bookings.note": "Note",
+  "calendar.bookings.join": "Join",
   "calendar.bookings.cancel": "Cancel",
   "calendar.bookings.markCompleted": "Mark completed",
   "calendar.bookings.markNoShow": "No-show",

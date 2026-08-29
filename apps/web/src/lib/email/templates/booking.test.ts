@@ -203,4 +203,26 @@ describe("bookingReminderEmail", () => {
     expect(html).toContain(WHEN_BOOKER);
     expect(text).toContain(WHEN_BOOKER);
   });
+
+  // Mirrors bookingConfirmationEmail's meetingUrl treatment (Task 3): a
+  // promoted button in html, a plain URL line in text, present only when the
+  // provider minted a room.
+  it("shows a promoted \"Join your video meeting\" link in html and a plain URL line in text when meetingUrl is present", () => {
+    const { html, text } = bookingReminderEmail({
+      brand, whenBookerZone: WHEN_BOOKER, cancelUrl: CANCEL_URL, meetingUrl: MEETING_URL,
+    });
+    expect(html).toContain("Join your video meeting");
+    expect(html).toContain(`href="${MEETING_URL}"`);
+    expect(text).toContain(`Join your video meeting: ${MEETING_URL}`);
+  });
+
+  it("omits the video meeting link entirely when meetingUrl is absent", () => {
+    const { html, text } = bookingReminderEmail({
+      brand, whenBookerZone: WHEN_BOOKER, cancelUrl: CANCEL_URL,
+    });
+    expect(html).not.toContain("Join your video meeting");
+    expect(html).not.toContain(MEETING_URL);
+    expect(text).not.toContain("Join your video meeting");
+    expect(text).not.toContain(MEETING_URL);
+  });
 });

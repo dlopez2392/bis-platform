@@ -75,7 +75,9 @@ export async function GET(req: Request): Promise<Response> {
       const whenBookerZone = formatWhen(new Date(reminder.startsAt), bookerZone);
       const cancelUrl = `${origin}/b/${reminder.calendarPublicId}/cancel/${reminder.cancelToken}`;
 
-      const { html, text } = bookingReminderEmail({ brand, whenBookerZone, cancelUrl });
+      const { html, text } = bookingReminderEmail({
+        brand, whenBookerZone, cancelUrl, meetingUrl: reminder.meetingUrl ?? undefined,
+      });
 
       // fromAddress carries the account's sending address: a reminder is
       // customer-facing outbound, same shape as the booking confirmation

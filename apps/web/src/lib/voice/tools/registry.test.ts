@@ -245,6 +245,15 @@ describe("book_appointment", () => {
       expect(dbMocks.createBooking).not.toHaveBeenCalled();
     });
 
+    it("refuses a video booking whose email fails shape validation, telling the model to re-confirm it", async () => {
+      const { result } = await runTool(emptyCallState(), videoCtx, "book_appointment",
+        { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "no" });
+      expect(result).toMatchObject({ ok: false });
+      expect(String((result as { error?: string }).error)).toMatch(/character by character/i);
+      expect(dbMocks.createBooking).not.toHaveBeenCalled();
+      expect(meetingProviderMock).not.toHaveBeenCalled();
+    });
+
     it("books, mints a room, and puts the url in the confirmation email when a real email is given", async () => {
       meetingProviderMock.mockReturnValue({
         createMeetingRoom: vi.fn().mockResolvedValue({ url: "https://video.example/room1" }),
@@ -315,5 +324,73 @@ describe("reschedule / cancel", () => {
     const { result } = await runTool(emptyCallState(), ctx, "cancel_appointment", { bookingId: "ghost" });
     expect(result).toMatchObject({ ok: false });
     expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
+  });
+
+  it("in_person reschedule never touches the meeting provider", async () => {
+    computeAllSlotsMock.mockResolvedValue([{ startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z") }]);
+    dbMocks.getBookingById.mockResolvedValue({ id: "old1", contact_id: "ct1", calendar_id: "cal1",
+      starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" });
+    dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "t" });
+    dbMocks.setBookingStatus.mockResolvedValue(undefined);
+    await runTool(emptyCallState(), ctx, "reschedule_appointment",
+      { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
+    expect(meetingProviderMock).not.toHaveBeenCalled();
+  });
+
+  describe("video reschedule", () => {
+    const videoCtx: ToolContext = {
+      ...ctx,
+      calendar: { ...ctx.calendar, meeting_type: "video" } as unknown as CalendarRow,
+    };
+    // Deliberately a DIFFERENT slot than the old booking's — the old row's
+    // room expires at the OLD endsAt+1h, so a mutant that reused the old
+    // row's ends_at (or its url) instead of minting a fresh one would fail
+    // the "called with the NEW endsAt" assertion below.
+    const oldEndsAt = new Date("2027-06-01T15:00:00Z");
+    const newSlot = { startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:30:00Z") };
+
+    beforeEach(() => {
+      computeAllSlotsMock.mockResolvedValue([newSlot]);
+      dbMocks.getBookingById.mockResolvedValue({
+        id: "old1", contact_id: "ct1", calendar_id: "cal1",
+        starts_at: "2027-06-01T14:00:00Z", ends_at: oldEndsAt.toISOString(),
+        status: "booked", meeting_url: "https://video.example/OLD-room",
+      });
+      dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "t" });
+      dbMocks.setBookingStatus.mockResolvedValue(undefined);
+    });
+
+    it("mints a NEW room sized to the NEW slot's endsAt and passes its url into the new booking", async () => {
+      const createMeetingRoom = vi.fn().mockResolvedValue({ url: "https://video.example/new-room" });
+      meetingProviderMock.mockReturnValue({ createMeetingRoom });
+
+      const { result } = await runTool(emptyCallState(), videoCtx, "reschedule_appointment",
+        { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
+
+      expect(result).toMatchObject({ ok: true, bookingId: "new1" });
+      expect(createMeetingRoom).toHaveBeenCalledWith(
+        expect.objectContaining({ endsAt: newSlot.endsAt }));
+      // Never the old row's ends_at, and never the old row's url copied forward.
+      expect(createMeetingRoom).not.toHaveBeenCalledWith(
+        expect.objectContaining({ endsAt: oldEndsAt }));
+      expect(dbMocks.createBooking).toHaveBeenCalledWith({}, "a1",
+        expect.objectContaining({ meetingUrl: "https://video.example/new-room" }), "voice", "ai");
+    });
+
+    it("never-fail pin: a throwing provider still reschedules, just without a url, and never logs one", async () => {
+      const createMeetingRoom = vi.fn().mockRejectedValue(new Error("daily down"));
+      meetingProviderMock.mockReturnValue({ createMeetingRoom });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const { result } = await runTool(emptyCallState(), videoCtx, "reschedule_appointment",
+        { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
+
+      const loggedUrl = errSpy.mock.calls.some((c) => String(c[0] ?? "").includes("https://"));
+      errSpy.mockRestore();
+      expect(loggedUrl).toBe(false);
+      expect(result).toMatchObject({ ok: true, bookingId: "new1" });
+      expect(dbMocks.createBooking).toHaveBeenCalledWith({}, "a1",
+        expect.objectContaining({ meetingUrl: undefined }), "voice", "ai");
+    });
   });
 });

@@ -50,6 +50,7 @@ function reminder(overrides: Record<string, unknown> = {}) {
       replyToEmail: "owner@acme.com",
     },
     fromEmail: null,
+    meetingUrl: null,
     ...overrides,
   };
 }
@@ -218,6 +219,18 @@ describe("GET /api/cron/reminders", () => {
     // would still satisfy it. Assert directly on the captured arg.
     const call = sendMock.mock.calls[0]![0] as { fromAddress?: string };
     expect(call.fromAddress).toBeUndefined();
+  });
+
+  it("carries meetingUrl into the sent reminder's join link when present, omits it when null", async () => {
+    const withUrl = reminder({ bookingId: "bk_video", meetingUrl: "https://meet.example.com/room-1" });
+    const withoutUrl = reminder({ bookingId: "bk_plain", contactEmail: "plain@example.com" });
+    listDueRemindersMock.mockResolvedValue([withUrl, withoutUrl]);
+
+    await GET(req(`Bearer ${SECRET}`));
+
+    const [firstCall, secondCall] = sendMock.mock.calls as { body: string }[][];
+    expect(firstCall![0]!.body).toContain("https://meet.example.com/room-1");
+    expect(secondCall![0]!.body).not.toContain("Join your video meeting");
   });
 
   it("counts a reminder with no contact email as a failure, without stamping it", async () => {

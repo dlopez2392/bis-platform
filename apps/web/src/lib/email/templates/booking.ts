@@ -138,6 +138,10 @@ export type BookingReminderInput = {
   /** Pre-formatted in the booker's own zone. */
   whenBookerZone: string;
   cancelUrl: string;
+  /** Same discipline as `BookingConfirmationInput.meetingUrl`: present only
+   *  when the calendar is `"video"` AND the room still exists at reminder
+   *  time — omitted entirely, never a link to nowhere. */
+  meetingUrl?: string;
 };
 
 /**
@@ -145,10 +149,16 @@ export type BookingReminderInput = {
  *
  * The confirmation minus the company-zone line and minus the "you're booked"
  * novelty: the booker already knows they're booked, so the subject here is
- * "this is tomorrow", not a repeat of the original news.
+ * "this is tomorrow", not a repeat of the original news. The video link, when
+ * present, gets the same `button()` treatment as the confirmation's — it IS
+ * the meeting, so it outweighs the plain cancel link here too.
  */
 export function bookingReminderEmail(input: BookingReminderInput):
   { html: string; text: string } {
+  const meetingHtml = input.meetingUrl
+    ? `<p style="margin:0 0 16px;">${button(input.brand, input.meetingUrl, "Join your video meeting")}</p>`
+    : "";
+
   // Same reasoning as `bookingConfirmationEmail`'s `cancelHtml`: an empty
   // `cancelUrl` gets no anchor at all, never one pointing nowhere.
   const cancelHtml = input.cancelUrl
@@ -158,6 +168,7 @@ export function bookingReminderEmail(input: BookingReminderInput):
   const html = shell(input.brand, `
     <p style="margin:0 0 12px;">This is a reminder for your upcoming booking.</p>
     <p style="margin:0 0 16px;font-size:16px;">${escapeHtml(input.whenBookerZone)}</p>
+    ${meetingHtml}
     ${cancelHtml}
   `);
 
@@ -165,6 +176,7 @@ export function bookingReminderEmail(input: BookingReminderInput):
     "This is a reminder for your upcoming booking.",
     "",
     input.whenBookerZone,
+    ...(input.meetingUrl ? ["", `Join your video meeting: ${input.meetingUrl}`] : []),
     ...(input.cancelUrl ? ["", `Cancel this booking: ${input.cancelUrl}`] : []),
   ].join("\n");
 
