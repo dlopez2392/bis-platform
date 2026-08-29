@@ -91,6 +91,13 @@ export default async function SetupPage({
   };
 
   const account = accountR.status === "fulfilled" ? accountR.value : null;
+  // `null` on both a genuinely absent row AND a failed read — same
+  // conservative direction `deriveSetupStatus` already takes below by
+  // feeding it this exact value. `hasVoiceProfile` (passed to SetupPanel)
+  // reads existence off this, not completeness: see its own doc comment in
+  // setup-panel.tsx for why that is the right question for the test-call
+  // card specifically.
+  const profile = profileR.status === "fulfilled" ? profileR.value : null;
   const numbers = numbersR.status === "fulfilled" ? numbersR.value : [];
   const checklistRows = ticksR.status === "fulfilled" ? ticksR.value : [];
 
@@ -105,7 +112,7 @@ export default async function SetupPage({
     brandName: account?.brand_name ?? null,
     fromEmail: account?.from_email ?? null,
     calendar: calendarR.status === "fulfilled" ? calendarR.value : null,
-    profile: profileR.status === "fulfilled" ? profileR.value : null,
+    profile,
     numbers,
     callCount: callsR.status === "fulfilled" ? callsR.value : 0,
     ticks: {
@@ -174,6 +181,7 @@ export default async function SetupPage({
           prereqsMet={prereqsMet}
           assignedNumber={assignedNumber}
           movableNumbers={movableNumbers}
+          hasVoiceProfile={profile !== null}
           // accountId bound server-side on all three — it must never travel
           // as a form field. For moveNumberAction that binding is what makes
           // the account the DESTINATION rather than something the browser

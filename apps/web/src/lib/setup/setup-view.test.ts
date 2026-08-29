@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { deriveSetupStatus, type SetupInputs, type SetupStepKey } from "./setup-status";
 import {
   buildSetupViews, kindOf, resolveAssignedNumber, requiresMoveConfirm, canEnableTestCalls,
-  READS_BEHIND, type ReadKey, type SetupStepView,
+  testCallNoteKind, READS_BEHIND, type ReadKey, type SetupStepView,
 } from "./setup-view";
 
 // Same fully-configured fixture setup-status.test.ts uses: every step reads
@@ -124,14 +124,56 @@ describe("resolveAssignedNumber", () => {
 });
 
 describe("canEnableTestCalls", () => {
-  it("offers the button only for a provisioned number", () => {
-    expect(canEnableTestCalls("provisioned")).toBe(true);
+  it("offers the button only for a provisioned number that has a saved voice profile", () => {
+    expect(canEnableTestCalls("provisioned", true)).toBe(true);
   });
 
-  it("does not offer it for a number already answering calls, or a former number", () => {
-    expect(canEnableTestCalls("testing")).toBe(false);
-    expect(canEnableTestCalls("live")).toBe(false);
-    expect(canEnableTestCalls("released")).toBe(false);
+  // The exit-gate finding this task fixes: `setNumberStatusAction` has
+  // nothing stopping a `provisioned` number with no voice profile row at all
+  // from flipping to `testing` — but `callAnswerable` (accept-gate.ts)
+  // declines every call to it with `no-profile` regardless of status. A
+  // button that flips this number would be offering a fix that doesn't fix
+  // anything.
+  it("withholds it from a provisioned number with no voice profile saved yet", () => {
+    expect(canEnableTestCalls("provisioned", false)).toBe(false);
+  });
+
+  it("does not offer it for a number already answering calls, or a former number, with or without a profile", () => {
+    expect(canEnableTestCalls("testing", true)).toBe(false);
+    expect(canEnableTestCalls("live", true)).toBe(false);
+    expect(canEnableTestCalls("released", true)).toBe(false);
+    expect(canEnableTestCalls("testing", false)).toBe(false);
+    expect(canEnableTestCalls("live", false)).toBe(false);
+    expect(canEnableTestCalls("released", false)).toBe(false);
+  });
+});
+
+describe("testCallNoteKind", () => {
+  it("reads 'enable' for a provisioned number with a saved profile — the ordinary path", () => {
+    expect(testCallNoteKind("provisioned", true)).toBe("enable");
+  });
+
+  it("reads 'needsProfile' for a provisioned number with no profile — the button must stay disabled", () => {
+    expect(testCallNoteKind("provisioned", false)).toBe("needsProfile");
+  });
+
+  it("reads 'testing' for a testing number with a saved profile — it is genuinely answering", () => {
+    expect(testCallNoteKind("testing", true)).toBe("testing");
+  });
+
+  // Covers a number that was flipped to `testing` before this task existed
+  // (or via a direct action call): the status alone used to be enough to
+  // claim "answering now", which was the defect. With no profile, it is not
+  // actually answering — the 'testing' note must NOT win here.
+  it("reads 'needsProfile' — not 'testing' — for a testing number with no profile", () => {
+    expect(testCallNoteKind("testing", false)).toBe("needsProfile");
+  });
+
+  it("reads null for live or released numbers regardless of profile — this card offers nothing for either", () => {
+    expect(testCallNoteKind("live", true)).toBe(null);
+    expect(testCallNoteKind("live", false)).toBe(null);
+    expect(testCallNoteKind("released", true)).toBe(null);
+    expect(testCallNoteKind("released", false)).toBe(null);
   });
 });
 

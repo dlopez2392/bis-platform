@@ -661,9 +661,14 @@ export const m = {
   // so there is nothing else this number is waiting on.
   "setup.testCall.testingNote":
     "This number is answering calls now, for testing — it works even before you go live. Go live makes it permanent.",
+  // Shown for a `provisioned` number with no saved voice profile (button
+  // stays disabled) AND for a `testing` number with no saved voice profile
+  // (already flipped, but not actually answering — `callAnswerable` declines
+  // every call to a number with no profile row, regardless of status).
+  "setup.testCall.needsProfileNote":
+    "This number needs a saved voice profile before it can answer calls. Save one on step 04, Voice profile, then come back here.",
   "setup.testCall.enable": "Enable test calls",
   "setup.testCall.enabling": "Enabling…",
-  "setup.testCall.enableFailed": "Could not enable test calls for this number. Try again.",
   "setup.step.go_live.title": "Go live",
   "setup.step.go_live.help":
     "Enables the receptionist and marks the number live. Callers get real answers from here on.",

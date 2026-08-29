@@ -108,17 +108,57 @@ export function resolveAssignedNumber(
   return found ? { id: found.id, e164: found.e164, status: found.status } : null;
 }
 
+/** Which note the test-call card renders, and — via `canEnableTestCalls`
+ *  below, which reads off this same value — whether the button underneath it
+ *  is ever a LIVE "enable" rather than a disabled one. */
+export type TestCallNoteKind = "enable" | "needsProfile" | "testing" | null;
+
 /**
- * Whether the test-call card should offer the "Enable test calls" button —
- * the wizard's own exit-gate finding this task fixes: an operator who
- * finished every other step still had a number sitting `provisioned`,
- * answering nobody, with nothing on this page saying so or offering to fix
- * it. `testing` and `live` both already answer calls (`callAnswerable`,
- * lib/voice/accept-gate.ts — `testing` regardless of the receptionist
- * toggle, since Task 8), so only `provisioned` needs the button.
+ * `provisioned` and `testing` are the only two statuses this card ever has
+ * something to say about (`live`/`released` fall through to `null` — the
+ * go-live card and the move-number flow own those, respectively). Within
+ * those two, `hasVoiceProfile` decides which of two very different messages
+ * is honest — the wizard's own exit-gate finding this fixes (Finding 2, the
+ * same gap Finding 1 found in the step order itself): `provisioned` alone
+ * used to be enough to offer the button. But `setNumberStatusAction`
+ * (voice/actions.ts) gates only the flip TO `live` on a saved profile — the
+ * flip to `testing` this card's button drives has no such check, so it would
+ * happily set status to `testing` on a number with `profile === null`.
+ * `callAnswerable` (lib/voice/accept-gate.ts) then declines every call to it
+ * with `no-profile`, REGARDLESS of status — `testing` is not an exception
+ * there, only `profile.enabled` for `live` is.
+ *
+ * - `provisioned`, profile saved → `"enable"`: the ordinary path, a live
+ *   button that would actually leave the number answering.
+ * - `provisioned`, no profile → `"needsProfile"`: a button that flipped the
+ *   row anyway would be offering to fix a card that would still be lying the
+ *   moment the write landed, so the button must render DISABLED rather than
+ *   vanish — an operator staring at a card with no control at all has no
+ *   path forward from here.
+ * - `testing`, profile saved → `"testing"`: genuinely answering, say so.
+ * - `testing`, no profile → `"needsProfile"`, not `"testing"`. Covers a
+ *   number that reached `testing` before this task shipped (or via a direct
+ *   call to the action, which still has no profile check on this
+ *   transition): the old card read status alone and printed "answering
+ *   calls now" — provably false per `callAnswerable`. Status can no longer
+ *   answer this question by itself.
  */
-export function canEnableTestCalls(status: PhoneNumberStatus): boolean {
-  return status === "provisioned";
+export function testCallNoteKind(
+  status: PhoneNumberStatus,
+  hasVoiceProfile: boolean,
+): TestCallNoteKind {
+  if (status === "provisioned") return hasVoiceProfile ? "enable" : "needsProfile";
+  if (status === "testing") return hasVoiceProfile ? "testing" : "needsProfile";
+  return null;
+}
+
+/** Whether the test-call card's button is a LIVE "Enable test calls" —
+ *  narrower than "does the button render at all" (setup-panel.tsx also
+ *  renders it, disabled, for `"needsProfile"` on a `provisioned` number).
+ *  Derived from `testCallNoteKind` rather than re-deciding status/profile
+ *  itself, so the two can never drift apart on which case is which. */
+export function canEnableTestCalls(status: PhoneNumberStatus, hasVoiceProfile: boolean): boolean {
+  return testCallNoteKind(status, hasVoiceProfile) === "enable";
 }
 
 /**

@@ -4,7 +4,7 @@ import { AlertTriangle, ArrowRight, Check, Minus, Rocket } from "lucide-react";
 import type { PhoneNumberStatus } from "@bis/db";
 import type { SetupStepKey } from "@/lib/setup/setup-status";
 import {
-  GO_LIVE_PREREQ_KEYS, kindOf, canEnableTestCalls, type SetupStepView, type StateKind,
+  GO_LIVE_PREREQ_KEYS, kindOf, testCallNoteKind, type SetupStepView, type StateKind,
   type AssignedNumber,
 } from "@/lib/setup/setup-view";
 import { buttonVariants } from "@/components/ui/button";
@@ -146,7 +146,7 @@ const STATE_LABEL: Record<StateKind, string> = {
 };
 
 export function SetupPanel({
-  accountId, steps, prereqsMet, assignedNumber, movableNumbers,
+  accountId, steps, prereqsMet, assignedNumber, movableNumbers, hasVoiceProfile,
   tickAction, goLiveAction, moveNumberAction, enableTestCallsAction,
 }: {
   accountId: string;
@@ -167,6 +167,16 @@ export function SetupPanel({
    *  has none. Empty when it already has one, when the cross-account read
    *  failed, or when there is genuinely nothing to move. */
   movableNumbers: MovableNumber[];
+  /** Whether a `voice_profiles` row exists for this account at all —
+   *  existence, not completeness: `voiceProfileDone` (setup-status.ts) also
+   *  requires a greeting and facts, but `callAnswerable` (accept-gate.ts)
+   *  declines on `profile === null` alone, so that is the exact question the
+   *  test-call card needs answered (`testCallNoteKind`, setup-view.ts). `false`
+   *  when the profile read itself failed (page.tsx) — the same direction
+   *  every other unverifiable-prerequisite case on this page already takes,
+   *  since a card that can't confirm a profile exists must not offer a
+   *  button that promises the number will answer. */
+  hasVoiceProfile: boolean;
   tickAction: SetupTickAction;
   goLiveAction: SetupGoLiveAction;
   moveNumberAction: SetupMoveNumberAction;
@@ -316,6 +326,7 @@ export function SetupPanel({
                   href={path ? `${base}${path}` : null}
                   assignedNumber={assignedNumber}
                   movableNumbers={movableNumbers}
+                  hasVoiceProfile={hasVoiceProfile}
                   tickAction={tickAction}
                   goLiveAction={goLiveAction}
                   moveNumberAction={moveNumberAction}
@@ -461,7 +472,7 @@ function MovableNumbers({
 }
 
 function StepActions({
-  step, kind, base, href, assignedNumber, movableNumbers,
+  step, kind, base, href, assignedNumber, movableNumbers, hasVoiceProfile,
   tickAction, goLiveAction, moveNumberAction, enableTestCallsAction, prereqsMet, blockedReason,
 }: {
   step: SetupStepView;
@@ -470,6 +481,7 @@ function StepActions({
   href: string | null;
   assignedNumber: AssignedNumber | null | "unknown";
   movableNumbers: MovableNumber[];
+  hasVoiceProfile: boolean;
   tickAction: SetupTickAction;
   goLiveAction: SetupGoLiveAction;
   moveNumberAction: SetupMoveNumberAction;
@@ -581,10 +593,13 @@ function StepActions({
         <NumberChip key="e164" e164={number.e164} />,
         <NumberStatusChip key="status" status={number.status} />,
       );
-      // What pressing (or having pressed) the button actually does — see
-      // canEnableTestCalls (setup-view.ts) and Task 8's callAnswerable for
-      // why `testing` needs no further caveat here.
-      if (canEnableTestCalls(number.status)) {
+      // Which note (if any) and which flavour of button — see
+      // testCallNoteKind (setup-view.ts) for why `hasVoiceProfile` decides
+      // this alongside status, not status alone: the exit-gate finding this
+      // fixes is exactly a card that used to answer this question from
+      // status only, and could be flipped-but-not-answering as a result.
+      const noteKind = testCallNoteKind(number.status, hasVoiceProfile);
+      if (noteKind === "enable") {
         note = m["setup.testCall.provisionedNote"];
         rows.push(
           <SetupEnableTestCallsButton
@@ -593,7 +608,22 @@ function StepActions({
             phoneNumberId={number.id}
           />,
         );
-      } else if (number.status === "testing") {
+      } else if (noteKind === "needsProfile") {
+        note = m["setup.testCall.needsProfileNote"];
+        // Only for `provisioned`: a `testing` number reaching this branch is
+        // already flipped — pressing the button again would just resubmit
+        // the same status, so there is nothing useful for it to do here.
+        if (number.status === "provisioned") {
+          rows.push(
+            <SetupEnableTestCallsButton
+              key="enable"
+              action={enableTestCallsAction}
+              phoneNumberId={number.id}
+              disabled
+            />,
+          );
+        }
+      } else if (noteKind === "testing") {
         note = m["setup.testCall.testingNote"];
       }
     }

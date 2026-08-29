@@ -27,12 +27,21 @@ import type { SetNumberStatusAction } from "./setup-panel";
  * on. Inline error, not a toast, matching SetupGoLiveButton: this is the one
  * action that unblocks the whole test-call card, so a failure needs to stay
  * on screen next to the button rather than flash past in a toast.
+ *
+ * `disabled` (Finding 2): the panel passes `true` when
+ * `testCallNoteKind` (setup-view.ts) reads `"needsProfile"` for a
+ * `provisioned` number — no saved voice profile, so the flip WOULD succeed
+ * (`setNumberStatusAction` only gates the transition to `live`, not to
+ * `testing`) but `callAnswerable` would decline every call to the result
+ * anyway. The button still renders here rather than disappearing, so the
+ * card always has a control to point the "needsProfile" note at.
  */
 export function SetupEnableTestCallsButton({
-  action, phoneNumberId,
+  action, phoneNumberId, disabled = false,
 }: {
   action: SetNumberStatusAction;
   phoneNumberId: string;
+  disabled?: boolean;
 }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -52,7 +61,7 @@ export function SetupEnableTestCallsButton({
           router.refresh();
         }}
       >
-        <PendingButton />
+        <PendingButton disabled={disabled} />
       </form>
 
       {/* Hue in the border and the fill, never in the text — same rule the
@@ -69,10 +78,10 @@ export function SetupEnableTestCallsButton({
   );
 }
 
-function PendingButton() {
+function PendingButton({ disabled }: { disabled: boolean }) {
   const { pending } = useFormStatus();
   return (
-    <Button type="submit" size="sm" disabled={pending}>
+    <Button type="submit" size="sm" disabled={pending || disabled}>
       {pending ? null : <PhoneCall aria-hidden className="size-3.5" />}
       {pending ? m["setup.testCall.enabling"] : m["setup.testCall.enable"]}
     </Button>
