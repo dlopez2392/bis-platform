@@ -360,11 +360,13 @@ confirmation/reminder emails never carry a join link.
 **Booking behavior once the key is set**: a booking on a `video` calendar
 gets a Daily.co room created before the booking write commits (so a
 room-creation failure never leaves a half-booked slot), and the join link
-travels in the confirmation email, the reminder email, and — for voice
-bookings — is read back to the caller. **Video bookings require the
-caller's/booker's email at the tool layer**: `book_appointment` (voice) and
-the public booking form both refuse to complete a video booking without a
-valid email on file — there is no code path that books a video meeting and
+travels in the confirmation email and the reminder email. On voice bookings
+the link is deliberately NEVER read aloud — Sofía says it arrives by email
+(a URL by voice is noise; the prompt forbids reading web links).
+**Video bookings require the caller's email at the tool layer**:
+`book_appointment` (voice) refuses a video booking without a valid email
+(a video-conditional gate); the public booking form requires an email for
+EVERY booking regardless of meeting type, so it covers video incidentally — there is no code path that books a video meeting and
 leaves the customer with no way to receive the join link. A caller who
 declines to give an email on a video calendar gets the same polite refusal
 + take-a-message fallback as any other tool-boundary decline.
@@ -402,8 +404,11 @@ same route booking reminders already ride, Hobby-tier daily granularity).
    after the appointment, sent once (`followup_sent_at` stamped
    send-then-stamp, same pattern as booking reminders — a delivery failure
    never gets silently marked sent). A booking with no contact email on
-   file (e.g. the recorded voice-booking `fillBlanks` gap) is skipped, not
-   retried.
+   file (e.g. the recorded voice-booking `fillBlanks` gap) is skipped on
+   every tick — never stamped, never an error, counted as `skippedNoEmail`
+   in the cron output each day until the 25h window ages it out. Seeing the
+   same booking skip across consecutive days is designed repetition, not a
+   bug; it is never sent.
 
 **Verify:** enable follow-ups on a test calendar with a short custom body,
 complete a real booking (voice or public page) with a real email, wait for
