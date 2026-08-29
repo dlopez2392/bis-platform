@@ -1,10 +1,13 @@
 import { timingSafeEqual } from "node:crypto";
-import { serviceDb, listDueReminders, stampReminderSent } from "@bis/db";
+import {
+  serviceDb, listDueReminders, stampReminderSent, listDueFollowups, stampFollowupSent,
+} from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
 import { configuredOrigin } from "@/lib/email/origin";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { bookingReminderEmail } from "@/lib/email/templates/booking";
+import { bookingFollowupEmail } from "@/lib/email/templates/followup";
 import { safeZone, formatWhen } from "@/lib/booking/time";
 
 export const dynamic = "force-dynamic";
@@ -120,5 +123,80 @@ export async function GET(req: Request): Promise<Response> {
     }
   }
 
-  return Response.json({ sent, failed, unstamped });
+  // Second pass, same cron tick, same auth gate: follow-ups sent ~a day
+  // after a booking's meeting ENDS, mirroring `listDueFollowups`' own
+  // backward-looking window (see that function's doc comment). Kept as its
+  // own loop with its own counters rather than folded into the reminder
+  // loop above — the two passes read different due-lists, stamp different
+  // columns, and (per the brief) count a missing contact email differently:
+  // a reminder with no email is a `failed` send, but a follow-up with no
+  // email is `skippedNoEmail` and never even attempts a send, since a
+  // contact who never gave an email will retry harmlessly every tick until
+  // the 25h window ages it out on its own.
+  const followups = await listDueFollowups(db, new Date().toISOString());
+
+  let followupsSent = 0;
+  let followupsFailed = 0;
+  let followupsUnstamped = 0;
+  let skippedNoEmail = 0;
+
+  for (const followup of followups) {
+    if (!followup.contactEmail) {
+      skippedNoEmail++;
+      console.error(
+        `follow-up skipped, no contact email on file for booking ${followup.bookingId}`,
+      );
+      continue;
+    }
+
+    // SEND-THEN-STAMP, same discipline as the reminder pass above:
+    // `followup_sent_at` is a dedupe marker, not a record of an attempt.
+    try {
+      const brand = emailBrand(followup.branding, followup.accountName);
+      const { subject, html, text } = bookingFollowupEmail({
+        brand, body: followup.followupBody,
+      });
+
+      // fromAddress/replyTo follow the DueReminder precedent above, but
+      // replyTo reads DueFollowup's OWN top-level `replyToEmail`, not
+      // `followup.branding.replyToEmail` — that's the whole reason
+      // `listDueFollowups` duplicates it there (see its doc comment).
+      await provider.send({
+        to: followup.contactEmail,
+        fromName: brand.name,
+        fromAddress: followup.fromEmail ?? undefined,
+        replyTo: normalizeReplyTo(followup.replyToEmail),
+        subject,
+        body: text,
+        html,
+      });
+
+      // Own try/catch, same reasoning as the reminder pass: a send that
+      // already left the building counts as `sent` regardless of whether
+      // the stamp write lands, so a stamp failure can't misreport as a
+      // send failure — and can't roll back the `sent` count either.
+      try {
+        await stampFollowupSent(db, followup.bookingId);
+      } catch (stampErr) {
+        followupsUnstamped++;
+        console.error(
+          `follow-up sent but NOT stamped for booking ${followup.bookingId} — `
+          + `may repeat next tick: ${String(stampErr)}`,
+        );
+      }
+
+      followupsSent++;
+    } catch (e) {
+      followupsFailed++;
+      console.error(`follow-up send failed for booking ${followup.bookingId}: ${String(e)}`);
+    }
+  }
+
+  return Response.json({
+    sent, failed, unstamped,
+    followups: {
+      sent: followupsSent, failed: followupsFailed,
+      unstamped: followupsUnstamped, skippedNoEmail,
+    },
+  });
 }

@@ -10,10 +10,14 @@ vi.mock("next/headers", () => ({ headers: vi.fn() }));
 
 const listDueRemindersMock = vi.fn();
 const stampReminderSentMock = vi.fn();
+const listDueFollowupsMock = vi.fn();
+const stampFollowupSentMock = vi.fn();
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({}),
   listDueReminders: (...a: unknown[]) => listDueRemindersMock(...a),
   stampReminderSent: (...a: unknown[]) => stampReminderSentMock(...a),
+  listDueFollowups: (...a: unknown[]) => listDueFollowupsMock(...a),
+  stampFollowupSent: (...a: unknown[]) => stampFollowupSentMock(...a),
 }));
 
 const sendMock = vi.fn();
@@ -61,6 +65,35 @@ function req(bearer?: string) {
   });
 }
 
+/**
+ * Same distinctive-fixture discipline as `reminder()` above, sized to
+ * `DueFollowup`'s shape (Task 1, `packages/db/src/booking.ts`): `replyToEmail`
+ * lives top-level here, NOT nested in `branding` the way the reminder fixture
+ * carries it — that's the whole point of the top-level field (see
+ * `listDueFollowups`'s doc comment), and a fixture that only set
+ * `branding.replyToEmail` could not catch a route that read the wrong one.
+ */
+function followup(overrides: Record<string, unknown> = {}) {
+  return {
+    bookingId: "bk_f1",
+    accountId: "acct_1",
+    startsAt: "2026-08-19T20:00:00.000Z",
+    contactEmail: "booker@example.com",
+    contactName: "Jamie Booker",
+    accountName: "Acme Co",
+    accountTimezone: "America/New_York",
+    branding: {
+      brandName: "Acme Brand", brandLogoPath: null, brandColor: null,
+      brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
+      replyToEmail: "wrong-should-not-be-used@acme.com",
+    },
+    fromEmail: "hello@acme.com",
+    replyToEmail: "owner@acme.com",
+    followupBody: "Great seeing you!",
+    ...overrides,
+  };
+}
+
 function bookerZoneWhen(startsAt: string, timeZone: string): string {
   return new Intl.DateTimeFormat("en-US", {
     timeZone, weekday: "short", month: "short", day: "numeric",
@@ -68,9 +101,13 @@ function bookerZoneWhen(startsAt: string, timeZone: string): string {
   }).format(new Date(startsAt));
 }
 
+const EMPTY_FOLLOWUPS = { sent: 0, failed: 0, unstamped: 0, skippedNoEmail: 0 };
+
 beforeEach(() => {
   listDueRemindersMock.mockReset().mockResolvedValue([]);
   stampReminderSentMock.mockReset().mockResolvedValue(undefined);
+  listDueFollowupsMock.mockReset().mockResolvedValue([]);
+  stampFollowupSentMock.mockReset().mockResolvedValue(undefined);
   sendMock.mockReset().mockResolvedValue({ providerMessageId: "prov_1" });
   process.env.CRON_SECRET = SECRET;
   delete process.env.APP_ORIGIN;
@@ -112,7 +149,7 @@ describe("GET /api/cron/reminders", () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body).toEqual({ sent: 1, failed: 1, unstamped: 0 });
+    expect(body).toEqual({ sent: 1, failed: 1, unstamped: 0, followups: EMPTY_FOLLOWUPS });
     expect(stampReminderSentMock).toHaveBeenCalledTimes(1);
     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_ok");
     expect(stampReminderSentMock).not.toHaveBeenCalledWith(expect.anything(), "bk_fail");
@@ -132,7 +169,7 @@ describe("GET /api/cron/reminders", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 1 });
+    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 1, followups: EMPTY_FOLLOWUPS });
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
 
@@ -147,7 +184,7 @@ describe("GET /api/cron/reminders", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0 });
+    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, followups: EMPTY_FOLLOWUPS });
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_fail");
   });
@@ -240,8 +277,108 @@ describe("GET /api/cron/reminders", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body).toEqual({ sent: 0, failed: 1, unstamped: 0 });
+    expect(body).toEqual({ sent: 0, failed: 1, unstamped: 0, followups: EMPTY_FOLLOWUPS });
     expect(sendMock).not.toHaveBeenCalled();
     expect(stampReminderSentMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/cron/reminders — follow-up pass", () => {
+  it("sends the follow-up with the company's from/reply-to, then stamps it", async () => {
+    const one = followup();
+    listDueFollowupsMock.mockResolvedValue([one]);
+
+    const res = await GET(req(`Bearer ${SECRET}`));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({
+      sent: 0, failed: 0, unstamped: 0,
+      followups: { sent: 1, failed: 0, unstamped: 0, skippedNoEmail: 0 },
+    });
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "booker@example.com",
+        fromAddress: "hello@acme.com",
+        // The top-level `replyToEmail` DueFollowup carries, NOT the one
+        // nested in `branding` — see the `followup()` fixture's comment.
+        replyTo: "owner@acme.com",
+      }),
+    );
+    expect(stampFollowupSentMock).toHaveBeenCalledTimes(1);
+    expect(stampFollowupSentMock).toHaveBeenCalledWith(expect.anything(), "bk_f1");
+  });
+
+  it("never runs the follow-up pass ahead of the reminder pass's own result (reminders pass stays unchanged)", async () => {
+    const dueReminder = reminder({ bookingId: "bk_r1" });
+    const dueFollowup = followup({ bookingId: "bk_f1" });
+    listDueRemindersMock.mockResolvedValue([dueReminder]);
+    listDueFollowupsMock.mockResolvedValue([dueFollowup]);
+
+    const res = await GET(req(`Bearer ${SECRET}`));
+    const body = await res.json();
+
+    expect(body).toEqual({
+      sent: 1, failed: 0, unstamped: 0,
+      followups: { sent: 1, failed: 0, unstamped: 0, skippedNoEmail: 0 },
+    });
+    expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_r1");
+    expect(stampFollowupSentMock).toHaveBeenCalledWith(expect.anything(), "bk_f1");
+  });
+
+  // Send-then-stamp pin, mirroring the reminder pass's own pinned test: a
+  // mutant that stamps before sending would make stampFollowupSentMock see
+  // the failing booking id too, since its stamp would fire before the send
+  // that's supposed to guard it ever threw.
+  it("counts a failing follow-up send as failed and does NOT stamp it (send-then-stamp pin)", async () => {
+    const failing = followup({ bookingId: "bk_f_fail" });
+    listDueFollowupsMock.mockResolvedValue([failing]);
+    sendMock.mockRejectedValueOnce(new Error("provider down"));
+
+    const res = await GET(req(`Bearer ${SECRET}`));
+    const body = await res.json();
+
+    expect(body.followups).toEqual({ sent: 0, failed: 1, unstamped: 0, skippedNoEmail: 0 });
+    expect(stampFollowupSentMock).not.toHaveBeenCalled();
+  });
+
+  it("counts a follow-up with no contact email as skippedNoEmail, sends nothing, stamps nothing", async () => {
+    const noEmail = followup({ bookingId: "bk_f_noemail", contactEmail: null });
+    listDueFollowupsMock.mockResolvedValue([noEmail]);
+
+    const res = await GET(req(`Bearer ${SECRET}`));
+    const body = await res.json();
+
+    // Distinct from the reminder pass's null-email handling: that counts
+    // toward `failed`, this counts toward its own `skippedNoEmail` bucket —
+    // a follow-up with no email retries harmlessly forever until the
+    // 25h window passes it by, so it is never a "failure" to report.
+    expect(body.followups).toEqual({ sent: 0, failed: 0, unstamped: 0, skippedNoEmail: 1 });
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(stampFollowupSentMock).not.toHaveBeenCalled();
+  });
+
+  it("stamp failure after a successful follow-up send counts as unstamped, not failed", async () => {
+    const one = followup({ bookingId: "bk_f_unstamped" });
+    listDueFollowupsMock.mockResolvedValue([one]);
+    stampFollowupSentMock.mockRejectedValueOnce(new Error("db unavailable"));
+
+    const res = await GET(req(`Bearer ${SECRET}`));
+    const body = await res.json();
+
+    expect(body.followups).toEqual({ sent: 1, failed: 0, unstamped: 1, skippedNoEmail: 0 });
+  });
+
+  it("falls back to the default follow-up copy when followupBody is empty", async () => {
+    const one = followup({ followupBody: "" });
+    listDueFollowupsMock.mockResolvedValue([one]);
+
+    await GET(req(`Bearer ${SECRET}`));
+
+    const sendArgs = sendMock.mock.calls[0]![0] as { body: string };
+    expect(sendArgs.body).toContain(
+      "Thanks for coming in! If you have any questions or want to book again, "
+      + "just reply to this email.",
+    );
   });
 });
