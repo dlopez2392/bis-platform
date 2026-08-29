@@ -13,14 +13,34 @@ import { buildSummaryInput, composeSummary } from "./summarize";
  */
 export async function generateSummary(
   state: CallState,
-  deps?: { fetchImpl?: typeof fetch },
+  opts?: { timezone?: string; fetchImpl?: typeof fetch },
 ): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   let prose = "";
 
   if (apiKey) {
-    const fetchImpl = deps?.fetchImpl ?? fetch;
+    const fetchImpl = opts?.fetchImpl ?? fetch;
     try {
+      const systemRules = [
+        "Summarize this front-desk call for staff in 3-4 sentences.",
+        "The BOOKED and INTAKE sections are the system's own records and are authoritative.",
+        "Only state that an appointment was booked if BOOKED lists one; if BOOKED is (none), say plainly that no appointment was recorded.",
+        "Only state that contact details were captured if INTAKE lists them; if INTAKE is (none), say plainly that none were captured.",
+        "If the caller asked for something the records do not show, say what they asked for and that it was not completed — do not describe it as done.",
+        "Never invent names, phone numbers, email addresses or times that do not appear in the input.",
+        "Always write the summary in English (it is staff-facing), regardless of the language spoken on the call.",
+      ];
+      // BOOKED times in the input are raw UTC (see summarize.ts's fact line,
+      // which stays that way deliberately). Left alone, the prose model
+      // renders that UTC instant as if it were already local — a booking at
+      // 14:00 UTC became "2:00 PM" in a production summary when the account's
+      // actual local time was 9:00 AM Central. Only added when a timezone is
+      // known; with none, there is nothing correct to convert to.
+      if (opts?.timezone) {
+        systemRules.push(
+          `State all dates and times in the ${opts.timezone} timezone in natural local form (e.g. 9:00 AM Central). Never present a UTC time as if it were local.`,
+        );
+      }
       const r = await fetchImpl("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
@@ -29,15 +49,7 @@ export async function generateSummary(
           messages: [
             {
               role: "system",
-              content: [
-                "Summarize this front-desk call for staff in 3-4 sentences.",
-                "The BOOKED and INTAKE sections are the system's own records and are authoritative.",
-                "Only state that an appointment was booked if BOOKED lists one; if BOOKED is (none), say plainly that no appointment was recorded.",
-                "Only state that contact details were captured if INTAKE lists them; if INTAKE is (none), say plainly that none were captured.",
-                "If the caller asked for something the records do not show, say what they asked for and that it was not completed — do not describe it as done.",
-                "Never invent names, phone numbers, email addresses or times that do not appear in the input.",
-                "Always write the summary in English (it is staff-facing), regardless of the language spoken on the call.",
-              ].join(" "),
+              content: systemRules.join(" "),
             },
             { role: "user", content: buildSummaryInput(state) },
           ],

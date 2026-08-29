@@ -471,7 +471,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const finishCtx: FinishContext = {
       db, accountId, accountName: accountRow.name, branding,
       notifyEmails: calendar.notify_emails, callerNumber, origin,
-      profileLanguage: profile.languages,
+      profileLanguage: profile.languages, timezone: accountRow.timezone,
     };
 
     // --- Step 13: accept the call, then IMMEDIATELY schedule the lifecycle

@@ -25,6 +25,10 @@ export interface FinishContext {
    *  off a browser request that might carry no host header. */
   origin: string;
   profileLanguage: "en" | "es" | "both";
+  /** IANA zone the account operates in (e.g. "America/Chicago"). Threaded
+   *  into generateSummary so the prose states booking times in local form
+   *  instead of the raw UTC the booking records carry. */
+  timezone: string;
 }
 
 export interface FinishMeta {
@@ -149,7 +153,7 @@ export async function finishCall(
 
   let summary: string;
   try {
-    summary = await generateSummary(state);
+    summary = await generateSummary(state, { timezone: ctx.timezone });
   } catch (e) {
     console.error(`finishCall: generateSummary failed, falling back to fact line: ${String(e)}`);
     summary = summaryFactLine(state);

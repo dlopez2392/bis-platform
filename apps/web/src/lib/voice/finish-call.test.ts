@@ -13,7 +13,8 @@ vi.mock("@/lib/email", () => ({
     return { send: (...a: unknown[]) => emailRefs.send(...a) };
   },
 }));
-vi.mock("./summary-service", () => ({ generateSummary: vi.fn().mockResolvedValue("RECORDED — test.") }));
+const summaryMocks = vi.hoisted(() => ({ generateSummary: vi.fn() }));
+vi.mock("./summary-service", () => ({ generateSummary: summaryMocks.generateSummary }));
 
 import type { serviceDb } from "@bis/db";
 import { finishCall, type FinishContext } from "./finish-call";
@@ -24,12 +25,13 @@ const ctx: FinishContext = {
   branding: { brandName: null, brandLogoPath: null, brandColor: null, brandNeutral: null,
     brandCorners: null, brandType: null, brandMode: null, replyToEmail: null },
   notifyEmails: ["staff@example.com"], callerNumber: "+19562921696",
-  origin: "https://x.example", profileLanguage: "both",
+  origin: "https://x.example", profileLanguage: "both", timezone: "America/Chicago",
 };
 const meta = { callRowId: "call1", startedAt: new Date("2027-06-01T12:00:00Z"), endedAt: new Date("2027-06-01T12:02:00Z") };
 
 beforeEach(() => {
   Object.values(dbMocks).forEach((m) => m.mockReset());
+  summaryMocks.generateSummary.mockReset().mockResolvedValue("RECORDED — test.");
   emailRefs.providerShouldThrow = false;
   emailRefs.send.mockReset().mockResolvedValue({ providerMessageId: "x" });
   dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: false });
@@ -124,6 +126,12 @@ describe("finishCall", () => {
     expect(dbMocks.createContact).not.toHaveBeenCalled();
     expect(dbMocks.finishCallRow).toHaveBeenCalledWith({}, "a1", "call1",
       expect.objectContaining({ outcome: "booked", contactId: "ct-existing", bookingId: "bk1" }));
+  });
+  it("passes ctx.timezone through to generateSummary so prose speaks the account's local zone", async () => {
+    const s = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
+      { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
+    await finishCall(s, ctx, meta);
+    expect(summaryMocks.generateSummary).toHaveBeenCalledWith(s, expect.objectContaining({ timezone: "America/Chicago" }));
   });
   it("a bilingual-profile call whose caller turns are Spanish stores language: es on the row", async () => {
     const s = withLead(withTranscript(emptyCallState(),
