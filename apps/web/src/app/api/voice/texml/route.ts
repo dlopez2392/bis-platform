@@ -16,6 +16,7 @@
 import { NextResponse } from "next/server";
 import { toE164 } from "@/lib/voice/phone-number";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
+import { callAnswerable } from "@/lib/voice/accept-gate";
 
 export const runtime = "nodejs";
 
@@ -69,9 +70,16 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
       return { kind: "refuse", languages: "en" };
     }
     const profile = await getVoiceProfile(db, row.account_id);
-    if (!profile || !profile.enabled) {
+    const gate = callAnswerable({ status: row.status, profile });
+    if (!gate.answerable) {
       console.log(`texml declined refuse-disabled for ${calledE164}, caller ${callerE164 ?? "unknown"}, accountId ${row.account_id}`);
       return { kind: "refuse", languages: profile?.languages ?? "en" };
+    }
+    // Unreachable — callAnswerable's "no-profile" reason above already
+    // returned for a null profile — but TypeScript can't see across that
+    // predicate call, so this narrows `profile` for everything below.
+    if (!profile) {
+      return { kind: "refuse", languages: "en" };
     }
     // Cap UX only — the caller deserves words, not dead air. The incoming
     // webhook re-checks with the same decideLimit and stays authoritative,

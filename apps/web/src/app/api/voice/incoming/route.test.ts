@@ -231,6 +231,26 @@ describe("POST /api/voice/incoming — step 7: voice profile", () => {
     const res = await POST(req());
     expect(await res.json()).toEqual({ ok: true, declined: "disabled" });
   });
+
+  it("status testing + profile.enabled === false → still reaches accept (testing answers regardless of the toggle)", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    getPhoneNumberByE164Mock.mockResolvedValue({ ...PHONE_ROW, status: "testing" });
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, enabled: false });
+    const res = await POST(req());
+    const json = await res.json();
+    expect(json.declined).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(afterMock).toHaveBeenCalledOnce();
+  });
+
+  it("status live + profile.enabled === false → still declined:disabled (live keeps requiring the toggle)", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    getPhoneNumberByE164Mock.mockResolvedValue({ ...PHONE_ROW, status: "live" });
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, enabled: false });
+    const res = await POST(req());
+    expect(await res.json()).toEqual({ ok: true, declined: "disabled" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("POST /api/voice/incoming — step 8: call caps", () => {

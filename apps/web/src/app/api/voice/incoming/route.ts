@@ -51,6 +51,7 @@ import {
   type Branding,
 } from "@bis/db";
 import { extractCallerNumber, extractCalledNumber, sipHeaderNames } from "@/lib/voice/sip-headers";
+import { callAnswerable } from "@/lib/voice/accept-gate";
 import { buildRealtimeSessionConfig, type VoicePromptInput } from "@/lib/voice/session-config";
 import { processCallEvent, type RealtimeCallEvent } from "@/lib/voice/call-events";
 import { emptyCallState } from "@/lib/voice/call-state";
@@ -375,10 +376,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
     const accountId = phoneRow.account_id;
 
-    // --- Step 7: the tenant's voice profile must exist and be enabled -----
+    // --- Step 7: the tenant's voice profile must exist and, for a live
+    // number, be enabled — a testing number answers regardless of the
+    // toggle (shared gate predicate, stays in agreement with texml's) ------
     const profile = await getVoiceProfile(db, accountId);
-    if (!profile || !profile.enabled) {
+    const gate = callAnswerable({ status: phoneRow.status, profile });
+    if (!gate.answerable) {
       log("declined: disabled", { callId, accountId });
+      return NextResponse.json({ ok: true, declined: "disabled" });
+    }
+    // Unreachable — callAnswerable's "no-profile" reason above already
+    // returned for a null profile — but TypeScript can't see across that
+    // predicate call, so this narrows `profile` for everything below.
+    if (!profile) {
       return NextResponse.json({ ok: true, declined: "disabled" });
     }
 

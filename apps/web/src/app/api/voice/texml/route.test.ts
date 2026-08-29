@@ -92,6 +92,24 @@ describe("texml route — disabled profile refusal (spoken, bilingual)", () => {
     expect(xml).toContain("<Hangup/>");
     expect(xml).not.toContain("<Dial");
   });
+  it("status testing + enabled:false profile → Dials anyway (testing answers regardless of the toggle)", async () => {
+    lookupMock.mockResolvedValue({ id: "pn1", account_id: "a1", e164: "+19565550999", telnyx_id: null, status: "testing" });
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, enabled: false, languages: "en" });
+    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999"));
+    const xml = await res.text();
+    expect(xml).toContain("<Dial");
+    expect(xml).not.toContain("<Say>Sorry");
+  });
+
+  it("status live + enabled:false profile → spoken refusal (live keeps requiring the toggle)", async () => {
+    lookupMock.mockResolvedValue({ id: "pn1", account_id: "a1", e164: "+19565550999", telnyx_id: null, status: "live" });
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, enabled: false, languages: "en" });
+    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999"));
+    const xml = await res.text();
+    expect(xml).not.toContain("<Dial");
+    expect(xml).toContain("<Say>Sorry");
+  });
+
   it("profile missing entirely → refusal defaults to English", async () => {
     profileMock.mockResolvedValue(null);
     const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999"));
