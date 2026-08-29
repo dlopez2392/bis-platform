@@ -460,7 +460,10 @@ export async function listDueFollowups(
     .select(`id, account_id, starts_at,
              calendars!inner(followup_body),
              contacts(first_name, last_name, email)`)
-    .eq("status", "booked").is("followup_sent_at", null)
+    // Widened past "booked": an operator's "Mark completed" on the list
+    // must not silence the follow-up this feature exists to send.
+    // no_show stays excluded -- deliberately deferred, not an oversight.
+    .in("status", ["booked", "completed"]).is("followup_sent_at", null)
     .eq("calendars.followup_enabled", true)
     .gte("ends_at", windowStart).lte("ends_at", windowEnd)
     .order("starts_at", { ascending: true });

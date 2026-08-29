@@ -382,6 +382,41 @@ describe("booking accessors", () => {
     });
   });
 
+  /**
+   * The "Mark completed" trap: an operator closing out a booking on the
+   * list after the meeting flips status booked -> completed, and that must
+   * NOT silence the very follow-up this feature exists to send. no_show is
+   * the opposite case -- deliberately still excluded (no-show messaging is
+   * a recorded deferred item, not an oversight).
+   */
+  it("listDueFollowups includes completed bookings, excludes no_show", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      await updateCalendarSettings(db, accountId,
+        { followupEnabled: true, followupBody: "How did it go?" }, "user_test");
+      const { id: contactId } = await createContact(db, accountId,
+        { firstName: "Status", email: "followup-status@example.com" }, "user_test");
+      const now = new Date("2027-03-11T12:00:00Z");
+
+      const completed = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId,
+          startsAt: new Date("2027-03-11T09:30:00Z"),
+          endsAt: new Date("2027-03-11T10:00:00Z") },        // ended 2h ago
+        "user_test");
+      await setBookingStatus(db, accountId, completed.id, "completed", "user_test");
+      const noShow = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId,
+          startsAt: new Date("2027-03-11T10:15:00Z"),
+          endsAt: new Date("2027-03-11T10:45:00Z") },        // ended 1h15m ago
+        "user_test");
+      await setBookingStatus(db, accountId, noShow.id, "no_show", "user_test");
+
+      const ids = (await listDueFollowups(db, now.toISOString())).map((d) => d.bookingId);
+      expect(ids).toContain(completed.id);
+      expect(ids).not.toContain(noShow.id);
+    });
+  });
+
   it("stampFollowupSent sets the stamp and a second call is idempotent", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
