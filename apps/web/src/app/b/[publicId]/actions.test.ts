@@ -11,6 +11,8 @@ const ensureConversationMock = vi.fn();
 const createMessageMock = vi.fn();
 const incrementUnreadCountMock = vi.fn();
 const setAttributionMock = vi.fn();
+const getMeetingProviderMock = vi.fn();
+const createMeetingRoomMock = vi.fn();
 
 const sendMock = vi.fn();
 // `emailProviderThrowsRef` lets one test simulate `getEmailProvider()`
@@ -113,6 +115,14 @@ vi.mock("@/app/f/[publicId]/actions", () => ({
   setAttribution: (...a: unknown[]) => setAttributionMock(...a),
 }));
 
+// Defaults to `null` in `beforeEach` — the same "video is entirely optional"
+// default the real `getMeetingProvider()` documents (no DAILY_API_KEY, no
+// meeting links). Individual tests below override with a fake provider
+// object to exercise the success/throw paths.
+vi.mock("@/lib/meetings/provider", () => ({
+  getMeetingProvider: (...a: unknown[]) => getMeetingProviderMock(...a),
+}));
+
 import { headers } from "next/headers";
 import { computeSlots, type SlotConfig } from "@/lib/booking/slots";
 import { submitBookingAction, getSlotsAction } from "./actions";
@@ -134,6 +144,9 @@ function calendarRow(overrides: Record<string, unknown> = {}) {
       sat: [["00:00", "24:00"]],
     },
     notify_emails: ["owner@acme.com"],
+    // Matches the column's own db default (0022_meetings_followups.sql) —
+    // most tests in this file book an ordinary, non-video calendar.
+    meeting_type: "in_person" as "in_person" | "phone" | "video",
     ...overrides,
   };
 }
@@ -198,6 +211,8 @@ beforeEach(() => {
   incrementUnreadCountMock.mockReset();
   setAttributionMock.mockReset().mockResolvedValue(undefined);
   sendMock.mockReset().mockResolvedValue(undefined);
+  getMeetingProviderMock.mockReset().mockReturnValue(null);
+  createMeetingRoomMock.mockReset();
   accountErrorRef.current = null;
   emailProviderThrowsRef.current = false;
 });
@@ -568,6 +583,68 @@ describe("submitBookingAction — phone normalized to E.164 at the boundary", ()
 
     expect(result.ok).toBe(true);
     expect(createContactMock.mock.calls[0]![2]).toMatchObject({ phone: "5551234" });
+  });
+});
+
+describe("submitBookingAction — video meeting rooms (Task 3)", () => {
+  function fakeProvider() {
+    return { createMeetingRoom: (...a: unknown[]) => createMeetingRoomMock(...a) };
+  }
+
+  it("video calendar with a configured provider: createBooking receives the room url, and it lands in the confirmation html (mutation: drop the meetingUrl wiring → FAILS)", async () => {
+    getCalendarByPublicIdMock.mockResolvedValue(calendarRow({ meeting_type: "video" }));
+    getMeetingProviderMock.mockReturnValue(fakeProvider());
+    createMeetingRoomMock.mockResolvedValue({ url: "https://acme.daily.co/bis-room-1" });
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+
+    expect(result.ok).toBe(true);
+    expect(createBookingMock.mock.calls[0]![2]).toMatchObject({
+      meetingUrl: "https://acme.daily.co/bis-room-1",
+    });
+    const confirmCall = sendMock.mock.calls[1]![0];
+    expect(confirmCall.html).toContain("https://acme.daily.co/bis-room-1");
+  });
+
+  it("THE PIN — the provider throwing still returns ok:true, createBooking gets no meetingUrl, and the room url is never logged (mutation: let the throw escape the try/catch → FAILS)", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    getCalendarByPublicIdMock.mockResolvedValue(calendarRow({ meeting_type: "video" }));
+    getMeetingProviderMock.mockReturnValue(fakeProvider());
+    createMeetingRoomMock.mockRejectedValue(new Error("daily rooms failed: 500"));
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+
+    expect(result.ok).toBe(true);
+    expect(createBookingMock.mock.calls[0]![2].meetingUrl).toBeUndefined();
+    // Nothing logged anywhere in this run carries a url — there isn't one to
+    // leak on the failure path, and success never logs it either.
+    for (const call of consoleErrorSpy.mock.calls) {
+      for (const arg of call) expect(String(arg)).not.toMatch(/https?:\/\//);
+    }
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("in_person calendar: the meeting provider is never even consulted (mutation: drop the meeting_type guard → FAILS)", async () => {
+    getCalendarByPublicIdMock.mockResolvedValue(calendarRow({ meeting_type: "in_person" }));
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+
+    expect(result.ok).toBe(true);
+    expect(getMeetingProviderMock).not.toHaveBeenCalled();
+    expect(createMeetingRoomMock).not.toHaveBeenCalled();
+    expect(createBookingMock.mock.calls[0]![2].meetingUrl).toBeUndefined();
+  });
+
+  it("video calendar with NO provider configured (unset DAILY_API_KEY): booking still succeeds, no room requested", async () => {
+    getCalendarByPublicIdMock.mockResolvedValue(calendarRow({ meeting_type: "video" }));
+    getMeetingProviderMock.mockReturnValue(null);
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+
+    expect(result.ok).toBe(true);
+    expect(getMeetingProviderMock).toHaveBeenCalled();
+    expect(createMeetingRoomMock).not.toHaveBeenCalled();
+    expect(createBookingMock.mock.calls[0]![2].meetingUrl).toBeUndefined();
   });
 });
 

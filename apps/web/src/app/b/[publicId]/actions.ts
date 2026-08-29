@@ -7,6 +7,7 @@ import {
   incrementUnreadCount, type CalendarRow,
 } from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
+import { getMeetingProvider } from "@/lib/meetings/provider";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { originFrom } from "@/lib/email/origin";
 import { emailBrand } from "@/lib/email/templates/shell";
@@ -248,6 +249,30 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     );
     if (!stillFree) return { ok: false, error: m["booking.public.slotTaken"], slotTaken: true };
 
+    // Video room, minted before the booking row exists (Task 3). No
+    // ordering requirement forces this after `createBooking`: the real
+    // provider's room-naming is NOT derived from `bookingId` (see
+    // `daily.ts` — it uses `crypto.randomUUID()`), so `publicId` (the
+    // calendar's, not a booking's — there is no booking yet) stands in for
+    // the interface's `bookingId` field. THE PIN: a provider that is absent
+    // (video is optional — `getMeetingProvider()` returns null when
+    // unconfigured) or that THROWS must never cost anyone their booking —
+    // this is best-effort, exactly like the emails below, one call, one
+    // try/catch, `meetingUrl` simply stays `undefined` on either path. Never
+    // logs the url, on failure (there isn't one to log) OR on success (there
+    // is, and a room link needs no story about how it got into a log).
+    let meetingUrl: string | undefined;
+    if (calendar.meeting_type === "video") {
+      const meetingProvider = getMeetingProvider();
+      if (meetingProvider) {
+        try {
+          ({ url: meetingUrl } = await meetingProvider.createMeetingRoom({ bookingId: publicId, endsAt }));
+        } catch (e) {
+          console.error(`booking ${publicId}: createMeetingRoom failed: ${String(e)}`);
+        }
+      }
+    }
+
     const created = await createContact(db, calendar.account_id, {
       firstName, lastName: lastName || undefined, email,
       // Voice stores E.164; storing web input as-typed made the same person
@@ -278,7 +303,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     try {
       ({ id: bookingId, cancelToken } = await createBooking(db, calendar.account_id, {
         calendarId: calendar.id, contactId, startsAt, endsAt,
-        note: note || undefined, bookerTimezone: bookerZone, ipHash,
+        note: note || undefined, bookerTimezone: bookerZone, ipHash, meetingUrl,
       }, ACTOR_ID, ACTOR_TYPE));
     } catch (e) {
       if (e instanceof SlotTakenError) {
@@ -380,7 +405,9 @@ export async function submitBookingAction(publicId: string, formData: FormData):
         }
       }
 
-      const { html, text } = bookingConfirmationEmail({ brand, whenBookerZone, whenCompanyZone, cancelUrl });
+      const { html, text } = bookingConfirmationEmail({
+        brand, whenBookerZone, whenCompanyZone, cancelUrl, meetingUrl,
+      });
       await provider.send({
         to: email, fromName: brand.name, fromAddress: account?.from_email ?? undefined,
         replyTo: normalizeReplyTo(account?.reply_to_email), subject: "You're booked in",

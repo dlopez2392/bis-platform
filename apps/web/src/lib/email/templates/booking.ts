@@ -73,6 +73,12 @@ export type BookingConfirmationInput = {
    *  customer nothing they didn't already see. */
   whenCompanyZone: string;
   cancelUrl: string;
+  /** Absolute video-room URL, present only when the calendar's
+   *  `meeting_type` is `"video"` AND the meeting provider minted a room
+   *  successfully — a provider that is unconfigured or that throws leaves
+   *  this `undefined` (see `b/[publicId]/actions.ts`). Same empty-vs-absent
+   *  discipline as `cancelUrl`: omitted entirely, never a link to nowhere. */
+  meetingUrl?: string;
 };
 
 /**
@@ -81,7 +87,9 @@ export type BookingConfirmationInput = {
  * Customer-facing, like `outboundEmail`: a small brand header, plain
  * paragraphs, and a plain cancel LINK rather than a button — cancelling
  * should be available, not promoted with the same visual weight as a
- * call-to-action.
+ * call-to-action. The video link, when present, is the opposite call: it IS
+ * the meeting, so it gets the `button()` treatment — more visual weight than
+ * the cancel link, not less.
  */
 export function bookingConfirmationEmail(input: BookingConfirmationInput):
   { html: string; text: string } {
@@ -91,6 +99,10 @@ export function bookingConfirmationEmail(input: BookingConfirmationInput):
     ? `<p style="margin:0 0 16px;font-size:16px;">${escapeHtml(input.whenBookerZone)}</p>`
     : `<p style="margin:0 0 4px;font-size:16px;">${escapeHtml(input.whenBookerZone)}</p>
        <p style="margin:0 0 16px;color:#71717a;">${escapeHtml(input.whenCompanyZone)} for us</p>`;
+
+  const meetingHtml = input.meetingUrl
+    ? `<p style="margin:0 0 16px;">${button(input.brand, input.meetingUrl, "Join your video meeting")}</p>`
+    : "";
 
   // `cancelUrl` arrives "" when the triggering request carried no host
   // header (`originFrom` returns null — see `b/[publicId]/actions.ts`). An
@@ -105,6 +117,7 @@ export function bookingConfirmationEmail(input: BookingConfirmationInput):
   const html = shell(input.brand, `
     <p style="margin:0 0 12px;">You're booked in.</p>
     ${whenHtml}
+    ${meetingHtml}
     ${cancelHtml}
   `);
 
@@ -113,6 +126,7 @@ export function bookingConfirmationEmail(input: BookingConfirmationInput):
     "",
     input.whenBookerZone,
     ...(sameZone ? [] : [`${input.whenCompanyZone} for us`]),
+    ...(input.meetingUrl ? ["", `Join your video meeting: ${input.meetingUrl}`] : []),
     ...(input.cancelUrl ? ["", `Cancel this booking: ${input.cancelUrl}`] : []),
   ].join("\n");
 

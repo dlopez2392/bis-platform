@@ -14,6 +14,7 @@ const WHEN_COMPANY = "Tue, Aug 26 · 2:00 PM CDT";
 const WHEN_BOOKER = "Tue, Aug 26 · 3:00 PM EDT";
 const CONTACT_URL = "https://bis-platform-six.vercel.app/dashboard/accounts/acct_1/contacts/contact_1";
 const CANCEL_URL = "https://bis-platform-six.vercel.app/book/cancel/tok_1";
+const MEETING_URL = "https://acme.daily.co/bis-abc123";
 
 describe("bookingAlertEmail", () => {
   it("carries the contact name and the when-string in both parts", () => {
@@ -130,6 +131,37 @@ describe("bookingConfirmationEmail", () => {
     // Losing the cancel link must never lose the booking confirmation itself.
     expect(html).toContain(WHEN_BOOKER);
     expect(text).toContain(WHEN_BOOKER);
+  });
+
+  it("shows a promoted \"Join your video meeting\" link in html and a plain URL line in text when meetingUrl is present", () => {
+    const { html, text } = bookingConfirmationEmail({
+      brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY,
+      cancelUrl: CANCEL_URL, meetingUrl: MEETING_URL,
+    });
+    expect(html).toContain("Join your video meeting");
+    expect(html).toContain(`href="${MEETING_URL}"`);
+    expect(text).toContain(`Join your video meeting: ${MEETING_URL}`);
+  });
+
+  it("renders the meeting link with more visual weight (a button) than the plain cancel link", () => {
+    const { html } = bookingConfirmationEmail({
+      brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY,
+      cancelUrl: CANCEL_URL, meetingUrl: MEETING_URL,
+    });
+    const meetingAnchor = html.match(new RegExp(`<a href="${MEETING_URL}"[^>]*>`))?.[0] ?? "";
+    const cancelAnchor = html.match(new RegExp(`<a href="${CANCEL_URL}"[^>]*>`))?.[0] ?? "";
+    expect(meetingAnchor).toContain("background-color");
+    expect(cancelAnchor).not.toContain("background-color");
+  });
+
+  it("omits the video meeting link entirely when meetingUrl is absent (same empty-cancelUrl precedent)", () => {
+    const { html, text } = bookingConfirmationEmail({
+      brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY, cancelUrl: CANCEL_URL,
+    });
+    expect(html).not.toContain("Join your video meeting");
+    expect(html).not.toContain(MEETING_URL);
+    expect(text).not.toContain("Join your video meeting");
+    expect(text).not.toContain(MEETING_URL);
   });
 });
 
