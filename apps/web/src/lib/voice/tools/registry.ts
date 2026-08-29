@@ -110,6 +110,22 @@ export async function runTool(
         return { state, result: { ok: false, error: "need a phone number or an email to book" } };
       }
 
+      // The email offer is enforced HERE, not just in the prompt. Three real
+      // calls on 2026-08-28 booked without the offer ever being made, under
+      // two differently-structured prompts — prose loses to flow momentum,
+      // but the model reliably corrects on tool results (slot-taken, garbled
+      // phone). So: no email and no explicit declined-attestation = no
+      // booking, and the error tells the model exactly what to do.
+      if (!email && args?.emailDeclined !== true) {
+        return {
+          state,
+          result: {
+            ok: false,
+            error: "Not booked yet. First ask the caller whether they would like an email confirmation — that is where the written confirmation and the cancellation link go. Then call book_appointment again with their email, or with emailDeclined: true if they said no.",
+          },
+        };
+      }
+
       const wanted = String(args?.startsAt ?? "");
       const all = await computeAllSlots(ctx.db, ctx.calendar, ctx.timezone, now);
       const slot = all.find((s) => s.startsAt.toISOString() === new Date(wanted).toISOString());
