@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SubmitButton } from "../../submit-button";
 import { m } from "@/lib/messages";
+import { DEFAULT_FOLLOWUP_BODY } from "@/lib/email/templates/followup";
 import {
   DEFAULT_CLOSE_TIME, DEFAULT_OPEN_TIME, openHoursToRows, seedTimeOnPickerOpen,
   type WeekdayKey,
@@ -31,6 +32,12 @@ const BUFFER_OPTIONS = [0, 5, 10, 15, 30];
 const NOTICE_OPTIONS = [1, 2, 4, 8, 12, 24, 48, 72];
 const ADVANCE_OPTIONS = [7, 14, 30, 45, 60, 90];
 
+const MEETING_TYPE_OPTIONS: { value: CalendarRow["meeting_type"]; label: string }[] = [
+  { value: "in_person", label: m["calendar.settings.meetingType.inPerson"] },
+  { value: "phone", label: m["calendar.settings.meetingType.phone"] },
+  { value: "video", label: m["calendar.settings.meetingType.video"] },
+];
+
 export function CalendarSettings({
   isAgency, calendar, action,
 }: {
@@ -42,6 +49,15 @@ export function CalendarSettings({
 }) {
   const [enabled, setEnabled] = useState(calendar.enabled);
   const [notifyEmailsText, setNotifyEmailsText] = useState(calendar.notify_emails.join("\n"));
+  const [followupEnabled, setFollowupEnabled] = useState(calendar.followup_enabled);
+  // Pre-filled with the send-time default when the operator never wrote one
+  // — the point is the operator sees exactly what will go out, not an empty
+  // box that mysteriously sends text nobody typed. `DEFAULT_FOLLOWUP_BODY` is
+  // imported, not copy-pasted, so this can never drift from what
+  // `bookingFollowupEmail` actually falls back to.
+  const [followupBodyText, setFollowupBodyText] = useState(
+    calendar.followup_body || DEFAULT_FOLLOWUP_BODY,
+  );
   const rows = useMemo(() => openHoursToRows(calendar.open_hours), [calendar.open_hours]);
 
   const notifyEmailsEmpty = notifyEmailsText
@@ -159,6 +175,17 @@ export function CalendarSettings({
                 </SelectContent>
               </Select>
             </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="meetingType">{m["calendar.settings.meetingType"]}</Label>
+              <Select name="meetingType" defaultValue={calendar.meeting_type}>
+                <SelectTrigger id="meetingType" className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {MEETING_TYPE_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
           <div className="space-y-1.5">
@@ -170,6 +197,25 @@ export function CalendarSettings({
               className="w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
             />
             <p className="text-xs text-muted-foreground">{m["calendar.settings.notifyEmailsHint"]}</p>
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-card-foreground">{m["calendar.settings.followup"]}</p>
+            <p className="text-xs text-muted-foreground">{m["calendar.settings.followupHint"]}</p>
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="followup-enabled" name="followupEnabled"
+                checked={followupEnabled} onCheckedChange={(v) => setFollowupEnabled(v === true)}
+              />
+              <Label htmlFor="followup-enabled">{m["calendar.settings.followupEnabled"]}</Label>
+            </div>
+            <Label htmlFor="followupBody" className="sr-only">{m["calendar.settings.followupBody"]}</Label>
+            <textarea
+              id="followupBody" name="followupBody" rows={3}
+              value={followupBodyText}
+              onChange={(e) => setFollowupBodyText(e.target.value)}
+              className="w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            />
           </div>
 
           <SubmitButton>{m["common.save"]}</SubmitButton>

@@ -1,13 +1,22 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { serviceDb, updateCalendarSettings, setBookingStatus, type BookingStatus } from "@bis/db";
+import {
+  serviceDb, updateCalendarSettings, setBookingStatus,
+  type BookingStatus, type CalendarSettingsPatch,
+} from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 import { HOURS_FORM_DAYS, rowsToOpenHours, type HoursRow } from "./hours-form";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
+
+type MeetingType = NonNullable<CalendarSettingsPatch["meetingType"]>;
+const MEETING_TYPES: readonly MeetingType[] = ["in_person", "phone", "video"];
+function isMeetingType(v: FormDataEntryValue | null): v is MeetingType {
+  return typeof v === "string" && (MEETING_TYPES as readonly string[]).includes(v);
+}
 
 /**
  * Both audiences reach this — calendar is the client's own business data,
@@ -35,6 +44,12 @@ export async function updateCalendarSettingsAction(
     return { ok: false, error: m["calendar.settings.saveFailed"] };
   }
 
+  const meetingTypeRaw = formData.get("meetingType");
+  if (!isMeetingType(meetingTypeRaw)) {
+    return { ok: false, error: m["calendar.settings.saveFailed"] };
+  }
+  const meetingType = meetingTypeRaw;
+
   const rows: HoursRow[] = HOURS_FORM_DAYS.map((day) => ({
     day,
     from: String(formData.get(`hours_${day}_from`) ?? ""),
@@ -53,6 +68,9 @@ export async function updateCalendarSettingsAction(
       maxAdvanceDays,
       openHours: rowsToOpenHours(rows),
       notifyEmails,
+      meetingType,
+      followupEnabled: formData.get("followupEnabled") === "on",
+      followupBody: String(formData.get("followupBody") ?? ""),
     }, userId);
   } catch (e) {
     console.error(`updateCalendarSettingsAction: save failed for account ${accountId}: ${String(e)}`);

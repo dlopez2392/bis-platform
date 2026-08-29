@@ -475,6 +475,14 @@ export const m = {
   // account that is accepting bookings with nobody listed to hear about them
   // is a silent failure mode, not a valid configuration to save quietly.
   "calendar.settings.notifyEmailsWarning": "Booking is on, but no address is listed above — nobody will be notified when someone books.",
+  "calendar.settings.meetingType": "Meeting type",
+  "calendar.settings.meetingType.inPerson": "In person",
+  "calendar.settings.meetingType.phone": "Phone",
+  "calendar.settings.meetingType.video": "Video",
+  "calendar.settings.followup": "Follow-up email",
+  "calendar.settings.followupHint": "Sent the morning after an appointment ends.",
+  "calendar.settings.followupEnabled": "Send a follow-up email after appointments",
+  "calendar.settings.followupBody": "Follow-up message",
   "calendar.settings.saved": "Booking settings saved",
   "calendar.settings.saveFailed": "Could not save booking settings.",
 
