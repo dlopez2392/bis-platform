@@ -187,7 +187,13 @@ forwarding):
    confirmed with the client.
 8. **Test call** *(read from real rows, not fakeable)* — done once at
    least one row exists in `calls` for this account. An actual phone call
-   is still required to reach this state.
+   is still required to reach this state, which means the assigned number
+   has to actually be answering first: this card carries its own **Enable
+   test calls** button, a one-click flip of the number from `provisioned`
+   to `testing`. Testing answers real calls immediately, with **no
+   dependency on the Receptionist-enabled toggle** — but it does require a
+   saved voice profile (step 4 above), so the button renders **disabled**
+   with a "needs profile" note until that step is done.
 9. **Go live** — one server action that flips the number to `live` and the
    voice profile to enabled together, but only once hours, voice profile,
    number, and test call (steps 3/4/5/8 above — deliberately **not**
@@ -223,15 +229,31 @@ For this runbook's exit-gate account specifically (see "Client onboarding
    something real to say.
 3. Walk the wizard's **number** step to assign the E.164 number from
    Step 4 (optionally with its Telnyx id).
-4. On the account's **Voice** page, set the number's status to **Testing**
-   (not Live — this is the exit-gate call, not a real client going live —
-   and not through the wizard's Go-live button, which sets Live directly).
-5. On the same page, toggle **Receptionist enabled** ON and save.
+4. Back on the Setup wizard, the **test call** card now shows a live
+   **Enable test calls** button — click it. One click flips the assigned
+   number from `provisioned` to `testing` (not Live — this is the exit-gate
+   call, not a real client going live — and not the wizard's separate
+   Go-live button, which sets Live directly). See "Testing-status
+   semantics" right below before you click if the button looks disabled.
+
+**Testing-status semantics (current behavior):** a number in **Testing**
+answers real calls the moment the status write lands, **regardless of the
+Receptionist-enabled toggle** — there is nothing further to switch on for a
+testing-only call. It **does** require a saved voice profile: the wizard's
+Enable-test-calls button renders **disabled** with a "needs profile" note
+if the account has no voice profile row yet (walk step 2 above first). This
+is different from **Live**, which still genuinely requires the profile's
+own Receptionist-enabled toggle — see Step 7's Go-live note. The Voice
+page's manual status dropdown can also set `testing` directly and does not
+enforce the profile check itself; prefer the wizard button so you don't hit
+a testing number that silently declines every call.
 
 **Verify:** the Setup wizard shows **branding**, **hours**, **voice
-profile**, and **number** all ticked done; the Voice page shows the number
-under Phone numbers with status Testing, and the voice profile shows
-"Voice profile saved" with the fields you entered persisted after a reload.
+profile**, and **number** all ticked done; the test-call card's button read
+**Enable test calls** (not disabled) before you clicked it; the Voice page
+shows the number under Phone numbers with status Testing, and the voice
+profile shows "Voice profile saved" with the fields you entered persisted
+after a reload.
 
 ---
 
@@ -309,6 +331,88 @@ page but is no longer the recommended path for taking a client live.
 
 ---
 
+## Video meetings (Daily.co)
+
+Optional, per-company, off by default in the sense that it's entirely
+config-driven — there is no separate on/off toggle beyond the calendar's
+own **Meeting type** setting.
+
+1. **Get a Daily.co API key**: Daily.co dashboard → **Developers** → API
+   keys.
+2. **Set `DAILY_API_KEY` in Vercel** — Project **bis-platform**,
+   environment **Production**, type **Sensitive**. Same Remove-then-Add,
+   then-redeploy caution as Step 2's voice vars applies here too.
+3. **Set the calendar's Meeting type**: the account's **Calendar** page →
+   Settings → **Meeting type** → **Video**. (The other two options, In
+   person and Phone, never touch Daily.co at all — a room is only ever
+   created for a `video` calendar.)
+
+**DORMANT until `DAILY_API_KEY` is set**: `getMeetingProvider()`
+(`apps/web/src/lib/meetings/provider.ts`) returns `null` with no key
+configured, in every environment including production — this is a
+deliberate design choice, not a placeholder. There is no fake provider the
+way email has `fakeEmailProvider`; a video calendar with no key simply
+**books without a meeting link**, silently, the same shape as a client who
+never set video up. Nothing errors, nothing warns in the logs, the booking
+still completes — check this env var first if a video calendar's
+confirmation/reminder emails never carry a join link.
+
+**Booking behavior once the key is set**: a booking on a `video` calendar
+gets a Daily.co room created before the booking write commits (so a
+room-creation failure never leaves a half-booked slot), and the join link
+travels in the confirmation email, the reminder email, and — for voice
+bookings — is read back to the caller. **Video bookings require the
+caller's/booker's email at the tool layer**: `book_appointment` (voice) and
+the public booking form both refuse to complete a video booking without a
+valid email on file — there is no code path that books a video meeting and
+leaves the customer with no way to receive the join link. A caller who
+declines to give an email on a video calendar gets the same polite refusal
++ take-a-message fallback as any other tool-boundary decline.
+
+**Reschedules get a new room**, not a reused one — the old booking's room
+is simply allowed to expire on Daily's side, never explicitly deleted (no
+delete-room call exists in this milestone).
+
+**Verify:** with `DAILY_API_KEY` set and redeployed, book a slot on a
+`video` calendar (voice or public page) with a real email — the
+confirmation email's "Join" link should open a working Daily.co room in the
+browser for both parties.
+
+---
+
+## Follow-up emails
+
+Off by default, per-company, next-morning delivery riding the existing
+daily reminder cron (`apps/web/src/app/api/cron/reminders/route.ts` — the
+same route booking reminders already ride, Hobby-tier daily granularity).
+
+1. **Turn it on**: the account's **Calendar** page → Settings → the
+   **"Send a follow-up email"** checkbox.
+2. **Body (optional)**: the textarea directly below it. **Leave it empty to
+   use the live default copy** (`DEFAULT_FOLLOWUP_BODY`,
+   `apps/web/src/lib/email/templates/followup.ts`) — the empty textarea
+   shows that default as greyed-out placeholder text, not a value that gets
+   saved. Typing something and saving pins that exact text as the
+   company's follow-up body going forward; clearing it back to empty and
+   saving returns to the live default (the server normalizes a
+   default-matching save back to `""` — saving never accidentally freezes
+   the default text in place, even if a future edit changes what the
+   "default" is).
+3. **Who gets one**: every booking with a saved contact email, the morning
+   after the appointment, sent once (`followup_sent_at` stamped
+   send-then-stamp, same pattern as booking reminders — a delivery failure
+   never gets silently marked sent). A booking with no contact email on
+   file (e.g. the recorded voice-booking `fillBlanks` gap) is skipped, not
+   retried.
+
+**Verify:** enable follow-ups on a test calendar with a short custom body,
+complete a real booking (voice or public page) with a real email, wait for
+the next daily cron tick after the appointment's end time, and confirm the
+email arrives with your custom text (or the default copy, if you left the
+body empty).
+
+---
+
 ## Env vars — reference
 
 See `.env.example` at the repo root for the full commented list (`OPENAI_*`,
@@ -334,6 +438,10 @@ Two more env vars, not voice-specific but load-bearing for this milestone:
   hardened activation procedure" above before ever setting this one; it is
   not a "set and forget" var, the TeXML app's Voice Method has to be
   flipped to POST first or every live call breaks.
+- **`DAILY_API_KEY`** — unset by default. See "Video meetings (Daily.co)"
+  above. Sensitive in Vercel. Unset behavior: not an error — video
+  calendars simply book without a meeting link, silently, in every
+  environment.
 
 ## Troubleshooting quick-reference
 
@@ -365,3 +473,22 @@ Two more env vars, not voice-specific but load-bearing for this milestone:
   deployment was redeployed after — a link/sender domain mismatch is a
   silent-discard trigger, not a bounce, so nothing in our own logs will
   flag it.
+- **Video calendar bookings have no join link:** check `DAILY_API_KEY` is
+  actually set in Vercel Production and the deployment was redeployed after
+  — this is the designed dormant behavior (no error, no fake link), not a
+  bug, until the key is live.
+- **Voice caller can't complete a booking on a video calendar:**
+  `book_appointment` refuses video bookings without a valid email at the
+  tool layer by design — confirm the caller actually gave (and the model
+  actually captured) an email; a declined/missing email should route to
+  the take-a-message fallback, not a silent failure.
+- **Follow-up email never arrives:** confirm the checkbox is ON for that
+  calendar, the booking has a saved contact email (voice bookings can lack
+  one — the recorded `fillBlanks` gap), and enough time has passed for the
+  next daily cron tick after the appointment ended — this is next-morning
+  granularity on Hobby, not real-time.
+- **Testing number doesn't answer calls:** check the wizard's test-call
+  card — if the **Enable test calls** button is disabled with a "needs
+  profile" note, the account has no saved voice profile yet (see
+  "Testing-status semantics" under Step 5); this is unrelated to the
+  Receptionist-enabled toggle, which Testing status ignores entirely.
