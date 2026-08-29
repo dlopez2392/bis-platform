@@ -8,6 +8,7 @@ import {
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
+import { DEFAULT_FOLLOWUP_BODY } from "@/lib/email/templates/followup";
 import { HOURS_FORM_DAYS, rowsToOpenHours, type HoursRow } from "./hours-form";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
@@ -59,6 +60,18 @@ export async function updateCalendarSettingsAction(
   const notifyEmails = String(formData.get("notifyEmails") ?? "")
     .split("\n").map((s) => s.trim()).filter(Boolean);
 
+  // Server-side belt for the UI's seeding fix: the textarea is seeded with
+  // the stored value only (never the default), but this normalizes the
+  // submission too, in case a body that happens to equal the default text
+  // arrives some other way (e.g. the operator typing it verbatim, or a
+  // future caller of this action that isn't the current form). A stored
+  // copy identical to `DEFAULT_FOLLOWUP_BODY` adds nothing over an empty
+  // column and would go stale the moment the default's own copy changes —
+  // so it's collapsed back to "", keeping "empty column" the single source
+  // of truth for "use the live default at send time".
+  const followupBodyRaw = String(formData.get("followupBody") ?? "");
+  const followupBody = followupBodyRaw.trim() === DEFAULT_FOLLOWUP_BODY ? "" : followupBodyRaw;
+
   try {
     await updateCalendarSettings(await dbForRequest(), accountId, {
       enabled: formData.get("enabled") === "on",
@@ -70,7 +83,7 @@ export async function updateCalendarSettingsAction(
       notifyEmails,
       meetingType,
       followupEnabled: formData.get("followupEnabled") === "on",
-      followupBody: String(formData.get("followupBody") ?? ""),
+      followupBody,
     }, userId);
   } catch (e) {
     console.error(`updateCalendarSettingsAction: save failed for account ${accountId}: ${String(e)}`);

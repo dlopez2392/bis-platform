@@ -50,14 +50,18 @@ export function CalendarSettings({
   const [enabled, setEnabled] = useState(calendar.enabled);
   const [notifyEmailsText, setNotifyEmailsText] = useState(calendar.notify_emails.join("\n"));
   const [followupEnabled, setFollowupEnabled] = useState(calendar.followup_enabled);
-  // Pre-filled with the send-time default when the operator never wrote one
-  // — the point is the operator sees exactly what will go out, not an empty
-  // box that mysteriously sends text nobody typed. `DEFAULT_FOLLOWUP_BODY` is
-  // imported, not copy-pasted, so this can never drift from what
-  // `bookingFollowupEmail` actually falls back to.
-  const [followupBodyText, setFollowupBodyText] = useState(
-    calendar.followup_body || DEFAULT_FOLLOWUP_BODY,
-  );
+  // Seeded with the STORED value ONLY — never the default. This form
+  // submits `followupBodyText` on every save, including saves of unrelated
+  // fields, so seeding it with `DEFAULT_FOLLOWUP_BODY` would silently pin
+  // the frozen default into the column on the operator's next unrelated
+  // save, breaking the contract that an empty column keeps using the LIVE
+  // default at send time (`bookingFollowupEmail` in followup.ts). The
+  // operator still sees exactly what will go out: the empty textarea shows
+  // `DEFAULT_FOLLOWUP_BODY` as its `placeholder` below — greyed, not a real
+  // value, so typing replaces it instead of appending to it.
+  // `DEFAULT_FOLLOWUP_BODY` is imported, not copy-pasted, so the preview can
+  // never drift from what `bookingFollowupEmail` actually falls back to.
+  const [followupBodyText, setFollowupBodyText] = useState(calendar.followup_body);
   const rows = useMemo(() => openHoursToRows(calendar.open_hours), [calendar.open_hours]);
 
   const notifyEmailsEmpty = notifyEmailsText
@@ -214,6 +218,7 @@ export function CalendarSettings({
               id="followupBody" name="followupBody" rows={3}
               value={followupBodyText}
               onChange={(e) => setFollowupBodyText(e.target.value)}
+              placeholder={DEFAULT_FOLLOWUP_BODY}
               className="w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
             />
           </div>

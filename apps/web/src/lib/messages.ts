@@ -480,7 +480,7 @@ export const m = {
   "calendar.settings.meetingType.phone": "Phone",
   "calendar.settings.meetingType.video": "Video",
   "calendar.settings.followup": "Follow-up email",
-  "calendar.settings.followupHint": "Sent the morning after an appointment ends.",
+  "calendar.settings.followupHint": "Sent the morning after an appointment ends. Leave blank to send our default message.",
   "calendar.settings.followupEnabled": "Send a follow-up email after appointments",
   "calendar.settings.followupBody": "Follow-up message",
   "calendar.settings.saved": "Booking settings saved",
