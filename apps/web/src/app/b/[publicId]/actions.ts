@@ -4,7 +4,7 @@ import { headers } from "next/headers";
 import {
   serviceDb, getCalendarByPublicId, createContact, createBooking, SlotTakenError,
   countRecentBookings, ensureConversation, createMessage,
-  incrementUnreadCount, type CalendarRow,
+  incrementUnreadCount,
 } from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
 import { getMeetingProvider } from "@/lib/meetings/provider";
