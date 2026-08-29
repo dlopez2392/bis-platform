@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import type { Branding } from "@bis/db";
 import { emailBrand } from "./shell";
-import { bookingAlertEmail, bookingConfirmationEmail, bookingReminderEmail } from "./booking";
+import {
+  bookingAlertEmail, bookingConfirmationEmail, bookingReminderEmail, bookingRescheduledEmail,
+} from "./booking";
 
 const UNBRANDED: Branding = {
   brandName: null, brandLogoPath: null, brandColor: null,
@@ -224,5 +226,83 @@ describe("bookingReminderEmail", () => {
     expect(html).not.toContain(MEETING_URL);
     expect(text).not.toContain("Join your video meeting");
     expect(text).not.toContain(MEETING_URL);
+  });
+});
+
+describe("bookingRescheduledEmail", () => {
+  it("says the booking MOVED — never the confirmation's 'you're booked' novelty — and carries the new when-string", () => {
+    const { html, text } = bookingRescheduledEmail({
+      brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY, cancelUrl: CANCEL_URL,
+    });
+    expect(html.toLowerCase()).toContain("moved");
+    expect(text.toLowerCase()).toContain("moved");
+    expect(html.toLowerCase()).not.toContain("you're booked");
+    expect(text.toLowerCase()).not.toContain("you're booked");
+    expect(html).toContain(WHEN_BOOKER);
+    expect(text).toContain(WHEN_BOOKER);
+  });
+
+  it("carries both zone strings when they differ, once when they match", () => {
+    const differ = bookingRescheduledEmail({
+      brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY, cancelUrl: CANCEL_URL,
+    });
+    expect(differ.html).toContain(WHEN_COMPANY);
+    expect(differ.text).toContain(WHEN_COMPANY);
+    const same = bookingRescheduledEmail({
+      brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_BOOKER, cancelUrl: CANCEL_URL,
+    });
+    expect(same.html.split(WHEN_BOOKER).length - 1).toBe(1);
+    expect(same.text.split(WHEN_BOOKER).length - 1).toBe(1);
+  });
+
+  it("promotes the NEW meeting link as a button and says it replaces the earlier one, in both parts", () => {
+    const { html, text } = bookingRescheduledEmail({
+      brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY,
+      cancelUrl: CANCEL_URL, meetingUrl: MEETING_URL,
+    });
+    expect(html).toContain("Join your video meeting");
+    expect(html).toContain(`href="${MEETING_URL}"`);
+    expect(text).toContain(`Join your video meeting: ${MEETING_URL}`);
+    // The whole reason this email exists: a same-day video reschedule leaves
+    // the customer holding the OLD confirmation's link. Both parts must say
+    // this one replaces it.
+    expect(html.toLowerCase()).toContain("replaces");
+    expect(text.toLowerCase()).toContain("replaces");
+  });
+
+  it("omits the meeting link AND the replaces-line entirely when meetingUrl is absent", () => {
+    const { html, text } = bookingRescheduledEmail({
+      brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY, cancelUrl: CANCEL_URL,
+    });
+    expect(html).not.toContain("Join your video meeting");
+    expect(html).not.toContain(MEETING_URL);
+    expect(text).not.toContain(MEETING_URL);
+    // A replaces-line with no link to replace it with would read as "your
+    // link is dead and we have nothing for you" — never render it alone.
+    expect(html.toLowerCase()).not.toContain("replaces");
+    expect(text.toLowerCase()).not.toContain("replaces");
+  });
+
+  it("links cancellation plainly and omits the line entirely when cancelUrl is empty", () => {
+    const withUrl = bookingRescheduledEmail({
+      brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY, cancelUrl: CANCEL_URL,
+    });
+    expect(withUrl.html).toContain(`href="${CANCEL_URL}"`);
+    expect(withUrl.text).toContain(CANCEL_URL);
+    const without = bookingRescheduledEmail({
+      brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY, cancelUrl: "",
+    });
+    expect(without.html).not.toContain("<a href");
+    expect(without.html.toLowerCase()).not.toContain("cancel this booking");
+    expect(without.text.toLowerCase()).not.toContain("cancel this booking");
+    expect(without.html).toContain(WHEN_BOOKER);
+    expect(without.text).toContain(WHEN_BOOKER);
+  });
+
+  it("never returns an empty text part", () => {
+    const { text } = bookingRescheduledEmail({
+      brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY, cancelUrl: CANCEL_URL,
+    });
+    expect(text.trim().length).toBeGreaterThan(0);
   });
 });

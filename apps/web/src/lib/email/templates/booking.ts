@@ -133,6 +133,77 @@ export function bookingConfirmationEmail(input: BookingConfirmationInput):
   return { html, text };
 }
 
+export type BookingRescheduledInput = {
+  brand: EmailBrand;
+  /** Pre-formatted in the booker's own zone — the NEW time, never the old. */
+  whenBookerZone: string;
+  /** Pre-formatted in the company's zone; same show-only-when-different
+   *  discipline as `BookingConfirmationInput.whenCompanyZone`. */
+  whenCompanyZone: string;
+  /** The NEW booking row's cancel link — the old row is cancelled, so its
+   *  token resolves to nothing worth mailing again. */
+  cancelUrl: string;
+  /** The NEW room's url, same present-only-when-minted discipline as
+   *  `BookingConfirmationInput.meetingUrl`. When present, the copy also says
+   *  it REPLACES the earlier confirmation's link — the whole reason this
+   *  template exists: a same-day video reschedule otherwise leaves the
+   *  customer holding a link to a room nobody will be in. */
+  meetingUrl?: string;
+};
+
+/**
+ * The email a booker gets after their booking is MOVED (today: by phone,
+ * through the voice assistant's reschedule tool).
+ *
+ * The confirmation reshaped for changed news: "moved", not "booked" — the
+ * customer already had a confirmation, so repeating its copy verbatim would
+ * read as a duplicate and bury the one fact that matters, the new time. Same
+ * customer-facing restraint and the same link-weight calls as
+ * `bookingConfirmationEmail`: video link as a button, cancel as a plain link,
+ * both omitted entirely rather than rendered empty.
+ */
+export function bookingRescheduledEmail(input: BookingRescheduledInput):
+  { html: string; text: string } {
+  const sameZone = input.whenBookerZone === input.whenCompanyZone;
+
+  const whenHtml = sameZone
+    ? `<p style="margin:0 0 16px;font-size:16px;">${escapeHtml(input.whenBookerZone)}</p>`
+    : `<p style="margin:0 0 4px;font-size:16px;">${escapeHtml(input.whenBookerZone)}</p>
+       <p style="margin:0 0 16px;color:#71717a;">${escapeHtml(input.whenCompanyZone)} for us</p>`;
+
+  const meetingHtml = input.meetingUrl
+    ? `<p style="margin:0 0 4px;">${button(input.brand, input.meetingUrl, "Join your video meeting")}</p>
+       <p style="margin:0 0 16px;color:#71717a;">This link replaces the one from your earlier confirmation.</p>`
+    : "";
+
+  // Same reasoning as `bookingConfirmationEmail`'s `cancelHtml`: an empty
+  // `cancelUrl` gets no anchor at all, never one pointing nowhere.
+  const cancelHtml = input.cancelUrl
+    ? `<p style="margin:0;"><a href="${escapeHtml(input.cancelUrl)}" style="color:#71717a;">Cancel this booking</a></p>`
+    : "";
+
+  const html = shell(input.brand, `
+    <p style="margin:0 0 12px;">Your booking has been moved.</p>
+    ${whenHtml}
+    ${meetingHtml}
+    ${cancelHtml}
+  `);
+
+  const text = [
+    "Your booking has been moved.",
+    "",
+    input.whenBookerZone,
+    ...(sameZone ? [] : [`${input.whenCompanyZone} for us`]),
+    ...(input.meetingUrl
+      ? ["", `Join your video meeting: ${input.meetingUrl}`,
+        "This link replaces the one from your earlier confirmation."]
+      : []),
+    ...(input.cancelUrl ? ["", `Cancel this booking: ${input.cancelUrl}`] : []),
+  ].join("\n");
+
+  return { html, text };
+}
+
 export type BookingReminderInput = {
   brand: EmailBrand;
   /** Pre-formatted in the booker's own zone. */

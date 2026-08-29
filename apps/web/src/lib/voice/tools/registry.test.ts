@@ -10,7 +10,7 @@ const dbMocks = vi.hoisted(() => ({
   findUpcomingBookingForPhone: vi.fn(),
   createContact: vi.fn(), createBooking: vi.fn(),
   setBookingStatus: vi.fn(), getBookingById: vi.fn(),
-  fillContactBlanks: vi.fn(),
+  fillContactBlanks: vi.fn(), getContact: vi.fn(),
 }));
 const sendMock = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", async (importOriginal) => {
@@ -391,6 +391,84 @@ describe("reschedule / cancel", () => {
       expect(result).toMatchObject({ ok: true, bookingId: "new1" });
       expect(dbMocks.createBooking).toHaveBeenCalledWith({}, "a1",
         expect.objectContaining({ meetingUrl: undefined }), "voice", "ai");
+    });
+  });
+
+  // 2026-08-29 (final-review Important): a reschedule minted a new room but
+  // sent NOTHING — a same-day video reschedule left the customer holding the
+  // OLD confirmation's expired link, with the new one existing nowhere a
+  // customer could see it.
+  describe("reschedule confirmation email", () => {
+    const newSlot = { startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z") };
+    beforeEach(() => {
+      computeAllSlotsMock.mockResolvedValue([newSlot]);
+      dbMocks.getBookingById.mockResolvedValue({ id: "old1", contact_id: "ct1", calendar_id: "cal1",
+        starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" });
+      dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "newtok99" });
+      dbMocks.setBookingStatus.mockResolvedValue(undefined);
+      dbMocks.getContact.mockResolvedValue({
+        id: "ct1", first_name: "Ana", last_name: "Ruiz", email: "ana@example.com", phone: null,
+      });
+      sendMock.mockReset().mockResolvedValue({ providerMessageId: "x" });
+    });
+
+    it("sends the contact ONE email carrying the new time and the NEW booking's cancel link", async () => {
+      const { result } = await runTool(emptyCallState(), ctx, "reschedule_appointment",
+        { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
+      expect(result).toMatchObject({ ok: true, bookingId: "new1" });
+      expect(result).not.toHaveProperty("emailFailed");
+      expect(sendMock).toHaveBeenCalledTimes(1);
+      const sent = sendMock.mock.calls[0]![0] as { to: string; html?: string; body: string };
+      expect(sent.to).toBe("ana@example.com");
+      // The NEW row's token — the old confirmation's cancel link now points
+      // at a cancelled booking, so mailing the old token again is useless.
+      expect(sent.html).toContain("https://x.example/b/pub1/cancel/newtok99");
+      expect(sent.body).toContain("https://x.example/b/pub1/cancel/newtok99");
+    });
+
+    it("a contact with no email on file gets no send and raises no flag", async () => {
+      dbMocks.getContact.mockResolvedValue({
+        id: "ct1", first_name: "Ana", last_name: "Ruiz", email: null, phone: "+19565550100",
+      });
+      const { result } = await runTool(emptyCallState(), ctx, "reschedule_appointment",
+        { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
+      expect(result).toMatchObject({ ok: true, bookingId: "new1" });
+      expect(result).not.toHaveProperty("emailFailed");
+      expect(sendMock).not.toHaveBeenCalled();
+    });
+
+    it("a video reschedule's email carries the NEW room url", async () => {
+      const videoCtx: ToolContext = {
+        ...ctx, calendar: { ...ctx.calendar, meeting_type: "video" } as unknown as CalendarRow,
+      };
+      meetingProviderMock.mockReturnValue({
+        createMeetingRoom: vi.fn().mockResolvedValue({ url: "https://video.example/new-room" }),
+      });
+      await runTool(emptyCallState(), videoCtx, "reschedule_appointment",
+        { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
+      expect(sendMock).toHaveBeenCalledTimes(1);
+      const sent = sendMock.mock.calls[0]![0] as { html?: string; body: string };
+      expect(sent.html).toContain("https://video.example/new-room");
+      expect(sent.body).toContain("https://video.example/new-room");
+    });
+
+    it("a throwing send never fails the committed reschedule — soft emailFailed flag, like book_appointment", async () => {
+      sendMock.mockRejectedValue(new Error("smtp down"));
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { result } = await runTool(emptyCallState(), ctx, "reschedule_appointment",
+        { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
+      errSpy.mockRestore();
+      expect(result).toMatchObject({ ok: true, bookingId: "new1", emailFailed: true });
+    });
+
+    it("a throwing contact lookup never fails the reschedule either — flagged, not sent", async () => {
+      dbMocks.getContact.mockRejectedValue(new Error("db blip"));
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { result } = await runTool(emptyCallState(), ctx, "reschedule_appointment",
+        { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
+      errSpy.mockRestore();
+      expect(result).toMatchObject({ ok: true, bookingId: "new1", emailFailed: true });
+      expect(sendMock).not.toHaveBeenCalled();
     });
   });
 });

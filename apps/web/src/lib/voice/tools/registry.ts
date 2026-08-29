@@ -2,7 +2,8 @@
 import {
   serviceDb,
   findUpcomingBookingForPhone,
-  createContact, fillContactBlanks, createBooking, SlotTakenError, setBookingStatus, getBookingById,
+  createContact, fillContactBlanks, getContact,
+  createBooking, SlotTakenError, setBookingStatus, getBookingById,
   type CalendarRow, type VoiceProfileRow, type Branding,
 } from "@bis/db";
 import { computeAllSlots, dayKeyInZone } from "@/lib/booking/availability";
@@ -10,7 +11,7 @@ import { toE164 } from "../phone-number";
 import { getEmailProvider } from "@/lib/email";
 import { getMeetingProvider } from "@/lib/meetings/provider";
 import { emailBrand } from "@/lib/email/templates/shell";
-import { bookingConfirmationEmail } from "@/lib/email/templates/booking";
+import { bookingConfirmationEmail, bookingRescheduledEmail } from "@/lib/email/templates/booking";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { isValidEmail } from "@/lib/forms/guards";
 import { formatWhen } from "@/lib/booking/time";
@@ -274,9 +275,9 @@ export async function runTool(
       }
 
       // Book the NEW slot first — never leave the caller with nothing.
-      let newId: string;
+      let newId: string; let newCancelToken: string;
       try {
-        ({ id: newId } = await createBooking(ctx.db, ctx.accountId, {
+        ({ id: newId, cancelToken: newCancelToken } = await createBooking(ctx.db, ctx.accountId, {
           calendarId: old.calendar_id, contactId: old.contact_id,
           startsAt: slot.startsAt, endsAt: slot.endsAt,
           meetingUrl,
@@ -286,11 +287,54 @@ export async function runTool(
         throw e;
       }
       await setBookingStatus(ctx.db, ctx.accountId, bookingId, "cancelled", "voice");
+
+      // 2026-08-29 (final-review Important): this used to end here, silently —
+      // a same-day VIDEO reschedule left the customer holding the OLD
+      // confirmation's link to a room nobody would be in, with the new link
+      // existing nowhere a customer could see it. The contact's email isn't in
+      // call state (find_my_booking matched by phone), so it's read from the
+      // contact row. Everything below is best-effort with the same invariant
+      // as book_appointment's send: the reschedule is already committed, so
+      // email trouble is a soft `emailFailed` flag for the model to voice,
+      // never a hard `ok:false` on a booking the caller now holds.
+      let emailFailed = false;
+      let contactEmail: string | null = null;
+      try {
+        const contact = await getContact(ctx.db, ctx.accountId, old.contact_id);
+        contactEmail = (contact?.email ?? "").trim() || null;
+      } catch (e) {
+        // Can't tell whether an email was on file, so flag rather than stay
+        // silent — for a video caller this is exactly the "your new link
+        // never arrived" case the flag exists to voice.
+        emailFailed = true;
+        console.error(`voice reschedule ${newId}: contact lookup failed: ${String(e)}`);
+      }
+      if (contactEmail) {
+        try {
+          const brand = emailBrand(ctx.branding, ctx.accountName);
+          const whenCompanyZone = formatWhen(slot.startsAt, ctx.timezone);
+          // The NEW row's token — the old confirmation's cancel link points at
+          // a booking that was just cancelled above.
+          const cancelUrl = `${ctx.origin}/b/${ctx.calendar.public_id}/cancel/${newCancelToken}`;
+          const { html, text } = bookingRescheduledEmail({
+            brand, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl, meetingUrl,
+          });
+          await getEmailProvider().send({
+            to: contactEmail, fromName: brand.name, fromAddress: ctx.fromEmail ?? undefined,
+            replyTo: normalizeReplyTo(ctx.branding.replyToEmail),
+            subject: "Your booking has been moved", body: text, html,
+          });
+        } catch (e) {
+          emailFailed = true;
+          console.error(`voice reschedule ${newId}: confirmation email failed: ${String(e)}`);
+        }
+      }
+
       const next = withBooking(
         { ...state, bookings: state.bookings.filter((b) => b.id !== bookingId) },
         { id: newId, contactName: "", startsAt: slot.startsAt.toISOString(), endsAt: slot.endsAt.toISOString() },
       );
-      return { state: next, result: { ok: true, bookingId: newId, startsAt: slot.startsAt.toISOString() } };
+      return { state: next, result: { ok: true, bookingId: newId, startsAt: slot.startsAt.toISOString(), ...(emailFailed ? { emailFailed: true } : {}) } };
     }
 
     case "cancel_appointment": {
