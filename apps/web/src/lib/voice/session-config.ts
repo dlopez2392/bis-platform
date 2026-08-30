@@ -22,7 +22,7 @@ export function buildRealtimeSessionConfig(input: VoicePromptInput, now: Date) {
     type: "realtime",
     model: REALTIME_MODEL,
     instructions: buildSystemPrompt(input, now),
-    tools: toolSchemas(input.bookingEnabled),
+    tools: toolSchemas(input.bookingEnabled, input.meetingType),
     audio: {
       input: {
         transcription: { model: "gpt-4o-mini-transcribe" },

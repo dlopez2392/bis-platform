@@ -75,6 +75,19 @@ describe("buildSystemPrompt", () => {
     expect(p).toMatch(/VIDEO CALL/);
     expect(p).toMatch(/Never read a web link aloud/);
   });
+  it("video line forbids the phone-only improvisation, by name", () => {
+    // Regression: 2026-08-30 live call. The caller said "No" to email and
+    // Sofía answered "We can book the appointment using just your phone
+    // number, and the business will confirm by phone" — a policy she
+    // invented on the spot. The old line said email-is-required and she
+    // recited it moments earlier; what it lacked was the explicit negative
+    // naming the exact improvisation, and the instruction to STOP collecting
+    // details.
+    const p = buildSystemPrompt(baseInput({ meetingType: "video" }), now);
+    expect(p).toMatch(/no phone-only option/i);
+    expect(p).toMatch(/NEVER offer to book with just a phone number/);
+    expect(p).toMatch(/stop collecting booking details/i);
+  });
   it("non-video meetingType omits the video line", () => {
     const p = buildSystemPrompt(baseInput({ meetingType: "in_person" }), now);
     expect(p).not.toMatch(/VIDEO CALL/);

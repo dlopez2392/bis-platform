@@ -32,6 +32,36 @@ const CORE_TOOLS = [
     parameters: { type: "object", properties: { role: { type: "string", enum: ["caller", "assistant"] }, text: { type: "string" } }, required: ["role", "text"] } },
 ] as const;
 
-export function toolSchemas(bookingEnabled: boolean) {
-  return bookingEnabled ? [...BOOKING_TOOLS, ...CORE_TOOLS] : [...CORE_TOOLS];
+// The video rewrite of book_appointment's contract. 2026-08-30, live call:
+// the caller declined email and the model invented "we can book using just
+// your phone number" — while the SYSTEM PROMPT said email-is-required
+// (recited moments earlier; prompt rules are wishes). The tool description
+// was actively working against the video gate: it said "pass their email,
+// or emailDeclined: true if they said no", which on a video calendar is a
+// booking path that does not exist (registry.ts refuses it). The contract
+// the model reads at call time must say what the tool will actually do.
+const VIDEO_BOOK_TOOL = {
+  ...BOOKING_TOOLS[1],
+  description:
+    "Book an appointment at an available ISO start time. Requires the caller's name, a phone number (their caller ID is used if they don't give one), and a working EMAIL ADDRESS — appointments at this business are VIDEO meetings and the meeting link only arrives by email. emailDeclined is NOT accepted: there is no way to book without an email and no phone-only option, so never offer one. If the caller cannot or will not give an email, stop collecting booking details and use take_message so a human can arrange it.",
+  parameters: {
+    ...BOOKING_TOOLS[1].parameters,
+    properties: {
+      ...BOOKING_TOOLS[1].parameters.properties,
+      emailDeclined: {
+        type: "boolean",
+        description: "Not accepted for this business — its video appointments cannot be booked without an email. If the caller declines, use take_message instead.",
+      },
+    },
+  },
+} as const;
+
+export function toolSchemas(
+  bookingEnabled: boolean, meetingType: "in_person" | "phone" | "video",
+) {
+  if (!bookingEnabled) return [...CORE_TOOLS];
+  const booking = meetingType === "video"
+    ? BOOKING_TOOLS.map((t) => (t.name === "book_appointment" ? VIDEO_BOOK_TOOL : t))
+    : [...BOOKING_TOOLS];
+  return [...booking, ...CORE_TOOLS];
 }

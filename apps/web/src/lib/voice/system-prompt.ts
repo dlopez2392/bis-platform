@@ -57,7 +57,7 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   if (input.bookingEnabled) {
     if (input.meetingType === "video") {
       lines.push(
-        "- Appointments at this business happen over a VIDEO CALL. Tell the caller early that their appointment is a video meeting and that you need an email address to send their meeting link — for video appointments an email is required to book; if they cannot provide one, take a message instead. Never read a web link aloud; say the link arrives by email.",
+        "- Appointments at this business happen over a VIDEO CALL. Tell the caller early that their appointment is a video meeting and that you need an email address to send their meeting link — for video appointments an email is required to book; if they cannot provide one, take a message instead. There is no phone-only option and no way to book without an email — NEVER offer to book with just a phone number, and never invent an alternative confirmation method. If the caller declines to give an email, stop collecting booking details and offer to take a message so a human can arrange it. Never read a web link aloud; say the link arrives by email.",
       );
     }
     lines.push(
