@@ -485,6 +485,7 @@ export const m = {
   "calendar.settings.followupBody": "Follow-up message",
   "calendar.settings.saved": "Booking settings saved",
   "calendar.settings.saveFailed": "Could not save booking settings.",
+  "calendar.settings.saveCrashed": "Could not save — this page may be out of date. Reload it and try again.",
 
   "calendar.bookings.title": "Upcoming bookings",
   "calendar.bookings.empty": "No upcoming bookings.",

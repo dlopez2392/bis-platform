@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SubmitButton } from "../../submit-button";
 import { m } from "@/lib/messages";
+import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { DEFAULT_FOLLOWUP_BODY } from "@/lib/email/templates/followup";
 import {
   DEFAULT_CLOSE_TIME, DEFAULT_OPEN_TIME, openHoursToRows, seedTimeOnPickerOpen,
@@ -75,11 +76,14 @@ export function CalendarSettings({
       </CardHeader>
       <CardContent>
         <form
-          action={async (formData) => {
-            const result = await action(formData);
-            if (result.ok) toast.success(m["calendar.settings.saved"]);
-            else toast.error(result.error);
-          }}
+          // notifyActionResult, not a naked await: a Save clicked in a tab
+          // that predates the current deployment REJECTS (stale server-action
+          // id) rather than returning {ok:false}, and that failure must reach
+          // the operator as a toast, never vanish (2026-08-29, live).
+          action={(formData) => notifyActionResult(() => action(formData), toast, {
+            success: m["calendar.settings.saved"],
+            crashed: m["calendar.settings.saveCrashed"],
+          })}
           className="space-y-6"
         >
           <div className="flex items-center gap-2">
