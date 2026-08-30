@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { clerkClient } from "@clerk/nextjs/server";
 import { serviceDb, setClientAccess, removeBrandLogo } from "@bis/db";
+import { deleteAccountCascade, type SweepReport } from "./fixtures/sweep";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -64,19 +65,19 @@ teardown("delete the client-access e2e fixture", async () => {
   }
 
   try {
-    // contacts has no ON DELETE behavior on its account_id FK
-    // (0003_crm_core.sql), so it must be cleared before the accounts row
-    // itself, same as events. Forms are the same shape, and the fixture now
-    // publishes one for the public-form branding assertion -- without this the
-    // accounts delete below fails on the FK, which this project has already
-    // watched happen SILENTLY once.
-    await db.from("form_submissions").delete().eq("account_id", fixture.accountId);
-    await db.from("forms").delete().eq("account_id", fixture.accountId);
-    await db.from("contacts").delete().eq("account_id", fixture.accountId);
-    await db.from("events").delete().eq("account_id", fixture.accountId);
-    const { error: delErr } = await db.from("accounts").delete().eq("id", fixture.accountId);
-    if (delErr) {
-      console.error(`e2e teardown: account delete failed: ${delErr.message}`);
+    // The sweep's cascade, not a local table list: the booking and
+    // calendar-settings journeys now run ON this fixture account
+    // (2026-08-30), leaving calendars, bookings, conversations and messages
+    // behind — all `on delete restrict` upstream of the accounts row. This
+    // file used to carry its own shorter list, which is exactly the drift
+    // that would have made the accounts delete start failing SILENTLY the
+    // day those specs moved; one exported list, two callers.
+    const report: SweepReport = {
+      accounts: [], clerkUsers: [], clerkOrgs: [], orphanObjects: [], errors: [],
+    };
+    await deleteAccountCascade(db, fixture.accountId, report);
+    for (const err of report.errors) {
+      console.error(`e2e teardown: ${err}`);
     }
   } catch (e) {
     console.error(`e2e teardown: postgres delete failed: ${String(e)}`);

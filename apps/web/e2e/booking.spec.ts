@@ -1,7 +1,7 @@
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, updateCalendarSettings } from "@bis/db";
-import { openAccountByName, SEEDED_ACCOUNT_NAME } from "./support";
+import { openFixtureCalendar } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase
 // from the Playwright runner process directly (cleanup below), not through a
@@ -83,10 +83,11 @@ async function goToDay(page: Page, weeksForward: number, dayIndex: number): Prom
 /**
  * Deletes only what this run created, in FK-child-first order — the same
  * shape `forms.spec.ts`'s `purge()` uses, extended to also check every
- * delete's own error (that spec's doesn't). This targets a contact on the
- * SHARED `Test Client One` fixture account, not a throwaway E2E account, so
- * a silently-failed delete here is a real leak on real fixture data, not
- * just this run's own sandbox.
+ * delete's own error (that spec's doesn't). Since 2026-08-30 this journey
+ * runs on the per-run FIXTURE account (see step 1), so these rows would be
+ * swept by `auth.teardown.ts`'s cascade anyway — kept because teardown only
+ * runs when a suite COMPLETES, and a same-run retry of this spec should not
+ * find the previous attempt's booking already holding the slot.
  *
  * Errors are logged, not thrown: throwing from a `finally` block REPLACES
  * whatever exception the `try` above it was already raising, which would
@@ -160,11 +161,12 @@ test("a stranger books, the operator sees it, the slot dies and revives", async 
 
   try {
     // --- Step 1: the agency configures the calendar (Task 9's own surface) ---
-    await openAccountByName(page, SEEDED_ACCOUNT_NAME);
-    await expect(page).toHaveURL(/\/contacts$/);
-    accountId = new URL(page.url()).pathname.split("/")[3]!;
-
-    await page.getByRole("link", { name: "Calendar" }).click();
+    // The per-run FIXTURE account, not `Test Client One` (2026-08-30): this
+    // journey flips calendar settings and leaves the calendar disabled when
+    // done, and there is exactly one Supabase project — on the shared seeded
+    // account those writes are PRODUCTION writes, and they wiped a live
+    // video exit-gate configuration twice in one afternoon.
+    accountId = await openFixtureCalendar(page);
     await expect(page).toHaveURL(/\/calendar$/);
 
     // Clear every day first — defensive against a prior killed run's hours

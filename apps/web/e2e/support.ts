@@ -1,4 +1,5 @@
 import { type Page, test } from "@playwright/test";
+import { existsSync, readFileSync } from "node:fs";
 import { contrastRatio } from "../src/lib/branding/color";
 
 /**
@@ -62,4 +63,43 @@ export async function openAccountByName(page: Page, accountName: string) {
     return;
   }
   await card.click();
+}
+
+/**
+ * The per-run client fixture auth.setup.ts creates and auth.teardown.ts
+ * deletes — the account for specs that MUTATE account state (calendar
+ * settings, bookings). Written on 2026-08-30, the day the booking journeys'
+ * "reset the calendar to disabled when done" convention wiped a LIVE video
+ * exit-gate configuration on `Test Client One` twice in one afternoon: there
+ * is exactly ONE Supabase project, so an e2e write to the shared seeded
+ * account IS a production write. Specs that only need to READ real rows
+ * (calls.spec's real phone calls, messaging's seeded contact) stay on
+ * `Test Client One`; anything that changes account-level state belongs here,
+ * where the whole account evaporates after the run.
+ */
+const CLIENT_FIXTURE_FILE = "e2e/.auth/client-fixture.json";
+
+export function readClientFixture(): { accountId: string; companyName: string } | null {
+  if (!existsSync(CLIENT_FIXTURE_FILE)) return null;
+  const parsed = JSON.parse(readFileSync(CLIENT_FIXTURE_FILE, "utf-8")) as {
+    accountId?: string; companyName?: string;
+  };
+  if (!parsed.accountId || !parsed.companyName) return null;
+  return { accountId: parsed.accountId, companyName: parsed.companyName };
+}
+
+/**
+ * Opens the fixture account's Calendar page directly by id (the agency
+ * session sees every account, and the id is authoritative from the fixture
+ * file — no card-by-name lookup to race). Skips with a clear reason when the
+ * fixture file is missing, e.g. a spec run that bypassed the setup project.
+ */
+export async function openFixtureCalendar(page: Page): Promise<string> {
+  const fixture = readClientFixture();
+  if (!fixture) {
+    test.skip(true, `No client fixture at ${CLIENT_FIXTURE_FILE} — the setup project creates it; run the full suite.`);
+    return "";
+  }
+  await page.goto(`/dashboard/accounts/${fixture.accountId}/calendar`);
+  return fixture.accountId;
 }

@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, updateCalendarSettings } from "@bis/db";
 import { DEFAULT_FOLLOWUP_BODY } from "../src/lib/email/templates/followup";
-import { openAccountByName, SEEDED_ACCOUNT_NAME } from "./support";
+import { openFixtureCalendar } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase
 // from the Playwright runner process directly (cleanup below), not through a
@@ -22,10 +22,11 @@ test.describe.configure({ timeout: 60_000 });
  * and `followup_body` actually persist for an `authenticated` writer.
  *
  * Resets the three columns back to their defaults in `finally`, by explicit
- * account id, so a later spec never finds `Test Client One`'s calendar
- * flipped to video/follow-up-on. Deliberately leaves `enabled`/hours/other
- * settings untouched — this journey never touches those fields through the
- * form, so nothing here should touch them in cleanup either.
+ * account id, so a later spec (or this file's own second journey) never
+ * finds the fixture account's calendar flipped to video/follow-up-on.
+ * Deliberately leaves `enabled`/hours/other settings untouched — this
+ * journey never touches those fields through the form, so nothing here
+ * should touch them in cleanup either.
  */
 async function resetMeetingFollowupSettings(accountId: string): Promise<void> {
   try {
@@ -44,11 +45,11 @@ test("an agency operator sets meeting type + follow-up, and both survive a reloa
   let accountId = "";
 
   try {
-    await openAccountByName(page, SEEDED_ACCOUNT_NAME);
-    await expect(page).toHaveURL(/\/contacts$/);
-    accountId = new URL(page.url()).pathname.split("/")[3]!;
-
-    await page.getByRole("link", { name: "Calendar" }).click();
+    // The per-run FIXTURE account, not `Test Client One` (2026-08-30): this
+    // spec's reset-to-in_person cleanup is exactly what wiped a live video
+    // exit-gate configuration — one Supabase project means shared-account
+    // e2e writes are production writes.
+    accountId = await openFixtureCalendar(page);
     await expect(page).toHaveURL(/\/calendar$/);
 
     await page.getByRole("combobox", { name: "Meeting type" }).click();
@@ -96,13 +97,14 @@ test("saving unrelated settings never writes the default follow-up text into an 
   let accountId = "";
 
   try {
-    await openAccountByName(page, SEEDED_ACCOUNT_NAME);
-    await expect(page).toHaveURL(/\/contacts$/);
-    accountId = new URL(page.url()).pathname.split("/")[3]!;
-    await resetMeetingFollowupSettings(accountId);
-
-    await page.getByRole("link", { name: "Calendar" }).click();
+    // Same fixture-account reasoning as the first journey above.
+    accountId = await openFixtureCalendar(page);
     await expect(page).toHaveURL(/\/calendar$/);
+    await resetMeetingFollowupSettings(accountId);
+    // The reset above is a serviceDb write the already-rendered form can't
+    // see — reload so the assertions below start from the clean column, not
+    // from whatever the first journey's run left painted.
+    await page.reload();
 
     const followupField = page.getByLabel("Follow-up message");
     // Empty stored column: the textarea shows nothing, not the default text

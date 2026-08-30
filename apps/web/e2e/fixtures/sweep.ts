@@ -58,7 +58,7 @@ const empty = (): SweepReport =>
  * orphaned accounts, so every step reports its own error rather than letting
  * the caller assume.
  */
-async function deleteAccountCascade(
+export async function deleteAccountCascade(
   db: Db, accountId: string, report: SweepReport,
 ): Promise<void> {
   // "bookings" then "calendars" FIRST (M13): migration 0017 made
@@ -67,7 +67,14 @@ async function deleteAccountCascade(
   // (packages/db/src/test/fixtures.ts) orders them first. Deleting contacts
   // before bookings, on a stale fixture account that ever booked anything,
   // would fail on the FK instead of sweeping the account.
-  for (const table of ["calls", "bookings", "calendars", "checklist_items", "form_submissions",
+  // "messages" then "conversations" before contacts, added when the booking
+  // and calendar-settings journeys moved onto the fixture account
+  // (2026-08-30): a web booking opens a conversation and appends messages,
+  // and both sit FK-upstream of the contacts delete below. Exported so
+  // auth.teardown.ts runs THIS list rather than a second copy that can
+  // drift — the drift already happened once (teardown lacked these tables).
+  for (const table of ["calls", "bookings", "messages", "conversations", "calendars",
+                       "checklist_items", "form_submissions",
                        "forms", "contacts", "events", "voice_profiles", "phone_numbers"]) {
     const { error } = await db.from(table).delete().eq("account_id", accountId);
     if (error) report.errors.push(`${table} delete for ${accountId}: ${error.message}`);
