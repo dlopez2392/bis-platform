@@ -61,6 +61,16 @@ describe("buildSystemPrompt", () => {
     const p = buildSystemPrompt(baseInput({ bookingEnabled: true }), now);
     expect(p).toMatch(/^- BEFORE you book: ask once whether they would like an email confirmation/m);
   });
+  it("orders the model to speak tool-provided local times and never do its own conversion", () => {
+    // Regression: 2026-08-30 live call. The model rescheduled to the asked-for
+    // 4 PM, re-read the result's raw ISO with the wrong UTC offset, decided it
+    // had booked the wrong slot, and silently moved the booking an hour
+    // forward. Tool results now carry a `local`/`startsAtLocal` rendering; the
+    // prompt must forbid manual conversion.
+    const p = buildSystemPrompt(baseInput({ bookingEnabled: true }), now);
+    expect(p).toMatch(/NEVER convert an ISO timestamp yourself/);
+    expect(p).toMatch(/local/);
+  });
   it("failed bookings must capture_lead before take_message", () => {
     const p = buildSystemPrompt(baseInput({ bookingEnabled: true }), now);
     expect(p).toMatch(/FIRST call capture_lead/);
@@ -74,6 +84,21 @@ describe("buildSystemPrompt", () => {
     const p = buildSystemPrompt(baseInput({ meetingType: "video" }), now);
     expect(p).toMatch(/VIDEO CALL/);
     expect(p).toMatch(/Never read a web link aloud/);
+  });
+  it("video prompts carry NO phone-only decline script anywhere — the generic bullets go conditional", () => {
+    // The 2026-08-30 refusal call was not improvisation after all: the
+    // GENERIC booking bullet scripts "book with the phone number alone, and
+    // say the business will confirm by phone" — Sofía followed it verbatim
+    // while the video bullet said the opposite. Contradictory instructions
+    // lose to the more specific script; on video calendars the phone-only
+    // path must not be in the prompt at all.
+    const video = buildSystemPrompt(baseInput({ meetingType: "video" }), now);
+    expect(video).not.toContain("book with the phone number alone");
+    expect(video).not.toContain("say the business will confirm by phone");
+    expect(video).not.toContain("pass emailDeclined: true");
+    const plain = buildSystemPrompt(baseInput({ meetingType: "in_person" }), now);
+    expect(plain).toContain("book with the phone number alone");
+    expect(plain).toContain("pass emailDeclined: true");
   });
   it("video line forbids the phone-only improvisation, by name", () => {
     // Regression: 2026-08-30 live call. The caller said "No" to email and

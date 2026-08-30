@@ -45,13 +45,36 @@ beforeEach(() => {
 });
 
 describe("check_availability", () => {
-  it("returns ISO starts for the requested day only, in the account zone", async () => {
+  // 2026-08-30 live call: the model rescheduled a booking to the caller's
+  // asked-for 4 PM, re-read the result's raw ISO with the wrong UTC offset,
+  // concluded it had booked the wrong slot, and "corrected" it an hour
+  // forward — announcing a time nobody asked for. Tool results therefore
+  // carry every time TWICE: `startsAt` (ISO, for tool calls) and a `local`
+  // rendering in the business's zone for the model to SAY, so it never does
+  // its own timezone math.
+  it("returns slots for the requested day with both the ISO start and a spoken local rendering", async () => {
     computeAllSlotsMock.mockResolvedValue([
       { startsAt: new Date("2027-06-01T14:00:00Z"), endsAt: new Date("2027-06-01T15:00:00Z") }, // Jun 1 in Chicago
       { startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z") }, // Jun 2
     ]);
     const { result } = await runTool(emptyCallState(), ctx, "check_availability", { date: "2027-06-01" });
-    expect(result).toEqual({ slots: ["2027-06-01T14:00:00.000Z"] });
+    const slots = (result as { slots: { startsAt: string; local: string }[] }).slots;
+    expect(slots).toHaveLength(1);
+    expect(slots[0]!.startsAt).toBe("2027-06-01T14:00:00.000Z");
+    expect(slots[0]!.local).toContain("9:00 AM");
+    expect(slots[0]!.local).toContain("CDT");
+  });
+  it("local rendering follows ctx.timezone, never the machine zone", async () => {
+    // This dev machine IS Central, so the Chicago assertions above cannot
+    // discriminate a system-zone mutant — the recorded timezone-test lesson.
+    computeAllSlotsMock.mockResolvedValue([
+      { startsAt: new Date("2027-06-01T14:00:00Z"), endsAt: new Date("2027-06-01T15:00:00Z") },
+    ]);
+    const nyCtx = { ...ctx, timezone: "America/New_York" };
+    const { result } = await runTool(emptyCallState(), nyCtx, "check_availability", { date: "2027-06-01" });
+    const slots = (result as { slots: { startsAt: string; local: string }[] }).slots;
+    expect(slots[0]!.local).toContain("10:00 AM");
+    expect(slots[0]!.local).toContain("EDT");
   });
   it("rejects a malformed date without calling the engine", async () => {
     const { result } = await runTool(emptyCallState(), ctx, "check_availability", { date: "tomorrow" });
@@ -65,7 +88,9 @@ describe("find_my_booking", () => {
     dbMocks.findUpcomingBookingForPhone.mockResolvedValue({ bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" });
     const r1 = await runTool(emptyCallState(), ctx, "find_my_booking", {});
     expect(dbMocks.findUpcomingBookingForPhone).toHaveBeenCalledWith({}, "a1", "+19562921696", expect.any(String));
-    expect(r1.result).toEqual({ found: true, bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" });
+    expect(r1.result).toMatchObject({ found: true, bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" });
+    // Spoken rendering rides along so the model never converts the ISO itself.
+    expect((r1.result as { startsAtLocal: string }).startsAtLocal).toContain("9:00 AM");
     await runTool(emptyCallState(), ctx, "find_my_booking", { phone: "(956) 555-0100" });
     expect(dbMocks.findUpcomingBookingForPhone).toHaveBeenLastCalledWith({}, "a1", "+19565550100", expect.any(String));
   });
@@ -130,6 +155,8 @@ describe("book_appointment", () => {
     const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
       { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true });
     expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
+    // Same anti-conversion contract as check_availability's `local`.
+    expect((result as { startsAtLocal: string }).startsAtLocal).toContain("9:00 AM");
     expect(sendMock).not.toHaveBeenCalled();
   });
 
@@ -305,6 +332,10 @@ describe("reschedule / cancel", () => {
     const { state, result } = await runTool(emptyCallState(), ctx, "reschedule_appointment",
       { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
     expect(result).toMatchObject({ ok: true, bookingId: "new1" });
+    // The 2026-08-30 double-reschedule: the model re-read the result's raw
+    // ISO with the wrong offset and "fixed" a correct booking an hour
+    // forward. The result now hands it the spoken time directly.
+    expect((result as { startsAtLocal: string }).startsAtLocal).toContain("9:00 AM");
     expect(calls).toEqual(["book", "cancel"]);
     expect(state.bookings.find((b) => b.id === "old1")).toBeUndefined(); // replaced, not duplicated
     expect(state.bookings.find((b) => b.id === "new1")).toMatchObject({ status: "booked" });

@@ -4,7 +4,7 @@
 // at platform semantics (booking ids, not Cal uids).
 const BOOKING_TOOLS = [
   { type: "function", name: "check_availability",
-    description: "List open appointment start times for a date.",
+    description: "List open appointment slots for a date. Each slot carries startsAt (an ISO timestamp — pass that exact value to book_appointment or reschedule_appointment) and local (the same moment rendered in the business's own timezone — this is what you SAY to the caller; never convert the ISO value yourself).",
     parameters: { type: "object", properties: { date: { type: "string", description: "YYYY-MM-DD in the business's timezone" } }, required: ["date"] } },
   { type: "function", name: "book_appointment",
     description: "Book an appointment at an available ISO start time. Requires the caller's name and a phone number (their caller ID is used if they don't give one). You MUST first ask whether they would like an email confirmation: pass their email, or emailDeclined: true if they said no. The tool refuses to book without one of the two.",

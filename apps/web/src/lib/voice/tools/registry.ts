@@ -43,6 +43,14 @@ export async function runTool(
 ): Promise<{ state: CallState; result: unknown }> {
   const now = ctx.now?.() ?? new Date();
   switch (name) {
+    // Every time a tool result names leaves this file twice: `startsAt`
+    // (ISO, what other tool calls take) and a `local`/`startsAtLocal`
+    // rendering in the ACCOUNT's zone, which is what the model SAYS.
+    // 2026-08-30 live call: the model rescheduled to the caller's asked-for
+    // 4 PM, re-read the result's raw ISO with the wrong UTC offset, decided
+    // it had hit the wrong slot, and silently moved a correct booking an
+    // hour forward. The model's own timezone math is a coin flip; these
+    // renderings make it unnecessary, and the prompt forbids it.
     case "check_availability": {
       const date = String(args?.date ?? "");
       if (!DAY_RE.test(date)) {
@@ -52,7 +60,10 @@ export async function runTool(
       const slots = all
         .filter((s) => dayKeyInZone(s.startsAt, ctx.timezone) === date)
         .slice(0, 20)
-        .map((s) => s.startsAt.toISOString());
+        .map((s) => ({
+          startsAt: s.startsAt.toISOString(),
+          local: formatWhen(s.startsAt, ctx.timezone),
+        }));
       return { state, result: { slots } };
     }
 
@@ -60,7 +71,11 @@ export async function runTool(
       const phone = toE164(String(args?.phone ?? "")) ?? ctx.callerNumber;
       if (!phone) return { state, result: { found: false } };
       const hit = await findUpcomingBookingForPhone(ctx.db, ctx.accountId, phone, now.toISOString());
-      return { state, result: hit ? { found: true, ...hit } : { found: false } };
+      if (!hit) return { state, result: { found: false } };
+      return { state, result: {
+        found: true, ...hit,
+        startsAtLocal: formatWhen(new Date(hit.startsAt), ctx.timezone),
+      } };
     }
 
     case "capture_lead": {
@@ -241,7 +256,12 @@ export async function runTool(
         id: bookingId, contactName: name,
         startsAt: slot.startsAt.toISOString(), endsAt: slot.endsAt.toISOString(),
       });
-      return { state: next, result: { ok: true, bookingId, startsAt: slot.startsAt.toISOString(), ...(emailFailed ? { emailFailed: true } : {}) } };
+      return { state: next, result: {
+        ok: true, bookingId,
+        startsAt: slot.startsAt.toISOString(),
+        startsAtLocal: formatWhen(slot.startsAt, ctx.timezone),
+        ...(emailFailed ? { emailFailed: true } : {}),
+      } };
     }
 
     case "reschedule_appointment": {
@@ -334,7 +354,12 @@ export async function runTool(
         { ...state, bookings: state.bookings.filter((b) => b.id !== bookingId) },
         { id: newId, contactName: "", startsAt: slot.startsAt.toISOString(), endsAt: slot.endsAt.toISOString() },
       );
-      return { state: next, result: { ok: true, bookingId: newId, startsAt: slot.startsAt.toISOString(), ...(emailFailed ? { emailFailed: true } : {}) } };
+      return { state: next, result: {
+        ok: true, bookingId: newId,
+        startsAt: slot.startsAt.toISOString(),
+        startsAtLocal: formatWhen(slot.startsAt, ctx.timezone),
+        ...(emailFailed ? { emailFailed: true } : {}),
+      } };
     }
 
     case "cancel_appointment": {

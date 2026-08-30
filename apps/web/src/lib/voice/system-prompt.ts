@@ -60,21 +60,37 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
         "- Appointments at this business happen over a VIDEO CALL. Tell the caller early that their appointment is a video meeting and that you need an email address to send their meeting link — for video appointments an email is required to book; if they cannot provide one, take a message instead. There is no phone-only option and no way to book without an email — NEVER offer to book with just a phone number, and never invent an alternative confirmation method. If the caller declines to give an email, stop collecting booking details and offer to take a message so a human can arrange it. Never read a web link aloud; say the link arrives by email.",
       );
     }
+    // The decline path is MEETING-TYPE-CONDITIONAL. 2026-08-30 live call:
+    // the generic script below ("book with the phone number alone, and say
+    // the business will confirm by phone") is correct for in-person and
+    // phone calendars — and on a video calendar it directly contradicted
+    // the video bullet above. Sofía followed the specific script, not the
+    // rule, and promised a caller a phone-only video booking that cannot
+    // exist. Contradictory instructions lose to the more concrete one, so
+    // the phone-only wording must not APPEAR in a video prompt at all.
+    const isVideo = input.meetingType === "video";
+    const emailAskLine = isVideo
+      ? "- BEFORE you book: you need the caller's EMAIL ADDRESS — video appointments cannot be booked without one, and book_appointment will refuse (emailDeclined is not accepted). If they decline or cannot give one, do NOT book and do NOT keep collecting details: offer to take a message instead."
+      : "- BEFORE you book: ask once whether they would like an email confirmation — that is where the written confirmation and the cancellation link go. Do not skip this question; book_appointment will refuse to book until you pass either their email or emailDeclined: true. If they decline, pass emailDeclined: true, book with the phone number alone, and say the business will confirm by phone.";
+    const emailFallback = isVideo
+      ? "If they cannot spell it clearly or you get it wrong twice, do not book — take a message instead."
+      : "If they cannot spell it clearly or you get it wrong twice, book with the phone number alone.";
     lines.push(
       "- check_availability(date) — list open times for a date before offering any.",
       "- book_appointment(startsAt, name, email, phone, notes) — book only a time check_availability returned.",
       "- find_my_booking(phone) — when a caller wants to change or cancel an existing appointment, call this FIRST with the number they are calling from.",
       "- reschedule_appointment(bookingId, startsAt) / cancel_appointment(bookingId) — only after find_my_booking found it.",
+      "- TIMES — tool results give every time twice: startsAt (an ISO timestamp — pass that exact value to tools) and local/startsAtLocal (the time in the business's own timezone). When telling the caller a time, say the local value. NEVER convert an ISO timestamp yourself — your own timezone arithmetic is not reliable, and a tool result that looks like a different hour than you expected is YOUR conversion being wrong, never a reason to re-book or re-reschedule.",
       "",
-      `BOOKING — Appointments are ${input.slotDurationMinutes} minutes. To book you need the caller's NAME and PHONE NUMBER; their email is optional but worth asking for once, because it is where the written confirmation and the cancellation link go.`,
+      `BOOKING — Appointments are ${input.slotDurationMinutes} minutes. To book you need the caller's NAME and PHONE NUMBER; their email is ${isVideo ? "REQUIRED (video meeting link)" : "optional but worth asking for once, because it is where the written confirmation and the cancellation link go"}.`,
       "- If they are calling from their own phone, confirm you should use the number they are calling from; otherwise take the number and READ IT BACK DIGIT BY DIGIT and wait for them to confirm before you book.",
       // The ask leads its OWN bullet, deliberately. It used to sit mid-
       // paragraph inside the read-back rule below, and on the first real
       // call after that change the model skipped offering email entirely
       // (2026-08-28). A step the model must take gets a bullet; a rule for
       // handling what the caller says gets a different one.
-      "- BEFORE you book: ask once whether they would like an email confirmation — that is where the written confirmation and the cancellation link go. Do not skip this question; book_appointment will refuse to book until you pass either their email or emailDeclined: true. If they decline, pass emailDeclined: true, book with the phone number alone, and say the business will confirm by phone.",
-      "- EMAIL ADDRESSES — never trust your first hearing. ALWAYS spell the address back character by character — letters, digits, and symbols one at a time — and wait for the caller to confirm before using it. Say 'at' for @ and 'dot' for the period. If you hear the word 'plus', 'dash', 'underscore', or 'dot' INSIDE the address, ask whether they mean the symbol (+, -, _, .) — callers usually mean the symbol, and writing the word instead sends their confirmation to a nonexistent address. If they cannot spell it clearly or you get it wrong twice, book with the phone number alone. Never guess an email address.",
+      emailAskLine,
+      `- EMAIL ADDRESSES — never trust your first hearing. ALWAYS spell the address back character by character — letters, digits, and symbols one at a time — and wait for the caller to confirm before using it. Say 'at' for @ and 'dot' for the period. If you hear the word 'plus', 'dash', 'underscore', or 'dot' INSIDE the address, ask whether they mean the symbol (+, -, _, .) — callers usually mean the symbol, and writing the word instead sends their confirmation to a nonexistent address. ${emailFallback} Never guess an email address.`,
       "- Only if you cannot get a phone number either: stop trying to book, use take_message instead.",
       "- If no suitable time exists, offer another day or take a message. Confirm the details back to the caller before you book.",
       "- If a booking cannot be completed — no open time works, details are missing, or a tool fails — do NOT let the caller's details evaporate: FIRST call capture_lead with their name and what they needed, THEN take_message. Never end a call knowing the caller's name without having recorded it through a tool.",

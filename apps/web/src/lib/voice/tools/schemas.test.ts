@@ -49,4 +49,11 @@ describe("toolSchemas", () => {
     expect(names).not.toContain("book_appointment");
     expect(names).toContain("take_message");
   });
+
+  it("check_availability's contract explains the slot shape: ISO for tools, local for speech", () => {
+    const check = tool(toolSchemas(true, "in_person"), "check_availability");
+    expect(check.description).toMatch(/startsAt/);
+    expect(check.description).toMatch(/local/);
+    expect(check.description).toMatch(/say/i);
+  });
 });
