@@ -77,6 +77,13 @@ export function SetupMoveNumberButton({
       // The number step flips to done and this whole list disappears —
       // both are re-derived by the refresh, nothing is patched locally.
       router.refresh();
+    } catch {
+      // try/FINALLY alone let a stale-deployment rejection skip both toasts
+      // and propagate silently — on the one button that moves a LIVE phone
+      // number (2026-08-29 class, found in the sweep). Collapse the confirm
+      // step too, so the armed state never lingers over an unknown outcome.
+      toast.error(m["common.actionCrashed"]);
+      setConfirming(false);
     } finally {
       setIsPending(false);
     }

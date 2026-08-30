@@ -120,6 +120,7 @@ export const m = {
   "common.sort": "Sort",
   "common.none": "—",
   "common.saving": "Saving…",
+  "common.actionCrashed": "That didn't go through — this page may be out of date. Reload it and try again.",
   "common.unavailable": "—",
 
   "accounts.title": "Companies",

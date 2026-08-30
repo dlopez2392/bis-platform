@@ -39,7 +39,16 @@ export function SetupGoLiveButton({
       <form
         action={async () => {
           setError(null);
-          const result = await action();
+          // The catch exists for the stale-deployment case: a tab loaded
+          // before a redeploy REJECTS the action call outright, and without
+          // it this button fails with no error at all (2026-08-29, live).
+          let result: Awaited<ReturnType<typeof action>>;
+          try {
+            result = await action();
+          } catch {
+            setError(m["common.actionCrashed"]);
+            return;
+          }
           if (!result.ok) {
             setError(result.error);
             return;

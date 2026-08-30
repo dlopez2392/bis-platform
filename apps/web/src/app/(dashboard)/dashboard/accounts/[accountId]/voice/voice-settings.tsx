@@ -2,6 +2,7 @@
 
 import { useTransition } from "react";
 import { toast } from "sonner";
+import { notifyActionResult } from "@/lib/forms/action-feedback";
 import type { PhoneNumberRow, PhoneNumberStatus, VoiceProfileRow } from "@bis/db";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -46,11 +47,13 @@ function VoiceProfileForm({
       </CardHeader>
       <CardContent>
         <form
-          action={async (formData) => {
-            const result = await action(formData);
-            if (result.ok) toast.success(m["voice.profile.saved"]);
-            else toast.error(result.error);
-          }}
+          // notifyActionResult, not a naked await: a stale-deployment tab's
+          // save REJECTS rather than returning {ok:false} — that failure must
+          // toast, never vanish (2026-08-29 calendar-settings, live).
+          action={(formData) => notifyActionResult(() => action(formData), toast, {
+            success: m["voice.profile.saved"],
+            crashed: m["common.actionCrashed"],
+          })}
           className="space-y-6"
         >
           <div className="space-y-1.5">

@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SubmitButton } from "@/app/(dashboard)/dashboard/accounts/submit-button";
 import { m } from "@/lib/messages";
+import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { FORM_ACCENT_FALLBACK, SIDEBAR_BG, resolveSidebarAccent } from "@/lib/branding/color";
 import { panelCopy, type BrandingAudience } from "@/lib/branding/panel-copy";
 import { publicFormTheme } from "@/lib/branding/public-form-theme";
@@ -156,13 +157,14 @@ export function BrandingPanel({
               toast.error(m["branding.tooLarge"]);
               return;
             }
-            const result = await action(formData);
-            if (result.ok) {
-              toast.success(m["branding.saved"]);
-              setFileKey((k) => k + 1);
-            } else {
-              toast.error(result.error);
-            }
+            // notifyActionResult so a stale-deployment tab's REJECTED save
+            // toasts instead of vanishing (2026-08-29 calendar-settings,
+            // live). The success callback keeps this form's extra step: the
+            // file input remounts so a re-pick of the same file re-fires.
+            await notifyActionResult(() => action(formData), {
+              success: (msg) => { toast.success(msg); setFileKey((k) => k + 1); },
+              error: toast.error,
+            }, { success: m["branding.saved"], crashed: m["common.actionCrashed"] });
           }}
           className="space-y-3"
         >

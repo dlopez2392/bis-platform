@@ -34,7 +34,15 @@ export function SetupTickButton({
   return (
     <form
       action={async () => {
-        const result = await action(tick, done);
+        // The catch exists for the stale-deployment case — a rejected action
+        // call must toast, never vanish (2026-08-29, live).
+        let result: Awaited<ReturnType<typeof action>>;
+        try {
+          result = await action(tick, done);
+        } catch {
+          toast.error(m["common.actionCrashed"]);
+          return;
+        }
         if (!result.ok) {
           toast.error(m["setup.tickFailed"]);
           return;

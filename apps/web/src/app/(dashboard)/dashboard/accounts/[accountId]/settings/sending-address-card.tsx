@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SubmitButton } from "../../submit-button";
 import { m } from "@/lib/messages";
+import { notifyActionResult } from "@/lib/forms/action-feedback";
 
 /**
  * Agency-only by construction: this component is rendered from the Settings
@@ -43,11 +44,13 @@ export function SendingAddressCard({
           {m["settings.sendingAddressBody"]}
         </p>
         <form
-          action={async (formData) => {
-            const result = await action(formData);
-            if (result.ok) toast.success(m["settings.sendingAddressSaved"]);
-            else toast.error(result.error);
-          }}
+          // notifyActionResult, not a naked await: a stale-deployment tab's
+          // save REJECTS rather than returning {ok:false} — that failure must
+          // toast, never vanish (2026-08-29 calendar-settings, live).
+          action={(formData) => notifyActionResult(() => action(formData), toast, {
+            success: m["settings.sendingAddressSaved"],
+            crashed: m["common.actionCrashed"],
+          })}
           className="flex flex-col gap-3"
         >
           <Label htmlFor="fromEmail">{m["settings.sendingAddress"]}</Label>

@@ -51,7 +51,15 @@ export function SetupEnableTestCallsButton({
       <form
         action={async () => {
           setError(null);
-          const result = await action(phoneNumberId, "testing");
+          // Same stale-deployment catch as setup-go-live-button: a rejected
+          // action call must surface, never vanish (2026-08-29, live).
+          let result: Awaited<ReturnType<typeof action>>;
+          try {
+            result = await action(phoneNumberId, "testing");
+          } catch {
+            setError(m["common.actionCrashed"]);
+            return;
+          }
           if (!result.ok) {
             setError(result.error);
             return;
