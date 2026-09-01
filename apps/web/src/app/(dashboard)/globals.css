@@ -115,7 +115,12 @@ body {
    fully honors the OS setting. Un-layered on purpose: these must beat the
    Tailwind layers. */
 :focus-visible {
-  outline: 2px solid var(--accent);
+  /* var(--ring), NOT var(--accent): themed client accounts override --accent
+     on <body> with the ramp's hover-surface tint (theme-style.ts), which
+     would render keyboard focus invisible there. --ring is the token whose
+     derivation is LIFTED to ≥3:1 against bg and card for exactly this job
+     (theme.ts), and resolves to the same violet when unthemed. */
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
