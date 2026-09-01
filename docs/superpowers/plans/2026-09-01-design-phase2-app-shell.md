@@ -99,11 +99,21 @@ Commit `feat(design): grouped sidebar nav with mono labels and unread badge`.
 
 **Files:** `app-sidebar.tsx`; the setup meter needs the account's step
 state: reuse the setup page's existing derivation (find it under
-`.../setup/` — a server helper deriving the 9 steps) called from the
-LAYOUT server-side, passed as `setupProgress?: { done: number; total: number }`
-(agency + in-account only; omit → no meter). If the derivation is too
-heavy/entangled to lift cleanly, BLOCK and report rather than duplicating
-its logic.
+`.../setup/` — a server helper deriving the 9 steps).
+> **CORRECTED 2026-09-01 (Task 2 review made this binding):** originally
+> this said "called from the LAYOUT server-side, passed as
+> `setupProgress`" — impossible, the layout is an ANCESTOR of
+> `dashboard/accounts/[accountId]` and never receives the account id
+> (the exact wiring behind Task 2's Critical). Use the sanctioned
+> pattern instead: a guarded `"use server"` action in the `[accountId]`
+> segment (mirror `unread-actions.ts` — `requireAccountAccess` OUTSIDE
+> the try, returns `{ done: number; total: number }`), imported directly
+> by `AppSidebar` and read from its pathname-keyed effect, agency +
+> in-account only (early-return otherwise; a failed read hides the
+> meter, never crashes the shell). The action CALLS the setup page's
+> existing derivation — if that derivation is too heavy/entangled to
+> call cleanly from an action, BLOCK and report rather than duplicating
+> its logic.
 **Shell:** `aside` gets `h-dvh sticky top-0`; nav middle `overflow-y-auto
 min-h-0 flex-1`; footer cluster pinned at bottom (`mt-auto border-t
 border-sidebar-border pt-2`): Settings link (agency in-account), setup
