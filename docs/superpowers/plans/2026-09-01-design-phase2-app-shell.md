@@ -57,10 +57,20 @@ Run the full branding suite. Commit
 ### Task 2: grouped sidebar nav + badges
 
 **Files:** Modify `apps/web/src/components/app-sidebar.tsx`,
-`apps/web/src/lib/messages.ts`; Modify the dashboard layout (find the file
-rendering `<AppSidebar/>`) to thread `unreadTotal`; Create
-`packages/db` helper ONLY if one for summing `conversations.unread_count`
-by account does not already exist (check `messaging.ts` first).
+`apps/web/src/lib/messages.ts`; Create `packages/db` helper ONLY if one
+for summing `conversations.unread_count` by account does not already exist
+(check `messaging.ts` first).
+> **CORRECTED 2026-09-01 (review):** this task originally said to thread
+> `unreadTotal` through the dashboard layout — that wiring is IMPOSSIBLE:
+> the layout rendering `<AppSidebar/>` is an ANCESTOR of
+> `dashboard/accounts/[accountId]` and never receives a descendant
+> segment's dynamic params, so `accountId` is always undefined there. The
+> shipped architecture instead adds a guarded `"use server"` action
+> `getUnreadTotal(accountId)` in the `[accountId]` segment
+> (`unread-actions.ts`, `requireAccountAccess` + scoped `sumUnreadCount`),
+> imported directly by the client sidebar and called from an effect keyed
+> on `pathname`. Any later task needing per-account data in the sidebar
+> must use this pattern, not layout params.
 **In-account groups (both audiences, items filtered per audience as today):**
 OVERVIEW: Dashboard · CRM: Contacts, Opportunities · COMMUNICATIONS:
 Conversations, Calls, Voice(agency-only) · GROWTH: Forms, Calendar,
@@ -70,10 +80,15 @@ top-level (Companies/Blueprints) stays flat, no labels. Structure:
 collapsed; a plain `<div role="presentation">`), then items.
 **Active treatment:** replace `bg-white/10` with `bg-sidebar-accent/15
 text-white`, rail `w-[3px]` (was `w-0.5`).
-**Badge:** `unreadTotal` prop → small pill on Conversations item
+**Badge:** `unreadCount` prop → small pill on Conversations item
 (`bg-sidebar-accent text-[10px] font-medium text-sidebar rounded-full
-px-1.5 min-w-4 text-center`, `aria-label` "N unread"); collapsed state shows
-a dot (absolute top-right of icon). Hidden when 0.
+px-1.5 min-w-4 text-center`); collapsed state shows a dot (absolute
+top-right of icon). Hidden when 0.
+> **CORRECTED 2026-09-01 (review):** the original "aria-label on the
+> badge span" instruction was itself an a11y defect — name-from-content
+> would let a labelled span REPLACE the link's own name in the collapsed
+> state. The count rides on the Link's `aria-label`
+> (`"Conversations (N unread)"`); both badge spans are `aria-hidden`.
 TDD where testable (group-structure pure helper: extract
 `buildNavGroups(base, isAgency)` to `apps/web/src/lib/nav-groups.ts` with
 unit tests: grouping, audience filtering, Setup absent). e2e mirrors:

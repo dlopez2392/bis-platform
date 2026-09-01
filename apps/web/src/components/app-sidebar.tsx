@@ -33,6 +33,12 @@ import { getUnreadTotal } from "@/app/(dashboard)/dashboard/accounts/[accountId]
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
 
+// The in-account route shape; capture group 1 is the accountId segment.
+// Used both for render-time derivation (base/active id) and inside the
+// unread effect, which re-derives from pathname so its dependency list can
+// be exactly [pathname].
+const ACCOUNT_ROUTE_RE = /^\/dashboard\/accounts\/([^/]+)/;
+
 // The pure nav-groups module maps hrefs/labelKeys only (see its own doc
 // comment for why); this component owns the actual icon components and the
 // one place that maps an icon key to one.
@@ -107,27 +113,36 @@ export function AppSidebar({
     document.cookie = `sidebar_collapsed=${next}; path=/; max-age=31536000; samesite=lax`;
   }
 
-  const match = pathname.match(/^\/dashboard\/accounts\/([^/]+)/);
+  const match = pathname.match(ACCOUNT_ROUTE_RE);
   const activeAccountId = match?.[1];
   const base = activeAccountId ? `/dashboard/accounts/${activeAccountId}` : null;
 
-  // The Conversations badge's count. Re-read on every account change, not
-  // polled — a stale count until the next navigation is an acceptable
-  // trade for not hammering the DB from every open tab. See
+  // The Conversations badge's count. Re-read on every route change (soft
+  // navigations included, hence keying on pathname and re-deriving the id
+  // inside), so reading your conversations clears the pill on the very next
+  // navigation — but never polled, so an idle tab costs nothing. The count
+  // only goes stale while the user sits still on one route. See
   // unread-actions.ts for why this read happens here (an imperative Server
   // Action call) rather than the dashboard layout: that layout is an
   // ANCESTOR of dashboard/accounts/[accountId] and never receives accountId
   // through its own params, so it cannot make this read itself.
   useEffect(() => {
-    if (!activeAccountId) return;
+    const accountId = pathname.match(ACCOUNT_ROUTE_RE)?.[1];
+    if (!accountId) return;
     let cancelled = false;
-    getUnreadTotal(activeAccountId).then((count) => {
-      if (!cancelled) setUnreadState({ accountId: activeAccountId, total: count });
-    });
+    getUnreadTotal(accountId)
+      .then((count) => {
+        if (!cancelled) setUnreadState({ accountId, total: count });
+      })
+      .catch(() => {
+        // Client-leg failure (offline, the action route itself erroring)
+        // keeps the last known count — a badge must never take the shell
+        // down or surface an error of its own.
+      });
     return () => {
       cancelled = true;
     };
-  }, [activeAccountId]);
+  }, [pathname]);
   // Stale account's count never leaks under the new account's Conversations
   // item while its own fetch is still in flight — and there is nothing to
   // show at the agency top level (activeAccountId undefined), both without
@@ -273,13 +288,15 @@ export function AppSidebar({
 
       <nav className="flex flex-1 flex-col gap-0.5">
         {groups.map((group, i) => (
-          // Index, not label: the one agency top-level group has label=null
-          // and would collide on "" as a key otherwise.
+          // Label when present; only the agency top-level group has
+          // label=null and falls back to an index-based key.
           <div key={group.label ?? `group-${i}`} className="flex flex-col gap-0.5">
             {group.label ? (
-              // Hidden rather than unmounted when collapsed: the row still
-              // exists for a screen reader's document structure, it just has
-              // no rendered content or spacing in the icon-only rail.
+              // No label row in the icon-only rail. `hidden` is
+              // display:none, which removes it from the accessibility tree
+              // exactly as unmounting would — that's fine (it's
+              // role="presentation" decoration either way); hidden just
+              // keeps the markup stable across collapse toggles.
               <div
                 role="presentation"
                 className={cn(
@@ -338,6 +355,13 @@ function SidebarLink({
     <Link
       href={item.href}
       title={collapsed ? item.label : undefined}
+      // The unread count rides on the LINK's accessible name, never on the
+      // badge spans (both aria-hidden below): accessible-name computation
+      // prefers name-from-content, so a labelled span inside the link would
+      // REPLACE "Conversations" with "5 unread" in the collapsed state —
+      // and aria-label on a generic <span> is ignored by some screen-reader
+      // pairs anyway (naming prohibited on the generic role).
+      aria-label={hasUnread ? `${item.label} (${unreadCount} unread)` : undefined}
       className={cn(
         "relative flex items-center gap-3 rounded-md px-2.5 py-2 text-sm transition-colors",
         collapsed && "justify-center px-0",
@@ -356,20 +380,21 @@ function SidebarLink({
         <Icon className="size-4" aria-hidden />
         {hasUnread && collapsed ? (
           // Collapsed state: a dot rather than the pill below, since there is
-          // no room for a count beside a centered icon. aria-label carries
-          // the count for a screen reader either way — the visual dot alone
-          // says nothing.
+          // no room for a count beside a centered icon. Purely decorative —
+          // the count is announced via the Link's aria-label above.
           <span
             className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-sidebar-accent"
-            aria-label={`${unreadCount} unread`}
+            aria-hidden
           />
         ) : null}
       </span>
       {collapsed ? null : <span className="min-w-0 flex-1 truncate">{item.label}</span>}
       {hasUnread && !collapsed ? (
+        // Visual-only: the Link's aria-label already carries "(N unread)",
+        // so exposing this span's text too would double-announce the count.
         <span
           className="min-w-4 shrink-0 rounded-full bg-sidebar-accent px-1.5 text-center text-[10px] font-medium text-sidebar"
-          aria-label={`${unreadCount} unread`}
+          aria-hidden
         >
           {unreadCount}
         </span>
