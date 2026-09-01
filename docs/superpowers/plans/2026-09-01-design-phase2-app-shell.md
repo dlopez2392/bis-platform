@@ -143,12 +143,30 @@ Commit `feat(design): identity blocks with avatar chip + timezone line`.
 weekCount: calls with `started_at >= start of current week, account tz not
 required — UTC week is fine, label says "this week"). Unit tests with a
 mocked db per the house pattern in `registry.test.ts`.
-Modify `topbar.tsx` + the layout: in-account only, both audiences, and only
-when the account HAS an enabled voice profile (thread a boolean; skip the
-query otherwise). Render: on-call → violet dot with `animate-pulse`
+Modify `topbar.tsx`: in-account only, both audiences, and only when the
+account HAS an enabled voice profile.
+> **CORRECTED 2026-09-01 (third instance of the ancestor-params trap):**
+> originally "the layout ... thread a boolean" — impossible: `Topbar` is
+> mounted in the ROOT dashboard layout, which never receives
+> `[accountId]`, and the nested `[accountId]` layout renders only into
+> `main`, below the topbar. Use the sanctioned pattern (binding since the
+> Task 2 review): a guarded `"use server"` action in the `[accountId]`
+> segment (`requireAccountAccess` OUTSIDE the try — both audiences see
+> this) that FIRST checks for an enabled voice profile — no enabled
+> profile → return `null` and skip the calls queries entirely (the
+> "skip the query" semantics move server-side into the action) —
+> otherwise returns `getVoicePresence(...)`'s snapshot. Rendered by a
+> small `"use client"` presence component inside the (still server)
+> `Topbar`, reading via a pathname-keyed effect that early-returns off
+> account routes; action/transport failure renders nothing — presence
+> must never take the topbar down.
+Render: on-call → violet dot with `animate-pulse`
 (respects the global reduced-motion kill) + "Sofía · on a call"; idle →
-"✓ N calls this week" muted. Strings via `m[...]`. RECORDED DEVIATION:
-request-time snapshot, no live polling (revisit later).
+"✓ N calls this week" muted; no enabled voice profile → render NOTHING
+(not the idle state). Strings via `m[...]`. RECORDED DEVIATION:
+request-time snapshot became per-navigation snapshot (same class, reads on
+route change like the sidebar's badge/meter), still no live polling
+(revisit later).
 Commit `feat(design): topbar voice presence indicator`.
 
 ### Task 6: display face goes live
