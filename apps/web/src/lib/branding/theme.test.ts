@@ -164,6 +164,31 @@ describe("deriveTheme", () => {
                 .toBeLessThan(contrastRatio(t.foreground, t.background));
             }
   });
+
+  // Successor to the "accent distinguishable from card" check removed when
+  // accent/accentForeground came off ResolvedTheme (themeStyle no longer
+  // shadows the brand --accent token). secondary and muted are BOTH
+  // steps.subtle -- the same ramp step accent used to be -- and both still
+  // render directly on --card in live UI (bg-secondary in buttons/badges,
+  // bg-muted in quiet panels), so a subtle step collapsing into the card is
+  // the same failure the removed check caught, just reached through the two
+  // token names that still carry that relationship.
+  it("keeps secondary and muted distinguishable from card", () => {
+    for (const neutral of NEUTRALS)
+      for (const corners of CORNERS)
+        for (const type of TYPES)
+          for (const mode of MODES)
+            for (const color of ADVERSARIAL) {
+              const t = deriveTheme({ color, neutral, corners, type, mode: null }, mode)!;
+              const where = `${neutral}/${corners}/${type}/${mode}/${color}`;
+              // Not 3:1 -- a quiet surface is meant to be quiet -- but it
+              // must not collapse into the surface it appears over.
+              expect(contrastRatio(t.secondary, t.card), `secondary distinguishable from card ${where}`)
+                .toBeGreaterThanOrEqual(1.04);
+              expect(contrastRatio(t.muted, t.card), `muted distinguishable from card ${where}`)
+                .toBeGreaterThanOrEqual(1.04);
+            }
+  });
 });
 
 // The public form joins the sweep rather than getting a private one of its
