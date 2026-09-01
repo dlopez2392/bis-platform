@@ -35,3 +35,10 @@ describe("design foundation: tokens scaffolding", () => {
     expect(tokens).not.toMatch(/--ring:\s/);
   });
 });
+
+describe("design foundation: base rules", () => {
+  it("globals owns the focus ring and the reduced-motion kill switch", () => {
+    expect(globals).toMatch(/:focus-visible/);
+    expect(globals).toMatch(/prefers-reduced-motion/);
+  });
+});

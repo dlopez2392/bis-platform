@@ -110,3 +110,18 @@ body {
   color: var(--foreground);
   font-family: var(--font-sans), system-ui, sans-serif;
 }
+
+/* DESIGN.md base rules — visible keyboard focus everywhere, and motion
+   fully honors the OS setting. Un-layered on purpose: these must beat the
+   Tailwind layers. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
