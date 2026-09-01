@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  deriveSetupStatus, goLivePrereqsMet, SETUP_TICK_KEYS,
+  deriveSetupStatus, goLivePrereqsMet, reduceSetupProgress, SETUP_TICK_KEYS,
   type SetupInputs, type SetupStepState, type SetupStepKey,
 } from "./setup-status";
 
@@ -326,6 +326,34 @@ describe("goLivePrereqsMet", () => {
   it("is false for a wholly unconfigured tenant", () => {
     const steps = deriveSetupStatus(emptyInputs);
     expect(goLivePrereqsMet(steps)).toBe(false);
+  });
+});
+
+describe("reduceSetupProgress", () => {
+  it("counts done steps against the full nine for a wholly unconfigured tenant", () => {
+    const steps = deriveSetupStatus(emptyInputs);
+    expect(reduceSetupProgress(steps)).toEqual({ done: 1, total: 9 }); // account is always done
+  });
+
+  it("counts all nine as done for a fully configured, live tenant", () => {
+    // fullInputs()'s own defaults are already a fully-done tenant (profile
+    // enabled, a live number) — no overrides needed to reach 9 of 9.
+    const steps = deriveSetupStatus(fullInputs());
+    expect(reduceSetupProgress(steps)).toEqual({ done: 9, total: 9 });
+  });
+
+  it("does not count a skipped-but-not-done step as done", () => {
+    const steps = deriveSetupStatus(fullInputs({
+      fromEmail: null, ticks: { emailSkipped: true, forwardingDone: true },
+    }));
+    const email = stepFor(steps, "email");
+    expect(email.done).toBe(false);
+    expect(email.skipped).toBe(true);
+    expect(reduceSetupProgress(steps).done).toBe(8); // every step but email
+  });
+
+  it("total always reflects the number of steps passed in, not a hardcoded 9", () => {
+    expect(reduceSetupProgress([{ key: "account", done: true, skipped: false }])).toEqual({ done: 1, total: 1 });
   });
 });
 

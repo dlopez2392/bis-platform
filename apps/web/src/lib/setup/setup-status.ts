@@ -95,6 +95,16 @@ export function deriveSetupStatus(inputs: SetupInputs): SetupStepState[] {
   ];
 }
 
+/** What the sidebar's setup meter shows (app-sidebar.tsx via
+ *  dashboard/accounts/[accountId]/setup-actions.ts): how many of the steps
+ *  are done, out of how many exist. `total` reads off `steps.length` rather
+ *  than a hardcoded 9 so it stays correct if a step is ever added or
+ *  removed here — the one number this function must never duplicate from
+ *  the array it was handed. */
+export function reduceSetupProgress(steps: SetupStepState[]): { done: number; total: number } {
+  return { done: steps.filter((s) => s.done).length, total: steps.length };
+}
+
 // email/forwarding are deliberately excluded: neither blocks a tenant from
 // actually taking live calls, so gating go-live on them would be a UX lie
 // (see setup-status.test.ts's goLivePrereqsMet suite for the met-with-

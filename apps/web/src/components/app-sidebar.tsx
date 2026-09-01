@@ -30,6 +30,10 @@ import { buildNavGroups, type NavIconKey } from "@/lib/nav-groups";
 // unread-actions.ts's own doc comment for why the read has to live in the
 // [accountId] segment rather than the layout that renders this sidebar.
 import { getUnreadTotal } from "@/app/(dashboard)/dashboard/accounts/[accountId]/unread-actions";
+// Same direct-import shape as getUnreadTotal above, for the same reason —
+// see setup-actions.ts's own doc comment for why this read lives in the
+// [accountId] segment rather than this component's own layout ancestor.
+import { getSetupProgress } from "@/app/(dashboard)/dashboard/accounts/[accountId]/setup-actions";
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
 
@@ -106,6 +110,12 @@ export function AppSidebar({
   // system). Pairing lets "reset to 0 when leaving an account" fall out of
   // the read below as a derived mismatch instead of a second state write.
   const [unreadState, setUnreadState] = useState<{ accountId: string; total: number } | null>(null);
+  // Same accountId-paired shape as unreadState above, and for the same
+  // set-state-in-effect reason — see that field's own comment. `total: 0`
+  // (the account-not-found/mismatch fallback below) is indistinguishable
+  // from a genuinely 0-of-0 failed read (setup-actions.ts's own fold), which
+  // is fine: both are "don't show the meter", the row's only two states.
+  const [setupState, setSetupState] = useState<{ accountId: string; done: number; total: number } | null>(null);
 
   function toggle() {
     const next = !collapsed;
@@ -149,6 +159,47 @@ export function AppSidebar({
   // a second, effect-synchronous setState call.
   const unreadTotal = unreadState && unreadState.accountId === activeAccountId ? unreadState.total : 0;
 
+  // The footer's setup meter. Separate effect and separate action from the
+  // unread badge above — same [pathname]-keyed, id-re-derived-inside,
+  // cancelled-cleanup, catch-and-drop-on-the-client-leg shape, but Setup is
+  // agency-only where Conversations is both-audience, so this one also
+  // early-returns on !isAgency before ever calling the action (the action's
+  // own requireAgencyOnlyAccountAccess guard is defense in depth behind
+  // that, not the only thing enforcing it).
+  useEffect(() => {
+    const accountId = pathname.match(ACCOUNT_ROUTE_RE)?.[1];
+    if (!accountId || !isAgency) return;
+    let cancelled = false;
+    getSetupProgress(accountId)
+      .then((progress) => {
+        if (!cancelled) setSetupState({ accountId, ...progress });
+      })
+      .catch(() => {
+        // Client-leg failure keeps the last known progress — same reasoning
+        // as the unread badge's catch above: a sidebar row must never take
+        // the shell down or surface an error of its own.
+      });
+    return () => {
+      cancelled = true;
+    };
+    // isAgency deliberately absent: it is a prop resolved once, server-side,
+    // for this component's whole mounted lifetime (dashboard/layout.tsx's
+    // own claims check) — a session never flips it without a full reload,
+    // which remounts this component with a fresh closure anyway. Keyed on
+    // [pathname] alone, matching the unread effect above and this task's own
+    // ambiguity resolution.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname]);
+  // Paired with the account it was read for, same reasoning as unreadTotal
+  // above. `done === total` (true for both a genuinely complete setup and
+  // the action's own failed-read fold, and for the still-null pre-fetch
+  // state via the `?? { done: 0, total: 0 }` below) is the row's one hidden
+  // condition — see the meter's own render below.
+  const setupProgress =
+    setupState && setupState.accountId === activeAccountId
+      ? setupState
+      : { done: 0, total: 0 };
+
   // Grouping, audience filtering and href construction all live in the pure
   // nav-groups module (unit-tested there without React); this component only
   // resolves labelKey → copy and iconKey → icon component per item.
@@ -186,7 +237,11 @@ export function AppSidebar({
         ? ({ "--sidebar-accent": clientAccentColor } as React.CSSProperties)
         : undefined}
       className={cn(
-        "flex shrink-0 flex-col gap-3 bg-sidebar p-3 text-sidebar-foreground transition-[width] duration-200",
+        // DESIGN.md rule 10: the sidebar itself is exactly one viewport tall
+        // and pinned there (h-dvh + sticky), so its middle nav — the one
+        // child below given overflow-y-auto — is what scrolls, while the
+        // footer cluster after it stays on screen at every viewport height.
+        "sticky top-0 flex h-dvh shrink-0 flex-col gap-3 bg-sidebar p-3 text-sidebar-foreground transition-[width] duration-200",
         collapsed ? "w-16" : "w-56",
       )}
     >
@@ -286,7 +341,7 @@ export function AppSidebar({
         </div>
       ) : null}
 
-      <nav className="flex flex-1 flex-col gap-0.5">
+      <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
         {groups.map((group, i) => (
           // Label when present; only the agency top-level group has
           // label=null and falls back to an index-based key.
@@ -325,12 +380,32 @@ export function AppSidebar({
       </nav>
 
       {footer ? (
-        <div className="border-t border-sidebar-border pt-2">
+        // DESIGN.md rule 10 / "Sidebar" key pattern: pinned, always visible —
+        // `mt-auto` (belt-and-braces with `<nav>`'s own flex-1 above, which
+        // already pushes this to the bottom) plus the aside's h-dvh/sticky
+        // keep this cluster on screen at every viewport height, however long
+        // the nav list above scrolls.
+        <div className="mt-auto border-t border-sidebar-border pt-2">
           <SidebarLink
             item={footer}
             collapsed={collapsed}
             active={isNavActive(pathname, footer.href, !base)}
           />
+          {/* Agency in-account only (base set) — the agency top-level footer
+              (Dashboard link, base === null) has no account to meter, and a
+              client never reaches this branch at all (footer is null for
+              them). Hidden at done === total: a genuinely complete setup and
+              the read's own failure fold both land here, and Setup leaving
+              the nav on completion means this row IS its nav presence — see
+              setup-actions.ts. */}
+          {base && setupProgress.done !== setupProgress.total ? (
+            <SetupMeterLink
+              base={base}
+              collapsed={collapsed}
+              done={setupProgress.done}
+              total={setupProgress.total}
+            />
+          ) : null}
         </div>
       ) : null}
     </aside>
@@ -399,6 +474,67 @@ function SidebarLink({
           {unreadCount}
         </span>
       ) : null}
+    </Link>
+  );
+}
+
+/**
+ * The footer's setup-progress meter — not a plain NavItem/SidebarLink
+ * (nav-groups.ts has no "setup" icon key at all; Task 2's own comment there
+ * says why: Setup left the nav for good, this row is its whole nav
+ * presence). Its own bespoke row instead: label + right-aligned `done/total`
+ * above a 2px accent-on-white/10 bar, both wrapped in one Link so the whole
+ * row is the click target, matching every other nav row in this file.
+ *
+ * `title` mirrors SidebarLink's collapsed-tooltip convention (plain label,
+ * only when collapsed). `aria-label` carries the count ALWAYS, not only when
+ * non-zero like the unread badge above — there is no "zero" reading for
+ * setup progress that would make the count worth omitting, every render of
+ * this row has *some* steps left (see the done!==total guard that gates
+ * whether it renders at all). Same rule as SidebarLink's own aria-label:
+ * lives on the Link, never on a labelled span inside it — the bar below is
+ * `aria-hidden`, a value with no ARIA role of its own to carry, exactly the
+ * accessibility finding Task 2's review left for this task to apply.
+ */
+function SetupMeterLink({
+  base,
+  collapsed,
+  done,
+  total,
+}: {
+  base: string;
+  collapsed: boolean;
+  done: number;
+  total: number;
+}) {
+  const percent = total > 0 ? Math.round((done / total) * 100) : 0;
+  const progressText = m["setup.progress"]
+    .replace("{done}", String(done))
+    .replace("{total}", String(total));
+  return (
+    <Link
+      href={`${base}/setup`}
+      title={collapsed ? m["nav.setup"] : undefined}
+      aria-label={`${m["nav.setup"]} (${progressText})`}
+      className={cn(
+        "flex flex-col gap-1.5 rounded-md px-2.5 py-2 text-sm text-sidebar-foreground/75 transition-colors hover:bg-white/5 hover:text-sidebar-foreground",
+        // Collapsed: no room for the label/count row (hidden below), so this
+        // link keeps only the bar — full rail-button width, same reasoning
+        // as every other collapsed row's `px-0` above.
+        collapsed && "px-0",
+      )}
+    >
+      {collapsed ? null : (
+        <span className="flex items-center justify-between gap-2">
+          <span className="truncate">{m["nav.setup"]}</span>
+          <span className="shrink-0 font-mono text-xs text-sidebar-foreground/60 tabular-nums">
+            {done}/{total}
+          </span>
+        </span>
+      )}
+      <span className="h-0.5 w-full overflow-hidden rounded-full bg-white/10" aria-hidden>
+        <span className="block h-full rounded-full bg-sidebar-accent" style={{ width: `${percent}%` }} />
+      </span>
     </Link>
   );
 }
