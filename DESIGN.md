@@ -82,25 +82,16 @@ Thin marks, 4px rounded tops, hover tooltip on every mark, weekend bars
 muted (`--surface-3`), mono axis labels. Never a dual-axis chart. Text on
 charts uses text tokens, never the series color.
 
-## Installation status (2026-08-31)
+## Installation status (2026-08-31 — Phase 1 COMPLETE, tokens import LIVE)
 
-Contract, mockups, and tokens file are INSTALLED; the tokens import into
-`(dashboard)/globals.css` is DELIBERATELY DEFERRED — the contract's own
-stop-and-flag rule applied to itself. Two conflicts with the live app must be
-resolved by the first migration task, not by a blind import:
-
-1. **Token-name collision:** `globals.css` already defines `--accent` and
-   `--ring` (the shadcn set, consumed app-wide); this file defines the same
-   names with different values on `:root`. Importing as-is flips live colors.
-2. **Theme polarity:** this contract is dark-default keyed on
-   `[data-theme="light"]`; the app is light-default keyed on a `.dark` class
-   (next-themes). The bridge (next-themes `attribute="data-theme"` or a
-   selector alias) is part of migration task 1, alongside resolving #1 and
-   the `body`/`:focus-visible` base rules that would beat Tailwind's layers.
-
-Until that task lands, new UI follows this contract's RULES and PATTERNS
-(surfaces, type roles, radii, states, copy voice) while consuming the
-EXISTING globals.css variables; the token cut-over happens once, deliberately.
+The foundation cut-over shipped: `(dashboard)/globals.css` imports
+`tokens.css` first and every semantic variable resolves to a token (or a
+sanctioned literal island). New UI consumes tokens directly. The records
+below document how the two original install conflicts (token-name collision;
+theme polarity) were resolved — they are history, not open items. One
+notational deviation from this file's own DoD line: themes are keyed on the
+app's `.dark` class (next-themes), not `data-theme="light"` — verify "renders
+in dark AND light" against the `.dark` toggle.
 
 Resolved 2026-08-31 (Phase 1): tokens restructured to the app's
 `:root`(light)/`.dark` scaffolding — values unchanged; the mockup HTML
