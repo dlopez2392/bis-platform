@@ -5,8 +5,53 @@
    radius, or shadow in a component.
    ============================================================ */
 
-/* ---------- dark (default) ---------- */
+/* ---------- light (default) ---------- */
 :root {
+  /* surface ladder: page → card → nested → raised */
+  --surface-0: #F6F5FA;
+  --surface-1: #FFFFFF;
+  --surface-2: #FFFFFF;
+  --surface-3: #F1EFF7;
+
+  --line:        #E8E5F0;
+  --line-strong: #D8D4E6;
+
+  --text-1: #1D1930;
+  --text-2: #5D5876;
+  --text-3: #8B86A0;
+
+  /* accent is per-mode: desaturated on dark, full on light.
+     The per-client branding engine overrides --accent only. */
+  --accent:        #6D28D9;
+  --accent-strong: #5B21B8;
+  --accent-dim:    rgba(109, 40, 217, .09);
+  --ring-glow:     rgba(109, 40, 217, .28);
+
+  /* status — always rendered with dot + text label, never color alone */
+  --good: #15803D;  --good-bg: rgba(21, 128, 61, .10);
+  --warn: #B45309;  --warn-bg: rgba(180, 83, 9, .10);
+  --crit: #B91C1C;  --crit-bg: rgba(185, 28, 28, .09);
+
+  /* shape */
+  --radius-ctl:  8px;       /* buttons, inputs, chips  */
+  --radius-card: 11px;      /* cards, panels, drawers  */
+  --radius-pill: 999px;
+
+  /* elevation: light mode = small tight shadows */
+  --shadow-card: 0 1px 2px rgba(29,25,48,.05), 0 10px 28px -18px rgba(29,25,48,.18);
+
+  /* motion */
+  --ease-hover: 150ms cubic-bezier(.2,.7,.3,1);
+  --ease-panel: 250ms cubic-bezier(.2,.7,.3,1);
+
+  /* type roles */
+  --font-display: "Bricolage Grotesque", "Geist", sans-serif; /* titles + KPI numbers ONLY */
+  --font-ui:      "Geist", -apple-system, "Segoe UI", sans-serif;
+  --font-mono:    "Geist Mono", ui-monospace, monospace;      /* micro-labels, ids, timestamps */
+}
+
+/* ---------- dark ---------- */
+.dark {
   /* surface ladder: page → card → nested → raised */
   --surface-0: #0E0D14;
   --surface-1: #16141E;
@@ -25,7 +70,7 @@
   --accent:        #8B7CF7;
   --accent-strong: #A99EFF;
   --accent-dim:    rgba(139, 124, 247, .14);
-  --ring:          rgba(139, 124, 247, .35);
+  --ring-glow:     rgba(139, 124, 247, .35);
 
   /* status — always rendered with dot + text label, never color alone */
   --good: #4ADE97;  --good-bg: rgba(74, 222, 151, .12);
@@ -50,55 +95,9 @@
   --font-mono:    "Geist Mono", ui-monospace, monospace;      /* micro-labels, ids, timestamps */
 }
 
-/* ---------- light ---------- */
-[data-theme="light"] {
-  --surface-0: #F6F5FA;
-  --surface-1: #FFFFFF;
-  --surface-2: #FFFFFF;
-  --surface-3: #F1EFF7;
-
-  --line:        #E8E5F0;
-  --line-strong: #D8D4E6;
-
-  --text-1: #1D1930;
-  --text-2: #5D5876;
-  --text-3: #8B86A0;
-
-  --accent:        #6D28D9;
-  --accent-strong: #5B21B8;
-  --accent-dim:    rgba(109, 40, 217, .09);
-  --ring:          rgba(109, 40, 217, .28);
-
-  --good: #15803D;  --good-bg: rgba(21, 128, 61, .10);
-  --warn: #B45309;  --warn-bg: rgba(180, 83, 9, .10);
-  --crit: #B91C1C;  --crit-bg: rgba(185, 28, 28, .09);
-
-  /* light mode = small tight shadows */
-  --shadow-card: 0 1px 2px rgba(29,25,48,.05), 0 10px 28px -18px rgba(29,25,48,.18);
-}
-
 /* ============================================================
    Base + exemplar components (extend, don't fork)
    ============================================================ */
-
-body {
-  background: var(--surface-0);
-  color: var(--text-1);
-  font-family: var(--font-ui);
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation: none !important; transition: none !important; }
-}
-
-/* visible keyboard focus, everywhere */
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: var(--radius-ctl);
-}
 
 /* micro-label: sidebar groups, chart captions, table headers */
 .label {
@@ -124,7 +123,7 @@ body {
   background: var(--accent); color: #fff;
   border: none; border-radius: var(--radius-ctl);
   padding: 7px 14px; font: 600 13px/1 var(--font-ui);
-  box-shadow: 0 4px 14px -6px var(--ring);
+  box-shadow: 0 4px 14px -6px var(--ring-glow);
   transition: filter var(--ease-hover);
   cursor: pointer;
 }

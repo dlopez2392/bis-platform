@@ -102,6 +102,12 @@ Until that task lands, new UI follows this contract's RULES and PATTERNS
 (surfaces, type roles, radii, states, copy voice) while consuming the
 EXISTING globals.css variables; the token cut-over happens once, deliberately.
 
+Resolved 2026-08-31 (Phase 1): tokens restructured to the app's
+`:root`(light)/`.dark` scaffolding — values unchanged; the mockup HTML
+remains the visual source of truth. The alpha glow token is `--ring-glow`
+(renamed from `--ring`, which the shadcn layer owns as the solid focus
+color = `var(--accent)`).
+
 ## Definition of done for any UI PR
 
 - [ ] No hard-coded colors/radii/shadows — tokens only
