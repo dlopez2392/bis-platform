@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
-import { serviceDb, listAccounts, brandLogoUrl } from "@bis/db";
+import { serviceDb, listAccounts, brandLogoUrl, sumUnreadCount } from "@bis/db";
 import type { AppClaims } from "@/lib/auth";
 import { resolveSidebarAccent } from "@/lib/branding/color";
 import { getTenantAccessState, getTenantBranding } from "@/lib/branding/tenant-theme-reader";
@@ -76,8 +76,15 @@ export async function generateMetadata(): Promise<Metadata> {
 // client out of those three agency-wide reads.
 export default async function DashboardLayout({
   children,
+  params,
 }: {
   children: React.ReactNode;
+  // Next.js gives every layout in the matched tree the full flattened params
+  // for the request, not just the segments above it — this layout sits above
+  // dashboard/accounts/[accountId], but still receives accountId when the
+  // leaf route is inside one. Optional because most routes under /dashboard
+  // (accounts list, blueprints) carry no accountId at all.
+  params: Promise<{ accountId?: string }>;
 }) {
   const { userId, sessionClaims } = await auth();
   if (!userId) redirect("/sign-in");
@@ -109,7 +116,15 @@ export default async function DashboardLayout({
     if (state.status === "none") redirect("/no-access?reason=none");
   }
 
-  const [accounts, cookieStore, branding] = await Promise.all([
+  // Same derivation as AppSidebar's own client-side base (pathname regex) —
+  // this server component has no pathname to read, but the matched route's
+  // params carry the same information. base != null is exactly "inside an
+  // account", for both audiences: Conversations, and its badge, are visible
+  // to a client too.
+  const { accountId } = await params;
+  const base = accountId ? `/dashboard/accounts/${accountId}` : null;
+
+  const [accounts, cookieStore, branding, unreadTotal] = await Promise.all([
     isAgency ? listAccounts(serviceDb()) : Promise.resolve([]),
     cookies(),
     // Only a client's chrome wears a brand. The agency's stays BIS on purpose,
@@ -117,6 +132,10 @@ export default async function DashboardLayout({
     clientState?.status === "ok"
       ? getTenantBranding(clientState.id)
       : Promise.resolve(null),
+    // Sidebar unread badge. Not gated on isAgency: Conversations is a
+    // both-audience item (see nav-groups.ts), and serviceDb here matches how
+    // this layout already reads listAccounts above — never gated by RLS.
+    base ? sumUnreadCount(serviceDb(), accountId!) : Promise.resolve(undefined),
   ]);
   const collapsed = cookieStore.get("sidebar_collapsed")?.value === "true";
 
@@ -130,6 +149,7 @@ export default async function DashboardLayout({
         clientBrandName={branding?.brandName ?? undefined}
         clientLogoUrl={branding?.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : undefined}
         clientAccentColor={resolveSidebarAccent(branding?.brandColor ?? null) ?? undefined}
+        unreadTotal={unreadTotal}
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar isAgency={isAgency} />

@@ -1,4 +1,11 @@
 export const m = {
+  // The sidebar's mono uppercase group headers (DESIGN.md's grouped-nav
+  // pattern). Text-cased in CSS, not here — these strings stay plain so a
+  // screen reader announces them as words, not letter-by-letter.
+  "nav.group.overview": "Overview",
+  "nav.group.crm": "CRM",
+  "nav.group.communications": "Communications",
+  "nav.group.growth": "Growth",
   "nav.dashboard": "Dashboard",
   "nav.contacts": "Contacts",
   "nav.opportunities": "Opportunities",

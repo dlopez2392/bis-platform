@@ -194,6 +194,23 @@ export async function clearUnreadCount(
   if (error) throw new Error(`clearUnreadCount failed: ${error.message}`);
 }
 
+/**
+ * Total unread count across every conversation in the account — the sidebar
+ * badge needs one number, not the per-conversation breakdown listConversations
+ * already returns. Summed in JS rather than a Postgres aggregate: PostgREST's
+ * select-based sum() would be a new, unproven surface in this codebase, and an
+ * account's conversation count is small enough that fetching the one column
+ * and reducing it costs nothing meaningful. Still a single query.
+ */
+export async function sumUnreadCount(
+  db: SupabaseClient, accountId: string,
+): Promise<number> {
+  const { data, error } = await db.from("conversations")
+    .select("unread_count").eq("account_id", accountId);
+  if (error) throw new Error(`sumUnreadCount failed: ${error.message}`);
+  return (data ?? []).reduce((sum, row) => sum + (row.unread_count ?? 0), 0);
+}
+
 export async function listConversations(
   db: SupabaseClient, accountId: string,
 ): Promise<ConversationSummary[]> {

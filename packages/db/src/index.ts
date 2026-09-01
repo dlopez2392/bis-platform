@@ -15,7 +15,8 @@ export { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
 export { ensureConversation, createMessage, updateMessageStatus,
          updateMessageStatusByProviderId, listConversations, listMessages, listContactMessages,
          incrementUnreadCount, clearUnreadCount,
-         type MessageStatus, type NewMessage, type ConversationSummary } from "./messaging";
+         type MessageStatus, type NewMessage, type ConversationSummary,
+         sumUnreadCount } from "./messaging";
 export { newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId,
          updateForm, createSubmission, recordRejectedSubmission, countRecentSubmissions,
          shouldRecordRateLimit, findRecentDuplicate, linkSubmissionContact,

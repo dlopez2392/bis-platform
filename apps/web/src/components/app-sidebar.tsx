@@ -19,14 +19,33 @@ import {
   Palette,
   Phone,
   PhoneIncoming,
-  ListChecks,
   type LucideIcon,
 } from "lucide-react";
 import { AccountSwitcher, type AccountOption } from "@/components/account-switcher";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
+import { buildNavGroups, type NavIconKey } from "@/lib/nav-groups";
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
+
+// The pure nav-groups module maps hrefs/labelKeys only (see its own doc
+// comment for why); this component owns the actual icon components and the
+// one place that maps an icon key to one.
+const NAV_ICONS: Record<NavIconKey, LucideIcon> = {
+  dashboard: LayoutDashboard,
+  contacts: Users,
+  opportunities: KanbanSquare,
+  conversations: MessagesSquare,
+  // `PhoneIncoming` rather than `Phone` so Calls stays distinguishable from
+  // Voice in the agency's sidebar, where both appear.
+  calls: PhoneIncoming,
+  forms: FileText,
+  calendar: Calendar,
+  branding: Palette,
+  voice: Phone,
+  accounts: Building2,
+  blueprints: Layers,
+};
 
 // Active when pathname matches href exactly, or is nested under it (href + "/…").
 // Pass exact=true for items whose href is a strict prefix of a sibling item's
@@ -45,6 +64,7 @@ export function AppSidebar({
   clientBrandName,
   clientLogoUrl,
   clientAccentColor,
+  unreadTotal,
 }: {
   accounts: AccountOption[];
   defaultCollapsed: boolean;
@@ -66,6 +86,11 @@ export function AppSidebar({
    *  the globals.css tokens — including their deliberate light/dark tuning,
    *  which a flat override would discard. */
   clientAccentColor?: string;
+  /** Sum of every conversation's unread_count in this account, read
+   *  server-side by the dashboard layout (packages/db's sumUnreadCount).
+   *  Undefined at the agency top level, where there is no account in scope
+   *  to count — the Conversations badge below only ever renders inside one. */
+  unreadTotal?: number;
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const pathname = usePathname();
@@ -79,50 +104,15 @@ export function AppSidebar({
   const match = pathname.match(/^\/dashboard\/accounts\/([^/]+)/);
   const activeAccountId = match?.[1];
   const base = activeAccountId ? `/dashboard/accounts/${activeAccountId}` : null;
-  const items: NavItem[] = base
-    ? [
-        { href: `${base}/dashboard`, label: m["nav.dashboard"], icon: LayoutDashboard },
-        { href: `${base}/contacts`, label: m["nav.contacts"], icon: Users },
-        { href: `${base}/pipeline`, label: m["nav.opportunities"], icon: KanbanSquare },
-        { href: `${base}/conversations`, label: m["nav.conversations"], icon: MessagesSquare },
-        // BOTH audiences, unlike the agency-only Voice item below: that one
-        // is the settings that configure the receptionist, this is the log of
-        // what it actually did — the client's own business data, and the one
-        // screen where they see what they are paying for. `PhoneIncoming`
-        // rather than `Phone` so it stays distinguishable from Voice in the
-        // agency's sidebar, where both appear.
-        { href: `${base}/calls`, label: m["nav.calls"], icon: PhoneIncoming },
-        { href: `${base}/forms`, label: m["nav.forms"], icon: FileText },
-        { href: `${base}/calendar`, label: m["nav.calendar"], icon: Calendar },
-        // Clients only. The agency reaches the same panel from Settings,
-        // beside the things only they can do; giving them both would be two
-        // doors to one form in the same sidebar. The route itself still
-        // works for the agency — hiding a link is not authorization, and a
-        // 404 there would be a thing to debug later rather than a boundary.
-        ...(isAgency
-          ? []
-          : [{ href: `${base}/branding`, label: m["nav.branding"], icon: Palette }]),
-        // Agency only — the mirror image of Branding above. The route itself
-        // is still gated independently by requireAgencyOnlyAccountAccess (in
-        // the page) and by the isAgency check inside every action in
-        // ./voice/actions.ts; hiding the link here is convenience, not the
-        // boundary.
-        //
-        // Setup sits directly after Voice for the same reason: it is agency
-        // work ABOUT the client (requireAgencyOnlyAccountAccess gates the
-        // route itself), and it is the screen that sends an operator into
-        // Voice, Calendar, Branding and Settings in the first place.
-        ...(isAgency
-          ? [
-              { href: `${base}/voice`, label: m["nav.voice"], icon: Phone },
-              { href: `${base}/setup`, label: m["nav.setup"], icon: ListChecks },
-            ]
-          : []),
-      ]
-    : [
-        { href: "/dashboard/accounts", label: m["nav.accounts"], icon: Building2 },
-        { href: "/dashboard/blueprints", label: m["nav.blueprints"], icon: Layers },
-      ];
+  // Grouping, audience filtering and href construction all live in the pure
+  // nav-groups module (unit-tested there without React); this component only
+  // resolves labelKey → copy and iconKey → icon component per item.
+  const groups = buildNavGroups(base, isAgency).map((group) => ({
+    label: group.label,
+    items: group.items.map(
+      (item): NavItem => ({ href: item.href, label: m[item.labelKey], icon: NAV_ICONS[item.iconKey] }),
+    ),
+  }));
 
   // A client has no agency scope to return to, so there is no footer item
   // for them at all — not Settings (agency-only, see requireAgencyOnlyAccountAccess),
@@ -252,13 +242,38 @@ export function AppSidebar({
       ) : null}
 
       <nav className="flex flex-1 flex-col gap-0.5">
-        {items.map((item) => (
-          <SidebarLink
-            key={item.href}
-            item={item}
-            collapsed={collapsed}
-            active={isNavActive(pathname, item.href)}
-          />
+        {groups.map((group, i) => (
+          // Index, not label: the one agency top-level group has label=null
+          // and would collide on "" as a key otherwise.
+          <div key={group.label ?? `group-${i}`} className="flex flex-col gap-0.5">
+            {group.label ? (
+              // Hidden rather than unmounted when collapsed: the row still
+              // exists for a screen reader's document structure, it just has
+              // no rendered content or spacing in the icon-only rail.
+              <div
+                role="presentation"
+                className={cn(
+                  "px-2.5 pt-3 pb-1 font-mono text-[10px] font-medium tracking-[0.14em] text-sidebar-foreground/50 uppercase",
+                  collapsed && "hidden",
+                )}
+              >
+                {m[group.label]}
+              </div>
+            ) : null}
+            {group.items.map((item) => (
+              <SidebarLink
+                key={item.href}
+                item={item}
+                collapsed={collapsed}
+                active={isNavActive(pathname, item.href)}
+                // Only the Conversations item carries a badge — the sum this
+                // account's unread messages, threaded down from the layout's
+                // sumUnreadCount read. Every other item gets undefined, which
+                // SidebarLink treats as zero (hidden).
+                unreadCount={base && item.href === `${base}/conversations` ? unreadTotal : undefined}
+              />
+            ))}
+          </div>
         ))}
       </nav>
 
@@ -279,12 +294,16 @@ function SidebarLink({
   item,
   collapsed,
   active,
+  unreadCount,
 }: {
   item: NavItem;
   collapsed: boolean;
   active: boolean;
+  /** Undefined or 0 both render no badge — see the brief's "hidden when 0". */
+  unreadCount?: number;
 }) {
   const Icon = item.icon;
+  const hasUnread = (unreadCount ?? 0) > 0;
   return (
     <Link
       href={item.href}
@@ -293,18 +312,38 @@ function SidebarLink({
         "relative flex items-center gap-3 rounded-md px-2.5 py-2 text-sm transition-colors",
         collapsed && "justify-center px-0",
         active
-          ? "bg-white/10 font-medium text-white"
+          ? "bg-sidebar-accent/15 font-medium text-white"
           : "text-sidebar-foreground/75 hover:bg-white/5 hover:text-sidebar-foreground",
       )}
     >
       {active ? (
         <span
-          className="absolute left-0 h-5 w-0.5 rounded-r bg-sidebar-accent"
+          className="absolute left-0 h-5 w-[3px] rounded-r bg-sidebar-accent"
           aria-hidden
         />
       ) : null}
-      <Icon className="size-4 shrink-0" aria-hidden />
-      {collapsed ? null : <span className="truncate">{item.label}</span>}
+      <span className="relative flex shrink-0">
+        <Icon className="size-4" aria-hidden />
+        {hasUnread && collapsed ? (
+          // Collapsed state: a dot rather than the pill below, since there is
+          // no room for a count beside a centered icon. aria-label carries
+          // the count for a screen reader either way — the visual dot alone
+          // says nothing.
+          <span
+            className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-sidebar-accent"
+            aria-label={`${unreadCount} unread`}
+          />
+        ) : null}
+      </span>
+      {collapsed ? null : <span className="min-w-0 flex-1 truncate">{item.label}</span>}
+      {hasUnread && !collapsed ? (
+        <span
+          className="min-w-4 shrink-0 rounded-full bg-sidebar-accent px-1.5 text-center text-[10px] font-medium text-sidebar"
+          aria-label={`${unreadCount} unread`}
+        >
+          {unreadCount}
+        </span>
+      ) : null}
     </Link>
   );
 }

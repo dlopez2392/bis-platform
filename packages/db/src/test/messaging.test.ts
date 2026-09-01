@@ -4,6 +4,7 @@ import { createContact } from "../contacts";
 import {
   ensureConversation, createMessage, updateMessageStatus,
   updateMessageStatusByProviderId, listConversations, listMessages,
+  incrementUnreadCount, sumUnreadCount,
 } from "../messaging";
 
 describe("messaging", () => {
@@ -190,5 +191,24 @@ describe("messaging", () => {
       const convos = await listConversations(db, accountId);
       expect(convos[0]!.id).toBe(cb.id);
       expect(convos[1]!.id).toBe(ca.id);
+    }));
+
+  it("sumUnreadCount adds unread_count across every conversation in the account", () =>
+    withTestAccount(async (db, accountId) => {
+      const a = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
+      const b = await createContact(db, accountId, { firstName: "Grace" }, "user_test");
+      const ca = await ensureConversation(db, accountId, a.id, "user_test");
+      const cb = await ensureConversation(db, accountId, b.id, "user_test");
+
+      await incrementUnreadCount(db, accountId, ca.id);
+      await incrementUnreadCount(db, accountId, ca.id);
+      await incrementUnreadCount(db, accountId, cb.id);
+
+      expect(await sumUnreadCount(db, accountId)).toBe(3);
+    }));
+
+  it("sumUnreadCount is 0 for an account with no conversations", () =>
+    withTestAccount(async (db, accountId) => {
+      expect(await sumUnreadCount(db, accountId)).toBe(0);
     }));
 });
