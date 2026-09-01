@@ -1,0 +1,174 @@
+/* ============================================================
+   BIS Platform — design tokens
+   Source of truth: docs/design/bis-design-direction.html
+   Wire components to tokens ONLY. Never hard-code a color,
+   radius, or shadow in a component.
+   ============================================================ */
+
+/* ---------- dark (default) ---------- */
+:root {
+  /* surface ladder: page → card → nested → raised */
+  --surface-0: #0E0D14;
+  --surface-1: #16141E;
+  --surface-2: #1D1A28;
+  --surface-3: #252132;
+
+  --line:        #28243A;   /* structural borders */
+  --line-strong: #38334F;   /* interactive edges  */
+
+  --text-1: #F2F0F7;        /* primary   */
+  --text-2: #A9A3BD;        /* secondary */
+  --text-3: #6F6987;        /* tertiary / labels */
+
+  /* accent is per-mode: desaturated on dark, full on light.
+     The per-client branding engine overrides --accent only. */
+  --accent:        #8B7CF7;
+  --accent-strong: #A99EFF;
+  --accent-dim:    rgba(139, 124, 247, .14);
+  --ring:          rgba(139, 124, 247, .35);
+
+  /* status — always rendered with dot + text label, never color alone */
+  --good: #4ADE97;  --good-bg: rgba(74, 222, 151, .12);
+  --warn: #F0B35E;  --warn-bg: rgba(240, 179, 94, .12);
+  --crit: #F2708A;  --crit-bg: rgba(242, 112, 138, .12);
+
+  /* shape */
+  --radius-ctl:  8px;       /* buttons, inputs, chips  */
+  --radius-card: 11px;      /* cards, panels, drawers  */
+  --radius-pill: 999px;
+
+  /* elevation: dark mode = inner top highlight + soft ambient, no gray blurs */
+  --shadow-card: 0 1px 0 rgba(255,255,255,.03) inset, 0 8px 24px -12px rgba(0,0,0,.6);
+
+  /* motion */
+  --ease-hover: 150ms cubic-bezier(.2,.7,.3,1);
+  --ease-panel: 250ms cubic-bezier(.2,.7,.3,1);
+
+  /* type roles */
+  --font-display: "Bricolage Grotesque", "Geist", sans-serif; /* titles + KPI numbers ONLY */
+  --font-ui:      "Geist", -apple-system, "Segoe UI", sans-serif;
+  --font-mono:    "Geist Mono", ui-monospace, monospace;      /* micro-labels, ids, timestamps */
+}
+
+/* ---------- light ---------- */
+[data-theme="light"] {
+  --surface-0: #F6F5FA;
+  --surface-1: #FFFFFF;
+  --surface-2: #FFFFFF;
+  --surface-3: #F1EFF7;
+
+  --line:        #E8E5F0;
+  --line-strong: #D8D4E6;
+
+  --text-1: #1D1930;
+  --text-2: #5D5876;
+  --text-3: #8B86A0;
+
+  --accent:        #6D28D9;
+  --accent-strong: #5B21B8;
+  --accent-dim:    rgba(109, 40, 217, .09);
+  --ring:          rgba(109, 40, 217, .28);
+
+  --good: #15803D;  --good-bg: rgba(21, 128, 61, .10);
+  --warn: #B45309;  --warn-bg: rgba(180, 83, 9, .10);
+  --crit: #B91C1C;  --crit-bg: rgba(185, 28, 28, .09);
+
+  /* light mode = small tight shadows */
+  --shadow-card: 0 1px 2px rgba(29,25,48,.05), 0 10px 28px -18px rgba(29,25,48,.18);
+}
+
+/* ============================================================
+   Base + exemplar components (extend, don't fork)
+   ============================================================ */
+
+body {
+  background: var(--surface-0);
+  color: var(--text-1);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* visible keyboard focus, everywhere */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-ctl);
+}
+
+/* micro-label: sidebar groups, chart captions, table headers */
+.label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+/* card */
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+/* buttons: one primary per view; ghost for everything else */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--accent); color: #fff;
+  border: none; border-radius: var(--radius-ctl);
+  padding: 7px 14px; font: 600 13px/1 var(--font-ui);
+  box-shadow: 0 4px 14px -6px var(--ring);
+  transition: filter var(--ease-hover);
+  cursor: pointer;
+}
+.btn:hover { filter: brightness(1.08); }
+.btn--ghost {
+  background: transparent; color: var(--text-2);
+  border: 1px solid var(--line-strong);
+  box-shadow: none; font-weight: 500;
+}
+
+/* status pill — dot + label is mandatory */
+.pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 500;
+  border-radius: var(--radius-pill); padding: 2px 9px;
+}
+.pill::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.pill--good { background: var(--good-bg); color: var(--good); }
+.pill--warn { background: var(--warn-bg); color: var(--warn); }
+.pill--crit { background: var(--crit-bg); color: var(--crit); }
+
+/* KPI value: display face, tabular digits */
+.kpi-value {
+  font-family: var(--font-display);
+  font-size: 24px; font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.01em;
+}
+
+/* tables: whole row is the target */
+.row-interactive { transition: background var(--ease-hover); cursor: pointer; }
+.row-interactive:hover { background: var(--surface-2); }
+
+/* sidebar shell: middle scrolls, footer pinned (Settings never hides) */
+.sidebar { display: flex; flex-direction: column; height: 100dvh; }
+.sidebar__nav { overflow-y: auto; min-height: 0; }
+.sidebar__footer { margin-top: auto; border-top: 1px solid var(--line); }
+
+/* skeleton loading — shaped like content, never a spinner */
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: skeleton 1.4s ease infinite;
+  border-radius: var(--radius-ctl);
+  color: transparent;
+}
+@keyframes skeleton { to { background-position: -200% 0; } }

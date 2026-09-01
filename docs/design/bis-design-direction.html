@@ -1,0 +1,507 @@
+<title>BIS Design Direction</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+  /* ---------- page chrome (theme-aware) ---------- */
+  :root{
+    --pg-bg:#f7f6fa; --pg-surface:#ffffff; --pg-ink:#1d1930; --pg-muted:#5d5876; --pg-faint:#8b86a0;
+    --pg-line:#e7e4ef; --pg-accent:#6d28d9; --pg-accent-soft:#efeafb; --pg-chip:#edebf4;
+    --pg-code:#141220; --pg-code-ink:#d6d1ea;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --pg-bg:#121018; --pg-surface:#1a1723; --pg-ink:#ece9f5; --pg-muted:#a49ebb; --pg-faint:#736d8c;
+      --pg-line:#2b2739; --pg-accent:#a78bfa; --pg-accent-soft:#272038; --pg-chip:#252134;
+      --pg-code:#0d0b13; --pg-code-ink:#c9c3e0;
+    }
+  }
+  :root[data-theme="dark"]{
+    --pg-bg:#121018; --pg-surface:#1a1723; --pg-ink:#ece9f5; --pg-muted:#a49ebb; --pg-faint:#736d8c;
+    --pg-line:#2b2739; --pg-accent:#a78bfa; --pg-accent-soft:#272038; --pg-chip:#252134;
+    --pg-code:#0d0b13; --pg-code-ink:#c9c3e0;
+  }
+  body{background:var(--pg-bg); color:var(--pg-ink); margin:0; padding:0 24px 110px;
+    font-family:"Geist",-apple-system,"Segoe UI",sans-serif; font-size:16px; line-height:1.62;}
+  .shell{max-width:960px; margin:0 auto;}
+  .prose{max-width:690px;}
+  h1,h2,h3{font-family:"Bricolage Grotesque","Geist",sans-serif; text-wrap:balance; line-height:1.12; margin:0;}
+  h1{font-size:2.7rem; font-weight:700;}
+  h2{font-size:1.5rem; font-weight:650; margin-bottom:14px;}
+  h3{font-size:1.08rem; font-weight:600; margin:26px 0 8px;}
+  p{margin:0 0 14px;}
+  a{color:var(--pg-accent);}
+  .eyebrow{font-family:"Geist Mono",monospace; font-size:.7rem; letter-spacing:.16em; text-transform:uppercase;
+    color:var(--pg-accent); display:block; margin-bottom:10px;}
+  header.page{padding:64px 0 30px; border-bottom:1px solid var(--pg-line); margin-bottom:52px;}
+  section{margin-bottom:64px;}
+  .lede{color:var(--pg-muted); font-size:1.06rem;}
+
+  /* diagnosis cards */
+  .diag{display:grid; grid-template-columns:repeat(auto-fit,minmax(270px,1fr)); gap:14px; margin-top:10px;}
+  .diag div{background:var(--pg-surface); border:1px solid var(--pg-line); border-radius:10px; padding:18px 20px;}
+  .diag h3{margin:0 0 6px; font-size:1rem;}
+  .diag p{margin:0; font-size:.92rem; color:var(--pg-muted);}
+
+  /* swatches + token tables */
+  .swrow{display:grid; grid-template-columns:repeat(auto-fill,minmax(148px,1fr)); gap:10px; margin:14px 0 6px;}
+  .sw{border:1px solid var(--pg-line); border-radius:10px; overflow:hidden; background:var(--pg-surface);}
+  .sw .c{height:52px;}
+  .sw .l{padding:8px 10px; font-family:"Geist Mono",monospace; font-size:.68rem; line-height:1.5;}
+  .sw .l b{display:block; font-weight:500; color:var(--pg-ink);}
+  .sw .l span{color:var(--pg-faint);}
+  .notes{font-size:.9rem; color:var(--pg-muted);}
+
+  .scale{border:1px solid var(--pg-line); border-radius:10px; background:var(--pg-surface); overflow:hidden;}
+  .scale .row{display:grid; grid-template-columns:190px 1fr; gap:18px; padding:14px 20px; border-bottom:1px solid var(--pg-line); align-items:baseline;}
+  .scale .row:last-child{border-bottom:none;}
+  .scale .spec{font-family:"Geist Mono",monospace; font-size:.7rem; color:var(--pg-faint); line-height:1.6;}
+  .scale .spec b{color:var(--pg-ink); font-weight:500; display:block;}
+
+  pre.tokens{background:var(--pg-code); color:var(--pg-code-ink); border-radius:12px; padding:22px 24px;
+    overflow-x:auto; font-family:"Geist Mono",monospace; font-size:.78rem; line-height:1.7; margin:16px 0 0;}
+  pre.tokens .k{color:#8b7cf7;} pre.tokens .cm{color:#6f6987;}
+
+  ul.plain{padding-left:20px;} ul.plain li{margin-bottom:10px;}
+  .rulelist{counter-reset:r; list-style:none; padding:0; margin:10px 0 0;}
+  .rulelist li{counter-increment:r; display:grid; grid-template-columns:44px 1fr; gap:14px; padding:14px 0; border-bottom:1px solid var(--pg-line);}
+  .rulelist li:last-child{border-bottom:none;}
+  .rulelist li::before{content:counter(r,decimal-leading-zero); font-family:"Geist Mono",monospace; font-size:.8rem; color:var(--pg-accent); padding-top:3px;}
+  .rulelist b{font-weight:600;}
+  .rulelist p{margin:2px 0 0; font-size:.93rem; color:var(--pg-muted);}
+
+  /* ---------- mockup frames (deliberately single-theme each) ---------- */
+  .frame{border-radius:14px; overflow:hidden; border:1px solid var(--pg-line); margin:18px 0 8px;
+    box-shadow:0 24px 60px -32px rgba(20,15,40,.35);}
+  .frame .bar{display:flex; align-items:center; gap:6px; padding:10px 14px; font-family:"Geist Mono",monospace; font-size:.68rem;}
+  .frame .bar i{width:10px; height:10px; border-radius:50%; display:inline-block;}
+  .caption{font-family:"Geist Mono",monospace; font-size:.7rem; color:var(--pg-faint); letter-spacing:.08em; text-transform:uppercase; margin-bottom:26px;}
+
+  /* mockup component styles consume per-frame vars */
+  .mk{ font-family:"Geist",sans-serif; font-size:13.5px; line-height:1.5; background:var(--s0); color:var(--t1);}
+  .mk-dark{ --s0:#0e0d14; --s1:#16141e; --s2:#1d1a28; --s3:#252132; --ln:#28243a; --ln2:#38334f;
+    --t1:#f2f0f7; --t2:#a9a3bd; --t3:#6f6987; --ac:#8b7cf7; --ac2:#a99eff; --ac-dim:rgba(139,124,247,.14);
+    --good:#4ade97; --good-bg:rgba(74,222,151,.12); --warn:#f0b35e; --warn-bg:rgba(240,179,94,.12);
+    --crit:#f2708a; --crit-bg:rgba(242,112,138,.12); --ring:rgba(139,124,247,.35);
+    --shadow:0 1px 0 rgba(255,255,255,.03) inset, 0 8px 24px -12px rgba(0,0,0,.6);}
+  .mk-light{ --s0:#f6f5fa; --s1:#ffffff; --s2:#ffffff; --s3:#f1eff7; --ln:#e8e5f0; --ln2:#d8d4e6;
+    --t1:#1d1930; --t2:#5d5876; --t3:#8b86a0; --ac:#6d28d9; --ac2:#5b21b8; --ac-dim:rgba(109,40,217,.09);
+    --good:#15803d; --good-bg:rgba(21,128,61,.1); --warn:#b45309; --warn-bg:rgba(180,83,9,.1);
+    --crit:#b91c1c; --crit-bg:rgba(185,28,28,.09); --ring:rgba(109,40,217,.28);
+    --shadow:0 1px 2px rgba(29,25,48,.05), 0 10px 28px -18px rgba(29,25,48,.18);}
+  .mk *{box-sizing:border-box;}
+  .mk .layout{display:grid; grid-template-columns:216px 1fr; min-height:560px;}
+  .mk aside{background:var(--s1); border-right:1px solid var(--ln); padding:16px 12px; display:flex; flex-direction:column; gap:2px;}
+  .mk .brand{display:flex; align-items:center; gap:9px; padding:4px 10px 14px;}
+  .mk .brand .dot{width:24px; height:24px; border-radius:7px; background:linear-gradient(135deg,var(--ac),var(--ac2)); display:grid; place-items:center; color:#fff; font-weight:600; font-size:11px;}
+  .mk .brand b{font-family:"Bricolage Grotesque",sans-serif; font-weight:650; font-size:14px; letter-spacing:.01em;}
+  .mk .client{display:flex; align-items:center; gap:8px; background:var(--s2); border:1px solid var(--ln); border-radius:8px; padding:7px 10px; margin:0 4px 14px; box-shadow:var(--shadow);}
+  .mk .client .av{width:22px; height:22px; border-radius:6px; background:var(--ac-dim); color:var(--ac); display:grid; place-items:center; font-size:10px; font-weight:600;}
+  .mk .client div b{display:block; font-size:12px; font-weight:600; line-height:1.2;}
+  .mk .client div span{font-size:10.5px; color:var(--t3);}
+  .mk .client .chev{margin-left:auto; color:var(--t3); font-size:10px;}
+  .mk .grp{font-family:"Geist Mono",monospace; font-size:9px; letter-spacing:.14em; color:var(--t3); text-transform:uppercase; padding:12px 10px 5px;}
+  .mk nav a{display:flex; align-items:center; gap:9px; padding:6.5px 10px; border-radius:7px; color:var(--t2); text-decoration:none; font-size:13px; font-weight:500; position:relative;}
+  .mk nav a svg{width:15px; height:15px; stroke:currentColor; stroke-width:1.7; fill:none; stroke-linecap:round; stroke-linejoin:round; opacity:.85;}
+  .mk nav a.on{background:var(--ac-dim); color:var(--ac2);}
+  .mk nav a.on::before{content:""; position:absolute; left:-12px; top:6px; bottom:6px; width:3px; border-radius:2px; background:var(--ac);}
+  .mk nav a .n{margin-left:auto; background:var(--ac); color:#fff; font-size:9.5px; font-weight:600; border-radius:999px; padding:1px 6px;}
+  .mk .sfoot{margin-top:auto; padding:12px 10px 4px; border-top:1px solid var(--ln); font-size:11.5px; color:var(--t3);}
+  .mk .sfoot .pb{height:4px; border-radius:2px; background:var(--s3); margin-top:6px; overflow:hidden;}
+  .mk .sfoot .pb i{display:block; height:100%; width:78%; border-radius:2px; background:linear-gradient(90deg,var(--ac),var(--ac2));}
+  .mk main{padding:0 22px 22px; background:var(--s0);}
+  .mk .top{display:flex; align-items:center; gap:12px; padding:14px 0; border-bottom:1px solid var(--ln); margin-bottom:18px;}
+  .mk .top h4{font-family:"Bricolage Grotesque",sans-serif; font-size:19px; font-weight:650; margin:0;}
+  .mk .top .sub{color:var(--t3); font-size:12px; margin-top:1px;}
+  .mk .search{margin-left:auto; display:flex; align-items:center; gap:7px; background:var(--s1); border:1px solid var(--ln); border-radius:8px; padding:6px 11px; color:var(--t3); font-size:12px; min-width:170px;}
+  .mk .search kbd{margin-left:auto; font-family:"Geist Mono",monospace; font-size:9.5px; border:1px solid var(--ln2); border-radius:4px; padding:0 4px; color:var(--t3);}
+  .mk .iconbtn{width:30px; height:30px; border-radius:8px; border:1px solid var(--ln); background:var(--s1); display:grid; place-items:center; color:var(--t2);}
+  .mk .avatar{width:30px; height:30px; border-radius:50%; background:linear-gradient(135deg,#e0a86c,#c76a4a); color:#fff; display:grid; place-items:center; font-size:11px; font-weight:600;}
+  .mk .kpis{display:grid; grid-template-columns:repeat(4,1fr); gap:12px;}
+  .mk .kpi{background:var(--s1); border:1px solid var(--ln); border-radius:11px; padding:14px 16px 10px; box-shadow:var(--shadow);}
+  .mk .kpi .lbl{font-size:11.5px; color:var(--t2); display:flex; align-items:center; gap:6px;}
+  .mk .kpi .val{font-family:"Bricolage Grotesque",sans-serif; font-size:24px; font-weight:650; margin:2px 0 0; font-variant-numeric:tabular-nums; letter-spacing:-.01em;}
+  .mk .kpi .d{font-size:11px; font-weight:500; margin-left:6px;}
+  .mk .kpi .d.up{color:var(--good);} .mk .kpi .d.dn{color:var(--crit);}
+  .mk .kpi svg.spark{width:100%; height:26px; margin-top:4px;}
+  .mk .grid2{display:grid; grid-template-columns:1.6fr 1fr; gap:12px; margin-top:12px;}
+  .mk .card{background:var(--s1); border:1px solid var(--ln); border-radius:11px; padding:16px 18px; box-shadow:var(--shadow);}
+  .mk .card h5{margin:0; font-size:13px; font-weight:600; display:flex; align-items:baseline; gap:8px;}
+  .mk .card h5 span{font-family:"Geist Mono",monospace; font-size:10px; color:var(--t3); font-weight:400; margin-left:auto;}
+  .mk .bars{display:flex; align-items:flex-end; gap:5px; height:110px; margin-top:14px; padding-top:6px; border-bottom:1px solid var(--ln);}
+  .mk .bars i{flex:1; border-radius:4px 4px 0 0; background:var(--ac); opacity:.85; min-height:6px; position:relative; transition:opacity .15s;}
+  .mk .bars i.mut{background:var(--s3); opacity:1;}
+  .mk .bars i:hover{opacity:1;}
+  .mk .bars i:hover::after{content:attr(data-v); position:absolute; bottom:calc(100% + 6px); left:50%; transform:translateX(-50%);
+    background:var(--s3); border:1px solid var(--ln2); color:var(--t1); font-size:10px; padding:2px 7px; border-radius:5px; white-space:nowrap;}
+  .mk .axis{display:flex; justify-content:space-between; font-family:"Geist Mono",monospace; font-size:9px; color:var(--t3); margin-top:6px;}
+  .mk .feed{display:flex; flex-direction:column; gap:0; margin-top:8px;}
+  .mk .feed .ev{display:grid; grid-template-columns:26px 1fr auto; gap:10px; padding:9px 0; border-bottom:1px solid var(--ln); align-items:start;}
+  .mk .feed .ev:last-child{border-bottom:none;}
+  .mk .feed .ic{width:26px; height:26px; border-radius:8px; display:grid; place-items:center; font-size:12px;}
+  .mk .feed .ev p{margin:0; font-size:12.5px;} .mk .feed .ev p b{font-weight:600;}
+  .mk .feed .ev .t{font-family:"Geist Mono",monospace; font-size:9.5px; color:var(--t3); padding-top:3px;}
+  .mk .pill{display:inline-flex; align-items:center; gap:5px; font-size:10.5px; font-weight:500; border-radius:999px; padding:2px 9px;}
+  .mk .pill i{width:5px; height:5px; border-radius:50%;}
+  .mk .pill.g{background:var(--good-bg); color:var(--good);} .mk .pill.g i{background:var(--good);}
+  .mk .pill.w{background:var(--warn-bg); color:var(--warn);} .mk .pill.w i{background:var(--warn);}
+  .mk .pill.c{background:var(--crit-bg); color:var(--crit);} .mk .pill.c i{background:var(--crit);}
+  .mk table.mini{width:100%; border-collapse:collapse; margin-top:10px; font-size:12.5px;}
+  .mk table.mini td{padding:8px 4px; border-bottom:1px solid var(--ln); font-variant-numeric:tabular-nums;}
+  .mk table.mini tr:last-child td{border-bottom:none;}
+  .mk table.mini .who{font-weight:600;}
+  .mk table.mini .dim{color:var(--t3); font-family:"Geist Mono",monospace; font-size:10.5px;}
+  .mk .btn{display:inline-flex; align-items:center; gap:6px; background:var(--ac); color:#fff; border:none; border-radius:8px;
+    padding:7px 14px; font-size:12.5px; font-weight:600; font-family:inherit; box-shadow:0 4px 14px -6px var(--ring);}
+  .mk .btn.ghost{background:transparent; color:var(--t2); border:1px solid var(--ln2); box-shadow:none; font-weight:500;}
+
+  /* sidebar pinned footer */
+  .mk .sfoot a.sset{display:flex; align-items:center; gap:9px; padding:6.5px 10px; margin:0 -2px 6px; border-radius:7px; color:var(--t2); text-decoration:none; font-size:13px; font-weight:500;}
+  .mk .sfoot a.sset svg{width:15px; height:15px; stroke:currentColor; stroke-width:1.7; fill:none; stroke-linecap:round; stroke-linejoin:round; opacity:.85;}
+  .mk .sfoot .meter{padding:2px 10px 0; font-size:11.5px; color:var(--t3);}
+
+  /* setup mockup */
+  .su{display:grid; grid-template-columns:264px 1fr; background:var(--s0); min-height:430px;}
+  .su .rail{background:var(--s1); border-right:1px solid var(--ln); padding:18px 14px;}
+  .su .rail .hd{padding:2px 10px 14px;}
+  .su .rail .hd b{font-family:"Bricolage Grotesque",sans-serif; font-size:15px; font-weight:650; display:block;}
+  .su .rail .hd span{font-family:"Geist Mono",monospace; font-size:9.5px; color:var(--t3); letter-spacing:.1em; text-transform:uppercase;}
+  .su .rail .pb{height:4px; border-radius:2px; background:var(--s3); margin:10px 0 4px; overflow:hidden;}
+  .su .rail .pb i{display:block; height:100%; width:78%; border-radius:2px; background:linear-gradient(90deg,var(--ac),var(--ac2));}
+  .su .st{display:grid; grid-template-columns:24px 1fr; gap:10px; padding:7px 10px; border-radius:8px; align-items:center; font-size:12.5px; color:var(--t2); position:relative;}
+  .su .st .b{width:21px; height:21px; border-radius:50%; display:grid; place-items:center; font-family:"Geist Mono",monospace; font-size:9.5px; background:var(--s3); color:var(--t3);}
+  .su .st.done{color:var(--t3);}
+  .su .st.done .b{background:var(--good-bg); color:var(--good); font-size:10px;}
+  .su .st.cur{background:var(--ac-dim); color:var(--t1); font-weight:600;}
+  .su .st.cur .b{background:var(--ac); color:#fff;}
+  .su .st.lock{opacity:.55;}
+  .su .st.lock .b{background:transparent; border:1px dashed var(--ln2);}
+  .su .st small{grid-column:2; font-size:10px; font-weight:400; color:var(--t3); margin-top:-2px;}
+  .su .pane{padding:24px 28px;}
+  .su .pane .stepno{font-family:"Geist Mono",monospace; font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--ac); margin-bottom:6px; display:block;}
+  .su .pane h4{font-family:"Bricolage Grotesque",sans-serif; font-size:20px; font-weight:650; margin:0 0 6px;}
+  .su .pane .why{color:var(--t2); font-size:13px; max-width:52ch; margin:0 0 16px;}
+  .su .tag{display:inline-flex; align-items:center; gap:5px; font-family:"Geist Mono",monospace; font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; background:var(--s3); color:var(--t2); border-radius:5px; padding:3px 8px; margin-bottom:14px;}
+  .su .panel{background:var(--s1); border:1px solid var(--ln); border-radius:11px; padding:14px 16px; box-shadow:var(--shadow); margin-top:12px; max-width:480px;}
+  .su .panel .row{display:flex; align-items:center; gap:10px; font-size:12.5px;}
+  .su .panel .row b{font-variant-numeric:tabular-nums;}
+  .su .panel .row span{color:var(--t3); font-size:11px;}
+  .su .nav2{display:flex; gap:8px; margin-top:20px; align-items:center;}
+  .su .skip{color:var(--t3); font-size:12px; margin-left:6px;}
+
+  /* booking mockup */
+  .bk{background:var(--s0); padding:34px 20px; display:grid; place-items:center;}
+  .bk .card{max-width:460px; width:100%; padding:0; overflow:hidden;}
+  .bk .head{padding:20px 24px 16px; border-bottom:1px solid var(--ln); display:flex; gap:13px; align-items:center;
+    background:linear-gradient(160deg,var(--ac-dim),transparent 60%);}
+  .bk .logo{width:42px; height:42px; border-radius:11px; background:linear-gradient(135deg,#2f7d4f,#7fb069); color:#fff; display:grid; place-items:center; font-weight:700; font-size:15px; font-family:"Bricolage Grotesque",sans-serif;}
+  .bk .head b{font-family:"Bricolage Grotesque",sans-serif; font-size:16px; display:block;}
+  .bk .head span{font-size:12px; color:var(--t2);}
+  .bk .body{padding:18px 24px 22px;}
+  .bk .steps{display:flex; gap:6px; margin-bottom:14px;}
+  .bk .steps i{height:3px; flex:1; border-radius:2px; background:var(--s3);}
+  .bk .steps i.on{background:var(--ac);}
+  .bk .days{display:flex; gap:7px; overflow-x:auto; padding-bottom:4px;}
+  .bk .day{min-width:52px; text-align:center; border:1px solid var(--ln); border-radius:9px; padding:8px 4px; font-size:11px; color:var(--t2);}
+  .bk .day b{display:block; font-size:15px; color:var(--t1); font-variant-numeric:tabular-nums;}
+  .bk .day.on{background:var(--ac); border-color:var(--ac); color:rgba(255,255,255,.8);}
+  .bk .day.on b{color:#fff;}
+  .bk .lbl{font-family:"Geist Mono",monospace; font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--t3); margin:16px 0 8px;}
+  .bk .slots{display:grid; grid-template-columns:repeat(3,1fr); gap:8px;}
+  .bk .slot{border:1px solid var(--ln); border-radius:8px; padding:8px 0; text-align:center; font-size:12.5px; font-variant-numeric:tabular-nums; color:var(--t1);}
+  .bk .slot.on{border-color:var(--ac); color:var(--ac2); background:var(--ac-dim); font-weight:600;}
+  .bk .foot{display:flex; align-items:center; margin-top:18px;}
+  .bk .foot small{color:var(--t3); font-size:10.5px; margin-left:auto;}
+  @media (max-width:760px){ .mk .layout{grid-template-columns:1fr;} .mk aside{display:none;} .mk .kpis{grid-template-columns:repeat(2,1fr);} .mk .grid2{grid-template-columns:1fr;} }
+</style>
+
+<div class="shell">
+<header class="page">
+  <span class="eyebrow">Visual direction · BIS Platform</span>
+  <h1>From Functional to Finished</h1>
+  <p class="lede prose" style="margin-top:12px;">The platform works. What it lacks is <em>depth, hierarchy, and moments of brand</em> — the three things that separate an internal tool from a product people pay monthly for. Everything below is buildable with CSS variables on top of the theming engine you already shipped.</p>
+</header>
+
+<section>
+  <span class="eyebrow">01 · Diagnosis</span>
+  <h2>Why it currently reads as "basic"</h2>
+  <p class="prose lede" style="font-size:.98rem;">None of these are taste problems — each is a specific, fixable mechanic.</p>
+  <div class="diag">
+    <div><h3>One flat elevation</h3><p>Every surface is the same near-black card on a near-black page with a hairline border. With no elevation ladder, nothing recedes and nothing advances — the eye has no landing point.</p></div>
+    <div><h3>No data ink</h3><p>A CRM's beauty is its data. Right now numbers sit alone in cards: no sparklines, no deltas, no trend bars. Empty pixels where evidence of value should be.</p></div>
+    <div><h3>Typography without a scale</h3><p>One weight, two sizes, no display face. Page titles, card labels, and body copy all carry similar visual weight, so hierarchy is done by position alone.</p></div>
+    <div><h3>Unused width</h3><p>Voice, Calendar, and Setup put a single narrow column on a 1500px canvas. Whitespace is a tool; a dead right half is just absence.</p></div>
+    <div><h3>Unbranded key moments</h3><p>The login door, the booking page, empty states — the moments a client's <em>customer</em> sees are the least designed surfaces in the product. That's backwards.</p></div>
+    <div><h3>Affordance gaps</h3><p>Checkboxes without bulk actions, chevrons that need pixel-perfect clicks, no hover states on rows. Small frictions compound into "feels unfinished."</p></div>
+  </div>
+</section>
+
+<section>
+  <span class="eyebrow">02 · Foundations</span>
+  <h2>The kit: surfaces, type, and rhythm</h2>
+
+  <h3>Surface ladder — four steps, not one</h3>
+  <p class="prose notes">Depth comes from a ladder of surfaces, each one step lighter (dark mode) or shadowed (light mode) than the last: <b>page → card → nested panel → raised control</b>. Borders get two strengths — a whisper for structure, a firmer line for interactive edges. In dark mode, replace drop shadows with a 1px inner top highlight plus a soft ambient shadow; in light mode use small, tight shadows, never big gray blurs.</p>
+  <div class="swrow">
+    <div class="sw"><div class="c" style="background:#0e0d14"></div><div class="l"><b>--surface-0 · #0E0D14</b><span>page ground (dark)</span></div></div>
+    <div class="sw"><div class="c" style="background:#16141e"></div><div class="l"><b>--surface-1 · #16141E</b><span>cards, sidebar</span></div></div>
+    <div class="sw"><div class="c" style="background:#1d1a28"></div><div class="l"><b>--surface-2 · #1D1A28</b><span>nested panels, inputs</span></div></div>
+    <div class="sw"><div class="c" style="background:#252132"></div><div class="l"><b>--surface-3 · #252132</b><span>hover, raised, tooltips</span></div></div>
+    <div class="sw"><div class="c" style="background:#8b7cf7"></div><div class="l"><b>--accent · #8B7CF7</b><span>desaturated for dark bg</span></div></div>
+    <div class="sw"><div class="c" style="background:#f6f5fa"></div><div class="l"><b>--surface-0 · #F6F5FA</b><span>page ground (light)</span></div></div>
+    <div class="sw"><div class="c" style="background:#ffffff; border-bottom:1px solid var(--pg-line)"></div><div class="l"><b>--surface-1 · #FFFFFF</b><span>cards</span></div></div>
+    <div class="sw"><div class="c" style="background:#f1eff7"></div><div class="l"><b>--surface-3 · #F1EFF7</b><span>hover, wells</span></div></div>
+    <div class="sw"><div class="c" style="background:#6d28d9"></div><div class="l"><b>--accent · #6D28D9</b><span>full saturation on light</span></div></div>
+    <div class="sw"><div class="c" style="background:linear-gradient(90deg,#4ade97 33%,#f0b35e 33%,#f0b35e 66%,#f2708a 66%)"></div><div class="l"><b>status triad</b><span>always dot + label, never color alone</span></div></div>
+  </div>
+  <p class="prose notes">Two details that quietly change everything: give every neutral a <b>violet bias</b> (your grays are currently pure; hue-biased neutrals read as designed), and tint the accent per mode — <b>#8B7CF7 on dark, #6D28D9 on light</b> — because one violet cannot be correct on both grounds.</p>
+
+  <h3>Type — three roles, one scale</h3>
+  <div class="scale">
+    <div class="row"><div class="spec"><b>Display · Bricolage Grotesque 650</b>24–28px / -0.01em</div><div style="font-family:'Bricolage Grotesque',sans-serif; font-weight:650; font-size:1.5rem;">Dashboard — Valle Verde</div></div>
+    <div class="row"><div class="spec"><b>UI · Geist 400–600</b>13–14px / 1.5</div><div style="font-size:.9rem;">Buttons, table cells, body copy. One face, three weights — weight does the hierarchy, not size.</div></div>
+    <div class="row"><div class="spec"><b>Data · Geist tabular</b>font-variant-numeric</div><div style="font-size:.95rem; font-variant-numeric:tabular-nums;">$12,400 · 47 calls · 2:12 — digits align in columns</div></div>
+    <div class="row"><div class="spec"><b>Label · Geist Mono 500</b>9–11px / +0.14em / caps</div><div style="font-family:'Geist Mono',monospace; font-size:.66rem; letter-spacing:.14em; text-transform:uppercase; color:var(--pg-faint);">COMMUNICATIONS · OUTCOME · LAST 14 DAYS</div></div>
+  </div>
+  <p class="prose notes" style="margin-top:12px;">The display face is the personality budget: page titles, KPI numbers, the login page, and nothing else. Everything functional stays in Geist (already one of your theming engine's options). Mono uppercase micro-labels are what make the sidebar groups, chart captions, and table headers feel engineered rather than default.</p>
+
+  <h3>Rhythm</h3>
+  <p class="prose notes">A 4px spacing grid (4·8·12·16·24·32·48). Radius scale: <b>7–8px controls, 11px cards, 999px pills</b> — pick once, apply everywhere; mixed radii are a top "AI-built" tell. Motion: 150ms ease-out on hover states, 250ms on panel transitions, and honor <code style="font-family:'Geist Mono',monospace; font-size:.8em;">prefers-reduced-motion</code>. No scroll-linked effects — that's implicated in your current jank.</p>
+</section>
+
+<section>
+  <span class="eyebrow">03 · Flagship mockup</span>
+  <h2>The dashboard, in both directions</h2>
+  <p class="prose lede" style="font-size:.98rem;">Same layout, two identities. Hover the bars — the mockups are live HTML, so every spec here is inspectable and liftable. Note what changed from today: grouped sidebar with mono labels and an active rail, a client switcher with identity, KPI tiles that carry evidence (sparkline + delta), a chart where the empty space was, an activity feed with outcome pills, and setup progress demoted to a quiet sidebar meter instead of dominating the page.</p>
+
+  <div class="frame">
+    <div class="bar" style="background:#16141e; color:#6f6987;"><i style="background:#3a3550"></i><i style="background:#3a3550"></i><i style="background:#3a3550"></i><span style="margin-left:10px;">app.bis-rgv.com — direction A · refined dark</span></div>
+    <div class="mk mk-dark" id="mock-src">
+      <div class="layout">
+        <aside>
+          <div class="brand"><span class="dot">B</span><b>BIS Platform</b></div>
+          <div class="client"><span class="av">VV</span><div><b>Valle Verde Landscaping</b><span>America/Chicago</span></div><span class="chev">▾</span></div>
+          <div class="grp">Overview</div>
+          <nav>
+            <a class="on" href="#" onclick="return false"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>Dashboard</a>
+          </nav>
+          <div class="grp">CRM</div>
+          <nav>
+            <a href="#" onclick="return false"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>Contacts</a>
+            <a href="#" onclick="return false"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="5" height="16" rx="1"/><rect x="10" y="4" width="5" height="10" rx="1"/><rect x="17" y="4" width="5" height="13" rx="1"/></svg>Opportunities</a>
+          </nav>
+          <div class="grp">Communications</div>
+          <nav>
+            <a href="#" onclick="return false"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z"/></svg>Conversations<span class="n">3</span></a>
+            <a href="#" onclick="return false"><svg viewBox="0 0 24 24"><path d="M5 4h4l2 5-3 2a13 13 0 0 0 5 5l2-3 5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/></svg>Calls</a>
+            <a href="#" onclick="return false"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>Voice</a>
+          </nav>
+          <div class="grp">Growth</div>
+          <nav>
+            <a href="#" onclick="return false"><svg viewBox="0 0 24 24"><path d="M6 3h9l5 5v13H6z"/><path d="M14 3v6h6"/></svg>Forms</a>
+            <a href="#" onclick="return false"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Calendar</a>
+          </nav>
+          <div class="sfoot">
+            <a class="sset" href="#" onclick="return false"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>Settings</a>
+            <div class="meter">Setup · 7 of 9 done<span class="pb"><i></i></span></div>
+          </div>
+        </aside>
+        <main>
+          <div class="top">
+            <div><h4>Good morning, Valle Verde</h4><div class="sub">Monday, Aug 31 · Sofía answered every call this weekend</div></div>
+            <div class="search">⌕ Search…<kbd>⌘K</kbd></div>
+            <span class="iconbtn">◐</span><span class="avatar">DL</span>
+          </div>
+          <div class="kpis">
+            <div class="kpi"><span class="lbl">Calls answered</span><div><span class="val">47</span><span class="d up">▲ 12%</span></div>
+              <svg class="spark" viewBox="0 0 100 26" preserveAspectRatio="none"><polyline points="0,20 14,17 28,18 42,12 56,14 70,9 84,10 100,4" fill="none" stroke="var(--ac)" stroke-width="2"/><polygon points="0,20 14,17 28,18 42,12 56,14 70,9 84,10 100,4 100,26 0,26" fill="var(--ac)" opacity=".12"/><circle cx="100" cy="4" r="2.4" fill="var(--ac2)"/></svg></div>
+            <div class="kpi"><span class="lbl">Appointments booked</span><div><span class="val">18</span><span class="d up">▲ 5%</span></div>
+              <svg class="spark" viewBox="0 0 100 26" preserveAspectRatio="none"><polyline points="0,18 14,19 28,15 42,16 56,11 70,13 84,8 100,7" fill="none" stroke="var(--ac)" stroke-width="2"/><polygon points="0,18 14,19 28,15 42,16 56,11 70,13 84,8 100,7 100,26 0,26" fill="var(--ac)" opacity=".12"/><circle cx="100" cy="7" r="2.4" fill="var(--ac2)"/></svg></div>
+            <div class="kpi"><span class="lbl">After-hours captured</span><div><span class="val">9</span><span class="d up">▲ 3</span></div>
+              <svg class="spark" viewBox="0 0 100 26" preserveAspectRatio="none"><polyline points="0,22 14,20 28,21 42,17 56,18 70,14 84,15 100,10" fill="none" stroke="var(--ac)" stroke-width="2"/><polygon points="0,22 14,20 28,21 42,17 56,18 70,14 84,15 100,10 100,26 0,26" fill="var(--ac)" opacity=".12"/><circle cx="100" cy="10" r="2.4" fill="var(--ac2)"/></svg></div>
+            <div class="kpi"><span class="lbl">Pipeline added</span><div><span class="val">$12,400</span><span class="d dn">▼ 8%</span></div>
+              <svg class="spark" viewBox="0 0 100 26" preserveAspectRatio="none"><polyline points="0,10 14,8 28,12 42,9 56,13 70,12 84,16 100,14" fill="none" stroke="var(--ac)" stroke-width="2"/><polygon points="0,10 14,8 28,12 42,9 56,13 70,12 84,16 100,14 100,26 0,26" fill="var(--ac)" opacity=".12"/><circle cx="100" cy="14" r="2.4" fill="var(--ac2)"/></svg></div>
+          </div>
+          <div class="grid2">
+            <div class="card">
+              <h5>Calls <span>LAST 14 DAYS · HOVER FOR DETAIL</span></h5>
+              <div class="bars">
+                <i style="height:34%" data-v="Aug 18 · 5 calls"></i><i style="height:46%" data-v="Aug 19 · 7 calls"></i><i style="height:40%" data-v="Aug 20 · 6 calls"></i><i style="height:60%" data-v="Aug 21 · 9 calls"></i><i style="height:52%" data-v="Aug 22 · 8 calls"></i><i class="mut" style="height:22%" data-v="Aug 23 · 3 calls"></i><i class="mut" style="height:28%" data-v="Aug 24 · 4 calls"></i><i style="height:56%" data-v="Aug 25 · 8 calls"></i><i style="height:64%" data-v="Aug 26 · 10 calls"></i><i style="height:50%" data-v="Aug 27 · 7 calls"></i><i style="height:72%" data-v="Aug 28 · 11 calls"></i><i style="height:58%" data-v="Aug 29 · 9 calls"></i><i class="mut" style="height:36%" data-v="Aug 30 · 5 calls"></i><i style="height:88%" data-v="Aug 31 · 13 calls"></i>
+              </div>
+              <div class="axis"><span>AUG 18</span><span>WEEKENDS MUTED</span><span>TODAY</span></div>
+              <table class="mini">
+                <tr><td class="who">Maria Garcia</td><td class="dim">2:12 · EN</td><td><span class="pill g"><i></i>Booked</span></td><td class="dim" style="text-align:right">5:20 PM</td></tr>
+                <tr><td class="who">+1 956 802 3471</td><td class="dim">1:09 · ES</td><td><span class="pill w"><i></i>Abandoned</span></td><td class="dim" style="text-align:right">5:15 PM</td></tr>
+                <tr><td class="who">+1 956 292 1696</td><td class="dim">0:07 · EN</td><td><span class="pill c"><i></i>Spam</span></td><td class="dim" style="text-align:right">4:01 PM</td></tr>
+              </table>
+            </div>
+            <div class="card">
+              <h5>Activity <span>TODAY</span></h5>
+              <div class="feed">
+                <div class="ev"><span class="ic" style="background:var(--good-bg); color:var(--good)">✓</span><p><b>Sofía booked Carlos Mendoza</b> — free estimate, Tue 9:00 AM</p><span class="t">10m</span></div>
+                <div class="ev"><span class="ic" style="background:var(--ac-dim); color:var(--ac)">✉</span><p><b>Form submitted</b> — "Backyard renovation" via website</p><span class="t">1h</span></div>
+                <div class="ev"><span class="ic" style="background:var(--warn-bg); color:var(--warn)">★</span><p><b>New Google review</b> — 5 stars from R. Treviño</p><span class="t">3h</span></div>
+                <div class="ev"><span class="ic" style="background:var(--ac-dim); color:var(--ac)">↻</span><p><b>Missed-call text-back sent</b> to +1 956 555 0182</p><span class="t">5h</span></div>
+              </div>
+              <div style="margin-top:14px; display:flex; gap:8px;">
+                <button class="btn">Add opportunity</button><button class="btn ghost">Weekly report</button>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </div>
+  <p class="caption">Direction A — refined dark · four-step surface ladder, violet-biased neutrals, evidence in every card</p>
+
+  <div class="frame">
+    <div class="bar" style="background:#ffffff; color:#8b86a0; border-bottom:1px solid #e8e5f0;"><i style="background:#d8d4e6"></i><i style="background:#d8d4e6"></i><i style="background:#d8d4e6"></i><span style="margin-left:10px;">app.bis-rgv.com — direction B · light-first</span></div>
+    <div class="mk mk-light" id="mock-dst"></div>
+  </div>
+  <p class="caption">Direction B — light-first · identical structure, friendlier to non-technical owners; ship it as the client-user default and keep dark for you</p>
+
+  <h3>The booking page, redesigned</h3>
+  <p class="prose notes">Today this is a bare widget on a void. Every booking page should be a branded storefront: the client's logo and color (your theming engine already stores both), what is being booked, a step indicator, and a quiet "Powered by BIS" — which turns every booking page into your own lead-gen surface.</p>
+  <div class="frame">
+    <div class="mk mk-dark bk">
+      <div class="card">
+        <div class="head"><span class="logo">VV</span><div><b>Valle Verde Landscaping</b><span>Free estimate · 60 min · Video or phone · English / Español</span></div></div>
+        <div class="body">
+          <div class="steps"><i class="on"></i><i class="on"></i><i></i></div>
+          <div class="lbl">Pick a day</div>
+          <div class="days">
+            <div class="day">Mon<b>31</b></div><div class="day on">Tue<b>1</b></div><div class="day">Wed<b>2</b></div><div class="day">Thu<b>3</b></div><div class="day">Fri<b>4</b></div><div class="day">Sat<b>5</b></div>
+          </div>
+          <div class="lbl">Available times · Central</div>
+          <div class="slots">
+            <div class="slot">9:00 AM</div><div class="slot on">10:00 AM</div><div class="slot">12:00 PM</div>
+            <div class="slot">1:00 PM</div><div class="slot">3:00 PM</div><div class="slot">4:00 PM</div>
+          </div>
+          <div class="foot"><button class="btn">Continue →</button><small>Powered by BIS</small></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <p class="caption">Booking — branded card on the client's surface tone; same component serves the embed and the direct link</p>
+
+  <h3>The Setup experience, rebuilt as a two-pane wizard</h3>
+  <p class="prose notes">Today Setup is a long single-column scroll of nine cards — you read all nine to find the one that needs you, and the empty right half of the screen watches you do it. The fix is structural: a <b>stepper rail on the left, one step's detail on the right</b>. The rail shows every state at a glance (done, current, locked-until), the pane holds only the active step, and the width finally works for you. Two rules come with it: the current step is always the first incomplete one, pre-selected on arrival; and steps that depend on others (Call forwarding, Go live) show <em>why</em> they're locked, in plain words, right on the rail.</p>
+  <div class="frame">
+    <div class="mk mk-dark su">
+      <div class="rail">
+        <div class="hd"><b>Client setup</b><span>Valle Verde Landscaping</span><span class="pb"><i></i></span><span style="font-size:10px; color:var(--t3); letter-spacing:0; text-transform:none;">7 of 9 complete</span></div>
+        <div class="st done"><span class="b">✓</span>Create the account</div>
+        <div class="st done"><span class="b">✓</span>Branding</div>
+        <div class="st done"><span class="b">✓</span>Business hours</div>
+        <div class="st done"><span class="b">✓</span>Voice profile</div>
+        <div class="st cur"><span class="b">5</span>Phone number</div>
+        <div class="st"><span class="b">6</span>Email identity<small>Optional — can skip</small></div>
+        <div class="st lock"><span class="b">7</span>Call forwarding<small>Needs a phone number first</small></div>
+        <div class="st done"><span class="b">✓</span>Test call</div>
+        <div class="st lock"><span class="b">★</span>Go live<small>Unlocks after step 5</small></div>
+      </div>
+      <div class="pane">
+        <span class="stepno">Step 5 of 9 · Next up</span>
+        <h4>Assign a phone number</h4>
+        <p class="why">This is the number Sofía answers. Buy one in your carrier dashboard, then assign it here — or move a number you already own from another client.</p>
+        <span class="tag">⚙ Done outside BIS · opens carrier dashboard</span>
+        <div style="display:flex; gap:8px;">
+          <button class="btn">Open Telnyx →</button>
+          <button class="btn ghost">Enter a number manually</button>
+        </div>
+        <div class="panel">
+          <div class="row"><b>+1 956 506 1545</b><span>currently on Bespoke Intelligent Solutions · Testing</span><button class="btn ghost" style="margin-left:auto; padding:5px 11px;">⇆ Move here</button></div>
+        </div>
+        <div class="nav2">
+          <button class="btn ghost">← Test call</button>
+          <button class="btn ghost">Email identity →</button>
+          <span class="skip">Progress saves automatically</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <p class="caption">Setup — stepper rail states at a glance, one step in focus, dependencies explained where they block</p>
+  <p class="prose notes">And one opinionated call: <b>Setup should retire itself.</b> It is a launch surface, not a permanent module. While incomplete, it lives as the progress meter pinned at the bottom of the sidebar (see the dashboard mockup) — clicking it opens this wizard. Once all nine steps are done, the meter is replaced by a one-time "🎉 Live since Sep 4" line and Setup leaves the navigation entirely; a "Launch checklist" entry in Settings keeps it reachable for audits. Permanent nav space for a one-time task is the kind of clutter that makes a product feel like a tool.</p>
+
+  <h3>Fixing the buried Settings link</h3>
+  <p class="prose notes">You're right that Settings currently sits below the fold of the sidebar — on a laptop it's invisible until you scroll, which makes the product's control panel feel like an afterthought. The fix is a <b>pinned footer cluster</b>, already shown in the dashboard mockup above: the sidebar becomes a flex column where only the middle nav region scrolls (<code style="font-family:'Geist Mono',monospace; font-size:.85em;">overflow-y:auto</code> on the nav, <code style="font-family:'Geist Mono',monospace; font-size:.85em;">margin-top:auto</code> on the footer), while Settings and the setup meter stay glued to the bottom at every viewport height. Settings never scrolls out of view again, and it gains an icon and the same hover treatment as every other nav item — pinned, not demoted. Back it up with two redundant paths, because settings is a destination people hunt for: the client switcher's dropdown gets a "Company settings" row, and ⌘K search matches every settings section by name ("branding," "custom fields," "outgoing email") so nobody has to remember where a control lives.</p>
+</section>
+
+<section>
+  <span class="eyebrow">04 · The rules</span>
+  <h2>Ten rules to hold the line</h2>
+  <ol class="rulelist prose" style="max-width:760px;">
+    <li><div><b>Every number earns context.</b><p>A metric never appears without a comparison — a delta, a sparkline, or a period label. "47" is data; "47 ▲12% this week" is a product.</p></div></li>
+    <li><div><b>Four surfaces, two borders, one shadow recipe.</b><p>All depth comes from the ladder. If a new component needs a fifth surface, the design is wrong, not the ladder.</p></div></li>
+    <li><div><b>Weight before size, size before color.</b><p>Hierarchy escalates in that order. Reach for the accent color last — it's for actions and identity, not emphasis.</p></div></li>
+    <li><div><b>Status is never color alone.</b><p>Booked/Abandoned/Spam pills always carry the dot and the word. Colorblind owners run businesses too.</p></div></li>
+    <li><div><b>The whole row is the button.</b><p>Tables: full-row click target, hover surface shift, visible focus ring, and a bulk-action bar that appears the moment a checkbox is ticked.</p></div></li>
+    <li><div><b>Empty states sell the feature.</b><p>"No conversations yet" becomes one sentence of what will appear here plus the one action that makes it happen. Blueprints' empty state already does this — make it the template.</p></div></li>
+    <li><div><b>Speak the owner's language.</b><p>No milestone codes, no "Released," no {{template_syntax}} in client-facing copy. Read every string as a landscaper at 7 AM.</p></div></li>
+    <li><div><b>Motion is a whisper.</b><p>150ms hovers, 250ms panels, reduced-motion respected, nothing tied to scroll. Fix the scroll jank before adding any new animation.</p></div></li>
+    <li><div><b>Brand the thresholds.</b><p>Login, booking page, email footers, invite emails — anywhere a client's customer touches the product gets the client's logo and color, automatically, from the tokens you already store.</p></div></li>
+    <li><div><b>The dashboard is the invoice.</b><p>Its job is to prove the service paid for itself this week. Design every card on it to answer "what did BIS capture for me?"</p></div></li>
+  </ol>
+</section>
+
+<section>
+  <span class="eyebrow">05 · Implementation</span>
+  <h2>Drop-in tokens</h2>
+  <p class="prose notes">Your Settings page already themes per client via variables — extend that same mechanism. These are the core custom properties behind both mockups above; wire components to tokens only, and the client-branding engine (brand color → <code style="font-family:'Geist Mono',monospace; font-size:.85em;">--accent</code>) keeps working untouched.</p>
+<pre class="tokens"><span class="cm">/* dark (default) */</span>
+<span class="k">:root</span> {
+  --surface-0:#0E0D14; --surface-1:#16141E; --surface-2:#1D1A28; --surface-3:#252132;
+  --line:#28243A; --line-strong:#38334F;
+  --text-1:#F2F0F7; --text-2:#A9A3BD; --text-3:#6F6987;
+  --accent:#8B7CF7; --accent-strong:#A99EFF; --accent-dim:rgba(139,124,247,.14);
+  --good:#4ADE97; --warn:#F0B35E; --crit:#F2708A;
+  --radius-ctl:8px; --radius-card:11px;
+  --shadow-card:0 1px 0 rgba(255,255,255,.03) inset, 0 8px 24px -12px rgba(0,0,0,.6);
+  --ease:150ms cubic-bezier(.2,.7,.3,1);
+}
+<span class="cm">/* light */</span>
+<span class="k">[data-theme="light"]</span> {
+  --surface-0:#F6F5FA; --surface-1:#FFF; --surface-2:#FFF; --surface-3:#F1EFF7;
+  --line:#E8E5F0; --line-strong:#D8D4E6;
+  --text-1:#1D1930; --text-2:#5D5876; --text-3:#8B86A0;
+  --accent:#6D28D9; --accent-strong:#5B21B8; --accent-dim:rgba(109,40,217,.09);
+  --good:#15803D; --warn:#B45309; --crit:#B91C1C;
+  --shadow-card:0 1px 2px rgba(29,25,48,.05), 0 10px 28px -18px rgba(29,25,48,.18);
+}</pre>
+  <p class="prose notes" style="margin-top:16px;">Suggested build order (see §06 for the interaction layer that follows): <b>(1)</b> tokens + surface ladder across all pages, <b>(2)</b> sidebar grouping and topbar, <b>(3)</b> KPI tiles with sparklines and the dashboard chart, <b>(4)</b> booking page reskin, <b>(5)</b> table interactions and empty states. Steps 1–2 alone will transform first impressions; every step is CSS plus a small amount of markup — no architectural change.</p>
+</section>
+
+<section>
+  <span class="eyebrow">06 · The interaction layer</span>
+  <h2>Beyond the redesign: how the app should <em>behave</em></h2>
+  <p class="prose lede" style="font-size:.98rem;">The tokens and mockups fix how the product looks. What makes users say "this feels expensive" is behavior — the second layer, built on the first.</p>
+
+  <h3>Speed</h3>
+  <div class="diag">
+    <div><h3>⌘K is the spine</h3><p>One command palette that finds contacts, calls, and conversations, jumps to any settings section by name, and runs actions ("new opportunity," "text Maria"). It solves navigation depth (including the Settings problem) permanently, and power users never touch the sidebar again.</p></div>
+    <div><h3>Skeletons, never spinners</h3><p>Loading states shaped like the content they're waiting for — gray KPI tiles, ghost table rows. A spinner says "wait"; a skeleton says "almost." Combine with optimistic updates: a dragged pipeline card lands instantly and reconciles in the background.</p></div>
+    <div><h3>A real keyboard model</h3><p>j/k to move through rows, Enter to open, Esc to close, ? for the shortcut sheet. Costs a day, and it's the single strongest "built by people who use software" signal to anyone technical evaluating the platform.</p></div>
+  </div>
+
+  <h3>Context</h3>
+  <div class="diag">
+    <div><h3>Drawers, not page loads</h3><p>Clicking a call or contact in a list opens a right-side drawer over the list, not a full navigation — triage ten calls without losing your place, Esc to close, deep-link to the full page for heavy editing. This is the modern CRM's core interaction (Linear, Attio, Front all live on it).</p></div>
+    <div><h3>Inline edit everywhere</h3><p>Contact fields, opportunity values, tags: click the value, edit in place, save on blur with an undo toast. Kill the form-and-Save-button pattern everywhere the edit is small.</p></div>
+    <div><h3>Design all three states</h3><p>Every screen ships with its loaded, empty, and error state designed — the empty state selling the feature (rule 06), the error state saying what happened and what to do. Unstyled edge states are where "basic" comes back.</p></div>
+  </div>
+
+  <h3>Trust &amp; delight</h3>
+  <div class="diag">
+    <div><h3>Sofía has presence</h3><p>A quiet topbar indicator — "● Sofía · on a call" with a soft pulse, "✓ 47 calls handled this week" when idle. The AI receptionist is the product's hero; right now she's invisible until you open a transcript. Later: click through to a live transcript view.</p></div>
+    <div><h3>Undo beats confirm</h3><p>Reversible actions execute immediately with a 10-second undo toast; confirmation dialogs are reserved for the truly destructive, which ask you to type the thing's name. Fewer interruptions, more safety than a reflexive "Are you sure?".</p></div>
+    <div><h3>Español is a toggle, not a translation project</h3><p>Per-user language switch for the client UI. Half your market thinks in Spanish; a bilingual admin panel is a moat competitors won't copy (pairs with the bilingual receptionist you already have).</p></div>
+    <div><h3>Owners live on phones</h3><p>A responsive PWA pass with a bottom tab bar for the five core sections and push notifications for bookings and hot leads. Not a native app — a home-screen icon and a layout that respects thumbs.</p></div>
+    <div><h3>A /styleguide page keeps you honest</h3><p>One internal route rendering every token, button, pill, card, and state from the live codebase. It's your design system's contract — drift shows up there first, and screenshot tests can watch it.</p></div>
+    <div><h3>Notifications with a spine</h3><p>A bell with a real inbox: new lead, booking, cancellation, review — each row deep-linking to the record, mark-all-read, quiet hours. This is the habit loop that brings owners back daily.</p></div>
+  </div>
+</section>
+</div>
+<script>
+  (function(){
+    var src=document.getElementById('mock-src'), dst=document.getElementById('mock-dst');
+    if(src&&dst){ dst.innerHTML=src.innerHTML; }
+  })();
+</script>
