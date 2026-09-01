@@ -8,9 +8,31 @@ const globals = readFileSync(
 const tokens = readFileSync(
   join(__dirname, "../../styles/tokens.css"), "utf-8");
 
+const dashboardLayout = readFileSync(
+  join(__dirname, "../../app/(dashboard)/layout.tsx"), "utf-8");
+
 describe("design foundation: fonts", () => {
   it("exposes --font-display mapped to the Bricolage variable", () => {
     expect(globals).toMatch(/--font-display:\s*var\(--font-bricolage\)/);
+  });
+
+  it("tokens.css repoints --font-display to var(--font-bricolage) in BOTH blocks (light :root and .dark) — a bare literal stack here would resolve to the browser/system face, not next/font's optimized one", () => {
+    const matches = [...tokens.matchAll(/--font-display:\s*var\(--font-bricolage\)/g)];
+    expect(matches.length).toBe(2);
+  });
+
+  it("Bricolage preloads now that page-header.tsx consumes --font-display", () => {
+    // Scoped to the bricolage object literal ([^}]* stops at its closing
+    // brace) so this cannot false-match the unrelated "next/font/google
+    // defaults to `preload: true`" prose in a later comment.
+    expect(dashboardLayout).toMatch(
+      /const bricolage = Bricolage_Grotesque\(\{[^}]*preload:\s*true[^}]*\}\)/
+    );
+  });
+
+  it("layout.tsx's Bricolage comment no longer claims no consumer exists", () => {
+    expect(dashboardLayout).not.toMatch(/Preload off until P2\/P3/);
+    expect(dashboardLayout).not.toMatch(/flip back when --font-display enters the UI/);
   });
 });
 

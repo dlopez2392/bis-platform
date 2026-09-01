@@ -45,7 +45,7 @@
   --ease-panel: 250ms cubic-bezier(.2,.7,.3,1);
 
   /* type roles */
-  --font-display: "Bricolage Grotesque", "Geist", sans-serif; /* titles + KPI numbers ONLY */
+  --font-display: var(--font-bricolage), "Bricolage Grotesque", "Geist", sans-serif; /* titles + KPI numbers ONLY */
   --font-ui:      "Geist", -apple-system, "Segoe UI", sans-serif;
   --font-mono:    "Geist Mono", ui-monospace, monospace;      /* micro-labels, ids, timestamps */
 }
@@ -90,7 +90,7 @@
   --ease-panel: 250ms cubic-bezier(.2,.7,.3,1);
 
   /* type roles */
-  --font-display: "Bricolage Grotesque", "Geist", sans-serif; /* titles + KPI numbers ONLY */
+  --font-display: var(--font-bricolage), "Bricolage Grotesque", "Geist", sans-serif; /* titles + KPI numbers ONLY */
   --font-ui:      "Geist", -apple-system, "Segoe UI", sans-serif;
   --font-mono:    "Geist Mono", ui-monospace, monospace;      /* micro-labels, ids, timestamps */
 }

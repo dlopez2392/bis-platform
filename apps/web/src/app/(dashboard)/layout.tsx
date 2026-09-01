@@ -20,12 +20,13 @@ const geistMono = Geist_Mono({
 
 // Design system display face — page titles and KPI numbers ONLY (DESIGN.md
 // type roles). Not a tenant-selectable face. Variable font: weight 650 is
-// picked at the use site, not loaded per-weight. Preload off until P2/P3
-// components paint with it; flip back when --font-display enters the UI.
+// picked at the use site, not loaded per-weight. Preloaded: page-header.tsx
+// (Task 6) is the first consumer of --font-display, so this now paints on
+// every dashboard route's first render.
 const bricolage = Bricolage_Grotesque({
   subsets: ["latin"],
   variable: "--font-bricolage",
-  preload: false,
+  preload: true,
 });
 
 // The two tenant-selectable faces carry `preload: false`, and that is the
