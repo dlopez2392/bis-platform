@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   LayoutDashboard,
   Users,
@@ -25,6 +25,11 @@ import { AccountSwitcher, type AccountOption } from "@/components/account-switch
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { buildNavGroups, type NavIconKey } from "@/lib/nav-groups";
+// A direct import of a "use server" export into this client component —
+// Next.js compiles it to a callable stub, no <form action> needed. See
+// unread-actions.ts's own doc comment for why the read has to live in the
+// [accountId] segment rather than the layout that renders this sidebar.
+import { getUnreadTotal } from "@/app/(dashboard)/dashboard/accounts/[accountId]/unread-actions";
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
 
@@ -64,7 +69,6 @@ export function AppSidebar({
   clientBrandName,
   clientLogoUrl,
   clientAccentColor,
-  unreadTotal,
 }: {
   accounts: AccountOption[];
   defaultCollapsed: boolean;
@@ -86,14 +90,16 @@ export function AppSidebar({
    *  the globals.css tokens — including their deliberate light/dark tuning,
    *  which a flat override would discard. */
   clientAccentColor?: string;
-  /** Sum of every conversation's unread_count in this account, read
-   *  server-side by the dashboard layout (packages/db's sumUnreadCount).
-   *  Undefined at the agency top level, where there is no account in scope
-   *  to count — the Conversations badge below only ever renders inside one. */
-  unreadTotal?: number;
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const pathname = usePathname();
+  // Paired with the account id it was fetched for, rather than a bare
+  // number reset via its own setState call: react-hooks' set-state-in-effect
+  // rule flags a synchronous setState in an effect body (only the fetch's
+  // own .then() callback below is exempt, as an update from an external
+  // system). Pairing lets "reset to 0 when leaving an account" fall out of
+  // the read below as a derived mismatch instead of a second state write.
+  const [unreadState, setUnreadState] = useState<{ accountId: string; total: number } | null>(null);
 
   function toggle() {
     const next = !collapsed;
@@ -104,6 +110,30 @@ export function AppSidebar({
   const match = pathname.match(/^\/dashboard\/accounts\/([^/]+)/);
   const activeAccountId = match?.[1];
   const base = activeAccountId ? `/dashboard/accounts/${activeAccountId}` : null;
+
+  // The Conversations badge's count. Re-read on every account change, not
+  // polled — a stale count until the next navigation is an acceptable
+  // trade for not hammering the DB from every open tab. See
+  // unread-actions.ts for why this read happens here (an imperative Server
+  // Action call) rather than the dashboard layout: that layout is an
+  // ANCESTOR of dashboard/accounts/[accountId] and never receives accountId
+  // through its own params, so it cannot make this read itself.
+  useEffect(() => {
+    if (!activeAccountId) return;
+    let cancelled = false;
+    getUnreadTotal(activeAccountId).then((count) => {
+      if (!cancelled) setUnreadState({ accountId: activeAccountId, total: count });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAccountId]);
+  // Stale account's count never leaks under the new account's Conversations
+  // item while its own fetch is still in flight — and there is nothing to
+  // show at the agency top level (activeAccountId undefined), both without
+  // a second, effect-synchronous setState call.
+  const unreadTotal = unreadState && unreadState.accountId === activeAccountId ? unreadState.total : 0;
+
   // Grouping, audience filtering and href construction all live in the pure
   // nav-groups module (unit-tested there without React); this component only
   // resolves labelKey → copy and iconKey → icon component per item.
@@ -266,10 +296,10 @@ export function AppSidebar({
                 item={item}
                 collapsed={collapsed}
                 active={isNavActive(pathname, item.href)}
-                // Only the Conversations item carries a badge — the sum this
-                // account's unread messages, threaded down from the layout's
-                // sumUnreadCount read. Every other item gets undefined, which
-                // SidebarLink treats as zero (hidden).
+                // Only the Conversations item carries a badge — this
+                // account's unread total, read above via getUnreadTotal.
+                // Every other item gets undefined, which SidebarLink treats
+                // as zero (hidden).
                 unreadCount={base && item.href === `${base}/conversations` ? unreadTotal : undefined}
               />
             ))}

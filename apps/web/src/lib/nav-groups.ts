@@ -75,9 +75,11 @@ export function buildNavGroups(base: string | null, isAgency: boolean): NavGroup
       label: "nav.group.communications",
       items: [
         { href: `${base}/conversations`, labelKey: "nav.conversations", iconKey: "conversations" },
-        // BOTH audiences — the client's own business data, not agency
-        // configuration. See app-sidebar.tsx's calls-item comment for why
-        // this stays visible where Voice (immediately below) does not.
+        // BOTH audiences, unlike the agency-only Voice item directly below:
+        // Voice is the settings that configure the receptionist, this is
+        // the log of what it actually did — the client's own business
+        // data, and one of the screens where they see what they are paying
+        // for, same class of surface as Calls right after it.
         { href: `${base}/calls`, labelKey: "nav.calls", iconKey: "calls" },
         // Agency only. The route itself is still gated independently by
         // requireAgencyOnlyAccountAccess and by the isAgency check inside
