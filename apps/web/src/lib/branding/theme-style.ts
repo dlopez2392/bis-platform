@@ -47,8 +47,15 @@ export function themeStyle(theme: ResolvedTheme): CSSProperties {
     "--secondary-foreground": c(theme.secondaryForeground),
     "--muted": c(theme.muted),
     "--muted-foreground": c(theme.mutedForeground),
-    "--accent": c(theme.accent),
-    "--accent-foreground": c(theme.accentForeground),
+    // Not "--accent"/"--accent-foreground": that name is the brand accent
+    // token globals.css/tokens.css own (var(--accent), the violet the whole
+    // app paints from). This function used to re-emit it here as the OLD
+    // shadcn hover-surface pair (dead for rendering since globals.css's
+    // @theme inline now reads --surface-3/--text-1 directly) — but the name
+    // collided, so a themed client account had the brand accent SHADOWED on
+    // <body> by whatever the ramp's subtle/fg pair happened to be. Emitting
+    // nothing here is the fix: the brand --accent custom property is never
+    // overridden by a tenant theme.
     "--border": c(theme.border),
     "--input": c(theme.input),
     "--ring": c(theme.ring),

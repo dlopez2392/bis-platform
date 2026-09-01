@@ -38,6 +38,22 @@ describe("themeStyle", () => {
     }
   });
 
+  // The brand `--accent` custom property (tokens.css) must never be shadowed
+  // on <body> for a themed client account. themeStyle used to re-emit
+  // `--accent`/`--accent-foreground` as the OLD shadcn hover-surface pair
+  // (dead for rendering since globals.css's @theme inline now reads
+  // --surface-3/--text-1 directly) — but the NAME collided with the brand
+  // token, so a themed account's body subtree still had the brand accent
+  // overridden by whatever the ramp's subtle/fg pair happened to be. Checked
+  // against the serialized string, not just the two keys, so a future
+  // emission of either name under a different code path still trips this.
+  it("never shadows the brand --accent token: no --accent or --accent-foreground in the emitted set", () => {
+    const style = themeStyle(theme) as Record<string, string>;
+    const serialized = Object.entries(style).map(([k, v]) => `${k}:${v};`).join("");
+    expect(serialized).not.toMatch(/--accent:/);
+    expect(serialized).not.toMatch(/--accent-foreground:/);
+  });
+
   // Defence in depth. Nothing should be able to reach this function with a
   // hostile value -- four inputs are DB-constrained and the colour is
   // hex-validated -- but this is the last gate before a style attribute, and

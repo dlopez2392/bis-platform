@@ -143,7 +143,6 @@ describe("deriveTheme", () => {
               expect(contrastRatio(t.mutedForeground, t.card), `muted on card ${where}`).toBeGreaterThanOrEqual(4.5);
               expect(contrastRatio(t.secondaryForeground, t.secondary), `secondary ${where}`).toBeGreaterThanOrEqual(4.5);
               expect(contrastRatio(t.primaryForeground, t.primary), `on primary ${where}`).toBeGreaterThanOrEqual(4.5);
-              expect(contrastRatio(t.accentForeground, t.accent), `on accent ${where}`).toBeGreaterThanOrEqual(4.5);
               expect(contrastRatio(t.sidebarForeground, t.sidebar), `sidebar text ${where}`).toBeGreaterThanOrEqual(4.5);
 
               // primary as text: text-primary links and the `link`
@@ -159,24 +158,6 @@ describe("deriveTheme", () => {
               expect(contrastRatio(t.ring, t.background), `ring on bg ${where}`).toBeGreaterThanOrEqual(3);
               expect(contrastRatio(t.ring, t.card), `ring on card ${where}`).toBeGreaterThanOrEqual(3);
               expect(contrastRatio(t.sidebarAccent, t.sidebar), `sidebar accent ${where}`).toBeGreaterThanOrEqual(3);
-
-              // accent is the hover/focus surface for dropdown items, command
-              // results and ghost buttons — not an accent stripe — so it is
-              // deliberately the ramp's own quiet pair and never brand-derived.
-              // `> 1` would pass for any two colours that merely differ, which
-              // proves nothing, so pin the actual contract instead: accent IS
-              // the ramp's subtle step, its text IS the ramp's foreground, and
-              // that pair still has to be readable.
-              const steps = NEUTRAL_RAMPS[neutral][mode];
-              expect(t.accent, `accent is the ramp's subtle step ${where}`).toBe(steps.subtle);
-              expect(t.accentForeground, `accent text is the ramp's fg ${where}`).toBe(steps.fg);
-              expect(contrastRatio(t.accentForeground, t.accent), `on accent ${where}`)
-                .toBeGreaterThanOrEqual(4.5);
-              // A hover fill nobody can see is a hover that does not exist.
-              // Not 3:1 — a quiet surface is meant to be quiet — but it must
-              // not collapse into the surface it appears over.
-              expect(contrastRatio(t.accent, t.card), `accent distinguishable from card ${where}`)
-                .toBeGreaterThanOrEqual(1.04);
 
               // hierarchy: muted text must stay quieter than primary text
               expect(contrastRatio(t.mutedForeground, t.background), `muted quieter ${where}`)

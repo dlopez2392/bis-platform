@@ -68,7 +68,6 @@ export type ResolvedTheme = {
   primary: string; primaryForeground: string;
   secondary: string; secondaryForeground: string;
   muted: string; mutedForeground: string;
-  accent: string; accentForeground: string;
   border: string; input: string; ring: string;
   sidebar: string; sidebarForeground: string;
   sidebarAccent: string; sidebarBorder: string;
@@ -220,17 +219,9 @@ export function deriveTheme(
   // by liftForLabel — 4.5:1 as text subsumes the 3:1 a plain button fill
   // would need.
   //
-  // accent is NOT brand-driven: it is the hover/focus surface for
-  // outline/ghost buttons, dropdown-menu items, command-palette items and
-  // badges — not an accent stripe — so filling it with the brand at full
-  // strength made every menu row loud. It takes the ramp's own subtle/fg
-  // pair instead, the same relationship secondary/secondaryForeground
-  // already has, which is what this token means everywhere else in shadcn.
-  //
   // ring and sidebarAccent still carry no label; they stay non-text UI at
   // 3:1, each lifted separately against the surface it actually lands on.
   const primary = (brand && liftForLabel(brand, steps.card, steps.bg, 4.5)) ?? bis.primary;
-  const accent = steps.subtle;
   const sidebarAccent = (brand && ensureContrast(brand, ramp.sidebar, 3)) ?? bis.sidebarAccent;
 
   // The ring appears on both the page background and on cards, so clearing
@@ -258,11 +249,6 @@ export function deriveTheme(
     // step is quieter than the foreground and still clears 4.5:1, which the
     // sweep asserts both ways.
     mutedForeground: steps.mutedFg,
-    accent,
-    // Not readableTextOn: accent is now always the ramp's own subtle step
-    // (never brand-driven, see above), and its foreground is the ramp's own
-    // fg — the exact pairing secondaryForeground/secondary already uses.
-    accentForeground: steps.fg,
     border: steps.border,
     input: steps.border,
     ring,
