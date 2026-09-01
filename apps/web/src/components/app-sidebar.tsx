@@ -79,6 +79,7 @@ export function AppSidebar({
   clientBrandName,
   clientLogoUrl,
   clientAccentColor,
+  clientTimezone,
 }: {
   accounts: AccountOption[];
   defaultCollapsed: boolean;
@@ -100,6 +101,13 @@ export function AppSidebar({
    *  the globals.css tokens — including their deliberate light/dark tuning,
    *  which a flat override would discard. */
   clientAccentColor?: string;
+  /** The client's own account timezone — same shape as the other client*
+   *  props above: resolved server-side in this layout, from the account
+   *  that's already been looked up for clientAccountName (auth.ts's
+   *  resolveClientAccessState reads it off the same row), not from an
+   *  [accountId] URL segment this layout never receives. Second identity-
+   *  block line, mirroring AccountSwitcher's own timezone line below. */
+  clientTimezone?: string;
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const pathname = usePathname();
@@ -324,8 +332,13 @@ export function AppSidebar({
             )}
           </span>
           {collapsed ? null : (
-            <span className="block min-w-0 flex-1 truncate text-sm font-medium">
-              {clientLabel}
+            // Same two-line shape as AccountSwitcher's own name/timezone
+            // block: name on top, timezone below at the shared 11px size.
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium">{clientLabel}</span>
+              <span className="block truncate text-[11px] text-sidebar-foreground/60">
+                {clientTimezone ?? ""}
+              </span>
             </span>
           )}
         </div>

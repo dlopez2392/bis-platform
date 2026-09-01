@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/command";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
+import { accountInitial } from "@/lib/account-initial";
 
 export type AccountOption = { id: string; name: string; timezone: string };
 
@@ -29,6 +30,12 @@ export function AccountSwitcher({
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const active = accounts.find((a) => a.id === activeAccountId);
+  // Accounts carry no uploaded mark (app-sidebar.tsx's client identity block
+  // is where a logo shows) — the chip's fallback is this account's own
+  // initial instead of a generic icon, once one is selected. "" (no active
+  // account, or a blank name) falls through to the Building2 icon below,
+  // same as before this task.
+  const initial = active ? accountInitial(active.name) : "";
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -40,7 +47,16 @@ export function AccountSwitcher({
         )}
       >
         <span className="flex size-7 shrink-0 items-center justify-center rounded bg-sidebar-accent/20 text-sidebar-accent">
-          <Building2 className="size-4" aria-hidden />
+          {initial ? (
+            // Decorative, like the icon it replaces: the trigger's own
+            // aria-label above already carries the accessible name, and a
+            // letter avatar adds no information a screen reader needs.
+            <span aria-hidden className="text-sm font-semibold">
+              {initial}
+            </span>
+          ) : (
+            <Building2 className="size-4" aria-hidden />
+          )}
         </span>
         {collapsed ? null : (
           <>
@@ -48,7 +64,7 @@ export function AccountSwitcher({
               <span className="block truncate text-sm font-medium">
                 {active?.name ?? m["shell.switchAccount"]}
               </span>
-              <span className="block truncate text-xs text-sidebar-foreground/60">
+              <span className="block truncate text-[11px] text-sidebar-foreground/60">
                 {active?.timezone ?? ""}
               </span>
             </span>

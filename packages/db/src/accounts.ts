@@ -39,9 +39,9 @@ export async function setClientAccess(
 
 export async function getAccountByOrgId(
   db: SupabaseClient, clerkOrgId: string,
-): Promise<{ id: string; name: string; client_access_enabled: boolean } | null> {
+): Promise<{ id: string; name: string; client_access_enabled: boolean; timezone: string } | null> {
   const { data, error } = await db.from("accounts")
-    .select("id, name, client_access_enabled").eq("clerk_org_id", clerkOrgId).maybeSingle();
+    .select("id, name, client_access_enabled, timezone").eq("clerk_org_id", clerkOrgId).maybeSingle();
   if (error) throw new Error(`getAccountByOrgId failed: ${error.message}`);
   return data ?? null;
 }

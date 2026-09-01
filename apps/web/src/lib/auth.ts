@@ -77,7 +77,7 @@ export async function requireAgencyOnlyAccountAccess(
  */
 export async function resolveClientAccessState(): Promise<
   | { status: "agency" }
-  | { status: "ok"; id: string; name: string }
+  | { status: "ok"; id: string; name: string; timezone: string }
   | { status: "off" }
   | { status: "none" }
 > {
@@ -88,7 +88,7 @@ export async function resolveClientAccessState(): Promise<
   const account = await getAccountByOrgId(serviceDb(), claims.org_id);
   if (!account) return { status: "none" };
   if (!account.client_access_enabled) return { status: "off" };
-  return { status: "ok", id: account.id, name: account.name };
+  return { status: "ok", id: account.id, name: account.name, timezone: account.timezone };
 }
 
 /** The client's own account, or null for the agency admin / an unlinked user. */
