@@ -122,7 +122,7 @@ describe("deriveTheme", () => {
       { color: "red; position:fixed", neutral: "slate", corners: null, type: null, mode: null },
       "light",
     );
-    expect(t?.primary).toBe("#7c3aed"); // the BIS light default, not the input
+    expect(t?.primary).toBe("#6d28d9"); // the BIS light default, not the input
   });
 
   // The whole point of the milestone: no combination of stored inputs can
@@ -305,52 +305,80 @@ describe("parseAllowlisted", () => {
   });
 });
 
-// BIS.dark.primary and globals.css's `.dark { --primary: ... }` must stay
-// equal (same for ring) — theme.ts's own comment says so, but a comment
-// enforces nothing. This reads the live CSS file and checks it against the
-// constants actually used at derivation time, so the two cannot drift apart
-// again without a red test.
-describe("globals.css / BIS.dark parity", () => {
+// BIS.dark.primary and BIS.dark.ring must stay equal to the color the app
+// actually paints — theme.ts's own comment says so, but a comment enforces
+// nothing. Since Phase 1's semantic cut-over, globals.css's `--primary`/
+// `--ring` are `var(--accent)`, not a literal, so the hex truth those two
+// track lives in tokens.css's own `--accent` per mode. This reads BOTH live
+// CSS files and checks them against the constants actually used at
+// derivation time, so the two cannot drift apart again without a red test —
+// following the truth to its new home rather than loosening what's checked.
+describe("globals.css / tokens.css / BIS parity", () => {
   const cssPath = path.join(
     path.dirname(fileURLToPath(import.meta.url)),
     "../../app/(dashboard)/globals.css",
   );
   const css = readFileSync(cssPath, "utf8");
   const darkBlock = css.match(/\.dark\s*\{([^}]*)\}/)?.[1];
+  const rootBlock = css.match(/:root\s*\{([^}]*)\}/)?.[1];
+
+  const tokensPath = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../styles/tokens.css",
+  );
+  const tokensCss = readFileSync(tokensPath, "utf8");
+  const tokensRootBlock = tokensCss.match(/:root\s*\{([^}]*)\}/)?.[1];
+  const tokensDarkBlock = tokensCss.match(/\.dark\s*\{([^}]*)\}/)?.[1];
+
+  const declared = (block: string | undefined, token: string) =>
+    block?.match(new RegExp(`--${token}:\\s*(#[0-9a-fA-F]{6});`))?.[1]?.toLowerCase();
 
   it("finds the .dark block", () => {
     expect(darkBlock).toBeTruthy();
   });
 
-  it("keeps --primary equal to BIS.dark.primary", () => {
-    const value = darkBlock?.match(/--primary:\s*(#[0-9a-fA-F]{6});/)?.[1];
-    expect(value?.toLowerCase()).toBe(BIS.dark.primary);
-  });
-
-  it("keeps --ring equal to BIS.dark.ring", () => {
-    const value = darkBlock?.match(/--ring:\s*(#[0-9a-fA-F]{6});/)?.[1];
-    expect(value?.toLowerCase()).toBe(BIS.dark.ring);
-  });
-
-  // The dark block covered two tokens; every other value duplicated between
-  // globals.css and TypeScript had nothing crossing it. Each of these is a
-  // fallback a tenant lands on when an input is unset or a value fails
-  // validation, so a drift here is invisible until an unbranded account looks
-  // subtly wrong next to a branded one.
-  const rootBlock = css.match(/:root\s*\{([^}]*)\}/)?.[1];
-  const declared = (block: string | undefined, token: string) =>
-    block?.match(new RegExp(`--${token}:\\s*(#[0-9a-fA-F]{6});`))?.[1]?.toLowerCase();
-
   it("finds the :root block", () => {
     expect(rootBlock).toBeTruthy();
   });
 
-  it.each([
-    ["primary", () => BIS.light.primary],
-    ["ring", () => BIS.light.ring],
-    ["sidebar-accent", () => BIS.light.sidebarAccent],
-  ])("keeps :root --%s equal to its BIS.light constant", (token, expected) => {
-    expect(declared(rootBlock, token)).toBe(expected());
+  it("finds tokens.css's :root and .dark blocks", () => {
+    expect(tokensRootBlock).toBeTruthy();
+    expect(tokensDarkBlock).toBeTruthy();
+  });
+
+  it("keeps BIS.dark.primary equal to tokens.css's dark --accent", () => {
+    expect(BIS.dark.primary).toBe(declared(tokensDarkBlock, "accent"));
+  });
+
+  it("keeps BIS.dark.ring equal to tokens.css's dark --accent", () => {
+    expect(BIS.dark.ring).toBe(declared(tokensDarkBlock, "accent"));
+  });
+
+  it("keeps BIS.light.primary equal to tokens.css's light --accent", () => {
+    expect(BIS.light.primary).toBe(declared(tokensRootBlock, "accent"));
+  });
+
+  it("keeps BIS.light.ring equal to tokens.css's light --accent", () => {
+    expect(BIS.light.ring).toBe(declared(tokensRootBlock, "accent"));
+  });
+
+  // globals.css itself still has to confirm --primary/--ring actually route
+  // through --accent (not some other token) in both blocks — a regression
+  // that repointed the var() at the wrong name would slip past the
+  // tokens.css-only checks above, which never look at globals.css's wiring.
+  it("keeps :root --primary and --ring wired to var(--accent)", () => {
+    expect(rootBlock).toMatch(/--primary:\s*var\(--accent\);/);
+    expect(rootBlock).toMatch(/--ring:\s*var\(--accent\);/);
+  });
+
+  it("keeps .dark --primary wired to var(--accent)", () => {
+    expect(darkBlock).toMatch(/--primary:\s*var\(--accent\);/);
+  });
+
+  // sidebar-accent is a sanctioned literal (the sidebar-literal island), not
+  // tokenized, so its hex truth still lives directly in globals.css.
+  it("keeps :root --sidebar-accent equal to its BIS.light constant", () => {
+    expect(declared(rootBlock, "sidebar-accent")).toBe(BIS.light.sidebarAccent);
   });
 
   it("keeps .dark --sidebar-accent equal to BIS.dark.sidebarAccent", () => {
@@ -358,19 +386,32 @@ describe("globals.css / BIS.dark parity", () => {
   });
 
   // SIDEBAR_FOREGROUND is deliberately mode-independent, so BOTH blocks must
-  // agree with the one constant — the sidebar does not invert.
+  // agree with the one constant — the sidebar does not invert. Also a
+  // sanctioned literal, so this still reads globals.css directly.
   it("keeps --sidebar-foreground equal to SIDEBAR_FOREGROUND in both modes", () => {
     expect(declared(rootBlock, "sidebar-foreground")).toBe(SIDEBAR_FOREGROUND);
     expect(declared(darkBlock, "sidebar-foreground")).toBe(SIDEBAR_FOREGROUND);
   });
 
-  // themeStyle falls back to these when a value fails validation. They are
-  // globals.css's own light values, and they are written out again in
-  // theme-style.ts where nothing checked them.
+  // themeStyle falls back to these when a value fails validation. --background
+  // is now `var(--surface-0)` in globals.css, so its light default's hex
+  // truth reads from tokens.css; --radius stays a literal directly in
+  // globals.css (controls converge in P2), so that half still reads there.
   it("keeps themeStyle's validation fallbacks equal to the light defaults", () => {
-    expect(declared(rootBlock, "background")).toBe(SAFE_STYLE_FALLBACKS.color);
+    expect(SAFE_STYLE_FALLBACKS.color).toBe(declared(tokensRootBlock, "surface-0"));
     const radius = rootBlock?.match(/--radius:\s*([0-9.]+rem);/)?.[1];
     expect(radius).toBe(SAFE_STYLE_FALLBACKS.radius);
+  });
+
+  // shadcn's --accent name is repointed at the hover surface, not the brand
+  // accent (see the NOTE in the design brief) — globals.css deletes
+  // --accent/--accent-foreground from :root/.dark entirely and instead maps
+  // @theme inline's --color-accent/-foreground straight at the surface
+  // ladder, so this asserts the new architecture's actual invariant instead
+  // of a literal that no longer exists.
+  it("wires shadcn's --color-accent to the hover surface, not the brand accent", () => {
+    expect(css).toMatch(/--color-accent:\s*var\(--surface-3\);/);
+    expect(css).toMatch(/--color-accent-foreground:\s*var\(--text-1\);/);
   });
 });
 

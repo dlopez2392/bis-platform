@@ -90,38 +90,26 @@ export const FONT: Record<TypeName, string> = {
 /**
  * What globals.css uses today, per mode. Every fallback lands here.
  *
- * dark.primary has been lifted from globals.css's original literal #8b5cf6
- * TWICE, for two different failures.
+ * Since Phase 1's semantic cut-over, these three values come from
+ * `apps/web/src/styles/tokens.css`, not from a literal in globals.css:
+ * `primary`/`ring` are tokens.css's `--accent` per mode (`#6D28D9` light,
+ * `#8B7CF7` dark) and `sidebarAccent` is the sanctioned sidebar-literal
+ * island's `--sidebar-accent` (`#A99EFF`, identical in both modes — the
+ * sidebar does not invert). All three passed the contrast sweep below
+ * untouched; no lift was needed this round.
  *
- * First: #8b5cf6 paired with white at only 4.234:1, and with #111111 at
- * 4.459:1 — under readableTextOn's own 4.5:1 floor no matter which text
- * colour it picks. The very first sweep caught this (27 failures, all
- * `mode=dark, color=null`). #8452f5 is the same hue and saturation lifted by
- * ensureContrast("#8b5cf6", "#ffffff", 4.5), so white text clears 4.5:1
- * (4.660:1).
- *
- * Second: once the sweep started asserting `primary` ITSELF — not just its
- * label — at 4.5:1 against every ramp's card AND page background (a
- * stronger bar than the 3:1 a plain button fill used to need; see
- * `liftForLabel`), #8452f5 fell short there: only 3.71–4.10:1 against the
- * three dark ramps' six card/background surfaces. #996ff7 is #8452f5's hue
- * and saturation lifted against whichever of those six was hardest at each
- * step, until all six clear 4.5:1 (4.919–5.429:1 measured). White no longer
- * clears on it (3.517:1) — its label is now #111111 (5.369:1), matching
- * both `readableTextOn(primary)` at derivation time and globals.css's own
- * hardcoded `--primary-foreground` for `.dark`.
- *
- * dark.ring tracks dark.primary through both lifts, for the same reason each
- * time: before the first lift, primary and ring were both #8b5cf6 — equal by
- * construction. Lifting only primary would leave them silently divergent, so
- * ring moved to match each time. This is consistency, not a contrast repair:
- * ring carries no text label, so 3:1 (which #8b5cf6 already cleared) was
- * never the problem, either time. theme.test.ts reads globals.css's `.dark`
- * block directly and asserts both tokens still equal these two constants.
+ * dark.ring is kept equal to dark.primary (and light.ring to light.primary)
+ * for the same reason the old literal-lift history recorded: before
+ * tokenization, primary and ring were the same brand violet by construction,
+ * and letting one drift from the other here would silently diverge them.
+ * ring carries no text label, so its floor is 3:1 (already cleared) — this
+ * is consistency, not a contrast repair. theme.test.ts reads globals.css's
+ * `:root` and `.dark` blocks directly and asserts all three still resolve to
+ * these constants.
  */
 export const BIS = {
-  light: { primary: "#7c3aed", ring: "#7c3aed", sidebarAccent: "#8b5cf6" },
-  dark:  { primary: "#996ff7", ring: "#996ff7", sidebarAccent: "#a78bfa" },
+  light: { primary: "#6d28d9", ring: "#6d28d9", sidebarAccent: "#a99eff" },
+  dark:  { primary: "#8b7cf7", ring: "#8b7cf7", sidebarAccent: "#a99eff" },
 } as const;
 
 /**

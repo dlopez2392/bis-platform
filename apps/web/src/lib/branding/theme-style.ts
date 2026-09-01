@@ -13,10 +13,17 @@ import { parseHexColor } from "./color";
 import { resolveCssLength } from "@/lib/forms/safe-theme";
 import type { ResolvedTheme } from "./theme";
 
-/** globals.css's own light values, used when a token fails validation. */
+/**
+ * globals.css's own light values, used when a token fails validation.
+ * `color` mirrors tokens.css's light `--surface-0` (globals.css's `--background`
+ * is now `var(--surface-0)`, not a literal, since Phase 1's semantic
+ * cut-over — was `#f8f8fb` pre-cut-over). `radius` mirrors globals.css's own
+ * `--radius` literal (`0.6875rem`, 11px — was `0.625rem`; controls converge
+ * in P2).
+ */
 export const SAFE_STYLE_FALLBACKS = {
-  color: "#f8f8fb",
-  radius: "0.625rem",
+  color: "#f6f5fa",
+  radius: "0.6875rem",
   fontSans: "var(--font-geist-sans)",
 } as const;
 

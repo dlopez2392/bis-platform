@@ -45,14 +45,14 @@ describe("themeStyle", () => {
   it("drops a value that is not a plain colour or length", () => {
     const hostile = { ...theme, background: "#fff;position:fixed;inset:0", radius: "9px;color:red" };
     const style = themeStyle(hostile) as Record<string, string>;
-    expect(style["--background"]).toBe("#f8f8fb"); // BIS light default
-    expect(style["--radius"]).toBe("0.625rem");
+    expect(style["--background"]).toBe("#f6f5fa"); // BIS light default
+    expect(style["--radius"]).toBe("0.6875rem");
   });
 
   it("rejects even valid CSS it cannot prove is declaration-free", () => {
     const hostile = { ...theme, background: "var(--x)", radius: "calc(1rem + 2px)" };
     const style = themeStyle(hostile) as Record<string, string>;
-    expect(style["--background"]).toBe("#f8f8fb");
-    expect(style["--radius"]).toBe("0.625rem");
+    expect(style["--background"]).toBe("#f6f5fa");
+    expect(style["--radius"]).toBe("0.6875rem");
   });
 });

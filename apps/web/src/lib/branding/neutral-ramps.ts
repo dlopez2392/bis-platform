@@ -50,5 +50,11 @@ export const NEUTRAL_RAMPS: Record<NeutralName, Ramp> = {
   },
 };
 
-/** Unchanged from globals.css: the sidebar's text is the same in both themes. */
-export const SIDEBAR_FOREGROUND = "#d4d4d8";
+/**
+ * Matches globals.css's sidebar-literal island: the sidebar's text is the
+ * same in both themes. Was `#d4d4d8` pre-cut-over; Phase 1's semantic
+ * remap moved the sidebar block to violet-biased dark-ladder literals and
+ * this now tracks that block's `--sidebar-foreground` (`#A9A3BD`, tokens.css's
+ * dark `--text-2`).
+ */
+export const SIDEBAR_FOREGROUND = "#a9a3bd";

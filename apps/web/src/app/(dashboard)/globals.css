@@ -1,44 +1,40 @@
+@import "../../styles/tokens.css";
 @import "tailwindcss";
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --radius: 0.625rem;
+  --radius: 0.6875rem; /* 11px — --radius-card; controls converge in P2 */
 
-  --background: #f8f8fb;
-  --foreground: #18181b;
-  --card: #ffffff;
-  --card-foreground: #18181b;
-  --popover: #ffffff;
-  --popover-foreground: #18181b;
+  --background: var(--surface-0);
+  --foreground: var(--text-1);
+  --card: var(--surface-1);
+  --card-foreground: var(--text-1);
+  --popover: var(--surface-1);
+  --popover-foreground: var(--text-1);
 
-  --primary: #7c3aed;
-  --primary-foreground: #ffffff;
-  --secondary: #f1f1f5;
-  --secondary-foreground: #27272a;
-  --muted: #f1f1f5;
-  --muted-foreground: #6b7280;
-  --accent: #0891b2;
-  /* Was #ffffff, which pairs with #0891b2 at 3.68:1 — below AA, live on
-     every dropdown item hover, outline button hover and command-palette
-     selection. Found by measurement, not by eye: readableTextOn("#0891b2")
-     independently picks #111111, which clears 5.13:1. */
-  --accent-foreground: #111111;
+  --primary: var(--accent);            /* tokens.css light --accent, #6D28D9 — cleared the AA sweep untouched */
+  --primary-foreground: #ffffff;       /* readableTextOn("#6d28d9") — 7.105:1, confirmed by the sweep */
+  --secondary: var(--surface-3);
+  --secondary-foreground: var(--text-1);
+  --muted: var(--surface-3);
+  --muted-foreground: var(--text-2);
 
-  --destructive: #dc2626;
-  --success: #16a34a;
-  --warning: #d97706;
+  --destructive: var(--crit);
+  --success: var(--good);
+  --warning: var(--warn);
 
-  --border: #e4e4e7;
-  --input: #e4e4e7;
-  --ring: #7c3aed;
+  --border: var(--line);
+  --input: var(--line);
+  --ring: var(--accent);
 
-  /* Sidebar is dark in both themes — it does not invert. */
-  --sidebar: #1e1b2e;
-  --sidebar-foreground: #d4d4d8;
-  --sidebar-accent: #8b5cf6;
-  --sidebar-border: #2e2a42;
+  /* Sidebar is dark in BOTH themes (recorded decision) — violet-biased
+     dark-ladder literals, not theme-flipping tokens. */
+  --sidebar: #16141E;
+  --sidebar-foreground: #A9A3BD;
+  --sidebar-accent: #A99EFF;
+  --sidebar-border: #28243A;
 
   --stage-1: #8b5cf6;
   --stage-2: #0891b2;
@@ -49,55 +45,15 @@
 }
 
 .dark {
-  --background: #0f0f14;
-  --foreground: #ededed;
-  --card: #17171f;
-  --card-foreground: #ededed;
-  --popover: #17171f;
-  --popover-foreground: #ededed;
-
-  /* Lifted twice. First from #8b5cf6 (paired with white at only 4.23:1,
-     below AA — found by the contrast sweep in branding/theme.test.ts, not
-     by review) to #8452f5, same hue/saturation, until white cleared 4.66:1.
-     Then, once the sweep started requiring `primary` itself — not just its
-     label — to clear 4.5:1 against every ramp's card AND page background,
-     #8452f5 fell short there too (3.71-4.10:1 against the three dark
-     ramps' surfaces), so it was lifted again to #996ff7, until all six
-     card/background pairs clear 4.5:1 (4.92-5.43:1 measured). Keep equal to
-     BIS.dark.primary in branding/theme.ts. */
-  --primary: #996ff7;
-  /* White no longer clears 4.5:1 on the lifted #996ff7 (3.52:1) —
-     readableTextOn("#996ff7") picks #111111 instead (5.37:1). */
-  --primary-foreground: #111111;
-  --secondary: #232330;
-  --secondary-foreground: #ededed;
-  --muted: #232330;
-  --muted-foreground: #a1a1aa;
-  --accent: #22d3ee;
-  --accent-foreground: #0f0f14;
-
-  --destructive: #ef4444;
-  --success: #22c55e;
-  --warning: #f59e0b;
-
-  --border: #2a2a37;
-  --input: #2a2a37;
-
-  /* Tracks --primary above through both of its lifts, for the same reason
-     each time: before the first lift, primary and ring were both #8b5cf6 —
-     equal by construction — and lifting only primary would leave them
-     silently divergent. --ring carries no text label, so 3:1 (which
-     #8b5cf6 already cleared) was never the problem, either time — this is
-     consistency, not a contrast repair. Keep it equal to BIS.dark.ring in
-     branding/theme.ts; branding/theme.test.ts reads this file and asserts
-     both stay in sync. */
-  --ring: #996ff7;
-
-  --sidebar: #131120;
-  --sidebar-foreground: #d4d4d8;
-  --sidebar-accent: #a78bfa;
-  --sidebar-border: #262238;
-
+  --primary: var(--accent);           /* tokens.css dark --accent, #8B7CF7 — cleared the AA sweep untouched */
+  --primary-foreground: #111111;      /* readableTextOn("#8b7cf7") — 5.686:1, confirmed by the sweep */
+  --destructive: var(--crit);
+  --success: var(--good);
+  --warning: var(--warn);
+  --sidebar: #131120;                 /* keep current: one step below cards */
+  --sidebar-foreground: #A9A3BD;
+  --sidebar-accent: #A99EFF;
+  --sidebar-border: #28243A;
   --stage-1: #a78bfa;
   --stage-2: #22d3ee;
   --stage-3: #60a5fa;
@@ -119,8 +75,12 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
+  /* shadcn's --accent is the HOVER SURFACE (dropdown/command hovers), not
+     the brand accent — it reads the surface ladder directly so the custom
+     property --accent (tokens.css's brand violet, the tenant branding
+     engine's override target) is never clobbered by this name collision. */
+  --color-accent: var(--surface-3);
+  --color-accent-foreground: var(--text-1);
   --color-destructive: var(--destructive);
   --color-success: var(--success);
   --color-warning: var(--warning);

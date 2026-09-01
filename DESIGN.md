@@ -108,6 +108,39 @@ remains the visual source of truth. The alpha glow token is `--ring-glow`
 (renamed from `--ring`, which the shadcn layer owns as the solid focus
 color = `var(--accent)`).
 
+Resolved 2026-08-31 (Phase 1, Task 3 — semantic-variable cut-over):
+`(dashboard)/globals.css` now imports `tokens.css` first and every shadcn
+semantic var either resolves to a token or is a sanctioned literal island
+(sidebar block, `--stage-1..6`). `--primary`/`--ring` route through
+`var(--accent)`; shadcn's own `--accent`/`--accent-foreground` name (the
+hover surface, not the brand accent) was deleted from `:root`/`.dark` and
+`@theme inline`'s `--color-accent`/`--color-accent-foreground` point at
+`var(--surface-3)`/`var(--text-1)` directly instead, so the brand `--accent`
+custom property is never shadowed.
+
+**#6D28D9 (light) and #8B7CF7 (dark) passed the AA contrast sweep in
+`branding/theme.test.ts` untouched — no lift was needed.** `BIS.light`/
+`BIS.dark` in `theme.ts` were updated to these resolved values (also
+`sidebarAccent` → `#A99EFF` in both modes, matching the sidebar-literal
+island being identical in `:root` and `.dark` now). `--primary-foreground`
+was re-derived via `readableTextOn`: `#ffffff` for light (7.105:1),
+`#111111` for dark (5.686:1) — both already what the brief's placeholders
+carried.
+
+Two cross-file mirrors that the tokenization's literal-vs-`var()` shape
+change broke were brought back into lockstep (values only; no test deleted
+or loosened): `neutral-ramps.ts`'s `SIDEBAR_FOREGROUND` `#d4d4d8` →
+`#a9a3bd` (globals' sidebar-literal island moved to `#A9A3BD`), and
+`theme-style.ts`'s `SAFE_STYLE_FALLBACKS` `color` `#f8f8fb` → `#f6f5fa`
+(tokens.css's light `--surface-0`) and `radius` `0.625rem` → `0.6875rem`
+(globals' own `--radius` literal, 11px — control convergence deferred to
+Phase 2). `theme.test.ts`'s parity block was retargeted, not weakened: where
+its regexes expected a literal hex in `globals.css` that is now
+`var(--accent)`, the assertions now read `tokens.css`'s `--accent` per mode
+instead (plus a check that globals' `--primary`/`--ring` still route through
+`var(--accent)`, so a wrong token name would still be caught) and the
+shadcn-`--accent` case asserts the new `@theme inline` mapping directly.
+
 ## Definition of done for any UI PR
 
 - [ ] No hard-coded colors/radii/shadows — tokens only
