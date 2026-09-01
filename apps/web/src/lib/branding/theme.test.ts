@@ -403,6 +403,14 @@ describe("globals.css / tokens.css / BIS parity", () => {
     expect(radius).toBe(SAFE_STYLE_FALLBACKS.radius);
   });
 
+  // Same reason as the --primary/--ring wiring checks above: the tokens.css
+  // comparison alone doesn't catch a typo that repoints globals' --background
+  // at the wrong surface step (e.g. --surface-1) while still matching some
+  // OTHER token's hex by coincidence. Pin the actual wiring in globals.css.
+  it("keeps :root --background wired to var(--surface-0)", () => {
+    expect(rootBlock).toMatch(/--background:\s*var\(--surface-0\);/);
+  });
+
   // shadcn's --accent name is repointed at the hover surface, not the brand
   // accent (see the NOTE in the design brief) — globals.css deletes
   // --accent/--accent-foreground from :root/.dark entirely and instead maps
