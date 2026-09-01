@@ -18,6 +18,16 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+// Design system display face — page titles and KPI numbers ONLY (DESIGN.md
+// type roles). Not a tenant-selectable face. Variable font: weight 650 is
+// picked at the use site, not loaded per-weight. Preload off until P2/P3
+// components paint with it; flip back when --font-display enters the UI.
+const bricolage = Bricolage_Grotesque({
+  subsets: ["latin"],
+  variable: "--font-bricolage",
+  preload: false,
+});
+
 // The two tenant-selectable faces carry `preload: false`, and that is the
 // whole point of declaring them here rather than assuming the browser is
 // clever. next/font/google defaults to `preload: true`, which emits a
@@ -47,13 +57,6 @@ const sourceSerif = Source_Serif_4({
   variable: "--font-source-serif",
   subsets: ["latin"],
   preload: false,
-});
-
-// Display face — page titles and KPI numbers ONLY (DESIGN.md type roles).
-// Variable font: weight 650 is picked at the use site, not loaded per-weight.
-const bricolage = Bricolage_Grotesque({
-  subsets: ["latin"],
-  variable: "--font-bricolage",
 });
 
 export const metadata: Metadata = {
