@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono, Inter, Source_Serif_4 } from "next/font/google";
+import { Bricolage_Grotesque, Geist, Geist_Mono, Inter, Source_Serif_4 } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
@@ -49,6 +49,13 @@ const sourceSerif = Source_Serif_4({
   preload: false,
 });
 
+// Display face — page titles and KPI numbers ONLY (DESIGN.md type roles).
+// Variable font: weight 650 is picked at the use site, not loaded per-weight.
+const bricolage = Bricolage_Grotesque({
+  subsets: ["latin"],
+  variable: "--font-bricolage",
+});
+
 export const metadata: Metadata = {
   title: "BIS Platform",
   description: "The all-in-one client platform by Bespoke Intelligent Solutions.",
@@ -96,7 +103,7 @@ export default async function RootLayout({
       <html
         lang="en"
         suppressHydrationWarning
-        className={`${geistSans.variable} ${geistMono.variable} ${inter.variable} ${sourceSerif.variable} h-full antialiased`}
+        className={`${geistSans.variable} ${geistMono.variable} ${inter.variable} ${sourceSerif.variable} ${bricolage.variable} h-full antialiased`}
       >
         <body
           suppressHydrationWarning
