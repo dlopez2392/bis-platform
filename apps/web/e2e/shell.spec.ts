@@ -31,5 +31,5 @@ test("account switcher navigates into a company", async ({ page }) => {
 test("the agency sidebar keeps the default accent", async ({ page }) => {
   await page.goto("/dashboard/accounts");
   await expect(page.locator("aside nav span.bg-sidebar-accent").first())
-    .toHaveCSS("background-color", "rgb(139, 92, 246)"); // #8b5cf6
+    .toHaveCSS("background-color", "rgb(169, 158, 255)"); // #A99EFF — the P1 token cut-over's sidebar accent (both themes)
 });
