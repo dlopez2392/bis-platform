@@ -31,11 +31,14 @@ import { getVoicePresence, type VoicePresence } from "@/lib/voice/presence";
  * case to handle, not three.
  *
  * `profile.enabled`, not `booking_enabled` or a phone number's `status`:
- * this is the same flag accept-gate.ts's `isCallAnswerable` reads to decide
- * whether Sofía answers a call at all (voice/incoming's route reads it the
- * same way) — the simplest honest reading of "the account HAS an enabled
- * voice profile" is the one flag that already means "the receptionist is
- * turned on" everywhere else in this tree.
+ * the simplest honest reading of "the account HAS an enabled voice
+ * profile" is the profile's own flag. Note this is deliberately NARROWER
+ * than accept-gate.ts's `callAnswerable`, which also answers calls for a
+ * `testing`-status number regardless of `profile.enabled` — so an account
+ * mid-setup (profile disabled, testing number taking real test calls)
+ * shows no presence indicator at all, nonzero weekCount included. That is
+ * the contract here: presence reflects the profile switch, not "would a
+ * call be answered right now".
  *
  * serviceDb(), not dbForRequest(): mirrors getUnreadTotal/getSetupProgress's
  * own choice — a read behind requireAccountAccess, not a write behind a
