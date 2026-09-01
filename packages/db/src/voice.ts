@@ -155,6 +155,27 @@ export async function countCallsSince(
   return count ?? 0;
 }
 
+/**
+ * Whether the account has any call still IN PROGRESS as of `sinceIso` — a
+ * `calls` row with no `ended_at` (finishCallRow never ran) whose
+ * `started_at` is after `sinceIso`. The topbar Sofía presence indicator
+ * (Task 5, apps/web/src/lib/voice/presence.ts) is the caller, and always
+ * passes "one hour ago" as the floor: an unfinished row can outlive the
+ * actual call (a crashed process, an `/api/voice/incoming` accept failure
+ * that skipped the deleteCallRow cleanup above), so without a floor a stuck
+ * row would pin the indicator "on a call" forever instead of just briefly
+ * showing a stale state that ages out on its own.
+ */
+export async function hasActiveCallSince(
+  db: SupabaseClient, accountId: string, sinceIso: string,
+): Promise<boolean> {
+  const { count, error } = await db.from("calls")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId).is("ended_at", null).gt("started_at", sinceIso);
+  if (error) throw new Error(`hasActiveCallSince failed: ${error.message}`);
+  return (count ?? 0) > 0;
+}
+
 export async function countCallsByCallerSince(
   db: SupabaseClient, accountId: string, callerE164: string, sinceIso: string,
 ): Promise<number> {

@@ -6,6 +6,7 @@ import {
   assignPhoneNumber, getPhoneNumberByE164, setPhoneNumberStatus,
   getVoiceProfile, upsertVoiceProfile,
   startCallRow, finishCallRow, countCallsSince, countCallsByCallerSince,
+  hasActiveCallSince,
   findUpcomingBookingForPhone, getBookingById, deleteCallRow,
   listPhoneNumbersForAccount, listAllPhoneNumbers, reassignPhoneNumber,
   listCalls, getCall,
@@ -106,6 +107,43 @@ describe("voice accessors", () => {
       await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: "+19565550002" });
       expect(await countCallsSince(db, accountId, since)).toBe(3);
       expect(await countCallsByCallerSince(db, accountId, "+19565550001", since)).toBe(2);
+    });
+  });
+
+  it("hasActiveCallSince: true only for an unfinished call started after the floor", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: "+19565550142" }, "user_test");
+      const floor = new Date(Date.now() - 60 * 60_000).toISOString(); // one hour ago
+      // Nothing yet.
+      expect(await hasActiveCallSince(db, accountId, floor)).toBe(false);
+
+      // In-flight call, started_at defaults to now() (> floor), ended_at null.
+      const { id } = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: "+19565550001" });
+      expect(await hasActiveCallSince(db, accountId, floor)).toBe(true);
+
+      // Finished — ended_at now set, so no longer "active" even though it
+      // started after the floor.
+      await finishCallRow(db, accountId, id, {
+        outcome: "message", endedAt: new Date(), durationSecs: 30, turnCount: 2,
+        transcript: [], summary: "done", language: "en",
+      });
+      expect(await hasActiveCallSince(db, accountId, floor)).toBe(false);
+
+      // A second in-flight call, but backdated to BEFORE the floor — an
+      // unfinished row that has been open far longer than "on a call" means
+      // (a crashed dyno, an accept failure that skipped cleanup — see
+      // deleteCallRow's own doc comment) must not read as active forever.
+      const stale = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: "+19565550002" });
+      const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+      const { error } = await db.from("calls").update({ started_at: twoHoursAgo }).eq("id", stale.id);
+      expect(error).toBeNull();
+      expect(await hasActiveCallSince(db, accountId, floor)).toBe(false);
+
+      // Cross-tenant scoping: a fabricated account id never sees this
+      // account's in-flight call, matching every other accessor's own
+      // account_id guard.
+      await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: "+19565550003" });
+      expect(await hasActiveCallSince(db, "00000000-0000-0000-0000-000000000099", floor)).toBe(false);
     });
   });
 

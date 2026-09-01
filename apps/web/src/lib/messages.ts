@@ -28,6 +28,14 @@ export const m = {
   "shell.collapse": "Collapse sidebar",
   "shell.expand": "Expand sidebar",
   "shell.backToAgency": "Back to companies",
+  // Topbar's AI presence indicator (DESIGN.md "AI presence" key pattern).
+  // The dot itself is a separate aria-hidden element (topbar-presence.tsx);
+  // this string carries the meaning on its own per DESIGN.md's status rule
+  // ("never color alone — dot + word"). "{count}" is the house {placeholder}
+  // convention (see setup.progress above) — the ✓ ships as plain text, not a
+  // separate icon element, since idle carries no color-only signal to back up.
+  "shell.presence.onCall": "Sofía · on a call",
+  "shell.presence.idle": "✓ {count} calls this week",
 
   "landing.title": "BIS Platform",
   "landing.tagline": "The all-in-one client platform by Bespoke Intelligent Solutions.",
