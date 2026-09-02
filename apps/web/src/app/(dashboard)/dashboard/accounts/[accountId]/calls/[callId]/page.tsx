@@ -11,14 +11,14 @@ import {
 } from "lucide-react";
 import { getCall } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
-import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { safeZone } from "@/lib/booking/time";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
-import { callerLabel, formatCallTime, formatDuration, OUTCOMES } from "../format";
+import { callerLabel, formatCallTime, formatDuration } from "../format";
+import { OutcomePill } from "../outcome-pill";
 import { splitSummaryBlocks, type SummaryBlock } from "./summary-blocks";
 import { TranscriptView } from "./transcript-view";
 
@@ -57,7 +57,6 @@ export default async function CallDetailPage({
 
   const timezone = safeZone(account.timezone, "UTC");
   const base = `/dashboard/accounts/${accountId}`;
-  const outcome = OUTCOMES[call.outcome];
   const blocks = splitSummaryBlocks(call.summary ?? "");
 
   // Every link is conditional on its own id. A call that matched no contact,
@@ -99,12 +98,7 @@ export default async function CallDetailPage({
     <>
       <PageHeader
         title={m["calls.detail.title"]}
-        tabs={
-          <Badge variant="outline" className={cn("gap-1.5 py-1 pr-2.5 pl-2", outcome.chip)}>
-            <span className={cn("size-1.5 rounded-full", outcome.dot)} aria-hidden />
-            {outcome.label}
-          </Badge>
-        }
+        tabs={<OutcomePill outcome={call.outcome} />}
         selector={
           // A description list, not a row of spans: each value here answers a
           // question the list page answers with a column header, and the

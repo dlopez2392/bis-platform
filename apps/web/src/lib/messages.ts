@@ -204,6 +204,25 @@ export const m = {
   "dashboard.kpi.afterHoursCaptured": "After-hours captured",
   "dashboard.kpi.pipelineAdded": "Pipeline added",
 
+  // The 14-day calls chart card (Task 6) — CSS bars, hover tooltip on every
+  // mark (DESIGN.md's chart section), a recent-calls mini table beneath it.
+  // "{date}"/"{count}"/"{unit}" are the house {placeholder} convention (see
+  // contacts.page above); the component .replace()s them, and picks "{unit}"
+  // itself (call vs calls) the same way shell.presence.idleOne pins its own
+  // singular case.
+  "dashboard.calls.title": "Calls",
+  "dashboard.calls.caption": "Last 14 days",
+  "dashboard.calls.axis.weekendsMuted": "Weekends muted",
+  "dashboard.calls.axis.today": "Today",
+  "dashboard.calls.tooltip": "{date} · {count} {unit}",
+  "dashboard.calls.tooltipSr": "{date}, {count} {unit}",
+  "dashboard.calls.unit.call": "call",
+  "dashboard.calls.unit.calls": "calls",
+  // Rule 5 (designed empty states): one sentence, verbatim from the brief.
+  "dashboard.calls.empty": "When Sofía answers, every call lands here with its outcome.",
+  "dashboard.calls.emptySetupVoice": "Set up your voice receptionist",
+  "dashboard.calls.emptyViewCalls": "View all calls",
+
   "contacts.title": "Contacts",
   "contacts.add": "Add contact",
   "contacts.search": "Search name, email, phone…",

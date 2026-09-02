@@ -9,11 +9,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
-import { callerLabel, formatCallTime, formatDuration, OUTCOMES } from "./format";
+import { callerLabel, formatCallTime, formatDuration } from "./format";
+import { OutcomePill } from "./outcome-pill";
 
 const HEAD = "px-4 text-xs font-medium tracking-wider text-muted-foreground uppercase";
 const CELL = "px-4 py-3";
@@ -58,7 +58,6 @@ export function CallsTable({
         <TableBody>
           {rows.map((row) => {
             const callHref = `${base}/calls/${row.id}`;
-            const outcome = OUTCOMES[row.outcome];
             const label = callerLabel(row);
             // Whether the label is a real identity or the withheld-number
             // fallback — read off the row rather than by comparing the label
@@ -103,10 +102,7 @@ export function CallsTable({
                 </TableCell>
 
                 <TableCell className={CELL}>
-                  <Badge variant="outline" className={cn("gap-1.5 py-1 pr-2.5 pl-2", outcome.chip)}>
-                    <span className={cn("size-1.5 rounded-full", outcome.dot)} aria-hidden />
-                    {outcome.label}
-                  </Badge>
+                  <OutcomePill outcome={row.outcome} />
                 </TableCell>
 
                 <TableCell className={cn(CELL, "hidden sm:table-cell")}>

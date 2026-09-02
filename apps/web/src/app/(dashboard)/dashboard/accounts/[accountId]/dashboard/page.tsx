@@ -2,7 +2,7 @@ import Link from "next/link";
 import { ListChecks } from "lucide-react";
 import {
   listChecklistState, countFormsMissingNotify, countContacts,
-  getVoiceProfile, getCalendarForAccount,
+  getVoiceProfile, getCalendarForAccount, listCalls,
   listCallStartsBetween, listBookingCreationsBetween, listOpportunityValuesCreatedBetween,
 } from "@bis/db";
 import { StatTile } from "@/components/stat-tile";
@@ -17,6 +17,7 @@ import { greetingPeriod, formatLocalLongDate } from "@/lib/dashboard/greeting";
 import { localDayWindow, bucketByLocalDay, bucketValueByLocalDay, deltaVsPrior, countAfterHours } from "@/lib/dashboard/metrics";
 import { ChecklistPanel } from "../checklist/checklist-panel";
 import { setChecklistItemAction, addChecklistItemAction } from "../checklist/actions";
+import { CallsChartCard } from "./calls-chart-card";
 
 export const dynamic = "force-dynamic";
 
@@ -68,7 +69,7 @@ export default async function AccountDashboardPage({
 
   const [
     checklistRows, formsMissingNotify, contactsCount, opps,
-    voiceProfile, calendar, callsIso, bookingsIso, oppPairs,
+    voiceProfile, calendar, callsIso, bookingsIso, oppPairs, recentCalls,
   ] = await Promise.all([
     listChecklistState(db, accountId),
     countFormsMissingNotify(db, accountId),
@@ -85,6 +86,9 @@ export default async function AccountDashboardPage({
     listCallStartsBetween(db, accountId, window14.fromIso, window14.toIso),
     listBookingCreationsBetween(db, accountId, window14.fromIso, window14.toIso),
     listOpportunityValuesCreatedBetween(db, accountId, window14.fromIso, window14.toIso),
+    // The calls chart card's (Task 6) mini table — the 3 most recent calls
+    // ever, not scoped to the 14-day window above.
+    listCalls(db, accountId, { limit: 3 }),
   ]);
 
   if (opps.error) {
@@ -131,10 +135,14 @@ export default async function AccountDashboardPage({
   const showVoiceSub = voiceProfile?.enabled === true;
 
   // Calls answered — split the one 14-day fetch on window7's boundary
-  // rather than issuing a second query.
+  // rather than issuing a second query. Bucketed once and reused by both the
+  // KPI tile's spark (Task 5) and the calls chart card's bars (Task 6) —
+  // same values either way, just avoiding a second identical
+  // `bucketByLocalDay` pass over the same `callsIso`/`window14.dayKeys`.
   const currentCallsIso = callsIso.filter((iso) => iso >= window7.fromIso);
   const priorCallsIso = callsIso.filter((iso) => iso < window7.fromIso);
-  const callsSpark = bucketByLocalDay(callsIso, timezone, window14.dayKeys).map((b) => b.count);
+  const callsDayBuckets = bucketByLocalDay(callsIso, timezone, window14.dayKeys);
+  const callsSpark = callsDayBuckets.map((b) => b.count);
   const callsDelta = deltaVsPrior(currentCallsIso.length, priorCallsIso.length);
 
   // Appointments booked — same split/spark shape as calls.
@@ -241,6 +249,19 @@ export default async function AccountDashboardPage({
             label={m["account.pipelineValue"]}
             value={pipelineValueDisplay}
             period={m["common.allTime"]}
+          />
+        </div>
+
+        {/* Task 7 fills the second column with an activity feed; until then
+            the chart card is this row's only child. */}
+        <div className="grid gap-4 xl:grid-cols-2">
+          <CallsChartCard
+            accountId={accountId}
+            timezone={timezone}
+            dayBuckets={callsDayBuckets}
+            recentCalls={recentCalls}
+            isAgency={isAgency}
+            voiceEnabled={showVoiceSub}
           />
         </div>
       </div>
