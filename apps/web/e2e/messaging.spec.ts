@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb } from "@bis/db";
 import { SEEDED_CONTACT_NAME } from "./support";
+import { m } from "../src/lib/messages";
 
 // Playwright's config passes env to the webServer, not to this process, so the
 // service-role credentials have to be loaded explicitly for cleanup.
@@ -29,7 +30,14 @@ test("email sent from a contact appears in the thread and in Conversations", asy
   await page.getByRole("link", { name: new RegExp(ACCOUNT_NAME, "i") }).first().click();
   await expect(page).toHaveURL(/\/contacts$/);
 
-  await page.getByRole("table").getByRole("link", { name: SEEDED_CONTACT_NAME }).click();
+  // P4 (Task 5) removed the name-cell link by design: a row click opens the
+  // peek drawer, and the full contact page is reached from the drawer's
+  // "Open full page" link. Same preamble as contact-detail.spec.ts; every
+  // assertion below is unchanged.
+  await page.getByRole("row").filter({ hasText: SEEDED_CONTACT_NAME }).click();
+  const drawer = page.getByRole("dialog");
+  await expect(drawer).toBeVisible();
+  await drawer.getByRole("link", { name: m["drawer.openFull"] }).click();
   await expect(page).toHaveURL(/\/contacts\/[0-9a-f-]{36}$/);
 
   // This spec writes real rows to the shared dev database. `ensureConversation`
@@ -38,7 +46,10 @@ test("email sent from a contact appears in the thread and in Conversations", asy
   // The timestamped subject both scopes that cleanup and stops assertions
   // from matching a row a crashed earlier run left behind.
   const subject = `E2E ${Date.now()}`;
-  await page.getByRole("button", { name: "Email" }).click();
+  // `exact` matters since P4 Task 8: the fields panel's inline-edit control
+  // for the email field is a button named "Edit Email", which a substring
+  // match also picks up. The composer tab is exactly "Email".
+  await page.getByRole("button", { name: "Email", exact: true }).click();
   await page.getByPlaceholder("Subject").fill(subject);
   await page.getByPlaceholder("Write an email…").fill("Sent by the e2e suite.");
   await page.getByRole("button", { name: "Send" }).click();

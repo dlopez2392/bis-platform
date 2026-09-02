@@ -173,10 +173,14 @@ test.describe("the Calls log, as the agency", () => {
     await expect(languageBadge).toHaveCSS("text-transform", "uppercase");
 
     // --- The detail ------------------------------------------------------
-    // Clicked by href rather than by position: the row carries three links
-    // (the timestamp, the caller, and the mouse-only chevron) and only two of
-    // them lead here.
-    await row.locator(`a[href="${base}/calls/${callId}"]`).first().click();
+    // P4 Task 9 made whole-row click the only way into a call (CallRow's own
+    // onClick -> router.push), matching the contacts table's own rule
+    // (DESIGN.md #4); the timestamp cell and the mouse-only chevron are no
+    // longer <a> elements at all, and the row's one remaining real link goes
+    // to the CALLER's contact, not the call. Click a cell known to carry no
+    // link of its own (duration, already asserted above) instead of an href
+    // that no longer exists.
+    await row.locator("td").nth(2).click();
     await expect(page).toHaveURL(new RegExp(`/calls/${callId}$`));
 
     await expect(page.getByRole("heading", { name: "Summary" })).toBeVisible();
