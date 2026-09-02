@@ -3,7 +3,6 @@
 import { revalidatePath } from "next/cache";
 import { serviceDb, setChecklistItem, upsertVoiceProfile, setPhoneNumberStatus } from "@bis/db";
 import { requireAccountAccess, requireAgencyOnlyAccountAccess } from "@/lib/auth";
-import { dbForRequest } from "@/lib/db";
 import { deriveSetupStatus, goLivePrereqsMet, SETUP_TICK_KEYS } from "@/lib/setup/setup-status";
 import { gatherSetupInputs } from "@/lib/setup/setup-inputs";
 import { m } from "@/lib/messages";
@@ -188,18 +187,35 @@ export async function goLiveAction(accountId: string): Promise<ActionResult> {
  * `accounts` has no `updated_at` column (packages/db/supabase/migrations/
  * 0001_tenancy.sql — only `created_at`), so the write below does not try to
  * set one.
+ *
+ * serviceDb(), not dbForRequest() — deliberately, and NOT the settings/
+ * actions.ts pattern of "column has no grant, so escalate": migration 0013
+ * (client-branding-grants.test.ts pins this exactly) revokes UPDATE on ALL of
+ * `accounts` from `authenticated` and re-grants it column-by-column for the
+ * seven branding columns only. `name` was never re-granted — a write through
+ * dbForRequest() (the `authenticated` role) fails with "permission denied for
+ * column \"name\"" on every real call, a failure only the e2e suite in Task 5
+ * can see, because unit tests mock the db client. serviceDb() is the
+ * sanctioned route for an agency write to a column `authenticated` cannot
+ * touch (0013's own comment: "Safe for the agency: ... run as service_role,
+ * which is subject to neither column grants nor RLS"), and it is safe here
+ * for the same reason it is safe in setFromEmailAction: the guard below is
+ * agency-only and runs BEFORE this line, so it — not any grant — is the only
+ * thing standing behind this write. Do not revert this to dbForRequest();
+ * that reintroduces the exact permission-denied failure this fix closes.
  */
 export async function renameAccountAction(
   accountId: string, value: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<ActionResult> {
   await requireAgencyOnlyAccountAccess(accountId);
   const name = value.trim();
   if (!name) return { ok: false, error: m["setup.rename.empty"] };
   try {
-    const db = await dbForRequest();
+    const db = serviceDb();
     const { error } = await db.from("accounts").update({ name }).eq("id", accountId);
     if (error) throw new Error(error.message);
-  } catch {
+  } catch (e) {
+    console.error(`renameAccountAction: write failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["setup.rename.failed"] };
   }
   revalidatePath(`/dashboard/accounts/${accountId}/setup`);

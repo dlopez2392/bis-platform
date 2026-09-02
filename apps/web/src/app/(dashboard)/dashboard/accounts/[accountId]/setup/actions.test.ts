@@ -41,9 +41,33 @@ import type { ReadKey } from "@/lib/setup/setup-view";
 const dbMocks = vi.hoisted(() => ({
   setChecklistItem: vi.fn(),
   upsertVoiceProfile: vi.fn(), setPhoneNumberStatus: vi.fn(),
+  // Backs renameAccountAction's `serviceDb().from("accounts").update(...)
+  // .eq(...)` chain — spied the same way dbForRequestMocks.accountsUpdate
+  // used to be, before this task moved that write onto serviceDb() (see
+  // renameAccountAction's own doc comment for why: accounts.name has no
+  // `authenticated` UPDATE grant since migration 0013, so the dbForRequest
+  // write failed on every real call).
+  accountsUpdate: vi.fn(),
 }));
+
+/** The one object `serviceDb()` resolves to everywhere in this file. Kept as
+ *  a single shared reference — rather than a fresh `{}` per call — so the
+ *  three actions that pass it straight through to a `@bis/db` function
+ *  (setChecklistItem, upsertVoiceProfile, setPhoneNumberStatus) can assert
+ *  "the same db instance flowed through" against this reference, and
+ *  renameAccountAction's own `.from("accounts")` chain has something to
+ *  hang off. A bare `{}` could not do both once one action needed a real
+ *  `.from()` method on it. */
+const serviceDbInstance = vi.hoisted(() => ({
+  from: (table: string) => ({
+    update: (payload: Record<string, unknown>) => ({
+      eq: (col: string, val: unknown) => dbMocks.accountsUpdate(table, payload, col, val),
+    }),
+  }),
+}));
+
 vi.mock("@bis/db", async (importOriginal) => ({
-  ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({}),
+  ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => serviceDbInstance,
 }));
 
 const setupInputsMocks = vi.hoisted(() => ({ gatherSetupInputs: vi.fn() }));
@@ -63,22 +87,6 @@ vi.mock("@/lib/auth", () => ({
     if (!guardFixture.isAgency) throw new Error("NEXT_REDIRECT");
     return { userId: "user_1" };
   },
-}));
-
-/** renameAccountAction's own db seam — `dbForRequest`, not `@bis/db`'s
- *  `serviceDb` the rest of this file mocks. Kept minimal on purpose: only
- *  the one chain (`.from("accounts").update(...).eq("id", ...)`) the action
- *  actually calls, spying on the call so a test can assert BOTH the payload
- *  and, for the empty-name case, that the chain was never entered at all. */
-const dbForRequestMocks = vi.hoisted(() => ({ accountsUpdate: vi.fn() }));
-vi.mock("@/lib/db", () => ({
-  dbForRequest: async () => ({
-    from: (table: string) => ({
-      update: (payload: Record<string, unknown>) => ({
-        eq: (col: string, val: unknown) => dbForRequestMocks.accountsUpdate(table, payload, col, val),
-      }),
-    }),
-  }),
 }));
 
 import { m } from "@/lib/messages";
@@ -140,8 +148,9 @@ beforeEach(() => {
   setupInputsMocks.gatherSetupInputs.mockResolvedValue(readyGathered());
   dbMocks.upsertVoiceProfile.mockResolvedValue({});
   dbMocks.setPhoneNumberStatus.mockResolvedValue(undefined);
-  dbForRequestMocks.accountsUpdate.mockReset();
-  dbForRequestMocks.accountsUpdate.mockResolvedValue({ error: null });
+  // Already reset by the allMocks() loop above (accountsUpdate lives in
+  // dbMocks); only the default resolved value needs setting here.
+  dbMocks.accountsUpdate.mockResolvedValue({ error: null });
   guardFixture.isAgency = true;
 });
 
@@ -160,7 +169,7 @@ describe("setSetupTickAction", () => {
     // `SETUP_TICK_KEYS.emailSkipped` back out of `checklist_items`, so a typo
     // on either side loses the tick silently rather than failing.
     expect(dbMocks.setChecklistItem).toHaveBeenCalledWith(
-      {}, "a1", "setup:email_skipped", { done: true }, "user_1",
+      serviceDbInstance, "a1", "setup:email_skipped", { done: true }, "user_1",
     );
   });
 
@@ -168,7 +177,7 @@ describe("setSetupTickAction", () => {
     const r = await setSetupTickAction("a1", "forwardingDone", false);
     expect(r).toEqual({ ok: true });
     expect(dbMocks.setChecklistItem).toHaveBeenCalledWith(
-      {}, "a1", "setup:forwarding_done", { done: false }, "user_1",
+      serviceDbInstance, "a1", "setup:forwarding_done", { done: false }, "user_1",
     );
   });
 
@@ -300,8 +309,8 @@ describe("goLiveAction", () => {
   it("enables the profile and marks the number live once everything checks out", async () => {
     const r = await goLiveAction("a1");
     expect(r).toEqual({ ok: true });
-    expect(dbMocks.upsertVoiceProfile).toHaveBeenCalledWith({}, "a1", { enabled: true }, "user_1");
-    expect(dbMocks.setPhoneNumberStatus).toHaveBeenCalledWith({}, "a1", "pn1", "live", "user_1");
+    expect(dbMocks.upsertVoiceProfile).toHaveBeenCalledWith(serviceDbInstance, "a1", { enabled: true }, "user_1");
+    expect(dbMocks.setPhoneNumberStatus).toHaveBeenCalledWith(serviceDbInstance, "a1", "pn1", "live", "user_1");
   });
 
   it("skips a released number and takes the first live-able one", async () => {
@@ -313,7 +322,7 @@ describe("goLiveAction", () => {
     }));
     const r = await goLiveAction("a1");
     expect(r).toEqual({ ok: true });
-    expect(dbMocks.setPhoneNumberStatus).toHaveBeenCalledWith({}, "a1", "pn2", "live", "user_1");
+    expect(dbMocks.setPhoneNumberStatus).toHaveBeenCalledWith(serviceDbInstance, "a1", "pn2", "live", "user_1");
   });
 
   it("reports a failed write rather than rejecting into the client island", async () => {
@@ -332,32 +341,48 @@ describe("goLiveAction", () => {
  * Agency-only for that reason, and empty is REJECTED rather than cleared —
  * unlike an inline contact field, "" has no fallback in the client switcher,
  * the dashboard greeting, or the accounts list.
+ *
+ * 🔴 These unit tests are BLIND to column grants. `serviceDb()` is mocked
+ * here to a plain in-memory object — it cannot fail the way the real
+ * `service_role` Postgres connection could, and (the direction that actually
+ * bit this action once already) it cannot PROVE the write is *permitted*
+ * either, the way `dbForRequest()`'s `authenticated` role could and did fail
+ * ("permission denied for column \"name\"" — see renameAccountAction's own
+ * doc comment and migration 0013). A mock more permissive than the real
+ * client proves nothing about grants; it only proves the action calls the
+ * chain it's supposed to call, with the payload it's supposed to send. The
+ * real proof that this write is actually permitted against the live
+ * database is the e2e rename test (Task 5), which runs against Postgres
+ * itself. This is a standing hard lesson in this repo: serviceDb-backed
+ * fixtures have shipped two defects behind green suites before this one.
  */
 describe("renameAccountAction", () => {
   it("a non-agency caller is rejected before any db call", async () => {
     guardFixture.isAgency = false;
     await expect(renameAccountAction("acct1", "Valid Name")).rejects.toThrow();
-    expect(dbForRequestMocks.accountsUpdate).not.toHaveBeenCalled();
+    expect(dbMocks.accountsUpdate).not.toHaveBeenCalled();
   });
 
   it("rejects an empty name WITHOUT writing", async () => {
     const r = await renameAccountAction("acct1", "   ");
     expect(r).toEqual({ ok: false, error: expect.any(String) });
     // The write must never even be attempted — not just that `ok` is false.
-    expect(dbForRequestMocks.accountsUpdate).not.toHaveBeenCalled();
+    expect(dbMocks.accountsUpdate).not.toHaveBeenCalled();
   });
 
   it("trims and writes a real name", async () => {
     const r = await renameAccountAction("acct1", "  Rio Roofing  ");
     expect(r).toEqual({ ok: true });
-    expect(dbForRequestMocks.accountsUpdate).toHaveBeenCalledWith(
+    expect(dbMocks.accountsUpdate).toHaveBeenCalledWith(
       "accounts", { name: "Rio Roofing" }, "id", "acct1",
     );
   });
 
   it("returns ok:false instead of throwing when the write fails", async () => {
-    dbForRequestMocks.accountsUpdate.mockResolvedValue({ error: { message: "boom" } });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.accountsUpdate.mockResolvedValue({ error: { message: "boom" } });
     const r = await renameAccountAction("acct1", "Valid Name");
     expect(r.ok).toBe(false);
+    errSpy.mockRestore();
   });
 });
