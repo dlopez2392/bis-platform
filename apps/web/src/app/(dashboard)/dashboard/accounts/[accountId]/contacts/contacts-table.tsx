@@ -15,7 +15,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { contactDisplayName, formatDate, initials } from "@/lib/format";
 import { m } from "@/lib/messages";
 import { usePeek } from "@/lib/contacts/use-peek";
+import { pageSelectionState, togglePageSelection } from "@/lib/contacts/selection";
 import { ContactDrawer } from "./contact-drawer";
+import { BulkActionBar } from "./bulk-action-bar";
 
 export type ContactRow = {
   id: string;
@@ -83,10 +85,25 @@ export function ContactsTable({
 
   return (
     <div className="rounded-lg border border-border bg-card">
+      <BulkActionBar
+        accountId={accountId}
+        selectedIds={[...selected]}
+        onDone={() => setSelected(new Set())}
+      />
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="w-10" />
+            <TableHead className="w-10" onClick={(e) => e.stopPropagation()}>
+              <Checkbox
+                checked={pageSelectionState(selected, visible.map((r) => r.id)) === "all"
+                  ? true
+                  : pageSelectionState(selected, visible.map((r) => r.id)) === "some"
+                    ? "indeterminate"
+                    : false}
+                onCheckedChange={() => setSelected((s) => togglePageSelection(s, visible.map((r) => r.id)))}
+                aria-label={m["bulk.selectPage"]}
+              />
+            </TableHead>
             <TableHead>
               <SortButton label={m["contacts.col.name"]} onClick={() => toggleSort("name")} />
             </TableHead>

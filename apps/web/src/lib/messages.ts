@@ -274,6 +274,20 @@ export const m = {
   "common.prev": "Prev",
   "common.next": "Next",
 
+  // The contacts table's bulk-action bar (DESIGN.md rule 4 — checkboxes
+  // never render without bulk actions). "{count}"/"{tag}"/"{skipped}" are
+  // the house {placeholder} convention (see contacts.page above).
+  "bulk.selectPage": "Select all on this page",
+  "bulk.selected": "{count} selected",
+  "bulk.addTag": "Add tag",
+  "bulk.delete": "Delete…",
+  "bulk.clear": "Clear selection",
+  "bulk.confirmTitle": "Delete {count} contacts?",
+  "bulk.confirmBody": "This can't be undone. Type {count} to confirm.",
+  "bulk.tagged": "Tagged {count} contacts with \"{tag}\"",
+  "bulk.deleted": "Deleted {count} contacts",
+  "bulk.deletedSkipped": "Deleted {count} · skipped {skipped} linked to bookings, deals, or conversations",
+
   "pipeline.title": "Opportunities",
   "pipeline.add": "Add opportunity",
   "pipeline.moveFailed": "Could not move that opportunity. Refresh and try again.",
