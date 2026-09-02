@@ -262,7 +262,8 @@ export const m = {
   "contacts.col.company": "Business name",
   "contacts.col.created": "Created",
   "contacts.empty.title": "No contacts yet",
-  "contacts.empty.body": "Add a contact or import a list to get started.",
+  "contacts.empty.body":
+    "Contacts show up when Sofía takes a call, a form is submitted, or you add one yourself.",
   "contacts.noMatches.title": "No matches",
   "contacts.noMatches.body": "Try a different name, email, or phone number.",
   "contacts.firstName": "First name",
@@ -714,7 +715,7 @@ export const m = {
   "calls.usageLabel": "Daily call usage",
   "calls.empty.title": "No calls yet",
   "calls.empty.body":
-    "When your AI receptionist answers a call, it will appear here with its transcript and outcome.",
+    "When Sofía answers a call, it will appear here with its transcript and outcome.",
   "calls.col.when": "When",
   "calls.col.caller": "Caller",
   "calls.col.duration": "Duration",
