@@ -1,19 +1,25 @@
 import { Fragment } from "react";
-import Link from "next/link";
-import { AlertTriangle, ArrowRight, Check, Minus, Rocket } from "lucide-react";
-import type { PhoneNumberStatus } from "@bis/db";
+import { AlertTriangle, Check, Minus, Rocket } from "lucide-react";
 import type { SetupStepKey } from "@/lib/setup/setup-status";
 import {
-  GO_LIVE_PREREQ_KEYS, kindOf, testCallNoteKind, type SetupStepView, type StateKind,
-  type AssignedNumber,
+  GO_LIVE_PREREQ_KEYS, kindOf, type SetupStepView, type StateKind, type AssignedNumber,
 } from "@/lib/setup/setup-view";
-import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
-import { SetupTickButton } from "./setup-tick-button";
-import { SetupGoLiveButton } from "./setup-go-live-button";
-import { SetupMoveNumberButton } from "./setup-move-number-button";
-import { SetupEnableTestCallsButton } from "./setup-enable-test-calls-button";
+import {
+  STEP_COPY, STEP_PATH, TONE, type StepDetailProps,
+  type SetupTick, type SetupTickAction, type SetupGoLiveAction, type SetupMoveNumberAction,
+  type SetNumberStatusAction, type MovableNumber,
+} from "./steps/step-shared";
+import { AccountStep } from "./steps/account";
+import { BrandingStep } from "./steps/branding";
+import { HoursStep } from "./steps/hours";
+import { VoiceProfileStep } from "./steps/voice-profile";
+import { NumberStep } from "./steps/number";
+import { EmailStep } from "./steps/email";
+import { ForwardingStep } from "./steps/forwarding";
+import { TestCallStep } from "./steps/test-call";
+import { GoLiveStep } from "./steps/go-live";
 
 /**
  * The wizard, as one path rather than nine cards.
@@ -40,101 +46,22 @@ import { SetupEnableTestCallsButton } from "./setup-enable-test-calls-button";
  * ④ "Couldn't check" is never green and never quiet. A read that threw is
  *   rendered in warning tone with a dashed marker, because the one thing this
  *   page must never do is show a tick for something it failed to verify.
+ *
+ * Design Phase 5 Task 3 split each step's detail (rows/note/panel) out of a
+ * single `StepActions` branch into its own module under ./steps/ — this file
+ * is now the shell: the progress meter, the rail of nine cards, and the
+ * `STEP_DETAIL` lookup that renders each step's module. No behavior changed;
+ * see ./steps/step-shared.ts for the maps/types every module shares.
  */
 
-export type SetupTick = "emailSkipped" | "forwardingDone";
-export type SetupTickAction = (tick: SetupTick, done: boolean) => Promise<{ ok: boolean }>;
-
-type ActionResult = { ok: true } | { ok: false; error: string };
-/** accountId already bound server-side — it must never travel as an argument
- *  from the browser. */
-export type SetupGoLiveAction = () => Promise<ActionResult>;
-/** Likewise: the caller picks WHICH number, never which account receives it. */
-export type SetupMoveNumberAction = (phoneNumberId: string) => Promise<ActionResult>;
-/** `setNumberStatusAction` (voice/actions.ts) with `accountId` already bound
- *  server-side, same reasoning as the two above — only WHICH number and WHAT
- *  status travel from the browser. Used today for exactly one status value:
- *  the enable-test-calls button always calls it with `"testing"`. */
-export type SetNumberStatusAction = (phoneNumberId: string, status: string) => Promise<ActionResult>;
-
-/** A number sitting on some other account that this one could take over.
- *  `accountName` is null when the join to `accounts` came back empty. */
-export type MovableNumber = {
-  id: string;
-  e164: string;
-  status: PhoneNumberStatus;
-  accountName: string | null;
-};
-
-/** Status shown beside every movable number, using the Voice page's own
- *  labels. Not decoration: "Live" here means some other client's callers are
- *  reaching that line right now, and one click would take it away from them.
- *  The operator has to be able to see that before they press. */
-const NUMBER_STATUS_LABEL: Record<PhoneNumberStatus, string> = {
-  provisioned: m["voice.numbers.status.provisioned"],
-  testing: m["voice.numbers.status.testing"],
-  live: m["voice.numbers.status.live"],
-  released: m["voice.numbers.status.released"],
-};
-
-const STEP_COPY: Record<SetupStepKey, { title: string; help: string }> = {
-  account: { title: m["setup.step.account.title"], help: m["setup.step.account.help"] },
-  branding: { title: m["setup.step.branding.title"], help: m["setup.step.branding.help"] },
-  hours: { title: m["setup.step.hours.title"], help: m["setup.step.hours.help"] },
-  voice_profile: {
-    title: m["setup.step.voice_profile.title"], help: m["setup.step.voice_profile.help"],
-  },
-  number: { title: m["setup.step.number.title"], help: m["setup.step.number.help"] },
-  email: { title: m["setup.step.email.title"], help: m["setup.step.email.help"] },
-  forwarding: { title: m["setup.step.forwarding.title"], help: m["setup.step.forwarding.help"] },
-  test_call: { title: m["setup.step.test_call.title"], help: m["setup.step.test_call.help"] },
-  go_live: { title: m["setup.step.go_live.title"], help: m["setup.step.go_live.help"] },
-};
-
-/** Where the work for a step actually happens. `?from=setup` is what makes
- *  the target page render its BackToSetup breadcrumb — a one-way trip into a
- *  settings screen is how a guided flow loses people. */
-const STEP_PATH: Partial<Record<SetupStepKey, string>> = {
-  branding: "/branding?from=setup",
-  hours: "/calendar?from=setup",
-  voice_profile: "/voice?from=setup",
-  number: "/voice?from=setup",
-  email: "/settings?from=setup",
-};
-
-const TONE: Record<StateKind, { marker: string; card: string; chip: string; dot: string }> = {
-  done: {
-    marker: "border-success/40 bg-success/10 text-success",
-    card: "border-border bg-card",
-    chip: "border-success/30 bg-success/10 text-foreground",
-    dot: "bg-success",
-  },
-  open: {
-    marker: "border-border bg-card text-muted-foreground",
-    card: "border-border bg-card",
-    chip: "border-border bg-transparent text-muted-foreground",
-    dot: "bg-muted-foreground/50",
-  },
-  // The single ringed card. Same content as `open` — only the emphasis
-  // differs, because it is the same kind of work, just the piece to do now.
-  next: {
-    marker: "border-primary bg-primary/10 text-primary",
-    card: "border-primary/40 bg-card shadow-sm ring-1 ring-primary/15",
-    chip: "border-border bg-transparent text-muted-foreground",
-    dot: "bg-primary",
-  },
-  skipped: {
-    marker: "border-dashed border-border bg-muted text-muted-foreground",
-    card: "border-dashed border-border bg-card",
-    chip: "border-border bg-muted text-muted-foreground",
-    dot: "bg-muted-foreground/40",
-  },
-  unknown: {
-    marker: "border-dashed border-warning/50 bg-warning/10 text-warning",
-    card: "border-warning/40 bg-warning/5",
-    chip: "border-warning/40 bg-warning/10 text-foreground",
-    dot: "bg-warning",
-  },
+// Re-exported so the four write-islands (setup-tick-button.tsx,
+// setup-go-live-button.tsx, setup-move-number-button.tsx,
+// setup-enable-test-calls-button.tsx) and page.tsx keep importing these
+// types from "./setup-panel" unchanged — their actual definitions now live
+// in ./steps/step-shared.ts, declared once alongside StepDetailProps.
+export type {
+  SetupTick, SetupTickAction, SetupGoLiveAction, SetupMoveNumberAction,
+  SetNumberStatusAction, MovableNumber,
 };
 
 const STATE_LABEL: Record<StateKind, string> = {
@@ -143,6 +70,20 @@ const STATE_LABEL: Record<StateKind, string> = {
   next: m["setup.state.open"],
   skipped: m["setup.state.skipped"],
   unknown: m["setup.state.unknown"],
+};
+
+/** Which module renders a given step's rows/note/panel — one entry per
+ *  `SetupStepKey`, in the same order the wizard walks them. */
+const STEP_DETAIL: Record<SetupStepKey, (p: StepDetailProps) => React.ReactNode> = {
+  account: AccountStep,
+  branding: BrandingStep,
+  hours: HoursStep,
+  voice_profile: VoiceProfileStep,
+  number: NumberStep,
+  email: EmailStep,
+  forwarding: ForwardingStep,
+  test_call: TestCallStep,
+  go_live: GoLiveStep,
 };
 
 export function SetupPanel({
@@ -249,6 +190,7 @@ export function SetupPanel({
           const copy = STEP_COPY[step.key];
           const path = STEP_PATH[step.key];
           const isLast = index === steps.length - 1;
+          const Detail = STEP_DETAIL[step.key];
 
           return (
             <li key={step.key} className={cn("relative flex gap-4", isLast ? "pb-0" : "pb-3")}>
@@ -319,7 +261,7 @@ export function SetupPanel({
                   </span>
                 </div>
 
-                <StepActions
+                <Detail
                   step={step}
                   kind={kind}
                   base={base}
@@ -404,270 +346,5 @@ function SetupProgress({ done, total }: { done: number; total: number }) {
         />
       </div>
     </section>
-  );
-}
-
-/** The number the carrier forwards to and the number a test call dials.
- *  Monospaced and selectable — it gets read down a phone line and typed into
- *  someone else's carrier portal. */
-function NumberChip({ e164 }: { e164: string }) {
-  return (
-    <code className="rounded-md border border-border bg-muted/60 px-2 py-1 font-mono text-xs text-foreground tabular-nums">
-      {e164}
-    </code>
-  );
-}
-
-/** The assigned number's status, beside its chip on the number and test-call
- *  cards (the two the wizard's exit gate found operators needed it on). Same
- *  labels the Voice page and the movable-numbers list already use — never a
- *  new vocabulary for the same four values. */
-function NumberStatusChip({ status }: { status: PhoneNumberStatus }) {
-  return (
-    <span className="text-xs text-muted-foreground">{NUMBER_STATUS_LABEL[status]}</span>
-  );
-}
-
-/** The offer on the number step when this account has none of its own: every
- *  number that lives on another account, with whose it is and what it is
- *  currently doing, so an operator cannot take a live line out from under
- *  another client without seeing that is what they are doing. Buying a fresh
- *  number stays the primary path — it is the card's own help text and its
- *  "Open" link to the Voice page; this is the alternative underneath. */
-function MovableNumbers({
-  numbers, moveAction,
-}: {
-  numbers: MovableNumber[];
-  moveAction: SetupMoveNumberAction;
-}) {
-  return (
-    <div className="rounded-md border border-border bg-muted/30 p-3">
-      <p className="text-xs font-medium text-muted-foreground">{m["setup.number.moveTitle"]}</p>
-      <ul className="mt-1 divide-y divide-border">
-        {numbers.map((n) => (
-          <li key={n.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
-            <div className="min-w-0">
-              <NumberChip e164={n.e164} />
-              <p className="mt-1 text-xs text-muted-foreground">
-                {m["setup.number.currentlyOn"].replace(
-                  "{account}",
-                  n.accountName ?? m["setup.number.unknownAccount"],
-                )}
-                {" · "}
-                {NUMBER_STATUS_LABEL[n.status]}
-              </p>
-            </div>
-            <SetupMoveNumberButton
-              action={moveAction}
-              phoneNumberId={n.id}
-              e164={n.e164}
-              status={n.status}
-              accountName={n.accountName}
-            />
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function StepActions({
-  step, kind, base, href, assignedNumber, movableNumbers, hasVoiceProfile,
-  tickAction, goLiveAction, moveNumberAction, enableTestCallsAction, prereqsMet, blockedReason,
-}: {
-  step: SetupStepView;
-  kind: StateKind;
-  base: string;
-  href: string | null;
-  assignedNumber: AssignedNumber | null | "unknown";
-  movableNumbers: MovableNumber[];
-  hasVoiceProfile: boolean;
-  tickAction: SetupTickAction;
-  goLiveAction: SetupGoLiveAction;
-  moveNumberAction: SetupMoveNumberAction;
-  enableTestCallsAction: SetNumberStatusAction;
-  prereqsMet: boolean;
-  blockedReason: string | null;
-}) {
-  /** Controls — buttons, links, the number chip — laid out on one wrapping
-   *  row. Prose belongs in `note` below it, not among them. */
-  const rows: React.ReactNode[] = [];
-  let note: React.ReactNode = null;
-  /** A block that needs its own box rather than a slot on the controls row —
-   *  currently only the movable-number list. */
-  let panel: React.ReactNode = null;
-
-  // The actual number, or null for BOTH "no number yet" and "couldn't
-  // check" — collapsed here because every chip site below already renders
-  // nothing for null, which is the right behaviour for "couldn't check" too.
-  // Only the forwarding card's `note` below needs to tell the two apart, so
-  // it reads `assignedNumber` directly rather than this narrowed value.
-  const number = assignedNumber === "unknown" ? null : assignedNumber;
-  const e164 = number?.e164 ?? null;
-
-  // A finished step keeps its door — the agency still edits branding and
-  // hours long after setup — but it stops shouting: ghost rather than
-  // outline, so the eye lands on the step that still needs doing.
-  if (href) {
-    rows.push(
-      <Link
-        key="open"
-        href={href}
-        className={cn(
-          buttonVariants({ variant: kind === "done" ? "ghost" : "outline", size: "sm" }),
-        )}
-      >
-        {m["setup.openStep"]}
-        <ArrowRight className="size-3.5" aria-hidden />
-      </Link>,
-    );
-  }
-
-  if (step.key === "number") {
-    if (number) {
-      rows.unshift(<NumberChip key="e164" e164={number.e164} />);
-      rows.push(<NumberStatusChip key="status" status={number.status} />);
-    } else if (assignedNumber === null && movableNumbers.length > 0) {
-      // Only when the read actually answered "none". Offering to move a
-      // number into an account that may already have one — which is what
-      // `assignedNumber === "unknown"` means — is how a live line gets
-      // stolen from the tenant next door to fix a problem that isn't there.
-      panel = <MovableNumbers numbers={movableNumbers} moveAction={moveNumberAction} />;
-    }
-  }
-
-  if (step.key === "forwarding") {
-    if (assignedNumber === "unknown") {
-      // Distinct from the no-number case below: telling the operator to go
-      // "assign a number first" would be wrong here — one may well already
-      // be assigned, the numbers read just didn't answer this render.
-      note = m["setup.step.forwarding.unknownNumber"];
-    } else if (e164) {
-      rows.unshift(<NumberChip key="e164" e164={e164} />);
-    } else {
-      // The help copy says "the number below" — when there is no number
-      // below, saying so is the whole content of this card.
-      note = m["setup.step.forwarding.noNumber"];
-    }
-    // Suppressed while the tick's own read is unknown: the button's label and
-    // the value it would write are both read off a state we do not have.
-    if (kind !== "unknown") {
-      rows.push(
-        <SetupTickButton
-          key="tick"
-          action={tickAction}
-          tick="forwardingDone"
-          done={!step.done}
-          label={step.done ? m["setup.step.forwarding.untick"] : m["setup.step.forwarding.tick"]}
-        />,
-      );
-    }
-  }
-
-  if (step.key === "email" && kind !== "unknown") {
-    // Nothing to skip once a sending identity actually exists — and a stale
-    // skip tick cannot mark a completed step skipped anyway (pinned in
-    // setup-status.test.ts), so there is no "Un-skip" to offer either.
-    if (step.skipped) {
-      rows.push(
-        <SetupTickButton
-          key="tick" action={tickAction} tick="emailSkipped" done={false}
-          label={m["setup.step.email.unskip"]}
-        />,
-      );
-    } else if (!step.done) {
-      rows.push(
-        <SetupTickButton
-          key="tick" action={tickAction} tick="emailSkipped" done={true}
-          label={m["setup.step.email.skip"]}
-        />,
-      );
-    }
-  }
-
-  if (step.key === "test_call") {
-    if (number) {
-      // No `unshift` needed here (unlike the number step below): the
-      // test-call card has no "Open" link, so `rows` is still empty.
-      rows.push(
-        <NumberChip key="e164" e164={number.e164} />,
-        <NumberStatusChip key="status" status={number.status} />,
-      );
-      // Which note (if any) and which flavour of button — see
-      // testCallNoteKind (setup-view.ts) for why `hasVoiceProfile` decides
-      // this alongside status, not status alone: the exit-gate finding this
-      // fixes is exactly a card that used to answer this question from
-      // status only, and could be flipped-but-not-answering as a result.
-      const noteKind = testCallNoteKind(number.status, hasVoiceProfile);
-      if (noteKind === "enable") {
-        note = m["setup.testCall.provisionedNote"];
-        rows.push(
-          <SetupEnableTestCallsButton
-            key="enable"
-            action={enableTestCallsAction}
-            phoneNumberId={number.id}
-          />,
-        );
-      } else if (noteKind === "needsProfile") {
-        note = m["setup.testCall.needsProfileNote"];
-        // Only for `provisioned`: a `testing` number reaching this branch is
-        // already flipped — pressing the button again would just resubmit
-        // the same status, so there is nothing useful for it to do here.
-        if (number.status === "provisioned") {
-          rows.push(
-            <SetupEnableTestCallsButton
-              key="enable"
-              action={enableTestCallsAction}
-              phoneNumberId={number.id}
-              disabled
-            />,
-          );
-        }
-      } else if (noteKind === "testing") {
-        note = m["setup.testCall.testingNote"];
-      }
-    }
-    rows.push(
-      <Link
-        key="calls"
-        href={`${base}/calls`}
-        className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
-      >
-        {m["setup.viewCalls"]}
-        <ArrowRight className="size-3.5" aria-hidden />
-      </Link>,
-    );
-  }
-
-  if (step.key === "go_live" && !step.done) {
-    rows.push(
-      // `disabled` is courtesy only. goLiveAction re-derives every
-      // prerequisite from live rows at click time and refuses on its own
-      // evidence, which is why it is safe to drive this attribute from a
-      // render that went stale the moment it painted.
-      <SetupGoLiveButton key="golive" action={goLiveAction} disabled={!prereqsMet} />,
-    );
-  }
-
-  // Scoped to the go-live card: `blockedReason` is computed once for the
-  // whole panel, so testing it alone here would give every other card an
-  // empty action row.
-  const showReason =
-    step.key === "go_live" && !step.done && !prereqsMet && blockedReason !== null;
-
-  if (rows.length === 0 && note === null && panel === null && !showReason) return null;
-
-  return (
-    <div className="mt-3 space-y-2">
-      {rows.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-2">{rows}</div>
-      ) : null}
-      {note !== null ? <p className="text-sm text-muted-foreground">{note}</p> : null}
-      {/* Visible, not a tooltip: a disabled button takes no pointer events in
-          several browsers and is out of the tab order, so `title` alone would
-          hide the one sentence that says what is still missing. */}
-      {showReason ? <p className="text-sm text-muted-foreground">{blockedReason}</p> : null}
-      {panel}
-    </div>
   );
 }
