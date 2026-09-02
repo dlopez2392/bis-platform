@@ -89,7 +89,10 @@ export function ContactDrawer({
                 <span className="truncate">{contactDisplayName(row)}</span>
                 <Link
                   href={fullHref}
-                  className="text-muted-foreground hover:text-foreground ml-auto"
+                  // mr-8 clears SheetContent's own close button, which is
+                  // absolutely positioned at top-4 right-4 — without it the
+                  // two icons render on top of each other.
+                  className="text-muted-foreground hover:text-foreground mr-8 ml-auto"
                   aria-label={m["drawer.openFull"]}
                 >
                   <ExternalLink className="size-4" aria-hidden />
