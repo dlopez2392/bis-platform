@@ -34,6 +34,14 @@ test("dragging an opportunity persists after reload", async ({ page }) => {
   // Drags the card from column `fromIndex` to column `toIndex` and proves
   // the move reached the database (not just the optimistic UI) via reload.
   async function dragTo(fromIndex: number, toIndex: number) {
+    // Since the Phase-2 shell, every account-route load fires two background
+    // server-action POSTs from the sidebar (unread count + setup meter).
+    // dnd-kit's pointer sensor needs a quiet main thread to register the
+    // 6px activation distance — starting the drag while those requests and
+    // their re-renders are in flight is how this spec flaked in-suite (the
+    // drop simply never registered). Settle first; also covers the reload
+    // inside this helper for the second dragTo call.
+    await page.waitForLoadState("networkidle");
     const fromColumn = columns.nth(fromIndex);
     const toColumn = columns.nth(toIndex);
     const draggedCard = fromColumn.locator(`[data-testid="${cardId}"]`);
@@ -88,8 +96,18 @@ test("dragging an opportunity persists after reload", async ({ page }) => {
     // reload — otherwise the reload can race the in-flight request and win,
     // which looks identical to "the server write never landed" but is
     // really just the test not having given it the chance to.
+    // Match the BODY too, not just method+URL: since the Phase-2 shell, the
+    // sidebar's own server-action POSTs (getUnreadTotal/getSetupProgress)
+    // also hit this route's URL on every navigation and can resolve this
+    // wait in place of the move. Only the move's body carries the
+    // opportunity id — the BARE id, not the "opp-"-prefixed testid
+    // (data-testid is `opp-${opp.id}`; the action is called with opp.id).
+    const bareOppId = cardId!.replace(/^opp-/, "");
     const movePosted = page.waitForResponse(
-      (res) => res.request().method() === "POST" && res.url().includes("/pipeline"),
+      (res) =>
+        res.request().method() === "POST" &&
+        res.url().includes("/pipeline") &&
+        (res.request().postData() ?? "").includes(bareOppId),
     );
 
     await page.mouse.move(startX, startY);

@@ -146,11 +146,24 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     // toggle hadn't reached the database yet, so the reload just re-served the
     // still-untouched row. Wait for the POST's response first, matching
     // pipeline.spec.ts's dragTo() helper.
+    // The predicate must also match the BODY, not just method+URL: since the
+    // Phase-2 shell, the sidebar fires its own server-action POSTs
+    // (getUnreadTotal/getSetupProgress) on every account-route navigation,
+    // and server actions POST to the current page URL — so on this route a
+    // sidebar read also matches "/checklist" and can resolve this wait while
+    // the toggle's own POST is still in flight, making the reload lose the
+    // write. Only the toggle's multipart form body carries the itemKey.
     const togglePosted = page.waitForResponse(
-      (res) => res.request().method() === "POST" && res.url().includes("/checklist"),
+      (res) =>
+        res.request().method() === "POST" &&
+        res.url().includes("/checklist") &&
+        (res.request().postData() ?? "").includes("phone_number"),
     );
     await page.getByRole("button", { name: "Buy a phone number" }).click();
-    await togglePosted;
+    // .ok() check matches pipeline.spec.ts's dragTo: a resolved response that
+    // carried an action error would otherwise read as "write raced the
+    // reload" when it's really "write failed".
+    expect((await togglePosted).ok()).toBeTruthy();
     await page.reload();
     await expect(page.getByRole("button", { name: "Buy a phone number" }))
       .toHaveAttribute("aria-pressed", "true");
