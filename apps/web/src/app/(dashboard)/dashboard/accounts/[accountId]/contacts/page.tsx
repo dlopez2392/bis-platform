@@ -50,7 +50,7 @@ export default async function ContactsPage({
             body={q ? m["contacts.noMatches.body"] : m["contacts.empty.body"]}
           />
         ) : (
-          <ContactsTable rows={contacts} base={base} />
+          <ContactsTable rows={contacts} base={base} accountId={accountId} />
         )}
       </div>
     </>

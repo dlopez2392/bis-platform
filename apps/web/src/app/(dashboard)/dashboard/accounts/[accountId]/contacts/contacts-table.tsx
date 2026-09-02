@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useMemo, useState } from "react";
 import { ArrowUpDown, Mail, Phone } from "lucide-react";
 import {
@@ -15,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { contactDisplayName, formatDate, initials } from "@/lib/format";
 import { m } from "@/lib/messages";
+import { usePeek } from "@/lib/contacts/use-peek";
 
 export type ContactRow = {
   id: string;
@@ -30,10 +30,20 @@ type SortKey = "name" | "company" | "created";
 
 const PAGE_SIZE = 20;
 
-export function ContactsTable({ rows, base }: { rows: ContactRow[]; base: string }) {
+export function ContactsTable({
+  rows,
+  base,
+  accountId,
+}: {
+  rows: ContactRow[];
+  base: string;
+  accountId: string;
+}) {
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "created", dir: -1 });
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // peekId/close unused until Task 6 mounts the drawer — expected for this commit.
+  const { peekId, open, close } = usePeek();
 
   const sorted = useMemo(() => {
     const value = (r: ContactRow) =>
@@ -85,8 +95,26 @@ export function ContactsTable({ rows, base }: { rows: ContactRow[]; base: string
           {visible.map((c) => {
             const name = contactDisplayName(c);
             return (
-              <TableRow key={c.id}>
-                <TableCell>
+              <TableRow
+                key={c.id}
+                tabIndex={0}
+                data-contact-row={c.id}
+                aria-label={name}
+                onClick={() => open(c.id)}
+                onKeyDown={(e) => {
+                  if (e.target !== e.currentTarget) return; // typing in a child — not row nav
+                  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(c.id); }
+                  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                    e.preventDefault();
+                    const sibling = e.key === "ArrowDown"
+                      ? e.currentTarget.nextElementSibling
+                      : e.currentTarget.previousElementSibling;
+                    if (sibling instanceof HTMLElement) sibling.focus();
+                  }
+                }}
+                className="cursor-pointer focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-inset focus-visible:outline-none"
+              >
+                <TableCell onClick={(e) => e.stopPropagation()}>
                   <Checkbox
                     checked={selected.has(c.id)}
                     onCheckedChange={() => toggleRow(c.id)}
@@ -94,12 +122,12 @@ export function ContactsTable({ rows, base }: { rows: ContactRow[]; base: string
                   />
                 </TableCell>
                 <TableCell>
-                  <Link href={`${base}/${c.id}`} className="flex items-center gap-2 font-medium hover:underline">
+                  <span className="flex items-center gap-2 font-medium">
                     <span className="flex size-7 items-center justify-center rounded-full bg-primary/10 text-xs text-primary">
                       {initials(name)}
                     </span>
                     <span className="truncate">{name}</span>
-                  </Link>
+                  </span>
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {c.phone ? (
