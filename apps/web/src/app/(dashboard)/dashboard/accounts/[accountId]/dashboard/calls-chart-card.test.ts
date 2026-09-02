@@ -110,6 +110,14 @@ describe("CallsChartCard", () => {
     expect(html).toContain("+19565061545");
   });
 
+  it("falls back to the E.164 number for a LINKED contact with no name — a real row shape (calls/format.ts's callerLabel doc comment: a call can create a contact from nothing but a spoken email address), and 'contactDisplayName's own (no name) fallback must not win here", () => {
+    const html = render({
+      recentCalls: [{ ...CALL, contact: { first_name: null, last_name: null } }],
+    });
+    expect(html).toContain("+19565061545");
+    expect(html).not.toContain("(no name)");
+  });
+
   it("stamps the mini table's time in the ACCOUNT zone, not the machine's", () => {
     // Same instant/expectations calls-table.test.ts already independently
     // verified for this exact fixture — reused rather than re-derived.

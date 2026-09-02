@@ -26,11 +26,10 @@ import type { CallListRow } from "@bis/db";
 import { EmptyState } from "@/components/empty-state";
 import { buttonVariants } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
-import { contactDisplayName } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { longDayLabel, shortDayLabel } from "@/lib/dashboard/day-label";
-import { formatDuration } from "../calls/format";
+import { callerLabel, formatDuration } from "../calls/format";
 import { OutcomePill } from "../calls/outcome-pill";
 
 /** Fixed bars-container height, pinned by the brief (not the mockup's own
@@ -168,20 +167,6 @@ function Bars({ dayBuckets }: { dayBuckets: { dayKey: string; count: number; isW
   );
 }
 
-/** Who rang: the matched contact's display name, else the number they rang
- *  from, else the shared "Unknown caller" fallback (a withheld caller ID
- *  with no matched contact — rare, but a real row shape `calls-table.tsx`
- *  already has to render). Deliberately `contactDisplayName` here, NOT
- *  `callerLabel` (calls/format.ts): the brief calls for "contact display
- *  name or E.164", and `callerLabel`'s own doc comment explains why it
- *  exists instead — its number-over-"(no name)" precedence is right for the
- *  full Calls list, but this mini table is meant to read as a name-first
- *  glance the way the mockup's own "Maria Garcia" example does. */
-function whoLabel(call: CallListRow): string {
-  if (call.contact) return contactDisplayName(call.contact);
-  return call.caller_e164?.trim() || m["calls.unknownCaller"];
-}
-
 function RecentCallsTable({
   calls,
   accountId,
@@ -223,8 +208,17 @@ function RecentCallsTable({
           return (
             <TableRow key={call.id}>
               <TableCell className="p-0">
+                {/* Shared with the Calls list: `callerLabel`'s own doc
+                    comment explains why it is NOT `contactDisplayName` — a
+                    linked contact can carry no name at all (a call can
+                    create one from nothing but a spoken email address), and
+                    `contactDisplayName`'s "(no name)" fallback would win
+                    over a perfectly good phone number. One chain, reused
+                    here rather than a second copy that could drift from it
+                    (a review caught exactly that drift in an earlier draft
+                    of this file). */}
                 <Link href={href} className="block py-2.5 pr-2 pl-0 font-medium text-foreground hover:underline">
-                  {whoLabel(call)}
+                  {callerLabel(call)}
                 </Link>
               </TableCell>
               <TableCell className="p-0">
