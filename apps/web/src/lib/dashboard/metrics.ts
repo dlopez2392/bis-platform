@@ -112,6 +112,35 @@ export function bucketByLocalDay(
 }
 
 /**
+ * Same zone-correct day-bucketing as `bucketByLocalDay` above, but summing a
+ * `monetaryValue` per instant instead of counting instants — the dashboard's
+ * "Pipeline added" tile needs day-SUMS of value, not day counts, for its
+ * spark. Deliberately a separate function rather than a `bucketByLocalDay`
+ * option: the two return shapes differ (`count` vs `value`), and threading a
+ * summed-field callback through the simpler counting function would make
+ * that one harder to read for its own, more common callers. Same silent-drop
+ * behavior for an instant whose local day isn't in `dayKeys`.
+ */
+export function bucketValueByLocalDay(
+  pairs: { createdAt: string; monetaryValue: number }[],
+  timezone: string,
+  dayKeys: string[],
+): { dayKey: string; value: number; isWeekend: boolean }[] {
+  const sums = new Map<string, number>();
+  for (const key of dayKeys) sums.set(key, 0);
+  for (const { createdAt, monetaryValue } of pairs) {
+    const key = dayKeyInZone(new Date(createdAt), timezone);
+    const current = sums.get(key);
+    if (current !== undefined) sums.set(key, current + monetaryValue);
+  }
+  return dayKeys.map((dayKey) => {
+    const { y, m, d } = parseDayKey(dayKey);
+    const weekday = utcWeekdayIndex(y, m, d);
+    return { dayKey, value: sums.get(dayKey) ?? 0, isWeekend: weekday === 0 || weekday === 6 };
+  });
+}
+
+/**
  * `current` vs `previous`: percent change when `previous > 0` (rounded to
  * the nearest whole percent); absolute count when `previous === 0` (a
  * percent off a zero base is meaningless — the mockup's "▲ 3" case).

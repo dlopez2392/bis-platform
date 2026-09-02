@@ -12,6 +12,7 @@ import { describe, it, expect } from "vitest";
 import {
   localDayWindow,
   bucketByLocalDay,
+  bucketValueByLocalDay,
   deltaVsPrior,
   sparklinePath,
   countAfterHours,
@@ -146,6 +147,53 @@ describe("bucketByLocalDay", () => {
     const dayKeys = ["2027-06-14"];
     const buckets = bucketByLocalDay(isoTimes, "America/New_York", dayKeys);
     expect(buckets).toEqual([{ dayKey: "2027-06-14", count: 0, isWeekend: false }]);
+  });
+});
+
+describe("bucketValueByLocalDay", () => {
+  it("23:30-local boundary (America/New_York): an opportunity whose UTC instant already reads tomorrow buckets its value into TODAY's local day", () => {
+    const pairs = [{ createdAt: "2027-06-16T03:30:00.000Z", monetaryValue: 500 }]; // 2027-06-15 23:30 local NY
+    const dayKeys = ["2027-06-14", "2027-06-15", "2027-06-16"];
+    const buckets = bucketValueByLocalDay(pairs, "America/New_York", dayKeys);
+    expect(buckets).toEqual([
+      { dayKey: "2027-06-14", value: 0, isWeekend: false },
+      { dayKey: "2027-06-15", value: 500, isWeekend: false },
+      { dayKey: "2027-06-16", value: 0, isWeekend: false },
+    ]);
+  });
+
+  it("mirror boundary, far zone (Pacific/Auckland): a value whose UTC instant still reads today buckets into TOMORROW's local day", () => {
+    const pairs = [{ createdAt: "2027-06-15T12:15:00.000Z", monetaryValue: 250 }]; // 2027-06-16 00:15 local Auckland
+    const dayKeys = ["2027-06-15", "2027-06-16", "2027-06-17"];
+    const buckets = bucketValueByLocalDay(pairs, "Pacific/Auckland", dayKeys);
+    expect(buckets.find((b) => b.dayKey === "2027-06-16")!.value).toBe(250);
+    expect(buckets.find((b) => b.dayKey === "2027-06-15")!.value).toBe(0);
+    expect(buckets.find((b) => b.dayKey === "2027-06-17")!.value).toBe(0);
+  });
+
+  it("multiple opportunities the same local day SUM into one bucket's value, not overwrite", () => {
+    const pairs = [
+      { createdAt: "2027-06-14T14:00:00.000Z", monetaryValue: 100 }, // 10:00 local
+      { createdAt: "2027-06-14T18:00:00.000Z", monetaryValue: 250 }, // 14:00 local
+      { createdAt: "2027-06-14T22:00:00.000Z", monetaryValue: 75 }, // 18:00 local
+    ];
+    const dayKeys = ["2027-06-14"];
+    const buckets = bucketValueByLocalDay(pairs, "America/New_York", dayKeys);
+    expect(buckets).toEqual([{ dayKey: "2027-06-14", value: 425, isWeekend: false }]);
+  });
+
+  it("a value whose local day falls outside the given dayKeys is not counted anywhere (no crash, no phantom bucket)", () => {
+    const pairs = [{ createdAt: "2027-01-01T14:00:00.000Z", monetaryValue: 999 }]; // far outside the window below
+    const dayKeys = ["2027-06-14"];
+    const buckets = bucketValueByLocalDay(pairs, "America/New_York", dayKeys);
+    expect(buckets).toEqual([{ dayKey: "2027-06-14", value: 0, isWeekend: false }]);
+  });
+
+  it("weekend flags follow the same UTC-anchor derivation as bucketByLocalDay, over an all-zero series", () => {
+    const dayKeys = ["2027-06-19", "2027-06-20"]; // Sat, Sun
+    const buckets = bucketValueByLocalDay([], "America/New_York", dayKeys);
+    expect(buckets.map((b) => b.isWeekend)).toEqual([true, true]);
+    expect(buckets.every((b) => b.value === 0)).toBe(true);
   });
 });
 

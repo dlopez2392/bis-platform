@@ -17,7 +17,7 @@ export default async function Home() {
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background px-6 text-center">
-      <h1 className="text-4xl font-semibold tracking-tight text-foreground">
+      <h1 className="text-4xl font-display font-[650] tracking-[-0.01em] text-foreground">
         {m["landing.title"]}
       </h1>
       <p className="max-w-md text-balance text-muted-foreground">{m["landing.tagline"]}</p>

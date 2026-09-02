@@ -126,7 +126,13 @@ test("a client sees only their own account, and nothing when access is off", asy
   // custom property is unset, which is exactly the failure being guarded.
   // #1e3a8a scores 1.62:1 on the dark sidebar and is lightened to #3a62d4 to
   // clear 3:1 — so this value ALSO proves the lightening ran.
-  await expect(sidebar.locator("nav span.bg-sidebar-accent").first())
+  //
+  // Targets the 3px active-item rail specifically (`.w-\[3px\]`), not just
+  // any `span.bg-sidebar-accent` — that class is shared by the unread-count
+  // badge and the collapsed-state dot too (app-sidebar.tsx), so the old
+  // broader selector could pass against the wrong element entirely if the
+  // rail itself ever stopped rendering.
+  await expect(sidebar.locator("nav span.bg-sidebar-accent.w-\\[3px\\]").first())
     .toHaveCSS("background-color", "rgb(58, 98, 212)");
 
   // The agency's own name must be gone from the client's chrome entirely.
@@ -164,6 +170,21 @@ test("a client sees only their own account, and nothing when access is off", asy
   // account is guaranteed to have a panel to show.
   await page.goto(`/dashboard/accounts/${fixture.accountId}/dashboard`);
   await expect(page.getByText("Activation checklist")).toHaveCount(0);
+
+  // 5b. Grants proof (hard lesson: serviceDb test fixtures are BLIND to
+  // column/table grants — a mock DB client is more permissive than the real
+  // one, so it proves nothing about what the CLIENT role can actually
+  // SELECT). This session is running as this fixture's real Clerk identity
+  // through dbForRequest(), not service role, so the Calls-answered KPI
+  // rendering a NUMBER here — rather than the tile being absent, or the page
+  // throwing — is the only thing in this suite that proves `calls`,
+  // `bookings`, and `opportunities` SELECT actually reach the client role
+  // (the KPI row reads all three; see [accountId]/dashboard/page.tsx). The
+  // fixture has taken zero calls, so "0" is the honest, EXPECTED value, not
+  // a fallback being tolerated — this asserts a numeric string specifically
+  // (not "not empty", not "not an error"), so a read that silently failed
+  // and rendered nothing, or threw past an error boundary, still fails this.
+  await expect(page.getByTestId("kpi-calls-answered")).toHaveText(/^\d+$/);
 
   // 6. With client_access_enabled flipped false, they get the no-access
   // page — not an empty CRM. This is what proves design spec sections

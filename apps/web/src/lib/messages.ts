@@ -182,6 +182,29 @@ export const m = {
   "account.openOpps": "Open opportunities",
   "account.pipelineValue": "Pipeline value",
 
+  // The in-account dashboard's greeting header (Task 5), both audiences.
+  // "{name}" is the house {placeholder} convention (see contacts.page) — the
+  // component .replace()s it with the account's own name. Time-of-day comes
+  // from `greetingPeriod` (lib/dashboard/greeting.ts), read from the
+  // ACCOUNT's timezone, never the viewer's.
+  "dashboard.greeting.morning": "Good morning, {name}",
+  "dashboard.greeting.afternoon": "Good afternoon, {name}",
+  "dashboard.greeting.evening": "Good evening, {name}",
+  // Sub-line, appended only when the account has an ENABLED voice profile —
+  // never a blanket claim about what the receptionist did (that isn't
+  // honestly derivable this phase; see the task brief).
+  "dashboard.sub.voice": "Sofía is answering your calls.",
+
+  // The KPI row (Task 5): rolling 7-local-day metrics, each with a delta vs
+  // the prior 7 days and (except after-hours) a 14-day sparkline — DESIGN.md
+  // rule 1's context requirement, carried by the delta/spark themselves, so
+  // none of these four need a `period` caption the way the "All time" row
+  // below them does.
+  "dashboard.kpi.callsAnswered": "Calls answered",
+  "dashboard.kpi.appointmentsBooked": "Appointments booked",
+  "dashboard.kpi.afterHoursCaptured": "After-hours captured",
+  "dashboard.kpi.pipelineAdded": "Pipeline added",
+
   "contacts.title": "Contacts",
   "contacts.add": "Add contact",
   "contacts.search": "Search name, email, phone…",

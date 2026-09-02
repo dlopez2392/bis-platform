@@ -46,12 +46,18 @@ export function StatTile({
   delta,
   spark,
   period,
+  valueTestId,
 }: {
   label: string;
   value: string;
   delta?: StatTileDelta;
   spark?: number[];
   period?: string;
+  /** Optional `data-testid` on the value element only — e2e's grants-proof
+   *  assertion (client-access.spec.ts) needs a stable hook onto a specific
+   *  tile's rendered value, since the label text alone isn't a safe
+   *  Playwright selector once several tiles share this component. */
+  valueTestId?: string;
 }) {
   if (process.env.NODE_ENV !== "production" && !hasStatContext({ delta, spark, period })) {
     throw new Error(
@@ -65,7 +71,10 @@ export function StatTile({
     <div className="rounded-lg border border-border bg-card p-5">
       <p className={LABEL_ROLE}>{label}</p>
       <div className="mt-2 flex items-baseline gap-2">
-        <p className="font-display font-[650] text-3xl tracking-[-0.01em] tabular-nums text-card-foreground">
+        <p
+          data-testid={valueTestId}
+          className="font-display font-[650] text-3xl tracking-[-0.01em] tabular-nums text-card-foreground"
+        >
           {value}
         </p>
         {delta ? (

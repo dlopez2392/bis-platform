@@ -30,6 +30,10 @@ test("account switcher navigates into a company", async ({ page }) => {
 // class assertion passes whether or not the custom property was set.
 test("the agency sidebar keeps the default accent", async ({ page }) => {
   await page.goto("/dashboard/accounts");
-  await expect(page.locator("aside nav span.bg-sidebar-accent").first())
+  // Targets the 3px active-item rail specifically (`.w-\[3px\]`), not just
+  // any `span.bg-sidebar-accent` — see client-access.spec.ts's own note on
+  // the identical tightening: that class is shared by the unread-count
+  // badge and the collapsed-state dot too (app-sidebar.tsx).
+  await expect(page.locator("aside nav span.bg-sidebar-accent.w-\\[3px\\]").first())
     .toHaveCSS("background-color", "rgb(169, 158, 255)"); // #A99EFF — the P1 token cut-over's sidebar accent (both themes)
 });
