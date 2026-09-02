@@ -215,3 +215,66 @@ export async function countContacts(db: SupabaseClient, accountId: string): Prom
   if (error) throw new Error(`countContacts failed: ${error.message}`);
   return count ?? 0;
 }
+
+/**
+ * Bulk tag: one tag upsert + one contact_tags bulk upsert. Same
+ * trim/lowercase normalization as addTagToContact so "VIP" and "vip"
+ * are the same tag. Returns the tagId so the caller can offer undo.
+ */
+export async function addTagToContacts(
+  db: SupabaseClient, accountId: string, contactIds: string[], tagName: string,
+): Promise<{ tagId: string; applied: number }> {
+  const name = tagName.trim().toLowerCase();
+  if (!name || contactIds.length === 0) throw new Error("addTagToContacts: nothing to do");
+  const { data: tag, error: tErr } = await db.from("tags")
+    .upsert({ account_id: accountId, name }, { onConflict: "account_id,name" })
+    .select("id").single();
+  if (tErr || !tag) throw new Error(`tag upsert failed: ${tErr?.message}`);
+  const rows = contactIds.map((contactId) => ({
+    contact_id: contactId, tag_id: tag.id, account_id: accountId,
+  }));
+  const { error } = await db.from("contact_tags")
+    .upsert(rows, { onConflict: "contact_id,tag_id" });
+  if (error) throw new Error(`contact_tags bulk upsert failed: ${error.message}`);
+  return { tagId: tag.id, applied: contactIds.length };
+}
+
+/** Undo for addTagToContacts: strip ONE tag from the same id set. */
+export async function removeTagFromContacts(
+  db: SupabaseClient, accountId: string, contactIds: string[], tagId: string,
+): Promise<void> {
+  if (contactIds.length === 0) return;
+  const { error } = await db.from("contact_tags").delete()
+    .eq("account_id", accountId).eq("tag_id", tagId).in("contact_id", contactIds);
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Bulk delete with skip-blocked semantics. opportunities.contact_id and
+ * conversations.contact_id are NO ACTION FKs, and bookings.contact_id is
+ * `on delete restrict` BY DESIGN (0017) — a single unfiltered
+ * `delete … in (…)` would abort the whole batch on one linked contact.
+ * So: pre-read which ids have any blocking child, delete only the rest in
+ * one statement, and report both counts honestly. contact_tags/notes/tasks
+ * cascade; form_submissions and calls set-null (schema, not our concern
+ * here). Deliberately NO event emit: `contact.deleted` is not a curated
+ * ledger type and the ledger fails closed on unknown types.
+ */
+export async function deleteContacts(
+  db: SupabaseClient, accountId: string, contactIds: string[],
+): Promise<{ deleted: number; skippedBlocked: number }> {
+  if (contactIds.length === 0) return { deleted: 0, skippedBlocked: 0 };
+  const blocked = new Set<string>();
+  for (const table of ["opportunities", "conversations", "bookings"] as const) {
+    const { data, error } = await db.from(table).select("contact_id")
+      .eq("account_id", accountId).in("contact_id", contactIds);
+    if (error) throw new Error(`deleteContacts ${table} pre-read failed: ${error.message}`);
+    for (const r of data ?? []) if (r.contact_id) blocked.add(r.contact_id as string);
+  }
+  const deletable = contactIds.filter((id) => !blocked.has(id));
+  if (deletable.length === 0) return { deleted: 0, skippedBlocked: blocked.size };
+  const { data, error } = await db.from("contacts").delete()
+    .eq("account_id", accountId).in("id", deletable).select("id");
+  if (error) throw new Error(`deleteContacts failed: ${error.message}`);
+  return { deleted: (data ?? []).length, skippedBlocked: blocked.size };
+}

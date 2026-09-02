@@ -10,7 +10,7 @@ import {
   hasActiveCallSince,
   findUpcomingBookingForPhone, getBookingById, deleteCallRow,
   listPhoneNumbersForAccount, listAllPhoneNumbers, reassignPhoneNumber,
-  listCalls, getCall, listCallStartsBetween,
+  listCalls, getCall, listCallStartsBetween, listContactCalls,
 } from "../voice";
 
 describe("voice accessors", () => {
@@ -318,6 +318,43 @@ describe("listCallStartsBetween", () => {
           new Date("2027-06-14T23:59:59.999Z").getTime(),
         ]);
       });
+    });
+  });
+});
+
+// The contact drawer's recent-calls source — belongs here (not
+// contacts.test.ts) because it reads the `calls` table, per this file's
+// existing convention (listCalls/getCall above).
+describe("listContactCalls", () => {
+  it("newest-first, scoped to one contact, respects limit", async () => {
+    await withTestAccount(async (db, accountA) => {
+      const n = await assignPhoneNumber(db, accountA, { e164: "+15550000040" }, "user_test");
+      const mine = await createContact(db, accountA, { firstName: "Ana", phone: "+15550000041" }, "user_test");
+      const other = await createContact(db, accountA, { firstName: "Zed", phone: "+15550000042" }, "user_test");
+
+      const r1 = await startCallRow(db, accountA, { phoneNumberId: n.id, callerE164: "+15550000041" });
+      await finishCallRow(db, accountA, r1.id, {
+        outcome: "booked", endedAt: new Date(), durationSecs: 30, turnCount: 3,
+        transcript: [], summary: "s1", language: "en", contactId: mine.id,
+      });
+      const r2 = await startCallRow(db, accountA, { phoneNumberId: n.id, callerE164: "+15550000041" });
+      await finishCallRow(db, accountA, r2.id, {
+        outcome: "message", endedAt: new Date(), durationSecs: 15, turnCount: 2,
+        transcript: [], summary: "s2", language: "en", contactId: mine.id,
+      });
+      // A call belonging to a different contact — must not leak in.
+      const r3 = await startCallRow(db, accountA, { phoneNumberId: n.id, callerE164: "+15550000042" });
+      await finishCallRow(db, accountA, r3.id, {
+        outcome: "spam", endedAt: new Date(), durationSecs: 5, turnCount: 1,
+        transcript: [], summary: "s3", language: "en", contactId: other.id,
+      });
+
+      const rows = await listContactCalls(db, accountA, mine.id);
+      expect(rows.map((r) => r.id)).toEqual([r2.id, r1.id]); // newest first
+      expect(rows.every((r) => typeof r.outcome === "string" && typeof r.started_at === "string")).toBe(true);
+
+      const limited = await listContactCalls(db, accountA, mine.id, 1);
+      expect(limited.map((r) => r.id)).toEqual([r2.id]);
     });
   });
 });

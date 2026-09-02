@@ -2,7 +2,8 @@ import "dotenv/config";
 import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
 import { createContact, updateContact, listContacts, getContact,
-         addTagToContact, listContactTags, fillContactBlanks, countContacts } from "../contacts";
+         addTagToContact, listContactTags, fillContactBlanks, countContacts,
+         deleteContacts, addTagToContacts, removeTagFromContacts } from "../contacts";
 
 describe("contacts service", () => {
   it("creates, emits event, dedupes by email", () =>
@@ -197,4 +198,50 @@ describe("countContacts", () => {
       });
     });
   });
+});
+
+describe("bulk contact ops", () => {
+  it("addTagToContacts tags every id once, idempotently, and returns the tagId", () =>
+    withTestAccount(async (db, accountId) => {
+      const a = await createContact(db, accountId, { firstName: "A" }, "user_test");
+      const b = await createContact(db, accountId, { firstName: "B" }, "user_test");
+      const r1 = await addTagToContacts(db, accountId, [a.id, b.id], "VIP");
+      expect(r1.applied).toBe(2);
+      // idempotent — re-applying does not duplicate contact_tags rows
+      const r2 = await addTagToContacts(db, accountId, [a.id, b.id], "vip");
+      expect(r2.tagId).toBe(r1.tagId); // trims + lowercases like addTagToContact
+      const tagsA = await listContactTags(db, accountId, a.id);
+      expect(tagsA).toHaveLength(1);
+      // undo path: removeTagFromContacts strips it from both
+      await removeTagFromContacts(db, accountId, [a.id, b.id], r1.tagId);
+      expect(await listContactTags(db, accountId, a.id)).toHaveLength(0);
+      expect(await listContactTags(db, accountId, b.id)).toHaveLength(0);
+    }));
+
+  it("deleteContacts deletes unblocked ids and skips one linked to an opportunity", () =>
+    withTestAccount(async (db, accountId) => {
+      const free = await createContact(db, accountId, { firstName: "Free" }, "user_test");
+      const blocked = await createContact(db, accountId, { firstName: "Blocked" }, "user_test");
+      const { data: pipe } = await db.from("pipelines")
+        .insert({ account_id: accountId, name: "P" }).select("id").single();
+      const { data: stage } = await db.from("pipeline_stages")
+        .insert({ account_id: accountId, pipeline_id: pipe!.id, name: "S", position: 1 })
+        .select("id").single();
+      await db.from("opportunities").insert({
+        account_id: accountId, contact_id: blocked.id, pipeline_id: pipe!.id,
+        stage_id: stage!.id, name: "Deal", monetary_value: 0, status: "open",
+      });
+      const r = await deleteContacts(db, accountId, [free.id, blocked.id]);
+      expect(r).toEqual({ deleted: 1, skippedBlocked: 1 });
+      expect(await getContact(db, accountId, free.id)).toBeNull();
+      expect(await getContact(db, accountId, blocked.id)).not.toBeNull();
+    }));
+
+  it("deleteContacts cascades tags/notes and null-scoped: ignores other-account ids", () =>
+    withTestAccount(async (db, accountId) => {
+      const c = await createContact(db, accountId, { firstName: "C" }, "user_test");
+      await addTagToContact(db, accountId, c.id, "temp");
+      const r = await deleteContacts(db, accountId, [c.id, "00000000-0000-0000-0000-000000000000"]);
+      expect(r.deleted).toBe(1); // the bogus id is not counted, not an error
+    }));
 });

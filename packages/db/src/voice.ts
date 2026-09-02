@@ -308,6 +308,18 @@ export async function getCall(
   return (data as unknown as CallDetailRow | null) ?? null;
 }
 
+/** The contact drawer's recent-calls source — newest few for ONE contact. */
+export async function listContactCalls(
+  db: SupabaseClient, accountId: string, contactId: string, limit = 3,
+): Promise<{ id: string; started_at: string; outcome: string }[]> {
+  const { data, error } = await db.from("calls")
+    .select("id, started_at, outcome")
+    .eq("account_id", accountId).eq("contact_id", contactId)
+    .order("started_at", { ascending: false }).limit(limit);
+  if (error) throw new Error(`listContactCalls failed: ${error.message}`);
+  return (data ?? []) as { id: string; started_at: string; outcome: string }[];
+}
+
 export async function getBookingById(
   db: SupabaseClient, accountId: string, bookingId: string,
 ): Promise<{ id: string; contact_id: string; calendar_id: string; starts_at: string; ends_at: string; status: string } | null> {
