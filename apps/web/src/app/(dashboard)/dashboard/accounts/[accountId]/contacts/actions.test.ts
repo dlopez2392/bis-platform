@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   requireAccountAccess: async () => ({ userId: "user_1", isAgency: true }),
@@ -16,7 +16,11 @@ const dbMocks = {
 };
 vi.mock("@bis/db", () => dbMocks);
 
-const { updateContactFieldAction, bulkDeleteContactsAction } = await import("./actions");
+const { updateContactFieldAction, bulkDeleteContactsAction, bulkAddTagAction, bulkRemoveTagAction } = await import("./actions");
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 describe("updateContactFieldAction", () => {
   it("rejects a non-allowlisted field WITHOUT touching the db", async () => {
@@ -43,6 +47,37 @@ describe("bulkDeleteContactsAction", () => {
   it("returns ok:false instead of throwing when the db op throws", async () => {
     dbMocks.deleteContacts.mockRejectedValue(new Error("boom"));
     const r = await bulkDeleteContactsAction("a1", ["x"]);
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("bulkAddTagAction", () => {
+  it("returns ok:true and spreads the tagId/applied from addTagToContacts", async () => {
+    dbMocks.addTagToContacts.mockResolvedValue({ tagId: "t9", applied: 2 });
+    const r = await bulkAddTagAction("a1", ["c1", "c2"], "urgent");
+    expect(r).toEqual({ ok: true, tagId: "t9", applied: 2 });
+  });
+  it("returns ok:false instead of throwing when the db op throws", async () => {
+    dbMocks.addTagToContacts.mockRejectedValue(new Error("boom"));
+    const r = await bulkAddTagAction("a1", ["c1"], "urgent");
+    expect(r.ok).toBe(false);
+  });
+  it("returns ok:false and does not call addTagToContacts when contactIds is empty", async () => {
+    const r = await bulkAddTagAction("a1", [], "urgent");
+    expect(r.ok).toBe(false);
+    expect(dbMocks.addTagToContacts).not.toHaveBeenCalled();
+  });
+});
+
+describe("bulkRemoveTagAction", () => {
+  it("returns ok:true when removeTagFromContacts resolves", async () => {
+    dbMocks.removeTagFromContacts.mockResolvedValue(undefined);
+    const r = await bulkRemoveTagAction("a1", ["c1", "c2"], "t9");
+    expect(r).toEqual({ ok: true });
+  });
+  it("returns ok:false instead of throwing when the db op throws", async () => {
+    dbMocks.removeTagFromContacts.mockRejectedValue(new Error("boom"));
+    const r = await bulkRemoveTagAction("a1", ["c1"], "t9");
     expect(r.ok).toBe(false);
   });
 });
