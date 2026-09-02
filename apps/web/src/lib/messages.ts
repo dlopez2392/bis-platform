@@ -298,6 +298,16 @@ export const m = {
   "contact.noOpportunities": "None yet.",
   "contact.noName": "(no name)",
 
+  // The contact drawer's recent-activity feed (Task 2's summary route,
+  // Task 6's drawer). "{outcome}"/"{name}"/"{value}" are the house
+  // {placeholder} convention (see contacts.page above) — the route
+  // .replace()s them before the string ever reaches the client.
+  "drawer.recent.call": "Call — {outcome}",
+  "drawer.recent.note": "Note added",
+  "drawer.recent.submission": "Form submitted",
+  "drawer.recent.message": "Message",
+  "drawer.recent.opportunity": "Opportunity: {name} ({value})",
+
   "settings.title": "Settings",
   "settings.customFields": "Custom fields",
   "settings.customFieldsBody": "Extra fields captured on every contact.",

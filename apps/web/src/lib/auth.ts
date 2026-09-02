@@ -96,3 +96,24 @@ export async function resolveClientAccount(): Promise<{ id: string; name: string
   const state = await resolveClientAccessState();
   return state.status === "ok" ? { id: state.id, name: state.name } : null;
 }
+
+/**
+ * requireAccountAccess for API route handlers: same checks, but returns
+ * null instead of redirecting — the caller answers 404 (never 403/401
+ * with substance: don't confirm to a wrong-tenant caller that the
+ * resource exists). Client callers get access to exactly their own
+ * account, like the page variant.
+ */
+export async function apiAccountAccess(
+  accountId: string,
+): Promise<{ userId: string; isAgency: boolean } | null> {
+  const { userId, sessionClaims } = await auth();
+  if (!userId) return null;
+  const claims = sessionClaims as AppClaims;
+  if (claims.app_role === "agency_admin") return { userId, isAgency: true };
+  if (!claims.org_id) return null;
+  const account = await getAccountByOrgId(serviceDb(), claims.org_id);
+  if (!account || !account.client_access_enabled) return null;
+  if (account.id !== accountId) return null;
+  return { userId, isAgency: false };
+}
