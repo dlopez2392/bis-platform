@@ -10,6 +10,7 @@ import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { formatCurrency } from "@/lib/format";
 import { mergeChecklist } from "@/lib/checklist-catalogue";
+import { getTenantBranding } from "@/lib/branding/tenant-theme-reader";
 import { m } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 import { greetingPeriod, formatLocalLongDate } from "@/lib/dashboard/greeting";
@@ -100,6 +101,24 @@ export default async function AccountDashboardPage({
   // Greeting header (this page only). Time-of-day and the long date both
   // read the ACCOUNT's timezone, never the viewer's own clock — the same
   // zone-pinned discipline every other date on this page follows.
+  //
+  // WHO the greeting names: for the agency, `accounts.name` IS the label
+  // meant for them (their own internal note on this client, e.g. "Rio
+  // Roofing — trial") — unchanged, no branding read on this path. For a
+  // client, that same internal label is agency-private and must not
+  // surface here — mirrors app-sidebar.tsx's own `clientBrandName ??
+  // clientAccountName` precedence exactly, so the greeting can never
+  // disagree with the identity block beside it. `getTenantBranding` is
+  // serviceDb()-backed, but this is NOT a new query on a client's own
+  // request: dashboard/layout.tsx already resolves this exact accountId
+  // (their own tenant) through the same `cache()` memo earlier in the same
+  // request, so this call hits that memo — the page's "never serviceDb for
+  // its own reads" rule governs the KPI/metrics data this page owns, not
+  // branding, which every /dashboard/* route already resolves once per
+  // request regardless of this page.
+  const greetingName = isAgency
+    ? account.name
+    : (await getTenantBranding(accountId)).brandName ?? account.name;
   const period = greetingPeriod(now, timezone);
   const greetingKey =
     period === "morning"
@@ -107,7 +126,7 @@ export default async function AccountDashboardPage({
       : period === "afternoon"
         ? "dashboard.greeting.afternoon"
         : "dashboard.greeting.evening";
-  const greetingText = m[greetingKey].replace("{name}", account.name);
+  const greetingText = m[greetingKey].replace("{name}", greetingName);
   const dateText = formatLocalLongDate(now, timezone);
   const showVoiceSub = voiceProfile?.enabled === true;
 

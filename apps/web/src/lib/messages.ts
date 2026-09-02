@@ -177,7 +177,6 @@ export const m = {
   "dashboard.openOpps": "Open opportunities",
   "dashboard.pipelineValue": "Pipeline value",
 
-  "account.dashboard.title": "Dashboard",
   "account.contacts": "Contacts",
   "account.openOpps": "Open opportunities",
   "account.pipelineValue": "Pipeline value",
