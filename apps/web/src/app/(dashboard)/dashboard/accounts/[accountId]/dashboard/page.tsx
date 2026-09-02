@@ -229,32 +229,6 @@ export default async function AccountDashboardPage({
         </p>
       </div>
       <div className="space-y-6 p-6">
-        {isAgency ? (
-          checklistRemaining > 0 ? (
-            <div className="max-w-2xl">
-              <ChecklistPanel
-                entries={checklistEntries}
-                formsMissingNotify={formsMissingNotify}
-                setAction={setChecklistItemAction.bind(null, accountId)}
-                addAction={addChecklistItemAction.bind(null, accountId)}
-                titleHref={`/dashboard/accounts/${accountId}/checklist`}
-              />
-            </div>
-          ) : (
-            // A finished checklist should not compete with the rest of the
-            // dashboard, but it still has to stay reachable — un-ticking an
-            // item, adding a custom step, or just reviewing what was done had
-            // no path back in once the panel above stopped rendering.
-            <Link
-              href={`/dashboard/accounts/${accountId}/checklist`}
-              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <ListChecks className="size-3.5" aria-hidden />
-              {m["checklist.reviewLink"]}
-            </Link>
-          )
-        ) : null}
-
         <div className={cn("grid gap-4 sm:grid-cols-2", hasAfterHours ? "xl:grid-cols-4" : "xl:grid-cols-3")}>
           <StatTile
             label={m["dashboard.kpi.callsAnswered"]}
@@ -305,9 +279,38 @@ export default async function AccountDashboardPage({
           />
           {/* Both audiences (see the `listRecentEvents` call above's own
               grants comment) — no isAgency gate, unlike the checklist panel
-              higher on this page. */}
+              below. */}
           <ActivityCard accountId={accountId} events={recentEvents} now={now} />
         </div>
+
+        {/* Below the metrics on purpose (danlo, 2026-09-02): the dashboard
+            leads with what the business DID — the checklist is the agency's
+            onboarding worklist, not the day's news, so it reads last. */}
+        {isAgency ? (
+          checklistRemaining > 0 ? (
+            <div className="max-w-2xl">
+              <ChecklistPanel
+                entries={checklistEntries}
+                formsMissingNotify={formsMissingNotify}
+                setAction={setChecklistItemAction.bind(null, accountId)}
+                addAction={addChecklistItemAction.bind(null, accountId)}
+                titleHref={`/dashboard/accounts/${accountId}/checklist`}
+              />
+            </div>
+          ) : (
+            // A finished checklist should not compete with the rest of the
+            // dashboard, but it still has to stay reachable — un-ticking an
+            // item, adding a custom step, or just reviewing what was done had
+            // no path back in once the panel above stopped rendering.
+            <Link
+              href={`/dashboard/accounts/${accountId}/checklist`}
+              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <ListChecks className="size-3.5" aria-hidden />
+              {m["checklist.reviewLink"]}
+            </Link>
+          )
+        ) : null}
       </div>
     </>
   );
