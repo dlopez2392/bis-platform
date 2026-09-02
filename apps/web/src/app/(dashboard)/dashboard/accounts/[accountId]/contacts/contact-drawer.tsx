@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ExternalLink, Plus, X } from "lucide-react";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { toast } from "sonner";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -78,7 +79,31 @@ export function ContactDrawer({
 
   return (
     <Sheet open={row !== null} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <SheetContent side="right" className="w-full sm:max-w-md">
+      <SheetContent
+        side="right"
+        className="w-full sm:max-w-md"
+        // Radix's own Escape listener sits on `document` with
+        // `{capture: true}` and runs BEFORE any bubble-phase `onKeyDown` on
+        // a field inside this sheet — including InlineField's own Escape
+        // handler, which only means to cancel the field being edited.
+        // Without this, Escape while editing (or mid-tag-draft in TagsRow
+        // below) closed the whole drawer instead of just abandoning the
+        // edit. preventDefault here stops Radix's dismiss for THIS keypress
+        // only; the focused field's own onKeyDown still runs right after
+        // (same event, same phase, just later), so the edit itself still
+        // cancels normally. Esc with no field focused — document.activeElement
+        // isn't an input — is untouched and still closes the drawer.
+        onEscapeKeyDown={(e) => {
+          const el = document.activeElement;
+          if (
+            el instanceof HTMLInputElement &&
+            e.currentTarget instanceof Node &&
+            e.currentTarget.contains(el)
+          ) {
+            e.preventDefault();
+          }
+        }}
+      >
         {row === null ? null : (
           <>
             <SheetHeader>
@@ -98,12 +123,21 @@ export function ContactDrawer({
                   <ExternalLink className="size-4" aria-hidden />
                 </Link>
               </SheetTitle>
+              <SheetDescription className="sr-only">{m["drawer.description"]}</SheetDescription>
             </SheetHeader>
 
-            <div className="space-y-4 overflow-y-auto px-4 pb-6">
+            <div
+              data-testid="drawer-scroll"
+              className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-6"
+            >
               <dl className="space-y-1">
                 {FIELDS.map(({ field, labelKey, type }) => (
-                  <div key={field} className="grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2">
+                  // Keyed by contact id + field, not field alone: the peek
+                  // overlay blocks row clicks while it's open so `row` can't
+                  // change out from under it today, but a bare `field` key
+                  // would reconcile instead of remount if it ever could,
+                  // showing/writing contact A's values under contact B.
+                  <div key={`${row.id}:${field}`} className="grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2">
                     <dt className="text-muted-foreground text-xs">{m[labelKey]}</dt>
                     <dd>
                       <InlineField
@@ -145,7 +179,12 @@ export function ContactDrawer({
                 </div>
               ) : (
                 <>
-                  <TagsRow accountId={accountId} contactId={row.id} tags={load.summary.tags} />
+                  <TagsRow
+                    accountId={accountId}
+                    contactId={row.id}
+                    tags={load.summary.tags}
+                    onChanged={() => setRetryNonce((n) => n + 1)}
+                  />
                   <div>
                     <p className="text-muted-foreground mb-2 font-mono text-[10px] tracking-[0.14em] uppercase">
                       {m["drawer.recent"]}
@@ -155,7 +194,7 @@ export function ContactDrawer({
                     ) : (
                       <ul className="space-y-1.5 text-sm">
                         {load.summary.recent.map((r, i) => (
-                          <li key={i} className="flex items-baseline justify-between gap-2">
+                          <li key={i} data-testid="drawer-recent-item" className="flex items-baseline justify-between gap-2">
                             <span className="truncate">{r.label}</span>
                             <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
                               {relativeTime(r.at, load.nowMs)}
@@ -176,12 +215,29 @@ export function ContactDrawer({
 }
 
 // Reuses the EXISTING FormData tag actions with the same hidden-input idiom
-// as contact-fields-panel.tsx (do not invent a new action shape). CAVEAT:
-// after a tag add/remove the `tags` prop above does NOT auto-refresh (the
-// summary was fetched once) — accepted for v1, the server revalidates the
-// page and reopening the drawer shows the truth.
-function TagsRow({ accountId, contactId, tags }: {
-  accountId: string; contactId: string; tags: ContactSummary["tags"];
+// as contact-fields-panel.tsx (do not invent a new action shape). `onChanged`
+// fires only after a successful submission and bumps ContactDrawer's own
+// `retryNonce`, which the guarded fetch effect above already depends on — so
+// a tag add/remove refetches the one-shot summary GET the badges below come
+// from. Before this, the server actions' own `revalidatePath` targeted the
+// contact DETAIL path (not this drawer), so the badges stayed stale with no
+// toast either way and an operator watching a tag not disappear had no way
+// to tell a slow success from a silent failure.
+async function submitTagAction(run: () => Promise<void>, onChanged: () => void) {
+  try {
+    await run();
+    onChanged();
+  } catch {
+    // Same crash-safety reasoning as notifyActionResult (action-feedback.ts):
+    // a stale tab posting a content-hashed server-action id from before a
+    // redeploy REJECTS rather than resolving, and that must reach the
+    // operator as a toast, not vanish silently.
+    toast.error(m["inline.crashed"]);
+  }
+}
+
+function TagsRow({ accountId, contactId, tags, onChanged }: {
+  accountId: string; contactId: string; tags: ContactSummary["tags"]; onChanged: () => void;
 }) {
   const boundAdd = addTagAction.bind(null, accountId);
   const boundRemove = removeTagAction.bind(null, accountId);
@@ -189,7 +245,11 @@ function TagsRow({ accountId, contactId, tags }: {
   return (
     <div className="flex flex-wrap items-center gap-2">
       {tags.map((t) => (
-        <form key={t.id} action={boundRemove} className="inline-flex">
+        <form
+          key={t.id}
+          action={(formData) => submitTagAction(() => boundRemove(formData), onChanged)}
+          className="inline-flex"
+        >
           {hidden}
           <input type="hidden" name="tagId" value={t.id} />
           <button type="submit" className="group" title={t.name}
@@ -201,7 +261,10 @@ function TagsRow({ accountId, contactId, tags }: {
           </button>
         </form>
       ))}
-      <form action={boundAdd} className="inline-flex items-center gap-1">
+      <form
+        action={(formData) => submitTagAction(() => boundAdd(formData), onChanged)}
+        className="inline-flex items-center gap-1"
+      >
         {hidden}
         <Input name="tag" placeholder={m["contact.addTag"]} className="h-7 w-28 text-xs" />
         <Button type="submit" size="icon-xs" variant="outline" aria-label={m["contact.addTag"]}>

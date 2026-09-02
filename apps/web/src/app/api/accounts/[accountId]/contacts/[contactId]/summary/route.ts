@@ -7,6 +7,7 @@ import { apiAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { formatCurrency } from "@/lib/format";
 import { m } from "@/lib/messages";
+import { OUTCOMES } from "@/app/(dashboard)/dashboard/accounts/[accountId]/calls/format";
 
 export const dynamic = "force-dynamic";
 
@@ -45,7 +46,17 @@ export async function GET(
   const items: Item[] = [
     ...calls.map((c): Item => ({
       kind: "call",
-      label: m["drawer.recent.call"].replace("{outcome}", String(c.outcome)),
+      // The localized label ("Booked"/"Abandoned"/…), not the raw
+      // lowercase `calls.outcome` enum — same map the Calls list/detail
+      // pages render from (calls/format.ts). `listContactCalls` types
+      // `outcome` as plain `string` (not `CallOutcome`), so the lookup is
+      // cast rather than indexed directly — which also means an unknown
+      // value falls back to the raw string instead of throwing and taking
+      // the whole summary route down with it.
+      label: m["drawer.recent.call"].replace(
+        "{outcome}",
+        (OUTCOMES as Record<string, { label: string }>)[c.outcome]?.label ?? String(c.outcome),
+      ),
       at: c.started_at,
     })),
     ...notes.map((n): Item => ({

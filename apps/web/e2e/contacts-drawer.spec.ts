@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import {
   serviceDb, setClientAccess, createContact, ensureDefaultPipeline, createOpportunity,
-  assignPhoneNumber, startCallRow, finishCallRow,
+  assignPhoneNumber, startCallRow, finishCallRow, addTagToContact, addNote,
 } from "@bis/db";
 import { readClientFixture } from "./support";
 import { m } from "../src/lib/messages";
@@ -78,6 +78,7 @@ const pagingIds: string[] = [];
 let blockedId = "";
 let opportunityId = "";
 let pipelineId = "";
+let scrollCheckId = "";
 const seededTagName = "vip-e2e";
 let callLinkContactId = "";
 
@@ -113,7 +114,7 @@ async function clearOwnFixtures(db: ReturnType<typeof serviceDb>, accId: string)
   if (numErr) throw new Error(`contacts-drawer e2e: pre-clean phone_numbers failed: ${numErr.message}`);
   const { error: contactErr } = await db.from("contacts").delete()
     .eq("account_id", accId)
-    .in("first_name", ["Deeplink", "SpaceKey", "Retry", "BulkGate", "CallLink", "Paging"]);
+    .in("first_name", ["Deeplink", "SpaceKey", "Retry", "BulkGate", "CallLink", "Paging", "ScrollCheck"]);
   if (contactErr) throw new Error(`contacts-drawer e2e: pre-clean contacts failed: ${contactErr.message}`);
 }
 
@@ -199,6 +200,26 @@ test.beforeAll(async () => {
     outcome: "lead", endedAt: new Date(), durationSecs: 58, turnCount: 1,
     transcript: [], summary: "Linked call, e2e", language: "en", contactId: callLinkContactId,
   });
+
+  // Addition H (final-review FIX 7): a wall of tags plus RECENT_LIMIT (5)
+  // notes, so the drawer's body genuinely overflows a short viewport —
+  // proving the scroll fix for real rather than by inspection. Notes are
+  // capped at 5 by the summary route's own RECENT_LIMIT regardless of how
+  // many exist, so tags (unbounded, and each one wraps the flex row taller)
+  // are what has to do the work of forcing real overflow: a first pass at 6
+  // tags measured clientHeight === scrollHeight (640 === 640) at 1440x720 —
+  // real content, genuinely not enough of it. Notes are cleaned up by
+  // auth.teardown.ts's deleteAccountCascade with the rest of this contact;
+  // tags are cleaned by this file's own afterAll (account-wide already).
+  scrollCheckId = (await createContact(
+    db, accountId, { firstName: "ScrollCheck", lastName: "Target" }, ACTOR,
+  )).id;
+  for (let i = 1; i <= 40; i++) {
+    await addTagToContact(db, accountId, scrollCheckId, `tag-${i}`);
+  }
+  for (let i = 1; i <= 5; i++) {
+    await addNote(db, accountId, scrollCheckId, `Scroll check note ${i}`, ACTOR);
+  }
 });
 
 test.afterAll(async () => {
@@ -383,7 +404,13 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
       await route.continue();
     });
 
-    await dialogA.getByRole("button", { name: m["common.retry"] }).click();
+    // `exact: true` matters since FIX 1 (final review): InlineField's edit
+    // button now carries the field's VALUE in its accessible name too (e.g.
+    // "Edit First name: Retry" for this very contact), so a substring match
+    // on "Retry" ambiguously matches both that button and the real Retry
+    // button below — Retry A/B being named that is a coincidence of this
+    // spec's own fixture naming, unrelated to the field it collides with.
+    await dialogA.getByRole("button", { name: m["common.retry"], exact: true }).click();
 
     // Close A — the overlay would block a real click on row B anyway (see
     // the deep-link test's own comment on this), and this is the realistic
@@ -500,7 +527,7 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     const existingItem = page.getByRole("menuitem", { name: seededTagName });
     await expect(existingItem).toBeVisible();
     await existingItem.click();
-    await expect(page.getByText(`Tagged 1 contacts with "${seededTagName}"`)).toBeVisible();
+    await expect(page.getByText(`Tagged 1 contact with "${seededTagName}"`)).toBeVisible();
 
     await page.getByRole("button", { name: m["common.undo"] }).click();
     // NOT `${base()}/contacts/.../summary` — `base()` is the DASHBOARD PAGE
@@ -522,7 +549,7 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     const draftTag = `fresh-tag-${Date.now()}`;
     await page.getByPlaceholder(m["contact.addTag"]).fill(draftTag);
     await page.keyboard.press("Enter");
-    await expect(page.getByText(`Tagged 1 contacts with "${draftTag}"`)).toBeVisible();
+    await expect(page.getByText(`Tagged 1 contact with "${draftTag}"`)).toBeVisible();
 
     await page.keyboard.press("Escape");
     await row.getByRole("checkbox").click();
@@ -606,6 +633,65 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     await expect(rows.nth(0)).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/\/calls\/[0-9a-f-]{36}$/);
+  });
+
+  // Final-review FIX 7: the drawer's scrollable body was a child of
+  // SheetContent's `flex flex-col` with no `min-h-0`/`flex-1`, so its
+  // default `min-height: auto` floored it at content height and the bottom
+  // became unreachable once body scroll is locked (Radix does this while any
+  // Sheet/Dialog is open). "ScrollCheck Target" (six tags, five notes — the
+  // drawer's RECENT_LIMIT) plus a short 1440x720 viewport is enough real
+  // content to force actual overflow, so this proves the fix by measurement
+  // rather than by inspecting the className.
+  test("drawer body scrolls to the bottom on a short viewport (FIX 7)", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 720 });
+    await page.goto(`${base()}/contacts?q=ScrollCheck`);
+    const row = page.getByRole("row").filter({ hasText: "ScrollCheck Target" });
+    await row.click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText("Recent", { exact: true })).toBeVisible();
+
+    const scroller = dialog.getByTestId("drawer-scroll");
+    const before = await scroller.evaluate((el) => (
+      { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight, scrollTop: el.scrollTop }
+    ));
+    // The measurement that actually distinguishes the bug from the fix: with
+    // the min-height:auto bug the container just grows to fit its content
+    // (scrollHeight === clientHeight, nothing for overflow-y-auto to act
+    // on); constrained to the sheet's remaining flex space, content this
+    // size genuinely overflows it.
+    expect(before.scrollHeight, "seeded content must overflow the container for this check to mean anything")
+      .toBeGreaterThan(before.clientHeight);
+    expect(before.scrollTop).toBe(0);
+
+    await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    const scrollTopAfter = await scroller.evaluate((el) => el.scrollTop);
+    expect(scrollTopAfter, "the container must actually be scrollable, not just overflowing")
+      .toBeGreaterThan(0);
+
+    // The scrollTop assertions above are the real proof; this is a geometric
+    // sanity check that the LAST recent-activity row actually lands inside
+    // the scroller's own clipped bounds once scrolled. Playwright's
+    // `toBeVisible()` alone would not catch a regression here: it checks for
+    // a non-empty, non-`visibility:hidden` bounding box, not whether that
+    // box is clipped outside a scrollable ancestor. Located by testid and
+    // `.last()`, not by a note's own body text: the summary route renders
+    // every note as the same generic `m["drawer.recent.note"]` label
+    // ("Note added") regardless of body, so the five seeded notes are
+    // indistinguishable in the UI — only their position in the list differs.
+    const lastNote = dialog.getByTestId("drawer-recent-item").last();
+    await expect(lastNote).toBeVisible();
+    const scrollerBox = await scroller.boundingBox();
+    const noteBox = await lastNote.boundingBox();
+    expect(scrollerBox, "scroller must have a real bounding box").not.toBeNull();
+    expect(noteBox, "the last recent-activity row must have a real bounding box").not.toBeNull();
+    if (scrollerBox && noteBox) {
+      expect(noteBox.y, "the last row's top must be within the scroller's clipped bounds")
+        .toBeGreaterThanOrEqual(scrollerBox.y - 1);
+      expect(noteBox.y + noteBox.height, "the last row's bottom must be within the scroller's clipped bounds")
+        .toBeLessThanOrEqual(scrollerBox.y + scrollerBox.height + 1);
+    }
   });
 });
 

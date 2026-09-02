@@ -284,9 +284,17 @@ export const m = {
   "bulk.delete": "Delete…",
   "bulk.clear": "Clear selection",
   "bulk.confirmTitle": "Delete {count} contacts?",
+  // Singular pair, same house convention as shell.presence.idleOne: the
+  // count is always literally 1, so it's spelled into the string rather
+  // than carried as a placeholder. Single selection is the common case for
+  // a bulk action bar, and "Delete 1 contacts?" / "Tagged 1 contacts" /
+  // "Deleted 1 contacts" is broken English on a destructive confirmation.
+  "bulk.confirmTitleOne": "Delete 1 contact?",
   "bulk.confirmBody": "This can't be undone. Type {count} to confirm.",
   "bulk.tagged": "Tagged {count} contacts with \"{tag}\"",
+  "bulk.taggedOne": "Tagged 1 contact with \"{tag}\"",
   "bulk.deleted": "Deleted {count} contacts",
+  "bulk.deletedOne": "Deleted 1 contact",
   "bulk.deletedSkipped": "Deleted {count} · skipped {skipped} linked to bookings, deals, or conversations",
 
   "pipeline.title": "Opportunities",
@@ -338,6 +346,11 @@ export const m = {
   "drawer.recentEmpty": "Nothing here yet — calls, notes, and form submissions for this contact will show up here.",
   "drawer.loadFailed": "Couldn't load this contact's activity.",
   "drawer.openFull": "Open full page",
+  // Screen-reader-only (Radix logs a missing-Description warning without
+  // one) — sr-only rather than visible copy, since the header row already
+  // carries the avatar, name, and open-full-page link and DESIGN.md's
+  // surfaces don't have room for a redundant subtitle.
+  "drawer.description": "Contact details, tags, and recent activity.",
 
   "settings.title": "Settings",
   "settings.customFields": "Custom fields",

@@ -9,7 +9,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { m } from "@/lib/messages";
 import { bulkAddTagAction, bulkRemoveTagAction, bulkDeleteContactsAction } from "./actions";
@@ -27,6 +27,9 @@ export function BulkActionBar({
   const [tagDraft, setTagDraft] = useState("");
   const count = selectedIds.length;
   if (count === 0) return null;
+  const confirmTitle = count === 1
+    ? m["bulk.confirmTitleOne"]
+    : m["bulk.confirmTitle"].replace("{count}", String(count));
 
   async function applyTag(name: string) {
     const ids = [...selectedIds];
@@ -35,7 +38,9 @@ export function BulkActionBar({
     if (!r.ok) { toast.error(r.error); return; }
     onDone();
     toast.success(
-      m["bulk.tagged"].replace("{count}", String(r.applied)).replace("{tag}", name),
+      r.applied === 1
+        ? m["bulk.taggedOne"].replace("{tag}", name)
+        : m["bulk.tagged"].replace("{count}", String(r.applied)).replace("{tag}", name),
       {
         action: {
           label: m["common.undo"],
@@ -57,7 +62,11 @@ export function BulkActionBar({
     onDone();
     toast.success(
       r.skippedBlocked === 0
-        ? m["bulk.deleted"].replace("{count}", String(r.deleted))
+        ? r.deleted === 1
+          ? m["bulk.deletedOne"]
+          : m["bulk.deleted"].replace("{count}", String(r.deleted))
+        // No plural noun in this string ("Deleted N · skipped N linked to
+        // ..."), so it reads fine at any count — no singular form needed.
         : m["bulk.deletedSkipped"]
             .replace("{count}", String(r.deleted))
             .replace("{skipped}", String(r.skippedBlocked)),
@@ -123,16 +132,16 @@ export function BulkActionBar({
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{m["bulk.confirmTitle"].replace("{count}", String(count))}</DialogTitle>
+            <DialogTitle>{confirmTitle}</DialogTitle>
+            <DialogDescription>
+              {m["bulk.confirmBody"].replace("{count}", String(count))}
+            </DialogDescription>
           </DialogHeader>
-          <p className="text-muted-foreground text-sm">
-            {m["bulk.confirmBody"].replace("{count}", String(count))}
-          </p>
           <Input
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
             placeholder={String(count)}
-            aria-label={m["bulk.confirmTitle"].replace("{count}", String(count))}
+            aria-label={confirmTitle}
           />
           <DialogFooter>
             <Button variant="outline" onClick={() => { setConfirmOpen(false); setTyped(""); }}>

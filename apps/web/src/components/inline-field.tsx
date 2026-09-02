@@ -75,7 +75,11 @@ export function InlineField({
           "hover:bg-muted focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none",
           shown ? "text-foreground" : "text-muted-foreground italic",
         )}
-        aria-label={m["inline.edit"].replace("{label}", label)}
+        // Carries the VALUE, not just the field name — without it a screen
+        // reader hears "Edit Email, button" and never the value itself,
+        // since aria-label REPLACES the button's text content as the
+        // accessible name rather than supplementing it.
+        aria-label={`${m["inline.edit"].replace("{label}", label)}: ${shown || m["inline.empty"]}`}
       >
         {shown || m["inline.empty"]}
       </button>
