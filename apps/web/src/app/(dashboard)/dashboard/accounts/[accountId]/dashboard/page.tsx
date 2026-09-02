@@ -2,7 +2,7 @@ import Link from "next/link";
 import { ListChecks } from "lucide-react";
 import {
   listChecklistState, countFormsMissingNotify, countContacts,
-  getVoiceProfile, getCalendarForAccount, listCalls,
+  getVoiceProfile, getCalendarForAccount, listCalls, listRecentEvents,
   listCallStartsBetween, listBookingCreationsBetween, listOpportunityValuesCreatedBetween,
 } from "@bis/db";
 import { StatTile } from "@/components/stat-tile";
@@ -18,6 +18,15 @@ import { localDayWindow, bucketByLocalDay, bucketValueByLocalDay, deltaVsPrior, 
 import { ChecklistPanel } from "../checklist/checklist-panel";
 import { setChecklistItemAction, addChecklistItemAction } from "../checklist/actions";
 import { CallsChartCard } from "./calls-chart-card";
+import { ActivityCard } from "./activity-card";
+
+// The activity card curates a small set of known event types out of a much
+// noisier raw ledger (CRM housekeeping, setup plumbing, …) — see
+// activity-card.tsx's own curation-map comment. Fetching well past its
+// DISPLAY_LIMIT (8) means a day full of contact edits between two real
+// bookings still surfaces both bookings, instead of the feed silently
+// emptying because the newest 8 RAW rows all happened to be skipped types.
+const RECENT_EVENTS_FETCH_LIMIT = 50;
 
 export const dynamic = "force-dynamic";
 
@@ -69,7 +78,7 @@ export default async function AccountDashboardPage({
 
   const [
     checklistRows, formsMissingNotify, contactsCount, opps,
-    voiceProfile, calendar, callsIso, bookingsIso, oppPairs, recentCalls,
+    voiceProfile, calendar, callsIso, bookingsIso, oppPairs, recentCalls, recentEvents,
   ] = await Promise.all([
     listChecklistState(db, accountId),
     countFormsMissingNotify(db, accountId),
@@ -89,6 +98,14 @@ export default async function AccountDashboardPage({
     // The calls chart card's (Task 6) mini table — the 3 most recent calls
     // ever, not scoped to the 14-day window above.
     listCalls(db, accountId, { limit: 3 }),
+    // The activity card's (Task 7) raw feed — both audiences: `events`'
+    // RLS policy (0001_tenancy.sql, events_read) grants SELECT to the
+    // agency AND to `account_id = app.current_account_id()`, the same
+    // shape as accounts_member_read/memberships_member_read, and no later
+    // migration narrows it (0020 only touched phone_numbers/voice_profiles/
+    // calls). dbForRequest() is therefore safe here for a client session
+    // too, unlike the calendar-status write path a few files over.
+    listRecentEvents(db, accountId, RECENT_EVENTS_FETCH_LIMIT),
   ]);
 
   if (opps.error) {
@@ -252,8 +269,6 @@ export default async function AccountDashboardPage({
           />
         </div>
 
-        {/* Task 7 fills the second column with an activity feed; until then
-            the chart card is this row's only child. */}
         <div className="grid gap-4 xl:grid-cols-2">
           <CallsChartCard
             accountId={accountId}
@@ -263,6 +278,10 @@ export default async function AccountDashboardPage({
             isAgency={isAgency}
             voiceEnabled={showVoiceSub}
           />
+          {/* Both audiences (see the `listRecentEvents` call above's own
+              grants comment) — no isAgency gate, unlike the checklist panel
+              higher on this page. */}
+          <ActivityCard accountId={accountId} events={recentEvents} now={now} />
         </div>
       </div>
     </>

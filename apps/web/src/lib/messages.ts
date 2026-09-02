@@ -223,6 +223,27 @@ export const m = {
   "dashboard.calls.emptySetupVoice": "Set up your voice receptionist",
   "dashboard.calls.emptyViewCalls": "View all calls",
 
+  // The activity feed card (Task 7) — the events ledger's first READ
+  // consumer. Each `dashboard.activity.*` line is a CURATED, generic
+  // summary for a small set of known `events.type` values (never the raw
+  // type string — DESIGN.md's "never expose internal codes"); see
+  // activity-card.tsx's own curation-map comment for the grep-verified
+  // inventory of what a real account can emit and why everything else is
+  // skipped silently. "{outcome}" is the house {placeholder} convention,
+  // filled from `OUTCOMES[outcome].label` (calls/format.ts) — itself
+  // already m[]-sourced, so no raw enum value ever reaches this string.
+  "dashboard.activity.title": "Activity",
+  "dashboard.activity.caption": "Recent",
+  "dashboard.activity.bookingCreated": "A new appointment was booked.",
+  "dashboard.activity.bookingCancelled": "An appointment was cancelled.",
+  "dashboard.activity.bookingCompleted": "An appointment was completed.",
+  "dashboard.activity.bookingNoShow": "An appointment was marked as a no-show.",
+  "dashboard.activity.formSubmitted": "A new lead came in through your form.",
+  "dashboard.activity.callRecorded": "Call outcome: {outcome}.",
+  // Rule 5 (designed empty states): one sentence, verbatim from the brief.
+  // No action link — the brief pins this one deliberately link-less.
+  "dashboard.activity.empty": "Bookings, form leads, and call outcomes appear here as they happen.",
+
   "contacts.title": "Contacts",
   "contacts.add": "Add contact",
   "contacts.search": "Search name, email, phone…",
