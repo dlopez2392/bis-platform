@@ -61,9 +61,12 @@ export type ShellSnapshot = {
  * Setup's read chain (`gatherSetupInputs` → `deriveSetupStatus` →
  * `reduceSetupProgress`) is the same proven-safe read set
  * `getSetupProgress` used, now the one shared copy in
- * `lib/setup/setup-inputs.ts` — see that module's own doc comment for why a
- * failure inside it rejects the whole chain rather than answering with a
- * partial read.
+ * `lib/setup/setup-inputs.ts`. That function is per-leg fault-isolated
+ * internally (see its own doc comment) and reports which of its six reads
+ * failed rather than rejecting outright — this leg folds to `null` the
+ * moment ANY of them did (`Object.values(failed).some(Boolean)`), matching
+ * this action's own one-leg-at-a-time contract: a setup count built from a
+ * partial read is not a count worth showing.
  *
  * Presence: `getVoiceProfile` is checked FIRST — `null` when the account has
  * no ENABLED voice profile, before `getVoicePresence`'s two calls ever run —
@@ -108,7 +111,8 @@ async function readSetupProgress(
 ): Promise<{ done: number; total: number } | null> {
   if (!isAgency) return null;
   try {
-    const inputs = await gatherSetupInputs(db, accountId);
+    const { inputs, failed } = await gatherSetupInputs(db, accountId);
+    if (Object.values(failed).some(Boolean)) return null;
     return reduceSetupProgress(deriveSetupStatus(inputs));
   } catch (error) {
     console.error(

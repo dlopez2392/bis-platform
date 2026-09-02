@@ -1,28 +1,16 @@
-import { listAllPhoneNumbers, type PhoneNumberRow } from "@bis/db";
+import { listAllPhoneNumbers } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
-import { deriveSetupStatus, type SetupInputs } from "@/lib/setup/setup-status";
+import { deriveSetupStatus } from "@/lib/setup/setup-status";
 import { gatherSetupInputs } from "@/lib/setup/setup-inputs";
-import { buildSetupViews, resolveAssignedNumber, type ReadKey } from "@/lib/setup/setup-view";
+import { buildSetupViews, resolveAssignedNumber } from "@/lib/setup/setup-view";
 import { m } from "@/lib/messages";
 import { SetupPanel, type MovableNumber } from "./setup-panel";
 import { setSetupTickAction, goLiveAction } from "./actions";
 import { moveNumberAction, setNumberStatusAction } from "../voice/actions";
 
 export const dynamic = "force-dynamic";
-
-// A wholly unconfigured tenant's inputs — fed to `deriveSetupStatus` when
-// `gatherSetupInputs` itself fails, so the derive function only ever sees
-// clean values (never a partial/undefined field) even on the failure path.
-// Every step it produces from this reads not-done, which is what `failed`
-// below (every key `true` in that case) overrides to "couldn't check" —
-// this fallback only shapes deriveSetupStatus's INPUT type, not what the
-// page actually renders.
-const NEUTRAL_SETUP_INPUTS: SetupInputs = {
-  brandName: null, fromEmail: null, calendar: null, profile: null,
-  numbers: [], callCount: 0, ticks: { emailSkipped: false, forwardingDone: false },
-};
 
 /**
  * The guided path from a bare account row to a receptionist taking real
@@ -41,14 +29,11 @@ const NEUTRAL_SETUP_INPUTS: SetupInputs = {
  *    and never as not-done. `gatherSetupInputs` (lib/setup/setup-inputs.ts)
  *    is the one shared copy of this page's six-source read set — also used
  *    by the sidebar's setup meter and by `goLiveAction`'s own prerequisite
- *    re-check — and it is ATOMIC (its own doc comment explains why: a
- *    partial derivation is not a decision any of its three callers want).
- *    That means this page can no longer isolate WHICH of the six reads
- *    failed the way its own former `Promise.allSettled` block did — a
- *    single failed leg now marks EVERY step "couldn't check" together,
- *    rather than only the step(s) actually behind that one read. Still
- *    conservative (never a false "done" or "to do"), just coarser than
- *    before this task's read-set unification.
+ *    re-check — and it is per-leg fault isolated: `failed` names exactly
+ *    which of the six reads didn't answer, so ONLY the step(s) that read
+ *    depends on (`READS_BEHIND` in setup-view.ts) render "couldn't check" —
+ *    everything else still renders normally, unchanged from this page's
+ *    behavior before the three call sites were unified onto one function.
  *
  * `dbForRequest()`, not `serviceDb()` — the page runs as the signed-in
  * agency user, on purpose. `serviceDb()` would render identically for an
@@ -83,28 +68,17 @@ export default async function SetupPage({
     console.error(`setup: account name lookup failed for account ${accountId}: ${String(e)}`);
   }
 
-  let inputs: SetupInputs;
-  let failed: Record<ReadKey, boolean>;
-  try {
-    inputs = await gatherSetupInputs(db, accountId);
-    failed = { account: false, calendar: false, profile: false, numbers: false, ticks: false, calls: false };
-  } catch (e) {
-    console.error(`setup: gatherSetupInputs failed for account ${accountId}: ${String(e)}`);
-    inputs = NEUTRAL_SETUP_INPUTS;
-    failed = { account: true, calendar: true, profile: true, numbers: true, ticks: true, calls: true };
-  }
+  // `gatherSetupInputs` is per-leg fault-isolated internally (Promise.allSettled,
+  // never rejects on its own) — `inputs` already carries each failed leg's
+  // neutral default, and `numbers` is the FULL rows (not `inputs.numbers`'s
+  // narrower status-only shape) so `resolveAssignedNumber`/`movableNumbers`
+  // below get `id`/`e164` with no cast. See setup-inputs.ts's own doc comment.
+  const { inputs, numbers, failed } = await gatherSetupInputs(db, accountId);
 
   // `hasVoiceProfile` (passed to SetupPanel) reads existence off this, not
   // completeness — see its own doc comment in setup-panel.tsx for why that
   // is the right question for the test-call card specifically.
   const profile = inputs.profile;
-  // `gatherSetupInputs`'s declared `numbers` type is narrowed to
-  // `Pick<PhoneNumberRow, "status">` (all `deriveSetupStatus` needs) — the
-  // array itself is the SAME full rows `listPhoneNumbersForAccount`
-  // returned, so `resolveAssignedNumber`/`movableNumbers` below (which also
-  // need `id`/`e164`) widen the type back rather than reading the table
-  // again. See setup-inputs.ts's own doc comment.
-  const numbers = inputs.numbers as Pick<PhoneNumberRow, "id" | "status" | "e164">[];
 
   const steps = deriveSetupStatus(inputs);
 

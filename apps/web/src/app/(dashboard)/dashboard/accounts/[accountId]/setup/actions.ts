@@ -1,9 +1,6 @@
 "use server";
 
-import {
-  serviceDb, setChecklistItem, upsertVoiceProfile, setPhoneNumberStatus,
-  type PhoneNumberRow,
-} from "@bis/db";
+import { serviceDb, setChecklistItem, upsertVoiceProfile, setPhoneNumberStatus } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { deriveSetupStatus, goLivePrereqsMet, SETUP_TICK_KEYS } from "@/lib/setup/setup-status";
 import { gatherSetupInputs } from "@/lib/setup/setup-inputs";
@@ -91,15 +88,24 @@ export async function setSetupTickAction(
  * RLS silently narrowed would answer that question wrong.
  *
  * `gatherSetupInputs` (lib/setup/setup-inputs.ts) is the one shared copy of
- * this re-check's read set, atomic by design (see its own doc comment): a
- * prerequisite this function could not verify is not a met one, and — same
- * distinction the page draws — it must not be reported as an unmet one
- * either, hence the separate `m["setup.goLive.failed"]` rather than
- * `notReady` in the catch below. `brandName`/`fromEmail` now come back real
- * rather than the hardcoded `null` this action used to pass — harmless,
- * since neither gates go-live (see `goLivePrereqsMet`) — as does one real
- * account-row read this action did not previously make; the tradeoff for one
- * shared, tested read set rather than three drifting copies.
+ * this re-check's read set — it reports which of its SIX legs failed rather
+ * than an atomic pass/fail (its own doc comment explains why), and is itself
+ * per-leg fault-isolated (`Promise.allSettled`), so it should not actually
+ * reject; the try/catch below is the same defensive belt-and-braces every
+ * other `"use server"` action in this tree wraps its reads in — an
+ * exception escaping unhandled would reject this action outright, which the
+ * client island's Result-typed rendering can never see (same reasoning
+ * `setSetupTickAction`'s own doc comment gives for its write). This action
+ * only ever read FIVE of the six legs before the three call sites were
+ * unified (`calendar`, `profile`, `numbers`, `calls`, `ticks` — never
+ * `accounts`; `brandName`/`fromEmail` were hardcoded `null`, since neither
+ * gates go-live, see `goLivePrereqsMet`), so it checks exactly those five
+ * and deliberately IGNORES an `accounts`-leg failure: an outage on a table
+ * this action never used to touch must not turn a real "ready" into a false
+ * "couldn't verify." A prerequisite this function could not verify is not a
+ * met one, and — same distinction the page draws — it must not be reported
+ * as an unmet one either, hence the separate `m["setup.goLive.failed"]`
+ * rather than `notReady` below.
  */
 export async function goLiveAction(accountId: string): Promise<ActionResult> {
   const { userId, isAgency } = await requireAccountAccess(accountId);
@@ -107,22 +113,24 @@ export async function goLiveAction(accountId: string): Promise<ActionResult> {
 
   const db = serviceDb();
 
-  let steps: ReturnType<typeof deriveSetupStatus>;
-  let numbers: PhoneNumberRow[];
+  let gathered: Awaited<ReturnType<typeof gatherSetupInputs>>;
   try {
-    const inputs = await gatherSetupInputs(db, accountId);
-    // `gatherSetupInputs`'s declared `numbers` type is narrowed to
-    // `Pick<PhoneNumberRow, "status">` (all `deriveSetupStatus` needs) — the
-    // array itself is the SAME full rows `listPhoneNumbersForAccount`
-    // returned, so the target-number lookup below (which needs `id`) widens
-    // the type back rather than reading the table again.
-    numbers = inputs.numbers as PhoneNumberRow[];
-    steps = deriveSetupStatus(inputs);
+    gathered = await gatherSetupInputs(db, accountId);
   } catch (e) {
     console.error(`goLiveAction: prerequisite re-check failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["setup.goLive.failed"] };
   }
+  const { inputs, numbers, failed } = gathered;
 
+  // Deliberately excludes `failed.account` — see the doc comment above.
+  const reReadFailed = failed.calendar || failed.profile || failed.numbers
+    || failed.calls || failed.ticks;
+  if (reReadFailed) {
+    console.error(`goLiveAction: prerequisite re-check failed for account ${accountId}: ${JSON.stringify(failed)}`);
+    return { ok: false, error: m["setup.goLive.failed"] };
+  }
+
+  const steps = deriveSetupStatus(inputs);
   if (!goLivePrereqsMet(steps)) return { ok: false, error: m["setup.goLive.notReady"] };
 
   // A released number is a former number. `deriveSetupStatus`'s number step
