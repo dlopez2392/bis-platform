@@ -854,6 +854,11 @@ export const m = {
   "setup.viewCalls": "View calls",
   "setup.openStep": "Open",
   "setup.tickFailed": "Could not save that. Reload and try again.",
+  "setup.rename.empty": "A company needs a name — this one can't be blank.",
+  "setup.rename.failed": "Couldn't rename this company. Try again.",
+  "setup.rename.label": "Company name",
+  "setup.rename.help":
+    "Your own label for this client — they never see it. The name their customers see comes from Branding.",
 } as const;
 
 export type MessageKey = keyof typeof m;

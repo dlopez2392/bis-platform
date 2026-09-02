@@ -1,7 +1,9 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { serviceDb, setChecklistItem, upsertVoiceProfile, setPhoneNumberStatus } from "@bis/db";
-import { requireAccountAccess } from "@/lib/auth";
+import { requireAccountAccess, requireAgencyOnlyAccountAccess } from "@/lib/auth";
+import { dbForRequest } from "@/lib/db";
 import { deriveSetupStatus, goLivePrereqsMet, SETUP_TICK_KEYS } from "@/lib/setup/setup-status";
 import { gatherSetupInputs } from "@/lib/setup/setup-inputs";
 import { m } from "@/lib/messages";
@@ -169,5 +171,39 @@ export async function goLiveAction(accountId: string): Promise<ActionResult> {
   // No revalidatePath: the setup page is `force-dynamic`, and the client
   // island calls router.refresh() to re-derive all nine cards — same
   // arrangement as setSetupTickAction above.
+  return { ok: true };
+}
+
+/**
+ * Rename the account's INTERNAL label (`accounts.name`) — the agency's own
+ * note about this client, e.g. "Rio Roofing — trial". Not the client's
+ * public-facing name: branding owns that, and a client sees their brand name
+ * everywhere this label would otherwise leak (dashboard greeting, sidebar
+ * identity — see P3).
+ *
+ * Empty is REJECTED rather than allowed to clear, unlike an inline contact
+ * field: an account with no name breaks the client switcher, the dashboard
+ * greeting and the accounts list, none of which have a fallback for "".
+ *
+ * `accounts` has no `updated_at` column (packages/db/supabase/migrations/
+ * 0001_tenancy.sql — only `created_at`), so the write below does not try to
+ * set one.
+ */
+export async function renameAccountAction(
+  accountId: string, value: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  await requireAgencyOnlyAccountAccess(accountId);
+  const name = value.trim();
+  if (!name) return { ok: false, error: m["setup.rename.empty"] };
+  try {
+    const db = await dbForRequest();
+    const { error } = await db.from("accounts").update({ name }).eq("id", accountId);
+    if (error) throw new Error(error.message);
+  } catch {
+    return { ok: false, error: m["setup.rename.failed"] };
+  }
+  revalidatePath(`/dashboard/accounts/${accountId}/setup`);
+  revalidatePath(`/dashboard/accounts/${accountId}/dashboard`);
+  revalidatePath("/dashboard/accounts");
   return { ok: true };
 }

@@ -1,4 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// Outside a real request, revalidatePath throws ("static generation store
+// missing") rather than no-op'ing — voice/actions.test.ts and
+// conversations/actions.test.ts mock it for the same reason. Only
+// renameAccountAction in this file calls it (on its success path).
+vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+
 import type { PhoneNumberRow } from "@bis/db";
 import type { SetupInputs } from "@/lib/setup/setup-status";
 import type { ReadKey } from "@/lib/setup/setup-view";
@@ -45,10 +52,37 @@ vi.mock("@/lib/setup/setup-inputs", () => setupInputsMocks);
 const guardFixture = vi.hoisted(() => ({ isAgency: true }));
 vi.mock("@/lib/auth", () => ({
   requireAccountAccess: async () => ({ userId: "user_1", isAgency: guardFixture.isAgency }),
+  // Mirrors the real function's own shape: it builds on requireAccountAccess
+  // and then redirects a non-agency caller (in real Next.js, a `redirect()`
+  // throw the framework intercepts). renameAccountAction never catches this
+  // — same as every other requireAgencyOnlyAccountAccess call site in this
+  // tree (settings/actions.ts) — so the throw here has to actually escape,
+  // not resolve to a value, for the "rejected before any db call" test below
+  // to mean anything.
+  requireAgencyOnlyAccountAccess: async (accountId: string) => {
+    if (!guardFixture.isAgency) throw new Error("NEXT_REDIRECT");
+    return { userId: "user_1" };
+  },
+}));
+
+/** renameAccountAction's own db seam — `dbForRequest`, not `@bis/db`'s
+ *  `serviceDb` the rest of this file mocks. Kept minimal on purpose: only
+ *  the one chain (`.from("accounts").update(...).eq("id", ...)`) the action
+ *  actually calls, spying on the call so a test can assert BOTH the payload
+ *  and, for the empty-name case, that the chain was never entered at all. */
+const dbForRequestMocks = vi.hoisted(() => ({ accountsUpdate: vi.fn() }));
+vi.mock("@/lib/db", () => ({
+  dbForRequest: async () => ({
+    from: (table: string) => ({
+      update: (payload: Record<string, unknown>) => ({
+        eq: (col: string, val: unknown) => dbForRequestMocks.accountsUpdate(table, payload, col, val),
+      }),
+    }),
+  }),
 }));
 
 import { m } from "@/lib/messages";
-import { setSetupTickAction, goLiveAction } from "./actions";
+import { setSetupTickAction, goLiveAction, renameAccountAction } from "./actions";
 
 /** Every mock this test suite touches, across both modules — the "not
  *  called before the guard settles" assertions check all of them, not just
@@ -106,6 +140,8 @@ beforeEach(() => {
   setupInputsMocks.gatherSetupInputs.mockResolvedValue(readyGathered());
   dbMocks.upsertVoiceProfile.mockResolvedValue({});
   dbMocks.setPhoneNumberStatus.mockResolvedValue(undefined);
+  dbForRequestMocks.accountsUpdate.mockReset();
+  dbForRequestMocks.accountsUpdate.mockResolvedValue({ error: null });
   guardFixture.isAgency = true;
 });
 
@@ -286,5 +322,42 @@ describe("goLiveAction", () => {
     const r = await goLiveAction("a1");
     expect(r).toEqual({ ok: false, error: m["setup.goLive.failed"] });
     errSpy.mockRestore();
+  });
+});
+
+/**
+ * The account's INTERNAL label (`accounts.name`) — the agency's own note
+ * about this client, never shown to the client themselves (see P3: a client
+ * always sees their BRAND name; `accounts.name` is the agency-only fallback).
+ * Agency-only for that reason, and empty is REJECTED rather than cleared —
+ * unlike an inline contact field, "" has no fallback in the client switcher,
+ * the dashboard greeting, or the accounts list.
+ */
+describe("renameAccountAction", () => {
+  it("a non-agency caller is rejected before any db call", async () => {
+    guardFixture.isAgency = false;
+    await expect(renameAccountAction("acct1", "Valid Name")).rejects.toThrow();
+    expect(dbForRequestMocks.accountsUpdate).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty name WITHOUT writing", async () => {
+    const r = await renameAccountAction("acct1", "   ");
+    expect(r).toEqual({ ok: false, error: expect.any(String) });
+    // The write must never even be attempted — not just that `ok` is false.
+    expect(dbForRequestMocks.accountsUpdate).not.toHaveBeenCalled();
+  });
+
+  it("trims and writes a real name", async () => {
+    const r = await renameAccountAction("acct1", "  Rio Roofing  ");
+    expect(r).toEqual({ ok: true });
+    expect(dbForRequestMocks.accountsUpdate).toHaveBeenCalledWith(
+      "accounts", { name: "Rio Roofing" }, "id", "acct1",
+    );
+  });
+
+  it("returns ok:false instead of throwing when the write fails", async () => {
+    dbForRequestMocks.accountsUpdate.mockResolvedValue({ error: { message: "boom" } });
+    const r = await renameAccountAction("acct1", "Valid Name");
+    expect(r.ok).toBe(false);
   });
 });
