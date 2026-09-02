@@ -50,6 +50,7 @@ export function ContactDrawer({
   onClose: () => void;
 }) {
   const [fetched, setFetched] = useState<Fetched>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
   const contactId = row?.id ?? null;
 
   useEffect(() => {
@@ -64,7 +65,7 @@ export function ContactDrawer({
       })
       .catch(() => { if (!stale) setFetched({ contactId, result: { status: "error" } }); });
     return () => { stale = true; };
-  }, [accountId, contactId]);
+  }, [accountId, contactId, retryNonce]);
 
   const load: LoadResult | { status: "loading" } =
     contactId && fetched?.contactId === contactId ? fetched.result : { status: "loading" };
@@ -122,19 +123,14 @@ export function ContactDrawer({
                   <p className="text-muted-foreground">{m["drawer.loadFailed"]}</p>
                   <div className="mt-2 flex gap-3">
                     <Button size="sm" variant="outline" onClick={() => {
-                      const id = row.id;
                       // Drop the paired fetch so `load` falls back to
-                      // "loading" (the mismatch check above) while this
-                      // retry is in flight — an event handler, so a plain
-                      // setState here (not inside an effect) is fine.
+                      // "loading" (the mismatch check above), then bump the
+                      // nonce so the guarded effect above refires the fetch
+                      // itself — retry rides the same `stale` closure guard
+                      // as the normal load, so a switched-away contact can
+                      // never have its state overwritten by this retry.
                       setFetched(null);
-                      fetch(`/api/accounts/${accountId}/contacts/${id}/summary`)
-                        .then(async (res) => {
-                          if (!res.ok) { setFetched({ contactId: id, result: { status: "error" } }); return; }
-                          const summary = (await res.json()) as ContactSummary;
-                          setFetched({ contactId: id, result: { status: "ready", summary, nowMs: Date.now() } });
-                        })
-                        .catch(() => setFetched({ contactId: id, result: { status: "error" } }));
+                      setRetryNonce((n) => n + 1);
                     }}>
                       {m["common.retry"]}
                     </Button>
