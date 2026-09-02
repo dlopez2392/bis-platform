@@ -264,8 +264,39 @@ describe("countAfterHours", () => {
     expect(countAfterHours(isoTimes, "America/New_York", mondayOnlyHours)).toBe(3);
   });
 
-  it("far zone (Pacific/Auckland): before-open still resolves correctly through the account's own timezone, not the dev machine's", () => {
-    const isoTimes = ["2027-06-13T20:00:00.000Z"]; // 08:00 local Auckland, Monday
-    expect(countAfterHours(isoTimes, "Pacific/Auckland", mondayOnlyHours)).toBe(1);
+  // STRONG discrimination for the timezone argument itself: the SAME instant
+  // + the SAME openHours fixture, asserted TWICE with only the zone changed,
+  // for OPPOSITE results. A weaker version of this test (one instant, one
+  // zone, "expect after-hours") cannot tell a correct zone-aware
+  // implementation from one that silently substitutes a fixed/system zone —
+  // if that substituted reading also happens to land after-hours (same
+  // weekday-closed or same out-of-window outcome), the test passes for the
+  // wrong reason. Asserting the same fixture through two zones with
+  // opposite verdicts closes that hole: no single fixed zone can produce
+  // both answers.
+  //
+  // Instant: 2027-01-04T00:00:00.000Z (January — both zones are outside any
+  // DST transition window, so their offsets are simple UTC-6 / UTC+13, no
+  // fold/gap complications).
+  //
+  //   Pacific/Auckland (NZDT, UTC+13 in January — southern-hemisphere
+  //   summer): 00:00 UTC + 13:00 = 2027-01-04 13:00 local, Monday.
+  //   13:00 falls inside mondayOnlyHours' 09:00-17:00 window -> NOT
+  //   after-hours (count 0).
+  //
+  //   America/Chicago (CST, UTC-6 in January — US DST doesn't start until
+  //   March, so this is plain standard time, no ambiguity): 00:00 UTC -
+  //   6:00 = 2027-01-03 18:00 local, SUNDAY (a full calendar day earlier,
+  //   not just a different hour). "sun" has no entry in mondayOnlyHours at
+  //   all -> closed day -> after-hours (count 1).
+  //
+  // (Both readings were produced by running partsInZone itself against this
+  // exact instant before writing this test, not hand-computed offset math —
+  // the reviewer note that flagged the prior version specifically warned
+  // hand-picked replacements tend to be off by a weekday.)
+  it("far zone discrimination: the SAME instant through Pacific/Auckland (within Monday's window) vs America/Chicago (a Sunday, closed) gives OPPOSITE verdicts — a system-zone or fixed-zone implementation cannot pass both", () => {
+    const instant = "2027-01-04T00:00:00.000Z";
+    expect(countAfterHours([instant], "Pacific/Auckland", mondayOnlyHours)).toBe(0);
+    expect(countAfterHours([instant], "America/Chicago", mondayOnlyHours)).toBe(1);
   });
 });
