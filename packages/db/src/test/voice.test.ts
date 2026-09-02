@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
 import { getOrCreateCalendar, createBooking, setBookingStatus, getCalendarForAccount } from "../booking";
@@ -9,7 +10,7 @@ import {
   hasActiveCallSince,
   findUpcomingBookingForPhone, getBookingById, deleteCallRow,
   listPhoneNumbersForAccount, listAllPhoneNumbers, reassignPhoneNumber,
-  listCalls, getCall,
+  listCalls, getCall, listCallStartsBetween,
 } from "../voice";
 
 describe("voice accessors", () => {
@@ -274,6 +275,48 @@ describe("listCalls / getCall", () => {
         expect(detail?.transcript).toEqual([]);
         expect(await getCall(db, accountB, r.id)).toBeNull();  // tenant boundary
         expect(await getCall(db, accountA, "00000000-0000-0000-0000-000000000000")).toBeNull();
+      });
+    });
+  });
+});
+
+describe("listCallStartsBetween", () => {
+  it("[from, to) — pins both boundary edges, ascending order, cross-tenant rows excluded", async () => {
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (db2, accountB) => {
+        const numA = await assignPhoneNumber(db, accountA, { e164: "+15550000030" }, "user_test");
+        const numB = await assignPhoneNumber(db2, accountB, { e164: "+15550000031" }, "user_test");
+
+        const from = "2027-06-01T00:00:00.000Z";
+        const to = "2027-06-15T00:00:00.000Z";
+
+        async function callAt(dbc: SupabaseClient, acct: string, numId: string, iso: string) {
+          const { id } = await startCallRow(dbc, acct, { phoneNumberId: numId, callerE164: null });
+          const { error } = await dbc.from("calls").update({ started_at: iso }).eq("id", id);
+          if (error) throw new Error(error.message);
+        }
+
+        // Outside the window on both sides — excluded.
+        await callAt(db, accountA, numA.id, "2027-05-31T23:59:59.999Z");
+        await callAt(db, accountA, numA.id, to); // exclusive edge — excluded
+
+        // Inside, including the inclusive `from` edge.
+        await callAt(db, accountA, numA.id, from);
+        await callAt(db, accountA, numA.id, "2027-06-10T12:00:00.000Z");
+        await callAt(db, accountA, numA.id, "2027-06-14T23:59:59.999Z");
+
+        // Same window, other tenant — must not leak into accountA's result.
+        await callAt(db2, accountB, numB.id, "2027-06-05T00:00:00.000Z");
+
+        const result = await listCallStartsBetween(db, accountA, from, to);
+        expect(result).toHaveLength(3);
+        const times = result.map((s) => new Date(s).getTime());
+        expect(times).toEqual([...times].sort((a, b) => a - b)); // ascending
+        expect(times).toEqual([
+          new Date(from).getTime(),
+          new Date("2027-06-10T12:00:00.000Z").getTime(),
+          new Date("2027-06-14T23:59:59.999Z").getTime(),
+        ]);
       });
     });
   });

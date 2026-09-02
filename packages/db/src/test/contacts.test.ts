@@ -2,7 +2,7 @@ import "dotenv/config";
 import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
 import { createContact, updateContact, listContacts, getContact,
-         addTagToContact, listContactTags, fillContactBlanks } from "../contacts";
+         addTagToContact, listContactTags, fillContactBlanks, countContacts } from "../contacts";
 
 describe("contacts service", () => {
   it("creates, emits event, dedupes by email", () =>
@@ -181,4 +181,20 @@ describe("fillContactBlanks", () => {
       expect(await fillContactBlanks(db, accountId, c.id,
         { firstName: "Maria", lastName: "Smith" }, "t")).toEqual([]);
     }));
+});
+
+describe("countContacts", () => {
+  it("returns the exact head count for the account, cross-tenant rows excluded", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await withTestAccount(async (_otherDb, otherAccountId) => {
+        expect(await countContacts(db, accountId)).toBe(0);
+        await createContact(db, accountId, { firstName: "A" }, "user_test");
+        await createContact(db, accountId, { firstName: "B" }, "user_test");
+        await createContact(db, otherAccountId, { firstName: "Other" }, "user_test");
+
+        expect(await countContacts(db, accountId)).toBe(2);
+        expect(await countContacts(db, otherAccountId)).toBe(1);
+      });
+    });
+  });
 });

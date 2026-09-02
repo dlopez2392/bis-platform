@@ -1,12 +1,14 @@
 import "dotenv/config";
 import { describe, it, expect } from "vitest";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount } from "./fixtures";
 import { createAccount } from "../accounts";
 import { createContact } from "../contacts";
 import { ensureDefaultPipeline } from "../crm-config";
 import { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
          updateOpportunity, setOpportunityStatus,
-         listBoard, listContactOpportunities } from "../opportunities";
+         listBoard, listContactOpportunities,
+         listOpportunityValuesCreatedBetween } from "../opportunities";
 
 describe("opportunities", () => {
   it("create → first stage; move right; board groups + totals", () =>
@@ -157,4 +159,55 @@ describe("opportunities", () => {
         .eq("type", "opportunity.updated");
       expect(ev).toHaveLength(0);
     }));
+});
+
+describe("listOpportunityValuesCreatedBetween", () => {
+  it("[from, to) on created_at — pins both boundary edges, any status, cross-tenant rows excluded", async () => {
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (db2, accountB) => {
+        const { id: contactA } = await createContact(db, accountA, { firstName: "A" }, "user_test");
+        const { id: contactB } = await createContact(db2, accountB, { firstName: "B" }, "user_test");
+        const { pipelineId: pipeA } = await ensureDefaultPipeline(db, accountA);
+        const { pipelineId: pipeB } = await ensureDefaultPipeline(db2, accountB);
+
+        const from = "2027-06-01T00:00:00.000Z";
+        const to = "2027-06-15T00:00:00.000Z";
+
+        async function oppAt(
+          dbc: SupabaseClient, acct: string, pipelineId: string, contactId: string,
+          value: number, createdIso: string,
+        ) {
+          const { id } = await createOpportunity(dbc, acct,
+            { contactId, pipelineId, name: `opp-${value}`, value }, "user_test");
+          const { error } = await dbc.from("opportunities").update({ created_at: createdIso }).eq("id", id);
+          if (error) throw new Error(error.message);
+          return id;
+        }
+
+        // Outside the window on both sides — excluded.
+        await oppAt(db, accountA, pipeA, contactA, 111, "2027-05-31T23:59:59.999Z");
+        await oppAt(db, accountA, pipeA, contactA, 222, to); // exclusive edge — excluded
+
+        // Inside, including the inclusive `from` edge. One is later marked
+        // "won" — pipeline-added value is the created value, not the
+        // surviving value, so a status change must not erase the capture.
+        await oppAt(db, accountA, pipeA, contactA, 500, from);
+        const won = await oppAt(db, accountA, pipeA, contactA, 750, "2027-06-10T12:00:00.000Z");
+        await setOpportunityStatus(db, accountA, won, "won", "user_test");
+        await oppAt(db, accountA, pipeA, contactA, 900, "2027-06-14T23:59:59.999Z");
+
+        // Same window, other tenant — must not leak into accountA's result.
+        await oppAt(db2, accountB, pipeB, contactB, 1000, "2027-06-05T00:00:00.000Z");
+
+        const result = await listOpportunityValuesCreatedBetween(db, accountA, from, to);
+        expect(result).toHaveLength(3);
+        expect(result.map((r) => r.monetaryValue)).toEqual([500, 750, 900]);
+        expect(result.map((r) => new Date(r.createdAt).getTime())).toEqual([
+          new Date(from).getTime(),
+          new Date("2027-06-10T12:00:00.000Z").getTime(),
+          new Date("2027-06-14T23:59:59.999Z").getTime(),
+        ]);
+      });
+    });
+  });
 });

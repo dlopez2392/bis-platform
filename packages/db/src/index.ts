@@ -5,13 +5,15 @@ export { emit, type ActorType } from "./events";
 export { createAccount, listAccounts, setClientAccess, getAccountByOrgId } from "./accounts";
 export { createContact, updateContact, listContacts, getContact,
          addTagToContact, removeTagFromContact, listContactTags, fillContactBlanks,
+         countContacts,
          type ContactInput } from "./contacts";
 export { addNote, listNotes, addTask, listContactTasks, completeTask } from "./activities";
 export { listCustomFields, createCustomField, listCustomValues, upsertCustomValue,
          ensureDefaultPipeline, listPipelinesWithStages, type CustomFieldDef } from "./crm-config";
 export { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
          updateOpportunity, setOpportunityStatus,
-         listBoard, listContactOpportunities } from "./opportunities";
+         listBoard, listContactOpportunities,
+         listOpportunityValuesCreatedBetween } from "./opportunities";
 export { ensureConversation, createMessage, updateMessageStatus,
          updateMessageStatusByProviderId, listConversations, listMessages, listContactMessages,
          incrementUnreadCount, clearUnreadCount,
@@ -36,7 +38,7 @@ export { getSendingIdentity, setFromEmail, type SendingIdentity } from "./sendin
 export { getOrCreateCalendar, getCalendarForAccount, getCalendarByPublicId, updateCalendarSettings,
          listBookedRanges, createBooking, cancelBookingByToken, setBookingStatus,
          listUpcomingBookings, countRecentBookings, listDueReminders, stampReminderSent,
-         listDueFollowups, stampFollowupSent,
+         listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
          newCancelToken, SlotTakenError,
          type CalendarRow, type BookingRow, type BookingStatus, type CalendarSettingsPatch,
          type CreateBookingInput, type DueReminder, type DueFollowup } from "./booking";

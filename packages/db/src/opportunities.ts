@@ -135,3 +135,23 @@ export async function listContactOpportunities(
   if (error) throw new Error(error.message);
   return data;
 }
+
+/**
+ * Raw (createdAt, value) pairs for opportunities created in
+ * `[fromIso, toIso)` — the dashboard's 14-day pipeline-value chart.
+ * Bucketing happens in JS on the caller side, not here. Any status: "pipeline
+ * added" means the value AT CREATION, not the value that survived — a later
+ * win/loss must not change what this window already captured.
+ */
+export async function listOpportunityValuesCreatedBetween(
+  db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
+): Promise<{ createdAt: string; monetaryValue: number }[]> {
+  const { data, error } = await db.from("opportunities")
+    .select("created_at, monetary_value")
+    .eq("account_id", accountId).gte("created_at", fromIso).lt("created_at", toIso)
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(`listOpportunityValuesCreatedBetween failed: ${error.message}`);
+  return (data ?? []).map((r: { created_at: string; monetary_value: number }) => ({
+    createdAt: r.created_at, monetaryValue: Number(r.monetary_value),
+  }));
+}

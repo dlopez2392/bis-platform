@@ -308,6 +308,24 @@ export async function listUpcomingBookings(
   });
 }
 
+/**
+ * Raw `created_at` instants in `[fromIso, toIso)` for the dashboard's 14-day
+ * bookings chart — bucketing happens in JS on the caller side, not here.
+ * Deliberately no status filter, unlike `listBookedRanges`: "pipeline
+ * added"-style capture is the CREATED count, so a later cancel must not
+ * erase a bar this account already earned.
+ */
+export async function listBookingCreationsBetween(
+  db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
+): Promise<string[]> {
+  const { data, error } = await db.from("bookings")
+    .select("created_at")
+    .eq("account_id", accountId).gte("created_at", fromIso).lt("created_at", toIso)
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(`listBookingCreationsBetween failed: ${error.message}`);
+  return (data ?? []).map((r: { created_at: string }) => r.created_at);
+}
+
 /** Rate limiting for the public booking submit: same shape as forms' countRecentSubmissions. */
 export async function countRecentBookings(
   db: SupabaseClient, calendarId: string, ipHash: string, windowStartIso: string,

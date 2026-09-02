@@ -186,6 +186,23 @@ export async function countCallsByCallerSince(
   return count ?? 0;
 }
 
+/**
+ * Raw `started_at` instants in `[fromIso, toIso)` for the dashboard's 14-day
+ * call chart — bucketing (day boundaries, timezone) happens in JS on the
+ * caller side, not here. Daily caps are 50/day, so a 14-day window is at
+ * most ~700 rows; no pagination needed.
+ */
+export async function listCallStartsBetween(
+  db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
+): Promise<string[]> {
+  const { data, error } = await db.from("calls")
+    .select("started_at")
+    .eq("account_id", accountId).gte("started_at", fromIso).lt("started_at", toIso)
+    .order("started_at", { ascending: true });
+  if (error) throw new Error(`listCallStartsBetween failed: ${error.message}`);
+  return (data ?? []).map((r: { started_at: string }) => r.started_at);
+}
+
 export async function findUpcomingBookingForPhone(
   db: SupabaseClient, accountId: string, phoneE164: string, nowIso: string,
 ): Promise<{ bookingId: string; startsAt: string } | null> {

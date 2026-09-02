@@ -206,3 +206,12 @@ export async function listContactTags(db: SupabaseClient, accountId: string, con
   if (error) throw new Error(error.message);
   return (data ?? []).map((r: any) => ({ id: r.tags.id as string, name: r.tags.name as string }));
 }
+
+/** Dashboard KPI tile: total contacts on the account, right now. */
+export async function countContacts(db: SupabaseClient, accountId: string): Promise<number> {
+  const { count, error } = await db.from("contacts")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId);
+  if (error) throw new Error(`countContacts failed: ${error.message}`);
+  return count ?? 0;
+}

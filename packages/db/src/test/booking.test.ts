@@ -2,11 +2,12 @@ import { describe, it, expect } from "vitest";
 import "dotenv/config";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   getOrCreateCalendar, getCalendarByPublicId, updateCalendarSettings,
   createBooking, cancelBookingByToken, setBookingStatus,
   listBookedRanges, listUpcomingBookings, listDueReminders, stampReminderSent,
-  listDueFollowups, stampFollowupSent,
+  listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
   SlotTakenError,
 } from "../booking";
 
@@ -435,6 +436,61 @@ describe("booking accessors", () => {
       const { data: second } = await db.from("bookings")
         .select("followup_sent_at").eq("id", booking.id).single();
       expect(second!.followup_sent_at).not.toBeNull();
+    });
+  });
+});
+
+describe("listBookingCreationsBetween", () => {
+  it("[from, to) on created_at — pins both boundary edges, any status, cross-tenant rows excluded", async () => {
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (db2, accountB) => {
+        const calA = await getOrCreateCalendar(db, accountA, "user_test");
+        const calB = await getOrCreateCalendar(db2, accountB, "user_test");
+        const { id: contactA } = await createContact(db, accountA, { firstName: "A" }, "user_test");
+        const { id: contactB } = await createContact(db2, accountB, { firstName: "B" }, "user_test");
+
+        const from = "2027-06-01T00:00:00.000Z";
+        const to = "2027-06-15T00:00:00.000Z";
+
+        // Distinct, non-overlapping slots (unrelated to the created_at window
+        // under test) so `bookings_no_overlap` never gets in the way.
+        let slotDay = 1;
+        async function bookingAt(
+          dbc: SupabaseClient, acct: string, calId: string, contactId: string, createdIso: string,
+        ) {
+          const startsAt = new Date(Date.UTC(2028, 0, slotDay, 9, 0, 0));
+          const endsAt = new Date(Date.UTC(2028, 0, slotDay, 10, 0, 0));
+          slotDay += 1;
+          const { id } = await createBooking(dbc, acct,
+            { calendarId: calId, contactId, startsAt, endsAt }, "user_test");
+          const { error } = await dbc.from("bookings").update({ created_at: createdIso }).eq("id", id);
+          if (error) throw new Error(error.message);
+          return id;
+        }
+
+        // Outside the window on both sides — excluded.
+        await bookingAt(db, accountA, calA.id, contactA, "2027-05-31T23:59:59.999Z");
+        await bookingAt(db, accountA, calA.id, contactA, to); // exclusive edge — excluded
+
+        // Inside, including the inclusive `from` edge. One is cancelled
+        // AFTER creation — a later status change must not erase the capture.
+        await bookingAt(db, accountA, calA.id, contactA, from);
+        const cancelled = await bookingAt(db, accountA, calA.id, contactA, "2027-06-10T12:00:00.000Z");
+        await setBookingStatus(db, accountA, cancelled, "cancelled", "user_test");
+        await bookingAt(db, accountA, calA.id, contactA, "2027-06-14T23:59:59.999Z");
+
+        // Same window, other tenant — must not leak into accountA's result.
+        await bookingAt(db2, accountB, calB.id, contactB, "2027-06-05T00:00:00.000Z");
+
+        const result = await listBookingCreationsBetween(db, accountA, from, to);
+        expect(result).toHaveLength(3);
+        const times = result.map((s) => new Date(s).getTime());
+        expect(times).toEqual([
+          new Date(from).getTime(),
+          new Date("2027-06-10T12:00:00.000Z").getTime(),
+          new Date("2027-06-14T23:59:59.999Z").getTime(),
+        ]);
+      });
     });
   });
 });
