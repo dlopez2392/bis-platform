@@ -1,11 +1,9 @@
-import {
-  getCalendarForAccount, getVoiceProfile, listPhoneNumbersForAccount,
-  listChecklistState, countCallsSince, listAllPhoneNumbers,
-} from "@bis/db";
+import { listAllPhoneNumbers, type PhoneNumberRow } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
-import { deriveSetupStatus, SETUP_TICK_KEYS } from "@/lib/setup/setup-status";
+import { deriveSetupStatus, type SetupInputs } from "@/lib/setup/setup-status";
+import { gatherSetupInputs } from "@/lib/setup/setup-inputs";
 import { buildSetupViews, resolveAssignedNumber, type ReadKey } from "@/lib/setup/setup-view";
 import { m } from "@/lib/messages";
 import { SetupPanel, type MovableNumber } from "./setup-panel";
@@ -14,7 +12,17 @@ import { moveNumberAction, setNumberStatusAction } from "../voice/actions";
 
 export const dynamic = "force-dynamic";
 
-type AccountRow = { name: string; brand_name: string | null; from_email: string | null };
+// A wholly unconfigured tenant's inputs — fed to `deriveSetupStatus` when
+// `gatherSetupInputs` itself fails, so the derive function only ever sees
+// clean values (never a partial/undefined field) even on the failure path.
+// Every step it produces from this reads not-done, which is what `failed`
+// below (every key `true` in that case) overrides to "couldn't check" —
+// this fallback only shapes deriveSetupStatus's INPUT type, not what the
+// page actually renders.
+const NEUTRAL_SETUP_INPUTS: SetupInputs = {
+  brandName: null, fromEmail: null, calendar: null, profile: null,
+  numbers: [], callCount: 0, ticks: { emailSkipped: false, forwardingDone: false },
+};
 
 /**
  * The guided path from a bare account row to a receptionist taking real
@@ -30,19 +38,24 @@ type AccountRow = { name: string; brand_name: string | null; from_email: string 
  *    still said it was configured.
  *
  * ② A read that FAILS renders its steps as "couldn't check" — never as done,
- *    and never as not-done. Hence `Promise.allSettled` rather than
- *    `Promise.all`: one unlucky query must not take the page down, and it
- *    must not be allowed to quietly answer for the step it was going to
- *    verify. Rejections feed the derive function neutral inputs (so it only
- *    ever sees clean values) and are separately mapped, via READS_BEHIND, to
- *    an `unknown` flag the panel renders in its own distinct state.
+ *    and never as not-done. `gatherSetupInputs` (lib/setup/setup-inputs.ts)
+ *    is the one shared copy of this page's six-source read set — also used
+ *    by the sidebar's setup meter and by `goLiveAction`'s own prerequisite
+ *    re-check — and it is ATOMIC (its own doc comment explains why: a
+ *    partial derivation is not a decision any of its three callers want).
+ *    That means this page can no longer isolate WHICH of the six reads
+ *    failed the way its own former `Promise.allSettled` block did — a
+ *    single failed leg now marks EVERY step "couldn't check" together,
+ *    rather than only the step(s) actually behind that one read. Still
+ *    conservative (never a false "done" or "to do"), just coarser than
+ *    before this task's read-set unification.
  *
- * All six reads go through `dbForRequest()` — the page runs as the signed-in
+ * `dbForRequest()`, not `serviceDb()` — the page runs as the signed-in
  * agency user, on purpose. `serviceDb()` would render identically for an
  * account whose grants are wrong, which is exactly the failure this page
  * exists to catch: the setup wizard should see what its operator sees.
- * `getCalendarForAccount`, not `getOrCreateCalendar` — looking at a setup
- * page must not CREATE a calendar row as a side effect.
+ * `gatherSetupInputs` uses `getCalendarForAccount`, not `getOrCreateCalendar`
+ * — looking at a setup page must not CREATE a calendar row as a side effect.
  */
 export default async function SetupPage({
   params,
@@ -56,70 +69,44 @@ export default async function SetupPage({
   await requireAgencyOnlyAccountAccess(accountId);
   const db = await dbForRequest();
 
-  const settled = await Promise.allSettled([
-    db.from("accounts").select("name, brand_name, from_email").eq("id", accountId).maybeSingle()
-      .then(({ data, error }) => {
-        if (error) throw new Error(`setup: account lookup failed: ${error.message}`);
-        if (!data) throw new Error("setup: account not found");
-        return data as AccountRow;
-      }),
-    getCalendarForAccount(db, accountId),
-    getVoiceProfile(db, accountId),
-    listPhoneNumbersForAccount(db, accountId),
-    listChecklistState(db, accountId),
-    // Epoch floor: "has this account EVER taken a call", not "today", which
-    // is what the test-call step is asking.
-    countCallsSince(db, accountId, "1970-01-01T00:00:00.000Z"),
-  ]);
-  const [accountR, calendarR, profileR, numbersR, ticksR, callsR] = settled;
-
-  // Otherwise a failing read is visible only as a warning chip on screen,
-  // with nothing anywhere saying what actually broke.
-  for (const result of settled) {
-    if (result.status === "rejected") {
-      console.error(`setup: read failed for account ${accountId}: ${String(result.reason)}`);
-    }
+  // The header's own display name — separate from gatherSetupInputs's six
+  // reads (which need brand_name/from_email, not name, and feed the derive
+  // function, not the page chrome). Its own failure only means the header
+  // omits the name span (same fallback the page always had); it has no
+  // bearing on any step's done/not-done/unknown state.
+  let accountName: string | null = null;
+  try {
+    const { data, error } = await db.from("accounts").select("name").eq("id", accountId).maybeSingle();
+    if (error) throw new Error(error.message);
+    accountName = (data as { name: string } | null)?.name ?? null;
+  } catch (e) {
+    console.error(`setup: account name lookup failed for account ${accountId}: ${String(e)}`);
   }
 
-  const failed: Record<ReadKey, boolean> = {
-    account: accountR.status === "rejected",
-    calendar: calendarR.status === "rejected",
-    profile: profileR.status === "rejected",
-    numbers: numbersR.status === "rejected",
-    ticks: ticksR.status === "rejected",
-    calls: callsR.status === "rejected",
-  };
+  let inputs: SetupInputs;
+  let failed: Record<ReadKey, boolean>;
+  try {
+    inputs = await gatherSetupInputs(db, accountId);
+    failed = { account: false, calendar: false, profile: false, numbers: false, ticks: false, calls: false };
+  } catch (e) {
+    console.error(`setup: gatherSetupInputs failed for account ${accountId}: ${String(e)}`);
+    inputs = NEUTRAL_SETUP_INPUTS;
+    failed = { account: true, calendar: true, profile: true, numbers: true, ticks: true, calls: true };
+  }
 
-  const account = accountR.status === "fulfilled" ? accountR.value : null;
-  // `null` on both a genuinely absent row AND a failed read — same
-  // conservative direction `deriveSetupStatus` already takes below by
-  // feeding it this exact value. `hasVoiceProfile` (passed to SetupPanel)
-  // reads existence off this, not completeness: see its own doc comment in
-  // setup-panel.tsx for why that is the right question for the test-call
-  // card specifically.
-  const profile = profileR.status === "fulfilled" ? profileR.value : null;
-  const numbers = numbersR.status === "fulfilled" ? numbersR.value : [];
-  const checklistRows = ticksR.status === "fulfilled" ? ticksR.value : [];
+  // `hasVoiceProfile` (passed to SetupPanel) reads existence off this, not
+  // completeness — see its own doc comment in setup-panel.tsx for why that
+  // is the right question for the test-call card specifically.
+  const profile = inputs.profile;
+  // `gatherSetupInputs`'s declared `numbers` type is narrowed to
+  // `Pick<PhoneNumberRow, "status">` (all `deriveSetupStatus` needs) — the
+  // array itself is the SAME full rows `listPhoneNumbersForAccount`
+  // returned, so `resolveAssignedNumber`/`movableNumbers` below (which also
+  // need `id`/`e164`) widen the type back rather than reading the table
+  // again. See setup-inputs.ts's own doc comment.
+  const numbers = inputs.numbers as Pick<PhoneNumberRow, "id" | "status" | "e164">[];
 
-  // `done_at` non-null is the tick. Keys the checklist catalogue does not
-  // know about never render on the checklist page (mergeChecklist walks the
-  // catalogue, not the rows), so these two live here without leaking into
-  // that surface.
-  const ticked = (key: string) =>
-    checklistRows.some((row) => row.item_key === key && row.done_at !== null);
-
-  const steps = deriveSetupStatus({
-    brandName: account?.brand_name ?? null,
-    fromEmail: account?.from_email ?? null,
-    calendar: calendarR.status === "fulfilled" ? calendarR.value : null,
-    profile,
-    numbers,
-    callCount: callsR.status === "fulfilled" ? callsR.value : 0,
-    ticks: {
-      emailSkipped: ticked(SETUP_TICK_KEYS.emailSkipped),
-      forwardingDone: ticked(SETUP_TICK_KEYS.forwardingDone),
-    },
-  });
+  const steps = deriveSetupStatus(inputs);
 
   const { views, prereqsMet } = buildSetupViews(steps, failed);
 
@@ -156,8 +143,8 @@ export default async function SetupPage({
       <PageHeader
         title={m["setup.title"]}
         selector={
-          account ? (
-            <span className="text-sm text-muted-foreground">{account.name}</span>
+          accountName ? (
+            <span className="text-sm text-muted-foreground">{accountName}</span>
           ) : undefined
         }
       />

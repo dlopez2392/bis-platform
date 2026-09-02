@@ -9,10 +9,12 @@ const ONE_HOUR_MS = 60 * 60 * 1000;
  * The topbar Sofía presence indicator's data (DESIGN.md "AI presence" key
  * pattern: "● Sofía · on a call" / "✓ N calls handled this week"). Read
  * through the guarded `"use server"` action in the [accountId] segment
- * (dashboard/accounts/[accountId]/presence-actions.ts) — never from a
- * layout, and never from this module directly: Task 5's CORRECTED brief
- * records why (Topbar mounts in the ROOT dashboard layout, an ANCESTOR of
- * [accountId], which never receives accountId through its own params).
+ * (dashboard/accounts/[accountId]/shell-actions.ts's getShellSnapshot) —
+ * never from a layout, and never from this module directly: Task 5's
+ * CORRECTED brief records why (Topbar mounts in the ROOT dashboard layout,
+ * an ANCESTOR of [accountId], which never receives accountId through its
+ * own params) — the same reasoning that keeps this one shared shell action
+ * (this task's own P3 dedup) in that segment too.
  *
  * `db` and `now` are both passed in rather than read from ambient state, so
  * this stays testable with a mocked `@bis/db` — the same house shape

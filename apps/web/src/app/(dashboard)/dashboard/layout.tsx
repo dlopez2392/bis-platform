@@ -8,6 +8,7 @@ import { resolveSidebarAccent } from "@/lib/branding/color";
 import { getTenantAccessState, getTenantBranding } from "@/lib/branding/tenant-theme-reader";
 import { AppSidebar } from "@/components/app-sidebar";
 import { Topbar } from "@/components/topbar";
+import { ShellDataProvider } from "@/components/shell-data";
 
 // generateMetadata and the layout body below are separate invocations that
 // need the same answers the root layout also needs for the very same tenant
@@ -121,21 +122,29 @@ export default async function DashboardLayout({
   const collapsed = cookieStore.get("sidebar_collapsed")?.value === "true";
 
   return (
-    <div className="flex min-h-screen">
-      <AppSidebar
-        accounts={accounts.map((a) => ({ id: a.id, name: a.name, timezone: a.timezone }))}
-        defaultCollapsed={collapsed}
-        isAgency={isAgency}
-        clientAccountName={clientState?.status === "ok" ? clientState.name : undefined}
-        clientBrandName={branding?.brandName ?? undefined}
-        clientLogoUrl={branding?.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : undefined}
-        clientAccentColor={resolveSidebarAccent(branding?.brandColor ?? null) ?? undefined}
-        clientTimezone={clientState?.status === "ok" ? clientState.timezone : undefined}
-      />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <Topbar isAgency={isAgency} />
-        <main className="min-w-0 flex-1">{children}</main>
+    // ShellDataProvider wraps the whole chrome, not just the two components
+    // that read from it: it mounts one pathname-keyed effect that both
+    // AppSidebar (unread badge, setup meter) and Topbar's TopbarPresence
+    // child consume via useShellData() — see shell-data.tsx's own doc
+    // comment for why this single fetch replaces what used to be three
+    // separate per-navigation POSTs.
+    <ShellDataProvider>
+      <div className="flex min-h-screen">
+        <AppSidebar
+          accounts={accounts.map((a) => ({ id: a.id, name: a.name, timezone: a.timezone }))}
+          defaultCollapsed={collapsed}
+          isAgency={isAgency}
+          clientAccountName={clientState?.status === "ok" ? clientState.name : undefined}
+          clientBrandName={branding?.brandName ?? undefined}
+          clientLogoUrl={branding?.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : undefined}
+          clientAccentColor={resolveSidebarAccent(branding?.brandColor ?? null) ?? undefined}
+          clientTimezone={clientState?.status === "ok" ? clientState.timezone : undefined}
+        />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <Topbar isAgency={isAgency} />
+          <main className="min-w-0 flex-1">{children}</main>
+        </div>
       </div>
-    </div>
+    </ShellDataProvider>
   );
 }

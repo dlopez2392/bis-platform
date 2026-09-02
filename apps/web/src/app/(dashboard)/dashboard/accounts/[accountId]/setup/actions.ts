@@ -1,12 +1,12 @@
 "use server";
 
 import {
-  serviceDb, setChecklistItem, getCalendarForAccount, getVoiceProfile,
-  listPhoneNumbersForAccount, countCallsSince, listChecklistState,
-  upsertVoiceProfile, setPhoneNumberStatus,
+  serviceDb, setChecklistItem, upsertVoiceProfile, setPhoneNumberStatus,
+  type PhoneNumberRow,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { deriveSetupStatus, goLivePrereqsMet, SETUP_TICK_KEYS } from "@/lib/setup/setup-status";
+import { gatherSetupInputs } from "@/lib/setup/setup-inputs";
 import { m } from "@/lib/messages";
 
 /** Same shape voice/actions.ts uses, and for the same reason: these run from
@@ -82,13 +82,24 @@ export async function setSetupTickAction(
  * accepting anything from the client: nothing about what is ready travels
  * over the wire, only the account id, which the guard above validates.
  *
- * Reads go through `serviceDb()` to match the writes below. That is a
- * deliberate difference from the PAGE, which reads as the signed-in user so
- * a grants problem shows up as a broken card rather than a page that renders
- * fine for an operator and fails for everyone else. Here the question is not
- * "can this operator see it" — the guard already answered that — but "is it
- * actually true", and a read that RLS silently narrowed would answer that
- * question wrong.
+ * Reads go through `serviceDb()` (passed into `gatherSetupInputs`) to match
+ * the writes below. That is a deliberate difference from the PAGE, which
+ * reads as the signed-in user so a grants problem shows up as a broken card
+ * rather than a page that renders fine for an operator and fails for
+ * everyone else. Here the question is not "can this operator see it" — the
+ * guard already answered that — but "is it actually true", and a read that
+ * RLS silently narrowed would answer that question wrong.
+ *
+ * `gatherSetupInputs` (lib/setup/setup-inputs.ts) is the one shared copy of
+ * this re-check's read set, atomic by design (see its own doc comment): a
+ * prerequisite this function could not verify is not a met one, and — same
+ * distinction the page draws — it must not be reported as an unmet one
+ * either, hence the separate `m["setup.goLive.failed"]` rather than
+ * `notReady` in the catch below. `brandName`/`fromEmail` now come back real
+ * rather than the hardcoded `null` this action used to pass — harmless,
+ * since neither gates go-live (see `goLivePrereqsMet`) — as does one real
+ * account-row read this action did not previously make; the tradeoff for one
+ * shared, tested read set rather than three drifting copies.
  */
 export async function goLiveAction(accountId: string): Promise<ActionResult> {
   const { userId, isAgency } = await requireAccountAccess(accountId);
@@ -96,53 +107,17 @@ export async function goLiveAction(accountId: string): Promise<ActionResult> {
 
   const db = serviceDb();
 
-  // `Promise.all`, not `allSettled` as the page uses: the page degrades a
-  // failed read to "couldn't check" and keeps rendering, but there is no
-  // degraded version of this decision. A prerequisite we could not verify is
-  // not a met one, and it must not be reported as an unmet one either — hence
-  // the distinct `failed` copy rather than `notReady`.
-  let steps;
-  let numbers;
+  let steps: ReturnType<typeof deriveSetupStatus>;
+  let numbers: PhoneNumberRow[];
   try {
-    const [calendar, profile, rows, callCount, ticks] = await Promise.all([
-      getCalendarForAccount(db, accountId),
-      getVoiceProfile(db, accountId),
-      listPhoneNumbersForAccount(db, accountId),
-      // Epoch floor: "has this account EVER taken a call", which is what the
-      // test-call prerequisite asks — same question the page asks.
-      countCallsSince(db, accountId, "1970-01-01T00:00:00.000Z"),
-      listChecklistState(db, accountId),
-    ]);
-    numbers = rows;
-    // brandName/fromEmail decide the branding and email steps, and neither
-    // gates go-live (see goLivePrereqsMet) — so nulls here rather than a
-    // sixth read whose answer this function would then ignore.
-    //
-    // The checklist read above is the deliberate exception to that: today's
-    // prereq set ignores the two ticks as well, so by the same argument it
-    // could be dropped for a hardcoded pair of `false`s. It is not, because
-    // the two failure modes are not the same size. A transient checklist
-    // failure costs one honest "try again" and a reload. Hardcoding `false`
-    // costs nothing until someone adds `forwarding` to goLivePrereqsMet — and
-    // then go-live becomes permanently impossible for every account, while
-    // the panel insists the operator finish a step whose tick is already set.
-    // A read that is redundant now is cheaper than that.
-    steps = deriveSetupStatus({
-      brandName: null,
-      fromEmail: null,
-      calendar,
-      profile,
-      numbers: rows,
-      callCount,
-      ticks: {
-        emailSkipped: ticks.some(
-          (t) => t.item_key === SETUP_TICK_KEYS.emailSkipped && t.done_at !== null,
-        ),
-        forwardingDone: ticks.some(
-          (t) => t.item_key === SETUP_TICK_KEYS.forwardingDone && t.done_at !== null,
-        ),
-      },
-    });
+    const inputs = await gatherSetupInputs(db, accountId);
+    // `gatherSetupInputs`'s declared `numbers` type is narrowed to
+    // `Pick<PhoneNumberRow, "status">` (all `deriveSetupStatus` needs) — the
+    // array itself is the SAME full rows `listPhoneNumbersForAccount`
+    // returned, so the target-number lookup below (which needs `id`) widens
+    // the type back rather than reading the table again.
+    numbers = inputs.numbers as PhoneNumberRow[];
+    steps = deriveSetupStatus(inputs);
   } catch (e) {
     console.error(`goLiveAction: prerequisite re-check failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["setup.goLive.failed"] };

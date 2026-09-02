@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   LayoutDashboard,
   Users,
@@ -25,23 +25,16 @@ import { AccountSwitcher, type AccountOption } from "@/components/account-switch
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { buildNavGroups, type NavIconKey } from "@/lib/nav-groups";
-// A direct import of a "use server" export into this client component —
-// Next.js compiles it to a callable stub, no <form action> needed. See
-// unread-actions.ts's own doc comment for why the read has to live in the
-// [accountId] segment rather than the layout that renders this sidebar.
-import { getUnreadTotal } from "@/app/(dashboard)/dashboard/accounts/[accountId]/unread-actions";
-// Same direct-import shape as getUnreadTotal above, for the same reason —
-// see setup-actions.ts's own doc comment for why this read lives in the
-// [accountId] segment rather than this component's own layout ancestor.
-import { getSetupProgress } from "@/app/(dashboard)/dashboard/accounts/[accountId]/setup-actions";
+import { ACCOUNT_ROUTE_RE } from "@/lib/account-route";
+// Conversations' unread badge and the footer's setup meter both read from
+// this one shared background fetch — see shell-data.tsx's own doc comment
+// for why the read lives in the [accountId] segment (via shell-actions.ts)
+// rather than this component's own layout ancestor, and for the
+// paired-state/derive-by-account-match shape that used to live here as two
+// separate effects before this task coalesced them into one.
+import { useShellData } from "@/components/shell-data";
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
-
-// The in-account route shape; capture group 1 is the accountId segment.
-// Used both for render-time derivation (base/active id) and inside the
-// unread effect, which re-derives from pathname so its dependency list can
-// be exactly [pathname].
-const ACCOUNT_ROUTE_RE = /^\/dashboard\/accounts\/([^/]+)/;
 
 // The pure nav-groups module maps hrefs/labelKeys only (see its own doc
 // comment for why); this component owns the actual icon components and the
@@ -111,19 +104,6 @@ export function AppSidebar({
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const pathname = usePathname();
-  // Paired with the account id it was fetched for, rather than a bare
-  // number reset via its own setState call: react-hooks' set-state-in-effect
-  // rule flags a synchronous setState in an effect body (only the fetch's
-  // own .then() callback below is exempt, as an update from an external
-  // system). Pairing lets "reset to 0 when leaving an account" fall out of
-  // the read below as a derived mismatch instead of a second state write.
-  const [unreadState, setUnreadState] = useState<{ accountId: string; total: number } | null>(null);
-  // Same accountId-paired shape as unreadState above, and for the same
-  // set-state-in-effect reason — see that field's own comment. `total: 0`
-  // (the account-not-found/mismatch fallback below) is indistinguishable
-  // from a genuinely 0-of-0 failed read (setup-actions.ts's own fold), which
-  // is fine: both are "don't show the meter", the row's only two states.
-  const [setupState, setSetupState] = useState<{ accountId: string; done: number; total: number } | null>(null);
 
   function toggle() {
     const next = !collapsed;
@@ -135,78 +115,17 @@ export function AppSidebar({
   const activeAccountId = match?.[1];
   const base = activeAccountId ? `/dashboard/accounts/${activeAccountId}` : null;
 
-  // The Conversations badge's count. Re-read on every route change (soft
-  // navigations included, hence keying on pathname and re-deriving the id
-  // inside), so reading your conversations clears the pill on the very next
-  // navigation — but never polled, so an idle tab costs nothing. The count
-  // only goes stale while the user sits still on one route. See
-  // unread-actions.ts for why this read happens here (an imperative Server
-  // Action call) rather than the dashboard layout: that layout is an
-  // ANCESTOR of dashboard/accounts/[accountId] and never receives accountId
-  // through its own params, so it cannot make this read itself.
-  useEffect(() => {
-    const accountId = pathname.match(ACCOUNT_ROUTE_RE)?.[1];
-    if (!accountId) return;
-    let cancelled = false;
-    getUnreadTotal(accountId)
-      .then((count) => {
-        if (!cancelled) setUnreadState({ accountId, total: count });
-      })
-      .catch(() => {
-        // Client-leg failure (offline, the action route itself erroring)
-        // keeps the last known count — a badge must never take the shell
-        // down or surface an error of its own.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [pathname]);
-  // Stale account's count never leaks under the new account's Conversations
-  // item while its own fetch is still in flight — and there is nothing to
-  // show at the agency top level (activeAccountId undefined), both without
-  // a second, effect-synchronous setState call.
-  const unreadTotal = unreadState && unreadState.accountId === activeAccountId ? unreadState.total : 0;
-
-  // The footer's setup meter. Separate effect and separate action from the
-  // unread badge above — same [pathname]-keyed, id-re-derived-inside,
-  // cancelled-cleanup, catch-and-drop-on-the-client-leg shape, but Setup is
-  // agency-only where Conversations is both-audience, so this one also
-  // early-returns on !isAgency before ever calling the action (the action's
-  // own requireAgencyOnlyAccountAccess guard is defense in depth behind
-  // that, not the only thing enforcing it).
-  useEffect(() => {
-    const accountId = pathname.match(ACCOUNT_ROUTE_RE)?.[1];
-    if (!accountId || !isAgency) return;
-    let cancelled = false;
-    getSetupProgress(accountId)
-      .then((progress) => {
-        if (!cancelled) setSetupState({ accountId, ...progress });
-      })
-      .catch(() => {
-        // Client-leg failure keeps the last known progress — same reasoning
-        // as the unread badge's catch above: a sidebar row must never take
-        // the shell down or surface an error of its own.
-      });
-    return () => {
-      cancelled = true;
-    };
-    // isAgency deliberately absent: it is a prop resolved once, server-side,
-    // for this component's whole mounted lifetime (dashboard/layout.tsx's
-    // own claims check) — a session never flips it without a full reload,
-    // which remounts this component with a fresh closure anyway. Keyed on
-    // [pathname] alone, matching the unread effect above and this task's own
-    // ambiguity resolution.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pathname]);
-  // Paired with the account it was read for, same reasoning as unreadTotal
-  // above. `done === total` (true for both a genuinely complete setup and
-  // the action's own failed-read fold, and for the still-null pre-fetch
-  // state via the `?? { done: 0, total: 0 }` below) is the row's one hidden
-  // condition — see the meter's own render below.
-  const setupProgress =
-    setupState && setupState.accountId === activeAccountId
-      ? setupState
-      : { done: 0, total: 0 };
+  // The Conversations badge's count and the footer's setup meter both come
+  // from the one shared shell fetch (shell-data.tsx) — replacing what used
+  // to be two separate pathname-keyed effects here. `useShellData()` already
+  // does the accountId-paired derive-by-match this component's own two
+  // effects used to do individually; a missing snapshot (off-account, not
+  // yet fetched, or a stale account's leftover data) and a client's own
+  // `setup: null` (the server's call, never this component's — Setup is
+  // agency-only data) both collapse to the same "hidden" fallback here.
+  const snapshot = useShellData();
+  const unreadTotal = snapshot?.unreadTotal ?? 0;
+  const setupProgress = snapshot?.setup ?? { done: 0, total: 0 };
 
   // Grouping, audience filtering and href construction all live in the pure
   // nav-groups module (unit-tested there without React); this component only
@@ -410,7 +329,7 @@ export function AppSidebar({
               them). Hidden at done === total: a genuinely complete setup and
               the read's own failure fold both land here, and Setup leaving
               the nav on completion means this row IS its nav presence — see
-              setup-actions.ts. */}
+              shell-actions.ts. */}
           {base && setupProgress.done !== setupProgress.total ? (
             <SetupMeterLink
               base={base}
@@ -439,6 +358,11 @@ function SidebarLink({
 }) {
   const Icon = item.icon;
   const hasUnread = (unreadCount ?? 0) > 0;
+  // The visible pill caps at "99+" — it has room for two digits, not the
+  // three-plus a very active inbox could reach. The aria-label above (and
+  // below) keeps the REAL count regardless: capping the announced number
+  // too would tell a screen-reader user something false.
+  const unreadDisplay = (unreadCount ?? 0) > 99 ? "99+" : unreadCount;
   return (
     <Link
       href={item.href}
@@ -484,7 +408,7 @@ function SidebarLink({
           className="min-w-4 shrink-0 rounded-full bg-sidebar-accent px-1.5 text-center text-[10px] font-medium text-sidebar"
           aria-hidden
         >
-          {unreadCount}
+          {unreadDisplay}
         </span>
       ) : null}
     </Link>
