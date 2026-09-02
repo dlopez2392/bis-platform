@@ -11,6 +11,8 @@ import { dbForRequest } from "@/lib/db";
 import { formatCurrency } from "@/lib/format";
 import { mergeChecklist } from "@/lib/checklist-catalogue";
 import { getTenantBranding } from "@/lib/branding/tenant-theme-reader";
+import { safeZone } from "@/lib/booking/time";
+import { normalizeOpenHours } from "@/lib/booking/slots";
 import { m } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 import { greetingPeriod, formatLocalLongDate } from "@/lib/dashboard/greeting";
@@ -61,20 +63,31 @@ export default async function AccountDashboardPage({
       if (!data) throw new Error("account dashboard: account not found");
       return data as { name: string; timezone: string };
     });
-  const { timezone } = account;
+  // `accounts.timezone` is free-text at creation (no DB-level IANA
+  // validation) — an invalid value would RangeError on the first
+  // `Intl.DateTimeFormat` construction it reaches below, which is a page
+  // BOTH audiences land on at login. Same guard `calls/page.tsx` and
+  // `calls/[callId]/page.tsx` already apply to this exact column.
+  const timezone = safeZone(account.timezone, "UTC");
 
   // One 14-day window covers every KPI's spark AND both halves of its
   // "current 7 vs prior 7" delta — the last 7 dayKeys are the current
   // period, the first 7 are the prior period, adjacent with no gap and no
   // overlap (localDayWindow's own dayKeys are contiguous local calendar
-  // days). `window7.fromIso` is the exact boundary between the two halves;
-  // splitting each fetched series on that boundary with a plain ISO-string
-  // comparison is safe because both instants came from the SAME sanctioned
-  // `localDayWindow` call (same `now`/`timezone`) — no zone math is being
-  // re-derived by that comparison, only two already-zone-correct instants
-  // being ordered.
+  // days). `window7.fromIso` is the exact boundary between the two halves.
   const window7 = localDayWindow(now, timezone, 7);
   const window14 = localDayWindow(now, timezone, 14);
+  // The three splits below compare each fetched ISO string against this
+  // boundary. A plain STRING comparison is NOT safe here even though both
+  // sides nominally come from the same sanctioned `localDayWindow` call:
+  // `window7.fromIso` is `Date.toISOString()`'s own `.000Z`-suffixed form,
+  // while the rows this splits (`callsIso`/`bookingsIso`/`oppPairs`) come
+  // back from Postgres as `+00:00`-suffixed timestamps — two different
+  // lexical formats for the same instant that misorder each other within a
+  // millisecond of the boundary. Parsing both sides to the same epoch-ms
+  // number once, here, makes every split below a real numeric comparison
+  // instead.
+  const window7FromMs = Date.parse(window7.fromIso);
 
   const [
     checklistRows, formsMissingNotify, contactsCount, opps,
@@ -147,7 +160,12 @@ export default async function AccountDashboardPage({
       : period === "afternoon"
         ? "dashboard.greeting.afternoon"
         : "dashboard.greeting.evening";
-  const greetingText = m[greetingKey].replace("{name}", greetingName);
+  // A replacer FUNCTION, not a plain replacement string: `String.replace`
+  // treats a string second argument as a pattern — `$&`, `$1`, etc. — so a
+  // tenant-authored name containing one of those sequences (e.g. "Bob's $&
+  // Grill") would have it expanded instead of inserted verbatim. A function
+  // return value is never re-interpreted.
+  const greetingText = m[greetingKey].replace("{name}", () => greetingName);
   const dateText = formatLocalLongDate(now, timezone);
   const showVoiceSub = voiceProfile?.enabled === true;
 
@@ -156,15 +174,15 @@ export default async function AccountDashboardPage({
   // KPI tile's spark (Task 5) and the calls chart card's bars (Task 6) —
   // same values either way, just avoiding a second identical
   // `bucketByLocalDay` pass over the same `callsIso`/`window14.dayKeys`.
-  const currentCallsIso = callsIso.filter((iso) => iso >= window7.fromIso);
-  const priorCallsIso = callsIso.filter((iso) => iso < window7.fromIso);
+  const currentCallsIso = callsIso.filter((iso) => Date.parse(iso) >= window7FromMs);
+  const priorCallsIso = callsIso.filter((iso) => Date.parse(iso) < window7FromMs);
   const callsDayBuckets = bucketByLocalDay(callsIso, timezone, window14.dayKeys);
   const callsSpark = callsDayBuckets.map((b) => b.count);
   const callsDelta = deltaVsPrior(currentCallsIso.length, priorCallsIso.length);
 
   // Appointments booked — same split/spark shape as calls.
-  const currentBookingsIso = bookingsIso.filter((iso) => iso >= window7.fromIso);
-  const priorBookingsIso = bookingsIso.filter((iso) => iso < window7.fromIso);
+  const currentBookingsIso = bookingsIso.filter((iso) => Date.parse(iso) >= window7FromMs);
+  const priorBookingsIso = bookingsIso.filter((iso) => Date.parse(iso) < window7FromMs);
   const bookingsSpark = bucketByLocalDay(bookingsIso, timezone, window14.dayKeys).map((b) => b.count);
   const bookingsDelta = deltaVsPrior(currentBookingsIso.length, priorBookingsIso.length);
 
@@ -173,7 +191,14 @@ export default async function AccountDashboardPage({
   // judge a call against. countAfterHours itself would happily return an
   // honest-but-meaningless "every call is after-hours" for either case; that
   // honesty is the wrong answer to show on screen, so the gate lives here.
-  const hasAfterHours = calendar !== null && Object.keys(calendar.open_hours).length > 0;
+  // Gated on the NORMALIZED shape (the same `normalizeOpenHours` pass
+  // `countAfterHours` itself applies internally), not the raw jsonb keys:
+  // `calendar.open_hours` has no DB-level shape guarantee, so a row whose
+  // every key maps to an invalid/malformed interval would satisfy the raw
+  // `Object.keys(...).length > 0` check while `countAfterHours` normalizes
+  // it down to nothing and judges every call after-hours — the exact
+  // "every-call-after-hours" reading this gate exists to prevent.
+  const hasAfterHours = calendar !== null && Object.keys(normalizeOpenHours(calendar.open_hours)).length > 0;
   const afterHoursCurrent = hasAfterHours
     ? countAfterHours(currentCallsIso, timezone, calendar.open_hours)
     : 0;
@@ -185,8 +210,8 @@ export default async function AccountDashboardPage({
   // Pipeline added — value-at-creation, not value-that-survived (see
   // listOpportunityValuesCreatedBetween's own doc comment): a later win/loss
   // must not change what a past 7-day window already captured.
-  const currentOppPairs = oppPairs.filter((p) => p.createdAt >= window7.fromIso);
-  const priorOppPairs = oppPairs.filter((p) => p.createdAt < window7.fromIso);
+  const currentOppPairs = oppPairs.filter((p) => Date.parse(p.createdAt) >= window7FromMs);
+  const priorOppPairs = oppPairs.filter((p) => Date.parse(p.createdAt) < window7FromMs);
   const pipelineSpark = bucketValueByLocalDay(oppPairs, timezone, window14.dayKeys).map((b) => b.value);
   const currentPipelineValue = currentOppPairs.reduce((sum, p) => sum + p.monetaryValue, 0);
   const priorPipelineValue = priorOppPairs.reduce((sum, p) => sum + p.monetaryValue, 0);

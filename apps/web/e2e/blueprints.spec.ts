@@ -147,8 +147,8 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     // still-untouched row. Wait for the POST's response first, matching
     // pipeline.spec.ts's dragTo() helper.
     // The predicate must also match the BODY, not just method+URL: since the
-    // Phase-2 shell, the sidebar fires its own server-action POSTs
-    // (getUnreadTotal/getSetupProgress) on every account-route navigation,
+    // Phase-2 shell, the sidebar fires its own server-action POST
+    // (getShellSnapshot) on every account-route navigation,
     // and server actions POST to the current page URL — so on this route a
     // sidebar read also matches "/checklist" and can resolve this wait while
     // the toggle's own POST is still in flight, making the reload lose the

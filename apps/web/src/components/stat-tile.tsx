@@ -78,18 +78,27 @@ export function StatTile({
           {value}
         </p>
         {delta ? (
-          <span
-            className={cn(
-              "text-xs font-medium",
-              delta.direction === "up" && "text-success",
-              delta.direction === "down" && "text-destructive",
-              delta.direction === "flat" && "text-muted-foreground",
-            )}
-            aria-label={deltaAriaLabel(delta)}
-          >
-            {glyph ? `${glyph} ` : ""}
-            {delta.label}
-          </span>
+          <>
+            {/* `aria-label` on a generic `<span>` is unreliable — naming is
+                prohibited on the generic role for some screen-reader pairs
+                (app-sidebar.tsx's SidebarLink carries the same note next to
+                its own Link, which CAN carry a name, unlike this bare
+                `<span>`). Hidden from assistive tech entirely; the `sr-only`
+                sibling below carries the same worded copy instead. */}
+            <span
+              aria-hidden
+              className={cn(
+                "text-xs font-medium",
+                delta.direction === "up" && "text-success",
+                delta.direction === "down" && "text-destructive",
+                delta.direction === "flat" && "text-muted-foreground",
+              )}
+            >
+              {glyph ? `${glyph} ` : ""}
+              {delta.label}
+            </span>
+            <span className="sr-only">{deltaAriaLabel(delta)}</span>
+          </>
         ) : null}
       </div>
       {spark && spark.length > 0 ? (

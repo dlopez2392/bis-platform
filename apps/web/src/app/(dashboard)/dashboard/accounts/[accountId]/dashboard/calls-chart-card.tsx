@@ -40,6 +40,15 @@ const BARS_HEIGHT_PX = 120;
  *  `min-height:6px`. 4px keeps this on the repo's 4px spacing grid (Shape &
  *  motion) rather than lifting the mockup's un-aligned 6px verbatim. */
 const MIN_BAR_HEIGHT_PX = 4;
+/** The container below is `box-sizing: border-box` (Tailwind preflight), so
+ *  its `pt-1.5` (6px) and `border-b` (1px) both eat into the fixed
+ *  `BARS_HEIGHT_PX` total rather than sitting outside it — the space a bar
+ *  can actually occupy, measured up from the border to the padding edge, is
+ *  6px + 1px shorter than the full 120px. Scaling the tallest bar against
+ *  THIS (not `BARS_HEIGHT_PX` itself) keeps it inside the visible box;
+ *  scaling against the full 120 let the max-value bar's flex child poke
+ *  through the top padding by the same 7px it was short. */
+const BARS_CONTENT_HEIGHT_PX = BARS_HEIGHT_PX - 6 - 1;
 
 export function CallsChartCard({
   accountId,
@@ -110,12 +119,18 @@ export function CallsChartCard({
             <span>{m["dashboard.calls.axis.weekendsMuted"]}</span>
             <span>{m["dashboard.calls.axis.today"]}</span>
           </div>
-
-          {recentCalls.length > 0 ? (
-            <RecentCallsTable calls={recentCalls} accountId={accountId} timezone={timezone} />
-          ) : null}
         </>
       )}
+
+      {/* Keyed on `recentCalls` itself, independent of the 14-day `isEmpty`
+          gate above: `recentCalls` is deliberately the 3 most recent calls
+          EVER (see this prop's own doc comment on the component signature),
+          so a quiet 14-day window must not hide real older history — the
+          chart area still shows its empty state, but the table renders
+          below it whenever there is anything in it to show. */}
+      {recentCalls.length > 0 ? (
+        <RecentCallsTable calls={recentCalls} accountId={accountId} timezone={timezone} />
+      ) : null}
     </div>
   );
 }
@@ -133,7 +148,7 @@ function Bars({ dayBuckets }: { dayBuckets: { dayKey: string; count: number; isW
   return (
     <div className="mt-3.5 flex h-[120px] items-end gap-1 border-b border-border pt-1.5">
       {dayBuckets.map((bucket) => {
-        const heightPx = Math.max(MIN_BAR_HEIGHT_PX, Math.round((bucket.count / max) * BARS_HEIGHT_PX));
+        const heightPx = Math.max(MIN_BAR_HEIGHT_PX, Math.round((bucket.count / max) * BARS_CONTENT_HEIGHT_PX));
         const unit = callsUnit(bucket.count);
         const tooltip = m["dashboard.calls.tooltip"]
           .replace("{date}", shortDayLabel(bucket.dayKey))

@@ -148,4 +148,11 @@ describe("CallsChartCard", () => {
     expect(html).toContain("/dashboard/accounts/acct1/calls");
     expect(html).not.toContain("/dashboard/accounts/acct1/voice");
   });
+
+  it("a quiet 14-day window with real OLDER history shows the empty-state copy AND the mini table — recentCalls is the 3 most recent ever, not scoped to the window", () => {
+    const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [CALL] });
+    expect(html).toContain("When Sofía answers, every call lands here with its outcome.");
+    expect(html).toContain("Ana Reyes");
+    expect(html).toContain("/dashboard/accounts/acct1/calls/c1");
+  });
 });

@@ -97,8 +97,8 @@ test("dragging an opportunity persists after reload", async ({ page }) => {
     // which looks identical to "the server write never landed" but is
     // really just the test not having given it the chance to.
     // Match the BODY too, not just method+URL: since the Phase-2 shell, the
-    // sidebar's own server-action POSTs (getUnreadTotal/getSetupProgress)
-    // also hit this route's URL on every navigation and can resolve this
+    // sidebar's own server-action POST (getShellSnapshot)
+    // also hits this route's URL on every navigation and can resolve this
     // wait in place of the move. Only the move's body carries the
     // opportunity id — the BARE id, not the "opp-"-prefixed testid
     // (data-testid is `opp-${opp.id}`; the action is called with opp.id).
