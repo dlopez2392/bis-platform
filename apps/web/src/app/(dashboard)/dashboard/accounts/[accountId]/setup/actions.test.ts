@@ -83,7 +83,10 @@ vi.mock("@/lib/auth", () => ({
   // tree (settings/actions.ts) — so the throw here has to actually escape,
   // not resolve to a value, for the "rejected before any db call" test below
   // to mean anything.
-  requireAgencyOnlyAccountAccess: async (accountId: string) => {
+  // No parameter: the mock ignores the accountId the real guard takes, and
+  // this eslint config has no argsIgnorePattern, so even an underscored
+  // param trips no-unused-vars. Extra args are ignored at the call site.
+  requireAgencyOnlyAccountAccess: async () => {
     if (!guardFixture.isAgency) throw new Error("NEXT_REDIRECT");
     return { userId: "user_1" };
   },
