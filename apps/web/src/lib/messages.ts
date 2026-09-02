@@ -132,6 +132,7 @@ export const m = {
 
   "common.save": "Save",
   "common.cancel": "Cancel",
+  "common.undo": "Undo",
   "common.add": "Add",
   "common.import": "Import",
   "common.filters": "Filters",
@@ -154,6 +155,13 @@ export const m = {
   "stat.delta.up": "up {value} vs the prior period",
   "stat.delta.down": "down {value} vs the prior period",
   "stat.delta.flat": "flat vs the prior period",
+
+  // InlineField component (Task 4): click-to-edit for contact fields.
+  // "{label}" is the field name (e.g., "Email"); the component .replace()s it.
+  "inline.saved": "{label} saved",
+  "inline.edit": "Edit {label}",
+  "inline.empty": "Add…",
+  "inline.crashed": "Save didn't go through — the page may be out of date. Reload and try again.",
 
   "accounts.title": "Companies",
   "accounts.add": "Add company",
