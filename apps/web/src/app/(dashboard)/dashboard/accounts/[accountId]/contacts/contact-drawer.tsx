@@ -34,7 +34,10 @@ type LoadResult =
 // the fetch's own `.then()`/`.catch()` callbacks below write state.
 type Fetched = { contactId: string; result: LoadResult } | null;
 
-const FIELDS: { field: EditableField; labelKey: keyof typeof m; type: "text" | "email" | "tel" }[] = [
+// Exported so contact-fields-panel.tsx (the full contact page) shares this
+// vocabulary instead of duplicating it — one list of standard fields, two
+// InlineField call sites (drawer + full page).
+export const FIELDS: { field: EditableField; labelKey: keyof typeof m; type: "text" | "email" | "tel" }[] = [
   { field: "first_name", labelKey: "contacts.firstName", type: "text" },
   { field: "last_name", labelKey: "contacts.lastName", type: "text" },
   { field: "email", labelKey: "contacts.email", type: "email" },

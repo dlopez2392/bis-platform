@@ -1,3 +1,5 @@
+"use client";
+
 import { Plus, X } from "lucide-react";
 import type { getContact, listContactTags, CustomFieldDef } from "@bis/db";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,9 +16,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { InlineField } from "@/components/inline-field";
 import { m } from "@/lib/messages";
 import { SubmitButton } from "../../../submit-button";
 import { updateContactAction, addTagAction, removeTagAction } from "./actions";
+import { updateContactFieldAction } from "../actions";
+import { FIELDS } from "../contact-drawer";
 import { CLEAR_FIELD_SENTINEL } from "./constants";
 
 type Contact = NonNullable<Awaited<ReturnType<typeof getContact>>>;
@@ -47,33 +52,29 @@ export function ContactFieldsPanel({
         <CardHeader>
           <CardTitle className="text-sm">{m["contact.details"]}</CardTitle>
         </CardHeader>
-        <CardContent>
-          <form action={boundUpdateContact} className="space-y-3">
-            {hidden}
-            <div className="space-y-1.5">
-              <Label htmlFor="firstName">{m["contacts.firstName"]}</Label>
-              <Input id="firstName" name="firstName" defaultValue={contact.first_name ?? ""} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="lastName">{m["contacts.lastName"]}</Label>
-              <Input id="lastName" name="lastName" defaultValue={contact.last_name ?? ""} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="email">{m["contacts.email"]}</Label>
-              <Input id="email" name="email" type="email" defaultValue={contact.email ?? ""} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="phone">{m["contacts.phone"]}</Label>
-              <Input id="phone" name="phone" defaultValue={contact.phone ?? ""} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="companyName">{m["contact.company"]}</Label>
-              <Input id="companyName" name="companyName" defaultValue={contact.company_name ?? ""} />
-            </div>
+        <CardContent className="space-y-3">
+          <dl className="space-y-1">
+            {FIELDS.map(({ field, labelKey, type }) => (
+              <div key={field} className="space-y-0.5">
+                <dt className="text-muted-foreground text-xs">{m[labelKey]}</dt>
+                <dd>
+                  <InlineField
+                    label={m[labelKey]}
+                    field={field}
+                    inputType={type}
+                    value={(contact[field] as string | null) ?? null}
+                    save={(v) => updateContactFieldAction(accountId, contactId, field, v)}
+                  />
+                </dd>
+              </div>
+            ))}
+          </dl>
 
-            {fieldDefs.length > 0 ? (
-              <>
-                <Separator />
+          {fieldDefs.length > 0 ? (
+            <>
+              <Separator />
+              <form action={boundUpdateContact} className="space-y-3">
+                {hidden}
                 {fieldDefs.map((d) => {
                   const fieldName = `cf_${d.field_key}`;
                   const current = custom[d.field_key];
@@ -119,11 +120,11 @@ export function ContactFieldsPanel({
                     </div>
                   );
                 })}
-              </>
-            ) : null}
 
-            <SubmitButton>{m["common.save"]}</SubmitButton>
-          </form>
+                <SubmitButton>{m["common.save"]}</SubmitButton>
+              </form>
+            </>
+          ) : null}
         </CardContent>
       </Card>
 
