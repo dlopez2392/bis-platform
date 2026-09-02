@@ -80,9 +80,16 @@ trap), caps at 5. Timestamps render in the account timezone via the same
 - `bulkAddTagAction(accountId, contactIds, tagName)` — single insert with
   `on conflict do nothing` semantics; undo removes that tag from the same
   ids. Toast reports the honest applied count.
-- `bulkDeleteContactsAction(accountId, contactIds)` — single
-  `delete … where id in (…)` scoped to the account. No undo (rule 6
-  destructive path; typed-count confirm gates it).
+- `bulkDeleteContactsAction(accountId, contactIds)` — **skip-blocked
+  semantics** (amended after schema verification): `opportunities.contact_id`
+  and `conversations.contact_id` are NO ACTION FKs and `bookings.contact_id`
+  is `on delete restrict` BY DESIGN (migration 0017), so a naive
+  `delete … where id in (…)` would abort the whole batch on one linked
+  contact. The action pre-reads which selected ids have opportunities,
+  conversations, or bookings, deletes only the unblocked ones in one
+  statement, and reports honestly: "Deleted N · skipped M (linked to
+  bookings, deals, or conversations)". No undo (rule 6 destructive path;
+  typed-count confirm gates it). Never weaken an FK to make delete easier.
 - All action results surface through the existing `notifyActionResult`
   pattern so stale-tab rejections stay loud (the silent-save lesson).
 - Existing single tag add/remove actions are reused in the drawer.
@@ -137,8 +144,9 @@ trap), caps at 5. Timestamps render in the account timezone via the same
 - Drawer open on a contact that was bulk-deleted (or stale `?peek=`) → the
   same error state; never ghost data.
 - Inline save failure → displayed value reverts, error toast.
-- Bulk ops are single statements — no partial-success ambiguity; the toast
-  reports the count actually affected.
+- Bulk tag is a single statement; bulk delete is a pre-read plus one
+  statement over the unblocked ids (see the FK amendment above). Either way
+  the toast reports the count actually affected — never a claimed count.
 - A row navigation and a checkbox tick must never fire from one click
   (stopPropagation is asserted in tests).
 
