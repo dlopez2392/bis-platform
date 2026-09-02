@@ -84,9 +84,13 @@ export default async function AccountDashboardPage({
           )
         ) : null}
         <div className="grid gap-4 sm:grid-cols-3">
-          <StatTile label={m["account.contacts"]} value={contactsValue} />
-          <StatTile label={m["account.openOpps"]} value={openOppsValue} />
-          <StatTile label={m["account.pipelineValue"]} value={pipelineValueDisplay} />
+          <StatTile label={m["account.contacts"]} value={contactsValue} period={m["common.allTime"]} />
+          <StatTile label={m["account.openOpps"]} value={openOppsValue} period={m["common.allTime"]} />
+          <StatTile
+            label={m["account.pipelineValue"]}
+            value={pipelineValueDisplay}
+            period={m["common.allTime"]}
+          />
         </div>
       </div>
     </>

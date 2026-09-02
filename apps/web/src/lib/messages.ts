@@ -140,6 +140,20 @@ export const m = {
   "common.saving": "Saving…",
   "common.actionCrashed": "That didn't go through — this page may be out of date. Reload it and try again.",
   "common.unavailable": "—",
+  // The period caption on a StatTile (Task 4) when the metric covers the
+  // whole account history rather than a rolling window — shared verbatim
+  // across the agency and in-account dashboards, so one key, not two.
+  "common.allTime": "All time",
+
+  // StatTile's delta chip (Task 4, DESIGN.md rule 1: every metric ships
+  // with context). The visible chip is glyph + `delta.label` ("▲ 12%");
+  // this is the chip's `aria-label`, spelling the direction out in words
+  // so the glyph is never the only carrier of the up/down/flat meaning.
+  // "{value}" is the house {placeholder} convention (see setup.progress
+  // above) — `deltaVsPrior`'s own `label` field (a percent or a raw count).
+  "stat.delta.up": "up {value} vs the prior period",
+  "stat.delta.down": "down {value} vs the prior period",
+  "stat.delta.flat": "flat vs the prior period",
 
   "accounts.title": "Companies",
   "accounts.add": "Add company",

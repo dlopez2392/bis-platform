@@ -44,10 +44,14 @@ export default async function DashboardPage() {
     <>
       <PageHeader title={m["dashboard.title"]} />
       <div className="grid gap-4 p-6 sm:grid-cols-2 xl:grid-cols-4">
-        <StatTile label={m["dashboard.companies"]} value={String(accounts.length)} />
-        <StatTile label={m["dashboard.contacts"]} value={contactsValue} />
-        <StatTile label={m["dashboard.openOpps"]} value={openOppsValue} />
-        <StatTile label={m["dashboard.pipelineValue"]} value={pipelineValueDisplay} />
+        <StatTile label={m["dashboard.companies"]} value={String(accounts.length)} period={m["common.allTime"]} />
+        <StatTile label={m["dashboard.contacts"]} value={contactsValue} period={m["common.allTime"]} />
+        <StatTile label={m["dashboard.openOpps"]} value={openOppsValue} period={m["common.allTime"]} />
+        <StatTile
+          label={m["dashboard.pipelineValue"]}
+          value={pipelineValueDisplay}
+          period={m["common.allTime"]}
+        />
       </div>
     </>
   );
