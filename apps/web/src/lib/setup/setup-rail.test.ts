@@ -23,13 +23,17 @@ describe("SETUP_STEP_KEYS", () => {
 });
 
 describe("isLockedStep", () => {
-  it("locks ONLY test_call and go_live, and only when their gate is unmet", () => {
-    const unmet = { canTestCall: false, prereqsMet: false };
-    const met = { canTestCall: true, prereqsMet: true };
+  it("locks ONLY test_call and go_live, and only when their prerequisites are unmet", () => {
+    const unmet = views(); // nothing done
+    const met = SETUP_STEP_KEYS.reduce(
+      (a, k) => ({ ...a, [k]: { done: true } }),
+      {} as Record<SetupStepView["key"], Partial<SetupStepView>>,
+    );
+    const metViews = views(met);
     expect(isLockedStep("test_call", unmet)).toBe(true);
     expect(isLockedStep("go_live", unmet)).toBe(true);
-    expect(isLockedStep("test_call", met)).toBe(false);
-    expect(isLockedStep("go_live", met)).toBe(false);
+    expect(isLockedStep("test_call", metViews)).toBe(false);
+    expect(isLockedStep("go_live", metViews)).toBe(false);
     for (const k of ["account", "branding", "hours", "voice_profile", "number", "email", "forwarding"] as const) {
       expect(isLockedStep(k, unmet)).toBe(false);
     }
@@ -45,6 +49,21 @@ describe("lockedPrereqKeys", () => {
       number: { done: true },
     });
     expect(lockedPrereqKeys("go_live", v)).toEqual(["voice_profile", "test_call"]);
+  });
+  it("names test_call's unmet prerequisites, including an UNKNOWN one", () => {
+    // number not done, voice_profile done but unknown (read failed)
+    const v = views({
+      voice_profile: { done: true, unknown: true },
+    });
+    expect(lockedPrereqKeys("test_call", v)).toEqual(["voice_profile", "number"]);
+  });
+  it("is empty for test_call once both prerequisites are done, and unlocks it", () => {
+    const v = views({
+      number: { done: true },
+      voice_profile: { done: true },
+    });
+    expect(lockedPrereqKeys("test_call", v)).toEqual([]);
+    expect(isLockedStep("test_call", v)).toBe(false);
   });
   it("is empty for a step that does not lock", () => {
     expect(lockedPrereqKeys("branding", views())).toEqual([]);
