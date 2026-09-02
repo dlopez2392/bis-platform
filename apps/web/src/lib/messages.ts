@@ -133,6 +133,7 @@ export const m = {
   "common.save": "Save",
   "common.cancel": "Cancel",
   "common.undo": "Undo",
+  "common.retry": "Retry",
   "common.add": "Add",
   "common.import": "Import",
   "common.filters": "Filters",
@@ -315,6 +316,13 @@ export const m = {
   "drawer.recent.submission": "Form submitted",
   "drawer.recent.message": "Message",
   "drawer.recent.opportunity": "Opportunity: {name} ({value})",
+
+  // The drawer's own chrome (Task 6): skeleton/error states and the
+  // recent-activity section heading/empty copy.
+  "drawer.recent": "Recent",
+  "drawer.recentEmpty": "Nothing here yet — calls, notes, and form submissions for this contact will show up here.",
+  "drawer.loadFailed": "Couldn't load this contact's activity.",
+  "drawer.openFull": "Open full page",
 
   "settings.title": "Settings",
   "settings.customFields": "Custom fields",

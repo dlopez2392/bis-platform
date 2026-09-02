@@ -15,6 +15,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { contactDisplayName, formatDate, initials } from "@/lib/format";
 import { m } from "@/lib/messages";
 import { usePeek } from "@/lib/contacts/use-peek";
+import { ContactDrawer } from "./contact-drawer";
 
 export type ContactRow = {
   id: string;
@@ -26,23 +27,31 @@ export type ContactRow = {
   created_at: string;
 };
 
+// A `?peek=` id absent from the current page's rows (deleted, or on another
+// page of the client-side paging) still opens the drawer — the stub's empty
+// fields render as empty InlineFields and the summary fetch 404s into the
+// drawer's error state, which is exactly the spec's deleted-contact behavior.
+function missingRow(id: string): ContactRow {
+  return {
+    id, first_name: null, last_name: null, email: null, phone: null,
+    company_name: null, created_at: "",
+  };
+}
+
 type SortKey = "name" | "company" | "created";
 
 const PAGE_SIZE = 20;
 
 export function ContactsTable({
   rows,
-  base,
   accountId,
 }: {
   rows: ContactRow[];
-  base: string;
   accountId: string;
 }) {
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "created", dir: -1 });
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  // peekId/close unused until Task 6 mounts the drawer — expected for this commit.
   const { peekId, open, close } = usePeek();
 
   const sorted = useMemo(() => {
@@ -177,6 +186,11 @@ export function ContactsTable({
           </Button>
         </div>
       </div>
+      <ContactDrawer
+        accountId={accountId}
+        row={rows.find((r) => r.id === peekId) ?? (peekId ? missingRow(peekId) : null)}
+        onClose={close}
+      />
     </div>
   );
 }
