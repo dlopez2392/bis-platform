@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { callerLabel, formatCallTime, formatDuration } from "./format";
 import { OutcomePill } from "./outcome-pill";
+import { CallRow, StopPropagation } from "./call-row";
 
 const HEAD = "px-4 text-xs font-medium tracking-wider text-muted-foreground uppercase";
 const CELL = "px-4 py-3";
@@ -68,24 +69,23 @@ export function CallsTable({
             const known = Boolean(row.caller_e164?.trim());
 
             return (
-              <TableRow key={row.id} className="group">
+              <CallRow key={row.id} href={callHref} label={label}>
                 <TableCell className={CELL}>
-                  <Link
-                    href={callHref}
-                    className="font-medium tabular-nums transition-colors hover:text-primary"
-                  >
+                  <span className="font-medium tabular-nums">
                     {formatCallTime(row.started_at, timezone)}
-                  </Link>
+                  </span>
                 </TableCell>
 
                 <TableCell className={CELL}>
                   {row.contact_id ? (
-                    <Link
-                      href={`${base}/contacts/${row.contact_id}`}
-                      className="font-medium hover:underline"
-                    >
-                      {label}
-                    </Link>
+                    <StopPropagation>
+                      <Link
+                        href={`${base}/contacts/${row.contact_id}`}
+                        className="font-medium hover:underline"
+                      >
+                        {label}
+                      </Link>
+                    </StopPropagation>
                   ) : (
                     <span
                       className={cn(
@@ -111,26 +111,22 @@ export function CallsTable({
                   </span>
                 </TableCell>
 
-                {/* Mouse-only sugar: a second, right-aligned target for the
-                    same call, so the row reads as openable from either end.
-                    Hidden from assistive tech and skipped by the tab order —
-                    one announced link per row is enough.
-
-                    Deliberately NOT a stretched overlay across the whole row:
-                    that needs `position: relative` on a <tr>, and where it
-                    is not honoured the overlay resolves against the table
-                    container instead and swallows every click in the table. */}
+                {/* Mouse-only sugar: a second, right-aligned affordance so
+                    the row reads as openable from either end. The row
+                    itself (CallRow) handles the click and the keyboard nav;
+                    this is no longer a Link — a nested interactive element
+                    inside a whole-row click target would double-fire
+                    navigation and confuse the tab order. `aria-hidden`
+                    stays: it is decoration, not a second announced target. */}
                 <TableCell className="w-10 p-0">
-                  <Link
-                    href={callHref}
+                  <span
                     aria-hidden
-                    tabIndex={-1}
                     className="flex items-center justify-end px-4 py-3 text-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-foreground"
                   >
                     <ChevronRight className="size-4" />
-                  </Link>
+                  </span>
                 </TableCell>
-              </TableRow>
+              </CallRow>
             );
           })}
         </TableBody>

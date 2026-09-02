@@ -1,8 +1,18 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { CallListRow } from "@bis/db";
 import { CallsTable } from "./calls-table";
+
+// `CallRow` (Task 9) calls `useRouter()` from "next/navigation" at render
+// time for the row's onClick/keyboard nav — outside a mounted Next app
+// router (as here, a plain `renderToStaticMarkup`) that hook throws
+// "invariant expected app router to be mounted". `Link`, used elsewhere in
+// this table, needs no such stand-in: it only touches the router lazily,
+// inside its own click handler, never during render.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: () => {} }),
+}));
 
 // Same shape as `b/layout.test.ts`: a server component with no client state
 // is just a function of its props, so `renderToStaticMarkup` pins the served
@@ -33,14 +43,31 @@ function render(rows: CallListRow[], opts: { olderHref?: string; timezone?: stri
   );
 }
 
+/** Every anchor's `href`, in document order — order-independent of attribute
+ *  position within the tag. Used to prove exactly which links survive the
+ *  whole-row rework (Task 9): the row itself is no longer one of them. */
+function anchorHrefs(html: string): string[] {
+  return [...html.matchAll(/<a\b[^>]*>/g)]
+    .map((tag) => /href="([^"]+)"/.exec(tag[0])?.[1])
+    .filter((href): href is string => Boolean(href));
+}
+
 describe("CallsTable", () => {
-  it("renders a complete call: caller linked to the contact, row linked to the call", () => {
+  it("renders a complete call: row carries the caller as its aria-label, contact stays a real link, the call itself is no longer an anchor", () => {
     const html = render([ROW]);
     expect(html).toContain("Ana Reyes");
     expect(html).toContain("1:02");
     expect(html).toContain("Booked");
-    expect(html).toContain("/dashboard/accounts/acct1/calls/c1");
-    expect(html).toContain("/dashboard/accounts/acct1/contacts/ct1");
+    // Whole-row pattern (Task 9): the row is the click target via CallRow's
+    // client-side onClick/router.push, not a rendered anchor — so the row's
+    // own href never appears as markup. Its aria-label is what makes the
+    // click target announced to assistive tech instead.
+    expect(html).toContain('aria-label="Ana Reyes"');
+    expect(html).not.toContain("/dashboard/accounts/acct1/calls/c1");
+    // The contact link is the one interactive child that must survive as a
+    // real, keyboard-reachable anchor — StopPropagation only stops the click
+    // from bubbling to the row, it doesn't touch the underlying <a>.
+    expect(html).toContain('href="/dashboard/accounts/acct1/contacts/ct1"');
     expect(html).not.toContain("Older calls");
   });
 
@@ -84,6 +111,21 @@ describe("CallsTable", () => {
     // c4 — a contact with no name at all is still linked; the label falls
     // through to the number rather than to contactDisplayName's "(no name)".
     expect(html).toContain("/dashboard/accounts/acct1/contacts/ct2");
+    // Every row (c2..c5) carries its caller label as the row's own
+    // aria-label now, including the withheld-caller fallback text.
+    expect(html).toContain('aria-label="+19565061545"');
+    expect(html).toContain('aria-label="Unknown caller"');
+    // Exactly three anchors survive anywhere in this render: c4's and c5's
+    // (inherited from ROW) contact links, and the pager's "Older calls"
+    // link. None of the four calls' own detail hrefs render as anchors
+    // any more — the row (CallRow) is the click target via
+    // onClick/router.push, not markup, and the former when-cell + chevron
+    // links are gone with it.
+    expect(anchorHrefs(html)).toEqual([
+      "/dashboard/accounts/acct1/contacts/ct2",
+      "/dashboard/accounts/acct1/contacts/ct1",
+      "/dashboard/accounts/acct1/calls?before=x",
+    ]);
     // All five outcomes have a treatment; none renders blank.
     for (const label of ["Lead", "Message", "Abandoned", "Spam"]) expect(html).toContain(label);
     expect(html).toContain("Older calls");
