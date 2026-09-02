@@ -249,6 +249,16 @@ export async function removeTagFromContacts(
   if (error) throw new Error(error.message);
 }
 
+/** The account's tag vocabulary, for pickers. Alphabetical. */
+export async function listTags(
+  db: SupabaseClient, accountId: string,
+): Promise<{ id: string; name: string }[]> {
+  const { data, error } = await db.from("tags")
+    .select("id, name").eq("account_id", accountId).order("name");
+  if (error) throw new Error(`listTags failed: ${error.message}`);
+  return (data ?? []) as { id: string; name: string }[];
+}
+
 /**
  * Bulk delete with skip-blocked semantics. opportunities.contact_id and
  * conversations.contact_id are NO ACTION FKs, and bookings.contact_id is

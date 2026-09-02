@@ -5,7 +5,7 @@ export { emit, listRecentEvents, type ActorType, type EventRow } from "./events"
 export { createAccount, listAccounts, setClientAccess, getAccountByOrgId } from "./accounts";
 export { createContact, updateContact, listContacts, getContact,
          addTagToContact, removeTagFromContact, listContactTags, fillContactBlanks,
-         countContacts, deleteContacts, addTagToContacts, removeTagFromContacts,
+         countContacts, deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
          type ContactInput } from "./contacts";
 export { addNote, listNotes, addTask, listContactTasks, completeTask } from "./activities";
 export { listCustomFields, createCustomField, listCustomValues, upsertCustomValue,

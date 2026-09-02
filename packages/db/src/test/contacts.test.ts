@@ -3,7 +3,7 @@ import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
 import { createContact, updateContact, listContacts, getContact,
          addTagToContact, listContactTags, fillContactBlanks, countContacts,
-         deleteContacts, addTagToContacts, removeTagFromContacts } from "../contacts";
+         deleteContacts, addTagToContacts, removeTagFromContacts, listTags } from "../contacts";
 
 describe("contacts service", () => {
   it("creates, emits event, dedupes by email", () =>
@@ -243,5 +243,14 @@ describe("bulk contact ops", () => {
       await addTagToContact(db, accountId, c.id, "temp");
       const r = await deleteContacts(db, accountId, [c.id, "00000000-0000-0000-0000-000000000000"]);
       expect(r.deleted).toBe(1); // the bogus id is not counted, not an error
+    }));
+
+  it("listTags returns the account's tag vocabulary alphabetically, normalized", () =>
+    withTestAccount(async (db, accountId) => {
+      const c = await createContact(db, accountId, { firstName: "Z" }, "user_test");
+      await addTagToContact(db, accountId, c.id, "zeta");
+      await addTagToContact(db, accountId, c.id, "Alpha ");
+      const tags = await listTags(db, accountId);
+      expect(tags.map((t) => ({ name: t.name }))).toEqual([{ name: "alpha" }, { name: "zeta" }]);
     }));
 });

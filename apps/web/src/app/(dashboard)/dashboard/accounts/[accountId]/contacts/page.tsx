@@ -1,5 +1,5 @@
 import { Users } from "lucide-react";
-import { listContacts } from "@bis/db";
+import { listContacts, listTags } from "@bis/db";
 import { createContactAction } from "./actions";
 import { ContactsTable } from "./contacts-table";
 import { AddContactDialog } from "./add-contact-dialog";
@@ -21,7 +21,10 @@ export default async function ContactsPage({
   const { accountId } = await params;
   const { q } = await searchParams;
   const db = await dbForRequest();
-  const contacts = await listContacts(db, accountId, { search: q });
+  const [contacts, tags] = await Promise.all([
+    listContacts(db, accountId, { search: q }),
+    listTags(db, accountId),
+  ]);
   const base = `/dashboard/accounts/${accountId}/contacts`;
   const boundCreateContact = createContactAction.bind(null, accountId);
 
@@ -50,7 +53,7 @@ export default async function ContactsPage({
             body={q ? m["contacts.noMatches.body"] : m["contacts.empty.body"]}
           />
         ) : (
-          <ContactsTable rows={contacts} accountId={accountId} />
+          <ContactsTable rows={contacts} accountId={accountId} existingTags={tags} />
         )}
       </div>
     </>

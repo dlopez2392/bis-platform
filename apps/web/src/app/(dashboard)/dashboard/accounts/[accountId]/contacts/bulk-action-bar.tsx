@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -15,10 +15,11 @@ import { m } from "@/lib/messages";
 import { bulkAddTagAction, bulkRemoveTagAction, bulkDeleteContactsAction } from "./actions";
 
 export function BulkActionBar({
-  accountId, selectedIds, onDone,
+  accountId, selectedIds, existingTags, onDone,
 }: {
   accountId: string;
   selectedIds: string[];
+  existingTags: { id: string; name: string }[];
   onDone: () => void; // clear selection in the table
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -82,6 +83,16 @@ export function BulkActionBar({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
+          {existingTags.length > 0 && (
+            <>
+              {existingTags.map((t) => (
+                <DropdownMenuItem key={t.id} onSelect={() => void applyTag(t.name)}>
+                  {t.name}
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+            </>
+          )}
           <form
             className="flex items-center gap-1 p-1"
             onSubmit={(e) => {

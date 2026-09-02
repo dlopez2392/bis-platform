@@ -47,9 +47,11 @@ const PAGE_SIZE = 20;
 export function ContactsTable({
   rows,
   accountId,
+  existingTags,
 }: {
   rows: ContactRow[];
   accountId: string;
+  existingTags: { id: string; name: string }[];
 }) {
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "created", dir: -1 });
   const [page, setPage] = useState(0);
@@ -88,6 +90,7 @@ export function ContactsTable({
       <BulkActionBar
         accountId={accountId}
         selectedIds={[...selected]}
+        existingTags={existingTags}
         onDone={() => setSelected(new Set())}
       />
       <Table>
