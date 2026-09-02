@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 
 const PARAM = "peek";
 
@@ -25,10 +25,23 @@ function readPeek(): string | null {
  * IF this hook pushed, else (deep-linked arrival) strips the param in
  * place. useSyncExternalStore keeps the URL as the single source of truth
  * (no state duplication, SSR snapshot is null → hydration-safe).
+ *
+ * Call this hook ONCE per page (the table) and thread peekId/open/close to
+ * children via props — two live instances would keep divergent pushed
+ * bookkeeping.
  */
 export function usePeek() {
   const peekId = useSyncExternalStore(subscribe, readPeek, () => null);
   const pushed = useRef(false);
+
+  useEffect(() => {
+    // Any real history traversal invalidates "we pushed the current entry" —
+    // without this reset, close() after a native Back pops the user's own
+    // arrival entry instead of stripping the param in place.
+    const onPop = () => { pushed.current = false; };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   const open = useCallback((id: string) => {
     const url = new URL(window.location.href);
