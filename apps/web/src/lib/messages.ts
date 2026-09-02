@@ -35,7 +35,10 @@ export const m = {
   // convention (see setup.progress above) — the ✓ ships as plain text, not a
   // separate icon element, since idle carries no color-only signal to back up.
   "shell.presence.onCall": "Sofía · on a call",
-  "shell.presence.idle": "✓ {count} calls this week",
+  "shell.presence.idle": "✓ {count} calls handled this week",
+  // Singular pair: "✓ 1 calls" is a real state for exactly the young voice
+  // accounts that get demoed. "handled" restores DESIGN.md's own wording.
+  "shell.presence.idleOne": "✓ 1 call handled this week",
 
   "landing.title": "BIS Platform",
   "landing.tagline": "The all-in-one client platform by Bespoke Intelligent Solutions.",

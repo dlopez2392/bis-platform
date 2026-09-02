@@ -14,5 +14,9 @@
 export function accountInitial(name: string): string {
   const trimmed = name.trim();
   if (!trimmed) return "";
-  return Array.from(trimmed)[0]!.toLocaleUpperCase();
+  // .toUpperCase(), NOT .toLocaleUpperCase(): this runs in a client
+  // component that SSRs, and locale-sensitive casing differs between the
+  // server's locale and a visitor's (Turkish İ/I) — the repo's recorded
+  // SSR-hydration-mismatch class. Ordinal casing is identical everywhere.
+  return Array.from(trimmed)[0]!.toUpperCase();
 }

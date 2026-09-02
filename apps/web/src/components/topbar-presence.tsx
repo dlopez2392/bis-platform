@@ -81,7 +81,11 @@ export function TopbarPresence() {
             alone: dot + word). animate-pulse is killed by the global
             `prefers-reduced-motion` rule in globals.css (a `*` selector with
             `!important`, so it beats this utility's own animation without
-            needing a `motion-reduce:` override here). */}
+            needing a `motion-reduce:` override here). bg-primary is the
+            BRAND accent, so on a themed account the dot wears the tenant's
+            color, not BIS violet — deliberate (final review recorded it):
+            the whole shell re-tints for themed clients and a hardcoded
+            violet dot would be the one off-brand element. */}
         <span aria-hidden className="size-2 shrink-0 rounded-full bg-primary animate-pulse" />
         {m["shell.presence.onCall"]}
       </span>
@@ -90,7 +94,9 @@ export function TopbarPresence() {
 
   return (
     <span className="text-sm text-muted-foreground">
-      {m["shell.presence.idle"].replace("{count}", String(presence.weekCount))}
+      {presence.weekCount === 1
+        ? m["shell.presence.idleOne"]
+        : m["shell.presence.idle"].replace("{count}", String(presence.weekCount))}
     </span>
   );
 }
