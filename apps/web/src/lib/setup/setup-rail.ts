@@ -116,11 +116,50 @@ export function railKindOf(
   return isLockedStep(view.key, views) ? "locked" : kind;
 }
 
-/** Preselected step: the first one not yet done. When everything is done the
- *  wizard has nothing outstanding, so it opens on the last step (go-live)
- *  rather than an arbitrary one. */
+/**
+ * The one step the wizard calls "next": the first that is genuinely
+ * outstanding. The pane badges it "Next up", the rail rings it "Current", and
+ * `defaultStepKey` below opens on it.
+ *
+ * `!skipped && !unknown`, not `!done` alone, and both exclusions are
+ * deliberate:
+ *   - `skipped` — the operator has already answered this step ("send from the
+ *     platform address for now"). Pointing them back at it as their next task
+ *     re-asks a question they closed.
+ *   - `unknown` — a read that threw answered neither "done" nor "to do". The
+ *     action for that step is "reload", not "go do this", so naming it as the
+ *     next task sends the operator into a settings page to fix something that
+ *     may already be fine.
+ *
+ * `null` when nothing is outstanding — every step is done, skipped or
+ * unknown. That is a real state (a fully live account), not an error, which
+ * is why `defaultStepKey` handles it rather than this function inventing an
+ * answer.
+ *
+ * ONE predicate, used by both surfaces on purpose. These were two functions
+ * that disagreed: this one lived inline in setup-panel.tsx and `defaultStepKey`
+ * was `find(v => !v.done)`, so after skipping the email step an operator
+ * opening `/setup` with no `?step=` landed on "Email identity — Skipped"
+ * while the rail rang a different step "Current".
+ */
+export function nextStepKey(views: SetupStepView[]): SetupStepKey | null {
+  return views.find((v) => !v.done && !v.skipped && !v.unknown)?.key ?? null;
+}
+
+/**
+ * Preselected step: the one `nextStepKey` names.
+ *
+ * Its two fallbacks are for the case where nothing is outstanding at all.
+ * First the loosest reading of "unfinished" — any step not `done`, which
+ * catches a skipped or unknown step when there is nothing better to offer, so
+ * an account whose only remaining item is a failed read still opens on that
+ * read rather than somewhere unrelated. Then the last step (go-live), for the
+ * genuinely finished account, rather than an arbitrary one.
+ */
 export function defaultStepKey(views: SetupStepView[]): SetupStepKey {
-  return views.find((v) => !v.done)?.key ?? SETUP_STEP_KEYS[SETUP_STEP_KEYS.length - 1]!;
+  return nextStepKey(views)
+    ?? views.find((v) => !v.done)?.key
+    ?? SETUP_STEP_KEYS[SETUP_STEP_KEYS.length - 1]!;
 }
 
 /** `?step=` → a real key. Anything missing, unknown or malformed falls back

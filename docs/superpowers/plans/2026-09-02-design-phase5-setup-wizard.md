@@ -37,8 +37,9 @@
 - Consumes: `SetupStepView`, `StateKind`, `kindOf`, `GO_LIVE_PREREQ_KEYS` from `./setup-view`; `SetupStepKey` from `./setup-status`.
 - Produces:
   - `SETUP_STEP_KEYS: readonly SetupStepKey[]` — the canonical nine, in order.
-  - `isLockedStep(key, opts: { canTestCall: boolean; prereqsMet: boolean }): boolean`
-  - `lockedPrereqKeys(key, views: SetupStepView[]): SetupStepKey[]` — the unmet prerequisite keys to name in a locked pane (empty when not locked).
+  - `isLockedStep(key, views: SetupStepView[]): boolean` — locked exactly when `lockedPrereqKeys(key, views)` is non-empty.
+    > **Corrected after review — do not reintroduce the `opts` version.** This originally read `isLockedStep(key, opts: { canTestCall, prereqsMet })`. `canTestCall` comes from `canEnableTestCalls`, which answers "should the *Enable test calls* button be live?" — and goes FALSE once the number reaches `testing`, a state that already means the number answers calls. That let `isLockedStep` say LOCKED while `lockedPrereqKeys` returned `[]`, i.e. a locked `test_call` pane with an empty reason list under it. Deriving the lock from the prerequisites themselves makes that divergence impossible by construction.
+  - `lockedPrereqKeys(key, views: SetupStepView[]): SetupStepKey[]` — the unmet prerequisite keys to name in a locked pane (empty when not locked); the single source of truth the lock itself is derived from.
   - `defaultStepKey(views: SetupStepView[]): SetupStepKey` — first not-done step, else the last step.
   - `parseStepParam(raw: string | null | undefined, views: SetupStepView[]): SetupStepKey` — valid key → itself; missing/unknown/malformed → `defaultStepKey(views)`.
 
@@ -70,13 +71,16 @@ describe("SETUP_STEP_KEYS", () => {
 });
 
 describe("isLockedStep", () => {
-  it("locks ONLY test_call and go_live, and only when their gate is unmet", () => {
-    const unmet = { canTestCall: false, prereqsMet: false };
-    const met = { canTestCall: true, prereqsMet: true };
+  it("locks ONLY test_call and go_live, and only when their prerequisites are unmet", () => {
+    const unmet = views(); // nothing done
+    const metViews = views(SETUP_STEP_KEYS.reduce(
+      (a, k) => ({ ...a, [k]: { done: true } }),
+      {} as Record<SetupStepView["key"], Partial<SetupStepView>>,
+    ));
     expect(isLockedStep("test_call", unmet)).toBe(true);
     expect(isLockedStep("go_live", unmet)).toBe(true);
-    expect(isLockedStep("test_call", met)).toBe(false);
-    expect(isLockedStep("go_live", met)).toBe(false);
+    expect(isLockedStep("test_call", metViews)).toBe(false);
+    expect(isLockedStep("go_live", metViews)).toBe(false);
     for (const k of ["account", "branding", "hours", "voice_profile", "number", "email", "forwarding"] as const) {
       expect(isLockedStep(k, unmet)).toBe(false);
     }
@@ -146,19 +150,27 @@ export const SETUP_STEP_KEYS: readonly SetupStepKey[] = [
 ] as const;
 
 /**
- * Which steps can be LOCKED, and by what. Exactly two, and both gates
- * already exist in code — no step's lock is invented here:
- *  - test_call: `canEnableTestCalls(status, hasVoiceProfile)` (setup-view.ts)
- *  - go_live:   `goLivePrereqsMet` narrowed by unknown reads (buildSetupViews)
- * The other seven are independent and are NEVER locked; claiming otherwise
- * would invent a dependency the derivation does not have.
+ * Which steps can be LOCKED. Exactly two — `test_call` and `go_live` — the
+ * other seven are independent and are NEVER locked; claiming otherwise would
+ * invent a dependency the derivation does not have.
+ *
+ * A step is locked exactly when `lockedPrereqKeys` names at least one unmet
+ * prerequisite for it — the SAME list the pane renders under the lock, so the
+ * two can never disagree.
+ *
+ * ⚠️ REJECTED IN REVIEW, recorded so it is not reintroduced: this function was
+ * first specified as `isLockedStep(key, { canTestCall, prereqsMet })`, taking
+ * its gates from the caller. `canTestCall` comes from `canEnableTestCalls`
+ * (setup-view.ts), which answers "should the *Enable test calls* button be
+ * live?" — a narrower question that goes FALSE once the number's status
+ * reaches `testing`, precisely because a number already in testing mode does
+ * not need enabling. But `testing` is in `LIVE_NUMBER_STATUSES`, so at that
+ * point `number` and `voice_profile` both read `done: true` and
+ * `lockedPrereqKeys` is empty: the opts version rendered `test_call` LOCKED
+ * with no reason to show under it.
  */
-export function isLockedStep(
-  key: SetupStepKey, opts: { canTestCall: boolean; prereqsMet: boolean },
-): boolean {
-  if (key === "test_call") return !opts.canTestCall;
-  if (key === "go_live") return !opts.prereqsMet;
-  return false;
+export function isLockedStep(key: SetupStepKey, views: SetupStepView[]): boolean {
+  return lockedPrereqKeys(key, views).length > 0;
 }
 
 /**

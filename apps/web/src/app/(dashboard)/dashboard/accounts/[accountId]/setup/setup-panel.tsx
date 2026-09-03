@@ -2,6 +2,7 @@ import { Fragment } from "react";
 import { Rocket } from "lucide-react";
 import type { SetupStepKey } from "@/lib/setup/setup-status";
 import { GO_LIVE_PREREQ_KEYS, kindOf, type SetupStepView, type AssignedNumber } from "@/lib/setup/setup-view";
+import { nextStepKey } from "@/lib/setup/setup-rail";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import {
@@ -135,12 +136,14 @@ export function SetupPanel({
   const total = steps.filter((s) => !s.skipped).length;
   const doneCount = steps.filter((s) => s.done).length;
 
-  // The one step the pane badges "Next up" and the rail rings "Current".
-  // Deliberately skips `unknown` steps: the action for those is "reload",
-  // not "go do this", so pointing the operator at one as their next task
-  // would send them into a settings page to fix something that may already
-  // be fine.
-  const nextKey = steps.find((s) => !s.done && !s.skipped && !s.unknown)?.key ?? null;
+  // The one step the pane badges "Next up" and the rail rings "Current" —
+  // and, through `defaultStepKey`, the one the wizard OPENS on when no
+  // `?step=` is given. That last part is why this predicate now lives in
+  // lib/setup/setup-rail.ts instead of inline here: the two used to be
+  // separate expressions that disagreed about skipped and unknown steps, so
+  // the wizard could open on "Email identity — Skipped" while the rail rang
+  // Business hours as Current.
+  const nextKey = nextStepKey(steps);
 
   // `!s.done` alone is sufficient TODAY, and `|| s.unknown` is the insurance.
   // The reason it is sufficient is narrow: each of the four

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  SETUP_STEP_KEYS, isLockedStep, lockedPrereqKeys, railKindOf, defaultStepKey, parseStepParam,
+  SETUP_STEP_KEYS, isLockedStep, lockedPrereqKeys, railKindOf,
+  nextStepKey, defaultStepKey, parseStepParam,
 } from "./setup-rail";
 import type { SetupStepView } from "./setup-view";
 
@@ -123,11 +124,83 @@ describe("railKindOf", () => {
   });
 });
 
+describe("nextStepKey", () => {
+  it("is the first step that is not done", () => {
+    expect(nextStepKey(views({ account: { done: true }, branding: { done: true } })))
+      .toBe("hours");
+  });
+
+  it("steps over a SKIPPED step — the operator already answered it", () => {
+    const v = views({
+      account: { done: true }, branding: { done: true }, hours: { done: true },
+      voice_profile: { done: true }, number: { done: true },
+      email: { skipped: true },
+    });
+    expect(nextStepKey(v)).toBe("forwarding");
+  });
+
+  it("steps over an UNKNOWN step — 'reload' is not a task to point at", () => {
+    const v = views({
+      account: { done: true }, branding: { done: true },
+      hours: { unknown: true },
+    });
+    expect(nextStepKey(v)).toBe("voice_profile");
+  });
+
+  it("is null when every step is done, skipped or unknown", () => {
+    const all = SETUP_STEP_KEYS.reduce(
+      (a, k) => ({ ...a, [k]: { done: true } }),
+      {} as Record<SetupStepView["key"], Partial<SetupStepView>>,
+    );
+    expect(nextStepKey(views({ ...all, email: { skipped: true } }))).toBeNull();
+  });
+});
+
 describe("defaultStepKey", () => {
   it("is the first not-done step", () => {
     expect(defaultStepKey(views({ account: { done: true }, branding: { done: true } })))
       .toBe("hours");
   });
+
+  /**
+   * THE DIVERGENCE THIS PAIR EXISTS TO PREVENT. `defaultStepKey` used to be
+   * `find(v => !v.done)` while the "Current" ring came from a separate
+   * expression that also excluded skipped and unknown steps. After skipping
+   * the email step, opening /setup with no `?step=` therefore landed on
+   * "Email identity — Skipped" while the rail rang Call forwarding as
+   * Current. One predicate now, asserted as agreeing rather than assumed to.
+   */
+  it("agrees with nextStepKey over a skipped step", () => {
+    const v = views({
+      account: { done: true }, branding: { done: true }, hours: { done: true },
+      voice_profile: { done: true }, number: { done: true },
+      email: { skipped: true },
+    });
+    expect(defaultStepKey(v)).toBe("forwarding");
+    expect(defaultStepKey(v)).toBe(nextStepKey(v));
+  });
+
+  it("agrees with nextStepKey over an unknown step", () => {
+    const v = views({
+      account: { done: true }, branding: { done: true }, hours: { unknown: true },
+    });
+    expect(defaultStepKey(v)).toBe("voice_profile");
+    expect(defaultStepKey(v)).toBe(nextStepKey(v));
+  });
+
+  /** Nothing outstanding, but one step is not `done` either — the loose
+   *  fallback offers it rather than jumping to go-live over an unresolved
+   *  read. */
+  it("falls back to a not-done step when nextStepKey has nothing to offer", () => {
+    const all = SETUP_STEP_KEYS.reduce(
+      (a, k) => ({ ...a, [k]: { done: true } }),
+      {} as Record<SetupStepView["key"], Partial<SetupStepView>>,
+    );
+    const v = views({ ...all, forwarding: { unknown: true } });
+    expect(nextStepKey(v)).toBeNull();
+    expect(defaultStepKey(v)).toBe("forwarding");
+  });
+
   it("falls back to the last step when everything is done", () => {
     const all = SETUP_STEP_KEYS.reduce((a, k) => ({ ...a, [k]: { done: true } }), {});
     expect(defaultStepKey(views(all))).toBe("go_live");

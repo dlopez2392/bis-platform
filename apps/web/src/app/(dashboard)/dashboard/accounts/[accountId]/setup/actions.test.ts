@@ -41,30 +41,25 @@ import type { ReadKey } from "@/lib/setup/setup-view";
 const dbMocks = vi.hoisted(() => ({
   setChecklistItem: vi.fn(),
   upsertVoiceProfile: vi.fn(), setPhoneNumberStatus: vi.fn(),
-  // Backs renameAccountAction's `serviceDb().from("accounts").update(...)
-  // .eq(...)` chain — spied the same way dbForRequestMocks.accountsUpdate
-  // used to be, before this task moved that write onto serviceDb() (see
-  // renameAccountAction's own doc comment for why: accounts.name has no
-  // `authenticated` UPDATE grant since migration 0013, so the dbForRequest
-  // write failed on every real call).
-  accountsUpdate: vi.fn(),
+  // renameAccountAction no longer writes `accounts` from the route. The final
+  // review moved it onto `renameAccount` (packages/db/src/accounts.ts) —
+  // where every other account-level write already lives — so what this file
+  // spies is a `@bis/db` function like the other three, not a hand-rolled
+  // `.from().update().eq()` chain. The two things that move bought (a
+  // `.select("id")` that turns a zero-row update into a failure, and the
+  // `account.renamed` event) are BOTH invisible from here by construction:
+  // they are the helper's own behaviour, and the helper is mocked. Their
+  // proof is packages/db/src/test/accounts.test.ts, against real Postgres.
+  renameAccount: vi.fn(),
 }));
 
 /** The one object `serviceDb()` resolves to everywhere in this file. Kept as
  *  a single shared reference — rather than a fresh `{}` per call — so the
- *  three actions that pass it straight through to a `@bis/db` function
- *  (setChecklistItem, upsertVoiceProfile, setPhoneNumberStatus) can assert
- *  "the same db instance flowed through" against this reference, and
- *  renameAccountAction's own `.from("accounts")` chain has something to
- *  hang off. A bare `{}` could not do both once one action needed a real
- *  `.from()` method on it. */
-const serviceDbInstance = vi.hoisted(() => ({
-  from: (table: string) => ({
-    update: (payload: Record<string, unknown>) => ({
-      eq: (col: string, val: unknown) => dbMocks.accountsUpdate(table, payload, col, val),
-    }),
-  }),
-}));
+ *  four actions that pass it straight through to a `@bis/db` function
+ *  (setChecklistItem, upsertVoiceProfile, setPhoneNumberStatus,
+ *  renameAccount) can each assert "the same db instance flowed through"
+ *  against this reference. */
+const serviceDbInstance = vi.hoisted(() => ({ __serviceDb: true }));
 
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => serviceDbInstance,
@@ -151,9 +146,12 @@ beforeEach(() => {
   setupInputsMocks.gatherSetupInputs.mockResolvedValue(readyGathered());
   dbMocks.upsertVoiceProfile.mockResolvedValue({});
   dbMocks.setPhoneNumberStatus.mockResolvedValue(undefined);
-  // Already reset by the allMocks() loop above (accountsUpdate lives in
-  // dbMocks); only the default resolved value needs setting here.
-  dbMocks.accountsUpdate.mockResolvedValue({ error: null });
+  // Already reset by the allMocks() loop above (renameAccount lives in
+  // dbMocks); only the default resolved value needs setting here. `undefined`,
+  // not `{ error: null }` — the real helper returns `Promise<void>` and
+  // signals failure by THROWING, so a resolved value here would be a shape
+  // the action never inspects.
+  dbMocks.renameAccount.mockResolvedValue(undefined);
   guardFixture.isAgency = true;
 });
 
@@ -339,11 +337,13 @@ describe("goLiveAction", () => {
 
 /**
  * The account's INTERNAL label (`accounts.name`) — the agency's own note
- * about this client, never shown to the client themselves (see P3: a client
- * always sees their BRAND name; `accounts.name` is the agency-only fallback).
- * Agency-only for that reason, and empty is REJECTED rather than cleared —
- * unlike an inline contact field, "" has no fallback in the client switcher,
- * the dashboard greeting, or the accounts list.
+ * about this client. Not the client's public-facing name (branding owns
+ * that), but not hidden from them either: the sidebar and the dashboard
+ * greeting both read `brandName ?? account.name`, so an account with no
+ * brand name set yet shows this label to the client. Agency-only to write,
+ * and empty is REJECTED rather than cleared — unlike an inline contact
+ * field, "" has no fallback in the client switcher, the dashboard greeting,
+ * or the accounts list.
  *
  * 🔴 These unit tests are BLIND to column grants. `serviceDb()` is mocked
  * here to a plain in-memory object — it cannot fail the way the real
@@ -352,40 +352,48 @@ describe("goLiveAction", () => {
  * either, the way `dbForRequest()`'s `authenticated` role could and did fail
  * ("permission denied for column \"name\"" — see renameAccountAction's own
  * doc comment and migration 0013). A mock more permissive than the real
- * client proves nothing about grants; it only proves the action calls the
- * chain it's supposed to call, with the payload it's supposed to send. The
- * real proof that this write is actually permitted against the live
- * database is the e2e rename test (Task 5), which runs against Postgres
- * itself. This is a standing hard lesson in this repo: serviceDb-backed
- * fixtures have shipped two defects behind green suites before this one.
+ * client proves nothing about grants; it only proves the action calls what
+ * it's supposed to call, with the arguments it's supposed to send. The real
+ * proof that this write is actually permitted against the live database is
+ * the e2e rename test (Task 5), which runs against Postgres itself. This is a
+ * standing hard lesson in this repo: serviceDb-backed fixtures have shipped
+ * two defects behind green suites before this one.
  */
 describe("renameAccountAction", () => {
   it("a non-agency caller is rejected before any db call", async () => {
     guardFixture.isAgency = false;
     await expect(renameAccountAction("acct1", "Valid Name")).rejects.toThrow();
-    expect(dbMocks.accountsUpdate).not.toHaveBeenCalled();
+    expect(dbMocks.renameAccount).not.toHaveBeenCalled();
   });
 
   it("rejects an empty name WITHOUT writing", async () => {
     const r = await renameAccountAction("acct1", "   ");
     expect(r).toEqual({ ok: false, error: expect.any(String) });
     // The write must never even be attempted — not just that `ok` is false.
-    expect(dbMocks.accountsUpdate).not.toHaveBeenCalled();
+    expect(dbMocks.renameAccount).not.toHaveBeenCalled();
   });
 
-  it("trims and writes a real name", async () => {
+  it("trims the name and hands the guard's userId to the db helper as the actor", async () => {
     const r = await renameAccountAction("acct1", "  Rio Roofing  ");
     expect(r).toEqual({ ok: true });
-    expect(dbMocks.accountsUpdate).toHaveBeenCalledWith(
-      "accounts", { name: "Rio Roofing" }, "id", "acct1",
+    // The actor argument is the point of this assertion as much as the trim:
+    // the previous raw-route write DISCARDED the userId the guard returns,
+    // which is why a rename left no trace in `events` at all.
+    expect(dbMocks.renameAccount).toHaveBeenCalledWith(
+      serviceDbInstance, "acct1", "Rio Roofing", "user_1",
     );
   });
 
   it("returns ok:false instead of throwing when the write fails", async () => {
+    // Covers BOTH failure shapes the helper has, because it has exactly one
+    // channel for them: a PostgREST error and a zero-row update both leave
+    // `renameAccount` throwing (packages/db/src/accounts.ts). The zero-row
+    // case is the one that used to report `{ok:true}` from here — a "saved"
+    // toast over a write that touched nothing.
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    dbMocks.accountsUpdate.mockResolvedValue({ error: { message: "boom" } });
+    dbMocks.renameAccount.mockRejectedValue(new Error("renameAccount: no account acct1"));
     const r = await renameAccountAction("acct1", "Valid Name");
-    expect(r.ok).toBe(false);
+    expect(r).toEqual({ ok: false, error: m["setup.rename.failed"] });
     errSpy.mockRestore();
   });
 });

@@ -10,7 +10,9 @@ import {
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { STEP_COPY } from "./steps/step-shared";
-import { SetupRail, STATE_LABEL, STATE_TONE } from "./setup-rail";
+import {
+  SetupRail, STATE_LABEL, STATE_TONE, SETUP_PANE_ID, SETUP_PANE_HEADING_ID,
+} from "./setup-rail";
 
 const PARAM = "step";
 
@@ -126,14 +128,26 @@ export function SetupShell({
         onSelect={select}
       />
 
-      <div className="min-w-0 rounded-lg border border-border bg-card p-5">
+      {/* `role="region"` + `aria-labelledby`, not a bare `id`: the rail's
+          `aria-controls` needs a target, and a target worth jumping to has to
+          be findable and named. The heading below supplies the name, so the
+          region announces as "Business hours, region" — the same words the
+          operator just clicked. */}
+      <div
+        id={SETUP_PANE_ID}
+        role="region"
+        aria-labelledby={SETUP_PANE_HEADING_ID}
+        className="min-w-0 rounded-lg border border-border bg-card p-5"
+      >
         <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="text-[11px] font-medium tracking-widest text-muted-foreground tabular-nums">
                 {String(index + 1).padStart(2, "0")}
               </span>
-              <h2 className="text-base font-semibold text-card-foreground">{copy.title}</h2>
+              <h2 id={SETUP_PANE_HEADING_ID} className="text-base font-semibold text-card-foreground">
+                {copy.title}
+              </h2>
               {kind === "next" ? (
                 <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-primary uppercase">
                   {m["setup.nextUp"]}
@@ -167,15 +181,28 @@ export function SetupShell({
           >
             <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
             <div className="min-w-0 space-y-1.5">
-              {/* go_live reuses the sentence setup-panel.tsx already computed
-                  once for the whole page rather than deriving a second one
-                  that happens to name the same steps; `test_call` has no such
-                  precomputed sentence, so its lead-in comes from
-                  `setup.locked.blockedBy` wrapped around the buttons below. */}
-              {selected === "go_live" && blockedReason ? <p>{blockedReason}</p> : null}
+              {/* ONE presentation for both locked panes: the lead-in sentence,
+                  then each blocker as a button that selects it.
+
+                  `go_live` used to ALSO print `blockedReason` — the same
+                  sentence with the same step titles comma-joined inside it —
+                  immediately above the buttons, so an operator on the pane
+                  they see most read every blocker twice and it looked like a
+                  rendering bug. `test_call` never did. The duplication was the
+                  odd one out, not the lead-in, so the lead-in is what both
+                  panes keep: it is the half that says what to DO, and the
+                  buttons are strictly more useful than the comma list they
+                  duplicated (naming a blocker and then making the operator
+                  hunt for it in the rail is half an answer).
+
+                  `blockedReason` is still the RAIL's go_live hint
+                  (setup-rail.tsx's `lockedHint`), where a compact sentence
+                  under the entry is the right shape and there are no buttons
+                  to carry the names — which is why it is still a prop here
+                  and still passed down. */}
               {blockerKeys.length > 0 ? (
                 <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
-                  {selected === "go_live" ? null : <span>{blockedLead}</span>}
+                  <span>{blockedLead}</span>
                   {blockerKeys.map((key) => (
                     <button
                       key={key}
@@ -190,7 +217,7 @@ export function SetupShell({
                       {STEP_COPY[key].title}
                     </button>
                   ))}
-                  {selected !== "go_live" && blockedTail ? <span>{blockedTail}</span> : null}
+                  {blockedTail ? <span>{blockedTail}</span> : null}
                 </div>
               ) : null}
             </div>

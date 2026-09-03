@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { serviceDb, setChecklistItem, upsertVoiceProfile, setPhoneNumberStatus } from "@bis/db";
+import { serviceDb, setChecklistItem, upsertVoiceProfile, setPhoneNumberStatus, renameAccount } from "@bis/db";
 import { requireAccountAccess, requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { deriveSetupStatus, goLivePrereqsMet, SETUP_TICK_KEYS } from "@/lib/setup/setup-status";
 import { gatherSetupInputs } from "@/lib/setup/setup-inputs";
@@ -176,17 +176,31 @@ export async function goLiveAction(accountId: string): Promise<ActionResult> {
 /**
  * Rename the account's INTERNAL label (`accounts.name`) — the agency's own
  * note about this client, e.g. "Rio Roofing — trial". Not the client's
- * public-facing name: branding owns that, and a client sees their brand name
- * everywhere this label would otherwise leak (dashboard greeting, sidebar
- * identity — see P3).
+ * public-facing name: branding owns that, and a client with a brand name set
+ * sees THAT everywhere this label would otherwise appear (dashboard greeting,
+ * sidebar identity — see P3). It is NOT invisible to the client, though: both
+ * of those surfaces are `brandName ?? account.name`, and a freshly created
+ * account has no `brand_name` at all (`createClientAccount` never writes one),
+ * so until Branding is filled in this label IS what the client reads. That is
+ * the condition `m["setup.rename.help"]` now states out loud rather than
+ * promising "they never see it".
  *
  * Empty is REJECTED rather than allowed to clear, unlike an inline contact
  * field: an account with no name breaks the client switcher, the dashboard
  * greeting and the accounts list, none of which have a fallback for "".
  *
+ * The write goes through `renameAccount` (packages/db/src/accounts.ts) rather
+ * than a raw `.update()` from this route, which is what every other
+ * account-level write in this codebase already does. Two things came with the
+ * move, both of which the raw write got wrong: the helper `.select("id")`s so
+ * a zero-row update is a FAILURE rather than a silent "saved" toast over
+ * nothing, and it emits `account.renamed` with the actor — `accounts` has no
+ * `updated_at`, so without that event a rename left no trace anywhere. The
+ * `userId` the guard already returns is what carries the actor; it used to be
+ * discarded.
+ *
  * `accounts` has no `updated_at` column (packages/db/supabase/migrations/
- * 0001_tenancy.sql — only `created_at`), so the write below does not try to
- * set one.
+ * 0001_tenancy.sql — only `created_at`), so the write does not try to set one.
  *
  * serviceDb(), not dbForRequest() — deliberately, and NOT the settings/
  * actions.ts pattern of "column has no grant, so escalate": migration 0013
@@ -207,13 +221,11 @@ export async function goLiveAction(accountId: string): Promise<ActionResult> {
 export async function renameAccountAction(
   accountId: string, value: string,
 ): Promise<ActionResult> {
-  await requireAgencyOnlyAccountAccess(accountId);
+  const { userId } = await requireAgencyOnlyAccountAccess(accountId);
   const name = value.trim();
   if (!name) return { ok: false, error: m["setup.rename.empty"] };
   try {
-    const db = serviceDb();
-    const { error } = await db.from("accounts").update({ name }).eq("id", accountId);
-    if (error) throw new Error(error.message);
+    await renameAccount(serviceDb(), accountId, name, userId);
   } catch (e) {
     console.error(`renameAccountAction: write failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["setup.rename.failed"] };

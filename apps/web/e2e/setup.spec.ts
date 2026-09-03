@@ -120,10 +120,18 @@ const STATES = [
 ] as const;
 type StepState = (typeof STATES)[number];
 
-/** The sentence both a locked pane and its rail entry print. Two message keys
- *  (`setup.goLive.blocked` and `setup.locked.blockedBy`) worded identically on
- *  purpose — see lib/messages.ts. Written out here so a copy change has to be
- *  a deliberate edit to this spec. */
+/**
+ * The lead-in every locked surface prints, and the full comma-joined sentence
+ * only the RAIL prints. Two message keys (`setup.goLive.blocked` and
+ * `setup.locked.blockedBy`) worded identically on purpose — see
+ * lib/messages.ts. Written out here so a copy change has to be a deliberate
+ * edit to this spec.
+ *
+ * The split matters since the final review unified the two locked PANES on
+ * one presentation: a pane says the lead-in once and then names its blockers
+ * as buttons, so `GO_LIVE_BLOCKED`'s comma list survives only in the rail's
+ * compact hint, where there are no buttons to carry the names.
+ */
 const BLOCKED_LEAD = "Finish these steps first:";
 const GO_LIVE_BLOCKED =
   `${BLOCKED_LEAD} Business hours, Voice profile, Phone number, Test call`;
@@ -138,7 +146,18 @@ const RAIL_LABEL = "Setup steps";
 const rail = (page: Page) => page.getByRole("list", { name: RAIL_LABEL });
 const railButtons = (page: Page) => rail(page).getByRole("button");
 const railEntry = (page: Page, key: StepKey) => railButtons(page).nth(stepIndex(key));
-const currentEntry = (page: Page) => rail(page).locator("button[aria-current='step']");
+/**
+ * The SELECTED entry — `aria-current="true"`, not `"step"`.
+ *
+ * The two are different claims and this rail makes both. `aria-current="step"`
+ * means "the current step in a process", which on this rail is `nextKey` — the
+ * entry wearing the visible word "Current". Selection is wherever the operator
+ * clicked, and can be any of the nine. The rail used to put `"step"` on the
+ * selected entry, so a screen reader announced "Go live, current step" while
+ * the Current chip sat on Business hours; `"true"` is the value that means
+ * "the selected one in this set" and nothing more.
+ */
+const currentEntry = (page: Page) => rail(page).locator("button[aria-current='true']");
 
 /**
  * The detail pane, as the rail's next sibling (setup-shell.tsx renders
@@ -312,7 +331,7 @@ test.describe("the setup wizard, as the agency", () => {
    *
    * The structural assertions ride along in the same page load: the rail is
    * exactly nine buttons in the canonical order, exactly one of them is
-   * `aria-current="step"`, and exactly ONE `<h2>` exists in the document.
+   * `aria-current="true"`, and exactly ONE `<h2>` exists in the document.
    */
   test("the page renders, and the rail is nine steps with exactly one current", async ({ page }) => {
     await page.goto(setupUrl());
@@ -340,7 +359,7 @@ test.describe("the setup wizard, as the agency", () => {
     // (DESIGN.md: "First incomplete step pre-selected").
     await expectRailState(railEntry(page, "account"), "Done");
     await expectRailState(railEntry(page, "branding"), "Done");
-    await expect(railEntry(page, "hours")).toHaveAttribute("aria-current", "step");
+    await expect(railEntry(page, "hours")).toHaveAttribute("aria-current", "true");
 
     // ONE h2 in the whole document, not merely one in the pane: that is the
     // difference between "the other eight details are absent" and "the other
@@ -402,7 +421,7 @@ test.describe("the setup wizard, as the agency", () => {
 
     // Selection moved as one: the newly selected entry owns aria-current and
     // nothing else does.
-    await expect(railEntry(page, "email")).toHaveAttribute("aria-current", "step");
+    await expect(railEntry(page, "email")).toHaveAttribute("aria-current", "true");
     await expect(currentEntry(page)).toHaveCount(1);
 
     // The pane really swapped its CONTENT, not just its heading — the email
@@ -421,7 +440,7 @@ test.describe("the setup wizard, as the agency", () => {
     await page.goBack();
     await expect(page).toHaveURL(/[?&]step=email(&|$)/);
     await expect(paneHeading(page)).toHaveText(stepTitle("email"));
-    await expect(railEntry(page, "email")).toHaveAttribute("aria-current", "step");
+    await expect(railEntry(page, "email")).toHaveAttribute("aria-current", "true");
     expect(await readWindowMark(page)).toBe(SENTINEL);
   });
 
@@ -435,7 +454,7 @@ test.describe("the setup wizard, as the agency", () => {
   test("a cold load honours ?step=, and falls back rather than rendering nothing", async ({ page }) => {
     await page.goto(`${setupUrl()}?step=go_live`);
     await expect(paneHeading(page)).toHaveText(stepTitle("go_live"));
-    await expect(railEntry(page, "go_live")).toHaveAttribute("aria-current", "step");
+    await expect(railEntry(page, "go_live")).toHaveAttribute("aria-current", "true");
     await expect(currentEntry(page)).toHaveCount(1);
 
     // Garbage in the param. The URL is NOT rewritten (parseStepParam resolves
@@ -443,7 +462,7 @@ test.describe("the setup wizard, as the agency", () => {
     // where the browser ended up.
     await page.goto(`${setupUrl()}?step=nonsense`);
     await expect(paneHeading(page)).toHaveText(stepTitle("hours"));
-    await expect(railEntry(page, "hours")).toHaveAttribute("aria-current", "step");
+    await expect(railEntry(page, "hours")).toHaveAttribute("aria-current", "true");
     // NON-EMPTY, stated as content rather than as "something is there": the
     // failure mode being guarded is a pane frame with no body in it, which a
     // heading-only assertion would happily accept.
@@ -476,12 +495,12 @@ test.describe("the setup wizard, as the agency", () => {
     await expect(railEntry(page, "branding")).toBeFocused();
     // Focus moved; selection did NOT — the two are separate, and a rail that
     // selected on focus would make arrow-key browsing impossible.
-    await expect(railEntry(page, "hours")).toHaveAttribute("aria-current", "step");
+    await expect(railEntry(page, "hours")).toHaveAttribute("aria-current", "true");
 
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/[?&]step=branding(&|$)/);
     await expect(paneHeading(page)).toHaveText(stepTitle("branding"));
-    await expect(railEntry(page, "branding")).toHaveAttribute("aria-current", "step");
+    await expect(railEntry(page, "branding")).toHaveAttribute("aria-current", "true");
   });
 
   /**
@@ -544,7 +563,7 @@ test.describe("the setup wizard, as the agency", () => {
     await blockers.first().click();
     await expect(page).toHaveURL(/[?&]step=voice_profile(&|$)/);
     await expect(paneHeading(page)).toHaveText(stepTitle("voice_profile"));
-    await expect(railEntry(page, "voice_profile")).toHaveAttribute("aria-current", "step");
+    await expect(railEntry(page, "voice_profile")).toHaveAttribute("aria-current", "true");
     // Same client-side swap as a rail click — the blocker buttons call the
     // same `select`, and this is what proves it rather than assuming it.
     expect(await readWindowMark(page)).toBe(SENTINEL);
@@ -553,28 +572,35 @@ test.describe("the setup wizard, as the agency", () => {
     await railEntry(page, "go_live").click();
     await expectRailState(railEntry(page, "go_live"), "Locked");
     await expect(paneHeading(page)).toHaveText(stepTitle("go_live"));
-    await expect(pane(page)).toContainText(GO_LIVE_BLOCKED);
+    await expect(pane(page)).toContainText(BLOCKED_LEAD);
 
     // Visible prose, not a `title` tooltip: a disabled button takes no
     // pointer events in several browsers and is out of the tab order, so an
     // operator staring at a dead button would have nothing to read.
     await expect(pane(page).getByRole("button", { name: "Go live", exact: true })).toBeDisabled();
 
-    // THE COUNTS. go_live's pane deliberately prints the blocked SENTENCE
-    // once (reusing the string setup-panel.tsx already computed) and then
-    // repeats each blocker as a button — so every blocker's title appears
-    // TWICE on this pane and the lead-in appears ONCE. That duplication is a
-    // decision (setup-shell.tsx suppresses the `blockedLead` span for
-    // go_live precisely so it isn't three times); pinning the numbers is what
-    // keeps it a decision rather than drift nobody notices.
+    // THE COUNTS, RETARGETED — not loosened.
+    //
+    // Both locked panes now render ONE presentation: the lead-in once, then
+    // each blocker as a button. go_live used to ALSO print `blockedReason` —
+    // the same lead-in with the same titles comma-joined inside it — above
+    // those buttons, so this file pinned every blocker title at TWO
+    // occurrences to keep that duplication a deliberate decision. The final
+    // review's verdict was that it read as a rendering bug on the pane an
+    // operator sees most, so the duplicate sentence is gone and the number is
+    // ONE. Still an exact count, and still the same discriminating assertion:
+    // a reintroduced second copy fails it just as a missing lead-in does.
     expect(await countText(pane(page), BLOCKED_LEAD)).toBe(1);
-    expect(await countText(pane(page), stepTitle("hours"))).toBe(2);
+    expect(await countText(pane(page), stepTitle("hours"))).toBe(1);
     await expect(pane(page).getByRole("note").getByRole("button")).toHaveText([
       stepTitle("hours"), stepTitle("voice_profile"), stepTitle("number"), stepTitle("test_call"),
     ]);
-    // And the rail entry carries the same sentence exactly once — one
-    // derivation feeding two surfaces (`lockedHint`), not two strings that
-    // happen to agree today.
+    // The comma-joined sentence did not disappear from the product — it is
+    // the RAIL's go_live hint, which has no buttons to carry the names and so
+    // still needs the prose form. Asserted here, on the entry, because this
+    // is now the only surface that renders it: one derivation
+    // (`lockedHint` ← `blockedReason`), exactly once.
+    await expect(railEntry(page, "go_live")).toContainText(GO_LIVE_BLOCKED);
     expect(await countText(railEntry(page, "go_live"), BLOCKED_LEAD)).toBe(1);
   });
 

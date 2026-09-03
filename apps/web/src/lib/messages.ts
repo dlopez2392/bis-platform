@@ -878,8 +878,15 @@ export const m = {
   "setup.rename.empty": "A company needs a name — this one can't be blank.",
   "setup.rename.failed": "Couldn't rename this company. Try again.",
   "setup.rename.label": "Company name",
+  // NOT "they never see it" — that was false in exactly the window this
+  // wizard runs in. A new account has no brand name yet (createClientAccount
+  // never writes one, which is why Branding is step 2), and until one is set
+  // the client reads THIS label in their sidebar and in the dashboard
+  // greeting (app-sidebar.tsx, dashboard/page.tsx: `brandName ?? name`). The
+  // copy has to name that condition, or it invites an operator to type
+  // "Rio Roofing — trial, chasing invoice" into a field the client can read.
   "setup.rename.help":
-    "Your own label for this client — they never see it. The name their customers see comes from Branding.",
+    "Your own label for this client. They see it when they sign in until you set a brand name in Branding — after that, they see the brand name.",
 } as const;
 
 export type MessageKey = keyof typeof m;
