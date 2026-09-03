@@ -254,6 +254,11 @@ export function BookingPage({
       // inside an iframe IS the iframe's own height, so posting it back would
       // feed the frame's height into itself and grow without bound.
       const bottom = node.getBoundingClientRect().bottom + window.scrollY;
+      // A zero-height measurement is never a real answer — it means layout has
+      // not happened yet. Posting it would collapse the host's frame to 8px,
+      // which is far worse than the frame simply staying at its default for
+      // one more tick until the observer fires with a real number.
+      if (bottom <= 0) return;
       window.parent.postMessage({ type: "bis-form-height", height: bottom + 8 }, "*");
     };
     post();
@@ -263,7 +268,10 @@ export function BookingPage({
     // The brand row too: its logo has no intrinsic dimensions, so it resizes
     // when the image finally loads — after this effect first ran — and that
     // changes where this column's bottom edge sits.
-    const brand = document.querySelector(".bis-brand");
+    // Scoped to this column's own parent rather than the whole document: the
+    // brand row is its immediate sibling, and a document-wide lookup would
+    // happily bind to some other subtree's copy.
+    const brand = node.parentElement?.querySelector(".bis-brand");
     if (brand) observer.observe(brand);
     return () => observer.disconnect();
   }, [step]);

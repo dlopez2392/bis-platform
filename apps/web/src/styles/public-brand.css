@@ -26,16 +26,20 @@
   max-width: var(--public-measure, 34rem);
   margin-inline: auto;
 }
-/* 40px of CONTENT height — these routes deliberately load no globals.css and
-   so no border-box reset, which is what makes this the logo's full cap rather
-   than the cap minus the padding above.
+/* Reserve the logo's height before it loads, so the row does not grow when the
+   image lands and shove the week strip out from under a finger.
 
-   Scoped to the BOOKING FLOW on purpose. /b previously reserved a fixed 28x28
-   box and lost it converging on the form's rules, so this restores something
-   it had. /f never reserved anything, and applying it there would GROW its
-   brand row for any logo under 40px tall — a visual change to a live surface
-   this phase promised not to move. /f has the same latent shift and deserves
-   the same fix; it is simply not this phase's to make. */
+   40px of CONTENT height: these routes load no globals.css and so no
+   border-box reset, which is what makes this the logo's full cap rather than
+   the cap minus the padding above.
+
+   SCOPED TO THE BOOKING FLOW, and it must stay that way. /b had a fixed 28x28
+   box and lost it converging on the form's rules, so this restores what it
+   had. /f never reserved anything: adding it there would GROW its brand row
+   for every logo under 40px tall — a visible change to a live surface. /f has
+   the same latent shift and deserves the same fix, in a change that owns that
+   consequence rather than smuggling it in. Do not widen this selector to
+   `.bis-brand` without doing that. */
 .bis-booking-page .bis-brand:has(.bis-brand-logo),
 .bis-cancel-page .bis-brand:has(.bis-brand-logo) { min-height: 40px; }
 
