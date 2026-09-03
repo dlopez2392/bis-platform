@@ -19,7 +19,8 @@ export { ensureConversation, createMessage, updateMessageStatus,
          updateMessageStatusByProviderId, listConversations, listMessages, listContactMessages,
          incrementUnreadCount, clearUnreadCount,
          type MessageStatus, type NewMessage, type ConversationSummary,
-         sumUnreadCount } from "./messaging";
+         sumUnreadCount, searchConversations } from "./messaging";
+// NOTE: searchCalls needs no line here — voice is `export * from "./voice"` below.
 export { newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId,
          updateForm, createSubmission, recordRejectedSubmission, countRecentSubmissions,
          shouldRecordRateLimit, findRecentDuplicate, linkSubmissionContact,

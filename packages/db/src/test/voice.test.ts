@@ -10,7 +10,7 @@ import {
   hasActiveCallSince,
   findUpcomingBookingForPhone, getBookingById, deleteCallRow,
   listPhoneNumbersForAccount, listAllPhoneNumbers, reassignPhoneNumber,
-  listCalls, getCall, listCallStartsBetween, listContactCalls,
+  listCalls, getCall, listCallStartsBetween, listContactCalls, searchCalls,
 } from "../voice";
 
 describe("voice accessors", () => {
@@ -251,7 +251,10 @@ describe("listCalls / getCall", () => {
       await finishCallRow(db, accountA, r1.id, {
         outcome: "booked", endedAt: new Date(), durationSecs: 62, turnCount: 9,
         transcript: [{ role: "caller", text: "hola", at: new Date().toISOString() }],
-        summary: "s", language: "es", contactId: c.id,
+        // Was "s"; widened to a distinctive phrase so the P6 searchCalls
+        // assertions below can cover the summary branch of its .or() filter.
+        // Nothing in this test asserts on the summary itself.
+        summary: "Roof inspection booked for Tuesday", language: "es", contactId: c.id,
       });
       const r2 = await startCallRow(db, accountA, { phoneNumberId: n.id, callerE164: null });
 
@@ -263,6 +266,21 @@ describe("listCalls / getCall", () => {
 
       const paged = await listCalls(db, accountA, { before: rows[0]!.started_at, limit: 1 });
       expect(paged.map((r) => r.id)).toEqual([r1.id]);
+
+      // P6 searchCalls, folded into THIS cycle rather than a new
+      // withTestAccount — blueprints.test.ts is contention-marginal and extra
+      // fixture cycles tip it into a 20s timeout. Both branches of the
+      // interpolated .or() are covered, since that construct is the risky one.
+      const bySummary = await searchCalls(db, accountA, { search: "roof inspection" });
+      expect(bySummary.map((r) => r.id)).toEqual([r1.id]);
+      const byNumber = await searchCalls(db, accountA, { search: "5550000011" });
+      expect(byNumber.map((r) => r.id)).toEqual([r1.id]);
+
+      expect(await searchCalls(db, accountA, { search: "zzz nothing matches" })).toEqual([]);
+      // An all-punctuation query must return NOTHING, not the whole call log.
+      expect(await searchCalls(db, accountA, { search: "%%%" })).toEqual([]);
+      // And the grammar-breaking character must not blow up the .or() string.
+      expect(await searchCalls(db, accountA, { search: `roof"` })).toHaveLength(1);
     });
   });
 

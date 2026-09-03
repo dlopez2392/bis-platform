@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
+import { sanitizeSearchTerm } from "./search-term";
 
 export type MessageStatus =
   | "queued" | "sent" | "delivered" | "opened" | "bounced" | "failed";
@@ -287,4 +288,66 @@ export async function listMessages(
     .order("created_at", { ascending: true });
   if (error) throw new Error(error.message);
   return data ?? [];
+}
+
+/**
+ * The ⌘K palette's conversations half — matched on MESSAGE BODY, which is what
+ * someone means by "find the thread where we talked about the fence".
+ *
+ * Two queries, deliberately. The first is a single-column `.ilike()`, whose
+ * operand PostgREST sends as a parameter — no interpolated filter grammar to
+ * break (see search-term.ts). The second fetches only the handful of parent
+ * conversations that survived, so the `max_rows` truncation listConversations
+ * has to worry about cannot bite here.
+ *
+ * `lastMessagePreview` is the MATCHED message, not the newest one — in a
+ * palette, showing the line you searched for is the whole point.
+ */
+export async function searchConversations(
+  db: SupabaseClient, accountId: string, opts: { search: string; limit?: number },
+): Promise<ConversationSummary[]> {
+  const s = sanitizeSearchTerm(opts.search);
+  if (!s) return [];
+  const limit = opts.limit ?? 5;
+
+  const { data: msgs, error: msgErr } = await db.from("messages")
+    .select("conversation_id, body, created_at")
+    .eq("account_id", accountId)
+    .ilike("body", `%${s}%`)
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (msgErr) throw new Error(`searchConversations failed: ${msgErr.message}`);
+
+  // Newest matching message per conversation, in match order, capped.
+  const preview = new Map<string, string>();
+  for (const row of (msgs ?? []) as { conversation_id: string; body: string }[]) {
+    if (!preview.has(row.conversation_id)) preview.set(row.conversation_id, row.body);
+    if (preview.size >= limit) break;
+  }
+  const ids = [...preview.keys()];
+  if (ids.length === 0) return [];
+
+  const { data, error } = await db.from("conversations")
+    .select("id, contact_id, last_message_at, unread_count, contacts(first_name, last_name)")
+    .eq("account_id", accountId)
+    .in("id", ids);
+  if (error) throw new Error(`searchConversations failed: ${error.message}`);
+
+  const byId = new Map(((data ?? []) as any[]).map((r) => [r.id as string, r]));
+  // Ordered by match recency (the `ids` order), not by the second query's
+  // arbitrary return order. A row RLS filtered out is dropped rather than
+  // half-rendered from the message hit alone.
+  return ids.flatMap((id) => {
+    const r = byId.get(id);
+    if (!r) return [];
+    return [{
+      id: r.id,
+      contactId: r.contact_id,
+      contactFirstName: r.contacts?.first_name ?? null,
+      contactLastName: r.contacts?.last_name ?? null,
+      lastMessageAt: r.last_message_at,
+      lastMessagePreview: preview.get(id) ?? null,
+      unreadCount: r.unread_count ?? 0,
+    }];
+  });
 }

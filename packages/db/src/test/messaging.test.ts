@@ -4,7 +4,7 @@ import { createContact } from "../contacts";
 import {
   ensureConversation, createMessage, updateMessageStatus,
   updateMessageStatusByProviderId, listConversations, listMessages,
-  incrementUnreadCount, sumUnreadCount,
+  incrementUnreadCount, sumUnreadCount, searchConversations,
 } from "../messaging";
 
 describe("messaging", () => {
@@ -58,6 +58,21 @@ describe("messaging", () => {
       const [summary] = await listConversations(db, accountId);
       expect(summary!.lastMessageAt).not.toBeNull();
       expect(summary!.lastMessagePreview).toContain("First contact");
+
+      // P6 searchConversations, asserted inside THIS cycle rather than a new
+      // withTestAccount of its own — blueprints.test.ts is contention-marginal
+      // and extra fixture cycles tip it into a 20s timeout.
+      const hits = await searchConversations(db, accountId, { search: "first contact" });
+      expect(hits).toHaveLength(1);
+      expect(hits[0]!.id).toBe(convo.id);
+      expect(hits[0]!.contactFirstName).toBe("Ada");
+      // The MATCHED message, which is the whole point in a palette.
+      expect(hits[0]!.lastMessagePreview).toContain("First contact");
+
+      expect(await searchConversations(db, accountId, { search: "zzz nothing" })).toEqual([]);
+      // A bare wildcard must return NOTHING here, not every conversation: an
+      // empty sanitized term means "no searchable query", not "match all".
+      expect(await searchConversations(db, accountId, { search: "%" })).toEqual([]);
     }));
 
   it("createMessage emits message.created for a successfully inserted message", () =>

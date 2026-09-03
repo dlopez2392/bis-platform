@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
+import { sanitizeSearchTerm } from "./search-term";
 
 export type PhoneNumberStatus = "provisioned" | "testing" | "live" | "released";
 export type PhoneNumberRow = {
@@ -328,4 +329,30 @@ export async function getBookingById(
     .eq("id", bookingId).eq("account_id", accountId).maybeSingle();
   if (error) throw new Error(`getBookingById failed: ${error.message}`);
   return (data as any) ?? null;
+}
+
+/**
+ * The ⌘K palette's calls half. Own-table columns ONLY — `caller_e164` and the
+ * receptionist's `summary` — so the filter never has to reach through the
+ * embedded `contact:contacts(...)` join, which would need an `!inner` rewrite
+ * and change what `listCalls` returns for everyone else.
+ *
+ * A caller whose contact is known is still findable: the palette's CONTACTS
+ * group returns that person, and their calls hang off the contact page.
+ *
+ * An empty sanitized term returns [] rather than the newest N calls — a
+ * palette showing the whole log for a query of "%%%" would read as a match.
+ */
+export async function searchCalls(
+  db: SupabaseClient, accountId: string, opts: { search: string; limit?: number },
+): Promise<CallListRow[]> {
+  const s = sanitizeSearchTerm(opts.search);
+  if (!s) return [];
+  const { data, error } = await db.from("calls").select(CALL_LIST_COLS)
+    .eq("account_id", accountId)
+    .or(`caller_e164.ilike.%${s}%,summary.ilike.%${s}%`)
+    .order("started_at", { ascending: false })
+    .limit(opts.limit ?? 5);
+  if (error) throw new Error(`searchCalls failed: ${error.message}`);
+  return (data ?? []) as unknown as CallListRow[];
 }
