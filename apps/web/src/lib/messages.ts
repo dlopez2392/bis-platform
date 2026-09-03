@@ -894,6 +894,33 @@ export const m = {
   // type it, not after a customer reads it.
   "setup.rename.help":
     "Your own label for this client. Until you set a brand name in Branding, it's what they see when they sign in — and what their customers see in booking and lead emails.",
+
+  // ── Command palette (DESIGN.md's ⌘K key pattern) ───────────────────────
+  "palette.placeholder": "Search contacts, calls, pages…",
+  "palette.searchHint": "Search",
+  "palette.shortcut": "⌘K",
+  "palette.group.navigation": "Go to",
+  "palette.group.settings": "Settings",
+  "palette.group.actions": "Actions",
+  "palette.group.contacts": "Contacts",
+  "palette.group.calls": "Calls",
+  "palette.group.conversations": "Conversations",
+  "palette.hint": "Keep typing to search your contacts, calls and conversations.",
+  "palette.empty": "Nothing matches “{query}”.",
+  // Names the failure instead of showing an empty list. An empty list would
+  // say "you have no such contact", which is a lie about a broken request.
+  "palette.error": "Couldn't search your records just now.",
+  "palette.retry": "Try again",
+  "palette.action.toggleTheme": "Switch between light and dark",
+  "palette.settings.clientAccess": "Client access",
+  "palette.settings.sendingAddress": "Sending address",
+  "palette.settings.customFields": "Custom fields",
+  "palette.settings.customValues": "Custom values",
+
+  // ── /styleguide ────────────────────────────────────────────────────────
+  "styleguide.title": "Style guide",
+  "styleguide.body":
+    "Every component this app draws, in the theme you're looking at right now. Switch themes with the toggle to check both.",
 } as const;
 
 export type MessageKey = keyof typeof m;
