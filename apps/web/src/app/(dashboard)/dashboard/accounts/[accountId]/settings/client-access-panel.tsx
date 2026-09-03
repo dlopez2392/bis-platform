@@ -43,7 +43,11 @@ export function ClientAccessPanel({
   const [email, setEmail] = useState("");
 
   return (
-    <Card>
+    // The palette's `settings:client-access` entry jumps here. scroll-mt-24
+    // keeps the anchored section clear of the sticky topbar instead of
+    // landing underneath it. The id lives on the component's own root so it
+    // travels with the component rather than depending on its call site.
+    <Card id="client-access" className="scroll-mt-24">
       <CardHeader>
         <CardTitle>{m["clientAccess.title"]}</CardTitle>
         <CardDescription>{m["clientAccess.body"]}</CardDescription>

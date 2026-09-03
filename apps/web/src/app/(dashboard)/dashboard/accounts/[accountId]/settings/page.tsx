@@ -181,7 +181,7 @@ export default async function CrmSettingsPage({
           action={boundSetFromEmail}
         />
         <div className="grid gap-6 lg:grid-cols-2">
-          <Card>
+          <Card id="custom-fields" className="scroll-mt-24">
             <CardHeader>
               <CardTitle>{m["settings.customFields"]}</CardTitle>
               <CardDescription>{m["settings.customFieldsBody"]}</CardDescription>
@@ -242,7 +242,7 @@ export default async function CrmSettingsPage({
             </CardContent>
           </Card>
 
-          <Card>
+          <Card id="custom-values" className="scroll-mt-24">
             <CardHeader>
               <CardTitle>{m["settings.customValues"]}</CardTitle>
               <CardDescription>{m["settings.customValuesBody"]}</CardDescription>

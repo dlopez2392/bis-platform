@@ -29,7 +29,9 @@ export function SendingAddressCard({
   action: (formData: FormData) => Promise<{ ok: true } | { ok: false; error: string }>;
 }) {
   return (
-    <Card>
+    // Anchor for the palette's `settings:sending-address` entry; see
+    // client-access-panel.tsx for why the id lives on the component root.
+    <Card id="sending-address" className="scroll-mt-24">
       <CardHeader>
         {/* Deliberately NOT m["settings.sendingAddress"]. The title and the
             field's Label both used to render that string, so "Sending
