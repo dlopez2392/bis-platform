@@ -36,6 +36,22 @@ describe("contacts service", () => {
       await createContact(db, accountId, { firstName: "Zed" }, "user_test");
       const hits = await listContacts(db, accountId, { search: "trevi" });
       expect(hits).toHaveLength(1);
+
+      // The P6 hardening (sanitizeSearchTerm), asserted inside THIS cycle
+      // rather than a new withTestAccount of its own: blueprints.test.ts is
+      // contention-marginal and an extra fixture cycle tips it into a 20s
+      // timeout. A double quote breaks out of the interpolated .or() filter
+      // grammar this search still builds (see contacts.ts:23-49) — before the
+      // fix this threw, or worse, came back as a silent "no match".
+      const quoted = await listContacts(db, accountId, { search: `trevi"` });
+      expect(quoted).toHaveLength(1);
+      expect(quoted![0]!.last_name).toBe("Trevino");
+      // A typed wildcard must not silently become "match everything". "trev%"
+      // sanitizes to "trev"; a bare "%" sanitizes to "", which the `if (s)`
+      // guard treats as no filter at all — pinning that contract deliberately.
+      expect(await listContacts(db, accountId, { search: "trev%" })).toHaveLength(1);
+      expect(await listContacts(db, accountId, { search: "%" })).toHaveLength(2);
+
       await addTagToContact(db, accountId, id, "vip");
       await addTagToContact(db, accountId, id, "vip"); // idempotent
       const tags = await listContactTags(db, accountId, id);

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
+import { sanitizeSearchTerm } from "./search-term";
 
 export type ContactInput = {
   firstName?: string; lastName?: string; email?: string; phone?: string;
@@ -163,7 +164,12 @@ export async function listContacts(
   let q = db.from("contacts").select(COLS)
     .eq("account_id", accountId).order("created_at", { ascending: false })
     .limit(opts.limit ?? 100);
-  const s = opts.search?.trim().replace(/[%,()]/g, "");
+  // Was a local `.replace(/[%,()]/g, "")`, which left `"` and `\` in place —
+  // both break the interpolated .or() string one line below (see
+  // search-term.ts, and this file's own comment block above escapeLikePattern).
+  // Harmless while only a deliberate CRM search reached it; P6 put this call
+  // behind every keystroke of the ⌘K palette.
+  const s = opts.search ? sanitizeSearchTerm(opts.search) : undefined;
   if (s) q = q.or(`first_name.ilike.%${s}%,last_name.ilike.%${s}%,email.ilike.%${s}%,phone.ilike.%${s}%`);
   const { data, error } = await q;
   if (error) throw new Error(error.message);
