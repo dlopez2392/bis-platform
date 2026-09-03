@@ -28,6 +28,12 @@ export const EMBED_SCRIPT = `(function () {
   var locale = script.getAttribute("data-locale");
   if (locale) params.set("locale", locale);
 
+  // The host page's own colour mode. A site that toggles its own dark class
+  // knows the answer; prefers-color-scheme inside the iframe does not. Only
+  // the two words are forwarded — anything else is not a hint.
+  var theme = script.getAttribute("data-theme");
+  if (theme === "light" || theme === "dark") params.set("theme", theme);
+
   // utm_* and click ids live on the HOST page url. The iframe cannot read them
   // — its own url is ours — so they have to be lifted here and passed through.
   // Miss this and attribution records empty forever while appearing to work.

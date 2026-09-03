@@ -14,6 +14,7 @@ import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { originFrom } from "@/lib/email/origin";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { leadAlertEmail } from "@/lib/email/templates/lead-alert";
+import { leadReceiptEmail, leadReceiptSubject } from "@/lib/email/templates/lead-receipt";
 import {
   HONEYPOT_FIELD, RENDER_TOKEN_FIELD, MIN_FILL_MS, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS,
   DUPLICATE_WINDOW_MS, verifyRenderToken, hashIp, hashAnswers, parseAttribution,
@@ -232,7 +233,7 @@ export async function submitFormAction(
     // `enrich` itself keeps the notification independent of everything else
     // it does, so this is a last-resort net, not the primary handling. -------
     try {
-      await enrich(db, form, submissionId, answers, base.attribution, originFrom(h));
+      await enrich(db, form, submissionId, answers, base.attribution, originFrom(h), locale);
     } catch (e) {
       const message = e instanceof Error ? e.message : "unknown enrichment failure";
       await setSubmissionProcessingError(db, accountId, submissionId, message);
@@ -261,6 +262,8 @@ async function enrich(
    *  no host. Threaded from the action because headers() is readable only
    *  there, not in this helper. */
   origin: string | null,
+  /** The language the form was submitted in — the receipt's language. */
+  locale: "en" | "es",
 ): Promise<void> {
   const accountId = form.account_id;
   const byKind = new Map(form.fields.map((f) => [f.kind, answers.find((a) => a.key === f.key)?.value ?? ""]));
@@ -356,6 +359,16 @@ async function enrich(
     await notify(db, form, contactId, answers, byKind.get("core.email") ?? "", origin);
   } catch (e) {
     errors.push(`notify: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  // The receipt to the person, after the alert to the company and independent
+  // of it. Logged, never recorded on the submission: `processing_error` is
+  // the operator's "somebody was not told about this lead" signal, and a
+  // bounced auto-reply is not that.
+  try {
+    await receipt(db, form, locale, byKind.get("core.email") ?? "", byKind.get("core.first_name") ?? "");
+  } catch (e) {
+    console.error(`form ${form.id} submission ${submissionId} receipt failed: ${String(e)}`);
   }
 
   if (errors.length > 0) {
@@ -531,4 +544,49 @@ async function notify(
     }
   }
   if (failures.length > 0) throw new Error(`send failed for ${failures.join(", ")}`);
+}
+
+/**
+ * The auto-reply to the person who filled the form in, when the form asked
+ * for their address and what they typed is one. Customer-facing outbound,
+ * the same shape as the booking confirmation: sent FROM the account's own
+ * sending address (unlike the staff-facing alert, which deliberately is
+ * not), reply-to the account's reply address, in the language of the page
+ * they submitted from.
+ *
+ * Every published form sends one. bis-rgv.com's own contact form did before
+ * it moved onto the platform, and a form that goes silent after "Submit"
+ * reads as a form that did not work. A per-form switch is the natural
+ * follow-up if a client ever wants theirs quiet.
+ */
+async function receipt(
+  db: ReturnType<typeof serviceDb>, form: FormRow, locale: "en" | "es",
+  leadEmail: string, firstName: string,
+): Promise<void> {
+  if (!leadEmail || !isValidEmail(leadEmail)) return;
+
+  const { data: account } = await db.from("accounts")
+    .select("name, from_email, reply_to_email, brand_name, brand_logo_path, brand_color, brand_neutral, brand_corners, brand_type, brand_mode")
+    .eq("id", form.account_id).maybeSingle();
+
+  const brand = emailBrand({
+    brandName: account?.brand_name ?? null,
+    brandLogoPath: account?.brand_logo_path ?? null,
+    brandColor: account?.brand_color ?? null,
+    brandNeutral: account?.brand_neutral ?? null,
+    brandCorners: account?.brand_corners ?? null,
+    brandType: account?.brand_type ?? null,
+    brandMode: account?.brand_mode ?? null,
+    replyToEmail: null,
+  }, account?.name ?? "BIS");
+
+  const replyTo = normalizeReplyTo(account?.reply_to_email);
+  const { html, text: body } = leadReceiptEmail({
+    brand, locale, firstName: firstName || null, canReply: Boolean(replyTo),
+  });
+
+  await getEmailProvider().send({
+    to: leadEmail, fromName: brand.name, fromAddress: account?.from_email ?? undefined,
+    replyTo, subject: leadReceiptSubject(locale, brand.name), body, html,
+  });
 }

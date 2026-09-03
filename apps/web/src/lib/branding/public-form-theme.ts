@@ -84,6 +84,25 @@ export const FORM_CSS_FALLBACKS = {
 
 export type FormAccent = { accent: string; accentForeground: string };
 
+/**
+ * The host page's own colour mode, when it says so: `?theme=light|dark` on
+ * `/f` and `/b`, which `embed.js` forwards from a `data-theme` attribute.
+ *
+ * `brand_mode: "follow"` answers "which mode?" with `prefers-color-scheme`,
+ * and that is the wrong oracle for a host page that toggles its own dark
+ * class: a visitor on a light device who flipped bis-rgv.com to dark got a
+ * white form in the middle of a dark page. The host knows; the iframe cannot.
+ *
+ * A hint outranks `null` and `follow` — both mean nobody has fixed the mode —
+ * and never an explicit `light`/`dark` the operator chose in the branding
+ * panel. Anything that is not one of the two words is no hint at all.
+ */
+export type HostMode = "light" | "dark";
+
+export function parseHostMode(value: string | null | undefined): HostMode | null {
+  return value === "light" || value === "dark" ? value : null;
+}
+
 export type PublicFormTheme = {
   /**
    * Custom properties for `<main>`. Never null: even an unthemed account
@@ -200,8 +219,18 @@ function darkRule(declarations: string): string {
  * corners and typeface there — but no surfaces and no mode, because painting
  * a dark card set onto an unknown host page is how a form disappears into it.
  */
-export function publicFormTheme(branding: Branding, transparent: boolean): PublicFormTheme {
-  const inputs = themeInputsFrom(branding);
+export function publicFormTheme(
+  branding: Branding, transparent: boolean, hostMode: HostMode | null = null,
+): PublicFormTheme {
+  const stored = themeInputsFrom(branding);
+  // A hint stands in for a mode nobody fixed. Setting it here, on the inputs,
+  // is what makes an otherwise unthemed account engage the theme for a host
+  // that asked — the same rule as any other single control — so a dark host
+  // page gets the default ramp's dark set rather than form.css's light
+  // fallbacks painted onto it.
+  const inputs = hostMode && (stored.mode === null || stored.mode === "follow")
+    ? { ...stored, mode: hostMode }
+    : stored;
   const light = deriveTheme(inputs, "light");
 
   // No theme controls set. The token set is absent entirely and form.css's own
@@ -216,6 +245,34 @@ export function publicFormTheme(branding: Branding, transparent: boolean): Publi
   }
 
   if (transparent) {
+    // A transparent embed on a host that named its mode: the backdrop is
+    // still the host's, so `--background` stays out, but the text, input and
+    // border tokens of THAT mode go in — dark labels on a dark host page are
+    // what the hint exists to prevent. The CTA and the error red are measured
+    // against the mode's own surfaces, the closest thing to the unknown
+    // backdrop there is.
+    if (hostMode && inputs.mode === hostMode) {
+      const hinted = deriveTheme(inputs, hostMode)!;
+      const cta = resolveCta(inputs.color, hinted.background, hinted.card, hinted.primary);
+      const t = tokens(hinted);
+      return {
+        style: {
+          "--foreground": t["--foreground"],
+          "--card": t["--card"],
+          "--border": t["--border"],
+          "--muted-foreground": t["--muted-foreground"],
+          "--radius": t["--radius"],
+          "--font-sans": t["--font-sans"],
+          ...ctaStyle(cta),
+          ...errorStyle(hinted),
+          colorScheme: hostMode,
+        } as CSSProperties,
+        darkCss: null,
+        formAccent: cta,
+        themed: true,
+      };
+    }
+
     const cta = resolveCta(inputs.color, UNTHEMED_SURFACE, UNTHEMED_SURFACE, FORM_ACCENT_FALLBACK);
     const t = tokens(light);
     return {

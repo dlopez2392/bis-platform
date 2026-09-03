@@ -8,7 +8,8 @@ import {
 import { getEmailProvider } from "@/lib/email";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { formatWhen } from "@/lib/booking/time";
-import { m } from "@/lib/messages";
+import { normalizeLocale } from "@/lib/forms/public-strings";
+import { bookingStrings } from "@/lib/booking/public-strings";
 
 export type CancelResult = { ok: true } | { ok: false; error: string };
 
@@ -107,7 +108,12 @@ async function loadCalendarNotifyEmails(
  * the mutation into a POST-only form action is the whole reason this page
  * exists instead of a cancel-on-GET redirect.
  */
-export async function confirmCancelAction(publicId: string, token: string): Promise<CancelResult> {
+export async function confirmCancelAction(
+  publicId: string, token: string, locale: string = "en",
+): Promise<CancelResult> {
+  // Bound by `page.tsx` from the resolved `?locale=`; a server action is a
+  // public endpoint, so an unknown value is English, never an exception.
+  const s = bookingStrings(normalizeLocale(locale, "en"));
   try {
     const db = serviceDb();
 
@@ -190,6 +196,6 @@ export async function confirmCancelAction(publicId: string, token: string): Prom
     return { ok: true };
   } catch (e) {
     console.error(`confirmCancelAction ${publicId} failed: ${String(e)}`);
-    return { ok: false, error: m["booking.cancel.genericError"] };
+    return { ok: false, error: s.cancelGenericError };
   }
 }

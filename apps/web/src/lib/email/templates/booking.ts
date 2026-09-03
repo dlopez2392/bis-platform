@@ -1,4 +1,33 @@
 import { shell, button, escapeHtml, type EmailBrand } from "./shell";
+import type { PublicLocale } from "@/lib/forms/public-strings";
+
+/**
+ * The confirmation is the one booking email a stranger reads, so it is the
+ * one that speaks their language. The alert and the reminder stay English:
+ * the alert is for the operator, and the reminder runs from a cron that has
+ * no booker language on the row yet (a `bookings.locale` column is the
+ * recorded follow-up).
+ */
+const CONFIRMATION_COPY = {
+  en: {
+    subject: "You're booked in",
+    title: "You're booked in.",
+    forUs: (when: string) => `${when} for us`,
+    join: "Join your video meeting",
+    cancel: "Cancel this booking",
+  },
+  es: {
+    subject: "Tu cita quedó agendada",
+    title: "Tu cita quedó agendada.",
+    forUs: (when: string) => `${when} para nosotros`,
+    join: "Unirse a la videollamada",
+    cancel: "Cancelar esta cita",
+  },
+} as const;
+
+export function bookingConfirmationSubject(locale: PublicLocale = "en"): string {
+  return CONFIRMATION_COPY[locale].subject;
+}
 
 const ROW_LABEL_STYLE =
   "padding:4px 12px 4px 0;color:#71717a;white-space:nowrap;vertical-align:top;";
@@ -66,6 +95,9 @@ export function bookingAlertEmail(input: BookingAlertInput): { html: string; tex
 
 export type BookingConfirmationInput = {
   brand: EmailBrand;
+  /** The booker's language; English when absent. Both when-strings are
+   *  expected to have been formatted in the same language by the caller. */
+  locale?: PublicLocale;
   /** Pre-formatted in the booker's own zone. */
   whenBookerZone: string;
   /** Pre-formatted in the company's zone. Shown alongside the booker's line
@@ -93,15 +125,16 @@ export type BookingConfirmationInput = {
  */
 export function bookingConfirmationEmail(input: BookingConfirmationInput):
   { html: string; text: string } {
+  const copy = CONFIRMATION_COPY[input.locale ?? "en"];
   const sameZone = input.whenBookerZone === input.whenCompanyZone;
 
   const whenHtml = sameZone
     ? `<p style="margin:0 0 16px;font-size:16px;">${escapeHtml(input.whenBookerZone)}</p>`
     : `<p style="margin:0 0 4px;font-size:16px;">${escapeHtml(input.whenBookerZone)}</p>
-       <p style="margin:0 0 16px;color:#71717a;">${escapeHtml(input.whenCompanyZone)} for us</p>`;
+       <p style="margin:0 0 16px;color:#71717a;">${escapeHtml(copy.forUs(input.whenCompanyZone))}</p>`;
 
   const meetingHtml = input.meetingUrl
-    ? `<p style="margin:0 0 16px;">${button(input.brand, input.meetingUrl, "Join your video meeting")}</p>`
+    ? `<p style="margin:0 0 16px;">${button(input.brand, input.meetingUrl, copy.join)}</p>`
     : "";
 
   // `cancelUrl` arrives "" when the triggering request carried no host
@@ -111,23 +144,23 @@ export function bookingConfirmationEmail(input: BookingConfirmationInput):
   // email. Omitted entirely rather than rendered disabled, matching how
   // `booking-page.tsx` already treats the same empty string in-app.
   const cancelHtml = input.cancelUrl
-    ? `<p style="margin:0;"><a href="${escapeHtml(input.cancelUrl)}" style="color:#71717a;">Cancel this booking</a></p>`
+    ? `<p style="margin:0;"><a href="${escapeHtml(input.cancelUrl)}" style="color:#71717a;">${escapeHtml(copy.cancel)}</a></p>`
     : "";
 
   const html = shell(input.brand, `
-    <p style="margin:0 0 12px;">You're booked in.</p>
+    <p style="margin:0 0 12px;">${escapeHtml(copy.title)}</p>
     ${whenHtml}
     ${meetingHtml}
     ${cancelHtml}
   `);
 
   const text = [
-    "You're booked in.",
+    copy.title,
     "",
     input.whenBookerZone,
-    ...(sameZone ? [] : [`${input.whenCompanyZone} for us`]),
-    ...(input.meetingUrl ? ["", `Join your video meeting: ${input.meetingUrl}`] : []),
-    ...(input.cancelUrl ? ["", `Cancel this booking: ${input.cancelUrl}`] : []),
+    ...(sameZone ? [] : [copy.forUs(input.whenCompanyZone)]),
+    ...(input.meetingUrl ? ["", `${copy.join}: ${input.meetingUrl}`] : []),
+    ...(input.cancelUrl ? ["", `${copy.cancel}: ${input.cancelUrl}`] : []),
   ].join("\n");
 
   return { html, text };

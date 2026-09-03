@@ -5,7 +5,7 @@ import { serviceDb, getPublishedFormByPublicId, getBranding, brandLogoUrl,
          type Branding } from "@bis/db";
 import { signRenderToken, parseAttribution } from "@/lib/forms/guards";
 import { publicStrings, normalizeLocale } from "@/lib/forms/public-strings";
-import { publicFormTheme } from "@/lib/branding/public-form-theme";
+import { publicFormTheme, parseHostMode } from "@/lib/branding/public-form-theme";
 import { PublicForm } from "./public-form";
 import { FormBrand } from "./form-brand";
 import { submitFormAction } from "./actions";
@@ -119,8 +119,11 @@ export default async function PublicFormPage({
   // still stored and still copied by blueprints, and are deliberately no
   // longer read: a company has one brand, not one per form — the same call
   // that removed the per-form accent picker in the brand-colour milestone.
+  // `?theme=` is the host page saying which mode it is in — forwarded by
+  // `embed.js` from `data-theme`, or set by a host that builds its own
+  // iframe. See `parseHostMode` for what it may and may not override.
   const { style, darkCss, themed } = publicFormTheme(
-    branding, form.theme.transparentBackground ?? false,
+    branding, form.theme.transparentBackground ?? false, parseHostMode(flat.get("theme")),
   );
 
   return (

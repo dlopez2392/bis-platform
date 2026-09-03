@@ -49,13 +49,15 @@ export default function PublicBookingLayout({
   return (
     <html lang="en" className={`${geistSans.variable} ${inter.variable} ${sourceSerif.variable}`}>
       {/* The token set is painted on <main> by the page (`publicFormTheme`),
-          same as `/f`. Unlike `/f`, though, `/b` has no `background:
-          "transparent"` here: `/f` is embedded in someone else's iframe, so
-          its body must let the host page show through an unthemed form.
-          `/b` is a destination a visitor navigates to directly — there is no
-          host page underneath to reveal, so an unthemed calendar just paints
-          its own background like any other page. */}
-      <body style={{ margin: 0 }}>{children}</body>
+          same as `/f`, and the body is transparent for the same reason `/f`'s
+          is: `/b` IS embedded — `embed.js` has a `data-booking` variant, and
+          bis-rgv.com's contact page frames it. This used to paint nothing
+          here on the reasoning that `/b` was only ever a direct destination;
+          the first real embed on a dark host page showed the browser's
+          default white body around a dark <main>. A visitor reaching the
+          bare page directly sees no difference: <main> still paints its own
+          background, and the unthemed fallback is transparent-on-white. */}
+      <body style={{ margin: 0, background: "transparent" }}>{children}</body>
     </html>
   );
 }

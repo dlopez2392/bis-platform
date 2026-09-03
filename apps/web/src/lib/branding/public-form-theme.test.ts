@@ -6,7 +6,7 @@ import type { Branding } from "@bis/db";
 import { contrastRatio, FORM_ACCENT_FALLBACK } from "./color";
 import { NEUTRAL_RAMPS } from "./neutral-ramps";
 import {
-  FORM_CSS_FALLBACKS, publicFormTheme, serializeDeclarations,
+  FORM_CSS_FALLBACKS, publicFormTheme, parseHostMode, serializeDeclarations,
 } from "./public-form-theme";
 
 const NONE: Branding = {
@@ -256,5 +256,77 @@ describe("form.css fallbacks match the module's unthemed answers", () => {
   // this route no longer emits.
   it("keeps no .dark block of its own", () => {
     expect(css).not.toMatch(/\.dark\s/);
+  });
+});
+
+describe("publicFormTheme — the host page's own mode (`?theme=`)", () => {
+  const dark = (b: Branding, transparent = false) =>
+    publicFormTheme(b, transparent, "dark").style as unknown as Record<string, string>;
+
+  it("engages the default ramp's dark set for an unthemed account when the host says dark", () => {
+    const result = publicFormTheme(NONE, false, "dark");
+    expect(result.themed).toBe(true);
+    expect(result.darkCss).toBeNull();
+    expect(dark(NONE)["--background"]).toBe(NEUTRAL_RAMPS.slate.dark.bg);
+    expect(dark(NONE)["--foreground"]).toBe(NEUTRAL_RAMPS.slate.dark.fg);
+    expect((result.style as { colorScheme?: string }).colorScheme).toBe("dark");
+  });
+
+  it("stands in for a follow tenant's media rule: the host already knows the answer", () => {
+    const b = branding({ brandNeutral: "warm", brandMode: "follow" });
+    const result = publicFormTheme(b, false, "dark");
+    expect(result.darkCss).toBeNull();
+    expect(dark(b)["--background"]).toBe(NEUTRAL_RAMPS.warm.dark.bg);
+    // And the other way: a follow tenant on a light host paints light, no rule.
+    const light = publicFormTheme(b, false, "light");
+    expect(light.darkCss).toBeNull();
+    expect((light.style as Record<string, string>)["--background"]).toBe(NEUTRAL_RAMPS.warm.light.bg);
+  });
+
+  it("never overrides a mode the operator fixed", () => {
+    const b = branding({ brandNeutral: "cool", brandMode: "light" });
+    expect(dark(b)["--background"]).toBe(NEUTRAL_RAMPS.cool.light.bg);
+    const fixedDark = branding({ brandNeutral: "cool", brandMode: "dark" });
+    const onLightHost = publicFormTheme(fixedDark, false, "light").style as unknown as Record<string, string>;
+    expect(onLightHost["--background"]).toBe(NEUTRAL_RAMPS.cool.dark.bg);
+  });
+
+  it("gives a transparent embed the hinted mode's text and input tokens, but still no backdrop", () => {
+    const b = branding({ brandCorners: "round" });
+    const result = publicFormTheme(b, true, "dark");
+    const s = result.style as unknown as Record<string, string>;
+    expect(result.themed).toBe(true);
+    expect(result.darkCss).toBeNull();
+    expect(s).not.toHaveProperty("--background");
+    expect(s["--foreground"]).toBe(NEUTRAL_RAMPS.slate.dark.fg);
+    expect(s["--card"]).toBe(NEUTRAL_RAMPS.slate.dark.card);
+    expect(s["--border"]).toBe(NEUTRAL_RAMPS.slate.dark.border);
+    expect(s["--muted-foreground"]).toBe(NEUTRAL_RAMPS.slate.dark.mutedFg);
+    expect(s["--form-error"]).toBeDefined();
+    expect((result.style as { colorScheme?: string }).colorScheme).toBe("dark");
+    // The CTA is measured against the dark surfaces it will actually sit on.
+    expect(contrastRatio(result.formAccent.accent, NEUTRAL_RAMPS.slate.dark.bg)).toBeGreaterThanOrEqual(3);
+  });
+
+  it("leaves a transparent embed on a fixed-mode tenant exactly as before when the host disagrees", () => {
+    const b = branding({ brandMode: "light" });
+    const s = publicFormTheme(b, true, "dark").style as unknown as Record<string, string>;
+    expect(Object.keys(s).sort()).toEqual(["--font-sans", "--form-accent", "--form-accent-foreground", "--radius"]);
+  });
+
+  it("no hint changes nothing: the third argument defaults to null", () => {
+    expect(publicFormTheme(NONE, false)).toEqual(publicFormTheme(NONE, false, null));
+    const b = branding({ brandNeutral: "warm", brandMode: "follow" });
+    expect(publicFormTheme(b, false)).toEqual(publicFormTheme(b, false, null));
+  });
+});
+
+describe("parseHostMode", () => {
+  it("accepts only the two words", () => {
+    expect(parseHostMode("light")).toBe("light");
+    expect(parseHostMode("dark")).toBe("dark");
+    for (const junk of ["auto", "Dark", "", undefined, null, "follow"]) {
+      expect(parseHostMode(junk), String(junk)).toBeNull();
+    }
   });
 });

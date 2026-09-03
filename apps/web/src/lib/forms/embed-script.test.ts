@@ -147,6 +147,21 @@ describe("embed script", () => {
     expect(iframeB.style.height).toBe(beforeB);
   });
 
+  it("forwards the host page's own colour mode from data-theme, and only the two real values", () => {
+    const dark = run({ "data-form": "abc123def456", "data-theme": "dark" }, "https://client.example/");
+    expect(new URL(dark.iframe.src).searchParams.get("theme")).toBe("dark");
+
+    const light = run({ "data-booking": "resource-42", "data-theme": "light" }, "https://client.example/");
+    expect(new URL(light.iframe.src).searchParams.get("theme")).toBe("light");
+
+    // A value that is not a mode is not a hint — never forwarded as-is.
+    const junk = run({ "data-form": "abc123def456", "data-theme": "auto" }, "https://client.example/");
+    expect(new URL(junk.iframe.src).searchParams.get("theme")).toBeNull();
+
+    const none = run({ "data-form": "abc123def456" }, "https://client.example/");
+    expect(new URL(none.iframe.src).searchParams.get("theme")).toBeNull();
+  });
+
   describe("data-booking (booking pages share the same embed script)", () => {
     it("injects an iframe pointing at the hosted booking page, defaulting min-height to 560", () => {
       const { iframe, inserted } = run({ "data-booking": "resource-42" }, "https://client.example/book");
