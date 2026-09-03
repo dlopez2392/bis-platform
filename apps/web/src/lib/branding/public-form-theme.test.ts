@@ -237,16 +237,17 @@ describe("serializeDeclarations", () => {
 // how brand_type stayed inert through M4a. This is what crosses.
 describe("form.css fallbacks match the module's unthemed answers", () => {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  // BOTH stylesheets. P7 moved the brand header's rules — and with them their
-  // `--foreground` and `--font-sans` fallbacks — out of form.css and into the
-  // shared public-brand.css that /b and the cancel page also read. Checking
-  // only form.css would have left those copies unpinned, which is precisely
-  // the two-copies-of-one-value-in-two-languages failure this whole block
-  // exists to catch, just relocated.
-  const css = [
-    "../../app/f/[publicId]/form.css",
-    "../../styles/public-brand.css",
-  ].map((rel) => readFileSync(path.join(here, rel), "utf8")).join("\n");
+  const read = (rel: string) => readFileSync(path.join(here, rel), "utf8");
+  const formCss = read("../../app/f/[publicId]/form.css");
+  // P7 moved the brand header's rules — and with them their `--foreground`
+  // and `--font-sans` fallbacks — out of form.css into the shared
+  // public-brand.css that /b and the cancel page also read. Both files are
+  // checked, but SEPARATELY: concatenating them would let a token deleted
+  // from form.css still satisfy the "is read at all" check because the other
+  // file happens to read it, which is how `.bis-form`'s own colour could go
+  // missing and a dark tenant's form render UA-black on green tests.
+  const brandCss = read("../../styles/public-brand.css");
+  const css = formCss;
 
   it.each(Object.entries(FORM_CSS_FALLBACKS))(
     "%s falls back to the literal this page rendered before the theme existed", (token, expected) => {
@@ -263,6 +264,25 @@ describe("form.css fallbacks match the module's unthemed answers", () => {
   // this route no longer emits.
   it("keeps no .dark block of its own", () => {
     expect(css).not.toMatch(/\.dark\s/);
+  });
+
+  // The shared brand stylesheet, checked on its own terms: it reads only the
+  // handful of tokens the header needs, so "every token appears" is the wrong
+  // assertion for it. What must hold is that whatever it DOES read falls back
+  // to the same literal form.css would have — the two files render the same
+  // unthemed page, and a third copy of these values is exactly the drift this
+  // block exists to prevent.
+  it("public-brand.css reads at least one token, and every fallback it uses matches", () => {
+    let found = 0;
+    for (const [token, expected] of Object.entries(FORM_CSS_FALLBACKS)) {
+      const uses = [...brandCss.matchAll(new RegExp(`var\\(${token},\\s*([^)]+)\\)`, "g"))]
+        .map((m) => m[1]!.trim());
+      found += uses.length;
+      for (const used of uses) expect(used, token).toBe(expected);
+    }
+    // Guards the loop above from passing vacuously if the file is ever
+    // rewritten to hard-code its values instead of reading tokens.
+    expect(found, "public-brand.css reads no theme tokens at all").toBeGreaterThan(0);
   });
 });
 

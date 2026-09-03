@@ -231,19 +231,40 @@ export function BookingPage({
    * and the footer, which together push the Confirm button past the fold of
    * that fixed frame on a real embedded page.
    *
-   * Keyed on `step` as well as observing: the two return branches below are
-   * different DOM nodes, so the observer has to be re-attached when the flow
-   * moves between them.
+   * Keyed on `step` for an IMMEDIATE post when the flow moves between the two
+   * return branches, rather than waiting on the observer's own callback. React
+   * reconciles both branches to the same `.bis-booking` node, so the ref does
+   * not change and the re-attach is belt-and-braces, not a requirement.
    */
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const node = rootRef.current;
     if (!node || window.parent === window) return;
-    const post = () => window.parent.postMessage(
-      { type: "bis-form-height", height: node.getBoundingClientRect().height + 8 }, "*");
+
+    const post = () => {
+      // Measured to this column's BOTTOM EDGE IN THE DOCUMENT, not to its own
+      // height. The brand header is a SIBLING rendered by page.tsx, not a
+      // child of this component, so an element-height measurement omits it —
+      // and embed.js assigns the posted number outright (no Math.max with its
+      // 560px default), so under-reporting makes the host size the iframe
+      // SHORTER than its content and clip the footer. That is worse than the
+      // fixed frame this replaced.
+      //
+      // Deliberately NOT measuring <main>: it carries min-height:100vh, which
+      // inside an iframe IS the iframe's own height, so posting it back would
+      // feed the frame's height into itself and grow without bound.
+      const bottom = node.getBoundingClientRect().bottom + window.scrollY;
+      window.parent.postMessage({ type: "bis-form-height", height: bottom + 8 }, "*");
+    };
     post();
+
     const observer = new ResizeObserver(post);
     observer.observe(node);
+    // The brand row too: its logo has no intrinsic dimensions, so it resizes
+    // when the image finally loads — after this effect first ran — and that
+    // changes where this column's bottom edge sits.
+    const brand = document.querySelector(".bis-brand");
+    if (brand) observer.observe(brand);
     return () => observer.disconnect();
   }, [step]);
 
