@@ -9,6 +9,7 @@ import { getTenantAccessState, getTenantBranding } from "@/lib/branding/tenant-t
 import { AppSidebar } from "@/components/app-sidebar";
 import { Topbar } from "@/components/topbar";
 import { ShellDataProvider } from "@/components/shell-data";
+import { CommandPalette } from "@/components/command-palette";
 
 // generateMetadata and the layout body below are separate invocations that
 // need the same answers the root layout also needs for the very same tenant
@@ -141,7 +142,12 @@ export default async function DashboardLayout({
           clientTimezone={clientState?.status === "ok" ? clientState.timezone : undefined}
         />
         <div className="flex min-w-0 flex-1 flex-col">
-          <Topbar isAgency={isAgency} />
+          {/* The palette mounts ONCE for the whole dashboard tree. This
+              layout sits ABOVE the [accountId] segment, so it cannot pass an
+              account id down and does not try — CommandPalette derives the
+              current account from the pathname, the same way ShellDataProvider
+              above it already does. */}
+          <Topbar isAgency={isAgency} palette={<CommandPalette isAgency={isAgency} />} />
           <main className="min-w-0 flex-1">{children}</main>
         </div>
       </div>
