@@ -15,6 +15,8 @@ import {
 } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RailStates } from "./rail-states";
+import { PublicBrand } from "@/components/public-brand";
+import "@/styles/public-brand.css";
 import { m } from "@/lib/messages";
 
 export const dynamic = "force-dynamic";
@@ -99,6 +101,19 @@ export default async function StyleguidePage() {
             rail-states.tsx for what that cost before it was one. */}
         <Section title="Status states (setup rail)" file="…/setup/setup-rail.tsx">
           <RailStates />
+        </Section>
+
+        {/* The one component on this page that does NOT belong to the
+            dashboard: it renders on the public booking, cancel and lead-form
+            pages, outside the Tailwind layer, which is why it brings its own
+            stylesheet. Shown name-only — the styleguide has no tenant logo to
+            borrow, and inventing one would misrepresent the component's own
+            sizing. An account with a brand name but no upload renders exactly
+            this. */}
+        <Section title="Public brand header" file="components/public-brand.tsx">
+          <div className="w-full">
+            <PublicBrand name="Rio Roofing" logoUrl={null} />
+          </div>
         </Section>
 
         <Section title="Form controls" file="components/ui/{input,label,checkbox}.tsx">
