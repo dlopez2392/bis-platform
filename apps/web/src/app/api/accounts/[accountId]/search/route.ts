@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { listContacts, searchCalls, searchConversations } from "@bis/db";
+import { listContacts, searchCalls, searchConversations, sanitizeSearchTerm } from "@bis/db";
 import { apiAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { callerLabel, OUTCOMES } from "@/app/(dashboard)/dashboard/accounts/[accountId]/calls/format";
@@ -59,7 +59,22 @@ export async function GET(
   // 404 for both no-access and unknown account — never confirm existence.
   if (!access) return NextResponse.json({}, { status: 404 });
 
-  const q = (new URL(req.url).searchParams.get("q") ?? "").trim();
+  // The floor is applied to the SANITIZED term, not the raw one, and that
+  // distinction is load-bearing twice over.
+  //
+  // `listContacts` is a LIST function with an optional search — an empty term
+  // legitimately means "no filter, return the list", which is what the
+  // contacts page depends on. Its two siblings here are SEARCH functions and
+  // return [] instead. So a query of "%%" or "()", which sanitizes away to
+  // nothing, would have reached listContacts as "no filter" and rendered the
+  // account's five most recent contacts as if they had MATCHED — a lie about
+  // a search. Gating here keeps listContacts' contract intact for its other
+  // callers while never handing it an empty term from this route.
+  //
+  // It also closes the raw-length hole: "(a)" is three characters and clears
+  // a raw floor, but carries one character of actual query.
+  const raw = (new URL(req.url).searchParams.get("q") ?? "").trim();
+  const q = sanitizeSearchTerm(raw);
   if (q.length < MIN_QUERY) return NextResponse.json(EMPTY);
 
   const db = await dbForRequest(); // RLS-scoped — NEVER serviceDb here
@@ -97,7 +112,10 @@ export async function GET(
       id: v.id,
       label: joinName(v.contactFirstName, v.contactLastName) || UNNAMED,
       sublabel: v.lastMessagePreview,
-      at: v.lastMessageAt,
+      // Deliberately null. `sublabel` here is the MATCHED message, but
+      // `lastMessageAt` is the thread's NEWEST message — pairing them would
+      // caption a line from March with today's date. No date beats a wrong one.
+      at: null,
       // The conversations page selects a thread with ?c= — there is no
       // /conversations/<id> route (conversations/page.tsx).
       href: `${base}/conversations?c=${v.id}`,

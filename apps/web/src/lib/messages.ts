@@ -898,7 +898,9 @@ export const m = {
   // ── Command palette (DESIGN.md's ⌘K key pattern) ───────────────────────
   "palette.placeholder": "Search contacts, calls, pages…",
   "palette.searchHint": "Search",
-  "palette.shortcut": "⌘K",
+  // Two, because the hint has to name the key this machine actually has.
+  "palette.shortcut.mac": "⌘K",
+  "palette.shortcut.other": "Ctrl K",
   "palette.group.navigation": "Go to",
   "palette.group.settings": "Settings",
   "palette.group.actions": "Actions",

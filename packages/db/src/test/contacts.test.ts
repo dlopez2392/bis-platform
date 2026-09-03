@@ -46,10 +46,18 @@ describe("contacts service", () => {
       const quoted = await listContacts(db, accountId, { search: `trevi"` });
       expect(quoted).toHaveLength(1);
       expect(quoted![0]!.last_name).toBe("Trevino");
-      // A typed wildcard must not silently become "match everything". "trev%"
-      // sanitizes to "trev"; a bare "%" sanitizes to "", which the `if (s)`
-      // guard treats as no filter at all — pinning that contract deliberately.
+      // A typed wildcard must not silently become "match everything":
+      // "trev%" sanitizes to "trev" and still finds exactly Rosa.
       expect(await listContacts(db, accountId, { search: "trev%" })).toHaveLength(1);
+      // A bare "%" sanitizes to "", and this LIST function's `if (s)` guard
+      // then applies no filter — which is correct HERE and load-bearing: the
+      // contacts page passes its search box straight through, and an empty box
+      // must list everything rather than nothing. It is exactly why the
+      // palette's search route gates on the SANITIZED term before calling
+      // this (see api/accounts/[accountId]/search/route.ts) — otherwise a
+      // query of "%%" would render these rows as if they had MATCHED. The two
+      // dedicated SEARCH functions (searchCalls/searchConversations) return []
+      // for the same input, because they have no "list everything" meaning.
       expect(await listContacts(db, accountId, { search: "%" })).toHaveLength(2);
 
       await addTagToContact(db, accountId, id, "vip");

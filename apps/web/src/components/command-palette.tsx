@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
@@ -38,6 +38,27 @@ function isEditable(target: EventTarget | null): boolean {
   );
 }
 
+function detectMac(): boolean {
+  return /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
+}
+
+/**
+ * The platform, read the one way that is safe here.
+ *
+ * `navigator` does not exist on the server, so this value legitimately differs
+ * between the server render and the client. useSyncExternalStore is built for
+ * exactly that: its third argument is the server snapshot, so React renders
+ * `false` on both sides and then re-renders with the real answer — no
+ * hydration mismatch, and no setState inside an effect (which this repo's
+ * lint rejects outright, and shell-data.tsx documents the reasoning for).
+ * The store never changes, so `subscribe` returns a no-op unsubscribe.
+ */
+const NEVER_CHANGES = () => () => {};
+
+function useIsMac(): boolean {
+  return useSyncExternalStore(NEVER_CHANGES, detectMac, () => false);
+}
+
 /**
  * DESIGN.md's ⌘K key pattern: finds contacts/calls/conversations, jumps to any
  * settings section by name, runs safe actions.
@@ -57,6 +78,7 @@ export function CommandPalette({ isAgency }: { isAgency: boolean }) {
   const [query, setQuery] = useState("");
   const [live, setLive] = useState<Live>(null);
   const [retryNonce, setRetryNonce] = useState(0);
+  const isMac = useIsMac();
 
   const accountId = pathname.match(ACCOUNT_ROUTE_RE)?.[1] ?? null;
   const base = accountId ? `/dashboard/accounts/${accountId}` : null;
@@ -77,16 +99,19 @@ export function CommandPalette({ isAgency }: { isAgency: boolean }) {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key.toLowerCase() !== "k") return;
       if (!event.metaKey && !event.ctrlKey) return;
-      // ⌘K is ours everywhere. Ctrl+K inside a text field is NOT: on macOS
-      // that is the OS's own "delete to end of line", and stealing it from
-      // someone mid-sentence is worse than making them reach for the mouse.
-      if (event.ctrlKey && !event.metaKey && isEditable(event.target)) return;
+      // ⌘K is ours everywhere. Ctrl+K inside a text field is the OS's own
+      // "delete to end of line" — but ONLY on macOS, so the bail is gated on
+      // the platform. Ungated it broke Windows and Linux outright, where
+      // Ctrl+K is the only shortcut there is: it did nothing in any text
+      // field, and (since cmdk focuses the palette's own input) it could
+      // never toggle the palette closed either.
+      if (isMac && event.ctrlKey && !event.metaKey && isEditable(event.target)) return;
       event.preventDefault();
       setOpen((wasOpen) => !wasOpen);
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [isMac]);
 
   // The live half: debounced, aborted on every keystroke, and never allowed to
   // report an older query's answer.
@@ -161,8 +186,10 @@ export function CommandPalette({ isAgency }: { isAgency: boolean }) {
             that form was Tailwind v3 and this repo is on v4, where it emits an
             invalid declaration and silently drops the radius. --radius-ctl is
             DESIGN.md's 8px control radius. */}
+        {/* The shortcut this machine actually has. "⌘K" on a Windows box is
+            just wrong — Ctrl is the only modifier that opens this there. */}
         <kbd className="rounded-[var(--radius-ctl)] border border-border px-1.5 py-0.5 font-mono text-[10px]">
-          {m["palette.shortcut"]}
+          {isMac ? m["palette.shortcut.mac"] : m["palette.shortcut.other"]}
         </kbd>
       </Button>
 

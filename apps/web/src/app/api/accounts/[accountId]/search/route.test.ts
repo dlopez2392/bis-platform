@@ -7,7 +7,15 @@ vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
 const dbMocks = {
   listContacts: vi.fn(), searchCalls: vi.fn(), searchConversations: vi.fn(),
 };
-vi.mock("@bis/db", () => dbMocks);
+// The three READS are mocked; `sanitizeSearchTerm` is the REAL one. Stubbing
+// it would make this file assert against a sanitizer of its own invention —
+// the "a mock more permissive than the real thing proves nothing" trap — and
+// the query-floor tests below exist precisely to pin the real one's behaviour
+// at this boundary.
+vi.mock("@bis/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@bis/db")>();
+  return { ...dbMocks, sanitizeSearchTerm: actual.sanitizeSearchTerm };
+});
 
 const { GET } = await import("./route");
 
@@ -38,6 +46,35 @@ describe("account search route", () => {
     expect(dbMocks.listContacts).not.toHaveBeenCalled();
     expect(dbMocks.searchCalls).not.toHaveBeenCalled();
     expect(dbMocks.searchConversations).not.toHaveBeenCalled();
+  });
+
+  it("treats a query that sanitizes away as no query at all", async () => {
+    // "%%" and "()" clear a RAW two-character floor but carry no searchable
+    // term. listContacts is a LIST function whose `if (s)` guard reads an
+    // empty term as "no filter", so without gating on the SANITIZED term the
+    // palette would render the five most recent contacts as if they had
+    // MATCHED "%%" — a lie about a search, and inconsistent with its two
+    // siblings, which return [].
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    for (const hostile of ["%%", "()", "__", "**", `""`]) {
+      const body = await (await GET(req(hostile), ctx())).json();
+      expect(body, `query ${hostile}`).toEqual({ contacts: [], calls: [], conversations: [] });
+    }
+    expect(dbMocks.listContacts).not.toHaveBeenCalled();
+  });
+
+  it("measures the query floor after sanitizing, not before", async () => {
+    // "(a)" is three characters raw and one character of actual query.
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    const body = await (await GET(req("(a)"), ctx())).json();
+    expect(body).toEqual({ contacts: [], calls: [], conversations: [] });
+    expect(dbMocks.listContacts).not.toHaveBeenCalled();
+  });
+
+  it("passes the SANITIZED term to the database, not the raw one", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    await GET(req(`ro"sa`), ctx());
+    expect(dbMocks.listContacts).toHaveBeenCalledWith({}, "a1", { search: "rosa", limit: 5 });
   });
 
   it("caps every source at five and asks the database for no more", async () => {

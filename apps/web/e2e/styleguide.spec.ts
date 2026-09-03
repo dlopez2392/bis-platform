@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { readFileSync } from "node:fs";
 
 test.describe("the style guide", () => {
   test("renders the component index for the agency", async ({ page }) => {
@@ -18,6 +19,17 @@ test.describe("the style guide is agency-only", () => {
   test.use({ storageState: "e2e/.auth/client-state.json" });
 
   test("a client is redirected away", async ({ page }) => {
+    // POSITIVE CONTROL FIRST. An absence check alone passes just as happily
+    // when the session is broken and every page is an error — the lesson this
+    // suite's client specs have already been bitten by. Prove the session
+    // works before proving this one route does not.
+    const f = JSON.parse(
+      readFileSync("e2e/.auth/client-fixture.json", "utf-8"),
+    ) as { accountId: string };
+    await page.goto(`/dashboard/accounts/${f.accountId}/contacts`);
+    await expect(page.locator("aside").getByRole("link", { name: "Contacts", exact: true }))
+      .toBeVisible();
+
     await page.goto("/dashboard/styleguide");
     // requireAgency() sends a non-agency caller to "/", NOT to their own
     // dashboard — that is requireAgencyOnlyAccountAccess's behaviour, and this

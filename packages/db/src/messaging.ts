@@ -297,8 +297,14 @@ export async function listMessages(
  * Two queries, deliberately. The first is a single-column `.ilike()`, whose
  * operand PostgREST sends as a parameter — no interpolated filter grammar to
  * break (see search-term.ts). The second fetches only the handful of parent
- * conversations that survived, so the `max_rows` truncation listConversations
- * has to worry about cannot bite here.
+ * conversations that survived.
+ *
+ * The 200-row cap on the first query is a real, accepted limit, not immunity:
+ * an account with more than 200 messages matching one term keeps only the 200
+ * NEWEST, so a thread whose only match is older than all of those is missed.
+ * That is the right trade for a find-as-you-type box capped at 5 results —
+ * but it is a truncation, and calling it anything else would be a lie the
+ * next reader has to discover for themselves.
  *
  * `lastMessagePreview` is the MATCHED message, not the newest one — in a
  * palette, showing the line you searched for is the whole point.
