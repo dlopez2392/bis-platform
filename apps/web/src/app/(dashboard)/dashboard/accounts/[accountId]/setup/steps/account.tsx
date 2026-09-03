@@ -3,23 +3,24 @@ import { m } from "@/lib/messages";
 import type { StepDetailProps } from "./step-shared";
 
 /**
- * Trim, then reject empty — matching `renameAccountAction`'s own
- * server-side rule (../actions.ts) exactly, both the trim and the message.
- * An account name is not one of `InlineField`'s five CONTACT columns (it
- * has no `field` to pass without lying about which column this edits), and
- * a contact column's own rule is wrong here anyway: `normalizeFieldInput`
+ * `required`, not `field` — and a plain boolean, not a function.
+ *
+ * An account name is not one of `InlineField`'s five CONTACT columns (there
+ * is no `field` to pass without lying about which column this edits), and a
+ * contact column's own rule is wrong here anyway: `normalizeFieldInput`
  * treats an empty value as a CLEAR (every contact column is nullable),
  * while `accounts.name` has no fallback for "" — the client switcher, the
- * dashboard greeting and the accounts list would all break. This function
- * is the one place that rule lives; it only ever gets a chance to run
- * before the same rule runs again, for real, on the server.
+ * dashboard greeting and the accounts list would all break.
+ *
+ * The trim-and-reject-empty rule itself lives in `inline-field.tsx`
+ * (`normalizeRequired`), NOT here, because this module is a SERVER
+ * component and `InlineField` is `"use client"`: a function prop across
+ * that boundary is not a lint nit but a hard Flight serializer error
+ * ("Functions cannot be passed directly to Client Components") that 500s
+ * the whole setup page — setup-panel.tsx builds all nine step nodes on
+ * every render, so it threw no matter which step was selected. A boolean
+ * serializes; a rule the client component already owns runs.
  */
-function validateAccountName(raw: string): { ok: true; value: string } | { ok: false; error: string } {
-  const value = raw.trim();
-  if (!value) return { ok: false, error: m["setup.rename.empty"] };
-  return { ok: true, value };
-}
-
 export function AccountStep({ accountName, renameAction }: StepDetailProps): React.ReactNode {
   return (
     <div className="mt-3 max-w-sm space-y-3">
@@ -27,7 +28,7 @@ export function AccountStep({ accountName, renameAction }: StepDetailProps): Rea
         <p className="text-xs font-medium text-muted-foreground">{m["setup.rename.label"]}</p>
         <InlineField
           label={m["setup.rename.label"]}
-          validate={validateAccountName}
+          required
           value={accountName}
           save={renameAction}
         />

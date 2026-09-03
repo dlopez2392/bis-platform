@@ -761,6 +761,10 @@ export const m = {
   "calls.detail.noTranscript": "No transcript was recorded for this call.",
 
   "setup.title": "Client setup",
+  // The stepper rail's own accessible name. Distinct from `setup.title`
+  // on purpose: that string is the page <h1>, and reusing it here would
+  // name two different things identically for a screen reader.
+  "setup.railLabel": "Setup steps",
   "setup.backToSetup": "Back to setup",
   "setup.progress": "{done} of {total} steps done",
   "setup.progressLabel": "Setup progress",
@@ -785,7 +789,10 @@ export const m = {
   // string. go_live reuses `setup.goLive.blocked` instead of this one (see
   // setup-rail.tsx's `lockedHint`) — it already exists and already handles
   // the unknown-prerequisite case, so this key is only ever test_call's.
-  "setup.locked.blockedBy": "Finish these first: {steps}",
+  // WORDED IDENTICALLY to `setup.goLive.blocked` on purpose: the two are
+  // one concept ("these steps block this one") shown one rail click apart,
+  // and two phrasings for that read as two different rules.
+  "setup.locked.blockedBy": "Finish these steps first: {steps}",
   "setup.step.account.title": "Create the account",
   "setup.step.account.help": "This company exists — you're looking at it.",
   "setup.step.branding.title": "Branding",

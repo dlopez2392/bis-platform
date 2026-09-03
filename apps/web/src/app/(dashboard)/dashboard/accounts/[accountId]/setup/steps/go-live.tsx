@@ -19,7 +19,17 @@ export function GoLiveStep({
   // Scoped to the go-live card: `blockedReason` is computed once for the
   // whole panel, so testing it alone here would give every other card an
   // empty action row.
-  const showReason = !step.done && !prereqsMet && blockedReason !== null;
+  //
+  // `step.unknown` is the NARROWING, and it is not cosmetic. The pane's own
+  // locked banner (setup-shell.tsx) already prints this same sentence
+  // whenever `railKindOf` answers `locked` — but `railKindOf` returns
+  // `unknown` BEFORE it ever considers the lock (lib/setup/setup-rail.ts),
+  // so an unverifiable go-live step gets NO banner at all while still being
+  // un-live-able. Deleting this block outright would drop the reason in
+  // precisely the case the operator most needs it; keeping it unconditional
+  // would print it twice on every locked pane. So it covers exactly the case
+  // the shell does not: `unknown`.
+  const showReason = step.unknown && !step.done && !prereqsMet && blockedReason !== null;
 
   if (rows.length === 0 && !showReason) return null;
 

@@ -4,11 +4,13 @@ import { useCallback, useSyncExternalStore } from "react";
 import { AlertTriangle } from "lucide-react";
 import type { SetupStepKey } from "@/lib/setup/setup-status";
 import type { SetupStepView } from "@/lib/setup/setup-view";
-import { parseStepParam } from "@/lib/setup/setup-rail";
+import {
+  SETUP_STEP_KEYS, parseStepParam, lockedPrereqKeys, railKindOf,
+} from "@/lib/setup/setup-rail";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { STEP_COPY } from "./steps/step-shared";
-import { SetupRail, STATE_LABEL, STATE_TONE, railKindOf, lockedHint } from "./setup-rail";
+import { SetupRail, STATE_LABEL, STATE_TONE } from "./setup-rail";
 
 const PARAM = "step";
 
@@ -49,11 +51,15 @@ export function useSetupStep(views: SetupStepView[]) {
   const selected = parseStepParam(raw, views);
 
   const select = useCallback((key: SetupStepKey) => {
+    // Re-selecting the step already on screen would push a SECOND identical
+    // history entry. Nothing on screen changes, but the next Back press then
+    // lands on the same step — a Back button that visibly does nothing.
+    if (key === selected) return;
     const url = new URL(window.location.href);
     url.searchParams.set(PARAM, key);
     window.history.pushState(window.history.state, "", url);
     notify(); // pushState does not fire popstate — subscribers must be told directly
-  }, []);
+  }, [selected]);
 
   return { selected, select };
 }
@@ -94,7 +100,21 @@ export function SetupShell({
   const kind = railKindOf(view, selected === nextKey, views);
   const locked = kind === "locked";
   const copy = STEP_COPY[selected];
-  const index = views.findIndex((v) => v.key === selected);
+  // Same source as the rail's own numbering (setup-rail.tsx maps over
+  // SETUP_STEP_KEYS). Deriving this one from `views` instead would let the
+  // pane say "04" while the rail entry it came from says "05" the moment
+  // the two lists ever disagree on order or length.
+  const index = SETUP_STEP_KEYS.indexOf(selected);
+
+  // The blockers as KEYS, not a pre-joined sentence: naming what blocks this
+  // step and then making the operator find it again in the rail is half the
+  // answer. Each one is a button that selects that step.
+  const blockerKeys = locked ? lockedPrereqKeys(selected, views) : [];
+  // `setup.locked.blockedBy` carries its list in a `{steps}` slot; splitting
+  // on that slot lets the BUTTONS occupy it instead of a joined string — the
+  // same technique SetupProgress (setup-panel.tsx) uses on its own
+  // `{done}`/`{total}` placeholders.
+  const [blockedLead = "", blockedTail = ""] = m["setup.locked.blockedBy"].split("{steps}");
 
   return (
     <div className="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
@@ -137,10 +157,43 @@ export function SetupShell({
         {locked ? (
           <div
             role="note"
-            className="mt-3 flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning"
+            // Prose is `text-foreground`, NOT `text-warning`. `--warning`
+            // measures ~3.6:1 on this surface: over the 3:1 bar a dot, ring
+            // or ICON has to clear, under AA for a LABEL. Exactly why every
+            // state chip keeps its text foreground and puts the hue in the
+            // dot and the border (TONE.unknown.chip, steps/step-shared.tsx)
+            // — the hue stays on this banner's border and its icon.
+            className="mt-3 flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-foreground"
           >
-            <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-            <p>{lockedHint(selected, views, blockedReason)}</p>
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
+            <div className="min-w-0 space-y-1.5">
+              {/* go_live reuses the sentence setup-panel.tsx already computed
+                  once for the whole page rather than deriving a second one
+                  that happens to name the same steps; `test_call` has no such
+                  precomputed sentence, so its lead-in comes from
+                  `setup.locked.blockedBy` wrapped around the buttons below. */}
+              {selected === "go_live" && blockedReason ? <p>{blockedReason}</p> : null}
+              {blockerKeys.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+                  {selected === "go_live" ? null : <span>{blockedLead}</span>}
+                  {blockerKeys.map((key) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => select(key)}
+                      className={cn(
+                        "rounded-md border border-border bg-card px-2 py-0.5 text-xs font-medium text-foreground",
+                        "transition-colors hover:bg-muted",
+                        "focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none",
+                      )}
+                    >
+                      {STEP_COPY[key].title}
+                    </button>
+                  ))}
+                  {selected !== "go_live" && blockedTail ? <span>{blockedTail}</span> : null}
+                </div>
+              ) : null}
+            </div>
           </div>
         ) : null}
 

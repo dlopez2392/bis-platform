@@ -1,5 +1,5 @@
 import type { SetupStepKey } from "./setup-status";
-import { GO_LIVE_PREREQ_KEYS, type SetupStepView } from "./setup-view";
+import { GO_LIVE_PREREQ_KEYS, kindOf, type SetupStepView, type StateKind } from "./setup-view";
 
 // Pure module, same discipline as setup-status.ts / setup-view.ts: no db,
 // no React, no Date. Everything the two-pane rail needs to decide WHICH
@@ -79,6 +79,41 @@ export function lockedPrereqKeys(
       .map((v) => v.key);
   }
   return [];
+}
+
+/** The five `kindOf` states (./setup-view.ts) plus a sixth the RAIL layer
+ *  adds on top: `locked`. Kept OUT of `StateKind` itself — that type is what
+ *  every step module's own `kind` prop uses (setup/steps/step-shared.tsx),
+ *  and none of those need to know "locked" exists; only the rail and the
+ *  pane header (setup/setup-shell.tsx) do. */
+export type RailKind = StateKind | "locked";
+
+/**
+ * `kindOf`'s answer, promoted to `locked` when this step's own prerequisites
+ * are unmet — but ONLY when `kindOf` didn't already answer `unknown`,
+ * `done`, or `skipped`:
+ *   - `unknown` stays `unknown`. A step whose OWN read failed must keep
+ *     saying so — "couldn't check" is never quietly upgraded to a verdict
+ *     about a DIFFERENT step's prerequisites.
+ *   - `done` stays `done`. `test_call` can be done (a real call was placed)
+ *     while one of its prerequisites has since gone unmet again (a voice
+ *     profile cleared after the call) — the step itself is still finished;
+ *     it does not retroactively need unlocking.
+ *   - `skipped` stays `skipped`, for the same reason: no lockable key is
+ *     ever also skippable today (`isLockedStep` only locks `test_call`/
+ *     `go_live`; only `email` is ever skipped), but excluding it here keeps
+ *     that true by construction rather than by coincidence.
+ *
+ * Lives in this module, not in the rail component that renders it, for the
+ * reason stated at the top of this file: it is a decision, and a decision
+ * in a `.tsx` is a decision no test can reach. See setup-rail.test.ts.
+ */
+export function railKindOf(
+  view: SetupStepView, isNext: boolean, views: SetupStepView[],
+): RailKind {
+  const kind = kindOf(view, isNext);
+  if (kind === "unknown" || kind === "done" || kind === "skipped") return kind;
+  return isLockedStep(view.key, views) ? "locked" : kind;
 }
 
 /** Preselected step: the first one not yet done. When everything is done the

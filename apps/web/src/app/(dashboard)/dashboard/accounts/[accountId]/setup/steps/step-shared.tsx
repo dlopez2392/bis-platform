@@ -74,36 +74,41 @@ export const STEP_PATH: Partial<Record<SetupStepKey, string>> = {
   email: "/settings?from=setup",
 };
 
-export const TONE: Record<StateKind, { marker: string; card: string; chip: string; dot: string }> = {
+/**
+ * Three slots per state, not four. `card` went with the nine-card list the
+ * two-pane wizard replaced — there is ONE pane now, and it carries its card
+ * chrome itself (setup-shell.tsx) rather than restyling it per state, so
+ * nothing has read this field since that change.
+ *
+ * Note what every `chip` has in common: `text-foreground`. Status hue lives
+ * in the dot and the border, never in the words — `--warning` clears the
+ * 3:1 bar for a dot or an icon, but not AA for a label.
+ */
+export const TONE: Record<StateKind, { marker: string; chip: string; dot: string }> = {
   done: {
     marker: "border-success/40 bg-success/10 text-success",
-    card: "border-border bg-card",
     chip: "border-success/30 bg-success/10 text-foreground",
     dot: "bg-success",
   },
   open: {
     marker: "border-border bg-card text-muted-foreground",
-    card: "border-border bg-card",
     chip: "border-border bg-transparent text-muted-foreground",
     dot: "bg-muted-foreground/50",
   },
-  // The single ringed card. Same content as `open` — only the emphasis
+  // The single emphasised state. Same content as `open` — only the emphasis
   // differs, because it is the same kind of work, just the piece to do now.
   next: {
     marker: "border-primary bg-primary/10 text-primary",
-    card: "border-primary/40 bg-card shadow-sm ring-1 ring-primary/15",
     chip: "border-border bg-transparent text-muted-foreground",
     dot: "bg-primary",
   },
   skipped: {
     marker: "border-dashed border-border bg-muted text-muted-foreground",
-    card: "border-dashed border-border bg-card",
     chip: "border-border bg-muted text-muted-foreground",
     dot: "bg-muted-foreground/40",
   },
   unknown: {
     marker: "border-dashed border-warning/50 bg-warning/10 text-warning",
-    card: "border-warning/40 bg-warning/5",
     chip: "border-warning/40 bg-warning/10 text-foreground",
     dot: "bg-warning",
   },

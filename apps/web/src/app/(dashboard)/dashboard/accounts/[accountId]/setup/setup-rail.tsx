@@ -2,8 +2,10 @@
 
 import { AlertTriangle, Check, Lock, Minus } from "lucide-react";
 import type { SetupStepKey } from "@/lib/setup/setup-status";
-import { kindOf, type SetupStepView, type StateKind } from "@/lib/setup/setup-view";
-import { SETUP_STEP_KEYS, isLockedStep, lockedPrereqKeys } from "@/lib/setup/setup-rail";
+import type { SetupStepView } from "@/lib/setup/setup-view";
+import {
+  SETUP_STEP_KEYS, lockedPrereqKeys, railKindOf, type RailKind,
+} from "@/lib/setup/setup-rail";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { STEP_COPY, TONE } from "./steps/step-shared";
@@ -16,36 +18,6 @@ import { STEP_COPY, TONE } from "./steps/step-shared";
  * the list). Selection itself lives in ./setup-shell.tsx — this file only
  * renders the rail and reports clicks upward via `onSelect`.
  */
-
-/** The five `kindOf` states (lib/setup/setup-view.ts) plus a sixth the RAIL
- *  layer adds on top: `locked`. Kept OUT of `StateKind` itself — that type
- *  is what every step module's own `kind` prop uses (step-shared.tsx), and
- *  none of those need to know "locked" exists; only the rail and the pane
- *  header (setup-shell.tsx) do. */
-export type RailKind = StateKind | "locked";
-
-/**
- * `kindOf`'s answer, promoted to `locked` when this step's own prerequisites
- * are unmet — but ONLY when `kindOf` didn't already answer `unknown`,
- * `done`, or `skipped`:
- *   - `unknown` stays `unknown`. A step whose OWN read failed must keep
- *     saying so — "couldn't check" is never quietly upgraded to a verdict
- *     about a DIFFERENT step's prerequisites (the correction this task
- *     brief itself exists to enforce).
- *   - `done` stays `done`. `test_call` can be done (a real call was placed)
- *     while one of its prerequisites has since gone unmet again (a voice
- *     profile cleared after the call) — the step itself is still finished;
- *     it does not retroactively need unlocking.
- *   - `skipped` stays `skipped`, for the same reason: no lockable key is
- *     ever also skippable today (`isLockedStep` only locks `test_call`/
- *     `go_live`; only `email` is ever skipped), but excluding it here keeps
- *     that true by construction rather than by coincidence.
- */
-export function railKindOf(view: SetupStepView, isNext: boolean, views: SetupStepView[]): RailKind {
-  const kind = kindOf(view, isNext);
-  if (kind === "unknown" || kind === "done" || kind === "skipped") return kind;
-  return isLockedStep(view.key, views) ? "locked" : kind;
-}
 
 /** Status is never colour alone (DESIGN.md rule 3) — every rail entry and
  *  the pane header (setup-shell.tsx) both read off this single map, so the
@@ -118,7 +90,13 @@ export function SetupRail({
   onSelect: (key: SetupStepKey) => void;
 }) {
   return (
-    <ol className="space-y-1" aria-label={m["setup.title"]}>
+    <ol
+      className="space-y-1"
+      // NOT `setup.title` — that is the page's own <h1>, and a list whose
+      // accessible name repeats the heading it sits under makes a screen
+      // reader announce "Client setup" twice for two different things.
+      aria-label={m["setup.railLabel"]}
+    >
       {SETUP_STEP_KEYS.map((key, index) => {
         const view = views.find((v) => v.key === key);
         if (!view) return null; // SETUP_STEP_KEYS and `views` always agree in practice

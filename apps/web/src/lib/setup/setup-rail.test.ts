@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  SETUP_STEP_KEYS, isLockedStep, lockedPrereqKeys, defaultStepKey, parseStepParam,
+  SETUP_STEP_KEYS, isLockedStep, lockedPrereqKeys, railKindOf, defaultStepKey, parseStepParam,
 } from "./setup-rail";
 import type { SetupStepView } from "./setup-view";
 
@@ -67,6 +67,59 @@ describe("lockedPrereqKeys", () => {
   });
   it("is empty for a step that does not lock", () => {
     expect(lockedPrereqKeys("branding", views())).toEqual([]);
+  });
+});
+
+describe("railKindOf", () => {
+  // The lock is the LAST question this function asks, never the first:
+  // `unknown`, `done` and `skipped` all outrank it. That precedence is a
+  // phase-wide constraint, which is why the function lives in this module
+  // rather than in setup-rail.tsx — vitest.config.ts includes no .tsx, so a
+  // decision left there is a decision no test can reach.
+  const pick = (vs: SetupStepView[], key: SetupStepView["key"]) =>
+    vs.find((v) => v.key === key)!;
+
+  it("keeps an UNKNOWN step unknown, and never calls it locked", () => {
+    // The exact collision: test_call's own read failed while both of its
+    // prerequisites are also unmet, so the lock is genuinely armed.
+    const v = views({ test_call: { unknown: true } });
+    expect(isLockedStep("test_call", v)).toBe(true);
+    expect(railKindOf(pick(v, "test_call"), false, v)).toBe("unknown");
+    // Still unknown when it would otherwise have been the current step.
+    expect(railKindOf(pick(v, "test_call"), true, v)).toBe("unknown");
+  });
+
+  it("keeps a DONE step done even when its prerequisites have gone unmet again", () => {
+    // A real test call was placed; the voice profile has since been cleared.
+    // The step is still finished — it does not retroactively need unlocking.
+    const v = views({ test_call: { done: true } });
+    expect(isLockedStep("test_call", v)).toBe(true);
+    expect(railKindOf(pick(v, "test_call"), false, v)).toBe("done");
+  });
+
+  it("locks an otherwise-open step whose prerequisites are unmet", () => {
+    const v = views(); // nothing done
+    expect(railKindOf(pick(v, "test_call"), false, v)).toBe("locked");
+    // Including when it would otherwise have been the current step.
+    expect(railKindOf(pick(v, "go_live"), true, v)).toBe("locked");
+  });
+
+  it("keeps a SKIPPED step skipped", () => {
+    const v = views({ email: { skipped: true } });
+    expect(railKindOf(pick(v, "email"), false, v)).toBe("skipped");
+  });
+
+  it("passes kindOf's answer straight through for a step that cannot lock", () => {
+    const v = views({ branding: { done: true } });
+    expect(railKindOf(pick(v, "branding"), false, v)).toBe("done");
+    expect(railKindOf(pick(v, "hours"), true, v)).toBe("next");
+    expect(railKindOf(pick(v, "hours"), false, v)).toBe("open");
+  });
+
+  it("unlocks a lockable step once its prerequisites are met", () => {
+    const v = views({ number: { done: true }, voice_profile: { done: true } });
+    expect(railKindOf(pick(v, "test_call"), true, v)).toBe("next");
+    expect(railKindOf(pick(v, "test_call"), false, v)).toBe("open");
   });
 });
 
