@@ -236,10 +236,17 @@ describe("serializeDeclarations", () => {
 // stylesheet's own fallbacks — with nothing crossing between them is exactly
 // how brand_type stayed inert through M4a. This is what crosses.
 describe("form.css fallbacks match the module's unthemed answers", () => {
-  const css = readFileSync(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), "../../app/f/[publicId]/form.css"),
-    "utf8",
-  );
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  // BOTH stylesheets. P7 moved the brand header's rules — and with them their
+  // `--foreground` and `--font-sans` fallbacks — out of form.css and into the
+  // shared public-brand.css that /b and the cancel page also read. Checking
+  // only form.css would have left those copies unpinned, which is precisely
+  // the two-copies-of-one-value-in-two-languages failure this whole block
+  // exists to catch, just relocated.
+  const css = [
+    "../../app/f/[publicId]/form.css",
+    "../../styles/public-brand.css",
+  ].map((rel) => readFileSync(path.join(here, rel), "utf8")).join("\n");
 
   it.each(Object.entries(FORM_CSS_FALLBACKS))(
     "%s falls back to the literal this page rendered before the theme existed", (token, expected) => {

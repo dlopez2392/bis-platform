@@ -356,27 +356,24 @@ test("a stranger books, the operator sees it, the slot dies and revives", async 
     await expect(anonPage.getByRole("button", { name: slotLabel, exact: true })).toHaveCount(0);
 
     // --- P7: an operator's fixed mode outranks the host's hint --------------
-    // P7 gave this page the `?theme=` argument its sibling has had since
-    // PR #22. What that fix is worth CANNOT be proven on this fixture, and
-    // saying so is more useful than a test that looks like proof:
-    // `public-form-theme.ts:231` reads "a hint stands in for a mode nobody
-    // fixed" — it applies only when `stored.mode` is null or "follow" — and
-    // auth.setup.ts:205 fixes this fixture's `brandMode: "dark"`. So the hint
-    // is correctly ignored here, before and after the change alike.
+    // NOT a proof of the ?theme= fix — that one is asserted structurally in
+    // cancel/[token]/actions.test.ts, because this fixture fixes
+    // `brandMode: "dark"` and a fixed mode correctly outranks any hint
+    // ("a hint stands in for a mode nobody fixed", public-form-theme.ts:231),
+    // so a behavioural assertion here passes with or without the fix.
     //
-    // What IS worth pinning is that precedence rule itself: a host page must
-    // never be able to override a mode the operator deliberately set. That
-    // would be a real regression, and nothing else in the suite catches it.
+    // What this DOES pin is that precedence rule: a host page must never
+    // override a mode the operator deliberately set. Nothing else covers it.
     //
-    // Both loads are read-only GETs — the page only cancels on CancelForm's
-    // submit, which this block never clicks, so Step 5's booking is still live.
-    await anonPage.goto(cancelHref!);
-    await expect(anonPage.getByText("Powered by BIS")).toBeVisible();
-    const cancelUnhinted = await anonPage.locator(".bis-cancel-page").evaluate(
+    // A read-only GET — the page only cancels on CancelForm's submit, which
+    // this never clicks, so Step 5's booking is still live below.
+    await anonPage.goto(`${cancelHref!}${cancelHref!.includes("?") ? "&" : "?"}theme=light`);
+    await expect(anonPage.getByText(/Powered by|Con tecnología/)).toBeVisible();
+    const cancelHinted = await anonPage.locator(".bis-cancel-page").evaluate(
       (el) => getComputedStyle(el).backgroundColor,
     );
-    await anonPage.goto(`${cancelHref!}${cancelHref!.includes("?") ? "&" : "?"}theme=light`);
-    const cancelHinted = await anonPage.locator(".bis-cancel-page").evaluate(
+    await anonPage.goto(cancelHref!);
+    const cancelUnhinted = await anonPage.locator(".bis-cancel-page").evaluate(
       (el) => getComputedStyle(el).backgroundColor,
     );
     expect(cancelHinted, "a host's light hint must not override the operator's fixed dark mode")

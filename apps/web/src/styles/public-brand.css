@@ -9,6 +9,13 @@
   align-items: center;
   gap: 10px;
   padding: 16px 16px 0;
+  /* Reserve the logo's full height BEFORE it loads. The <img> carries no
+     width/height (the upload's dimensions are unknown), so without this the
+     row grows the moment the image arrives and shoves everything below it
+     down — on the booking page that is the week strip, moving under a finger
+     already reaching for a day. /b previously reserved a fixed 28x28 box and
+     lost it in the move to this shared rule; /f never had it. Costs nothing
+     when there is no logo: `:has()` only matches when one is rendered. */
   font: 400 15px/1.5 var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
   color: var(--foreground, #18181b);
   /* THE MEASURE. The brand header is a SIBLING of the column it heads, not a
@@ -19,6 +26,10 @@
   max-width: var(--public-measure, 34rem);
   margin-inline: auto;
 }
+/* 40px of CONTENT height — these routes deliberately load no globals.css and
+   so no border-box reset, which is what makes this the logo's full cap rather
+   than the cap minus the padding above. */
+.bis-brand:has(.bis-brand-logo) { min-height: 40px; }
 
 /* Capped in both directions so a large upload cannot dominate the page a
    customer came to in order to book, or to fill in a form. */

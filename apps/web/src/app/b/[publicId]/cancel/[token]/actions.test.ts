@@ -357,3 +357,32 @@ describe("confirmCancelAction — a calendar-row lookup problem never turns a co
     expect(sendMock).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * P7 gave this page the `?theme=` host hint its sibling `/b` has had since
+ * PR #22, so a dark host site stops embedding a light cancel page.
+ *
+ * Asserted STRUCTURALLY, in the house shape above, because no end-to-end
+ * assertion can prove it: `public-form-theme.ts:231` applies a hint only when
+ * the stored mode is null or "follow" ("a hint stands in for a mode nobody
+ * fixed"), and the e2e fixture fixes `brandMode: "dark"` (auth.setup.ts), so
+ * the hint is correctly ignored there before and after the change alike. A
+ * behavioural test on that fixture passes either way — which is exactly how
+ * this argument went missing in the first place: PR #22 edited this file to
+ * add `?locale=` and nothing noticed the theme argument was absent.
+ */
+describe("the host theme hint reaches the cancel page — structural", () => {
+  it("page.tsx parses ?theme= and passes it to publicFormTheme", () => {
+    const dir = fileURLToPath(new URL(".", import.meta.url));
+    const pageSrc = readFileSync(`${dir}page.tsx`, "utf8");
+
+    expect(pageSrc, "parseHostMode must be imported").toMatch(/parseHostMode/);
+    // The third argument specifically: publicFormTheme(branding, false) is the
+    // exact call shape this fix replaced, and it is what a careless revert
+    // would restore.
+    expect(
+      pageSrc.replace(/\s+/g, " "),
+      "publicFormTheme must receive a third argument derived from the query",
+    ).toMatch(/publicFormTheme\(\s*branding,\s*false,\s*parseHostMode\(/);
+  });
+});

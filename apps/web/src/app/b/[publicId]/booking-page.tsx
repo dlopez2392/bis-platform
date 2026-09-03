@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState, useSyncExternalStore, useTransition, type FormEvent } from "react";
+import {
+  useEffect, useMemo, useRef, useState, useSyncExternalStore, useTransition, type FormEvent,
+} from "react";
 import { HONEYPOT_FIELD, RENDER_TOKEN_FIELD } from "@/lib/forms/guards";
 import type { PublicLocale } from "@/lib/forms/public-strings";
 import { intlLocale, type BookingStrings } from "@/lib/booking/public-strings";
@@ -220,6 +222,32 @@ export function BookingPage({
   const step = bookingStep({ selectedSlot, succeeded: result?.ok === true });
 
   /**
+   * Tell an embedding host how tall this page actually is.
+   *
+   * embed.js has always LISTENED for `bis-form-height` (it handles the message
+   * generically, whichever path it embedded) but only `/f` ever posted it — so
+   * a booking embed stayed frozen at the 560px `minHeight` the script gives it,
+   * whatever the content did. That was survivable until P7 added the step row
+   * and the footer, which together push the Confirm button past the fold of
+   * that fixed frame on a real embedded page.
+   *
+   * Keyed on `step` as well as observing: the two return branches below are
+   * different DOM nodes, so the observer has to be re-attached when the flow
+   * moves between them.
+   */
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const node = rootRef.current;
+    if (!node || window.parent === window) return;
+    const post = () => window.parent.postMessage(
+      { type: "bis-form-height", height: node.getBoundingClientRect().height + 8 }, "*");
+    post();
+    const observer = new ResizeObserver(post);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [step]);
+
+  /**
    * DESIGN.md's booking-page pattern asks for step dots. Rendered from a
    * helper because BOTH return branches below need them — the success branch
    * early-returns, so an indicator placed only in the main branch would
@@ -260,7 +288,7 @@ export function BookingPage({
 
   if (result?.ok) {
     return (
-      <div className="bis-booking">
+      <div className="bis-booking" ref={rootRef}>
         <style>{BOOKING_CSS}</style>
         {steps}
         <p role="status" className="bis-booking-success-title">{strings.successTitle}</p>
@@ -276,7 +304,7 @@ export function BookingPage({
   }
 
   return (
-    <div className="bis-booking">
+    <div className="bis-booking" ref={rootRef}>
       <style>{BOOKING_CSS}</style>
       {steps}
 

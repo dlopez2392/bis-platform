@@ -53,9 +53,9 @@ const STRINGS = {
     cancelAlreadyCancelledTitle: "This booking has already been cancelled.",
     cancelPastTitle: "This booking has already happened.",
     cancelGenericError: "Something went wrong — the booking was not cancelled. Please try again.",
-    // DESIGN.md's booking-page pattern. A brand name does not translate, so
-    // the value is identical in both blocks — present in both so a later
-    // reader does not take one locale for an oversight.
+    // DESIGN.md's booking-page pattern. "BIS" is the proper noun; "Powered by"
+    // is an ordinary phrase and translates like any other — a Spanish booker
+    // was reading one English line at the foot of an otherwise Spanish page.
     poweredBy: "Powered by BIS",
     // The step indicator. The NAME carries the meaning, not the dot: DESIGN.md
     // rule 3 forbids status by colour alone.
@@ -92,7 +92,7 @@ const STRINGS = {
     cancelAlreadyCancelledTitle: "Esta cita ya fue cancelada.",
     cancelPastTitle: "Esta cita ya pasó.",
     cancelGenericError: "Algo salió mal — la cita no se canceló. Vuelve a intentarlo.",
-    poweredBy: "Powered by BIS",
+    poweredBy: "Con tecnología de BIS",
     stepsLabel: "Progreso de la reserva",
     step1: "Elige un horario",
     step2: "Tus datos",
