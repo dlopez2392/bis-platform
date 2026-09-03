@@ -14,11 +14,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  STATE_LABEL, STATE_TONE,
-} from "@/app/(dashboard)/dashboard/accounts/[accountId]/setup/setup-rail";
-import type { RailKind } from "@/lib/setup/setup-rail";
-import { cn } from "@/lib/utils";
+import { RailStates } from "./rail-states";
 import { m } from "@/lib/messages";
 
 export const dynamic = "force-dynamic";
@@ -37,8 +33,6 @@ export const dynamic = "force-dynamic";
  *
  * Every entry names its file, so this stays an index rather than a poster.
  */
-const RAIL_KINDS: RailKind[] = ["done", "open", "next", "skipped", "unknown", "locked"];
-
 function Section({
   title, file, children,
 }: { title: string; file: string; children: React.ReactNode }) {
@@ -100,20 +94,11 @@ export default async function StyleguidePage() {
 
         {/* DESIGN.md rule 3: status is never colour alone — dot + word. All
             six rail kinds, read straight off the rail's own exported maps so
-            this page can never drift from the wizard it documents. */}
+            this page can never drift from the wizard it documents. A client
+            component because those maps live in a "use client" module — see
+            rail-states.tsx for what that cost before it was one. */}
         <Section title="Status states (setup rail)" file="…/setup/setup-rail.tsx">
-          {RAIL_KINDS.map((kind) => (
-            <span
-              key={kind}
-              className={cn(
-                "inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs",
-                STATE_TONE[kind].chip,
-              )}
-            >
-              <span className={cn("size-1.5 rounded-full", STATE_TONE[kind].dot)} aria-hidden />
-              {STATE_LABEL[kind]}
-            </span>
-          ))}
+          <RailStates />
         </Section>
 
         <Section title="Form controls" file="components/ui/{input,label,checkbox}.tsx">
