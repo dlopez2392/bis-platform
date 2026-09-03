@@ -38,6 +38,24 @@ test.describe("the command palette, as the agency", () => {
     await expect(palette).toHaveCount(0);
   });
 
+  test("the shortcut still works while focus is in a text field", async ({ page }) => {
+    await openAccountByName(page, SEEDED_ACCOUNT_NAME);
+    await page.keyboard.press("ControlOrMeta+k");
+    const palette = page.getByRole(PALETTE);
+    await expect(palette).toBeVisible();
+
+    // cmdk focuses the palette's own input, so this press originates from an
+    // EDITABLE element — the case the "don't steal Ctrl+K in a text field"
+    // bail covers. That bail is macOS-only for a reason: on Windows and Linux
+    // Ctrl+K is the only shortcut there is, and applying the guard everywhere
+    // (as this shipped before review) made it impossible to close the palette
+    // with the same keys that opened it. Every other press in this file
+    // originates from document.body and cannot see that.
+    await expect(palette.getByRole("combobox")).toBeFocused();
+    await page.keyboard.press("ControlOrMeta+k");
+    await expect(palette).toHaveCount(0);
+  });
+
   test("a static destination is reachable with the keyboard alone", async ({ page }) => {
     await openAccountByName(page, SEEDED_ACCOUNT_NAME);
     await page.keyboard.press("ControlOrMeta+k");

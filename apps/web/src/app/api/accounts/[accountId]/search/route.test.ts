@@ -137,6 +137,11 @@ describe("account search route", () => {
 
     expect(body.conversations[0].href).toBe("/dashboard/accounts/a1/conversations?c=v1");
     expect(body.conversations[0].sublabel).toBe("cedar fence");
+    // A conversation hit carries NO date on purpose. `sublabel` is the MATCHED
+    // message but `lastMessageAt` is the thread's NEWEST one, so pairing them
+    // would caption a line from March with today's date. Pinned, because
+    // "restore the date" is an inviting one-character change.
+    expect(body.conversations[0].at).toBeNull();
   });
 
   it("falls back to the raw outcome rather than throwing on an unknown enum value", async () => {

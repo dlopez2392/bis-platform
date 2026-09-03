@@ -8,6 +8,9 @@ import {
 } from "@/components/ui/command";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
+// The SUBPATH, not "@bis/db": that barrel pulls in @supabase/supabase-js, and
+// this is a client component. search-term.ts is a standalone pure module.
+import { sanitizeSearchTerm } from "@bis/db/search-term";
 import { ACCOUNT_ROUTE_RE } from "@/lib/account-route";
 import {
   buildPaletteEntries, filterEntries, type PaletteEntry,
@@ -84,7 +87,13 @@ export function CommandPalette({ isAgency }: { isAgency: boolean }) {
   const base = accountId ? `/dashboard/accounts/${accountId}` : null;
   const entries = filterEntries(buildPaletteEntries(base, isAgency), query);
 
-  const q = query.trim();
+  // Sanitized, not merely trimmed, and measured against the SAME floor the
+  // route applies to the SAME transform. Gating on the raw string instead let
+  // "(a)" — three characters, one of them real — clear the floor here, fetch,
+  // come back empty, and print "Nothing matches “(a)”" when the honest answer
+  // was "keep typing". The two sides must agree or the palette lies about
+  // which of them rejected the query.
+  const q = sanitizeSearchTerm(query);
   const wantsLive = accountId !== null && q.length >= MIN_QUERY;
   /** Only a settled response FOR THIS EXACT QUERY counts. Anything else —
    *  never fetched, still debouncing, in flight, or answering an older
@@ -178,7 +187,9 @@ export function CommandPalette({ isAgency }: { isAgency: boolean }) {
         size="sm"
         onClick={() => setOpen(true)}
         aria-label={m["shell.search"]}
-        aria-keyshortcuts="Meta+K Control+K"
+        // Names the shortcut this machine actually honours, for the same
+        // reason the visible chip below does.
+        aria-keyshortcuts={isMac ? "Meta+K" : "Control+K"}
         className="gap-2 text-muted-foreground"
       >
         <span>{m["palette.searchHint"]}</span>
