@@ -40,7 +40,8 @@
   - `isLockedStep(key, views: SetupStepView[]): boolean` — locked exactly when `lockedPrereqKeys(key, views)` is non-empty.
     > **Corrected after review — do not reintroduce the `opts` version.** This originally read `isLockedStep(key, opts: { canTestCall, prereqsMet })`. `canTestCall` comes from `canEnableTestCalls`, which answers "should the *Enable test calls* button be live?" — and goes FALSE once the number reaches `testing`, a state that already means the number answers calls. That let `isLockedStep` say LOCKED while `lockedPrereqKeys` returned `[]`, i.e. a locked `test_call` pane with an empty reason list under it. Deriving the lock from the prerequisites themselves makes that divergence impossible by construction.
   - `lockedPrereqKeys(key, views: SetupStepView[]): SetupStepKey[]` — the unmet prerequisite keys to name in a locked pane (empty when not locked); the single source of truth the lock itself is derived from.
-  - `defaultStepKey(views: SetupStepView[]): SetupStepKey` — first not-done step, else the last step.
+  - `defaultStepKey(views: SetupStepView[]): SetupStepKey` — delegates to `nextStepKey(views)`, falling back to the last step when nothing is outstanding.
+    > **Corrected after the final review — do not reintroduce the bare `!v.done` find.** This originally read "first not-done step", which is a DIFFERENT predicate from the one the rail uses to ring a step "Current" (`nextStepKey`: `!done && !skipped && !unknown`). The two disagreed in real states: after skipping email, `/setup` with no `?step=` opened on "Email identity — Skipped" while the rail rang a later step as Current; a failed read did the same with a "Couldn't check" pane. One predicate, two readers.
   - `parseStepParam(raw: string | null | undefined, views: SetupStepView[]): SetupStepKey` — valid key → itself; missing/unknown/malformed → `defaultStepKey(views)`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -197,11 +198,18 @@ export function lockedPrereqKeys(
   return [];
 }
 
-/** Preselected step: the first one not yet done. When everything is done the
- *  wizard has nothing outstanding, so it opens on the last step (go-live)
- *  rather than an arbitrary one. */
+/** The step the rail rings as "Current": the first that is genuinely
+ *  actionable. Skipped and unknown steps are passed over deliberately —
+ *  pointing an operator at a step whose read FAILED is not guidance. */
+export function nextStepKey(views: SetupStepView[]): SetupStepKey | null {
+  return views.find((v) => !v.done && !v.skipped && !v.unknown)?.key ?? null;
+}
+
+/** Preselected step. Shares nextStepKey's predicate so the pane the wizard
+ *  opens on and the entry the rail rings can never be different steps. When
+ *  nothing is outstanding it opens on the last step (go-live). */
 export function defaultStepKey(views: SetupStepView[]): SetupStepKey {
-  return views.find((v) => !v.done)?.key ?? SETUP_STEP_KEYS[SETUP_STEP_KEYS.length - 1]!;
+  return nextStepKey(views) ?? SETUP_STEP_KEYS[SETUP_STEP_KEYS.length - 1]!;
 }
 
 /** `?step=` → a real key. Anything missing, unknown or malformed falls back

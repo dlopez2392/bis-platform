@@ -103,8 +103,11 @@ export function SetupRail({
 }) {
   return (
     <ol
-      // Sticky, which DESIGN.md's own layout line asks for ("stepper rail
-      // (~260px, sticky)") and the plain grid did not give: nine entries plus
+      // Sticky, which the P5 spec's Layout section asks for ("stepper rail
+      // (~260px, sticky)" —
+      // docs/superpowers/specs/2026-09-02-design-phase5-setup-wizard-design.md;
+      // DESIGN.md itself says nothing about a rail) and the plain grid did
+      // not give: nine entries plus
       // two locked hints is taller than a laptop viewport's content area, so
       // scrolling the pane scrolled the rail away with it and the operator
       // lost the map of where they were.

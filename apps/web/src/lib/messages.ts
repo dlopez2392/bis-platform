@@ -885,8 +885,15 @@ export const m = {
   // greeting (app-sidebar.tsx, dashboard/page.tsx: `brandName ?? name`). The
   // copy has to name that condition, or it invites an operator to type
   // "Rio Roofing — trial, chasing invoice" into a field the client can read.
+  // Names BOTH audiences on purpose. Until `brand_name` is set, `accounts.name`
+  // is the fallback in the client's own workspace (app-sidebar.tsx,
+  // dashboard/page.tsx) AND in mail their customers receive — emailBrand in
+  // lib/email/templates/shell.ts is `brandName ?? accountName`, which reaches
+  // booking confirmations, cancel notices, lead alerts and call emails. An
+  // operator typing "chasing invoice" here needs to know both before they
+  // type it, not after a customer reads it.
   "setup.rename.help":
-    "Your own label for this client. They see it when they sign in until you set a brand name in Branding — after that, they see the brand name.",
+    "Your own label for this client. Until you set a brand name in Branding, it's what they see when they sign in — and what their customers see in booking and lead emails.",
 } as const;
 
 export type MessageKey = keyof typeof m;
