@@ -6,7 +6,9 @@ import {
 } from "@bis/db";
 import { signRenderToken, parseAttribution } from "@/lib/forms/guards";
 import { partsInZone } from "@/lib/booking/slots";
-import { publicFormTheme } from "@/lib/branding/public-form-theme";
+import { publicFormTheme, parseHostMode } from "@/lib/branding/public-form-theme";
+import { normalizeLocale } from "@/lib/forms/public-strings";
+import { bookingStrings } from "@/lib/booking/public-strings";
 import { BookingPage } from "./booking-page";
 import { getSlotsAction, submitBookingAction } from "./actions";
 
@@ -106,7 +108,14 @@ export default async function PublicBookingPage({
   const branding: Branding = (await loadBranding(calendar.account_id, publicId)) ?? UNBRANDED;
   const timezone = await loadTimezone(calendar.account_id);
 
-  const { style, darkCss, themed } = publicFormTheme(branding, false);
+  // `?theme=` is the host page naming its own colour mode (forwarded by
+  // `embed.js` from `data-theme`); `?locale=` is the language `embed.js` has
+  // forwarded from `data-locale` all along, and which this route ignored
+  // until the first bilingual host embedded it. A calendar has no
+  // `locale_default` of its own the way a form does, so English is the
+  // fallback for an absent or unknown value.
+  const { style, darkCss, themed } = publicFormTheme(branding, false, parseHostMode(query.theme as string | undefined));
+  const locale = normalizeLocale(typeof query.locale === "string" ? query.locale : undefined, "en");
 
   // Same shape as `f/[publicId]/page.tsx`'s identical block: `embed.js`
   // lifts utm_*/gclid/fbclid off the HOST page (the iframe's own URL can
@@ -142,11 +151,13 @@ export default async function PublicBookingPage({
         </div>
       ) : null}
       <BookingPage
+        locale={locale}
+        strings={bookingStrings(locale)}
         todayKey={todayKey}
         maxAdvanceDays={calendar.max_advance_days}
         renderToken={issueRenderToken(publicId)}
         attribution={attribution}
-        getSlots={getSlotsAction.bind(null, publicId)}
+        getSlots={getSlotsAction.bind(null, publicId, locale)}
         submit={submitBookingAction.bind(null, publicId)}
       />
     </main>

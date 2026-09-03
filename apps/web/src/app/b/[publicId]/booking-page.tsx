@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState, useSyncExternalStore, useTransition, type FormEvent } from "react";
 import { HONEYPOT_FIELD, RENDER_TOKEN_FIELD } from "@/lib/forms/guards";
-import { m } from "@/lib/messages";
+import type { PublicLocale } from "@/lib/forms/public-strings";
+import { intlLocale, type BookingStrings } from "@/lib/booking/public-strings";
 import type { BookingResult } from "./actions";
 
 /** Pure calendar-day arithmetic on a `YYYY-MM-DD` key — no timezone lookup,
@@ -21,13 +22,14 @@ function addDays(dayKey: string, delta: number): string {
  *  explicitly — the recorded lesson: `Intl.DateTimeFormat` formats in the
  *  SYSTEM zone by default, and every zone behind UTC would otherwise render
  *  the day before the one this key actually names. */
-function dayLabel(dayKey: string): string {
-  // "en-US", never `undefined` (the house pattern — see `lib/format.ts`):
-  // this renders unconditionally on the FIRST paint, server and client
-  // alike, so an `undefined` locale resolves to the SERVER's locale during
-  // SSR and the BROWSER's during hydration — a mismatch for every visitor
-  // whose device isn't set to en-US, es-* included.
-  return new Intl.DateTimeFormat("en-US", {
+function dayLabel(dayKey: string, intl: "en-US" | "es-US"): string {
+  // An explicit tag, never `undefined` (the house pattern — see
+  // `lib/format.ts` and `intlLocale`): this renders unconditionally on the
+  // FIRST paint, server and client alike, so an `undefined` locale resolves
+  // to the SERVER's locale during SSR and the BROWSER's during hydration — a
+  // mismatch for every visitor whose device isn't set to the server's. The
+  // page's own locale is the one value both sides agree on.
+  return new Intl.DateTimeFormat(intl, {
     weekday: "short", month: "short", day: "numeric", timeZone: "UTC",
   }).format(new Date(`${dayKey}T12:00:00Z`));
 }
@@ -54,6 +56,10 @@ function getServerBookerTimezone(): null {
 }
 
 type Props = {
+  /** Resolved by page.tsx from `?locale=`; drives every string and every
+   *  `Intl` call below, and corrects `<html lang>` after hydration. */
+  locale: PublicLocale;
+  strings: BookingStrings;
   /** The account-zone calendar day this page was rendered on. */
   todayKey: string;
   maxAdvanceDays: number;
@@ -68,7 +74,10 @@ type Props = {
   submit: (formData: FormData) => Promise<BookingResult>;
 };
 
-export function BookingPage({ todayKey, maxAdvanceDays, renderToken, attribution, getSlots, submit }: Props) {
+export function BookingPage({
+  locale, strings, todayKey, maxAdvanceDays, renderToken, attribution, getSlots, submit,
+}: Props) {
+  const intl = intlLocale(locale);
   const [weekStart, setWeekStart] = useState(todayKey);
   const [selectedDay, setSelectedDay] = useState(todayKey);
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
@@ -105,6 +114,22 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, attribution
     subscribeToNothing, getBookerTimezone, getServerBookerTimezone,
   );
 
+  // Same correction `f/[publicId]/public-form.tsx` makes and for the same
+  // reason: the root layout cannot read `?locale=`, so the server always
+  // emits `<html lang="en">`. One tick late is the accepted gap.
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
+
+  // Tell the host page a booking just landed, the booking twin of the form's
+  // `bis-form-submitted`: the iframe boundary otherwise hides the conversion
+  // from a host site's own analytics. Nothing rides in the payload; the
+  // host's listener is the side that must check source and origin.
+  useEffect(() => {
+    if (!result?.ok || window.parent === window) return;
+    window.parent.postMessage({ type: "bis-booking-submitted" }, "*");
+  }, [result]);
+
   const lastBookableKey = useMemo(() => addDays(todayKey, maxAdvanceDays), [todayKey, maxAdvanceDays]);
   const weekDays = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
 
@@ -134,14 +159,14 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, attribution
       // error and no way out short of reloading the page.
       if (cancelled) return;
       console.error(`getSlots(${selectedDay}) failed client-side: ${String(e)}`);
-      setSlotsError(m["booking.public.genericError"]);
+      setSlotsError(strings.genericError);
       setSlots(null);
       setLoadingSlots(false);
     });
     return () => {
       cancelled = true;
     };
-  }, [selectedDay, reloadNonce, getSlots]);
+  }, [selectedDay, reloadNonce, getSlots, strings.genericError]);
 
   function selectDay(day: string) {
     setSelectedDay(day);
@@ -185,7 +210,7 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, attribution
         }
       } catch (e2) {
         console.error(`booking submit failed client-side: ${String(e2)}`);
-        setResult({ ok: false, error: m["booking.public.genericError"] });
+        setResult({ ok: false, error: strings.genericError });
         setLoadingSlots(false);
       }
     });
@@ -195,12 +220,12 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, attribution
     return (
       <div className="bis-booking">
         <style>{BOOKING_CSS}</style>
-        <p role="status" className="bis-booking-success-title">{m["booking.public.successTitle"]}</p>
-        <p className="bis-booking-success-body">{m["booking.public.successBody"]}</p>
+        <p role="status" className="bis-booking-success-title">{strings.successTitle}</p>
+        <p className="bis-booking-success-body">{strings.successBody}</p>
         {result.cancelUrl ? (
-          <p className="bis-booking-cancel-hint"><a href={result.cancelUrl}>{m["booking.public.cancelHint"]}</a></p>
+          <p className="bis-booking-cancel-hint"><a href={result.cancelUrl}>{strings.cancelHint}</a></p>
         ) : (
-          <p className="bis-booking-cancel-hint">{m["booking.public.cancelHint"]}</p>
+          <p className="bis-booking-cancel-hint">{strings.cancelHint}</p>
         )}
       </div>
     );
@@ -212,7 +237,7 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, attribution
 
       <div className="bis-booking-weekstrip">
         <button type="button" className="bis-booking-nav" onClick={() => goToWeek(-1)}
-                disabled={!canGoPrev} aria-label={m["booking.public.previousWeek"]}>‹</button>
+                disabled={!canGoPrev} aria-label={strings.previousWeek}>‹</button>
         <div className="bis-booking-days">
           {weekDays.map((day) => (
             <button
@@ -221,12 +246,12 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, attribution
               disabled={day < todayKey || day > lastBookableKey}
               onClick={() => selectDay(day)}
             >
-              {dayLabel(day)}
+              {dayLabel(day, intl)}
             </button>
           ))}
         </div>
         <button type="button" className="bis-booking-nav" onClick={() => goToWeek(1)}
-                disabled={!canGoNext} aria-label={m["booking.public.nextWeek"]}>›</button>
+                disabled={!canGoNext} aria-label={strings.nextWeek}>›</button>
       </div>
 
       {/* Both this label and the slot times below stay a placeholder until
@@ -236,7 +261,7 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, attribution
           keeps the label's line height stable rather than collapsing to
           nothing for that one frame. */}
       <p className="bis-booking-tzlabel">
-        {bookerTimezone ? m["booking.public.timezoneLabel"].replace("{zone}", bookerTimezone) : " "}
+        {bookerTimezone ? strings.timezoneLabel.replace("{zone}", bookerTimezone) : " "}
       </p>
 
       {!selectedSlot ? (
@@ -252,16 +277,16 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, attribution
             slots.map((iso) => (
               <button key={iso} type="button" className="bis-booking-slot" onClick={() => setSelectedSlot(iso)}>
                 {/* Gated behind `bookerTimezone` resolving (never SSR-rendered — see
-                    the `useSyncExternalStore` note above), but pinned to "en-US"
-                    anyway for the same house-pattern reason `dayLabel` is: no Intl
-                    call on this route should depend on the visitor's own locale. */}
-                {new Intl.DateTimeFormat("en-US", {
+                    the `useSyncExternalStore` note above), but pinned to the page's
+                    own tag anyway for the same house-pattern reason `dayLabel` is:
+                    no Intl call on this route should depend on the visitor's device. */}
+                {new Intl.DateTimeFormat(intl, {
                   hour: "numeric", minute: "2-digit", timeZone: bookerTimezone,
                 }).format(new Date(iso))}
               </button>
             ))
           ) : (
-            <p className="bis-booking-empty">{m["booking.public.noSlots"]}</p>
+            <p className="bis-booking-empty">{strings.noSlots}</p>
           )}
         </div>
       ) : (
@@ -269,7 +294,7 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, attribution
           <p className="bis-booking-chosen">
             {/* Same reasoning as the slot buttons above: never SSR-rendered
                 (only reachable once `selectedSlot` is set), pinned anyway. */}
-            {new Intl.DateTimeFormat("en-US", {
+            {new Intl.DateTimeFormat(intl, {
               weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
               // `bookerTimezone` cannot actually be null here: this branch only
               // renders once `selectedSlot` is set, which only happens via a
@@ -281,10 +306,14 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, attribution
             }).format(new Date(selectedSlot))}
             {" — "}
             <button type="button" className="bis-booking-link" onClick={() => setSelectedSlot(null)}>
-              {m["booking.public.changeTime"]}
+              {strings.changeTime}
             </button>
           </p>
 
+          {/* The action reads this back so its error strings match the page
+              the visitor is looking at — the same hidden field the sibling
+              form posts, for the same reason. */}
+          <input type="hidden" name="locale" value={locale} />
           <input type="hidden" name="slotStartsAt" value={selectedSlot} />
           <input type="hidden" name="bookerTimezone" value={bookerTimezone ?? "UTC"} />
           <input type="hidden" name="attribution" value={attribution} />
@@ -298,31 +327,31 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, attribution
           </div>
 
           <div className="bis-booking-row">
-            <label htmlFor="firstName">{m["booking.public.firstName"]}</label>
+            <label htmlFor="firstName">{strings.firstName}</label>
             <input id="firstName" name="firstName" type="text" required />
           </div>
           <div className="bis-booking-row">
             <label htmlFor="lastName">
-              {m["booking.public.lastName"]}{" "}
-              <span className="bis-booking-optional">({m["booking.public.optional"]})</span>
+              {strings.lastName}{" "}
+              <span className="bis-booking-optional">({strings.optional})</span>
             </label>
             <input id="lastName" name="lastName" type="text" />
           </div>
           <div className="bis-booking-row">
-            <label htmlFor="email">{m["booking.public.email"]}</label>
+            <label htmlFor="email">{strings.email}</label>
             <input id="email" name="email" type="email" required />
           </div>
           <div className="bis-booking-row">
             <label htmlFor="phone">
-              {m["booking.public.phone"]}{" "}
-              <span className="bis-booking-optional">({m["booking.public.optional"]})</span>
+              {strings.phone}{" "}
+              <span className="bis-booking-optional">({strings.optional})</span>
             </label>
             <input id="phone" name="phone" type="tel" />
           </div>
           <div className="bis-booking-row">
             <label htmlFor="note">
-              {m["booking.public.note"]}{" "}
-              <span className="bis-booking-optional">({m["booking.public.optional"]})</span>
+              {strings.note}{" "}
+              <span className="bis-booking-optional">({strings.optional})</span>
             </label>
             <textarea id="note" name="note" rows={3} />
           </div>
@@ -332,7 +361,7 @@ export function BookingPage({ todayKey, maxAdvanceDays, renderToken, attribution
           ) : null}
 
           <button type="submit" disabled={pending} className="bis-booking-submit">
-            {pending ? m["booking.public.submitting"] : m["booking.public.submit"]}
+            {pending ? strings.submitting : strings.submit}
           </button>
         </form>
       )}
