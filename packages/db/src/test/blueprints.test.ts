@@ -171,6 +171,20 @@ describe("blueprint capture", () => {
 });
 
 describe("blueprint apply", () => {
+  /**
+   * 60s, not the 20s file default. MEASURED, not guessed: this test takes
+   * ~17s alone on an idle machine (`vitest run blueprints.test.ts -t "applies
+   * configuration"`), leaving ~3s of headroom against the default — so under
+   * full-suite contention it intermittently timed out and took `pnpm check`
+   * red with it. It reproduces on a clean checkout with no other changes
+   * present, so this is a latent-since-P5 tripwire rather than a regression.
+   *
+   * The cost is inherent, not a slowdown to hide: this is the heaviest
+   * fixture test in the package — it opens TWO nested withTestAccount cycles
+   * (each a real account create + full FK-ordered teardown against the shared
+   * Supabase project), seeds a whole CRM config, captures a blueprint, then
+   * applies it twice. Nothing is asserted less strictly; only the clock moves.
+   */
   it("applies configuration, and applying twice creates nothing twice", () =>
     withTestAccount(async (db, sourceId) => {
       await seedConfig(db, sourceId);
@@ -202,7 +216,7 @@ describe("blueprint apply", () => {
         expect(second.skipped.length).toBeGreaterThan(0);
         expect(await countAll()).toEqual(afterFirst);
       });
-    }));
+    }), 60_000);
 
   it("an applied form is a draft with its own public id and no notify address", () =>
     withTestAccount(async (db, sourceId) => {
