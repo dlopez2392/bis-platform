@@ -53,6 +53,16 @@ const STRINGS = {
     cancelAlreadyCancelledTitle: "This booking has already been cancelled.",
     cancelPastTitle: "This booking has already happened.",
     cancelGenericError: "Something went wrong — the booking was not cancelled. Please try again.",
+    // DESIGN.md's booking-page pattern. A brand name does not translate, so
+    // the value is identical in both blocks — present in both so a later
+    // reader does not take one locale for an oversight.
+    poweredBy: "Powered by BIS",
+    // The step indicator. The NAME carries the meaning, not the dot: DESIGN.md
+    // rule 3 forbids status by colour alone.
+    stepsLabel: "Booking progress",
+    step1: "Pick a time",
+    step2: "Your details",
+    step3: "Confirmed",
   },
   es: {
     noSlots: "No hay horarios disponibles este día.",
@@ -82,6 +92,11 @@ const STRINGS = {
     cancelAlreadyCancelledTitle: "Esta cita ya fue cancelada.",
     cancelPastTitle: "Esta cita ya pasó.",
     cancelGenericError: "Algo salió mal — la cita no se canceló. Vuelve a intentarlo.",
+    poweredBy: "Powered by BIS",
+    stepsLabel: "Progreso de la reserva",
+    step1: "Elige un horario",
+    step2: "Tus datos",
+    step3: "Confirmado",
   },
 } as const;
 

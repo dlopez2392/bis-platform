@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore, useTransition, type
 import { HONEYPOT_FIELD, RENDER_TOKEN_FIELD } from "@/lib/forms/guards";
 import type { PublicLocale } from "@/lib/forms/public-strings";
 import { intlLocale, type BookingStrings } from "@/lib/booking/public-strings";
+import { bookingStep } from "@/lib/booking/steps";
 import type { BookingResult } from "./actions";
 
 /** Pure calendar-day arithmetic on a `YYYY-MM-DD` key — no timezone lookup,
@@ -216,10 +217,52 @@ export function BookingPage({
     });
   }
 
+  const step = bookingStep({ selectedSlot, succeeded: result?.ok === true });
+
+  /**
+   * DESIGN.md's booking-page pattern asks for step dots. Rendered from a
+   * helper because BOTH return branches below need them — the success branch
+   * early-returns, so an indicator placed only in the main branch would
+   * vanish at exactly the moment it reaches step 3.
+   *
+   * The dots do not carry the meaning on their own (DESIGN.md rule 3 forbids
+   * status by colour alone): the CURRENT step's name renders as visible text,
+   * and the other two stay in the accessibility tree so the list still reads
+   * as a three-step flow.
+   */
+  const steps = (
+    <ol className="bis-booking-steps" aria-label={strings.stepsLabel}>
+      {([1, 2, 3] as const).map((n) => (
+        <li
+          key={n}
+          className={`bis-booking-step${n === step ? " is-current" : ""}`}
+          {...(n === step ? { "aria-current": "step" as const } : {})}
+        >
+          <span className="bis-booking-step-dot" aria-hidden />
+          <span className="bis-booking-step-name">
+            {n === 1 ? strings.step1 : n === 2 ? strings.step2 : strings.step3}
+          </span>
+        </li>
+      ))}
+    </ol>
+  );
+
+  /* Opens in a new tab: this page is routinely embedded in an iframe on the
+     client's own site, and a same-tab navigation would replace the booking
+     the visitor is in the middle of making. */
+  const poweredBy = (
+    <p className="bis-booking-poweredby">
+      <a href="https://bis-rgv.com" target="_blank" rel="noopener noreferrer">
+        {strings.poweredBy}
+      </a>
+    </p>
+  );
+
   if (result?.ok) {
     return (
       <div className="bis-booking">
         <style>{BOOKING_CSS}</style>
+        {steps}
         <p role="status" className="bis-booking-success-title">{strings.successTitle}</p>
         <p className="bis-booking-success-body">{strings.successBody}</p>
         {result.cancelUrl ? (
@@ -227,6 +270,7 @@ export function BookingPage({
         ) : (
           <p className="bis-booking-cancel-hint">{strings.cancelHint}</p>
         )}
+        {poweredBy}
       </div>
     );
   }
@@ -234,6 +278,7 @@ export function BookingPage({
   return (
     <div className="bis-booking">
       <style>{BOOKING_CSS}</style>
+      {steps}
 
       <div className="bis-booking-weekstrip">
         <button type="button" className="bis-booking-nav" onClick={() => goToWeek(-1)}
@@ -365,6 +410,7 @@ export function BookingPage({
           </button>
         </form>
       )}
+      {poweredBy}
     </div>
   );
 }
@@ -378,10 +424,13 @@ export function BookingPage({
 // first paint and after hydration alike — including the brand header markup
 // `page.tsx` renders as this component's sibling.
 const BOOKING_CSS = `
-.bis-booking-page { background: var(--background, transparent); min-height: 100vh; }
-.bis-booking-brand { display: flex; align-items: center; gap: 8px; padding: 16px 16px 0; }
-.bis-booking-brand-logo { width: 28px; height: 28px; object-fit: contain; }
-.bis-booking-brand-name { font: 600 15px var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif); color: var(--foreground, #18181b); }
+/* --public-measure is this page's own column width, read by the shared brand
+   header in styles/public-brand.css. The header is a SIBLING of .bis-booking,
+   not a child, so without it the client's logo hung at the far left while the
+   column it heads sat centred — the bug /f had already fixed for itself. The
+   three .bis-booking-brand* rules that used to live here moved to that shared
+   sheet along with the form's copies of them. */
+.bis-booking-page { background: var(--background, transparent); min-height: 100vh; --public-measure: 480px; }
 .bis-booking {
   font: 400 15px/1.5 var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
   color: var(--foreground, #18181b);
@@ -409,7 +458,12 @@ const BOOKING_CSS = `
   outline: 2px solid var(--form-accent, #6d28d9); outline-offset: 1px; border-color: var(--form-accent, #6d28d9);
 }
 .bis-booking-empty { color: var(--muted-foreground, #71717a); grid-column: 1 / -1; }
-.bis-booking-error { color: #b91c1c; margin: 0 0 8px; }
+/* The token, not the literal. #b91c1c measures 2.93:1 on all three dark ramps
+   — under AA, on the sentence that tells a customer their email address is
+   wrong. --form-error is already emitted to this page by publicFormTheme and
+   is already lifted to 4.5:1 at source (public-form-theme.ts:176); /f has read
+   it since M4b and this page simply never did. */
+.bis-booking-error { color: var(--form-error, #b91c1c); margin: 0 0 8px; }
 .bis-booking-chosen { margin: 0 0 16px; }
 .bis-booking-link { font: inherit; background: none; border: none; padding: 0; color: var(--form-accent, #6d28d9); text-decoration: underline; cursor: pointer; }
 .bis-booking-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
@@ -433,4 +487,23 @@ const BOOKING_CSS = `
 .bis-booking-success-title { font-size: 17px; font-weight: 600; margin: 0 0 8px; }
 .bis-booking-success-body { color: var(--muted-foreground, #71717a); margin: 0 0 16px; }
 .bis-booking-cancel-hint { font-size: 13px; color: var(--muted-foreground, #71717a); }
+.bis-booking-steps { display: flex; align-items: center; gap: 8px; list-style: none; margin: 0 0 12px; padding: 0; }
+.bis-booking-step { display: flex; align-items: center; gap: 6px; }
+.bis-booking-step-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--muted-foreground, #71717a); opacity: 0.4; }
+.bis-booking-step.is-current .bis-booking-step-dot { background: var(--form-accent, #6d28d9); opacity: 1; }
+/* Visually hidden, still announced — the two steps the visitor is not on.
+   Only the current step's name is painted, which is what keeps the dots from
+   carrying the state on colour alone (DESIGN.md rule 3). */
+.bis-booking-step-name {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.bis-booking-step.is-current .bis-booking-step-name {
+  position: static; width: auto; height: auto; margin: 0; overflow: visible;
+  clip: auto; white-space: normal;
+  font-size: 13px; color: var(--muted-foreground, #71717a);
+}
+.bis-booking-poweredby { margin: 24px 0 0; font-size: 12px; text-align: center; }
+.bis-booking-poweredby a { color: var(--muted-foreground, #71717a); text-decoration: none; }
+.bis-booking-poweredby a:hover { text-decoration: underline; }
 `;

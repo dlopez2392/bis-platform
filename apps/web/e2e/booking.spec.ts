@@ -1,7 +1,7 @@
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, updateCalendarSettings } from "@bis/db";
-import { openFixtureCalendar } from "./support";
+import { openFixtureCalendar, paintedContrast } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase
 // from the Playwright runner process directly (cleanup below), not through a
@@ -255,8 +255,53 @@ test("a stranger books, the operator sees it, the slot dies and revives", async 
     const navigatedAt = Date.now();
     await anonPage.goto(publicPath);
 
+    // --- P7: the brand header tracks the column it heads --------------------
+    // The same property public-form-theme.spec.ts:118-129 already pins for /f.
+    // The brand header is a SIBLING of the booking column, not a child, so it
+    // needs the column's own measure or the client's logo hangs at the far
+    // left while the page it belongs to sits centred. No viewport change: the
+    // project's Desktop Chrome default is already 1280 wide, which is all this
+    // needs to expose the difference.
+    const boxOf = async (selector: string) => {
+      const b = await anonPage.locator(selector).boundingBox();
+      if (!b) throw new Error(`${selector} has no box — it did not render`);
+      return b;
+    };
+    const bookingColumn = await boxOf(".bis-booking");
+    const bookingBrand = await boxOf(".bis-brand");
+    expect(Math.abs(bookingBrand.x - bookingColumn.x), "the brand header tracks the column")
+      .toBeLessThanOrEqual(1);
+
+    await expect(anonPage.getByText("Powered by BIS")).toBeVisible();
+
     const { weeksForward, dayIndex, slotLabel } = await findFirstOfferedSlot(anonPage);
     await anonPage.locator("button.bis-booking-slot").first().click();
+
+    // --- P7: the error a customer reads must clear AA -----------------------
+    // The fixture is a THEMED tenant. A raw #b91c1c measures 2.93:1 on all
+    // three dark ramps — under AA, on the sentence telling someone their email
+    // address is wrong. /f tokenised this exact value for this exact reason
+    // (form.css:60); this page had not.
+    //
+    // Submitting empty is the cheapest way to render it, and it is SAFE here:
+    // actions.ts checks required fields BEFORE any spam guard ("Real errors,
+    // for real people, before any spam guard"), so this never trips the
+    // MIN_FILL_MS fake-success path and never writes a booking.
+    await anonPage.getByRole("button", { name: /confirm booking/i }).click();
+    const bookingError = anonPage.locator(".bis-booking-error").first();
+    await expect(bookingError).toBeVisible();
+    const errorColour = await bookingError.evaluate((el) => getComputedStyle(el).color);
+    const pageBackground = await anonPage.locator(".bis-booking-page").evaluate(
+      (el) => getComputedStyle(el).backgroundColor,
+    );
+    // Guard against a vacuous pass: .bis-booking-page paints
+    // `var(--background, transparent)`, and a transparent background would
+    // make any ratio meaningless rather than wrong.
+    expect(pageBackground, "the page must paint an opaque background to measure against")
+      .not.toBe("rgba(0, 0, 0, 0)");
+    expect(paintedContrast(errorColour, pageBackground),
+      "the error a customer reads must clear AA against the page it sits on")
+      .toBeGreaterThanOrEqual(4.5);
 
     await anonPage.getByLabel("First name").fill(bookerFirstName);
     await anonPage.getByLabel(/Last name/).fill(bookerLastName);
@@ -309,6 +354,33 @@ test("a stranger books, the operator sees it, the slot dies and revives", async 
     await anonPage.goto(publicPath);
     await goToDay(anonPage, weeksForward, dayIndex);
     await expect(anonPage.getByRole("button", { name: slotLabel, exact: true })).toHaveCount(0);
+
+    // --- P7: an operator's fixed mode outranks the host's hint --------------
+    // P7 gave this page the `?theme=` argument its sibling has had since
+    // PR #22. What that fix is worth CANNOT be proven on this fixture, and
+    // saying so is more useful than a test that looks like proof:
+    // `public-form-theme.ts:231` reads "a hint stands in for a mode nobody
+    // fixed" — it applies only when `stored.mode` is null or "follow" — and
+    // auth.setup.ts:205 fixes this fixture's `brandMode: "dark"`. So the hint
+    // is correctly ignored here, before and after the change alike.
+    //
+    // What IS worth pinning is that precedence rule itself: a host page must
+    // never be able to override a mode the operator deliberately set. That
+    // would be a real regression, and nothing else in the suite catches it.
+    //
+    // Both loads are read-only GETs — the page only cancels on CancelForm's
+    // submit, which this block never clicks, so Step 5's booking is still live.
+    await anonPage.goto(cancelHref!);
+    await expect(anonPage.getByText("Powered by BIS")).toBeVisible();
+    const cancelUnhinted = await anonPage.locator(".bis-cancel-page").evaluate(
+      (el) => getComputedStyle(el).backgroundColor,
+    );
+    await anonPage.goto(`${cancelHref!}${cancelHref!.includes("?") ? "&" : "?"}theme=light`);
+    const cancelHinted = await anonPage.locator(".bis-cancel-page").evaluate(
+      (el) => getComputedStyle(el).backgroundColor,
+    );
+    expect(cancelHinted, "a host's light hint must not override the operator's fixed dark mode")
+      .toBe(cancelUnhinted);
 
     // --- Step 5: cancel via the captured link, then idempotent replay ------
     await anonPage.goto(cancelHref!);

@@ -4,10 +4,12 @@ import { notFound } from "next/navigation";
 import {
   serviceDb, getBranding, brandLogoUrl, type Branding,
 } from "@bis/db";
-import { publicFormTheme } from "@/lib/branding/public-form-theme";
+import { publicFormTheme, parseHostMode } from "@/lib/branding/public-form-theme";
 import { safeZone, formatWhen } from "@/lib/booking/time";
 import { normalizeLocale } from "@/lib/forms/public-strings";
 import { bookingStrings } from "@/lib/booking/public-strings";
+import { PublicBrand } from "@/components/public-brand";
+import "@/styles/public-brand.css";
 import { lookupBookingByToken } from "./actions";
 import { CancelForm } from "./cancel-form";
 
@@ -105,7 +107,14 @@ export default async function CancelBookingPage({
 
   const branding = (await loadBranding(row.account_id, publicId, token)) ?? UNBRANDED;
   const timezone = await loadTimezone(row.account_id);
-  const { style, darkCss, themed } = publicFormTheme(branding, false);
+  // The third argument the booking page has had since PR #22 and this page did
+  // not: a host site rendering this in an iframe names its own colour mode with
+  // ?theme=, and the cancel page is the second page of that same flow — so a
+  // dark host embedded a light cancel page. Same `typeof` guard as ?locale=
+  // above, rather than the booking page's looser cast.
+  const { style, darkCss, themed } = publicFormTheme(
+    branding, false, parseHostMode(typeof query.theme === "string" ? query.theme : undefined),
+  );
 
   const bookerZone = safeZone(row.booker_timezone ?? undefined, timezone);
   const when = formatWhen(new Date(row.starts_at), bookerZone, locale);
@@ -117,15 +126,10 @@ export default async function CancelBookingPage({
     <main className="bis-cancel-page" style={style} {...(themed ? { "data-tenant-theme": "" } : {})}>
       {darkCss ? <style>{darkCss}</style> : null}
       <style>{CANCEL_CSS}</style>
-      {(branding.brandName || branding.brandLogoPath) ? (
-        <div className="bis-cancel-brand">
-          {branding.brandLogoPath ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={brandLogoUrl(branding.brandLogoPath)} alt="" className="bis-cancel-brand-logo" />
-          ) : null}
-          {branding.brandName ? <span className="bis-cancel-brand-name">{branding.brandName}</span> : null}
-        </div>
-      ) : null}
+      <PublicBrand
+        name={branding.brandName}
+        logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
+      />
 
       <div className="bis-cancel">
         <p className="bis-cancel-when">{when}</p>
@@ -143,6 +147,14 @@ export default async function CancelBookingPage({
           // exactly the "a failed cancel is silent" bug this fixes.
           <CancelForm publicId={publicId} token={token} locale={locale} strings={strings} />
         )}
+
+        {/* Same treatment and the same new-tab reasoning as the booking page's
+            own footer — this is the second page of that one flow. */}
+        <p className="bis-cancel-poweredby">
+          <a href="https://bis-rgv.com" target="_blank" rel="noopener noreferrer">
+            {strings.poweredBy}
+          </a>
+        </p>
       </div>
     </main>
   );
@@ -153,10 +165,10 @@ export default async function CancelBookingPage({
 // exactly these fallbacks, a themed one inherits the tokens `publicFormTheme`
 // already put on `<main>` above.
 const CANCEL_CSS = `
-.bis-cancel-page { background: var(--background, transparent); min-height: 100vh; }
-.bis-cancel-brand { display: flex; align-items: center; gap: 8px; padding: 16px 16px 0; }
-.bis-cancel-brand-logo { width: 28px; height: 28px; object-fit: contain; }
-.bis-cancel-brand-name { font: 600 15px var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif); color: var(--foreground, #18181b); }
+/* --public-measure: this page's own column width, read by the shared brand
+   header (styles/public-brand.css). Same sibling-not-child reasoning as the
+   booking page's own rule — see booking-page.tsx. */
+.bis-cancel-page { background: var(--background, transparent); min-height: 100vh; --public-measure: 480px; }
 .bis-cancel {
   font: 400 15px/1.5 var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
   color: var(--foreground, #18181b);
@@ -170,5 +182,9 @@ const CANCEL_CSS = `
   padding: 10px 18px; cursor: pointer;
 }
 .bis-cancel-submit:disabled { opacity: 0.6; cursor: not-allowed; }
-.bis-cancel-error { color: #b91c1c; margin: 12px 0 0; }
+/* Same AA reasoning as the booking page's own error rule — see booking-page.tsx. */
+.bis-cancel-error { color: var(--form-error, #b91c1c); margin: 12px 0 0; }
+.bis-cancel-poweredby { margin: 24px 0 0; font-size: 12px; text-align: center; }
+.bis-cancel-poweredby a { color: var(--muted-foreground, #71717a); text-decoration: none; }
+.bis-cancel-poweredby a:hover { text-decoration: underline; }
 `;

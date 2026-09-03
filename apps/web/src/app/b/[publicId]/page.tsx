@@ -9,6 +9,8 @@ import { partsInZone } from "@/lib/booking/slots";
 import { publicFormTheme, parseHostMode } from "@/lib/branding/public-form-theme";
 import { normalizeLocale } from "@/lib/forms/public-strings";
 import { bookingStrings } from "@/lib/booking/public-strings";
+import { PublicBrand } from "@/components/public-brand";
+import "@/styles/public-brand.css";
 import { BookingPage } from "./booking-page";
 import { getSlotsAction, submitBookingAction } from "./actions";
 
@@ -138,18 +140,10 @@ export default async function PublicBookingPage({
   return (
     <main className="bis-booking-page" style={style} {...(themed ? { "data-tenant-theme": "" } : {})}>
       {darkCss ? <style>{darkCss}</style> : null}
-      {(branding.brandName || branding.brandLogoPath) ? (
-        <div className="bis-booking-brand">
-          {branding.brandLogoPath ? (
-            // Decorative: the name beside it (when present) already carries the
-            // meaning; when there is no name either, there is nothing honest to
-            // caption an unfamiliar logo with.
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={brandLogoUrl(branding.brandLogoPath)} alt="" className="bis-booking-brand-logo" />
-          ) : null}
-          {branding.brandName ? <span className="bis-booking-brand-name">{branding.brandName}</span> : null}
-        </div>
-      ) : null}
+      <PublicBrand
+        name={branding.brandName}
+        logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
+      />
       <BookingPage
         locale={locale}
         strings={bookingStrings(locale)}
