@@ -549,35 +549,9 @@ export const m = {
   "blueprints.saveFailed": "Could not save the blueprint.",
   "blueprints.overwriteWarning": "\"{name}\" already exists (version {version}). Saving will replace it — there is no version history and no undo.",
 
-  // The public booking page — a stranger's own screen, reached at /b/<publicId>
-  // with no account context at all. Same audience as forms.* above: no
-  // internal roadmap label, ever (messages.test.ts enforces it repo-wide).
-  "booking.public.noSlots": "No times available this day.",
-  "booking.public.timezoneLabel": "Times shown in {zone}",
-  "booking.public.previousWeek": "Previous week",
-  "booking.public.nextWeek": "Next week",
-  "booking.public.firstName": "First name",
-  "booking.public.lastName": "Last name",
-  "booking.public.email": "Email",
-  "booking.public.phone": "Phone",
-  "booking.public.note": "Note",
-  "booking.public.optional": "optional",
-  "booking.public.required": "This field is required.",
-  "booking.public.invalidEmail": "Enter a valid email address.",
-  "booking.public.invalidPhone": "Enter a valid phone number.",
-  // Same deliberate carve-out `f/[publicId]/actions.ts`'s `tokenExpired`
-  // draws: a real visitor who left the tab open, not a spam signal, so this
-  // is the one render-token failure that gets its own honest message instead
-  // of the shared fake success.
-  "booking.public.tokenExpired": "This page has been open a while — please refresh and pick your time again.",
-  "booking.public.submit": "Confirm booking",
-  "booking.public.submitting": "Booking…",
-  "booking.public.changeTime": "Choose a different time",
-  "booking.public.slotTaken": "That time was just booked. Pick another below.",
-  "booking.public.genericError": "Something went wrong. Please try again.",
-  "booking.public.successTitle": "You're booked in.",
-  "booking.public.successBody": "We've sent a confirmation to your email.",
-  "booking.public.cancelHint": "Need to cancel or reschedule? Use the link in your confirmation email.",
+  // The public booking page's own strings (`booking.public.*`) moved to
+  // `lib/booking/public-strings.ts`, which carries them in both languages —
+  // this catalogue is single-locale by design and `/b` is not the dashboard.
 
   // The cancel-by-link page — `/b/<publicId>/cancel/<token>`, reached from
   // the confirmation and reminder emails. Same audience/rule as booking.public.*

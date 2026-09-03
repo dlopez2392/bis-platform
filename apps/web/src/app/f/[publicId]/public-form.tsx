@@ -81,6 +81,18 @@ export function PublicForm({
     }
   }, [state]);
 
+  // Tell the host page a submission just went through, so it can count the
+  // conversion in its own analytics. The iframe boundary otherwise makes the
+  // lead invisible to the host — which is fine for the lead (it is in the
+  // CRM) and not fine for a marketing site whose one number is "leads".
+  // `"*"` is acceptable outbound for the same reason the height message
+  // uses it: the payload carries nothing, and the host's listener is the
+  // side that must be strict about source and origin.
+  useEffect(() => {
+    if (state.status !== "success" || window.parent === window) return;
+    window.parent.postMessage({ type: "bis-form-submitted" }, "*");
+  }, [state.status]);
+
   const errors = state.status === "invalid" ? state.fieldErrors : {};
 
   return (

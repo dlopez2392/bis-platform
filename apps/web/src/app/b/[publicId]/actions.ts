@@ -22,7 +22,8 @@ import { toE164 } from "@/lib/voice/phone-number";
 // The SAME helper the sibling public-form action uses, not a re-implementation
 // (I3) — see its docstring in that file for why it is exported.
 import { setAttribution } from "@/app/f/[publicId]/actions";
-import { m } from "@/lib/messages";
+import { normalizeLocale } from "@/lib/forms/public-strings";
+import { bookingStrings } from "@/lib/booking/public-strings";
 
 export type BookingResult =
   | { ok: true; cancelUrl: string }
@@ -112,14 +113,17 @@ async function loadAccount(db: ReturnType<typeof serviceDb>, accountId: string) 
  *  instants — the zone the client renders them in is a display choice made
  *  downstream, not something this action needs to know. */
 export async function getSlotsAction(
-  publicId: string, dayIso: string,
+  publicId: string, locale: string, dayIso: string,
 ): Promise<{ slots: string[] } | { error: string }> {
+  // Bound by page.tsx from the resolved `?locale=`, but a server action is a
+  // public endpoint: an unknown value is English, never an exception.
+  const s = bookingStrings(normalizeLocale(locale, "en"));
   try {
-    if (!DAY_KEY_RE.test(dayIso)) return { error: m["booking.public.genericError"] };
+    if (!DAY_KEY_RE.test(dayIso)) return { error: s.genericError };
 
     const db = serviceDb();
     const calendar = await getCalendarByPublicId(db, publicId);
-    if (!calendar || !calendar.enabled) return { error: m["booking.public.genericError"] };
+    if (!calendar || !calendar.enabled) return { error: s.genericError };
 
     const account = await loadAccount(db, calendar.account_id);
     const timezone = account?.timezone ?? "UTC";
@@ -130,7 +134,7 @@ export async function getSlotsAction(
     return { slots: wanted.map((s) => s.startsAt.toISOString()) };
   } catch (e) {
     console.error(`getSlotsAction ${publicId} (${dayIso}) failed: ${String(e)}`);
-    return { error: m["booking.public.genericError"] };
+    return { error: s.genericError };
   }
 }
 
@@ -153,10 +157,14 @@ export async function getSlotsAction(
  *     `enrich()`/`notify()` draw in the sibling action.
  */
 export async function submitBookingAction(publicId: string, formData: FormData): Promise<BookingResult> {
+  // Read before the try: the outer catch below answers in this language too.
+  // The hidden `locale` field the page posts, normalised exactly as the
+  // sibling form action normalises its own — a crafted value is English.
+  const s = bookingStrings(normalizeLocale(String(formData.get("locale") ?? ""), "en"));
   try {
     const db = serviceDb();
     const calendar = await getCalendarByPublicId(db, publicId);
-    if (!calendar || !calendar.enabled) return { ok: false, error: m["booking.public.genericError"] };
+    if (!calendar || !calendar.enabled) return { ok: false, error: s.genericError };
 
     const h = await headers();
     const ipHash = hashIp(clientIp(h));
@@ -182,10 +190,10 @@ export async function submitBookingAction(publicId: string, formData: FormData):
 
     // --- Real errors, for real people, before any spam guard -------------
     if (!firstName || !email || !startsAtRaw) {
-      return { ok: false, error: m["booking.public.required"] };
+      return { ok: false, error: s.required };
     }
-    if (!isValidEmail(email)) return { ok: false, error: m["booking.public.invalidEmail"] };
-    if (phone && !isValidPhone(phone)) return { ok: false, error: m["booking.public.invalidPhone"] };
+    if (!isValidEmail(email)) return { ok: false, error: s.invalidEmail };
+    if (phone && !isValidPhone(phone)) return { ok: false, error: s.invalidPhone };
 
     // --- Guards on well-formed input --------------------------------------
     // Rate limit first: the only guard below that bounds anything, and the
@@ -193,7 +201,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     // pins and for the same reason.
     const windowStart = new Date(Date.now() - RATE_LIMIT_WINDOW_MS).toISOString();
     if (await countRecentBookings(db, calendar.id, ipHash, windowStart) >= RATE_LIMIT_MAX) {
-      return { ok: false, error: m["booking.public.genericError"] };
+      return { ok: false, error: s.genericError };
     }
 
     if (str(formData, HONEYPOT_FIELD) !== "") {
@@ -215,7 +223,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       // everyone else too. Telling them to refresh leaks nothing a bot doesn't
       // already know — `issuedAt` is plaintext in the token it holds.
       if (token.reason === "expired") {
-        return { ok: false, error: m["booking.public.tokenExpired"] };
+        return { ok: false, error: s.tokenExpired };
       }
       // `malformed`/`bad_signature` stay folded into the shared fake success —
       // unlike `expired`, there is no real visitor on the other end of those.
@@ -231,7 +239,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     const bookerZone = safeZone(bookerTimezoneRaw, timezone);
 
     const startsAt = new Date(startsAtRaw);
-    if (Number.isNaN(startsAt.getTime())) return { ok: false, error: m["booking.public.genericError"] };
+    if (Number.isNaN(startsAt.getTime())) return { ok: false, error: s.genericError };
     const endsAt = new Date(startsAt.getTime() + calendar.slot_duration_minutes * 60_000);
 
     // App-level re-check BEFORE any write (I2): a rejected instant must never
@@ -247,7 +255,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     const stillFree = (await computeAllSlots(db, calendar, timezone, now)).some(
       (s) => s.startsAt.getTime() === startsAt.getTime() && s.endsAt.getTime() === endsAt.getTime(),
     );
-    if (!stillFree) return { ok: false, error: m["booking.public.slotTaken"], slotTaken: true };
+    if (!stillFree) return { ok: false, error: s.slotTaken, slotTaken: true };
 
     // Video room, minted before the booking row exists (Task 3). No
     // ordering requirement forces this after `createBooking`: the real
@@ -307,7 +315,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       }, ACTOR_ID, ACTOR_TYPE));
     } catch (e) {
       if (e instanceof SlotTakenError) {
-        return { ok: false, error: m["booking.public.slotTaken"], slotTaken: true };
+        return { ok: false, error: s.slotTaken, slotTaken: true };
       }
       throw e;
     }
@@ -420,6 +428,6 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     return { ok: true, cancelUrl };
   } catch (e) {
     console.error(`submitBookingAction ${publicId} failed: ${String(e)}`);
-    return { ok: false, error: m["booking.public.genericError"] };
+    return { ok: false, error: s.genericError };
   }
 }

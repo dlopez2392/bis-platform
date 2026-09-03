@@ -130,7 +130,7 @@ import { SlotTakenError } from "@bis/db";
 import {
   signRenderToken, RENDER_TOKEN_FIELD, HONEYPOT_FIELD, RATE_LIMIT_MAX,
 } from "@/lib/forms/guards";
-import { m } from "@/lib/messages";
+import { bookingStrings } from "@/lib/booking/public-strings";
 
 const PUBLIC_ID = "cal_test1234";
 
@@ -254,7 +254,7 @@ describe("submitBookingAction — spam gates (each mutation named)", () => {
   it("invalid email: field error, no writes (mutation: drop the email check → FAILS)", async () => {
     const result = await submitBookingAction(PUBLIC_ID, validFormData({ email: "not-an-email" }));
 
-    expect(result).toEqual({ ok: false, error: m["booking.public.invalidEmail"] });
+    expect(result).toEqual({ ok: false, error: bookingStrings("en").invalidEmail });
     expect(createContactMock).not.toHaveBeenCalled();
   });
 });
@@ -402,7 +402,7 @@ describe("submitBookingAction — I1: the two previously-unpinned guards", () =>
 
     const result = await submitBookingAction(PUBLIC_ID, validFormData({ slotStartsAt: offGrid }));
 
-    expect(result).toEqual({ ok: false, error: m["booking.public.slotTaken"], slotTaken: true });
+    expect(result).toEqual({ ok: false, error: bookingStrings("en").slotTaken, slotTaken: true });
     expect(createContactMock).not.toHaveBeenCalled();
     expect(createBookingMock).not.toHaveBeenCalled();
   });
@@ -412,7 +412,7 @@ describe("submitBookingAction — I1: the two previously-unpinned guards", () =>
 
     const result = await submitBookingAction(PUBLIC_ID, validFormData());
 
-    expect(result).toEqual({ ok: false, error: m["booking.public.genericError"] });
+    expect(result).toEqual({ ok: false, error: bookingStrings("en").genericError });
     expect(createContactMock).not.toHaveBeenCalled();
     expect(createBookingMock).not.toHaveBeenCalled();
   });
@@ -442,7 +442,7 @@ describe("submitBookingAction — C3: an expired render token is a real failure,
 
     const result = await submitBookingAction(PUBLIC_ID, validFormData({ [RENDER_TOKEN_FIELD]: expiredToken }));
 
-    expect(result).toEqual({ ok: false, error: m["booking.public.tokenExpired"] });
+    expect(result).toEqual({ ok: false, error: bookingStrings("en").tokenExpired });
     expect(createContactMock).not.toHaveBeenCalled();
     expect(createBookingMock).not.toHaveBeenCalled();
     expect(sendMock).not.toHaveBeenCalled();
@@ -462,7 +462,7 @@ describe("submitBookingAction — I3: loadAccount does not swallow its query err
 
     const result = await submitBookingAction(PUBLIC_ID, validFormData());
 
-    expect(result).toEqual({ ok: false, error: m["booking.public.genericError"] });
+    expect(result).toEqual({ ok: false, error: bookingStrings("en").genericError });
     expect(createContactMock).not.toHaveBeenCalled();
   });
 });
@@ -503,7 +503,7 @@ describe("submitBookingAction — SlotTakenError", () => {
 
     const result = await submitBookingAction(PUBLIC_ID, validFormData());
 
-    expect(result).toEqual({ ok: false, error: m["booking.public.slotTaken"], slotTaken: true });
+    expect(result).toEqual({ ok: false, error: bookingStrings("en").slotTaken, slotTaken: true });
     expect(ensureConversationMock).not.toHaveBeenCalled();
     expect(createMessageMock).not.toHaveBeenCalled();
     expect(sendMock).not.toHaveBeenCalled();
@@ -653,7 +653,7 @@ describe("getSlotsAction", () => {
     const dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: accountRow.timezone })
       .format(slot.startsAt); // en-CA formats as YYYY-MM-DD
 
-    const result = await getSlotsAction(PUBLIC_ID, dayKey);
+    const result = await getSlotsAction(PUBLIC_ID, "en", dayKey);
 
     expect("slots" in result).toBe(true);
     if ("slots" in result) {
@@ -665,8 +665,39 @@ describe("getSlotsAction", () => {
   it("errors for a disabled calendar", async () => {
     getCalendarByPublicIdMock.mockResolvedValue(calendarRow({ enabled: false }));
 
-    const result = await getSlotsAction(PUBLIC_ID, "2026-01-01");
+    const result = await getSlotsAction(PUBLIC_ID, "en", "2026-01-01");
 
     expect("error" in result).toBe(true);
+  });
+
+  it("answers in the page's language: a Spanish page gets the Spanish error", async () => {
+    getCalendarByPublicIdMock.mockResolvedValue(calendarRow({ enabled: false }));
+
+    const result = await getSlotsAction(PUBLIC_ID, "es", "2026-01-01");
+
+    expect(result).toEqual({ error: bookingStrings("es").genericError });
+  });
+
+  it("treats an unknown locale as English rather than throwing", async () => {
+    getCalendarByPublicIdMock.mockResolvedValue(calendarRow({ enabled: false }));
+
+    const result = await getSlotsAction(PUBLIC_ID, "fr", "2026-01-01");
+
+    expect(result).toEqual({ error: bookingStrings("en").genericError });
+  });
+});
+
+describe("submitBookingAction — the hidden locale field picks the language of every error", () => {
+  it("a Spanish page's invalid email comes back in Spanish, with no writes", async () => {
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ locale: "es", email: "nope" }));
+
+    expect(result).toEqual({ ok: false, error: bookingStrings("es").invalidEmail });
+    expect(createContactMock).not.toHaveBeenCalled();
+  });
+
+  it("a missing or crafted locale is English", async () => {
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ locale: "pt-BR", email: "nope" }));
+
+    expect(result).toEqual({ ok: false, error: bookingStrings("en").invalidEmail });
   });
 });
