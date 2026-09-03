@@ -6,9 +6,10 @@ import {
 } from "@bis/db";
 import { publicFormTheme } from "@/lib/branding/public-form-theme";
 import { safeZone, formatWhen } from "@/lib/booking/time";
+import { normalizeLocale } from "@/lib/forms/public-strings";
+import { bookingStrings } from "@/lib/booking/public-strings";
 import { lookupBookingByToken } from "./actions";
 import { CancelForm } from "./cancel-form";
-import { m } from "@/lib/messages";
 
 export const dynamic = "force-dynamic";
 
@@ -79,11 +80,18 @@ export async function generateMetadata(
  */
 
 export default async function CancelBookingPage({
-  params,
+  params, searchParams,
 }: {
   params: Promise<{ publicId: string; token: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { publicId, token } = await params;
+  // The confirmation email links here with `?locale=es` for a Spanish
+  // booker; the same fallback as the booking page — English for anything
+  // absent or unknown.
+  const query = await searchParams;
+  const locale = normalizeLocale(typeof query.locale === "string" ? query.locale : undefined, "en");
+  const strings = bookingStrings(locale);
 
   // `lookupBookingByToken` (via the `loadBooking` cache wrapper above) is a
   // plain SELECT — this is what lets the four states below (unknown /
@@ -100,7 +108,7 @@ export default async function CancelBookingPage({
   const { style, darkCss, themed } = publicFormTheme(branding, false);
 
   const bookerZone = safeZone(row.booker_timezone ?? undefined, timezone);
-  const when = formatWhen(new Date(row.starts_at), bookerZone);
+  const when = formatWhen(new Date(row.starts_at), bookerZone, locale);
 
   const isCancelled = row.status === "cancelled";
   const isPast = row.status === "completed" || row.status === "no_show";
@@ -123,9 +131,9 @@ export default async function CancelBookingPage({
         <p className="bis-cancel-when">{when}</p>
 
         {isCancelled ? (
-          <p role="status" className="bis-cancel-title">{m["booking.cancel.alreadyCancelledTitle"]}</p>
+          <p role="status" className="bis-cancel-title">{strings.cancelAlreadyCancelledTitle}</p>
         ) : isPast ? (
-          <p role="status" className="bis-cancel-title">{m["booking.cancel.pastTitle"]}</p>
+          <p role="status" className="bis-cancel-title">{strings.cancelPastTitle}</p>
         ) : (
           // `CancelForm` is the one client component on this route: the
           // GET-time state above (cancelled / past / unknown-via-notFound)
@@ -133,7 +141,7 @@ export default async function CancelBookingPage({
           // hold and show `CancelResult.error` — the plain server-action
           // form this replaced discarded that result entirely, which is
           // exactly the "a failed cancel is silent" bug this fixes.
-          <CancelForm publicId={publicId} token={token} />
+          <CancelForm publicId={publicId} token={token} locale={locale} strings={strings} />
         )}
       </div>
     </main>

@@ -31,8 +31,14 @@ export function safeZone(tz: string | undefined, fallback: string): string {
 
 // Exported for the same reason `safeZone` above is: the cancel flow renders
 // and mails the identical "when" shape this route already established.
-export function formatWhen(instant: Date, timeZone: string): string {
-  return new Intl.DateTimeFormat("en-US", {
+//
+// `locale` is the BOOKER's language (the page's `?locale=`), for the strings
+// the booker reads — their confirmation, their cancel page. Operator-facing
+// strings (the alert, the conversation thread) keep the default: the
+// dashboard is English. Anything but "es" is English, never a RangeError
+// after a booking has already committed.
+export function formatWhen(instant: Date, timeZone: string, locale: "en" | "es" = "en"): string {
+  return new Intl.DateTimeFormat(locale === "es" ? "es-US" : "en-US", {
     timeZone, weekday: "short", month: "short", day: "numeric",
     hour: "numeric", minute: "2-digit", timeZoneName: "short",
   }).format(instant);

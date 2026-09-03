@@ -1,10 +1,11 @@
 "use client";
 
 import { useActionState } from "react";
-import { m } from "@/lib/messages";
+import type { PublicLocale } from "@/lib/forms/public-strings";
+import type { BookingStrings } from "@/lib/booking/public-strings";
 import { confirmCancelAction, type CancelResult } from "./actions";
 
-type Props = { publicId: string; token: string };
+type Props = { publicId: string; token: string; locale: PublicLocale; strings: BookingStrings };
 
 /**
  * IMPORTANT fix: a failed cancel used to be silent. `page.tsx`'s old inline
@@ -26,9 +27,9 @@ type Props = { publicId: string; token: string };
  * `useActionState`'s signature instead of `<form action>`'s
  * `void | Promise<void>` one.
  */
-export function CancelForm({ publicId, token }: Props) {
+export function CancelForm({ publicId, token, locale, strings }: Props) {
   const [result, formAction, pending] = useActionState<CancelResult | null, FormData>(
-    async () => confirmCancelAction(publicId, token),
+    async () => confirmCancelAction(publicId, token, locale),
     null,
   );
 
@@ -38,15 +39,15 @@ export function CancelForm({ publicId, token }: Props) {
   // says it in identical words for a visitor who reloads this same link.
   // Reusing that message keeps the two paths from ever drifting apart.
   if (result?.ok) {
-    return <p role="status" className="bis-cancel-title">{m["booking.cancel.alreadyCancelledTitle"]}</p>;
+    return <p role="status" className="bis-cancel-title">{strings.cancelAlreadyCancelledTitle}</p>;
   }
 
   return (
     <>
-      <p className="bis-cancel-title">{m["booking.cancel.confirmTitle"]}</p>
+      <p className="bis-cancel-title">{strings.cancelConfirmTitle}</p>
       <form action={formAction}>
         <button type="submit" disabled={pending} className="bis-cancel-submit">
-          {m["booking.cancel.confirmButton"]}
+          {strings.cancelConfirmButton}
         </button>
       </form>
       {result && !result.ok ? (

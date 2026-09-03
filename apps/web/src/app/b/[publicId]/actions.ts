@@ -24,6 +24,7 @@ import { toE164 } from "@/lib/voice/phone-number";
 import { setAttribution } from "@/app/f/[publicId]/actions";
 import { normalizeLocale } from "@/lib/forms/public-strings";
 import { bookingStrings } from "@/lib/booking/public-strings";
+import { bookingConfirmationSubject } from "@/lib/email/templates/booking";
 
 export type BookingResult =
   | { ok: true; cancelUrl: string }
@@ -160,7 +161,8 @@ export async function submitBookingAction(publicId: string, formData: FormData):
   // Read before the try: the outer catch below answers in this language too.
   // The hidden `locale` field the page posts, normalised exactly as the
   // sibling form action normalises its own — a crafted value is English.
-  const s = bookingStrings(normalizeLocale(String(formData.get("locale") ?? ""), "en"));
+  const locale = normalizeLocale(String(formData.get("locale") ?? ""), "en");
+  const s = bookingStrings(locale);
   try {
     const db = serviceDb();
     const calendar = await getCalendarByPublicId(db, publicId);
@@ -329,11 +331,16 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     // probe), but this keeps it true by structure rather than by trust — a
     // formatting failure here can no longer escape to the outer catch and turn
     // a successful insert into a reported failure. -------------------------
+    // `whenCompanyZone` is operator-facing (the alert, the thread) and stays
+    // English; the two `*ForBooker` strings are the same instants in the
+    // booker's own language, for the one email the booker reads.
     let whenCompanyZone = "";
     let whenBookerZone = "";
+    let whenCompanyZoneForBooker = "";
     try {
       whenCompanyZone = formatWhen(startsAt, timezone);
-      whenBookerZone = formatWhen(startsAt, bookerZone);
+      whenBookerZone = formatWhen(startsAt, bookerZone, locale);
+      whenCompanyZoneForBooker = formatWhen(startsAt, timezone, locale);
       const convo = await ensureConversation(db, calendar.account_id, contactId, ACTOR_ID, ACTOR_TYPE);
       const body = [`Booking: ${whenCompanyZone}`, ...(note ? [`Note: ${note}`] : [])].join("\n");
       await createMessage(db, calendar.account_id, {
@@ -359,7 +366,13 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     // provider) — the booking is already real by this point (`createBooking`
     // above committed), so the response this action returns must carry a
     // real cancelUrl regardless of whether anything past this line succeeds.
-    const cancelUrl = originFrom(h) ? `${originFrom(h)}/b/${publicId}/cancel/${cancelToken}` : "";
+    //
+    // The cancel page reads `?locale=` the way this page does, so a Spanish
+    // booker's link opens a Spanish page. English is the page's default and
+    // carries no parameter, which keeps every existing link and test intact.
+    const cancelUrl = originFrom(h)
+      ? `${originFrom(h)}/b/${publicId}/cancel/${cancelToken}${locale === "es" ? "?locale=es" : ""}`
+      : "";
 
     // Everything below is best-effort, structurally, not just by convention:
     // `getEmailProvider()` THROWS the moment RESEND_API_KEY/EMAIL_FROM is
@@ -414,11 +427,11 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       }
 
       const { html, text } = bookingConfirmationEmail({
-        brand, whenBookerZone, whenCompanyZone, cancelUrl, meetingUrl,
+        brand, locale, whenBookerZone, whenCompanyZone: whenCompanyZoneForBooker, cancelUrl, meetingUrl,
       });
       await provider.send({
         to: email, fromName: brand.name, fromAddress: account?.from_email ?? undefined,
-        replyTo: normalizeReplyTo(account?.reply_to_email), subject: "You're booked in",
+        replyTo: normalizeReplyTo(account?.reply_to_email), subject: bookingConfirmationSubject(locale),
         body: text, html,
       });
     } catch (e) {

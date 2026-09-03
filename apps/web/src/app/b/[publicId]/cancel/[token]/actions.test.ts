@@ -128,7 +128,7 @@ vi.mock("@bis/db", () => ({
 
 import { confirmCancelAction, lookupBookingByToken } from "./actions";
 import { serviceDb } from "@bis/db";
-import { m } from "@/lib/messages";
+import { bookingStrings } from "@/lib/booking/public-strings";
 
 const PUBLIC_ID = "cal_test1234";
 const TOKEN = "tok_abc123";
@@ -295,7 +295,15 @@ describe("confirmCancelAction — IMPORTANT: a failed cancel is no longer silent
 
     const result = await confirmCancelAction(PUBLIC_ID, TOKEN);
 
-    expect(result).toEqual({ ok: false, error: m["booking.cancel.genericError"] });
+    expect(result).toEqual({ ok: false, error: bookingStrings("en").cancelGenericError });
+  });
+
+  it("answers in the page's language: a Spanish page gets the Spanish error", async () => {
+    cancelBookingByTokenMock.mockRejectedValue(new Error("db down"));
+
+    const result = await confirmCancelAction(PUBLIC_ID, TOKEN, "es");
+
+    expect(result).toEqual({ ok: false, error: bookingStrings("es").cancelGenericError });
   });
 });
 

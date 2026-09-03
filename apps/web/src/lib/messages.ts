@@ -553,18 +553,8 @@ export const m = {
   // `lib/booking/public-strings.ts`, which carries them in both languages —
   // this catalogue is single-locale by design and `/b` is not the dashboard.
 
-  // The cancel-by-link page — `/b/<publicId>/cancel/<token>`, reached from
-  // the confirmation and reminder emails. Same audience/rule as booking.public.*
-  // above: no internal roadmap label, ever.
-  "booking.cancel.confirmTitle": "Cancel this booking?",
-  "booking.cancel.confirmButton": "Cancel booking",
-  // Deliberately the SAME copy for a booking this action just cancelled and
-  // one a second click on the same link finds already cancelled — a replay
-  // is a state, not an error, and the two are indistinguishable to a visitor
-  // by design (see `cancelBookingByToken`'s own doc comment).
-  "booking.cancel.alreadyCancelledTitle": "This booking has already been cancelled.",
-  "booking.cancel.pastTitle": "This booking has already happened.",
-  "booking.cancel.genericError": "Something went wrong. Please try again.",
+  // The cancel-by-link page's strings (`booking.cancel.*`) live beside the
+  // booking page's in `lib/booking/public-strings.ts`, in both languages.
 
   // The operator Calendar page — /dashboard/accounts/<id>/calendar. Reachable
   // by BOTH audiences (calendar is the client's own business data, same as

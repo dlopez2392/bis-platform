@@ -42,6 +42,17 @@ const STRINGS = {
     successTitle: "You're booked in.",
     successBody: "We've sent a confirmation to your email.",
     cancelHint: "Need to cancel or reschedule? Use the link in your confirmation email.",
+    // The cancel-by-link page — `/b/<publicId>/cancel/<token>`, reached from
+    // the confirmation and reminder emails.
+    cancelConfirmTitle: "Cancel this booking?",
+    cancelConfirmButton: "Cancel booking",
+    // Deliberately the SAME copy for a booking this action just cancelled and
+    // one a second click on the same link finds already cancelled — a replay
+    // is a state, not an error, and the two are indistinguishable to a
+    // visitor by design (see `cancelBookingByToken`'s own doc comment).
+    cancelAlreadyCancelledTitle: "This booking has already been cancelled.",
+    cancelPastTitle: "This booking has already happened.",
+    cancelGenericError: "Something went wrong — the booking was not cancelled. Please try again.",
   },
   es: {
     noSlots: "No hay horarios disponibles este día.",
@@ -66,6 +77,11 @@ const STRINGS = {
     successTitle: "Tu cita quedó agendada.",
     successBody: "Te enviamos una confirmación a tu correo.",
     cancelHint: "¿Necesitas cancelar o reprogramar? Usa el enlace de tu correo de confirmación.",
+    cancelConfirmTitle: "¿Cancelar esta cita?",
+    cancelConfirmButton: "Cancelar cita",
+    cancelAlreadyCancelledTitle: "Esta cita ya fue cancelada.",
+    cancelPastTitle: "Esta cita ya pasó.",
+    cancelGenericError: "Algo salió mal — la cita no se canceló. Vuelve a intentarlo.",
   },
 } as const;
 

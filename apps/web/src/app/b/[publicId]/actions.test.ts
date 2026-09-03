@@ -701,3 +701,43 @@ describe("submitBookingAction — the hidden locale field picks the language of 
     expect(result).toEqual({ ok: false, error: bookingStrings("en").invalidEmail });
   });
 });
+
+describe("submitBookingAction — a Spanish booker gets a Spanish confirmation", () => {
+  it("subject, copy and when-strings in Spanish; the cancel link opens the Spanish page", async () => {
+    vi.mocked(headers).mockResolvedValue(
+      new Headers({ "user-agent": "test-agent", host: "book.example.com", "x-forwarded-proto": "https" }) as never,
+    );
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ locale: "es" }));
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.cancelUrl).toBe(`https://book.example.com/b/${PUBLIC_ID}/cancel/tok_1?locale=es`);
+
+    const confirmation = sendMock.mock.calls.map((c) => c[0]).find((c) => c.to === "maria@example.com");
+    expect(confirmation.subject).toBe("Tu cita quedó agendada");
+    expect(confirmation.body).toContain("Tu cita quedó agendada.");
+    // Booker in New York, company in Chicago: both lines, both in Spanish.
+    expect(confirmation.body).toContain("para nosotros");
+    expect(confirmation.body).not.toMatch(/\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b/);
+    expect(confirmation.body).toContain(`/cancel/tok_1?locale=es`);
+  });
+
+  it("the operator's alert and thread stay English regardless", async () => {
+    await submitBookingAction(PUBLIC_ID, validFormData({ locale: "es" }));
+
+    const alert = sendMock.mock.calls.map((c) => c[0]).find((c) => c.to === "owner@acme.com");
+    expect(alert.subject).toMatch(/^New booking: /);
+    expect(alert.body).toContain("New booking from Maria Lopez.");
+    expect(createMessageMock.mock.calls[0]![2].body).toMatch(/^Booking: /);
+  });
+
+  it("an English booker's cancel link carries no locale parameter, exactly as before", async () => {
+    vi.mocked(headers).mockResolvedValue(
+      new Headers({ "user-agent": "test-agent", host: "book.example.com", "x-forwarded-proto": "https" }) as never,
+    );
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+    if (result.ok) expect(result.cancelUrl).not.toContain("locale");
+    const confirmation = sendMock.mock.calls.map((c) => c[0]).find((c) => c.to === "maria@example.com");
+    expect(confirmation.subject).toBe("You're booked in");
+  });
+});

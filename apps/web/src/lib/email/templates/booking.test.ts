@@ -306,3 +306,29 @@ describe("bookingRescheduledEmail", () => {
     expect(text.trim().length).toBeGreaterThan(0);
   });
 });
+
+describe("bookingConfirmationEmail — Spanish", () => {
+  const WHEN_BOOKER_ES = "mar, 26 ago, 3:00 p. m. EDT";
+  const WHEN_COMPANY_ES = "mar, 26 ago, 2:00 p. m. CDT";
+
+  it("speaks Spanish throughout when the booker did", () => {
+    const { html, text } = bookingConfirmationEmail({
+      brand, locale: "es", whenBookerZone: WHEN_BOOKER_ES, whenCompanyZone: WHEN_COMPANY_ES,
+      cancelUrl: CANCEL_URL, meetingUrl: MEETING_URL,
+    });
+    for (const part of [html, text]) {
+      expect(part).toContain("Tu cita quedó agendada.");
+      expect(part).toContain(`${WHEN_COMPANY_ES} para nosotros`);
+      expect(part).toContain("Unirse a la videollamada");
+      expect(part).toContain("Cancelar esta cita");
+      expect(part).not.toContain("booked in");
+      expect(part).not.toContain(" for us");
+    }
+  });
+
+  it("defaults to English when no locale is given, byte-identical to the explicit en", () => {
+    const input = { brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY, cancelUrl: CANCEL_URL };
+    expect(bookingConfirmationEmail(input)).toEqual(bookingConfirmationEmail({ ...input, locale: "en" }));
+    expect(bookingConfirmationEmail(input).text).toContain("You're booked in.");
+  });
+});

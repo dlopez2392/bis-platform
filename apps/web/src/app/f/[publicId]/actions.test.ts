@@ -505,3 +505,84 @@ describe("submitFormAction — the lead alert is branded and linkable", () => {
     expect(sendMock.mock.calls[0]![0].fromAddress).toBeUndefined();
   });
 });
+
+describe("submitFormAction — the receipt to the person who wrote in", () => {
+  const withEmail = (over: Record<string, unknown> = {}) => formRow({
+    fields: [
+      { key: "first_name", kind: "core.first_name", label: "Name", required: true },
+      { key: "email", kind: "core.email", label: "Email", required: true },
+    ],
+    notify_emails: [],
+    ...over,
+  });
+  const token = () => signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
+
+  it("sends one, in the page's language, from the account's own address, when the form collected an email", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(withEmail());
+
+    const result = await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token(), locale: "es", first_name: "María", email: "customer@example.com",
+    }));
+
+    expect(result.status).toBe("success");
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    const sent = sendMock.mock.calls[0]![0];
+    expect(sent.to).toBe("customer@example.com");
+    expect(sent.subject).toBe("Recibimos tu mensaje — Rio Roofing");
+    expect(sent.fromName).toBe("Rio Roofing");
+    // Customer-facing outbound, the booking confirmation's shape: the
+    // account's own sending address, unlike the staff-facing alert.
+    expect(sent.fromAddress).toBe("leads@acme.com");
+    expect(sent.body).toContain("Hola María:");
+    expect(sent.html).toContain("Hola María:");
+    // The fixture account has no reply-to address, so the receipt neither
+    // sets one nor invites a reply that would land nowhere.
+    expect(sent.replyTo).toBeUndefined();
+    expect(sent.body).not.toContain("responde a este correo");
+  });
+
+  it("goes after the company's alert, never instead of it", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(withEmail({ notify_emails: ["owner@rioroofing.com"] }));
+
+    await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token(), locale: "en", first_name: "Maria", email: "customer@example.com",
+    }));
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(sendMock.mock.calls[0]![0]).toMatchObject({ to: "owner@rioroofing.com", subject: "New lead: Test Form" });
+    expect(sendMock.mock.calls[1]![0]).toMatchObject({
+      to: "customer@example.com", subject: "We received your message — Rio Roofing",
+    });
+    expect(sendMock.mock.calls[1]![0].body).toContain("Hi Maria,");
+  });
+
+  it("is skipped when the form asks for no email address", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(formRow({
+      fields: [{ key: "phone", kind: "core.phone", label: "Phone", required: true }],
+      notify_emails: [],
+    }));
+
+    const result = await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token(), locale: "en", phone: "956-555-0101",
+    }));
+
+    expect(result.status).toBe("success");
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("a receipt that fails to send never fails the submission and is not recorded on it", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(withEmail());
+    sendMock.mockRejectedValue(new Error("provider down"));
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token(), locale: "en", first_name: "Maria", email: "customer@example.com",
+    }));
+
+    expect(result.status).toBe("success");
+    // `processing_error` is the operator's "nobody was told" signal; a
+    // bounced auto-reply is not that.
+    expect(setSubmissionProcessingErrorMock).not.toHaveBeenCalled();
+    quiet.mockRestore();
+  });
+});
