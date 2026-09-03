@@ -7,8 +7,9 @@ import { signRenderToken, parseAttribution } from "@/lib/forms/guards";
 import { publicStrings, normalizeLocale } from "@/lib/forms/public-strings";
 import { publicFormTheme, parseHostMode } from "@/lib/branding/public-form-theme";
 import { PublicForm } from "./public-form";
-import { FormBrand } from "./form-brand";
+import { PublicBrand } from "@/components/public-brand";
 import { submitFormAction } from "./actions";
+import "@/styles/public-brand.css";
 import "./form.css";
 
 export const dynamic = "force-dynamic";
@@ -134,7 +135,7 @@ export default async function PublicFormPage({
       {/* Only a `follow` tenant emits this: the visitor's own device decides,
           which no server-rendered style attribute can answer on its own. */}
       {darkCss ? <style>{darkCss}</style> : null}
-      <FormBrand
+      <PublicBrand
         name={branding.brandName}
         logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
       />

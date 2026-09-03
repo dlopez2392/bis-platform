@@ -120,7 +120,7 @@ test.describe("the public form wears the tenant theme", () => {
       await page.goto(`/f/${fixture.formPublicId}`);
 
       const form = await box(".bis-form");
-      const brand = await box(".bis-form-brand");
+      const brand = await box(".bis-brand");
       expect(form.width, "a desktop visitor gets a line length, not the viewport")
         .toBeLessThanOrEqual(640);
       expect(form.x, "and it is centred rather than pinned to the left edge").toBeGreaterThan(100);

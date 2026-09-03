@@ -225,7 +225,7 @@ test.describe("the public lead form wears the client's brand", () => {
     await expect(page.locator(".bis-form form")).toBeVisible();
 
     await expect(page.getByText(fixture.brandName, { exact: true })).toBeVisible();
-    const logo = page.locator(".bis-form-brand-logo");
+    const logo = page.locator(".bis-brand-logo");
     await expect(logo).toBeVisible();
     const logoSrc = await logo.getAttribute("src");
     expect(logoSrc).toContain(fixture.brandLogoPath);

@@ -1,0 +1,36 @@
+/* The brand header shared by /f, /b and /b/.../cancel.
+
+   Values are the FORM's, unchanged: of the three copies this replaces, it is
+   the one that was reviewed, measured and shipped, so it is the one the others
+   converge on. The booking and cancel copies used a fixed 28px logo and a 15px
+   name; they now match the form. */
+.bis-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 16px 0;
+  font: 400 15px/1.5 var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+  color: var(--foreground, #18181b);
+  /* THE MEASURE. The brand header is a SIBLING of the column it heads, not a
+     child, so it needs that column's own width or the logo hangs to the left
+     of the content it belongs to. Each route sets --public-measure; 34rem is
+     the form's, and is the default only because the form is the surface this
+     was lifted from. */
+  max-width: var(--public-measure, 34rem);
+  margin-inline: auto;
+}
+
+/* Capped in both directions so a large upload cannot dominate the page a
+   customer came to in order to book, or to fill in a form. */
+.bis-brand-logo {
+  max-height: 40px;
+  max-width: 180px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+}
+
+.bis-brand-name {
+  font-size: 17px;
+  font-weight: 600;
+}

@@ -62,18 +62,11 @@
 /* Off-screen, not display:none — some bots skip hidden inputs but fill
    anything else they find. */
 .bis-form-hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
-/* The brand header sits above .bis-form, not inside it, so it repeats the
-   font and colour rather than inheriting them. Bottom padding only — the form
-   below brings its own 16px top. */
-.bis-form-brand {
-  display: flex; align-items: center; gap: 10px; padding: 16px 16px 0;
-  font: 400 15px/1.5 var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
-  color: var(--foreground, #18181b);
-}
-/* Capped in both directions so a large upload cannot dominate the page a
-   customer came to in order to fill in a form. */
-.bis-form-brand-logo { max-height: 40px; max-width: 180px; width: auto; height: auto; object-fit: contain; }
-.bis-form-brand-name { font-size: 17px; font-weight: 600; }
+/* The brand header's own rules moved to `@/styles/public-brand.css` in P7 —
+   the booking and cancel pages carried near-identical copies of them, and one
+   of the two was missing the measure below entirely. It reads this page's
+   measure through `--public-measure`, set on `.bis-form-page` further down. */
+
 /* THE MEASURE, and the reason it is not a card.
 
    Standalone, `.bis-form-page` is the whole viewport, and until this rule the
@@ -93,8 +86,11 @@
    the second.
 
    The brand header is a SIBLING of the form, not a child, so it needs the same
-   two properties or the logo hangs to the left of the fields it belongs to. */
-.bis-form-brand, .bis-form {
+   two properties or the logo hangs to the left of the fields it belongs to.
+   It gets them from public-brand.css via `--public-measure` below — the same
+   number, declared once, so the two cannot drift apart. */
+.bis-form-page { --public-measure: 34rem; }
+.bis-form {
   max-width: 34rem;
   margin-inline: auto;
 }
