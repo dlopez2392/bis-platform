@@ -7,7 +7,7 @@ import { gatherSetupInputs } from "@/lib/setup/setup-inputs";
 import { buildSetupViews, resolveAssignedNumber } from "@/lib/setup/setup-view";
 import { m } from "@/lib/messages";
 import { SetupPanel, type MovableNumber } from "./setup-panel";
-import { setSetupTickAction, goLiveAction } from "./actions";
+import { setSetupTickAction, goLiveAction, renameAccountAction } from "./actions";
 import { moveNumberAction, setNumberStatusAction } from "../voice/actions";
 
 export const dynamic = "force-dynamic";
@@ -122,7 +122,11 @@ export default async function SetupPage({
           ) : undefined
         }
       />
-      <div className="max-w-3xl space-y-4 p-6">
+      {/* max-w-5xl, not -3xl: the two-pane wizard (setup-panel.tsx) needs
+          room for a 260px rail beside a real detail pane — the old
+          single-column card list fit -3xl only because it never had a
+          second column to share the width with. */}
+      <div className="max-w-5xl space-y-4 p-6">
         {/* Same warning the checklist page shows, for the same reason and on
             the same param: createClientAccount now lands here, so a blueprint
             that only partly applied has to be visible on THIS page or it is
@@ -143,7 +147,8 @@ export default async function SetupPage({
           assignedNumber={assignedNumber}
           movableNumbers={movableNumbers}
           hasVoiceProfile={profile !== null}
-          // accountId bound server-side on all three — it must never travel
+          accountName={accountName}
+          // accountId bound server-side on all four — it must never travel
           // as a form field. For moveNumberAction that binding is what makes
           // the account the DESTINATION rather than something the browser
           // gets to name.
@@ -151,6 +156,7 @@ export default async function SetupPage({
           goLiveAction={goLiveAction.bind(null, accountId)}
           moveNumberAction={moveNumberAction.bind(null, accountId)}
           enableTestCallsAction={setNumberStatusAction.bind(null, accountId)}
+          renameAction={renameAccountAction.bind(null, accountId)}
         />
       </div>
     </>

@@ -24,6 +24,11 @@ export type SetupMoveNumberAction = (phoneNumberId: string) => Promise<ActionRes
  *  the enable-test-calls button always calls it with `"testing"`. */
 export type SetNumberStatusAction = (phoneNumberId: string, status: string) => Promise<ActionResult>;
 
+/** `renameAccountAction` (../actions.ts) with `accountId` already bound
+ *  server-side, same reasoning as the three above. Read by `./account.tsx`
+ *  alone. */
+export type SetupRenameAction = (value: string) => Promise<ActionResult>;
+
 /** A number sitting on some other account that this one could take over.
  *  `accountName` is null when the join to `accounts` came back empty. */
 export type MovableNumber = {
@@ -143,4 +148,9 @@ export type StepDetailProps = {
   enableTestCallsAction: SetNumberStatusAction;
   prereqsMet: boolean;
   blockedReason: string | null;
+  /** The agency's internal label for this client (`accounts.name`) — read
+   *  by `./account.tsx` alone; every other module ignores it, same as every
+   *  other field in this bag it doesn't need. */
+  accountName: string | null;
+  renameAction: SetupRenameAction;
 };

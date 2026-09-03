@@ -767,11 +767,25 @@ export const m = {
   "setup.nextUp": "Next up",
   "setup.state.done": "Done",
   "setup.state.open": "To do",
+  // The single step the rail rings and the pane badges "Next up" — distinct
+  // from the seven other not-done steps, which stay "To do".
+  "setup.state.next": "Current",
   "setup.state.skipped": "Skipped",
   // Never "not done". A read that threw tells us nothing about the step it
   // was going to answer for, and the whole point of this page is that a green
   // tick means the thing is actually true.
   "setup.state.unknown": "Couldn't check — reload to retry",
+  // Only ever shown for test_call/go_live (lib/setup/setup-rail.ts's
+  // isLockedStep locks exactly those two) — and only for a step whose read
+  // actually settled; a step that couldn't be verified stays "Couldn't
+  // check", never "Locked".
+  "setup.state.locked": "Locked",
+  // The two-pane wizard's locked-step banner and rail hint. Reused for BOTH
+  // — same data (lockedPrereqKeys mapped through STEP_COPY titles), one
+  // string. go_live reuses `setup.goLive.blocked` instead of this one (see
+  // setup-rail.tsx's `lockedHint`) — it already exists and already handles
+  // the unknown-prerequisite case, so this key is only ever test_call's.
+  "setup.locked.blockedBy": "Finish these first: {steps}",
   "setup.step.account.title": "Create the account",
   "setup.step.account.help": "This company exists — you're looking at it.",
   "setup.step.branding.title": "Branding",
@@ -782,7 +796,7 @@ export const m = {
     "Enable the calendar and set open hours — without them, callers hear \"no availability\" for every day.",
   "setup.step.voice_profile.title": "Voice profile",
   "setup.step.voice_profile.help":
-    "Greeting, business facts, and persona for the AI receptionist.",
+    "Greeting, business facts, and persona for Sofía.",
   "setup.step.number.title": "Phone number",
   "setup.step.number.help":
     "Assign a BIS number to this client. Buy numbers in the Telnyx dashboard, then assign here.",

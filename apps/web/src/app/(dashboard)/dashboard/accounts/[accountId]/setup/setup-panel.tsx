@@ -1,15 +1,13 @@
 import { Fragment } from "react";
-import { AlertTriangle, Check, Minus, Rocket } from "lucide-react";
+import { Rocket } from "lucide-react";
 import type { SetupStepKey } from "@/lib/setup/setup-status";
-import {
-  GO_LIVE_PREREQ_KEYS, kindOf, type SetupStepView, type StateKind, type AssignedNumber,
-} from "@/lib/setup/setup-view";
+import { GO_LIVE_PREREQ_KEYS, kindOf, type SetupStepView, type AssignedNumber } from "@/lib/setup/setup-view";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import {
-  STEP_COPY, STEP_PATH, TONE, type StepDetailProps,
+  STEP_COPY, STEP_PATH, type StepDetailProps,
   type SetupTick, type SetupTickAction, type SetupGoLiveAction, type SetupMoveNumberAction,
-  type SetNumberStatusAction, type MovableNumber,
+  type SetNumberStatusAction, type MovableNumber, type SetupRenameAction,
 } from "./steps/step-shared";
 import { AccountStep } from "./steps/account";
 import { BrandingStep } from "./steps/branding";
@@ -20,38 +18,26 @@ import { EmailStep } from "./steps/email";
 import { ForwardingStep } from "./steps/forwarding";
 import { TestCallStep } from "./steps/test-call";
 import { GoLiveStep } from "./steps/go-live";
+import { SetupShell } from "./setup-shell";
 
 /**
- * The wizard, as one path rather than nine cards.
+ * The wizard, as a two-pane shell rather than nine cards.
  *
- * Everything here is server-rendered except the five buttons that write: the
- * two ticks (./setup-tick-button.tsx), go-live (./setup-go-live-button.tsx),
- * move-number (./setup-move-number-button.tsx), and enable-test-calls
- * (./setup-enable-test-calls-button.tsx). Each is its own island calling a
- * Result-typed action, so a refusal arrives as a value to render rather than
- * a rejected promise. The visual argument the layout makes:
+ * This file's own job shrank twice now. Design Phase 5 Task 3 split each
+ * step's detail (rows/note/panel) out into its own module under ./steps/,
+ * leaving this file as the shell: the progress meter, the rail of nine
+ * cards, and the `STEP_DETAIL` lookup. Task 4 (this change) replaces the
+ * "rail of nine cards" with the real two-pane wizard DESIGN.md calls for —
+ * a stepper rail (./setup-rail.tsx) plus ONE step's detail pane
+ * (./setup-shell.tsx) — because a long single-column scroll of nine cards
+ * is not that; see the mockup notes in docs/design/bis-design-direction.html
+ * for the full argument.
  *
- * ① A spine. A hairline rail threads the nine markers top to bottom, so the
- *   page reads as a sequence with a beginning and an end — "nothing" to
- *   "live" — instead of a grid of unrelated settings the operator has to
- *   order in their head.
- * ② One focal point. Exactly one card is ringed as "Next up": the first step
- *   that is genuinely actionable. An operator who reads nothing else on this
- *   page still knows what to do.
- * ③ Colour lives in graphical marks, never in small text. `--success`
- *   measures ~3.4:1 on the light card and `--warning` ~3.6:1 — fine for a
- *   dot, a ring or an icon (3:1), below AA for a label. So every state chip
- *   keeps `text-foreground`/`text-muted-foreground` and carries its hue in
- *   the dot and the border, exactly as the Calls table's outcome chips do.
- * ④ "Couldn't check" is never green and never quiet. A read that threw is
- *   rendered in warning tone with a dashed marker, because the one thing this
- *   page must never do is show a tick for something it failed to verify.
- *
- * Design Phase 5 Task 3 split each step's detail (rows/note/panel) out of a
- * single `StepActions` branch into its own module under ./steps/ — this file
- * is now the shell: the progress meter, the rail of nine cards, and the
- * `STEP_DETAIL` lookup that renders each step's module. No behavior changed;
- * see ./steps/step-shared.ts for the maps/types every module shares.
+ * What stays server-side, unchanged from before: everything here is still
+ * computed once, from props already in hand, with no client round trip.
+ * Only WHICH of the nine pre-rendered nodes gets placed into the DOM is a
+ * client decision now (./setup-shell.tsx) — the nodes themselves, and every
+ * write action bound to them, are exactly what this file already built.
  */
 
 // Re-exported so the four write-islands (setup-tick-button.tsx,
@@ -61,15 +47,7 @@ import { GoLiveStep } from "./steps/go-live";
 // in ./steps/step-shared.ts, declared once alongside StepDetailProps.
 export type {
   SetupTick, SetupTickAction, SetupGoLiveAction, SetupMoveNumberAction,
-  SetNumberStatusAction, MovableNumber,
-};
-
-const STATE_LABEL: Record<StateKind, string> = {
-  done: m["setup.state.done"],
-  open: m["setup.state.open"],
-  next: m["setup.state.open"],
-  skipped: m["setup.state.skipped"],
-  unknown: m["setup.state.unknown"],
+  SetNumberStatusAction, MovableNumber, SetupRenameAction,
 };
 
 /** Which module renders a given step's rows/note/panel — one entry per
@@ -87,8 +65,8 @@ const STEP_DETAIL: Record<SetupStepKey, (p: StepDetailProps) => React.ReactNode>
 };
 
 export function SetupPanel({
-  accountId, steps, prereqsMet, assignedNumber, movableNumbers, hasVoiceProfile,
-  tickAction, goLiveAction, moveNumberAction, enableTestCallsAction,
+  accountId, steps, prereqsMet, assignedNumber, movableNumbers, hasVoiceProfile, accountName,
+  tickAction, goLiveAction, moveNumberAction, enableTestCallsAction, renameAction,
 }: {
   accountId: string;
   steps: SetupStepView[];
@@ -118,10 +96,15 @@ export function SetupPanel({
    *  since a card that can't confirm a profile exists must not offer a
    *  button that promises the number will answer. */
   hasVoiceProfile: boolean;
+  /** The agency's internal label for this client (`accounts.name`) — read
+   *  by the account step's rename control alone; the page header (page.tsx)
+   *  reads it separately for its own display. */
+  accountName: string | null;
   tickAction: SetupTickAction;
   goLiveAction: SetupGoLiveAction;
   moveNumberAction: SetupMoveNumberAction;
   enableTestCallsAction: SetNumberStatusAction;
+  renameAction: SetupRenameAction;
 }) {
   const base = `/dashboard/accounts/${accountId}`;
 
@@ -152,10 +135,11 @@ export function SetupPanel({
   const total = steps.filter((s) => !s.skipped).length;
   const doneCount = steps.filter((s) => s.done).length;
 
-  // The one card that gets the ring. Deliberately skips `unknown` steps: the
-  // action for those is "reload", not "go do this", so pointing the operator
-  // at one as their next task would send them into a settings page to fix
-  // something that may already be fine.
+  // The one step the pane badges "Next up" and the rail rings "Current".
+  // Deliberately skips `unknown` steps: the action for those is "reload",
+  // not "go do this", so pointing the operator at one as their next task
+  // would send them into a settings page to fix something that may already
+  // be fine.
   const nextKey = steps.find((s) => !s.done && !s.skipped && !s.unknown)?.key ?? null;
 
   // `!s.done` alone is sufficient TODAY, and `|| s.unknown` is the insurance.
@@ -179,108 +163,42 @@ export function SetupPanel({
         blocked.map((s) => STEP_COPY[s.key].title).join(", "),
       );
 
+  // One pre-rendered node per step, from props already in hand — same
+  // props every module always received (StepDetailProps), computed for all
+  // nine regardless of which one ends up selected. setup-shell.tsx places
+  // only the selected key's node into the tree; the other eight are real
+  // React elements that are simply never mounted.
+  const details = {} as Record<SetupStepKey, React.ReactNode>;
+  for (const step of steps) {
+    const kind = kindOf(step, step.key === nextKey);
+    const Detail = STEP_DETAIL[step.key];
+    const path = STEP_PATH[step.key];
+    details[step.key] = (
+      <Detail
+        key={step.key}
+        step={step}
+        kind={kind}
+        base={base}
+        href={path ? `${base}${path}` : null}
+        assignedNumber={assignedNumber}
+        movableNumbers={movableNumbers}
+        hasVoiceProfile={hasVoiceProfile}
+        tickAction={tickAction}
+        goLiveAction={goLiveAction}
+        moveNumberAction={moveNumberAction}
+        enableTestCallsAction={enableTestCallsAction}
+        prereqsMet={prereqsMet}
+        blockedReason={blockedReason}
+        accountName={accountName}
+        renameAction={renameAction}
+      />
+    );
+  }
+
   return (
     <div className="space-y-6">
       <SetupProgress done={doneCount} total={total} />
-
-      <ol>
-        {steps.map((step, index) => {
-          const kind = kindOf(step, step.key === nextKey);
-          const tone = TONE[kind];
-          const copy = STEP_COPY[step.key];
-          const path = STEP_PATH[step.key];
-          const isLast = index === steps.length - 1;
-          const Detail = STEP_DETAIL[step.key];
-
-          return (
-            <li key={step.key} className={cn("relative flex gap-4", isLast ? "pb-0" : "pb-3")}>
-              {/* The spine. Purely decorative: the ordered list already
-                  carries the sequence for assistive tech. */}
-              {isLast ? null : (
-                <span
-                  aria-hidden
-                  className="absolute top-9 bottom-0 left-4 w-px -translate-x-1/2 bg-border"
-                />
-              )}
-
-              <span
-                aria-hidden
-                className={cn(
-                  "relative z-10 flex size-8 shrink-0 items-center justify-center rounded-full border",
-                  tone.marker,
-                )}
-              >
-                {kind === "done" ? (
-                  <Check className="size-4" />
-                ) : kind === "skipped" ? (
-                  <Minus className="size-4" />
-                ) : kind === "unknown" ? (
-                  <AlertTriangle className="size-4" />
-                ) : (
-                  <span className="size-1.5 rounded-full bg-current" />
-                )}
-              </span>
-
-              <div className={cn("min-w-0 flex-1 rounded-lg border p-4", tone.card)}>
-                <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
-                  {/* `basis-64`, not `auto`. With a wrapping row, the browser
-                      places items at their max-content width first — so the
-                      two longest help sentences on the page (email identity,
-                      call forwarding) were pushing their state chip onto a
-                      second line while every other card kept its chip top
-                      right. A fixed basis makes the chips line up in a
-                      column down the page at any desktop width, and still
-                      lets the row stack under roughly 380px. */}
-                  <div className="min-w-0 flex-1 basis-64">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] font-medium tracking-widest text-muted-foreground tabular-nums">
-                        {String(index + 1).padStart(2, "0")}
-                      </span>
-                      <h2 className="text-sm font-semibold text-card-foreground">{copy.title}</h2>
-                      {kind === "next" ? (
-                        <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-primary uppercase">
-                          {m["setup.nextUp"]}
-                        </span>
-                      ) : null}
-                    </div>
-                    <p className="mt-1 text-sm text-muted-foreground">{copy.help}</p>
-                  </div>
-
-                  {/* Deliberately shrinkable: "Couldn't check — reload to
-                      retry" is four times the width of "Done", and a chip
-                      pinned to its intrinsic size would push out of a narrow
-                      card rather than wrapping inside it. */}
-                  <span
-                    className={cn(
-                      "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium",
-                      tone.chip,
-                    )}
-                  >
-                    <span className={cn("size-1.5 shrink-0 rounded-full", tone.dot)} aria-hidden />
-                    {STATE_LABEL[kind]}
-                  </span>
-                </div>
-
-                <Detail
-                  step={step}
-                  kind={kind}
-                  base={base}
-                  href={path ? `${base}${path}` : null}
-                  assignedNumber={assignedNumber}
-                  movableNumbers={movableNumbers}
-                  hasVoiceProfile={hasVoiceProfile}
-                  tickAction={tickAction}
-                  goLiveAction={goLiveAction}
-                  moveNumberAction={moveNumberAction}
-                  enableTestCallsAction={enableTestCallsAction}
-                  prereqsMet={prereqsMet}
-                  blockedReason={blockedReason}
-                />
-              </div>
-            </li>
-          );
-        })}
-      </ol>
+      <SetupShell views={steps} nextKey={nextKey} blockedReason={blockedReason} details={details} />
     </div>
   );
 }
