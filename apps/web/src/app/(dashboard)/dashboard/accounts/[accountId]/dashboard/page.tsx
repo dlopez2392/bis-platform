@@ -4,6 +4,7 @@ import {
   listChecklistState, countFormsMissingNotify, countContacts,
   getVoiceProfile, getCalendarForAccount, listCalls, listRecentEvents,
   listCallStartsBetween, listBookingCreationsBetween, listOpportunityValuesCreatedBetween,
+  getA2pRegistration,
 } from "@bis/db";
 import { StatTile } from "@/components/stat-tile";
 import { requireAccountAccess } from "@/lib/auth";
@@ -92,6 +93,7 @@ export default async function AccountDashboardPage({
   const [
     checklistRows, formsMissingNotify, contactsCount, opps,
     voiceProfile, calendar, callsIso, bookingsIso, oppPairs, recentCalls, recentEvents,
+    a2p,
   ] = await Promise.all([
     listChecklistState(db, accountId),
     countFormsMissingNotify(db, accountId),
@@ -119,6 +121,13 @@ export default async function AccountDashboardPage({
     // calls). dbForRequest() is therefore safe here for a client session
     // too, unlike the calendar-status write path a few files over.
     listRecentEvents(db, accountId, RECENT_EVENTS_FETCH_LIMIT),
+    // The A2P item on the checklist below DERIVES from this rather than from a
+    // stored tick, so this read must happen at BOTH mergeChecklist call sites
+    // or the item silently keeps ticking on one of them. Safe for a client
+    // session for the same reason as listRecentEvents above: 0023 left `a2p_*`
+    // selectable by `authenticated` (only UPDATE is withheld), and
+    // accounts_member_read already scopes the row.
+    getA2pRegistration(db, accountId),
   ]);
 
   if (opps.error) {
@@ -129,7 +138,7 @@ export default async function AccountDashboardPage({
   const openOppsValue = String(open.length);
   const pipelineValueDisplay = formatCurrency(open.reduce((sum, o) => sum + Number(o.monetary_value), 0));
 
-  const checklistEntries = mergeChecklist(checklistRows);
+  const checklistEntries = mergeChecklist(checklistRows, { a2pStatus: a2p?.status });
   const checklistRemaining = checklistEntries.filter((e) => !e.done).length;
 
   // Greeting header (this page only). Time-of-day and the long date both

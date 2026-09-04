@@ -1,11 +1,12 @@
-import { listChecklistState, countFormsMissingNotify } from "@bis/db";
+import { listChecklistState, countFormsMissingNotify, getA2pRegistration } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { mergeChecklist } from "@/lib/checklist-catalogue";
 import { m } from "@/lib/messages";
 import { ChecklistPanel } from "./checklist-panel";
-import { setChecklistItemAction, addChecklistItemAction } from "./actions";
+import { A2pPanel } from "./a2p-panel";
+import { setChecklistItemAction, addChecklistItemAction, setA2pRegistrationAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -20,9 +21,13 @@ export default async function ChecklistPage({
   const { apply } = await searchParams;
   await requireAgencyOnlyAccountAccess(accountId);
   const db = await dbForRequest();
-  const [rows, formsMissingNotify] = await Promise.all([
+  // The READS stay on dbForRequest() — RLS is right there and correct. Only
+  // the A2P WRITE needs serviceDb (see setA2pRegistrationAction): `a2p_*` is
+  // selectable by `authenticated`, just not updatable.
+  const [rows, formsMissingNotify, a2p] = await Promise.all([
     listChecklistState(db, accountId),
     countFormsMissingNotify(db, accountId),
+    getA2pRegistration(db, accountId),
   ]);
   return (
     <>
@@ -37,10 +42,14 @@ export default async function ChecklistPage({
           </p>
         ) : null}
         <ChecklistPanel
-          entries={mergeChecklist(rows)}
+          entries={mergeChecklist(rows, { a2pStatus: a2p?.status })}
           formsMissingNotify={formsMissingNotify}
           setAction={setChecklistItemAction.bind(null, accountId)}
           addAction={addChecklistItemAction.bind(null, accountId)}
+        />
+        <A2pPanel
+          registration={a2p}
+          action={setA2pRegistrationAction.bind(null, accountId)}
         />
       </div>
     </>

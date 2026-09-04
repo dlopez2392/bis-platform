@@ -535,6 +535,23 @@ export const m = {
   "checklist.open": "Open",
   "checklist.reviewLink": "Checklist complete — review",
 
+  // The A2P item above is no longer a manual tick — it reads from what the
+  // operator records here. "With the carriers" rather than "Pending" on
+  // purpose: it names who is holding it up, which is the thing the operator
+  // actually wants to know, and it matches the item's own help text saying
+  // nothing you do here speeds it up.
+  "a2p.title": "A2P registration",
+  "a2p.body": "What the carriers have approved for this company. Texting stays off until the campaign is approved.",
+  "a2p.brandId": "Brand ID",
+  "a2p.campaignId": "Campaign ID",
+  "a2p.status": "Status",
+  "a2p.status.not_started": "Not started",
+  "a2p.status.pending": "With the carriers",
+  "a2p.status.approved": "Approved",
+  "a2p.status.rejected": "Rejected",
+  "a2p.saved": "A2P registration updated",
+  "a2p.saveFailed": "Could not update A2P registration",
+
   "blueprints.title": "Blueprints",
   "blueprints.empty.title": "No blueprints yet",
   "blueprints.empty.body": "Set an account up the way you like it, then save its configuration here to reuse on the next client.",
