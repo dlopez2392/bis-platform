@@ -1,4 +1,4 @@
-import type { ChecklistStateRow } from "@bis/db";
+import type { A2pStatus, ChecklistStateRow } from "@bis/db";
 import { m } from "./messages";
 
 export type CatalogueItem = {
@@ -48,15 +48,28 @@ export type ChecklistEntry = {
  * is dropped rather than rendered untitled, so retiring an item cannot break
  * an account that had ticked it.
  */
-export function mergeChecklist(rows: ChecklistStateRow[]): ChecklistEntry[] {
+export function mergeChecklist(
+  rows: ChecklistStateRow[],
+  /** Items whose truth lives in account state rather than a stored tick.
+   *  A2P is the first: registration happens with the carriers, so a manual
+   *  tick could claim done for a client who cannot legally text. Undefined
+   *  (no account read available) falls back to the stored row. */
+  derived: { a2pStatus?: A2pStatus } = {},
+): ChecklistEntry[] {
   const byKey = new Map(rows.map((r) => [r.item_key, r]));
 
   const catalogue: ChecklistEntry[] = CHECKLIST_CATALOGUE.map((item) => {
     const row = byKey.get(item.key);
+    // Only `approved` reads as done, and it OVERRIDES a stored tick rather
+    // than OR-ing with it — the accepted consequence is that this one item can
+    // go backwards if a registration is later rejected.
+    const done = item.key === "a2p_registration" && derived.a2pStatus !== undefined
+      ? derived.a2pStatus === "approved"
+      : Boolean(row?.done_at);
     return {
       key: item.key, title: item.title, help: item.help,
       external: item.external, href: item.href, custom: false,
-      done: Boolean(row?.done_at), note: row?.note ?? null,
+      done, note: row?.note ?? null,
     };
   });
 

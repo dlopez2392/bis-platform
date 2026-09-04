@@ -47,6 +47,39 @@ describe("checklist catalogue", () => {
     expect(entries).toHaveLength(CHECKLIST_CATALOGUE.length + 1);
   });
 
+  it("derives A2P from account state, not from a stored tick", () => {
+    const a2p = (entries: ReturnType<typeof mergeChecklist>) =>
+      entries.find((e) => e.key === "a2p_registration")!;
+
+    expect(a2p(mergeChecklist([], { a2pStatus: "approved" })).done).toBe(true);
+    // Only `approved` counts — a registration still with the carriers, or one
+    // the carriers rejected, cannot read as done.
+    for (const status of ["not_started", "pending", "rejected"] as const) {
+      expect(a2p(mergeChecklist([], { a2pStatus: status })).done, status).toBe(false);
+    }
+
+    // A stale manual tick must NOT win. The whole point of this phase is that
+    // the item reflects what the carriers approved, so a row saying done under
+    // a status saying otherwise resolves to NOT done — and this item can now
+    // go BACKWARDS, which is new behaviour for the list and is intended.
+    const ticked = [{
+      id: "1", item_key: "a2p_registration", title: null,
+      done_at: "2026-07-31T00:00:00Z", done_by: "user_1", note: null, position: 0,
+    }];
+    expect(a2p(mergeChecklist(ticked, { a2pStatus: "pending" })).done).toBe(false);
+    // …and with no account read available, the stored row is still the answer,
+    // which is what keeps an un-wired call site rendering something sane.
+    expect(a2p(mergeChecklist(ticked)).done).toBe(true);
+  });
+
+  it("leaves every other item on its stored tick", () => {
+    const entries = mergeChecklist([{
+      id: "1", item_key: "phone_number", title: null,
+      done_at: "2026-07-31T00:00:00Z", done_by: "user_1", note: null, position: 0,
+    }], { a2pStatus: "not_started" });
+    expect(entries.find((e) => e.key === "phone_number")!.done).toBe(true);
+  });
+
   it("drops a stored row whose catalogue key no longer exists", () => {
     // Retiring a catalogue item must not crash every account that ticked it.
     const entries = mergeChecklist([
