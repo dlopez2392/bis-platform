@@ -534,6 +534,11 @@ export const m = {
   "checklist.remaining": "remaining",
   "checklist.open": "Open",
   "checklist.reviewLink": "Checklist complete — review",
+  // Shown on the A2P item, which no longer has a working tick. Names what
+  // decides it, so the operator is not left clicking a dead box. Deliberately
+  // NOT "the registration below": this panel also renders on the account
+  // dashboard, where the A2P card is not on the page at all.
+  "checklist.derivedFromA2p": "Ticks itself once the A2P registration is approved",
 
   // The A2P item above is no longer a manual tick — it reads from what the
   // operator records here. "With the carriers" rather than "Pending" on

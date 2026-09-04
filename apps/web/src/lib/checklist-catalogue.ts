@@ -38,6 +38,10 @@ export const CHECKLIST_CATALOGUE: CatalogueItem[] = [
 export type ChecklistEntry = {
   key: string; title: string; help: string; external: boolean; href?: string;
   custom: boolean; done: boolean; note: string | null;
+  /** True when `done` came from account state rather than a stored tick, so
+   *  the panel must NOT offer a toggle: writing the row would succeed and
+   *  change nothing on screen, which is a control that lies. */
+  derived: boolean;
 };
 
 /**
@@ -54,22 +58,23 @@ export function mergeChecklist(
    *  A2P is the first: registration happens with the carriers, so a manual
    *  tick could claim done for a client who cannot legally text. Undefined
    *  (no account read available) falls back to the stored row. */
-  derived: { a2pStatus?: A2pStatus } = {},
+  accountState: { a2pStatus?: A2pStatus } = {},
 ): ChecklistEntry[] {
   const byKey = new Map(rows.map((r) => [r.item_key, r]));
 
   const catalogue: ChecklistEntry[] = CHECKLIST_CATALOGUE.map((item) => {
     const row = byKey.get(item.key);
+    const derived = item.key === "a2p_registration" && accountState.a2pStatus !== undefined;
     // Only `approved` reads as done, and it OVERRIDES a stored tick rather
     // than OR-ing with it — the accepted consequence is that this one item can
     // go backwards if a registration is later rejected.
-    const done = item.key === "a2p_registration" && derived.a2pStatus !== undefined
-      ? derived.a2pStatus === "approved"
+    const done = derived
+      ? accountState.a2pStatus === "approved"
       : Boolean(row?.done_at);
     return {
       key: item.key, title: item.title, help: item.help,
       external: item.external, href: item.href, custom: false,
-      done, note: row?.note ?? null,
+      done, note: row?.note ?? null, derived,
     };
   });
 
@@ -78,6 +83,7 @@ export function mergeChecklist(
     .map((r) => ({
       key: r.item_key, title: r.title ?? "", help: "", external: false,
       custom: true, done: Boolean(r.done_at), note: r.note ?? null,
+      derived: false,
     }));
 
   return [...catalogue, ...custom];

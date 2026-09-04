@@ -43,6 +43,12 @@ export function ChecklistPanel({
         <ul className="divide-y divide-border">
           {entries.map((entry) => (
             <li key={entry.key} className="flex items-start gap-3 py-2.5">
+              {/* A derived item gets NO toggle. Its `done` comes from account
+                  state, so a tick would write a row the merge ignores: the
+                  POST would succeed, the page would revalidate, and nothing
+                  would change on screen. Disabled rather than removed so the
+                  row keeps its shape and the control still announces the
+                  item's state; the help line below says where to change it. */}
               <form action={setAction} className="pt-0.5">
                 <input type="hidden" name="itemKey" value={entry.key} />
                 <input type="hidden" name="done" value={entry.done ? "false" : "true"} />
@@ -50,7 +56,8 @@ export function ChecklistPanel({
                   type="submit"
                   aria-label={entry.title}
                   aria-pressed={entry.done}
-                  className="size-4 rounded border border-input bg-background data-[done=true]:bg-primary"
+                  disabled={entry.derived}
+                  className="size-4 rounded border border-input bg-background data-[done=true]:bg-primary disabled:cursor-not-allowed"
                   data-done={entry.done}
                 />
               </form>
@@ -67,6 +74,11 @@ export function ChecklistPanel({
                   {/* Say plainly that the platform does not do these. */}
                   {entry.external ? (
                     <Badge variant="secondary">{m["checklist.external"]}</Badge>
+                  ) : null}
+                  {entry.derived ? (
+                    <span className="text-xs text-muted-foreground">
+                      {m["checklist.derivedFromA2p"]}
+                    </span>
                   ) : null}
                   {entry.key === "form_notify" && formsMissingNotify > 0 ? (
                     <span className="text-xs text-destructive">

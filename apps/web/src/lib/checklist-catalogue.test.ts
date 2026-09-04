@@ -72,6 +72,19 @@ describe("checklist catalogue", () => {
     expect(a2p(mergeChecklist(ticked)).done).toBe(true);
   });
 
+  it("marks only the derived item as derived, and only when a status is supplied", () => {
+    // The panel keys its disabled toggle off this. A derived item whose tick
+    // still submitted would write a row the merge ignores — the POST would
+    // succeed, the page would revalidate, and nothing would change on screen.
+    const derivedKeys = (entries: ReturnType<typeof mergeChecklist>) =>
+      entries.filter((e) => e.derived).map((e) => e.key);
+
+    expect(derivedKeys(mergeChecklist([], { a2pStatus: "approved" })))
+      .toEqual(["a2p_registration"]);
+    // No account read available: nothing is derived, so every toggle still works.
+    expect(derivedKeys(mergeChecklist([]))).toEqual([]);
+  });
+
   it("leaves every other item on its stored tick", () => {
     const entries = mergeChecklist([{
       id: "1", item_key: "phone_number", title: null,
