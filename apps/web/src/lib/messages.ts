@@ -556,6 +556,12 @@ export const m = {
   "a2p.status.rejected": "Rejected",
   "a2p.saved": "A2P registration updated",
   "a2p.saveFailed": "Could not update A2P registration",
+  // Names what is missing rather than "invalid input": approving without the
+  // identifiers ticks a checklist item that reads "Register A2P 10DLC brand
+  // and campaign" for a company with nothing to send on.
+  "a2p.approvedNeedsIds": "Add the brand ID and campaign ID before marking this approved",
+  "a2p.staleStatus": "That status isn't one of the options — reload the page and try again",
+  "a2p.recorded": "Recorded",
 
   "blueprints.title": "Blueprints",
   "blueprints.empty.title": "No blueprints yet",

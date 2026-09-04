@@ -70,9 +70,38 @@ describe("serviceDb-only account writes", () => {
       expect(pending.campaignId).toBe("CAMP456");
       expect(pending.status).toBe("pending");
 
-      const { data: a2pEv } = await db.from("events").select("type")
+      const { data: a2pEv } = await db.from("events").select("type, payload")
         .eq("account_id", accountId).eq("type", "account.a2p_updated");
       expect(a2pEv).toHaveLength(1);
+      // The identifiers ride the event, not just the status — `accounts` has
+      // no updated_at history, so this row is the only answer to "approved on
+      // WHICH campaign".
+      expect(a2pEv![0]).toMatchObject({
+        payload: { status: "pending", brandId: "BRAND123", campaignId: "CAMP456" },
+      });
+
+      // `approved` is the one status the platform treats as permission, so it
+      // cannot be recorded without the identifiers it claims to have: an
+      // approval with no campaign id has nothing to send on, yet would tick a
+      // checklist item that reads "Register A2P 10DLC brand and campaign".
+      await expect(setA2pRegistration(db, accountId, {
+        brandId: "BRAND123", campaignId: null, status: "approved",
+      }, "user_test")).rejects.toThrow(/brand id and a campaign id/);
+      // …and it did not half-write on the way out.
+      expect((await getA2pRegistration(db, accountId))!.status).toBe("pending");
+
+      // The same patch is fine while the carriers still have it — you cannot
+      // have ids you have not been issued yet.
+      await setA2pRegistration(db, accountId, {
+        brandId: null, campaignId: null, status: "pending",
+      }, "user_test");
+
+      // updatedAt is stamped by the writer, and read back — a status with no
+      // date cannot distinguish "filed on Tuesday" from "nobody has touched
+      // this since March".
+      const stamped = (await getA2pRegistration(db, accountId))!;
+      expect(stamped.updatedAt).toBeTruthy();
+      expect(Number.isNaN(Date.parse(stamped.updatedAt!))).toBe(false);
     });
   });
 
@@ -110,8 +139,11 @@ describe("serviceDb-only account writes", () => {
   it("setA2pRegistration throws rather than reporting success for an account that does not exist", async () => {
     const db = serviceDb();
     const ghost = "00000000-0000-0000-0000-000000000000";
+    // Deliberately NOT `approved` with null ids: that now fails the approval
+    // completeness guard BEFORE the query runs, so the test would pass without
+    // ever reaching the zero-row check it exists for.
     await expect(setA2pRegistration(
-      db, ghost, { brandId: null, campaignId: null, status: "approved" }, "user_test",
+      db, ghost, { brandId: null, campaignId: null, status: "pending" }, "user_test",
     )).rejects.toThrow(/no account/);
 
     const { data } = await db.from("events").select("id")

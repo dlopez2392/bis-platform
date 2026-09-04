@@ -179,6 +179,16 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     // merge would ignore it, so the operator would click a box that never ticks.
     await expect(a2pItem).toBeDisabled();
 
+    // `approved` with no identifiers is refused: it would tick an item that
+    // reads "Register A2P 10DLC brand and campaign" for a company with no
+    // campaign to send on, which is the exact false-true this phase exists to
+    // stop. Refused with copy that names what is missing, not a generic error.
+    await page.getByLabel("Status").click();
+    await page.getByRole("option", { name: "Approved" }).click();
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByText(/Add the brand ID and campaign ID/)).toBeVisible();
+    await expect(a2pItem).toHaveAttribute("aria-pressed", "false");
+
     await page.getByLabel("Brand ID").fill("BRAND123");
     await page.getByLabel("Campaign ID").fill("CAMP456");
     await page.getByLabel("Status").click();
@@ -193,6 +203,9 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     await expect(page.getByLabel("Brand ID")).toHaveValue("BRAND123");
     await expect(page.getByRole("button", { name: "Register A2P 10DLC brand and campaign" }))
       .toHaveAttribute("aria-pressed", "true");
+    // The status carries its date — "with the carriers" means one thing a day
+    // old and another a quarter old. Rendered in the ACCOUNT's timezone.
+    await expect(page.getByText(/^Recorded /)).toBeVisible();
 
     // And it goes BACKWARDS — new behaviour for this list, and the reason the
     // item cannot be a manual tick: a rejected registration must not keep
@@ -206,9 +219,10 @@ test("a blueprint captured from one company applies to a new one", async ({ page
 
     // GAP 3: on the account dashboard, ChecklistPanel's title links back to
     // the full checklist route (via the titleHref prop) so an unfinished
-    // checklist stays reachable from the summary view. This account only has
-    // "phone_number" ticked — 5 of 6 catalogue items remain — so the panel
-    // renders in its non-compact form with the link. If titleHref stopped
+    // checklist stays reachable from the summary view. This account has only
+    // "phone_number" ticked, and A2P sitting at `rejected` from the block
+    // above — 6 of the 7 catalogue items remain — so the panel renders in its
+    // non-compact form with the link. If titleHref stopped
     // being passed, CardTitle would render the plain string instead and no
     // such link would exist at all.
     await page.goto(`/dashboard/accounts/${accountId}/dashboard`);

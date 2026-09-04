@@ -76,11 +76,34 @@ export async function renameAccount(
 
 export type A2pStatus = "not_started" | "pending" | "approved" | "rejected";
 
+/** The writable shape. `getA2pRegistration` returns this plus `updatedAt`. */
 export type A2pRegistration = {
   brandId: string | null;
   campaignId: string | null;
   status: A2pStatus;
 };
+
+export type A2pRegistrationRecord = A2pRegistration & {
+  /** When the outcome was last recorded. Surfaced because "with the carriers"
+   *  means something very different a day old and a quarter old, and this is
+   *  the item whose own help says to expect days to weeks. */
+  updatedAt: string | null;
+};
+
+/**
+ * `approved` is the ONE status the rest of the platform treats as permission —
+ * the activation checklist ticks on it and the send path will gate on it — so
+ * it is the one status that cannot be recorded without the identifiers it
+ * claims to have. An approval with no campaign id is not a lesser record, it
+ * is a false one: there is nothing to send on, and the checklist item it ticks
+ * is literally "Register A2P 10DLC brand and campaign".
+ *
+ * Lives here rather than only in the action so that every future caller —
+ * Phase 1b's send path included — inherits it.
+ */
+export function a2pApprovalIsComplete(patch: A2pRegistration): boolean {
+  return patch.status !== "approved" || Boolean(patch.brandId && patch.campaignId);
+}
 
 /**
  * A2P 10DLC state, recorded rather than performed: registration happens in the
@@ -88,9 +111,10 @@ export type A2pRegistration = {
  * platform can refuse to text on a number that is not cleared.
  *
  * serviceDb ONLY. 0013 revoked UPDATE on accounts from `authenticated` and
- * re-granted branding columns alone, so these columns are unwritable by the
- * RLS-scoped client — and unit tests, which mock the database, cannot see
- * that. Callers must be agency-gated.
+ * re-granted seven branding columns alone (0014 later added `reply_to_email`,
+ * so the granted set is eight — client-branding-grants.test.ts pins it), so
+ * these columns are unwritable by the RLS-scoped client — and unit tests,
+ * which mock the database, cannot see that. Callers must be agency-gated.
  *
  * Zero rows is not success, for `renameAccount`'s reason: PostgREST reports no
  * error for an update that matched nothing, so without the check a wrong id
@@ -99,6 +123,9 @@ export type A2pRegistration = {
 export async function setA2pRegistration(
   db: SupabaseClient, accountId: string, patch: A2pRegistration, actorId: string,
 ): Promise<void> {
+  if (!a2pApprovalIsComplete(patch)) {
+    throw new Error("setA2pRegistration: approved requires a brand id and a campaign id");
+  }
   const { data, error } = await db.from("accounts")
     .update({
       a2p_brand_id: patch.brandId,
@@ -109,20 +136,27 @@ export async function setA2pRegistration(
     .eq("id", accountId).select("id");
   if (error) throw new Error(`setA2pRegistration failed: ${error.message}`);
   if (!data?.length) throw new Error(`setA2pRegistration: no account ${accountId}`);
-  await emit(db, accountId, "account.a2p_updated", actorId, { status: patch.status });
+  // The identifiers ride the event too, not just the status: this is the
+  // record that decides whether a client may legally text, and `accounts` has
+  // no updated_at history — without them the ledger cannot answer "approved on
+  // WHICH campaign".
+  await emit(db, accountId, "account.a2p_updated", actorId, {
+    status: patch.status, brandId: patch.brandId, campaignId: patch.campaignId,
+  });
 }
 
 export async function getA2pRegistration(
   db: SupabaseClient, accountId: string,
-): Promise<A2pRegistration | null> {
+): Promise<A2pRegistrationRecord | null> {
   const { data, error } = await db.from("accounts")
-    .select("a2p_brand_id, a2p_campaign_id, a2p_status")
+    .select("a2p_brand_id, a2p_campaign_id, a2p_status, a2p_updated_at")
     .eq("id", accountId).maybeSingle();
   if (error) throw new Error(`getA2pRegistration failed: ${error.message}`);
   if (!data) return null;
   return {
     brandId: data.a2p_brand_id, campaignId: data.a2p_campaign_id,
     status: data.a2p_status as A2pStatus,
+    updatedAt: data.a2p_updated_at,
   };
 }
 

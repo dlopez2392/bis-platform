@@ -56,9 +56,15 @@ export function mergeChecklist(
   rows: ChecklistStateRow[],
   /** Items whose truth lives in account state rather than a stored tick.
    *  A2P is the first: registration happens with the carriers, so a manual
-   *  tick could claim done for a client who cannot legally text. Undefined
-   *  (no account read available) falls back to the stored row. */
-  accountState: { a2pStatus?: A2pStatus } = {},
+   *  tick could claim done for a client who cannot legally text.
+   *
+   *  REQUIRED, and deliberately not defaulted — the plan specified an optional
+   *  argument "so existing callers keep compiling", but that default fails
+   *  OPEN: a call site that forgets it silently falls back to the stored row
+   *  and the item goes on ticking, which is the exact failure the plan itself
+   *  warned about. Passing `{ a2pStatus: undefined }` still selects the
+   *  fallback; it just has to be said out loud. */
+  accountState: { a2pStatus: A2pStatus | undefined },
 ): ChecklistEntry[] {
   const byKey = new Map(rows.map((r) => [r.item_key, r]));
 

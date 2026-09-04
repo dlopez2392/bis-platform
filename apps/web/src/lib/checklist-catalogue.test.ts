@@ -24,7 +24,7 @@ describe("checklist catalogue", () => {
     const entries = mergeChecklist([
       { id: "1", item_key: "phone_number", title: null, done_at: "2026-07-31T00:00:00Z",
         done_by: "user_1", note: "ported", position: 0 },
-    ]);
+    ], { a2pStatus: undefined });
 
     const phone = entries.find((e) => e.key === "phone_number")!;
     expect(phone.done).toBe(true);
@@ -40,7 +40,7 @@ describe("checklist catalogue", () => {
     const entries = mergeChecklist([
       { id: "2", item_key: "custom:abc", title: "Order signage", done_at: null,
         done_by: null, note: null, position: 100 },
-    ]);
+    ], { a2pStatus: undefined });
     const custom = entries.find((e) => e.key === "custom:abc")!;
     expect(custom.title).toBe("Order signage");
     expect(custom.custom).toBe(true);
@@ -69,7 +69,7 @@ describe("checklist catalogue", () => {
     expect(a2p(mergeChecklist(ticked, { a2pStatus: "pending" })).done).toBe(false);
     // …and with no account read available, the stored row is still the answer,
     // which is what keeps an un-wired call site rendering something sane.
-    expect(a2p(mergeChecklist(ticked)).done).toBe(true);
+    expect(a2p(mergeChecklist(ticked, { a2pStatus: undefined })).done).toBe(true);
   });
 
   it("marks only the derived item as derived, and only when a status is supplied", () => {
@@ -82,7 +82,7 @@ describe("checklist catalogue", () => {
     expect(derivedKeys(mergeChecklist([], { a2pStatus: "approved" })))
       .toEqual(["a2p_registration"]);
     // No account read available: nothing is derived, so every toggle still works.
-    expect(derivedKeys(mergeChecklist([]))).toEqual([]);
+    expect(derivedKeys(mergeChecklist([], { a2pStatus: undefined }))).toEqual([]);
   });
 
   it("leaves every other item on its stored tick", () => {
@@ -98,7 +98,7 @@ describe("checklist catalogue", () => {
     const entries = mergeChecklist([
       { id: "3", item_key: "retired_item", title: null, done_at: null,
         done_by: null, note: null, position: 0 },
-    ]);
+    ], { a2pStatus: undefined });
     expect(entries.find((e) => e.key === "retired_item")).toBeUndefined();
     expect(entries).toHaveLength(CHECKLIST_CATALOGUE.length);
   });

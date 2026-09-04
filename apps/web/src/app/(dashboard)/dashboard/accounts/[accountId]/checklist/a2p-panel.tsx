@@ -33,9 +33,13 @@ const STATUS_OPTIONS: readonly { value: A2pStatus; label: string }[] = [
  * redacts to a digest in production).
  */
 export function A2pPanel({
-  registration, action,
+  registration, recordedAt, action,
 }: {
   registration: A2pRegistration | null;
+  /** Already formatted in the ACCOUNT's timezone by the page — this component
+   *  never sees a raw instant, so it cannot format one in the viewer's clock
+   *  (the repeated timezone defect in this codebase). Null when never set. */
+  recordedAt: string | null;
   action: (formData: FormData) => Promise<{ ok: true } | { ok: false; error: string }>;
 }) {
   // A missing row is not a state the operator can be in on this page — the
@@ -44,7 +48,7 @@ export function A2pPanel({
   const current = registration ?? { brandId: null, campaignId: null, status: "not_started" as const };
 
   return (
-    <Card id="a2p-registration" className="scroll-mt-24">
+    <Card>
       <CardHeader>
         <CardTitle>{m["a2p.title"]}</CardTitle>
         <CardDescription>{m["a2p.body"]}</CardDescription>
@@ -87,6 +91,14 @@ export function A2pPanel({
                 ))}
               </SelectContent>
             </Select>
+            {/* DESIGN.md rule 1: every metric ships with context. "With the
+                carriers" means one thing a day old and another a quarter old,
+                and this item's own help says to expect days to weeks. */}
+            {recordedAt ? (
+              <p className="text-xs text-muted-foreground">
+                {m["a2p.recorded"]} {recordedAt}
+              </p>
+            ) : null}
           </div>
           <SubmitButton>{m["common.save"]}</SubmitButton>
         </form>

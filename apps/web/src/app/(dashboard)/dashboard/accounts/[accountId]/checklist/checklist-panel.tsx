@@ -57,7 +57,13 @@ export function ChecklistPanel({
                   aria-label={entry.title}
                   aria-pressed={entry.done}
                   disabled={entry.derived}
-                  className="size-4 rounded border border-input bg-background data-[done=true]:bg-primary disabled:cursor-not-allowed"
+                  // Points at the "ticks itself" line below, so the reason a
+                  // browse-mode reader finds an unavailable control is right
+                  // there. `disabled` takes it out of the tab order, which is
+                  // correct for a control that cannot be operated — but it
+                  // must not still LOOK live, hence the opacity.
+                  aria-describedby={entry.derived ? `checklist-derived-${entry.key}` : undefined}
+                  className="size-4 rounded border border-input bg-background data-[done=true]:bg-primary disabled:cursor-not-allowed disabled:opacity-60"
                   data-done={entry.done}
                 />
               </form>
@@ -76,7 +82,8 @@ export function ChecklistPanel({
                     <Badge variant="secondary">{m["checklist.external"]}</Badge>
                   ) : null}
                   {entry.derived ? (
-                    <span className="text-xs text-muted-foreground">
+                    <span id={`checklist-derived-${entry.key}`}
+                          className="text-xs text-muted-foreground">
                       {m["checklist.derivedFromA2p"]}
                     </span>
                   ) : null}

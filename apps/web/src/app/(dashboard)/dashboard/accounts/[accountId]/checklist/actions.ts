@@ -5,7 +5,7 @@ import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import {
   setChecklistItem, addCustomChecklistItem, serviceDb, setA2pRegistration,
-  type A2pStatus,
+  a2pApprovalIsComplete, type A2pStatus,
 } from "@bis/db";
 import { m } from "@/lib/messages";
 
@@ -17,6 +17,11 @@ export type ActionResult = { ok: true } | { ok: false; error: string };
 
 const A2P_STATUSES: readonly A2pStatus[] =
   ["not_started", "pending", "approved", "rejected"] as const;
+
+/** States the narrowing rather than casting an unvalidated string into the
+ *  union to satisfy `includes`. */
+const isA2pStatus = (s: string): s is A2pStatus =>
+  (A2P_STATUSES as readonly string[]).includes(s);
 
 export async function setChecklistItemAction(
   accountId: string, formData: FormData,
@@ -39,8 +44,10 @@ export async function setChecklistItemAction(
  *
  * serviceDb(), not dbForRequest() — deliberately, and for renameAccountAction's
  * reason exactly: migration 0013 revoked UPDATE on ALL of `accounts` from
- * `authenticated` and re-granted it column-by-column for the seven branding
- * columns only. 0023 adds the `a2p_*` columns and does NOT grant them, so a
+ * `authenticated` and re-granted it column-by-column for seven branding
+ * columns (0014 added `reply_to_email`, making the granted set eight —
+ * client-branding-grants.test.ts pins it exactly, in both directions).
+ * 0023 adds the `a2p_*` columns and does NOT grant them, so a
  * write through dbForRequest() (the `authenticated` role) fails with
  * "permission denied" on every real call — a failure only the e2e suite can
  * see, because unit tests mock the db client. The agency-only guard below runs
@@ -55,22 +62,27 @@ export async function setA2pRegistrationAction(
   const { userId } = await requireAgencyOnlyAccountAccess(accountId);
 
   const status = String(formData.get("status") ?? "");
-  if (!A2P_STATUSES.includes(status as A2pStatus)) {
-    // A value the select cannot produce: a tampered or stale post, not
-    // something to toast a friendly sentence about — but still a value, not a
-    // throw, so the operator sees it instead of a full-screen error page.
-    return { ok: false, error: m["a2p.saveFailed"] };
+  if (!isA2pStatus(status)) {
+    // A value the select cannot produce: a tampered or stale post. Its own
+    // copy, not the generic write failure — telling an operator the save
+    // failed when their PAGE is stale sends them to retry the same thing.
+    return { ok: false, error: m["a2p.staleStatus"] };
   }
   const str = (k: string) => {
     const v = String(formData.get(k) ?? "").trim();
     return v === "" ? null : v;
   };
+  const patch = { brandId: str("brandId"), campaignId: str("campaignId"), status };
+
+  // Checked here as well as in setA2pRegistration so the operator gets a
+  // sentence that names the problem instead of the generic write failure the
+  // catch below produces. The db-layer guard is the one that binds.
+  if (!a2pApprovalIsComplete(patch)) {
+    return { ok: false, error: m["a2p.approvedNeedsIds"] };
+  }
 
   try {
-    await setA2pRegistration(serviceDb(), accountId, {
-      brandId: str("brandId"), campaignId: str("campaignId"),
-      status: status as A2pStatus,
-    }, userId);
+    await setA2pRegistration(serviceDb(), accountId, patch, userId);
   } catch (e) {
     console.error(`setA2pRegistrationAction: write failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["a2p.saveFailed"] };
