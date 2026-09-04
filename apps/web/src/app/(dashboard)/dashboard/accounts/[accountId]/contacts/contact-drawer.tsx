@@ -13,6 +13,7 @@ import { InlineField } from "@/components/inline-field";
 import { contactDisplayName, initials } from "@/lib/format";
 import { relativeTime } from "@/lib/dashboard/relative-time";
 import { m } from "@/lib/messages";
+import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { updateContactFieldAction } from "./actions";
 import { addTagAction, removeTagAction } from "./[contactId]/actions";
 import type { ContactRow } from "./contacts-table";
@@ -223,16 +224,20 @@ export function ContactDrawer({
 // contact DETAIL path (not this drawer), so the badges stayed stale with no
 // toast either way and an operator watching a tag not disappear had no way
 // to tell a slow success from a silent failure.
-async function submitTagAction(run: () => Promise<void>, onChanged: () => void) {
+async function submitTagAction(run: () => Promise<void>, onChanged: () => void): Promise<boolean> {
   try {
     await run();
     onChanged();
+    return true;
   } catch {
     // Same crash-safety reasoning as notifyActionResult (action-feedback.ts):
     // a stale tab posting a content-hashed server-action id from before a
     // redeploy REJECTS rather than resolving, and that must reach the
     // operator as a toast, not vanish silently.
     toast.error(m["inline.crashed"]);
+    // Reported rather than swallowed, so the caller can keep the operator's
+    // typed tag on screen instead of clearing a field whose write failed.
+    return false;
   }
 }
 
@@ -242,12 +247,22 @@ function TagsRow({ accountId, contactId, tags, onChanged }: {
   const boundAdd = addTagAction.bind(null, accountId);
   const boundRemove = removeTagAction.bind(null, accountId);
   const hidden = <input type="hidden" name="contactId" value={contactId} />;
+  const addTag = useFormSubmit(async (formData, form) => {
+    const ok = await submitTagAction(() => boundAdd(formData), onChanged);
+    // Cleared for the next tag ONLY on success. On failure the typed tag has
+    // to stay — that is the whole point of the conversion.
+    if (ok && form.isConnected) form.reset();
+  });
   return (
     <div className="flex flex-wrap items-center gap-2">
       {tags.map((t) => (
         <form
           key={t.id}
-          action={(formData) => submitTagAction(() => boundRemove(formData), onChanged)}
+          // Keeps the `action` prop: this form carries no operator-typed
+          // input (just hidden ids), so React's post-action reset has nothing
+          // to discard. `void` because submitTagAction now reports success for
+          // the add form's benefit, and an action prop must return void.
+          action={(formData) => void submitTagAction(() => boundRemove(formData), onChanged)}
           className="inline-flex"
         >
           {hidden}
@@ -261,8 +276,14 @@ function TagsRow({ accountId, contactId, tags, onChanged }: {
           </button>
         </form>
       ))}
+      {/* onSubmit, NOT the `action` prop: submitTagAction catches and toasts,
+          so a failed add used to resolve, trigger React's post-action reset,
+          and wipe the tag the operator had just typed. One short word to
+          retype, but the same defect as the rest — see
+          lib/forms/use-form-submit.ts. The REMOVE forms above carry no typed
+          input, so they keep the `action` prop. */}
       <form
-        action={(formData) => submitTagAction(() => boundAdd(formData), onChanged)}
+        onSubmit={addTag.onSubmit}
         className="inline-flex items-center gap-1"
       >
         {hidden}

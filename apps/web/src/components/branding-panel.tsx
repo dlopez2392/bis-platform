@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { SubmitButton } from "@/app/(dashboard)/dashboard/accounts/submit-button";
 import { m } from "@/lib/messages";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
+import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { FORM_ACCENT_FALLBACK, SIDEBAR_BG, resolveSidebarAccent } from "@/lib/branding/color";
 import { panelCopy, type BrandingAudience } from "@/lib/branding/panel-copy";
 import { publicFormTheme } from "@/lib/branding/public-form-theme";
@@ -87,6 +88,28 @@ export function BrandingPanel({
   // Bumped on success to reset the file input, so the chosen filename stops
   // being displayed next to a preview that has already moved on to it.
   const [fileKey, setFileKey] = useState(0);
+
+  const { pending, onSubmit } = useFormSubmit(async (formData) => {
+    // Refuse an oversized logo here, before the request leaves the browser.
+    // Next caps a Server Action body at 1 MB and answers 413 itself, so for
+    // exactly the files our 512 KB rule exists to reject, the action never ran
+    // and production showed a bare "something went wrong" with no idea what to
+    // change. The server still enforces the same limit twice — this is the
+    // message, not the guarantee.
+    const picked = formData.get("logo");
+    if (picked instanceof File && picked.size > MAX_LOGO_BYTES) {
+      toast.error(m["branding.tooLarge"]);
+      return;
+    }
+    // notifyActionResult so a stale-deployment tab REJECTING its save toasts
+    // instead of vanishing (2026-08-29 calendar-settings, live). The success
+    // callback keeps this form extra step: the file input remounts so a
+    // re-pick of the same file re-fires.
+    await notifyActionResult(() => action(formData), {
+      success: (msg) => { toast.success(msg); setFileKey((k) => k + 1); },
+      error: toast.error,
+    }, { success: m["branding.saved"], crashed: m["common.actionCrashed"] });
+  });
   const [color, setColor] = useState(brandColor ?? "");
   const [neutral, setNeutral] = useState<string>(brandNeutral ?? "");
   const [corners, setCorners] = useState<string>(brandCorners ?? "");
@@ -145,27 +168,19 @@ export function BrandingPanel({
       </CardHeader>
       <CardContent>
         <form
-          action={async (formData) => {
-            // Refuse an oversized logo here, before the request leaves the
-            // browser. Next caps a Server Action body at 1 MB and answers 413
-            // itself, so for exactly the files our 512 KB rule exists to reject,
-            // the action never ran and production showed a bare "something went
-            // wrong" with no idea what to change. The server still enforces the
-            // same limit twice — this is the message, not the guarantee.
-            const picked = formData.get("logo");
-            if (picked instanceof File && picked.size > MAX_LOGO_BYTES) {
-              toast.error(m["branding.tooLarge"]);
-              return;
-            }
-            // notifyActionResult so a stale-deployment tab's REJECTED save
-            // toasts instead of vanishing (2026-08-29 calendar-settings,
-            // live). The success callback keeps this form's extra step: the
-            // file input remounts so a re-pick of the same file re-fires.
-            await notifyActionResult(() => action(formData), {
-              success: (msg) => { toast.success(msg); setFileKey((k) => k + 1); },
-              error: toast.error,
-            }, { success: m["branding.saved"], crashed: m["common.actionCrashed"] });
-          }}
+          // onSubmit, NOT the `action` prop. React resets an action-prop form
+          // once the action settles, and the oversized-logo guard below
+          // `return`s WITHOUT ever calling the server — so that reset was
+          // GUARANTEED, with no revalidation to cover it: pick a >512KB logo
+          // and every other edit on this panel was silently thrown away, with
+          // brandName and replyToEmail reverted to stored values that still
+          // looked filled. The radios are controlled but not immune either —
+          // React only syncs `defaultChecked` while `checked == null`, so a
+          // reset restores their first-render state and React state does not
+          // follow. This panel also renders on the CLIENT's own /branding
+          // page, so the blast radius includes non-operators. See
+          // lib/forms/use-form-submit.ts.
+          onSubmit={onSubmit}
           className="space-y-3"
         >
           <div className="space-y-1.5">
@@ -388,7 +403,7 @@ export function BrandingPanel({
             )}
           </div>
 
-          <SubmitButton>{m["common.save"]}</SubmitButton>
+          <SubmitButton pending={pending}>{m["common.save"]}</SubmitButton>
         </form>
       </CardContent>
     </Card>

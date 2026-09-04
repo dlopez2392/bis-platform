@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { SubmitButton } from "../../submit-button";
 import { m } from "@/lib/messages";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
+import { useFormSubmit } from "@/lib/forms/use-form-submit";
 
 /**
  * Agency-only by construction: this component is rendered from the Settings
@@ -28,6 +29,13 @@ export function SendingAddressCard({
   fromEmail: string | null;
   action: (formData: FormData) => Promise<{ ok: true } | { ok: false; error: string }>;
 }) {
+  const { pending, onSubmit } = useFormSubmit(async (formData) => {
+    await notifyActionResult(() => action(formData), toast, {
+      success: m["settings.sendingAddressSaved"],
+      crashed: m["common.actionCrashed"],
+    });
+  });
+
   return (
     // Anchor for the palette's `settings:sending-address` entry; see
     // client-access-panel.tsx for why the id lives on the component root.
@@ -46,13 +54,18 @@ export function SendingAddressCard({
           {m["settings.sendingAddressBody"]}
         </p>
         <form
-          // notifyActionResult, not a naked await: a stale-deployment tab's
-          // save REJECTS rather than returning {ok:false} — that failure must
-          // toast, never vanish (2026-08-29 calendar-settings, live).
-          action={(formData) => notifyActionResult(() => action(formData), toast, {
-            success: m["settings.sendingAddressSaved"],
-            crashed: m["common.actionCrashed"],
-          })}
+          // onSubmit, NOT the `action` prop — and this card is the sharpest
+          // case of that defect in the app, because REFUSAL IS THE DESIGNED
+          // PATH here: the whole reason this is a client component is to show
+          // Resend's "domain not verified" message. React resets an
+          // action-prop form when the action resolves to {ok:false}, so the
+          // refused save silently reverted this field to the STORED address
+          // while it still looked filled — and the operator's next save, after
+          // verifying the domain, would write the old address back. On a
+          // column that is deliberately ungranted to clients because a wrong
+          // value means sending as another tenant. See
+          // lib/forms/use-form-submit.ts.
+          onSubmit={onSubmit}
           className="flex flex-col gap-3"
         >
           <Label htmlFor="fromEmail">{m["settings.sendingAddress"]}</Label>
@@ -68,7 +81,7 @@ export function SendingAddressCard({
               {m["settings.sendingAddressDefault"]}
             </p>
           )}
-          <SubmitButton>{m["common.save"]}</SubmitButton>
+          <SubmitButton pending={pending}>{m["common.save"]}</SubmitButton>
         </form>
       </CardContent>
     </Card>

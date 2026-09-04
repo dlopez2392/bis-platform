@@ -1,6 +1,6 @@
 "use client";
 
-import { useTransition } from "react";
+import { useRef, useTransition } from "react";
 
 /**
  * Submits a form WITHOUT React's `action` prop — and that omission is the
@@ -39,15 +39,33 @@ export function useFormSubmit(
   run: (formData: FormData, form: HTMLFormElement) => Promise<void>,
 ): { pending: boolean; onSubmit: React.FormEventHandler<HTMLFormElement> } {
   const [pending, startTransition] = useTransition();
+  // Belt to `pending`'s braces. `pending` is passed to the submit button BY
+  // HAND at every call site and both button components take it optionally, so
+  // a new caller that forgets it gets a permanently-enabled button and no
+  // type error — and on the two composers that means a DUPLICATE EMAIL to a
+  // real person. A ref cannot be forgotten, and it also closes the
+  // sub-render-tick window a `disabled` prop cannot.
+  const inFlight = useRef(false);
 
   const onSubmit: React.FormEventHandler<HTMLFormElement> = (e) => {
     e.preventDefault();
+    if (inFlight.current) return;
+    inFlight.current = true;
     const form = e.currentTarget;
     // Read the data BEFORE the transition: `e.currentTarget` is nulled once
     // the synthetic event is done, and the async callback runs after that.
-    const formData = new FormData(form);
+    //
+    // The submitter is passed for parity with what React's own action path
+    // does (`createFormDataWithSubmitter`). No form here has a named submit
+    // button today, so it changes nothing — but the first "Save and publish"
+    // someone adds would otherwise lose its entry with nothing to catch it.
+    const formData = new FormData(form, (e.nativeEvent as SubmitEvent).submitter);
     startTransition(async () => {
-      await run(formData, form);
+      try {
+        await run(formData, form);
+      } finally {
+        inFlight.current = false;
+      }
     });
   };
 

@@ -52,7 +52,18 @@ test("email sent from a contact appears in the thread and in Conversations", asy
   await page.getByRole("button", { name: "Email", exact: true }).click();
   await page.getByPlaceholder("Subject").fill(subject);
   await page.getByPlaceholder("Write an email…").fill("Sent by the e2e suite.");
-  await page.getByRole("button", { name: "Send" }).click();
+
+  // The composer disables its own button for the duration of the send. This is
+  // the ONE assertion standing between a slow Resend round-trip and a
+  // DUPLICATE EMAIL to a real person — send-button.tsx exists for it, and
+  // after the move off the `action` prop its pending state is passed by hand
+  // rather than read from useFormStatus, so a wiring mistake would be silent.
+  const send = page.getByRole("button", { name: "Send" });
+  await send.click();
+  await expect(send).toBeDisabled();
+  // …and released again once the send settles, or the operator could never
+  // send a second message without reloading.
+  await expect(send).toBeEnabled({ timeout: 20_000 });
 
   // The contact page's ActivityTimeline (contacts/[contactId]/activity-timeline.tsx)
   // only ever renders notes/tasks/opportunities — its TimelineItem union has no

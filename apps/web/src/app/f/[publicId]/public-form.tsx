@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useRef } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import type { FormField, FormTheme } from "@bis/db";
 import { HONEYPOT_FIELD, RENDER_TOKEN_FIELD } from "@/lib/forms/guards";
 import type { PublicStrings } from "@/lib/forms/public-strings";
@@ -40,6 +40,8 @@ export function PublicForm({
   action: (prev: SubmitResult, formData: FormData) => Promise<SubmitResult>;
 }) {
   const [state, formAction, pending] = useActionState(action, IDLE);
+  // Survives the post-action form reset — see the note on `Field` below.
+  const [values, setValues] = useState<Record<string, string>>({});
   const rootRef = useRef<HTMLDivElement>(null);
 
   // `app/f/layout.tsx` cannot read `?locale=` (no access to searchParams in a
@@ -128,7 +130,9 @@ export function PublicForm({
           </div>
 
           {fields.map((field) => (
-            <Field key={field.key} field={field} error={errors[field.key]} strings={strings} />
+            <Field key={field.key} field={field} error={errors[field.key]} strings={strings}
+                   value={values[field.key] ?? ""}
+                   onValueChange={(v) => setValues((c) => ({ ...c, [field.key]: v }))} />
           ))}
 
           {state.status === "invalid" && state.formError ? (
@@ -148,16 +152,39 @@ export function PublicForm({
   );
 }
 
+/**
+ * CONTROLLED, and that is load-bearing rather than style.
+ *
+ * React resets a form once its action settles — `useActionState`'s dispatch is
+ * still an action-prop function, so this form resets too — and `noValidate`
+ * above means SERVER validation is the only gate, so "invalid" is the normal
+ * path, not an edge case. Uncontrolled fields therefore wiped everything the
+ * visitor had typed at the exact moment the page told them to fix one field.
+ * That is a lead lost, on the one surface in this product a stranger uses
+ * once and does not retry.
+ *
+ * Controlled inputs are immune: React keeps `defaultValue` in lockstep with
+ * the controlled value on every render, so the reset restores what is already
+ * there. It also costs no progressive enhancement — without JS the page never
+ * hydrates and the browser submits the fields natively as before.
+ */
 function Field({
-  field, error, strings,
-}: { field: FormField; error?: string; strings: PublicStrings }) {
+  field, error, strings, value, onValueChange,
+}: {
+  field: FormField; error?: string; strings: PublicStrings;
+  value: string; onValueChange: (value: string) => void;
+}) {
   const id = `f_${field.key}`;
   const described = error ? `${id}_err` : undefined;
 
   if (field.kind === "consent") {
     return (
       <div className="bis-form-row bis-form-consent">
-        <input id={id} name={field.key} type="checkbox" aria-describedby={described} />
+        {/* A checkbox submits its `value` only when checked, so consent rides
+            on `checked` and keeps "on" as the submitted value it always had. */}
+        <input id={id} name={field.key} type="checkbox" aria-describedby={described}
+               checked={value === "on"}
+               onChange={(e) => onValueChange(e.target.checked ? "on" : "")} />
         <label htmlFor={id}>{field.label}</label>
         {error ? <p id={described} role="alert" className="bis-form-error">{error}</p> : null}
       </div>
@@ -173,12 +200,14 @@ function Field({
       </label>
       {isMessage ? (
         <textarea id={id} name={field.key} rows={4} placeholder={field.placeholder}
-                  aria-describedby={described} aria-invalid={error ? true : undefined} />
+                  aria-describedby={described} aria-invalid={error ? true : undefined}
+                  value={value} onChange={(e) => onValueChange(e.target.value)} />
       ) : (
         <input id={id} name={field.key}
                type={field.kind === "core.email" ? "email" : field.kind === "core.phone" ? "tel" : "text"}
                placeholder={field.placeholder} aria-describedby={described}
-               aria-invalid={error ? true : undefined} />
+               aria-invalid={error ? true : undefined}
+               value={value} onChange={(e) => onValueChange(e.target.value)} />
       )}
       {error ? <p id={described} role="alert" className="bis-form-error">{error}</p> : null}
     </div>
