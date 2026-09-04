@@ -56,7 +56,7 @@ modify `packages/db/src/accounts.ts`, `packages/db/src/index.ts`,
 - `setA2pRegistration(db, accountId, patch: { brandId: string | null; campaignId: string | null; status: A2pStatus }, actorId): Promise<void>`
 - `getA2pRegistration(db, accountId): Promise<{ brandId: string | null; campaignId: string | null; status: A2pStatus } | null>`
 
-- [ ] **Step 1: Write the migration**
+- [x] **Step 1: Write the migration**
 
 `0022` is the current highest — confirm with `ls packages/db/supabase/migrations/`
 before naming the file. Create `0023_a2p_registration.sql`:
@@ -84,7 +84,7 @@ alter table public.accounts
 The default is honest: for every existing account the platform genuinely does
 not know, so `not_started` is the truth rather than a backfill guess.
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 Extend the EXISTING `withTestAccount` cycle in
 `packages/db/src/test/accounts.test.ts` — read the file first and add to a cycle
@@ -114,12 +114,12 @@ that already creates an account, rather than opening a new one. Add:
       )).rejects.toThrow(/no account/);
 ```
 
-- [ ] **Step 3: Run it and confirm it fails**
+- [x] **Step 3: Run it and confirm it fails**
 
 Run: `cd packages/db && npx vitest run src/test/accounts.test.ts`
 Expected: FAIL — `setA2pRegistration is not a function`.
 
-- [ ] **Step 4: Implement**
+- [x] **Step 4: Implement**
 
 Append to `packages/db/src/accounts.ts`, beside `renameAccount` whose shape
 this mirrors:
@@ -182,7 +182,7 @@ Check `accounts.ts`'s existing imports for `emit` and add it if absent.
 Export from `packages/db/src/index.ts` on the accounts line:
 `setA2pRegistration, getA2pRegistration, type A2pStatus, type A2pRegistration`.
 
-- [ ] **Step 5: Apply the migration, run the test**
+- [x] **Step 5: Apply the migration, run the test**
 
 🔴 Migrations in this repo are applied ONCE and never re-applied. Apply `0023`
 the way the runbook prescribes, then:
@@ -190,7 +190,7 @@ the way the runbook prescribes, then:
 Run: `cd packages/db && npx vitest run src/test/accounts.test.ts`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add packages/db
@@ -207,7 +207,7 @@ git commit -m "feat(db): record A2P 10DLC registration state per account"
 the second argument is optional so existing callers keep compiling; Task 3
 passes it at both call sites.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `apps/web/src/lib/checklist-catalogue.test.ts` (create it if absent — check
 first):
@@ -245,12 +245,12 @@ first):
 ⚠️ `ChecklistStateRow`'s real shape may carry more fields — read it from
 `@bis/db` and match the literal to it rather than to the cast above.
 
-- [ ] **Step 2: Run and confirm it fails**
+- [x] **Step 2: Run and confirm it fails**
 
 Run: `cd apps/web && npx vitest run src/lib/checklist-catalogue.test.ts`
 Expected: FAIL — `mergeChecklist` takes one argument.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```ts
 export function mergeChecklist(
@@ -280,12 +280,12 @@ export function mergeChecklist(
 
 Import `type A2pStatus` from `@bis/db`.
 
-- [ ] **Step 4: Run and confirm it passes**
+- [x] **Step 4: Run and confirm it passes**
 
 Run: `cd apps/web && npx vitest run src/lib/checklist-catalogue.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/web/src/lib/checklist-catalogue.ts apps/web/src/lib/checklist-catalogue.test.ts
@@ -299,7 +299,7 @@ git commit -m "feat(checklist): A2P derives from account state, not a manual tic
 **Files:** create `.../checklist/a2p-panel.tsx`; modify `.../checklist/actions.ts`,
 `.../checklist/page.tsx`, `.../dashboard/page.tsx`, `apps/web/src/lib/messages.ts`
 
-- [ ] **Step 1: Copy**
+- [x] **Step 1: Copy**
 
 Add to `messages.ts`:
 
@@ -321,7 +321,7 @@ Add to `messages.ts`:
 it up, which is the thing the operator actually wants to know and matches the
 checklist help's "nothing you do here speeds it up."
 
-- [ ] **Step 2: The action**
+- [x] **Step 2: The action**
 
 In `.../checklist/actions.ts`, following the file's existing action shape (read
 it first — match its `requireAgencyOnlyAccountAccess` usage and revalidate
@@ -352,7 +352,7 @@ export async function setA2pRegistrationAction(
 }
 ```
 
-- [ ] **Step 3: The panel**
+- [x] **Step 3: The panel**
 
 Create `a2p-panel.tsx` — a Card with two text inputs and a Select for status,
 bound to the action. Match the shape of an existing settings panel
@@ -360,7 +360,7 @@ bound to the action. Match the shape of an existing settings panel
 its Card/Label/Input/SubmitButton structure and its toast handling). Tokens
 only; no hard-coded colours or radii.
 
-- [ ] **Step 4: Wire both `mergeChecklist` call sites**
+- [x] **Step 4: Wire both `mergeChecklist` call sites**
 
 Both must pass the derived status or the item silently keeps ticking:
 
@@ -372,12 +372,12 @@ Both must pass the derived status or the item silently keeps ticking:
 ⚠️ Read both files first: `checklist/page.tsx` uses `dbForRequest()` for its
 READS, which is correct and must not change — only the WRITE needs `serviceDb`.
 
-- [ ] **Step 5: Gates**
+- [x] **Step 5: Gates**
 
 Run: `pnpm --filter web typecheck && pnpm --filter web lint && pnpm --filter web build`
 Expected: exit 0 for all three.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/web/src
@@ -392,7 +392,7 @@ git commit -m "feat(checklist): agency panel for A2P registration"
 — whichever already has an agency-and-client pair; read both and pick, do not
 create a new spec)
 
-- [ ] **Step 1: Write it**
+- [x] **Step 1: Write it**
 
 ```ts
   // The agency records a registration and the checklist reflects it.
@@ -428,12 +428,12 @@ provable through the UI, assert the panel is absent for a client session
 instead and say so in a comment rather than shipping a weaker test dressed as a
 strong one.
 
-- [ ] **Step 2: Run the chosen spec alone**
+- [x] **Step 2: Run the chosen spec alone**
 
 Run: `cd apps/web && npx playwright test <spec>`
 Expected: PASS.
 
-- [ ] **Step 3: Full gates**
+- [x] **Step 3: Full gates**
 
 ```bash
 pnpm check
@@ -445,7 +445,7 @@ cd apps/web && npx playwright test
 red, re-run it alone before treating it as a regression. Never diagnose an e2e
 failure while a second run is alive.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add apps/web/e2e
@@ -456,7 +456,7 @@ git commit -m "test(e2e): the agency records A2P state; a client cannot"
 
 ## Final gates before merge
 
-- [ ] `pnpm check` exit 0 · `pnpm --filter web build` · full e2e
+- [x] `pnpm check` exit 0 · `pnpm --filter web build` · full e2e
 - [ ] Review gate (no autonomous merge)
 - [ ] danlo gate
 
