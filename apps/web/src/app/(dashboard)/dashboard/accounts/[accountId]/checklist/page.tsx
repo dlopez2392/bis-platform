@@ -4,7 +4,8 @@ import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { mergeChecklist } from "@/lib/checklist-catalogue";
 import { m } from "@/lib/messages";
-import { safeZone, formatWhen } from "@/lib/booking/time";
+import { safeZone } from "@/lib/booking/time";
+import { formatDateInZone } from "@/lib/format";
 import { ChecklistPanel } from "./checklist-panel";
 import { A2pPanel } from "./a2p-panel";
 import { setChecklistItemAction, addChecklistItemAction, setA2pRegistrationAction } from "./actions";
@@ -39,10 +40,20 @@ export default async function ChecklistPage({
   if (account.error) {
     throw new Error(`checklist: account lookup failed: ${account.error.message}`);
   }
+  // A null row falls through to the "UTC" fallback rather than throwing, which
+  // is a DELIBERATE divergence from calls/page.tsx and calendar/page.tsx (both
+  // throw "account not found" here). requireAgencyOnlyAccountAccess above has
+  // already proved the row exists, and 500ing the whole checklist over one
+  // cosmetic date line would be the worse failure. Do not "fix" this to a throw.
   const timezone = safeZone(
     (account.data as { timezone: string } | null)?.timezone, "UTC");
+  // formatDateInZone, NOT formatWhen: that formatter emits no year, so a
+  // registration recorded in 2025 and one recorded in 2026 would render
+  // identically — on the one field whose job is telling a fresh filing from a
+  // stale one. See the note on formatCallTime; formatWhen must not gain a year
+  // because it is also spoken aloud on live calls.
   const recordedAt = a2p?.updatedAt
-    ? formatWhen(new Date(a2p.updatedAt), timezone)
+    ? formatDateInZone(a2p.updatedAt, timezone)
     : null;
   return (
     <>

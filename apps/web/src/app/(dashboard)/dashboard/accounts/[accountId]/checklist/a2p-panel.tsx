@@ -36,9 +36,12 @@ export function A2pPanel({
   registration, recordedAt, action,
 }: {
   registration: A2pRegistration | null;
-  /** Already formatted in the ACCOUNT's timezone by the page — this component
-   *  never sees a raw instant, so it cannot format one in the viewer's clock
-   *  (the repeated timezone defect in this codebase). Null when never set. */
+  /** Already formatted in the ACCOUNT's timezone by the page, so nothing here
+   *  can format an instant in the viewer's clock — the repeated timezone
+   *  defect in this codebase. (`registration` does still carry the raw
+   *  `updatedAt` across the boundary in the props payload; the narrower prop
+   *  type is what keeps this component from reaching for it.) Null when the
+   *  registration has never been recorded. */
   recordedAt: string | null;
   action: (formData: FormData) => Promise<{ ok: true } | { ok: false; error: string }>;
 }) {

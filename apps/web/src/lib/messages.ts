@@ -559,7 +559,10 @@ export const m = {
   // Names what is missing rather than "invalid input": approving without the
   // identifiers ticks a checklist item that reads "Register A2P 10DLC brand
   // and campaign" for a company with nothing to send on.
-  "a2p.approvedNeedsIds": "Add the brand ID and campaign ID before marking this approved",
+  // "Both … are needed" rather than "Add the brand ID and campaign ID": the
+  // guard fires when EITHER is missing, so naming both as things to add is
+  // wrong half the time it appears.
+  "a2p.approvedNeedsIds": "Both the brand ID and campaign ID are needed before marking this approved",
   "a2p.staleStatus": "That status isn't one of the options — reload the page and try again",
   "a2p.recorded": "Recorded",
 

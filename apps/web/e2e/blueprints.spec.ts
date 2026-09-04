@@ -186,8 +186,15 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     await page.getByLabel("Status").click();
     await page.getByRole("option", { name: "Approved" }).click();
     await page.getByRole("button", { name: "Save" }).click();
-    await expect(page.getByText(/Add the brand ID and campaign ID/)).toBeVisible();
-    await expect(a2pItem).toHaveAttribute("aria-pressed", "false");
+    await expect(page.getByText(/Both the brand ID and campaign ID are needed/)).toBeVisible();
+    // Across a RELOAD, so it bites. Asserting aria-pressed inline would have
+    // matched on the first poll against an item that was already false — it
+    // would pass identically with the guard deleted and the flip merely still
+    // in flight. After a reload the assertion is about the database.
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Register A2P 10DLC brand and campaign" }))
+      .toHaveAttribute("aria-pressed", "false");
+    await expect(page.getByLabel("Brand ID")).toHaveValue("");
 
     await page.getByLabel("Brand ID").fill("BRAND123");
     await page.getByLabel("Campaign ID").fill("CAMP456");
@@ -204,8 +211,11 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     await expect(page.getByRole("button", { name: "Register A2P 10DLC brand and campaign" }))
       .toHaveAttribute("aria-pressed", "true");
     // The status carries its date — "with the carriers" means one thing a day
-    // old and another a quarter old. Rendered in the ACCOUNT's timezone.
-    await expect(page.getByText(/^Recorded /)).toBeVisible();
+    // old and another a quarter old. Rendered in the ACCOUNT's timezone, and
+    // the YEAR is asserted on purpose: `/^Recorded /` alone was format-blind,
+    // and the first cut of this used a formatter that emits no year, so two
+    // registrations a year apart rendered identically.
+    await expect(page.getByText(/^Recorded \w+ \d+, 20\d\d$/)).toBeVisible();
 
     // And it goes BACKWARDS — new behaviour for this list, and the reason the
     // item cannot be a manual tick: a rejected registration must not keep
