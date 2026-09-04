@@ -2,7 +2,10 @@ import { describe, it, expect } from "vitest";
 import "dotenv/config";
 import { serviceDb } from "../service";
 import { withTestAccount } from "./fixtures";
-import { createAccount, listAccounts, renameAccount } from "../accounts";
+import {
+  createAccount, listAccounts, renameAccount,
+  setA2pRegistration, getA2pRegistration,
+} from "../accounts";
 
 const suffix = () => Math.random().toString(36).slice(2, 10);
 
@@ -25,13 +28,22 @@ describe("accounts service", () => {
 });
 
 /**
- * The setup wizard's inline rename (renameAccountAction) is the only caller
- * today, and it reaches this through `serviceDb()` behind an agency-only
- * guard — `authenticated` has held no UPDATE grant on `accounts.name` since
- * migration 0013.
+ * Account-level writes that only `serviceDb()` can make. Both of them —
+ * `renameAccount` and `setA2pRegistration` — touch columns `authenticated`
+ * holds no UPDATE grant on since migration 0013, which re-granted the seven
+ * branding columns and nothing else. Both are therefore agency-gated at the
+ * call site, and both are shaped the same way: `.select("id")`, throw on
+ * error, throw on ZERO ROWS.
  */
-describe("renameAccount", () => {
-  it("writes the new name and emits account.renamed with the actor", async () => {
+describe("serviceDb-only account writes", () => {
+  /**
+   * ONE fixture cycle for both writers, deliberately. `withTestAccount` is a
+   * create plus twenty-two deletes, this suite runs ~20 files in parallel
+   * against a single shared Supabase project, and its slowest file already
+   * sits near the 20s per-test timeout. A second cycle bought for tidiness is
+   * contention spent to prove nothing new.
+   */
+  it("renames the account, and round-trips A2P registration state", async () => {
     await withTestAccount(async (db, accountId) => {
       await renameAccount(db, accountId, "Rio Roofing", "user_test");
 
@@ -45,6 +57,22 @@ describe("renameAccount", () => {
         type: "account.renamed", actor_type: "user", actor_id: "user_test",
         payload: { name: "Rio Roofing" },
       });
+
+      // P1a: A2P registration round-trip. A fresh account knows nothing, and
+      // `not_started` is that truth rather than a guess.
+      expect((await getA2pRegistration(db, accountId))!.status).toBe("not_started");
+
+      await setA2pRegistration(db, accountId, {
+        brandId: "BRAND123", campaignId: "CAMP456", status: "pending",
+      }, "user_test");
+      const pending = (await getA2pRegistration(db, accountId))!;
+      expect(pending.brandId).toBe("BRAND123");
+      expect(pending.campaignId).toBe("CAMP456");
+      expect(pending.status).toBe("pending");
+
+      const { data: a2pEv } = await db.from("events").select("type")
+        .eq("account_id", accountId).eq("type", "account.a2p_updated");
+      expect(a2pEv).toHaveLength(1);
     });
   });
 
@@ -64,7 +92,7 @@ describe("renameAccount", () => {
    * its slowest test sits close to the 20s per-test timeout; a fixture cycle
    * bought purely for symmetry is load spent to prove nothing.
    */
-  it("throws rather than reporting success for an account that does not exist", async () => {
+  it("renameAccount throws rather than reporting success for an account that does not exist", async () => {
     const db = serviceDb();
     const ghost = "00000000-0000-0000-0000-000000000000";
     await expect(
@@ -75,6 +103,19 @@ describe("renameAccount", () => {
     // never happened would be worse than no event at all.
     const { data } = await db.from("events").select("id")
       .eq("account_id", ghost).eq("type", "account.renamed");
+    expect(data ?? []).toHaveLength(0);
+  });
+
+  /** Same claim, same reason, for the A2P writer. */
+  it("setA2pRegistration throws rather than reporting success for an account that does not exist", async () => {
+    const db = serviceDb();
+    const ghost = "00000000-0000-0000-0000-000000000000";
+    await expect(setA2pRegistration(
+      db, ghost, { brandId: null, campaignId: null, status: "approved" }, "user_test",
+    )).rejects.toThrow(/no account/);
+
+    const { data } = await db.from("events").select("id")
+      .eq("account_id", ghost).eq("type", "account.a2p_updated");
     expect(data ?? []).toHaveLength(0);
   });
 });

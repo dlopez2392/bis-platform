@@ -3,7 +3,9 @@ export { userDb } from "./user-client";
 export type { SupabaseClient } from "@supabase/supabase-js";
 export { emit, listRecentEvents, type ActorType, type EventRow } from "./events";
 export { sanitizeSearchTerm } from "./search-term";
-export { createAccount, listAccounts, setClientAccess, renameAccount, getAccountByOrgId } from "./accounts";
+export { createAccount, listAccounts, setClientAccess, renameAccount, getAccountByOrgId,
+         setA2pRegistration, getA2pRegistration } from "./accounts";
+export type { A2pStatus, A2pRegistration } from "./accounts";
 export { createContact, updateContact, listContacts, getContact,
          addTagToContact, removeTagFromContact, listContactTags, fillContactBlanks,
          countContacts, deleteContacts, addTagToContacts, removeTagFromContacts, listTags,

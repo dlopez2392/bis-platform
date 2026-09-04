@@ -74,6 +74,58 @@ export async function renameAccount(
   await emit(db, accountId, "account.renamed", actorId, { name });
 }
 
+export type A2pStatus = "not_started" | "pending" | "approved" | "rejected";
+
+export type A2pRegistration = {
+  brandId: string | null;
+  campaignId: string | null;
+  status: A2pStatus;
+};
+
+/**
+ * A2P 10DLC state, recorded rather than performed: registration happens in the
+ * Telnyx portal with the carriers, and this is where its outcome lands so the
+ * platform can refuse to text on a number that is not cleared.
+ *
+ * serviceDb ONLY. 0013 revoked UPDATE on accounts from `authenticated` and
+ * re-granted branding columns alone, so these columns are unwritable by the
+ * RLS-scoped client — and unit tests, which mock the database, cannot see
+ * that. Callers must be agency-gated.
+ *
+ * Zero rows is not success, for `renameAccount`'s reason: PostgREST reports no
+ * error for an update that matched nothing, so without the check a wrong id
+ * returns ok having written nothing.
+ */
+export async function setA2pRegistration(
+  db: SupabaseClient, accountId: string, patch: A2pRegistration, actorId: string,
+): Promise<void> {
+  const { data, error } = await db.from("accounts")
+    .update({
+      a2p_brand_id: patch.brandId,
+      a2p_campaign_id: patch.campaignId,
+      a2p_status: patch.status,
+      a2p_updated_at: new Date().toISOString(),
+    })
+    .eq("id", accountId).select("id");
+  if (error) throw new Error(`setA2pRegistration failed: ${error.message}`);
+  if (!data?.length) throw new Error(`setA2pRegistration: no account ${accountId}`);
+  await emit(db, accountId, "account.a2p_updated", actorId, { status: patch.status });
+}
+
+export async function getA2pRegistration(
+  db: SupabaseClient, accountId: string,
+): Promise<A2pRegistration | null> {
+  const { data, error } = await db.from("accounts")
+    .select("a2p_brand_id, a2p_campaign_id, a2p_status")
+    .eq("id", accountId).maybeSingle();
+  if (error) throw new Error(`getA2pRegistration failed: ${error.message}`);
+  if (!data) return null;
+  return {
+    brandId: data.a2p_brand_id, campaignId: data.a2p_campaign_id,
+    status: data.a2p_status as A2pStatus,
+  };
+}
+
 export async function getAccountByOrgId(
   db: SupabaseClient, clerkOrgId: string,
 ): Promise<{ id: string; name: string; client_access_enabled: boolean; timezone: string } | null> {
