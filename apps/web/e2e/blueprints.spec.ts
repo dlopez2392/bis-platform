@@ -187,19 +187,25 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     await page.getByRole("option", { name: "Approved" }).click();
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByText(/Both the brand ID and campaign ID are needed/)).toBeVisible();
-    // Across a RELOAD, so it bites. Asserting aria-pressed inline would have
-    // matched on the first poll against an item that was already false — it
-    // would pass identically with the guard deleted and the flip merely still
-    // in flight. After a reload the assertion is about the database.
-    await page.reload();
-    await expect(page.getByRole("button", { name: "Register A2P 10DLC brand and campaign" }))
-      .toHaveAttribute("aria-pressed", "false");
-    await expect(page.getByLabel("Brand ID")).toHaveValue("");
 
+    // 🔴 THE REGRESSION GUARD, and it must run WITHOUT a reload in between.
+    // React resets a form once its `action` prop resolves — including to
+    // {ok:false} — and Radix's Select listens for that reset and drives its
+    // value back to first render, firing onValueChange. So a refused save
+    // silently reverted the operator's chosen status while the fields still
+    // looked filled, and their next Save wrote `not_started` with the ids
+    // attached: an approval a human typed, stored as not-approved. Found on
+    // the first real use of this panel, NOT by this suite — the earlier
+    // version of this block reloaded here, which is exactly what hid it.
+    // a2p-panel.tsx uses onSubmit rather than `action` because of this.
+    await expect(page.getByLabel("Status")).toContainText("Approved");
+
+    // And the operator's typing survives a refusal too — same reset, same
+    // cause. Both fields were empty for the refusal, so fill them now.
     await page.getByLabel("Brand ID").fill("BRAND123");
     await page.getByLabel("Campaign ID").fill("CAMP456");
-    await page.getByLabel("Status").click();
-    await page.getByRole("option", { name: "Approved" }).click();
+    // Deliberately NOT re-selecting the status: the whole point is that the
+    // choice made before the refusal is still the choice being submitted.
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByText("A2P registration updated")).toBeVisible();
 

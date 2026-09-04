@@ -1,11 +1,12 @@
 "use client";
 
+import { useState, useTransition } from "react";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { SubmitButton } from "../../submit-button";
 import { m } from "@/lib/messages";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import type { A2pRegistration, A2pStatus } from "@bis/db";
@@ -50,6 +51,21 @@ export function A2pPanel({
   // renders the same thing a fresh account shows rather than crashing.
   const current = registration ?? { brandId: null, campaignId: null, status: "not_started" as const };
 
+  // CONTROLLED, not defaultValue — and this is load-bearing, not style.
+  // React resets an uncontrolled `<form action={fn}>` once the action
+  // resolves, INCLUDING when it resolves to {ok:false}. A refused save does
+  // not revalidate (correctly — nothing was written), so that reset restored
+  // the OLD server values and silently threw away what the operator had
+  // chosen. The fields still looked populated, so the next Save submitted the
+  // stale status: an approval typed by a human landed in the database as
+  // `not_started`, with the ids written. Hit on the first real use of this
+  // panel. calendar-settings.tsx holds its fields in state for the same
+  // reason. Do not revert these to defaultValue.
+  const [brandId, setBrandId] = useState(current.brandId ?? "");
+  const [campaignId, setCampaignId] = useState(current.campaignId ?? "");
+  const [status, setStatus] = useState<A2pStatus>(current.status);
+  const [pending, startTransition] = useTransition();
+
   return (
     <Card>
       <CardHeader>
@@ -58,14 +74,40 @@ export function A2pPanel({
       </CardHeader>
       <CardContent>
         <form
-          // notifyActionResult, not a naked await: a Save clicked in a tab that
-          // predates the current deployment REJECTS (stale server-action id)
-          // rather than returning {ok:false}, and that failure must reach the
-          // operator as a toast, never vanish (2026-08-29, live).
-          action={(formData) => notifyActionResult(() => action(formData), toast, {
-            success: m["a2p.saved"],
-            crashed: m["common.actionCrashed"],
-          })}
+          // onSubmit, NOT the `action` prop — deliberately, and the one place
+          // this panel departs from the house form pattern.
+          //
+          // React resets a form once its `action` resolves, including when it
+          // resolves to {ok:false}. Radix's Select registers its own listener
+          // for that reset (`@radix-ui/react-select`: `initialValueRef` is
+          // captured on FIRST render and the listener calls `setValue` on it,
+          // which fires `onValueChange`) — so the reset drives React state
+          // BACKWARDS and no amount of controlling the value wins the race.
+          // The live consequence: a refused save silently reverted the
+          // operator's chosen status, the fields still looked filled, and
+          // their next Save wrote `not_started` with the ids attached. An
+          // approval a human typed landed in the database as not-approved.
+          // Hit on the first real use of this panel, on Test Client One.
+          //
+          // Not using `action` means React never calls reset, so the listener
+          // never fires. It costs us `useFormStatus` (hence useTransition and
+          // a local Button rather than the shared SubmitButton).
+          //
+          // notifyActionResult stays, for its own reason: a Save clicked in a
+          // tab that predates the current deployment REJECTS (stale
+          // server-action id) rather than returning {ok:false}, and that
+          // failure must reach the operator as a toast, never vanish
+          // (2026-08-29, live).
+          onSubmit={(e) => {
+            e.preventDefault();
+            const formData = new FormData(e.currentTarget);
+            startTransition(async () => {
+              await notifyActionResult(() => action(formData), toast, {
+                success: m["a2p.saved"],
+                crashed: m["common.actionCrashed"],
+              });
+            });
+          }}
           className="space-y-4"
         >
           <div className="grid gap-4 sm:grid-cols-2">
@@ -73,20 +115,21 @@ export function A2pPanel({
               <Label htmlFor="a2pBrandId">{m["a2p.brandId"]}</Label>
               <Input
                 id="a2pBrandId" name="brandId"
-                defaultValue={current.brandId ?? ""}
+                value={brandId} onChange={(e) => setBrandId(e.target.value)}
               />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="a2pCampaignId">{m["a2p.campaignId"]}</Label>
               <Input
                 id="a2pCampaignId" name="campaignId"
-                defaultValue={current.campaignId ?? ""}
+                value={campaignId} onChange={(e) => setCampaignId(e.target.value)}
               />
             </div>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="a2pStatus">{m["a2p.status"]}</Label>
-            <Select name="status" defaultValue={current.status}>
+            <Select name="status" value={status}
+                    onValueChange={(v) => setStatus(v as A2pStatus)}>
               <SelectTrigger id="a2pStatus" className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {STATUS_OPTIONS.map((opt) => (
@@ -103,7 +146,12 @@ export function A2pPanel({
               </p>
             ) : null}
           </div>
-          <SubmitButton>{m["common.save"]}</SubmitButton>
+          {/* Not the shared SubmitButton: useFormStatus only reports for a
+              form driven by the `action` prop, which this one deliberately is
+              not. Same disabled-while-pending behaviour and same copy. */}
+          <Button type="submit" disabled={pending}>
+            {pending ? m["common.saving"] : m["common.save"]}
+          </Button>
         </form>
       </CardContent>
     </Card>
