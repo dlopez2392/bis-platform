@@ -10,6 +10,10 @@ export function formatCurrency(n: number): string {
   return currency.format(n);
 }
 
+/** Renders in the RUNTIME's zone (server or browser, whichever formats it).
+ *  For anything scoped to an account — a record's timestamp, anything an
+ *  operator reads as "when this happened to this client" — use
+ *  `formatDateInZone` below and pass the account's zone. */
 export function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString("en-US", {
     month: "short",
@@ -18,6 +22,7 @@ export function formatDate(iso: string): string {
   });
 }
 
+/** Renders in the RUNTIME's zone — same caveat as `formatDate` above. */
 export function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString("en-US", {
     month: "short",
@@ -43,6 +48,12 @@ export function formatDateTime(iso: string): string {
  *
  * No hour/minute: a field measured in days-to-weeks does not need a clock, and
  * "Sep 4, 2026" is what a business owner reads at 7 AM.
+ *
+ * ⚠️ THROWS on an unparseable `iso` (`RangeError: Invalid time value`), unlike
+ * the three `toLocale*String` formatters in this file, which return the string
+ * "Invalid Date". Deliberate — a bad timestamp should be a 500 an operator
+ * reports, not a cell that quietly reads "Invalid Date" forever — but it means
+ * a nullable or user-supplied value must be checked BEFORE the call, not after.
  */
 export function formatDateInZone(iso: string, timeZone: string): string {
   return new Intl.DateTimeFormat("en-US", {
