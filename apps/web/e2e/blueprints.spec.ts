@@ -168,6 +168,42 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     await expect(page.getByRole("button", { name: "Buy a phone number" }))
       .toHaveAttribute("aria-pressed", "true");
 
+    // A2P: the item DERIVES from recorded account state, so this is the only
+    // place the whole chain is exercised — panel → serviceDb write → the
+    // checklist re-reading it. `a2p_*` carries no grant for `authenticated`
+    // (migration 0023), and unit tests mock the database, so a write wrongly
+    // routed through dbForRequest() would be green everywhere but here.
+    const a2pItem = page.getByRole("button", { name: "Register A2P 10DLC brand and campaign" });
+    await expect(a2pItem).toHaveAttribute("aria-pressed", "false");
+    // Derived items must not offer a toggle: the row would be written and the
+    // merge would ignore it, so the operator would click a box that never ticks.
+    await expect(a2pItem).toBeDisabled();
+
+    await page.getByLabel("Brand ID").fill("BRAND123");
+    await page.getByLabel("Campaign ID").fill("CAMP456");
+    await page.getByLabel("Status").click();
+    await page.getByRole("option", { name: "Approved" }).click();
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByText("A2P registration updated")).toBeVisible();
+
+    // Derived, not ticked: the item reads done because the status says so, and
+    // nothing ever wrote a checklist_items row for it.
+    await expect(a2pItem).toHaveAttribute("aria-pressed", "true");
+    await page.reload();
+    await expect(page.getByLabel("Brand ID")).toHaveValue("BRAND123");
+    await expect(page.getByRole("button", { name: "Register A2P 10DLC brand and campaign" }))
+      .toHaveAttribute("aria-pressed", "true");
+
+    // And it goes BACKWARDS — new behaviour for this list, and the reason the
+    // item cannot be a manual tick: a rejected registration must not keep
+    // reading as done for a client who cannot legally text.
+    await page.getByLabel("Status").click();
+    await page.getByRole("option", { name: "Rejected" }).click();
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByText("A2P registration updated")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Register A2P 10DLC brand and campaign" }))
+      .toHaveAttribute("aria-pressed", "false");
+
     // GAP 3: on the account dashboard, ChecklistPanel's title links back to
     // the full checklist route (via the titleHref prop) so an unfinished
     // checklist stays reachable from the summary view. This account only has

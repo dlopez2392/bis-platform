@@ -41,10 +41,17 @@ async function mintClientToken(userId: string): Promise<string> {
   return token.jwt;
 }
 
-/** PostgREST, called directly with the client's own token. */
+/**
+ * PostgREST, called directly with the client's own token.
+ *
+ * Returns the raw response `body` as well as the status: a bare
+ * `status >= 400` assertion passes for ANY refusal, including a typo'd column
+ * name, so a test that only reads the status can prove a boundary that isn't
+ * there. Case 5 below asserts the REASON.
+ */
 async function patchAccount(
   token: string, accountId: string, body: Record<string, unknown>,
-): Promise<{ status: number; rows: unknown[] }> {
+): Promise<{ status: number; rows: unknown[]; body: string }> {
   const res = await fetch(
     `${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/accounts?id=eq.${accountId}&select=id`,
     {
@@ -58,8 +65,9 @@ async function patchAccount(
       body: JSON.stringify(body),
     },
   );
-  const rows = res.ok ? ((await res.json()) as unknown[]) : [];
-  return { status: res.status, rows };
+  const text = await res.text();
+  const rows = res.ok ? (JSON.parse(text) as unknown[]) : [];
+  return { status: res.status, rows, body: text };
 }
 
 /**
@@ -119,6 +127,27 @@ test.describe("a client's branding boundary, at the database", () => {
       const rename = await patchAccount(token, accountId, { name: "renamed by client" });
       expect(rename.status, "the agency's internal label must be refused")
         .toBeGreaterThanOrEqual(400);
+
+      // 5. THE ASSERTION THE A2P PHASE EXISTS FOR. Migration 0023 adds the
+      //    `a2p_*` columns and deliberately does not grant them, so a client
+      //    cannot record their own carrier approval — which, since the
+      //    activation checklist now DERIVES from a2p_status, would otherwise
+      //    let them tick themselves cleared to text. Unit tests mock the
+      //    database and are blind to column grants (three shipped defects in
+      //    this repo already), so this is the only test that can see it.
+      const a2p = await patchAccount(token, accountId, { a2p_status: "approved" });
+      expect(a2p.status, "a client must not be able to write A2P state")
+        .toBeGreaterThanOrEqual(400);
+      //    And refused BY PRIVILEGE, not by a typo. Without this the assertion
+      //    above would pass just as happily against a misspelled column, which
+      //    is precisely the false green this phase is trying not to ship.
+      //    `42501` is Postgres's insufficient_privilege; an unknown column
+      //    comes back as PGRST204 instead, so this discriminates. Postgres
+      //    reports it for the TABLE rather than naming a2p_status — 0013's
+      //    revoke is table-wide, and the column-level re-grant simply never
+      //    covered this column.
+      expect(a2p.body, "the refusal must be insufficient_privilege, not a bad column")
+        .toContain("42501");
     } finally {
       // Unconditional, and it covers the case this test exists to disprove:
       // if assertion 2 ever fails, the agency's real account has been written
