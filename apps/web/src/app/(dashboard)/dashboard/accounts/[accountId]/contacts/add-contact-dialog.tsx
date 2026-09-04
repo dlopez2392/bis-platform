@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useFormStatus } from "react-dom";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -16,9 +15,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { m } from "@/lib/messages";
+import { useFormSubmit } from "@/lib/forms/use-form-submit";
 
-function Submit() {
-  const { pending } = useFormStatus();
+function Submit({ pending }: { pending: boolean }) {
   return (
     <Button type="submit" disabled={pending}>
       {pending ? m["common.saving"] : m["common.save"]}
@@ -32,6 +31,14 @@ export function AddContactDialog({
   action: (formData: FormData) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
+  const { pending, onSubmit } = useFormSubmit(async (formData) => {
+    try {
+      await action(formData);
+      setOpen(false);
+    } catch {
+      toast.error(m["contacts.createFailed"]);
+    }
+  });
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -45,14 +52,11 @@ export function AddContactDialog({
           <DialogTitle>{m["contacts.add"]}</DialogTitle>
         </DialogHeader>
         <form
-          action={async (formData) => {
-            try {
-              await action(formData);
-              setOpen(false);
-            } catch {
-              toast.error(m["contacts.createFailed"]);
-            }
-          }}
+          // onSubmit, NOT the `action` prop: on the catch path the dialog
+          // stays open and React's post-action reset cleared every field the
+          // operator had just typed. See lib/forms/use-form-submit.ts. Nothing
+          // to reset on success — the dialog closes.
+          onSubmit={onSubmit}
           className="space-y-4"
         >
           <div className="grid grid-cols-2 gap-3">
@@ -74,7 +78,7 @@ export function AddContactDialog({
             <Input id="phone" name="phone" />
           </div>
           <DialogFooter>
-            <Submit />
+            <Submit pending={pending} />
           </DialogFooter>
         </form>
       </DialogContent>

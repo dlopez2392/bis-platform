@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useFormStatus } from "react-dom";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -23,9 +22,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { m } from "@/lib/messages";
+import { useFormSubmit } from "@/lib/forms/use-form-submit";
 
-function Submit() {
-  const { pending } = useFormStatus();
+function Submit({ pending }: { pending: boolean }) {
   return (
     <Button type="submit" disabled={pending}>
       {pending ? m["common.saving"] : m["common.save"]}
@@ -43,6 +42,14 @@ export function AddOpportunityDialog({
   action: (formData: FormData) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
+  const { pending, onSubmit } = useFormSubmit(async (formData) => {
+    try {
+      await action(formData);
+      setOpen(false);
+    } catch {
+      toast.error(m["pipeline.createFailed"]);
+    }
+  });
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -56,14 +63,13 @@ export function AddOpportunityDialog({
           <DialogTitle>{m["pipeline.add"]}</DialogTitle>
         </DialogHeader>
         <form
-          action={async (formData) => {
-            try {
-              await action(formData);
-              setOpen(false);
-            } catch {
-              toast.error(m["pipeline.createFailed"]);
-            }
-          }}
+          // onSubmit, NOT the `action` prop: on the catch path the dialog
+          // stays open, and React's post-action reset cleared the contact
+          // Select and every field the operator had just filled in — so a
+          // failed create meant re-entering everything. See
+          // lib/forms/use-form-submit.ts. Nothing to reset on success: the
+          // dialog closes and the form unmounts.
+          onSubmit={onSubmit}
           className="space-y-4"
         >
           <input type="hidden" name="pipelineId" value={pipelineId} />
@@ -91,7 +97,7 @@ export function AddOpportunityDialog({
             <Input id="value" name="value" type="number" step="0.01" />
           </div>
           <DialogFooter>
-            <Submit />
+            <Submit pending={pending} />
           </DialogFooter>
         </form>
       </DialogContent>

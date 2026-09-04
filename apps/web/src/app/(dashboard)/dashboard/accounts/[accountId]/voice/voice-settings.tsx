@@ -3,6 +3,7 @@
 import { useTransition } from "react";
 import { toast } from "sonner";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
+import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import type { PhoneNumberRow, PhoneNumberStatus, VoiceProfileRow } from "@bis/db";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -39,6 +40,12 @@ function VoiceProfileForm({
   action: (formData: FormData) => Promise<ActionResult>;
 }) {
   const p = profile ?? DEFAULT_PROFILE;
+  const { pending, onSubmit } = useFormSubmit(async (formData) => {
+    await notifyActionResult(() => action(formData), toast, {
+      success: m["voice.profile.saved"],
+      crashed: m["common.actionCrashed"],
+    });
+  });
   return (
     <Card>
       <CardHeader>
@@ -47,13 +54,16 @@ function VoiceProfileForm({
       </CardHeader>
       <CardContent>
         <form
-          // notifyActionResult, not a naked await: a stale-deployment tab's
-          // save REJECTS rather than returning {ok:false} — that failure must
-          // toast, never vanish (2026-08-29 calendar-settings, live).
-          action={(formData) => notifyActionResult(() => action(formData), toast, {
-            success: m["voice.profile.saved"],
-            crashed: m["common.actionCrashed"],
-          })}
+          // onSubmit via useFormSubmit, NOT the `action` prop: React resets an
+          // action-prop form even when the action resolves to {ok:false}, and
+          // the two Selects below revert to their first-render values on that
+          // reset — so a refused save silently discarded the operator's
+          // choices. See lib/forms/use-form-submit.ts.
+          //
+          // notifyActionResult stays for its own reason: a stale-deployment
+          // tab's save REJECTS rather than returning {ok:false} — that failure
+          // must toast, never vanish (2026-08-29 calendar-settings, live).
+          onSubmit={onSubmit}
           className="space-y-6"
         >
           <div className="space-y-1.5">
@@ -129,7 +139,7 @@ function VoiceProfileForm({
             <Label htmlFor="enabled">{m["voice.profile.enabled"]}</Label>
           </div>
 
-          <SubmitButton>{m["voice.profile.save"]}</SubmitButton>
+          <SubmitButton pending={pending}>{m["voice.profile.save"]}</SubmitButton>
         </form>
       </CardContent>
     </Card>
@@ -171,6 +181,17 @@ function PhoneNumbersPanel({
   assignAction: (formData: FormData) => Promise<ActionResult>;
   statusAction: (phoneNumberId: string, status: string) => Promise<ActionResult>;
 }) {
+  const assignSubmit = useFormSubmit(async (formData, form) => {
+    const result = await assignAction(formData);
+    if (result.ok) {
+      toast.success(m["voice.numbers.assigned"]);
+      // Clear for the next number. `isConnected` because a form that has been
+      // unmounted mid-flight cannot be reset.
+      if (form.isConnected) form.reset();
+    } else {
+      toast.error(result.error);
+    }
+  });
   return (
     <Card>
       <CardHeader>
@@ -197,11 +218,13 @@ function PhoneNumbersPanel({
         )}
 
         <form
-          action={async (formData) => {
-            const result = await assignAction(formData);
-            if (result.ok) toast.success(m["voice.numbers.assigned"]);
-            else toast.error(result.error);
-          }}
+          // Same reason as every other converted form (see
+          // lib/forms/use-form-submit.ts) — but this one is an ADD form, so
+          // the clear-after-success that React's reset used to give for free
+          // is wanted and is now explicit. Only on success: a rejected number
+          // must stay in the field for the operator to correct, which is
+          // exactly what the old behaviour got wrong.
+          onSubmit={assignSubmit.onSubmit}
           className="space-y-3 border-t border-border pt-4"
         >
           <div className="space-y-1.5">
@@ -213,7 +236,7 @@ function PhoneNumbersPanel({
             <Label htmlFor="telnyxId">{m["voice.numbers.telnyxId"]}</Label>
             <Input id="telnyxId" name="telnyxId" />
           </div>
-          <SubmitButton>{m["voice.numbers.assign"]}</SubmitButton>
+          <SubmitButton pending={assignSubmit.pending}>{m["voice.numbers.assign"]}</SubmitButton>
         </form>
       </CardContent>
     </Card>

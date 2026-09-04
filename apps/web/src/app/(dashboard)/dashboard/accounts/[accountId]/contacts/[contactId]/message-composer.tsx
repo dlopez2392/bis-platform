@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { isSendRejected } from "../../conversations/send-errors";
 import { EmailSendButton } from "../../conversations/send-button";
+import { useFormSubmit } from "@/lib/forms/use-form-submit";
 
 type Mode = "note" | "email";
 
@@ -23,6 +24,24 @@ export function MessageComposer({
 }) {
   const [mode, setMode] = useState<Mode>("note");
   const isEmail = mode === "email";
+
+  const { pending, onSubmit } = useFormSubmit(async (formData, form) => {
+    try {
+      await (isEmail ? emailAction : noteAction)(formData);
+      if (isEmail) toast.success(m["compose.sent"]);
+      // Clear for the next message — what React's reset used to do, now
+      // explicit and ONLY on success. On failure the draft must survive: a
+      // rejected send used to wipe the note or email the operator had just
+      // typed, at the worst possible moment to lose it.
+      if (form.isConnected) form.reset();
+    } catch (e) {
+      if (!isEmail) {
+        toast.error(m["compose.noteFailed"]);
+      } else {
+        toast.error(isSendRejected(e) ? m["compose.sendRejected"] : m["compose.sendFailed"]);
+      }
+    }
+  });
 
   return (
     <div className="w-full space-y-2">
@@ -50,18 +69,8 @@ export function MessageComposer({
       ) : (
         <form
           key={mode}
-          action={async (formData) => {
-            try {
-              await (isEmail ? emailAction : noteAction)(formData);
-              if (isEmail) toast.success(m["compose.sent"]);
-            } catch (e) {
-              if (!isEmail) {
-                toast.error(m["compose.noteFailed"]);
-              } else {
-                toast.error(isSendRejected(e) ? m["compose.sendRejected"] : m["compose.sendFailed"]);
-              }
-            }
-          }}
+          // onSubmit, NOT the `action` prop — see lib/forms/use-form-submit.ts.
+          onSubmit={onSubmit}
           className="space-y-2"
           aria-label={isEmail ? m["compose.email"] : m["compose.note"]}
         >
@@ -84,6 +93,7 @@ export function MessageComposer({
               label={isEmail ? m["compose.send"] : m["common.add"]}
               pendingLabel={isEmail ? m["compose.sending"] : m["common.saving"]}
               variant={isEmail ? "default" : "outline"}
+              pending={pending}
             />
           </div>
         </form>

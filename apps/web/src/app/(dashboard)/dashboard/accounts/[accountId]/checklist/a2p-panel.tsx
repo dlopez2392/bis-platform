@@ -1,14 +1,15 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SubmitButton } from "../../submit-button";
 import { m } from "@/lib/messages";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
+import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import type { A2pRegistration, A2pStatus } from "@bis/db";
 
 /** Rendered in catalogue order, which is also the order a registration moves
@@ -64,7 +65,13 @@ export function A2pPanel({
   const [brandId, setBrandId] = useState(current.brandId ?? "");
   const [campaignId, setCampaignId] = useState(current.campaignId ?? "");
   const [status, setStatus] = useState<A2pStatus>(current.status);
-  const [pending, startTransition] = useTransition();
+
+  const { pending, onSubmit } = useFormSubmit(async (formData) => {
+    await notifyActionResult(() => action(formData), toast, {
+      success: m["a2p.saved"],
+      crashed: m["common.actionCrashed"],
+    });
+  });
 
   return (
     <Card>
@@ -74,40 +81,20 @@ export function A2pPanel({
       </CardHeader>
       <CardContent>
         <form
-          // onSubmit, NOT the `action` prop — deliberately, and the one place
-          // this panel departs from the house form pattern.
-          //
-          // React resets a form once its `action` resolves, including when it
-          // resolves to {ok:false}. Radix's Select registers its own listener
-          // for that reset (`@radix-ui/react-select`: `initialValueRef` is
-          // captured on FIRST render and the listener calls `setValue` on it,
-          // which fires `onValueChange`) — so the reset drives React state
-          // BACKWARDS and no amount of controlling the value wins the race.
-          // The live consequence: a refused save silently reverted the
-          // operator's chosen status, the fields still looked filled, and
-          // their next Save wrote `not_started` with the ids attached. An
+          // onSubmit via useFormSubmit, NOT the `action` prop. This is the
+          // panel the defect was FOUND on — a refused save silently reverted
+          // the operator's chosen status, the fields still looked filled, and
+          // the retry wrote `not_started` with the ids attached, so an
           // approval a human typed landed in the database as not-approved.
-          // Hit on the first real use of this panel, on Test Client One.
-          //
-          // Not using `action` means React never calls reset, so the listener
-          // never fires. It costs us `useFormStatus` (hence useTransition and
-          // a local Button rather than the shared SubmitButton).
+          // The mechanism, and why controlling the value is not enough, is
+          // documented once in lib/forms/use-form-submit.ts.
           //
           // notifyActionResult stays, for its own reason: a Save clicked in a
           // tab that predates the current deployment REJECTS (stale
           // server-action id) rather than returning {ok:false}, and that
           // failure must reach the operator as a toast, never vanish
           // (2026-08-29, live).
-          onSubmit={(e) => {
-            e.preventDefault();
-            const formData = new FormData(e.currentTarget);
-            startTransition(async () => {
-              await notifyActionResult(() => action(formData), toast, {
-                success: m["a2p.saved"],
-                crashed: m["common.actionCrashed"],
-              });
-            });
-          }}
+          onSubmit={onSubmit}
           className="space-y-4"
         >
           <div className="grid gap-4 sm:grid-cols-2">
@@ -146,12 +133,7 @@ export function A2pPanel({
               </p>
             ) : null}
           </div>
-          {/* Not the shared SubmitButton: useFormStatus only reports for a
-              form driven by the `action` prop, which this one deliberately is
-              not. Same disabled-while-pending behaviour and same copy. */}
-          <Button type="submit" disabled={pending}>
-            {pending ? m["common.saving"] : m["common.save"]}
-          </Button>
+          <SubmitButton pending={pending}>{m["common.save"]}</SubmitButton>
         </form>
       </CardContent>
     </Card>

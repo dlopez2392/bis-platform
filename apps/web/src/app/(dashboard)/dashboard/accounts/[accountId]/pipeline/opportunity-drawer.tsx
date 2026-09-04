@@ -1,6 +1,5 @@
 "use client";
 
-import { useFormStatus } from "react-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,9 +20,9 @@ import {
 } from "@/components/ui/select";
 import type { BoardOpportunity } from "./pipeline-board";
 import { m } from "@/lib/messages";
+import { useFormSubmit } from "@/lib/forms/use-form-submit";
 
-function Submit() {
-  const { pending } = useFormStatus();
+function Submit({ pending }: { pending: boolean }) {
   return (
     <Button type="submit" disabled={pending}>
       {pending ? m["common.saving"] : m["common.save"]}
@@ -40,6 +39,14 @@ export function OpportunityDrawer({
   onClose: () => void;
   action: (formData: FormData) => Promise<void>;
 }) {
+  const { pending, onSubmit } = useFormSubmit(async (formData) => {
+    try {
+      await action(formData);
+      onClose();
+    } catch {
+      toast.error(m["pipeline.updateFailed"]);
+    }
+  });
   return (
     <Sheet open={opportunity !== null} onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="flex flex-col gap-6">
@@ -48,14 +55,13 @@ export function OpportunityDrawer({
         </SheetHeader>
         {opportunity ? (
           <form
-            action={async (formData) => {
-              try {
-                await action(formData);
-                onClose();
-              } catch {
-                toast.error(m["pipeline.updateFailed"]);
-              }
-            }}
+            // onSubmit, NOT the `action` prop: on the catch path the drawer
+            // stays open, and React's post-action reset reverted the status
+            // Select and the name Input to what the drawer opened with — the
+            // operator's edit gone, the fields still looking edited. See
+            // lib/forms/use-form-submit.ts. Nothing to reset on success: the
+            // drawer closes.
+            onSubmit={onSubmit}
             className="flex flex-1 flex-col gap-4"
           >
             <input type="hidden" name="oppId" value={opportunity.id} />
@@ -87,7 +93,7 @@ export function OpportunityDrawer({
               </Select>
             </div>
             <SheetFooter className="mt-auto">
-              <Submit />
+              <Submit pending={pending} />
             </SheetFooter>
           </form>
         ) : null}

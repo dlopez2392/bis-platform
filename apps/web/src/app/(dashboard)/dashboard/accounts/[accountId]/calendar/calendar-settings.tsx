@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { SubmitButton } from "../../submit-button";
 import { m } from "@/lib/messages";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
+import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { DEFAULT_FOLLOWUP_BODY } from "@/lib/email/templates/followup";
 import {
   DEFAULT_CLOSE_TIME, DEFAULT_OPEN_TIME, openHoursToRows, seedTimeOnPickerOpen,
@@ -65,6 +66,13 @@ export function CalendarSettings({
   const [followupBodyText, setFollowupBodyText] = useState(calendar.followup_body);
   const rows = useMemo(() => openHoursToRows(calendar.open_hours), [calendar.open_hours]);
 
+  const { pending, onSubmit } = useFormSubmit(async (formData) => {
+    await notifyActionResult(() => action(formData), toast, {
+      success: m["calendar.settings.saved"],
+      crashed: m["calendar.settings.saveCrashed"],
+    });
+  });
+
   const notifyEmailsEmpty = notifyEmailsText
     .split("\n").map((s) => s.trim()).filter(Boolean).length === 0;
 
@@ -76,14 +84,19 @@ export function CalendarSettings({
       </CardHeader>
       <CardContent>
         <form
-          // notifyActionResult, not a naked await: a Save clicked in a tab
-          // that predates the current deployment REJECTS (stale server-action
-          // id) rather than returning {ok:false}, and that failure must reach
-          // the operator as a toast, never vanish (2026-08-29, live).
-          action={(formData) => notifyActionResult(() => action(formData), toast, {
-            success: m["calendar.settings.saved"],
-            crashed: m["calendar.settings.saveCrashed"],
-          })}
+          // onSubmit via useFormSubmit, NOT the `action` prop: React resets an
+          // action-prop form even when the action resolves to {ok:false}, and
+          // the five Selects below listen for that reset and revert to their
+          // first-render values — so a refused save silently discarded the
+          // operator's choices and the retry wrote the stale ones. See
+          // lib/forms/use-form-submit.ts.
+          //
+          // notifyActionResult stays, for its own reason: a Save clicked in a
+          // tab that predates the current deployment REJECTS (stale
+          // server-action id) rather than returning {ok:false}, and that
+          // failure must reach the operator as a toast, never vanish
+          // (2026-08-29, live).
+          onSubmit={onSubmit}
           className="space-y-6"
         >
           <div className="flex items-center gap-2">
@@ -227,7 +240,7 @@ export function CalendarSettings({
             />
           </div>
 
-          <SubmitButton>{m["common.save"]}</SubmitButton>
+          <SubmitButton pending={pending}>{m["common.save"]}</SubmitButton>
         </form>
       </CardContent>
     </Card>

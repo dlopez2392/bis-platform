@@ -17,6 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SubmitButton } from "../../../submit-button";
+import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { m } from "@/lib/messages";
 import { defaultFieldKey } from "@/lib/forms/editor-helpers";
 
@@ -41,6 +42,11 @@ export function FormEditor({
 }) {
   const [fields, setFields] = useState<FormField[]>(form.fields);
   const [successMode, setSuccessMode] = useState(form.success_mode);
+
+  const { pending, onSubmit } = useFormSubmit(async (formData) => {
+    try { await action(formData); toast.success(m["forms.saved"]); }
+    catch { toast.error(m["forms.saveFailed"]); }
+  });
 
   const available = [
     ...CORE_KINDS.filter((kind) => !fields.some((f) => f.kind === kind)),
@@ -81,10 +87,13 @@ export function FormEditor({
 
   return (
     <form
-      action={async (formData) => {
-        try { await action(formData); toast.success(m["forms.saved"]); }
-        catch { toast.error(m["forms.saveFailed"]); }
-      }}
+      // onSubmit, NOT the `action` prop — React resets an action-prop form
+      // even when the action threw and was caught here, and the three Selects
+      // below revert to their first-render values on that reset. For
+      // `successMode` that also drove `setSuccessMode` backwards through
+      // onValueChange, flipping the conditional redirect field with it. See
+      // lib/forms/use-form-submit.ts.
+      onSubmit={onSubmit}
       className="space-y-4"
     >
       <input type="hidden" name="formId" value={form.id} />
@@ -207,7 +216,7 @@ export function FormEditor({
       </Card>
 
       <div className="flex flex-wrap items-center gap-2">
-        <SubmitButton>{m["common.save"]}</SubmitButton>
+        <SubmitButton pending={pending}>{m["common.save"]}</SubmitButton>
         <Label htmlFor="form-status" className="sr-only">{m["forms.status"]}</Label>
         <Select name="status" defaultValue={form.status}>
           <SelectTrigger id="form-status" className="w-40">
