@@ -9,6 +9,21 @@ vi.mock("@/lib/email", () => ({
 }));
 
 /**
+ * THE gate for SMS, mocked at its own module boundary rather than
+ * reconstructed from its two underlying queries (a2p_registrations +
+ * phone_numbers) — resolveSmsSender's own correctness is sender.test.ts's
+ * job. What THIS file pins is that sendSmsAction obeys whatever the gate
+ * says and never re-derives a `from` number or an approval decision itself.
+ */
+const gateMock = vi.fn();
+vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => gateMock(...a) }));
+
+const smsSendMock = vi.fn();
+vi.mock("@/lib/sms", () => ({
+  getSmsProvider: () => ({ send: (...a: unknown[]) => smsSendMock(...a) }),
+}));
+
+/**
  * The one direct query this action makes: the account's display name and,
  * as of this change, its reply-to address. Mutated per test rather than
  * re-mocked, and read through a closure so the factory sees the current value
@@ -57,16 +72,32 @@ vi.mock("@/lib/db", () => ({
   }),
 }));
 
+/**
+ * The one contact row both actions read. sendEmailAction only ever looks at
+ * `email`; sendSmsAction only at `phone` (run through toE164 before it
+ * reaches the provider) — one mutable object covers both, same pattern as
+ * accountRow above.
+ */
+const contactRow: { id: string; email: string | null; phone: string | null } = {
+  id: "contact_1", email: "customer@example.com", phone: "9565551234",
+};
+
 vi.mock("@bis/db", () => ({
   brandLogoUrl: (path: string) => `https://cdn.test/${path}`,
-  getContact: async () => ({ id: "contact_1", email: "customer@example.com" }),
+  getContact: async () => contactRow,
   ensureConversation: async () => ({ id: "convo_1" }),
-  createMessage: async () => ({ id: "msg_1" }),
+  // vi.fn(), not a plain async function: the write-then-send ordering test
+  // below needs invocationCallOrder against the SMS provider's send mock.
+  createMessage: vi.fn(async () => ({ id: "msg_1" })),
   updateMessageStatus: vi.fn(),
   clearUnreadCount: vi.fn(),
 }));
 
-import { sendEmailAction } from "./actions";
+import { sendEmailAction, sendSmsAction } from "./actions";
+import { createMessage, updateMessageStatus } from "@bis/db";
+
+const createMessageMock = vi.mocked(createMessage);
+const updateMessageStatusMock = vi.mocked(updateMessageStatus);
 
 function fd(entries: Record<string, string>) {
   const formData = new FormData();
@@ -76,9 +107,17 @@ function fd(entries: Record<string, string>) {
 
 beforeEach(() => {
   sendMock.mockReset().mockResolvedValue({ providerMessageId: "pm_1" });
+  smsSendMock.mockReset().mockResolvedValue({ providerMessageId: "pm_1" });
+  gateMock.mockReset().mockResolvedValue({ ok: true, from: "+19565559999" });
+  createMessageMock.mockClear();
+  createMessageMock.mockResolvedValue({ id: "msg_1" });
+  updateMessageStatusMock.mockClear();
+  updateMessageStatusMock.mockResolvedValue(undefined);
   accountRow.reply_to_email = null;
   accountRow.from_email = null;
   accountRow.brand_name = "Rio Roofing";
+  contactRow.email = "customer@example.com";
+  contactRow.phone = "9565551234";
 });
 
 /**
@@ -169,5 +208,114 @@ describe("sendEmailAction — the customer sees the brand, never the internal la
     }));
 
     expect(sendMock.mock.calls[0]![0].fromName).toBe("Rio Roofing — trial");
+  });
+});
+
+/**
+ * sendSmsAction is the feature's entire safety boundary (A2P gate + phone
+ * normalization stand between a click and a real text to a real phone), and
+ * had no test at any layer before this file.
+ */
+describe("sendSmsAction — the gate blocks before anything is written", () => {
+  it("a gate refusal stops the send: no provider call, no message row", async () => {
+    gateMock.mockResolvedValue({ ok: false, reason: "a2p_not_approved" });
+
+    await expect(sendSmsAction("acct_1", fd({
+      contactId: "contact_1", body: "On our way",
+    }))).rejects.toThrow();
+
+    expect(createMessageMock).not.toHaveBeenCalled();
+    expect(smsSendMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("sendSmsAction — the from number comes from the gate and nowhere else", () => {
+  it("sends from exactly the number the gate returned", async () => {
+    gateMock.mockResolvedValue({ ok: true, from: "+19565550001" });
+
+    await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }));
+
+    expect(smsSendMock).toHaveBeenCalledWith(expect.objectContaining({ from: "+19565550001" }));
+  });
+});
+
+describe("sendSmsAction — the contact's phone must survive toE164 before anything is written", () => {
+  it("rejects an unnormalizable phone before any row is written", async () => {
+    contactRow.phone = "not a phone";
+
+    await expect(sendSmsAction("acct_1", fd({
+      contactId: "contact_1", body: "On our way",
+    }))).rejects.toThrow();
+
+    expect(createMessageMock).not.toHaveBeenCalled();
+    expect(smsSendMock).not.toHaveBeenCalled();
+  });
+
+  it("normalizes a free-form phone to E.164 before it reaches the provider", async () => {
+    contactRow.phone = "(956) 292-1696";
+
+    await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }));
+
+    expect(smsSendMock).toHaveBeenCalledWith(expect.objectContaining({ to: "+19562921696" }));
+  });
+});
+
+describe("sendSmsAction — write then send", () => {
+  it("creates the message row before calling the provider", async () => {
+    await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }));
+
+    expect(createMessageMock).toHaveBeenCalled();
+    expect(smsSendMock).toHaveBeenCalled();
+    expect(createMessageMock.mock.invocationCallOrder[0]!)
+      .toBeLessThan(smsSendMock.mock.invocationCallOrder[0]!);
+  });
+});
+
+describe("sendSmsAction — provider failure marks the row failed", () => {
+  it("marks the message failed when the provider throws", async () => {
+    smsSendMock.mockRejectedValue(new Error("carrier rejected"));
+
+    await expect(sendSmsAction("acct_1", fd({
+      contactId: "contact_1", body: "On our way",
+    }))).rejects.toThrow("carrier rejected");
+
+    expect(updateMessageStatusMock).toHaveBeenCalledWith(
+      expect.anything(), "acct_1", "msg_1", "failed",
+      expect.objectContaining({ error: "carrier rejected" }),
+      "user_1",
+    );
+  });
+});
+
+describe("sendSmsAction — success, and the one place it must not paper over a failure", () => {
+  it("marks the row sent with the provider's message id", async () => {
+    smsSendMock.mockResolvedValue({ providerMessageId: "pm_success" });
+
+    await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }));
+
+    expect(updateMessageStatusMock).toHaveBeenCalledWith(
+      expect.anything(), "acct_1", "msg_1", "sent",
+      { providerMessageId: "pm_success" },
+      "user_1",
+    );
+  });
+
+  /**
+   * The final status write sits OUTSIDE the try/catch that wraps the
+   * provider call, on purpose: by the time it runs the text is already gone
+   * and irrevocably out the door, so a failure here (a rare DB error) must
+   * propagate as-is, never get caught and relabeled "failed" — that would
+   * tell the operator a delivered text didn't go out and invite a duplicate
+   * send to a real phone.
+   */
+  it("propagates a failure of the final status write without relabeling the row failed", async () => {
+    updateMessageStatusMock.mockRejectedValue(new Error("db down"));
+
+    await expect(sendSmsAction("acct_1", fd({
+      contactId: "contact_1", body: "On our way",
+    }))).rejects.toThrow("db down");
+
+    expect(updateMessageStatusMock).toHaveBeenCalledTimes(1);
+    expect(updateMessageStatusMock.mock.calls[0]![3]).toBe("sent");
   });
 });

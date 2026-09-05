@@ -75,11 +75,16 @@ export function MessageComposer({
             // place of the form below, rather than a disabled tab that hides
             // it entirely.
             onClick={() => {
+              if (value === mode) return;
               setMode(value);
               // A controlled body survives an uncontrolled `key={mode}`
               // remount — without this, an internal note typed, then a
               // switch to Text, sends the note's text as the outbound SMS.
-              setBody("");
+              // Only the note boundary is the hazard: clear when a note is
+              // entered or left, not on every tab switch (that would wipe an
+              // in-progress email/SMS draft on a zero-intent re-click or a
+              // switch between the two send modes).
+              if (mode === "note" || value === "note") setBody("");
             }}
             aria-pressed={mode === value}
             className={cn(
