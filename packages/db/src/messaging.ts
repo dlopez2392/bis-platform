@@ -10,7 +10,10 @@ export type NewMessage = {
   // 'form' arrives with M1c: a form submission is the platform's first inbound
   // message. 'note' is not reused for it — that means "the operator wrote this
   // internally" in the UI, and a lead's own words are not an internal note.
-  channel: "email" | "form" | "voice";
+  // "sms" needs no migration: 0006_forms.sql:92 already sets the CHECK to
+  // ('email','sms','webchat','voice','note','form') — a deliberate
+  // "channels are adapters, not migrations" decision.
+  channel: "email" | "form" | "voice" | "sms";
   direction: "outbound" | "inbound";
   subject?: string;
   body: string;
