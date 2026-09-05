@@ -7,7 +7,12 @@ export const m = {
   "nav.group.communications": "Communications",
   "nav.group.growth": "Growth",
   "nav.dashboard": "Dashboard",
-  "nav.checklist": "Activation checklist",
+  // "Checklist", not "Activation checklist": every other sidebar entry is one
+  // word, and the longer form is byte-identical to the dashboard card's own
+  // title link — which made `getByRole("link", {name: "Activation checklist"})`
+  // ambiguous and broke blueprints.spec.ts. Renaming here keeps that
+  // assertion at full strength instead of scoping the test around the clash.
+  "nav.checklist": "Checklist",
   "nav.contacts": "Contacts",
   "nav.opportunities": "Opportunities",
   "nav.conversations": "Conversations",
