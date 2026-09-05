@@ -4,13 +4,24 @@ import { resolveSmsSender } from "./sender";
 const a2p = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", () => ({ getA2pRegistration: a2p }));
 
+/** Captures the arguments `.order()` was called with, so tests can assert on them. */
+type OrderCall = { column: string; opts: { ascending: boolean } };
+
 /** Minimal PostgREST stub for the phone_numbers lookup. */
-function dbReturning(rows: { e164: string; created_at: string }[]) {
+function dbReturning(
+  rows: { e164: string; created_at: string }[],
+  captured?: { call?: OrderCall },
+) {
   return {
     from: () => ({
       select: () => ({
         eq: () => ({
-          eq: () => ({ order: () => Promise.resolve({ data: rows, error: null }) }),
+          eq: () => ({
+            order: (column: string, opts: { ascending: boolean }) => {
+              if (captured) captured.call = { column, opts };
+              return Promise.resolve({ data: rows, error: null });
+            },
+          }),
         }),
       }),
     }),
@@ -41,10 +52,16 @@ describe("resolveSmsSender", () => {
 
   it("returns the OLDEST live number when approved", async () => {
     a2p.mockResolvedValue({ status: "approved", brandId: "B", campaignId: "C", updatedAt: null });
+    const captured: { call?: OrderCall } = {};
     const gate = await resolveSmsSender(dbReturning([
       { e164: "+15550001111", created_at: "2026-01-01" },
       { e164: "+15559998888", created_at: "2026-06-01" },
-    ]), "acc");
+    ], captured), "acc");
     expect(gate).toEqual({ ok: true, from: "+15550001111" });
+    // Prove the result is ordering, not incidental array order: the DB read
+    // must ask Postgres for ascending created_at, not just read data[0] of
+    // whatever comes back. A refactor flipping this flag must fail loudly —
+    // the sending number must not change under an account between two sends.
+    expect(captured.call).toEqual({ column: "created_at", opts: { ascending: true } });
   });
 });
