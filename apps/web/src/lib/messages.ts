@@ -412,6 +412,16 @@ export const m = {
   "compose.sendRejected": "Could not send that email. Check the contact has an email address.",
   "compose.noteFailed": "Could not save that note. Try again.",
   "compose.noEmailOnContact": "This contact has no email address.",
+  "compose.sms": "Text",
+  "compose.smsPlaceholder": "Write a text…",
+  "compose.smsSent": "Text sent",
+  "compose.smsFailed": "Could not send the text",
+  // Says WHO is holding it up and what unblocks it, rather than "unavailable".
+  "compose.smsBlockedA2p": "Texting is off until this company's A2P registration is approved",
+  "compose.smsBlockedNoNumber": "Texting needs a live phone number on this company",
+  // {n} segments — SMS bills per segment, and a single non-GSM character
+  // (an accent, a curly apostrophe) drops the whole message to 70 per segment.
+  "compose.smsSegments": "{chars} characters · {segments} message(s)",
 
   "conversations.empty.title": "No conversations yet",
   "conversations.empty.body": "Email a contact from their timeline and the thread will appear here.",
@@ -499,7 +509,8 @@ export const m = {
   "conversations.unread": "unread",
   "conversations.channel.form": "Form submission",
   "conversations.channel.email": "Email",
-  "conversations.channel.note": "Note",
+  "conversations.channel.voice": "Call",
+  "conversations.channel.sms": "Text",
   "contact.emailSent": "Email sent",
   "contact.emailReceived": "Email received",
   "contact.formSubmission": "Form submission",

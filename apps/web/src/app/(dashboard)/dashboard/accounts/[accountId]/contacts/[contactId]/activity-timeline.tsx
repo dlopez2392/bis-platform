@@ -1,6 +1,7 @@
 import { CalendarClock, CheckSquare, DollarSign, FileText, History, Mail, Square, StickyNote } from "lucide-react";
 import type { listNotes, listContactTasks, listContactOpportunities, listContactSubmissions,
               listContactMessages } from "@bis/db";
+import type { SmsGate } from "@/lib/sms/sender";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -32,16 +33,22 @@ export function ActivityTimeline({
   accountId,
   contactId,
   contactHasEmail,
+  smsGate,
   notes,
   tasks,
   opportunities,
   submissions,
   messages,
   emailAction,
+  smsAction,
 }: {
   accountId: string;
   contactId: string;
   contactHasEmail: boolean;
+  // Resolved server-side (resolveSmsSender, THE gate) and threaded through as
+  // a plain prop — MessageComposer is a client component and must not query
+  // the database itself.
+  smsGate: SmsGate;
   notes: Note[];
   tasks: Task[];
   opportunities: Opportunity[];
@@ -51,6 +58,7 @@ export function ActivityTimeline({
    *  was sent from showed nothing. */
   messages: ContactMessage[];
   emailAction: (formData: FormData) => Promise<void>;
+  smsAction: (formData: FormData) => Promise<void>;
 }) {
   const hidden = <input type="hidden" name="contactId" value={contactId} />;
   const boundAddTask = addTaskAction.bind(null, accountId);
@@ -158,8 +166,10 @@ export function ActivityTimeline({
         <MessageComposer
           contactId={contactId}
           contactHasEmail={contactHasEmail}
+          smsGate={smsGate}
           noteAction={boundAddNote}
           emailAction={emailAction}
+          smsAction={smsAction}
         />
       </CardFooter>
     </Card>

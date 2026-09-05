@@ -1,3 +1,4 @@
+import type { NewMessage } from "@bis/db";
 import { m } from "./messages";
 
 /** Opportunity `status` column -> display label. Shared so the pipeline drawer,
@@ -34,9 +35,17 @@ export const FORM_STATUS_LABEL: Record<string, string> = {
 };
 
 /** Message `channel` column -> display label. A form submission must never be
- *  labelled "Note": the words are the contact's own, not the operator's. */
-export const MESSAGE_CHANNEL_LABEL: Record<string, string> = {
+ *  labelled "Note": the words are the contact's own, not the operator's.
+ *
+ *  Typed to the full channel union, not `Record<string, string>` — the
+ *  previous shape let a call site fall through to `?? message.channel` and
+ *  render the raw DB value (e.g. the literal string "sms") for any channel
+ *  missing an entry here, with no compiler check that every channel has
+ *  one. Dropping a key now is a compile error instead of a silent runtime
+ *  gap. */
+export const MESSAGE_CHANNEL_LABEL: Record<NewMessage["channel"], string> = {
   email: m["conversations.channel.email"],
   form: m["conversations.channel.form"],
-  note: m["conversations.channel.note"],
+  voice: m["conversations.channel.voice"],
+  sms: m["conversations.channel.sms"],
 };

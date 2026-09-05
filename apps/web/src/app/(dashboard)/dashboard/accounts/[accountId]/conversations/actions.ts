@@ -11,6 +11,9 @@ import { getEmailProvider } from "@/lib/email";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { outboundEmail } from "@/lib/email/templates/outbound";
+import { resolveSmsSender } from "@/lib/sms/sender";
+import { getSmsProvider } from "@/lib/sms";
+import { m } from "@/lib/messages";
 // A prefix on `.message` rather than an Error subclass: thrown Errors are
 // serialized across the server-action boundary and do not keep a custom
 // prototype chain on the way back to the client. Lives in its own module
@@ -101,6 +104,64 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
 
   revalidatePath(`/dashboard/accounts/${accountId}/contacts/${contactId}`);
   revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
+}
+
+export async function sendSmsAction(accountId: string, formData: FormData): Promise<void> {
+  const { userId } = await requireAccountAccess(accountId);
+  const contactId = String(formData.get("contactId") ?? "");
+  const body = String(formData.get("body") ?? "").trim();
+  if (!contactId || !body) rejectSend("contactId and body required");
+
+  // dbForRequest(), not serviceDb(): every read this action needs is already
+  // granted to `authenticated` under RLS. 0013 only column-scoped UPDATE on
+  // accounts (0023's a2p_* columns were never added to that grant list, on
+  // purpose — an agency-only write, done elsewhere via serviceDb()), and
+  // never touched SELECT; 0019/0020 grant `authenticated` SELECT on
+  // phone_numbers with a tenant-scoped RLS policy. Both reads resolveSmsSender
+  // makes are covered, so this stays on the RLS-enforced client like
+  // sendEmailAction above, per lib/db.ts's own rule against serviceDb() on
+  // the in-account surface.
+  const db = await dbForRequest();
+
+  // THE gate, and the only one. Never re-derive this.
+  //
+  // The refusal is mapped to operator copy, NOT passed through raw: the
+  // composer already renders the reason server-side, so reaching here means a
+  // stale tab or a tampered post, and "a2p_not_approved" is not a sentence a
+  // business owner should ever see on their screen.
+  const gate = await resolveSmsSender(db, accountId);
+  if (!gate.ok) {
+    rejectSend(gate.reason === "a2p_not_approved"
+      ? m["compose.smsBlockedA2p"] : m["compose.smsBlockedNoNumber"]);
+  }
+
+  const contact = await getContact(db, accountId, contactId);
+  if (!contact) rejectSend("contact not in account");
+  const to = contact.phone;
+  if (!to) rejectSend("contact has no phone number");
+
+  const convo = await ensureConversation(db, accountId, contactId, userId);
+
+  // WRITE THEN SEND: the row exists before anything leaves the building, so a
+  // provider failure is a visible `failed` message rather than a silent gap.
+  // Same ordering as sendEmailAction, same reason.
+  const { id: messageId } = await createMessage(db, accountId, {
+    conversationId: convo.id, channel: "sms", direction: "outbound", body,
+  }, userId);
+
+  try {
+    const { providerMessageId } = await getSmsProvider().send({ to, from: gate.from, body });
+    await updateMessageStatus(db, accountId, messageId, "sent", { providerMessageId }, userId);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "unknown send failure";
+    await updateMessageStatus(db, accountId, messageId, "failed", { error: message }, userId);
+    revalidatePath(`/dashboard/accounts/${accountId}/contacts/${contactId}`);
+    revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
+    throw e;
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
+  revalidatePath(`/dashboard/accounts/${accountId}/contacts/${contactId}`);
 }
 
 export async function markConversationReadAction(

@@ -1,4 +1,4 @@
-import type { listMessages } from "@bis/db";
+import type { listMessages, NewMessage } from "@bis/db";
 import { formatDateTime } from "@/lib/format";
 import { MESSAGE_STATUS_LABEL, MESSAGE_CHANNEL_LABEL } from "@/lib/labels";
 import { cn } from "@/lib/utils";
@@ -41,7 +41,14 @@ export function MessageThread({
             <p className="mt-1 text-xs text-muted-foreground">
               {formatDateTime(message.created_at)}
               {message.channel !== "email" ? (
-                <> · {MESSAGE_CHANNEL_LABEL[message.channel] ?? message.channel}</>
+                // `message.channel` is a raw DB string (untyped Supabase
+                // client, no generated schema types) — the CHECK constraint
+                // allows a couple of values outside NewMessage["channel"]
+                // (e.g. "note", never actually written to this table; see
+                // messaging.ts), so the `?? message.channel` fallback stays
+                // as the safety net for those, while the cast lets the label
+                // map itself stay exhaustively typed to the real union.
+                <> · {MESSAGE_CHANNEL_LABEL[message.channel as NewMessage["channel"]] ?? message.channel}</>
               ) : null}
               {message.direction === "outbound" ? (
                 <> · {MESSAGE_STATUS_LABEL[message.status] ?? message.status}</>

@@ -9,7 +9,8 @@ import { m } from "@/lib/messages";
 import { STATUS_LABEL } from "@/lib/labels";
 import { ContactFieldsPanel } from "./contact-fields-panel";
 import { ActivityTimeline } from "./activity-timeline";
-import { sendEmailAction } from "../../conversations/actions";
+import { sendEmailAction, sendSmsAction } from "../../conversations/actions";
+import { resolveSmsSender } from "@/lib/sms/sender";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +21,7 @@ export default async function ContactDetailPage({
   const db = await dbForRequest();
   const contact = await getContact(db, accountId, contactId);
   if (!contact) notFound();
-  const [tags, notes, tasks, fieldDefs, opps, submissions, messages] = await Promise.all([
+  const [tags, notes, tasks, fieldDefs, opps, submissions, messages, smsGate] = await Promise.all([
     listContactTags(db, accountId, contactId),
     listNotes(db, accountId, contactId),
     listContactTasks(db, accountId, contactId),
@@ -28,6 +29,9 @@ export default async function ContactDetailPage({
     listContactOpportunities(db, accountId, contactId),
     listContactSubmissions(db, accountId, contactId),
     listContactMessages(db, accountId, contactId),
+    // Resolved here (server component) and passed down as a prop — the
+    // composer is a client component and must not query the database.
+    resolveSmsSender(db, accountId),
   ]);
 
   return (
@@ -45,12 +49,14 @@ export default async function ContactDetailPage({
           accountId={accountId}
           contactId={contactId}
           contactHasEmail={Boolean(contact.email)}
+          smsGate={smsGate}
           notes={notes}
           tasks={tasks}
           opportunities={opps}
           submissions={submissions}
           messages={messages}
           emailAction={sendEmailAction.bind(null, accountId)}
+          smsAction={sendSmsAction.bind(null, accountId)}
         />
         <aside className="rounded-lg border border-border bg-card p-4">
           <p className="mb-3 text-sm font-medium text-card-foreground">
