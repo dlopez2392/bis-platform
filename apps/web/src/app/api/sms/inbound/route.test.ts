@@ -7,6 +7,7 @@ const dbMocks = vi.hoisted(() => ({
   ensureConversation: vi.fn(),
   createMessage: vi.fn(),
   createContact: vi.fn(),
+  incrementUnreadCount: vi.fn(),
   getPhoneNumberByE164: vi.fn(),
   serviceDb: vi.fn(),
 }));
@@ -132,6 +133,11 @@ describe("POST /api/sms/inbound", () => {
       }),
       expect.any(String), expect.any(String),
     );
+    // The finding this covers: without this call an inbound text left both
+    // the conversation-list badge and the sidebar unread meter at zero.
+    expect(dbMocks.incrementUnreadCount).toHaveBeenCalledWith(
+      expect.anything(), "acct_1", "conv_1",
+    );
   });
 
   it("skips a retried message.received (same payload.id) — writes exactly one message", async () => {
@@ -161,6 +167,9 @@ describe("POST /api/sms/inbound", () => {
     expect(first.status).toBe(200);
     expect(second.status).toBe(200);
     expect(dbMocks.createMessage).toHaveBeenCalledTimes(1);
+    // The idempotent-skip branch returns before the increment call — a
+    // replayed delivery must not double-count the same text as two unreads.
+    expect(dbMocks.incrementUnreadCount).toHaveBeenCalledTimes(1);
   });
 
   it("routes a delivery receipt to updateMessageStatusByProviderId", async () => {

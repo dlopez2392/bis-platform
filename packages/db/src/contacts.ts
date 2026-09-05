@@ -52,6 +52,23 @@ function escapeLikePattern(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
 }
 
+/**
+ * Comparison key for phone dedupe: digits only, with a leading NANP country
+ * code folded off. contacts.phone is only trimmed on write, never reshaped
+ * — an operator or a web form routinely leaves it as "(956) 292-1696", while
+ * an inbound SMS sender's number (or anything already run through
+ * lib/voice/phone-number.ts's toE164) arrives as "+19562921696". Both are
+ * the same ten digits and must resolve to the same contact; an exact string
+ * match on the raw column never sees that, and forked a duplicate contact
+ * (and, upstream, a second conversation thread) for the majority phone
+ * shape in this database. Comparison-only — this never gets written back;
+ * the stored column keeps whatever shape it was entered in.
+ */
+function phoneDigits(value: string): string {
+  const digits = value.replace(/[^0-9]/g, "");
+  return digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+}
+
 async function findDuplicate(
   db: SupabaseClient, accountId: string, email?: string, phone?: string,
 ): Promise<string | null> {
@@ -62,10 +79,33 @@ async function findDuplicate(
     if (data && data.length > 0) return data[0]!.id;
   }
   if (phone) {
-    const { data, error } = await db.from("contacts").select("id")
+    // Fast path first: an exact string match still hits the
+    // `contacts_account_phone (account_id, phone)` index directly, and
+    // covers the common case where both sides already agree on shape (two
+    // inbound texts from the same already-E.164-stored number; two
+    // identical operator entries).
+    const { data: exact, error: exactErr } = await db.from("contacts").select("id")
       .eq("account_id", accountId).eq("phone", phone).limit(1);
-    if (error) throw new Error(`contact dedupe failed: ${error.message}`);
-    if (data && data.length > 0) return data[0]!.id;
+    if (exactErr) throw new Error(`contact dedupe failed: ${exactErr.message}`);
+    if (exact && exact.length > 0) return exact[0]!.id;
+
+    // Fallback: normalized-digit comparison for the case the exact match
+    // can't see (see phoneDigits' comment). Still scoped by the same
+    // account_id the exact match used, so this still uses that index's
+    // leading column — it just can't use the second column once the
+    // comparison is digits-based rather than string-based, so it pulls
+    // every non-null phone on THIS account (never cross-tenant) and
+    // compares in memory.
+    const key = phoneDigits(phone);
+    if (key) {
+      const { data, error } = await db.from("contacts").select("id, phone")
+        .eq("account_id", accountId).not("phone", "is", null);
+      if (error) throw new Error(`contact dedupe failed: ${error.message}`);
+      const match = (data ?? []).find(
+        (row) => row.phone && phoneDigits(row.phone as string) === key,
+      );
+      if (match) return match.id as string;
+    }
   }
   return null;
 }

@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
-import { isSendRejected } from "../../conversations/send-errors";
+import { isSendRejected, sendRejectedReason } from "../../conversations/send-errors";
 import { EmailSendButton } from "../../conversations/send-button";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { segmentsFor } from "@/lib/sms/segments";
@@ -16,6 +16,7 @@ type Mode = "note" | "email" | "sms";
 export function MessageComposer({
   contactId,
   contactHasEmail,
+  contactHasPhone,
   smsGate,
   noteAction,
   emailAction,
@@ -23,6 +24,11 @@ export function MessageComposer({
 }: {
   contactId: string;
   contactHasEmail: boolean;
+  // Mirrors contactHasEmail: whether toE164(contact.phone) resolves to a
+  // usable number — the same notion sendSmsAction itself gates on. Without
+  // this, SMS let an operator compose an entire text to a phone-less
+  // contact and only fail on submit, where email already blocks up front.
+  contactHasPhone: boolean;
   // Resolved on the SERVER (the contact page is a server component) and
   // passed in as a prop — this composer is a client component and must not
   // query the database itself. `resolveSmsSender` is THE gate; nothing here
@@ -54,7 +60,16 @@ export function MessageComposer({
       }
     } catch (e) {
       if (isSms) {
-        toast.error(isSendRejected(e) ? m["compose.smsSendRejected"] : m["compose.smsFailed"]);
+        // Carries the ACTUAL reason sendSmsAction produced (already curated,
+        // plain-language m[] copy for every gate it can throw —
+        // compose.smsBlockedA2p / compose.smsBlockedNoNumber /
+        // compose.noPhoneOnContact) rather than one fixed string. A fixed
+        // "check the contact has a phone number" line is wrong for the two
+        // GATE rejections a stale tab can still hit past the contactHasPhone
+        // check above: A2P revoked, or the number went unassigned, between
+        // this page rendering and the send landing.
+        toast.error(isSendRejected(e)
+          ? (sendRejectedReason(e) ?? m["compose.smsSendRejected"]) : m["compose.smsFailed"]);
       } else if (!isEmail) {
         toast.error(m["compose.noteFailed"]);
       } else {
@@ -106,6 +121,8 @@ export function MessageComposer({
           {smsGate.reason === "a2p_not_approved"
             ? m["compose.smsBlockedA2p"] : m["compose.smsBlockedNoNumber"]}
         </p>
+      ) : isSms && !contactHasPhone ? (
+        <p className="text-xs text-muted-foreground">{m["compose.noPhoneOnContact"]}</p>
       ) : (
         <form
           key={mode}

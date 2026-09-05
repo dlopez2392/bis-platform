@@ -25,7 +25,7 @@
 //     status lives at `data.payload.to[].status`.
 import { NextResponse } from "next/server";
 import {
-  serviceDb, ensureConversation, createMessage, createContact,
+  serviceDb, ensureConversation, createMessage, createContact, incrementUnreadCount,
   updateMessageStatusByProviderId, findMessageByProviderId, getPhoneNumberByE164,
   type MessageStatus, type SupabaseClient,
 } from "@bis/db";
@@ -128,6 +128,15 @@ async function handleInbound(db: SupabaseClient, payload: TelnyxPayload | undefi
     conversationId: conversation.id, channel: "sms", direction: "inbound",
     body: payload?.text ?? "", providerMessageId,
   }, ACTOR_ID, ACTOR_TYPE);
+  // Same invariant every other inbound writer keeps (f/[publicId]/actions.ts,
+  // b/[publicId]/actions.ts, b/[publicId]/cancel/[token]/actions.ts,
+  // lib/voice/finish-call.ts): a new inbound message always bumps the
+  // conversation's unread count, immediately after the row that made it
+  // unread exists. Without this an inbound text left both the conversation
+  // list badge and the sidebar unread meter at zero. Still inside the
+  // route's outer try (see POST) — a failure here logs and falls through to
+  // the same 200 ack, it never escapes as a 500.
+  await incrementUnreadCount(db, accountId, conversation.id);
 }
 
 async function handleStatus(db: SupabaseClient, payload: TelnyxPayload | undefined): Promise<void> {

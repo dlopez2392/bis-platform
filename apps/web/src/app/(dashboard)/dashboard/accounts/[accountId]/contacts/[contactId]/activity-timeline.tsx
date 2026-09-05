@@ -45,6 +45,7 @@ export function ActivityTimeline({
   accountId,
   contactId,
   contactHasEmail,
+  contactHasPhone,
   smsGate,
   notes,
   tasks,
@@ -57,6 +58,9 @@ export function ActivityTimeline({
   accountId: string;
   contactId: string;
   contactHasEmail: boolean;
+  // Mirrors contactHasEmail: whether toE164(contact.phone) resolves to a
+  // usable number (same notion sendSmsAction itself gates on).
+  contactHasPhone: boolean;
   // Resolved server-side (resolveSmsSender, THE gate) and threaded through as
   // a plain prop — MessageComposer is a client component and must not query
   // the database itself.
@@ -179,6 +183,7 @@ export function ActivityTimeline({
         <MessageComposer
           contactId={contactId}
           contactHasEmail={contactHasEmail}
+          contactHasPhone={contactHasPhone}
           smsGate={smsGate}
           noteAction={boundAddNote}
           emailAction={emailAction}

@@ -100,6 +100,18 @@ describe("contacts service", () => {
       const b = await createContact(db, accountId, { phone: "956-555-0101" }, "user_test");
       expect(b.existing).toBe(true);
       expect(b.id).toBe(a.id);
+
+      // Same fixture cycle, extended: the review finding this fixes.
+      // contacts.phone is only trimmed on write, so an operator-typed
+      // "(956) 292-1696" and an inbound SMS sender's E.164
+      // "+19562921696" are the same ten digits but never the same STRING —
+      // before the fix, an exact-match dedupe forked a second contact (and,
+      // upstream, a second conversation thread) for the same customer.
+      const c = await createContact(db, accountId, { phone: "(956) 292-1696" }, "user_test");
+      expect(c.existing).toBe(false);
+      const d = await createContact(db, accountId, { phone: "+19562921696" }, "user_test");
+      expect(d.existing).toBe(true);
+      expect(d.id).toBe(c.id);
     }));
 
   it("createContact treats % and _ in email as literal characters, not ILIKE wildcards", () =>

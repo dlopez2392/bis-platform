@@ -19,3 +19,17 @@ export function sendRejected(reason: string): never {
 export function isSendRejected(e: unknown): boolean {
   return e instanceof Error && e.message.startsWith(SEND_REJECTED_PREFIX);
 }
+
+/**
+ * The literal reason text a rejected action passed to sendRejected, with the
+ * internal prefix stripped — null when `e` isn't one of these. Every caller
+ * of sendRejected in the SMS path passes an already-curated, plain-language
+ * m[] string for each reason a stale tab can still reach past the client's
+ * own gates (compose.smsBlockedA2p / compose.smsBlockedNoNumber /
+ * compose.noPhoneOnContact) — so it is safe to show verbatim instead of
+ * collapsing every rejection to one fixed line that names only one of them.
+ */
+export function sendRejectedReason(e: unknown): string | null {
+  if (!(e instanceof Error) || !e.message.startsWith(SEND_REJECTED_PREFIX)) return null;
+  return e.message.slice(SEND_REJECTED_PREFIX.length);
+}
