@@ -49,3 +49,16 @@ export const MESSAGE_CHANNEL_LABEL: Record<NewMessage["channel"], string> = {
   voice: m["conversations.channel.voice"],
   sms: m["conversations.channel.sms"],
 };
+
+/** The one place that widens an untyped DB `channel` string against
+ *  MESSAGE_CHANNEL_LABEL. The Supabase client here is untyped (no generated
+ *  schema types), so a raw `.select()` column comes back as `string`, not
+ *  `NewMessage["channel"]` — every call site used to re-cast it locally
+ *  (message-thread.tsx did, and activity-timeline.tsx was about to grow a
+ *  second copy). One helper means the widening — and its fallback to the raw
+ *  value for anything outside the known union — happens exactly once, while
+ *  MESSAGE_CHANNEL_LABEL itself stays exhaustively typed and a dropped key is
+ *  still a compile error. */
+export function messageChannelLabel(channel: string): string {
+  return MESSAGE_CHANNEL_LABEL[channel as NewMessage["channel"]] ?? channel;
+}

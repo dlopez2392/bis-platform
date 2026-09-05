@@ -13,6 +13,7 @@ import { emailBrand } from "@/lib/email/templates/shell";
 import { outboundEmail } from "@/lib/email/templates/outbound";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { getSmsProvider } from "@/lib/sms";
+import { toE164 } from "@/lib/voice/phone-number";
 import { m } from "@/lib/messages";
 // A prefix on `.message` rather than an Error subclass: thrown Errors are
 // serialized across the server-action boundary and do not keep a custom
@@ -137,8 +138,14 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
 
   const contact = await getContact(db, accountId, contactId);
   if (!contact) rejectSend("contact not in account");
-  const to = contact.phone;
-  if (!to) rejectSend("contact has no phone number");
+  // contacts.phone is free-form (only trimmed on write) — operator-typed and
+  // web-form contacts routinely arrive as "9562921696" or "(956) 292-1696".
+  // toE164 (lib/voice/phone-number.ts) is live-verified: Telnyx rejects every
+  // shape except "+19562921696", and every number leaving this app is
+  // required to go through it. A null here means the contact has nothing we
+  // can actually text, not just that the field is empty.
+  const to = toE164(contact.phone);
+  if (!to) rejectSend(m["compose.noPhoneOnContact"]);
 
   const convo = await ensureConversation(db, accountId, contactId, userId);
 
@@ -149,9 +156,15 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
     conversationId: convo.id, channel: "sms", direction: "outbound", body,
   }, userId);
 
+  // Only the send itself is guarded: once send() has succeeded the text is
+  // gone and irrevocably out the door, so a failure recording that (a rare
+  // DB error) must never be re-labeled "failed" here — that would tell the
+  // operator a delivered text didn't go out, invite a duplicate send to a
+  // real phone, and drop the provider message id the delivery webhook needs
+  // to correlate against. Same hazard, same fix, as sendEmailAction above.
+  let providerMessageId: string;
   try {
-    const { providerMessageId } = await getSmsProvider().send({ to, from: gate.from, body });
-    await updateMessageStatus(db, accountId, messageId, "sent", { providerMessageId }, userId);
+    ({ providerMessageId } = await getSmsProvider().send({ to, from: gate.from, body }));
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown send failure";
     await updateMessageStatus(db, accountId, messageId, "failed", { error: message }, userId);
@@ -159,6 +172,8 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
     revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
     throw e;
   }
+
+  await updateMessageStatus(db, accountId, messageId, "sent", { providerMessageId }, userId);
 
   revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
   revalidatePath(`/dashboard/accounts/${accountId}/contacts/${contactId}`);

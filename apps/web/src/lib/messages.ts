@@ -416,6 +416,14 @@ export const m = {
   "compose.smsPlaceholder": "Write a text…",
   "compose.smsSent": "Text sent",
   "compose.smsFailed": "Could not send the text",
+  // Mirrors compose.sendRejected's shape: a fixed, generic line shown whenever
+  // the server refuses the send before anything reached the provider — never
+  // the raw internal reason (see send-errors.ts).
+  "compose.smsSendRejected": "Could not send that text. Check the contact has a phone number.",
+  // Mirrors compose.noEmailOnContact in wording and tone. Covers both an
+  // empty phone field and one that couldn't be turned into a number we can
+  // actually text (see lib/voice/phone-number.ts's toE164).
+  "compose.noPhoneOnContact": "This contact has no phone number.",
   // Says WHO is holding it up and what unblocks it, rather than "unavailable".
   "compose.smsBlockedA2p": "Texting is off until this company's A2P registration is approved",
   "compose.smsBlockedNoNumber": "Texting needs a live phone number on this company",
@@ -511,8 +519,12 @@ export const m = {
   "conversations.channel.email": "Email",
   "conversations.channel.voice": "Call",
   "conversations.channel.sms": "Text",
-  "contact.emailSent": "Email sent",
-  "contact.emailReceived": "Email received",
+  // "{channel}" is the house placeholder convention (see shell.presence.idle).
+  // Filled from MESSAGE_CHANNEL_LABEL (lib/labels.ts) so the timeline reads
+  // "Email sent"/"Text sent"/etc. from the real channel instead of a
+  // hardcoded "Email" for every message regardless of how it was sent.
+  "contact.activitySent": "{channel} sent",
+  "contact.activityReceived": "{channel} received",
   "contact.formSubmission": "Form submission",
 
   // Every item but form_notify happens outside the platform. The help text

@@ -1,6 +1,8 @@
-import { CalendarClock, CheckSquare, DollarSign, FileText, History, Mail, Square, StickyNote } from "lucide-react";
+import { CalendarClock, CheckSquare, DollarSign, FileText, History, Mail, MessageSquare, Phone,
+         Square, StickyNote } from "lucide-react";
+import type { ComponentType } from "react";
 import type { listNotes, listContactTasks, listContactOpportunities, listContactSubmissions,
-              listContactMessages } from "@bis/db";
+              listContactMessages, NewMessage } from "@bis/db";
 import type { SmsGate } from "@/lib/sms/sender";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -10,7 +12,17 @@ import { EmptyState } from "@/components/empty-state";
 import { formatCurrency, formatDate, formatDateUTC, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
-import { STATUS_LABEL } from "@/lib/labels";
+import { STATUS_LABEL, messageChannelLabel } from "@/lib/labels";
+
+// Exhaustively typed to the real channel union (see labels.ts's own
+// MESSAGE_CHANNEL_LABEL comment) so a new channel is a compile error here
+// too, not a silent fallback to the Mail icon.
+const MESSAGE_CHANNEL_ICON: Record<NewMessage["channel"], ComponentType<{ className?: string }>> = {
+  email: Mail,
+  sms: MessageSquare,
+  voice: Phone,
+  form: FileText,
+};
 import { addNoteAction, addTaskAction, completeTaskAction } from "./actions";
 import { MessageComposer } from "./message-composer";
 
@@ -27,7 +39,7 @@ type TimelineItem =
   | { kind: "submission"; id: string; at: string; formName: string;
       answers: { key: string; label: string; value: string }[] }
   | { kind: "message"; id: string; at: string; direction: string; subject: string | null;
-      body: string; status: string };
+      body: string; status: string; channel: string };
 
 export function ActivityTimeline({
   accountId,
@@ -105,6 +117,7 @@ export function ActivityTimeline({
         subject: msg.subject,
         body: msg.body,
         status: msg.status,
+        channel: msg.channel,
       }),
     ),
   ].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
@@ -232,12 +245,15 @@ function TimelineRow({
 
   if (item.kind === "message") {
     const outbound = item.direction === "outbound";
+    const Icon = MESSAGE_CHANNEL_ICON[item.channel as NewMessage["channel"]] ?? Mail;
+    const channelLabel = messageChannelLabel(item.channel);
     return (
       <div className="flex gap-3 rounded-lg border border-border bg-card p-3">
-        <Mail className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+        <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-card-foreground">
-            {outbound ? m["contact.emailSent"] : m["contact.emailReceived"]}
+            {(outbound ? m["contact.activitySent"] : m["contact.activityReceived"])
+              .replace("{channel}", channelLabel)}
             {item.subject ? ` · ${item.subject}` : ""}
           </p>
           <p className="mt-1 whitespace-pre-wrap break-words text-sm text-card-foreground">

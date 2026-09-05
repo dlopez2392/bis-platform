@@ -54,7 +54,7 @@ export function MessageComposer({
       }
     } catch (e) {
       if (isSms) {
-        toast.error(m["compose.smsFailed"]);
+        toast.error(isSendRejected(e) ? m["compose.smsSendRejected"] : m["compose.smsFailed"]);
       } else if (!isEmail) {
         toast.error(m["compose.noteFailed"]);
       } else {
@@ -66,39 +66,41 @@ export function MessageComposer({
   return (
     <div className="w-full space-y-2">
       <div className="flex gap-1">
-        {(["note", "email", "sms"] as const).map((value) => {
-          const disabled = value === "sms" && !smsGate.ok;
-          return (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setMode(value)}
-              disabled={disabled}
-              aria-pressed={mode === value}
-              className={cn(
-                "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                disabled
-                  ? "cursor-not-allowed text-muted-foreground/50"
-                  : mode === value
-                    ? "bg-secondary text-secondary-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {value === "note" ? m["compose.note"] : value === "email" ? m["compose.email"] : m["compose.sms"]}
-            </button>
-          );
-        })}
+        {(["note", "email", "sms"] as const).map((value) => (
+          <button
+            key={value}
+            type="button"
+            // The Text tab stays enabled even when SMS is gated off (danlo's
+            // call): switching to it is how the operator SEES the reason, in
+            // place of the form below, rather than a disabled tab that hides
+            // it entirely.
+            onClick={() => {
+              setMode(value);
+              // A controlled body survives an uncontrolled `key={mode}`
+              // remount — without this, an internal note typed, then a
+              // switch to Text, sends the note's text as the outbound SMS.
+              setBody("");
+            }}
+            aria-pressed={mode === value}
+            className={cn(
+              "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+              mode === value
+                ? "bg-secondary text-secondary-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {value === "note" ? m["compose.note"] : value === "email" ? m["compose.email"] : m["compose.sms"]}
+          </button>
+        ))}
       </div>
 
-      {!smsGate.ok ? (
+      {isEmail && !contactHasEmail ? (
+        <p className="text-xs text-muted-foreground">{m["compose.noEmailOnContact"]}</p>
+      ) : isSms && !smsGate.ok ? (
         <p className="text-xs text-muted-foreground">
           {smsGate.reason === "a2p_not_approved"
             ? m["compose.smsBlockedA2p"] : m["compose.smsBlockedNoNumber"]}
         </p>
-      ) : null}
-
-      {isEmail && !contactHasEmail ? (
-        <p className="text-xs text-muted-foreground">{m["compose.noEmailOnContact"]}</p>
       ) : (
         <form
           key={mode}
