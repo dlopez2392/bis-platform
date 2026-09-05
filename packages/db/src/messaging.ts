@@ -155,6 +155,11 @@ export async function updateMessageStatus(
  * context, so this deliberately does not take an accountId — the provider id
  * is globally unique (see the partial unique index in migration 0005). The
  * account is read back from the row, never taken from the payload.
+ *
+ * Inbound messages now record provider ids for webhook-retry idempotency, so
+ * this query must filter to direction="outbound" to ensure a delivery-status
+ * callback can only ever match and update an outbound message (the platform's
+ * own send), never an inbound one.
  */
 export async function updateMessageStatusByProviderId(
   db: SupabaseClient, providerMessageId: string, status: MessageStatus,
@@ -162,6 +167,7 @@ export async function updateMessageStatusByProviderId(
   const { data, error } = await db.from("messages")
     .select("id, account_id, status")
     .eq("provider_message_id", providerMessageId)
+    .eq("direction", "outbound")
     .maybeSingle();
   if (error) throw new Error(`updateMessageStatusByProviderId failed: ${error.message}`);
   if (!data) return { updated: false };

@@ -281,4 +281,25 @@ describe("messaging", () => {
     withTestAccount(async (db, accountId) => {
       expect(await sumUnreadCount(db, accountId)).toBe(0);
     }));
+
+  it("updateMessageStatusByProviderId does not match inbound messages even when they carry a provider_message_id", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+
+      // Create an inbound message with a provider id (for webhook-retry idempotency)
+      const { id: messageId } = await createMessage(db, accountId, {
+        conversationId: convo.id, channel: "sms", direction: "inbound",
+        body: "inbound message", providerMessageId: "inbound_prov_delivery",
+      }, "sms-inbound", "system");
+
+      // Attempt to update status by provider id — should miss because the row is inbound
+      const result = await updateMessageStatusByProviderId(db, "inbound_prov_delivery", "delivered");
+      expect(result.updated).toBe(false);
+
+      // Verify the message status is unchanged (still at its default queued state)
+      const [msg] = await listMessages(db, accountId, convo.id);
+      expect(msg!.id).toBe(messageId);
+      expect(msg!.status).toBe("queued");
+    }));
 });
