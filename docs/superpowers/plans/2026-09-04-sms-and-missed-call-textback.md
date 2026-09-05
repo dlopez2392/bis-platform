@@ -566,8 +566,16 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
   const db = serviceDb();
 
   // THE gate, and the only one. Never re-derive this.
+  //
+  // The refusal is mapped to operator copy, NOT passed through raw: the
+  // composer already renders the reason server-side, so reaching here means a
+  // stale tab or a tampered post, and "a2p_not_approved" is not a sentence a
+  // business owner should ever see on their screen.
   const gate = await resolveSmsSender(db, accountId);
-  if (!gate.ok) rejectSend(gate.reason);
+  if (!gate.ok) {
+    rejectSend(gate.reason === "a2p_not_approved"
+      ? m["compose.smsBlockedA2p"] : m["compose.smsBlockedNoNumber"]);
+  }
 
   const contact = await getContact(db, accountId, contactId);
   const to = contact?.phone;
@@ -960,11 +968,19 @@ Add after the staff-alert leg in `finishCall`, as a fourth independent block:
           conversationId: conversation.id, channel: "sms", direction: "outbound",
           subject: null, body,
         }, ACTOR_ID, ACTOR_TYPE);
-        const { providerMessageId } = await getSmsProvider().send({
-          to: ctx.callerNumber, from: gate.from, body,
-        });
-        await setMessageProviderId(ctx.db, ctx.accountId, message.id, providerMessageId, "sent");
-        textedBack = true;
+        try {
+          const { providerMessageId } = await getSmsProvider().send({
+            to: ctx.callerNumber, from: gate.from, body,
+          });
+          await setMessageProviderId(ctx.db, ctx.accountId, message.id, providerMessageId, "sent");
+          textedBack = true;
+        } catch (sendError) {
+          // The row already exists (write-then-send), so mark it failed rather
+          // than leaving it reading `queued` forever. There is no retry — this
+          // status IS the signal Task 7 surfaces on the call.
+          await setMessageStatus(ctx.db, ctx.accountId, message.id, "failed", String(sendError));
+          throw sendError;
+        }
       }
     } catch (e) {
       console.error(`finishCall ${meta.callRowId ?? "(no row)"}: text-back failed: ${String(e)}`);
