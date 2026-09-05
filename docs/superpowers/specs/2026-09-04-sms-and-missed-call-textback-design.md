@@ -147,6 +147,14 @@ An unknown called-number returns **200 with no write**: a webhook that 500s
 gets retried forever, and a number this platform does not own is not an error
 condition it can fix.
 
+**But it is logged, not merely dropped.** `console.error` with the called
+number, so it reaches Vercel's runtime logs. The failure this guards against
+is a number we DO own whose `phone_numbers` row is missing or wrong — in which
+case a real customer's text is being silently discarded and nothing on any
+screen would ever say so. Logging is the difference between a discoverable
+misconfiguration and an invisible one. It stays a log rather than a stored row
+because an unowned number is, by definition, not attributable to a tenant.
+
 **Delivery receipts arrive at the same route**, not a sibling: Telnyx posts
 both inbound messages and status callbacks to one webhook URL, so the handler
 branches on the event type and calls `updateMessageStatusByProviderId`
