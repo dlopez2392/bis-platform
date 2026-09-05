@@ -7,6 +7,7 @@ export const m = {
   "nav.group.communications": "Communications",
   "nav.group.growth": "Growth",
   "nav.dashboard": "Dashboard",
+  "nav.checklist": "Activation checklist",
   "nav.contacts": "Contacts",
   "nav.opportunities": "Opportunities",
   "nav.conversations": "Conversations",

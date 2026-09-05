@@ -27,7 +27,9 @@ describe("buildNavGroups", () => {
 
   it("places Dashboard, Contacts/Opportunities, Conversations/Calls/Voice, Forms/Calendar per the brief's grouping map (agency)", () => {
     const [overview, crm, comms, growth] = buildNavGroups(BASE, true);
-    expect(overview!.items.map((i) => i.labelKey)).toEqual(["nav.dashboard"]);
+    // Checklist joined OVERVIEW on 2026-09-05: the page hosts the A2P
+    // registration panel that gates SMS, and nothing in the nav reached it.
+    expect(overview!.items.map((i) => i.labelKey)).toEqual(["nav.dashboard", "nav.checklist"]);
     expect(crm!.items.map((i) => i.labelKey)).toEqual(["nav.contacts", "nav.opportunities"]);
     expect(comms!.items.map((i) => i.labelKey)).toEqual(["nav.conversations", "nav.calls", "nav.voice"]);
     expect(growth!.items.map((i) => i.labelKey)).toEqual(["nav.forms", "nav.calendar"]);
@@ -43,6 +45,12 @@ describe("buildNavGroups", () => {
   it("shows Branding to a client and hides it from the agency", () => {
     const agencyGrowth = buildNavGroups(BASE, true)[3]!;
     const clientGrowth = buildNavGroups(BASE, false)[3]!;
+    // Checklist is agency-only, matching the route's own
+    // requireAgencyOnlyAccountAccess. Asserted in BOTH directions so hiding it
+    // cannot be quietly dropped — though the route, not this list, is the
+    // actual boundary.
+    expect(buildNavGroups(BASE, true)[0]!.items.map((i) => i.labelKey)).toContain("nav.checklist");
+    expect(buildNavGroups(BASE, false)[0]!.items.map((i) => i.labelKey)).not.toContain("nav.checklist");
     expect(clientGrowth.items.map((i) => i.labelKey)).toContain("nav.branding");
     expect(agencyGrowth.items.map((i) => i.labelKey)).not.toContain("nav.branding");
   });

@@ -17,7 +17,8 @@ export type NavIconKey =
   | "branding"
   | "voice"
   | "accounts"
-  | "blueprints";
+  | "blueprints"
+  | "checklist";
 
 export type NavItemSpec = {
   href: string;
@@ -62,6 +63,21 @@ export function buildNavGroups(base: string | null, isAgency: boolean): NavGroup
       label: "nav.group.overview",
       items: [
         { href: `${base}/dashboard`, labelKey: "nav.dashboard", iconKey: "dashboard" },
+        // Agency only, matching the route's own requireAgencyOnlyAccountAccess.
+        //
+        // Added 2026-09-05 because the page was genuinely unreachable: the
+        // dashboard's checklist CARD links here, but nothing in the nav did,
+        // and the A2P registration panel — the record that gates the entire
+        // SMS feature — lives on this page and nowhere else. danlo failed to
+        // find it twice, which is the only evidence that matters.
+        //
+        // Setup stays absent from the nav (see the note above); this is the
+        // opposite case. Setup is a wizard you finish and leave behind, while
+        // the checklist is a record you return to, and after Setup drops out
+        // of the footer meter there is no path back to it at all.
+        ...(isAgency
+          ? ([{ href: `${base}/checklist`, labelKey: "nav.checklist", iconKey: "checklist" }] satisfies NavItemSpec[])
+          : []),
       ],
     },
     {

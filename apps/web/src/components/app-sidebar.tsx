@@ -12,7 +12,7 @@ import {
   FileText,
   Settings,
   Building2,
-  Layers,
+  Layers, ListChecks,
   PanelLeftClose,
   PanelLeft,
   ArrowLeft,
@@ -53,6 +53,7 @@ const NAV_ICONS: Record<NavIconKey, LucideIcon> = {
   voice: Phone,
   accounts: Building2,
   blueprints: Layers,
+  checklist: ListChecks,
 };
 
 // Active when pathname matches href exactly, or is nested under it (href + "/…").
