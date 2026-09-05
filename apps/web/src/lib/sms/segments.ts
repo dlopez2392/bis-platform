@@ -37,11 +37,11 @@ export function segmentsFor(body: string): SmsSegments {
 
   if (gsm7) {
     const segments = septets <= 160 ? 1 : Math.ceil(septets / 153);
-    return { encoding: "gsm7", chars: septets, segments: Math.max(1, segments) };
+    return { encoding: "gsm7", chars: septets, segments };
   }
 
   // UCS-2 counts UTF-16 code units, so an emoji (a surrogate pair) is two.
   const units = body.length;
   const segments = units <= 70 ? 1 : Math.ceil(units / 67);
-  return { encoding: "ucs2", chars: units, segments: Math.max(1, segments) };
+  return { encoding: "ucs2", chars: units, segments };
 }
