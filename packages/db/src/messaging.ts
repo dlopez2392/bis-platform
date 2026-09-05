@@ -17,6 +17,12 @@ export type NewMessage = {
   direction: "outbound" | "inbound";
   subject?: string;
   body: string;
+  // Set on inbound webhook writes (sms/inbound's message.received handler) so
+  // a retried delivery can be recognised and skipped BEFORE this insert runs
+  // — see findMessageByProviderId below. Left unset for every other caller;
+  // the outbound send path instead records this later via
+  // updateMessageStatus's own providerMessageId patch.
+  providerMessageId?: string;
 };
 
 export type ConversationSummary = {
@@ -99,6 +105,7 @@ export async function createMessage(
       direction: input.direction,
       subject: input.subject ?? null,
       body: input.body,
+      provider_message_id: input.providerMessageId ?? null,
     })
     .select("id").single();
   if (error || !data) throw new Error(`createMessage failed: ${error?.message}`);
@@ -174,6 +181,28 @@ export async function updateMessageStatusByProviderId(
   await emit(db, data.account_id, "message.status_changed", "system",
     { messageId: data.id, status, providerMessageId }, "system");
   return { updated: true };
+}
+
+/**
+ * Idempotency check for an inbound webhook write (sms/inbound's
+ * message.received handler): Telnyx retries at-least-once, and unlike
+ * `updateMessageStatusByProviderId` above this MUST run before the insert,
+ * not after — there is no update to make idempotent-by-rank here, only an
+ * insert to skip outright. Scoped by accountId (unlike the status lookup)
+ * because the caller already knows its tenant from the dialed number and
+ * there is no reason to search past it, even though
+ * `messages_provider_message_id_unique` (migration 0005) also enforces this
+ * globally as a backstop against a race between two concurrent deliveries.
+ */
+export async function findMessageByProviderId(
+  db: SupabaseClient, accountId: string, providerMessageId: string,
+): Promise<{ id: string } | null> {
+  const { data, error } = await db.from("messages")
+    .select("id")
+    .eq("account_id", accountId).eq("provider_message_id", providerMessageId)
+    .maybeSingle();
+  if (error) throw new Error(`findMessageByProviderId failed: ${error.message}`);
+  return (data as { id: string } | null) ?? null;
 }
 
 /**

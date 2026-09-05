@@ -26,7 +26,7 @@
 import { NextResponse } from "next/server";
 import {
   serviceDb, ensureConversation, createMessage, createContact,
-  updateMessageStatusByProviderId, getPhoneNumberByE164,
+  updateMessageStatusByProviderId, findMessageByProviderId, getPhoneNumberByE164,
   type MessageStatus, type SupabaseClient,
 } from "@bis/db";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
@@ -84,12 +84,36 @@ async function handleInbound(db: SupabaseClient, payload: TelnyxPayload | undefi
   // case that matters is a number we DO own whose phone_numbers row is
   // missing or wrong: a real customer's text silently discarded with no
   // screen anywhere that would say so.
+  //
+  // The status check is the same guard voice/incoming applies at its own
+  // tenant-resolution step: setPhoneNumberStatus is a plain UPDATE, never a
+  // delete, so a released or reassigned number's row persists with the OLD
+  // account_id. Treating anything other than testing/live as "unowned"
+  // stops a stranger's text to a released number from being attributed to
+  // a former tenant's conversation list.
   const phoneRow = await getPhoneNumberByE164(db, calledNumber);
-  if (!phoneRow) {
-    log("inbound text to a number this platform does not own", calledNumber);
+  if (!phoneRow || (phoneRow.status !== "testing" && phoneRow.status !== "live")) {
+    log("inbound text to a number this platform does not own or is not active", calledNumber);
     return;
   }
   const accountId = phoneRow.account_id;
+
+  // Telnyx retries message.received at-least-once. payload.id is the
+  // message's own id (file header note 1) and stable across retries, so a
+  // row already recorded under it means this exact delivery has been seen
+  // before — skip the insert rather than duplicate the line in the
+  // customer's thread. No providerMessageId at all (a payload shape Telnyx
+  // hasn't sent in practice but the type guards allow) skips the dedupe
+  // check, not the message — recording it once, undeduped, beats dropping
+  // it.
+  const providerMessageId = payload?.id;
+  if (providerMessageId) {
+    const existing = await findMessageByProviderId(db, accountId, providerMessageId);
+    if (existing) {
+      log("skipping already-recorded inbound message (retried delivery)", providerMessageId);
+      return;
+    }
+  }
 
   // Match an existing contact on this account by phone, or create one —
   // createContact already dedupes on phone (contacts.ts's findDuplicate),
@@ -102,7 +126,7 @@ async function handleInbound(db: SupabaseClient, payload: TelnyxPayload | undefi
   const conversation = await ensureConversation(db, accountId, contact.id, ACTOR_ID, ACTOR_TYPE);
   await createMessage(db, accountId, {
     conversationId: conversation.id, channel: "sms", direction: "inbound",
-    body: payload?.text ?? "",
+    body: payload?.text ?? "", providerMessageId,
   }, ACTOR_ID, ACTOR_TYPE);
 }
 
@@ -143,14 +167,16 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   const eventType = body.data?.event_type;
   const payload = body.data?.payload;
-  const db = serviceDb();
 
   // Everything past the signature check acks 200 no matter what happens
   // inside: a webhook that 500s gets retried forever, and nothing below
   // this point is an error the provider can fix by retrying. Any unexpected
-  // throw (a DB blip, a malformed payload past the type guards) logs and
-  // falls through to the same 200 a graceful no-op would return.
+  // throw (a DB blip, a malformed payload past the type guards, or
+  // serviceDb() itself throwing when its env vars are misconfigured) logs
+  // and falls through to the same 200 a graceful no-op would return —
+  // serviceDb() MUST stay inside this try for that guarantee to hold.
   try {
+    const db = serviceDb();
     if (eventType === "message.received") {
       await handleInbound(db, payload);
     } else if (eventType === "message.sent" || eventType === "message.finalized") {

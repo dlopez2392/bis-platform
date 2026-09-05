@@ -3,7 +3,7 @@ import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
 import {
   ensureConversation, createMessage, updateMessageStatus,
-  updateMessageStatusByProviderId, listConversations, listMessages,
+  updateMessageStatusByProviderId, findMessageByProviderId, listConversations, listMessages,
   incrementUnreadCount, sumUnreadCount, searchConversations,
 } from "../messaging";
 
@@ -187,6 +187,61 @@ describe("messaging", () => {
       // One from the initial "sent" write above, one from the first
       // "delivered" — the replayed second call must not add a third.
       expect(ev).toHaveLength(2);
+    }));
+
+  it("createMessage persists a providerMessageId set at insert time", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+
+      const { id: messageId } = await createMessage(db, accountId, {
+        conversationId: convo.id, channel: "sms", direction: "inbound",
+        body: "hi", providerMessageId: "inbound_evt_1",
+      }, "sms-inbound", "system");
+
+      const [msg] = await listMessages(db, accountId, convo.id);
+      expect(msg!.provider_message_id).toBe("inbound_evt_1");
+      expect(msg!.id).toBe(messageId);
+    }));
+
+  it("findMessageByProviderId finds a row scoped to its own account and returns null for a miss", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      await createMessage(db, accountId, {
+        conversationId: convo.id, channel: "sms", direction: "inbound",
+        body: "hi", providerMessageId: "inbound_evt_2",
+      }, "sms-inbound", "system");
+
+      const hit = await findMessageByProviderId(db, accountId, "inbound_evt_2");
+      expect(hit).not.toBeNull();
+
+      expect(await findMessageByProviderId(db, accountId, "inbound_evt_does_not_exist")).toBeNull();
+    }));
+
+  it("createMessage on a replayed inbound webhook is skipped by the caller, proving exactly one row exists", () =>
+    withTestAccount(async (db, accountId) => {
+      // This mirrors what sms/inbound's handleInbound does: check
+      // findMessageByProviderId BEFORE calling createMessage, and skip the
+      // insert entirely on a hit. Proven here against the real table rather
+      // than a mock, since a mock can't see the unique index backstop.
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+
+      const providerMessageId = "inbound_evt_replay";
+      for (const attempt of [1, 2]) {
+        const existing = await findMessageByProviderId(db, accountId, providerMessageId);
+        if (!existing) {
+          await createMessage(db, accountId, {
+            conversationId: convo.id, channel: "sms", direction: "inbound",
+            body: `attempt ${attempt}`, providerMessageId,
+          }, "sms-inbound", "system");
+        }
+      }
+
+      const messages = await listMessages(db, accountId, convo.id);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]!.body).toBe("attempt 1");
     }));
 
   it("listConversations orders most-recent first", () =>

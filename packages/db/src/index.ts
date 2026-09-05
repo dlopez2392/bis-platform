@@ -18,8 +18,8 @@ export { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
          listBoard, listContactOpportunities,
          listOpportunityValuesCreatedBetween } from "./opportunities";
 export { ensureConversation, createMessage, updateMessageStatus,
-         updateMessageStatusByProviderId, listConversations, listMessages, listContactMessages,
-         incrementUnreadCount, clearUnreadCount,
+         updateMessageStatusByProviderId, findMessageByProviderId, listConversations, listMessages,
+         listContactMessages, incrementUnreadCount, clearUnreadCount,
          type MessageStatus, type NewMessage, type ConversationSummary,
          sumUnreadCount, searchConversations } from "./messaging";
 // NOTE: searchCalls needs no line here — voice is `export * from "./voice"` below.
