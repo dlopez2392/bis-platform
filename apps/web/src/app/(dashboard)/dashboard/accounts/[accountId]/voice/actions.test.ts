@@ -162,8 +162,8 @@ describe("voice settings actions", () => {
     expect(r).toEqual({ ok: true });
     const saved = dbMocks.upsertVoiceProfile.mock.calls[0]![2] as { textback_body: string };
     expect(saved.textback_body).toBe("");
-    expect(saved.textback_body).not.toBe(defaultTextbackBody("Alex"));
-    expect(saved.textback_body).not.toBe(defaultTextbackBody(""));
+    expect(saved.textback_body).not.toBe(defaultTextbackBody("Alex", "en"));
+    expect(saved.textback_body).not.toBe(defaultTextbackBody("", "en"));
   });
 });
 

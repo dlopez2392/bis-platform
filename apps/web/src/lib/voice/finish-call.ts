@@ -183,6 +183,12 @@ export async function finishCall(
 ): Promise<FinishResult> {
   const outcome = classifyOutcome(state);
   const meaningful = isMeaningful(outcome);
+  // Computed once, read twice: the `calls.language` column below, and the
+  // language the missed-call text-back answers in. Deliberately the SAME
+  // value — a caller the Calls page labels "Spanish" who then receives an
+  // English text is the platform contradicting itself in front of the
+  // customer, and two separate derivations is how that starts.
+  const spokenLanguage = detectSpokenLanguage(state.transcript, ctx.profileLanguage);
 
   let summary: string;
   try {
@@ -299,8 +305,13 @@ export async function finishCall(
         // em dash is outside GSM-7, so sending it also silently doubles the
         // message to two segments. Same resolver the staff alert one leg up
         // already uses.
+        //
+        // `spokenLanguage`, so a caller who spoke Spanish to Sofía is
+        // answered in Spanish. Only the DEFAULT is chosen this way: an
+        // operator's own body is sent exactly as they wrote it, never
+        // translated — they chose those words for their own customers.
         const body = ctx.textbackBody.trim()
-          || defaultTextbackBody(brandDisplayName(ctx.branding, ctx.accountName));
+          || defaultTextbackBody(brandDisplayName(ctx.branding, ctx.accountName), spokenLanguage);
 
         // resolveContactId, not createContact: it honours a contact the call
         // already established and backfills blanks on a dedupe hit. An
@@ -405,7 +416,7 @@ export async function finishCall(
         turnCount: state.transcript.length,
         transcript: state.transcript,
         summary,
-        language: detectSpokenLanguage(state.transcript, ctx.profileLanguage),
+        language: spokenLanguage,
         contactId: contactId ?? undefined,
         conversationId: conversationId ?? undefined,
         bookingId,

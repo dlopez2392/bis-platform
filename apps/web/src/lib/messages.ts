@@ -710,7 +710,25 @@ export const m = {
   "voice.textback.enabled": "Text back callers who didn't book",
   "voice.textback.help": "When someone talks to Sofía and hangs up without booking, send them a text. Off until you turn it on, and only for companies whose A2P registration is approved.",
   "voice.textback.body": "Message",
-  "voice.textback.defaultBodyNoName": "Sorry we missed you just now, reply here and we'll help.",
+  // The missed-call text-back's default body, in the language the CALLER
+  // actually spoke (detectSpokenLanguage) — this platform serves the Rio
+  // Grande Valley, and answering a Spanish caller in English is the whole
+  // point of having the column. `{name}` is the house placeholder, filled
+  // with the customer-facing brand name; the NoName variants drop the
+  // identifying clause entirely rather than inventing a placeholder noun.
+  //
+  // Every one of these four is ONE SMS segment for a GSM-7 company name, and
+  // that is a constraint on the copy, not an observation about it — see
+  // textback-body.ts. The Spanish wording is deliberately written with no
+  // á/í/ó/ú: those are outside GSM-7 (é/ñ/ü/¿/¡ are inside it), and a single
+  // one drops the whole message to UCS-2 at 70 characters per segment, which
+  // this sentence does not fit in. "responda aquí" cost two segments for
+  // every Spanish caller; "responda este mensaje" costs one and says the
+  // same thing. Pinned in textback-body.test.ts.
+  "voice.textback.defaultBodyEn": "Hi, this is {name}. Sorry we missed you just now, reply here and we'll help.",
+  "voice.textback.defaultBodyNoNameEn": "Sorry we missed you just now, reply here and we'll help.",
+  "voice.textback.defaultBodyEs": "Hola, somos {name}. No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
+  "voice.textback.defaultBodyNoNameEs": "No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
   "voice.profile.save": "Save voice profile",
   "voice.profile.saved": "Voice profile saved",
   "voice.profile.saveFailed": "Could not save the voice profile.",

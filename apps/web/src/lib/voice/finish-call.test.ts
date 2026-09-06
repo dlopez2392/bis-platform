@@ -186,10 +186,10 @@ describe("finishCall — missed-call text-back", () => {
     expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
     expect(dbMocks.createMessage).toHaveBeenCalledWith({}, "a1",
       expect.objectContaining({ conversationId: "cv1", channel: "sms", direction: "outbound",
-        body: defaultTextbackBody("Rio Roofing") }), "voice", "ai");
+        body: defaultTextbackBody("Rio Roofing", "en") }), "voice", "ai");
     expect(smsRefs.send).toHaveBeenCalledOnce();
     expect(smsRefs.send).toHaveBeenCalledWith({
-      to: "+19562921696", from: "+19565550100", body: defaultTextbackBody("Rio Roofing"),
+      to: "+19562921696", from: "+19565550100", body: defaultTextbackBody("Rio Roofing", "en"),
     });
     // "ai", not "user": actor_id "voice" with actor_type "user" is the exact
     // mis-attribution M1b fixed for the Resend webhook, and finish-call.ts's
@@ -229,7 +229,7 @@ describe("finishCall — missed-call text-back", () => {
     const body = (smsRefs.send.mock.calls[0]![0] as { body: string }).body;
     expect(body).toContain("Rio Roofing");
     expect(body).not.toContain("trial");
-    expect(body).toBe(defaultTextbackBody("Rio Roofing"));
+    expect(body).toBe(defaultTextbackBody("Rio Roofing", "en"));
     // The message the operator is billed for, not just the one they read.
     expect(segmentsFor(body)).toMatchObject({ encoding: "gsm7", segments: 1 });
     // And the row carries the same string that went out.
@@ -240,13 +240,54 @@ describe("finishCall — missed-call text-back", () => {
   it("falls back to the account name only when the company has no brand name", async () => {
     await finishCall(abandonedState(), textbackCtx, meta);
     expect(smsRefs.send).toHaveBeenCalledWith(expect.objectContaining({
-      body: defaultTextbackBody("Rio Roofing"),
+      body: defaultTextbackBody("Rio Roofing", "en"),
     }));
   });
 
   it("an operator's own body is sent verbatim; the default is only the empty-body fallback", async () => {
     await finishCall(abandonedState(), { ...textbackCtx, textbackBody: "  Call us back at 956-555-0100.  " }, meta);
     expect(smsRefs.send).toHaveBeenCalledWith(expect.objectContaining({ body: "Call us back at 956-555-0100." }));
+  });
+
+  /** A caller who spoke Spanish to Sofía was being answered in English. */
+  it("answers a Spanish-speaking caller in Spanish", async () => {
+    const s = withTranscript(emptyCallState(),
+      { role: "caller", text: "hola, necesito ayuda con el techo por favor", at: "t" });
+    await finishCall(s, textbackCtx, meta);
+    expect(smsRefs.send).toHaveBeenCalledWith(expect.objectContaining({
+      body: defaultTextbackBody("Rio Roofing", "es"),
+    }));
+    // The same value the row records, from the same computation — a call the
+    // Calls page labels Spanish must not have been texted in English.
+    expect(dbMocks.finishCallRow).toHaveBeenCalledWith({}, "a1", "call1",
+      expect.objectContaining({ language: "es" }));
+  });
+
+  it("answers an English-speaking caller on the same bilingual line in English", async () => {
+    const s = withTranscript(emptyCallState(),
+      { role: "caller", text: "hi, I need help with the roof please", at: "t" });
+    await finishCall(s, textbackCtx, meta);
+    expect(smsRefs.send).toHaveBeenCalledWith(expect.objectContaining({
+      body: defaultTextbackBody("Rio Roofing", "en"),
+    }));
+  });
+
+  it("an es-only profile texts Spanish without the caller having to prove it", async () => {
+    // detectSpokenLanguage short-circuits on a single-language profile, so a
+    // caller who said almost nothing still gets their own language.
+    await finishCall(abandonedState(), { ...textbackCtx, profileLanguage: "es" }, meta);
+    expect(smsRefs.send).toHaveBeenCalledWith(expect.objectContaining({
+      body: defaultTextbackBody("Rio Roofing", "es"),
+    }));
+  });
+
+  it("never translates the operator's OWN body — they wrote it for their customers", async () => {
+    const s = withTranscript(emptyCallState(),
+      { role: "caller", text: "hola, necesito ayuda con el techo por favor", at: "t" });
+    await finishCall(s, { ...textbackCtx, textbackBody: "Call us back at 956-555-0100." }, meta);
+    expect(smsRefs.send).toHaveBeenCalledWith(expect.objectContaining({
+      body: "Call us back at 956-555-0100.",
+    }));
   });
 
   it("does NOT text a SPAM call", async () => {

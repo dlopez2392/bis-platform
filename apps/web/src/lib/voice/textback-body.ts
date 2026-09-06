@@ -46,11 +46,38 @@ import { m } from "@/lib/messages";
  * not naming one. Instead the identifying clause is dropped entirely and the
  * message opens on the apology sentence alone — that sentence already reads
  * correctly standalone, so nothing else changes. Copy lives in messages.ts
- * (`voice.textback.defaultBodyNoName`) per this repo's client-facing-copy
- * rule, the same precedent `setup.number.unknownAccount` sets for a missing
- * name elsewhere.
+ * per this repo's client-facing-copy rule, the same precedent
+ * `setup.number.unknownAccount` sets for a missing name elsewhere.
+ *
+ * `language` is the language the CALLER actually spoke, from
+ * `detectSpokenLanguage` — the same value the call row stores, so the text a
+ * caller gets and the language the operator sees on the call can never
+ * disagree. This platform serves the Rio Grande Valley and voice profiles
+ * carry `languages: "en" | "es" | "both"`; answering a Spanish caller in
+ * English was a defect, not a simplification. Only the DEFAULT is chosen this
+ * way: an operator who has written their own `textback_body` gets it sent
+ * exactly as written, never translated.
+ *
+ * The Spanish copy is written with no á/í/ó/ú on purpose. Those four are
+ * outside GSM7_BASE (é, ñ, ü, ¿ and ¡ are inside it), and a single one drops
+ * the whole message to UCS-2 at 70 characters per segment — which the
+ * sentence does not fit in. The natural first draft, "responda aquí y le
+ * ayudamos", measured ucs2/86 chars/2 segments for a plain GSM-7 company
+ * name: two segments for every Spanish caller, forever. "responda este
+ * mensaje" says the same thing in one. Measured, not assumed — pinned in
+ * textback-body.test.ts.
  */
-export function defaultTextbackBody(brandName: string): string {
-  if (!brandName.trim()) return m["voice.textback.defaultBodyNoName"];
-  return `Hi, this is ${brandName}. Sorry we missed you just now, reply here and we'll help.`;
+export function defaultTextbackBody(brandName: string, language: "en" | "es"): string {
+  if (!brandName.trim()) {
+    return language === "es"
+      ? m["voice.textback.defaultBodyNoNameEs"]
+      : m["voice.textback.defaultBodyNoNameEn"];
+  }
+  const template = language === "es"
+    ? m["voice.textback.defaultBodyEs"]
+    : m["voice.textback.defaultBodyEn"];
+  // Function replacement, not a plain string: a company name containing `$&`
+  // or `$'` would otherwise be re-interpreted by String.replace as a
+  // substitution pattern and mangle the message.
+  return template.replace("{name}", () => brandName);
 }

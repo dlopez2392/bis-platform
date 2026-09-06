@@ -99,8 +99,8 @@ describe("voice settings page — text-back preview name", () => {
     expect(props.brandName).toBe("Rio Roofing");
     // The exact string the sender would build, so a divergence between the
     // two resolvers shows up here rather than on a customer's phone.
-    expect(defaultTextbackBody(props.brandName!)).toBe(defaultTextbackBody("Rio Roofing"));
-    expect(defaultTextbackBody(props.brandName!)).not.toContain("trial");
+    expect(defaultTextbackBody(props.brandName!, "en")).toBe(defaultTextbackBody("Rio Roofing", "en"));
+    expect(defaultTextbackBody(props.brandName!, "en")).not.toContain("trial");
   });
 
   it("falls back to the account name when the company has set no brand name", async () => {

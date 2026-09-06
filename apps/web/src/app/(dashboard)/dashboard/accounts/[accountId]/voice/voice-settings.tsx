@@ -56,13 +56,28 @@ function VoiceProfileForm({
   // the live default as its `placeholder` instead: greyed, not a real value,
   // so typing replaces it rather than appending to it.
   const [textbackBody, setTextbackBody] = useState(p.textback_body);
+  // Which language the default previews in. `detectSpokenLanguage` decides
+  // this per call at send time, and for a Spanish-only line it can only ever
+  // answer "es" — so previewing English there would show the operator a
+  // message none of their callers will receive. A bilingual line falls back
+  // to "en", which is exactly what detectSpokenLanguage returns when the
+  // caller's speech does not clear its Spanish bar.
+  //
+  // Uncontrolled Select + onValueChange, NOT a controlled `value`: the form
+  // submits via onSubmit so React never resets it (see the form comment
+  // below), and passing `value` here would re-introduce the Radix
+  // reset-drives-state-backwards hazard for no gain. This state exists only
+  // to redraw the preview.
+  const [previewLanguage, setPreviewLanguage] = useState<"en" | "es">(
+    p.languages === "es" ? "es" : "en",
+  );
   // What the counter below previews must match what actually sends: an
   // empty textarea means "use the live default at send time" (the
   // empty-means-default contract this column exists for, explained above),
   // so the preview has to be the default's own segment count, not 0
   // chars / 1 message for a string that will never be what goes out. The
   // moment the operator types anything, `textbackBody` itself takes over.
-  const previewBody = textbackBody || defaultTextbackBody(brandName);
+  const previewBody = textbackBody || defaultTextbackBody(brandName, previewLanguage);
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     await notifyActionResult(() => action(formData), toast, {
       success: m["voice.profile.saved"],
@@ -131,7 +146,10 @@ function VoiceProfileForm({
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="languages">{m["voice.profile.language"]}</Label>
-              <Select name="languages" defaultValue={p.languages}>
+              <Select
+                name="languages" defaultValue={p.languages}
+                onValueChange={(v) => setPreviewLanguage(v === "es" ? "es" : "en")}
+              >
                 <SelectTrigger id="languages" className="w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="en">{m["voice.profile.language.en"]}</SelectItem>
@@ -173,7 +191,7 @@ function VoiceProfileForm({
               id="textback_body" name="textback_body" rows={2}
               value={textbackBody}
               onChange={(e) => setTextbackBody(e.target.value)}
-              placeholder={defaultTextbackBody(brandName)}
+              placeholder={defaultTextbackBody(brandName, previewLanguage)}
               className="w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
             />
             <p className="text-xs text-muted-foreground">
