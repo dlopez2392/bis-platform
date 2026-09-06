@@ -8,7 +8,15 @@ cp .env.example apps/web/.env.local   # fill from Clerk + Supabase dashboards
 pnpm --filter web dev
 
 ## Gates
-pnpm check   # tsc + vitest, must be green before commit
+pnpm check                    # typecheck + lint + every package's vitest suite
+pnpm --filter web build
+pnpm --filter web test:e2e    # Playwright; needs apps/web/.env.local, ~5 min
+
+CI (.github/workflows/ci.yml) runs all three on every push, from five
+repository secrets that mirror apps/web/.env.local: NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
+CLERK_SECRET_KEY, NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_DB_URL.
+The e2e job is serialized across the repo because the suite shares the one
+Supabase project with production.
 
 ## Deploy
 Vercel project "bis-platform" (team danlopez508-8452s-projects), Root Directory apps/web,
