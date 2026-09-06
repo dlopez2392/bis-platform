@@ -75,7 +75,8 @@ export async function deleteAccountCascade(
   // drift — the drift already happened once (teardown lacked these tables).
   for (const table of ["calls", "bookings", "messages", "conversations", "calendars",
                        "checklist_items", "form_submissions",
-                       "forms", "contacts", "events", "voice_profiles", "phone_numbers"]) {
+                       "forms", "contacts", "events", "voice_profiles", "phone_numbers",
+                       "automations"]) {
     const { error } = await db.from(table).delete().eq("account_id", accountId);
     if (error) report.errors.push(`${table} delete for ${accountId}: ${error.message}`);
   }

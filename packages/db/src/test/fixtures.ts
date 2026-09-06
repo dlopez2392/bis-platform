@@ -25,7 +25,7 @@ export async function withTestAccount(fn: (db: SupabaseClient, accountId: string
                          "checklist_items", "contact_tags", "notes", "tasks",
                          "opportunities", "pipeline_stages", "pipelines", "custom_fields",
                          "custom_values", "tags", "contacts",
-                         "voice_profiles", "phone_numbers"]) {
+                         "voice_profiles", "phone_numbers", "automations"]) {
       const { error } = await db.from(table).delete().eq("account_id", id);
       if (error) throw new Error(`withTestAccount cleanup failed on ${table}: ${error.message}`);
     }

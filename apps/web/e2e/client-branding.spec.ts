@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, setBranding, getBranding, setClientAccess } from "@bis/db";
+import { mintClientToken } from "./support";
 
 // Same two paths, same reason, as auth.setup.ts: this file calls serviceDb()
 // and the Clerk API from the Playwright runner process, not through a Next
@@ -15,31 +16,6 @@ const fixture = (): ClientFixture =>
 
 /** The agency's own seeded account — the "someone else" in the negative case. */
 const OTHER_ACCOUNT = "45240784-a70e-43a0-8a0c-0027c7073f98";
-
-/**
- * A real Clerk session token for the fixture's CLIENT user, minted the same
- * two-call way packages/db's user-client integration test does.
- *
- * Not stubbed. The whole boundary is Clerk's claims meeting Supabase's
- * policies, so a hand-made JWT would prove nothing about either — it would
- * only prove that a token this test invented is accepted or rejected.
- */
-async function mintClientToken(userId: string): Promise<string> {
-  const sk = process.env.CLERK_SECRET_KEY;
-  if (!sk) throw new Error("CLERK_SECRET_KEY missing — this spec cannot run hermetically");
-  const headers = { Authorization: `Bearer ${sk}`, "Content-Type": "application/json" };
-
-  const session = (await (await fetch("https://api.clerk.com/v1/sessions", {
-    method: "POST", headers, body: JSON.stringify({ user_id: userId }),
-  })).json()) as { id?: string };
-  if (!session.id) throw new Error(`could not create a Clerk session for ${userId}`);
-
-  const token = (await (await fetch(
-    `https://api.clerk.com/v1/sessions/${session.id}/tokens`, { method: "POST", headers },
-  )).json()) as { jwt?: string };
-  if (!token.jwt) throw new Error("Clerk returned no jwt");
-  return token.jwt;
-}
 
 /**
  * PostgREST, called directly with the client's own token.
