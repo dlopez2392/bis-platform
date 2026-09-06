@@ -26,6 +26,10 @@ vi.mock("@/lib/email", () => ({
 }));
 
 import { GET } from "./route";
+import { STAMP_RETRY_DELAYS_MS } from "@/lib/booking/stamp-retry";
+
+/** Attempts, not retries: the first try is not a retry. */
+const STAMP_ATTEMPTS = STAMP_RETRY_DELAYS_MS.length + 1;
 
 const SECRET = "test_cron_secret";
 const ORIGIN = "https://app.example.com";
@@ -182,21 +186,48 @@ describe("GET /api/cron/reminders", () => {
     expect(stampReminderSentMock).not.toHaveBeenCalledWith(expect.anything(), "bk_fail");
   });
 
-  it("counts a stamp failure after a successful send as {sent:1,failed:0,unstamped:1}, not a send failure", async () => {
-    // The stamp gets its OWN try/catch: a send that succeeds must count as
-    // sent regardless of whether the follow-up stamp write lands. Folding
-    // this into the outer catch would misreport a stamp failure as a send
-    // failure in triage, and a mutant that removes the inner try/catch would
-    // make this go red (send called once, but {sent:0,failed:1,unstamped:0}).
-    const one = reminder({ bookingId: "bk_unstamped" });
+  it("retries a transient reminder stamp failure instead of leaving the row to re-mail the booker", async () => {
+    // THE COST OF ONE FAILED STAMP AT THIS CADENCE. `listDueReminders`' window
+    // is 75 minutes wide, so an unstamped row comes back on 5-6 consecutive
+    // ticks and this booker gets 5-6 identical reminders 15 minutes apart. A
+    // stamp failure is transient (a connection blip on a write that a
+    // just-succeeded send proves the connection can carry), so it is retried.
+    //
+    // The send must NOT be repeated by the retry — only the stamp.
+    const one = reminder({ bookingId: "bk_flaky_stamp" });
     listDueRemindersMock.mockResolvedValue([one]);
-    sendMock.mockResolvedValueOnce({ providerMessageId: "p1" });
-    stampReminderSentMock.mockRejectedValueOnce(new Error("db unavailable"));
+    stampReminderSentMock
+      .mockRejectedValueOnce(new Error("connection reset"))
+      .mockResolvedValueOnce(undefined);
 
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
+    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, followups: EMPTY_FOLLOWUPS });
+    expect(stampReminderSentMock).toHaveBeenCalledTimes(2);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up on a reminder stamp after a bounded number of attempts, still counting the send as sent", async () => {
+    // The residual exposure, stated as a test: the retry SHRINKS the duplicate
+    // window, it does not close it. When every attempt fails the row is left
+    // unstamped on purpose (send-then-stamp is the deliberate trade — see
+    // `stampReminderSent`'s doc comment) and reported so triage can see it.
+    //
+    // Bounded is the load-bearing word: an unbounded retry inside a cron tick
+    // would strand every row queued behind this one.
+    const one = reminder({ bookingId: "bk_unstamped" });
+    listDueRemindersMock.mockResolvedValue([one]);
+    sendMock.mockResolvedValueOnce({ providerMessageId: "p1" });
+    stampReminderSentMock.mockRejectedValue(new Error("db unavailable"));
+
+    const res = await GET(req(`Bearer ${SECRET}`));
+    const body = await res.json();
+
+    // Counted as sent, never as failed: folding the stamp into the outer catch
+    // would misreport a stamp failure as a send failure in triage.
     expect(body).toEqual({ sent: 1, failed: 0, unstamped: 1, followups: EMPTY_FOLLOWUPS });
+    expect(stampReminderSentMock).toHaveBeenCalledTimes(STAMP_ATTEMPTS);
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
 
@@ -385,15 +416,59 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
     expect(stampFollowupSentMock).not.toHaveBeenCalled();
   });
 
-  it("stamp failure after a successful follow-up send counts as unstamped, not failed", async () => {
-    const one = followup({ bookingId: "bk_f_unstamped" });
+  it("retries a transient follow-up stamp failure — the worse of the two paths by more than double", async () => {
+    // The morning band is THREE HOURS wide, so an unstamped follow-up comes
+    // back on ~12 consecutive ticks: up to twelve identical "great seeing
+    // you" emails, 15 minutes apart, before the band closes. The reminder
+    // window is 75 minutes and costs 5-6. Same fix, bigger stake.
+    const one = followup({ bookingId: "bk_f_flaky_stamp" });
     listDueFollowupsMock.mockResolvedValue([one]);
-    stampFollowupSentMock.mockRejectedValueOnce(new Error("db unavailable"));
+    stampFollowupSentMock
+      .mockRejectedValueOnce(new Error("connection reset"))
+      .mockResolvedValueOnce(undefined);
 
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body.followups).toEqual({ sent: 1, failed: 0, unstamped: 1, skippedNoEmail: 0, waitingForMorning: 0 });
+    expect(body.followups).toEqual({
+      sent: 1, failed: 0, unstamped: 0, skippedNoEmail: 0, waitingForMorning: 0,
+    });
+    expect(stampFollowupSentMock).toHaveBeenCalledTimes(2);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up on a follow-up stamp after a bounded number of attempts and counts it unstamped, not failed", async () => {
+    const one = followup({ bookingId: "bk_f_unstamped" });
+    listDueFollowupsMock.mockResolvedValue([one]);
+    stampFollowupSentMock.mockRejectedValue(new Error("db unavailable"));
+
+    const res = await GET(req(`Bearer ${SECRET}`));
+    const body = await res.json();
+
+    expect(body.followups).toEqual({
+      sent: 1, failed: 0, unstamped: 1, skippedNoEmail: 0, waitingForMorning: 0,
+    });
+    expect(stampFollowupSentMock).toHaveBeenCalledTimes(STAMP_ATTEMPTS);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the two passes' retry budgets separate — one path exhausting its own does not spend the other's", async () => {
+    // Separate loops, separate counters, separate retries. A shared or
+    // short-circuiting budget would let a bad follow-up stamp suppress the
+    // reminder pass's retry (or vice versa) and quietly reintroduce the
+    // duplicate this whole change exists to bound.
+    listDueRemindersMock.mockResolvedValue([reminder({ bookingId: "bk_r_stampfail" })]);
+    listDueFollowupsMock.mockResolvedValue([followup({ bookingId: "bk_f_stampfail" })]);
+    stampReminderSentMock.mockRejectedValue(new Error("db unavailable"));
+    stampFollowupSentMock.mockRejectedValue(new Error("db unavailable"));
+
+    const res = await GET(req(`Bearer ${SECRET}`));
+    const body = await res.json();
+
+    expect(body.unstamped).toBe(1);
+    expect(body.followups.unstamped).toBe(1);
+    expect(stampReminderSentMock).toHaveBeenCalledTimes(STAMP_ATTEMPTS);
+    expect(stampFollowupSentMock).toHaveBeenCalledTimes(STAMP_ATTEMPTS);
   });
 
   it("falls back to the default follow-up copy when followupBody is empty", async () => {

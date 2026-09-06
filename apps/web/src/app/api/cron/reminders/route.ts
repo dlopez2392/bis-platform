@@ -10,6 +10,7 @@ import { bookingReminderEmail } from "@/lib/email/templates/booking";
 import { bookingFollowupEmail } from "@/lib/email/templates/followup";
 import { safeZone, formatWhen } from "@/lib/booking/time";
 import { shouldSendFollowupNow } from "@/lib/booking/followup-timing";
+import { stampWithRetry } from "@/lib/booking/stamp-retry";
 
 export const dynamic = "force-dynamic";
 
@@ -120,21 +121,36 @@ export async function GET(req: Request): Promise<Response> {
 
       // A send that already left the building counts as `sent` no matter
       // what happens next — folding the stamp into the outer catch would
-      // misreport a stamp failure as a send failure in triage. Its own
-      // try/catch here means a stamp failure can't silently look identical
-      // to a send failure, and can't roll back the `sent` count either.
-      // The cost is real: the row stays unstamped, so `listDueReminders`
-      // treats it as still due and this booker gets a duplicate reminder
-      // next tick. Duplicate over silence is the chosen direction (a repeat
-      // email is recoverable; a reminder that never fires again is not) —
-      // logged distinctly so it's visible in triage instead of masquerading
-      // as either a normal success or a send failure.
-      try {
-        await stampReminderSent(db, reminder.bookingId);
-      } catch (stampErr) {
+      // misreport a stamp failure as a send failure in triage. Handling the
+      // stamp separately here means a stamp failure can't silently look
+      // identical to a send failure, and can't roll back the `sent` count.
+      //
+      // WHY THE STAMP IS RETRIED, and why the old "a duplicate" reasoning no
+      // longer describes the cost. This comment used to accept exactly one
+      // repeat email, and on the once-a-day cron that was true: the row came
+      // back on the next tick, tomorrow, and got mailed a second time. At 96
+      // ticks a day it is not one repeat. `listDueReminders`' window is 75
+      // minutes wide, so an unstamped row is returned by 5-6 CONSECUTIVE
+      // ticks and this booker gets 5-6 identical reminders fifteen minutes
+      // apart. `stampWithRetry` spends a bounded ~0.9s of backoff on what is
+      // a transient write failure (the send that just succeeded proves the
+      // connection carries), which removes this in practice.
+      //
+      // It does NOT close it, and this is not claiming otherwise. If every
+      // attempt fails — a sustained outage, or a write the database will keep
+      // refusing — the row is still left unstamped and the 5-6 repeats above
+      // are the real exposure. That remains the deliberate direction (a
+      // repeat email is recoverable; a reminder that never fires again is
+      // not — see `stampReminderSent`'s doc comment), and the `unstamped`
+      // count plus this log line are the only signal that it happened.
+      // Nothing suppresses the repeat and there is no dead-letter.
+      const stamp = await stampWithRetry(() => stampReminderSent(db, reminder.bookingId));
+      if (!stamp.stamped) {
         unstamped++;
         console.error(
-          `reminder sent but NOT stamped for booking ${reminder.bookingId} — may repeat next tick: ${String(stampErr)}`,
+          `reminder sent but NOT stamped for booking ${reminder.bookingId} after `
+          + `${stamp.attempts} attempts — expect up to 5 more copies over the next 75 `
+          + `minutes: ${String(stamp.lastError)}`,
         );
       }
 
@@ -219,17 +235,31 @@ export async function GET(req: Request): Promise<Response> {
         html,
       });
 
-      // Own try/catch, same reasoning as the reminder pass: a send that
+      // Handled separately, same reasoning as the reminder pass: a send that
       // already left the building counts as `sent` regardless of whether
       // the stamp write lands, so a stamp failure can't misreport as a
       // send failure — and can't roll back the `sent` count either.
-      try {
-        await stampFollowupSent(db, followup.bookingId);
-      } catch (stampErr) {
+      //
+      // Retried for the same reason too, and this is the WORSE of the two
+      // paths by more than double. A follow-up's qualifying moment is the
+      // three-hour morning band in `followup-timing.ts`, not a 75-minute
+      // window, so an unstamped row is returned and re-sent by roughly TWELVE
+      // consecutive ticks — twelve identical "great seeing you" emails,
+      // fifteen minutes apart, on the morning after someone's appointment.
+      // Its own budget, deliberately not shared with the reminder pass above:
+      // the two loops fail independently and one exhausting its retries must
+      // not spend the other's.
+      //
+      // Same residual exposure, stated the same way: when every attempt fails
+      // the row stays unstamped and those ~12 repeats are live. The
+      // `followups.unstamped` count and this log line are the only signal.
+      const stamp = await stampWithRetry(() => stampFollowupSent(db, followup.bookingId));
+      if (!stamp.stamped) {
         followupsUnstamped++;
         console.error(
-          `follow-up sent but NOT stamped for booking ${followup.bookingId} — `
-          + `may repeat next tick: ${String(stampErr)}`,
+          `follow-up sent but NOT stamped for booking ${followup.bookingId} after `
+          + `${stamp.attempts} attempts — expect up to 11 more copies before the `
+          + `morning band closes: ${String(stamp.lastError)}`,
         );
       }
 
