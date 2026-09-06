@@ -39,7 +39,7 @@ export { captureBlueprint, listBlueprints, getBlueprint, blueprintKey, applyBlue
          type BlueprintBundle, type BlueprintRow, type BlueprintSummary, type ApplyReport } from "./blueprints";
 export { listChecklistState, setChecklistItem, addCustomChecklistItem,
          type ChecklistStateRow } from "./checklist";
-export { uploadBrandLogo, removeBrandLogo, brandLogoUrl, setBranding, getBranding,
+export { uploadBrandLogo, removeBrandLogo, brandLogoUrl, setBranding, getBranding, brandDisplayName,
          type Branding } from "./branding";
 export { getSendingIdentity, setFromEmail, type SendingIdentity } from "./sending-identity";
 export { getOrCreateCalendar, getCalendarForAccount, getCalendarByPublicId, updateCalendarSettings,

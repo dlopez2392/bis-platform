@@ -2,7 +2,28 @@ import { describe, it, expect } from "vitest";
 import "dotenv/config";
 import { serviceDb } from "../service";
 import { withTestAccount } from "./fixtures";
-import { setBranding, getBranding } from "../branding";
+import { setBranding, getBranding, brandDisplayName } from "../branding";
+
+describe("brandDisplayName — the db copy of the ONE customer-facing name rule", () => {
+  const base = {
+    brandLogoPath: null, brandColor: null, brandNeutral: null,
+    brandCorners: null, brandType: null, brandMode: null, replyToEmail: null,
+  } as const;
+
+  it("prefers brand_name over the agency's internal accounts.name label", () => {
+    expect(brandDisplayName({ ...base, brandName: "Rio Roofing" }, "Rio Roofing — trial"))
+      .toBe("Rio Roofing");
+  });
+
+  it("falls back to accounts.name only when brand_name is null", () => {
+    expect(brandDisplayName({ ...base, brandName: null }, "Rio Roofing — trial"))
+      .toBe("Rio Roofing — trial");
+  });
+
+  it("does not treat an empty-string brand_name as unset (identical to the web copy)", () => {
+    expect(brandDisplayName({ ...base, brandName: "" }, "Fallback")).toBe("");
+  });
+});
 
 describe("branding service", () => {
   it("sets both fields, reads them back, and emits account.branding_updated", async () => {
