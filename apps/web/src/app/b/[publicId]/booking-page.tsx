@@ -58,6 +58,56 @@ function getServerBookerTimezone(): null {
   return null;
 }
 
+/** "September 2026" for the strip's header — or both months when a week
+ *  straddles two. The month was nowhere on this page before: seven chips
+ *  reading "Mon, Sep 8" gave the date but never which month you had paged
+ *  into. */
+function weekHeading(days: string[], intl: "en-US" | "es-US"): string {
+  const first = days[0];
+  const last = days[days.length - 1];
+  // `weekDays` is always seven entries, but the checker cannot know that and
+  // an empty heading is a better failure than a thrown one.
+  if (!first || !last) return "";
+  const fmt = (key: string, opts: Intl.DateTimeFormatOptions) =>
+    new Intl.DateTimeFormat(intl, { ...opts, timeZone: "UTC" }).format(new Date(`${key}T12:00:00Z`));
+  const firstMonth = fmt(first, { month: "long" });
+  const lastMonth = fmt(last, { month: "long" });
+  const year = fmt(last, { year: "numeric" });
+  return firstMonth === lastMonth ? `${firstMonth} ${year}` : `${firstMonth} – ${lastMonth} ${year}`;
+}
+
+/** The two halves of a day chip: "Mon" over "8". Same `timeZone: "UTC"` rule
+ *  `dayLabel` documents — these are day KEYS, not instants. */
+function dayParts(dayKey: string, intl: "en-US" | "es-US"): { weekday: string; date: string } {
+  const at = new Date(`${dayKey}T12:00:00Z`);
+  const part = (opts: Intl.DateTimeFormatOptions) =>
+    new Intl.DateTimeFormat(intl, { ...opts, timeZone: "UTC" }).format(at);
+  return { weekday: part({ weekday: "short" }), date: part({ day: "numeric" }) };
+}
+
+export type PartOfDay = "morning" | "afternoon" | "evening";
+
+/** Read in the BOOKER's zone — the same zone the time beside it is printed
+ *  in, so a slot can never sit under a heading that contradicts its own hour. */
+export function partOfDay(iso: string, timeZone: string): PartOfDay {
+  const hour = Number(
+    new Intl.DateTimeFormat("en-US", { hour: "numeric", hour12: false, timeZone }).format(new Date(iso)),
+  );
+  if (hour < 12) return "morning";
+  if (hour < 17) return "afternoon";
+  return "evening";
+}
+
+/** Reading order, empty groups dropped: a heading with nothing under it is
+ *  worse than no heading at all. */
+export function groupSlots(slots: string[], timeZone: string): { part: PartOfDay; slots: string[] }[] {
+  const buckets: Record<PartOfDay, string[]> = { morning: [], afternoon: [], evening: [] };
+  for (const iso of slots) buckets[partOfDay(iso, timeZone)].push(iso);
+  return (["morning", "afternoon", "evening"] as const)
+    .map((part) => ({ part, slots: buckets[part] }))
+    .filter((g) => g.slots.length > 0);
+}
+
 type Props = {
   /** Resolved by page.tsx from `?locale=`; drives every string and every
    *  `Intl` call below, and corrects `<html lang>` after hydration. */
@@ -320,13 +370,33 @@ export function BookingPage({
       <div className="bis-booking" ref={rootRef}>
         <style>{BOOKING_CSS}</style>
         {steps}
-        <p role="status" className="bis-booking-success-title">{strings.successTitle}</p>
-        <p className="bis-booking-success-body">{strings.successBody}</p>
-        {result.cancelUrl ? (
-          <p className="bis-booking-cancel-hint"><a href={result.cancelUrl}>{strings.cancelHint}</a></p>
-        ) : (
-          <p className="bis-booking-cancel-hint">{strings.cancelHint}</p>
-        )}
+        <div className="bis-booking-success" role="status">
+          {/* A mark AND the words — status is never colour alone. */}
+          <span className="bis-booking-check" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+                 strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M20 6 9 17l-5-5" />
+            </svg>
+          </span>
+          <p className="bis-booking-success-title">{strings.successTitle}</p>
+          {/* The time they booked, said back to them. Confirming without
+              restating it asks a visitor to trust that the click landed on the
+              row they meant. */}
+          {selectedSlot ? (
+            <p className="bis-booking-success-when">
+              {new Intl.DateTimeFormat(intl, {
+                weekday: "long", month: "long", day: "numeric",
+                hour: "numeric", minute: "2-digit", timeZone: bookerTimezone ?? "UTC",
+              }).format(new Date(selectedSlot))}
+            </p>
+          ) : null}
+          <p className="bis-booking-success-body">{strings.successBody}</p>
+          {result.cancelUrl ? (
+            <p className="bis-booking-cancel-hint"><a href={result.cancelUrl}>{strings.cancelHint}</a></p>
+          ) : (
+            <p className="bis-booking-cancel-hint">{strings.cancelHint}</p>
+          )}
+        </div>
         {poweredBy}
       </div>
     );
@@ -337,23 +407,47 @@ export function BookingPage({
       <style>{BOOKING_CSS}</style>
       {steps}
 
-      <div className="bis-booking-weekstrip">
-        <button type="button" className="bis-booking-nav" onClick={() => goToWeek(-1)}
-                disabled={!canGoPrev} aria-label={strings.previousWeek}>‹</button>
-        <div className="bis-booking-days">
-          {weekDays.map((day) => (
+      <div className="bis-booking-monthrow">
+        <p className="bis-booking-month">{weekHeading(weekDays, intl)}</p>
+        <div className="bis-booking-navs">
+          <button type="button" className="bis-booking-nav" onClick={() => goToWeek(-1)}
+                  disabled={!canGoPrev} aria-label={strings.previousWeek}>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                 strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="m15 18-6-6 6-6" />
+            </svg>
+          </button>
+          <button type="button" className="bis-booking-nav" onClick={() => goToWeek(1)}
+                  disabled={!canGoNext} aria-label={strings.nextWeek}>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                 strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="m9 18 6-6-6-6" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div className="bis-booking-days" role="group" aria-label={weekHeading(weekDays, intl)}>
+        {weekDays.map((day) => {
+          const { weekday, date } = dayParts(day, intl);
+          const isToday = day === todayKey;
+          return (
             <button
               key={day} type="button"
-              className={`bis-booking-day${day === selectedDay ? " is-selected" : ""}`}
+              className={`bis-booking-day${day === selectedDay ? " is-selected" : ""}${isToday ? " is-today" : ""}`}
               disabled={day < todayKey || day > lastBookableKey}
+              aria-pressed={day === selectedDay}
+              // The chip shows two fragments; the accessible name stays the
+              // whole date, so this announces "Mon, Sep 8" rather than "Mon 8".
+              aria-label={`${dayLabel(day, intl)}${isToday ? ` (${strings.today})` : ""}`}
               onClick={() => selectDay(day)}
             >
-              {dayLabel(day, intl)}
+              <span className="bis-booking-day-weekday" aria-hidden="true">{weekday}</span>
+              <span className="bis-booking-day-date" aria-hidden="true">{date}</span>
+              {isToday ? <span className="bis-booking-day-dot" aria-hidden="true" /> : null}
             </button>
-          ))}
-        </div>
-        <button type="button" className="bis-booking-nav" onClick={() => goToWeek(1)}
-                disabled={!canGoNext} aria-label={strings.nextWeek}>›</button>
+          );
+        })}
       </div>
 
       {/* Both this label and the slot times below stay a placeholder until
@@ -367,50 +461,87 @@ export function BookingPage({
       </p>
 
       {!selectedSlot ? (
-        <div className="bis-booking-slots">
+        <div className="bis-booking-slotarea">
           {result && !result.ok && result.slotTaken ? (
             <p role="alert" className="bis-booking-error">{result.error}</p>
           ) : null}
           {loadingSlots || !bookerTimezone ? (
-            <p className="bis-booking-empty">…</p>
+            /* Skeletons shaped like the slots they stand in for, rather than
+               the single "…" that was here: a visitor could not tell a slow
+               day from an empty one, and the layout jumped when the real
+               chips arrived. */
+            <div className="bis-booking-skeletons" role="status">
+              {/* The bars are decorative; the sentence is the announcement. The
+                  wrapper itself must NOT be aria-hidden, or the sentence is
+                  hidden with it and a screen-reader user hears nothing while
+                  the round trip runs. */}
+              {Array.from({ length: 8 }, (_, i) => (
+                <span key={i} className="bis-booking-skeleton" aria-hidden="true" />
+              ))}
+              <span className="bis-booking-sr">{strings.loadingTimes}</span>
+            </div>
           ) : slotsError ? (
             <p role="alert" className="bis-booking-error">{slotsError}</p>
           ) : slots && slots.length > 0 ? (
-            slots.map((iso) => (
-              <button key={iso} type="button" className="bis-booking-slot" onClick={() => setSelectedSlot(iso)}>
-                {/* Gated behind `bookerTimezone` resolving (never SSR-rendered — see
-                    the `useSyncExternalStore` note above), but pinned to the page's
-                    own tag anyway for the same house-pattern reason `dayLabel` is:
-                    no Intl call on this route should depend on the visitor's device. */}
-                {new Intl.DateTimeFormat(intl, {
-                  hour: "numeric", minute: "2-digit", timeZone: bookerTimezone,
-                }).format(new Date(iso))}
-              </button>
+            groupSlots(slots, bookerTimezone).map(({ part, slots: group }) => (
+              <section key={part} className="bis-booking-group">
+                {/* Morning / afternoon / evening: forty identical chips in one
+                    grid is a wall, and the part of the day is the first thing
+                    anyone actually decides. */}
+                <h3 className="bis-booking-grouplabel">{strings[part]}</h3>
+                <div className="bis-booking-slots">
+                  {group.map((iso) => (
+                    <button key={iso} type="button" className="bis-booking-slot" onClick={() => setSelectedSlot(iso)}>
+                      {/* Gated behind `bookerTimezone` resolving (never SSR-rendered — see
+                          the `useSyncExternalStore` note above), but pinned to the page's
+                          own tag anyway for the same house-pattern reason `dayLabel` is:
+                          no Intl call on this route should depend on the visitor's device. */}
+                      {new Intl.DateTimeFormat(intl, {
+                        hour: "numeric", minute: "2-digit", timeZone: bookerTimezone,
+                      }).format(new Date(iso))}
+                    </button>
+                  ))}
+                </div>
+              </section>
             ))
           ) : (
-            <p className="bis-booking-empty">{strings.noSlots}</p>
+            /* An empty day used to be one grey sentence and a dead end. It now
+               says what to do next, which is the only useful thing an empty
+               state can do here. */
+            <div className="bis-booking-empty">
+              <p className="bis-booking-empty-title">{strings.noSlots}</p>
+              <p className="bis-booking-empty-hint">{strings.noSlotsHint}</p>
+            </div>
           )}
         </div>
       ) : (
         <form onSubmit={handleSubmit} className="bis-booking-form" noValidate>
-          <p className="bis-booking-chosen">
-            {/* Same reasoning as the slot buttons above: never SSR-rendered
-                (only reachable once `selectedSlot` is set), pinned anyway. */}
-            {new Intl.DateTimeFormat(intl, {
-              weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
-              // `bookerTimezone` cannot actually be null here: this branch only
-              // renders once `selectedSlot` is set, which only happens via a
-              // slot button's onClick, and those buttons themselves only
-              // render once `bookerTimezone` has resolved (the `!bookerTimezone`
-              // guard above). The `?? "UTC"` is belt-and-suspenders for the
-              // type checker, not a reachable fallback.
-              timeZone: bookerTimezone ?? "UTC",
-            }).format(new Date(selectedSlot))}
-            {" — "}
-            <button type="button" className="bis-booking-link" onClick={() => setSelectedSlot(null)}>
+          {/* The chosen time was a sentence with an underlined link in it. It
+              is the one thing a visitor must be sure of before typing their
+              details, so it is now a card that states it plainly, with the way
+              back beside it rather than buried in the middle of the line. */}
+          <div className="bis-booking-chosen">
+            <div>
+              <p className="bis-booking-chosen-label">{strings.chosenLabel}</p>
+              <p className="bis-booking-chosen-when">
+                {/* Same reasoning as the slot buttons above: never SSR-rendered
+                    (only reachable once `selectedSlot` is set), pinned anyway. */}
+                {new Intl.DateTimeFormat(intl, {
+                  weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit",
+                  // `bookerTimezone` cannot actually be null here: this branch only
+                  // renders once `selectedSlot` is set, which only happens via a
+                  // slot button's onClick, and those buttons themselves only
+                  // render once `bookerTimezone` has resolved (the `!bookerTimezone`
+                  // guard above). The `?? "UTC"` is belt-and-suspenders for the
+                  // type checker, not a reachable fallback.
+                  timeZone: bookerTimezone ?? "UTC",
+                }).format(new Date(selectedSlot))}
+              </p>
+            </div>
+            <button type="button" className="bis-booking-change" onClick={() => setSelectedSlot(null)}>
               {strings.changeTime}
             </button>
-          </p>
+          </div>
 
           {/* The action reads this back so its error strings match the page
               the visitor is looking at — the same hidden field the sibling
@@ -486,81 +617,190 @@ const BOOKING_CSS = `
    not a child, so without it the client's logo hung at the far left while the
    column it heads sat centred — the bug /f had already fixed for itself. The
    three .bis-booking-brand* rules that used to live here moved to that shared
-   sheet along with the form's copies of them. */
-.bis-booking-page { background: var(--background, transparent); min-height: 100vh; --public-measure: 480px; }
+   sheet along with the form's copies of them.
+
+   Everything themeable still rides the same var(--token, <fallback>)
+   convention that f/[publicId]/form.css established. Tints are derived from
+   those same tokens with color-mix rather than introduced as new literals, so
+   a client's accent colours the selected day, the today dot and the focus
+   ring without anyone adding a token per shade. */
+.bis-booking-page { background: var(--background, transparent); min-height: 100vh; --public-measure: 520px; }
 .bis-booking {
   font: 400 15px/1.5 var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
   color: var(--foreground, #18181b);
-  padding: 16px; max-width: 480px; margin: 0 auto;
+  padding: 16px; max-width: 520px; margin: 0 auto;
+  --bis-accent: var(--form-accent, #6d28d9);
+  --bis-tint: color-mix(in oklab, var(--bis-accent) 10%, transparent);
+  --bis-ring: color-mix(in oklab, var(--bis-accent) 35%, transparent);
 }
-.bis-booking-weekstrip { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
-.bis-booking-days { display: flex; flex: 1; gap: 4px; overflow-x: auto; }
-.bis-booking-day, .bis-booking-nav {
-  font: inherit; border: 1px solid var(--border, #d4d4d8); border-radius: var(--radius, 0.5rem);
-  background: var(--card, #ffffff); color: inherit; padding: 8px 6px; cursor: pointer; min-width: 56px;
+
+/* --- The month, and the week arrows ------------------------------------- */
+.bis-booking-monthrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.bis-booking-month { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+.bis-booking-navs { display: flex; gap: 4px; }
+.bis-booking-nav {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; padding: 0;
+  font: inherit; color: inherit; cursor: pointer;
+  border: 1px solid var(--border, #d4d4d8); border-radius: 8px;
+  background: var(--card, #ffffff);
+  transition: background-color 150ms ease, border-color 150ms ease;
 }
-.bis-booking-nav { min-width: 32px; padding: 8px; }
+.bis-booking-nav:hover:not(:disabled) { background: var(--bis-tint); border-color: var(--bis-accent); }
+
+/* --- The week strip ------------------------------------------------------ */
+.bis-booking-days {
+  display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin-bottom: 12px;
+}
+.bis-booking-day {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  font: inherit; color: inherit; cursor: pointer;
+  padding: 8px 4px 10px;
+  border: 1px solid var(--border, #d4d4d8); border-radius: 8px;
+  background: var(--card, #ffffff);
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+.bis-booking-day:hover:not(:disabled):not(.is-selected) { background: var(--bis-tint); border-color: var(--bis-accent); }
+/* Weekday small and quiet, the date the thing you actually read. Both were
+   the same size on one line before, which made seven chips a wall of text. */
+.bis-booking-day-weekday {
+  font-size: 10px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--muted-foreground, #71717a);
+}
+.bis-booking-day-date { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.1; }
 .bis-booking-day.is-selected {
-  border-color: var(--form-accent, #6d28d9); background: var(--form-accent, #6d28d9);
+  border-color: var(--bis-accent); background: var(--bis-accent);
   color: var(--form-accent-foreground, #ffffff);
 }
+.bis-booking-day.is-selected .bis-booking-day-weekday { color: inherit; opacity: 0.8; }
+/* Today is marked, not merely selectable. Nothing on the strip said which day
+   was today unless it happened to be the selected one. */
+.bis-booking-day-dot {
+  position: absolute; bottom: 4px; width: 4px; height: 4px; border-radius: 999px;
+  background: var(--bis-accent);
+}
+.bis-booking-day.is-selected .bis-booking-day-dot { background: currentColor; }
 .bis-booking-day:disabled, .bis-booking-nav:disabled { opacity: 0.35; cursor: not-allowed; }
-.bis-booking-tzlabel { font-size: 12px; color: var(--muted-foreground, #71717a); margin: 0 0 12px; }
-.bis-booking-slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
+
+.bis-booking-tzlabel {
+  font-size: 12px; color: var(--muted-foreground, #71717a); margin: 0 0 12px;
+}
+
+/* --- Times, grouped by part of the day ----------------------------------- */
+.bis-booking-slotarea { display: flex; flex-direction: column; gap: 16px; }
+.bis-booking-group { display: flex; flex-direction: column; gap: 8px; }
+.bis-booking-grouplabel {
+  margin: 0; font-size: 10px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--muted-foreground, #71717a);
+}
+.bis-booking-slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 8px; }
 .bis-booking-slot {
-  font: inherit; border: 1px solid var(--border, #d4d4d8); border-radius: var(--radius, 0.5rem);
-  background: var(--card, #ffffff); color: inherit; padding: 8px 6px; cursor: pointer;
+  font: inherit; font-variant-numeric: tabular-nums;
+  border: 1px solid var(--border, #d4d4d8); border-radius: 8px;
+  background: var(--card, #ffffff); color: inherit; padding: 10px 6px; cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease;
 }
-.bis-booking-slot:hover, .bis-booking-slot:focus-visible {
-  outline: 2px solid var(--form-accent, #6d28d9); outline-offset: 1px; border-color: var(--form-accent, #6d28d9);
+/* Hover shifts the surface; the outline is reserved for focus, so a keyboard
+   user can still tell where they are. Before this both did the same thing. */
+.bis-booking-slot:hover { background: var(--bis-tint); border-color: var(--bis-accent); }
+
+/* --- Loading, shaped like what is coming --------------------------------- */
+.bis-booking-skeletons { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 8px; }
+.bis-booking-skeleton {
+  height: 40px; border-radius: 8px;
+  background: color-mix(in oklab, var(--foreground, #18181b) 8%, transparent);
+  animation: bis-booking-pulse 1.4s ease-in-out infinite;
 }
-.bis-booking-empty { color: var(--muted-foreground, #71717a); grid-column: 1 / -1; }
+.bis-booking-skeleton:nth-child(2n) { animation-delay: 0.15s; }
+.bis-booking-skeleton:nth-child(3n) { animation-delay: 0.3s; }
+@keyframes bis-booking-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+.bis-booking-sr {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+/* --- Empty and error ------------------------------------------------------ */
+.bis-booking-empty {
+  border: 1px dashed var(--border, #d4d4d8); border-radius: 11px;
+  padding: 20px 16px; text-align: center;
+}
+.bis-booking-empty-title { margin: 0; font-weight: 600; }
+.bis-booking-empty-hint { margin: 4px 0 0; font-size: 13px; color: var(--muted-foreground, #71717a); }
 /* The token, not the literal. #b91c1c measures 2.93:1 on all three dark ramps
    — under AA, on the sentence that tells a customer their email address is
    wrong. --form-error is already emitted to this page by publicFormTheme and
-   is already lifted to 4.5:1 at source (public-form-theme.ts:176); /f has read
-   it since M4b and this page simply never did. */
+   is already lifted to 4.5:1 at source (public-form-theme.ts); /f has read it
+   since M4b. The e2e journey (booking.spec.ts, P7) measures this. */
 .bis-booking-error { color: var(--form-error, #b91c1c); margin: 0 0 8px; }
-.bis-booking-chosen { margin: 0 0 16px; }
-.bis-booking-link { font: inherit; background: none; border: none; padding: 0; color: var(--form-accent, #6d28d9); text-decoration: underline; cursor: pointer; }
+
+/* --- The time you picked -------------------------------------------------- */
+.bis-booking-chosen {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  border: 1px solid var(--border, #d4d4d8); border-radius: 11px;
+  background: var(--bis-tint);
+  padding: 12px 14px; margin: 0 0 16px;
+}
+.bis-booking-chosen-label {
+  margin: 0; font-size: 10px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--muted-foreground, #71717a);
+}
+.bis-booking-chosen-when { margin: 2px 0 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+.bis-booking-change {
+  font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
+  border: 1px solid var(--border, #d4d4d8); border-radius: 999px;
+  background: var(--card, #ffffff); color: inherit; padding: 6px 12px;
+  transition: border-color 150ms ease;
+}
+.bis-booking-change:hover { border-color: var(--bis-accent); }
+
+/* --- The form ------------------------------------------------------------- */
 .bis-booking-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
 .bis-booking-row label { font-size: 13px; font-weight: 500; }
 .bis-booking-optional { font-weight: 400; color: var(--muted-foreground, #71717a); }
 .bis-booking input[type="text"], .bis-booking input[type="email"], .bis-booking input[type="tel"], .bis-booking textarea {
-  width: 100%; box-sizing: border-box; padding: 8px 10px; font: inherit;
-  border: 1px solid var(--border, #d4d4d8); border-radius: var(--radius, 0.5rem);
+  width: 100%; box-sizing: border-box; padding: 10px 12px; font: inherit;
+  border: 1px solid var(--border, #d4d4d8); border-radius: 8px;
   background: var(--card, #ffffff); color: inherit;
-}
-.bis-booking input:focus, .bis-booking textarea:focus {
-  outline: 2px solid var(--form-accent, #6d28d9); outline-offset: 1px; border-color: var(--form-accent, #6d28d9);
+  transition: border-color 150ms ease;
 }
 .bis-booking-hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
 .bis-booking-submit {
-  font: 600 15px inherit; border: none; border-radius: var(--radius, 0.5rem);
-  background: var(--form-accent, #6d28d9); color: var(--form-accent-foreground, #ffffff);
-  padding: 10px 18px; cursor: pointer;
+  font: inherit; font-weight: 600; border: none; border-radius: 8px;
+  background: var(--bis-accent); color: var(--form-accent-foreground, #ffffff);
+  padding: 12px 18px; cursor: pointer; width: 100%;
+  transition: filter 150ms ease;
 }
+.bis-booking-submit:hover:not(:disabled) { filter: brightness(0.94); }
 .bis-booking-submit:disabled { opacity: 0.6; cursor: not-allowed; }
-.bis-booking-success-title { font-size: 17px; font-weight: 600; margin: 0 0 8px; }
+
+/* One focus treatment for every control on the page, so nothing is ever
+   focused without being obviously focused. */
+.bis-booking button:focus-visible,
+.bis-booking input:focus-visible,
+.bis-booking textarea:focus-visible,
+.bis-booking a:focus-visible {
+  outline: 2px solid var(--bis-accent); outline-offset: 2px;
+}
+.bis-booking input:focus, .bis-booking textarea:focus { border-color: var(--bis-accent); }
+
+/* --- Booked --------------------------------------------------------------- */
+.bis-booking-success {
+  border: 1px solid var(--border, #d4d4d8); border-radius: 11px;
+  background: var(--card, #ffffff);
+  padding: 24px 20px; text-align: center;
+}
+.bis-booking-check {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border-radius: 999px; margin-bottom: 12px;
+  background: var(--bis-tint); color: var(--bis-accent);
+}
+.bis-booking-success-title { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 4px; }
+.bis-booking-success-when { margin: 0 0 12px; font-weight: 600; }
 .bis-booking-success-body { color: var(--muted-foreground, #71717a); margin: 0 0 16px; }
-.bis-booking-cancel-hint { font-size: 13px; color: var(--muted-foreground, #71717a); }
-.bis-booking-steps { display: flex; align-items: center; gap: 8px; list-style: none; margin: 0 0 12px; padding: 0; }
-.bis-booking-step { display: flex; align-items: center; gap: 6px; }
-.bis-booking-step-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--muted-foreground, #71717a); opacity: 0.4; }
-.bis-booking-step.is-current .bis-booking-step-dot { background: var(--form-accent, #6d28d9); opacity: 1; }
-/* Visually hidden, still announced — the two steps the visitor is not on.
-   Only the current step's name is painted, which is what keeps the dots from
-   carrying the state on colour alone (DESIGN.md rule 3). */
-.bis-booking-step-name {
-  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
-  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+.bis-booking-cancel-hint { font-size: 13px; color: var(--muted-foreground, #71717a); margin: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bis-booking *, .bis-booking-skeleton { transition: none !important; animation: none !important; }
 }
-.bis-booking-step.is-current .bis-booking-step-name {
-  position: static; width: auto; height: auto; margin: 0; overflow: visible;
-  clip: auto; white-space: normal;
-  font-size: 13px; color: var(--muted-foreground, #71717a);
-}
-.bis-booking-poweredby { margin: 24px 0 0; font-size: 12px; text-align: center; }
-.bis-booking-poweredby a { color: var(--muted-foreground, #71717a); text-decoration: none; }
-.bis-booking-poweredby a:hover { text-decoration: underline; }
 `;
