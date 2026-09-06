@@ -4,6 +4,7 @@ import { createContact } from "../contacts";
 import {
   ensureConversation, createMessage, updateMessageStatus,
   updateMessageStatusByProviderId, findMessageByProviderId, hasRecentOutboundSms,
+  listFailedOutboundSms,
   listConversations, listMessages,
   incrementUnreadCount, sumUnreadCount, searchConversations,
 } from "../messaging";
@@ -192,6 +193,88 @@ describe("messaging", () => {
       }, "user_test");
       await updateMessageStatus(db, accountId, id, "failed", { error: "carrier refused" }, "voice", "ai");
       expect(await hasRecentOutboundSms(db, accountId, convo.id, since())).toBe(false);
+    }));
+
+  it("listFailedOutboundSms surfaces a failed text-back, clears it once something newer goes out, and refuses to see another tenant's rows", () =>
+    withTestAccount(async (db, accountId) => {
+      // One fixture cycle for the whole contract, deliberately — same
+      // contention note as the tests above.
+      const ada = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
+      const grace = await createContact(db, accountId, { firstName: "Grace" }, "user_test");
+      const a = await ensureConversation(db, accountId, ada.id, "voice", "ai");
+      const b = await ensureConversation(db, accountId, grace.id, "voice", "ai");
+
+      // An empty id list must short-circuit — the calls list hands one over
+      // for every page of calls that never opened a conversation, and a query
+      // there would be a round trip that cannot return anything.
+      expect(await listFailedOutboundSms(db, accountId, [])).toEqual([]);
+      // Conversations with no messages at all.
+      expect(await listFailedOutboundSms(db, accountId, [a.id, b.id])).toEqual([]);
+
+      const body = "Sorry we missed you just now.";
+      const { id: failedId } = await createMessage(db, accountId, {
+        conversationId: a.id, channel: "sms", direction: "outbound", body,
+      }, "voice", "ai");
+
+      // `queued` is not a failure — the text may well have gone out.
+      expect(await listFailedOutboundSms(db, accountId, [a.id, b.id])).toEqual([]);
+
+      await updateMessageStatus(db, accountId, failedId, "failed",
+        { error: "carrier refused" }, "voice", "ai");
+
+      const hits = await listFailedOutboundSms(db, accountId, [a.id, b.id]);
+      expect(hits).toHaveLength(1);
+      expect(hits[0]!.conversationId).toBe(a.id);
+      expect(hits[0]!.messageId).toBe(failedId);
+      // The body the operator gets to resend WITHOUT retyping it.
+      expect(hits[0]!.body).toBe(body);
+
+      // A duplicate id in the caller's list must not duplicate the answer —
+      // two calls from the same abandoned caller share one conversation, and
+      // both land on the same page of the calls list.
+      expect(await listFailedOutboundSms(db, accountId, [a.id, a.id])).toHaveLength(1);
+
+      // THE TENANT BOUNDARY. Same conversation id, another account's context:
+      // without the account filter the conversation filter alone would match.
+      expect(await listFailedOutboundSms(
+        db, "00000000-0000-0000-0000-000000000000", [a.id])).toEqual([]);
+
+      // Channel and direction both filter. A failed EMAIL is not a failed
+      // text-back, and neither is anything inbound.
+      const { id: emailId } = await createMessage(db, accountId, {
+        conversationId: b.id, channel: "email", direction: "outbound", body: "hello",
+      }, "user_test");
+      await updateMessageStatus(db, accountId, emailId, "failed", { error: "bounced" }, "user_test");
+      const { id: inboundId } = await createMessage(db, accountId, {
+        conversationId: b.id, channel: "sms", direction: "inbound", body: "who is this",
+      }, "sms-inbound", "system");
+      await updateMessageStatus(db, accountId, inboundId, "failed", { error: "x" }, "system", "system");
+      expect((await listFailedOutboundSms(db, accountId, [a.id, b.id])).map((f) => f.conversationId))
+        .toEqual([a.id]);
+
+      // THE DECIDED SEMANTICS: the LATEST outbound text, not "a failure exists
+      // somewhere". The resend writes a NEW row (sendSmsAction) rather than
+      // mutating the failed one, so a badge keyed on mere existence would
+      // still be showing after a send that worked — and the operator's next
+      // click would text a real phone twice.
+      const { id: resentId } = await createMessage(db, accountId, {
+        conversationId: a.id, channel: "sms", direction: "outbound", body,
+      }, "user_test");
+      await updateMessageStatus(db, accountId, resentId, "sent",
+        { providerMessageId: "prov_resend" }, "user_test");
+      expect(await listFailedOutboundSms(db, accountId, [a.id, b.id])).toEqual([]);
+
+      // …and it comes back if the NEXT one fails too, carrying the newest
+      // failure's body rather than the stale first one.
+      const { id: secondFailure } = await createMessage(db, accountId, {
+        conversationId: a.id, channel: "sms", direction: "outbound", body: "Second attempt.",
+      }, "user_test");
+      await updateMessageStatus(db, accountId, secondFailure, "failed",
+        { error: "carrier refused again" }, "user_test");
+      const again = await listFailedOutboundSms(db, accountId, [a.id, b.id]);
+      expect(again).toHaveLength(1);
+      expect(again[0]!.messageId).toBe(secondFailure);
+      expect(again[0]!.body).toBe("Second attempt.");
     }));
 
   it("updateMessageStatusByProviderId finds the row without tenant context", () =>

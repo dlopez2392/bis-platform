@@ -770,6 +770,25 @@ export const m = {
   "calls.outcome.abandoned": "Abandoned",
   "calls.outcome.spam": "Spam",
 
+  // The missed-call text-back that never left the building. There is no retry
+  // anywhere in that path — one cron, no queue — so saying so on the row the
+  // operator is already reading is the entire mitigation.
+  //
+  // "didn't send", not "failed": the operator needs to know the caller is
+  // still sitting there un-texted, and no part of that sentence should make
+  // them wonder whether it might yet go out on its own. It won't.
+  "calls.textbackFailed": "Text-back didn't send",
+  // The detail page only — the list row is a whole-row click target and gets
+  // the badge alone (a nested button there would double-fire the row's own
+  // navigation and confuse the tab order).
+  "calls.textbackResend": "Send it now",
+  // The one line under the badge on the detail page, and it says the thing
+  // the operator cannot see anywhere else: `failed` means the provider refused
+  // and NOTHING was delivered, and there is no queue and no cron that will
+  // have another go. If they want this caller texted, it is on them, now.
+  "calls.textbackFailedBody":
+    "Nothing reached them, and nothing will try again on its own.",
+
   // A single call — /dashboard/accounts/<id>/calls/<callId>. The transcript
   // surface: the one place a client can read what their receptionist actually
   // said, rather than take our word for what it did.

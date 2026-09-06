@@ -1,6 +1,6 @@
 import { Fragment } from "react";
 import { PhoneIncoming } from "lucide-react";
-import { listCalls, countCallsSince } from "@bis/db";
+import { listCalls, countCallsSince, listFailedOutboundSms } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { requireAccountAccess } from "@/lib/auth";
@@ -75,6 +75,29 @@ export default async function CallsPage({
   const cap = readLimitConfig().perAccountPerDay;
   const timezone = safeZone(account.timezone, "UTC");
 
+  // ONE read for the whole page, not one per row — fifty rows would otherwise
+  // be fifty round trips to answer a question that is empty for almost all of
+  // them. `listFailedOutboundSms` returns early on an empty id list, so a page
+  // of calls that never opened a conversation (every call before the text-back
+  // shipped) costs nothing at all. Sequential rather than in the Promise.all
+  // above because it takes the conversation ids that read returns.
+  //
+  // ABANDONED rows only. The text-back fires on no other outcome
+  // (finish-call.ts), and conversations are one-per-CONTACT: a repeat caller
+  // whose first call was abandoned and whose second one booked shares a single
+  // conversation, so an unfiltered read would put "Text-back didn't send" on
+  // the booked row too — a sentence that is simply not true of that call.
+  const failedTextbacks = await listFailedOutboundSms(
+    db, accountId,
+    rows.filter((row) => row.outcome === "abandoned")
+      .map((row) => row.conversation_id)
+      .filter((id): id is string => Boolean(id)),
+  );
+  // Mapped back onto the rows in memory below, by conversation. A failed
+  // text-back belongs to exactly one conversation, and a conversation to
+  // exactly one contact (see ensureConversation).
+  const textbackFailed = new Set(failedTextbacks.map((f) => f.conversationId));
+
   const last = rows[rows.length - 1];
   const olderHref =
     rows.length === PAGE_SIZE && last
@@ -104,6 +127,7 @@ export default async function CallsPage({
             accountId={accountId}
             timezone={timezone}
             olderHref={olderHref}
+            textbackFailed={textbackFailed}
           />
         )}
       </div>

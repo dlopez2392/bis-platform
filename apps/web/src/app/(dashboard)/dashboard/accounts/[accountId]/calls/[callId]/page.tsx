@@ -9,7 +9,7 @@ import {
   Timer,
   UserRound,
 } from "lucide-react";
-import { getCall } from "@bis/db";
+import { getCall, listFailedOutboundSms } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { requireAccountAccess } from "@/lib/auth";
@@ -19,8 +19,11 @@ import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { callerLabel, formatCallTime, formatDuration } from "../format";
 import { OutcomePill } from "../outcome-pill";
+import { TextbackFailedBadge } from "../textback-failed-badge";
+import { sendSmsAction } from "../../conversations/actions";
 import { splitSummaryBlocks, type SummaryBlock } from "./summary-blocks";
 import { TranscriptView } from "./transcript-view";
+import { TextbackResend } from "./textback-resend";
 
 export const dynamic = "force-dynamic";
 
@@ -58,6 +61,17 @@ export default async function CallDetailPage({
   const timezone = safeZone(account.timezone, "UTC");
   const base = `/dashboard/accounts/${accountId}`;
   const blocks = splitSummaryBlocks(call.summary ?? "");
+
+  // The missed-call text-back that never went out. Only asked for an ABANDONED
+  // call that actually opened a conversation: the text-back fires on no other
+  // outcome (finish-call.ts), and conversations are one-per-contact, so a
+  // repeat caller's booked call would otherwise inherit the abandoned one's
+  // failure and claim a text-back it never had. Every call from before that
+  // feature shipped skips the read entirely. Same single read the list page
+  // uses, given a list of one.
+  const [textbackFailure] = call.outcome === "abandoned" && call.conversation_id
+    ? await listFailedOutboundSms(db, accountId, [call.conversation_id])
+    : [];
 
   // Every link is conditional on its own id. A call that matched no contact,
   // opened no conversation and booked nothing renders no rail at all rather
@@ -150,6 +164,40 @@ export default async function CallDetailPage({
         )}
       >
         <div className="min-w-0 space-y-4">
+          {/* Above the summary, because it is the only thing on this page that
+              asks the operator to DO something. Not a `section` with a
+              heading: the badge already says what this is, and an <h2>
+              carrying the same sentence would have a screen reader read it
+              twice in a row. */}
+          {textbackFailure ? (
+            <div
+              className={cn(
+                CARD,
+                "flex flex-wrap items-center gap-x-4 gap-y-3 border-destructive/30 bg-destructive/5 p-5",
+              )}
+            >
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <TextbackFailedBadge />
+                <p className="text-sm leading-6 text-muted-foreground">
+                  {m["calls.textbackFailedBody"]}
+                </p>
+              </div>
+              {/* The control needs a contact to text — `sendSmsAction` reads
+                  the number off the contact record, never off the call. A
+                  conversation always has one (ensureConversation is keyed on
+                  it), but this page renders what it can prove: no contact id,
+                  no button, and the operator still learns the text failed
+                  rather than getting a control that cannot work. */}
+              {call.contact_id ? (
+                <TextbackResend
+                  contactId={call.contact_id}
+                  body={textbackFailure.body}
+                  action={sendSmsAction.bind(null, accountId)}
+                />
+              ) : null}
+            </div>
+          ) : null}
+
           {/* No summary at all renders no section. There is no honest copy for
               an empty one, and a "Summary" heading over nothing reads as a
               summary that said nothing — which is a claim. */}

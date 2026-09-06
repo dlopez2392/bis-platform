@@ -260,6 +260,104 @@ export async function hasRecentOutboundSms(
   return data !== null;
 }
 
+/** One conversation whose LATEST outbound SMS is `failed` — nothing reached
+ *  the person on the other end, and there is no retry anywhere that will.
+ *  `body` is what was attempted, so a resend does not make the operator
+ *  retype it. */
+export type FailedOutboundSms = {
+  conversationId: string;
+  messageId: string;
+  body: string;
+  failedAt: string;
+};
+
+/**
+ * Which of these conversations are currently sitting on a failed outbound
+ * text — the read behind the failed-text-back badge on the Calls list and the
+ * call detail page.
+ *
+ * ONE read for a whole page of calls, not one per row. The calls list renders
+ * up to 50, and a per-row query would be fifty round trips to answer a
+ * question that is empty for almost every one of them.
+ *
+ * "LATEST outbound SMS is failed", not "a failed one exists anywhere". That
+ * distinction is what lets the badge CLEAR: the resend control writes a new
+ * outbound row through `sendSmsAction` rather than mutating the failed one
+ * (there is no "resolved" column and no migration here to add one), so a badge
+ * keyed on mere existence would still be showing after a successful resend —
+ * inviting a second text to a real phone.
+ *
+ * Two queries at most, and one in the common case. The first asks only for
+ * FAILED rows, which are rare, so it cannot be the unbounded scan that
+ * "newest message per conversation" usually is; when it comes back empty —
+ * almost always — the second never runs. The second then looks only at the
+ * handful of conversations that actually had a failure, to find out whether
+ * something newer already went out.
+ *
+ * Scoped by accountId as well as conversation id, exactly like
+ * `hasRecentOutboundSms` above and for the same reason: a conversation id is a
+ * bare uuid arriving from a caller's own page state, and no read in this file
+ * may be satisfiable by another tenant's rows.
+ */
+export async function listFailedOutboundSms(
+  db: SupabaseClient, accountId: string, conversationIds: string[],
+): Promise<FailedOutboundSms[]> {
+  const ids = [...new Set(conversationIds.filter(Boolean))];
+  if (ids.length === 0) return [];
+
+  const { data: failures, error } = await db.from("messages")
+    .select("id, conversation_id, body, created_at")
+    .eq("account_id", accountId)
+    .in("conversation_id", ids)
+    .eq("channel", "sms")
+    .eq("direction", "outbound")
+    .eq("status", "failed")
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(`listFailedOutboundSms failed: ${error.message}`);
+
+  // Newest failure per conversation. Rows arrive newest-first, so the first
+  // one seen for a conversation is the one that matters.
+  const newest = new Map<string, FailedOutboundSms>();
+  for (const row of (failures ?? []) as {
+    id: string; conversation_id: string; body: string; created_at: string;
+  }[]) {
+    if (newest.has(row.conversation_id)) continue;
+    newest.set(row.conversation_id, {
+      conversationId: row.conversation_id,
+      messageId: row.id,
+      body: row.body,
+      failedAt: row.created_at,
+    });
+  }
+  if (newest.size === 0) return [];
+
+  const { data: sent, error: sentErr } = await db.from("messages")
+    .select("conversation_id, created_at")
+    .eq("account_id", accountId)
+    .in("conversation_id", [...newest.keys()])
+    .eq("channel", "sms")
+    .eq("direction", "outbound")
+    .neq("status", "failed");
+  if (sentErr) throw new Error(`listFailedOutboundSms failed: ${sentErr.message}`);
+
+  // Compared as instants, not as strings. Postgres omits the fractional part
+  // of a timestamptz whose microseconds are zero, so two rows a second apart
+  // can differ in LENGTH as well as value and lexical comparison stops being
+  // trustworthy at exactly the boundary this decides.
+  const latestSent = new Map<string, number>();
+  for (const row of (sent ?? []) as { conversation_id: string; created_at: string }[]) {
+    const at = Date.parse(row.created_at);
+    if (!Number.isFinite(at)) continue;
+    if (at > (latestSent.get(row.conversation_id) ?? -Infinity)) {
+      latestSent.set(row.conversation_id, at);
+    }
+  }
+
+  return [...newest.values()].filter(
+    (f) => (latestSent.get(f.conversationId) ?? -Infinity) < Date.parse(f.failedAt),
+  );
+}
+
 /**
  * Atomic, via a SQL function. PostgREST cannot express `set x = x + 1`, and a
  * read-modify-write from here would silently lose a count when two submissions

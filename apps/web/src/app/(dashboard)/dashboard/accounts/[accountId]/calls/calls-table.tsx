@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { callerLabel, formatCallTime, formatDuration } from "./format";
 import { OutcomePill } from "./outcome-pill";
+import { TextbackFailedBadge } from "./textback-failed-badge";
 import { CallRow, StopPropagation } from "./call-row";
 
 const HEAD = "px-4 text-xs font-medium tracking-wider text-muted-foreground uppercase";
@@ -29,6 +30,7 @@ export function CallsTable({
   accountId,
   timezone,
   olderHref,
+  textbackFailed,
 }: {
   rows: CallListRow[];
   accountId: string;
@@ -38,6 +40,11 @@ export function CallsTable({
   timezone: string;
   /** Present only when a full page came back, i.e. there may be more. */
   olderHref?: string;
+  /** Conversation ids whose latest outbound text failed to send — resolved by
+   *  the page in ONE read for the whole table (see page.tsx), never per row.
+   *  Optional so the dashboard's mini table and this component's own tests can
+   *  render rows without it. */
+  textbackFailed?: ReadonlySet<string>;
 }) {
   const base = `/dashboard/accounts/${accountId}`;
 
@@ -101,8 +108,25 @@ export function CallsTable({
                   {formatDuration(row.duration_secs)}
                 </TableCell>
 
+                {/* The outcome, and — when the text-back we sent this caller
+                    never left the building — the fact that it didn't, right
+                    beside it. A BADGE ONLY: this row is a whole-row click
+                    target, so the "Send it now" control lives on the detail
+                    page (see the chevron cell's note below, and
+                    [callId]/textback-resend.tsx).
+
+                    `abandoned` is re-checked here rather than trusted from the
+                    set: conversations are one-per-CONTACT, so a repeat caller's
+                    abandoned and booked calls share one conversation id and an
+                    outcome-blind lookup would badge both. */}
                 <TableCell className={CELL}>
-                  <OutcomePill outcome={row.outcome} />
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <OutcomePill outcome={row.outcome} />
+                    {row.outcome === "abandoned" && row.conversation_id
+                      && textbackFailed?.has(row.conversation_id) ? (
+                      <TextbackFailedBadge />
+                    ) : null}
+                  </div>
                 </TableCell>
 
                 <TableCell className={cn(CELL, "hidden sm:table-cell")}>

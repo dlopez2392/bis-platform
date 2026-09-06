@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { CallDetailRow } from "@bis/db";
 import { emptyCallState } from "@/lib/voice/call-state";
@@ -24,8 +24,18 @@ vi.mock("@/lib/db", () => ({
 }));
 
 const getCallMock = vi.fn();
+const listFailedOutboundSmsMock = vi.fn();
 vi.mock("@bis/db", () => ({
   getCall: (...args: unknown[]) => getCallMock(...args),
+  listFailedOutboundSms: (...args: unknown[]) => listFailedOutboundSmsMock(...args),
+}));
+
+// The resend control binds this. Mocked because a "use server" module cannot
+// be imported into a vitest render, and because what is under test here is
+// which control renders — not what the action does, which
+// conversations/actions.test.ts already pins in full.
+vi.mock("../../conversations/actions", () => ({
+  sendSmsAction: async () => {},
 }));
 
 /** `notFound()` throws in Next; the mock keeps that contract so the page's
@@ -35,6 +45,11 @@ vi.mock("next/navigation", () => ({
   notFound: () => {
     throw NOT_FOUND;
   },
+  // `TextbackResend` calls this at render time to refresh the page after a
+  // successful resend. Outside a mounted app router the real hook throws
+  // "invariant expected app router to be mounted" — same stand-in, same
+  // reason, as calls-table.test.ts's.
+  useRouter: () => ({ refresh: () => {}, push: () => {} }),
 }));
 
 const { default: CallDetailPage } = await import("./page");
@@ -59,14 +74,24 @@ const CALL: CallDetailRow = {
   booking_id: "bk1",
 };
 
-function render(row: CallDetailRow | null) {
+const FAILED_TEXTBACK = {
+  conversationId: "cv1",
+  messageId: "msg1",
+  body: "Sorry we missed you just now — reply here and we'll get right back to you.",
+  failedAt: "2026-08-25T19:19:00.000000+00:00",
+};
+
+function render(row: CallDetailRow | null, failed: (typeof FAILED_TEXTBACK)[] = []) {
   getCallMock.mockResolvedValue(row);
+  listFailedOutboundSmsMock.mockResolvedValue(failed);
   return CallDetailPage({
     params: Promise.resolve({ accountId: "acct1", callId: "call1" }),
   }).then(renderToStaticMarkup);
 }
 
 describe("CallDetailPage", () => {
+  beforeEach(() => listFailedOutboundSmsMock.mockClear());
+
   it("renders the header, the summary and both sides of the conversation", async () => {
     const html = await render(CALL);
 
@@ -160,5 +185,61 @@ describe("CallDetailPage", () => {
 
   it("404s rather than leaking the difference between another tenant's call and no call", async () => {
     await expect(render(null)).rejects.toThrow("NEXT_NOT_FOUND");
+  });
+
+  /**
+   * The failed text-back. There is no retry in that path anywhere, so the
+   * detail page is where the operator both LEARNS it failed and can do
+   * something about it — unlike the list row, which is a whole-row click
+   * target and gets the badge alone.
+   */
+  it("says the text-back didn't send, and offers to send the same message now", async () => {
+    const html = await render(
+      { ...CALL, outcome: "abandoned", booking_id: null },
+      [FAILED_TEXTBACK],
+    );
+
+    expect(html).toContain("Text-back didn&#x27;t send");
+    // The line the operator can read nowhere else: nothing was delivered, and
+    // there is no queue and no cron that will have another go.
+    expect(html).toContain("nothing will try again on its own");
+    expect(html).toContain("Send it now");
+    // Dot + word, never colour alone (DESIGN.md rule 3).
+    expect(html).toContain("bg-destructive");
+    // The BODY THAT FAILED rides along as the resend's payload — the operator
+    // is not made to retype the message the platform dropped.
+    expect(html).toContain("Sorry we missed you just now");
+    expect(html).toContain('name="contactId"');
+    // Asked about THIS call's conversation and nothing else.
+    expect(listFailedOutboundSmsMock).toHaveBeenCalledTimes(1);
+    expect(listFailedOutboundSmsMock.mock.calls[0]![2]).toEqual(["cv1"]);
+  });
+
+  it("renders nothing about the text-back when the last one went out fine", async () => {
+    const html = await render({ ...CALL, outcome: "abandoned" }, []);
+
+    expect(listFailedOutboundSmsMock).toHaveBeenCalledTimes(1);
+    expect(html).not.toContain("Text-back");
+    expect(html).not.toContain("Send it now");
+  });
+
+  it("never asks about a text-back for a call that opened no conversation", async () => {
+    // The pre-text-back shape. A read here would be a query per page view
+    // answering a question that cannot have an answer.
+    await render({ ...CALL, conversation_id: null, outcome: "abandoned" });
+
+    expect(listFailedOutboundSmsMock).not.toHaveBeenCalled();
+  });
+
+  it("does not claim a text-back on a BOOKED call that shares a repeat caller's conversation", async () => {
+    // Conversations are one-per-contact: a caller who abandoned on Monday and
+    // booked on Tuesday has ONE conversation, and Monday's failed text-back
+    // hangs off it. The text-back fires on `abandoned` and nothing else, so
+    // this row must neither ask nor claim.
+    const html = await render(CALL, [FAILED_TEXTBACK]);
+
+    expect(listFailedOutboundSmsMock).not.toHaveBeenCalled();
+    expect(html).not.toContain("Text-back");
+    expect(html).not.toContain("Send it now");
   });
 });

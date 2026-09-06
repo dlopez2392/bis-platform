@@ -275,18 +275,25 @@ export type CallListRow = {
   id: string; started_at: string; duration_secs: number | null;
   outcome: CallOutcome; language: "en" | "es"; caller_e164: string | null;
   contact_id: string | null;
+  // On the LIST as well as the detail row since the missed-call text-back:
+  // an abandoned call that was texted back now records the conversation the
+  // text lives in, and the calls list needs it to ask — in ONE read for the
+  // whole page rather than one per row — whether that text failed to send.
+  // There is no retry anywhere in that path, so visibility on the row the
+  // operator is already looking at is the only mitigation there is.
+  conversation_id: string | null;
   contact: { first_name: string | null; last_name: string | null } | null;
 };
 export type CallDetailRow = CallListRow & {
   ended_at: string | null; turn_count: number; transcript: TranscriptEvent[];
-  summary: string; conversation_id: string | null; booking_id: string | null;
+  summary: string; booking_id: string | null;
 };
 
 const CALL_LIST_COLS =
   "id, started_at, duration_secs, outcome, language, caller_e164, contact_id, " +
-  "contact:contacts(first_name, last_name)";
+  "conversation_id, contact:contacts(first_name, last_name)";
 const CALL_DETAIL_COLS =
-  CALL_LIST_COLS + ", ended_at, turn_count, transcript, summary, conversation_id, booking_id";
+  CALL_LIST_COLS + ", ended_at, turn_count, transcript, summary, booking_id";
 
 export async function listCalls(
   db: SupabaseClient, accountId: string, opts: { limit?: number; before?: string } = {},

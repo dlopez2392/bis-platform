@@ -29,16 +29,21 @@ const ROW: CallListRow = {
   language: "es",
   caller_e164: "+19565061545",
   contact_id: "ct1",
+  conversation_id: "cv1",
   contact: { first_name: "Ana", last_name: "Reyes" },
 };
 
-function render(rows: CallListRow[], opts: { olderHref?: string; timezone?: string } = {}) {
+function render(
+  rows: CallListRow[],
+  opts: { olderHref?: string; timezone?: string; textbackFailed?: Set<string> } = {},
+) {
   return renderToStaticMarkup(
     createElement(CallsTable, {
       rows,
       accountId: "acct1",
       timezone: opts.timezone ?? "America/Chicago",
       olderHref: opts.olderHref,
+      textbackFailed: opts.textbackFailed,
     }),
   );
 }
@@ -129,6 +134,47 @@ describe("CallsTable", () => {
     // All five outcomes have a treatment; none renders blank.
     for (const label of ["Lead", "Message", "Abandoned", "Spam"]) expect(html).toContain(label);
     expect(html).toContain("Older calls");
+  });
+
+  /**
+   * The failed text-back badge. There is no retry anywhere in that path, so
+   * this badge IS the mitigation — and the row is a whole-row click target,
+   * so it must be a badge and nothing else. A "Send it now" button nested in
+   * here would double-fire the row's own navigation.
+   */
+  it("badges only the rows whose conversation has a failed text-back, and never renders a resend control in a table row", () => {
+    const rows: CallListRow[] = [
+      { ...ROW, id: "c1", conversation_id: "cv-failed", outcome: "abandoned" },
+      { ...ROW, id: "c2", conversation_id: "cv-fine", outcome: "abandoned" },
+      // No conversation at all — the shape every call had before the
+      // text-back shipped. Must not badge on a `null` lookup.
+      { ...ROW, id: "c3", conversation_id: null, outcome: "abandoned" },
+      // THE REPEAT CALLER. Conversations are one-per-CONTACT, so this booked
+      // call shares `cv-failed` with c1 above — and a text-back never fires on
+      // a booked call. Badging it would put a sentence on the row that is
+      // simply untrue of that call.
+      { ...ROW, id: "c4", conversation_id: "cv-failed", outcome: "booked" },
+    ];
+    const html = render(rows, { textbackFailed: new Set(["cv-failed"]) });
+
+    // Once, for exactly one of the four rows.
+    expect(html.match(/Text-back didn&#x27;t send/g)).toHaveLength(1);
+    // Dot + word, not colour alone (DESIGN.md rule 3) — asserted on the
+    // painted class, because "the text rendered" is what a badge that lost
+    // its dot would also satisfy.
+    expect(html).toContain("bg-destructive");
+    // The list row carries NO interactive element for this: no form, no
+    // button. Both are what the whole-row click target cannot tolerate.
+    expect(html).not.toContain("<form");
+    expect(html).not.toContain("<button");
+    expect(html).not.toContain("Send it now");
+  });
+
+  it("renders no badge at all when the page found no failed text-backs", () => {
+    // The overwhelmingly common case, and the one where the prop is absent
+    // entirely rather than an empty set.
+    expect(render([ROW])).not.toContain("Text-back");
+    expect(render([ROW], { textbackFailed: new Set() })).not.toContain("Text-back");
   });
 
   it("renders headers and no pager when there is nothing to page", () => {

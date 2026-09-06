@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
+import { ensureConversation } from "../messaging";
 import { getOrCreateCalendar, createBooking, setBookingStatus, getCalendarForAccount } from "../booking";
 import {
   assignPhoneNumber, getPhoneNumberByE164, setPhoneNumberStatus,
@@ -247,6 +248,7 @@ describe("listCalls / getCall", () => {
     await withTestAccount(async (db, accountA) => {
       const n = await assignPhoneNumber(db, accountA, { e164: "+15550000010" }, "user_test");
       const c = await createContact(db, accountA, { firstName: "Maria", lastName: "Garcia", phone: "+15550000011" }, "user_test");
+      const convo = await ensureConversation(db, accountA, c.id, "user_test");
       const r1 = await startCallRow(db, accountA, { phoneNumberId: n.id, callerE164: "+15550000011" });
       await finishCallRow(db, accountA, r1.id, {
         outcome: "booked", endedAt: new Date(), durationSecs: 62, turnCount: 9,
@@ -255,6 +257,7 @@ describe("listCalls / getCall", () => {
         // assertions below can cover the summary branch of its .or() filter.
         // Nothing in this test asserts on the summary itself.
         summary: "Roof inspection booked for Tuesday", language: "es", contactId: c.id,
+        conversationId: convo.id,
       });
       const r2 = await startCallRow(db, accountA, { phoneNumberId: n.id, callerE164: null });
 
@@ -263,6 +266,15 @@ describe("listCalls / getCall", () => {
       const booked = rows.find((r) => r.id === r1.id)!;
       expect(booked.contact?.first_name).toBe("Maria");
       expect(booked.language).toBe("es");
+      // `conversation_id` is on the LIST projection, not just the detail one:
+      // it is what the calls list joins a failed text-back on, in one read for
+      // the whole page. A column dropped from CALL_LIST_COLS would arrive
+      // `undefined` here rather than as the id, and the badge would silently
+      // never render for anyone.
+      expect(booked.conversation_id).toBe(convo.id);
+      // …and it is genuinely nullable, not merely absent: an unfinished call
+      // has no conversation, and that must read as null rather than undefined.
+      expect(rows.find((r) => r.id === r2.id)!.conversation_id).toBeNull();
 
       const paged = await listCalls(db, accountA, { before: rows[0]!.started_at, limit: 1 });
       expect(paged.map((r) => r.id)).toEqual([r1.id]);
