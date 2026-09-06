@@ -56,7 +56,13 @@ env:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 35, not 20. The first green run spent 15m30s in `pnpm check` alone —
+    # the packages/db suite is live network work against Supabase, and a
+    # runner is a slower, more distant client than a dev machine (the same
+    # command takes ~3 minutes locally). 20 left under four minutes of
+    # headroom, which is a gate that eventually fails on wall clock and
+    # trains everyone to re-run red CI without reading it.
+    timeout-minutes: 35
     concurrency:
       group: verify-${{ github.ref }}
       cancel-in-progress: true
