@@ -17,6 +17,13 @@ import type { PublicLocale } from "@/lib/forms/public-strings";
 const STRINGS = {
   en: {
     noSlots: "No times available this day.",
+    noSlotsHint: "Try another day above.",
+    today: "Today",
+    morning: "Morning",
+    afternoon: "Afternoon",
+    evening: "Evening",
+    chosenLabel: "Your time",
+    loadingTimes: "Loading available times",
     timezoneLabel: "Times shown in {zone}",
     previousWeek: "Previous week",
     nextWeek: "Next week",
@@ -66,6 +73,13 @@ const STRINGS = {
   },
   es: {
     noSlots: "No hay horarios disponibles este día.",
+    noSlotsHint: "Prueba con otro día de arriba.",
+    today: "Hoy",
+    morning: "Mañana",
+    afternoon: "Tarde",
+    evening: "Noche",
+    chosenLabel: "Tu horario",
+    loadingTimes: "Cargando horarios disponibles",
     timezoneLabel: "Horarios mostrados en {zone}",
     previousWeek: "Semana anterior",
     nextWeek: "Semana siguiente",
