@@ -325,9 +325,11 @@ one spec that drives PostgREST with a minted client token and pins `42501`).
   The fixture row is inserted with `serviceDb()` in the spec and removed in a
   `finally`.
 - **Watched failing first.** The spec is written and run once BEFORE migration
-  0025 is applied. The table is absent at that point, so the body carries
-  `42P01` and the `42501` assertion fails — which is the proof that the
-  assertion discriminates, not a formality. Note the e2e suite shares the ONE
+  0025 is applied. The table is absent at that point, so the seed insert
+  fails with PostgREST's `PGRST205` (no such table in the schema cache; the
+  raw Postgres `42P01` appears only at the pg level, in the db package's own
+  grants test) and the `42501` assertion is never reached — which is the
+  proof that the spec cannot pass by accident, not a formality. Note the e2e suite shares the ONE
   Supabase project with production (CLAUDE.md), so "applying 0025" is the
   production migration, and once applied it is never re-applied.
 - `mintClientToken` moves from `client-branding.spec.ts` into `e2e/support.ts`
