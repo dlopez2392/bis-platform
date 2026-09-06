@@ -9,7 +9,7 @@ import { emailBrand } from "@/lib/email/templates/shell";
 import { bookingReminderEmail } from "@/lib/email/templates/booking";
 import { bookingFollowupEmail } from "@/lib/email/templates/followup";
 import { safeZone, formatWhen } from "@/lib/booking/time";
-import { shouldSendFollowupNow } from "@/lib/booking/followup-timing";
+import { shouldSendFollowupNow, resolveAccountZone } from "@/lib/booking/followup-timing";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
 
 export const dynamic = "force-dynamic";
@@ -183,17 +183,46 @@ export async function GET(req: Request): Promise<Response> {
   let followupsUnstamped = 0;
   let skippedNoEmail = 0;
   let waitingForMorning = 0;
+  let unresolvableTimezone = 0;
 
   for (const followup of followups) {
-    // THE SEND-TIME GATE, and it runs FIRST — before the no-email check, so
-    // a contact with no email is not logged 96 times a day for something
-    // that was never going to send this tick anyway.
+    // RULE 0, AND IT RUNS BEFORE THE GATE ITSELF: an account whose
+    // `accounts.timezone` we cannot resolve gets NO follow-up at all.
     //
-    // `accountTimezone` is `accounts.timezone`, which is FREE TEXT at
-    // creation; the helper launders it through `safeZone(tz, "UTC")` rather
-    // than handing it to Intl raw, because a RangeError here would abort the
-    // whole tick — including the reminder pass that has already run and
-    // already mailed people above.
+    // `accounts.timezone` is free text at creation (a recorded, still-open
+    // issue — not fixed here). The gate never hands it to Intl raw, because a
+    // RangeError would abort this whole tick including the reminder pass that
+    // has already mailed people above. What it must ALSO not do is guess:
+    // the old `safeZone(tz, "UTC")` substitution turned an unreadable zone
+    // into a send inside the 08:00-11:00 UTC band, which is 03:00-06:00 in
+    // the Rio Grande Valley. A silent 3 a.m. email is worse than no email,
+    // and the old daily 14:00 UTC tick used to hide this by accident.
+    //
+    // Counted and logged under its OWN name rather than folded into
+    // `waitingForMorning`, which is the pass's normal, expected, dominant
+    // outcome. "Not this tick" and "we cannot tell you when" need to look
+    // different in triage, or the misconfiguration stays invisible — this is
+    // the whole failure mode. The log repeats while the booking is a
+    // candidate (up to 37h), which is loud, but this state is rare, always a
+    // misconfiguration, and always operator-fixable.
+    const accountZone = resolveAccountZone(followup.accountTimezone);
+    if (accountZone === null) {
+      unresolvableTimezone++;
+      console.error(
+        `follow-up HELD for booking ${followup.bookingId}: account ${followup.accountId}'s `
+        + `timezone ${JSON.stringify(followup.accountTimezone)} is not a zone we can resolve, `
+        + `so there is no hour we can safely send at — fix the account's timezone; `
+        + `this booking will age out unsent`,
+      );
+      continue;
+    }
+
+    // THE SEND-TIME GATE. Runs before the no-email check, so a contact with
+    // no email is not logged 96 times a day for something that was never
+    // going to send this tick anyway. It re-resolves the zone itself rather
+    // than taking `accountZone` as an argument: the gate owns its own
+    // preconditions and must stay safe to call from anywhere, and both sides
+    // go through the same `resolveAccountZone`, so they cannot disagree.
     //
     // This is the dominant branch by a wide margin: a booking sits in the
     // candidate list for up to 37h and only ~12 of those ticks are inside
@@ -275,6 +304,7 @@ export async function GET(req: Request): Promise<Response> {
     followups: {
       sent: followupsSent, failed: followupsFailed,
       unstamped: followupsUnstamped, skippedNoEmail, waitingForMorning,
+      unresolvableTimezone,
     },
   });
 }

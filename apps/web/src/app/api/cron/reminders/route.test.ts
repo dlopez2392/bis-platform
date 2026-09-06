@@ -113,7 +113,8 @@ function bookerZoneWhen(startsAt: string, timeZone: string): string {
 }
 
 const EMPTY_FOLLOWUPS = {
-  sent: 0, failed: 0, unstamped: 0, skippedNoEmail: 0, waitingForMorning: 0,
+  sent: 0, failed: 0, unstamped: 0,
+  skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
 };
 
 /**
@@ -352,7 +353,10 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
     expect(res.status).toBe(200);
     expect(body).toEqual({
       sent: 0, failed: 0, unstamped: 0,
-      followups: { sent: 1, failed: 0, unstamped: 0, skippedNoEmail: 0, waitingForMorning: 0 },
+      followups: {
+        sent: 1, failed: 0, unstamped: 0,
+        skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
+      },
     });
     expect(sendMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -378,7 +382,10 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
 
     expect(body).toEqual({
       sent: 1, failed: 0, unstamped: 0,
-      followups: { sent: 1, failed: 0, unstamped: 0, skippedNoEmail: 0, waitingForMorning: 0 },
+      followups: {
+        sent: 1, failed: 0, unstamped: 0,
+        skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
+      },
     });
     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_r1");
     expect(stampFollowupSentMock).toHaveBeenCalledWith(expect.anything(), "bk_f1");
@@ -396,7 +403,10 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body.followups).toEqual({ sent: 0, failed: 1, unstamped: 0, skippedNoEmail: 0, waitingForMorning: 0 });
+    expect(body.followups).toEqual({
+      sent: 0, failed: 1, unstamped: 0,
+      skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
+    });
     expect(stampFollowupSentMock).not.toHaveBeenCalled();
   });
 
@@ -411,7 +421,10 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
     // toward `failed`, this counts toward its own `skippedNoEmail` bucket —
     // a follow-up with no email retries harmlessly forever until the
     // 25h window passes it by, so it is never a "failure" to report.
-    expect(body.followups).toEqual({ sent: 0, failed: 0, unstamped: 0, skippedNoEmail: 1, waitingForMorning: 0 });
+    expect(body.followups).toEqual({
+      sent: 0, failed: 0, unstamped: 0,
+      skippedNoEmail: 1, waitingForMorning: 0, unresolvableTimezone: 0,
+    });
     expect(sendMock).not.toHaveBeenCalled();
     expect(stampFollowupSentMock).not.toHaveBeenCalled();
   });
@@ -431,7 +444,8 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
     const body = await res.json();
 
     expect(body.followups).toEqual({
-      sent: 1, failed: 0, unstamped: 0, skippedNoEmail: 0, waitingForMorning: 0,
+      sent: 1, failed: 0, unstamped: 0,
+      skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
     });
     expect(stampFollowupSentMock).toHaveBeenCalledTimes(2);
     expect(sendMock).toHaveBeenCalledTimes(1);
@@ -446,7 +460,8 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
     const body = await res.json();
 
     expect(body.followups).toEqual({
-      sent: 1, failed: 0, unstamped: 1, skippedNoEmail: 0, waitingForMorning: 0,
+      sent: 1, failed: 0, unstamped: 1,
+      skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
     });
     expect(stampFollowupSentMock).toHaveBeenCalledTimes(STAMP_ATTEMPTS);
     expect(sendMock).toHaveBeenCalledTimes(1);
@@ -508,7 +523,8 @@ describe("GET /api/cron/reminders — follow-ups wait for the next morning", () 
     const body = await res.json();
 
     expect(body.followups).toEqual({
-      sent: 0, failed: 0, unstamped: 0, skippedNoEmail: 0, waitingForMorning: 1,
+      sent: 0, failed: 0, unstamped: 0,
+      skippedNoEmail: 0, waitingForMorning: 1, unresolvableTimezone: 0,
     });
     expect(sendMock).not.toHaveBeenCalled();
     expect(stampFollowupSentMock).not.toHaveBeenCalled();
@@ -534,7 +550,8 @@ describe("GET /api/cron/reminders — follow-ups wait for the next morning", () 
     const body = await res.json();
 
     expect(body.followups).toEqual({
-      sent: 1, failed: 0, unstamped: 0, skippedNoEmail: 0, waitingForMorning: 1,
+      sent: 1, failed: 0, unstamped: 0,
+      skippedNoEmail: 0, waitingForMorning: 1, unresolvableTimezone: 0,
     });
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock).toHaveBeenCalledWith(expect.objectContaining({ to: "booker@example.com" }));
@@ -592,11 +609,12 @@ describe("GET /api/cron/reminders — follow-ups wait for the next morning", () 
     const body = await res.json();
 
     expect(body.followups).toEqual({
-      sent: 0, failed: 0, unstamped: 0, skippedNoEmail: 0, waitingForMorning: 1,
+      sent: 0, failed: 0, unstamped: 0,
+      skippedNoEmail: 0, waitingForMorning: 1, unresolvableTimezone: 0,
     });
   });
 
-  it("a garbage account timezone is laundered, never thrown, and the reminder pass still completes", async () => {
+  it("a garbage account timezone is never thrown, and the reminder pass still completes", async () => {
     // `accounts.timezone` is free text at creation. A RangeError out of the
     // gate would abort the whole tick — including the reminder pass that has
     // already mailed people by the time the follow-up loop runs.
@@ -609,8 +627,67 @@ describe("GET /api/cron/reminders — follow-ups wait for the next morning", () 
 
     expect(res.status).toBe(200);
     expect(body.sent).toBe(1);
-    // Falls back to UTC, where the pinned tick is 14:00 — outside the band.
-    expect(body.followups.waitingForMorning).toBe(1);
+    expect(sendMock).toHaveBeenCalledTimes(1);   // the reminder only
     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_r_ok");
+  });
+
+  it("refuses to send at an unknown hour: an unresolvable zone is held and counted separately", async () => {
+    // ONE tick, TWO accounts, OPPOSITE verdicts — and the two are chosen so
+    // the OLD behaviour had to treat them differently in exactly the wrong
+    // direction. `safeZone(tz, "UTC")` silently substituted UTC for the junk,
+    // and the follow-up then went out inside the 08:00-11:00 UTC band, which
+    // in the Rio Grande Valley is 03:00-06:00 — a customer's phone at 3 a.m.
+    //
+    // At the pinned tick (14:00Z) Chicago reads 09:00, so the good account
+    // sends. The broken one must be HELD, and held under its own name rather
+    // than folded into `waitingForMorning`: an operator can fix a timezone,
+    // but only if the difference between "not yet" and "we cannot tell you
+    // when" is visible.
+    const broken = followup({
+      bookingId: "bk_f_badzone", accountTimezone: "Mars/Olympus",
+    });
+    const good = followup({
+      bookingId: "bk_f_goodzone", accountTimezone: "America/Chicago",
+      contactEmail: "chicago@example.com",
+    });
+    listDueFollowupsMock.mockResolvedValue([broken, good]);
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await GET(req(`Bearer ${SECRET}`));
+    const body = await res.json();
+
+    expect(body.followups).toEqual({
+      sent: 1, failed: 0, unstamped: 0, skippedNoEmail: 0,
+      waitingForMorning: 0, unresolvableTimezone: 1,
+    });
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledWith(expect.objectContaining({ to: "chicago@example.com" }));
+    expect(stampFollowupSentMock).toHaveBeenCalledTimes(1);
+    expect(stampFollowupSentMock).toHaveBeenCalledWith(expect.anything(), "bk_f_goodzone");
+
+    // Logged the way the route logs its other swallowed failures, and it must
+    // name the booking AND the offending value — a log that only says "bad
+    // timezone" cannot be acted on.
+    const logged = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(logged).toContain("bk_f_badzone");
+    expect(logged).toContain("Mars/Olympus");
+    errSpy.mockRestore();
+  });
+
+  it("still sends for an account whose timezone genuinely IS UTC — fail-closed, not fail-on-everything", async () => {
+    // The guard against detecting brokenness by the FALLBACK'S VALUE. "UTC" is
+    // a real zone and a legitimate setting; at 09:30Z it is inside the band.
+    // A check written as `zone === "UTC" means broken` would hold this, and
+    // this account would simply never get a follow-up again.
+    vi.setSystemTime(new Date("2026-09-09T09:30:00Z"));
+    const utcAccount = followup({ bookingId: "bk_f_utc", accountTimezone: "UTC" });
+    listDueFollowupsMock.mockResolvedValue([utcAccount]);
+
+    const res = await GET(req(`Bearer ${SECRET}`));
+    const body = await res.json();
+
+    expect(body.followups.sent).toBe(1);
+    expect(body.followups.unresolvableTimezone).toBe(0);
+    expect(stampFollowupSentMock).toHaveBeenCalledWith(expect.anything(), "bk_f_utc");
   });
 });

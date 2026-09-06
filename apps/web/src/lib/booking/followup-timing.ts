@@ -37,6 +37,10 @@ import { safeZone } from "./time";
  * Plus a staleness cap, so a multi-day outage cannot come back up and mail
  * someone about a meeting they have forgotten — see FOLLOWUP_MAX_AGE_MS.
  *
+ * And a third rule that is really a precondition for the other two: RULE 0,
+ * A ZONE WE CAN ACTUALLY RESOLVE — see `resolveAccountZone`. Both rules above
+ * are statements about local time, and neither means anything without one.
+ *
  * `followup_sent_at` still does all the deduping. This gate only decides
  * whether NOW is an acceptable moment; it has no memory.
  */
@@ -81,6 +85,45 @@ export const FOLLOWUP_MORNING_END_HOUR = 11;
  */
 export const FOLLOWUP_MAX_AGE_MS = 37 * 60 * 60 * 1000;
 
+/**
+ * A sentinel `safeZone` can hand back as a FALLBACK but never as a SUCCESS.
+ * `safeZone` returns its input verbatim only when the `Intl` probe succeeds,
+ * and `!` is not legal in an IANA zone name, so this string can never be
+ * probed successfully — seeing it come back is proof the probe failed, never
+ * proof of what the input was. There is no collision to worry about even in
+ * the pathological case: an operator who typed this into `accounts.timezone`
+ * verbatim would be told `null`, which is the correct answer, because it is
+ * not a zone.
+ */
+const ZONE_UNRESOLVABLE = "!unresolvable";
+
+/**
+ * The account's `accounts.timezone` if `Intl` can resolve it, `null` if it
+ * cannot. `null` means FAIL CLOSED at every call site — see the block comment
+ * on `shouldSendFollowupNow` for why that is the only defensible direction.
+ *
+ * Detecting this is subtle enough to be worth stating. `safeZone(tz, "UTC")`
+ * — what every render path in this repo uses, and what this gate used to use —
+ * SILENTLY SUBSTITUTES its fallback, so a broken zone and a legitimately-UTC
+ * account arrive at the band check as the same string. That substitution is
+ * exactly what hid this: nothing downstream could tell "the operator chose
+ * UTC" from "the operator typed `CST` and we gave up". Inspecting the returned
+ * VALUE cannot recover the difference either, and a `zone === "UTC" means
+ * broken` check would break every real UTC account instead.
+ *
+ * So the fallback is a value no input can legitimately produce. It reuses
+ * `safeZone`'s own `Intl.DateTimeFormat` probe rather than writing a second
+ * one — a divergent copy of that probe is a recorded mistake in this repo, and
+ * a zone this module accepted but `formatWhen` rejected would be worse than
+ * the bug being fixed. Even the pathological input (a caller passing the
+ * sentinel itself) resolves correctly: the probe rejects it, so it comes back
+ * as the fallback and reads as unresolvable, which it is.
+ */
+export function resolveAccountZone(timezone: string | null | undefined): string | null {
+  const zone = safeZone(timezone ?? undefined, ZONE_UNRESOLVABLE);
+  return zone === ZONE_UNRESOLVABLE ? null : zone;
+}
+
 /** Local calendar date as a comparable integer, e.g. 2026-09-09 → 20260909. */
 function localDayNumber(parts: Intl.DateTimeFormatPart[]): number {
   const get = (type: Intl.DateTimeFormatPartTypes) =>
@@ -107,10 +150,33 @@ function localParts(instant: Date, timeZone: string): Intl.DateTimeFormatPart[] 
  * @param now         the instant the cron tick is running at
  * @param meetingEnd  the booking's `ends_at`
  * @param timezone    the account's `accounts.timezone` — FREE TEXT at
- *                    creation (a recorded, still-open follow-up), so it is
- *                    laundered through `safeZone` exactly as every render
- *                    path does. A RangeError here would take down a whole
- *                    cron tick, including the reminder pass that already ran.
+ *                    creation (a recorded, still-open follow-up). Never
+ *                    handed to `Intl` raw: a RangeError here would take down
+ *                    a whole cron tick, including the reminder pass that
+ *                    already ran. But unlike every RENDER path, which
+ *                    substitutes a fallback zone and carries on, an
+ *                    unresolvable zone here means DO NOT SEND — see below.
+ *
+ * FAIL CLOSED ON AN UNRESOLVABLE ZONE, and this is a deliberate divergence
+ * from the `safeZone(tz, "UTC")` habit the rest of the repo follows. A render
+ * that guesses a zone shows a customer a time that is off by hours; they can
+ * see it is wrong, and a human is present. This gate does not render anything
+ * — it decides WHEN to wake someone up. The 08:00-11:00 band read in a
+ * substituted UTC is 03:00-06:00 in the Rio Grande Valley, where this
+ * platform's clients are, so the guess does not produce a visibly wrong time,
+ * it produces an email on a customer's phone in the middle of the night with
+ * nothing anywhere explaining why.
+ *
+ * That is a REGRESSION the 15-minute cadence introduced, not a pre-existing
+ * hazard: on the old daily 14:00 UTC tick an account with a broken timezone
+ * still got its follow-up at a civilised hour, by the same accident that made
+ * "next morning" work at all.
+ *
+ * The alternative to guessing is not sending, and it is strictly better here.
+ * There is no hour we can defend picking for an account whose zone we cannot
+ * read; the staleness cap ages the booking out on its own; and the operator
+ * can fix `accounts.timezone` and have every later booking work. An unsent
+ * follow-up is a missing nicety. A 3 a.m. one is a complaint.
  */
 export function shouldSendFollowupNow(now: Date, meetingEnd: Date, timezone: string): boolean {
   // Epoch milliseconds, never lexicographic ISO comparison: the strings in
@@ -122,7 +188,10 @@ export function shouldSendFollowupNow(now: Date, meetingEnd: Date, timezone: str
   if (elapsedMs < 0) return false;                    // the meeting has not ended
   if (elapsedMs > FOLLOWUP_MAX_AGE_MS) return false;  // too stale to be welcome
 
-  const zone = safeZone(timezone, "UTC");
+  // Rule 0. Everything below is a statement about LOCAL time and means
+  // nothing without a zone we can resolve.
+  const zone = resolveAccountZone(timezone);
+  if (zone === null) return false;
 
   const nowParts = localParts(now, zone);
   const hour = Number(nowParts.find((p) => p.type === "hour")?.value ?? NaN);

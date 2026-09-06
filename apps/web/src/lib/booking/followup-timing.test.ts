@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  shouldSendFollowupNow,
+  shouldSendFollowupNow, resolveAccountZone,
   FOLLOWUP_MORNING_START_HOUR, FOLLOWUP_MORNING_END_HOUR, FOLLOWUP_MAX_AGE_MS,
 } from "./followup-timing";
 
@@ -171,35 +171,91 @@ describe("shouldSendFollowupNow — the staleness cap", () => {
   });
 });
 
-describe("shouldSendFollowupNow — a free-text account timezone can never reach Intl raw", () => {
+describe("shouldSendFollowupNow — an unparseable account timezone FAILS CLOSED", () => {
   /**
    * `accounts.timezone` is free text at creation — a recorded, still-open
-   * follow-up in this repo. Every render path launders it through
-   * `safeZone(tz, "UTC")`; this gate runs inside a cron with no user watching,
-   * so a RangeError here would take out the whole tick, including the reminder
-   * pass that already ran.
+   * follow-up in this repo. The gate must still never throw: it runs inside a
+   * cron with no user watching, and a RangeError here would take out the whole
+   * tick, including the reminder pass that already mailed people.
+   *
+   * But "never throws" is not the same as "sends anyway". This gate used to
+   * launder the zone through `safeZone(tz, "UTC")` the way every render path
+   * does, and then read the morning band in that substituted UTC. For a
+   * business in the Rio Grande Valley the 08:00-11:00 UTC band is 03:00-06:00
+   * local — the follow-up lands on a customer's phone in the middle of the
+   * night, and nothing anywhere says why. Under the old daily 14:00 UTC tick
+   * the same broken account still got a civilised hour by accident, so this is
+   * a regression the 15-minute cadence introduced.
+   *
+   * So: no resolvable zone, no send. There is no hour we can defend picking,
+   * and the staleness cap ages the booking out on its own — an operator can
+   * fix `accounts.timezone` and the next booking works, which is strictly
+   * better than an automated email at an unknown hour.
    */
   const ENDED = new Date("2026-09-08T22:00:00Z");
+  const JUNK_ZONES = ["Mars/Olympus", "", "  ", "x".repeat(65), "America/Nowhere"];
 
-  it("falls back to UTC — not the system zone — and never throws", () => {
-    const utcMorning = new Date("2026-09-09T09:30:00Z");   // UTC 09:30, inside the band
-    for (const junk of ["Mars/Olympus", "", "  ", "x".repeat(65), "America/Nowhere"]) {
-      expect(shouldSendFollowupNow(utcMorning, ENDED, junk)).toBe(true);
+  it("holds a follow-up an explicitly-UTC account would have sent at the very same instant", () => {
+    // THE PAIR THAT PROVES THE REGRESSION IS GONE. One instant, two zones,
+    // opposite verdicts — and the two zones are chosen so the OLD
+    // implementation had to answer them identically: it substituted "UTC" for
+    // the junk, so junk and "UTC" were the same input by the time the band was
+    // read. 09:30 UTC is inside the band, so the old code sent BOTH.
+    const utcMorning = new Date("2026-09-09T09:30:00Z");
+    expect(shouldSendFollowupNow(utcMorning, ENDED, "UTC")).toBe(true);
+    for (const junk of JUNK_ZONES) {
+      expect(shouldSendFollowupNow(utcMorning, ENDED, junk)).toBe(false);
     }
   });
 
-  it("proves the fallback is UTC by picking an instant the system zone would answer differently", () => {
-    // 14:00 UTC is outside the band, but the SAME instant is 09:00 in this
-    // machine's own zone (America/Chicago) — squarely inside it. A helper that
-    // fell back to the system zone instead of UTC would answer true here.
+  it("does not fall back to the system zone either, and never throws on any junk shape", () => {
+    // Second pair, different discriminator: 14:00 UTC is outside the band but
+    // the SAME instant is 09:00 in this machine's own zone (America/Chicago),
+    // squarely inside it. A helper that quietly formatted in the system zone
+    // would answer true for the junk here.
     const notUtcMorning = new Date("2026-09-09T14:00:00Z");
-    expect(shouldSendFollowupNow(notUtcMorning, ENDED, "Mars/Olympus")).toBe(false);
     expect(shouldSendFollowupNow(notUtcMorning, ENDED, CHI)).toBe(true);   // guards the fixture
+    for (const junk of JUNK_ZONES) {
+      expect(shouldSendFollowupNow(notUtcMorning, ENDED, junk)).toBe(false);
+    }
+  });
+
+  it("still sends for an account whose timezone genuinely IS UTC", () => {
+    // Fail-closed must not become fail-on-everything. "UTC" is a real IANA
+    // zone and a deliberate configuration, not a broken one — this is the
+    // case a naive `zone === "UTC" means broken` check would silently break,
+    // which is why resolvability is detected rather than inferred from the
+    // fallback's VALUE.
+    expect(shouldSendFollowupNow(new Date("2026-09-09T09:30:00Z"), ENDED, "UTC")).toBe(true);
+    expect(shouldSendFollowupNow(new Date("2026-09-09T14:00:00Z"), ENDED, "UTC")).toBe(false);
   });
 
   it("refuses rather than throws on an unparseable instant", () => {
     expect(shouldSendFollowupNow(new Date("2026-09-09T14:00:00Z"), new Date("not a date"), NY))
       .toBe(false);
     expect(shouldSendFollowupNow(new Date("not a date"), ENDED, NY)).toBe(false);
+  });
+});
+
+describe("resolveAccountZone", () => {
+  it("returns real zones verbatim and null for anything Intl cannot resolve", () => {
+    for (const good of [NY, LA, CHI, "UTC", "Antarctica/Troll", "Europe/Madrid"]) {
+      expect(resolveAccountZone(good)).toBe(good);
+    }
+    for (const junk of ["Mars/Olympus", "", "  ", "x".repeat(65), "America/Nowhere"]) {
+      expect(resolveAccountZone(junk)).toBeNull();
+    }
+  });
+
+  it("treats a null or missing timezone as unresolvable, not as a default", () => {
+    expect(resolveAccountZone(null)).toBeNull();
+    expect(resolveAccountZone(undefined)).toBeNull();
+  });
+
+  it("answers correctly even for the sentinel value it uses internally", () => {
+    // The one input that could in principle collide with the detection
+    // mechanism. It cannot: the sentinel is not a legal zone, so it fails the
+    // probe like any other junk and gets the answer it deserves.
+    expect(resolveAccountZone("!unresolvable")).toBeNull();
   });
 });
