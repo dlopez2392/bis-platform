@@ -1,0 +1,67 @@
+#!/bin/sh
+# Refuses a direct push to main.
+#
+# This repository is private on a GitHub plan that does not offer protected
+# branches, so nothing SERVER-side can decline a push to main or a merge over
+# a red build. This hook is the part of that protection that can be enforced
+# for free: it runs on the machine doing the pushing, and the accident it
+# stops — a `git push` while main happens to be checked out, landing
+# unverified work straight onto the branch that deploys production — is by
+# far the most likely one.
+#
+# It deliberately does NOT try to be a security control. Anyone who wants
+# past it can pass the override below, use --no-verify, or push from a clone
+# where the hook is not installed. That is the correct scope: this guards
+# against a slip, not against intent.
+#
+# Install (once per clone, hooks are not carried by git itself):
+#
+#     git config core.hooksPath .githooks
+#
+# Deliberate override, for a hotfix when CI itself is the thing that is
+# broken:
+#
+#     bash:       ALLOW_MAIN_PUSH=1 git push
+#     PowerShell: $env:ALLOW_MAIN_PUSH=1; git push; Remove-Item Env:ALLOW_MAIN_PUSH
+
+while read -r _local_ref local_sha remote_ref _remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main) ;;
+    *) continue ;;
+  esac
+
+  if [ "$ALLOW_MAIN_PUSH" = "1" ]; then
+    echo "pre-push: ALLOW_MAIN_PUSH is set — allowing a direct push to main." >&2
+    continue
+  fi
+
+  # An all-zero local sha means "delete the remote branch".
+  case "$local_sha" in
+    0000000000000000000000000000000000000000)
+      echo "pre-push: refusing to DELETE main." >&2
+      ;;
+    *)
+      echo "pre-push: refusing to push directly to main." >&2
+      ;;
+  esac
+
+  cat >&2 <<'MSG'
+
+main deploys production on every push, and CI runs on branches so a pull
+request carries the evidence. Open one instead:
+
+    git switch -c <a-branch-name>
+    git push -u origin <a-branch-name>
+
+then merge it on GitHub once the "verify" and "e2e" checks are green.
+
+To override deliberately (a hotfix while CI itself is broken):
+
+    bash:       ALLOW_MAIN_PUSH=1 git push
+    PowerShell: $env:ALLOW_MAIN_PUSH=1; git push; Remove-Item Env:ALLOW_MAIN_PUSH
+
+MSG
+  exit 1
+done
+
+exit 0
