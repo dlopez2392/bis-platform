@@ -1,0 +1,155 @@
+name: CI
+
+# Why this exists: until 2026-09-06 every gate in this repo ran only when a
+# human remembered to run it in a terminal. The booking redesign (#23) shipped
+# with an e2e spec still waiting on a loading placeholder the redesign had
+# removed, and nobody knew until the author ran the suite by hand. The guards
+# this repo relies on protect nothing unless something runs them on every push.
+#
+# Two jobs, split on ONE criterion — whether the work touches the shared
+# Supabase project (see CLAUDE.md: e2e and production share one project):
+#
+#   verify  typecheck + lint + unit tests + production build. This is exactly
+#           `pnpm check` and `pnpm --filter web build` from CLAUDE.md, no
+#           more and no less, so CI and a contributor's terminal cannot
+#           disagree about what "green" means. A newer push to the same
+#           branch cancels the older run.
+#
+#   e2e     the Playwright journey. Serialized ACROSS THE WHOLE REPO, never
+#           cancelled: two runs against the one shared database at the same
+#           time would race on the fixture account and on the agency user's
+#           persisted preferences. A second push while one e2e run is live
+#           waits for it. (GitHub keeps at most one pending run per group, so
+#           a THIRD push within the same window cancels the second's e2e job —
+#           re-run it from the Actions tab if that ever bites.)
+#
+# Both jobs need the same five secrets — the values from apps/web/.env.local —
+# and REFUSE to run without them, naming what is missing. A gate that quietly
+# skips when it cannot run is how the pre-CI state came about in the first
+# place.
+
+on:
+  push:
+  workflow_dispatch:
+
+env:
+  # Not secrets — the same literals .env.example carries for every developer.
+  # Only what the gates actually need to RUN belongs here. APP_ORIGIN and
+  # EMAIL_FROM were set in the first draft, on the reasoning that CI should
+  # mirror the deployment; they are runtime configuration, and mirroring them
+  # changed what the gates measure. APP_ORIGIN is read ahead of the Host
+  # header by design, so it inverted eleven link-building tests and pointed
+  # the e2e run's cancel links at the production domain instead of the local
+  # server. A gate must test the code, not the deployment's settings.
+  NEXT_PUBLIC_CLERK_SIGN_IN_URL: /sign-in
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_h2GmSCjLzD74RotkQAvMbA_BL6FAI4k
+  # Secrets. Sending is FAKE everywhere except VERCEL_ENV=production
+  # (.env.example), so a CI run never emails a real address; the service-role
+  # key and DB URL are what the db suite, one web test, and the e2e fixture
+  # setup use to create and delete their own per-run rows.
+  NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+  CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+  NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+  SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    # 35, not 20. The first green run spent 15m30s in `pnpm check` alone —
+    # the packages/db suite is live network work against Supabase, and a
+    # runner is a slower, more distant client than a dev machine (the same
+    # command takes ~3 minutes locally). 20 left under four minutes of
+    # headroom, which is a gate that eventually fails on wall clock and
+    # trains everyone to re-run red CI without reading it.
+    timeout-minutes: 35
+    concurrency:
+      group: verify-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check that the repository secrets are configured
+        run: |
+          missing=""
+          for name in NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY CLERK_SECRET_KEY NEXT_PUBLIC_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing — add them under Settings > Secrets and variables > Actions, using the values from apps/web/.env.local."
+            exit 1
+          fi
+
+      # Reads the pinned version from package.json's "packageManager" field, so
+      # bumping pnpm is one edit, not two.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # `pnpm check` = typecheck + lint + every package's vitest suite,
+      # verbatim from CLAUDE.md. The db suite and one web test are live
+      # against the shared Supabase project and clean up after themselves.
+      - name: pnpm check
+        run: pnpm check
+
+      # Catches the class `tsc` cannot: Next evaluates route modules during
+      # page-data collection. Vercel builds only on main, so without this a
+      # branch can look green and break the production deploy on merge.
+      - name: Production build
+        run: pnpm --filter web build
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: e2e-shared-supabase
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check that the repository secrets are configured
+        run: |
+          missing=""
+          for name in NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY CLERK_SECRET_KEY NEXT_PUBLIC_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing — add them under Settings > Secrets and variables > Actions, using the values from apps/web/.env.local."
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium for Playwright
+        run: pnpm --filter web exec playwright install --with-deps chromium
+
+      # playwright.config.ts builds and starts the production server itself
+      # (`pnpm build && pnpm start`), signs in as the agency admin through a
+      # Clerk sign-in token, creates a per-run fixture client, runs every
+      # spec serially, and deletes the fixture in teardown. Stale fixtures a
+      # killed run left behind are swept at the top of the next run.
+      - name: Playwright
+        run: pnpm --filter web test:e2e
+
+      # Traces are retained only on failure (playwright.config.ts), so this
+      # is empty on a green run and skipped.
+      - name: Upload traces from failed specs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: apps/web/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
