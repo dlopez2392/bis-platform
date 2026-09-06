@@ -147,3 +147,23 @@ describe("verifyTicket", () => {
     expect(signTicket(SECRET, NOW)).not.toBe(signTicket(SECRET, NOW));
   });
 });
+
+/**
+ * Cross-repo known-answer vector. The WEBSITE signs these tickets and this
+ * repo verifies them, so the two implementations must agree byte for byte
+ * forever — a drift would look like every visitor being refused, with a
+ * correct-looking implementation on each side. The identical vector is
+ * pinned in the website's own suite (src/lib/sofia/ticket.test.ts). Changing
+ * this constant means changing it there in the same breath.
+ */
+describe("ticket wire format (cross-repo)", () => {
+  const VECTOR = "1760000000000.fixed-nonce.xgIR3steZ0rRu0fARbJMOaGgrAz4cQjf-GFc8wGYd74";
+
+  it("signs the pinned vector exactly", () => {
+    expect(signTicket("fixture-secret", 1_760_000_000_000, "fixed-nonce")).toBe(VECTOR);
+  });
+
+  it("verifies the pinned vector", () => {
+    expect(verifyTicket("fixture-secret", VECTOR, 1_760_000_000_000)).toEqual({ ok: true });
+  });
+});
