@@ -177,6 +177,13 @@ async function resolveContactId(state: CallState, ctx: FinishContext): Promise<s
  * signal a human sees; an email outage still leaves the row for the
  * dashboard; a carrier outage costs the abandoned caller their text and
  * nothing else.
+ *
+ * The text-back leg is deliberately SPLIT around the row write: its database
+ * work runs before (the row records the contact and conversation the text
+ * lives in, so those ids have to exist first), its carrier send runs after.
+ * Ordering by cost, not by leg — a 10-second provider call ahead of the
+ * durable record is how a slow carrier loses the call row on an invocation
+ * already near its maxDuration.
  */
 export async function finishCall(
   state: CallState, ctx: FinishContext, meta: FinishMeta,
@@ -290,6 +297,19 @@ export async function finishCall(
   // that value feeds the calls list, the outcome pill and the dashboard KPIs,
   // and re-labelling cancellation calls there is a product decision this
   // change is not entitled to make.
+  //
+  // SPLIT IN TWO around the row write below. Everything the call row itself
+  // needs — the contact, the conversation, and the outbound message row —
+  // happens here, because `finishCallRow` writes those ids and cannot write
+  // ids that do not exist yet. The PROVIDER SEND does not belong to that set:
+  // it is a network call to a carrier with a 10-second timeout, made inside
+  // an invocation already clamped near its `maxDuration`, and running it
+  // ahead of the durable record meant a long abandoned call plus a slow
+  // carrier could lose the call row entirely — the row the entire dashboard
+  // reads. So this half prepares the send, and the half below `finishCallRow`
+  // performs it. Write-then-send is preserved exactly as before: the message
+  // row still exists before anything leaves the building.
+  let pendingTextback: { messageId: string; to: string; from: string; body: string } | null = null;
   if (outcome === "abandoned" && !wasServed(state) && ctx.textbackEnabled && ctx.callerNumber) {
     try {
       // THE gate, and the only one — the same call the composer makes, never
@@ -355,45 +375,7 @@ export async function finishCall(
             const { id: messageId } = await createMessage(ctx.db, ctx.accountId, {
               conversationId, channel: "sms", direction: "outbound", body,
             }, ACTOR_ID, ACTOR_TYPE);
-
-            // ONLY the send is guarded. Once send() has returned, the text is
-            // gone and irrevocably out the door, so a failure recording that —
-            // the `sent` write below — must never be re-labelled `failed`: that
-            // would tell the operator a delivered text never went out, and drop
-            // the provider id the delivery webhook correlates against. That
-            // failure falls through to the outer catch instead, where it is
-            // logged and the message is left exactly as written. Identical
-            // reasoning to sendSmsAction (conversations/actions.ts).
-            let providerMessageId: string;
-            try {
-              ({ providerMessageId } = await getSmsProvider().send({
-                to: ctx.callerNumber, from: gate.from, body,
-              }));
-            } catch (sendError) {
-              // Nothing left the building, so `failed` is the honest label —
-              // and it is the only signal this failure has, since there is no
-              // retry and no human watching.
-              //
-              // Its own try/catch, because this write is BOOKKEEPING and
-              // `sendError` is the news. Awaited bare, a rejection here would
-              // replace the throw below entirely: the outer catch would log a
-              // database error, the genuine carrier failure would vanish, and
-              // the row would sit `queued` with nothing saying why. The
-              // original error survives its own bookkeeping either way.
-              try {
-                await updateMessageStatus(ctx.db, ctx.accountId, messageId, "failed",
-                  { error: sendError instanceof Error ? sendError.message : "unknown send failure" },
-                  ACTOR_ID, ACTOR_TYPE);
-              } catch (statusError) {
-                console.error(
-                  `finishCall ${meta.callRowId ?? "(no row)"}: could not mark message ` +
-                  `${messageId} failed: ${String(statusError)}`,
-                );
-              }
-              throw sendError;
-            }
-            await updateMessageStatus(ctx.db, ctx.accountId, messageId, "sent",
-              { providerMessageId }, ACTOR_ID, ACTOR_TYPE);
+            pendingTextback = { messageId, to: ctx.callerNumber, from: gate.from, body };
           }
         }
       }
@@ -424,6 +406,65 @@ export async function finishCall(
       stored = true;
     } catch (e) {
       console.error(`finishCall ${meta.callRowId}: finishCallRow failed: ${String(e)}`);
+    }
+  }
+
+  // The other half of the text-back leg: the actual send, deliberately AFTER
+  // the durable row above. Everything before this point is database work
+  // measured in milliseconds; this is a carrier round trip with a 10-second
+  // timeout, inside an invocation already clamped near its `maxDuration`.
+  // Ahead of the row write it was a way to lose the call record itself, which
+  // is the one artefact of the call the dashboard, the KPIs and any later
+  // investigation all read. The text is worth less than the record of the
+  // call, so it goes second.
+  //
+  // Same try/catch contract as every other leg — finishCall never throws —
+  // and the same two things that throw on CONFIGURATION alone still sit
+  // inside it: getSmsProvider() throws synchronously when TELNYX_API_KEY is
+  // missing in production, and it is called here, inside the inner try, so a
+  // config failure still marks the message `failed` exactly as a carrier
+  // failure does.
+  if (pendingTextback) {
+    const { messageId, to, from, body } = pendingTextback;
+    try {
+      // ONLY the send is guarded. Once send() has returned, the text is gone
+      // and irrevocably out the door, so a failure recording that — the `sent`
+      // write below — must never be re-labelled `failed`: that would tell the
+      // operator a delivered text never went out, and drop the provider id the
+      // delivery webhook correlates against. That failure falls through to the
+      // outer catch instead, where it is logged and the message is left
+      // exactly as written. Identical reasoning to sendSmsAction
+      // (conversations/actions.ts).
+      let providerMessageId: string;
+      try {
+        ({ providerMessageId } = await getSmsProvider().send({ to, from, body }));
+      } catch (sendError) {
+        // Nothing left the building, so `failed` is the honest label — and it
+        // is the only signal this failure has, since there is no retry and no
+        // human watching.
+        //
+        // Its own try/catch, because this write is BOOKKEEPING and `sendError`
+        // is the news. Awaited bare, a rejection here would replace the throw
+        // below entirely: the outer catch would log a database error, the
+        // genuine carrier failure would vanish, and the row would sit `queued`
+        // with nothing saying why. The original error survives its own
+        // bookkeeping either way.
+        try {
+          await updateMessageStatus(ctx.db, ctx.accountId, messageId, "failed",
+            { error: sendError instanceof Error ? sendError.message : "unknown send failure" },
+            ACTOR_ID, ACTOR_TYPE);
+        } catch (statusError) {
+          console.error(
+            `finishCall ${meta.callRowId ?? "(no row)"}: could not mark message ` +
+            `${messageId} failed: ${String(statusError)}`,
+          );
+        }
+        throw sendError;
+      }
+      await updateMessageStatus(ctx.db, ctx.accountId, messageId, "sent",
+        { providerMessageId }, ACTOR_ID, ACTOR_TYPE);
+    } catch (e) {
+      console.error(`finishCall ${meta.callRowId ?? "(no row)"}: text-back failed: ${String(e)}`);
     }
   }
 

@@ -370,6 +370,44 @@ describe("finishCall — missed-call text-back", () => {
     expect(dbMocks.createMessage).not.toHaveBeenCalled();
   });
 
+  /**
+   * The call record is worth more than the text. Everything the row needs —
+   * contact, conversation, the outbound message row — is written before it;
+   * the carrier round trip, which is the slow part and the part that can hang
+   * for ten seconds inside an invocation already near its maxDuration, comes
+   * after. Pinned so a future reorder cannot quietly put the network call back
+   * in front of the durable record.
+   */
+  it("writes the durable call row BEFORE handing anything to the carrier", async () => {
+    await finishCall(abandonedState(), textbackCtx, meta);
+    const messageWritten = dbMocks.createMessage.mock.invocationCallOrder[0]!;
+    const rowWritten = dbMocks.finishCallRow.mock.invocationCallOrder[0]!;
+    const sent = smsRefs.send.mock.invocationCallOrder[0]!;
+    // Write then send, unchanged: the message row exists before anything
+    // leaves the building.
+    expect(messageWritten).toBeLessThan(sent);
+    // ...and the call row is durable before the carrier is ever dialled.
+    expect(messageWritten).toBeLessThan(rowWritten);
+    expect(rowWritten).toBeLessThan(sent);
+  });
+
+  it("a carrier that never answers cannot cost the call its row", async () => {
+    // The failure this ordering exists for, played out: the send is still in
+    // flight when the invocation would be killed at maxDuration. The row —
+    // what the dashboard, the KPIs and any later investigation read — is
+    // already written by then.
+    let releaseSend: (v: { providerMessageId: string }) => void = () => {};
+    smsRefs.send.mockImplementation(() => new Promise((resolve) => { releaseSend = resolve; }));
+
+    const finishing = finishCall(abandonedState(), textbackCtx, meta);
+    await vi.waitFor(() => expect(smsRefs.send).toHaveBeenCalled());
+    expect(dbMocks.finishCallRow).toHaveBeenCalledWith({}, "a1", "call1",
+      expect.objectContaining({ outcome: "abandoned", contactId: "ct1", conversationId: "cv1" }));
+
+    releaseSend({ providerMessageId: "sm1" });
+    await expect(finishing).resolves.toMatchObject({ stored: true });
+  });
+
   it("a text-back failure does not take down the rest of finishCall, and marks the row failed", async () => {
     // finishCall is contractually never-throws: the caller has already hung
     // up, and there is nobody to surface a rejection to.
