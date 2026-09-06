@@ -470,9 +470,13 @@ export function BookingPage({
                the single "…" that was here: a visitor could not tell a slow
                day from an empty one, and the layout jumped when the real
                chips arrived. */
-            <div className="bis-booking-skeletons" aria-hidden="true">
+            <div className="bis-booking-skeletons" role="status">
+              {/* The bars are decorative; the sentence is the announcement. The
+                  wrapper itself must NOT be aria-hidden, or the sentence is
+                  hidden with it and a screen-reader user hears nothing while
+                  the round trip runs. */}
               {Array.from({ length: 8 }, (_, i) => (
-                <span key={i} className="bis-booking-skeleton" />
+                <span key={i} className="bis-booking-skeleton" aria-hidden="true" />
               ))}
               <span className="bis-booking-sr">{strings.loadingTimes}</span>
             </div>
@@ -723,7 +727,12 @@ const BOOKING_CSS = `
 }
 .bis-booking-empty-title { margin: 0; font-weight: 600; }
 .bis-booking-empty-hint { margin: 4px 0 0; font-size: 13px; color: var(--muted-foreground, #71717a); }
-.bis-booking-error { color: #b91c1c; margin: 0 0 8px; }
+/* The token, not the literal. #b91c1c measures 2.93:1 on all three dark ramps
+   — under AA, on the sentence that tells a customer their email address is
+   wrong. --form-error is already emitted to this page by publicFormTheme and
+   is already lifted to 4.5:1 at source (public-form-theme.ts); /f has read it
+   since M4b. The e2e journey (booking.spec.ts, P7) measures this. */
+.bis-booking-error { color: var(--form-error, #b91c1c); margin: 0 0 8px; }
 
 /* --- The time you picked -------------------------------------------------- */
 .bis-booking-chosen {
