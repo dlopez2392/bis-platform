@@ -1,0 +1,86 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const smsFactory = vi.hoisted(() => ({ getSmsProvider: vi.fn() }));
+vi.mock("@/lib/sms", () => ({ getSmsProvider: () => smsFactory.getSmsProvider() }));
+vi.mock("@/lib/email", () => ({
+  getEmailProvider: () => ({ isFake: true, send: async () => ({ providerMessageId: "e" }) }),
+}));
+
+import { buildPassContext, runPasses } from "./harness";
+import type { Pass, PassContext } from "./context";
+
+function ctx(): PassContext {
+  return buildPassContext({
+    db: {} as never, now: new Date("2026-09-09T14:00:00Z"), origin: "https://app.example.com",
+  });
+}
+
+beforeEach(() => {
+  smsFactory.getSmsProvider.mockReset();
+});
+
+describe("runPasses — independent error isolation, the finishCall-legs pattern", () => {
+  it("a pass that rejects OUTRIGHT is reported under its own key as errored, and the next pass still runs", async () => {
+    // Not a send inside a pass (each pass catches those itself) — the pass's
+    // own `run` blowing up, e.g. its due-query throwing. Mutation: remove the
+    // try/catch around `pass.run(ctx)` in harness.ts and this must fail.
+    const ran: string[] = [];
+    const boom: Pass = { key: "boom", run: async () => { throw new Error("db exploded"); } };
+    const fine: Pass = { key: "fine", run: async () => { ran.push("fine"); return { sent: 2 }; } };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const results = await runPasses([boom, fine], ctx());
+
+    expect(results).toEqual({ boom: { errored: 1 }, fine: { sent: 2 } });
+    expect(ran).toEqual(["fine"]);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("boom"));
+    spy.mockRestore();
+  });
+
+  it("runs passes in registry order, each handed the SAME context", async () => {
+    const seen: PassContext[] = [];
+    const order: string[] = [];
+    const mk = (key: string): Pass => ({
+      key, run: async (c) => { seen.push(c); order.push(key); return {}; },
+    });
+    const c = ctx();
+    await runPasses([mk("a"), mk("b"), mk("c")], c);
+    expect(order).toEqual(["a", "b", "c"]);
+    expect(seen.every((s) => s === c)).toBe(true);
+  });
+});
+
+describe("buildPassContext — the SMS provider is LAZY", () => {
+  it("does not construct the SMS provider until a pass asks, so a throwing factory cannot fail the tick", async () => {
+    // getSmsProvider() throws in production when TELNYX_API_KEY is unset —
+    // and it IS unset today, by design. An eager construction would 500 every
+    // tick, reminders included. Mutation: make `sms` eager in
+    // buildPassContext and this must fail.
+    smsFactory.getSmsProvider.mockImplementation(() => {
+      throw new Error("TELNYX_API_KEY is required in production");
+    });
+    const c = ctx();
+    expect(smsFactory.getSmsProvider).not.toHaveBeenCalled();
+    expect(() => c.sms()).toThrow(/TELNYX_API_KEY/);
+    const results = await runPasses([{ key: "emailOnly", run: async () => ({ sent: 0 }) }], c);
+    expect(results).toEqual({ emailOnly: { sent: 0 } });
+  });
+
+  it("memoises the SMS provider after the first successful construction", () => {
+    const provider = { isFake: true, send: async () => ({ providerMessageId: "s" }) };
+    smsFactory.getSmsProvider.mockReturnValue(provider);
+    const c = ctx();
+    expect(c.sms()).toBe(provider);
+    expect(c.sms()).toBe(provider);
+    expect(smsFactory.getSmsProvider).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("PassContext — structurally cannot carry the agency's internal label", () => {
+  it("has no accountName (pnpm typecheck fails here if someone adds one)", () => {
+    const c = ctx();
+    // @ts-expect-error accountName is deliberately absent from PassContext.
+    // If it is ever added, this directive becomes unused and `tsc` refuses it.
+    expect(c.accountName).toBeUndefined();
+  });
+});
