@@ -52,5 +52,8 @@ export async function GET(req: Request): Promise<Response> {
   // under its key — byte-identical to what this route returned before the
   // harness existed, which is what lets route.test.ts stand unchanged as the
   // migration's proof. New passes appear as new keys beside `followups`.
+  // One consequence to know when reading the cron log: if the reminder pass
+  // itself errors outright, the top level carries `errored: 1` and no
+  // `sent`/`failed`/`unstamped` keys for that tick.
   return Response.json({ ...reminders, ...rest });
 }

@@ -786,7 +786,7 @@ export const m = {
   "automations.review.saved": "Review requests saved",
   "automations.review.saveFailed": "Could not save review requests.",
   "automations.review.urlRequired": "Add the review link before turning this on.",
-  "automations.review.urlInvalid": "The review link needs to be a full web address starting with https://",
+  "automations.review.urlInvalid": "The review link needs to be a full web address, like https://g.page/r/.../review",
 
   // The client-facing Calls log — /dashboard/accounts/<id>/calls. BOTH
   // audiences: this is the client's own business data (who rang, what the

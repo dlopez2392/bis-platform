@@ -102,7 +102,16 @@ export const reviewRequestPass: Pass = {
         // is how an operator stops trusting what the settings page says.
         let gate = smsGates.get(row.accountId);
         if (!gate) {
-          gate = await resolveSmsSender(ctx.db, row.accountId);
+          // The gate READS (a2p registration, phone_numbers); a read error is
+          // this row's failure, not the whole pass's — letting it escape would
+          // discard the counters for every row already sent this tick.
+          try {
+            gate = await resolveSmsSender(ctx.db, row.accountId);
+          } catch (e) {
+            c.failed++;
+            console.error(`review request: sms gate read failed for account ${row.accountId}: ${String(e)}`);
+            continue;
+          }
           smsGates.set(row.accountId, gate);
         }
         if (!gate.ok) {
@@ -220,12 +229,18 @@ async function sendEmail(
 async function sendSms(
   ctx: PassContext, row: DueReviewRequest, to: string, from: string, body: string,
 ): Promise<{ messageId: string; providerMessageId: string }> {
+  // The provider FIRST, before any row is written: `ctx.sms()` is lazy and
+  // throws in production when TELNYX_API_KEY is unset. Constructing it after
+  // the message row would leave a failed text in the customer's conversation
+  // on every in-band tick for a misconfiguration that has nothing to do with
+  // the customer (review finding, 2026-09-06).
+  const sms = ctx.sms();
   const convo = await ensureConversation(ctx.db, row.accountId, row.contactId, ACTOR_ID, ACTOR_TYPE);
   const { id: messageId } = await createMessage(ctx.db, row.accountId, {
     conversationId: convo.id, channel: "sms", direction: "outbound", body,
   }, ACTOR_ID, ACTOR_TYPE);
   try {
-    const { providerMessageId } = await ctx.sms().send({ to, from, body });
+    const { providerMessageId } = await sms.send({ to, from, body });
     return { messageId, providerMessageId };
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown send failure";

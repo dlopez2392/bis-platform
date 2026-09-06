@@ -13,11 +13,13 @@ import { fileURLToPath } from "node:url";
  * Mutation: add `import { getSmsProvider } from "@/lib/sms"` to any pass file.
  */
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
+// Static `from "…"` and dynamic `import("…")` alike; `/index` spelled out
+// or not; `.tsx` as well as `.ts`.
 const FORBIDDEN: readonly RegExp[] = [
-  /from\s+["']@\/lib\/email["']/,          // the email factory
-  /from\s+["']@\/lib\/sms["']/,            // the sms factory
-  /from\s+["'][^"']*\/resend["']/,         // the real email provider
-  /from\s+["'][^"']*\/telnyx["']/,         // the real sms provider
+  /(?:from\s+|import\s*\(\s*)["']@\/lib\/email(?:\/index)?["']/,   // the email factory
+  /(?:from\s+|import\s*\(\s*)["']@\/lib\/sms(?:\/index)?["']/,     // the sms factory
+  /(?:from\s+|import\s*\(\s*)["'][^"']*\/resend["']/,              // the real email provider
+  /(?:from\s+|import\s*\(\s*)["'][^"']*\/telnyx["']/,              // the real sms provider
 ];
 const ALLOWED = new Set(["harness.ts"]);
 
@@ -25,7 +27,9 @@ function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
     const full = join(dir, name);
     if (statSync(full).isDirectory()) return walk(full);
-    return full.endsWith(".ts") && !full.endsWith(".test.ts") ? [full] : [];
+    const isSource = full.endsWith(".ts") || full.endsWith(".tsx");
+    const isTest = full.endsWith(".test.ts") || full.endsWith(".test.tsx");
+    return isSource && !isTest ? [full] : [];
   });
 }
 const rel = (file: string) => file.slice(ROOT.length).replace(/\\/g, "/");

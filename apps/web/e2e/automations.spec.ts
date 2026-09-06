@@ -103,6 +103,15 @@ test.describe("the Automations page", () => {
     await expect(page).toHaveURL(new RegExp(`/dashboard/accounts/${accountId}/automations$`));
     await expect(page.getByText("Review requests", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Review link")).toBeVisible();
+
+    // The residual the spec names: the live counter. Switch to Text message,
+    // type a link, and the count must be the body PLUS the link, as ONE
+    // segment for the default body (measured in review-request-copy.test.ts).
+    // Nothing is saved — the form is never submitted.
+    await page.getByLabel("Send by").click();
+    await page.getByRole("option", { name: "Text message" }).click();
+    await page.locator("#review_url").fill("https://g.page/r/CXyZ123abc/review");
+    await expect(page.getByTestId("review-sms-count")).toContainText("1 message(s)");
   });
 });
 

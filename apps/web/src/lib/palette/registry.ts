@@ -52,7 +52,7 @@ const NAV_KEYWORDS: Record<string, string[]> = {
   "/calendar": ["booking", "availability", "hours"],
   "/branding": ["logo", "colors", "theme"],
   "/voice": ["receptionist", "sofia", "ai"],
-  "/automations": ["review", "google review", "recipes", "follow up", "text"],
+  "/automations": ["reviews", "review requests", "google review", "follow up", "text"],
   "/dashboard/accounts": ["companies", "clients"],
   "/dashboard/blueprints": ["templates"],
 };

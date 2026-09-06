@@ -61,8 +61,11 @@ export function AutomationsSettings({
   // THE COUNTER COUNTS BODY PLUS LINK, through the ONE function the sender
   // uses, so what the operator approves is what is billed. An empty body
   // previews the live default (empty-means-default, as the column contract
-  // says), and an empty link previews the body alone.
-  const previewBody = body || defaultReviewRequestBody(brandName);
+  // says), and an empty link previews the body alone. `.trim()` because the
+  // pass defaults on `row.body.trim()` — a body of nothing but spaces must
+  // preview the default too, or the counter shows the link alone while the
+  // send carries the full default (review finding, 2026-09-06).
+  const previewBody = body.trim() || defaultReviewRequestBody(brandName);
   const preview = segmentsFor(composeReviewRequestSms(previewBody, reviewUrl));
 
   const { pending, onSubmit } = useFormSubmit(async (formData) => {

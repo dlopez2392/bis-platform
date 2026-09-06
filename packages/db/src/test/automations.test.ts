@@ -23,6 +23,13 @@ describe("parseReviewRequestConfig — jsonb is untrusted on read AND write", ()
       .toEqual({ channel: "email", reviewUrl: "http://example.com/review" });
   });
 
+  it("stores the NORMALISED href, so a link with a space or a bare origin is still clickable in an SMS", () => {
+    expect(parseReviewRequestConfig({ channel: "sms", reviewUrl: "https://x.example/a b" }))
+      .toEqual({ channel: "sms", reviewUrl: "https://x.example/a%20b" });
+    expect(parseReviewRequestConfig({ channel: "sms", reviewUrl: "https://x.example" }))
+      .toEqual({ channel: "sms", reviewUrl: "https://x.example/" });
+  });
+
   it("returns null for every shape the pass must treat as missing", () => {
     for (const bad of [
       null, undefined, "str", 42, [],

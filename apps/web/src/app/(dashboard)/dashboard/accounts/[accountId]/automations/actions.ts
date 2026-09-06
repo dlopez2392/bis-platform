@@ -31,7 +31,10 @@ export async function saveReviewRequestAction(
   if (!channel) return { ok: false, error: m["automations.review.saveFailed"] };
   const reviewUrl = String(formData.get("review_url") ?? "").trim();
   const enabled = formData.get("enabled") === "on";
-  const body = String(formData.get("body") ?? "");
+  // Trimmed on write so "" keeps meaning "use the default at send time"
+  // even after a stray space — the pass trims before defaulting, and the
+  // settings preview must see the same value the pass will.
+  const body = String(formData.get("body") ?? "").trim();
 
   // Validated on WRITE with the same parser the pass applies on READ. A junk
   // link is refused even while the recipe is off (a javascript: URL must never

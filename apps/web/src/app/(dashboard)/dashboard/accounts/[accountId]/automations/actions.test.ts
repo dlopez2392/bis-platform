@@ -57,6 +57,15 @@ describe("saveReviewRequestAction", () => {
     expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
   });
 
+  it("stores a whitespace-only body as empty, so it keeps meaning 'use the default'", async () => {
+    // Review finding: the page previews `body.trim() || default` and the pass
+    // sends `row.body.trim() || default`; a stored "   " must not survive to
+    // make those two disagree on a reload.
+    expect(await saveReviewRequestAction("acct_1", fd({ channel: "email", review_url: "", body: "  \n  " }))).toEqual({ ok: true });
+    expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "review_request",
+      { enabled: false, body: "", config: { channel: "email", reviewUrl: "" } }, "user_1");
+  });
+
   it("saves an OFF row with an empty link, so the operator can fill it in later", async () => {
     expect(await saveReviewRequestAction("acct_1", fd({ channel: "email", review_url: "", body: "" }))).toEqual({ ok: true });
     expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "review_request",

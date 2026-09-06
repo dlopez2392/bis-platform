@@ -14,7 +14,6 @@ import { loadAccountBrandInfo } from "./booking";
  * Milestone B adds keys in its own migration.
  */
 export type RecipeKey = "review_request";
-export const RECIPE_KEYS: readonly RecipeKey[] = ["review_request"];
 
 export type AutomationRow = {
   id: string; account_id: string; recipe_key: RecipeKey;
@@ -87,7 +86,11 @@ export function parseReviewRequestConfig(raw: unknown): ReviewRequestConfig | nu
   let parsed: URL;
   try { parsed = new URL(url); } catch { return null; }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
-  return { channel, reviewUrl: url };
+  // The NORMALISED form, not the raw string: `new URL("https://x/a b")`
+  // parses, but the literal space would break the link inside an SMS.
+  // `href` percent-encodes it (and adds the trailing slash a bare origin
+  // needs), so what is stored, previewed and sent is one clickable string.
+  return { channel, reviewUrl: parsed.href };
 }
 
 /**

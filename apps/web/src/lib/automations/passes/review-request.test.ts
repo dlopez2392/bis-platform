@@ -147,6 +147,31 @@ describe("review-request pass — SMS channel, the sendSmsAction discipline", ()
     expect(dbMocks.stampReviewRequested).not.toHaveBeenCalled();
   });
 
+  it("a no_live_number refusal is the same skip, not an email", async () => {
+    senderMock.resolveSmsSender.mockResolvedValue({ ok: false, reason: "no_live_number" });
+    dbMocks.listDueReviewRequests.mockResolvedValue([sms()]);
+    expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, skippedSmsGate: 1 });
+    expect(emailSend).not.toHaveBeenCalled();
+  });
+
+  it("a gate READ error fails that row and keeps the pass's counters, instead of erroring the whole pass", async () => {
+    senderMock.resolveSmsSender.mockRejectedValue(new Error("phone_numbers read failed"));
+    dbMocks.listDueReviewRequests.mockResolvedValue([row(), sms()]);   // email row first, then the sms row
+    expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, sent: 1, failed: 1 });
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+  });
+
+  it("constructs the SMS provider BEFORE writing the message row, so a throwing factory leaves no failed text in the inbox", async () => {
+    // Review finding: ctx.sms() is lazy and throws in production when
+    // TELNYX_API_KEY is unset. Mutation: move `ctx.sms()` back below createMessage.
+    dbMocks.listDueReviewRequests.mockResolvedValue([sms()]);
+    const c: PassContext = { ...ctx(), sms: () => { throw new Error("TELNYX_API_KEY is required in production"); } };
+    expect(await reviewRequestPass.run(c)).toEqual({ ...EMPTY, failed: 1 });
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+    expect(dbMocks.stampReviewRequested).not.toHaveBeenCalled();
+  });
+
   it("consults the gate ONCE per account per tick", async () => {
     dbMocks.listDueReviewRequests.mockResolvedValue([sms(), { ...sms(), bookingId: "bk_r2", contactId: "ct_2" }]);
     await reviewRequestPass.run(ctx());
