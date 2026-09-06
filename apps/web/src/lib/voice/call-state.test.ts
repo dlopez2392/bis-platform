@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   emptyCallState, classifyOutcome, withBooking, withBookingCancelled,
-  withLead, withMessage, withTranscript,
+  withLead, withMessage, withTranscript, withServed, wasServed,
 } from "./call-state";
 
 describe("classifyOutcome priority", () => {
@@ -27,5 +27,50 @@ describe("classifyOutcome priority", () => {
     s = withBooking(s, { id: "b1", contactName: "A", startsAt: "z", endsAt: "w" });
     expect(s.bookings).toHaveLength(1);
     expect(s.bookings[0]!.startsAt).toBe("z");
+  });
+});
+
+describe("served", () => {
+  it("a fresh call has served nobody", () => {
+    expect(wasServed(emptyCallState())).toBe(false);
+    expect(emptyCallState().served).toEqual([]);
+  });
+
+  it("records each action once — two lookups in one call are still one served caller", () => {
+    let s = withServed(emptyCallState(), "booking_found");
+    s = withServed(s, "booking_found");
+    expect(s.served).toEqual(["booking_found"]);
+    s = withServed(s, "cancelled");
+    expect(s.served).toEqual(["booking_found", "cancelled"]);
+    expect(wasServed(s)).toBe(true);
+  });
+
+  /**
+   * The constraint the fix was written under: `abandoned` feeds the calls
+   * list, the outcome pill and the dashboard KPIs, so serving a caller must
+   * NOT change what the row says. If someone later "simplifies" this by
+   * teaching classifyOutcome about `served`, this fails.
+   */
+  it("does NOT change what classifyOutcome says about the call", () => {
+    const spoke = withTranscript(emptyCallState(), { role: "caller", text: "hola", at: "t" });
+    expect(classifyOutcome(spoke)).toBe("abandoned");
+    expect(classifyOutcome(withServed(spoke, "cancelled"))).toBe("abandoned");
+    expect(classifyOutcome(withServed(spoke, "booking_found"))).toBe("abandoned");
+    // And a silent call stays spam even if a tool somehow ran.
+    expect(classifyOutcome(withServed(emptyCallState(), "cancelled"))).toBe("spam");
+  });
+
+  /**
+   * The actual defect, at the state layer: a caller cancelling a booking made
+   * on a PREVIOUS call has nothing in `state.bookings` for
+   * `withBookingCancelled` to map over, so the cancellation leaves no trace
+   * there at all. `served` is the only thing that remembers it.
+   */
+  it("a cancellation from a previous call leaves no booking trace, only the served flag", () => {
+    const spoke = withTranscript(emptyCallState(), { role: "caller", text: "quiero cancelar", at: "t" });
+    const cancelled = withServed(withBookingCancelled(spoke, "booking-from-last-week"), "cancelled");
+    expect(cancelled.bookings).toEqual([]);
+    expect(classifyOutcome(cancelled)).toBe("abandoned");
+    expect(wasServed(cancelled)).toBe(true);
   });
 });

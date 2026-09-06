@@ -17,6 +17,7 @@ import { isValidEmail } from "@/lib/forms/guards";
 import { formatWhen } from "@/lib/booking/time";
 import {
   type CallState, withLead, withMessage, withTranscript, withBooking, withBookingCancelled,
+  withServed,
 } from "../call-state";
 
 export type ToolName =
@@ -71,8 +72,12 @@ export async function runTool(
       const phone = toE164(String(args?.phone ?? "")) ?? ctx.callerNumber;
       if (!phone) return { state, result: { found: false } };
       const hit = await findUpcomingBookingForPhone(ctx.db, ctx.accountId, phone, now.toISOString());
+      // `found: false` is NOT served: we looked and told the caller we had
+      // nothing for them, which is the same empty-handed ending the text-back
+      // exists for. Only a lookup that actually produced their appointment
+      // counts.
       if (!hit) return { state, result: { found: false } };
-      return { state, result: {
+      return { state: withServed(state, "booking_found"), result: {
         found: true, ...hit,
         startsAtLocal: formatWhen(new Date(hit.startsAt), ctx.timezone),
       } };
@@ -350,10 +355,14 @@ export async function runTool(
         }
       }
 
-      const next = withBooking(
+      // `withServed` is belt-and-braces here: the mirrored booking below
+      // already classifies this call `booked`, so it never reaches the
+      // text-back gate today. Recorded anyway so "we served this caller" does
+      // not silently depend on that unrelated mechanism holding.
+      const next = withServed(withBooking(
         { ...state, bookings: state.bookings.filter((b) => b.id !== bookingId) },
         { id: newId, contactName: "", startsAt: slot.startsAt.toISOString(), endsAt: slot.endsAt.toISOString() },
-      );
+      ), "rescheduled");
       return { state: next, result: {
         ok: true, bookingId: newId,
         startsAt: slot.startsAt.toISOString(),
@@ -369,7 +378,12 @@ export async function runTool(
         return { state, result: { ok: false, error: "no such booking — use find_my_booking first" } };
       }
       await setBookingStatus(ctx.db, ctx.accountId, bookingId, "cancelled", "voice");
-      return { state: withBookingCancelled(state, bookingId), result: { ok: true } };
+      // `withBookingCancelled` alone is not enough to remember this happened:
+      // it maps over `state.bookings`, which is EMPTY when the booking was
+      // made on an earlier call — the ordinary case for a cancellation. The
+      // served flag is what survives that, and it is what stops a caller we
+      // served perfectly from being texted "Sorry we missed you just now".
+      return { state: withServed(withBookingCancelled(state, bookingId), "cancelled"), result: { ok: true } };
     }
 
     default:

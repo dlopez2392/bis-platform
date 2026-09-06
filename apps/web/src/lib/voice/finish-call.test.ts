@@ -31,7 +31,9 @@ vi.mock("./summary-service", () => ({ generateSummary: summaryMocks.generateSumm
 
 import type { serviceDb } from "@bis/db";
 import { finishCall, type FinishContext } from "./finish-call";
-import { emptyCallState, withLead, withMessage, withTranscript, withBooking } from "./call-state";
+import {
+  emptyCallState, withLead, withMessage, withTranscript, withBooking, withBookingCancelled, withServed,
+} from "./call-state";
 import { defaultTextbackBody } from "./textback-body";
 
 const ctx: FinishContext = {
@@ -228,6 +230,48 @@ describe("finishCall — missed-call text-back", () => {
       { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
     await finishCall(s, textbackCtx, meta);
     expect(smsRefs.send).not.toHaveBeenCalled();
+  });
+
+  it("does NOT text a caller whose booking we CANCELLED for them", async () => {
+    // The live defect: the booking was made on an earlier call, so
+    // `withBookingCancelled` maps over an empty array and the call ends
+    // `abandoned` with nothing in state. Cancelling is one of the most
+    // ordinary call types there is, and this branch turned every one of them
+    // into an automatic, unretractable "Sorry we missed you just now".
+    const s = withServed(withBookingCancelled(abandonedState(), "booking-from-last-week"), "cancelled");
+    const r = await finishCall(s, textbackCtx, meta);
+    expect(r.outcome).toBe("abandoned");                 // the row is unchanged, on purpose
+    expect(smsRefs.send).not.toHaveBeenCalled();
+    expect(dbMocks.createContact).not.toHaveBeenCalled();
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(senderMocks.resolveSmsSender).not.toHaveBeenCalled();
+  });
+
+  it("does NOT text a caller who rang up to CHECK their appointment time", async () => {
+    // find_my_booking that found something: a complete, successful call that
+    // writes nothing to the database and so classifies `abandoned` too.
+    const s = withServed(abandonedState(), "booking_found");
+    const r = await finishCall(s, textbackCtx, meta);
+    expect(r.outcome).toBe("abandoned");
+    expect(smsRefs.send).not.toHaveBeenCalled();
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+  });
+
+  it("does NOT text a caller we RESCHEDULED, whichever way the state is read", async () => {
+    // Belt and braces: a real reschedule also mirrors a new booking, so this
+    // is `booked` today and never reaches the gate. Pinned against the state
+    // shape changing underneath the gate.
+    const s = withServed(abandonedState(), "rescheduled");
+    await finishCall(s, textbackCtx, meta);
+    expect(smsRefs.send).not.toHaveBeenCalled();
+  });
+
+  it("STILL texts the ordinary abandoned caller — the served gate is not a blanket off switch", async () => {
+    // The regression guard for the two tests above: a caller who spoke and
+    // got nothing is exactly who this feature is for.
+    const r = await finishCall(abandonedState(), textbackCtx, meta);
+    expect(r.outcome).toBe("abandoned");
+    expect(smsRefs.send).toHaveBeenCalledOnce();
   });
 
   it("does NOT text when the toggle is off", async () => {

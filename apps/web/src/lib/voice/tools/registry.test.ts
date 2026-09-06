@@ -99,6 +99,20 @@ describe("find_my_booking", () => {
     expect(r.result).toEqual({ found: false });
     expect(dbMocks.findUpcomingBookingForPhone).not.toHaveBeenCalled();
   });
+  // A caller who rings in only to check their own appointment time changes
+  // nothing in the database, so the call classifies `abandoned` -- and was
+  // therefore getting an automatic "Sorry we missed you just now" text for a
+  // call that went perfectly. This flag is what the text-back gate reads.
+  it("a lookup that FOUND the booking marks the caller served", async () => {
+    dbMocks.findUpcomingBookingForPhone.mockResolvedValue({ bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" });
+    const { state } = await runTool(emptyCallState(), ctx, "find_my_booking", {});
+    expect(state.served).toEqual(["booking_found"]);
+  });
+  it("a lookup that found NOTHING does not - that caller left empty-handed", async () => {
+    dbMocks.findUpcomingBookingForPhone.mockResolvedValue(null);
+    const { state } = await runTool(emptyCallState(), ctx, "find_my_booking", {});
+    expect(state.served).toEqual([]);
+  });
 });
 
 describe("capture_lead / take_message / log_transcript mutate state only", () => {
@@ -339,6 +353,7 @@ describe("reschedule / cancel", () => {
     expect(calls).toEqual(["book", "cancel"]);
     expect(state.bookings.find((b) => b.id === "old1")).toBeUndefined(); // replaced, not duplicated
     expect(state.bookings.find((b) => b.id === "new1")).toMatchObject({ status: "booked" });
+    expect(state.served).toEqual(["rescheduled"]);
   });
   it("cancel marks status and mirrors", async () => {
     dbMocks.getBookingById.mockResolvedValue({ id: "b1", contact_id: "ct1", calendar_id: "cal1",
@@ -349,12 +364,30 @@ describe("reschedule / cancel", () => {
     expect(result).toEqual({ ok: true });
     expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "a1", "b1", "cancelled", "voice");
     expect(state.bookings[0]!.status).toBe("cancelled");
+    expect(state.served).toEqual(["cancelled"]);
+  });
+  /**
+   * THE case behind the served flag: the booking was made on an earlier call,
+   * so `state.bookings` is empty and `withBookingCancelled` maps over nothing.
+   * Without the flag this call ends with no booking, no lead and no message --
+   * `abandoned` -- and the missed-call text-back apologises by SMS for a call
+   * in which we did exactly what the caller rang up for.
+   */
+  it("cancelling a booking made on a PREVIOUS call still marks the caller served", async () => {
+    dbMocks.getBookingById.mockResolvedValue({ id: "b1", contact_id: "ct1", calendar_id: "cal1",
+      starts_at: "2027-06-01T14:00:00Z", ends_at: "x", status: "booked" });
+    dbMocks.setBookingStatus.mockResolvedValue(undefined);
+    const { state } = await runTool(emptyCallState(), ctx, "cancel_appointment", { bookingId: "b1" });
+    expect(state.bookings).toEqual([]);
+    expect(state.served).toEqual(["cancelled"]);
   });
   it("cancel of an unknown booking is a clean error", async () => {
     dbMocks.getBookingById.mockResolvedValue(null);
-    const { result } = await runTool(emptyCallState(), ctx, "cancel_appointment", { bookingId: "ghost" });
+    const { state, result } = await runTool(emptyCallState(), ctx, "cancel_appointment", { bookingId: "ghost" });
     expect(result).toMatchObject({ ok: false });
     expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
+    // Nothing was cancelled, so nobody was served.
+    expect(state.served).toEqual([]);
   });
 
   it("in_person reschedule never touches the meeting provider", async () => {

@@ -10,7 +10,7 @@ import { getSmsProvider } from "@/lib/sms";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { defaultTextbackBody } from "./textback-body";
 import type { CallState } from "./call-state";
-import { classifyOutcome } from "./call-state";
+import { classifyOutcome, wasServed } from "./call-state";
 import { detectSpokenLanguage } from "./language";
 import { generateSummary } from "./summary-service";
 import { summaryFactLine } from "./summarize";
@@ -271,7 +271,20 @@ export async function finishCall(
   // SPOKE, while a call with no caller speech is `spam`. That distinction is
   // what keeps silent robocalls out of the CRM by classification rather than
   // by rule, and it is why creating a contact here is acceptable at all.
-  if (outcome === "abandoned" && ctx.textbackEnabled && ctx.callerNumber) {
+  //
+  // ...but `abandoned` is not the same question as "did we fail this caller".
+  // A caller who rang in purely to CANCEL, or to check what time their
+  // appointment is, leaves no booking, no lead and no message behind — and
+  // for a booking made on an earlier call, not even a mirrored cancellation
+  // (call-state.ts's `withBookingCancelled` maps over an array that is
+  // empty). Those calls classify `abandoned` and were getting an automatic,
+  // unretractable "Sorry we missed you just now" for a call that went
+  // perfectly. `wasServed` is the second half of the gate, and it is
+  // deliberately a separate flag rather than a new classifyOutcome value:
+  // that value feeds the calls list, the outcome pill and the dashboard KPIs,
+  // and re-labelling cancellation calls there is a product decision this
+  // change is not entitled to make.
+  if (outcome === "abandoned" && !wasServed(state) && ctx.textbackEnabled && ctx.callerNumber) {
     try {
       // THE gate, and the only one — the same call the composer makes, never
       // re-derived (lib/sms/sender.ts). Consulted BEFORE any row is written,
