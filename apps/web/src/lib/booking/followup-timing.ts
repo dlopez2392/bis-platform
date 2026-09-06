@@ -147,6 +147,35 @@ function localParts(instant: Date, timeZone: string): Intl.DateTimeFormatPart[] 
 }
 
 /**
+ * Whether `now` falls inside the morning band, read in `zone`. Resolves the
+ * zone itself (a helper must be safe to call from anywhere) and FAILS CLOSED:
+ * a zone Intl cannot resolve or an invalid instant is `false`, never a throw
+ * — this runs inside a cron tick with no one watching.
+ */
+export function isInMorningBand(now: Date, zone: string): boolean {
+  const resolved = resolveAccountZone(zone);
+  if (resolved === null || !Number.isFinite(now.getTime())) return false;
+  const hour = Number(localParts(now, resolved).find((p) => p.type === "hour")?.value ?? NaN);
+  if (!Number.isFinite(hour)) return false;
+  return hour >= FOLLOWUP_MORNING_START_HOUR && hour < FOLLOWUP_MORNING_END_HOUR;
+}
+
+/**
+ * Whether `instant` fell on a strictly EARLIER local calendar day than `now`,
+ * both rendered in `zone`. Comparing local calendar dates (not "at least N
+ * hours ago") is what makes a 09:00 and a 23:00 appointment both wait for
+ * the next morning. Same fail-closed contract as `isInMorningBand`. The
+ * review-request gate applies this twice: to the meeting end, and to the
+ * follow-up's own stamp.
+ */
+export function isStrictlyEarlierLocalDay(instant: Date, now: Date, zone: string): boolean {
+  const resolved = resolveAccountZone(zone);
+  if (resolved === null) return false;
+  if (!Number.isFinite(instant.getTime()) || !Number.isFinite(now.getTime())) return false;
+  return localDayNumber(localParts(now, resolved)) > localDayNumber(localParts(instant, resolved));
+}
+
+/**
  * @param now         the instant the cron tick is running at
  * @param meetingEnd  the booking's `ends_at`
  * @param timezone    the account's `accounts.timezone` — FREE TEXT at
@@ -193,13 +222,8 @@ export function shouldSendFollowupNow(now: Date, meetingEnd: Date, timezone: str
   const zone = resolveAccountZone(timezone);
   if (zone === null) return false;
 
-  const nowParts = localParts(now, zone);
-  const hour = Number(nowParts.find((p) => p.type === "hour")?.value ?? NaN);
-  if (!Number.isFinite(hour)) return false;
-  if (hour < FOLLOWUP_MORNING_START_HOUR || hour >= FOLLOWUP_MORNING_END_HOUR) return false;
-
-  // Rule 2: strictly a later local calendar day than the one the meeting
-  // ended on. Both sides are rendered in the SAME zone, so this is a
-  // comparison of two dates a person in that zone would recognise.
-  return localDayNumber(nowParts) > localDayNumber(localParts(meetingEnd, zone));
+  // Rules 1 and 2, as the two exported predicates — the review-request gate
+  // composes the same two, so they cannot drift apart.
+  if (!isInMorningBand(now, zone)) return false;
+  return isStrictlyEarlierLocalDay(meetingEnd, now, zone);
 }
