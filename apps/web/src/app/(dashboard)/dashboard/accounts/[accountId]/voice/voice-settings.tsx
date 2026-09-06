@@ -1,6 +1,6 @@
 "use client";
 
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
@@ -12,6 +12,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SubmitButton } from "../../submit-button";
 import { m } from "@/lib/messages";
+import { segmentsFor } from "@/lib/sms/segments";
+import { defaultTextbackBody } from "@/lib/voice/textback-body";
 import type { ActionResult } from "./actions";
 
 // The DB-side defaults (0019_voice_core.sql) — used whenever no row exists
@@ -23,6 +25,7 @@ const DEFAULT_PROFILE: Omit<VoiceProfileRow, "id" | "account_id"> = {
   greeting_en: "", greeting_es: "", facts: "", services: "",
   languages: "both", booking_enabled: true,
   after_hours: "hours_then_message", enabled: false,
+  textback_enabled: false, textback_body: "",
 };
 
 const STATUS_LABEL: Record<PhoneNumberStatus, string> = {
@@ -34,12 +37,25 @@ const STATUS_LABEL: Record<PhoneNumberStatus, string> = {
 const STATUS_VALUES: PhoneNumberStatus[] = ["provisioned", "testing", "live", "released"];
 
 function VoiceProfileForm({
-  profile, action,
+  profile, accountName, action,
 }: {
   profile: VoiceProfileRow | null;
+  accountName: string;
   action: (formData: FormData) => Promise<ActionResult>;
 }) {
   const p = profile ?? DEFAULT_PROFILE;
+  // Controlled, not the uncontrolled `defaultValue` every other field in this
+  // form uses, so the segment counter below can recompute on every keystroke
+  // (message-composer.tsx's precedent — the rest of the form stays
+  // uncontrolled). Seeded with the STORED value ONLY, never the live default:
+  // this form submits `textback_body` on every save, including saves of
+  // unrelated fields, so seeding it with `defaultTextbackBody(...)` would
+  // silently pin that frozen text into the column on the operator's next
+  // unrelated save — the exact calendars.followup_body defect this column's
+  // empty-means-default contract exists to prevent. The empty textarea shows
+  // the live default as its `placeholder` instead: greyed, not a real value,
+  // so typing replaces it rather than appending to it.
+  const [textbackBody, setTextbackBody] = useState(p.textback_body);
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     await notifyActionResult(() => action(formData), toast, {
       success: m["voice.profile.saved"],
@@ -137,6 +153,27 @@ function VoiceProfileForm({
           <div className="flex items-center gap-2">
             <Checkbox id="enabled" name="enabled" defaultChecked={p.enabled} />
             <Label htmlFor="enabled">{m["voice.profile.enabled"]}</Label>
+          </div>
+
+          <div className="space-y-2 border-t border-border pt-4">
+            <div className="flex items-center gap-2">
+              <Checkbox id="textback_enabled" name="textback_enabled" defaultChecked={p.textback_enabled} />
+              <Label htmlFor="textback_enabled">{m["voice.textback.enabled"]}</Label>
+            </div>
+            <p className="text-xs text-muted-foreground">{m["voice.textback.help"]}</p>
+            <Label htmlFor="textback_body">{m["voice.textback.body"]}</Label>
+            <textarea
+              id="textback_body" name="textback_body" rows={2}
+              value={textbackBody}
+              onChange={(e) => setTextbackBody(e.target.value)}
+              placeholder={defaultTextbackBody(accountName)}
+              className="w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            />
+            <p className="text-xs text-muted-foreground">
+              {m["compose.smsSegments"]
+                .replace("{chars}", String(segmentsFor(textbackBody).chars))
+                .replace("{segments}", String(segmentsFor(textbackBody).segments))}
+            </p>
           </div>
 
           <SubmitButton pending={pending}>{m["voice.profile.save"]}</SubmitButton>
@@ -244,9 +281,14 @@ function PhoneNumbersPanel({
 }
 
 export function VoiceSettings({
-  profile, numbers, saveProfileAction, assignNumberAction, setStatusAction,
+  profile, accountName, numbers, saveProfileAction, assignNumberAction, setStatusAction,
 }: {
   profile: VoiceProfileRow | null;
+  // The live text-back default (defaultTextbackBody) names the company, so
+  // the textarea's placeholder needs it — passed down from the server
+  // component rather than re-fetched here, matching how this whole page
+  // resolves its data.
+  accountName: string;
   numbers: PhoneNumberRow[];
   saveProfileAction: (formData: FormData) => Promise<ActionResult>;
   assignNumberAction: (formData: FormData) => Promise<ActionResult>;
@@ -254,7 +296,7 @@ export function VoiceSettings({
 }) {
   return (
     <div className="space-y-6">
-      <VoiceProfileForm profile={profile} action={saveProfileAction} />
+      <VoiceProfileForm profile={profile} accountName={accountName} action={saveProfileAction} />
       <PhoneNumbersPanel numbers={numbers} assignAction={assignNumberAction} statusAction={setStatusAction} />
     </div>
   );

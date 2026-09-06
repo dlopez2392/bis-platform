@@ -12,6 +12,7 @@ export type VoiceProfileRow = {
   greeting_en: string; greeting_es: string; facts: string; services: string;
   languages: "en" | "es" | "both"; booking_enabled: boolean;
   after_hours: "hours_then_message" | "message_only"; enabled: boolean;
+  textback_enabled: boolean; textback_body: string;
 };
 export type VoiceProfilePatch = Partial<Omit<VoiceProfileRow, "id" | "account_id">>;
 export type CallOutcome = "booked" | "lead" | "message" | "abandoned" | "spam";
@@ -25,7 +26,7 @@ export type FinishCallPatch = {
 const PHONE_COLS = "id, account_id, e164, telnyx_id, status";
 const PROFILE_COLS =
   "id, account_id, persona_name, greeting_en, greeting_es, facts, services, " +
-  "languages, booking_enabled, after_hours, enabled";
+  "languages, booking_enabled, after_hours, enabled, textback_enabled, textback_body";
 
 export async function getPhoneNumberByE164(
   db: SupabaseClient, e164: string,

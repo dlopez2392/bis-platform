@@ -81,6 +81,22 @@ describe("voice settings actions", () => {
     expect(dbMocks.upsertVoiceProfile).toHaveBeenCalledWith({}, "a1",
       expect.objectContaining({ persona_name: "Alex" }), expect.any(String));
   });
+  it("parses textback_enabled off the checkbox convention and passes textback_body through", async () => {
+    dbMocks.upsertVoiceProfile.mockResolvedValue({});
+    const r = await saveVoiceProfileAction("a1", fd({
+      persona_name: "Alex", languages: "both", textback_enabled: "on", textback_body: "Custom body",
+    }));
+    expect(r).toEqual({ ok: true });
+    expect(dbMocks.upsertVoiceProfile).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ textback_enabled: true, textback_body: "Custom body" }), expect.any(String));
+  });
+  it("an absent textback_enabled checkbox (unchecked) saves false, and an empty body saves empty", async () => {
+    dbMocks.upsertVoiceProfile.mockResolvedValue({});
+    const r = await saveVoiceProfileAction("a1", fd({ persona_name: "Alex", languages: "both" }));
+    expect(r).toEqual({ ok: true });
+    expect(dbMocks.upsertVoiceProfile).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ textback_enabled: false, textback_body: "" }), expect.any(String));
+  });
   it("a blank persona_name falls back to Sofía server-side — the client's `required` is not enforcement", async () => {
     dbMocks.upsertVoiceProfile.mockResolvedValue({});
     const r = await saveVoiceProfileAction("a1", fd({ persona_name: "  ", languages: "both" }));

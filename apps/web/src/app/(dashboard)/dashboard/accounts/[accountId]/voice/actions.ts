@@ -68,6 +68,8 @@ export async function saveVoiceProfileAction(
     booking_enabled: formData.get("booking_enabled") === "on",
     after_hours: afterHours,
     enabled: formData.get("enabled") === "on",
+    textback_enabled: formData.get("textback_enabled") === "on",
+    textback_body: String(formData.get("textback_body") ?? ""),
   };
 
   try {

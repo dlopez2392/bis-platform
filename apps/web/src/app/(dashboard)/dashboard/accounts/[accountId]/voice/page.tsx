@@ -37,15 +37,23 @@ export default async function VoicePage({
   await requireAgencyOnlyAccountAccess(accountId);
 
   const db = serviceDb();
-  const [profile, { data: numbersData, error: numbersError }] = await Promise.all([
-    getVoiceProfile(db, accountId),
-    db.from("phone_numbers")
-      .select("id, account_id, e164, telnyx_id, status")
-      .eq("account_id", accountId)
-      .order("created_at", { ascending: true }),
-  ]);
+  const [profile, { data: numbersData, error: numbersError }, { data: accountData, error: accountError }] =
+    await Promise.all([
+      getVoiceProfile(db, accountId),
+      db.from("phone_numbers")
+        .select("id, account_id, e164, telnyx_id, status")
+        .eq("account_id", accountId)
+        .order("created_at", { ascending: true }),
+      // Just the name — the text-back default (defaultTextbackBody) names the
+      // company so a text from an unknown number doesn't read as spam, the
+      // same field the call flow itself uses ("Thanks for calling
+      // ${accountRow.name}", api/voice/incoming/route.ts).
+      db.from("accounts").select("name").eq("id", accountId).maybeSingle(),
+    ]);
   if (numbersError) throw new Error(`voice: phone number lookup failed: ${numbersError.message}`);
+  if (accountError) throw new Error(`voice: account lookup failed: ${accountError.message}`);
   const numbers = (numbersData ?? []) as PhoneNumberRow[];
+  const accountName = (accountData as { name: string } | null)?.name ?? "";
 
   const boundSaveProfile = saveVoiceProfileAction.bind(null, accountId);
   const boundAssignNumber = assignNumberAction.bind(null, accountId);
@@ -58,6 +66,7 @@ export default async function VoicePage({
       <div className="max-w-2xl space-y-6 p-6">
         <VoiceSettings
           profile={profile}
+          accountName={accountName}
           numbers={numbers}
           saveProfileAction={boundSaveProfile}
           assignNumberAction={boundAssignNumber}
