@@ -758,6 +758,16 @@ export const m = {
   // number just because the render it came from went stale.
   "voice.moveDestinationOccupied": "This client already has a phone number. Release or move it before bringing in another one.",
 
+  // The review request's default body. `{name}` is the house placeholder,
+  // filled at send time with the customer-facing brand name (never
+  // accounts.name); the NoName variant drops the identifying clause rather
+  // than inventing one. Both stay inside GSM-7 on purpose — a curly quote
+  // or an accented vowel would flip every SMS to UCS-2 at 70 chars/segment.
+  // The trailing colon is where the review link is appended
+  // (composeReviewRequestSms); the email template renders it as a button.
+  "automations.review.defaultBody": "Thanks for choosing {name}! If you have a minute, we'd love a quick review:",
+  "automations.review.defaultBodyNoName": "Thanks for choosing us! If you have a minute, we'd love a quick review:",
+
   // The client-facing Calls log — /dashboard/accounts/<id>/calls. BOTH
   // audiences: this is the client's own business data (who rang, what the
   // receptionist did about it), not agency work about the client, so it is
