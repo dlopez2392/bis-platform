@@ -1,3 +1,5 @@
+import { m } from "@/lib/messages";
+
 /**
  * What a missed caller receives when the operator has not written their own.
  *
@@ -25,7 +27,21 @@
  * just accented ones — caught by running the brief's own test
  * (task-5-brief.md), not by inspection. Swapped for a comma, which reads at
  * least as plain and stays in the GSM-7 set.
+ *
+ * Blank/whitespace-only account name: this is the ONLY definition of the
+ * text-back default, so a future caller (the SMS sender, not just this
+ * settings page) inherits the fallback for free instead of needing its own
+ * copy of it — the bug this module was written to make impossible. There is
+ * no placeholder noun ("our team") here on purpose: a text signed by an
+ * invented company name reads like a machine wrote it, and it is worse than
+ * not naming one. Instead the identifying clause is dropped entirely and the
+ * message opens on the apology sentence alone — that sentence already reads
+ * correctly standalone, so nothing else changes. Copy lives in messages.ts
+ * (`voice.textback.defaultBodyNoName`) per this repo's client-facing-copy
+ * rule, the same precedent `setup.number.unknownAccount` sets for a missing
+ * name elsewhere.
  */
 export function defaultTextbackBody(accountName: string): string {
+  if (!accountName.trim()) return m["voice.textback.defaultBodyNoName"];
   return `Hi, this is ${accountName}. Sorry we missed you just now, reply here and we'll help.`;
 }

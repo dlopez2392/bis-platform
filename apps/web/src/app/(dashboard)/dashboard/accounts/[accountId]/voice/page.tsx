@@ -51,19 +51,20 @@ export default async function VoicePage({
       // this value renders placeholder text, nothing is written from it — so
       // a failed read degrades to a fallback (setup/page.tsx:64-69's
       // precedent) instead of throwing and 500ing the whole settings page.
-      // The fallback (and an empty/blank stored name) is a name-shaped noun,
-      // not "", so defaultTextbackBody's sentence still reads as a sentence
-      // ("Hi, this is our team.") instead of "Hi, this is . Sorry we missed
-      // you...".
+      // Passed straight through, blank included: defaultTextbackBody is the
+      // ONE place that knows what to do with a blank name (it drops the
+      // identifying clause rather than inventing one) — substituting a
+      // placeholder noun here would fork that decision away from the
+      // definition this module exists to centralize, and the actual SMS
+      // sender (not this page) will call the same function directly.
       (async () => {
         try {
           const { data, error } = await db.from("accounts").select("name").eq("id", accountId).maybeSingle();
           if (error) throw new Error(error.message);
-          const name = (data as { name: string } | null)?.name?.trim();
-          return name || "our team";
+          return (data as { name: string } | null)?.name ?? "";
         } catch (e) {
           console.error(`voice: account name lookup failed for account ${accountId}: ${String(e)}`);
-          return "our team";
+          return "";
         }
       })(),
     ]);

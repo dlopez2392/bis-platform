@@ -25,4 +25,23 @@ describe("defaultTextbackBody", () => {
     expect(s.chars).toBe(84);
     expect(s.segments).toBe(2);
   });
+
+  // A blank account name must not fall back to an invented placeholder noun
+  // ("our team") — that reads like a machine wrote it. The identifying
+  // clause is dropped entirely and the message opens on the apology alone,
+  // which is why there is no stray "is ." fragment left behind. Both a
+  // wholly empty string and a whitespace-only one take this branch, since
+  // an operator's stored name could plausibly be either.
+  it("a blank or whitespace-only name drops the identifying clause instead of inventing one", () => {
+    const blank = defaultTextbackBody("");
+    const whitespace = defaultTextbackBody("   ");
+    expect(blank).toBe(whitespace);
+    expect(blank).not.toContain("is .");
+    expect(blank).not.toMatch(/\bour team\b/);
+    expect(blank).toBe("Sorry we missed you just now, reply here and we'll help.");
+
+    const s = segmentsFor(blank);
+    expect(s.encoding).toBe("gsm7");
+    expect(s.segments).toBe(1);
+  });
 });

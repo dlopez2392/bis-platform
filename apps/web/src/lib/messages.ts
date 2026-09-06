@@ -710,6 +710,7 @@ export const m = {
   "voice.textback.enabled": "Text back callers who didn't book",
   "voice.textback.help": "When someone talks to Sofía and hangs up without booking, send them a text. Off until you turn it on, and only for companies whose A2P registration is approved.",
   "voice.textback.body": "Message",
+  "voice.textback.defaultBodyNoName": "Sorry we missed you just now, reply here and we'll help.",
   "voice.profile.save": "Save voice profile",
   "voice.profile.saved": "Voice profile saved",
   "voice.profile.saveFailed": "Could not save the voice profile.",
