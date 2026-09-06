@@ -19,13 +19,17 @@ test.describe.configure({ timeout: 180_000 });
 
 const HOURS_DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 
-/** The public booking page's loading placeholder is the literal "…"
- *  character (`booking-page.tsx`: `loadingSlots || !bookerTimezone`). Waiting
- *  for it to clear, rather than a fixed delay, is what makes the slot-finder
- *  below correct against a real server-action round trip whose cost this
- *  spec has no way to predict. */
+/** The public booking page's loading state is the skeleton block
+ *  (`booking-page.tsx`: `.bis-booking-skeletons`, rendered while
+ *  `loadingSlots || !bookerTimezone`). Waiting for it to leave the DOM,
+ *  rather than a fixed delay, is what makes the slot-finder below correct
+ *  against a real server-action round trip whose cost this spec has no way
+ *  to predict. This used to wait on a literal "…" placeholder; when the
+ *  redesign replaced it with skeletons the wait resolved instantly, the
+ *  finder counted slots before they had loaded, and walked six weeks of
+ *  "empty" days — a false negative, not a calendar problem. */
 async function waitForSlotsSettled(page: Page): Promise<void> {
-  await expect(page.getByText("…", { exact: true })).toHaveCount(0, { timeout: 15_000 });
+  await expect(page.locator(".bis-booking-skeletons")).toHaveCount(0, { timeout: 15_000 });
 }
 
 /**
