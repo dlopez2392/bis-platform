@@ -16,6 +16,7 @@ export type NavIconKey =
   | "calendar"
   | "branding"
   | "voice"
+  | "automations"
   | "accounts"
   | "blueprints"
   | "checklist";
@@ -111,6 +112,13 @@ export function buildNavGroups(base: string | null, isAgency: boolean): NavGroup
       items: [
         { href: `${base}/forms`, labelKey: "nav.forms", iconKey: "forms" },
         { href: `${base}/calendar`, labelKey: "nav.calendar", iconKey: "calendar" },
+        // Agency only, like Voice: every recipe here spends the client's
+        // money and messages their customers, so v1 is agency-configured
+        // (spec Section 2). The route is gated independently by
+        // requireAgencyOnlyAccountAccess and every action re-checks isAgency.
+        ...(isAgency
+          ? ([{ href: `${base}/automations`, labelKey: "nav.automations", iconKey: "automations" }] satisfies NavItemSpec[])
+          : []),
         // Clients only — the agency reaches the same panel from Settings.
         // The route itself still works for the agency; hiding a link is
         // not authorization.

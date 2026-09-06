@@ -22,6 +22,7 @@ export const m = {
   "nav.settings": "Settings",
   "nav.branding": "Branding",
   "nav.voice": "Voice",
+  "nav.automations": "Automations",
   "nav.setup": "Setup",
   "nav.accounts": "Companies",
   "nav.blueprints": "Blueprints",
@@ -767,6 +768,25 @@ export const m = {
   // (composeReviewRequestSms); the email template renders it as a button.
   "automations.review.defaultBody": "Thanks for choosing {name}! If you have a minute, we'd love a quick review:",
   "automations.review.defaultBodyNoName": "Thanks for choosing us! If you have a minute, we'd love a quick review:",
+  // Automations page — agency-only, like Voice. Plain admin language; the
+  // recipe names are the things a business owner would call them.
+  "automations.title": "Automations",
+  "automations.agencyOnly": "Only the agency may manage automations.",
+  "automations.review.title": "Review requests",
+  "automations.review.body": "The morning after a job is marked completed, ask the customer for a review. If the follow-up email is on, this waits one more morning so the two never land together. Off until you turn it on.",
+  "automations.review.enabled": "Send review requests",
+  "automations.review.channel": "Send by",
+  "automations.review.channel.email": "Email",
+  "automations.review.channel.sms": "Text message",
+  "automations.review.url": "Review link",
+  "automations.review.urlHint": "Where the customer leaves the review, for example your Google Business review link. It is added to the end of the message.",
+  "automations.review.message": "Message",
+  "automations.review.messageHint": "Leave blank to send our default message.",
+  "automations.review.save": "Save review requests",
+  "automations.review.saved": "Review requests saved",
+  "automations.review.saveFailed": "Could not save review requests.",
+  "automations.review.urlRequired": "Add the review link before turning this on.",
+  "automations.review.urlInvalid": "The review link needs to be a full web address starting with https://",
 
   // The client-facing Calls log — /dashboard/accounts/<id>/calls. BOTH
   // audiences: this is the client's own business data (who rang, what the

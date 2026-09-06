@@ -94,3 +94,25 @@ test.describe("a client's automations boundary, at the database", () => {
     }
   });
 });
+
+test.describe("the Automations page", () => {
+  test("the agency reaches it from the nav and sees the review-request card", async ({ page }) => {
+    const { accountId } = fixture();
+    await page.goto(`/dashboard/accounts/${accountId}/dashboard`);
+    await page.getByRole("link", { name: "Automations" }).click();
+    await expect(page).toHaveURL(new RegExp(`/dashboard/accounts/${accountId}/automations$`));
+    await expect(page.getByText("Review requests", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Review link")).toBeVisible();
+  });
+});
+
+test.describe("a client cannot reach the Automations page", () => {
+  test.use({ storageState: "e2e/.auth/client-state.json" });
+
+  test("is sent to their own dashboard, and the nav never offered it", async ({ page }) => {
+    const { accountId } = fixture();
+    await page.goto(`/dashboard/accounts/${accountId}/automations`);
+    await expect(page).toHaveURL(new RegExp(`/dashboard/accounts/${accountId}/dashboard$`));
+    await expect(page.getByRole("link", { name: "Automations" })).toHaveCount(0);
+  });
+});
