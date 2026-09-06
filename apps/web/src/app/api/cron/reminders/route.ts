@@ -13,12 +13,30 @@ import { safeZone, formatWhen } from "@/lib/booking/time";
 export const dynamic = "force-dynamic";
 
 /**
- * The platform's first scheduled job: Vercel hits this once a day
- * (`vercel.json`'s `crons` entry, `0 14 * * *` — the Hobby plan REJECTS any
- * deployment carrying a sub-daily schedule) to mail bookers a reminder for
- * every booking in the day ahead. `listDueReminders` sizes its query window
- * to this cadence; if the schedule ever returns to every-15-minutes, narrow
- * the window there too or every booker gets their reminder a day early.
+ * The platform's first scheduled job: Vercel hits this every 15 minutes
+ * (`vercel.json`'s `crons` entry, `*/15 * * * *`) to mail bookers a reminder
+ * roughly a day before their booking. The account was on the Hobby plan
+ * until 2026-09-05, and Hobby REJECTS any deployment carrying a sub-daily
+ * schedule, so this ran `0 14 * * *` with both query windows widened to 25h
+ * to compensate. The Pro upgrade let all three move back together.
+ *
+ * The three are COUPLED — never change one alone:
+ *  - this schedule,
+ *  - `listDueReminders`' forward window (`[now+23h, now+24h15m]`), which is
+ *    sized to this cadence; widen the cadence without widening that and
+ *    reminders are missed, restore the cadence without narrowing it and
+ *    every booker gets their reminder up to a day early,
+ *  - `listDueFollowups`' backward window and the follow-up pass below. On
+ *    the daily cron, "next morning" was an ACCIDENT of the 14:00 UTC tick
+ *    hour landing in the Rio Grande Valley's early morning. At 96 ticks a
+ *    day that property is gone and has to be enforced explicitly.
+ *
+ * Cost when nothing is due: two `bookings` selects, both narrow and both
+ * index-shaped (status + a null-check on the stamp column + a range on
+ * `starts_at`/`ends_at`). Each returns [] and short-circuits BEFORE the
+ * per-account `accounts` lookups, no loop body runs, and
+ * `getEmailProvider()` only reads env vars — it opens no connection. An
+ * idle tick is two queries and nothing else, 96 times a day.
  *
  * AUTH is two separate failure modes, not one:
  *  - `CRON_SECRET` unset → 503, zero queries. An unguarded cron route must
