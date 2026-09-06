@@ -419,8 +419,9 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
 
     // Distinct from the reminder pass's null-email handling: that counts
     // toward `failed`, this counts toward its own `skippedNoEmail` bucket —
-    // a follow-up with no email retries harmlessly forever until the
-    // 25h window passes it by, so it is never a "failure" to report.
+    // a follow-up with no email retries harmlessly until `listDueFollowups`'
+    // 37h backward window ages it out, so it is never a "failure" to report.
+    // (It was 25h under the daily cron; the Pro cadence re-derived it.)
     expect(body.followups).toEqual({
       sent: 0, failed: 0, unstamped: 0,
       skippedNoEmail: 1, waitingForMorning: 0, unresolvableTimezone: 0,

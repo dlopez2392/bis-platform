@@ -377,7 +377,7 @@ describe("finishCall — missed-call text-back", () => {
    * for ten seconds inside an invocation that can be near its maxDuration,
    * comes after. Not the default case since Pro lifted the voice route's
    * ceiling to 800s against a 240s call cap, but exactly the case whenever
-   * `PHONE_MAX_CALL_SECONDS` is raised toward the route's 770s clamp. Pinned
+   * `PHONE_MAX_CALL_SECONDS` is raised toward the route's 750s clamp. Pinned
    * so a future reorder cannot quietly put the network call back in front of
    * the durable record.
    */

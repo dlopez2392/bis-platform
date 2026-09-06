@@ -255,10 +255,14 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       // real calls is an explicit `PHONE_MAX_CALL_SECONDS` decision, not a
       // side effect of a plan upgrade.
       //
-      // The clamp is what keeps the cap from eating the tail that runs AFTER
-      // it fires. Everything below has to finish inside `maxDuration` or
-      // Fluid Compute kills the invocation mid-teardown and the call row is
-      // lost. Budgeting that tail against the 800s ceiling:
+      // The clamp is what keeps the cap from eating the invocation. The cap
+      // timer is armed HERE, in `ws.on("open")` — not when the request
+      // arrived — so the budget has two halves, and an earlier version of
+      // this derivation only counted one of them.
+      //
+      // AFTER the cap fires (the tail). Everything below has to finish inside
+      // `maxDuration` or Fluid Compute kills the invocation mid-teardown and
+      // the call row is lost:
       //
       //     5s  closeTimer — the goodbye plays out before `ws.close()`
       //     3s  finish()'s bounded frame drain (`Promise.race([chain, 3000])`)
@@ -268,12 +272,37 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       //         rows, `finishCallRow`, and the staff alert email — sequential
       //         network round trips with no timeout of their own
       //    ---
-      //    30s  worst-case tail  →  800 - 30 = 770
+      //    30s  worst-case tail
       //
-      // Same safety property the old 280-against-300 clamp had, re-derived
-      // rather than rescaled: the old 20s of headroom predated the text-back
-      // leg and no longer covered its 10s carrier timeout on its own.
-      const maxSeconds = Math.min(parsedOrDefault, 770);
+      // BEFORE the cap timer is armed (the connect leg). This is real elapsed
+      // `maxDuration` that the cap knows nothing about, because the clock the
+      // platform is measuring started at the webhook and the cap's own clock
+      // starts here:
+      //
+      //     ~5s  cold start, signature verification, account resolution and
+      //          the `accept` round trip to OpenAI
+      //     15s  the wait for the media socket to open — bounded by
+      //          PHONE_CONNECT_TIMEOUT_MS, whose DEFAULT is 15000ms. The
+      //          worst case that still reaches this line is a connect that
+      //          took just under that; a connect that exceeds it never arms
+      //          the cap at all (`settled` short-circuits above).
+      //    ----
+      //     20s  worst-case connect leg
+      //
+      //   800 - 30 - 20 = 750
+      //
+      // Tightened from 770, which budgeted the tail only. 770 + 30 + 20 = 820
+      // overruns the 800s ceiling by 20s. Unreachable today — the default cap
+      // is 240s and nothing approaches the clamp — but it is the same latent
+      // shape the old 280/300 pair had, and it is cheaper to fix than to
+      // remember.
+      //
+      // THE ASSUMPTION THIS STILL CARRIES: PHONE_CONNECT_TIMEOUT_MS is
+      // configurable up to 60000ms (clamped above). Raising it past ~35s eats
+      // the whole connect budget and this 750 must be re-derived. Nothing
+      // enforces that coupling — the two knobs are independent, and this
+      // comment is the only thing linking them.
+      const maxSeconds = Math.min(parsedOrDefault, 750);
       capTimer = setTimeout(() => {
         log("call cap reached, sending goodbye", { callId, maxSeconds });
         try {

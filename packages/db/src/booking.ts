@@ -381,6 +381,31 @@ const ACCOUNT_BRAND_COLS =
  * different shape of the same risk, and strictly more forgiving in practice
  * because there are 96 chances a day instead of one. Accepted; revisit if
  * outages that long turn out to happen.
+ *
+ * HOW MUCH SLACK THAT ACTUALLY LEAVES, stated plainly because the number is
+ * uncomfortable and the failure is silent. This repo has a MEASURED cron
+ * jitter figure: 54 minutes, from the Hobby daily tick (2026-08-24). A tick
+ * that is on time followed by one that is 54 minutes late is a 69-minute gap,
+ * against a 75-minute window — about SIX MINUTES of slack. Anything wider
+ * than 75 minutes and the booking is stepped over: no reminder, ever, and no
+ * error, no retry and no counter anywhere records it. The `sent` count simply
+ * never mentions that booking.
+ *
+ * Two things keep that from being an emergency rather than a risk. The 54
+ * minutes was measured on HOBBY, where a daily job is scheduled loosely on
+ * purpose; Pro's every-15-minutes scheduling is expected to be far tighter.
+ * And it is UNMEASURED on Pro — expected is not observed, and nothing here
+ * has watched a real Pro tick yet. Worth measuring: log tick arrival times
+ * and check the spread before trusting the 6 minutes.
+ *
+ * DO NOT "fix" this by widening the window. That is the tempting move and it
+ * is wrong: the width is also what decides how early a reminder goes out, and
+ * widening it walks straight back into the bug this branch just fixed (under
+ * the 25h window a booking two hours away and one a day away were both due on
+ * the same tick, so bookers got reminders up to a day early). If Pro's jitter
+ * turns out to be worse than 75 minutes, the answer is a catch-up pass that
+ * can tell "missed" from "not yet" — not a wider window that mistimes every
+ * reminder to cover a rare one.
  */
 export async function listDueReminders(
   db: SupabaseClient, nowIso: string,
