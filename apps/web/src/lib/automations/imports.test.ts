@@ -43,7 +43,8 @@ describe("automations — providers come from ctx, never from imports", () => {
 
   it("the scan actually reaches the pass files (guards the fixture)", () => {
     expect(walk(ROOT).map(rel)).toEqual(expect.arrayContaining(
-      ["harness.ts", "context.ts", "registry.ts", "passes/reminders.ts", "passes/followups.ts"],
+      ["harness.ts", "context.ts", "registry.ts", "passes/reminders.ts", "passes/followups.ts",
+       "passes/review-request.ts"],
     ));
   });
 });

@@ -1,0 +1,87 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+/**
+ * THE SENTINEL. `accounts.name` is the agency's internal label for a company
+ * ("Rio Roofing — trial") and it has reached customers three times. Every
+ * registered pass is run here with due rows that carry that label wherever
+ * the row TYPE still allows it (the two migrated passes' rows do; the
+ * review-request row cannot), and every argument of every send — email and
+ * SMS, plus the SMS message row — is scanned for it.
+ *
+ * Mutation: in passes/reminders.ts pass `reminder.accountName` as `fromName`.
+ */
+const dbMocks = vi.hoisted(() => ({
+  listDueReminders: vi.fn(), stampReminderSent: vi.fn(),
+  listDueFollowups: vi.fn(), stampFollowupSent: vi.fn(),
+  listDueReviewRequests: vi.fn(), stampReviewRequested: vi.fn(), countReviewRequestsSince: vi.fn(),
+  ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(),
+}));
+vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
+vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: async () => ({ ok: true, from: "+19565550000" }) }));
+
+import { runPasses } from "./harness";
+import { PASSES } from "./registry";
+import type { PassContext } from "./context";
+
+const INTERNAL_LABEL = "Rio Roofing — trial";
+const BRAND = "Rio Roofing";
+const TICK = new Date("2026-09-09T14:00:00Z");   // NY 10:00, inside the morning band
+const branding = {
+  brandName: BRAND, brandLogoPath: null, brandColor: null, brandNeutral: null,
+  brandCorners: null, brandType: null, brandMode: null, replyToEmail: null,
+};
+
+beforeEach(() => {
+  for (const fn of Object.values(dbMocks)) fn.mockReset().mockResolvedValue(undefined);
+  dbMocks.listDueReminders.mockResolvedValue([{
+    bookingId: "bk_rem", accountId: "acct_1", startsAt: "2026-09-10T14:00:00.000Z", bookerTimezone: null,
+    cancelToken: "tok", calendarPublicId: "cal", contactEmail: "a@example.com", contactName: "A",
+    accountName: INTERNAL_LABEL, accountTimezone: "America/New_York", branding, fromEmail: null, meetingUrl: null,
+  }]);
+  dbMocks.listDueFollowups.mockResolvedValue([{
+    bookingId: "bk_fu", accountId: "acct_1", startsAt: "2026-09-08T21:00:00.000Z", endsAt: "2026-09-08T22:00:00.000Z",
+    contactEmail: "b@example.com", contactName: "B", accountName: INTERNAL_LABEL,
+    accountTimezone: "America/New_York", branding, fromEmail: null, replyToEmail: null, followupBody: "",
+  }]);
+  const review = {
+    accountId: "acct_1", endsAt: "2026-09-08T22:00:00.000Z", followupSentAt: null, brandName: BRAND, branding,
+    accountTimezone: "America/New_York", fromEmail: null, replyToEmail: null, body: "",
+  };
+  dbMocks.listDueReviewRequests.mockResolvedValue([
+    { ...review, bookingId: "bk_rv_email", contactId: "ct_1", contactEmail: "c@example.com", contactPhone: null,
+      config: { channel: "email", reviewUrl: "https://g.page/r/x/review" } },
+    { ...review, bookingId: "bk_rv_sms", contactId: "ct_2", contactEmail: null, contactPhone: "9565550101",
+      config: { channel: "sms", reviewUrl: "https://g.page/r/x/review" } },
+  ]);
+  dbMocks.countReviewRequestsSince.mockResolvedValue(0);
+  dbMocks.ensureConversation.mockResolvedValue({ id: "convo_1", created: false });
+  dbMocks.createMessage.mockResolvedValue({ id: "msg_1" });
+});
+
+describe("the sentinel: the internal label never reaches a customer, through ANY registered pass", () => {
+  it("every argument of every email send, SMS send and SMS message row is free of the label", async () => {
+    const emailSend = vi.fn(async () => ({ providerMessageId: "e" }));
+    const smsSend = vi.fn(async () => ({ providerMessageId: "s" }));
+    const ctx: PassContext = {
+      db: {} as never, now: TICK, origin: "https://app.example.com",
+      email: { isFake: true, send: emailSend }, sms: () => ({ isFake: true, send: smsSend }),
+    };
+
+    const results = await runPasses(PASSES, ctx);
+
+    // Guard the fixture: every pass actually sent, so the scan has teeth.
+    expect(results.reminders?.sent).toBe(1);
+    expect(results.followups?.sent).toBe(1);
+    expect(results.reviewRequests?.sent).toBe(2);
+
+    const everything = [...emailSend.mock.calls, ...smsSend.mock.calls, ...dbMocks.createMessage.mock.calls]
+      .map((args) => JSON.stringify(args)).join("\n");
+    expect(everything).not.toContain("— trial");
+    expect(everything).not.toContain(INTERNAL_LABEL);
+    expect(everything).toContain(BRAND);   // and the brand name DID go out, in its place
+  });
+
+  it("the registry runs reminders, then follow-ups, then review requests — the collision depends on it", () => {
+    expect(PASSES.map((p) => p.key)).toEqual(["reminders", "followups", "reviewRequests"]);
+  });
+});

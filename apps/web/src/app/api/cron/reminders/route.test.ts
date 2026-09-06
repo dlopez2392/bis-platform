@@ -18,6 +18,17 @@ vi.mock("@bis/db", () => ({
   stampReminderSent: (...a: unknown[]) => stampReminderSentMock(...a),
   listDueFollowups: (...a: unknown[]) => listDueFollowupsMock(...a),
   stampFollowupSent: (...a: unknown[]) => stampFollowupSentMock(...a),
+  // The review-request pass runs on the same harness; with nothing due it
+  // makes exactly one query. Enumerated because a factory mock THROWS on any
+  // export it does not define — including the constant the gate module reads
+  // at import time.
+  listDueReviewRequests: async () => [],
+  stampReviewRequested: async () => undefined,
+  countReviewRequestsSince: async () => 0,
+  ensureConversation: async () => ({ id: "convo", created: false }),
+  createMessage: async () => ({ id: "msg" }),
+  updateMessageStatus: async () => undefined,
+  REVIEW_REQUEST_MAX_AGE_MS: 61 * 60 * 60 * 1000,
 }));
 
 const sendMock = vi.fn();
@@ -116,6 +127,10 @@ const EMPTY_FOLLOWUPS = {
   sent: 0, failed: 0, unstamped: 0,
   skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
 };
+const EMPTY_REVIEW_REQUESTS = {
+  sent: 0, failed: 0, unstamped: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
+  skippedSmsGate: 0, skippedCap: 0, waitingForMorning: 0, unresolvableTimezone: 0,
+};
 
 /**
  * The route reads `new Date()` to decide whether a follow-up's morning has
@@ -181,7 +196,7 @@ describe("GET /api/cron/reminders", () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body).toEqual({ sent: 1, failed: 1, unstamped: 0, followups: EMPTY_FOLLOWUPS });
+    expect(body).toEqual({ sent: 1, failed: 1, unstamped: 0, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS });
     expect(stampReminderSentMock).toHaveBeenCalledTimes(1);
     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_ok");
     expect(stampReminderSentMock).not.toHaveBeenCalledWith(expect.anything(), "bk_fail");
@@ -204,7 +219,7 @@ describe("GET /api/cron/reminders", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, followups: EMPTY_FOLLOWUPS });
+    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS });
     expect(stampReminderSentMock).toHaveBeenCalledTimes(2);
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
@@ -227,7 +242,7 @@ describe("GET /api/cron/reminders", () => {
 
     // Counted as sent, never as failed: folding the stamp into the outer catch
     // would misreport a stamp failure as a send failure in triage.
-    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 1, followups: EMPTY_FOLLOWUPS });
+    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 1, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS });
     expect(stampReminderSentMock).toHaveBeenCalledTimes(STAMP_ATTEMPTS);
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
@@ -243,7 +258,7 @@ describe("GET /api/cron/reminders", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, followups: EMPTY_FOLLOWUPS });
+    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS });
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_fail");
   });
@@ -336,7 +351,7 @@ describe("GET /api/cron/reminders", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body).toEqual({ sent: 0, failed: 1, unstamped: 0, followups: EMPTY_FOLLOWUPS });
+    expect(body).toEqual({ sent: 0, failed: 1, unstamped: 0, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS });
     expect(sendMock).not.toHaveBeenCalled();
     expect(stampReminderSentMock).not.toHaveBeenCalled();
   });
@@ -357,6 +372,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
         sent: 1, failed: 0, unstamped: 0,
         skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
       },
+      reviewRequests: EMPTY_REVIEW_REQUESTS,
     });
     expect(sendMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -386,6 +402,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
         sent: 1, failed: 0, unstamped: 0,
         skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
       },
+      reviewRequests: EMPTY_REVIEW_REQUESTS,
     });
     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_r1");
     expect(stampFollowupSentMock).toHaveBeenCalledWith(expect.anything(), "bk_f1");

@@ -1,14 +1,15 @@
 import type { Pass } from "./context";
 import { remindersPass } from "./passes/reminders";
 import { followupsPass } from "./passes/followups";
+import { reviewRequestPass } from "./passes/review-request";
 
 /**
  * Every pass the cron tick runs, IN ORDER. Order is part of the contract:
  * the follow-up pass stamps `followup_sent_at` and the review-request pass
- * (Task 8) reads it in the same tick, which is what guarantees "how did it
- * go?" on day one and "would you leave a review?" on day two even when both
- * become eligible on the same morning.
+ * reads it in the same tick, which is what guarantees "how did it go?" on
+ * day one and "would you leave a review?" on day two even when both become
+ * eligible on the same morning.
  *
  * Adding a recipe = one line here plus its pass file. Nothing else.
  */
-export const PASSES: readonly Pass[] = [remindersPass, followupsPass];
+export const PASSES: readonly Pass[] = [remindersPass, followupsPass, reviewRequestPass];
