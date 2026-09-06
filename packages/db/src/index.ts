@@ -18,7 +18,8 @@ export { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
          listBoard, listContactOpportunities,
          listOpportunityValuesCreatedBetween } from "./opportunities";
 export { ensureConversation, createMessage, updateMessageStatus,
-         updateMessageStatusByProviderId, findMessageByProviderId, listConversations, listMessages,
+         updateMessageStatusByProviderId, findMessageByProviderId, hasRecentOutboundSms,
+         listConversations, listMessages,
          listContactMessages, incrementUnreadCount, clearUnreadCount,
          type MessageStatus, type NewMessage, type ConversationSummary,
          sumUnreadCount, searchConversations } from "./messaging";

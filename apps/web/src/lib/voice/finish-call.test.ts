@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const dbMocks = vi.hoisted(() => ({
   finishCallRow: vi.fn(), createContact: vi.fn(), ensureConversation: vi.fn(),
   createMessage: vi.fn(), incrementUnreadCount: vi.fn(), emit: vi.fn(),
-  fillContactBlanks: vi.fn(), updateMessageStatus: vi.fn(),
+  fillContactBlanks: vi.fn(), updateMessageStatus: vi.fn(), hasRecentOutboundSms: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const emailRefs = vi.hoisted(() => ({ providerShouldThrow: false, send: vi.fn() }));
@@ -65,6 +65,9 @@ beforeEach(() => {
   dbMocks.finishCallRow.mockResolvedValue(undefined);
   dbMocks.fillContactBlanks.mockResolvedValue([]);
   dbMocks.updateMessageStatus.mockResolvedValue(undefined);
+  // "This caller has not been texted recently" is the ordinary case, so it is
+  // the default here; the cooldown block below flips it.
+  dbMocks.hasRecentOutboundSms.mockResolvedValue(false);
 });
 
 describe("finishCall", () => {
@@ -185,8 +188,11 @@ describe("finishCall — missed-call text-back", () => {
     expect(smsRefs.send).toHaveBeenCalledWith({
       to: "+19562921696", from: "+19565550100", body: defaultTextbackBody("Rio Roofing"),
     });
+    // "ai", not "user": actor_id "voice" with actor_type "user" is the exact
+    // mis-attribution M1b fixed for the Resend webhook, and finish-call.ts's
+    // ACTOR_TYPE comment forbids it for every write this function makes.
     expect(dbMocks.updateMessageStatus).toHaveBeenCalledWith({}, "a1", "m1", "sent",
-      { providerMessageId: "sm1" }, "voice");
+      { providerMessageId: "sm1" }, "voice", "ai");
   });
 
   it("does NOT bump the unread count — unread means INBOUND, and this text is ours", async () => {
@@ -252,8 +258,27 @@ describe("finishCall — missed-call text-back", () => {
     smsRefs.send.mockRejectedValue(new Error("telnyx down"));
     await expect(finishCall(abandonedState(), textbackCtx, meta)).resolves.toMatchObject({ outcome: "abandoned" });
     expect(dbMocks.updateMessageStatus).toHaveBeenCalledWith({}, "a1", "m1", "failed",
-      { error: "telnyx down" }, "voice");
+      { error: "telnyx down" }, "voice", "ai");
     expect(dbMocks.finishCallRow).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("a failing `failed`-status write does not swallow the real send error", async () => {
+    // The status write is BOOKKEEPING; the carrier failure is the news. Awaited
+    // bare, a rejection here replaced the throw entirely — the outer catch
+    // logged the DATABASE error and "telnyx down" vanished with it.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    smsRefs.send.mockRejectedValue(new Error("telnyx down"));
+    dbMocks.updateMessageStatus.mockRejectedValue(new Error("db down"));
+
+    const r = await finishCall(abandonedState(), textbackCtx, meta);
+
+    const logged = errSpy.mock.calls.map((c) => String(c[0]));
+    expect(logged.some((l) => l.includes("text-back failed") && l.includes("telnyx down"))).toBe(true);
+    // The bookkeeping failure is still reported — just not INSTEAD of the send
+    // failure, and not as the text-back's cause of death.
+    expect(logged.some((l) => l.includes("could not mark message m1 failed") && l.includes("db down"))).toBe(true);
+    expect(r).toMatchObject({ stored: true, outcome: "abandoned" });
     errSpy.mockRestore();
   });
 
@@ -285,6 +310,72 @@ describe("finishCall — missed-call text-back", () => {
     expect(dbMocks.updateMessageStatus).toHaveBeenCalledTimes(1);
     expect(dbMocks.updateMessageStatus).not.toHaveBeenCalledWith(
       expect.anything(), expect.anything(), expect.anything(), "failed", expect.anything(), expect.anything());
+    expect(r).toMatchObject({ stored: true, outcome: "abandoned" });
+    errSpy.mockRestore();
+  });
+});
+
+describe("finishCall — text-back cooldown", () => {
+  it("does NOT text a caller who already got one inside the window, and writes no row for it", async () => {
+    // The whole point: a repeat abandoned caller getting the byte-identical
+    // body on every call is what carrier filtering hunts for under 10DLC, and
+    // the A2P registration it burns is the CLIENT'S.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.hasRecentOutboundSms.mockResolvedValue(true);
+
+    const r = await finishCall(abandonedState(), textbackCtx, meta);
+
+    expect(smsRefs.send).not.toHaveBeenCalled();
+    // Checked BEFORE the write, so a suppressed text-back leaves no outbound
+    // row claiming a text that never went out.
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(dbMocks.updateMessageStatus).not.toHaveBeenCalled();
+    expect(errSpy.mock.calls.some((c) => String(c[0]).includes("text-back suppressed"))).toBe(true);
+    // Still a normal finished call: the row lands, pointed at the contact and
+    // conversation, and nothing throws.
+    expect(r).toMatchObject({ stored: true, outcome: "abandoned" });
+    expect(dbMocks.finishCallRow).toHaveBeenCalledWith({}, "a1", "call1",
+      expect.objectContaining({ outcome: "abandoned", contactId: "ct1", conversationId: "cv1" }));
+    errSpy.mockRestore();
+  });
+
+  it("DOES text when the window is clear — the suppression above is not the default", async () => {
+    dbMocks.hasRecentOutboundSms.mockResolvedValue(false);
+    await finishCall(abandonedState(), textbackCtx, meta);
+    expect(smsRefs.send).toHaveBeenCalledOnce();
+  });
+
+  it("asks about THIS account and THIS conversation only, over a 24-hour window", async () => {
+    // Tenant scope is the load-bearing half: a conversation id is a bare uuid,
+    // and this read must never be satisfiable by another tenant's messages.
+    const before = Date.now();
+    await finishCall(abandonedState(), textbackCtx, meta);
+    const after = Date.now();
+
+    expect(dbMocks.hasRecentOutboundSms).toHaveBeenCalledOnce();
+    const [db, accountId, conversationId, since] = dbMocks.hasRecentOutboundSms.mock.calls[0]!;
+    expect(db).toEqual({});
+    expect(accountId).toBe("a1");
+    expect(conversationId).toBe("cv1");
+    const windowMs = 24 * 60 * 60 * 1000;
+    expect((since as Date).getTime()).toBeGreaterThanOrEqual(before - windowMs);
+    expect((since as Date).getTime()).toBeLessThanOrEqual(after - windowMs);
+  });
+
+  it("is consulted only AFTER the gate — a refused account is never even asked", async () => {
+    senderMocks.resolveSmsSender.mockResolvedValue({ ok: false, reason: "a2p_not_approved" });
+    await finishCall(abandonedState(), textbackCtx, meta);
+    expect(dbMocks.hasRecentOutboundSms).not.toHaveBeenCalled();
+  });
+
+  it("a cooldown read that THROWS costs the text, not the call row", async () => {
+    // finishCall is contractually never-throws, and this is now the first DB
+    // read the leg makes.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.hasRecentOutboundSms.mockRejectedValue(new Error("hasRecentOutboundSms failed: db down"));
+    const r = await finishCall(abandonedState(), textbackCtx, meta);
+    expect(smsRefs.send).not.toHaveBeenCalled();
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
     expect(r).toMatchObject({ stored: true, outcome: "abandoned" });
     errSpy.mockRestore();
   });

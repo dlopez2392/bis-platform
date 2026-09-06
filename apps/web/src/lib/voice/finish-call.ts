@@ -1,7 +1,7 @@
 import type { serviceDb, Branding, CallOutcome } from "@bis/db";
 import {
   createContact, fillContactBlanks, ensureConversation, createMessage, incrementUnreadCount,
-  updateMessageStatus, finishCallRow, emit,
+  updateMessageStatus, hasRecentOutboundSms, finishCallRow, emit,
 } from "@bis/db";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { getEmailProvider } from "@/lib/email";
@@ -64,6 +64,24 @@ export interface FinishResult {
 // Resend webhook.
 const ACTOR_ID = "voice";
 const ACTOR_TYPE = "ai";
+
+/**
+ * How long one caller is left alone after a text-back.
+ *
+ * A repeat abandoned caller would otherwise get a byte-identical message on
+ * every call, and repeated identical bodies to one number is exactly what
+ * carrier filtering hunts for under 10DLC — with the CLIENT'S OWN A2P
+ * registration as the thing that gets blocked, not ours. This is a rate limit,
+ * not an opt-out: STOP is enforced upstream at the carrier level by Telnyx,
+ * deliberately not reimplemented here.
+ *
+ * Module-private on purpose. finish-call.test.ts pins the window with its own
+ * literal 24h rather than importing this — a test that reads the constant it
+ * is checking proves only that multiplication works, and would stay green if
+ * someone quietly dropped this to an hour.
+ */
+const TEXTBACK_COOLDOWN_HOURS = 24;
+const TEXTBACK_COOLDOWN_MS = TEXTBACK_COOLDOWN_HOURS * 60 * 60 * 1000;
 
 /**
  * Outcomes worth a human seeing: a durable contact/conversation trail and a
@@ -280,38 +298,71 @@ export async function finishCall(
           const conversation = await ensureConversation(ctx.db, ctx.accountId, contactId, ACTOR_ID, ACTOR_TYPE);
           conversationId = conversation.id;
 
-          // WRITE THEN SEND, same ordering and same reason as sendSmsAction:
-          // the row exists before anything leaves the building, so a provider
-          // failure is a visible message rather than a silent gap. No unread
-          // bump — this text is OURS, and unread counts inbound.
-          const { id: messageId } = await createMessage(ctx.db, ctx.accountId, {
-            conversationId, channel: "sms", direction: "outbound", body,
-          }, ACTOR_ID, ACTOR_TYPE);
+          // The cooldown, consulted AFTER the conversation exists (that is what
+          // "this caller" is keyed on) and BEFORE the message row is written,
+          // so a suppressed text-back writes no row and sends nothing — an
+          // outbound row nobody sent would be a lie in the operator's inbox.
+          // The contact and conversation resolved above are still handed to
+          // the call row below, so a suppressed call is not orphaned.
+          const since = new Date(Date.now() - TEXTBACK_COOLDOWN_MS);
+          if (await hasRecentOutboundSms(ctx.db, ctx.accountId, conversationId, since)) {
+            // Logged, not thrown, and at the same console.error level as every
+            // other diagnostic in this function: suppression is the feature
+            // working, not a failure, but it is also the ONLY trace a caller
+            // who expected a text and did not get one leaves anywhere.
+            console.error(
+              `finishCall ${meta.callRowId ?? "(no row)"}: text-back suppressed — ` +
+              `conversation ${conversationId} already had an outbound SMS ` +
+              `within ${TEXTBACK_COOLDOWN_HOURS}h`,
+            );
+          } else {
+            // WRITE THEN SEND, same ordering and same reason as sendSmsAction:
+            // the row exists before anything leaves the building, so a provider
+            // failure is a visible message rather than a silent gap. No unread
+            // bump — this text is OURS, and unread counts inbound.
+            const { id: messageId } = await createMessage(ctx.db, ctx.accountId, {
+              conversationId, channel: "sms", direction: "outbound", body,
+            }, ACTOR_ID, ACTOR_TYPE);
 
-          // ONLY the send is guarded. Once send() has returned, the text is
-          // gone and irrevocably out the door, so a failure recording that —
-          // the `sent` write below — must never be re-labelled `failed`: that
-          // would tell the operator a delivered text never went out, and drop
-          // the provider id the delivery webhook correlates against. That
-          // failure falls through to the outer catch instead, where it is
-          // logged and the message is left exactly as written. Identical
-          // reasoning to sendSmsAction (conversations/actions.ts).
-          let providerMessageId: string;
-          try {
-            ({ providerMessageId } = await getSmsProvider().send({
-              to: ctx.callerNumber, from: gate.from, body,
-            }));
-          } catch (sendError) {
-            // Nothing left the building, so `failed` is the honest label —
-            // and it is the only signal this failure has, since there is no
-            // retry and no human watching.
-            await updateMessageStatus(ctx.db, ctx.accountId, messageId, "failed",
-              { error: sendError instanceof Error ? sendError.message : "unknown send failure" },
-              ACTOR_ID);
-            throw sendError;
+            // ONLY the send is guarded. Once send() has returned, the text is
+            // gone and irrevocably out the door, so a failure recording that —
+            // the `sent` write below — must never be re-labelled `failed`: that
+            // would tell the operator a delivered text never went out, and drop
+            // the provider id the delivery webhook correlates against. That
+            // failure falls through to the outer catch instead, where it is
+            // logged and the message is left exactly as written. Identical
+            // reasoning to sendSmsAction (conversations/actions.ts).
+            let providerMessageId: string;
+            try {
+              ({ providerMessageId } = await getSmsProvider().send({
+                to: ctx.callerNumber, from: gate.from, body,
+              }));
+            } catch (sendError) {
+              // Nothing left the building, so `failed` is the honest label —
+              // and it is the only signal this failure has, since there is no
+              // retry and no human watching.
+              //
+              // Its own try/catch, because this write is BOOKKEEPING and
+              // `sendError` is the news. Awaited bare, a rejection here would
+              // replace the throw below entirely: the outer catch would log a
+              // database error, the genuine carrier failure would vanish, and
+              // the row would sit `queued` with nothing saying why. The
+              // original error survives its own bookkeeping either way.
+              try {
+                await updateMessageStatus(ctx.db, ctx.accountId, messageId, "failed",
+                  { error: sendError instanceof Error ? sendError.message : "unknown send failure" },
+                  ACTOR_ID, ACTOR_TYPE);
+              } catch (statusError) {
+                console.error(
+                  `finishCall ${meta.callRowId ?? "(no row)"}: could not mark message ` +
+                  `${messageId} failed: ${String(statusError)}`,
+                );
+              }
+              throw sendError;
+            }
+            await updateMessageStatus(ctx.db, ctx.accountId, messageId, "sent",
+              { providerMessageId }, ACTOR_ID, ACTOR_TYPE);
           }
-          await updateMessageStatus(ctx.db, ctx.accountId, messageId, "sent",
-            { providerMessageId }, ACTOR_ID);
         }
       }
     } catch (e) {

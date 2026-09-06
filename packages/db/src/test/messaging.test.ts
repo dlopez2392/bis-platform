@@ -3,7 +3,8 @@ import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
 import {
   ensureConversation, createMessage, updateMessageStatus,
-  updateMessageStatusByProviderId, findMessageByProviderId, listConversations, listMessages,
+  updateMessageStatusByProviderId, findMessageByProviderId, hasRecentOutboundSms,
+  listConversations, listMessages,
   incrementUnreadCount, sumUnreadCount, searchConversations,
 } from "../messaging";
 
@@ -107,6 +108,90 @@ describe("messaging", () => {
       [msg] = await listMessages(db, accountId, convo.id);
       expect(msg!.status).toBe("failed");
       expect(msg!.error).toBe("boom");
+
+      // The actorType parameter is OPTIONAL and defaults to "user" — pins that
+      // adding it did not change what an existing call site (this one, and both
+      // of conversations/actions.ts's) writes.
+      const { data: ev } = await db.from("events").select("actor_type, actor_id")
+        .eq("account_id", accountId).eq("type", "message.status_changed")
+        .order("created_at", { ascending: false }).limit(1);
+      expect(ev![0]!.actor_type).toBe("user");
+      expect(ev![0]!.actor_id).toBe("user_test");
+    }));
+
+  it("updateMessageStatus attributes an AI-actor write to the AI, not to a user", () =>
+    withTestAccount(async (db, accountId) => {
+      // The voice text-back writes these statuses with actor_id "voice". Before
+      // the actorType parameter existed it emitted actor_type "user" — the
+      // exact mis-attribution M1b fixed for the Resend webhook.
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "voice", "ai");
+      const { id } = await createMessage(db, accountId, {
+        conversationId: convo.id, channel: "sms", direction: "outbound", body: "x",
+      }, "voice", "ai");
+
+      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId: "prov_ai" }, "voice", "ai");
+
+      const { data: ev } = await db.from("events").select("actor_type, actor_id")
+        .eq("account_id", accountId).eq("type", "message.status_changed")
+        .order("created_at", { ascending: false }).limit(1);
+      expect(ev![0]!.actor_type).toBe("ai");
+      expect(ev![0]!.actor_id).toBe("voice");
+    }));
+
+  it("hasRecentOutboundSms holds the text-back cooldown open for a real send but not for a failed one", () =>
+    withTestAccount(async (db, accountId) => {
+      // One fixture cycle for the whole cooldown contract, deliberately — see
+      // the note in the createMessage test above about contention.
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "voice", "ai");
+      const since = () => new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+      // A caller nobody has texted yet.
+      expect(await hasRecentOutboundSms(db, accountId, convo.id, since())).toBe(false);
+
+      const { id } = await createMessage(db, accountId, {
+        conversationId: convo.id, channel: "sms", direction: "outbound",
+        body: "Sorry we missed you just now.",
+      }, "voice", "ai");
+
+      // `queued` counts. That is the state a text whose post-send bookkeeping
+      // write blew up is left in, and that text DID go out.
+      expect(await hasRecentOutboundSms(db, accountId, convo.id, since())).toBe(true);
+
+      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId: "prov_cool" }, "voice", "ai");
+      expect(await hasRecentOutboundSms(db, accountId, convo.id, since())).toBe(true);
+
+      // THE DECIDED DIRECTION: `failed` means the provider refused and nothing
+      // was ever delivered. Counting it would silence the feature permanently
+      // for this caller on the strength of one outage.
+      await updateMessageStatus(db, accountId, id, "failed", { error: "carrier refused" }, "voice", "ai");
+      expect(await hasRecentOutboundSms(db, accountId, convo.id, since())).toBe(false);
+
+      // `bounced` is the other side of that line: it left the building.
+      await updateMessageStatus(db, accountId, id, "bounced", {}, "voice", "ai");
+      expect(await hasRecentOutboundSms(db, accountId, convo.id, since())).toBe(true);
+
+      // The WINDOW is real, not decorative: a `since` after the row was written
+      // excludes it.
+      expect(await hasRecentOutboundSms(db, accountId, convo.id, new Date(Date.now() + 60_000))).toBe(false);
+
+      // The TENANT boundary. Same conversation id, another account's context:
+      // without the account_id filter the conversation filter alone would still
+      // match this row.
+      expect(await hasRecentOutboundSms(
+        db, "00000000-0000-0000-0000-000000000000", convo.id, since())).toBe(false);
+
+      // Channel and direction both filter: the caller texting US back is not a
+      // text-back, and neither is an email.
+      await createMessage(db, accountId, {
+        conversationId: convo.id, channel: "sms", direction: "inbound", body: "who is this",
+      }, "sms-inbound", "system");
+      await createMessage(db, accountId, {
+        conversationId: convo.id, channel: "email", direction: "outbound", body: "following up",
+      }, "user_test");
+      await updateMessageStatus(db, accountId, id, "failed", { error: "carrier refused" }, "voice", "ai");
+      expect(await hasRecentOutboundSms(db, accountId, convo.id, since())).toBe(false);
     }));
 
   it("updateMessageStatusByProviderId finds the row without tenant context", () =>

@@ -138,6 +138,13 @@ export async function updateMessageStatus(
   status: MessageStatus,
   patch: { providerMessageId?: string; error?: string } = {},
   actorId = "system",
+  // Same `actorType: ActorType = "user"` convention every sibling in this file
+  // uses, and defaulted the same way so no existing call site changes
+  // behaviour. It exists because the voice text-back writes these statuses
+  // with actor_id "voice" — an AI, not a human — and without this the event
+  // said `actor_type: "user"`, which is the exact bug M1b fixed for the Resend
+  // webhook (see emit's doc in events.ts).
+  actorType: ActorType = "user",
 ): Promise<void> {
   const row: Record<string, unknown> = { status, updated_at: new Date().toISOString() };
   if (patch.providerMessageId !== undefined) row.provider_message_id = patch.providerMessageId;
@@ -147,7 +154,7 @@ export async function updateMessageStatus(
     .update(row).eq("account_id", accountId).eq("id", messageId);
   if (error) throw new Error(`updateMessageStatus failed: ${error.message}`);
 
-  await emit(db, accountId, "message.status_changed", actorId, { messageId, status });
+  await emit(db, accountId, "message.status_changed", actorId, { messageId, status }, actorType);
 }
 
 /**
@@ -209,6 +216,48 @@ export async function findMessageByProviderId(
     .maybeSingle();
   if (error) throw new Error(`findMessageByProviderId failed: ${error.message}`);
   return (data as { id: string } | null) ?? null;
+}
+
+/**
+ * Has this conversation already been texted since `since`?
+ *
+ * The cooldown read behind the missed-call text-back (finish-call.ts): a
+ * repeat abandoned caller would otherwise receive a byte-identical message on
+ * every call, which is precisely the pattern carrier filtering looks for under
+ * 10DLC — and the A2P registration at risk is the CLIENT'S OWN. Like
+ * `findMessageByProviderId` above, this runs BEFORE the insert rather than
+ * reconciling after it, so a suppressed text-back leaves no row at all.
+ *
+ * Scoped by accountId AND conversationId, both. Conversations are
+ * one-per-contact (see `ensureConversation`), so the conversation filter alone
+ * already means "this caller"; the account filter is the tenant boundary and
+ * is not redundant with it — a conversation id is a bare uuid arriving from a
+ * caller's own state, and no read in this file is allowed to be satisfiable by
+ * another tenant's rows.
+ *
+ * `failed` is deliberately EXCLUDED. A non-failed row (including `queued`,
+ * which is what a text whose post-send bookkeeping write blew up is left as)
+ * means a text really did leave the building; a `failed` row means the
+ * provider refused and nothing was ever delivered, so counting it would
+ * silence the feature permanently for that caller on the strength of an
+ * outage. `bounced` still counts: that message did go out, and the carrier
+ * rejecting it is the last reason to send it again.
+ */
+export async function hasRecentOutboundSms(
+  db: SupabaseClient, accountId: string, conversationId: string, since: Date,
+): Promise<boolean> {
+  const { data, error } = await db.from("messages")
+    .select("id")
+    .eq("account_id", accountId)
+    .eq("conversation_id", conversationId)
+    .eq("channel", "sms")
+    .eq("direction", "outbound")
+    .neq("status", "failed")
+    .gte("created_at", since.toISOString())
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`hasRecentOutboundSms failed: ${error.message}`);
+  return data !== null;
 }
 
 /**
