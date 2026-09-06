@@ -10,6 +10,17 @@ export default defineConfig({
     // that dangerous belongs in a unit test rather than only in the e2e run
     // that acts on it.
     include: ["src/**/*.test.ts", "e2e/**/*.test.ts"],
+    // Runtime-only configuration is pinned OFF for the unit suite, whatever
+    // the ambient environment holds. `originFrom` checks APP_ORIGIN ahead of
+    // the Host header by design, so eleven tests that assert host-derived
+    // behaviour (origin.test.ts, and the booking/form action suites that
+    // build links) silently invert when it is set — which is exactly what
+    // happened the first time CI ran with the deployment's env vars in
+    // scope. Blank reads as unset (`configuredOrigin` trims, then nulls an
+    // empty string), so this pins the default rather than inventing one, and
+    // the tests that DO exercise APP_ORIGIN set it themselves through
+    // `vi.stubEnv` or a literal env object.
+    env: { APP_ORIGIN: "" },
   },
   resolve: {
     alias: {

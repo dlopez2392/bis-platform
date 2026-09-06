@@ -34,10 +34,15 @@ on:
 
 env:
   # Not secrets — the same literals .env.example carries for every developer.
+  # Only what the gates actually need to RUN belongs here. APP_ORIGIN and
+  # EMAIL_FROM were set in the first draft, on the reasoning that CI should
+  # mirror the deployment; they are runtime configuration, and mirroring them
+  # changed what the gates measure. APP_ORIGIN is read ahead of the Host
+  # header by design, so it inverted eleven link-building tests and pointed
+  # the e2e run's cancel links at the production domain instead of the local
+  # server. A gate must test the code, not the deployment's settings.
   NEXT_PUBLIC_CLERK_SIGN_IN_URL: /sign-in
   NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_h2GmSCjLzD74RotkQAvMbA_BL6FAI4k
-  EMAIL_FROM: crm@bis-rgv.com
-  APP_ORIGIN: https://app.bis-rgv.com
   # Secrets. Sending is FAKE everywhere except VERCEL_ENV=production
   # (.env.example), so a CI run never emails a real address; the service-role
   # key and DB URL are what the db suite, one web test, and the e2e fixture
