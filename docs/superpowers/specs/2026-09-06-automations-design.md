@@ -355,6 +355,27 @@ one spec that drives PostgREST with a minted client token and pins `42501`).
 - `brand_name` null on a real account still shows `accounts.name` to a
   customer, by the existing platform-wide fallback. Not new, not fixed here.
 
+## Decisions taken after Milestone A shipped (danlo, 2026-09-06)
+
+Milestone A merged via PR #26 (`main` @ `20ad5f3`). Its review surfaced two
+spec-level questions; both are decided here and both land in Milestone B,
+because the no-show nudge inherits the same two shapes.
+
+- **One SMS attempt per booking per day.** Write-then-send on a cron meant
+  a carrier outage across a morning band left ~12 failed `messages` rows per
+  booking, and ~12 more the next morning. Rule: after a FAILED SMS attempt
+  for a booking, the pass skips that booking for 24h (the text-back cooldown
+  pattern, `hasRecentOutboundSms`). At most three attempts across the 61h
+  window, one visible failed row each. Counted under its own name.
+- **The review clock anchors on completion, not only on `ends_at`.** A
+  client who marks a week's jobs completed on Friday got no review requests
+  for anything older than 61h, and no counter said so. Milestone B adds
+  `bookings.completed_at`, stamped by `setBookingStatus` when status flips
+  to `completed`, and the review gate measures staleness and "strictly
+  earlier local day" from the LATER of `ends_at` and `completed_at`. The
+  61h derivation is unchanged; only the anchor moves. Rows completed before
+  the migration have `completed_at` null and keep the `ends_at` anchor.
+
 ## Status and next steps
 
 All five sections approved by danlo on 2026-09-06. In order:
