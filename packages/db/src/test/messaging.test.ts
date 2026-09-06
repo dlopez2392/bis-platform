@@ -195,6 +195,14 @@ describe("messaging", () => {
       expect(await hasRecentOutboundSms(db, accountId, convo.id, since())).toBe(false);
     }));
 
+  /**
+   * 60s, not the 20s file default. MEASURED, not guessed: this test takes
+   * ~10.3s alone on an idle machine (`vitest run messaging.test.ts -t
+   * "listFailedOutboundSms ties a failed text-back"`), leaving little
+   * headroom against the default — so under full-suite contention it
+   * intermittently timed out and took `pnpm check` red with it. Nothing is
+   * asserted less strictly; only the clock moves.
+   */
   it("listFailedOutboundSms ties a failed text-back to the CALL whose window holds it, keeps it after a later text goes out, and refuses to see another tenant's rows", () =>
     withTestAccount(async (db, accountId) => {
       // One fixture cycle for the whole contract, deliberately — same
@@ -393,7 +401,7 @@ describe("messaging", () => {
       expect(new Set(reversed.map((h) => h.messageId)).size).toBe(2);
       expect(reversed.find((h) => h.callId === "call-first")!.messageId).toBe(firstCall.id);
       expect(reversed.find((h) => h.callId === "call-second")!.messageId).toBe(secondCall.id);
-    }));
+    }), 60_000);
 
   it("updateMessageStatusByProviderId finds the row without tenant context", () =>
     withTestAccount(async (db, accountId) => {
