@@ -3,6 +3,15 @@ import { m } from "@/lib/messages";
 /**
  * What a missed caller receives when the operator has not written their own.
  *
+ * `brandName` is the CUSTOMER-FACING company name — `brandDisplayName`
+ * (email/templates/shell.ts), i.e. `brand_name` falling back to
+ * `accounts.name`. Never `accounts.name` on its own: that is the agency's
+ * internal label for the company ("Rio Roofing — trial"), and this text goes
+ * to the client's customer, signed. It is also the same trap that put the
+ * internal label on the email From line before M4d, and here it costs money
+ * as well as face — the em dash such labels carry is outside GSM-7, so the
+ * whole message silently becomes two segments.
+ *
  * One SMS segment in GSM-7 when the company name stays inside the GSM-7
  * character set (GSM7_BASE, segments.ts). That is NOT true for every
  * plausible company name: this is a Rio Grande Valley platform with heavily
@@ -41,7 +50,7 @@ import { m } from "@/lib/messages";
  * rule, the same precedent `setup.number.unknownAccount` sets for a missing
  * name elsewhere.
  */
-export function defaultTextbackBody(accountName: string): string {
-  if (!accountName.trim()) return m["voice.textback.defaultBodyNoName"];
-  return `Hi, this is ${accountName}. Sorry we missed you just now, reply here and we'll help.`;
+export function defaultTextbackBody(brandName: string): string {
+  if (!brandName.trim()) return m["voice.textback.defaultBodyNoName"];
+  return `Hi, this is ${brandName}. Sorry we missed you just now, reply here and we'll help.`;
 }

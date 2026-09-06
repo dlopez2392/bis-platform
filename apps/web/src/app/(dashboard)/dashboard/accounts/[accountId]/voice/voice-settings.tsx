@@ -37,10 +37,10 @@ const STATUS_LABEL: Record<PhoneNumberStatus, string> = {
 const STATUS_VALUES: PhoneNumberStatus[] = ["provisioned", "testing", "live", "released"];
 
 function VoiceProfileForm({
-  profile, accountName, action,
+  profile, brandName, action,
 }: {
   profile: VoiceProfileRow | null;
-  accountName: string;
+  brandName: string;
   action: (formData: FormData) => Promise<ActionResult>;
 }) {
   const p = profile ?? DEFAULT_PROFILE;
@@ -62,7 +62,7 @@ function VoiceProfileForm({
   // so the preview has to be the default's own segment count, not 0
   // chars / 1 message for a string that will never be what goes out. The
   // moment the operator types anything, `textbackBody` itself takes over.
-  const previewBody = textbackBody || defaultTextbackBody(accountName);
+  const previewBody = textbackBody || defaultTextbackBody(brandName);
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     await notifyActionResult(() => action(formData), toast, {
       success: m["voice.profile.saved"],
@@ -173,7 +173,7 @@ function VoiceProfileForm({
               id="textback_body" name="textback_body" rows={2}
               value={textbackBody}
               onChange={(e) => setTextbackBody(e.target.value)}
-              placeholder={defaultTextbackBody(accountName)}
+              placeholder={defaultTextbackBody(brandName)}
               className="w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
             />
             <p className="text-xs text-muted-foreground">
@@ -288,14 +288,17 @@ function PhoneNumbersPanel({
 }
 
 export function VoiceSettings({
-  profile, accountName, numbers, saveProfileAction, assignNumberAction, setStatusAction,
+  profile, brandName, numbers, saveProfileAction, assignNumberAction, setStatusAction,
 }: {
   profile: VoiceProfileRow | null;
   // The live text-back default (defaultTextbackBody) names the company, so
   // the textarea's placeholder needs it — passed down from the server
   // component rather than re-fetched here, matching how this whole page
-  // resolves its data.
-  accountName: string;
+  // resolves its data. Already resolved to the CUSTOMER-FACING name
+  // (`brandDisplayName`, page.tsx), never the agency's internal
+  // `accounts.name` label: what the operator previews has to be the string
+  // that actually sends.
+  brandName: string;
   numbers: PhoneNumberRow[];
   saveProfileAction: (formData: FormData) => Promise<ActionResult>;
   assignNumberAction: (formData: FormData) => Promise<ActionResult>;
@@ -303,7 +306,7 @@ export function VoiceSettings({
 }) {
   return (
     <div className="space-y-6">
-      <VoiceProfileForm profile={profile} accountName={accountName} action={saveProfileAction} />
+      <VoiceProfileForm profile={profile} brandName={brandName} action={saveProfileAction} />
       <PhoneNumbersPanel numbers={numbers} assignAction={assignNumberAction} statusAction={setStatusAction} />
     </div>
   );

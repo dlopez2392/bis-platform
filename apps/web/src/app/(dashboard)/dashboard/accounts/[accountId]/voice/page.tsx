@@ -1,7 +1,8 @@
-import { serviceDb, getVoiceProfile, type PhoneNumberRow } from "@bis/db";
+import { serviceDb, getVoiceProfile, getBranding, type PhoneNumberRow } from "@bis/db";
 import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
 import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
+import { brandDisplayName } from "@/lib/email/templates/shell";
 import { m } from "@/lib/messages";
 import { VoiceSettings } from "./voice-settings";
 import { saveVoiceProfileAction, assignNumberAction, setNumberStatusAction } from "./actions";
@@ -37,7 +38,7 @@ export default async function VoicePage({
   await requireAgencyOnlyAccountAccess(accountId);
 
   const db = serviceDb();
-  const [profile, { data: numbersData, error: numbersError }, accountName] =
+  const [profile, { data: numbersData, error: numbersError }, brandName] =
     await Promise.all([
       getVoiceProfile(db, accountId),
       db.from("phone_numbers")
@@ -45,25 +46,34 @@ export default async function VoicePage({
         .eq("account_id", accountId)
         .order("created_at", { ascending: true }),
       // Just the name — the text-back default (defaultTextbackBody) names the
-      // company so a text from an unknown number doesn't read as spam, the
-      // same field the call flow itself uses ("Thanks for calling
-      // ${accountRow.name}", api/voice/incoming/route.ts). Cosmetic only —
-      // this value renders placeholder text, nothing is written from it — so
-      // a failed read degrades to a fallback (setup/page.tsx:64-69's
-      // precedent) instead of throwing and 500ing the whole settings page.
-      // Passed straight through, blank included: defaultTextbackBody is the
-      // ONE place that knows what to do with a blank name (it drops the
-      // identifying clause rather than inventing one) — substituting a
-      // placeholder noun here would fork that decision away from the
-      // definition this module exists to centralize, and the actual SMS
-      // sender (not this page) will call the same function directly.
+      // company so a text from an unknown number doesn't read as spam.
+      //
+      // Resolved through `brandDisplayName`, exactly as the sender does
+      // (lib/voice/finish-call.ts), and NOT off `accounts.name` alone: that
+      // column is the agency's internal label ("Rio Roofing — trial"), so
+      // reading it here previewed one message to the operator while a
+      // different one went to the customer. A preview that does not match
+      // what sends is worse than no preview — the operator approves copy they
+      // never see, and the em dash such labels carry silently doubles the
+      // segment count the counter underneath is there to show.
+      //
+      // Cosmetic only — this value renders placeholder text, nothing is
+      // written from it — so a failed read degrades to a fallback
+      // (setup/page.tsx:64-69's precedent) instead of throwing and 500ing the
+      // whole settings page. Passed straight through, blank included:
+      // defaultTextbackBody is the ONE place that knows what to do with a
+      // blank name (it drops the identifying clause rather than inventing
+      // one).
       (async () => {
         try {
-          const { data, error } = await db.from("accounts").select("name").eq("id", accountId).maybeSingle();
+          const [branding, { data, error }] = await Promise.all([
+            getBranding(db, accountId),
+            db.from("accounts").select("name").eq("id", accountId).maybeSingle(),
+          ]);
           if (error) throw new Error(error.message);
-          return (data as { name: string } | null)?.name ?? "";
+          return brandDisplayName(branding, (data as { name: string } | null)?.name ?? "");
         } catch (e) {
-          console.error(`voice: account name lookup failed for account ${accountId}: ${String(e)}`);
+          console.error(`voice: brand name lookup failed for account ${accountId}: ${String(e)}`);
           return "";
         }
       })(),
@@ -82,7 +92,7 @@ export default async function VoicePage({
       <div className="max-w-2xl space-y-6 p-6">
         <VoiceSettings
           profile={profile}
-          accountName={accountName}
+          brandName={brandName}
           numbers={numbers}
           saveProfileAction={boundSaveProfile}
           assignNumberAction={boundAssignNumber}

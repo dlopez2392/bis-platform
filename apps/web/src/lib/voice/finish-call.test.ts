@@ -30,6 +30,7 @@ const summaryMocks = vi.hoisted(() => ({ generateSummary: vi.fn() }));
 vi.mock("./summary-service", () => ({ generateSummary: summaryMocks.generateSummary }));
 
 import type { serviceDb } from "@bis/db";
+import { segmentsFor } from "@/lib/sms/segments";
 import { finishCall, type FinishContext } from "./finish-call";
 import {
   emptyCallState, withLead, withMessage, withTranscript, withBooking, withBookingCancelled, withServed,
@@ -208,6 +209,39 @@ describe("finishCall — missed-call text-back", () => {
     await finishCall(abandonedState(), textbackCtx, meta);
     expect(dbMocks.finishCallRow).toHaveBeenCalledWith({}, "a1", "call1",
       expect.objectContaining({ outcome: "abandoned", contactId: "ct1", conversationId: "cv1" }));
+  });
+
+  /**
+   * `accounts.name` is the agency's internal label for the company — the
+   * repo's own record of this defect on the email side is at
+   * conversations/actions.ts's send: "Rio Roofing — trial" was reaching the
+   * customer's From line. It was reaching the text-back's signature too, so a
+   * stranger received "Hi, this is Rio Roofing — trial." AND, because that em
+   * dash is outside GSM-7, paid for two segments to say it.
+   */
+  it("signs with the BRAND name, never the agency's internal accounts.name label", async () => {
+    const branded: FinishContext = {
+      ...textbackCtx,
+      accountName: "Rio Roofing — trial",
+      branding: { ...textbackCtx.branding, brandName: "Rio Roofing" },
+    };
+    await finishCall(abandonedState(), branded, meta);
+    const body = (smsRefs.send.mock.calls[0]![0] as { body: string }).body;
+    expect(body).toContain("Rio Roofing");
+    expect(body).not.toContain("trial");
+    expect(body).toBe(defaultTextbackBody("Rio Roofing"));
+    // The message the operator is billed for, not just the one they read.
+    expect(segmentsFor(body)).toMatchObject({ encoding: "gsm7", segments: 1 });
+    // And the row carries the same string that went out.
+    expect(dbMocks.createMessage).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ body }), "voice", "ai");
+  });
+
+  it("falls back to the account name only when the company has no brand name", async () => {
+    await finishCall(abandonedState(), textbackCtx, meta);
+    expect(smsRefs.send).toHaveBeenCalledWith(expect.objectContaining({
+      body: defaultTextbackBody("Rio Roofing"),
+    }));
   });
 
   it("an operator's own body is sent verbatim; the default is only the empty-body fallback", async () => {

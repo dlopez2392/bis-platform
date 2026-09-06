@@ -11,9 +11,27 @@ export type EmailBrand = {
   accent: FormAccent;
 };
 
+/**
+ * The company name a CUSTOMER may be shown, from anywhere — email From line,
+ * SMS body, booking page.
+ *
+ * `accounts.name` is the agency's internal label for the company ("Rio
+ * Roofing — trial"); `accounts.brand_name` is what the client's own customers
+ * know them as. This is the one definition of that choice, deliberately
+ * separate from `emailBrand` below so a non-email caller can resolve the name
+ * without dragging the logo and accent-colour math along — and so there is
+ * never a second, subtly different copy of the rule. It has been re-derived
+ * twice already: once on the email From line (fixed in M4d, see
+ * conversations/actions.ts's send), and once in the missed-call text-back,
+ * which signed every message with the internal label.
+ */
+export function brandDisplayName(branding: Branding, accountName: string): string {
+  return branding.brandName ?? accountName;
+}
+
 export function emailBrand(branding: Branding, accountName: string): EmailBrand {
   return {
-    name: branding.brandName ?? accountName,
+    name: brandDisplayName(branding, accountName),
     logoUrl: branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null,
     // `false`, not `true`: an email card sits on white, which is exactly what
     // this resolver lifts against. It returns the brand colour raised until it

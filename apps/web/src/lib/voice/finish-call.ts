@@ -3,7 +3,7 @@ import {
   createContact, fillContactBlanks, ensureConversation, createMessage, incrementUnreadCount,
   updateMessageStatus, hasRecentOutboundSms, finishCallRow, emit,
 } from "@bis/db";
-import { emailBrand } from "@/lib/email/templates/shell";
+import { emailBrand, brandDisplayName } from "@/lib/email/templates/shell";
 import { getEmailProvider } from "@/lib/email";
 import { voiceCallAlertEmail } from "@/lib/email/templates/voice";
 import { getSmsProvider } from "@/lib/sms";
@@ -292,7 +292,15 @@ export async function finishCall(
       // contacts and conversations for callers it can never reach.
       const gate = await resolveSmsSender(ctx.db, ctx.accountId);
       if (gate.ok) {
-        const body = ctx.textbackBody.trim() || defaultTextbackBody(ctx.accountName);
+        // brandDisplayName, NOT ctx.accountName: this text is signed and it
+        // goes to the client's CUSTOMER. `accounts.name` is the agency's
+        // internal label for the company ("Rio Roofing — trial") — the same
+        // column that was reaching the email From line before M4d — and its
+        // em dash is outside GSM-7, so sending it also silently doubles the
+        // message to two segments. Same resolver the staff alert one leg up
+        // already uses.
+        const body = ctx.textbackBody.trim()
+          || defaultTextbackBody(brandDisplayName(ctx.branding, ctx.accountName));
 
         // resolveContactId, not createContact: it honours a contact the call
         // already established and backfills blanks on a dedupe hit. An
