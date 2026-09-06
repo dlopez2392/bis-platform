@@ -183,7 +183,10 @@ async function resolveContactId(state: CallState, ctx: FinishContext): Promise<s
  * lives in, so those ids have to exist first), its carrier send runs after.
  * Ordering by cost, not by leg — a 10-second provider call ahead of the
  * durable record is how a slow carrier loses the call row on an invocation
- * already near its maxDuration.
+ * running out of maxDuration. That is not the default case today (the voice
+ * route's ceiling is 800s against a 240s call cap), but it is exactly the
+ * case whenever an operator raises `PHONE_MAX_CALL_SECONDS` toward the
+ * route's 770s clamp, so the ordering is not something the upgrade retires.
  */
 export async function finishCall(
   state: CallState, ctx: FinishContext, meta: FinishMeta,
@@ -303,10 +306,12 @@ export async function finishCall(
   // happens here, because `finishCallRow` writes those ids and cannot write
   // ids that do not exist yet. The PROVIDER SEND does not belong to that set:
   // it is a network call to a carrier with a 10-second timeout, made inside
-  // an invocation already clamped near its `maxDuration`, and running it
-  // ahead of the durable record meant a long abandoned call plus a slow
-  // carrier could lose the call row entirely — the row the entire dashboard
-  // reads. So this half prepares the send, and the half below `finishCallRow`
+  // an invocation whose remaining `maxDuration` budget is whatever the call
+  // cap left behind — comfortable at the default 240s cap under the route's
+  // 800s ceiling, and nearly nothing once an operator raises
+  // `PHONE_MAX_CALL_SECONDS` toward its 770s clamp — and running it ahead of
+  // the durable record meant a long abandoned call plus a slow carrier could
+  // lose the call row entirely — the row the entire dashboard reads. So this half prepares the send, and the half below `finishCallRow`
   // performs it. Write-then-send is preserved exactly as before: the message
   // row still exists before anything leaves the building.
   let pendingTextback: { messageId: string; to: string; from: string; body: string } | null = null;
@@ -412,7 +417,10 @@ export async function finishCall(
   // The other half of the text-back leg: the actual send, deliberately AFTER
   // the durable row above. Everything before this point is database work
   // measured in milliseconds; this is a carrier round trip with a 10-second
-  // timeout, inside an invocation already clamped near its `maxDuration`.
+  // timeout, inside an invocation that may or may not have budget left — the
+  // voice route's 800s `maxDuration` leaves plenty at the default 240s call
+  // cap, and almost none if `PHONE_MAX_CALL_SECONDS` is ever raised toward
+  // the route's 770s clamp, which is the case this ordering is written for.
   // Ahead of the row write it was a way to lose the call record itself, which
   // is the one artefact of the call the dashboard, the KPIs and any later
   // investigation all read. The text is worth less than the record of the

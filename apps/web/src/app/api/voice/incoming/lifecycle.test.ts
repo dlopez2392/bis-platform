@@ -456,19 +456,24 @@ describe("runCallLifecycle — Important #5: connect timeout", () => {
 });
 
 describe("runCallLifecycle — Important #5: cap-seconds clamp", () => {
-  it("PHONE_MAX_CALL_SECONDS above 280 is clamped to 280, not the route's 300s maxDuration", async () => {
+  it("PHONE_MAX_CALL_SECONDS above 770 is clamped to 770, not the route's 800s maxDuration", async () => {
     vi.useFakeTimers();
-    process.env.PHONE_MAX_CALL_SECONDS = "500";
+    // Above BOTH the clamp and the route's `maxDuration = 800`, so a missing
+    // clamp cannot accidentally still land inside the invocation budget.
+    process.env.PHONE_MAX_CALL_SECONDS = "900";
     const { ws } = await startLifecycle();
     ws.send = vi.fn();
     ws.emit("open");
 
     // Just under the clamp: no goodbye yet.
-    await vi.advanceTimersByTimeAsync(279_000);
+    await vi.advanceTimersByTimeAsync(769_000);
     expect((ws.send as ReturnType<typeof vi.fn>).mock.calls
       .some((c) => String(c[0]).includes("brief goodbye"))).toBe(false);
 
-    // Crossing 280s (not the configured 500s) fires the goodbye.
+    // Crossing 770s (not the configured 900s) fires the goodbye. 770 is
+    // 800 - 30, the worst-case post-cap tail derived in route.ts: 5s close
+    // delay + 3s bounded drain + 10s carrier text-back + 12s of finishCall's
+    // remaining DB and email round trips.
     await vi.advanceTimersByTimeAsync(1_000);
     expect((ws.send as ReturnType<typeof vi.fn>).mock.calls
       .some((c) => String(c[0]).includes("brief goodbye"))).toBe(true);

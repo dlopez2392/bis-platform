@@ -11,9 +11,20 @@
 // verification's `crypto.subtle` usage are not Edge-compatible), with a
 // generous `maxDuration` because the call-scoped WebSocket loop in
 // `runCallLifecycle` runs for the entire phone call, not just this request.
-// 300 is the ceiling, not a guess: with Fluid Compute (default-on for all
-// plans), Hobby's default AND maximum are both 300s (Vercel docs,
-// "Duration limits" table).
+// 800 is the ceiling, not a guess. Vercel's "Duration limits" table
+// (/docs/functions/configuring-functions/duration) reads: Hobby 300s
+// default / 300s maximum; Pro 300s default / 800s maximum, with a 1800s
+// "extended maximum". This account is on Pro, so 800s is the generally
+// available maximum and is what this route takes. The 1800s tier is a beta
+// requiring per-function configuration and is deliberately NOT used. Note
+// the PROJECT default stays 300s — this per-route export is the only thing
+// raising it, and only for this function.
+//
+// This route previously exported 300 because that was Hobby's maximum, not
+// because 300s was ever the right length for a phone call. Raising it moves
+// only the roof: the call length a caller actually experiences is set by
+// `PHONE_MAX_CALL_SECONDS` (default 240s), which is a COST guardrail and is
+// deliberately unchanged. See the cap block in `runCallLifecycle` below.
 //
 // Three contracts worth stating up front, because getting any of them wrong
 // fails SILENTLY (dead air or a rejected accept, not a thrown error):
@@ -61,7 +72,7 @@ import { readLimitConfig, decideLimit, utcDayStart } from "@/lib/voice/call-limi
 import { configuredOrigin } from "@/lib/email/origin";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 function log(...args: unknown[]) {
   console.log("[voice/incoming]", ...args);
@@ -237,11 +248,32 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       // a brief goodbye, then close the socket ~5s later to let it play out.
       const capRaw = Number(process.env.PHONE_MAX_CALL_SECONDS);
       const parsedOrDefault = Number.isFinite(capRaw) && capRaw > 0 ? capRaw : 240;
-      // Clamped to 280s, not the route's full `maxDuration = 300` ceiling
-      // (module top of this file): the goodbye response, the 5s close
-      // delay, and finishCall's own work all still need to land inside the
-      // remaining budget before Fluid Compute kills the invocation outright.
-      const maxSeconds = Math.min(parsedOrDefault, 280);
+      // The default stays 240s ON PURPOSE. Pro raising `maxDuration` to 800s
+      // (module top) raised the ROOF, not the furniture: every second of a
+      // Realtime call is billed audio, so a longer ceiling must not silently
+      // make every call longer and every call more expensive. Lengthening
+      // real calls is an explicit `PHONE_MAX_CALL_SECONDS` decision, not a
+      // side effect of a plan upgrade.
+      //
+      // The clamp is what keeps the cap from eating the tail that runs AFTER
+      // it fires. Everything below has to finish inside `maxDuration` or
+      // Fluid Compute kills the invocation mid-teardown and the call row is
+      // lost. Budgeting that tail against the 800s ceiling:
+      //
+      //     5s  closeTimer — the goodbye plays out before `ws.close()`
+      //     3s  finish()'s bounded frame drain (`Promise.race([chain, 3000])`)
+      //    10s  finishCall's carrier text-back send (SEND_TIMEOUT_MS,
+      //         `lib/sms/telnyx.ts`) — a full provider round trip
+      //    12s  the rest of finishCall: contact, conversation and message
+      //         rows, `finishCallRow`, and the staff alert email — sequential
+      //         network round trips with no timeout of their own
+      //    ---
+      //    30s  worst-case tail  →  800 - 30 = 770
+      //
+      // Same safety property the old 280-against-300 clamp had, re-derived
+      // rather than rescaled: the old 20s of headroom predated the text-back
+      // leg and no longer covered its 10s carrier timeout on its own.
+      const maxSeconds = Math.min(parsedOrDefault, 770);
       capTimer = setTimeout(() => {
         log("call cap reached, sending goodbye", { callId, maxSeconds });
         try {
