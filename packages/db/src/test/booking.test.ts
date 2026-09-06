@@ -312,14 +312,20 @@ describe("booking accessors", () => {
   });
 
   /**
-   * `listDueFollowups` looks BACKWARD from `now` on `ends_at` (mirrors
-   * `listDueReminders`' forward window, same 25h daily-cron tolerance):
-   * booked + follow-ups enabled + ended within the last 25h + not yet
-   * stamped -> due. Cancelled, already-stamped, ended >25h ago, and
-   * not-yet-ended bookings are all excluded. A contact with no email still
-   * comes back (contactEmail: null) -- the route decides to skip+log it.
+   * `listDueFollowups` looks BACKWARD from `now` on `ends_at`: booked +
+   * follow-ups enabled + ended within the last 37h + not yet stamped -> a
+   * CANDIDATE. Cancelled, already-stamped, ended >37h ago, and not-yet-ended
+   * bookings are all excluded. A contact with no email still comes back
+   * (contactEmail: null) -- the route decides to skip+log it.
+   *
+   * Candidate, not due: since 2026-09-05 this window deliberately over-selects
+   * so the route's send-time gate (`shouldSendFollowupNow`, unit tested in
+   * apps/web) can pick the right MOMENT -- the next morning in the account's
+   * own timezone. 37h is that gate's worst case; the derivation lives on the
+   * function's doc comment. What this test still owns is the SQL-level
+   * predicate, which the gate cannot compensate for either way.
    */
-  it("listDueFollowups: due on ended-within-window, excludes cancelled/stamped/too-old/future", async () => {
+  it("listDueFollowups: candidate on ended-within-window, excludes cancelled/stamped/too-old/future", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
       await updateCalendarSettings(db, accountId,
@@ -353,10 +359,21 @@ describe("booking accessors", () => {
           endsAt: new Date("2027-03-10T07:30:00Z") },        // ended 4.5h ago, but already stamped
         "user_test");
       await stampFollowupSent(db, toStamp.id);
+      // 38h ago — past the 37h cap. Under the old 25h window this fixture sat
+      // at 26.5h; the widening moved it, and it has to stay OUTSIDE, because
+      // this window is the only thing standing between a multi-day outage and
+      // a mailbox full of follow-ups for forgotten meetings.
       const tooOld = await createBooking(db, accountId,
         { calendarId: cal.id, contactId,
-          startsAt: new Date("2027-03-09T09:00:00Z"),
-          endsAt: new Date("2027-03-09T09:30:00Z") },        // ended 26.5h ago
+          startsAt: new Date("2027-03-08T21:30:00Z"),
+          endsAt: new Date("2027-03-08T22:00:00Z") },        // ended 38h ago
+        "user_test");
+      // 36h ago — inside the cap by an hour, so the boundary is pinned from
+      // both sides rather than only from the excluded one.
+      const oldButInside = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId,
+          startsAt: new Date("2027-03-08T23:30:00Z"),
+          endsAt: new Date("2027-03-09T00:00:00Z") },        // ended 36h ago
         "user_test");
       const future = await createBooking(db, accountId,
         { calendarId: cal.id, contactId,
@@ -368,6 +385,7 @@ describe("booking accessors", () => {
       const ids = dueList.map((d) => d.bookingId);
       expect(ids).toContain(due.id);
       expect(ids).toContain(noEmailDue.id);
+      expect(ids).toContain(oldButInside.id);
       expect(ids).not.toContain(toCancel.id);
       expect(ids).not.toContain(toStamp.id);
       expect(ids).not.toContain(tooOld.id);
@@ -375,6 +393,12 @@ describe("booking accessors", () => {
 
       const dueRow = dueList.find((d) => d.bookingId === due.id);
       expect(dueRow?.contactEmail).toBe("followup-due@example.com");
+      // ends_at was previously FILTERED on but never selected. The route's
+      // send-time gate measures the next morning from when the meeting ENDED,
+      // so a query that forgot to project this column would hand the gate an
+      // undefined instant and silently never send.
+      expect(new Date(dueRow!.endsAt).getTime())
+        .toBe(new Date("2027-03-10T10:00:00Z").getTime());
       expect(dueRow?.followupBody).toBe("How did it go?");
       expect(dueRow?.fromEmail).toBeNull();       // fixture account never sets from_email
       expect(dueRow?.replyToEmail).toBeNull();    // fixture account never sets reply_to_email

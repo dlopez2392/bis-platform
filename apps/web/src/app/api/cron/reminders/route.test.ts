@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // `route.ts` reuses `safeZone`/`formatWhen` from the shared
 // `@/lib/booking/time` module (moved out of the sibling public-booking
@@ -72,12 +72,19 @@ function req(bearer?: string) {
  * carries it — that's the whole point of the top-level field (see
  * `listDueFollowups`'s doc comment), and a fixture that only set
  * `branding.replyToEmail` could not catch a route that read the wrong one.
+ *
+ * `endsAt` and `accountTimezone` together decide whether the send-time gate
+ * lets this follow-up through at all. The default pair is "ended yesterday
+ * evening, and it is now mid-morning in the account's zone" — see TICK_AT
+ * below — so every pre-existing test in this file still exercises the send
+ * path rather than the gate.
  */
 function followup(overrides: Record<string, unknown> = {}) {
   return {
     bookingId: "bk_f1",
     accountId: "acct_1",
-    startsAt: "2026-08-19T20:00:00.000Z",
+    startsAt: "2026-09-08T21:00:00.000Z",
+    endsAt: "2026-09-08T22:00:00.000Z",     // America/New_York: Tue 18:00, the previous local day
     contactEmail: "booker@example.com",
     contactName: "Jamie Booker",
     accountName: "Acme Co",
@@ -101,9 +108,25 @@ function bookerZoneWhen(startsAt: string, timeZone: string): string {
   }).format(new Date(startsAt));
 }
 
-const EMPTY_FOLLOWUPS = { sent: 0, failed: 0, unstamped: 0, skippedNoEmail: 0 };
+const EMPTY_FOLLOWUPS = {
+  sent: 0, failed: 0, unstamped: 0, skippedNoEmail: 0, waitingForMorning: 0,
+};
+
+/**
+ * The route reads `new Date()` to decide whether a follow-up's morning has
+ * arrived, so the clock has to be pinned or every follow-up test below would
+ * pass or fail depending on the hour the suite happened to run at.
+ *
+ * 2026-09-09T14:00:00Z is 10:00 in America/New_York (EDT) — mid-morning, and
+ * the `followup()` fixture's meeting ended the previous local evening, so the
+ * gate opens. Only `Date` is faked: the route awaits real promises and faking
+ * timers wholesale would stall them.
+ */
+const TICK_AT = new Date("2026-09-09T14:00:00Z");
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(TICK_AT);
   listDueRemindersMock.mockReset().mockResolvedValue([]);
   stampReminderSentMock.mockReset().mockResolvedValue(undefined);
   listDueFollowupsMock.mockReset().mockResolvedValue([]);
@@ -111,6 +134,10 @@ beforeEach(() => {
   sendMock.mockReset().mockResolvedValue({ providerMessageId: "prov_1" });
   process.env.CRON_SECRET = SECRET;
   delete process.env.APP_ORIGIN;
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("GET /api/cron/reminders", () => {
@@ -294,7 +321,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
     expect(res.status).toBe(200);
     expect(body).toEqual({
       sent: 0, failed: 0, unstamped: 0,
-      followups: { sent: 1, failed: 0, unstamped: 0, skippedNoEmail: 0 },
+      followups: { sent: 1, failed: 0, unstamped: 0, skippedNoEmail: 0, waitingForMorning: 0 },
     });
     expect(sendMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -320,7 +347,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
 
     expect(body).toEqual({
       sent: 1, failed: 0, unstamped: 0,
-      followups: { sent: 1, failed: 0, unstamped: 0, skippedNoEmail: 0 },
+      followups: { sent: 1, failed: 0, unstamped: 0, skippedNoEmail: 0, waitingForMorning: 0 },
     });
     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_r1");
     expect(stampFollowupSentMock).toHaveBeenCalledWith(expect.anything(), "bk_f1");
@@ -338,7 +365,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body.followups).toEqual({ sent: 0, failed: 1, unstamped: 0, skippedNoEmail: 0 });
+    expect(body.followups).toEqual({ sent: 0, failed: 1, unstamped: 0, skippedNoEmail: 0, waitingForMorning: 0 });
     expect(stampFollowupSentMock).not.toHaveBeenCalled();
   });
 
@@ -353,7 +380,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
     // toward `failed`, this counts toward its own `skippedNoEmail` bucket —
     // a follow-up with no email retries harmlessly forever until the
     // 25h window passes it by, so it is never a "failure" to report.
-    expect(body.followups).toEqual({ sent: 0, failed: 0, unstamped: 0, skippedNoEmail: 1 });
+    expect(body.followups).toEqual({ sent: 0, failed: 0, unstamped: 0, skippedNoEmail: 1, waitingForMorning: 0 });
     expect(sendMock).not.toHaveBeenCalled();
     expect(stampFollowupSentMock).not.toHaveBeenCalled();
   });
@@ -366,7 +393,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body.followups).toEqual({ sent: 1, failed: 0, unstamped: 1, skippedNoEmail: 0 });
+    expect(body.followups).toEqual({ sent: 1, failed: 0, unstamped: 1, skippedNoEmail: 0, waitingForMorning: 0 });
   });
 
   it("falls back to the default follow-up copy when followupBody is empty", async () => {
@@ -380,5 +407,135 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
       "Thanks for coming in! If you have any questions or want to book again, "
       + "just reply to this email.",
     );
+  });
+});
+
+/**
+ * The send-time gate, at the route level. `shouldSendFollowupNow` is unit
+ * tested exhaustively in `lib/booking/followup-timing.test.ts`; what is worth
+ * proving HERE is that the route actually consults it, feeds it the meeting's
+ * END (not its start) and the ACCOUNT's zone (not the server's), and runs it
+ * ahead of the no-email check.
+ *
+ * Every test below runs at the one pinned instant TICK_AT
+ * (2026-09-09T14:00:00Z) and varies only what the gate reads.
+ */
+describe("GET /api/cron/reminders — follow-ups wait for the next morning", () => {
+  it("holds a meeting that ended earlier the SAME morning instead of chasing it an hour later", async () => {
+    // 09:00 in America/New_York, one hour before the pinned tick. The
+    // candidate query returns it — it ended well inside 37h — and the gate is
+    // the only thing standing between this customer and an email sent while
+    // they are still in the parking lot.
+    const sameMorning = followup({ bookingId: "bk_f_parking_lot", endsAt: "2026-09-09T13:00:00.000Z" });
+    listDueFollowupsMock.mockResolvedValue([sameMorning]);
+
+    const res = await GET(req(`Bearer ${SECRET}`));
+    const body = await res.json();
+
+    expect(body.followups).toEqual({
+      sent: 0, failed: 0, unstamped: 0, skippedNoEmail: 0, waitingForMorning: 1,
+    });
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(stampFollowupSentMock).not.toHaveBeenCalled();
+  });
+
+  it("reads the morning in each ACCOUNT's own zone, not one zone for the whole tick", async () => {
+    // ONE tick, ONE meeting-end instant, two accounts. 14:00Z is 10:00 in
+    // New_York (mid-morning, send) and 07:00 in Los_Angeles (still dawn,
+    // wait). A route that used the server's zone, or UTC, or the first
+    // account's zone for everyone would have to treat these two identically —
+    // which is exactly the bug this asserts against.
+    const ended = "2026-09-08T22:00:00.000Z";   // the previous local day in BOTH zones
+    const eastern = followup({
+      bookingId: "bk_f_east", endsAt: ended, accountTimezone: "America/New_York",
+    });
+    const pacific = followup({
+      bookingId: "bk_f_west", endsAt: ended, accountTimezone: "America/Los_Angeles",
+      contactEmail: "west@example.com",
+    });
+    listDueFollowupsMock.mockResolvedValue([eastern, pacific]);
+
+    const res = await GET(req(`Bearer ${SECRET}`));
+    const body = await res.json();
+
+    expect(body.followups).toEqual({
+      sent: 1, failed: 0, unstamped: 0, skippedNoEmail: 0, waitingForMorning: 1,
+    });
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledWith(expect.objectContaining({ to: "booker@example.com" }));
+    expect(stampFollowupSentMock).toHaveBeenCalledTimes(1);
+    expect(stampFollowupSentMock).toHaveBeenCalledWith(expect.anything(), "bk_f_east");
+  });
+
+  it("gates on the meeting's END, not its start", async () => {
+    // A long meeting: it STARTED the previous local evening — which is what
+    // the default fixture uses to qualify — but did not END until 09:00 this
+    // morning. A route that passed `startsAt` to the gate would send.
+    const ranLate = followup({
+      bookingId: "bk_f_long",
+      startsAt: "2026-09-08T22:00:00.000Z",
+      endsAt: "2026-09-09T13:00:00.000Z",
+    });
+    listDueFollowupsMock.mockResolvedValue([ranLate]);
+
+    const res = await GET(req(`Bearer ${SECRET}`));
+    const body = await res.json();
+
+    expect(body.followups.waitingForMorning).toBe(1);
+    expect(body.followups.sent).toBe(0);
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("never resurrects a stale booking, even though the query still hands it over", async () => {
+    // Mid-morning, previous local day, every other rule satisfied — but the
+    // meeting was a week ago. This is the multi-day-outage case: the cron
+    // comes back up and must not mail people about meetings they have
+    // forgotten. (The 37h query window makes this unreachable in production;
+    // the gate refuses independently so a future widening cannot reintroduce
+    // it silently.)
+    const ancient = followup({ bookingId: "bk_f_ancient", endsAt: "2026-09-02T22:00:00.000Z" });
+    listDueFollowupsMock.mockResolvedValue([ancient]);
+
+    const res = await GET(req(`Bearer ${SECRET}`));
+    const body = await res.json();
+
+    expect(body.followups.sent).toBe(0);
+    expect(body.followups.waitingForMorning).toBe(1);
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("counts a not-yet-morning follow-up with no email as waiting, not as skippedNoEmail", async () => {
+    // Ordering pin: the gate runs BEFORE the no-email check. Otherwise every
+    // emailless contact would log a skip 96 times a day for a tick that was
+    // never going to send anyway.
+    const noEmailNotYet = followup({
+      bookingId: "bk_f_noemail_early", contactEmail: null, endsAt: "2026-09-09T13:00:00.000Z",
+    });
+    listDueFollowupsMock.mockResolvedValue([noEmailNotYet]);
+
+    const res = await GET(req(`Bearer ${SECRET}`));
+    const body = await res.json();
+
+    expect(body.followups).toEqual({
+      sent: 0, failed: 0, unstamped: 0, skippedNoEmail: 0, waitingForMorning: 1,
+    });
+  });
+
+  it("a garbage account timezone is laundered, never thrown, and the reminder pass still completes", async () => {
+    // `accounts.timezone` is free text at creation. A RangeError out of the
+    // gate would abort the whole tick — including the reminder pass that has
+    // already mailed people by the time the follow-up loop runs.
+    const junkZone = followup({ bookingId: "bk_f_junk", accountTimezone: "Mars/Olympus" });
+    listDueRemindersMock.mockResolvedValue([reminder({ bookingId: "bk_r_ok" })]);
+    listDueFollowupsMock.mockResolvedValue([junkZone]);
+
+    const res = await GET(req(`Bearer ${SECRET}`));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.sent).toBe(1);
+    // Falls back to UTC, where the pinned tick is 14:00 — outside the band.
+    expect(body.followups.waitingForMorning).toBe(1);
+    expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_r_ok");
   });
 });

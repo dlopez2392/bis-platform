@@ -9,12 +9,15 @@ import { emailBrand } from "@/lib/email/templates/shell";
 import { bookingReminderEmail } from "@/lib/email/templates/booking";
 import { bookingFollowupEmail } from "@/lib/email/templates/followup";
 import { safeZone, formatWhen } from "@/lib/booking/time";
+import { shouldSendFollowupNow } from "@/lib/booking/followup-timing";
 
 export const dynamic = "force-dynamic";
 
 /**
  * The platform's first scheduled job: Vercel hits this every 15 minutes
- * (`vercel.json`'s `crons` entry, `*/15 * * * *`) to mail bookers a reminder
+ * (`vercel.json`'s `crons` entry — the every-15-minutes schedule; the literal
+ * cron string is deliberately NOT quoted anywhere in a block comment in this
+ * repo, because its leading `*` + `/` closes the comment) to mail bookers a reminder
  * roughly a day before their booking. The account was on the Hobby plan
  * until 2026-09-05, and Hobby REJECTS any deployment carrying a sub-daily
  * schedule, so this ran `0 14 * * *` with both query windows widened to 25h
@@ -26,10 +29,11 @@ export const dynamic = "force-dynamic";
  *    sized to this cadence; widen the cadence without widening that and
  *    reminders are missed, restore the cadence without narrowing it and
  *    every booker gets their reminder up to a day early,
- *  - `listDueFollowups`' backward window and the follow-up pass below. On
- *    the daily cron, "next morning" was an ACCIDENT of the 14:00 UTC tick
- *    hour landing in the Rio Grande Valley's early morning. At 96 ticks a
- *    day that property is gone and has to be enforced explicitly.
+ *  - `listDueFollowups`' backward window (37h) plus `shouldSendFollowupNow`
+ *    in the follow-up pass below. On the daily cron, "next morning" was an
+ *    ACCIDENT of the 14:00 UTC tick hour landing in the Rio Grande Valley's
+ *    early morning. At 96 ticks a day that property is gone, so the gate now
+ *    enforces it explicitly, in each account's own timezone.
  *
  * Cost when nothing is due: two `bookings` selects, both narrow and both
  * index-shaped (status + a null-check on the stamp column + a range on
@@ -141,24 +145,50 @@ export async function GET(req: Request): Promise<Response> {
     }
   }
 
-  // Second pass, same cron tick, same auth gate: follow-ups sent ~a day
-  // after a booking's meeting ENDS, mirroring `listDueFollowups`' own
-  // backward-looking window (see that function's doc comment). Kept as its
-  // own loop with its own counters rather than folded into the reminder
-  // loop above — the two passes read different due-lists, stamp different
-  // columns, and (per the brief) count a missing contact email differently:
-  // a reminder with no email is a `failed` send, but a follow-up with no
-  // email is `skippedNoEmail` and never even attempts a send, since a
-  // contact who never gave an email will retry harmlessly every tick until
-  // the 25h window ages it out on its own.
-  const followups = await listDueFollowups(db, new Date().toISOString());
+  // Second pass, same cron tick, same auth gate: follow-ups sent the morning
+  // after a booking's meeting ENDS. Kept as its own loop with its own
+  // counters rather than folded into the reminder loop above — the two
+  // passes read different due-lists, stamp different columns, and (per the
+  // brief) count a missing contact email differently: a reminder with no
+  // email is a `failed` send, but a follow-up with no email is
+  // `skippedNoEmail` and never even attempts a send, since a contact who
+  // never gave an email will retry harmlessly until the window ages it out
+  // on its own.
+  //
+  // `listDueFollowups` is only a CANDIDATE list here — it returns anything
+  // that ended in the last 37h, which is wide on purpose (see its doc
+  // comment) so the gate below can always fire. The route, not the query,
+  // decides the moment.
+  const tickAt = new Date();
+  const followups = await listDueFollowups(db, tickAt.toISOString());
 
   let followupsSent = 0;
   let followupsFailed = 0;
   let followupsUnstamped = 0;
   let skippedNoEmail = 0;
+  let waitingForMorning = 0;
 
   for (const followup of followups) {
+    // THE SEND-TIME GATE, and it runs FIRST — before the no-email check, so
+    // a contact with no email is not logged 96 times a day for something
+    // that was never going to send this tick anyway.
+    //
+    // `accountTimezone` is `accounts.timezone`, which is FREE TEXT at
+    // creation; the helper launders it through `safeZone(tz, "UTC")` rather
+    // than handing it to Intl raw, because a RangeError here would abort the
+    // whole tick — including the reminder pass that has already run and
+    // already mailed people above.
+    //
+    // This is the dominant branch by a wide margin: a booking sits in the
+    // candidate list for up to 37h and only ~12 of those ticks are inside
+    // its morning band, so most ticks count `waitingForMorning` and do
+    // nothing. It is reported so that "follow-ups aren't going out" can be
+    // told apart from "nothing was due" without adding logging noise.
+    if (!shouldSendFollowupNow(tickAt, new Date(followup.endsAt), followup.accountTimezone)) {
+      waitingForMorning++;
+      continue;
+    }
+
     if (!followup.contactEmail) {
       skippedNoEmail++;
       console.error(
@@ -214,7 +244,7 @@ export async function GET(req: Request): Promise<Response> {
     sent, failed, unstamped,
     followups: {
       sent: followupsSent, failed: followupsFailed,
-      unstamped: followupsUnstamped, skippedNoEmail,
+      unstamped: followupsUnstamped, skippedNoEmail, waitingForMorning,
     },
   });
 }

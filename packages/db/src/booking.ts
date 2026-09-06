@@ -62,6 +62,11 @@ export type DueReminder = {
 
 export type DueFollowup = {
   bookingId: string; accountId: string; startsAt: string;
+  /** The meeting's `ends_at`. Previously the query FILTERED on this column
+   *  without selecting it; the send-time gate in the cron route
+   *  (`shouldSendFollowupNow`) needs the actual instant, because "the next
+   *  morning after the meeting" is measured from when it ENDED, not started. */
+  endsAt: string;
   contactEmail: string | null; contactName: string;
   accountName: string; accountTimezone: string;
   branding: Branding;
@@ -348,7 +353,9 @@ const ACCOUNT_BRAND_COLS =
  *
  * The window is `[now+23h, now+24h15m]` — 75 minutes wide, sized to the
  * every-15-minutes cron restored when the account moved to Vercel Pro on
- * 2026-09-05 (`apps/web/vercel.json`, `*/15 * * * *`). Between 2026-08-23
+ * 2026-09-05 (see the `crons` entry in `apps/web/vercel.json` — the literal
+ * cron string is not quoted here on purpose, since its leading star-slash
+ * would close this comment). Between 2026-08-23
  * and that upgrade this was `[now, now+25h]`, because the Hobby plan
  * rejects any deployment carrying a sub-daily schedule and a once-a-day
  * tick has to cover the whole day ahead in one pass. That fallback bought
@@ -470,25 +477,58 @@ export async function stampReminderSent(db: SupabaseClient, bookingId: string): 
 
 /**
  * Follow-ups look BACKWARD from `now` on `ends_at` -- the mirror image of
- * `listDueReminders`' forward window on `starts_at`, same 25h daily-cron
- * tolerance and the same rationale (see that function's comment): a booking
- * becomes due the moment its meeting ends and stays due for 25h, so a
- * missed/late tick still catches it, but an outage longer than that
- * permanently misses it. `calendars!inner(...)` + `.eq("calendars.followup_enabled", true)`
- * is what makes a calendar with follow-ups turned off never surface here,
- * mirroring how reminders don't filter on the calendar at all (a booking
- * calendar's own `enabled` flag is a different knob -- the public page's
- * on/off switch, not the follow-up feature's).
+ * `listDueReminders`' forward window on `starts_at`. `calendars!inner(...)` +
+ * `.eq("calendars.followup_enabled", true)` is what makes a calendar with
+ * follow-ups turned off never surface here, mirroring how reminders don't
+ * filter on the calendar at all (a booking calendar's own `enabled` flag is a
+ * different knob -- the public page's on/off switch, not the follow-up
+ * feature's).
+ *
+ * THIS WINDOW IS NOT THE SEND DECISION. It is a candidate list. Unlike the
+ * reminder window, which is tight enough to be the whole rule, everything
+ * returned here is then put through `shouldSendFollowupNow`
+ * (`apps/web/src/lib/booking/followup-timing.ts`), which decides whether NOW
+ * is the right MOMENT: the next morning, 08:00-11:00, in the account's own
+ * timezone, on a strictly later local calendar day than the meeting ended on.
+ * Until 2026-09-05 there was no such gate -- the cron ticked once a day at
+ * 14:00 UTC, early morning in the Rio Grande Valley, and "next morning" fell
+ * out of the tick hour by accident. At 96 ticks a day it has to be explicit.
+ *
+ * The 37h window is sized so that gate can always fire, and it is derived
+ * rather than round (the full arithmetic lives on FOLLOWUP_MAX_AGE_MS in
+ * followup-timing.ts, which MUST hold the same number):
+ *
+ *   32h  a meeting ending at 00:00:00 local waits out the rest of that local
+ *        day (24h) plus the small hours of the next (8h) before the morning
+ *        band can open -- the worst case.
+ *   + 3h  the band stays open until 11:00 local, and sizing to its CLOSE
+ *        rather than its open is what lets ANY tick inside the band send,
+ *        instead of only the first one.
+ *   + 2h  the largest scheduled backward clock shift in the IANA database
+ *        (Antarctica/Troll, UTC+2 -> UTC+0), which stretches that local day
+ *        to 26 real hours.
+ *
+ * It is also the explicit staleness cap, which the old 25h window got for
+ * free and a naive widening would have thrown away: nothing older than 37h is
+ * ever a candidate, so an outage of days cannot come back up and mail someone
+ * about a meeting they have forgotten. The cost is a bounded catch-up -- a
+ * meeting whose whole next-morning band was missed may still go out the
+ * morning after that, if it lands inside 37h. Two mornings late is
+ * recoverable; a week is not.
+ *
+ * `followup_sent_at` still does all the deduping, unchanged: the gate has no
+ * memory, so without that column the ~12 ticks inside one morning band would
+ * each send.
  */
 export async function listDueFollowups(
   db: SupabaseClient, nowIso: string,
 ): Promise<DueFollowup[]> {
   const now = new Date(nowIso).getTime();
-  const windowStart = new Date(now - 25 * 60 * 60 * 1000).toISOString();
+  const windowStart = new Date(now - 37 * 60 * 60 * 1000).toISOString();
   const windowEnd = new Date(now).toISOString();
 
   const { data, error } = await db.from("bookings")
-    .select(`id, account_id, starts_at,
+    .select(`id, account_id, starts_at, ends_at,
              calendars!inner(followup_body),
              contacts(first_name, last_name, email)`)
     // Widened past "booked": an operator's "Mark completed" on the list
@@ -552,6 +592,7 @@ export async function listDueFollowups(
       bookingId: r.id,
       accountId: r.account_id,
       startsAt: r.starts_at,
+      endsAt: r.ends_at,
       contactEmail: r.contacts?.email ?? null,
       contactName: contactName || "Unknown",
       accountName: info.accountName,
