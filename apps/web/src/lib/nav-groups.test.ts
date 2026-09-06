@@ -32,7 +32,7 @@ describe("buildNavGroups", () => {
     expect(overview!.items.map((i) => i.labelKey)).toEqual(["nav.dashboard", "nav.checklist"]);
     expect(crm!.items.map((i) => i.labelKey)).toEqual(["nav.contacts", "nav.opportunities"]);
     expect(comms!.items.map((i) => i.labelKey)).toEqual(["nav.conversations", "nav.calls", "nav.voice"]);
-    expect(growth!.items.map((i) => i.labelKey)).toEqual(["nav.forms", "nav.calendar"]);
+    expect(growth!.items.map((i) => i.labelKey)).toEqual(["nav.forms", "nav.calendar", "nav.automations"]);
   });
 
   it("shows Voice to the agency and hides it from a client", () => {
@@ -40,6 +40,13 @@ describe("buildNavGroups", () => {
     const clientComms = buildNavGroups(BASE, false)[2]!;
     expect(agencyComms.items.map((i) => i.labelKey)).toContain("nav.voice");
     expect(clientComms.items.map((i) => i.labelKey)).not.toContain("nav.voice");
+  });
+
+  it("shows Automations to the agency and hides it from a client", () => {
+    const agencyGrowth = buildNavGroups(BASE, true)[3]!;
+    const clientGrowth = buildNavGroups(BASE, false)[3]!;
+    expect(agencyGrowth.items.map((i) => i.labelKey)).toContain("nav.automations");
+    expect(clientGrowth.items.map((i) => i.labelKey)).not.toContain("nav.automations");
   });
 
   it("shows Branding to a client and hides it from the agency", () => {

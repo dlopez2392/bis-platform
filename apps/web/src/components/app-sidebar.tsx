@@ -19,6 +19,7 @@ import {
   Palette,
   Phone,
   PhoneIncoming,
+  Zap,
   type LucideIcon,
 } from "lucide-react";
 import { AccountSwitcher, type AccountOption } from "@/components/account-switcher";
@@ -51,6 +52,7 @@ const NAV_ICONS: Record<NavIconKey, LucideIcon> = {
   calendar: Calendar,
   branding: Palette,
   voice: Phone,
+  automations: Zap,
   accounts: Building2,
   blueprints: Layers,
   checklist: ListChecks,

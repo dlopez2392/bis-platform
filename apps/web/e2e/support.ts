@@ -103,3 +103,29 @@ export async function openFixtureCalendar(page: Page): Promise<string> {
   await page.goto(`/dashboard/accounts/${fixture.accountId}/calendar`);
   return fixture.accountId;
 }
+
+/**
+ * A real Clerk session token for a fixture's CLIENT user, minted the same
+ * two-call way packages/db's user-client integration test does.
+ *
+ * Not stubbed. The boundary under test is Clerk's claims meeting Supabase's
+ * policies, so a hand-made JWT would prove nothing about either — it would
+ * only prove that a token the test invented is accepted or rejected. Shared
+ * by client-branding.spec.ts and automations.spec.ts.
+ */
+export async function mintClientToken(userId: string): Promise<string> {
+  const sk = process.env.CLERK_SECRET_KEY;
+  if (!sk) throw new Error("CLERK_SECRET_KEY missing — this spec cannot run hermetically");
+  const headers = { Authorization: `Bearer ${sk}`, "Content-Type": "application/json" };
+
+  const session = (await (await fetch("https://api.clerk.com/v1/sessions", {
+    method: "POST", headers, body: JSON.stringify({ user_id: userId }),
+  })).json()) as { id?: string };
+  if (!session.id) throw new Error(`could not create a Clerk session for ${userId}`);
+
+  const token = (await (await fetch(
+    `https://api.clerk.com/v1/sessions/${session.id}/tokens`, { method: "POST", headers },
+  )).json()) as { jwt?: string };
+  if (!token.jwt) throw new Error("Clerk returned no jwt");
+  return token.jwt;
+}

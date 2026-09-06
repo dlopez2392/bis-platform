@@ -39,7 +39,7 @@ export { captureBlueprint, listBlueprints, getBlueprint, blueprintKey, applyBlue
          type BlueprintBundle, type BlueprintRow, type BlueprintSummary, type ApplyReport } from "./blueprints";
 export { listChecklistState, setChecklistItem, addCustomChecklistItem,
          type ChecklistStateRow } from "./checklist";
-export { uploadBrandLogo, removeBrandLogo, brandLogoUrl, setBranding, getBranding,
+export { uploadBrandLogo, removeBrandLogo, brandLogoUrl, setBranding, getBranding, brandDisplayName,
          type Branding } from "./branding";
 export { getSendingIdentity, setFromEmail, type SendingIdentity } from "./sending-identity";
 export { getOrCreateCalendar, getCalendarForAccount, getCalendarByPublicId, updateCalendarSettings,
@@ -47,6 +47,12 @@ export { getOrCreateCalendar, getCalendarForAccount, getCalendarByPublicId, upda
          listUpcomingBookings, countRecentBookings, listDueReminders, stampReminderSent,
          listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
          newCancelToken, SlotTakenError,
+         REMINDER_WINDOW_START_MS, REMINDER_WINDOW_END_MS, FOLLOWUP_QUERY_WINDOW_MS,
          type CalendarRow, type BookingRow, type BookingStatus, type CalendarSettingsPatch,
          type CreateBookingInput, type DueReminder, type DueFollowup } from "./booking";
+export { getAutomation, upsertAutomation, parseReviewRequestConfig,
+         listDueReviewRequests, stampReviewRequested, countReviewRequestsSince,
+         REVIEW_REQUEST_MAX_AGE_MS,
+         type RecipeKey, type AutomationRow, type ReviewRequestChannel,
+         type ReviewRequestConfig, type DueReviewRequest } from "./automations";
 export * from "./voice";

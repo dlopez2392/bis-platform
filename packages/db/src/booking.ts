@@ -22,6 +22,7 @@ export type BookingRow = {
   note: string | null; cancel_token: string; booker_timezone: string | null;
   reminder_sent_at: string | null;
   meeting_url: string | null; followup_sent_at: string | null;
+  review_requested_at: string | null;
 };
 
 export type CalendarSettingsPatch = Partial<{
@@ -81,7 +82,7 @@ const CALENDAR_COLS =
 
 const BOOKING_COLS =
   "id, account_id, calendar_id, contact_id, starts_at, ends_at, status, note, " +
-  "cancel_token, booker_timezone, reminder_sent_at, meeting_url, followup_sent_at";
+  "cancel_token, booker_timezone, reminder_sent_at, meeting_url, followup_sent_at, review_requested_at";
 
 // Same shape as newPublicId in forms.ts, but twice the length (24 bytes, not
 // 12): this token rides an email link with no rate limit protecting it, so it
@@ -347,6 +348,66 @@ const ACCOUNT_BRAND_COLS =
   "brand_corners, brand_type, brand_mode, reply_to_email, from_email";
 
 /**
+ * The cron windows, exported so they can be asserted against the schedule in
+ * `apps/web/vercel.json` (cron-coupling.test.ts) instead of only described in
+ * comments. The three are COUPLED — see the route's doc comment. The
+ * follow-up window MUST equal `FOLLOWUP_MAX_AGE_MS` in
+ * `apps/web/src/lib/booking/followup-timing.ts`; the same test pins that.
+ */
+export const REMINDER_WINDOW_START_MS = 23 * 60 * 60 * 1000;
+export const REMINDER_WINDOW_END_MS = (24 * 60 + 15) * 60 * 1000;
+export const FOLLOWUP_QUERY_WINDOW_MS = 37 * 60 * 60 * 1000;
+
+export type AccountBrandInfo = {
+  accountName: string; accountTimezone: string; branding: Branding;
+  fromEmail: string | null; replyToEmail: string | null;
+};
+
+/**
+ * One `accounts` read per distinct account id — the per-tick cache the due
+ * lists share. Throws on a missing account: a due row whose account cannot
+ * be read is a data problem, not a row to skip silently. Not batched into a
+ * single `.in()`: this runs on a 15-minute cron, and one account is the real
+ * shape today.
+ */
+export async function loadAccountBrandInfo(
+  db: SupabaseClient, accountIds: readonly string[], caller: string,
+): Promise<Map<string, AccountBrandInfo>> {
+  const out = new Map<string, AccountBrandInfo>();
+  for (const accountId of accountIds) {
+    const { data, error } = await db.from("accounts")
+      .select(ACCOUNT_BRAND_COLS).eq("id", accountId).single();
+    if (error || !data) {
+      throw new Error(`${caller}: account lookup failed for ${accountId}: ${error?.message}`);
+    }
+    const acct = data as unknown as {
+      name: string; timezone: string;
+      brand_name: string | null; brand_logo_path: string | null; brand_color: string | null;
+      brand_neutral: Branding["brandNeutral"]; brand_corners: Branding["brandCorners"];
+      brand_type: Branding["brandType"]; brand_mode: Branding["brandMode"];
+      reply_to_email: string | null; from_email: string | null;
+    };
+    out.set(accountId, {
+      accountName: acct.name,
+      accountTimezone: acct.timezone,
+      branding: {
+        brandName: acct.brand_name ?? null,
+        brandLogoPath: acct.brand_logo_path ?? null,
+        brandColor: acct.brand_color ?? null,
+        brandNeutral: acct.brand_neutral ?? null,
+        brandCorners: acct.brand_corners ?? null,
+        brandType: acct.brand_type ?? null,
+        brandMode: acct.brand_mode ?? null,
+        replyToEmail: acct.reply_to_email ?? null,
+      },
+      fromEmail: acct.from_email ?? null,
+      replyToEmail: acct.reply_to_email ?? null,
+    });
+  }
+  return out;
+}
+
+/**
  * `nowIso` is caller-injected (the cron route passes real now; tests pin a
  * fixed instant) — never computed from `Date.now()` inside here, or the test
  * suite could not assert the window's edges deterministically.
@@ -411,8 +472,8 @@ export async function listDueReminders(
   db: SupabaseClient, nowIso: string,
 ): Promise<DueReminder[]> {
   const now = new Date(nowIso).getTime();
-  const windowStart = new Date(now + 23 * 60 * 60 * 1000).toISOString();
-  const windowEnd = new Date(now + (24 * 60 + 15) * 60 * 1000).toISOString();
+  const windowStart = new Date(now + REMINDER_WINDOW_START_MS).toISOString();
+  const windowEnd = new Date(now + REMINDER_WINDOW_END_MS).toISOString();
 
   const { data, error } = await db.from("bookings")
     .select(`id, account_id, starts_at, booker_timezone, cancel_token, meeting_url,
@@ -425,44 +486,10 @@ export async function listDueReminders(
   const rows = (data ?? []) as any[];
   if (rows.length === 0) return [];
 
-  // One extra query per distinct account (in practice always one) for the
-  // account name/timezone and branding — all of which live on `accounts`.
-  // Not prematurely batched into a single `.in()` join: this route runs on a
-  // 15-minute cron, not a hot path, and one account is the real shape today.
-  const accountIds = [...new Set(rows.map((r) => r.account_id as string))];
-  const accountInfo = new Map<
-    string,
-    { accountName: string; accountTimezone: string; branding: Branding; fromEmail: string | null }
-  >();
-  for (const accountId of accountIds) {
-    const { data: acctData, error: acctErr } = await db.from("accounts")
-      .select(ACCOUNT_BRAND_COLS).eq("id", accountId).single();
-    if (acctErr || !acctData) {
-      throw new Error(`listDueReminders: account lookup failed for ${accountId}: ${acctErr?.message}`);
-    }
-    const acct = acctData as unknown as {
-      name: string; timezone: string;
-      brand_name: string | null; brand_logo_path: string | null; brand_color: string | null;
-      brand_neutral: Branding["brandNeutral"]; brand_corners: Branding["brandCorners"];
-      brand_type: Branding["brandType"]; brand_mode: Branding["brandMode"];
-      reply_to_email: string | null; from_email: string | null;
-    };
-    accountInfo.set(accountId, {
-      accountName: acct.name,
-      accountTimezone: acct.timezone,
-      branding: {
-        brandName: acct.brand_name ?? null,
-        brandLogoPath: acct.brand_logo_path ?? null,
-        brandColor: acct.brand_color ?? null,
-        brandNeutral: acct.brand_neutral ?? null,
-        brandCorners: acct.brand_corners ?? null,
-        brandType: acct.brand_type ?? null,
-        brandMode: acct.brand_mode ?? null,
-        replyToEmail: acct.reply_to_email ?? null,
-      },
-      fromEmail: acct.from_email ?? null,
-    });
-  }
+  // One `accounts` read per distinct account (in practice always one) for
+  // the name/timezone and branding — shared with the other due-lists.
+  const accountInfo = await loadAccountBrandInfo(
+    db, [...new Set(rows.map((r) => r.account_id as string))], "listDueReminders");
 
   return rows.map((r) => {
     const info = accountInfo.get(r.account_id as string)!;
@@ -549,7 +576,7 @@ export async function listDueFollowups(
   db: SupabaseClient, nowIso: string,
 ): Promise<DueFollowup[]> {
   const now = new Date(nowIso).getTime();
-  const windowStart = new Date(now - 37 * 60 * 60 * 1000).toISOString();
+  const windowStart = new Date(now - FOLLOWUP_QUERY_WINDOW_MS).toISOString();
   const windowEnd = new Date(now).toISOString();
 
   const { data, error } = await db.from("bookings")
@@ -568,46 +595,12 @@ export async function listDueFollowups(
   const rows = (data ?? []) as any[];
   if (rows.length === 0) return [];
 
-  // Same one-query-per-account cache as listDueReminders, plus replyToEmail
-  // pulled alongside it: DueFollowup carries it top-level (not just nested
-  // in branding) so the follow-up sender can set a Reply-To without digging
-  // into branding the way the reminder path does.
-  const accountIds = [...new Set(rows.map((r) => r.account_id as string))];
-  const accountInfo = new Map<
-    string,
-    { accountName: string; accountTimezone: string; branding: Branding;
-      fromEmail: string | null; replyToEmail: string | null }
-  >();
-  for (const accountId of accountIds) {
-    const { data: acctData, error: acctErr } = await db.from("accounts")
-      .select(ACCOUNT_BRAND_COLS).eq("id", accountId).single();
-    if (acctErr || !acctData) {
-      throw new Error(`listDueFollowups: account lookup failed for ${accountId}: ${acctErr?.message}`);
-    }
-    const acct = acctData as unknown as {
-      name: string; timezone: string;
-      brand_name: string | null; brand_logo_path: string | null; brand_color: string | null;
-      brand_neutral: Branding["brandNeutral"]; brand_corners: Branding["brandCorners"];
-      brand_type: Branding["brandType"]; brand_mode: Branding["brandMode"];
-      reply_to_email: string | null; from_email: string | null;
-    };
-    accountInfo.set(accountId, {
-      accountName: acct.name,
-      accountTimezone: acct.timezone,
-      branding: {
-        brandName: acct.brand_name ?? null,
-        brandLogoPath: acct.brand_logo_path ?? null,
-        brandColor: acct.brand_color ?? null,
-        brandNeutral: acct.brand_neutral ?? null,
-        brandCorners: acct.brand_corners ?? null,
-        brandType: acct.brand_type ?? null,
-        brandMode: acct.brand_mode ?? null,
-        replyToEmail: acct.reply_to_email ?? null,
-      },
-      fromEmail: acct.from_email ?? null,
-      replyToEmail: acct.reply_to_email ?? null,
-    });
-  }
+  // Same per-account cache as listDueReminders. DueFollowup carries
+  // replyToEmail top-level (not just nested in branding) so the follow-up
+  // sender can set a Reply-To without digging into branding the way the
+  // reminder path does.
+  const accountInfo = await loadAccountBrandInfo(
+    db, [...new Set(rows.map((r) => r.account_id as string))], "listDueFollowups");
 
   return rows.map((r) => {
     const info = accountInfo.get(r.account_id as string)!;

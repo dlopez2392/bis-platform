@@ -167,3 +167,22 @@ export async function getBranding(
     replyToEmail: data?.reply_to_email ?? null,
   };
 }
+
+/**
+ * The company name a CUSTOMER may be shown — `brand_name`, falling back to
+ * the agency's internal `accounts.name` label ("Rio Roofing — trial") only
+ * when no brand name is set.
+ *
+ * DELIBERATELY A SECOND COPY of `brandDisplayName` in
+ * `apps/web/src/lib/email/templates/shell.ts`, and the only one allowed:
+ * the data layer cannot import from the web app, and the web copy cannot
+ * import from here without breaking every web test that mocks `@bis/db`
+ * with a factory (vitest throws on an export the factory omits). The two are
+ * pinned against each other in
+ * `apps/web/src/lib/email/templates/brand-name-parity.test.ts`; change one,
+ * and that test says so. Used by the automations due-lists so a due-row
+ * carries the resolved `brandName` and never the internal label.
+ */
+export function brandDisplayName(branding: Branding, accountName: string): string {
+  return branding.brandName ?? accountName;
+}

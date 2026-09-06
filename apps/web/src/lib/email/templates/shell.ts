@@ -24,14 +24,25 @@ export type EmailBrand = {
  * twice already: once on the email From line (fixed in M4d, see
  * conversations/actions.ts's send), and once in the missed-call text-back,
  * which signed every message with the internal label.
+ *
+ * `packages/db/src/branding.ts` carries a deliberate second copy for the
+ * automations due-lists (the data layer cannot import this module, and this
+ * module cannot import that one without breaking every factory mock of
+ * `@bis/db` in the web tests). brand-name-parity.test.ts pins them equal.
  */
 export function brandDisplayName(branding: Branding, accountName: string): string {
   return branding.brandName ?? accountName;
 }
 
-export function emailBrand(branding: Branding, accountName: string): EmailBrand {
+/**
+ * `emailBrand` for a caller that has ALREADY resolved the customer-facing
+ * name — the automations passes, whose due-rows carry `brandName` and never
+ * `accounts.name`. `emailBrand` below is the same thing for callers that
+ * still hold both.
+ */
+export function emailBrandNamed(branding: Branding, name: string): EmailBrand {
   return {
-    name: brandDisplayName(branding, accountName),
+    name,
     logoUrl: branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null,
     // `false`, not `true`: an email card sits on white, which is exactly what
     // this resolver lifts against. It returns the brand colour raised until it
@@ -39,6 +50,10 @@ export function emailBrand(branding: Branding, accountName: string): EmailBrand 
     // here would reintroduce the two AA defects M4b found live in production.
     accent: publicFormTheme(branding, false).formAccent,
   };
+}
+
+export function emailBrand(branding: Branding, accountName: string): EmailBrand {
+  return emailBrandNamed(branding, brandDisplayName(branding, accountName));
 }
 
 export function escapeHtml(value: string): string {
