@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const dbMocks = vi.hoisted(() => ({
   finishCallRow: vi.fn(), createContact: vi.fn(), ensureConversation: vi.fn(),
   createMessage: vi.fn(), incrementUnreadCount: vi.fn(), emit: vi.fn(),
-  fillContactBlanks: vi.fn(),
+  fillContactBlanks: vi.fn(), updateMessageStatus: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const emailRefs = vi.hoisted(() => ({ providerShouldThrow: false, send: vi.fn() }));
@@ -13,12 +13,26 @@ vi.mock("@/lib/email", () => ({
     return { send: (...a: unknown[]) => emailRefs.send(...a) };
   },
 }));
+// Same shape as the email mock above, for the same reason: getSmsProvider()
+// throws SYNCHRONOUSLY when TELNYX_API_KEY is missing in production — which
+// is production's state right now — so the throw has to be reachable from a
+// test, not just the send rejection.
+const smsRefs = vi.hoisted(() => ({ providerShouldThrow: false, send: vi.fn() }));
+vi.mock("@/lib/sms", () => ({
+  getSmsProvider: () => {
+    if (smsRefs.providerShouldThrow) throw new Error("TELNYX_API_KEY is required in production");
+    return { isFake: true, send: (...a: unknown[]) => smsRefs.send(...a) };
+  },
+}));
+const senderMocks = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
+vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: senderMocks.resolveSmsSender }));
 const summaryMocks = vi.hoisted(() => ({ generateSummary: vi.fn() }));
 vi.mock("./summary-service", () => ({ generateSummary: summaryMocks.generateSummary }));
 
 import type { serviceDb } from "@bis/db";
 import { finishCall, type FinishContext } from "./finish-call";
 import { emptyCallState, withLead, withMessage, withTranscript, withBooking } from "./call-state";
+import { defaultTextbackBody } from "./textback-body";
 
 const ctx: FinishContext = {
   db: {} as unknown as ReturnType<typeof serviceDb>, accountId: "a1", accountName: "Rio Roofing",
@@ -26,7 +40,15 @@ const ctx: FinishContext = {
     brandCorners: null, brandType: null, brandMode: null, replyToEmail: null },
   notifyEmails: ["staff@example.com"], callerNumber: "+19562921696",
   origin: "https://x.example", profileLanguage: "both", timezone: "America/Chicago",
+  // Off in the shared context on purpose: the pre-existing "abandoned creates
+  // nothing" case below is the regression guard for the default, and it only
+  // means something while the default is the off state a real account ships in.
+  textbackEnabled: false, textbackBody: "",
 };
+const textbackCtx: FinishContext = { ...ctx, textbackEnabled: true };
+/** A caller who SPOKE and got nothing — classifyOutcome's "abandoned". */
+const abandonedState = () => withTranscript(emptyCallState(), { role: "caller", text: "uh", at: "t" });
+
 const meta = { callRowId: "call1", startedAt: new Date("2027-06-01T12:00:00Z"), endedAt: new Date("2027-06-01T12:02:00Z") };
 
 beforeEach(() => {
@@ -34,11 +56,15 @@ beforeEach(() => {
   summaryMocks.generateSummary.mockReset().mockResolvedValue("RECORDED — test.");
   emailRefs.providerShouldThrow = false;
   emailRefs.send.mockReset().mockResolvedValue({ providerMessageId: "x" });
+  smsRefs.providerShouldThrow = false;
+  smsRefs.send.mockReset().mockResolvedValue({ providerMessageId: "sm1" });
+  senderMocks.resolveSmsSender.mockReset().mockResolvedValue({ ok: true, from: "+19565550100" });
   dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: false });
   dbMocks.ensureConversation.mockResolvedValue({ id: "cv1", created: true });
   dbMocks.createMessage.mockResolvedValue({ id: "m1" });
   dbMocks.finishCallRow.mockResolvedValue(undefined);
   dbMocks.fillContactBlanks.mockResolvedValue([]);
+  dbMocks.updateMessageStatus.mockResolvedValue(undefined);
 });
 
 describe("finishCall", () => {
@@ -140,5 +166,126 @@ describe("finishCall", () => {
     await finishCall(s, ctx, meta);
     expect(dbMocks.finishCallRow).toHaveBeenCalledWith({}, "a1", "call1",
       expect.objectContaining({ language: "es" }));
+  });
+});
+
+describe("finishCall — missed-call text-back", () => {
+  it("texts back an ABANDONED caller when the toggle is on, and creates the contact", async () => {
+    // abandoned = the caller SPOKE but produced no booking, lead or message
+    // (call-state.ts:31). That is the follow-up target.
+    const r = await finishCall(abandonedState(), textbackCtx, meta);
+    expect(r.outcome).toBe("abandoned");
+    expect(dbMocks.createContact).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ firstName: "Caller", phone: "+19562921696", source: "voice" }), "voice", "ai");
+    expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
+    expect(dbMocks.createMessage).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ conversationId: "cv1", channel: "sms", direction: "outbound",
+        body: defaultTextbackBody("Rio Roofing") }), "voice", "ai");
+    expect(smsRefs.send).toHaveBeenCalledOnce();
+    expect(smsRefs.send).toHaveBeenCalledWith({
+      to: "+19562921696", from: "+19565550100", body: defaultTextbackBody("Rio Roofing"),
+    });
+    expect(dbMocks.updateMessageStatus).toHaveBeenCalledWith({}, "a1", "m1", "sent",
+      { providerMessageId: "sm1" }, "voice");
+  });
+
+  it("does NOT bump the unread count — unread means INBOUND, and this text is ours", async () => {
+    await finishCall(abandonedState(), textbackCtx, meta);
+    expect(dbMocks.incrementUnreadCount).not.toHaveBeenCalled();
+  });
+
+  it("points the call row at the contact and conversation the text-back created", async () => {
+    // Without this the row keeps the nulls an abandoned call has always
+    // written, and there is no path from the call to the text it sent.
+    await finishCall(abandonedState(), textbackCtx, meta);
+    expect(dbMocks.finishCallRow).toHaveBeenCalledWith({}, "a1", "call1",
+      expect.objectContaining({ outcome: "abandoned", contactId: "ct1", conversationId: "cv1" }));
+  });
+
+  it("an operator's own body is sent verbatim; the default is only the empty-body fallback", async () => {
+    await finishCall(abandonedState(), { ...textbackCtx, textbackBody: "  Call us back at 956-555-0100.  " }, meta);
+    expect(smsRefs.send).toHaveBeenCalledWith(expect.objectContaining({ body: "Call us back at 956-555-0100." }));
+  });
+
+  it("does NOT text a SPAM call", async () => {
+    // spam = the caller never spoke. Gating on `abandoned` excludes silent
+    // robocalls by CLASSIFICATION rather than by rule, which is what makes
+    // creating a contact acceptable.
+    const r = await finishCall(emptyCallState(), textbackCtx, meta);
+    expect(r.outcome).toBe("spam");
+    expect(smsRefs.send).not.toHaveBeenCalled();
+    expect(dbMocks.createContact).not.toHaveBeenCalled();
+  });
+
+  it("does NOT text a call that already got the full treatment (lead)", async () => {
+    const s = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
+      { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
+    await finishCall(s, textbackCtx, meta);
+    expect(smsRefs.send).not.toHaveBeenCalled();
+  });
+
+  it("does NOT text when the toggle is off", async () => {
+    await finishCall(abandonedState(), ctx, meta);
+    expect(senderMocks.resolveSmsSender).not.toHaveBeenCalled();
+    expect(smsRefs.send).not.toHaveBeenCalled();
+  });
+
+  it("does NOT text when there is no caller number to text", async () => {
+    await finishCall(abandonedState(), { ...textbackCtx, callerNumber: null }, meta);
+    expect(smsRefs.send).not.toHaveBeenCalled();
+    expect(dbMocks.createContact).not.toHaveBeenCalled();
+  });
+
+  it("does NOT text when the SMS gate refuses, and writes no rows for it either", async () => {
+    // A2P not approved must stop the automation too, not just the composer.
+    senderMocks.resolveSmsSender.mockResolvedValue({ ok: false, reason: "a2p_not_approved" });
+    await finishCall(abandonedState(), textbackCtx, meta);
+    expect(smsRefs.send).not.toHaveBeenCalled();
+    expect(dbMocks.createContact).not.toHaveBeenCalled();
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+  });
+
+  it("a text-back failure does not take down the rest of finishCall, and marks the row failed", async () => {
+    // finishCall is contractually never-throws: the caller has already hung
+    // up, and there is nobody to surface a rejection to.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    smsRefs.send.mockRejectedValue(new Error("telnyx down"));
+    await expect(finishCall(abandonedState(), textbackCtx, meta)).resolves.toMatchObject({ outcome: "abandoned" });
+    expect(dbMocks.updateMessageStatus).toHaveBeenCalledWith({}, "a1", "m1", "failed",
+      { error: "telnyx down" }, "voice");
+    expect(dbMocks.finishCallRow).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("getSmsProvider() throwing (no TELNYX_API_KEY) never escapes, and the row still gets written", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    smsRefs.providerShouldThrow = true;
+    const r = await finishCall(abandonedState(), textbackCtx, meta);
+    expect(r).toMatchObject({ stored: true, outcome: "abandoned" });
+    errSpy.mockRestore();
+  });
+
+  it("resolveSmsSender THROWING (phone_numbers read error) never escapes either", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    senderMocks.resolveSmsSender.mockRejectedValue(new Error("resolveSmsSender failed"));
+    const r = await finishCall(abandonedState(), textbackCtx, meta);
+    expect(r).toMatchObject({ stored: true, outcome: "abandoned" });
+    expect(smsRefs.send).not.toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("a status-write failure AFTER a successful send never relabels the text failed", async () => {
+    // The text is gone and cannot be unsent. Re-labelling it `failed` because
+    // the bookkeeping write blew up would tell the operator a delivered text
+    // never went out — same hazard, same call, as sendSmsAction's own comment.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.updateMessageStatus.mockRejectedValue(new Error("db down"));
+    const r = await finishCall(abandonedState(), textbackCtx, meta);
+    expect(smsRefs.send).toHaveBeenCalledOnce();
+    expect(dbMocks.updateMessageStatus).toHaveBeenCalledTimes(1);
+    expect(dbMocks.updateMessageStatus).not.toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), expect.anything(), "failed", expect.anything(), expect.anything());
+    expect(r).toMatchObject({ stored: true, outcome: "abandoned" });
+    errSpy.mockRestore();
   });
 });

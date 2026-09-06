@@ -1,11 +1,14 @@
 import type { serviceDb, Branding, CallOutcome } from "@bis/db";
 import {
   createContact, fillContactBlanks, ensureConversation, createMessage, incrementUnreadCount,
-  finishCallRow, emit,
+  updateMessageStatus, finishCallRow, emit,
 } from "@bis/db";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { getEmailProvider } from "@/lib/email";
 import { voiceCallAlertEmail } from "@/lib/email/templates/voice";
+import { getSmsProvider } from "@/lib/sms";
+import { resolveSmsSender } from "@/lib/sms/sender";
+import { defaultTextbackBody } from "./textback-body";
 import type { CallState } from "./call-state";
 import { classifyOutcome } from "./call-state";
 import { detectSpokenLanguage } from "./language";
@@ -29,6 +32,14 @@ export interface FinishContext {
    *  into generateSummary so the prose states booking times in local form
    *  instead of the raw UTC the booking records carry. */
   timezone: string;
+  /** `voice_profiles.textback_enabled` — the per-company missed-call
+   *  text-back switch (migration 0024). Off is the shipped default and the
+   *  honest one: this sends a text to a real phone with no human in the loop. */
+  textbackEnabled: boolean;
+  /** `voice_profiles.textback_body`. EMPTY means "use the live default at
+   *  send time" — the default is deliberately never persisted, so an operator
+   *  who never wrote their own keeps getting the current copy. */
+  textbackBody: string;
 }
 
 export interface FinishMeta {
@@ -56,8 +67,10 @@ const ACTOR_TYPE = "ai";
 
 /**
  * Outcomes worth a human seeing: a durable contact/conversation trail and a
- * staff alert. `abandoned`/`spam` get a row and nothing else — nobody picks
- * those up, so there is no one to hand off to.
+ * staff alert. `abandoned`/`spam` get neither — nobody picks those up, so
+ * there is no one to hand off to. (`abandoned` may still get a contact and a
+ * conversation from the text-back leg further down, when the account has
+ * opted in; that trail exists to hold the text, not to summon a human.)
  */
 function isMeaningful(outcome: CallOutcome): boolean {
   return outcome === "booked" || outcome === "lead" || outcome === "message";
@@ -139,11 +152,13 @@ async function resolveContactId(state: CallState, ctx: FinishContext): Promise<s
  * that, for the one failure mode that would otherwise vanish silently: both
  * the durable record and the staff alert missing at once).
  *
- * Three independent legs, each allowed to fail without taking the others
+ * Four independent legs, each allowed to fail without taking the others
  * down: lead treatment (contact/conversation/message/unread), the staff
- * alert, and the row write. A DB outage that breaks the first and third still
- * leaves the alert as the one surviving signal a human sees; an email outage
- * still leaves the row for the dashboard.
+ * alert, the missed-call text-back, and the row write. A DB outage that
+ * breaks the first and last still leaves the alert as the one surviving
+ * signal a human sees; an email outage still leaves the row for the
+ * dashboard; a carrier outage costs the abandoned caller their text and
+ * nothing else.
  */
 export async function finishCall(
   state: CallState, ctx: FinishContext, meta: FinishMeta,
@@ -222,6 +237,85 @@ export async function finishCall(
       // An outer catch keeps config failure from violating never-throws.
       // Same fix as apps/web/src/app/b/[publicId]/actions.ts.
       console.error(`finishCall ${meta.callRowId ?? "(no row)"}: staff alert setup failed: ${String(e)}`);
+    }
+  }
+
+  // Fourth leg: the missed-call text-back. Its own try/catch for the same
+  // reason as the three around it — finishCall is contractually never-throws,
+  // because the caller has already hung up and there is nobody for a
+  // rejection to reach. Both things in here that throw on CONFIGURATION alone
+  // sit inside that catch on purpose: resolveSmsSender throws on a
+  // phone_numbers read error, and getSmsProvider() throws synchronously when
+  // TELNYX_API_KEY is missing in production — which is production's state as
+  // this ships. Neither may cost the call its row.
+  //
+  // `abandoned` ONLY: classifyOutcome returns it when the caller actually
+  // SPOKE, while a call with no caller speech is `spam`. That distinction is
+  // what keeps silent robocalls out of the CRM by classification rather than
+  // by rule, and it is why creating a contact here is acceptable at all.
+  if (outcome === "abandoned" && ctx.textbackEnabled && ctx.callerNumber) {
+    try {
+      // THE gate, and the only one — the same call the composer makes, never
+      // re-derived (lib/sms/sender.ts). Consulted BEFORE any row is written,
+      // so an account that is not cleared to text does not quietly accumulate
+      // contacts and conversations for callers it can never reach.
+      const gate = await resolveSmsSender(ctx.db, ctx.accountId);
+      if (gate.ok) {
+        const body = ctx.textbackBody.trim() || defaultTextbackBody(ctx.accountName);
+
+        // resolveContactId, not createContact: it honours a contact the call
+        // already established and backfills blanks on a dedupe hit. An
+        // abandoned call has no lead and no contactId, so it lands on the
+        // caller-ID branch — exactly the minimal "Caller" + number record
+        // this leg wants, without a second copy of that logic.
+        //
+        // Assigned to the OUTER contactId/conversationId rather than shadowed:
+        // this leg runs before the row write below, so the call row ends up
+        // pointing at the contact and conversation the text lives in. Without
+        // that, an abandoned call keeps writing the nulls it always has and
+        // there is no path from the call to the text it sent — nothing for the
+        // dashboard, or for a failed text-back, to join on.
+        contactId = await resolveContactId(state, ctx);
+        if (contactId) {
+          const conversation = await ensureConversation(ctx.db, ctx.accountId, contactId, ACTOR_ID, ACTOR_TYPE);
+          conversationId = conversation.id;
+
+          // WRITE THEN SEND, same ordering and same reason as sendSmsAction:
+          // the row exists before anything leaves the building, so a provider
+          // failure is a visible message rather than a silent gap. No unread
+          // bump — this text is OURS, and unread counts inbound.
+          const { id: messageId } = await createMessage(ctx.db, ctx.accountId, {
+            conversationId, channel: "sms", direction: "outbound", body,
+          }, ACTOR_ID, ACTOR_TYPE);
+
+          // ONLY the send is guarded. Once send() has returned, the text is
+          // gone and irrevocably out the door, so a failure recording that —
+          // the `sent` write below — must never be re-labelled `failed`: that
+          // would tell the operator a delivered text never went out, and drop
+          // the provider id the delivery webhook correlates against. That
+          // failure falls through to the outer catch instead, where it is
+          // logged and the message is left exactly as written. Identical
+          // reasoning to sendSmsAction (conversations/actions.ts).
+          let providerMessageId: string;
+          try {
+            ({ providerMessageId } = await getSmsProvider().send({
+              to: ctx.callerNumber, from: gate.from, body,
+            }));
+          } catch (sendError) {
+            // Nothing left the building, so `failed` is the honest label —
+            // and it is the only signal this failure has, since there is no
+            // retry and no human watching.
+            await updateMessageStatus(ctx.db, ctx.accountId, messageId, "failed",
+              { error: sendError instanceof Error ? sendError.message : "unknown send failure" },
+              ACTOR_ID);
+            throw sendError;
+          }
+          await updateMessageStatus(ctx.db, ctx.accountId, messageId, "sent",
+            { providerMessageId }, ACTOR_ID);
+        }
+      }
+    } catch (e) {
+      console.error(`finishCall ${meta.callRowId ?? "(no row)"}: text-back failed: ${String(e)}`);
     }
   }
 

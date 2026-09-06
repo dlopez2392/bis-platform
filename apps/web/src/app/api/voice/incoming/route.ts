@@ -472,6 +472,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       db, accountId, accountName: accountRow.name, branding,
       notifyEmails: calendar.notify_emails, callerNumber, origin,
       profileLanguage: profile.languages, timezone: accountRow.timezone,
+      // Read off the profile loaded at step 7, so the text-back decision is
+      // pinned to the profile that answered THIS call rather than re-read
+      // minutes later at hangup, when an operator may have toggled it.
+      textbackEnabled: profile.textback_enabled, textbackBody: profile.textback_body,
     };
 
     // --- Step 13: accept the call, then IMMEDIATELY schedule the lifecycle
