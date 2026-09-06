@@ -47,6 +47,12 @@ export { getOrCreateCalendar, getCalendarForAccount, getCalendarByPublicId, upda
          listUpcomingBookings, countRecentBookings, listDueReminders, stampReminderSent,
          listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
          newCancelToken, SlotTakenError,
+         REMINDER_WINDOW_START_MS, REMINDER_WINDOW_END_MS, FOLLOWUP_QUERY_WINDOW_MS,
          type CalendarRow, type BookingRow, type BookingStatus, type CalendarSettingsPatch,
          type CreateBookingInput, type DueReminder, type DueFollowup } from "./booking";
+export { getAutomation, upsertAutomation, parseReviewRequestConfig,
+         listDueReviewRequests, stampReviewRequested, countReviewRequestsSince,
+         REVIEW_REQUEST_MAX_AGE_MS, RECIPE_KEYS,
+         type RecipeKey, type AutomationRow, type ReviewRequestChannel,
+         type ReviewRequestConfig, type DueReviewRequest } from "./automations";
 export * from "./voice";
