@@ -162,16 +162,10 @@ describe("opportunities", () => {
 });
 
 describe("listOpportunityValuesCreatedBetween", () => {
-  /**
-   * 60s, not the 20s file default. MEASURED, not guessed: this test takes
-   * ~9.1s alone on an idle machine (`vitest run opportunities.test.ts -t
-   * "pins both boundary edges"`), leaving little headroom against the
-   * default — so under full-suite contention it intermittently timed out
-   * and took `pnpm check` red with it. Pre-existing cost (two nested
-   * withTestAccount cycles, each a real account create + full FK-ordered
-   * teardown against the shared Supabase project), not something introduced
-   * here. Nothing is asserted less strictly; only the clock moves.
-   */
+  // MEASURED, not guessed: ~9.1s alone on an idle machine (`vitest run
+  // opportunities.test.ts -t "pins both boundary edges"`) — two nested
+  // withTestAccount cycles, each a real account create + full FK-ordered
+  // teardown; covered by the package's testTimeout.
   it("[from, to) on created_at — pins both boundary edges, any status, cross-tenant rows excluded", async () => {
     await withTestAccount(async (db, accountA) => {
       await withTestAccount(async (db2, accountB) => {
@@ -219,5 +213,5 @@ describe("listOpportunityValuesCreatedBetween", () => {
         ]);
       });
     });
-  }, 60_000);
+  });
 });
