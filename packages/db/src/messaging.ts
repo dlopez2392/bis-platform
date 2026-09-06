@@ -335,6 +335,12 @@ export type FailedOutboundSms = {
  * a failure from a previous call is outside this call's window and cannot be
  * claimed by it.
  *
+ * And each failure is claimed by ONE call. Windows genuinely overlap — a redial
+ * ending within five minutes of the first call puts its text-back inside both —
+ * so the loop below settles the overlap deterministically (latest-start call
+ * first, one message consumed once) rather than letting two rows report the
+ * same message. See the comments on the loop for why that is the right call.
+ *
  * Two queries at most, and one in the common case. The first asks only for
  * FAILED rows inside the union of the windows — rare and time-bounded, so it
  * cannot be the unbounded scan "newest message per conversation" usually is;
@@ -389,23 +395,57 @@ export async function listFailedOutboundSms(
     else byConversation.set(row.conversation_id, [row]);
   }
 
-  // Rows arrive newest-first, so the first one falling inside a window is that
-  // call's. Compared as instants, not as strings: Postgres omits the fractional
-  // part of a timestamptz whose microseconds are zero, so two rows a second
-  // apart can differ in LENGTH as well as value and lexical comparison stops
-  // being trustworthy at exactly the boundaries this decides.
+  // LATEST-START CALL FIRST, whatever order the caller passed them in.
+  //
+  // Windows overlap for real: a text-back is written at the END of a call, and
+  // one call's window runs five minutes past its own hangup, so a redial that
+  // ENDS within those five minutes has its text-back land inside the first
+  // call's window as well as its own. Something has to decide which call owns
+  // it, and the write itself says which: the message was written just after a
+  // hangup, so among the candidates whose window holds it, the one that STARTED
+  // last is the one whose hangup it sits closest to. For a single caller the
+  // calls are sequential — `startA < endA <= startB` — so latest start is also
+  // latest end, and the two readings of "nearest" agree.
+  //
+  // Sorted HERE rather than relied upon from the caller. `listCalls` does return
+  // newest-first (`.order("started_at", { ascending: false })`), and both call
+  // sites feed this straight from it — but that is the caller's ordering to
+  // change, and if it ever did, the failure would be silent and would send a
+  // real phone the wrong call's words.
+  const ordered = [...usable].sort((x, y) => Date.parse(y.fromIso) - Date.parse(x.fromIso));
+
+  // Rows arrive newest-first, so the first UNCLAIMED one falling inside a
+  // window is that call's. Compared as instants, not as strings: Postgres omits
+  // the fractional part of a timestamptz whose microseconds are zero, so two
+  // rows a second apart can differ in LENGTH as well as value and lexical
+  // comparison stops being trustworthy at exactly the boundaries this decides.
+  //
+  // TWO ledgers, and the message one is the one that matters. Keyed only on the
+  // CALL, a single message could be handed to more than one call — and with two
+  // overlapping windows it always was: the newer call took its own failed
+  // text-back, and the older call, whose window still reached past it, took the
+  // SAME row. The older call's own failure never surfaced at all, and "Send it
+  // now" on that row would have texted a real phone the OTHER call's words.
+  // `claimedMessages` makes a failure consumable exactly once.
+  //
+  // `claimedCalls` keeps the other half of the invariant the badge relies on:
+  // one call reports at most one failure, so a duplicate window for one call —
+  // or a second failed message inside one window — still yields a single row.
   const hits: FailedOutboundSms[] = [];
-  const claimed = new Set<string>();
-  for (const w of usable) {
-    if (claimed.has(w.callId)) continue;
+  const claimedCalls = new Set<string>();
+  const claimedMessages = new Set<string>();
+  for (const w of ordered) {
+    if (claimedCalls.has(w.callId)) continue;
     const from = Date.parse(w.fromIso);
     const to = Date.parse(w.toIso);
     const hit = (byConversation.get(w.conversationId) ?? []).find((row) => {
+      if (claimedMessages.has(row.id)) return false;
       const at = Date.parse(row.created_at);
       return Number.isFinite(at) && at >= from && at < to;
     });
     if (!hit) continue;
-    claimed.add(w.callId);
+    claimedCalls.add(w.callId);
+    claimedMessages.add(hit.id);
     hits.push({
       callId: w.callId,
       conversationId: w.conversationId,

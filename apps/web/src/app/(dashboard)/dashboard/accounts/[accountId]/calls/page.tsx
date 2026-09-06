@@ -88,6 +88,13 @@ export default async function CallsPage({
   // they ever made and a conversation-keyed answer lands on all of them.
   // `textbackWindow` is where the bounds — and the shapes it refuses to answer
   // for at all — are set out.
+  //
+  // These come off `listCalls`, which returns newest-first, and windows for a
+  // repeat caller OVERLAP — a redial ending within five minutes of the first
+  // call has its text-back land inside both. The read does not take this list's
+  // order as the answer to that: it sorts the windows itself (latest-starting
+  // call first) and consumes each failed message once, so changing the sort on
+  // this page cannot silently hand one row another call's message.
   const windows = rows
     .map((row) => textbackWindow(row))
     .filter((w): w is TextbackWindow => w !== null);

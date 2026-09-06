@@ -67,12 +67,31 @@ export const TEXTBACK_WINDOW_GRACE_MS = 5 * 60 * 1000;
  *    actor column, so an operator who texted this caller within five minutes of
  *    the hangup AND had that text refused by the carrier reads as a failed
  *    text-back. Both halves have to happen, in that window, for one call.
- * 2. A REDIAL inside `finishCall`'s own run. If the caller hangs up and calls
- *    straight back before the first call's text-back row is written, that row
- *    falls inside both calls' windows and both rows badge. The second call's
- *    text-back was suppressed by the 24h cooldown, so only one text was ever
- *    attempted — but nothing on file says which call attempted it. Requires a
- *    redial within roughly ten seconds of hanging up.
+ * 2. A REDIAL. Windows OVERLAP, and by five minutes, not by seconds: this one
+ *    runs five minutes past its own hangup, so any redial that ENDS inside
+ *    those five minutes has its text-back written inside this call's window as
+ *    well as its own. (An earlier draft of this note put the boundary at "about
+ *    ten seconds". That was the width of residual 2b below, not of the overlap,
+ *    and it understated it by ~25×.)
+ *
+ *    Two calls, two failed text-backs is NOT a residual — it is handled.
+ *    `listFailedOutboundSms` consumes each failed message exactly once and
+ *    hands it to the latest-starting call whose window holds it, which is the
+ *    call whose hangup it was written after; each row then badges its own
+ *    message. Keyed on the call instead, the older row took the newer call's
+ *    message, its own failure never appeared, and "Send it now" there would
+ *    have texted a real phone the other call's words.
+ *
+ *    2b. What is left is ONE attempted text under TWO windows. It needs the
+ *    redial to begin before the first call's text-back row is written — inside
+ *    `finishCall`'s own run, so roughly twelve seconds — because the lower
+ *    bound is `started_at`, and it needs the second call's own text-back to
+ *    have been suppressed by the 24h cooldown, which for a first attempt that
+ *    ends up `failed` means the cooldown read had to see it while it was still
+ *    `queued`. That single message is then claimed by the SECOND call, and the
+ *    first call — the one that actually attempted it — shows nothing. Nothing
+ *    on file distinguishes the two; a call id on `messages` is the only real
+ *    fix, and that is a migration.
  */
 export function textbackWindow(
   call: Pick<CallListRow, "id" | "outcome" | "conversation_id" | "started_at" | "ended_at">,

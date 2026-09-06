@@ -272,6 +272,24 @@ describe("CallDetailPage", () => {
     expect(html).toMatch(TEXTBACK_STATUS_DOT);
     expect(html).not.toContain("Send it now");
     expect(html).not.toContain("<form");
+    // FIX WAVE 2, FINDING 2. The withdrawal used to be MUTE: the button just
+    // stopped being there, next to a line still saying nothing will try again
+    // on its own. The operator's next move from that screen is to text the
+    // person by hand — the duplicate the withdrawal exists to prevent. The
+    // slot says why it is empty.
+    expect(html).toContain("A later text did go out to them");
+  });
+
+  it("says nothing about a later text when there was none — the resend is the only thing in that slot", async () => {
+    // The discriminator for the assertion above: this copy is conditional on
+    // `supersededAt`, not decoration that renders under the badge always.
+    const html = await render(
+      { ...CALL, outcome: "abandoned", booking_id: null },
+      [FAILED_TEXTBACK],
+    );
+
+    expect(html).toContain("Send it now");
+    expect(html).not.toContain("A later text did go out to them");
   });
 
   it("renders nothing about the text-back when the last one went out fine", async () => {

@@ -321,6 +321,78 @@ describe("messaging", () => {
       expect(again[0]!.messageId).toBe(secondFailure);
       expect(again[0]!.body).toBe("Second attempt.");
       expect(again[0]!.supersededAt).toBeNull();
+
+      // FIX WAVE 2 — ONE MESSAGE BELONGS TO ONE CALL.
+      //
+      // Grace rings, abandons, and her text-back fails; she redials within five
+      // minutes, abandons again, and that one fails too. Two calls, two failed
+      // messages — and the FIRST call's window runs five minutes past its own
+      // hangup, so it contains BOTH of them, while the second call's window
+      // (lower bound `started_at`, after the first message was written) contains
+      // only its own.
+      //
+      // Keyed on the CALL, the claim set could not stop a message being handed
+      // out twice: rows are scanned newest-first, so the first call took the
+      // SECOND call's message, its own failure never surfaced anywhere, and
+      // "Send it now" on that row would have texted a real phone the other
+      // call's words. Keyed on the MESSAGE, each failure is consumed once and
+      // the latest-starting call whose window holds it gets it — the call whose
+      // hangup it was written after.
+      const firstCall = await createMessage(db, accountId, {
+        conversationId: b.id, channel: "sms", direction: "outbound",
+        body: "First call's text-back.",
+      }, "voice", "ai");
+      await updateMessageStatus(db, accountId, firstCall.id, "failed",
+        { error: "carrier refused" }, "voice", "ai");
+      const secondCall = await createMessage(db, accountId, {
+        conversationId: b.id, channel: "sms", direction: "outbound",
+        body: "Second call's text-back.",
+      }, "voice", "ai");
+      await updateMessageStatus(db, accountId, secondCall.id, "failed",
+        { error: "carrier refused" }, "voice", "ai");
+
+      // Bounds read back off the DATABASE's clock, not this machine's — the two
+      // windows here have to sit between two rows written seconds apart, which
+      // is finer than the skew the minute-wide windows above are shaped around.
+      const writtenAt = async (id: string) => {
+        const { data } = await db.from("messages").select("created_at").eq("id", id).single();
+        return Date.parse((data as { created_at: string }).created_at);
+      };
+      const firstAt = await writtenAt(firstCall.id);
+      const secondAt = await writtenAt(secondCall.id);
+      expect(secondAt).toBeGreaterThan(firstAt);
+
+      const isoAt = (ms: number) => new Date(ms).toISOString();
+      const earlierWindow = {
+        callId: "call-first", conversationId: b.id,
+        fromIso: isoAt(firstAt - MIN), toIso: isoAt(secondAt + MIN),
+      };
+      const laterWindow = {
+        callId: "call-second", conversationId: b.id,
+        fromIso: isoAt(secondAt), toIso: isoAt(secondAt + MIN),
+      };
+
+      // Handed over EARLIEST-first — deliberately the opposite of the order
+      // `listCalls` delivers, because the read sorts them itself rather than
+      // trusting a caller to have done it.
+      const overlap = await listFailedOutboundSms(db, accountId, [earlierWindow, laterWindow]);
+      expect(overlap).toHaveLength(2);
+      // No message reported twice. This is the assertion the callId keying
+      // failed: it returned the same messageId under both call ids.
+      expect(new Set(overlap.map((h) => h.messageId)).size).toBe(2);
+      const byCall = new Map(overlap.map((h) => [h.callId, h]));
+      expect(byCall.get("call-second")!.messageId).toBe(secondCall.id);
+      expect(byCall.get("call-second")!.body).toBe("Second call's text-back.");
+      // Each call served its OWN message — and the body matters as much as the
+      // id, because it is what "Send it now" would put on a real phone.
+      expect(byCall.get("call-first")!.messageId).toBe(firstCall.id);
+      expect(byCall.get("call-first")!.body).toBe("First call's text-back.");
+
+      // Same answer newest-first, which is the order the pages actually pass.
+      const reversed = await listFailedOutboundSms(db, accountId, [laterWindow, earlierWindow]);
+      expect(new Set(reversed.map((h) => h.messageId)).size).toBe(2);
+      expect(reversed.find((h) => h.callId === "call-first")!.messageId).toBe(firstCall.id);
+      expect(reversed.find((h) => h.callId === "call-second")!.messageId).toBe(secondCall.id);
     }));
 
   it("updateMessageStatusByProviderId finds the row without tenant context", () =>

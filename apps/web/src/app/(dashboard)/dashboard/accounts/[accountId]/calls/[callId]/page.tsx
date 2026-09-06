@@ -210,8 +210,19 @@ export default async function CallDetailPage({
                     would text a real phone the same words twice. The badge and
                     the line above stay either way: this call's text-back failed,
                     and that does not stop being true because a later one
-                    worked. That is the whole defect this wave fixed. */}
-                {call.contact_id && !textbackFailure.supersededAt ? (
+                    worked. That is the whole defect the first wave fixed.
+
+                    But a withdrawn button that says nothing is its own defect.
+                    The operator is still reading "nothing will try again on its
+                    own", the one affordance has quietly gone, and the obvious
+                    next move is to text this person by hand — the exact
+                    duplicate the withdrawal exists to prevent. So the slot the
+                    button occupied carries the reason instead of going blank. */}
+                {textbackFailure.supersededAt ? (
+                  <p className="text-sm leading-6 text-muted-foreground">
+                    {m["calls.textbackSuperseded"]}
+                  </p>
+                ) : call.contact_id ? (
                   <TextbackResend
                     contactId={call.contact_id}
                     body={textbackFailure.body}

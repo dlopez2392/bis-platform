@@ -794,6 +794,19 @@ export const m = {
   // will.
   "calls.textbackFailedBody":
     "The text we tried to send never reached them, and nothing will try again on its own.",
+  // Where "Send it now" WOULD have been, once a later text to this person went
+  // out fine. The button is withdrawn on purpose — pressing it would text them
+  // the same words a second time — but withdrawing it silently left the
+  // operator reading "nothing will try again on its own" beside no way to act,
+  // and the obvious next move is to pick up their own phone and send exactly
+  // the duplicate the withdrawal exists to prevent. So say why it is gone.
+  //
+  // "A later text", not "your resend": we do not know who sent it or what it
+  // said — only that something outbound reached this person after this call's
+  // text-back failed. The badge above is untouched either way; that text-back
+  // failed, and a later message does not make it un-fail.
+  "calls.textbackSuperseded":
+    "A later text did go out to them, so there's nothing left to send here.",
 
   // A single call — /dashboard/accounts/<id>/calls/<callId>. The transcript
   // surface: the one place a client can read what their receptionist actually
