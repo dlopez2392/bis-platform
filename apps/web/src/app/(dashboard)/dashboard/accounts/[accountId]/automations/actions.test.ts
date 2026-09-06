@@ -57,6 +57,14 @@ describe("saveReviewRequestAction", () => {
     expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
   });
 
+  it("stores the NORMALISED link, so the page previews exactly the string the pass sends", async () => {
+    // Re-review finding: the pass sends parsed.href; a raw stored string would
+    // let a bare origin preview one character short of what goes out.
+    expect(await saveReviewRequestAction("acct_1", fd({ enabled: "on", channel: "sms", review_url: "https://x.example" }))).toEqual({ ok: true });
+    expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "review_request",
+      { enabled: true, body: "", config: { channel: "sms", reviewUrl: "https://x.example/" } }, "user_1");
+  });
+
   it("stores a whitespace-only body as empty, so it keeps meaning 'use the default'", async () => {
     // Review finding: the page previews `body.trim() || default` and the pass
     // sends `row.body.trim() || default`; a stored "   " must not survive to

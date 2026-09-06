@@ -43,9 +43,14 @@ export async function saveReviewRequestAction(
   if (reviewUrl && !parsed) return { ok: false, error: m["automations.review.urlInvalid"] };
   if (enabled && !parsed) return { ok: false, error: m["automations.review.urlRequired"] };
 
+  // Store the NORMALISED config (`parsed.href`), not the raw string: the pass
+  // parses on read and sends the href, so storing the raw form value would
+  // let the page preview one string and the send carry another (a bare
+  // origin gains a slash, a space becomes %20). `parsed` is null here only
+  // when the link is empty and the recipe is off.
   try {
     await upsertAutomation(serviceDb(), accountId, "review_request",
-      { enabled, body, config: { channel, reviewUrl } }, userId);
+      { enabled, body, config: parsed ?? { channel, reviewUrl } }, userId);
   } catch (e) {
     console.error(`saveReviewRequestAction: save failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.review.saveFailed"] };

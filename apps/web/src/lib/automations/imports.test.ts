@@ -16,8 +16,10 @@ const ROOT = fileURLToPath(new URL(".", import.meta.url));
 // Static `from "…"` and dynamic `import("…")` alike; `/index` spelled out
 // or not; `.tsx` as well as `.ts`.
 const FORBIDDEN: readonly RegExp[] = [
-  /(?:from\s+|import\s*\(\s*)["']@\/lib\/email(?:\/index)?["']/,   // the email factory
-  /(?:from\s+|import\s*\(\s*)["']@\/lib\/sms(?:\/index)?["']/,     // the sms factory
+  // The factories, by alias OR by relative path (`../../email` from passes/),
+  // with or without `/index` and a `.js`/`.ts` suffix.
+  /(?:from\s+|import\s*\(\s*)["'](?:@\/lib\/|(?:\.\.\/)+)email(?:\/index)?(?:\.[jt]s)?["']/,
+  /(?:from\s+|import\s*\(\s*)["'](?:@\/lib\/|(?:\.\.\/)+)sms(?:\/index)?(?:\.[jt]s)?["']/,
   /(?:from\s+|import\s*\(\s*)["'][^"']*\/resend["']/,              // the real email provider
   /(?:from\s+|import\s*\(\s*)["'][^"']*\/telnyx["']/,              // the real sms provider
 ];
