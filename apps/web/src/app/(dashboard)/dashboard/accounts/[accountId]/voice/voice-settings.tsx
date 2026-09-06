@@ -56,6 +56,13 @@ function VoiceProfileForm({
   // the live default as its `placeholder` instead: greyed, not a real value,
   // so typing replaces it rather than appending to it.
   const [textbackBody, setTextbackBody] = useState(p.textback_body);
+  // What the counter below previews must match what actually sends: an
+  // empty textarea means "use the live default at send time" (the
+  // empty-means-default contract this column exists for, explained above),
+  // so the preview has to be the default's own segment count, not 0
+  // chars / 1 message for a string that will never be what goes out. The
+  // moment the operator types anything, `textbackBody` itself takes over.
+  const previewBody = textbackBody || defaultTextbackBody(accountName);
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     await notifyActionResult(() => action(formData), toast, {
       success: m["voice.profile.saved"],
@@ -171,8 +178,8 @@ function VoiceProfileForm({
             />
             <p className="text-xs text-muted-foreground">
               {m["compose.smsSegments"]
-                .replace("{chars}", String(segmentsFor(textbackBody).chars))
-                .replace("{segments}", String(segmentsFor(textbackBody).segments))}
+                .replace("{chars}", String(segmentsFor(previewBody).chars))
+                .replace("{segments}", String(segmentsFor(previewBody).segments))}
             </p>
           </div>
 

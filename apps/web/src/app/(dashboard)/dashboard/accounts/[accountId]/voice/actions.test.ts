@@ -47,6 +47,7 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 import { m } from "@/lib/messages";
+import { defaultTextbackBody } from "@/lib/voice/textback-body";
 import {
   saveVoiceProfileAction, assignNumberAction, setNumberStatusAction, moveNumberAction,
 } from "./actions";
@@ -132,6 +133,37 @@ describe("voice settings actions", () => {
     const r = await setNumberStatusAction("a1", "pn1", "banana");
     expect(r).toMatchObject({ ok: false });
     expect(dbMocks.setPhoneNumberStatus).not.toHaveBeenCalled();
+  });
+
+  /**
+   * THE regression this repo has already shipped once, on a sibling column:
+   * `calendars.followup_body`'s settings UI seeded the live default into a
+   * real form value, so an untouched textarea submitted the default text as
+   * if the operator had typed it, and that frozen text pinned itself into
+   * the column on every unrelated save — breaking the "empty column means
+   * use the live default at send time" contract `bookingFollowupEmail`
+   * (and this column's own `defaultTextbackBody`) depends on.
+   *
+   * `textback_body`'s form field (voice-settings.tsx) is built specifically
+   * to not have that failure mode: the textarea shows the default only as a
+   * `placeholder`, never a `defaultValue`/`value`, so an untouched field
+   * submits "" rather than the default text. That is a UI-only guarantee
+   * with no automated check behind it — this repo's web tests run without a
+   * DOM, and voice has no e2e spec. This test is the server-side half: it
+   * proves the action itself saves the literal empty string for a
+   * submission carrying no `textback_body`, and NOT any text
+   * `defaultTextbackBody` would produce, so a future change to this action
+   * that starts backfilling the default before saving — the exact shape of
+   * the prior defect, just one file over — fails here immediately.
+   */
+  it("a submission with no textback_body saves empty, never the live default text", async () => {
+    dbMocks.upsertVoiceProfile.mockResolvedValue({});
+    const r = await saveVoiceProfileAction("a1", fd({ persona_name: "Alex", languages: "both" }));
+    expect(r).toEqual({ ok: true });
+    const saved = dbMocks.upsertVoiceProfile.mock.calls[0]![2] as { textback_body: string };
+    expect(saved.textback_body).toBe("");
+    expect(saved.textback_body).not.toBe(defaultTextbackBody("Alex"));
+    expect(saved.textback_body).not.toBe(defaultTextbackBody(""));
   });
 });
 
