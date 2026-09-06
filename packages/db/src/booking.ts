@@ -346,28 +346,41 @@ const ACCOUNT_BRAND_COLS =
  * fixed instant) — never computed from `Date.now()` inside here, or the test
  * suite could not assert the window's edges deterministically.
  *
- * The window is `[now, now+25h]` — a full day plus an hour, sized to the
- * DAILY cron the Vercel Hobby plan allows (it rejects any deployment
- * carrying a sub-daily schedule; empirically confirmed 2026-08-23). Each
- * tick covers the whole day ahead, and the 25th hour is tick-timing
- * tolerance, the same way the original 75-minute window carried 60 minutes
- * beyond its 15-minute tick. Consecutive daily ticks therefore overlap by
- * an hour; `reminder_sent_at` dedupes anything the previous tick already
- * sent. Restoring the 15-minute schedule on a paid plan means narrowing
- * this back to `[now+23h, now+24h15m]` so reminders land ~24h out again.
+ * The window is `[now+23h, now+24h15m]` — 75 minutes wide, sized to the
+ * every-15-minutes cron restored when the account moved to Vercel Pro on
+ * 2026-09-05 (`apps/web/vercel.json`, `*/15 * * * *`). Between 2026-08-23
+ * and that upgrade this was `[now, now+25h]`, because the Hobby plan
+ * rejects any deployment carrying a sub-daily schedule and a once-a-day
+ * tick has to cover the whole day ahead in one pass. That fallback bought
+ * coverage at the cost of accuracy: a booking two hours away and a booking
+ * a day away were both "due" on the same tick, so bookers got reminders up
+ * to a day early. Back on the 15-minute cadence, the first tick that sees a
+ * booking is the one ~24h15m before it starts, so the reminder lands ~24h
+ * out, which is what the email itself claims.
  *
- * That tolerance is bounded, not unlimited: an outage (cron paused, the
- * route 503ing, etc.) that delays a tick by more than the spare hour
- * permanently misses any booking whose start slipped past before the next
- * tick — there is no recovery pass that later notices and catches it up.
- * Accepted for v1; revisit if outages of that length turn out to happen.
+ * Why 75 minutes rather than one tick's worth: a booking starting at S is
+ * returned by every tick in `[S-24h15m, S-23h]`, so five or six consecutive
+ * ticks see it and `reminder_sent_at` dedupes all but the first. The extra
+ * 60 minutes beyond the 15-minute cadence is deliberate tick-timing
+ * tolerance — Hobby ticks were measured drifting by as much as 54 minutes,
+ * and Pro is not promised to be exact either.
+ *
+ * That tolerance is bounded, not unlimited, and the bound moved with the
+ * window: an outage (cron paused, the route 503ing, a deploy freeze) that
+ * leaves a gap of more than 75 minutes between successful ticks can step
+ * clean over a booking's entire eligible span, and nothing later notices or
+ * catches it up. Under the 25h window that bound was one hour of the day's
+ * single tick slipping; it is now 75 minutes between any two ticks — a
+ * different shape of the same risk, and strictly more forgiving in practice
+ * because there are 96 chances a day instead of one. Accepted; revisit if
+ * outages that long turn out to happen.
  */
 export async function listDueReminders(
   db: SupabaseClient, nowIso: string,
 ): Promise<DueReminder[]> {
   const now = new Date(nowIso).getTime();
-  const windowStart = new Date(now).toISOString();
-  const windowEnd = new Date(now + 25 * 60 * 60 * 1000).toISOString();
+  const windowStart = new Date(now + 23 * 60 * 60 * 1000).toISOString();
+  const windowEnd = new Date(now + (24 * 60 + 15) * 60 * 1000).toISOString();
 
   const { data, error } = await db.from("bookings")
     .select(`id, account_id, starts_at, booker_timezone, cancel_token, meeting_url,
