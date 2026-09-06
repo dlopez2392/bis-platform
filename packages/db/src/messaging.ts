@@ -260,39 +260,85 @@ export async function hasRecentOutboundSms(
   return data !== null;
 }
 
-/** One conversation whose LATEST outbound SMS is `failed` — nothing reached
- *  the person on the other end, and there is no retry anywhere that will.
- *  `body` is what was attempted, so a resend does not make the operator
- *  retype it. */
+/**
+ * ONE CALL's text-back window — the span of time inside which the text-back
+ * for that call, if there was one, would have been written.
+ *
+ * The whole point of this type. `messages` carries no call id (and this change
+ * ships no migration to add one), so the only thing that can tie a failed
+ * outbound SMS to a particular call is WHEN it was written: `finishCall`
+ * writes the text-back row during its own run, immediately after the caller
+ * hangs up. Correlating by conversation instead is wrong — conversations are
+ * one-per-CONTACT (`ensureConversation`), so one conversation spans every call
+ * that person has ever made, and a failure on any of them would be claimed by
+ * all of them.
+ *
+ * The bounds are chosen by the caller, which is where the reasoning and the
+ * residual failure modes are documented (`calls/textback-window.ts`). This read
+ * only applies them.
+ */
+export type TextbackWindow = {
+  /** The `calls` row this window belongs to. Carried straight through to the
+   *  result so callers key the badge on the CALL, never on the conversation. */
+  callId: string;
+  conversationId: string;
+  /** Inclusive lower bound, ISO. */
+  fromIso: string;
+  /** Exclusive upper bound, ISO. */
+  toIso: string;
+};
+
+/** The failed text-back belonging to ONE call — nothing reached the person on
+ *  the other end, and there is no retry anywhere that will. `body` is what was
+ *  attempted, so a resend does not make the operator retype it. */
 export type FailedOutboundSms = {
+  callId: string;
   conversationId: string;
   messageId: string;
   body: string;
   failedAt: string;
+  /** When a LATER outbound SMS to this contact did go out, if one did.
+   *
+   *  It deliberately does NOT suppress the failure: the text-back for this
+   *  call failed, that stays true forever, and an unrelated manual reply two
+   *  hours later is not evidence about it. Keying the badge itself on this was
+   *  the defect — a genuinely failed text-back vanished the moment anyone
+   *  texted that contact again, and nothing else in the product recorded it.
+   *
+   *  What it IS for: deciding whether to still offer "Send it now". The resend
+   *  writes a NEW outbound row through `sendSmsAction` rather than mutating the
+   *  failed one, so without this the button would sit there permanently and
+   *  every press would text a real phone again — the repeated-identical-body
+   *  pattern 10DLC carrier filtering hunts for, with the CLIENT'S OWN A2P
+   *  registration as the thing that gets blocked. */
+  supersededAt: string | null;
 };
 
 /**
- * Which of these conversations are currently sitting on a failed outbound
- * text — the read behind the failed-text-back badge on the Calls list and the
- * call detail page.
+ * The failed text-back belonging to each of these CALLS — the read behind the
+ * failed-text-back badge on the Calls list and the call detail page.
  *
  * ONE read for a whole page of calls, not one per row. The calls list renders
  * up to 50, and a per-row query would be fifty round trips to answer a
  * question that is empty for almost every one of them.
  *
- * "LATEST outbound SMS is failed", not "a failed one exists anywhere". That
- * distinction is what lets the badge CLEAR: the resend control writes a new
- * outbound row through `sendSmsAction` rather than mutating the failed one
- * (there is no "resolved" column and no migration here to add one), so a badge
- * keyed on mere existence would still be showing after a successful resend —
- * inviting a second text to a real phone.
+ * Correlation is BY CALL, through each call's own window (see `TextbackWindow`
+ * above): a failure counts for a call only when it was written inside that
+ * call's window. The conversation is still the lookup key — it is what the
+ * message rows are filed under — but it is no longer the ANSWER. A
+ * conversation-wide "is there a failure here" reported the same failure on
+ * every call that contact ever made, in both directions: a later call claiming
+ * an earlier call's failure, and a real failure disappearing the moment
+ * anything else in the thread succeeded.
+ *
+ * "The newest failure INSIDE the window", not "the newest failure anywhere":
+ * a failure from a previous call is outside this call's window and cannot be
+ * claimed by it.
  *
  * Two queries at most, and one in the common case. The first asks only for
- * FAILED rows, which are rare, so it cannot be the unbounded scan that
- * "newest message per conversation" usually is; when it comes back empty —
- * almost always — the second never runs. The second then looks only at the
- * handful of conversations that actually had a failure, to find out whether
- * something newer already went out.
+ * FAILED rows inside the union of the windows — rare and time-bounded, so it
+ * cannot be the unbounded scan "newest message per conversation" usually is;
+ * when it comes back empty, which is almost always, the second never runs.
  *
  * Scoped by accountId as well as conversation id, exactly like
  * `hasRecentOutboundSms` above and for the same reason: a conversation id is a
@@ -300,10 +346,23 @@ export type FailedOutboundSms = {
  * may be satisfiable by another tenant's rows.
  */
 export async function listFailedOutboundSms(
-  db: SupabaseClient, accountId: string, conversationIds: string[],
+  db: SupabaseClient, accountId: string, windows: TextbackWindow[],
 ): Promise<FailedOutboundSms[]> {
-  const ids = [...new Set(conversationIds.filter(Boolean))];
-  if (ids.length === 0) return [];
+  // A window that cannot bound anything is dropped, never widened. Both bounds
+  // reach here from `calls` columns, and an unparseable or inverted pair would
+  // otherwise become a filter matching everything — which is precisely the
+  // conversation-wide join this read exists to stop being.
+  const usable = windows.filter((w) => {
+    if (!w.callId || !w.conversationId) return false;
+    const from = Date.parse(w.fromIso);
+    const to = Date.parse(w.toIso);
+    return Number.isFinite(from) && Number.isFinite(to) && from < to;
+  });
+  if (usable.length === 0) return [];
+
+  const ids = [...new Set(usable.map((w) => w.conversationId))];
+  const earliest = Math.min(...usable.map((w) => Date.parse(w.fromIso)));
+  const latest = Math.max(...usable.map((w) => Date.parse(w.toIso)));
 
   const { data: failures, error } = await db.from("messages")
     .select("id, conversation_id, body, created_at")
@@ -312,50 +371,80 @@ export async function listFailedOutboundSms(
     .eq("channel", "sms")
     .eq("direction", "outbound")
     .eq("status", "failed")
+    // The union of every window on the page — a coarse pre-filter, with the
+    // per-window test below doing the real work. Milliseconds, because
+    // Date.parse truncates the microseconds Postgres stores; truncation rounds
+    // DOWN, so this only ever widens and cannot drop a row that belongs.
+    .gte("created_at", new Date(earliest).toISOString())
+    .lt("created_at", new Date(latest).toISOString())
     .order("created_at", { ascending: false });
   if (error) throw new Error(`listFailedOutboundSms failed: ${error.message}`);
 
-  // Newest failure per conversation. Rows arrive newest-first, so the first
-  // one seen for a conversation is the one that matters.
-  const newest = new Map<string, FailedOutboundSms>();
+  const byConversation = new Map<string, { id: string; body: string; created_at: string }[]>();
   for (const row of (failures ?? []) as {
     id: string; conversation_id: string; body: string; created_at: string;
   }[]) {
-    if (newest.has(row.conversation_id)) continue;
-    newest.set(row.conversation_id, {
-      conversationId: row.conversation_id,
-      messageId: row.id,
-      body: row.body,
-      failedAt: row.created_at,
+    const held = byConversation.get(row.conversation_id);
+    if (held) held.push(row);
+    else byConversation.set(row.conversation_id, [row]);
+  }
+
+  // Rows arrive newest-first, so the first one falling inside a window is that
+  // call's. Compared as instants, not as strings: Postgres omits the fractional
+  // part of a timestamptz whose microseconds are zero, so two rows a second
+  // apart can differ in LENGTH as well as value and lexical comparison stops
+  // being trustworthy at exactly the boundaries this decides.
+  const hits: FailedOutboundSms[] = [];
+  const claimed = new Set<string>();
+  for (const w of usable) {
+    if (claimed.has(w.callId)) continue;
+    const from = Date.parse(w.fromIso);
+    const to = Date.parse(w.toIso);
+    const hit = (byConversation.get(w.conversationId) ?? []).find((row) => {
+      const at = Date.parse(row.created_at);
+      return Number.isFinite(at) && at >= from && at < to;
+    });
+    if (!hit) continue;
+    claimed.add(w.callId);
+    hits.push({
+      callId: w.callId,
+      conversationId: w.conversationId,
+      messageId: hit.id,
+      body: hit.body,
+      failedAt: hit.created_at,
+      supersededAt: null,
     });
   }
-  if (newest.size === 0) return [];
+  if (hits.length === 0) return [];
 
+  // Only now, and only for the handful of conversations that actually had a
+  // failure: has anything else reached this contact since? This answers the
+  // resend control's question, never the badge's — see `supersededAt` above.
   const { data: sent, error: sentErr } = await db.from("messages")
     .select("conversation_id, created_at")
     .eq("account_id", accountId)
-    .in("conversation_id", [...newest.keys()])
+    .in("conversation_id", [...new Set(hits.map((h) => h.conversationId))])
     .eq("channel", "sms")
     .eq("direction", "outbound")
     .neq("status", "failed");
   if (sentErr) throw new Error(`listFailedOutboundSms failed: ${sentErr.message}`);
 
-  // Compared as instants, not as strings. Postgres omits the fractional part
-  // of a timestamptz whose microseconds are zero, so two rows a second apart
-  // can differ in LENGTH as well as value and lexical comparison stops being
-  // trustworthy at exactly the boundary this decides.
-  const latestSent = new Map<string, number>();
+  const latestSent = new Map<string, string>();
   for (const row of (sent ?? []) as { conversation_id: string; created_at: string }[]) {
     const at = Date.parse(row.created_at);
     if (!Number.isFinite(at)) continue;
-    if (at > (latestSent.get(row.conversation_id) ?? -Infinity)) {
-      latestSent.set(row.conversation_id, at);
+    const held = latestSent.get(row.conversation_id);
+    if (held === undefined || at > Date.parse(held)) {
+      latestSent.set(row.conversation_id, row.created_at);
     }
   }
 
-  return [...newest.values()].filter(
-    (f) => (latestSent.get(f.conversationId) ?? -Infinity) < Date.parse(f.failedAt),
-  );
+  return hits.map((h) => {
+    const at = latestSent.get(h.conversationId);
+    return at !== undefined && Date.parse(at) > Date.parse(h.failedAt)
+      ? { ...h, supersededAt: at }
+      : h;
+  });
 }
 
 /**

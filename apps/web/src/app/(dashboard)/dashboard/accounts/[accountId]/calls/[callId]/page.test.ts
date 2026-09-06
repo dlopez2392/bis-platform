@@ -75,11 +75,30 @@ const CALL: CallDetailRow = {
 };
 
 const FAILED_TEXTBACK = {
+  callId: "call1",
   conversationId: "cv1",
   messageId: "msg1",
   body: "Sorry we missed you just now — reply here and we'll get right back to you.",
   failedAt: "2026-08-25T19:19:00.000000+00:00",
+  supersededAt: null as string | null,
 };
+
+/** The window this page hands the read for `CALL` — `[started_at, ended_at +
+ *  5 min)`, asserted rather than recomputed, so a change that quietly widened
+ *  it back out to the contact's whole conversation fails here. */
+const WINDOW = {
+  callId: "call1",
+  conversationId: "cv1",
+  fromIso: "2026-08-25T19:15:00.123Z",
+  toIso: "2026-08-25T19:23:42.000Z",
+};
+
+/** The status DOT, not the chip. See the identical helper in
+ *  ../calls-table.test.ts: `toContain("bg-destructive")` matched the chip's own
+ *  `bg-destructive/5`, so deleting the dot `<span>` left every calls test
+ *  green. The lookahead demands the SOLID token. */
+const TEXTBACK_STATUS_DOT =
+  /<span\b[^>]*\bclass="(?=[^"]*\brounded-full\b)(?=[^"]*\bbg-destructive(?![\w/-]))[^"]*"/;
 
 function render(row: CallDetailRow | null, failed: (typeof FAILED_TEXTBACK)[] = []) {
   getCallMock.mockResolvedValue(row);
@@ -90,7 +109,15 @@ function render(row: CallDetailRow | null, failed: (typeof FAILED_TEXTBACK)[] = 
 }
 
 describe("CallDetailPage", () => {
-  beforeEach(() => listFailedOutboundSmsMock.mockClear());
+  // Braces, not a concise body. `mockClear()` RETURNS the mock, and vitest
+  // treats a function returned from `beforeEach` as that test's teardown — so
+  // the concise form quietly registered the mock itself to be CALLED again
+  // after every test in this file. Harmless while it returned a promise;
+  // the moment a test made it throw, the teardown threw and failed a test whose
+  // body had already passed.
+  beforeEach(() => {
+    listFailedOutboundSmsMock.mockClear();
+  });
 
   it("renders the header, the summary and both sides of the conversation", async () => {
     const html = await render(CALL);
@@ -204,15 +231,47 @@ describe("CallDetailPage", () => {
     // there is no queue and no cron that will have another go.
     expect(html).toContain("nothing will try again on its own");
     expect(html).toContain("Send it now");
-    // Dot + word, never colour alone (DESIGN.md rule 3).
-    expect(html).toContain("bg-destructive");
+    // Dot + word, never colour alone (DESIGN.md rule 3) — on the DOT's own
+    // painted class. `toContain("bg-destructive")` used to stand here and
+    // passed on the chip's `bg-destructive/5` with the dot deleted.
+    expect(html).toMatch(TEXTBACK_STATUS_DOT);
+    // FINDING 4. The block sits ON the card surface with the destructive wash
+    // layered over it, like the MISMATCH block — not tinting `--surface-0` a
+    // step below every other card on the page. `cn()` DROPS `bg-card` when a
+    // second background lands on the same element, which is how that happened;
+    // these two assertions are on the outer card and the inner wash separately,
+    // because a single element carrying both is exactly what cannot exist.
+    expect(html).toMatch(
+      /<div\b[^>]*\bclass="(?=[^"]*\bbg-card\b)(?=[^"]*\bborder-destructive\/30\b)[^"]*"/,
+    );
+    expect(html).toMatch(/<div\b[^>]*\bclass="(?=[^"]*\bbg-destructive\/5\b)[^"]*"/);
     // The BODY THAT FAILED rides along as the resend's payload — the operator
     // is not made to retype the message the platform dropped.
     expect(html).toContain("Sorry we missed you just now");
     expect(html).toContain('name="contactId"');
-    // Asked about THIS call's conversation and nothing else.
+    // Asked about THIS CALL's own window — not the contact's whole thread.
     expect(listFailedOutboundSmsMock).toHaveBeenCalledTimes(1);
-    expect(listFailedOutboundSmsMock.mock.calls[0]![2]).toEqual(["cv1"]);
+    expect(listFailedOutboundSmsMock.mock.calls[0]![2]).toEqual([WINDOW]);
+  });
+
+  /**
+   * FINDING 1, the false negative. A later outbound text to this contact used
+   * to make the badge vanish — including an unrelated manual reply — and
+   * nothing else in the product recorded that the text-back had failed. It is a
+   * fact about THIS CALL and it stays. Only the resend control stands down,
+   * because something has since reached this person and pressing it again would
+   * text a real phone the same words twice.
+   */
+  it("keeps the badge after a later outbound text to the same contact succeeded, and withdraws only the resend", async () => {
+    const html = await render(
+      { ...CALL, outcome: "abandoned", booking_id: null },
+      [{ ...FAILED_TEXTBACK, supersededAt: "2026-08-25T21:02:00.000000+00:00" }],
+    );
+
+    expect(html).toContain("Text-back didn&#x27;t send");
+    expect(html).toMatch(TEXTBACK_STATUS_DOT);
+    expect(html).not.toContain("Send it now");
+    expect(html).not.toContain("<form");
   });
 
   it("renders nothing about the text-back when the last one went out fine", async () => {
@@ -231,6 +290,15 @@ describe("CallDetailPage", () => {
     expect(listFailedOutboundSmsMock).not.toHaveBeenCalled();
   });
 
+  it("never asks about a text-back for a call with no end — nothing bounds the window", async () => {
+    // `ended_at` null: `finishCallRow` never landed, or the call is still live.
+    // There is no window to build, and an unbounded one would be the
+    // conversation-wide claim this page stopped making.
+    await render({ ...CALL, ended_at: null, outcome: "abandoned" }, [FAILED_TEXTBACK]);
+
+    expect(listFailedOutboundSmsMock).not.toHaveBeenCalled();
+  });
+
   it("does not claim a text-back on a BOOKED call that shares a repeat caller's conversation", async () => {
     // Conversations are one-per-contact: a caller who abandoned on Monday and
     // booked on Tuesday has ONE conversation, and Monday's failed text-back
@@ -241,5 +309,25 @@ describe("CallDetailPage", () => {
     expect(listFailedOutboundSmsMock).not.toHaveBeenCalled();
     expect(html).not.toContain("Text-back");
     expect(html).not.toContain("Send it now");
+  });
+
+  /**
+   * FINDING 3. One advisory panel must not be able to take a call record down.
+   * The transcript is the reason this page exists.
+   */
+  it("still renders the call when the failed-text-back read blows up", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    getCallMock.mockResolvedValue({ ...CALL, outcome: "abandoned" });
+    listFailedOutboundSmsMock.mockRejectedValue(new Error("permission denied for table messages"));
+
+    const html = await CallDetailPage({
+      params: Promise.resolve({ accountId: "acct1", callId: "call1" }),
+    }).then(renderToStaticMarkup);
+
+    expect(html).toContain("Transcript");
+    expect(html).toContain("I need a roof inspection.");
+    expect(html).not.toContain("Text-back");
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("failed-text-back read failed"));
+    spy.mockRestore();
   });
 });

@@ -195,7 +195,7 @@ describe("messaging", () => {
       expect(await hasRecentOutboundSms(db, accountId, convo.id, since())).toBe(false);
     }));
 
-  it("listFailedOutboundSms surfaces a failed text-back, clears it once something newer goes out, and refuses to see another tenant's rows", () =>
+  it("listFailedOutboundSms ties a failed text-back to the CALL whose window holds it, keeps it after a later text goes out, and refuses to see another tenant's rows", () =>
     withTestAccount(async (db, accountId) => {
       // One fixture cycle for the whole contract, deliberately — same
       // contention note as the tests above.
@@ -204,12 +204,26 @@ describe("messaging", () => {
       const a = await ensureConversation(db, accountId, ada.id, "voice", "ai");
       const b = await ensureConversation(db, accountId, grace.id, "voice", "ai");
 
-      // An empty id list must short-circuit — the calls list hands one over
+      // Windows are built from THIS machine's clock while `created_at` comes
+      // off the database's, so every bound below is minutes wide rather than
+      // seconds. What is under test here is that a window FILTERS, not that two
+      // clocks agree to the millisecond — the real bounds are pinned in
+      // apps/web's textback-window.test.ts, where the clock is not a variable.
+      const t0 = Date.now();
+      const MIN = 60_000;
+      const iso = (ms: number) => new Date(t0 + ms).toISOString();
+      /** The shape of a call that just this moment ended. */
+      const justNow = (callId: string, conversationId: string) => ({
+        callId, conversationId, fromIso: iso(-10 * MIN), toIso: iso(10 * MIN),
+      });
+
+      // An empty window list must short-circuit — the calls list hands one over
       // for every page of calls that never opened a conversation, and a query
       // there would be a round trip that cannot return anything.
       expect(await listFailedOutboundSms(db, accountId, [])).toEqual([]);
       // Conversations with no messages at all.
-      expect(await listFailedOutboundSms(db, accountId, [a.id, b.id])).toEqual([]);
+      expect(await listFailedOutboundSms(
+        db, accountId, [justNow("call-a", a.id), justNow("call-b", b.id)])).toEqual([]);
 
       const body = "Sorry we missed you just now.";
       const { id: failedId } = await createMessage(db, accountId, {
@@ -217,27 +231,50 @@ describe("messaging", () => {
       }, "voice", "ai");
 
       // `queued` is not a failure — the text may well have gone out.
-      expect(await listFailedOutboundSms(db, accountId, [a.id, b.id])).toEqual([]);
+      expect(await listFailedOutboundSms(
+        db, accountId, [justNow("call-a", a.id), justNow("call-b", b.id)])).toEqual([]);
 
       await updateMessageStatus(db, accountId, failedId, "failed",
         { error: "carrier refused" }, "voice", "ai");
 
-      const hits = await listFailedOutboundSms(db, accountId, [a.id, b.id]);
+      const hits = await listFailedOutboundSms(
+        db, accountId, [justNow("call-a", a.id), justNow("call-b", b.id)]);
       expect(hits).toHaveLength(1);
+      // Keyed on the CALL the window came in for, which is what the badge joins
+      // on now — the conversation rides along only as provenance.
+      expect(hits[0]!.callId).toBe("call-a");
       expect(hits[0]!.conversationId).toBe(a.id);
       expect(hits[0]!.messageId).toBe(failedId);
       // The body the operator gets to resend WITHOUT retyping it.
       expect(hits[0]!.body).toBe(body);
+      // Nothing has gone out since, so the resend control stands.
+      expect(hits[0]!.supersededAt).toBeNull();
 
-      // A duplicate id in the caller's list must not duplicate the answer —
-      // two calls from the same abandoned caller share one conversation, and
-      // both land on the same page of the calls list.
-      expect(await listFailedOutboundSms(db, accountId, [a.id, a.id])).toHaveLength(1);
+      // THE FALSE POSITIVE. The same caller rings again hours later and
+      // abandons again; the 24h cooldown suppresses that call's text-back, so
+      // it never writes a message at all — but `finishCall` still stamps the
+      // SAME conversation onto its row, because conversations are
+      // one-per-CONTACT. Keyed on the conversation, that later call claimed
+      // this failure and said "Text-back didn't send" about a text-back that
+      // never existed. Its own window is two hours away from the message.
+      const twoHoursLater = {
+        callId: "call-a2", conversationId: a.id,
+        fromIso: iso(120 * MIN), toIso: iso(130 * MIN),
+      };
+      expect(await listFailedOutboundSms(db, accountId, [twoHoursLater])).toEqual([]);
+      // …and asked about together, only the call whose window holds it answers.
+      expect((await listFailedOutboundSms(
+        db, accountId, [justNow("call-a", a.id), twoHoursLater])).map((f) => f.callId))
+        .toEqual(["call-a"]);
+
+      // A duplicate window for one call must not duplicate the answer.
+      expect(await listFailedOutboundSms(
+        db, accountId, [justNow("call-a", a.id), justNow("call-a", a.id)])).toHaveLength(1);
 
       // THE TENANT BOUNDARY. Same conversation id, another account's context:
       // without the account filter the conversation filter alone would match.
       expect(await listFailedOutboundSms(
-        db, "00000000-0000-0000-0000-000000000000", [a.id])).toEqual([]);
+        db, "00000000-0000-0000-0000-000000000000", [justNow("call-a", a.id)])).toEqual([]);
 
       // Channel and direction both filter. A failed EMAIL is not a failed
       // text-back, and neither is anything inbound.
@@ -249,32 +286,41 @@ describe("messaging", () => {
         conversationId: b.id, channel: "sms", direction: "inbound", body: "who is this",
       }, "sms-inbound", "system");
       await updateMessageStatus(db, accountId, inboundId, "failed", { error: "x" }, "system", "system");
-      expect((await listFailedOutboundSms(db, accountId, [a.id, b.id])).map((f) => f.conversationId))
-        .toEqual([a.id]);
+      expect((await listFailedOutboundSms(
+        db, accountId, [justNow("call-a", a.id), justNow("call-b", b.id)])).map((f) => f.callId))
+        .toEqual(["call-a"]);
 
-      // THE DECIDED SEMANTICS: the LATEST outbound text, not "a failure exists
-      // somewhere". The resend writes a NEW row (sendSmsAction) rather than
-      // mutating the failed one, so a badge keyed on mere existence would
-      // still be showing after a send that worked — and the operator's next
-      // click would text a real phone twice.
+      // THE FALSE NEGATIVE, and the semantics this replaces. A later outbound
+      // text to the same contact goes out fine — the operator's own resend, or
+      // an unrelated manual reply. Keyed on "the LATEST outbound SMS is failed",
+      // the badge vanished here and nothing else in the product recorded that
+      // the text-back had failed. It did fail, that call's caller was never
+      // texted, and that stays true.
       const { id: resentId } = await createMessage(db, accountId, {
         conversationId: a.id, channel: "sms", direction: "outbound", body,
       }, "user_test");
       await updateMessageStatus(db, accountId, resentId, "sent",
         { providerMessageId: "prov_resend" }, "user_test");
-      expect(await listFailedOutboundSms(db, accountId, [a.id, b.id])).toEqual([]);
+      const kept = await listFailedOutboundSms(db, accountId, [justNow("call-a", a.id)]);
+      expect(kept).toHaveLength(1);
+      expect(kept[0]!.messageId).toBe(failedId);
+      // The ONLY thing that changed: the resend control now knows something has
+      // reached this person, so it stands down rather than texting them twice.
+      expect(kept[0]!.supersededAt).not.toBeNull();
 
-      // …and it comes back if the NEXT one fails too, carrying the newest
-      // failure's body rather than the stale first one.
+      // A second failure inside the same window is the one reported, carrying
+      // its own body rather than the stale first one — and the successful
+      // resend is now older than it, so nothing supersedes it.
       const { id: secondFailure } = await createMessage(db, accountId, {
         conversationId: a.id, channel: "sms", direction: "outbound", body: "Second attempt.",
       }, "user_test");
       await updateMessageStatus(db, accountId, secondFailure, "failed",
         { error: "carrier refused again" }, "user_test");
-      const again = await listFailedOutboundSms(db, accountId, [a.id, b.id]);
+      const again = await listFailedOutboundSms(db, accountId, [justNow("call-a", a.id)]);
       expect(again).toHaveLength(1);
       expect(again[0]!.messageId).toBe(secondFailure);
       expect(again[0]!.body).toBe("Second attempt.");
+      expect(again[0]!.supersededAt).toBeNull();
     }));
 
   it("updateMessageStatusByProviderId finds the row without tenant context", () =>

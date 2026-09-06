@@ -9,7 +9,7 @@ import {
   Timer,
   UserRound,
 } from "lucide-react";
-import { getCall, listFailedOutboundSms } from "@bis/db";
+import { getCall, listFailedOutboundSms, type FailedOutboundSms } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { requireAccountAccess } from "@/lib/auth";
@@ -20,6 +20,7 @@ import { m } from "@/lib/messages";
 import { callerLabel, formatCallTime, formatDuration } from "../format";
 import { OutcomePill } from "../outcome-pill";
 import { TextbackFailedBadge } from "../textback-failed-badge";
+import { textbackWindow } from "../textback-window";
 import { sendSmsAction } from "../../conversations/actions";
 import { splitSummaryBlocks, type SummaryBlock } from "./summary-blocks";
 import { TranscriptView } from "./transcript-view";
@@ -62,16 +63,27 @@ export default async function CallDetailPage({
   const base = `/dashboard/accounts/${accountId}`;
   const blocks = splitSummaryBlocks(call.summary ?? "");
 
-  // The missed-call text-back that never went out. Only asked for an ABANDONED
-  // call that actually opened a conversation: the text-back fires on no other
-  // outcome (finish-call.ts), and conversations are one-per-contact, so a
-  // repeat caller's booked call would otherwise inherit the abandoned one's
-  // failure and claim a text-back it never had. Every call from before that
-  // feature shipped skips the read entirely. Same single read the list page
-  // uses, given a list of one.
-  const [textbackFailure] = call.outcome === "abandoned" && call.conversation_id
-    ? await listFailedOutboundSms(db, accountId, [call.conversation_id])
-    : [];
+  // The missed-call text-back that never went out — THIS call's, bounded by
+  // this call's own window rather than looked up across the contact's whole
+  // thread (conversations are one-per-contact, so the thread spans every call
+  // they ever made). `textbackWindow` returns null for every shape that cannot
+  // own a text-back, and those skip the read entirely. Same single read the
+  // list page uses, given a list of one.
+  //
+  // Swallowed like the list page's, and for the same reason: this block is one
+  // advisory panel on a page whose job is the transcript. A momentary
+  // `messages` failure must not take the call record down with it.
+  const window = textbackWindow(call);
+  let textbackFailure: FailedOutboundSms | undefined;
+  if (window) {
+    try {
+      [textbackFailure] = await listFailedOutboundSms(db, accountId, [window]);
+    } catch (e) {
+      console.error(
+        `call detail ${callId}: failed-text-back read failed, rendering no badge: ${String(e)}`,
+      );
+    }
+  }
 
   // Every link is conditional on its own id. A call that matched no contact,
   // opened no conversation and booked nothing renders no rail at all rather
@@ -170,31 +182,43 @@ export default async function CallDetailPage({
               carrying the same sentence would have a screen reader read it
               twice in a row. */}
           {textbackFailure ? (
-            <div
-              className={cn(
-                CARD,
-                "flex flex-wrap items-center gap-x-4 gap-y-3 border-destructive/30 bg-destructive/5 p-5",
-              )}
-            >
-              <div className="min-w-0 flex-1 space-y-1.5">
-                <TextbackFailedBadge />
-                <p className="text-sm leading-6 text-muted-foreground">
-                  {m["calls.textbackFailedBody"]}
-                </p>
+            // Two elements, not one. The destructive tint is a WASH LAYERED
+            // OVER the card surface — the same shape the MISMATCH block below
+            // uses, and for the same reason: every other card on this page sits
+            // on `--surface-1`, and `cn()` merges `bg-destructive/5` on top of
+            // `bg-card` by DROPPING it, which tinted `--surface-0` instead and
+            // sank this block a step below its own siblings. The border still
+            // belongs on the outer element, where the card's own `border` width
+            // and `rounded-lg` are.
+            <div className={cn(CARD, "border-destructive/30")}>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-3 bg-destructive/5 p-5">
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <TextbackFailedBadge />
+                  <p className="text-sm leading-6 text-muted-foreground">
+                    {m["calls.textbackFailedBody"]}
+                  </p>
+                </div>
+                {/* The control needs a contact to text — `sendSmsAction` reads
+                    the number off the contact record, never off the call. A
+                    conversation always has one (ensureConversation is keyed on
+                    it), but this page renders what it can prove: no contact id,
+                    no button.
+
+                    `supersededAt` is the other half of that. It means something
+                    else has since reached this contact — the operator's own
+                    earlier resend, most often — and offering the button again
+                    would text a real phone the same words twice. The badge and
+                    the line above stay either way: this call's text-back failed,
+                    and that does not stop being true because a later one
+                    worked. That is the whole defect this wave fixed. */}
+                {call.contact_id && !textbackFailure.supersededAt ? (
+                  <TextbackResend
+                    contactId={call.contact_id}
+                    body={textbackFailure.body}
+                    action={sendSmsAction.bind(null, accountId)}
+                  />
+                ) : null}
               </div>
-              {/* The control needs a contact to text — `sendSmsAction` reads
-                  the number off the contact record, never off the call. A
-                  conversation always has one (ensureConversation is keyed on
-                  it), but this page renders what it can prove: no contact id,
-                  no button, and the operator still learns the text failed
-                  rather than getting a control that cannot work. */}
-              {call.contact_id ? (
-                <TextbackResend
-                  contactId={call.contact_id}
-                  body={textbackFailure.body}
-                  action={sendSmsAction.bind(null, accountId)}
-                />
-              ) : null}
             </div>
           ) : null}
 

@@ -43,9 +43,12 @@ export function TextbackResend({
       await action(formData);
       toast.success(m["compose.smsSent"]);
       // `sendSmsAction` revalidates the conversation and contact pages, not
-      // this one — it has no idea it was called from a call. Without this
-      // refresh the badge above would still be sitting there after a send
-      // that worked, and the next click would text a real phone twice.
+      // this one — it has no idea it was called from a call. The BADGE is not
+      // what this refresh is for: that records a fact about this call's
+      // text-back and stays. It is this BUTTON. The message just written is
+      // what makes the failure `supersededAt`, and until the page re-reads,
+      // the control is still sitting there inviting a second text to a real
+      // phone.
       router.refresh();
     } catch (e) {
       // A thrown server action that nothing catches reaches the operator as a

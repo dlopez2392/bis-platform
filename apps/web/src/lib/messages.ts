@@ -786,8 +786,14 @@ export const m = {
   // the operator cannot see anywhere else: `failed` means the provider refused
   // and NOTHING was delivered, and there is no queue and no cron that will
   // have another go. If they want this caller texted, it is on them, now.
+  //
+  // "The text we tried to send", not a bare "nothing" — the badge stays on this
+  // call forever now, including after a later text to the same person did go
+  // out, and a flat "nothing reached them" would be a lie in exactly that case.
+  // The sentence is about THIS call's text-back, which never arrived and never
+  // will.
   "calls.textbackFailedBody":
-    "Nothing reached them, and nothing will try again on its own.",
+    "The text we tried to send never reached them, and nothing will try again on its own.",
 
   // A single call — /dashboard/accounts/<id>/calls/<callId>. The transcript
   // surface: the one place a client can read what their receptionist actually

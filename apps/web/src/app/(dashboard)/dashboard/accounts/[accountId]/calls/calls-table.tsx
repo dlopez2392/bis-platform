@@ -40,10 +40,12 @@ export function CallsTable({
   timezone: string;
   /** Present only when a full page came back, i.e. there may be more. */
   olderHref?: string;
-  /** Conversation ids whose latest outbound text failed to send — resolved by
-   *  the page in ONE read for the whole table (see page.tsx), never per row.
-   *  Optional so the dashboard's mini table and this component's own tests can
-   *  render rows without it. */
+  /** CALL ids whose own text-back failed to send — resolved by the page in ONE
+   *  read for the whole table (see page.tsx), never per row. Call ids, not
+   *  conversation ids: a conversation is one-per-CONTACT and spans every call
+   *  that person ever made, so keying this on the thread badged the wrong rows
+   *  in both directions. Optional so the dashboard's mini table and this
+   *  component's own tests can render rows without it. */
   textbackFailed?: ReadonlySet<string>;
 }) {
   const base = `/dashboard/accounts/${accountId}`;
@@ -115,15 +117,17 @@ export function CallsTable({
                     page (see the chevron cell's note below, and
                     [callId]/textback-resend.tsx).
 
-                    `abandoned` is re-checked here rather than trusted from the
-                    set: conversations are one-per-CONTACT, so a repeat caller's
-                    abandoned and booked calls share one conversation id and an
-                    outcome-blind lookup would badge both. */}
+                    Looked up by CALL id. The set is built from windows this
+                    row's own timestamps bounded (page.tsx → textback-window.ts),
+                    so it can only ever contain calls that really had one.
+                    `abandoned` is still re-checked here rather than trusted
+                    from the set — the same narrowing at each of the three
+                    layers, so no single one of them going wrong can put a
+                    sentence on a row that is untrue of that call. */}
                 <TableCell className={CELL}>
                   <div className="flex flex-wrap items-center gap-1.5">
                     <OutcomePill outcome={row.outcome} />
-                    {row.outcome === "abandoned" && row.conversation_id
-                      && textbackFailed?.has(row.conversation_id) ? (
+                    {row.outcome === "abandoned" && textbackFailed?.has(row.id) ? (
                       <TextbackFailedBadge />
                     ) : null}
                   </div>

@@ -1,6 +1,6 @@
 import { Fragment } from "react";
 import { PhoneIncoming } from "lucide-react";
-import { listCalls, countCallsSince, listFailedOutboundSms } from "@bis/db";
+import { listCalls, countCallsSince, listFailedOutboundSms, type TextbackWindow } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { requireAccountAccess } from "@/lib/auth";
@@ -10,6 +10,7 @@ import { readLimitConfig, utcDayStart } from "@/lib/voice/call-limits";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { CallsTable } from "./calls-table";
+import { textbackWindow } from "./textback-window";
 
 export const dynamic = "force-dynamic";
 
@@ -77,26 +78,35 @@ export default async function CallsPage({
 
   // ONE read for the whole page, not one per row — fifty rows would otherwise
   // be fifty round trips to answer a question that is empty for almost all of
-  // them. `listFailedOutboundSms` returns early on an empty id list, so a page
-  // of calls that never opened a conversation (every call before the text-back
-  // shipped) costs nothing at all. Sequential rather than in the Promise.all
-  // above because it takes the conversation ids that read returns.
+  // them. `listFailedOutboundSms` returns early on an empty window list, so a
+  // page of calls that never opened a conversation (every call before the
+  // text-back shipped) costs nothing at all. Sequential rather than in the
+  // Promise.all above because it takes what that read returns.
   //
-  // ABANDONED rows only. The text-back fires on no other outcome
-  // (finish-call.ts), and conversations are one-per-CONTACT: a repeat caller
-  // whose first call was abandoned and whose second one booked shares a single
-  // conversation, so an unfiltered read would put "Text-back didn't send" on
-  // the booked row too — a sentence that is simply not true of that call.
-  const failedTextbacks = await listFailedOutboundSms(
-    db, accountId,
-    rows.filter((row) => row.outcome === "abandoned")
-      .map((row) => row.conversation_id)
-      .filter((id): id is string => Boolean(id)),
-  );
-  // Mapped back onto the rows in memory below, by conversation. A failed
-  // text-back belongs to exactly one conversation, and a conversation to
-  // exactly one contact (see ensureConversation).
-  const textbackFailed = new Set(failedTextbacks.map((f) => f.conversationId));
+  // One window PER CALL, never a bare list of conversation ids: conversations
+  // are one-per-CONTACT, so a repeat caller's conversation spans every call
+  // they ever made and a conversation-keyed answer lands on all of them.
+  // `textbackWindow` is where the bounds — and the shapes it refuses to answer
+  // for at all — are set out.
+  const windows = rows
+    .map((row) => textbackWindow(row))
+    .filter((w): w is TextbackWindow => w !== null);
+
+  // Swallowed, exactly like the four legs of `finishCall` are. This badge is
+  // advisory; the log of calls is the page. A momentary `messages` failure must
+  // cost the operator their badges, not their Calls page — and the log line is
+  // the only trace that the badges on screen are incomplete.
+  let textbackFailed: ReadonlySet<string> = new Set<string>();
+  try {
+    const failures = await listFailedOutboundSms(db, accountId, windows);
+    // Keyed on the CALL id the window carried in, so the table joins on the row
+    // it is rendering rather than on the contact's whole thread.
+    textbackFailed = new Set(failures.map((f) => f.callId));
+  } catch (e) {
+    console.error(
+      `calls ${accountId}: failed-text-back read failed, rendering no badges: ${String(e)}`,
+    );
+  }
 
   const last = rows[rows.length - 1];
   const olderHref =

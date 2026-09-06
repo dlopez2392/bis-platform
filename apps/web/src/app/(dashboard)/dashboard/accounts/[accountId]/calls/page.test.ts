@@ -55,6 +55,7 @@ function route(before?: string) {
 const ROW: CallListRow = {
   id: "c1",
   started_at: "2026-08-25T19:15:00.123456+00:00",
+  ended_at: "2026-08-25T19:15:48.000000+00:00",
   duration_secs: null,
   outcome: "abandoned",
   language: "en",
@@ -62,6 +63,17 @@ const ROW: CallListRow = {
   contact_id: "ct1",
   conversation_id: "cv1",
   contact: null,
+};
+
+/** What the page hands `listFailedOutboundSms` for one row — asserted rather
+ *  than recomputed from the source, so a change to the window silently
+ *  widening it back out to "the whole conversation" fails here. */
+const WINDOW_FOR_ROW = {
+  callId: "c1",
+  conversationId: "cv1",
+  fromIso: "2026-08-25T19:15:00.123Z",
+  // ended_at + the 5-minute grace.
+  toIso: "2026-08-25T19:20:48.000Z",
 };
 
 describe("CallsPage", () => {
@@ -120,16 +132,18 @@ describe("CallsPage", () => {
     }));
     listCallsMock.mockResolvedValue(rows);
     listFailedOutboundSmsMock.mockResolvedValue([
-      { conversationId: "cv7", messageId: "msg7", body: "Sorry we missed you.", failedAt: "2026-08-25T19:16:00+00:00" },
+      { callId: "c7", conversationId: "cv7", messageId: "msg7", body: "Sorry we missed you.", failedAt: "2026-08-25T19:16:00+00:00", supersededAt: null },
     ]);
 
     const html = renderToStaticMarkup(await CallsPage(route(undefined)));
 
     expect(listFailedOutboundSmsMock).toHaveBeenCalledTimes(1);
-    const [, accountId, ids] = listFailedOutboundSmsMock.mock.calls[0]!;
+    const [, accountId, windows] = listFailedOutboundSmsMock.mock.calls[0]!;
     expect(accountId).toBe("acct1");
-    expect(ids).toHaveLength(50);
-    expect(ids).toContain("cv7");
+    expect(windows).toHaveLength(50);
+    // One window PER CALL, each bounded by that call's own timestamps — not a
+    // bare list of conversation ids.
+    expect(windows).toContainEqual({ ...WINDOW_FOR_ROW, callId: "c7", conversationId: "cv7" });
 
     // …and the one failure that came back is badged, exactly once, on the row
     // it belongs to rather than on all fifty.
@@ -146,23 +160,24 @@ describe("CallsPage", () => {
       { ...ROW, id: "c-booked", outcome: "booked", conversation_id: "cv1" },
     ]);
     listFailedOutboundSmsMock.mockResolvedValue([
-      { conversationId: "cv1", messageId: "msg1", body: "Sorry we missed you.", failedAt: "2026-08-25T19:16:00+00:00" },
+      { callId: "c-abandoned", conversationId: "cv1", messageId: "msg1", body: "Sorry we missed you.", failedAt: "2026-08-25T19:16:00+00:00", supersededAt: null },
     ]);
 
     const html = renderToStaticMarkup(await CallsPage(route(undefined)));
 
-    // The booked row's conversation id is never even sent.
-    expect(listFailedOutboundSmsMock.mock.calls[0]![2]).toEqual(["cv1"]);
+    // ONE window, for the abandoned call. The booked row contributes nothing —
+    // not its call id and not the conversation id it shares.
+    expect(listFailedOutboundSmsMock.mock.calls[0]![2])
+      .toEqual([{ ...WINDOW_FOR_ROW, callId: "c-abandoned" }]);
     // …and the badge lands once, not on both rows sharing that conversation.
     expect(html.match(/Text-back didn&#x27;t send/g)).toHaveLength(1);
   });
 
-  it("hands over an EMPTY id list for a page of calls that opened no conversation", async () => {
+  it("hands over an EMPTY window list for a page of calls that opened no conversation", async () => {
     // Every call in the log from before the text-back shipped, and every call
-    // in an account that has it switched off. The nulls must be filtered out
-    // rather than sent as ids — `listFailedOutboundSms` short-circuits on an
-    // empty list (proven in packages/db's own test), so this costs no round
-    // trip; a page that passed `[null, null]` through would cost one.
+    // in an account that has it switched off. Those rows must produce no window
+    // at all — `listFailedOutboundSms` short-circuits on an empty list (proven
+    // in packages/db's own test), so this costs no round trip.
     listCallsMock.mockResolvedValue([
       { ...ROW, id: "c1", conversation_id: null },
       { ...ROW, id: "c2", conversation_id: null },
@@ -173,5 +188,39 @@ describe("CallsPage", () => {
     expect(listFailedOutboundSmsMock).toHaveBeenCalledTimes(1);
     expect(listFailedOutboundSmsMock.mock.calls[0]![2]).toEqual([]);
     expect(html).not.toContain("Text-back");
+  });
+
+  it("asks for no window at all for a call that never finished — nothing bounds it", async () => {
+    // `ended_at` null: the row write failed, or the call is still live. Either
+    // way there is no end to hang a window off, and an unbounded window would be
+    // the conversation-wide claim this page stopped making.
+    listCallsMock.mockResolvedValue([{ ...ROW, ended_at: null }]);
+
+    renderToStaticMarkup(await CallsPage(route(undefined)));
+
+    expect(listFailedOutboundSmsMock.mock.calls[0]![2]).toEqual([]);
+  });
+
+  /**
+   * FINDING 3. The badge is advisory; the log of calls is the page. Letting a
+   * `messages` error out of this read took the whole Calls page down with it —
+   * a blank screen for a client whose calls are all fine, because one
+   * decoration could not be computed.
+   */
+  it("still renders the whole page when the failed-text-back read blows up", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    listCallsMock.mockResolvedValue([ROW]);
+    listFailedOutboundSmsMock.mockRejectedValue(new Error("permission denied for table messages"));
+
+    const html = renderToStaticMarkup(await CallsPage(route(undefined)));
+
+    // The calls themselves are all still there.
+    expect(html).toContain("Outcome");
+    expect(html).toContain("+19565061545");
+    // Only the badge is missing…
+    expect(html).not.toContain("Text-back");
+    // …and the swallow left a trace, the way finish-call.ts's four legs do.
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("failed-text-back read failed"));
+    spy.mockRestore();
   });
 });

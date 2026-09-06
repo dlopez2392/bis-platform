@@ -32,6 +32,7 @@ const CALL: CallListRow = {
   // Deliberately microsecond-precision, as Postgres returns it — same fixture
   // shape as calls-table.test.ts's own ROW.
   started_at: "2026-08-25T19:15:00.123456+00:00",
+  ended_at: "2026-08-25T19:17:12.000000+00:00",
   duration_secs: 132,
   outcome: "booked",
   language: "es",

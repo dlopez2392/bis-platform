@@ -275,6 +275,16 @@ describe("listCalls / getCall", () => {
       // …and it is genuinely nullable, not merely absent: an unfinished call
       // has no conversation, and that must read as null rather than undefined.
       expect(rows.find((r) => r.id === r2.id)!.conversation_id).toBeNull();
+      // `ended_at` joined it on the LIST projection for the same reason and is
+      // load-bearing in the same way: the conversation says which THREAD the
+      // text lives in, `started_at`/`ended_at` say which CALL wrote it. Dropped
+      // from CALL_LIST_COLS it would arrive undefined, `textbackWindow` would
+      // build no window, and no call would ever badge again.
+      expect(typeof booked.ended_at).toBe("string");
+      // Set by the same single finishCallRow UPDATE that stamps the
+      // conversation, so the two are null together on an unfinished row — which
+      // is why "no ended_at" is a shape the badge refuses to answer for.
+      expect(rows.find((r) => r.id === r2.id)!.ended_at).toBeNull();
 
       const paged = await listCalls(db, accountA, { before: rows[0]!.started_at, limit: 1 });
       expect(paged.map((r) => r.id)).toEqual([r1.id]);

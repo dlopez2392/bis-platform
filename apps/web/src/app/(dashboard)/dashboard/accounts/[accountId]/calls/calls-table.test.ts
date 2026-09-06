@@ -24,6 +24,7 @@ const ROW: CallListRow = {
   id: "c1",
   // Deliberately microsecond-precision, as Postgres returns it.
   started_at: "2026-08-25T19:15:00.123456+00:00",
+  ended_at: "2026-08-25T19:16:02.000000+00:00",
   duration_secs: 62,
   outcome: "booked",
   language: "es",
@@ -47,6 +48,20 @@ function render(
     }),
   );
 }
+
+/**
+ * The status DOT of the failed-text-back badge, and nothing else in the render.
+ *
+ * `toContain("bg-destructive")` was the assertion here, and it proved nothing:
+ * the chip's OWN class is `bg-destructive/5`, which contains that substring, so
+ * deleting the dot `<span>` left all forty calls tests green. This demands a
+ * `<span>` whose class list carries `rounded-full` AND the SOLID
+ * `bg-destructive` — the lookahead rejects every alpha variant (`/5`, `/40`),
+ * which is all the chip and the border ever use. Two lookaheads rather than one
+ * literal string so re-ordering or adding a utility class does not break it.
+ */
+const TEXTBACK_STATUS_DOT =
+  /<span\b[^>]*\bclass="(?=[^"]*\brounded-full\b)(?=[^"]*\bbg-destructive(?![\w/-]))[^"]*"/;
 
 /** Every anchor's `href`, in document order — order-independent of attribute
  *  position within the tag. Used to prove exactly which links survive the
@@ -142,27 +157,30 @@ describe("CallsTable", () => {
    * so it must be a badge and nothing else. A "Send it now" button nested in
    * here would double-fire the row's own navigation.
    */
-  it("badges only the rows whose conversation has a failed text-back, and never renders a resend control in a table row", () => {
+  it("badges the CALL whose own text-back failed, never its neighbours in the same conversation, and never renders a resend control in a table row", () => {
     const rows: CallListRow[] = [
-      { ...ROW, id: "c1", conversation_id: "cv-failed", outcome: "abandoned" },
-      { ...ROW, id: "c2", conversation_id: "cv-fine", outcome: "abandoned" },
+      { ...ROW, id: "c1", conversation_id: "cv-shared", outcome: "abandoned" },
+      // SAME CONTACT, SAME CONVERSATION, different call. The set is keyed on
+      // CALL ids for exactly this: the older read handed back a conversation
+      // id, and every row carrying it lit up.
+      { ...ROW, id: "c2", conversation_id: "cv-shared", outcome: "abandoned" },
       // No conversation at all — the shape every call had before the
       // text-back shipped. Must not badge on a `null` lookup.
       { ...ROW, id: "c3", conversation_id: null, outcome: "abandoned" },
-      // THE REPEAT CALLER. Conversations are one-per-CONTACT, so this booked
-      // call shares `cv-failed` with c1 above — and a text-back never fires on
-      // a booked call. Badging it would put a sentence on the row that is
-      // simply untrue of that call.
-      { ...ROW, id: "c4", conversation_id: "cv-failed", outcome: "booked" },
+      // THE REPEAT CALLER, booked. A text-back never fires on a booked call,
+      // and `abandoned` is re-checked in the row itself, so even a set that
+      // wrongly contained this call id could not badge it.
+      { ...ROW, id: "c4", conversation_id: "cv-shared", outcome: "booked" },
     ];
-    const html = render(rows, { textbackFailed: new Set(["cv-failed"]) });
+    const html = render(rows, { textbackFailed: new Set(["c1", "c4"]) });
 
     // Once, for exactly one of the four rows.
     expect(html.match(/Text-back didn&#x27;t send/g)).toHaveLength(1);
-    // Dot + word, not colour alone (DESIGN.md rule 3) — asserted on the
-    // painted class, because "the text rendered" is what a badge that lost
-    // its dot would also satisfy.
-    expect(html).toContain("bg-destructive");
+    // Dot + word, not colour alone (DESIGN.md rule 3) — on the DOT's own
+    // painted class, not on a substring the chip's `bg-destructive/5` also
+    // satisfies. Delete the `<span>` in textback-failed-badge.tsx and this
+    // line fails; that is the whole point of it.
+    expect(html).toMatch(TEXTBACK_STATUS_DOT);
     // The list row carries NO interactive element for this: no form, no
     // button. Both are what the whole-row click target cannot tolerate.
     expect(html).not.toContain("<form");
@@ -175,6 +193,11 @@ describe("CallsTable", () => {
     // entirely rather than an empty set.
     expect(render([ROW])).not.toContain("Text-back");
     expect(render([ROW], { textbackFailed: new Set() })).not.toContain("Text-back");
+    // …and a set holding the CONVERSATION id rather than the call id badges
+    // nothing. The join key changed; this is what proves the row changed with
+    // it rather than still matching on the old one.
+    expect(render([{ ...ROW, outcome: "abandoned" }], { textbackFailed: new Set(["cv1"]) }))
+      .not.toContain("Text-back");
   });
 
   it("renders headers and no pager when there is nothing to page", () => {

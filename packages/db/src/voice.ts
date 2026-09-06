@@ -282,18 +282,25 @@ export type CallListRow = {
   // There is no retry anywhere in that path, so visibility on the row the
   // operator is already looking at is the only mitigation there is.
   conversation_id: string | null;
+  // Likewise on the LIST since that badge. `conversation_id` alone says WHICH
+  // THREAD the text lives in, and a thread is one-per-contact — it spans every
+  // call that person ever made. `started_at`/`ended_at` are what say WHICH CALL
+  // wrote it, and both are needed to bound one call's text-back window (see
+  // `calls/textback-window.ts`). Written by the same single `finishCallRow`
+  // UPDATE that stamps `conversation_id`, so the two are set or unset together.
+  ended_at: string | null;
   contact: { first_name: string | null; last_name: string | null } | null;
 };
 export type CallDetailRow = CallListRow & {
-  ended_at: string | null; turn_count: number; transcript: TranscriptEvent[];
+  turn_count: number; transcript: TranscriptEvent[];
   summary: string; booking_id: string | null;
 };
 
 const CALL_LIST_COLS =
-  "id, started_at, duration_secs, outcome, language, caller_e164, contact_id, " +
+  "id, started_at, ended_at, duration_secs, outcome, language, caller_e164, contact_id, " +
   "conversation_id, contact:contacts(first_name, last_name)";
 const CALL_DETAIL_COLS =
-  CALL_LIST_COLS + ", ended_at, turn_count, transcript, summary, booking_id";
+  CALL_LIST_COLS + ", turn_count, transcript, summary, booking_id";
 
 export async function listCalls(
   db: SupabaseClient, accountId: string, opts: { limit?: number; before?: string } = {},
