@@ -10,9 +10,9 @@ import { loadAccountBrandInfo } from "./booking";
  * own stamp column, so a booking that is cancelled or un-completed just stops
  * matching. There is no void step and nothing to forget.
  *
- * The catalogue is fixed (the CHECK in 0025 + 0026 mirrors `RecipeKey`).
+ * The catalogue is fixed (the CHECK in 0025 + 0026 + 0027 mirrors `RecipeKey`).
  */
-export type RecipeKey = "review_request" | "no_show_nudge" | "sms_reminder";
+export type RecipeKey = "review_request" | "no_show_nudge" | "sms_reminder" | "instant_reply";
 
 export type AutomationRow = {
   id: string; account_id: string; recipe_key: RecipeKey;
@@ -498,4 +498,57 @@ export async function stampSmsReminderFailed(db: SupabaseClient, bookingId: stri
     .update({ sms_reminder_failed_at: new Date().toISOString() })
     .eq("id", bookingId);
   if (error) throw new Error(`stampSmsReminderFailed failed: ${error.message}`);
+}
+
+// ---------------------------------------------------------------------------
+// Recipe: instant reply to a new web-form lead (Milestone C — INLINE, not cron)
+// ---------------------------------------------------------------------------
+
+/**
+ * TWO bodies: English lives in `automations.body` — the column every recipe
+ * treats as "the text that sends" — and Spanish lives here. The submission's
+ * locale picks. No channel (the recipe IS a text), no link, no window: the
+ * form action calls the send path the moment a submission lands
+ * (apps/web/src/lib/automations/instant-reply.ts), so there is no due-list
+ * and no `listEnabled` shape for this recipe — the inline read is
+ * `getAutomation(db, accountId, "instant_reply")`, one row.
+ */
+export type InstantReplyConfig = { bodyEs: string };
+
+/** Same contract as parseReviewRequestConfig: validated on read AND write,
+ *  null means "treat as missing". Length is the save action's business
+ *  (AUTOMATION_BODY_MAX_LENGTH lives in the web app); this checks shape. */
+export function parseInstantReplyConfig(raw: unknown): InstantReplyConfig | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const { bodyEs } = raw as Record<string, unknown>;
+  if (typeof bodyEs !== "string") return null;
+  return { bodyEs };
+}
+
+/**
+ * SEND-THEN-STAMP, on the SUBMISSION row (0027): one text per submission at
+ * most, and the count the daily cap reads. Not the double-text guard — that
+ * is the 24h per-thread hold the send path reads through
+ * hasRecentOutboundSms — so a missed stamp undercounts by one and re-texts
+ * no one, which is why the inline caller does not retry it.
+ */
+export async function stampInstantReplySent(db: SupabaseClient, submissionId: string): Promise<void> {
+  const { error } = await db.from("form_submissions")
+    .update({ instant_reply_sent_at: new Date().toISOString() })
+    .eq("id", submissionId);
+  if (error) throw new Error(`stampInstantReplySent failed: ${error.message}`);
+}
+
+/** The daily cap's input (AUTOMATION_DAILY_CAP over DAILY_CAP_WINDOW_MS):
+ *  this account's stamps at or after `sinceIso`. Index-only through
+ *  form_submissions_instant_reply_sent (0027). */
+export async function countInstantRepliesSince(
+  db: SupabaseClient, accountId: string, sinceIso: string,
+): Promise<number> {
+  const { count, error } = await db.from("form_submissions")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId)
+    .gte("instant_reply_sent_at", sinceIso);
+  if (error) throw new Error(`countInstantRepliesSince failed: ${error.message}`);
+  return count ?? 0;
 }

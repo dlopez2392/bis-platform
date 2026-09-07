@@ -57,8 +57,9 @@ export { getAutomation, upsertAutomation, parseReviewRequestConfig,
          countNoShowNudgesSince, NO_SHOW_NUDGE_MAX_AGE_MS,
          listDueSmsReminders, stampSmsReminderSent, stampSmsReminderFailed,
          SMS_REMINDER_WINDOW_START_MS, SMS_REMINDER_WINDOW_END_MS,
+         parseInstantReplyConfig, stampInstantReplySent, countInstantRepliesSince,
          type RecipeKey, type AutomationRow, type ReviewRequestChannel,
          type ReviewRequestConfig, type DueReviewRequest,
          type NoShowNudgeChannel, type NoShowNudgeConfig, type DueNoShowNudge,
-         type DueSmsReminder } from "./automations";
+         type DueSmsReminder, type InstantReplyConfig } from "./automations";
 export * from "./voice";
