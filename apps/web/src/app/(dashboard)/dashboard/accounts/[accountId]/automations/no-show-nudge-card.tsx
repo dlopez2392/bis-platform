@@ -105,9 +105,11 @@ export function NoShowNudgeCard({
               placeholder={defaultNoShowNudgeBody(brandName)}
             />
             <p className="text-xs text-muted-foreground">{m["automations.noShow.messageHint"]}</p>
-            <p className="text-xs text-muted-foreground" data-testid="no-show-link">
-              {m["automations.noShow.linkHint"].replace("{link}", () => bookingUrl)}
-            </p>
+            {bookingUrl ? (
+              <p className="text-xs text-muted-foreground" data-testid="no-show-link">
+                {m["automations.noShow.linkHint"].replace("{link}", () => bookingUrl)}
+              </p>
+            ) : null}
             {channel === "sms" ? (
               <p className="text-xs text-muted-foreground" data-testid="no-show-sms-count">
                 {m["compose.smsSegments"]

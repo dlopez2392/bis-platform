@@ -785,7 +785,7 @@ export const m = {
   // recipe names are the things a business owner would call them.
   "automations.title": "Automations",
   "automations.agencyOnly": "Only the agency may manage automations.",
-  "automations.bodyTooLong": "Keep the message under 1,000 characters.",
+  "automations.bodyTooLong": "Keep the message to 1,000 characters at most.",
   "automations.review.title": "Review requests",
   "automations.review.body": "The morning after a job is marked completed, ask the customer for a review. If the follow-up email is on, this waits one more morning so the two never land together. Off until you turn it on.",
   "automations.review.enabled": "Send review requests",
