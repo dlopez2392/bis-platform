@@ -6,7 +6,7 @@ vi.mock("@/lib/email", () => ({
   getEmailProvider: () => ({ isFake: true, send: async () => ({ providerMessageId: "e" }) }),
 }));
 
-import { buildPassContext, runPasses } from "./harness";
+import { buildPassContext, runPasses, lazySmsProvider } from "./harness";
 import type { Pass, PassContext } from "./context";
 
 function ctx(): PassContext {
@@ -82,5 +82,27 @@ describe("PassContext — structurally cannot carry the agency's internal label"
     // @ts-expect-error accountName is deliberately absent from PassContext.
     // If it is ever added, this directive becomes unused and `tsc` refuses it.
     expect(c.accountName).toBeUndefined();
+  });
+});
+
+describe("lazySmsProvider — ONE definition of lazy, shared by the cron and the inline recipe", () => {
+  it("constructs nothing until called, then once — the second call returns the same provider", () => {
+    // Mutation: make it eager (`const sms = getSmsProvider(); return () => sms`).
+    smsFactory.getSmsProvider.mockReturnValue({ isFake: true, send: async () => ({ providerMessageId: "s" }) });
+    const sms = lazySmsProvider();
+    expect(smsFactory.getSmsProvider).not.toHaveBeenCalled();
+    const first = sms();
+    expect(sms()).toBe(first);
+    expect(smsFactory.getSmsProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it("a throwing factory is retried on the next call rather than cached as a failure", () => {
+    smsFactory.getSmsProvider
+      .mockImplementationOnce(() => { throw new Error("TELNYX_API_KEY unset"); })
+      .mockReturnValue({ isFake: true, send: async () => ({ providerMessageId: "s" }) });
+    const sms = lazySmsProvider();
+    expect(() => sms()).toThrow("TELNYX_API_KEY unset");
+    expect(sms().isFake).toBe(true);
+    expect(smsFactory.getSmsProvider).toHaveBeenCalledTimes(2);
   });
 });

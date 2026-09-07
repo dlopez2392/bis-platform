@@ -11,15 +11,25 @@ import type { Pass, PassContext, PassCounters } from "./context";
  * production guard (VERCEL_ENV AND NODE_ENV), because there is no other way
  * for a pass to obtain a provider.
  */
+/**
+ * The LAZY SMS getter, defined once. `getSmsProvider()` throws in production
+ * while TELNYX_API_KEY is unset (by design — no A2P-approved client yet), so
+ * nothing constructs it until a send has actually been decided; memoised on
+ * the first success, retried on the next call after a throw. buildPassContext
+ * hands one to every cron tick; the inline instant reply (instant-reply.ts)
+ * takes one for a single form submission. This module is the only one allowed
+ * to touch the factory (imports.test.ts), which is why the getter lives here
+ * and not beside its inline caller.
+ */
+export function lazySmsProvider(): () => SmsProvider {
+  let sms: SmsProvider | null = null;
+  return () => (sms ??= getSmsProvider());
+}
+
 export function buildPassContext(
   input: { db: SupabaseClient; now: Date; origin: string },
 ): PassContext {
-  let sms: SmsProvider | null = null;
-  return {
-    ...input,
-    email: getEmailProvider(),
-    sms: () => (sms ??= getSmsProvider()),
-  };
+  return { ...input, email: getEmailProvider(), sms: lazySmsProvider() };
 }
 
 /**
