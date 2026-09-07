@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { REVIEW_REQUEST_MAX_AGE_MS } from "@bis/db";
 import { FOLLOWUP_MAX_AGE_MS } from "@/lib/booking/followup-timing";
 import { shouldSendReviewRequestNow } from "./review-request-gate";
+import { laterOf } from "./anchor";
 
 /**
  * Same rules as followup-timing.test.ts: every instant computed with Intl
@@ -118,5 +119,38 @@ describe("shouldSendReviewRequestNow — the 61h staleness cap, pinned against r
     const reviewMorning = new Date("2026-11-03T13:00:00Z");         // NY 08:00 EST Tue Nov 3
     expect(reviewMorning.getTime() - endedAtLocalMidnight.getTime()).toBe(57 * HOUR);
     expect(shouldSendReviewRequestNow(reviewMorning, endedAtLocalMidnight, followupNextMorning, NY)).toBe(true);
+  });
+});
+
+describe("shouldSendReviewRequestNow — the clock runs from laterOf(ends_at, completed_at)", () => {
+  /**
+   * The batch-Friday case that motivated 0026: a job that ended Monday and
+   * was marked completed Friday afternoon. From ends_at it is 4½ days stale
+   * and the cap drops it; from completed_at it is Saturday morning's
+   * business. Mutation: pass `ENDED` instead of the anchor in the pass.
+   */
+  const ENDED_MONDAY = new Date("2026-08-31T22:00:00Z");     // NY Mon 18:00
+  const COMPLETED_FRIDAY = new Date("2026-09-04T20:00:00Z"); // NY Fri 16:00
+  const SATURDAY_MORNING = new Date("2026-09-05T14:00:00Z"); // NY Sat 10:00
+
+  it("a job completed days after it ended is due the morning after completion, not dropped as stale", () => {
+    expect(shouldSendReviewRequestNow(SATURDAY_MORNING, ENDED_MONDAY, null, NY)).toBe(false);
+    expect(shouldSendReviewRequestNow(SATURDAY_MORNING, laterOf(ENDED_MONDAY, COMPLETED_FRIDAY), null, NY)).toBe(true);
+  });
+
+  it("a job completed THIS morning holds until tomorrow even though the meeting ended yesterday", () => {
+    const NOW = new Date("2026-09-09T14:00:00Z");              // NY Wed 10:00
+    const ENDED = new Date("2026-09-08T22:00:00Z");            // NY Tue 18:00
+    const COMPLETED_TODAY = new Date("2026-09-09T12:30:00Z");  // NY Wed 08:30
+    expect(shouldSendReviewRequestNow(NOW, ENDED, null, NY)).toBe(true);
+    expect(shouldSendReviewRequestNow(NOW, laterOf(ENDED, COMPLETED_TODAY), null, NY)).toBe(false);
+  });
+
+  it("one completion instant, two zones, opposite verdicts — the stamp's LOCAL day is what counts", () => {
+    const NOW = new Date("2026-09-09T14:00:00Z");              // NY Wed 10:00 · CHI Wed 09:00
+    const ENDED = new Date("2026-09-08T20:00:00Z");            // NY Tue 16:00
+    const COMPLETED = new Date("2026-09-09T04:30:00Z");        // NY Wed 00:30 · CHI Tue 23:30
+    expect(shouldSendReviewRequestNow(NOW, laterOf(ENDED, COMPLETED), null, CHI)).toBe(true);
+    expect(shouldSendReviewRequestNow(NOW, laterOf(ENDED, COMPLETED), null, NY)).toBe(false);
   });
 });

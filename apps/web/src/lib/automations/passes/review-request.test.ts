@@ -317,3 +317,26 @@ describe("review-request pass — one SMS attempt per booking per day", () => {
     expect(dbMocks.stampReviewRequestSmsFailed).not.toHaveBeenCalled();
   });
 });
+
+describe("review-request pass — the completion clock (0026)", () => {
+  it("the batch-Friday case: ended 9 days ago, completed yesterday afternoon → sent this morning", async () => {
+    // Mutation: pass `new Date(row.endsAt)` to the gate instead of the anchor.
+    dbMocks.listDueReviewRequests.mockResolvedValue([row({
+      endsAt: "2026-08-31T22:00:00.000Z", completedAt: "2026-09-08T20:00:00.000Z",   // NY Mon 18:00 · Tue 16:00
+    })]);
+    expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
+  });
+
+  it("one completion instant, two zones: stamped 00:30 today in New York holds, 23:30 yesterday in Chicago sends", async () => {
+    const completed = "2026-09-09T04:30:00.000Z";
+    dbMocks.listDueReviewRequests.mockResolvedValue([row({ completedAt: completed, accountTimezone: "America/New_York" })]);
+    expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, waitingForMorning: 1 });
+    dbMocks.listDueReviewRequests.mockResolvedValue([row({ completedAt: completed, accountTimezone: "America/Chicago" })]);
+    expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
+  });
+
+  it("a pre-0026 row (completedAt null) behaves exactly as before", async () => {
+    dbMocks.listDueReviewRequests.mockResolvedValue([row({ completedAt: null })]);
+    expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
+  });
+});

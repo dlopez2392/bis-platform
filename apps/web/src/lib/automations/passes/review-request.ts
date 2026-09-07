@@ -9,6 +9,7 @@ import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
 import { toE164 } from "@/lib/voice/phone-number";
 import { resolveAccountZone } from "@/lib/booking/followup-timing";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
+import { laterOf } from "../anchor";
 import { shouldSendReviewRequestNow } from "../review-request-gate";
 import { composeReviewRequestSms, defaultReviewRequestBody } from "../review-request-copy";
 import { AUTOMATION_TICK_CAP, AUTOMATION_DAILY_CAP, DAILY_CAP_WINDOW_MS } from "../caps";
@@ -76,7 +77,9 @@ export const reviewRequestPass: Pass = {
       }
 
       const followupSentAt = row.followupSentAt ? new Date(row.followupSentAt) : null;
-      if (!shouldSendReviewRequestNow(ctx.now, new Date(row.endsAt), followupSentAt, row.accountTimezone)) {
+      // THE CLOCK (0026): the later of the meeting end and "Mark completed".
+      const anchor = laterOf(new Date(row.endsAt), row.completedAt ? new Date(row.completedAt) : null);
+      if (!shouldSendReviewRequestNow(ctx.now, anchor, followupSentAt, row.accountTimezone)) {
         c.waitingForMorning++;
         continue;
       }
