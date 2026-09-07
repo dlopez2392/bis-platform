@@ -45,8 +45,9 @@ export type SentSms = { messageId: string; providerMessageId: string };
  *      visible failed text in the inbox, not a silent gap;
  *   3. the send;
  *   4. on failure: mark the row failed, write the recipe's attempt marker
- *      (the 24h cooldown's input), rethrow so the pass counts `failed` and
- *      stamps nothing.
+ *      (the 24h cooldown's input for the morning-band recipes; the text
+ *      reminder writes it and never reads it, the instant reply writes
+ *      none), rethrow so the caller counts `failed` and stamps nothing.
  * The caller stamps its dedupe column and THEN calls markAutomationSmsSent.
  */
 export async function sendAutomationSms(ctx: SmsSendContext, input: AutomationSmsInput): Promise<SentSms> {

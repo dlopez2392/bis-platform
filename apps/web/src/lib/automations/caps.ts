@@ -72,7 +72,14 @@ export const INSTANT_REPLY_THREAD_HOLD_MS = 24 * 60 * 60 * 1000;
  * outside the list is skipped as `outsideRegion` and logged. Caveat: +1
  * also covers the Caribbean NANP countries (Jamaica +1876, the Dominican
  * Republic +1809…), which carriers bill as international; an area-code
- * table is not worth its weight until a real client asks. Prefix match,
- * never a length rule: +52 numbers are 12 or 13 digits after the plus.
+ * table is not worth its weight until a real client asks.
+ *
+ * A SHAPE per prefix, not a bare prefix (re-review, 2026-09-07): `toE164`
+ * turns "12345678" into "+12345678", which a prefix match would admit and
+ * the provider would then reject — unbilled, but a message row, four reads
+ * and a provider call per junk submission, invisible to the hold (failed
+ * rows are excluded) and to the cap (only successes are stamped). NANP is
+ * fixed at ten digits after +1; Mexican numbers are ten after +52, or
+ * eleven with the legacy mobile "1" (+52 1 …) some people still type.
  */
-export const INSTANT_REPLY_ALLOWED_PREFIXES: readonly string[] = ["+1", "+52"];
+export const INSTANT_REPLY_ALLOWED_PATTERNS: readonly RegExp[] = [/^\+1\d{10}$/, /^\+52\d{10,11}$/];

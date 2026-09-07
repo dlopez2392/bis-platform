@@ -19,7 +19,7 @@ vi.mock("@/lib/email", () => ({
 }));
 
 import {
-  AUTOMATION_DAILY_CAP, DAILY_CAP_WINDOW_MS, INSTANT_REPLY_THREAD_HOLD_MS, INSTANT_REPLY_ALLOWED_PREFIXES,
+  AUTOMATION_DAILY_CAP, DAILY_CAP_WINDOW_MS, INSTANT_REPLY_THREAD_HOLD_MS, INSTANT_REPLY_ALLOWED_PATTERNS,
 } from "./caps";
 import { sendInstantReply, type InstantReplyInput } from "./instant-reply";
 
@@ -75,28 +75,34 @@ describe("sendInstantReply — the free checks come before any read", () => {
   });
 });
 
-describe("sendInstantReply — the destination allowlist (danlo, 2026-09-07: +1 and +52 only)", () => {
-  it("pins the allowlist: US/Canada (+1) and Mexico (+52), nothing else", () => {
-    expect(INSTANT_REPLY_ALLOWED_PREFIXES).toEqual(["+1", "+52"]);
+describe("sendInstantReply — the destination allowlist (danlo, 2026-09-07: +1 and +52 only, as real shapes)", () => {
+  it("pins the allowlist: ten digits after +1, ten or eleven after +52, nothing else", () => {
+    expect(INSTANT_REPLY_ALLOWED_PATTERNS.map(String)).toEqual(["/^\\+1\\d{10}$/", "/^\\+52\\d{10,11}$/"]);
   });
 
-  it("a number outside the allowlist → outsideRegion before any read, logged once", async () => {
-    // Mutation: drop the prefix check — a public form could then direct a
-    // billed international text once a Telnyx key exists.
-    for (const to of ["+447700900123", "+5511987654321", "+9725012345678"]) {
+  it("a number outside the allowlist, or a NANP-impossible +1, → outsideRegion before any read, logged without the number", async () => {
+    // Mutation: a bare prefix match — "+12345678" (what toE164 makes of a
+    // typed "12345678", which the form's own validation accepts) then reaches
+    // the provider on every junk submission, unbilled but unbounded by the
+    // hold (failed rows excluded) and the cap (only successes stamped).
+    const outside = ["+447700900123", "+5511987654321", "+9725012345678", "+12345678", "+1956555010", "+521234"];
+    for (const to of outside) {
       dbMocks.getAutomation.mockClear();
       expect(await sendInstantReply(input({ phoneE164: to })), to).toEqual({ kind: "skipped", reason: "outsideRegion", detail: to });
       expect(dbMocks.getAutomation).not.toHaveBeenCalled();
     }
     expect(smsSend).not.toHaveBeenCalled();
-    expect(errors().filter((l) => l.includes("outside the allowed regions"))).toHaveLength(3);
+    const lines = errors().filter((l) => l.includes("outside the allowed regions"));
+    expect(lines).toHaveLength(outside.length);
+    for (const l of lines) expect(l).not.toMatch(/\+\d{4,}/);   // the prefix, never the number
   });
 
-  it("a Mexican number (+52) and a US number (+1) both proceed to the send", async () => {
-    expect(await sendInstantReply(input({ phoneE164: "+528181234567" }))).toEqual({ kind: "sent", unstamped: false });
-    expect(await sendInstantReply(input({ phoneE164: "+19565550101" }))).toEqual({ kind: "sent", unstamped: false });
-    expect(smsSend).toHaveBeenCalledTimes(2);
-    expect(smsSend.mock.calls[0]![0]).toMatchObject({ to: "+528181234567" });
+  it("a US number, a Mexican number, and a Mexican number typed with the legacy mobile 1 all proceed to the send", async () => {
+    for (const to of ["+19565550101", "+528181234567", "+5218181234567"]) {
+      expect(await sendInstantReply(input({ phoneE164: to })), to).toEqual({ kind: "sent", unstamped: false });
+    }
+    expect(smsSend).toHaveBeenCalledTimes(3);
+    expect(smsSend.mock.calls[1]![0]).toMatchObject({ to: "+528181234567" });
   });
 });
 

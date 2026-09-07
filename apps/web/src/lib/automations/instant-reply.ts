@@ -4,7 +4,7 @@ import {
 } from "@bis/db";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import {
-  AUTOMATION_DAILY_CAP, DAILY_CAP_WINDOW_MS, INSTANT_REPLY_THREAD_HOLD_MS, INSTANT_REPLY_ALLOWED_PREFIXES,
+  AUTOMATION_DAILY_CAP, DAILY_CAP_WINDOW_MS, INSTANT_REPLY_THREAD_HOLD_MS, INSTANT_REPLY_ALLOWED_PATTERNS,
 } from "./caps";
 import { lazySmsProvider } from "./harness";
 import { sendAutomationSms, markAutomationSmsSent, type SentSms, type SmsSendContext } from "./send-sms";
@@ -31,11 +31,13 @@ import { sendAutomationSms, markAutomationSmsSent, type SentSms, type SmsSendCon
  * cannot leak `accounts.name` at all (the sentinel pins it, and
  * InstantReplyInput carries no name for a recipe author to reach).
  *
- * Logging (console.error, the passes' convention): `smsGate`, `dailyCap`,
- * `failed` and an unstamped `sent` — each something an operator or the next
- * session would want to see. `disabled`, `noPhone`, `consentWithheld` and
- * `recentText` are normal and stay silent; `disabled` in particular would
- * otherwise log once per submission for every account without the recipe.
+ * Logging (console.error, the passes' convention): `outsideRegion` (the
+ * submission id and the number's first three characters, never the number),
+ * `smsGate`, `dailyCap`, `failed` and an unstamped `sent` — each something
+ * an operator or the next session would want to see. `disabled`, `noPhone`,
+ * `consentWithheld` and `recentText` are normal and stay silent; `disabled`
+ * in particular would otherwise log once per submission for every account
+ * without the recipe.
  */
 export type InstantReplyInput = {
   db: SupabaseClient;
@@ -78,9 +80,11 @@ export async function sendInstantReply(input: InstantReplyInput): Promise<Instan
   const to = input.phoneE164;
   if (!to) return { kind: "skipped", reason: "noPhone" };
   // The public form is the one trigger anyone can fire with any number
-  // (INSTANT_REPLY_ALLOWED_PREFIXES): outside US/Canada/Mexico, no text.
-  if (!INSTANT_REPLY_ALLOWED_PREFIXES.some((prefix) => to.startsWith(prefix))) {
-    console.error(`${WHAT} skipped for submission ${submissionId}: ${to} is outside the allowed regions`);
+  // (INSTANT_REPLY_ALLOWED_PATTERNS): outside US/Canada/Mexico, or not the
+  // shape of a real number there, no text. The log carries the prefix only —
+  // a submitter's phone number is not for the platform's error log.
+  if (!INSTANT_REPLY_ALLOWED_PATTERNS.some((pattern) => pattern.test(to))) {
+    console.error(`${WHAT} skipped for submission ${submissionId}: destination outside the allowed regions (${to.slice(0, 3)}…)`);
     return { kind: "skipped", reason: "outsideRegion", detail: to };
   }
   if (input.consentWithheld) return { kind: "skipped", reason: "consentWithheld" };
