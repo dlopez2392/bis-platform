@@ -2,9 +2,11 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import {
   REMINDER_WINDOW_START_MS, REMINDER_WINDOW_END_MS, FOLLOWUP_QUERY_WINDOW_MS,
-  REVIEW_REQUEST_MAX_AGE_MS,
+  REVIEW_REQUEST_MAX_AGE_MS, NO_SHOW_NUDGE_MAX_AGE_MS,
+  SMS_REMINDER_WINDOW_START_MS, SMS_REMINDER_WINDOW_END_MS,
 } from "@bis/db";
 import { FOLLOWUP_MAX_AGE_MS } from "@/lib/booking/followup-timing";
+import { SMS_RETRY_COOLDOWN_MS } from "./caps";
 
 /**
  * The three-way coupling (schedule ↔ reminder window ↔ follow-up window) was
@@ -44,5 +46,21 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
 
   it("the review-request cap is the follow-up cap plus one local day", () => {
     expect(REVIEW_REQUEST_MAX_AGE_MS).toBe(FOLLOWUP_MAX_AGE_MS + 24 * 60 * MINUTE);
+  });
+
+  it("the SMS reminder window is wider than one tick, and fires about two hours ahead", () => {
+    // Mutation: change either constant alone.
+    const tick = tickIntervalMs(entry!.schedule);
+    expect(SMS_REMINDER_WINDOW_END_MS - SMS_REMINDER_WINDOW_START_MS).toBeGreaterThan(tick);
+    expect(SMS_REMINDER_WINDOW_END_MS).toBe(135 * MINUTE);
+    expect(SMS_REMINDER_WINDOW_START_MS).toBe(90 * MINUTE);
+  });
+
+  it("the no-show nudge cap is the follow-up cap: same derivation, nothing to defer to", () => {
+    expect(NO_SHOW_NUDGE_MAX_AGE_MS).toBe(FOLLOWUP_MAX_AGE_MS);
+  });
+
+  it("the SMS cooldown allows at most three attempts across the review request's window", () => {
+    expect(Math.ceil(REVIEW_REQUEST_MAX_AGE_MS / SMS_RETRY_COOLDOWN_MS)).toBe(3);
   });
 });

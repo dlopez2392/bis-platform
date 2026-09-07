@@ -3,6 +3,7 @@ import { remindersPass } from "./passes/reminders";
 import { followupsPass } from "./passes/followups";
 import { reviewRequestPass } from "./passes/review-request";
 import { noShowNudgePass } from "./passes/no-show-nudge";
+import { smsReminderPass } from "./passes/sms-reminder";
 
 /**
  * Every pass the cron tick runs, IN ORDER. Order is part of the contract:
@@ -11,6 +12,7 @@ import { noShowNudgePass } from "./passes/no-show-nudge";
  * day one and "would you leave a review?" on day two even when both become
  * eligible on the same morning.
  *
+ * The SMS reminder runs last; it reads nothing the others write.
  * Adding a recipe = one line here plus its pass file. Nothing else.
  */
-export const PASSES: readonly Pass[] = [remindersPass, followupsPass, reviewRequestPass, noShowNudgePass];
+export const PASSES: readonly Pass[] = [remindersPass, followupsPass, reviewRequestPass, noShowNudgePass, smsReminderPass];

@@ -16,6 +16,7 @@ const dbMocks = vi.hoisted(() => ({
   listDueReviewRequests: vi.fn(), stampReviewRequested: vi.fn(), countReviewRequestsSince: vi.fn(),
   stampReviewRequestSmsFailed: vi.fn(),
   listDueNoShowNudges: vi.fn(), stampNoShowNudged: vi.fn(), stampNoShowNudgeSmsFailed: vi.fn(), countNoShowNudgesSince: vi.fn(),
+  listDueSmsReminders: vi.fn(), stampSmsReminderSent: vi.fn(), stampSmsReminderFailed: vi.fn(),
   ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
@@ -66,6 +67,11 @@ beforeEach(() => {
     { ...nudge, bookingId: "bk_ns_sms", contactId: "ct_4", contactEmail: null, contactPhone: "9565550102", config: { channel: "sms" } },
   ]);
   dbMocks.countNoShowNudgesSince.mockResolvedValue(0);
+  dbMocks.listDueSmsReminders.mockResolvedValue([{
+    bookingId: "bk_sr", accountId: "acct_1", startsAt: "2026-09-09T16:00:00.000Z", bookerTimezone: null,
+    smsFailedAt: null, contactId: "ct_5", contactPhone: "9565550103", brandName: BRAND,
+    accountTimezone: "America/New_York", body: "",
+  }]);
   dbMocks.ensureConversation.mockResolvedValue({ id: "convo_1", created: false });
   dbMocks.createMessage.mockResolvedValue({ id: "msg_1" });
 });
@@ -86,6 +92,7 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(results.followups?.sent).toBe(1);
     expect(results.reviewRequests?.sent).toBe(2);
     expect(results.noShowNudges?.sent).toBe(2);
+    expect(results.smsReminders?.sent).toBe(1);
 
     const everything = [...emailSend.mock.calls, ...smsSend.mock.calls, ...dbMocks.createMessage.mock.calls]
       .map((args) => JSON.stringify(args)).join("\n");
@@ -95,6 +102,6 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
   });
 
   it("the registry runs reminders, then follow-ups, then review requests — the collision depends on it", () => {
-    expect(PASSES.map((p) => p.key)).toEqual(["reminders", "followups", "reviewRequests", "noShowNudges"]);
+    expect(PASSES.map((p) => p.key)).toEqual(["reminders", "followups", "reviewRequests", "noShowNudges", "smsReminders"]);
   });
 });
