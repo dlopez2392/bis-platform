@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
@@ -121,6 +122,7 @@ export default async function StyleguidePage() {
             <Label htmlFor="sg-input">Label</Label>
             <Input id="sg-input" placeholder="Placeholder" />
             <Input id="sg-input-disabled" placeholder="Disabled" disabled />
+            <Textarea id="sg-textarea" placeholder="A few lines of text" rows={3} />
             <label className="flex items-center gap-2 text-sm">
               <Checkbox id="sg-check" /> Checkbox
             </label>

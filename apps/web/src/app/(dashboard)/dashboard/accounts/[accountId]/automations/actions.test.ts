@@ -13,6 +13,7 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 import { m } from "@/lib/messages";
+import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 import { saveReviewRequestAction, saveNoShowNudgeAction, saveSmsReminderAction } from "./actions";
 
 const fd = (o: Record<string, string>) => {
@@ -135,5 +136,29 @@ describe("saveSmsReminderAction", () => {
     dbMocks.upsertAutomation.mockRejectedValue(new Error("db down"));
     expect(await saveSmsReminderAction("acct_1", fd({ enabled: "on" })))
       .toEqual({ ok: false, error: m["automations.smsReminder.saveFailed"] });
+  });
+});
+
+describe("the body cap — every recipe refuses a message longer than AUTOMATION_BODY_MAX_LENGTH", () => {
+  const tooLong = "x".repeat(AUTOMATION_BODY_MAX_LENGTH + 1);
+  const atCap = "x".repeat(AUTOMATION_BODY_MAX_LENGTH);
+
+  it("review request", async () => {
+    expect(await saveReviewRequestAction("acct_1", fd({ enabled: "on", channel: "email", review_url: URL, body: tooLong })))
+      .toEqual({ ok: false, error: m["automations.bodyTooLong"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+    expect(await saveReviewRequestAction("acct_1", fd({ enabled: "on", channel: "email", review_url: URL, body: atCap }))).toEqual({ ok: true });
+  });
+
+  it("no-show nudge", async () => {
+    expect(await saveNoShowNudgeAction("acct_1", fd({ channel: "sms", body: tooLong })))
+      .toEqual({ ok: false, error: m["automations.bodyTooLong"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+  });
+
+  it("text reminder", async () => {
+    expect(await saveSmsReminderAction("acct_1", fd({ body: tooLong })))
+      .toEqual({ ok: false, error: m["automations.bodyTooLong"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
   });
 });

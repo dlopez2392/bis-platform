@@ -31,3 +31,10 @@ export const DAILY_CAP_WINDOW_MS = 24 * 60 * 60 * 1000;
  * decision is about the rows a text leaves in the customer's conversation.
  */
 export const SMS_RETRY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The longest operator-written body any recipe accepts. A pasted 3,000-
+ * character closing line would become a ~20-segment text per booking,
+ * billed; the actions refuse above this and the textareas stop typing at it.
+ */
+export const AUTOMATION_BODY_MAX_LENGTH = 1000;

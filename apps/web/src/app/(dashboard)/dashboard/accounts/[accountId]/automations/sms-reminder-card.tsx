@@ -13,6 +13,7 @@ import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { m } from "@/lib/messages";
 import { segmentsFor } from "@/lib/sms/segments";
+import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 import { safeZone, formatWhen } from "@/lib/booking/time";
 import {
   composeSmsReminder, defaultSmsReminderBody, SMS_REMINDER_PREVIEW_INSTANT,
@@ -69,7 +70,7 @@ export function SmsReminderCard({
           <div className="space-y-1.5">
             <Label htmlFor="smsrem-body">{m["automations.smsReminder.message"]}</Label>
             <Textarea
-              id="smsrem-body" name="body" rows={2} value={body}
+              id="smsrem-body" name="body" rows={2} maxLength={AUTOMATION_BODY_MAX_LENGTH} value={body}
               onChange={(e) => setBody(e.target.value)}
               placeholder={defaultSmsReminderBody()}
             />
@@ -77,8 +78,8 @@ export function SmsReminderCard({
           </div>
 
           <div className="space-y-1.5">
-            <Label>{m["automations.smsReminder.preview"]}</Label>
-            <p className="rounded-md border border-input px-3 py-2 text-sm" data-testid="sms-reminder-preview">{composed}</p>
+            <Label htmlFor="smsrem-preview">{m["automations.smsReminder.preview"]}</Label>
+            <p id="smsrem-preview" className="rounded-md border border-input px-3 py-2 text-sm" data-testid="sms-reminder-preview">{composed}</p>
             <p className="text-xs text-muted-foreground" data-testid="sms-reminder-count">
               {m["compose.smsSegments"]
                 .replace("{chars}", String(preview.chars))

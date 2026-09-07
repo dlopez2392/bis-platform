@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
-import { serviceDb, setClientAccess } from "@bis/db";
+import { serviceDb, setClientAccess, getOrCreateCalendar } from "@bis/db";
 import { mintClientToken } from "./support";
 
 // Same two paths, same reason, as auth.setup.ts: this file calls serviceDb()
@@ -44,6 +44,10 @@ async function rest(
 test.beforeAll(async () => {
   const { accountId, clerkUserId } = fixture();
   await setClientAccess(serviceDb(), accountId, true, clerkUserId);
+  // The page reads the calendar and never creates it; this spec's link
+  // assertion needs one to exist, as it would for any company that has
+  // opened Calendar once.
+  await getOrCreateCalendar(serviceDb(), accountId, clerkUserId);
 });
 
 /**

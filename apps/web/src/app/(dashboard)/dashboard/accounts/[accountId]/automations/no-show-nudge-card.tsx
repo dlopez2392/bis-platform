@@ -14,6 +14,7 @@ import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { m } from "@/lib/messages";
 import { segmentsFor } from "@/lib/sms/segments";
+import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 import { composeNoShowNudgeSms, defaultNoShowNudgeBody } from "@/lib/automations/no-show-nudge-copy";
 import type { ActionResult } from "./actions";
 
@@ -99,7 +100,7 @@ export function NoShowNudgeCard({
           <div className="space-y-1.5">
             <Label htmlFor="noshow-body">{m["automations.noShow.message"]}</Label>
             <Textarea
-              id="noshow-body" name="body" rows={3} value={body}
+              id="noshow-body" name="body" rows={3} maxLength={AUTOMATION_BODY_MAX_LENGTH} value={body}
               onChange={(e) => setBody(e.target.value)}
               placeholder={defaultNoShowNudgeBody(brandName)}
             />

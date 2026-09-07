@@ -1,5 +1,5 @@
 import { headers } from "next/headers";
-import { serviceDb, getAutomation, getBranding, getOrCreateCalendar } from "@bis/db";
+import { serviceDb, getAutomation, getBranding, getCalendarForAccount } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { brandDisplayName } from "@/lib/email/templates/shell";
@@ -26,7 +26,7 @@ export default async function AutomationsPage({
   params: Promise<{ accountId: string }>;
 }) {
   const { accountId } = await params;
-  const { userId } = await requireAgencyOnlyAccountAccess(accountId);
+  await requireAgencyOnlyAccountAccess(accountId);
 
   const db = serviceDb();
   const [review, noShow, smsReminder, account, smsGate, calendar, origin] = await Promise.all([
@@ -55,16 +55,18 @@ export default async function AutomationsPage({
     // The same gate the passes consult, so the page can say up front why a
     // text would be skipped.
     resolveSmsSender(db, accountId),
-    // Lazy, as the Calendar settings page does: the row exists the first
-    // time anything asks. The nudge's preview needs its public id.
-    getOrCreateCalendar(db, accountId, userId),
+    // READ-ONLY: a settings page must not create the calendar row on a GET.
+    // A company that has never opened Calendar has no row yet; the nudge
+    // card then shows its "booking page is off" state and the other two
+    // cards render regardless.
+    getCalendarForAccount(db, accountId),
     // APP_ORIGIN first, then the request's host — the same origin every
     // customer link carries (origin.ts). The pass builds the sent link from
     // ctx.origin the same way, so the preview shows the link that goes out.
     headers().then((h) => originFrom(h)),
   ]);
 
-  const bookingUrl = origin ? `${origin}/b/${calendar.public_id}` : "";
+  const bookingUrl = origin && calendar ? `${origin}/b/${calendar.public_id}` : "";
 
   return (
     <>
@@ -81,7 +83,7 @@ export default async function AutomationsPage({
           brandName={account.brandName}
           smsGate={smsGate}
           bookingUrl={bookingUrl}
-          calendarEnabled={calendar.enabled}
+          calendarEnabled={calendar?.enabled ?? false}
           saveAction={saveNoShowNudgeAction.bind(null, accountId)}
         />
         <SmsReminderCard

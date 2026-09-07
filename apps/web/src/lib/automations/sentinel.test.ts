@@ -101,7 +101,7 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(everything).toContain(BRAND);   // and the brand name DID go out, in its place
   });
 
-  it("the registry runs reminders, then follow-ups, then review requests — the collision depends on it", () => {
+  it("the registry runs reminders, follow-ups, review requests, no-show nudges, then text reminders — the first three's order is the collision's contract", () => {
     expect(PASSES.map((p) => p.key)).toEqual(["reminders", "followups", "reviewRequests", "noShowNudges", "smsReminders"]);
   });
 });

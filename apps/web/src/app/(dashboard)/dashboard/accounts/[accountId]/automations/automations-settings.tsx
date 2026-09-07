@@ -15,6 +15,7 @@ import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { m } from "@/lib/messages";
 import { segmentsFor } from "@/lib/sms/segments";
+import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 import { composeReviewRequestSms, defaultReviewRequestBody } from "@/lib/automations/review-request-copy";
 import type { ActionResult } from "./actions";
 
@@ -120,7 +121,7 @@ export function AutomationsSettings({
           <div className="space-y-1.5">
             <Label htmlFor="review-body">{m["automations.review.message"]}</Label>
             <Textarea
-              id="review-body" name="body" rows={3} value={body}
+              id="review-body" name="body" rows={3} maxLength={AUTOMATION_BODY_MAX_LENGTH} value={body}
               onChange={(e) => setBody(e.target.value)}
               placeholder={defaultReviewRequestBody(brandName)}
             />

@@ -18,7 +18,7 @@ vi.mock("@/lib/email/origin", () => ({ originFrom: () => "https://app.example.co
 const dbFixture = vi.hoisted(() => ({
   name: "Rio Roofing — trial", timezone: "America/Chicago", brandName: null as string | null,
 }));
-const dbMock = vi.hoisted(() => ({ getAutomation: vi.fn(), getBranding: vi.fn(), getOrCreateCalendar: vi.fn() }));
+const dbMock = vi.hoisted(() => ({ getAutomation: vi.fn(), getBranding: vi.fn(), getCalendarForAccount: vi.fn() }));
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({
     from: () => ({
@@ -29,7 +29,7 @@ vi.mock("@bis/db", () => ({
   }),
   getAutomation: (...a: unknown[]) => dbMock.getAutomation(...a),
   getBranding: (...a: unknown[]) => dbMock.getBranding(...a),
-  getOrCreateCalendar: (...a: unknown[]) => dbMock.getOrCreateCalendar(...a),
+  getCalendarForAccount: (...a: unknown[]) => dbMock.getCalendarForAccount(...a),
 }));
 vi.mock("@/lib/sms/sender", () => ({
   resolveSmsSender: async () => ({ ok: false, reason: "a2p_not_approved" }),
@@ -76,7 +76,7 @@ beforeEach(() => {
     brandName: dbFixture.brandName, brandLogoPath: null, brandColor: null, brandNeutral: null,
     brandCorners: null, brandType: null, brandMode: null, replyToEmail: null,
   }));
-  dbMock.getOrCreateCalendar.mockReset().mockResolvedValue({ id: "cal_1", public_id: "cal_pub_1", enabled: true });
+  dbMock.getCalendarForAccount.mockReset().mockResolvedValue({ id: "cal_1", public_id: "cal_pub_1", enabled: true });
 });
 
 describe("automations page", () => {
@@ -102,14 +102,25 @@ describe("automations page", () => {
     for (const p of [c.review!, c.noShow!, c.sms!]) expect(p.smsGate).toEqual({ ok: false, reason: "a2p_not_approved" });
   });
 
-  it("hands the nudge card the real booking-page link and whether the page is on — the lazily created calendar, as the Calendar page does", async () => {
+  it("hands the nudge card the real booking-page link and whether the page is on — a READ, never a write on a GET", async () => {
     const c = await render();
-    expect(dbMock.getOrCreateCalendar).toHaveBeenCalledWith(expect.anything(), "a1", "user_1");
+    expect(dbMock.getCalendarForAccount).toHaveBeenCalledWith(expect.anything(), "a1");
     expect(c.noShow!.bookingUrl).toBe("https://app.example.com/b/cal_pub_1");
     expect(c.noShow!.calendarEnabled).toBe(true);
   });
 
   it("hands the text-reminder card the account's zone for its sample time", async () => {
     expect((await render()).sms!.accountTimezone).toBe("America/Chicago");
+  });
+});
+
+describe("automations page — no calendar yet", () => {
+  it("renders all three cards; the nudge card gets no link and a switched-off page", async () => {
+    dbMock.getCalendarForAccount.mockResolvedValue(null);
+    const c = await render();
+    expect(c.review).not.toBeNull();
+    expect(c.sms).not.toBeNull();
+    expect(c.noShow!.bookingUrl).toBe("");
+    expect(c.noShow!.calendarEnabled).toBe(false);
   });
 });
