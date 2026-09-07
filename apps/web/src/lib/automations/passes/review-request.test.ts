@@ -3,6 +3,7 @@ import type { DueReviewRequest } from "@bis/db";
 
 const dbMocks = vi.hoisted(() => ({
   listDueReviewRequests: vi.fn(), stampReviewRequested: vi.fn(), countReviewRequestsSince: vi.fn(),
+  stampReviewRequestSmsFailed: vi.fn(),
   ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(),
   listDueReminders: vi.fn(), stampReminderSent: vi.fn(),
 }));
@@ -28,7 +29,7 @@ function row(overrides: Partial<DueReviewRequest> = {}): DueReviewRequest {
   return {
     bookingId: "bk_r1", accountId: "acct_1",
     endsAt: "2026-09-08T22:00:00.000Z",           // NY Tue 18:00 — the previous local day
-    followupSentAt: null,
+    followupSentAt: null, completedAt: null, smsFailedAt: null,
     contactId: "ct_1", contactEmail: "booker@example.com", contactPhone: "(956) 555-0101",
     brandName: "Rio Roofing",
     branding: {
@@ -54,7 +55,7 @@ function ctx(): PassContext {
 }
 const EMPTY = {
   sent: 0, failed: 0, unstamped: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
-  skippedSmsGate: 0, skippedCap: 0, waitingForMorning: 0, unresolvableTimezone: 0,
+  skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0, waitingForMorning: 0, unresolvableTimezone: 0,
 };
 
 beforeEach(() => {
@@ -62,6 +63,7 @@ beforeEach(() => {
   dbMocks.listDueReviewRequests.mockResolvedValue([]);
   dbMocks.stampReviewRequested.mockResolvedValue(undefined);
   dbMocks.countReviewRequestsSince.mockResolvedValue(0);
+  dbMocks.stampReviewRequestSmsFailed.mockResolvedValue(undefined);
   dbMocks.ensureConversation.mockResolvedValue({ id: "convo_1", created: false });
   dbMocks.createMessage.mockResolvedValue({ id: "msg_1" });
   dbMocks.updateMessageStatus.mockResolvedValue(undefined);
@@ -269,5 +271,49 @@ describe("caps — recipe passes only", () => {
       fromEmail: null, meetingUrl: null,
     })));
     expect(await remindersPass.run(ctx())).toEqual({ sent: 30, failed: 0, unstamped: 0 });
+  });
+});
+
+describe("review-request pass — one SMS attempt per booking per day", () => {
+  const sms = (overrides: Partial<DueReviewRequest> = {}) =>
+    row({ config: { channel: "sms", reviewUrl: URL }, ...overrides });
+
+  it("a provider failure writes the recipe's attempt marker, after the row is marked failed; nothing is stamped", async () => {
+    // Mutation: drop `onProviderFailure` from the sendAutomationSms call.
+    dbMocks.listDueReviewRequests.mockResolvedValue([sms()]);
+    smsSend.mockRejectedValueOnce(new Error("carrier timeout"));
+    expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, failed: 1 });
+    expect(dbMocks.stampReviewRequestSmsFailed).toHaveBeenCalledWith(expect.anything(), "bk_r1");
+    expect(dbMocks.stampReviewRequested).not.toHaveBeenCalled();
+    expect(dbMocks.updateMessageStatus.mock.invocationCallOrder[0]!)
+      .toBeLessThan(dbMocks.stampReviewRequestSmsFailed.mock.invocationCallOrder[0]!);
+  });
+
+  it("a marker younger than 24h holds the booking: counted, nothing written, nothing sent", async () => {
+    // Mutation: remove the smsCooldownActive check from the SMS branch.
+    dbMocks.listDueReviewRequests.mockResolvedValue([sms({ smsFailedAt: new Date(TICK.getTime() - 60 * 60 * 1000).toISOString() })]);
+    expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, skippedRecentFailure: 1 });
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampReviewRequested).not.toHaveBeenCalled();
+    expect(dbMocks.countReviewRequestsSince).not.toHaveBeenCalled();     // a held row never reaches the caps
+  });
+
+  it("a marker exactly 24h old is due again", async () => {
+    dbMocks.listDueReviewRequests.mockResolvedValue([sms({ smsFailedAt: new Date(TICK.getTime() - 24 * 60 * 60 * 1000).toISOString() })]);
+    expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
+  });
+
+  it("the EMAIL channel ignores the marker — the decision is about texts", async () => {
+    dbMocks.listDueReviewRequests.mockResolvedValue([row({ smsFailedAt: TICK.toISOString() })]);
+    expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
+    expect(emailSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("an email provider failure writes NO marker", async () => {
+    dbMocks.listDueReviewRequests.mockResolvedValue([row()]);
+    emailSend.mockRejectedValueOnce(new Error("provider down"));
+    expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, failed: 1 });
+    expect(dbMocks.stampReviewRequestSmsFailed).not.toHaveBeenCalled();
   });
 });

@@ -44,7 +44,7 @@ beforeEach(() => {
     accountTimezone: "America/New_York", branding, fromEmail: null, replyToEmail: null, followupBody: "",
   }]);
   const review = {
-    accountId: "acct_1", endsAt: "2026-09-08T22:00:00.000Z", followupSentAt: null, brandName: BRAND, branding,
+    accountId: "acct_1", endsAt: "2026-09-08T22:00:00.000Z", followupSentAt: null, completedAt: null, smsFailedAt: null, brandName: BRAND, branding,
     accountTimezone: "America/New_York", fromEmail: null, replyToEmail: null, body: "",
   };
   dbMocks.listDueReviewRequests.mockResolvedValue([

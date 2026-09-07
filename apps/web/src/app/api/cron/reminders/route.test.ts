@@ -25,6 +25,7 @@ vi.mock("@bis/db", () => ({
   listDueReviewRequests: async () => [],
   stampReviewRequested: async () => undefined,
   countReviewRequestsSince: async () => 0,
+  stampReviewRequestSmsFailed: async () => undefined,
   ensureConversation: async () => ({ id: "convo", created: false }),
   createMessage: async () => ({ id: "msg" }),
   updateMessageStatus: async () => undefined,
@@ -130,6 +131,7 @@ const EMPTY_FOLLOWUPS = {
 const EMPTY_REVIEW_REQUESTS = {
   sent: 0, failed: 0, unstamped: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
   skippedSmsGate: 0, skippedCap: 0, waitingForMorning: 0, unresolvableTimezone: 0,
+  skippedRecentFailure: 0,
 };
 
 /**

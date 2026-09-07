@@ -17,3 +17,17 @@ export const AUTOMATION_DAILY_CAP = 25;
 /** "A day" is a rolling 24h from the tick, counted from the pass's own stamp
  *  column — no ledger table, no timezone. */
 export const DAILY_CAP_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * One SMS attempt per booking per day after a FAILED attempt (danlo,
+ * 2026-09-06; spec, "Decisions taken after Milestone A shipped").
+ * Write-then-send on a 15-minute cron wrote ~12 failed messages rows per
+ * booking per morning band during a carrier outage. Each SMS-capable pass
+ * writes its recipe's own `*_sms_failed_at` on a provider failure and holds
+ * the booking while that marker is younger than this — counted as
+ * `skippedRecentFailure`. At most ceil(61h / 24h) = 3 attempts across the
+ * review request's window, one visible failed row each
+ * (cron-coupling.test.ts pins the 3). Email sends carry no marker: the
+ * decision is about the rows a text leaves in the customer's conversation.
+ */
+export const SMS_RETRY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
