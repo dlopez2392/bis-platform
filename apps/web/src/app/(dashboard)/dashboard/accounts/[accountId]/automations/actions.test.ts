@@ -13,7 +13,7 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 import { m } from "@/lib/messages";
-import { saveReviewRequestAction } from "./actions";
+import { saveReviewRequestAction, saveNoShowNudgeAction, saveSmsReminderAction } from "./actions";
 
 const fd = (o: Record<string, string>) => {
   const f = new FormData();
@@ -86,5 +86,54 @@ describe("saveReviewRequestAction", () => {
     dbMocks.upsertAutomation.mockRejectedValue(new Error("db down"));
     expect(await saveReviewRequestAction("acct_1", fd({ enabled: "on", channel: "email", review_url: URL })))
       .toEqual({ ok: false, error: m["automations.review.saveFailed"] });
+  });
+});
+
+describe("saveNoShowNudgeAction", () => {
+  it("refuses a non-agency caller before touching the database", async () => {
+    guardFixture.isAgency = false;
+    expect(await saveNoShowNudgeAction("acct_1", fd({ enabled: "on", channel: "sms" })))
+      .toEqual({ ok: false, error: m["automations.agencyOnly"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+  });
+
+  it("saves enabled + channel + trimmed body through serviceDb, validated with the pass's own parser", async () => {
+    expect(await saveNoShowNudgeAction("acct_1", fd({ enabled: "on", channel: "sms", body: "  Come back!  " }))).toEqual({ ok: true });
+    expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "no_show_nudge",
+      { enabled: true, body: "Come back!", config: { channel: "sms" } }, "user_1");
+  });
+
+  it("an unknown channel and a database failure both come back as a toastable failure", async () => {
+    // Mutation: default an unknown channel to email instead of refusing.
+    expect(await saveNoShowNudgeAction("acct_1", fd({ channel: "fax" })))
+      .toEqual({ ok: false, error: m["automations.noShow.saveFailed"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+    dbMocks.upsertAutomation.mockRejectedValue(new Error("db down"));
+    expect(await saveNoShowNudgeAction("acct_1", fd({ enabled: "on", channel: "email" })))
+      .toEqual({ ok: false, error: m["automations.noShow.saveFailed"] });
+  });
+});
+
+describe("saveSmsReminderAction", () => {
+  it("refuses a non-agency caller before touching the database", async () => {
+    guardFixture.isAgency = false;
+    expect(await saveSmsReminderAction("acct_1", fd({ enabled: "on" })))
+      .toEqual({ ok: false, error: m["automations.agencyOnly"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+  });
+
+  it("saves enabled + trimmed body with an empty config — the recipe has nothing else to configure", async () => {
+    expect(await saveSmsReminderAction("acct_1", fd({ enabled: "on", body: " See you soon! " }))).toEqual({ ok: true });
+    expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "sms_reminder",
+      { enabled: true, body: "See you soon!", config: {} }, "user_1");
+  });
+
+  it("saves an OFF row with an empty body, and reports a database failure as a toastable failure", async () => {
+    expect(await saveSmsReminderAction("acct_1", fd({}))).toEqual({ ok: true });
+    expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "sms_reminder",
+      { enabled: false, body: "", config: {} }, "user_1");
+    dbMocks.upsertAutomation.mockRejectedValue(new Error("db down"));
+    expect(await saveSmsReminderAction("acct_1", fd({ enabled: "on" })))
+      .toEqual({ ok: false, error: m["automations.smsReminder.saveFailed"] });
   });
 });

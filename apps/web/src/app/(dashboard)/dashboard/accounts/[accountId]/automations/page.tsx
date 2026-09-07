@@ -1,11 +1,15 @@
-import { serviceDb, getAutomation, getBranding } from "@bis/db";
+import { headers } from "next/headers";
+import { serviceDb, getAutomation, getBranding, getOrCreateCalendar } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { brandDisplayName } from "@/lib/email/templates/shell";
+import { originFrom } from "@/lib/email/origin";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { m } from "@/lib/messages";
 import { AutomationsSettings } from "./automations-settings";
-import { saveReviewRequestAction } from "./actions";
+import { NoShowNudgeCard } from "./no-show-nudge-card";
+import { SmsReminderCard } from "./sms-reminder-card";
+import { saveReviewRequestAction, saveNoShowNudgeAction, saveSmsReminderAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -22,44 +26,70 @@ export default async function AutomationsPage({
   params: Promise<{ accountId: string }>;
 }) {
   const { accountId } = await params;
-  await requireAgencyOnlyAccountAccess(accountId);
+  const { userId } = await requireAgencyOnlyAccountAccess(accountId);
 
   const db = serviceDb();
-  const [automation, brandName, smsGate] = await Promise.all([
+  const [review, noShow, smsReminder, account, smsGate, calendar, origin] = await Promise.all([
     getAutomation(db, accountId, "review_request"),
-    // The default body names the company. Resolved through brandDisplayName
-    // exactly as the pass's due-row is (packages/db), never off
+    getAutomation(db, accountId, "no_show_nudge"),
+    getAutomation(db, accountId, "sms_reminder"),
+    // The default bodies name the company. Resolved through brandDisplayName
+    // exactly as the passes' due-rows are (packages/db), never off
     // `accounts.name` alone — a preview that does not match what sends is
-    // worse than no preview. Cosmetic, so a failed read degrades to "".
+    // worse than no preview. The zone feeds the text reminder's sample time.
+    // Cosmetic, so a failed read degrades to ""/UTC.
     (async () => {
       try {
         const [branding, { data, error }] = await Promise.all([
           getBranding(db, accountId),
-          db.from("accounts").select("name").eq("id", accountId).maybeSingle(),
+          db.from("accounts").select("name, timezone").eq("id", accountId).maybeSingle(),
         ]);
         if (error) throw new Error(error.message);
-        return brandDisplayName(branding, (data as { name: string } | null)?.name ?? "");
+        const acct = data as { name: string; timezone: string } | null;
+        return { brandName: brandDisplayName(branding, acct?.name ?? ""), timezone: acct?.timezone ?? "UTC" };
       } catch (e) {
-        console.error(`automations: brand name lookup failed for account ${accountId}: ${String(e)}`);
-        return "";
+        console.error(`automations: account lookup failed for ${accountId}: ${String(e)}`);
+        return { brandName: "", timezone: "UTC" };
       }
     })(),
-    // The same gate the pass consults, so the page can say up front why an
-    // SMS review request would be skipped.
+    // The same gate the passes consult, so the page can say up front why a
+    // text would be skipped.
     resolveSmsSender(db, accountId),
+    // Lazy, as the Calendar settings page does: the row exists the first
+    // time anything asks. The nudge's preview needs its public id.
+    getOrCreateCalendar(db, accountId, userId),
+    // APP_ORIGIN first, then the request's host — the same origin every
+    // customer link carries (origin.ts). The pass builds the sent link from
+    // ctx.origin the same way, so the preview shows the link that goes out.
+    headers().then((h) => originFrom(h)),
   ]);
 
-  const boundSave = saveReviewRequestAction.bind(null, accountId);
+  const bookingUrl = origin ? `${origin}/b/${calendar.public_id}` : "";
 
   return (
     <>
       <PageHeader title={m["automations.title"]} />
       <div className="max-w-2xl space-y-6 p-6">
         <AutomationsSettings
-          automation={automation}
-          brandName={brandName}
+          automation={review}
+          brandName={account.brandName}
           smsGate={smsGate}
-          saveAction={boundSave}
+          saveAction={saveReviewRequestAction.bind(null, accountId)}
+        />
+        <NoShowNudgeCard
+          automation={noShow}
+          brandName={account.brandName}
+          smsGate={smsGate}
+          bookingUrl={bookingUrl}
+          calendarEnabled={calendar.enabled}
+          saveAction={saveNoShowNudgeAction.bind(null, accountId)}
+        />
+        <SmsReminderCard
+          automation={smsReminder}
+          brandName={account.brandName}
+          accountTimezone={account.timezone}
+          smsGate={smsGate}
+          saveAction={saveSmsReminderAction.bind(null, accountId)}
         />
       </div>
     </>

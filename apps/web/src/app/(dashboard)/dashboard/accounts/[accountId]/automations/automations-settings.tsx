@@ -9,6 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { SubmitButton } from "../../submit-button";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
@@ -34,10 +35,6 @@ function formDefaults(row: AutomationRow | null): StoredForm {
     body: row?.body ?? "",
   };
 }
-
-const TEXTAREA =
-  "w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs outline-none "
-  + "focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50";
 
 export function AutomationsSettings({
   automation, brandName, smsGate, saveAction,
@@ -76,7 +73,7 @@ export function AutomationsSettings({
   });
 
   return (
-    <Card>
+    <Card data-testid="review-request-card">
       <CardHeader>
         <CardTitle>{m["automations.review.title"]}</CardTitle>
         <CardDescription>{m["automations.review.body"]}</CardDescription>
@@ -84,17 +81,17 @@ export function AutomationsSettings({
       <CardContent>
         <form onSubmit={onSubmit} className="space-y-6">
           <div className="flex items-center gap-2">
-            <Checkbox id="enabled" name="enabled" defaultChecked={stored.enabled} />
-            <Label htmlFor="enabled">{m["automations.review.enabled"]}</Label>
+            <Checkbox id="review-enabled" name="enabled" defaultChecked={stored.enabled} />
+            <Label htmlFor="review-enabled">{m["automations.review.enabled"]}</Label>
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="channel">{m["automations.review.channel"]}</Label>
+            <Label htmlFor="review-channel">{m["automations.review.channel"]}</Label>
             <Select
               name="channel" defaultValue={stored.channel}
               onValueChange={(v) => setChannel(v === "sms" ? "sms" : "email")}
             >
-              <SelectTrigger id="channel" className="w-full"><SelectValue /></SelectTrigger>
+              <SelectTrigger id="review-channel" className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="email">{m["automations.review.channel.email"]}</SelectItem>
                 <SelectItem value="sms">{m["automations.review.channel.sms"]}</SelectItem>
@@ -121,12 +118,11 @@ export function AutomationsSettings({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="body">{m["automations.review.message"]}</Label>
-            <textarea
-              id="body" name="body" rows={3} value={body}
+            <Label htmlFor="review-body">{m["automations.review.message"]}</Label>
+            <Textarea
+              id="review-body" name="body" rows={3} value={body}
               onChange={(e) => setBody(e.target.value)}
               placeholder={defaultReviewRequestBody(brandName)}
-              className={TEXTAREA}
             />
             <p className="text-xs text-muted-foreground">{m["automations.review.messageHint"]}</p>
             {channel === "sms" ? (

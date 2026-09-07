@@ -10,7 +10,7 @@
 
 import { revalidatePath } from "next/cache";
 import {
-  serviceDb, upsertAutomation, parseReviewRequestConfig, type ReviewRequestChannel,
+  serviceDb, upsertAutomation, parseReviewRequestConfig, parseNoShowNudgeConfig, type ReviewRequestChannel,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { m } from "@/lib/messages";
@@ -54,6 +54,52 @@ export async function saveReviewRequestAction(
   } catch (e) {
     console.error(`saveReviewRequestAction: save failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.review.saveFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/automations`);
+  return { ok: true };
+}
+
+export async function saveNoShowNudgeAction(
+  accountId: string, formData: FormData,
+): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["automations.agencyOnly"] };
+
+  // The pass's own parser, on write: an unknown channel is refused, never
+  // defaulted — a default here would let the page show one channel while
+  // the row stores another.
+  const config = parseNoShowNudgeConfig({ channel: String(formData.get("channel") ?? "email") });
+  if (!config) return { ok: false, error: m["automations.noShow.saveFailed"] };
+  const enabled = formData.get("enabled") === "on";
+  const body = String(formData.get("body") ?? "").trim();
+
+  try {
+    await upsertAutomation(serviceDb(), accountId, "no_show_nudge", { enabled, body, config }, userId);
+  } catch (e) {
+    console.error(`saveNoShowNudgeAction: save failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.noShow.saveFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/automations`);
+  return { ok: true };
+}
+
+export async function saveSmsReminderAction(
+  accountId: string, formData: FormData,
+): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["automations.agencyOnly"] };
+
+  const enabled = formData.get("enabled") === "on";
+  const body = String(formData.get("body") ?? "").trim();
+
+  try {
+    // Nothing to configure: the channel is the recipe, the time is the booking's.
+    await upsertAutomation(serviceDb(), accountId, "sms_reminder", { enabled, body, config: {} }, userId);
+  } catch (e) {
+    console.error(`saveSmsReminderAction: save failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.smsReminder.saveFailed"] };
   }
 
   revalidatePath(`/dashboard/accounts/${accountId}/automations`);

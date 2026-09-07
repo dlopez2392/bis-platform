@@ -108,7 +108,7 @@ test.describe("the Automations page", () => {
     // type a link, and the count must be the body PLUS the link, as ONE
     // segment for the default body (measured in review-request-copy.test.ts).
     // Nothing is saved — the form is never submitted.
-    await page.getByLabel("Send by").click();
+    await page.getByTestId("review-request-card").getByLabel("Send by").click();
     await page.getByRole("option", { name: "Text message" }).click();
     await page.locator("#review_url").fill("https://g.page/r/CXyZ123abc/review");
     await expect(page.getByTestId("review-sms-count")).toContainText("1 message(s)");
@@ -123,5 +123,25 @@ test.describe("a client cannot reach the Automations page", () => {
     await page.goto(`/dashboard/accounts/${accountId}/automations`);
     await expect(page).toHaveURL(new RegExp(`/dashboard/accounts/${accountId}/dashboard$`));
     await expect(page.getByRole("link", { name: "Automations" })).toHaveCount(0);
+  });
+});
+
+test.describe("the Automations page — Milestone B cards", () => {
+  test("the no-show and text-reminder cards preview the composed message — link and time included — as one segment", async ({ page }) => {
+    const { accountId } = fixture();
+    await page.goto(`/dashboard/accounts/${accountId}/automations`);
+
+    const noShow = page.getByTestId("no-show-nudge-card");
+    await expect(noShow.getByText("No-show follow-ups", { exact: true })).toBeVisible();
+    await expect(noShow.getByTestId("no-show-link")).toContainText("/b/");
+    await noShow.getByLabel("Send by").click();
+    await page.getByRole("option", { name: "Text message" }).click();
+    await expect(noShow.getByTestId("no-show-sms-count")).toContainText("1 message(s)");
+
+    const reminder = page.getByTestId("sms-reminder-card");
+    await expect(reminder.getByText("Text reminders", { exact: true })).toBeVisible();
+    await expect(reminder.getByTestId("sms-reminder-preview")).toContainText("Reminder: your appointment");
+    await expect(reminder.getByTestId("sms-reminder-count")).toContainText("1 message(s)");
+    // Nothing is saved — no form is submitted.
   });
 });
