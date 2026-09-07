@@ -768,6 +768,19 @@ export const m = {
   // (composeReviewRequestSms); the email template renders it as a button.
   "automations.review.defaultBody": "Thanks for choosing {name}! If you have a minute, we'd love a quick review:",
   "automations.review.defaultBodyNoName": "Thanks for choosing us! If you have a minute, we'd love a quick review:",
+  // The no-show nudge's default body. Same rules as the review request's:
+  // `{name}` filled at send time with the customer-facing brand name; the
+  // NoName variant drops the clause; GSM-7 throughout (straight apostrophe).
+  // The trailing colon is where the booking-page link is appended
+  // (composeNoShowNudgeSms); the email template renders it as a button.
+  "automations.noShow.defaultBody": "We missed you for your appointment with {name}. If you'd like to pick a new time, book here:",
+  "automations.noShow.defaultBodyNoName": "We missed you for your appointment. If you'd like to pick a new time, book here:",
+  // The text reminder. The LEAD carries the appointment time and is never
+  // the operator's to place — `{when}` is formatWhen's output in the
+  // booker's zone; the operator's prose (or this default) follows it.
+  "automations.smsReminder.lead": "Reminder: your appointment with {name} is {when}.",
+  "automations.smsReminder.leadNoName": "Reminder: your appointment is {when}.",
+  "automations.smsReminder.defaultBody": "Reply to this text if you need to make a change.",
   // Automations page — agency-only, like Voice. Plain admin language; the
   // recipe names are the things a business owner would call them.
   "automations.title": "Automations",

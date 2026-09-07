@@ -1,4 +1,5 @@
-import { shell, escapeHtml, button, type EmailBrand } from "./shell";
+import { proseWithButton } from "./prose-button";
+import type { EmailBrand } from "./shell";
 
 export type ReviewRequestEmailInput = {
   brand: EmailBrand;
@@ -19,19 +20,6 @@ export type ReviewRequestEmailInput = {
  */
 export function reviewRequestEmail(input: ReviewRequestEmailInput):
   { subject: string; html: string; text: string } {
-  const paragraphs = input.body
-    .split(/\n\s*\n/)
-    .map((p) => p.trim())
-    .filter(Boolean);
-
-  const html = shell(
-    input.brand,
-    paragraphs.map((p) => `<p style="margin:0 0 12px;">${escapeHtml(p)}</p>`).join("")
-    + `<p style="margin:16px 0 0;">${button(input.brand, input.reviewUrl, "Leave a review")}</p>`,
-  );
-
-  // Composed from the same paragraph list, never by stripping tags.
-  const text = `${paragraphs.join("\n\n")}\n\n${input.reviewUrl}`;
-
+  const { html, text } = proseWithButton(input.brand, input.body, input.reviewUrl, "Leave a review");
   return { subject: `Would you leave ${input.brand.name} a review?`, html, text };
 }
