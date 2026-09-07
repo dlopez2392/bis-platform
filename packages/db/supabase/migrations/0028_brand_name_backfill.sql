@@ -1,0 +1,11 @@
+-- 0028: the customer-facing name is mandatory from here on (spec
+-- 2026-09-07-brand-name-resolver-design.md). `brandDisplayName` no longer
+-- falls back to `accounts.name` — the agency's internal label — so every
+-- account needs a `brand_name`. One-time backfill from the label for the
+-- rows that have none (read and reviewed before this ran: the e2e fixture
+-- and test-account orphans; no real client). From this migration on,
+-- createAccount seeds brand_name, the Branding save refuses a blank, and
+-- go-live requires the branding step. No constraint: a client holds UPDATE
+-- on brand_name (0013) and a NOT NULL would turn a blank into a Postgres
+-- error the operator cannot act on; the application rule is the guard.
+update public.accounts set brand_name = name where brand_name is null or btrim(brand_name) = '';

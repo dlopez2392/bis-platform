@@ -109,6 +109,7 @@ export const m = {
   "branding.color": "Brand color",
   "branding.colorHint": "Used for buttons and highlights on their lead forms and in their sidebar. Leave blank for the default.",
   "branding.badColor": "Enter a color as a hex code, like #0f766e.",
+  "branding.nameRequired": "Customers see this name on every email and text. Give the company a name before saving.",
   "branding.colorPreview": "Preview",
   "branding.previewSubmit": "Submit",
   "branding.previewSidebar": "Sidebar",
@@ -1058,22 +1059,24 @@ export const m = {
   "setup.rename.empty": "A company needs a name — this one can't be blank.",
   "setup.rename.failed": "Couldn't rename this company. Try again.",
   "setup.rename.label": "Company name",
-  // NOT "they never see it" — that was false in exactly the window this
-  // wizard runs in. A new account has no brand name yet (createClientAccount
-  // never writes one, which is why Branding is step 2), and until one is set
-  // the client reads THIS label in their sidebar and in the dashboard
-  // greeting (app-sidebar.tsx, dashboard/page.tsx: `brandName ?? name`). The
-  // copy has to name that condition, or it invites an operator to type
-  // "Rio Roofing — trial, chasing invoice" into a field the client can read.
-  // Names BOTH audiences on purpose. Until `brand_name` is set, `accounts.name`
-  // is the fallback in the client's own workspace (app-sidebar.tsx,
-  // dashboard/page.tsx) AND in mail their customers receive — emailBrand in
-  // lib/email/templates/shell.ts is `brandName ?? accountName`, which reaches
-  // booking confirmations, cancel notices, lead alerts and call emails. An
-  // operator typing "chasing invoice" here needs to know both before they
-  // type it, not after a customer reads it.
+  // This copy has answered the audience question wrongly twice. "They never
+  // see it" was false while a fresh account had no brand name: the client's
+  // sidebar and dashboard greeting are `brandName ?? name` (app-sidebar.tsx,
+  // dashboard/page.tsx), so until Branding was filled in the client read
+  // THIS label. Then "until you set a brand name … it's what they see" was
+  // written for that window — and the window closed with the brand-name
+  // resolver (spec 2026-09-07-brand-name-resolver): `createAccount` seeds
+  // `brand_name` from this very label, the Branding save refuses to blank it,
+  // and `brandDisplayName` (lib/email/templates/shell.ts) takes no account
+  // name at all. Through the product that fallback never fires, so this
+  // label reaches no client and no customer. The mistake to prevent now is
+  // the OPPOSITE one: an operator renaming here and expecting the client's
+  // workspace, or their customers' emails, to follow. They do not — the
+  // seeded brand name is a copy that drifts the moment either side is edited
+  // alone (renameAccountAction's doc comment, setup/actions.ts) — so the copy
+  // points at Branding for anything anyone else sees.
   "setup.rename.help":
-    "Your own label for this client. Until you set a brand name in Branding, it's what they see when they sign in — and what their customers see in booking and lead emails.",
+    "Your own label for this client — only you see it. Their brand name started as a copy of it; change what they and their customers see in Branding.",
 
   // ── Command palette (DESIGN.md's ⌘K key pattern) ───────────────────────
   "palette.placeholder": "Search contacts, calls, pages…",

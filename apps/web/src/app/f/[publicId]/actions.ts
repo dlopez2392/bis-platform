@@ -531,9 +531,11 @@ async function notify(
 
   // One row, both jobs: the display name and everything the template needs to
   // wear the company's brand. getBranding() here would be a second round trip
-  // to a row this query already returns.
+  // to a row this query already returns. `name` is NOT selected: that column
+  // is the agency's internal label and `emailBrand` has no parameter left to
+  // receive it.
   const { data: account } = await db.from("accounts")
-    .select("name, brand_name, brand_logo_path, brand_color, brand_neutral, brand_corners, brand_type, brand_mode")
+    .select("brand_name, brand_logo_path, brand_color, brand_neutral, brand_corners, brand_type, brand_mode")
     .eq("id", form.account_id).maybeSingle();
 
   const brand = emailBrand({
@@ -545,7 +547,7 @@ async function notify(
     brandType: account?.brand_type ?? null,
     brandMode: account?.brand_mode ?? null,
     replyToEmail: null,
-  }, account?.name ?? "BIS");
+  });
 
   const { html, text: body } = leadAlertEmail({
     brand,
@@ -601,7 +603,7 @@ async function receipt(
   if (!leadEmail || !isValidEmail(leadEmail)) return;
 
   const { data: account } = await db.from("accounts")
-    .select("name, from_email, reply_to_email, brand_name, brand_logo_path, brand_color, brand_neutral, brand_corners, brand_type, brand_mode")
+    .select("from_email, reply_to_email, brand_name, brand_logo_path, brand_color, brand_neutral, brand_corners, brand_type, brand_mode")
     .eq("id", form.account_id).maybeSingle();
 
   const brand = emailBrand({
@@ -613,7 +615,7 @@ async function receipt(
     brandType: account?.brand_type ?? null,
     brandMode: account?.brand_mode ?? null,
     replyToEmail: null,
-  }, account?.name ?? "BIS");
+  });
 
   const replyTo = normalizeReplyTo(account?.reply_to_email);
   const { html, text: body } = leadReceiptEmail({

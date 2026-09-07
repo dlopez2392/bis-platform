@@ -10,7 +10,7 @@ const UNBRANDED: Branding = {
   brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
   replyToEmail: null,
 };
-const brand = emailBrand({ ...UNBRANDED, brandName: "Rio Roofing" }, "Acme");
+const brand = emailBrand({ ...UNBRANDED, brandName: "Rio Roofing" });
 
 const WHEN_COMPANY = "Tue, Aug 26 · 2:00 PM CDT";
 const WHEN_BOOKER = "Tue, Aug 26 · 3:00 PM EDT";

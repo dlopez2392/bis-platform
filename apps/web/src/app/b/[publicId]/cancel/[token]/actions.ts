@@ -54,7 +54,7 @@ function stripSubjectControlChars(value: string): string {
 }
 
 type AccountRow = {
-  name: string | null; timezone: string | null;
+  timezone: string | null;
   brand_name: string | null; brand_logo_path: string | null; brand_color: string | null;
   brand_neutral: Branding["brandNeutral"]; brand_corners: Branding["brandCorners"];
   brand_type: Branding["brandType"]; brand_mode: Branding["brandMode"];
@@ -67,7 +67,7 @@ async function loadAccount(
   db: ReturnType<typeof serviceDb>, accountId: string,
 ): Promise<AccountRow | null> {
   const { data, error } = await db.from("accounts")
-    .select("name, timezone, brand_name, brand_logo_path, brand_color, brand_neutral, "
+    .select("timezone, brand_name, brand_logo_path, brand_color, brand_neutral, "
       + "brand_corners, brand_type, brand_mode")
     .eq("id", accountId).maybeSingle();
   if (error) throw new Error(`loadAccount(${accountId}) failed: ${error.message}`);
@@ -162,7 +162,7 @@ export async function confirmCancelAction(
           brandColor: account?.brand_color ?? null, brandNeutral: account?.brand_neutral ?? null,
           brandCorners: account?.brand_corners ?? null, brandType: account?.brand_type ?? null,
           brandMode: account?.brand_mode ?? null, replyToEmail: null,
-        }, account?.name ?? "BIS");
+        });
 
         const subject = `Booking cancelled: ${stripSubjectControlChars(whenCompanyZone)}`
           + ` — ${stripSubjectControlChars(contactName)}`;

@@ -392,8 +392,12 @@ describe("blueprint apply", () => {
 
       await withTestAccount(async (db2, targetId) => {
         await applyBlueprint(db2, targetId, blueprintId, "user_test");
+        // The target account's own brand_name is seeded from its own name
+        // ("Fixture Co", per createAccount's never-null invariant) at
+        // creation, before the blueprint is ever applied. "Left alone" means
+        // that seeded value survives untouched, not that it is null.
         expect(await getBranding(db2, targetId)).toEqual({
-          brandName: null, brandLogoPath: null, brandColor: null,
+          brandName: "Fixture Co", brandLogoPath: null, brandColor: null,
           brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
           // Included for the same reason as the rest, and it matters more than
           // the rest: a cloned reply-to would send a NEW client's customers to

@@ -97,16 +97,17 @@ export async function setSetupTickAction(
  * exception escaping unhandled would reject this action outright, which the
  * client island's Result-typed rendering can never see (same reasoning
  * `setSetupTickAction`'s own doc comment gives for its write). This action
- * only ever read FIVE of the six legs before the three call sites were
- * unified (`calendar`, `profile`, `numbers`, `calls`, `ticks` — never
- * `accounts`; `brandName`/`fromEmail` were hardcoded `null`, since neither
- * gates go-live, see `goLivePrereqsMet`), so it checks exactly those five
- * and deliberately IGNORES an `accounts`-leg failure: an outage on a table
- * this action never used to touch must not turn a real "ready" into a false
- * "couldn't verify." A prerequisite this function could not verify is not a
- * met one, and — same distinction the page draws — it must not be reported
- * as an unmet one either, hence the separate `m["setup.goLive.failed"]`
- * rather than `notReady` below.
+ * now reads all SIX legs, including `accounts`: branding gates go-live
+ * (spec 2026-09-07-brand-name-resolver, `goLivePrereqsMet` in
+ * setup-status.ts), and branding is read off the `accounts` row's
+ * `brand_name` — the leg this action used to hardcode to `null` and ignore
+ * entirely because neither `brandName` nor `fromEmail` used to gate go-live.
+ * An `accounts`-leg failure is now exactly as unverifiable as a failed
+ * calendar/profile/numbers/calls/ticks read, so it is folded into
+ * `reReadFailed` below rather than singled out: a prerequisite this
+ * function could not verify is not a met one, and — same distinction the
+ * page draws — it must not be reported as an unmet one either, hence the
+ * separate `m["setup.goLive.failed"]` rather than `notReady` below.
  */
 export async function goLiveAction(accountId: string): Promise<ActionResult> {
   const { userId, isAgency } = await requireAccountAccess(accountId);
@@ -123,8 +124,7 @@ export async function goLiveAction(accountId: string): Promise<ActionResult> {
   }
   const { inputs, numbers, failed } = gathered;
 
-  // Deliberately excludes `failed.account` — see the doc comment above.
-  const reReadFailed = failed.calendar || failed.profile || failed.numbers
+  const reReadFailed = failed.account || failed.calendar || failed.profile || failed.numbers
     || failed.calls || failed.ticks;
   if (reReadFailed) {
     console.error(`goLiveAction: prerequisite re-check failed for account ${accountId}: ${JSON.stringify(failed)}`);
@@ -176,14 +176,17 @@ export async function goLiveAction(accountId: string): Promise<ActionResult> {
 /**
  * Rename the account's INTERNAL label (`accounts.name`) — the agency's own
  * note about this client, e.g. "Rio Roofing — trial". Not the client's
- * public-facing name: branding owns that, and a client with a brand name set
- * sees THAT everywhere this label would otherwise appear (dashboard greeting,
- * sidebar identity — see P3). It is NOT invisible to the client, though: both
- * of those surfaces are `brandName ?? account.name`, and a freshly created
- * account has no `brand_name` at all (`createClientAccount` never writes one),
- * so until Branding is filled in this label IS what the client reads. That is
- * the condition `m["setup.rename.help"]` now states out loud rather than
- * promising "they never see it".
+ * public-facing name: branding owns that, and those customer-facing surfaces
+ * read through `brandDisplayName(branding)` (lib/email/templates/shell.ts),
+ * which takes the branding and NOTHING ELSE — there is no parameter left for
+ * this label to travel through. A freshly created account DOES have a
+ * `brand_name` — `createAccount` seeds it from the name given at creation,
+ * and Branding's own save refuses to ever blank it again (spec
+ * 2026-09-07-brand-name-resolver) — so `account.name` is not a customer-facing
+ * fallback at all any more. `m["setup.rename.help"]`
+ * still spells this relationship out for the agency user renaming the
+ * account, since the seeded brand name usually STARTS as a copy of this very
+ * label and can drift from it the moment either one is edited alone.
  *
  * Empty is REJECTED rather than allowed to clear, unlike an inline contact
  * field: an account with no name breaks the client switcher, the dashboard

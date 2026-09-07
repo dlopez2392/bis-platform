@@ -10,7 +10,7 @@ export async function createAccount(
 
   const { data: account, error } = await db
     .from("accounts")
-    .insert({ agency_id: agency.id, clerk_org_id: input.clerkOrgId, name: input.name, timezone: input.timezone ?? "America/Chicago" })
+    .insert({ agency_id: agency.id, clerk_org_id: input.clerkOrgId, name: input.name, brand_name: input.name, timezone: input.timezone ?? "America/Chicago" })
     .select("id")
     .single();
   if (error || !account) throw new Error(`createAccount failed: ${error?.message}`);

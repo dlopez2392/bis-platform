@@ -291,7 +291,7 @@ describe("go_live", () => {
 });
 
 describe("goLivePrereqsMet", () => {
-  it("is true when hours, voice_profile, number, and test_call are all done — email and forwarding are NOT required", () => {
+  it("is true when hours, voice_profile, number, and test_call are all done — email and forwarding are NOT required, and branding is done in the full fixture, so the guarantee survives it", () => {
     const steps = deriveSetupStatus(fullInputs({
       fromEmail: null,
       ticks: { emailSkipped: false, forwardingDone: false },
@@ -300,6 +300,7 @@ describe("goLivePrereqsMet", () => {
     // undone, so a pass here proves they aren't silently required.
     expect(stepFor(steps, "email").done).toBe(false);
     expect(stepFor(steps, "forwarding").done).toBe(false);
+    expect(stepFor(steps, "branding").done).toBe(true);
     expect(goLivePrereqsMet(steps)).toBe(true);
   });
 
@@ -325,6 +326,17 @@ describe("goLivePrereqsMet", () => {
 
   it("is false for a wholly unconfigured tenant", () => {
     const steps = deriveSetupStatus(emptyInputs);
+    expect(goLivePrereqsMet(steps)).toBe(false);
+  });
+
+  it("is false when branding is not done, even though hours, voice_profile, number, and test_call all are", () => {
+    // Mutation: drop isDone("branding") from the goLivePrereqsMet predicate.
+    const steps = deriveSetupStatus(fullInputs({ brandName: null }));
+    expect(stepFor(steps, "branding").done).toBe(false);
+    expect(stepFor(steps, "hours").done).toBe(true);
+    expect(stepFor(steps, "voice_profile").done).toBe(true);
+    expect(stepFor(steps, "number").done).toBe(true);
+    expect(stepFor(steps, "test_call").done).toBe(true);
     expect(goLivePrereqsMet(steps)).toBe(false);
   });
 });

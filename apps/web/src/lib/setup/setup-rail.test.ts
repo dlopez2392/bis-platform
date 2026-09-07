@@ -43,13 +43,27 @@ describe("isLockedStep", () => {
 
 describe("lockedPrereqKeys", () => {
   it("names go_live's unmet prerequisites, including an UNKNOWN one", () => {
-    // hours done, voice_profile unknown (read failed), number done, test_call not done
+    // branding done, hours done, voice_profile unknown (read failed), number
+    // done, test_call not done
     const v = views({
+      branding: { done: true },
       hours: { done: true },
       voice_profile: { done: true, unknown: true },
       number: { done: true },
     });
     expect(lockedPrereqKeys("go_live", v)).toEqual(["voice_profile", "test_call"]);
+  });
+  it("names branding ALONE when it is the only unmet go-live prerequisite, and locks the step on it", () => {
+    // Mutation: drop "branding" from GO_LIVE_PREREQ_KEYS — this list comes
+    // back empty, the rail says "not locked", and the pane's Go live button
+    // sits disabled (goLivePrereqsMet still refuses) with nothing named
+    // under it.
+    const v = views({
+      hours: { done: true }, voice_profile: { done: true },
+      number: { done: true }, test_call: { done: true },
+    });
+    expect(lockedPrereqKeys("go_live", v)).toEqual(["branding"]);
+    expect(isLockedStep("go_live", v)).toBe(true);
   });
   it("names test_call's unmet prerequisites, including an UNKNOWN one", () => {
     // number not done, voice_profile done but unknown (read failed)

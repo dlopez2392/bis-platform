@@ -169,9 +169,20 @@ export async function getBranding(
 }
 
 /**
- * The company name a CUSTOMER may be shown — `brand_name`, falling back to
- * the agency's internal `accounts.name` label ("Rio Roofing — trial") only
- * when no brand name is set.
+ * The company name a CUSTOMER may be shown — `brand_name`, trimmed, AND
+ * NOTHING ELSE.
+ *
+ * THERE IS NO FALLBACK, deliberately. `accounts.name` is the agency's
+ * internal label for the company ("Rio Roofing — trial") and it reached
+ * customers three times while this resolver still took it as a second
+ * argument. A parameter that carries the label is a parameter someone
+ * passes; removing it is what makes the leak impossible rather than merely
+ * discouraged.
+ *
+ * A blank result is unreachable through the product: `createAccount` seeds
+ * `brand_name` from the name given at creation, the Branding save refuses to
+ * blank it, go-live requires the branding step, and migration 0028 backfilled
+ * the rows that predate all three.
  *
  * DELIBERATELY A SECOND COPY of `brandDisplayName` in
  * `apps/web/src/lib/email/templates/shell.ts`, and the only one allowed:
@@ -183,6 +194,6 @@ export async function getBranding(
  * and that test says so. Used by the automations due-lists so a due-row
  * carries the resolved `brandName` and never the internal label.
  */
-export function brandDisplayName(branding: Branding, accountName: string): string {
-  return branding.brandName ?? accountName;
+export function brandDisplayName(branding: Branding): string {
+  return branding.brandName?.trim() || "";
 }

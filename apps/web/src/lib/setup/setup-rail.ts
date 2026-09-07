@@ -49,7 +49,7 @@ export function isLockedStep(key: SetupStepKey, views: SetupStepView[]): boolean
  * answer rather than silently dropping the step `!done` alone would miss
  * whenever a prerequisite carries `done: true` alongside `unknown: true`
  * (the way `email` can, per setup-panel.tsx's own comment on that
- * asymmetry) — go-live's four prerequisites don't do that today, but this
+ * asymmetry) — go-live's five prerequisites don't do that today, but this
  * function does not assume they never will.
  *
  * `test_call`'s prerequisites are `number` and `voice_profile`: placing a

@@ -33,9 +33,15 @@ export const READS_BEHIND: Record<SetupStepKey, readonly ReadKey[]> = {
 /** Mirrors the keys `goLivePrereqsMet` checks (setup-status.ts). Duplicated
  *  here rather than derived from it because that function returns a boolean
  *  and callers need to NAME the unmet steps (setup.goLive.blocked). One
- *  list, two readers — keep it in sync with that function's body. */
+ *  list, two readers — and setup-view.test.ts pins them in lockstep (undo
+ *  any one step: the predicate answers false exactly when the key is listed
+ *  here), because "keep it in sync" alone did not hold: `branding` joined
+ *  the predicate with the brand-name resolver (spec 2026-09-07 — the name
+ *  every email, text and the booking page hand to a stranger the moment the
+ *  line goes live) and this list did not follow, which left the Go live
+ *  button disabled with no step named under it. */
 export const GO_LIVE_PREREQ_KEYS: readonly SetupStepKey[] = [
-  "hours", "voice_profile", "number", "test_call",
+  "branding", "hours", "voice_profile", "number", "test_call",
 ];
 
 /**

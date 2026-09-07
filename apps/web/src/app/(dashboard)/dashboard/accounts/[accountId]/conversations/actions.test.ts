@@ -200,14 +200,22 @@ describe("sendEmailAction — the customer sees the brand, never the internal la
     expect(sent.fromName).toBe("Rio Roofing");
   });
 
-  it("falls back to the account name when no brand name is set", async () => {
+  // Was "falls back to the account name when no brand name is set". There is
+  // no fallback any more: `emailBrand` takes the branding and nothing else, and
+  // this action no longer even selects `name`. An account with no brand name
+  // sends with a blank From name rather than the agency's private label —
+  // unreachable through the product (creation seeds a brand name, the Branding
+  // save refuses a blank, go-live requires the step, 0028 backfilled the rest).
+  //
+  // Mutation: reintroduce `?? account?.name` at the emailBrand call.
+  it("sends a BLANK From name, never the internal label, when no brand name is set", async () => {
     accountRow.brand_name = null;
 
     await sendEmailAction("acct_1", fd({
       contactId: "contact_1", subject: "Hi", body: "Quote attached",
     }));
 
-    expect(sendMock.mock.calls[0]![0].fromName).toBe("Rio Roofing — trial");
+    expect(sendMock.mock.calls[0]![0].fromName).toBe("");
   });
 });
 

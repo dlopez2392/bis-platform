@@ -105,11 +105,15 @@ export function reduceSetupProgress(steps: SetupStepState[]): { done: number; to
   return { done: steps.filter((s) => s.done).length, total: steps.length };
 }
 
-// email/forwarding are deliberately excluded: neither blocks a tenant from
-// actually taking live calls, so gating go-live on them would be a UX lie
-// (see setup-status.test.ts's goLivePrereqsMet suite for the met-with-
+// branding now gates go-live (spec 2026-09-07-brand-name-resolver): a
+// customer-facing name is what every email, text and the booking page hand
+// to a stranger the moment the line goes live, so this is not the same kind
+// of check as email/forwarding below. email/forwarding are still
+// deliberately excluded: neither blocks a tenant from actually taking live
+// calls, so gating go-live on them would be a UX lie (see
+// setup-status.test.ts's goLivePrereqsMet suite for the met-with-
 // email-undone case this guards against regressing).
 export function goLivePrereqsMet(steps: SetupStepState[]): boolean {
   const isDone = (key: SetupStepKey) => steps.find((s) => s.key === key)?.done === true;
-  return isDone("hours") && isDone("voice_profile") && isDone("number") && isDone("test_call");
+  return isDone("hours") && isDone("voice_profile") && isDone("number") && isDone("test_call") && isDone("branding");
 }

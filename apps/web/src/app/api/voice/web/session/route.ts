@@ -15,6 +15,9 @@
 // actually decides. See `web-demo.ts` for why the rate limit lives on the
 // website rather than here.
 import { NextResponse } from "next/server";
+// Type-only: erased at compile time, so it does not put `@bis/db` back at
+// module scope (see the lazy import in the handler below).
+import type { Branding } from "@bis/db";
 import { buildRealtimeSessionConfig, type VoicePromptInput } from "@/lib/voice/session-config";
 import {
   WEB_DEMO_MAX_SECONDS, webDemoNotice, parseAllowedOrigins, originAllowed, verifyTicket,
@@ -87,9 +90,13 @@ export async function POST(req: Request) {
   }
 
   // Lazy import, same reason as every other voice route: a module-scope DB
-  // import breaks `next build` during page-data collection.
+  // import breaks `next build` during page-data collection. That is also why
+  // the name resolver comes from HERE rather than from
+  // `lib/email/templates/shell` — the web copy would drag `@bis/db` back to
+  // module scope through its own import. The two copies are pinned identical
+  // by brand-name-parity.test.ts, so this is the same rule either way.
   const {
-    serviceDb, getPhoneNumberByE164, getVoiceProfile, getOrCreateCalendar,
+    serviceDb, getPhoneNumberByE164, getVoiceProfile, getOrCreateCalendar, brandDisplayName,
   } = await import("@bis/db");
 
   let sessionConfig: ReturnType<typeof buildRealtimeSessionConfig>;
@@ -106,22 +113,44 @@ export async function POST(req: Request) {
       log("refused: profile disabled", { accountId });
       return refuse(503, "unavailable", origin);
     }
+    // The brand columns, not `name`: what the visitor hears Sofía call this
+    // company is customer-facing, and `accounts.name` is the agency's own
+    // internal label for it ("Rio Roofing — trial"). Same shape and same
+    // resolver as the phone path (`api/voice/incoming/route.ts`), so one
+    // company cannot be two names depending on which door the caller used.
     const { data: account, error } = await db
-      .from("accounts").select("name, timezone").eq("id", accountId).single();
+      .from("accounts")
+      .select("timezone, brand_name, brand_logo_path, brand_color, brand_neutral, "
+        + "brand_corners, brand_type, brand_mode")
+      .eq("id", accountId).single();
     if (error || !account) {
       log("refused: account lookup failed", { accountId, error: error?.message });
       return refuse(503, "unavailable", origin);
     }
-    const acct = account as { name: string; timezone: string };
+    const acct = account as unknown as {
+      timezone: string;
+      brand_name: string | null; brand_logo_path: string | null; brand_color: string | null;
+      brand_neutral: Branding["brandNeutral"]; brand_corners: Branding["brandCorners"];
+      brand_type: Branding["brandType"]; brand_mode: Branding["brandMode"];
+    };
     const calendar = await getOrCreateCalendar(db, accountId, "voice", "ai");
+
+    // `replyToEmail: null` — this route sends no mail and never selects the
+    // column; `brandDisplayName` reads `brandName` and nothing else.
+    const businessName = brandDisplayName({
+      brandName: acct.brand_name, brandLogoPath: acct.brand_logo_path,
+      brandColor: acct.brand_color, brandNeutral: acct.brand_neutral,
+      brandCorners: acct.brand_corners, brandType: acct.brand_type,
+      brandMode: acct.brand_mode, replyToEmail: null,
+    });
 
     const greetingBase = profile.languages === "es" ? profile.greeting_es : profile.greeting_en;
     const greeting = greetingBase && greetingBase.trim()
       ? greetingBase
-      : `Thanks for calling ${acct.name}. How can I help you today?`;
+      : `Thanks for calling ${businessName}. How can I help you today?`;
 
     const promptInput: VoicePromptInput = {
-      personaName: profile.persona_name, businessName: acct.name, greeting,
+      personaName: profile.persona_name, businessName, greeting,
       facts: profile.facts, services: profile.services, languages: profile.languages,
       // FALSE regardless of the tenant's own setting: no tools reach this
       // session, so a prompt that promises booking would promise something

@@ -25,6 +25,14 @@ describe("accounts service", () => {
       await db.from("accounts").delete().eq("id", id);
     }
   });
+
+  it("createAccount seeds brand_name from the name it is given — no account is ever nameless to a customer", async () => {
+    // Mutation: drop `brand_name: input.name` from the insert.
+    await withTestAccount(async (db, accountId) => {
+      const { data } = await db.from("accounts").select("name, brand_name").eq("id", accountId).single();
+      expect(data).toEqual({ name: "Fixture Co", brand_name: "Fixture Co" });
+    });
+  });
 });
 
 /**

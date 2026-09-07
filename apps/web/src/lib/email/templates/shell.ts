@@ -2,10 +2,11 @@ import { brandLogoUrl, type Branding } from "@bis/db";
 import { publicFormTheme, type FormAccent } from "@/lib/branding/public-form-theme";
 
 export type EmailBrand = {
-  /** What the reader should see. NEVER `accounts.name` when a brand name
-   *  exists: that column is the agency's internal label for the company
-   *  ("Rio Roofing — trial") and is not for the client's eyes, still less
-   *  their customer's. */
+  /** What the reader should see. NEVER `accounts.name`: that column is the
+   *  agency's internal label for the company ("Rio Roofing — trial") and is
+   *  not for the client's eyes, still less their customer's. Since the
+   *  resolver lost its second parameter there is no longer any way to put it
+   *  here. */
   name: string;
   logoUrl: string | null;
   accent: FormAccent;
@@ -13,32 +14,44 @@ export type EmailBrand = {
 
 /**
  * The company name a CUSTOMER may be shown, from anywhere — email From line,
- * SMS body, booking page.
+ * SMS body, booking page. `accounts.brand_name`, trimmed, AND NOTHING ELSE.
  *
- * `accounts.name` is the agency's internal label for the company ("Rio
- * Roofing — trial"); `accounts.brand_name` is what the client's own customers
- * know them as. This is the one definition of that choice, deliberately
- * separate from `emailBrand` below so a non-email caller can resolve the name
- * without dragging the logo and accent-colour math along — and so there is
- * never a second, subtly different copy of the rule. It has been re-derived
- * twice already: once on the email From line (fixed in M4d, see
- * conversations/actions.ts's send), and once in the missed-call text-back,
- * which signed every message with the internal label.
+ * THERE IS NO FALLBACK, deliberately. `accounts.name` is the agency's
+ * internal label for the company ("Rio Roofing — trial") and it reached
+ * customers three times while this resolver still took it as a second
+ * argument: the P5 copy, the email From line (M4d, see
+ * conversations/actions.ts's send) and the missed-call text-back, which
+ * signed every message with it. A parameter that carries the label is a
+ * parameter someone passes; removing it is what makes the leak impossible
+ * rather than merely discouraged.
+ *
+ * A blank result is unreachable through the product: `createAccount` seeds
+ * `brand_name` from the name given at creation, the Branding save refuses to
+ * blank it, go-live requires the branding step, and migration 0028 backfilled
+ * the rows that predate all three. A caller that still sees "" is looking at
+ * an account built outside those paths, and the honest answer is a nameless
+ * message — never the agency's private note about the client. Downstream copy
+ * handles it: `defaultTextbackBody` drops the identifying clause rather than
+ * inventing a company name.
+ *
+ * Kept separate from `emailBrand` below so a non-email caller can resolve the
+ * name without dragging the logo and accent-colour math along — and so there
+ * is never a second, subtly different copy of the rule.
  *
  * `packages/db/src/branding.ts` carries a deliberate second copy for the
  * automations due-lists (the data layer cannot import this module, and this
  * module cannot import that one without breaking every factory mock of
  * `@bis/db` in the web tests). brand-name-parity.test.ts pins them equal.
  */
-export function brandDisplayName(branding: Branding, accountName: string): string {
-  return branding.brandName ?? accountName;
+export function brandDisplayName(branding: Branding): string {
+  return branding.brandName?.trim() || "";
 }
 
 /**
  * `emailBrand` for a caller that has ALREADY resolved the customer-facing
  * name — the automations passes, whose due-rows carry `brandName` and never
- * `accounts.name`. `emailBrand` below is the same thing for callers that
- * still hold both.
+ * `accounts.name`. `emailBrand` below is the same thing for a caller holding
+ * only the `Branding`, and resolves that name itself.
  */
 export function emailBrandNamed(branding: Branding, name: string): EmailBrand {
   return {
@@ -52,8 +65,8 @@ export function emailBrandNamed(branding: Branding, name: string): EmailBrand {
   };
 }
 
-export function emailBrand(branding: Branding, accountName: string): EmailBrand {
-  return emailBrandNamed(branding, brandDisplayName(branding, accountName));
+export function emailBrand(branding: Branding): EmailBrand {
+  return emailBrandNamed(branding, brandDisplayName(branding));
 }
 
 export function escapeHtml(value: string): string {

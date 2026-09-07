@@ -297,14 +297,19 @@ describe("goLiveAction", () => {
     errSpy.mockRestore();
   });
 
-  it("ignores an accounts-leg failure — this action never read that table before unification", async () => {
-    // Everything goLiveAction actually reads (calendar/profile/numbers/
-    // calls/ticks) is fine; only the accounts leg (brand_name/from_email,
-    // never used here) failed. An outage on a table this action was never
-    // exposed to before must not turn a real "ready" into a false refusal.
+  it("refuses — never 'not ready' — when the accounts leg failed, now that branding gates go-live", async () => {
+    // Mutation: leave `failed.account` out of `reReadFailed`. Branding is now
+    // one of goLivePrereqsMet's checks (setup-status.ts), and branding reads
+    // off the accounts leg's brandName — a failed read there is exactly as
+    // unverifiable as a failed calendar/profile/numbers/calls/ticks read, so
+    // it must be reported the same way: `setup.goLive.failed`, not a false
+    // "ready" and not a misdirecting "not ready".
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     setupInputsMocks.gatherSetupInputs.mockResolvedValue(readyGathered({ failed: { account: true } }));
     const r = await goLiveAction("a1");
-    expect(r).toEqual({ ok: true });
+    expect(r).toEqual({ ok: false, error: m["setup.goLive.failed"] });
+    writes().forEach((mock) => expect(mock).not.toHaveBeenCalled());
+    errSpy.mockRestore();
   });
 
   it("enables the profile and marks the number live once everything checks out", async () => {

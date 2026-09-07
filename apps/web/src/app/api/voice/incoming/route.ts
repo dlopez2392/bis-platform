@@ -70,6 +70,7 @@ import { finishCall, type FinishContext } from "@/lib/voice/finish-call";
 import type { ToolContext } from "@/lib/voice/tools/registry";
 import { readLimitConfig, decideLimit, utcDayStart } from "@/lib/voice/call-limits";
 import { configuredOrigin } from "@/lib/email/origin";
+import { brandDisplayName } from "@/lib/email/templates/shell";
 
 export const runtime = "nodejs";
 export const maxDuration = 800;
@@ -83,11 +84,11 @@ function log(...args: unknown[]) {
 // detail, not a public seam — so the identical column list is selected
 // inline here rather than reaching into the package's internals.
 const ACCOUNT_COLS =
-  "name, timezone, brand_name, brand_logo_path, brand_color, brand_neutral, " +
+  "timezone, brand_name, brand_logo_path, brand_color, brand_neutral, " +
   "brand_corners, brand_type, brand_mode, reply_to_email, from_email";
 
 type AccountBrandRow = {
-  name: string; timezone: string;
+  timezone: string;
   brand_name: string | null; brand_logo_path: string | null; brand_color: string | null;
   brand_neutral: Branding["brandNeutral"]; brand_corners: Branding["brandCorners"];
   brand_type: Branding["brandType"]; brand_mode: Branding["brandMode"];
@@ -488,13 +489,28 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
 
     // --- Step 11: accept the call -----------------------------------------
+    // The branding is built HERE, above the prompt, rather than at step 12
+    // with the two call-scoped contexts: the greeting a caller hears and the
+    // business name the model answers as are customer-facing, so they come
+    // from `brandDisplayName` — `accounts.name` is the agency's internal
+    // label for the company ("Rio Roofing — trial") and Sofía was saying it
+    // out loud on every call. Nothing between here and the accept can throw
+    // on it (it is a field copy), so moving it up costs the accept nothing.
+    const branding: Branding = {
+      brandName: accountRow.brand_name, brandLogoPath: accountRow.brand_logo_path,
+      brandColor: accountRow.brand_color, brandNeutral: accountRow.brand_neutral,
+      brandCorners: accountRow.brand_corners, brandType: accountRow.brand_type,
+      brandMode: accountRow.brand_mode, replyToEmail: accountRow.reply_to_email,
+    };
+    const businessName = brandDisplayName(branding);
+
     const greetingBase = profile.languages === "es" ? profile.greeting_es : profile.greeting_en;
     const greeting = greetingBase && greetingBase.trim()
       ? greetingBase
-      : `Thanks for calling ${accountRow.name}. How can I help you today?`;
+      : `Thanks for calling ${businessName}. How can I help you today?`;
 
     const promptInput: VoicePromptInput = {
-      personaName: profile.persona_name, businessName: accountRow.name, greeting,
+      personaName: profile.persona_name, businessName, greeting,
       facts: profile.facts, services: profile.services, languages: profile.languages,
       bookingEnabled: profile.booking_enabled, timezone: accountRow.timezone,
       slotDurationMinutes: calendar.slot_duration_minutes, afterHours: profile.after_hours,
@@ -508,13 +524,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // next statement (see below) with zero statements in between that could
     // throw and leave a live, accepted call with nobody talking to it.
     // Building contexts first means the only thing left to do after a
-    // successful accept is schedule the lifecycle.
-    const branding: Branding = {
-      brandName: accountRow.brand_name, brandLogoPath: accountRow.brand_logo_path,
-      brandColor: accountRow.brand_color, brandNeutral: accountRow.brand_neutral,
-      brandCorners: accountRow.brand_corners, brandType: accountRow.brand_type,
-      brandMode: accountRow.brand_mode, replyToEmail: accountRow.reply_to_email,
-    };
+    // successful accept is schedule the lifecycle. (`branding` itself is
+    // built at step 11 above, because the prompt needs the resolved brand
+    // name before the accept.)
+    //
     // Cron-route precedent (`api/cron/reminders/route.ts`): this is a
     // webhook invocation, not a browser request forwarded through Vercel's
     // edge, so there is no forwarded-host chain to trust or distrust.
@@ -525,12 +538,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const origin = configuredOrigin() ?? new URL(req.url).origin;
 
     const toolCtx: ToolContext = {
-      db, accountId, accountName: accountRow.name, timezone: accountRow.timezone,
+      db, accountId, timezone: accountRow.timezone,
       calendar, profile, branding, fromEmail: accountRow.from_email ?? null,
       callerNumber, origin,
     };
     const finishCtx: FinishContext = {
-      db, accountId, accountName: accountRow.name, branding,
+      db, accountId, branding,
       notifyEmails: calendar.notify_emails, callerNumber, origin,
       profileLanguage: profile.languages, timezone: accountRow.timezone,
       // Read off the profile loaded at step 7, so the text-back decision is

@@ -72,7 +72,6 @@ function reminder(overrides: Record<string, unknown> = {}) {
     calendarPublicId: "cal_pub_1",
     contactEmail: "booker@example.com",
     contactName: "Jamie Booker",
-    accountName: "Acme Co",
     accountTimezone: "America/New_York",
     branding: {
       brandName: "Acme Brand", brandLogoPath: null, brandColor: null,
@@ -113,7 +112,6 @@ function followup(overrides: Record<string, unknown> = {}) {
     endsAt: "2026-09-08T22:00:00.000Z",     // America/New_York: Tue 18:00, the previous local day
     contactEmail: "booker@example.com",
     contactName: "Jamie Booker",
-    accountName: "Acme Co",
     accountTimezone: "America/New_York",
     branding: {
       brandName: "Acme Brand", brandLogoPath: null, brandColor: null,

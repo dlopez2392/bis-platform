@@ -26,7 +26,7 @@ import { runTool, type ToolContext, type ToolName } from "./registry";
 import { emptyCallState } from "../call-state";
 
 const ctx: ToolContext = {
-  db: {} as unknown as ReturnType<typeof serviceDb>, accountId: "a1", accountName: "Rio Roofing",
+  db: {} as unknown as ReturnType<typeof serviceDb>, accountId: "a1",
   timezone: "America/Chicago",
   calendar: { id: "cal1", account_id: "a1", public_id: "pub1", enabled: true,
     slot_duration_minutes: 60, buffer_minutes: 0, min_notice_hours: 0,

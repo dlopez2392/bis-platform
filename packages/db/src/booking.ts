@@ -56,7 +56,7 @@ export type DueReminder = {
   bookingId: string; accountId: string; startsAt: string;
   bookerTimezone: string | null; cancelToken: string; calendarPublicId: string;
   contactEmail: string | null; contactName: string;
-  accountName: string; accountTimezone: string;
+  accountTimezone: string;
   branding: Branding;
   // Reminders are customer-facing outbound, so they carry the account's
   // sending address per the M4d decision -- the same shape the booking
@@ -78,7 +78,7 @@ export type DueFollowup = {
    *  morning after the meeting" is measured from when it ENDED, not started. */
   endsAt: string;
   contactEmail: string | null; contactName: string;
-  accountName: string; accountTimezone: string;
+  accountTimezone: string;
   branding: Branding;
   fromEmail: string | null; replyToEmail: string | null;
   followupBody: string;
@@ -365,8 +365,12 @@ export async function countRecentBookings(
   return count ?? 0;
 }
 
+// No `name`: `accounts.name` is the agency's internal label ("Rio Roofing —
+// trial"), the due-rows built from this read have no field for it, and
+// `brandDisplayName` no longer takes it. Not selected at all, so there is
+// nothing here for a future mapper to reach for.
 const ACCOUNT_BRAND_COLS =
-  "name, timezone, brand_name, brand_logo_path, brand_color, brand_neutral, " +
+  "timezone, brand_name, brand_logo_path, brand_color, brand_neutral, " +
   "brand_corners, brand_type, brand_mode, reply_to_email, from_email";
 
 /**
@@ -381,7 +385,7 @@ export const REMINDER_WINDOW_END_MS = (24 * 60 + 15) * 60 * 1000;
 export const FOLLOWUP_QUERY_WINDOW_MS = 37 * 60 * 60 * 1000;
 
 export type AccountBrandInfo = {
-  accountName: string; accountTimezone: string; branding: Branding;
+  accountTimezone: string; branding: Branding;
   fromEmail: string | null; replyToEmail: string | null;
 };
 
@@ -403,14 +407,13 @@ export async function loadAccountBrandInfo(
       throw new Error(`${caller}: account lookup failed for ${accountId}: ${error?.message}`);
     }
     const acct = data as unknown as {
-      name: string; timezone: string;
+      timezone: string;
       brand_name: string | null; brand_logo_path: string | null; brand_color: string | null;
       brand_neutral: Branding["brandNeutral"]; brand_corners: Branding["brandCorners"];
       brand_type: Branding["brandType"]; brand_mode: Branding["brandMode"];
       reply_to_email: string | null; from_email: string | null;
     };
     out.set(accountId, {
-      accountName: acct.name,
       accountTimezone: acct.timezone,
       branding: {
         brandName: acct.brand_name ?? null,
@@ -526,7 +529,6 @@ export async function listDueReminders(
       calendarPublicId: r.calendars?.public_id,
       contactEmail: r.contacts?.email ?? null,
       contactName: contactName || "Unknown",
-      accountName: info.accountName,
       accountTimezone: info.accountTimezone,
       branding: info.branding,
       fromEmail: info.fromEmail,
@@ -635,7 +637,6 @@ export async function listDueFollowups(
       endsAt: r.ends_at,
       contactEmail: r.contacts?.email ?? null,
       contactName: contactName || "Unknown",
-      accountName: info.accountName,
       accountTimezone: info.accountTimezone,
       branding: info.branding,
       fromEmail: info.fromEmail,

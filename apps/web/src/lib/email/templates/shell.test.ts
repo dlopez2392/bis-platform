@@ -12,12 +12,12 @@ describe("emailBrand", () => {
   // accounts.name is the agency's internal label ("Rio Roofing — trial"), which
   // M3 established is not for the client's eyes — let alone their customer's.
   it("prefers the brand name over the agency's internal label", () => {
-    expect(emailBrand({ ...UNBRANDED, brandName: "Rio Roofing" }, "Rio Roofing — trial").name)
+    expect(emailBrand({ ...UNBRANDED, brandName: "Rio Roofing" }).name)
       .toBe("Rio Roofing");
   });
 
-  it("falls back to the account name when no brand name is set", () => {
-    expect(emailBrand(UNBRANDED, "Rio Roofing — trial").name).toBe("Rio Roofing — trial");
+  it("returns the EMPTY string, never the account name, when no brand name is set", () => {
+    expect(emailBrand(UNBRANDED).name).toBe("");
   });
 
   /**
@@ -34,13 +34,13 @@ describe("emailBrand", () => {
    * be asserting a bug.
    */
   it("lifts a brand colour that cannot carry a label", () => {
-    const { accent } = emailBrand({ ...UNBRANDED, brandColor: "#8b5cf6" }, "Acme");
+    const { accent } = emailBrand({ ...UNBRANDED, brandColor: "#8b5cf6" });
     expect(accent.accent.toLowerCase()).not.toBe("#8b5cf6");
     expect(accent.accentForeground).toBeTruthy();
   });
 
   it("leaves a colour that already carries one alone", () => {
-    const { accent } = emailBrand({ ...UNBRANDED, brandColor: "#1e3a8a" }, "Acme");
+    const { accent } = emailBrand({ ...UNBRANDED, brandColor: "#1e3a8a" });
     expect(accent.accent.toLowerCase()).toBe("#1e3a8a");
   });
 });
@@ -53,19 +53,19 @@ describe("escapeHtml", () => {
 
 describe("shell", () => {
   it("prints the brand name as TEXT, so a blocked image still identifies the sender", () => {
-    const html = shell(emailBrand({ ...UNBRANDED, brandName: "Rio Roofing" }, "Acme"), "<p>hi</p>");
+    const html = shell(emailBrand({ ...UNBRANDED, brandName: "Rio Roofing" }), "<p>hi</p>");
     expect(html).toContain("Rio Roofing");
     expect(html).not.toContain("<img");
   });
 
   it("escapes a brand name that contains markup", () => {
-    const html = shell(emailBrand({ ...UNBRANDED, brandName: "<script>x</script>" }, "Acme"), "<p>hi</p>");
+    const html = shell(emailBrand({ ...UNBRANDED, brandName: "<script>x</script>" }), "<p>hi</p>");
     expect(html).not.toContain("<script>");
     expect(html).toContain("&lt;script&gt;");
   });
 
   it("keeps layout in tables and styles inline, because email clients demand it", () => {
-    const html = shell(emailBrand(UNBRANDED, "Acme"), "<p>hi</p>");
+    const html = shell(emailBrand(UNBRANDED), "<p>hi</p>");
     expect(html).toContain("<table");
     expect(html).not.toContain("<style");
     expect(html).not.toContain("display:flex");
@@ -74,7 +74,7 @@ describe("shell", () => {
 
 describe("button", () => {
   it("paints the resolved accent and its readable foreground", () => {
-    const brand = emailBrand({ ...UNBRANDED, brandColor: "#1e3a8a" }, "Acme");
+    const brand = emailBrand({ ...UNBRANDED, brandColor: "#1e3a8a" });
     const html = button(brand, "https://example.com/x", "Open");
     expect(html).toContain(`background-color:${brand.accent.accent}`);
     expect(html).toContain(`color:${brand.accent.accentForeground}`);

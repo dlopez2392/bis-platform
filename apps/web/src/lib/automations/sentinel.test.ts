@@ -3,12 +3,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 /**
  * THE SENTINEL. `accounts.name` is the agency's internal label for a company
  * ("Rio Roofing — trial") and it has reached customers three times. Every
- * registered pass is run here with due rows that carry that label wherever
- * the row TYPE still allows it (the two migrated passes' rows do; the
- * review-request row cannot), and every argument of every send — email and
+ * registered pass is run here and every argument of every send — email and
  * SMS, plus the SMS message row — is scanned for it.
  *
- * Mutation: in passes/reminders.ts pass `reminder.accountName` as `fromName`.
+ * No due-row type carries the label any more (the last two lost it with the
+ * resolver's second parameter), which the absence pin at the bottom of the
+ * first describe keeps true. The scan stays anyway: it is the only check that
+ * looks at what actually LEFT the building, whatever a future recipe reads.
+ *
+ * Mutation: in passes/reminders.ts send `INTERNAL_LABEL` as `fromName`.
  */
 const dbMocks = vi.hoisted(() => ({
   listDueReminders: vi.fn(), stampReminderSent: vi.fn(),
@@ -28,6 +31,7 @@ const inlineSmsSend = vi.fn(async () => ({ providerMessageId: "s-inline" }));
 vi.mock("@/lib/sms", () => ({ getSmsProvider: () => ({ isFake: true, send: inlineSmsSend }) }));
 vi.mock("@/lib/email", () => ({ getEmailProvider: () => ({ isFake: true, send: async () => ({ providerMessageId: "e" }) }) }));
 
+import type { DueReminder, DueFollowup } from "@bis/db";
 import { runPasses } from "./harness";
 import { PASSES } from "./registry";
 import type { PassContext } from "./context";
@@ -41,18 +45,22 @@ const branding = {
   brandCorners: null, brandType: null, brandMode: null, replyToEmail: null,
 };
 
+/** The two cron due-rows, named so the absence pin below can extend them. */
+const REMINDER_ROW: DueReminder = {
+  bookingId: "bk_rem", accountId: "acct_1", startsAt: "2026-09-10T14:00:00.000Z", bookerTimezone: null,
+  cancelToken: "tok", calendarPublicId: "cal", contactEmail: "a@example.com", contactName: "A",
+  accountTimezone: "America/New_York", branding, fromEmail: null, meetingUrl: null,
+};
+const FOLLOWUP_ROW: DueFollowup = {
+  bookingId: "bk_fu", accountId: "acct_1", startsAt: "2026-09-08T21:00:00.000Z", endsAt: "2026-09-08T22:00:00.000Z",
+  contactEmail: "b@example.com", contactName: "B",
+  accountTimezone: "America/New_York", branding, fromEmail: null, replyToEmail: null, followupBody: "",
+};
+
 beforeEach(() => {
   for (const fn of Object.values(dbMocks)) fn.mockReset().mockResolvedValue(undefined);
-  dbMocks.listDueReminders.mockResolvedValue([{
-    bookingId: "bk_rem", accountId: "acct_1", startsAt: "2026-09-10T14:00:00.000Z", bookerTimezone: null,
-    cancelToken: "tok", calendarPublicId: "cal", contactEmail: "a@example.com", contactName: "A",
-    accountName: INTERNAL_LABEL, accountTimezone: "America/New_York", branding, fromEmail: null, meetingUrl: null,
-  }]);
-  dbMocks.listDueFollowups.mockResolvedValue([{
-    bookingId: "bk_fu", accountId: "acct_1", startsAt: "2026-09-08T21:00:00.000Z", endsAt: "2026-09-08T22:00:00.000Z",
-    contactEmail: "b@example.com", contactName: "B", accountName: INTERNAL_LABEL,
-    accountTimezone: "America/New_York", branding, fromEmail: null, replyToEmail: null, followupBody: "",
-  }]);
+  dbMocks.listDueReminders.mockResolvedValue([REMINDER_ROW]);
+  dbMocks.listDueFollowups.mockResolvedValue([FOLLOWUP_ROW]);
   const review = {
     accountId: "acct_1", endsAt: "2026-09-08T22:00:00.000Z", followupSentAt: null, completedAt: null, smsFailedAt: null, brandName: BRAND, branding,
     accountTimezone: "America/New_York", fromEmail: null, replyToEmail: null, body: "",
@@ -110,6 +118,23 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
 
   it("the registry runs reminders, follow-ups, review requests, no-show nudges, then text reminders — the first three's order is the collision's contract", () => {
     expect(PASSES.map((p) => p.key)).toEqual(["reminders", "followups", "reviewRequests", "noShowNudges", "smsReminders"]);
+  });
+
+  /**
+   * The scan above proves the label did not go out THIS tick. This proves a
+   * pass could not send it if it tried: the two migrated row types have no
+   * field for it, exactly as the three newer ones never did.
+   *
+   * Mutation: add `accountName: string` back to `DueReminder` or `DueFollowup`
+   * in packages/db/src/booking.ts — the matching directive becomes unused and
+   * `tsc` refuses it.
+   */
+  it("no cron row type carries the agency's label any more", () => {
+    // @ts-expect-error — DueReminder has no accountName
+    const r: DueReminder = { ...REMINDER_ROW, accountName: INTERNAL_LABEL };
+    // @ts-expect-error — DueFollowup has no accountName
+    const f: DueFollowup = { ...FOLLOWUP_ROW, accountName: INTERNAL_LABEL };
+    void r; void f;
   });
 });
 

@@ -64,7 +64,7 @@ export const followupsPass: Pass = {
 
       // SEND-THEN-STAMP, same discipline as the reminder pass.
       try {
-        const brand = emailBrand(followup.branding, followup.accountName);
+        const brand = emailBrand(followup.branding);
         const { subject, html, text } = bookingFollowupEmail({
           brand, body: followup.followupBody,
         });

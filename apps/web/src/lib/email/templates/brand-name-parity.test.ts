@@ -9,17 +9,13 @@ const base: Omit<Branding, "brandName"> = {
 
 describe("brandDisplayName — the web copy and the @bis/db copy are ONE rule", () => {
   it("answer identically across the input space that matters", () => {
-    const cases: [string | null, string][] = [
-      ["Rio Roofing", "Rio Roofing — trial"],
-      [null, "Rio Roofing — trial"],
-      ["", "Fallback"],
-      ["  ", "Fallback"],
-      [null, ""],
-    ];
-    for (const [brandName, accountName] of cases) {
+    // Mutation: reintroduce a fallback (`branding.brandName?.trim() || accountName`)
+    // in EITHER copy — this test is the only thing that says the two drifted.
+    const cases: [string | null][] = [["Rio Roofing"], [null], [""], ["  "]];
+    for (const [brandName] of cases) {
       const b = { ...base, brandName };
-      expect(brandDisplayName(b, accountName), JSON.stringify([brandName, accountName]))
-        .toBe(dbBrandDisplayName(b, accountName));
+      expect(brandDisplayName(b), JSON.stringify([brandName]))
+        .toBe(dbBrandDisplayName(b));
     }
   });
 });
@@ -27,7 +23,7 @@ describe("brandDisplayName — the web copy and the @bis/db copy are ONE rule", 
 describe("emailBrandNamed", () => {
   it("is emailBrand with the name already chosen — identical output for the same inputs", () => {
     const b = { ...base, brandName: "Rio Roofing", brandColor: "#1e3a8a" };
-    expect(emailBrandNamed(b, "Rio Roofing")).toEqual(emailBrand(b, "Rio Roofing — trial"));
+    expect(emailBrandNamed(b, "Rio Roofing")).toEqual(emailBrand(b));
     expect(emailBrandNamed(b, "Rio Roofing").name).toBe("Rio Roofing");
   });
 });
