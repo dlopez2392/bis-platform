@@ -24,7 +24,10 @@ import type { Pass } from "../context";
  * single carrier blip cost the customer their reminder. A failed send still
  * writes `sms_reminder_failed_at` (an attempt marker the operator can see)
  * but this pass never reads it back; the window bounds a bad afternoon to
- * three attempts and three failed rows (cron-coupling.test.ts pins the 3).
+ * three attempts and three failed rows (cron-coupling.test.ts pins the 3 —
+ * three quarter-hour grid points inside a closed 45-minute window; a fourth
+ * needs a tick to land on the bound to the second, which the cron's jitter
+ * never does).
  * The customer-visible worst case is the flip side: a provider failure that
  * was actually accepted (a timeout after delivery) is retried next tick, so
  * up to three copies of the reminder can land. Inherent to retrying, and

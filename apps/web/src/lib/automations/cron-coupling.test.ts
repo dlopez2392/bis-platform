@@ -68,6 +68,10 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
     // danlo, 2026-09-07: a failed text reminder retries next tick. The bound
     // is the window divided by the tick, not a hold — so a wider window or a
     // faster cadence would silently raise it. Mutation: change either.
+    // The due query is closed at both ends (gte/lte in listDueSmsReminders),
+    // so a tick landing on the bound to the second would see a fourth grid
+    // point; the cron's own jitter (observed ticks fire around :24s) makes
+    // three the count every real run sees.
     const tick = tickIntervalMs(entry!.schedule);
     expect((SMS_REMINDER_WINDOW_END_MS - SMS_REMINDER_WINDOW_START_MS) / tick).toBe(3);
   });

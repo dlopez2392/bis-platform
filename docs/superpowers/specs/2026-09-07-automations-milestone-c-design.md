@@ -53,10 +53,14 @@ open from Milestone B's review:
 1. **Destination allowlist: `+1` and `+52` only.** `toE164` accepts any
    8–15-digit number as `+digits` and nothing in the SMS layer restricts a
    destination, and this is the only recipe whose trigger needs no
-   reservation, call or login. `INSTANT_REPLY_ALLOWED_PREFIXES` in `caps.ts`;
-   a number outside it is a new free-check skip, `outsideRegion`, logged.
-   US/Canada and Mexico are who a Rio Grande Valley business serves; the
-   Caribbean NANP caveat is documented on the constant.
+   reservation, call or login. `INSTANT_REPLY_ALLOWED_PATTERNS` in `caps.ts`
+   — a SHAPE per prefix (ten digits after `+1`; ten after `+52`, or the
+   legacy mobile `1` and ten), because `toE164` also turns a typed
+   "12345678" into a NANP-impossible `+12345678` that a bare prefix would
+   admit (re-review, 2026-09-07). A number outside it is a new free-check
+   skip, `outsideRegion`, logged with the submission id and the first three
+   characters only. US/Canada and Mexico are who a Rio Grande Valley
+   business serves; the Caribbean NANP caveat is documented on the constant.
 2. **The frozen prefill (the `accounts.name` fallback) is fixed
    platform-wide in its own PR**, the resolver fix that was Milestone B's
    open Decision 2. It lands before any account enables this recipe. The

@@ -76,8 +76,8 @@ describe("sendInstantReply — the free checks come before any read", () => {
 });
 
 describe("sendInstantReply — the destination allowlist (danlo, 2026-09-07: +1 and +52 only, as real shapes)", () => {
-  it("pins the allowlist: ten digits after +1, ten or eleven after +52, nothing else", () => {
-    expect(INSTANT_REPLY_ALLOWED_PATTERNS.map(String)).toEqual(["/^\\+1\\d{10}$/", "/^\\+52\\d{10,11}$/"]);
+  it("pins the allowlist: ten digits after +1; ten after +52, or the legacy mobile 1 and ten; nothing else", () => {
+    expect(INSTANT_REPLY_ALLOWED_PATTERNS.map(String)).toEqual(["/^\\+1\\d{10}$/", "/^\\+521?\\d{10}$/"]);
   });
 
   it("a number outside the allowlist, or a NANP-impossible +1, → outsideRegion before any read, logged without the number", async () => {
@@ -85,7 +85,9 @@ describe("sendInstantReply — the destination allowlist (danlo, 2026-09-07: +1 
     // typed "12345678", which the form's own validation accepts) then reaches
     // the provider on every junk submission, unbilled but unbounded by the
     // hold (failed rows excluded) and the cap (only successes stamped).
-    const outside = ["+447700900123", "+5511987654321", "+9725012345678", "+12345678", "+1956555010", "+521234"];
+    // "+5258181234567": eleven digits after +52 whose eleventh is not the
+    // legacy mobile 1 — the shape the comment on the constant promises to refuse.
+    const outside = ["+447700900123", "+5511987654321", "+9725012345678", "+12345678", "+1956555010", "+521234", "+5258181234567"];
     for (const to of outside) {
       dbMocks.getAutomation.mockClear();
       expect(await sendInstantReply(input({ phoneE164: to })), to).toEqual({ kind: "skipped", reason: "outsideRegion", detail: to });

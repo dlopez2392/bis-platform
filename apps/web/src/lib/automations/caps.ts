@@ -82,4 +82,4 @@ export const INSTANT_REPLY_THREAD_HOLD_MS = 24 * 60 * 60 * 1000;
  * fixed at ten digits after +1; Mexican numbers are ten after +52, or
  * eleven with the legacy mobile "1" (+52 1 …) some people still type.
  */
-export const INSTANT_REPLY_ALLOWED_PATTERNS: readonly RegExp[] = [/^\+1\d{10}$/, /^\+52\d{10,11}$/];
+export const INSTANT_REPLY_ALLOWED_PATTERNS: readonly RegExp[] = [/^\+1\d{10}$/, /^\+521?\d{10}$/];
