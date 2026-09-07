@@ -18,6 +18,10 @@ const sendMock = vi.fn();
 vi.mock("@/lib/email", () => ({
   getEmailProvider: () => ({ send: (...a: unknown[]) => sendMock(...a) }),
 }));
+const instantReplyMock = vi.fn();
+vi.mock("@/lib/automations/instant-reply", () => ({
+  sendInstantReply: (...a: unknown[]) => instantReplyMock(...a),
+}));
 
 /**
  * The row behind notify()'s account lookup.
@@ -133,6 +137,7 @@ beforeEach(() => {
   ensureConversationMock.mockReset().mockResolvedValue({ id: "convo_1" });
   createMessageMock.mockReset().mockResolvedValue({ id: "msg_1" });
   incrementUnreadCountMock.mockReset();
+  instantReplyMock.mockReset().mockResolvedValue({ kind: "skipped", reason: "disabled" });
 });
 
 describe("submitFormAction — expired render token (lead-loss regression)", () => {
@@ -583,6 +588,106 @@ describe("submitFormAction — the receipt to the person who wrote in", () => {
     // `processing_error` is the operator's "nobody was told" signal; a
     // bounced auto-reply is not that.
     expect(setSubmissionProcessingErrorMock).not.toHaveBeenCalled();
+    quiet.mockRestore();
+  });
+});
+
+describe("submitFormAction — the instant reply to the person who wrote in (Milestone C)", () => {
+  const withPhone = (over: Record<string, unknown> = {}) => formRow({
+    fields: [
+      { key: "first_name", kind: "core.first_name", label: "Name", required: false },
+      { key: "email", kind: "core.email", label: "Email", required: false },
+      { key: "phone", kind: "core.phone", label: "Phone", required: false },
+    ],
+    notify_emails: [],
+    ...over,
+  });
+  const token = () => signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
+  const PHONE = "956-555-0101";
+
+  it("runs LAST — after the receipt — with the E.164 phone, the page's locale, the contact, the thread and the consent flag", async () => {
+    // Mutation: call it before the receipt, or pass the raw phone.
+    getPublishedFormByPublicIdMock.mockResolvedValue(withPhone());
+    const result = await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token(), locale: "es", first_name: "María", email: "customer@example.com", phone: PHONE,
+    }));
+    expect(result.status).toBe("success");
+    expect(instantReplyMock).toHaveBeenCalledTimes(1);
+    const arg = instantReplyMock.mock.calls[0]![0];
+    expect(arg).toMatchObject({
+      accountId: "acct_1", submissionId: "sub_1", contactId: "contact_1", conversationId: "convo_1",
+      phoneE164: "+19565550101", locale: "es", consentWithheld: false,
+    });
+    expect(arg.now).toBeInstanceOf(Date);
+    // The receipt is sendMock's only call here (no alert addresses), and the
+    // instant reply comes after it.
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(instantReplyMock.mock.invocationCallOrder[0]!).toBeGreaterThan(sendMock.mock.invocationCallOrder[0]!);
+  });
+
+  it("passes a null phone when the form asked for none", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(withPhone({ fields: [
+      { key: "email", kind: "core.email", label: "Email", required: false },
+    ] }));
+    await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token(), locale: "en", email: "a@example.com" }));
+    expect(instantReplyMock.mock.calls[0]![0]).toMatchObject({ phoneE164: null, locale: "en" });
+  });
+
+  it("reports consentWithheld when an OPTIONAL consent box was left unticked, and false once it is ticked", async () => {
+    // Mutation: derive it from `required` instead of `given`.
+    getPublishedFormByPublicIdMock.mockResolvedValue(withPhone({ fields: [
+      { key: "phone", kind: "core.phone", label: "Phone", required: false },
+      { key: "ok_to_text", kind: "consent", label: "You may text me", required: false },
+    ] }));
+    await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token(), locale: "en", phone: PHONE }));
+    expect(instantReplyMock.mock.calls[0]![0]).toMatchObject({ consentWithheld: true });
+
+    instantReplyMock.mockClear();
+    await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token(), locale: "en", phone: PHONE, ok_to_text: "on" }));
+    expect(instantReplyMock.mock.calls[0]![0]).toMatchObject({ consentWithheld: false });
+  });
+
+  it("a returning contact still qualifies — the thread hold, not `existing`, is the dedupe", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(withPhone());
+    createContactMock.mockResolvedValue({ id: "contact_1", existing: true });
+    await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token(), locale: "en", phone: PHONE }));
+    expect(instantReplyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a THROWING instant reply never fails the submission and never writes processing_error", async () => {
+    // Mutation: drop the try/catch around the call.
+    getPublishedFormByPublicIdMock.mockResolvedValue(withPhone());
+    instantReplyMock.mockRejectedValue(new Error("module exploded"));
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token(), locale: "en", phone: PHONE }));
+    expect(result.status).toBe("success");
+    expect(setSubmissionProcessingErrorMock).not.toHaveBeenCalled();
+    quiet.mockRestore();
+  });
+
+  it("is never reached by a spam-rejected or duplicate submission", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(withPhone());
+    // Honeypot filled.
+    await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token(), locale: "en", phone: PHONE, [HONEYPOT_FIELD]: "bot" }));
+    // Rate-limited.
+    countRecentSubmissionsMock.mockResolvedValue(RATE_LIMIT_MAX);
+    await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token(), locale: "en", phone: PHONE }));
+    // Duplicate.
+    countRecentSubmissionsMock.mockResolvedValue(0);
+    findRecentDuplicateMock.mockResolvedValue({ id: "sub_0" });
+    await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token(), locale: "en", phone: PHONE }));
+    expect(instantReplyMock).not.toHaveBeenCalled();
+    expect(createSubmissionMock).not.toHaveBeenCalled();
+  });
+
+  it("is skipped when the contact work failed — no thread, nothing to reply into", async () => {
+    // Mutation: call it whenever the submission row exists.
+    getPublishedFormByPublicIdMock.mockResolvedValue(withPhone());
+    createContactMock.mockRejectedValue(new Error("contacts down"));
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token(), locale: "en", phone: PHONE }));
+    expect(result.status).toBe("success");
+    expect(instantReplyMock).not.toHaveBeenCalled();
     quiet.mockRestore();
   });
 });
