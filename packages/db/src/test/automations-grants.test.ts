@@ -128,3 +128,86 @@ describe("0026 automations B", () => {
     });
   });
 });
+
+/**
+ * 0027, at the level that can see it. Watched failing BEFORE the migration:
+ * the column read comes back empty, the catalogue insert is refused with
+ * 23514, and the cross-tenant test dies on 42703 (no such column) — the
+ * proof none of them passes by accident.
+ *
+ * The standing on form_submissions is NOT the bookings pattern (bookings
+ * revokes client UPDATE). It carries Supabase's default table-level grants
+ * for `authenticated`, and RLS's single member policy is the fence — read on
+ * the live project 2026-09-07 before 0027 was written. These tests pin THAT
+ * standing, so a later revoke or a new policy shows up here, not in
+ * production. Mutation: change the expected grant list and watch it fail.
+ */
+describe("0027 instant reply", () => {
+  it("form_submissions carries the stamp column", async () => {
+    await withRollback(async (c) => {
+      const { rows } = await c.query<{ column_name: string; data_type: string }>(
+        `select column_name, data_type from information_schema.columns
+          where table_schema = 'public' and table_name = 'form_submissions'
+            and column_name = 'instant_reply_sent_at'`,
+      );
+      expect(rows).toEqual([{ column_name: "instant_reply_sent_at", data_type: "timestamp with time zone" }]);
+    });
+  });
+
+  it("the recipe catalogue accepts instant_reply", async () => {
+    await withRollback(async (c) => {
+      const { a } = await seedTwoAccounts(c);
+      await c.query("insert into automations (account_id, recipe_key) values ($1, 'instant_reply')", [a]);
+      const { rows } = await c.query(
+        "select recipe_key from automations where account_id = $1 order by recipe_key", [a]);
+      expect(rows.map((r: any) => r.recipe_key)).toEqual(["instant_reply", "review_request"]);
+    });
+  });
+
+  it("the client role's standing on form_submissions is the Supabase default — table-level grants, RLS as the fence", async () => {
+    await withRollback(async (c) => {
+      const { rows: grants } = await c.query<{ privilege_type: string }>(
+        `select privilege_type from information_schema.role_table_grants
+          where table_schema = 'public' and table_name = 'form_submissions' and grantee = 'authenticated'
+          order by privilege_type`,
+      );
+      expect(grants.map((g) => g.privilege_type)).toEqual(
+        ["DELETE", "INSERT", "REFERENCES", "SELECT", "TRIGGER", "TRUNCATE", "UPDATE"]);
+      const { rows: rls } = await c.query<{ relrowsecurity: boolean }>(
+        "select relrowsecurity from pg_class where oid = 'public.form_submissions'::regclass");
+      expect(rls).toEqual([{ relrowsecurity: true }]);
+      const { rows: policies } = await c.query<{ policyname: string; cmd: string }>(
+        "select policyname, cmd from pg_policies where schemaname = 'public' and tablename = 'form_submissions'");
+      expect(policies).toEqual([{ policyname: "form_submissions_member_all", cmd: "ALL" }]);
+    });
+  });
+
+  // RLS, not a grant, is what keeps a client off another account's stamp: the
+  // cross-tenant UPDATE is not refused, it matches NO row. Pinned as rowCount,
+  // never as "something failed".
+  it("a client stamps its own account's submission (1 row) and reaches zero rows of another account's", async () => {
+    await withRollback(async (c) => {
+      const { a, b } = await seedTwoAccounts(c);
+      const { subA, subB } = await seedOneSubmissionEach(c, a, b);
+      await actAs(c, { org_id: "org_AUTO_A" });
+      const own = await c.query(
+        "update form_submissions set instant_reply_sent_at = now() where id = $1", [subA]);
+      expect(own.rowCount).toBe(1);
+      const other = await c.query(
+        "update form_submissions set instant_reply_sent_at = now() where id = $1", [subB]);
+      expect(other.rowCount).toBe(0);
+    });
+  });
+});
+
+async function seedOneSubmissionEach(c: any, a: string, b: string) {
+  const { rows: [fa] } = await c.query(
+    "insert into forms (account_id, public_id, name) values ($1, 'pub_AUTO_A', 'Quote') returning id", [a]);
+  const { rows: [fb] } = await c.query(
+    "insert into forms (account_id, public_id, name) values ($1, 'pub_AUTO_B', 'Quote') returning id", [b]);
+  const { rows: [sa] } = await c.query(
+    "insert into form_submissions (account_id, form_id) values ($1, $2) returning id", [a, fa.id]);
+  const { rows: [sb] } = await c.query(
+    "insert into form_submissions (account_id, form_id) values ($1, $2) returning id", [b, fb.id]);
+  return { subA: sa.id as string, subB: sb.id as string };
+}
