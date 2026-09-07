@@ -1066,15 +1066,18 @@ export const m = {
   // greeting (app-sidebar.tsx, dashboard/page.tsx: `brandName ?? name`). The
   // copy has to name that condition, or it invites an operator to type
   // "Rio Roofing — trial, chasing invoice" into a field the client can read.
-  // Names BOTH audiences on purpose. Until `brand_name` is set, `accounts.name`
-  // is the fallback in the client's own workspace (app-sidebar.tsx,
-  // dashboard/page.tsx) AND in mail their customers receive — emailBrand in
-  // lib/email/templates/shell.ts is `brandName ?? accountName`, which reaches
-  // booking confirmations, cancel notices, lead alerts and call emails. An
-  // operator typing "chasing invoice" here needs to know both before they
-  // type it, not after a customer reads it.
+  // ONE audience now, and the copy says so. Until `brand_name` is set,
+  // `accounts.name` is still the fallback in the CLIENT'S OWN workspace
+  // (app-sidebar.tsx, dashboard/page.tsx) — so the warning stays. It is NOT a
+  // fallback in mail their customers receive any more: `brandDisplayName`
+  // (lib/email/templates/shell.ts) is `brandName?.trim() || ""` and takes no
+  // account name at all, so booking confirmations, cancel notices, lead
+  // alerts and call emails cannot reach this label (spec
+  // 2026-09-07-brand-name-resolver). The clause that promised they could was
+  // removed with the fallback: copy that describes a path the code no longer
+  // has teaches the operator the wrong model of their own system.
   "setup.rename.help":
-    "Your own label for this client. Until you set a brand name in Branding, it's what they see when they sign in — and what their customers see in booking and lead emails.",
+    "Your own label for this client. Until you set a brand name in Branding, it's what they see when they sign in. Their customers only ever see the brand name.",
 
   // ── Command palette (DESIGN.md's ⌘K key pattern) ───────────────────────
   "palette.placeholder": "Search contacts, calls, pages…",

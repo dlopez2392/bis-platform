@@ -36,19 +36,21 @@ export default async function AutomationsPage({
     getAutomation(db, accountId, "sms_reminder"),
     getAutomation(db, accountId, "instant_reply"),
     // The default bodies name the company. Resolved through brandDisplayName
-    // exactly as the passes' due-rows are (packages/db), never off
-    // `accounts.name` alone — a preview that does not match what sends is
-    // worse than no preview. The zone feeds the text reminder's sample time.
+    // exactly as the passes' due-rows are (packages/db) — the brand name and
+    // nothing else, so the preview cannot show what the send cannot, and a
+    // preview that does not match what sends is worse than no preview. The
+    // `accounts` read is only for the zone now (the text reminder's sample
+    // time); `name` is the agency's internal label and is not selected.
     // Cosmetic, so a failed read degrades to ""/UTC.
     (async () => {
       try {
         const [branding, { data, error }] = await Promise.all([
           getBranding(db, accountId),
-          db.from("accounts").select("name, timezone").eq("id", accountId).maybeSingle(),
+          db.from("accounts").select("timezone").eq("id", accountId).maybeSingle(),
         ]);
         if (error) throw new Error(error.message);
-        const acct = data as { name: string; timezone: string } | null;
-        return { brandName: brandDisplayName(branding, acct?.name ?? ""), timezone: acct?.timezone ?? "UTC" };
+        const acct = data as { timezone: string } | null;
+        return { brandName: brandDisplayName(branding), timezone: acct?.timezone ?? "UTC" };
       } catch (e) {
         console.error(`automations: account lookup failed for ${accountId}: ${String(e)}`);
         return { brandName: "", timezone: "UTC" };

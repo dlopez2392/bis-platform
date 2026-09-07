@@ -8,7 +8,7 @@ const UNBRANDED: Branding = {
   brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
   replyToEmail: null,
 };
-const brand = emailBrand({ ...UNBRANDED, brandName: "Rio Roofing" }, "Acme");
+const brand = emailBrand({ ...UNBRANDED, brandName: "Rio Roofing" });
 const answers = [
   { label: "Email", value: "customer@example.com" },
   { label: "Message", value: "Need a quote for a new roof" },

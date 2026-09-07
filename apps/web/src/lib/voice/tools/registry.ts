@@ -25,9 +25,15 @@ export type ToolName =
   | "cancel_appointment" | "find_my_booking"
   | "capture_lead" | "take_message" | "log_transcript";
 
+/**
+ * DELIBERATELY ABSENT: `accountName`. `accounts.name` is the agency's internal
+ * label ("Rio Roofing — trial"); the confirmation and reschedule emails below
+ * resolve the customer-facing name from `branding` alone (`brandDisplayName`,
+ * through `emailBrand`), so there is no label here for a tool to leak.
+ */
 export interface ToolContext {
   db: ReturnType<typeof serviceDb>;
-  accountId: string; accountName: string; timezone: string;
+  accountId: string; timezone: string;
   calendar: CalendarRow;
   profile: VoiceProfileRow;
   branding: Branding; fromEmail: string | null;
@@ -237,7 +243,7 @@ export async function runTool(
       let emailFailed = false;
       if (email) {
         try {
-          const brand = emailBrand(ctx.branding, ctx.accountName);
+          const brand = emailBrand(ctx.branding);
           const whenCompanyZone = formatWhen(slot.startsAt, ctx.timezone);
           const cancelUrl = `${ctx.origin}/b/${ctx.calendar.public_id}/cancel/${cancelToken}`;
           const { html, text } = bookingConfirmationEmail({
@@ -336,7 +342,7 @@ export async function runTool(
       }
       if (contactEmail) {
         try {
-          const brand = emailBrand(ctx.branding, ctx.accountName);
+          const brand = emailBrand(ctx.branding);
           const whenCompanyZone = formatWhen(slot.startsAt, ctx.timezone);
           // The NEW row's token — the old confirmation's cancel link points at
           // a booking that was just cancelled above.

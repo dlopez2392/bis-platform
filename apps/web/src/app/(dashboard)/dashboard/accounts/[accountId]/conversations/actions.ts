@@ -44,9 +44,11 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
 
   // One row, three jobs: the display name, the reply-to, and everything the
   // template needs to wear the company's brand. getBranding() here would be a
-  // second round trip to a row this query already returns.
+  // second round trip to a row this query already returns. `name` is NOT
+  // selected: that column is the agency's internal label and `emailBrand` has
+  // no parameter left to receive it.
   const { data: account } = await db.from("accounts")
-    .select("name, reply_to_email, from_email, brand_name, brand_logo_path, brand_color, brand_neutral, brand_corners, brand_type, brand_mode")
+    .select("reply_to_email, from_email, brand_name, brand_logo_path, brand_color, brand_neutral, brand_corners, brand_type, brand_mode")
     .eq("id", accountId).maybeSingle();
 
   const brand = emailBrand({
@@ -58,7 +60,7 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
     brandType: account?.brand_type ?? null,
     brandMode: account?.brand_mode ?? null,
     replyToEmail: account?.reply_to_email ?? null,
-  }, account?.name ?? "BIS");
+  });
 
   const { html, text } = outboundEmail({ brand, body });
 

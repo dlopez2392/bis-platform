@@ -8,7 +8,7 @@ const UNBRANDED: Branding = {
   brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
   replyToEmail: null,
 };
-const brand = emailBrand({ ...UNBRANDED, brandName: "Rio Roofing" }, "Acme");
+const brand = emailBrand({ ...UNBRANDED, brandName: "Rio Roofing" });
 
 describe("bookingFollowupEmail", () => {
   it("defaults the subject to 'Thanks from {brand.name}'", () => {
@@ -16,10 +16,17 @@ describe("bookingFollowupEmail", () => {
     expect(subject).toBe("Thanks from Rio Roofing");
   });
 
-  it("uses the account name in the subject when the account carries no brand name", () => {
-    const unbrandedBrand = emailBrand(UNBRANDED, "Acme Co");
+  // Was "uses the account name in the subject when the account carries no
+  // brand name" — that fallback is gone: `brandDisplayName` takes the branding
+  // and nothing else, so the subject carries no name rather than the agency's
+  // internal label ("Rio Roofing — trial"). Unreachable through the product
+  // (creation seeds a brand name, the Branding save refuses a blank, go-live
+  // requires the step, 0028 backfilled the rest); pinned here so a
+  // reintroduced `?? accountName` fallback shows up at the template layer too.
+  it("carries NO name in the subject when the account has no brand name — never the agency's label", () => {
+    const unbrandedBrand = emailBrand(UNBRANDED);
     const { subject } = bookingFollowupEmail({ brand: unbrandedBrand, body: "Thanks!" });
-    expect(subject).toBe("Thanks from Acme Co");
+    expect(subject).toBe("Thanks from ");
   });
 
   it("splits the operator's body on blank lines into separate paragraphs, in both parts", () => {

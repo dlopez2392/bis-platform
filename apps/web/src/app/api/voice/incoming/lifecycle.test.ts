@@ -99,7 +99,12 @@ vi.mock("@bis/db", () => ({
         eq: () => ({
           single: async () => {
             const row = {
-              name: "Rio Roofing", timezone: "America/Chicago",
+              // The agency's internal label, distinct from `brand_name` and
+              // carrying the suffix such labels carry: the greeting test below
+              // only passes if the route resolves the CUSTOMER-facing name.
+              // The route no longer selects this column, so the projection
+              // filter drops it.
+              name: "Rio Roofing — trial", timezone: "America/Chicago",
               brand_name: "Rio Roofing Co", brand_logo_path: null, brand_color: null,
               brand_neutral: null, brand_corners: null, brand_type: null, brand_mode: null,
               reply_to_email: null, from_email: null,
@@ -382,7 +387,10 @@ describe("runCallLifecycle — Important #4 ①: greeting payload", () => {
     expect(String(greetingCall![0])).toContain("Hola, gracias por llamar.");
   });
 
-  it("both greeting_en and greeting_es blank → falls back to the generic greeting naming the account", async () => {
+  // The caller HEARS this one, so it names the company the customer knows —
+  // `brand_name`, not the agency's internal `accounts.name` label. Mutation:
+  // `Thanks for calling ${accountRow.name}` in the route.
+  it("both greeting_en and greeting_es blank → falls back to the generic greeting naming the BRAND", async () => {
     vi.useFakeTimers();
     getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, greeting_en: "  ", greeting_es: "" });
     const { ws } = await startLifecycle();
@@ -391,7 +399,8 @@ describe("runCallLifecycle — Important #4 ①: greeting payload", () => {
     await vi.advanceTimersByTimeAsync(900);
     const calls = (ws.send as ReturnType<typeof vi.fn>).mock.calls;
     const greetingCall = calls.find((c) => String(c[0]).includes("Greet the caller with exactly:"));
-    expect(String(greetingCall![0])).toContain("Thanks for calling Rio Roofing. How can I help you today?");
+    expect(String(greetingCall![0])).toContain("Thanks for calling Rio Roofing Co. How can I help you today?");
+    expect(String(greetingCall![0])).not.toContain("trial");
   });
 });
 

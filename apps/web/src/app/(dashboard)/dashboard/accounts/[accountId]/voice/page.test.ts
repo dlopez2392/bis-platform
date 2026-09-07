@@ -23,7 +23,7 @@ vi.mock("@/lib/auth", () => ({
   requireAgencyOnlyAccountAccess: async () => ({ userId: "user_1", isAgency: true }),
 }));
 
-const dbFixture = vi.hoisted(() => ({ name: "Rio Roofing — trial", brandName: null as string | null }));
+const dbFixture = vi.hoisted(() => ({ brandName: null as string | null }));
 const serviceDbMock = vi.hoisted(() => ({ getBranding: vi.fn(), getVoiceProfile: vi.fn() }));
 
 vi.mock("@bis/db", () => ({
@@ -36,12 +36,10 @@ vi.mock("@bis/db", () => ({
           }),
         };
       }
-      // accounts
-      return {
-        select: () => ({
-          eq: () => ({ maybeSingle: async () => ({ data: { name: dbFixture.name }, error: null }) }),
-        }),
-      };
+      // There is no second read. `brandDisplayName` lost its `accounts.name`
+      // parameter, so the preview name comes from `getBranding` alone — an
+      // `accounts` query from this page would be the old defect growing back.
+      throw new Error(`voice page must not read "${table}"`);
     },
   }),
   getVoiceProfile: (...a: unknown[]) => serviceDbMock.getVoiceProfile(...a),
@@ -83,7 +81,6 @@ async function render() {
 }
 
 beforeEach(() => {
-  dbFixture.name = "Rio Roofing — trial";
   dbFixture.brandName = null;
   serviceDbMock.getVoiceProfile.mockReset().mockResolvedValue(PROFILE);
   serviceDbMock.getBranding.mockReset().mockImplementation(async () => ({
@@ -103,10 +100,12 @@ describe("voice settings page — text-back preview name", () => {
     expect(defaultTextbackBody(props.brandName!, "en")).not.toContain("trial");
   });
 
-  it("falls back to the account name when the company has set no brand name", async () => {
-    dbFixture.name = "Rio Roofing";
+  it("hands the preview NOTHING, never the account name, when the company has set no brand name", async () => {
+    // `brandName` is null from beforeEach and there is no label to fall back
+    // to any more. defaultTextbackBody drops the identifying clause rather
+    // than inventing a company name, which is the honest answer here.
     const props = await render();
-    expect(props.brandName).toBe("Rio Roofing");
+    expect(props.brandName).toBe("");
   });
 
   it("a failing branding read degrades to a blank name, never a 500", async () => {

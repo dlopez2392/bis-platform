@@ -4,13 +4,14 @@ import { m } from "@/lib/messages";
  * What a missed caller receives when the operator has not written their own.
  *
  * `brandName` is the CUSTOMER-FACING company name — `brandDisplayName`
- * (email/templates/shell.ts), i.e. `brand_name` falling back to
- * `accounts.name`. Never `accounts.name` on its own: that is the agency's
- * internal label for the company ("Rio Roofing — trial"), and this text goes
- * to the client's customer, signed. It is also the same trap that put the
- * internal label on the email From line before M4d, and here it costs money
- * as well as face — the em dash such labels carry is outside GSM-7, so the
- * whole message silently becomes two segments.
+ * (email/templates/shell.ts), i.e. `brand_name` trimmed, and nothing else.
+ * Never `accounts.name`: that is the agency's internal label for the company
+ * ("Rio Roofing — trial"), and this text goes to the client's customer,
+ * signed. That label is the same trap that put the internal label on the
+ * email From line before M4d, and here it costs money as well as face — the
+ * em dash such labels carry is outside GSM-7, so the whole message silently
+ * becomes two segments. The resolver has no parameter left to receive it, so
+ * the blank case below is the only nameless one reachable now.
  *
  * One SMS segment in GSM-7 when the company name stays inside the GSM-7
  * character set (GSM7_BASE, segments.ts). That is NOT true for every
@@ -37,7 +38,7 @@ import { m } from "@/lib/messages";
  * (task-5-brief.md), not by inspection. Swapped for a comma, which reads at
  * least as plain and stays in the GSM-7 set.
  *
- * Blank/whitespace-only account name: this is the ONLY definition of the
+ * Blank/whitespace-only brand name: this is the ONLY definition of the
  * text-back default, so a future caller (the SMS sender, not just this
  * settings page) inherits the fallback for free instead of needing its own
  * copy of it — the bug this module was written to make impossible. There is

@@ -41,7 +41,7 @@ export const remindersPass: Pass = {
           throw new Error("no contact email on file");
         }
 
-        const brand = emailBrand(reminder.branding, reminder.accountName);
+        const brand = emailBrand(reminder.branding);
         const bookerZone = safeZone(reminder.bookerTimezone ?? undefined, reminder.accountTimezone);
         const whenBookerZone = formatWhen(new Date(reminder.startsAt), bookerZone);
         const cancelUrl = `${ctx.origin}/b/${reminder.calendarPublicId}/cancel/${reminder.cancelToken}`;

@@ -177,12 +177,13 @@ export async function goLiveAction(accountId: string): Promise<ActionResult> {
  * Rename the account's INTERNAL label (`accounts.name`) — the agency's own
  * note about this client, e.g. "Rio Roofing — trial". Not the client's
  * public-facing name: branding owns that, and those customer-facing surfaces
- * read through `brandDisplayName(branding, account.name)` (lib/email/
- * templates/shell.ts) rather than this label directly. A freshly created
- * account DOES have a `brand_name` now — `createAccount` seeds it from the
- * name given at creation, and Branding's own save refuses to ever blank it
- * again (spec 2026-09-07-brand-name-resolver) — so `account.name` is no
- * longer a customer-facing fallback the way it once was. `m["setup.rename.help"]`
+ * read through `brandDisplayName(branding)` (lib/email/templates/shell.ts),
+ * which takes the branding and NOTHING ELSE — there is no parameter left for
+ * this label to travel through. A freshly created account DOES have a
+ * `brand_name` — `createAccount` seeds it from the name given at creation,
+ * and Branding's own save refuses to ever blank it again (spec
+ * 2026-09-07-brand-name-resolver) — so `account.name` is not a customer-facing
+ * fallback at all any more. `m["setup.rename.help"]`
  * still spells this relationship out for the agency user renaming the
  * account, since the seeded brand name usually STARTS as a copy of this very
  * label and can drift from it the moment either one is edited alone.

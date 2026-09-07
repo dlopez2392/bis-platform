@@ -264,7 +264,7 @@ describe("caps — recipe passes only", () => {
     dbMocks.listDueReminders.mockResolvedValue(Array.from({ length: 30 }, (_, i) => ({
       bookingId: `bk_rem_${i}`, accountId: "acct_1", startsAt: "2026-09-10T14:00:00.000Z",
       bookerTimezone: null, cancelToken: "tok", calendarPublicId: "cal",
-      contactEmail: `b${i}@example.com`, contactName: "B", accountName: "Acme Co",
+      contactEmail: `b${i}@example.com`, contactName: "B",
       accountTimezone: "America/New_York",
       branding: { brandName: "Acme", brandLogoPath: null, brandColor: null, brandNeutral: null,
         brandCorners: null, brandType: null, brandMode: null, replyToEmail: null },

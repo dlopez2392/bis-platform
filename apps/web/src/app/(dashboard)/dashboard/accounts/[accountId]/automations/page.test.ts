@@ -95,9 +95,14 @@ describe("automations page", () => {
     expect(c.sms!.brandName).toBe("Rio Roofing");
   });
 
-  it("falls back to the account name when the company has set no brand name", async () => {
-    dbFixture.name = "Rio Roofing";
-    expect((await render()).review!.brandName).toBe("Rio Roofing");
+  it("hands the cards NOTHING rather than the account name when the company has set no brand name", async () => {
+    // The label stays in the fixture on purpose: with no brand name the preview
+    // shows a nameless default, never "Rio Roofing — trial". Unreachable through
+    // the product since 0028 (creation seeds a brand name, the Branding save
+    // refuses a blank, go-live requires the step) — pinned so a reintroduced
+    // `?? accountName` fallback fails here.
+    expect(dbFixture.name).toBe("Rio Roofing — trial");
+    expect((await render()).review!.brandName).toBe("");
   });
 
   it("hands each card ITS OWN row (null where none is stored) and the SMS gate", async () => {

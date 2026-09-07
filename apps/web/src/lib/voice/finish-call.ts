@@ -16,10 +16,16 @@ import { generateSummary } from "./summary-service";
 import { summaryFactLine } from "./summarize";
 import { toE164 } from "./phone-number";
 
+/**
+ * DELIBERATELY ABSENT: `accountName`. `accounts.name` is the agency's internal
+ * label for the company ("Rio Roofing — trial") and it reached a stranger's
+ * phone from exactly this context once already. The staff alert and the
+ * text-back both resolve the customer-facing name from `branding` alone
+ * (`brandDisplayName`), so there is nothing here left to get wrong.
+ */
 export interface FinishContext {
   db: ReturnType<typeof serviceDb>;
   accountId: string;
-  accountName: string;
   branding: Branding;
   notifyEmails: string[];
   callerNumber: string | null;
@@ -242,7 +248,7 @@ export async function finishCall(
   if (meaningful) {
     try {
       const callerDisplay = ctx.callerNumber ?? "Unknown caller";
-      const brand = emailBrand(ctx.branding, ctx.accountName);
+      const brand = emailBrand(ctx.branding);
       const contactUrl = contactId
         ? `${ctx.origin}/dashboard/accounts/${ctx.accountId}/contacts/${contactId}`
         : null;
@@ -323,20 +329,22 @@ export async function finishCall(
       // contacts and conversations for callers it can never reach.
       const gate = await resolveSmsSender(ctx.db, ctx.accountId);
       if (gate.ok) {
-        // brandDisplayName, NOT ctx.accountName: this text is signed and it
-        // goes to the client's CUSTOMER. `accounts.name` is the agency's
-        // internal label for the company ("Rio Roofing — trial") — the same
-        // column that was reaching the email From line before M4d — and its
-        // em dash is outside GSM-7, so sending it also silently doubles the
-        // message to two segments. Same resolver the staff alert one leg up
-        // already uses.
+        // brandDisplayName, the ONE customer-facing name rule: this text is
+        // signed and it goes to the client's CUSTOMER. `accounts.name` is the
+        // agency's internal label for the company ("Rio Roofing — trial") —
+        // the same column that was reaching the email From line before M4d —
+        // and its em dash is outside GSM-7, so sending it also silently
+        // doubles the message to two segments. The resolver takes the
+        // branding and nothing else now, and `FinishContext` no longer
+        // carries the label at all, so neither this line nor the staff alert
+        // one leg up has anything to reach for.
         //
         // `spokenLanguage`, so a caller who spoke Spanish to Sofía is
         // answered in Spanish. Only the DEFAULT is chosen this way: an
         // operator's own body is sent exactly as they wrote it, never
         // translated — they chose those words for their own customers.
         const body = ctx.textbackBody.trim()
-          || defaultTextbackBody(brandDisplayName(ctx.branding, ctx.accountName), spokenLanguage);
+          || defaultTextbackBody(brandDisplayName(ctx.branding), spokenLanguage);
 
         // resolveContactId, not createContact: it honours a contact the call
         // already established and backfills blanks on a dedupe hit. An

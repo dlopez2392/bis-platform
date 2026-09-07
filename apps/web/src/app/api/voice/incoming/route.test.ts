@@ -49,7 +49,11 @@ const dbQuerySpy = vi.hoisted(() => ({ fromCalls: [] as string[], eqCalls: [] as
  *  code's own `.select(...)` list actually requested that column — the same
  *  projection trick `b/[publicId]/actions.test.ts` uses for its `accountRow`. */
 const accountRow = {
-  name: "Rio Roofing", timezone: "America/Chicago",
+  // The agency's INTERNAL label, deliberately different from `brand_name` and
+  // deliberately carrying the "— trial" suffix such labels carry: the prompt
+  // test below can only pass if the route never reads this column. The route
+  // no longer even selects it, so the projection filter drops it.
+  name: "Rio Roofing — trial", timezone: "America/Chicago",
   brand_name: "Rio Roofing Co", brand_logo_path: "logos/rio.png", brand_color: "#1a2b3c",
   brand_neutral: "warm" as const, brand_corners: "soft" as const, brand_type: "inter" as const,
   brand_mode: "light" as const, reply_to_email: "owner-reply@rio.example", from_email: "hello@rio.example",
@@ -339,6 +343,28 @@ describe("POST /api/voice/incoming — accounts query", () => {
     await POST(req());
     expect(dbQuerySpy.fromCalls).toContain("accounts");
     expect(dbQuerySpy.eqCalls).toContainEqual(["id", "acct1"]);
+  });
+
+  /**
+   * Sofía said the agency's private note about the client out loud, on every
+   * call: `businessName` and the fallback greeting both read `accounts.name`
+   * ("Rio Roofing — trial"), the same column M4d took off the email From
+   * line. The prompt names the business half a dozen times (system-prompt.ts),
+   * so this was the loudest surface the label ever reached.
+   *
+   * Mutation: `businessName: accountRow.name` in the route (or re-add `name`
+   * to ACCOUNT_COLS and read it) — the scan below finds "trial".
+   */
+  it("builds the prompt from the BRAND name, never the agency's internal accounts.name label", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    const [, init] = fetchMock.mock.calls[0]!;
+    const sent = String(init.body);
+    expect(sent).toContain(accountRow.brand_name);
+    // The whole accept body, not just `instructions`: the label must not have
+    // reached any field. Lower-cased because the prompt upper-cases the name
+    // in one line ("WHAT YOU KNOW ABOUT …").
+    expect(sent.toLowerCase()).not.toContain("trial");
   });
 });
 

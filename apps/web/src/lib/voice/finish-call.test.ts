@@ -38,8 +38,10 @@ import {
 import { defaultTextbackBody } from "./textback-body";
 
 const ctx: FinishContext = {
-  db: {} as unknown as ReturnType<typeof serviceDb>, accountId: "a1", accountName: "Rio Roofing",
-  branding: { brandName: null, brandLogoPath: null, brandColor: null, brandNeutral: null,
+  db: {} as unknown as ReturnType<typeof serviceDb>, accountId: "a1",
+  // The customer-facing name, and the ONLY name this context carries — there
+  // is no `accountName` on `FinishContext` any more.
+  branding: { brandName: "Rio Roofing", brandLogoPath: null, brandColor: null, brandNeutral: null,
     brandCorners: null, brandType: null, brandMode: null, replyToEmail: null },
   notifyEmails: ["staff@example.com"], callerNumber: "+19562921696",
   origin: "https://x.example", profileLanguage: "both", timezone: "America/Chicago",
@@ -218,14 +220,21 @@ describe("finishCall — missed-call text-back", () => {
    * customer's From line. It was reaching the text-back's signature too, so a
    * stranger received "Hi, this is Rio Roofing — trial." AND, because that em
    * dash is outside GSM-7, paid for two segments to say it.
+   *
+   * The context no longer has a field for that label at all, which is what
+   * the `@ts-expect-error` below pins: a re-added `accountName` makes the
+   * directive unused and `tsc` refuses it.
    */
-  it("signs with the BRAND name, never the agency's internal accounts.name label", async () => {
-    const branded: FinishContext = {
+  it("signs with the BRAND name — the context has no agency label left to sign with", async () => {
+    // Mutation: put `accountName: string` back on FinishContext.
+    const leaky: FinishContext = {
       ...textbackCtx,
+      // @ts-expect-error — FinishContext has no accountName
       accountName: "Rio Roofing — trial",
-      branding: { ...textbackCtx.branding, brandName: "Rio Roofing" },
     };
-    await finishCall(abandonedState(), branded, meta);
+    void leaky;
+
+    await finishCall(abandonedState(), textbackCtx, meta);
     const body = (smsRefs.send.mock.calls[0]![0] as { body: string }).body;
     expect(body).toContain("Rio Roofing");
     expect(body).not.toContain("trial");
@@ -237,10 +246,17 @@ describe("finishCall — missed-call text-back", () => {
       expect.objectContaining({ body }), "voice", "ai");
   });
 
-  it("falls back to the account name only when the company has no brand name", async () => {
-    await finishCall(abandonedState(), textbackCtx, meta);
+  // Was "falls back to the account name only when the company has no brand
+  // name" — there is no fallback any longer. A company with no brand name
+  // gets the nameless default, never the agency's internal label.
+  it("sends the NAMELESS default when the company has no brand name", async () => {
+    const unbranded: FinishContext = {
+      ...textbackCtx,
+      branding: { ...textbackCtx.branding, brandName: null },
+    };
+    await finishCall(abandonedState(), unbranded, meta);
     expect(smsRefs.send).toHaveBeenCalledWith(expect.objectContaining({
-      body: defaultTextbackBody("Rio Roofing", "en"),
+      body: defaultTextbackBody("", "en"),
     }));
   });
 

@@ -49,13 +49,15 @@ export default async function VoicePage({
       // company so a text from an unknown number doesn't read as spam.
       //
       // Resolved through `brandDisplayName`, exactly as the sender does
-      // (lib/voice/finish-call.ts), and NOT off `accounts.name` alone: that
-      // column is the agency's internal label ("Rio Roofing — trial"), so
-      // reading it here previewed one message to the operator while a
-      // different one went to the customer. A preview that does not match
-      // what sends is worse than no preview — the operator approves copy they
-      // never see, and the em dash such labels carry silently doubles the
-      // segment count the counter underneath is there to show.
+      // (lib/voice/finish-call.ts): the branding and nothing else. The
+      // `accounts` read this used to make alongside it is gone with the
+      // resolver's second parameter — `accounts.name` is the agency's
+      // internal label ("Rio Roofing — trial"), so reading it here previewed
+      // one message to the operator while a different one went to the
+      // customer. A preview that does not match what sends is worse than no
+      // preview — the operator approves copy they never see, and the em dash
+      // such labels carry silently doubles the segment count the counter
+      // underneath is there to show.
       //
       // Cosmetic only — this value renders placeholder text, nothing is
       // written from it — so a failed read degrades to a fallback
@@ -66,12 +68,7 @@ export default async function VoicePage({
       // one).
       (async () => {
         try {
-          const [branding, { data, error }] = await Promise.all([
-            getBranding(db, accountId),
-            db.from("accounts").select("name").eq("id", accountId).maybeSingle(),
-          ]);
-          if (error) throw new Error(error.message);
-          return brandDisplayName(branding, (data as { name: string } | null)?.name ?? "");
+          return brandDisplayName(await getBranding(db, accountId));
         } catch (e) {
           console.error(`voice: brand name lookup failed for account ${accountId}: ${String(e)}`);
           return "";

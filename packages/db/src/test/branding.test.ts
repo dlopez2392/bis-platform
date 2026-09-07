@@ -10,18 +10,17 @@ describe("brandDisplayName — the db copy of the ONE customer-facing name rule"
     brandCorners: null, brandType: null, brandMode: null, replyToEmail: null,
   } as const;
 
-  it("prefers brand_name over the agency's internal accounts.name label", () => {
-    expect(brandDisplayName({ ...base, brandName: "Rio Roofing" }, "Rio Roofing — trial"))
-      .toBe("Rio Roofing");
+  it("is the brand name, trimmed", () => {
+    expect(brandDisplayName({ ...base, brandName: "Rio Roofing" })).toBe("Rio Roofing");
   });
 
-  it("falls back to accounts.name only when brand_name is null", () => {
-    expect(brandDisplayName({ ...base, brandName: null }, "Rio Roofing — trial"))
-      .toBe("Rio Roofing — trial");
+  it("is the EMPTY string when brand_name is null — never the agency's accounts.name label", () => {
+    expect(brandDisplayName({ ...base, brandName: null })).toBe("");
   });
 
-  it("does not treat an empty-string brand_name as unset (identical to the web copy)", () => {
-    expect(brandDisplayName({ ...base, brandName: "" }, "Fallback")).toBe("");
+  it("is the EMPTY string for a blank brand_name, whitespace included (identical to the web copy)", () => {
+    expect(brandDisplayName({ ...base, brandName: "" })).toBe("");
+    expect(brandDisplayName({ ...base, brandName: "  " })).toBe("");
   });
 });
 

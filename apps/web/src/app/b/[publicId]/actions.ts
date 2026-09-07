@@ -94,12 +94,12 @@ const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
  *  in the sibling form action for the same throw-don't-swallow reasoning. */
 async function loadAccount(db: ReturnType<typeof serviceDb>, accountId: string) {
   const { data, error } = await db.from("accounts")
-    .select("name, timezone, from_email, reply_to_email, brand_name, brand_logo_path, "
+    .select("timezone, from_email, reply_to_email, brand_name, brand_logo_path, "
       + "brand_color, brand_neutral, brand_corners, brand_type, brand_mode")
     .eq("id", accountId).maybeSingle();
   if (error) throw new Error(`loadAccount(${accountId}) failed: ${error.message}`);
   return data as {
-    name: string | null; timezone: string | null;
+    timezone: string | null;
     from_email: string | null; reply_to_email: string | null;
     brand_name: string | null; brand_logo_path: string | null; brand_color: string | null;
     brand_neutral: "warm" | "cool" | "slate" | null;
@@ -391,7 +391,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
         brandColor: account?.brand_color ?? null, brandNeutral: account?.brand_neutral ?? null,
         brandCorners: account?.brand_corners ?? null, brandType: account?.brand_type ?? null,
         brandMode: account?.brand_mode ?? null, replyToEmail: null,
-      }, account?.name ?? "BIS");
+      });
 
       const origin = originFrom(h);
       const provider = getEmailProvider();

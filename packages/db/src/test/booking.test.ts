@@ -120,6 +120,12 @@ describe("booking accessors", () => {
       expect(due[0]!.fromEmail).toBeNull();
       // No meetingUrl was given to this booking — in_person default, so null.
       expect(due[0]!.meetingUrl).toBeNull();
+      // The agency's internal label has no field on this row and no column
+      // behind it: ACCOUNT_BRAND_COLS does not select `name` at all. Same pin
+      // the three newer due-row shapes carry in automations.test.ts.
+      // Mutation: put `accountName: acct.name` back in loadAccountBrandInfo
+      // (and `name` back in ACCOUNT_BRAND_COLS).
+      expect(due[0]!).not.toHaveProperty("accountName");
       await stampReminderSent(db, inWindow.id);
       expect(await listDueReminders(db, now.toISOString())).toEqual([]);
     });
@@ -440,6 +446,9 @@ describe("booking accessors", () => {
 
       const dueRow = dueList.find((d) => d.bookingId === due.id);
       expect(dueRow?.contactEmail).toBe("followup-due@example.com");
+      // Same pin as listDueReminders': no agency label on the row, and no
+      // `name` in the projection behind it.
+      expect(dueRow!).not.toHaveProperty("accountName");
       // ends_at was previously FILTERED on but never selected. The route's
       // send-time gate measures the next morning from when the meeting ENDED,
       // so a query that forgot to project this column would hand the gate an
