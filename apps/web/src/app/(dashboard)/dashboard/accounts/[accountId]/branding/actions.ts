@@ -40,18 +40,23 @@ export async function setBrandingAction(
   // confirms the account exists), and refuses one whose access is off.
   const { userId } = await requireAccountAccess(accountId);
 
-  const brandName = String(formData.get("brandName") ?? "").trim() || null;
+  const brandName = String(formData.get("brandName") ?? "").trim();
+  // Customers see this name on every email, text and the booking page; it
+  // is never blank from here on (spec 2026-09-07-brand-name-resolver).
+  if (!brandName) return { ok: false, error: m["branding.nameRequired"] };
 
-  // Empty clears it, exactly like brandName above. Anything present must be a
-  // real hex color: this string ends up in a CSS custom property on a page
-  // anonymous strangers load, so "looks close enough" is not a standard.
+  // Empty clears it — unlike brandName above, which now refuses a blank
+  // rather than clearing. Anything present must be a real hex color: this
+  // string ends up in a CSS custom property on a page anonymous strangers
+  // load, so "looks close enough" is not a standard.
   const rawColor = String(formData.get("brandColor") ?? "").trim();
   const brandColor = rawColor === "" ? null : parseHexColor(rawColor);
   if (rawColor !== "" && brandColor === null) {
     return { ok: false, error: m["branding.badColor"] };
   }
 
-  // Empty clears it, like brandName and brandColor above. A malformed address
+  // Empty clears it, like brandColor above (brandName above is the one
+  // exception: blank refuses rather than clears). A malformed address
   // is refused here rather than stored: it is handed to Resend on every send,
   // and a bad one fails silently at the provider — long after anyone is
   // looking at this form.

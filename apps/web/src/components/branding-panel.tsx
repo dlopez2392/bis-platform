@@ -185,7 +185,7 @@ export function BrandingPanel({
         >
           <div className="space-y-1.5">
             <Label htmlFor="brand-name">{m["branding.name"]}</Label>
-            <Input id="brand-name" name="brandName" defaultValue={brandName ?? ""} />
+            <Input id="brand-name" name="brandName" defaultValue={brandName ?? ""} required />
             <p className="text-xs text-muted-foreground">{copy.nameHint}</p>
           </div>
 

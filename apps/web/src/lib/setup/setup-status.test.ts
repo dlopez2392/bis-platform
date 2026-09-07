@@ -327,6 +327,28 @@ describe("goLivePrereqsMet", () => {
     const steps = deriveSetupStatus(emptyInputs);
     expect(goLivePrereqsMet(steps)).toBe(false);
   });
+
+  it("is false when branding is not done, even though hours, voice_profile, number, and test_call all are", () => {
+    // Mutation: drop isDone("branding") from the goLivePrereqsMet predicate.
+    const steps = deriveSetupStatus(fullInputs({ brandName: null }));
+    expect(stepFor(steps, "branding").done).toBe(false);
+    expect(stepFor(steps, "hours").done).toBe(true);
+    expect(stepFor(steps, "voice_profile").done).toBe(true);
+    expect(stepFor(steps, "number").done).toBe(true);
+    expect(stepFor(steps, "test_call").done).toBe(true);
+    expect(goLivePrereqsMet(steps)).toBe(false);
+  });
+
+  it("is true with branding done and email still undone — the existing email/forwarding-not-required guard still holds", () => {
+    const steps = deriveSetupStatus(fullInputs({
+      fromEmail: null,
+      ticks: { emailSkipped: false, forwardingDone: false },
+    }));
+    expect(stepFor(steps, "branding").done).toBe(true);
+    expect(stepFor(steps, "email").done).toBe(false);
+    expect(stepFor(steps, "forwarding").done).toBe(false);
+    expect(goLivePrereqsMet(steps)).toBe(true);
+  });
 });
 
 describe("reduceSetupProgress", () => {

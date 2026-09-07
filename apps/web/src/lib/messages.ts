@@ -109,6 +109,7 @@ export const m = {
   "branding.color": "Brand color",
   "branding.colorHint": "Used for buttons and highlights on their lead forms and in their sidebar. Leave blank for the default.",
   "branding.badColor": "Enter a color as a hex code, like #0f766e.",
+  "branding.nameRequired": "Customers see this name on every email and text. Give the company a name before saving.",
   "branding.colorPreview": "Preview",
   "branding.previewSubmit": "Submit",
   "branding.previewSidebar": "Sidebar",
