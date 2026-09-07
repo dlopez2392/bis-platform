@@ -38,3 +38,17 @@ export const SMS_RETRY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
  * billed; the actions refuse above this and the textareas stop typing at it.
  */
 export const AUTOMATION_BODY_MAX_LENGTH = 1000;
+
+/**
+ * The instant reply's per-thread hold (Milestone C, the inline recipe): a
+ * new web-form lead is not texted when their thread already carries a
+ * non-failed outbound text younger than this. `hasRecentOutboundSms`'s "ANY
+ * outbound text counts" semantics — which made it the WRONG store for the
+ * cron recipes' cooldown (a noon reminder would have silenced the next
+ * morning's review request) — are exactly right here: if the company already
+ * texted this person today, a generic "we got your message" is redundant.
+ * Its own constant, not SMS_RETRY_COOLDOWN_MS: that one is about a FAILED
+ * attempt, this one about a successful send, and they must be free to move
+ * apart.
+ */
+export const INSTANT_REPLY_THREAD_HOLD_MS = 24 * 60 * 60 * 1000;
