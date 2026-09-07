@@ -6,7 +6,7 @@ import { toE164 } from "@/lib/voice/phone-number";
 import { safeZone, formatWhen } from "@/lib/booking/time";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
 import { composeSmsReminder, defaultSmsReminderBody } from "../sms-reminder-copy";
-import { sendAutomationSms, markAutomationSmsSent, smsCooldownActive } from "../send-sms";
+import { sendAutomationSms, markAutomationSmsSent } from "../send-sms";
 import type { Pass } from "../context";
 
 /**
@@ -16,7 +16,15 @@ import type { Pass } from "../context";
  *
  * NO MORNING GATE: the window IS the moment (listDueSmsReminders). Per row:
  *   no textable phone → SMS gate refused (skip and count; there is no other
- *   channel) → SMS cooldown → send → STAMP → mark the message row sent.
+ *   channel) → send → STAMP → mark the message row sent.
+ *
+ * NO 24h HOLD after a failed attempt (danlo, 2026-09-07, from Milestone B's
+ * review — see SMS_RETRY_COOLDOWN_MS in caps.ts): the window is 45 minutes,
+ * three ticks, so a hold that outlived it meant ONE attempt ever and a
+ * single carrier blip cost the customer their reminder. A failed send still
+ * writes `sms_reminder_failed_at` (an attempt marker the operator can see)
+ * but this pass never reads it back; the window bounds a bad afternoon to
+ * three attempts and three failed rows.
  *
  * UNCAPPED, by the spec's own reasoning for the email reminder: a reminder
  * is one-to-one with a booking the customer made, and a cap on a busy
@@ -31,7 +39,7 @@ import type { Pass } from "../context";
 export const smsReminderPass: Pass = {
   key: "smsReminders",
   async run(ctx) {
-    const c = { sent: 0, failed: 0, unstamped: 0, skippedNoAddress: 0, skippedSmsGate: 0, skippedRecentFailure: 0 };
+    const c = { sent: 0, failed: 0, unstamped: 0, skippedNoAddress: 0, skippedSmsGate: 0 };
     const due = await listDueSmsReminders(ctx.db, ctx.now.toISOString());
 
     const smsGates = new Map<string, SmsGate>();
@@ -59,10 +67,6 @@ export const smsReminderPass: Pass = {
         console.error(
           `text reminder skipped for booking ${row.bookingId}: account ${row.accountId} cannot text (${gate.reason})`,
         );
-        continue;
-      }
-      if (smsCooldownActive(row.smsFailedAt, ctx.now)) {
-        c.skippedRecentFailure++;
         continue;
       }
 

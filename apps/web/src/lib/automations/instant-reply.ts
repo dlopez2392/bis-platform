@@ -3,7 +3,9 @@ import {
   stampInstantReplySent, type SupabaseClient,
 } from "@bis/db";
 import { resolveSmsSender } from "@/lib/sms/sender";
-import { AUTOMATION_DAILY_CAP, DAILY_CAP_WINDOW_MS, INSTANT_REPLY_THREAD_HOLD_MS } from "./caps";
+import {
+  AUTOMATION_DAILY_CAP, DAILY_CAP_WINDOW_MS, INSTANT_REPLY_THREAD_HOLD_MS, INSTANT_REPLY_ALLOWED_PREFIXES,
+} from "./caps";
 import { lazySmsProvider } from "./harness";
 import { sendAutomationSms, markAutomationSmsSent, type SentSms, type SmsSendContext } from "./send-sms";
 
@@ -16,8 +18,9 @@ import { sendAutomationSms, markAutomationSmsSent, type SentSms, type SmsSendCon
  * due-list, no tick, no registry entry.
  *
  * ONE outcome per call, never a throw for a business reason. The free checks
- * run before any read; an account with the recipe off pays exactly one
- * indexed read per submission. Then, in order: the A2P gate (the same gate
+ * (a parsed phone, inside the +1/+52 allowlist, consent not withheld) run
+ * before any read; an account with the recipe off pays exactly one indexed
+ * read per submission. Then, in order: the A2P gate (the same gate
  * as every send, fails closed) → the 24h per-thread hold (THE double-text
  * guard, new and returning contacts alike; one conversation exists per
  * contact) → the daily cap (25/account/24h, counted on the submission
@@ -59,7 +62,7 @@ export type InstantReplyInput = {
 };
 
 export type InstantReplySkip =
-  | "noPhone" | "consentWithheld" | "disabled" | "smsGate" | "recentText" | "dailyCap";
+  | "noPhone" | "outsideRegion" | "consentWithheld" | "disabled" | "smsGate" | "recentText" | "dailyCap";
 
 export type InstantReplyOutcome =
   | { kind: "sent"; unstamped: boolean }
@@ -74,6 +77,12 @@ export async function sendInstantReply(input: InstantReplyInput): Promise<Instan
   // The free checks first — no read for a submission that could never text.
   const to = input.phoneE164;
   if (!to) return { kind: "skipped", reason: "noPhone" };
+  // The public form is the one trigger anyone can fire with any number
+  // (INSTANT_REPLY_ALLOWED_PREFIXES): outside US/Canada/Mexico, no text.
+  if (!INSTANT_REPLY_ALLOWED_PREFIXES.some((prefix) => to.startsWith(prefix))) {
+    console.error(`${WHAT} skipped for submission ${submissionId}: ${to} is outside the allowed regions`);
+    return { kind: "skipped", reason: "outsideRegion", detail: to };
+  }
   if (input.consentWithheld) return { kind: "skipped", reason: "consentWithheld" };
 
   // ONE indexed read for every account with the recipe off — the whole cost

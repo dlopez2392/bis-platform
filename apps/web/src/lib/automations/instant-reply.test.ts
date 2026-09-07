@@ -18,7 +18,9 @@ vi.mock("@/lib/email", () => ({
   getEmailProvider: () => ({ isFake: true, send: async () => ({ providerMessageId: "e" }) }),
 }));
 
-import { AUTOMATION_DAILY_CAP, DAILY_CAP_WINDOW_MS, INSTANT_REPLY_THREAD_HOLD_MS } from "./caps";
+import {
+  AUTOMATION_DAILY_CAP, DAILY_CAP_WINDOW_MS, INSTANT_REPLY_THREAD_HOLD_MS, INSTANT_REPLY_ALLOWED_PREFIXES,
+} from "./caps";
 import { sendInstantReply, type InstantReplyInput } from "./instant-reply";
 
 const NOW = new Date("2026-09-10T15:00:00Z");
@@ -70,6 +72,31 @@ describe("sendInstantReply — the free checks come before any read", () => {
     expect(await sendInstantReply(input({ consentWithheld: true }))).toEqual({ kind: "skipped", reason: "consentWithheld" });
     expect(dbMocks.getAutomation).not.toHaveBeenCalled();
     expect(errors()).toEqual([]);
+  });
+});
+
+describe("sendInstantReply — the destination allowlist (danlo, 2026-09-07: +1 and +52 only)", () => {
+  it("pins the allowlist: US/Canada (+1) and Mexico (+52), nothing else", () => {
+    expect(INSTANT_REPLY_ALLOWED_PREFIXES).toEqual(["+1", "+52"]);
+  });
+
+  it("a number outside the allowlist → outsideRegion before any read, logged once", async () => {
+    // Mutation: drop the prefix check — a public form could then direct a
+    // billed international text once a Telnyx key exists.
+    for (const to of ["+447700900123", "+5511987654321", "+9725012345678"]) {
+      dbMocks.getAutomation.mockClear();
+      expect(await sendInstantReply(input({ phoneE164: to })), to).toEqual({ kind: "skipped", reason: "outsideRegion", detail: to });
+      expect(dbMocks.getAutomation).not.toHaveBeenCalled();
+    }
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(errors().filter((l) => l.includes("outside the allowed regions"))).toHaveLength(3);
+  });
+
+  it("a Mexican number (+52) and a US number (+1) both proceed to the send", async () => {
+    expect(await sendInstantReply(input({ phoneE164: "+528181234567" }))).toEqual({ kind: "sent", unstamped: false });
+    expect(await sendInstantReply(input({ phoneE164: "+19565550101" }))).toEqual({ kind: "sent", unstamped: false });
+    expect(smsSend).toHaveBeenCalledTimes(2);
+    expect(smsSend.mock.calls[0]![0]).toMatchObject({ to: "+528181234567" });
   });
 });
 

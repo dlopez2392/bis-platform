@@ -44,6 +44,30 @@ Open and deliberately NOT part of C (from Milestone B's review; danlo decides):
    leak a name at send time; only its prefilled defaults on the page inherit
    the resolver, like the other three cards.
 
+## Decisions taken after the review (danlo, 2026-09-07) — built in PR #30
+
+The review of the built branch (all eight claims confirmed, zero Critical)
+raised two pre-enablement risks; danlo decided both, plus the two items still
+open from Milestone B's review:
+
+1. **Destination allowlist: `+1` and `+52` only.** `toE164` accepts any
+   8–15-digit number as `+digits` and nothing in the SMS layer restricts a
+   destination, and this is the only recipe whose trigger needs no
+   reservation, call or login. `INSTANT_REPLY_ALLOWED_PREFIXES` in `caps.ts`;
+   a number outside it is a new free-check skip, `outsideRegion`, logged.
+   US/Canada and Mexico are who a Rio Grande Valley business serves; the
+   Caribbean NANP caveat is documented on the constant.
+2. **The frozen prefill (the `accounts.name` fallback) is fixed
+   platform-wide in its own PR**, the resolver fix that was Milestone B's
+   open Decision 2. It lands before any account enables this recipe. The
+   card keeps resolving its defaults the way the other three cards do.
+3. **The text reminder retries next tick** (Milestone B's open Decision 1):
+   the pass no longer reads its attempt marker; its 45-minute window bounds
+   it to three attempts and three failed rows. `skippedRecentFailure` leaves
+   that pass's counters. The morning-band recipes keep the 24h hold.
+4. **Sequencing:** items 1 and 3 fold into PR #30 before merge; item 2 is
+   the next PR.
+
 ## Section 1 — Scope and trigger (APPROVED)
 
 The recipe is `instant_reply`: one row per account in `automations`, off by

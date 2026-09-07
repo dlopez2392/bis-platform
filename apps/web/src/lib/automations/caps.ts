@@ -22,13 +22,21 @@ export const DAILY_CAP_WINDOW_MS = 24 * 60 * 60 * 1000;
  * One SMS attempt per booking per day after a FAILED attempt (danlo,
  * 2026-09-06; spec, "Decisions taken after Milestone A shipped").
  * Write-then-send on a 15-minute cron wrote ~12 failed messages rows per
- * booking per morning band during a carrier outage. Each SMS-capable pass
- * writes its recipe's own `*_sms_failed_at` on a provider failure and holds
- * the booking while that marker is younger than this — counted as
- * `skippedRecentFailure`. At most ceil(61h / 24h) = 3 attempts across the
- * review request's window, one visible failed row each
- * (cron-coupling.test.ts pins the 3). Email sends carry no marker: the
- * decision is about the rows a text leaves in the customer's conversation.
+ * booking per morning band during a carrier outage. Each MORNING-BAND
+ * SMS-capable pass (review request, no-show nudge) writes its recipe's own
+ * `*_sms_failed_at` on a provider failure and holds the booking while that
+ * marker is younger than this — counted as `skippedRecentFailure`. At most
+ * ceil(61h / 24h) = 3 attempts across the review request's window, one
+ * visible failed row each (cron-coupling.test.ts pins the 3). Email sends
+ * carry no marker: the decision is about the rows a text leaves in the
+ * customer's conversation.
+ *
+ * THE TEXT REMINDER IS EXEMPT (danlo, 2026-09-07, from Milestone B's
+ * review): its window is 45 minutes — three ticks — so a 24h hold outlived
+ * the window and meant ONE attempt ever; a single carrier blip cost the
+ * customer their reminder. That pass still writes its attempt marker but
+ * never reads it back; the window itself bounds it to three attempts and
+ * three failed rows, which is the pile-up this hold exists to prevent.
  */
 export const SMS_RETRY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
@@ -52,3 +60,19 @@ export const AUTOMATION_BODY_MAX_LENGTH = 1000;
  * apart.
  */
 export const INSTANT_REPLY_THREAD_HOLD_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Where an instant reply may be sent (danlo, 2026-09-07, from Milestone C's
+ * review). This is the only recipe whose trigger needs no reservation, no
+ * call and no login — anyone can type any number into a public form — and
+ * `toE164` accepts any 8–15-digit number as `+digits`, so without this a
+ * rotating-IP bot could direct the daily cap's worth of billed international
+ * texts at an account every day once a Telnyx key exists. US/Canada and
+ * Mexico are who a Rio Grande Valley business actually serves; a number
+ * outside the list is skipped as `outsideRegion` and logged. Caveat: +1
+ * also covers the Caribbean NANP countries (Jamaica +1876, the Dominican
+ * Republic +1809…), which carriers bill as international; an area-code
+ * table is not worth its weight until a real client asks. Prefix match,
+ * never a length rule: +52 numbers are 12 or 13 digits after the plus.
+ */
+export const INSTANT_REPLY_ALLOWED_PREFIXES: readonly string[] = ["+1", "+52"];
