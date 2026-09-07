@@ -23,6 +23,15 @@ export type BookingRow = {
   reminder_sent_at: string | null;
   meeting_url: string | null; followup_sent_at: string | null;
   review_requested_at: string | null;
+  /** 0026 clocks: stamped on the flip TO completed / no_show, never cleared. */
+  completed_at: string | null;
+  no_show_at: string | null;
+  /** 0026 dedupe stamps (send-then-stamp) and SMS attempt markers. */
+  no_show_nudged_at: string | null;
+  sms_reminder_sent_at: string | null;
+  review_request_sms_failed_at: string | null;
+  no_show_nudge_sms_failed_at: string | null;
+  sms_reminder_failed_at: string | null;
 };
 
 export type CalendarSettingsPatch = Partial<{
@@ -82,7 +91,9 @@ const CALENDAR_COLS =
 
 const BOOKING_COLS =
   "id, account_id, calendar_id, contact_id, starts_at, ends_at, status, note, " +
-  "cancel_token, booker_timezone, reminder_sent_at, meeting_url, followup_sent_at, review_requested_at";
+  "cancel_token, booker_timezone, reminder_sent_at, meeting_url, followup_sent_at, review_requested_at, " +
+  "completed_at, no_show_at, no_show_nudged_at, sms_reminder_sent_at, " +
+  "review_request_sms_failed_at, no_show_nudge_sms_failed_at, sms_reminder_failed_at";
 
 // Same shape as newPublicId in forms.ts, but twice the length (24 bytes, not
 // 12): this token rides an email link with no rate limit protecting it, so it
@@ -279,8 +290,19 @@ export async function cancelBookingByToken(
 export async function setBookingStatus(
   db: SupabaseClient, accountId: string, bookingId: string, status: BookingStatus, actorId: string,
 ): Promise<void> {
+  const nowIso = new Date().toISOString();
+  // THE AUTOMATION CLOCKS (0026; spec, "Decisions taken after Milestone A
+  // shipped"). The review request runs from the LATER of ends_at and this
+  // stamp, so a week of jobs marked completed on Friday earns its review
+  // requests on Saturday morning instead of aging out unsent; the no-show
+  // nudge runs from no_show_at the same way. Stamped on the flip TO the
+  // state, never cleared on a flip away — the status filter already stops a
+  // re-opened row from matching — and a re-flip re-stamps.
+  const stamp = status === "completed" ? { completed_at: nowIso }
+    : status === "no_show" ? { no_show_at: nowIso }
+    : {};
   const { data, error } = await db.from("bookings")
-    .update({ status, updated_at: new Date().toISOString() })
+    .update({ status, updated_at: nowIso, ...stamp })
     .eq("account_id", accountId).eq("id", bookingId)
     .select("id");
   if (error) throw new Error(`setBookingStatus failed: ${error.message}`);

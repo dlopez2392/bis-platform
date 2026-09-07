@@ -768,10 +768,24 @@ export const m = {
   // (composeReviewRequestSms); the email template renders it as a button.
   "automations.review.defaultBody": "Thanks for choosing {name}! If you have a minute, we'd love a quick review:",
   "automations.review.defaultBodyNoName": "Thanks for choosing us! If you have a minute, we'd love a quick review:",
+  // The no-show nudge's default body. Same rules as the review request's:
+  // `{name}` filled at send time with the customer-facing brand name; the
+  // NoName variant drops the clause; GSM-7 throughout (straight apostrophe).
+  // The trailing colon is where the booking-page link is appended
+  // (composeNoShowNudgeSms); the email template renders it as a button.
+  "automations.noShow.defaultBody": "We missed you for your appointment with {name}. If you'd like to pick a new time, book here:",
+  "automations.noShow.defaultBodyNoName": "We missed you for your appointment. If you'd like to pick a new time, book here:",
+  // The text reminder. The LEAD carries the appointment time and is never
+  // the operator's to place — `{when}` is formatWhen's output in the
+  // booker's zone; the operator's prose (or this default) follows it.
+  "automations.smsReminder.lead": "Reminder: your appointment with {name} is {when}.",
+  "automations.smsReminder.leadNoName": "Reminder: your appointment is {when}.",
+  "automations.smsReminder.defaultBody": "Reply to this text if you need to make a change.",
   // Automations page — agency-only, like Voice. Plain admin language; the
   // recipe names are the things a business owner would call them.
   "automations.title": "Automations",
   "automations.agencyOnly": "Only the agency may manage automations.",
+  "automations.bodyTooLong": "Keep the message to 1,000 characters at most.",
   "automations.review.title": "Review requests",
   "automations.review.body": "The morning after a job is marked completed, ask the customer for a review. If the follow-up email is on, this waits one more morning so the two never land together. Off until you turn it on.",
   "automations.review.enabled": "Send review requests",
@@ -787,6 +801,29 @@ export const m = {
   "automations.review.saveFailed": "Could not save review requests.",
   "automations.review.urlRequired": "Add the review link before turning this on.",
   "automations.review.urlInvalid": "The review link needs to be a full web address, like https://g.page/r/.../review",
+  // Shared channel labels for the SMS-capable recipes.
+  "automations.channel.email": "Email",
+  "automations.channel.sms": "Text message",
+  "automations.noShow.title": "No-show follow-ups",
+  "automations.noShow.body": "The morning after a booking is marked no-show, invite the customer to pick a new time. Your booking page link is added to the end of the message. Off until you turn it on.",
+  "automations.noShow.enabled": "Send no-show follow-ups",
+  "automations.noShow.channel": "Send by",
+  "automations.noShow.message": "Message",
+  "automations.noShow.messageHint": "Leave blank to send our default message.",
+  "automations.noShow.linkHint": "Added to the end: {link}",
+  "automations.noShow.calendarOff": "Your booking page is off, so there is nowhere to send people yet. Turn it on under Calendar first.",
+  "automations.noShow.save": "Save no-show follow-ups",
+  "automations.noShow.saved": "No-show follow-ups saved",
+  "automations.noShow.saveFailed": "Could not save no-show follow-ups.",
+  "automations.smsReminder.title": "Text reminders",
+  "automations.smsReminder.body": "About two hours before an appointment, text the customer a reminder with the time, on top of the email reminder the day before. Text only. Off until you turn it on.",
+  "automations.smsReminder.enabled": "Send text reminders",
+  "automations.smsReminder.message": "Closing line",
+  "automations.smsReminder.messageHint": "Comes after the appointment time. Leave blank to send our default.",
+  "automations.smsReminder.preview": "Preview",
+  "automations.smsReminder.save": "Save text reminders",
+  "automations.smsReminder.saved": "Text reminders saved",
+  "automations.smsReminder.saveFailed": "Could not save text reminders.",
 
   // The client-facing Calls log — /dashboard/accounts/<id>/calls. BOTH
   // audiences: this is the client's own business data (who rang, what the

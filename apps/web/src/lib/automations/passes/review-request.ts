@@ -1,6 +1,5 @@
 import {
-  listDueReviewRequests, stampReviewRequested, countReviewRequestsSince,
-  ensureConversation, createMessage, updateMessageStatus,
+  listDueReviewRequests, stampReviewRequested, stampReviewRequestSmsFailed, countReviewRequestsSince,
   type DueReviewRequest, type ReviewRequestConfig,
 } from "@bis/db";
 import { emailBrandNamed } from "@/lib/email/templates/shell";
@@ -10,15 +9,12 @@ import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
 import { toE164 } from "@/lib/voice/phone-number";
 import { resolveAccountZone } from "@/lib/booking/followup-timing";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
+import { laterOf } from "../anchor";
 import { shouldSendReviewRequestNow } from "../review-request-gate";
 import { composeReviewRequestSms, defaultReviewRequestBody } from "../review-request-copy";
 import { AUTOMATION_TICK_CAP, AUTOMATION_DAILY_CAP, DAILY_CAP_WINDOW_MS } from "../caps";
+import { sendAutomationSms, markAutomationSmsSent, smsCooldownActive, type SentSms } from "../send-sms";
 import type { Pass, PassContext } from "../context";
-
-// The messages rows this pass writes are the platform's, not a person's —
-// the same actor shape the voice text-back uses ("voice"/"ai").
-const ACTOR_ID = "automation";
-const ACTOR_TYPE = "system" as const;
 
 type Target =
   | { channel: "sms"; to: string; from: string }
@@ -32,21 +28,21 @@ type Target =
  * name so triage can tell them apart:
  *   invalid config → unresolvable zone → not this morning (the gate, which
  *   also defers to the calendar follow-up) → no deliverable address → SMS
- *   gate refused (NO fallback to email) → caps → send → STAMP → (sms) mark
- *   the message row sent.
+ *   gate refused (NO fallback to email) → SMS cooldown → caps → send →
+ *   STAMP → (sms) mark the message row sent.
  *
  * Nothing new sends: `ctx.email` and `ctx.sms()` come from the harness.
- * The SMS path is `sendSmsAction`'s exactly — write the message row, then
- * send, mark failed on a provider error — so a review text shows up in the
- * customer's conversation like any other outbound text, and a reply lands
- * in the operator's inbox.
+ * The SMS path is sendAutomationSms — write the message row, then send,
+ * mark failed and write the attempt marker on a provider error — so a
+ * review text shows up in the customer's conversation like any other
+ * outbound text, and a reply lands in the operator's inbox.
  */
 export const reviewRequestPass: Pass = {
   key: "reviewRequests",
   async run(ctx) {
     const c = {
       sent: 0, failed: 0, unstamped: 0,
-      skippedInvalidConfig: 0, skippedNoAddress: 0, skippedSmsGate: 0, skippedCap: 0,
+      skippedInvalidConfig: 0, skippedNoAddress: 0, skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0,
       waitingForMorning: 0, unresolvableTimezone: 0,
     };
     const due = await listDueReviewRequests(ctx.db, ctx.now.toISOString());
@@ -81,7 +77,9 @@ export const reviewRequestPass: Pass = {
       }
 
       const followupSentAt = row.followupSentAt ? new Date(row.followupSentAt) : null;
-      if (!shouldSendReviewRequestNow(ctx.now, new Date(row.endsAt), followupSentAt, row.accountTimezone)) {
+      // THE CLOCK (0026): the later of the meeting end and "Mark completed".
+      const anchor = laterOf(new Date(row.endsAt), row.completedAt ? new Date(row.completedAt) : null);
+      if (!shouldSendReviewRequestNow(ctx.now, anchor, followupSentAt, row.accountTimezone)) {
         c.waitingForMorning++;
         continue;
       }
@@ -122,6 +120,13 @@ export const reviewRequestPass: Pass = {
           );
           continue;
         }
+        // ONE ATTEMPT PER DAY: a text that failed less than 24h ago is not
+        // retried this tick (caps.ts, SMS_RETRY_COOLDOWN_MS). Held rows never
+        // reach the caps and are simply due again when the marker ages out.
+        if (smsCooldownActive(row.smsFailedAt, ctx.now)) {
+          c.skippedRecentFailure++;
+          continue;
+        }
         target = { channel: "sms", to, from: gate.from };
       } else {
         if (!row.contactEmail) {
@@ -155,10 +160,14 @@ export const reviewRequestPass: Pass = {
 
       const body = row.body.trim() || defaultReviewRequestBody(row.brandName);
 
-      let smsRow: { messageId: string; providerMessageId: string } | null = null;
+      let smsRow: SentSms | null = null;
       try {
         if (target.channel === "sms") {
-          smsRow = await sendSms(ctx, row, target.to, target.from, composeReviewRequestSms(body, config.reviewUrl));
+          smsRow = await sendAutomationSms(ctx, {
+            accountId: row.accountId, contactId: row.contactId, to: target.to, from: target.from,
+            body: composeReviewRequestSms(body, config.reviewUrl),
+            onProviderFailure: () => stampReviewRequestSmsFailed(ctx.db, row.bookingId),
+          });
         } else {
           await sendEmail(ctx, row, config, target.to, body);
         }
@@ -183,16 +192,7 @@ export const reviewRequestPass: Pass = {
       }
       c.sent++;
 
-      if (smsRow) {
-        // Best effort: the text is gone and stamped. A failure here must not
-        // re-label a delivered text "failed" (that invites a duplicate send).
-        try {
-          await updateMessageStatus(ctx.db, row.accountId, smsRow.messageId, "sent",
-            { providerMessageId: smsRow.providerMessageId }, ACTOR_ID, ACTOR_TYPE);
-        } catch (e) {
-          console.error(`review request: text sent but message ${smsRow.messageId} not marked sent: ${String(e)}`);
-        }
-      }
+      if (smsRow) await markAutomationSmsSent(ctx, row.accountId, smsRow, "review request");
     }
 
     return c;
@@ -217,38 +217,4 @@ async function sendEmail(
     body: text,
     html,
   });
-}
-
-/**
- * WRITE THEN SEND — sendSmsAction's discipline: the messages row exists
- * before anything leaves the building, so a provider failure is a visible
- * failed text in the conversation, not a silent gap. Returns the ids the
- * caller needs to mark it sent AFTER the stamp. Throws on a provider failure
- * after marking the row failed (best effort).
- */
-async function sendSms(
-  ctx: PassContext, row: DueReviewRequest, to: string, from: string, body: string,
-): Promise<{ messageId: string; providerMessageId: string }> {
-  // The provider FIRST, before any row is written: `ctx.sms()` is lazy and
-  // throws in production when TELNYX_API_KEY is unset. Constructing it after
-  // the message row would leave a failed text in the customer's conversation
-  // on every in-band tick for a misconfiguration that has nothing to do with
-  // the customer (review finding, 2026-09-06).
-  const sms = ctx.sms();
-  const convo = await ensureConversation(ctx.db, row.accountId, row.contactId, ACTOR_ID, ACTOR_TYPE);
-  const { id: messageId } = await createMessage(ctx.db, row.accountId, {
-    conversationId: convo.id, channel: "sms", direction: "outbound", body,
-  }, ACTOR_ID, ACTOR_TYPE);
-  try {
-    const { providerMessageId } = await sms.send({ to, from, body });
-    return { messageId, providerMessageId };
-  } catch (e) {
-    const message = e instanceof Error ? e.message : "unknown send failure";
-    try {
-      await updateMessageStatus(ctx.db, row.accountId, messageId, "failed", { error: message }, ACTOR_ID, ACTOR_TYPE);
-    } catch (statusErr) {
-      console.error(`review request: could not mark message ${messageId} failed: ${String(statusErr)}`);
-    }
-    throw e;
-  }
 }

@@ -84,3 +84,47 @@ describe("0025 automations RLS", () => {
       expect(rows.map((r: any) => r.account_id).sort()).toEqual([a, b].sort());
     }));
 });
+
+/**
+ * 0026, at the level that can see it. Watched failing BEFORE the migration:
+ * the column list comes back empty and the catalogue insert is refused with
+ * 23514 (check_violation) — the proof neither test passes by accident.
+ */
+describe("0026 automations B", () => {
+  it("bookings carries the seven B columns: two clocks, two dedupe stamps, three attempt markers", async () => {
+    await withRollback(async (c) => {
+      const { rows } = await c.query<{ column_name: string }>(
+        `select column_name from information_schema.columns
+          where table_schema = 'public' and table_name = 'bookings'
+            and column_name in ('completed_at', 'no_show_at', 'no_show_nudged_at', 'sms_reminder_sent_at',
+                                'review_request_sms_failed_at', 'no_show_nudge_sms_failed_at', 'sms_reminder_failed_at')`,
+      );
+      // Sorted in JS on both sides: Postgres collation orders underscores
+      // differently from JS, and the order is not the claim.
+      expect(rows.map((r) => r.column_name).sort()).toEqual([
+        "completed_at", "no_show_at", "no_show_nudge_sms_failed_at", "no_show_nudged_at",
+        "review_request_sms_failed_at", "sms_reminder_failed_at", "sms_reminder_sent_at",
+      ].sort());
+    });
+  });
+
+  it("the recipe catalogue accepts the two B keys", async () => {
+    await withRollback(async (c) => {
+      const { a } = await seedTwoAccounts(c);
+      await c.query(
+        "insert into automations (account_id, recipe_key) values ($1, 'no_show_nudge'), ($1, 'sms_reminder')", [a]);
+      const { rows } = await c.query("select recipe_key from automations where account_id = $1", [a]);
+      expect(rows.map((r: any) => r.recipe_key).sort()).toEqual(["no_show_nudge", "review_request", "sms_reminder"]);
+    });
+  });
+
+  it("the recipe catalogue still refuses an unknown key with check_violation (23514)", async () => {
+    // Its own transaction: one refused statement per withRollback (the 25P02 lesson).
+    await withRollback(async (c) => {
+      const { a } = await seedTwoAccounts(c);
+      await expect(
+        c.query("insert into automations (account_id, recipe_key) values ($1, 'rule_builder')", [a]),
+      ).rejects.toMatchObject({ code: "23514" });
+    });
+  });
+});

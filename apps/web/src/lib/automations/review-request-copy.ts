@@ -1,4 +1,5 @@
 import { m } from "@/lib/messages";
+import { withTrailingLink } from "./sms-link";
 
 /**
  * What a customer receives when the operator has not written their own
@@ -16,7 +17,7 @@ export function defaultReviewRequestBody(brandName: string): string {
 }
 
 /**
- * THE ONE PLACE the review link is appended to an SMS body. The settings
+ * The review request's name for withTrailingLink (sms-link.ts). The settings
  * page's segment counter and the review-request pass both call this with the
  * same inputs, so the count the operator approves is the count that sends —
  * the preview-vs-send drift fixed twice on 2026-09-06 cannot recur by
@@ -28,5 +29,5 @@ export function defaultReviewRequestBody(brandName: string): string {
  * url before it gets here).
  */
 export function composeReviewRequestSms(body: string, reviewUrl: string): string {
-  return [body.trim(), reviewUrl.trim()].filter(Boolean).join(" ");
+  return withTrailingLink(body, reviewUrl);
 }

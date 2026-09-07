@@ -10,10 +10,11 @@
 
 import { revalidatePath } from "next/cache";
 import {
-  serviceDb, upsertAutomation, parseReviewRequestConfig, type ReviewRequestChannel,
+  serviceDb, upsertAutomation, parseReviewRequestConfig, parseNoShowNudgeConfig, type ReviewRequestChannel,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { m } from "@/lib/messages";
+import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -35,6 +36,7 @@ export async function saveReviewRequestAction(
   // even after a stray space — the pass trims before defaulting, and the
   // settings preview must see the same value the pass will.
   const body = String(formData.get("body") ?? "").trim();
+  if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
 
   // Validated on WRITE with the same parser the pass applies on READ. A junk
   // link is refused even while the recipe is off (a javascript: URL must never
@@ -54,6 +56,54 @@ export async function saveReviewRequestAction(
   } catch (e) {
     console.error(`saveReviewRequestAction: save failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.review.saveFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/automations`);
+  return { ok: true };
+}
+
+export async function saveNoShowNudgeAction(
+  accountId: string, formData: FormData,
+): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["automations.agencyOnly"] };
+
+  // The pass's own parser, on write: an unknown channel is refused, never
+  // defaulted — a default here would let the page show one channel while
+  // the row stores another.
+  const config = parseNoShowNudgeConfig({ channel: String(formData.get("channel") ?? "email") });
+  if (!config) return { ok: false, error: m["automations.noShow.saveFailed"] };
+  const enabled = formData.get("enabled") === "on";
+  const body = String(formData.get("body") ?? "").trim();
+  if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
+
+  try {
+    await upsertAutomation(serviceDb(), accountId, "no_show_nudge", { enabled, body, config }, userId);
+  } catch (e) {
+    console.error(`saveNoShowNudgeAction: save failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.noShow.saveFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/automations`);
+  return { ok: true };
+}
+
+export async function saveSmsReminderAction(
+  accountId: string, formData: FormData,
+): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["automations.agencyOnly"] };
+
+  const enabled = formData.get("enabled") === "on";
+  const body = String(formData.get("body") ?? "").trim();
+  if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
+
+  try {
+    // Nothing to configure: the channel is the recipe, the time is the booking's.
+    await upsertAutomation(serviceDb(), accountId, "sms_reminder", { enabled, body, config: {} }, userId);
+  } catch (e) {
+    console.error(`saveSmsReminderAction: save failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.smsReminder.saveFailed"] };
   }
 
   revalidatePath(`/dashboard/accounts/${accountId}/automations`);

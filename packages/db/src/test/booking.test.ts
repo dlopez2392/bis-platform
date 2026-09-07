@@ -210,6 +210,53 @@ describe("booking accessors", () => {
   });
 
   /**
+   * The automation clocks (spec, "Decisions taken after Milestone A shipped"):
+   * `completed_at` / `no_show_at` are stamped on the flip TO that status so
+   * the review request and the no-show nudge can run from the operator's
+   * action, not only from ends_at. Never cleared on a flip away (the status
+   * filter does the excluding); a re-flip re-stamps. Watched failing BEFORE
+   * 0026: PostgREST answers PGRST204 (no such column in the schema cache).
+   * Mutation: drop `...stamp` from setBookingStatus's update.
+   */
+  it("setBookingStatus stamps completed_at / no_show_at on the flip to that status, keeps them on a flip away, re-stamps on a re-flip", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Clock" }, "user_test");
+      const booking = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date("2027-03-20T15:00:00Z"),
+          endsAt: new Date("2027-03-20T16:00:00Z") }, "user_test");
+      const read = async () => {
+        const { data, error } = await db.from("bookings")
+          .select("status, completed_at, no_show_at").eq("id", booking.id).single();
+        if (error) throw new Error(error.message);
+        return data as { status: string; completed_at: string | null; no_show_at: string | null };
+      };
+      expect(await read()).toEqual({ status: "booked", completed_at: null, no_show_at: null });
+
+      const before = Date.now() - 1000;
+      await setBookingStatus(db, accountId, booking.id, "completed", "user_test");
+      const completed = await read();
+      expect(completed.status).toBe("completed");
+      expect(new Date(completed.completed_at!).getTime()).toBeGreaterThanOrEqual(before);
+      expect(completed.no_show_at).toBeNull();
+
+      await setBookingStatus(db, accountId, booking.id, "booked", "user_test");
+      expect((await read()).completed_at).toBe(completed.completed_at);     // kept, not cleared
+
+      await new Promise((r) => setTimeout(r, 10));
+      await setBookingStatus(db, accountId, booking.id, "completed", "user_test");
+      expect(new Date((await read()).completed_at!).getTime())
+        .toBeGreaterThan(new Date(completed.completed_at!).getTime());       // re-stamped
+
+      await setBookingStatus(db, accountId, booking.id, "no_show", "user_test");
+      const noShow = await read();
+      expect(noShow.status).toBe("no_show");
+      expect(noShow.no_show_at).not.toBeNull();
+      expect(noShow.completed_at).not.toBeNull();                            // never cleared
+    });
+  });
+
+  /**
    * The half-open overlap window's boundary (`listBookedRanges`'s own
    * `.lt("starts_at", toIso).gt("ends_at", fromIso)`): a booking that
    * started BEFORE the queried window and is still running when the window
