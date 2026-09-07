@@ -149,3 +149,25 @@ test.describe("the Automations page — Milestone B cards", () => {
     // Nothing is saved — no form is submitted.
   });
 });
+
+test.describe("the Automations page — Milestone C card", () => {
+  test("the instant-reply card previews both texts verbatim, each one segment, and the counter follows the text", async ({ page }) => {
+    const { accountId } = fixture();
+    await page.goto(`/dashboard/accounts/${accountId}/automations`);
+
+    const card = page.getByTestId("instant-reply-card");
+    await expect(card.getByText("Instant reply to new leads", { exact: true })).toBeVisible();
+    await expect(card.getByTestId("instant-reply-preview-en")).toContainText("We got your message");
+    await expect(card.getByTestId("instant-reply-count-en")).toContainText("1 message(s)");
+    await expect(card.getByTestId("instant-reply-preview-es")).toContainText("Recibimos tu mensaje");
+    await expect(card.getByTestId("instant-reply-count-es")).toContainText("1 message(s)");
+
+    // Typing redraws the preview and the counter — the counter counts the
+    // string that sends, nothing composed around it.
+    await card.getByLabel("English message").fill("Got it, thanks!");
+    await expect(card.getByTestId("instant-reply-preview-en")).toHaveText("Got it, thanks!");
+    await expect(card.getByTestId("instant-reply-count-en")).toContainText("15 characters");
+    // Nothing is saved — the form is never submitted. e2e shares the
+    // production database; this recipe must NEVER be enabled here.
+  });
+});

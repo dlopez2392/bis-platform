@@ -149,7 +149,7 @@ const EMPTY_NO_SHOW_NUDGES = {
   waitingForMorning: 0, unresolvableTimezone: 0,
 };
 const EMPTY_SMS_REMINDERS = {
-  sent: 0, failed: 0, unstamped: 0, skippedNoAddress: 0, skippedSmsGate: 0, skippedRecentFailure: 0,
+  sent: 0, failed: 0, unstamped: 0, skippedNoAddress: 0, skippedSmsGate: 0,
 };
 
 /**

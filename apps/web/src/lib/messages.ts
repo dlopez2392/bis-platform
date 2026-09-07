@@ -781,6 +781,22 @@ export const m = {
   "automations.smsReminder.lead": "Reminder: your appointment with {name} is {when}.",
   "automations.smsReminder.leadNoName": "Reminder: your appointment is {when}.",
   "automations.smsReminder.defaultBody": "Reply to this text if you need to make a change.",
+  // The instant reply to a new web-form lead (Milestone C) — sent the moment
+  // a submission with a phone number lands, in the language the form was
+  // filled in (the submission's locale), so it matches the receipt email the
+  // same person gets in the same minute. TWO defaults per language: `{name}`
+  // is the house placeholder, filled with the customer-facing brand name on
+  // the settings page ONLY — the send path sends the saved text verbatim and
+  // never resolves a name; the NoName variants drop the opening clause rather
+  // than invent a noun. Every one of the four is ONE GSM-7 segment for a
+  // GSM-7 company name (measured in instant-reply-copy.test.ts). The Spanish
+  // is written with no á/í/ó/ú, the text-back's rule (voice.textback.*), and
+  // in the tú form the receipt email uses ("Recibimos tu mensaje…"). No em
+  // dash anywhere: it is outside GSM-7.
+  "automations.instantReply.defaultBodyEn": "Hi, this is {name}. We got your message and will be in touch shortly. Reply here if you'd like to add anything.",
+  "automations.instantReply.defaultBodyNoNameEn": "We got your message and will be in touch shortly. Reply here if you'd like to add anything.",
+  "automations.instantReply.defaultBodyEs": "Hola, somos {name}. Recibimos tu mensaje y nos pondremos en contacto pronto. Responde a este mensaje si quieres agregar algo.",
+  "automations.instantReply.defaultBodyNoNameEs": "Recibimos tu mensaje y nos pondremos en contacto pronto. Responde a este mensaje si quieres agregar algo.",
   // Automations page — agency-only, like Voice. Plain admin language; the
   // recipe names are the things a business owner would call them.
   "automations.title": "Automations",
@@ -824,6 +840,19 @@ export const m = {
   "automations.smsReminder.save": "Save text reminders",
   "automations.smsReminder.saved": "Text reminders saved",
   "automations.smsReminder.saveFailed": "Could not save text reminders.",
+  "automations.instantReply.title": "Instant reply to new leads",
+  "automations.instantReply.body": "The moment someone submits one of your forms with a phone number, text them from your number in the language they used, on top of the email receipt they already get. Off until you turn it on, and only for companies whose A2P registration is approved.",
+  "automations.instantReply.enabled": "Send an instant reply",
+  "automations.instantReply.messageEn": "English message",
+  "automations.instantReply.messageEnHint": "Sent to people who filled the form in English. Sent exactly as written.",
+  "automations.instantReply.messageEs": "Spanish message",
+  "automations.instantReply.messageEsHint": "Sent to people who filled the form in Spanish. Sent exactly as written.",
+  "automations.instantReply.previewEn": "English preview",
+  "automations.instantReply.previewEs": "Spanish preview",
+  "automations.instantReply.save": "Save instant reply",
+  "automations.instantReply.saved": "Instant reply saved",
+  "automations.instantReply.saveFailed": "Could not save the instant reply.",
+  "automations.instantReply.bodiesRequired": "Write both the English and the Spanish message before turning this on.",
 
   // The client-facing Calls log — /dashboard/accounts/<id>/calls. BOTH
   // audiences: this is the client's own business data (who rang, what the

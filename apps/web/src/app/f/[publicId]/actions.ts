@@ -21,6 +21,7 @@ import {
   isValidEmail, isValidPhone,
 } from "@/lib/forms/guards";
 import { toE164 } from "@/lib/voice/phone-number";
+import { sendInstantReply } from "@/lib/automations/instant-reply";
 import { publicStrings, normalizeLocale } from "@/lib/forms/public-strings";
 import type { SubmitResult } from "./submit-result";
 
@@ -233,7 +234,11 @@ export async function submitFormAction(
     // `enrich` itself keeps the notification independent of everything else
     // it does, so this is a last-resort net, not the primary handling. -------
     try {
-      await enrich(db, form, submissionId, answers, base.attribution, originFrom(h), locale);
+      await enrich(db, form, submissionId, answers, base.attribution, originFrom(h), locale,
+        // Any consent box left unticked — an OPTIONAL one, since `validate`
+        // above refuses a required one unticked — means no instant text
+        // (Milestone C, spec §1). Derived here, where the record is built.
+        (base.consent ?? []).some((c) => !c.given));
     } catch (e) {
       const message = e instanceof Error ? e.message : "unknown enrichment failure";
       await setSubmissionProcessingError(db, accountId, submissionId, message);
@@ -264,6 +269,9 @@ async function enrich(
   origin: string | null,
   /** The language the form was submitted in — the receipt's language. */
   locale: "en" | "es",
+  /** True when any consent checkbox was left unticked — the instant reply's
+   *  "no" (Milestone C, spec §1). */
+  consentWithheld: boolean,
 ): Promise<void> {
   const accountId = form.account_id;
   const byKind = new Map(form.fields.map((f) => [f.kind, answers.find((a) => a.key === f.key)?.value ?? ""]));
@@ -276,6 +284,11 @@ async function enrich(
 
   const errors: string[] = [];
   let contactId: string | null = null;
+  // Hoisted for the instant reply below: the thread `enrich` opens and the
+  // parsed phone the contact row stored. Both stay null when the contact
+  // work failed — there is then no thread to put a text in.
+  let conversationId: string | null = null;
+  let phoneE164: string | null = null;
 
   // Contact, conversation and event work, grouped: a failure partway through
   // (say, the message insert) stops the rest of this group, but must never
@@ -296,6 +309,7 @@ async function enrich(
     // stay obviously in lockstep rather than drift into two implementations
     // of the same normalization.
     const rawPhone = byKind.get("core.phone") || "";
+    phoneE164 = rawPhone ? toE164(rawPhone) : null;
     const created = await createContact(db, accountId, {
       firstName: byKind.get("core.first_name") || undefined,
       lastName: byKind.get("core.last_name") || undefined,
@@ -303,7 +317,7 @@ async function enrich(
       // Voice stores E.164; storing web input as-typed made the same person
       // two contacts and hid web submissions from find_my_booking. Parseable →
       // E.164, unparseable → as typed (never mangled, never rejected here).
-      phone: rawPhone ? (toE164(rawPhone) ?? rawPhone) : undefined,
+      phone: rawPhone ? (phoneE164 ?? rawPhone) : undefined,
       companyName: byKind.get("core.company_name") || undefined,
       source: `form: ${form.name}`,
       custom,
@@ -335,6 +349,7 @@ async function enrich(
     const threadBody = messageBody || answeredLines || `New submission on "${form.name}".`;
 
     const convo = await ensureConversation(db, accountId, contactId, "form", "system");
+    conversationId = convo.id;
     await createMessage(db, accountId, {
       conversationId: convo.id, channel: "form", direction: "inbound",
       subject: form.name, body: threadBody,
@@ -369,6 +384,26 @@ async function enrich(
     await receipt(db, form, locale, byKind.get("core.email") ?? "", byKind.get("core.first_name") ?? "");
   } catch (e) {
     console.error(`form ${form.id} submission ${submissionId} receipt failed: ${String(e)}`);
+  }
+
+  // The instant reply (Milestone C): a text to the person, from the company's
+  // own number, in the language of the page — last, after both emails, and
+  // independent of them. The module decides (recipe on, phone parsed, consent
+  // not withheld, the A2P gate, the 24h per-thread hold, the daily cap),
+  // sends write-then-send so a provider failure is a visible failed text in
+  // the inbox, and logs every outcome worth seeing. Like the receipt: never
+  // `processing_error` (that means "nobody was told about this lead"), never
+  // the submitter's result. Skipped outright when the contact work above
+  // failed — no thread, nothing to reply into.
+  if (contactId && conversationId) {
+    try {
+      await sendInstantReply({
+        db, now: new Date(), accountId, submissionId, contactId, conversationId,
+        phoneE164, locale, consentWithheld,
+      });
+    } catch (e) {
+      console.error(`form ${form.id} submission ${submissionId} instant reply crashed: ${String(e)}`);
+    }
   }
 
   if (errors.length > 0) {

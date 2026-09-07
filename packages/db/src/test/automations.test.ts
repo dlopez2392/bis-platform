@@ -3,6 +3,7 @@ import "dotenv/config";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
 import { setBranding } from "../branding";
+import { createForm, createSubmission } from "../forms";
 import {
   getOrCreateCalendar, createBooking, setBookingStatus, cancelBookingByToken,
   stampFollowupSent, updateCalendarSettings,
@@ -15,6 +16,7 @@ import {
   countNoShowNudgesSince, NO_SHOW_NUDGE_MAX_AGE_MS,
   listDueSmsReminders, stampSmsReminderSent, stampSmsReminderFailed,
   SMS_REMINDER_WINDOW_START_MS, SMS_REMINDER_WINDOW_END_MS,
+  parseInstantReplyConfig, stampInstantReplySent, countInstantRepliesSince,
 } from "../automations";
 
 const HOUR = 60 * 60 * 1000;
@@ -430,6 +432,53 @@ describe("sms reminder — data layer", () => {
       expect(row.sms_reminder_sent_at).not.toBeNull();
       expect(row.sms_reminder_failed_at).not.toBeNull();
       expect(row.reminder_sent_at).toBeNull();          // the EMAIL reminder's stamp is a different column
+    });
+  });
+});
+
+describe("instant reply — data layer (Milestone C, the inline recipe)", () => {
+  it("parseInstantReplyConfig accepts exactly a string bodyEs; everything else is null", () => {
+    // Mutation: return { bodyEs: String(bodyEs) } and the non-string cases pass.
+    expect(parseInstantReplyConfig({ bodyEs: "Hola" })).toEqual({ bodyEs: "Hola" });
+    expect(parseInstantReplyConfig({ bodyEs: "" })).toEqual({ bodyEs: "" });
+    expect(parseInstantReplyConfig({ bodyEs: "Hola", extra: 1 })).toEqual({ bodyEs: "Hola" });
+    for (const bad of [null, undefined, "Hola", 7, [], {}, { bodyEs: null }, { bodyEs: 3 }, { bodyEs: ["x"] }]) {
+      expect(parseInstantReplyConfig(bad), JSON.stringify(bad)).toBeNull();
+    }
+  });
+
+  it("stampInstantReplySent writes the stamp idempotently; countInstantRepliesSince counts only stamps after the floor", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { id: formId } = await createForm(db, accountId, { name: "Quote", fields: [] }, "user_test");
+      const mk = () => createSubmission(db, accountId, formId, { answers: [] });
+      const a = await mk(); const b = await mk(); const c = await mk();
+      const before = new Date();
+      await stampInstantReplySent(db, a.id);
+      await stampInstantReplySent(db, a.id);
+      await stampInstantReplySent(db, b.id);
+      void c;
+      const { data } = await db.from("form_submissions").select("id, instant_reply_sent_at")
+        .eq("account_id", accountId);
+      const rows = data as { id: string; instant_reply_sent_at: string | null }[];
+      expect(rows.filter((r) => r.instant_reply_sent_at).map((r) => r.id).sort()).toEqual([a.id, b.id].sort());
+      expect(rows.find((r) => r.id === c.id)!.instant_reply_sent_at).toBeNull();
+      // Mutation: drop `.gte(...)` and the future floor counts 2.
+      expect(await countInstantRepliesSince(db, accountId, new Date(before.getTime() - 1000).toISOString())).toBe(2);
+      expect(await countInstantRepliesSince(db, accountId, new Date(Date.now() + 60_000).toISOString())).toBe(0);
+    });
+  });
+
+  it("countInstantRepliesSince never counts another account's stamps", async () => {
+    // Mutation: drop `.eq("account_id", accountId)` and accountA counts 1.
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db, accountB) => {
+        const { id: formB } = await createForm(db, accountB, { name: "Quote", fields: [] }, "user_test");
+        const s = await createSubmission(db, accountB, formB, { answers: [] });
+        await stampInstantReplySent(db, s.id);
+        const floor = new Date(Date.now() - 60_000).toISOString();
+        expect(await countInstantRepliesSince(db, accountB, floor)).toBe(1);
+        expect(await countInstantRepliesSince(db, accountA, floor)).toBe(0);
+      });
     });
   });
 });

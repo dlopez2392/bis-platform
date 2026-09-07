@@ -14,7 +14,7 @@ vi.mock("@/lib/auth", () => ({
 
 import { m } from "@/lib/messages";
 import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
-import { saveReviewRequestAction, saveNoShowNudgeAction, saveSmsReminderAction } from "./actions";
+import { saveReviewRequestAction, saveNoShowNudgeAction, saveSmsReminderAction, saveInstantReplyAction } from "./actions";
 
 const fd = (o: Record<string, string>) => {
   const f = new FormData();
@@ -160,5 +160,54 @@ describe("the body cap — every recipe refuses a message longer than AUTOMATION
     expect(await saveSmsReminderAction("acct_1", fd({ body: tooLong })))
       .toEqual({ ok: false, error: m["automations.bodyTooLong"] });
     expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+  });
+});
+
+describe("saveInstantReplyAction", () => {
+  it("refuses a non-agency caller before touching the database", async () => {
+    guardFixture.isAgency = false;
+    expect(await saveInstantReplyAction("acct_1", fd({ enabled: "on", body_en: "Hi", body_es: "Hola" })))
+      .toEqual({ ok: false, error: m["automations.agencyOnly"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+  });
+
+  it("saves enabled + the English text in body + the Spanish text in config.bodyEs, both trimmed", async () => {
+    // Mutation: store the Spanish text untrimmed, or in body.
+    expect(await saveInstantReplyAction("acct_1", fd({ enabled: "on", body_en: "  Hi there  ", body_es: " Hola " }))).toEqual({ ok: true });
+    expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "instant_reply",
+      { enabled: true, body: "Hi there", config: { bodyEs: "Hola" } }, "user_1");
+  });
+
+  it("turning it on needs BOTH texts — either one blank is refused with copy that says so", async () => {
+    // Mutation: require only the English text.
+    expect(await saveInstantReplyAction("acct_1", fd({ enabled: "on", body_en: "Hi", body_es: "   " })))
+      .toEqual({ ok: false, error: m["automations.instantReply.bodiesRequired"] });
+    expect(await saveInstantReplyAction("acct_1", fd({ enabled: "on", body_en: "", body_es: "Hola" })))
+      .toEqual({ ok: false, error: m["automations.instantReply.bodiesRequired"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+  });
+
+  it("saves an OFF row with blank texts, so the operator can come back to it", async () => {
+    expect(await saveInstantReplyAction("acct_1", fd({ body_en: "", body_es: "" }))).toEqual({ ok: true });
+    expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "instant_reply",
+      { enabled: false, body: "", config: { bodyEs: "" } }, "user_1");
+  });
+
+  it("the cap applies to EITHER text", async () => {
+    // Mutation: cap only body_en.
+    const long = "x".repeat(AUTOMATION_BODY_MAX_LENGTH + 1);
+    expect(await saveInstantReplyAction("acct_1", fd({ body_en: long, body_es: "Hola" })))
+      .toEqual({ ok: false, error: m["automations.bodyTooLong"] });
+    expect(await saveInstantReplyAction("acct_1", fd({ body_en: "Hi", body_es: long })))
+      .toEqual({ ok: false, error: m["automations.bodyTooLong"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+  });
+
+  it("a database failure comes back as a toastable failure", async () => {
+    dbMocks.upsertAutomation.mockRejectedValue(new Error("down"));
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await saveInstantReplyAction("acct_1", fd({ body_en: "Hi", body_es: "Hola" })))
+      .toEqual({ ok: false, error: m["automations.instantReply.saveFailed"] });
+    quiet.mockRestore();
   });
 });

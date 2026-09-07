@@ -42,7 +42,7 @@ function ctx(): PassContext {
     sms: () => ({ isFake: true, send: (...a: unknown[]) => smsSend(...a) }),
   };
 }
-const EMPTY = { sent: 0, failed: 0, unstamped: 0, skippedNoAddress: 0, skippedSmsGate: 0, skippedRecentFailure: 0 };
+const EMPTY = { sent: 0, failed: 0, unstamped: 0, skippedNoAddress: 0, skippedSmsGate: 0 };
 
 beforeEach(() => {
   for (const fn of Object.values(dbMocks)) fn.mockReset();
@@ -135,11 +135,15 @@ describe("sms reminder pass — fail closed, each case its own counter", () => {
     expect(senderMock.resolveSmsSender).toHaveBeenCalledTimes(1);
   });
 
-  it("a marker younger than 24h holds the booking — with a 45-minute window that means one attempt, ever", async () => {
-    // Mutation: remove the smsCooldownActive check.
+  it("a booking whose last text attempt failed minutes ago is RETRIED, not held — the 45-minute window bounds it to three attempts (danlo, 2026-09-07)", async () => {
+    // Mutation: reinstate `smsCooldownActive(row.smsFailedAt, ctx.now)` as a
+    // skip. The 24h hold belongs to the morning-band recipes, whose windows
+    // are twelve ticks wide; here a hold outlives the window and means one
+    // attempt ever, so one carrier blip cost the customer their reminder.
     dbMocks.listDueSmsReminders.mockResolvedValue([row({ smsFailedAt: new Date(TICK.getTime() - 15 * 60 * 1000).toISOString() })]);
-    expect(await smsReminderPass.run(ctx())).toEqual({ ...EMPTY, skippedRecentFailure: 1 });
-    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(await smsReminderPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
+    expect(dbMocks.createMessage).toHaveBeenCalledTimes(1);
+    expect(dbMocks.stampSmsReminderSent).toHaveBeenCalledWith(expect.anything(), "bk_s1");
   });
 
   it("constructs the SMS provider BEFORE writing the message row", async () => {

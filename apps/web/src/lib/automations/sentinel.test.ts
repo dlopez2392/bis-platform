@@ -17,14 +17,21 @@ const dbMocks = vi.hoisted(() => ({
   stampReviewRequestSmsFailed: vi.fn(),
   listDueNoShowNudges: vi.fn(), stampNoShowNudged: vi.fn(), stampNoShowNudgeSmsFailed: vi.fn(), countNoShowNudgesSince: vi.fn(),
   listDueSmsReminders: vi.fn(), stampSmsReminderSent: vi.fn(), stampSmsReminderFailed: vi.fn(),
+  getAutomation: vi.fn(), hasRecentOutboundSms: vi.fn(), countInstantRepliesSince: vi.fn(), stampInstantReplySent: vi.fn(),
   ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: async () => ({ ok: true, from: "+19565550000" }) }));
+// The inline recipe reaches its provider through harness.ts's lazySmsProvider,
+// i.e. through this factory; the registered passes get theirs on ctx.
+const inlineSmsSend = vi.fn(async () => ({ providerMessageId: "s-inline" }));
+vi.mock("@/lib/sms", () => ({ getSmsProvider: () => ({ isFake: true, send: inlineSmsSend }) }));
+vi.mock("@/lib/email", () => ({ getEmailProvider: () => ({ isFake: true, send: async () => ({ providerMessageId: "e" }) }) }));
 
 import { runPasses } from "./harness";
 import { PASSES } from "./registry";
 import type { PassContext } from "./context";
+import { sendInstantReply, type InstantReplyInput } from "./instant-reply";
 
 const INTERNAL_LABEL = "Rio Roofing — trial";
 const BRAND = "Rio Roofing";
@@ -103,5 +110,45 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
 
   it("the registry runs reminders, follow-ups, review requests, no-show nudges, then text reminders — the first three's order is the collision's contract", () => {
     expect(PASSES.map((p) => p.key)).toEqual(["reminders", "followups", "reviewRequests", "noShowNudges", "smsReminders"]);
+  });
+});
+
+const INLINE_INPUT: InstantReplyInput = {
+  db: {} as never, now: TICK, accountId: "acct_1", submissionId: "sub_1", contactId: "ct_9",
+  conversationId: "convo_1", phoneE164: "+19565550109", locale: "en", consentWithheld: false,
+};
+
+describe("the sentinel — the inline recipe (instant reply) has no name to leak", () => {
+  it("its input type carries no account name at all — a recipe author cannot leak what they cannot reach", () => {
+    // Mutation: add `accountName: string` to InstantReplyInput and this compiles.
+    // @ts-expect-error — InstantReplyInput has no accountName
+    const bad: InstantReplyInput = { ...INLINE_INPUT, accountName: INTERNAL_LABEL };
+    void bad;
+  });
+
+  it("every argument of the SMS send and the message row is the SAVED body, free of the label", async () => {
+    // Mutation: prefix the body with `accounts.name` inside the module — there is no such value to reach.
+    dbMocks.getAutomation.mockResolvedValue({
+      id: "au_ir", account_id: "acct_1", recipe_key: "instant_reply", enabled: true,
+      body: `Hi, this is ${BRAND}. We got your message.`, config: { bodyEs: `Hola, somos ${BRAND}.` },
+      created_at: "2026-09-07T00:00:00Z", updated_at: "2026-09-07T00:00:00Z",
+    });
+    dbMocks.hasRecentOutboundSms.mockResolvedValue(false);
+    dbMocks.countInstantRepliesSince.mockResolvedValue(0);
+    dbMocks.stampInstantReplySent.mockResolvedValue(undefined);
+    dbMocks.ensureConversation.mockResolvedValue({ id: "convo_1", created: false });
+    dbMocks.createMessage.mockResolvedValue({ id: "msg_inline" });
+    dbMocks.updateMessageStatus.mockResolvedValue(undefined);
+    inlineSmsSend.mockClear();
+    dbMocks.createMessage.mockClear();
+
+    expect(await sendInstantReply(INLINE_INPUT)).toEqual({ kind: "sent", unstamped: false });
+
+    const everything = [...inlineSmsSend.mock.calls, ...dbMocks.createMessage.mock.calls]
+      .map((args) => JSON.stringify(args)).join("\n");
+    expect(inlineSmsSend).toHaveBeenCalledTimes(1);   // guards the fixture: it actually sent
+    expect(everything).not.toContain("— trial");
+    expect(everything).not.toContain(INTERNAL_LABEL);
+    expect(everything).toContain(BRAND);
   });
 });

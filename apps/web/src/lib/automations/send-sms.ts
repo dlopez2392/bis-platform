@@ -2,6 +2,15 @@ import { ensureConversation, createMessage, updateMessageStatus } from "@bis/db"
 import { SMS_RETRY_COOLDOWN_MS } from "./caps";
 import type { PassContext } from "./context";
 
+/**
+ * What the two helpers below actually need: the client and the LAZY SMS
+ * getter — not the whole cron context. A full PassContext satisfies this
+ * (it is a Pick), so every pass keeps handing over `ctx` unchanged; the
+ * inline instant reply (instant-reply.ts, Milestone C) builds exactly these
+ * two fields and never constructs the email provider it has no use for.
+ */
+export type SmsSendContext = Pick<PassContext, "db" | "sms">;
+
 /** The messages rows automations write are the platform's, not a person's —
  *  the same actor shape the voice text-back uses ("voice"/"ai"). */
 export const AUTOMATION_ACTOR_ID = "automation";
@@ -36,11 +45,12 @@ export type SentSms = { messageId: string; providerMessageId: string };
  *      visible failed text in the inbox, not a silent gap;
  *   3. the send;
  *   4. on failure: mark the row failed, write the recipe's attempt marker
- *      (the 24h cooldown's input), rethrow so the pass counts `failed` and
- *      stamps nothing.
+ *      (the 24h cooldown's input for the morning-band recipes; the text
+ *      reminder writes it and never reads it, the instant reply writes
+ *      none), rethrow so the caller counts `failed` and stamps nothing.
  * The caller stamps its dedupe column and THEN calls markAutomationSmsSent.
  */
-export async function sendAutomationSms(ctx: PassContext, input: AutomationSmsInput): Promise<SentSms> {
+export async function sendAutomationSms(ctx: SmsSendContext, input: AutomationSmsInput): Promise<SentSms> {
   const sms = ctx.sms();
   const convo = await ensureConversation(
     ctx.db, input.accountId, input.contactId, AUTOMATION_ACTOR_ID, AUTOMATION_ACTOR_TYPE);
@@ -73,7 +83,7 @@ export async function sendAutomationSms(ctx: PassContext, input: AutomationSmsIn
  * duplicate send). `what` names the recipe in the log line.
  */
 export async function markAutomationSmsSent(
-  ctx: PassContext, accountId: string, sent: SentSms, what: string,
+  ctx: SmsSendContext, accountId: string, sent: SentSms, what: string,
 ): Promise<void> {
   try {
     await updateMessageStatus(ctx.db, accountId, sent.messageId, "sent",

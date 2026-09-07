@@ -63,4 +63,16 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
   it("the SMS cooldown allows at most three attempts across the review request's window", () => {
     expect(Math.ceil(REVIEW_REQUEST_MAX_AGE_MS / SMS_RETRY_COOLDOWN_MS)).toBe(3);
   });
+
+  it("the text reminder, which has NO cooldown, is bounded by its window to three attempts per booking", () => {
+    // danlo, 2026-09-07: a failed text reminder retries next tick. The bound
+    // is the window divided by the tick, not a hold — so a wider window or a
+    // faster cadence would silently raise it. Mutation: change either.
+    // The due query is closed at both ends (gte/lte in listDueSmsReminders),
+    // so a tick landing on the bound to the second would see a fourth grid
+    // point; the cron's own jitter (observed ticks fire around :24s) makes
+    // three the count every real run sees.
+    const tick = tickIntervalMs(entry!.schedule);
+    expect((SMS_REMINDER_WINDOW_END_MS - SMS_REMINDER_WINDOW_START_MS) / tick).toBe(3);
+  });
 });
