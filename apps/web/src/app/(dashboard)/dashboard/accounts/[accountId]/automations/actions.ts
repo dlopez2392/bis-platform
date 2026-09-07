@@ -10,7 +10,8 @@
 
 import { revalidatePath } from "next/cache";
 import {
-  serviceDb, upsertAutomation, parseReviewRequestConfig, parseNoShowNudgeConfig, type ReviewRequestChannel,
+  serviceDb, upsertAutomation, parseReviewRequestConfig, parseNoShowNudgeConfig, parseInstantReplyConfig,
+  type ReviewRequestChannel,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { m } from "@/lib/messages";
@@ -104,6 +105,40 @@ export async function saveSmsReminderAction(
   } catch (e) {
     console.error(`saveSmsReminderAction: save failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.smsReminder.saveFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/automations`);
+  return { ok: true };
+}
+
+export async function saveInstantReplyAction(
+  accountId: string, formData: FormData,
+): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["automations.agencyOnly"] };
+
+  const enabled = formData.get("enabled") === "on";
+  // Trimmed on write: the send path trims before sending, and the preview
+  // must show the string that sends. English rides in `body`, the column
+  // every recipe treats as "the text that sends"; Spanish in config.bodyEs.
+  const bodyEn = String(formData.get("body_en") ?? "").trim();
+  const bodyEs = String(formData.get("body_es") ?? "").trim();
+  if (bodyEn.length > AUTOMATION_BODY_MAX_LENGTH || bodyEs.length > AUTOMATION_BODY_MAX_LENGTH) {
+    return { ok: false, error: m["automations.bodyTooLong"] };
+  }
+  // No empty-means-default for this recipe: the send path sends the saved
+  // text VERBATIM, so enabling with a blank text would text a blank.
+  if (enabled && (!bodyEn || !bodyEs)) return { ok: false, error: m["automations.instantReply.bodiesRequired"] };
+
+  // The send path's own parser, on write — the review request's discipline.
+  const config = parseInstantReplyConfig({ bodyEs });
+  if (!config) return { ok: false, error: m["automations.instantReply.saveFailed"] };
+
+  try {
+    await upsertAutomation(serviceDb(), accountId, "instant_reply", { enabled, body: bodyEn, config }, userId);
+  } catch (e) {
+    console.error(`saveInstantReplyAction: save failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.instantReply.saveFailed"] };
   }
 
   revalidatePath(`/dashboard/accounts/${accountId}/automations`);

@@ -9,7 +9,8 @@ import { m } from "@/lib/messages";
 import { AutomationsSettings } from "./automations-settings";
 import { NoShowNudgeCard } from "./no-show-nudge-card";
 import { SmsReminderCard } from "./sms-reminder-card";
-import { saveReviewRequestAction, saveNoShowNudgeAction, saveSmsReminderAction } from "./actions";
+import { InstantReplyCard } from "./instant-reply-card";
+import { saveReviewRequestAction, saveNoShowNudgeAction, saveSmsReminderAction, saveInstantReplyAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -29,10 +30,11 @@ export default async function AutomationsPage({
   await requireAgencyOnlyAccountAccess(accountId);
 
   const db = serviceDb();
-  const [review, noShow, smsReminder, account, smsGate, calendar, origin] = await Promise.all([
+  const [review, noShow, smsReminder, instantReply, account, smsGate, calendar, origin] = await Promise.all([
     getAutomation(db, accountId, "review_request"),
     getAutomation(db, accountId, "no_show_nudge"),
     getAutomation(db, accountId, "sms_reminder"),
+    getAutomation(db, accountId, "instant_reply"),
     // The default bodies name the company. Resolved through brandDisplayName
     // exactly as the passes' due-rows are (packages/db), never off
     // `accounts.name` alone — a preview that does not match what sends is
@@ -92,6 +94,12 @@ export default async function AutomationsPage({
           accountTimezone={account.timezone}
           smsGate={smsGate}
           saveAction={saveSmsReminderAction.bind(null, accountId)}
+        />
+        <InstantReplyCard
+          automation={instantReply}
+          brandName={account.brandName}
+          smsGate={smsGate}
+          saveAction={saveInstantReplyAction.bind(null, accountId)}
         />
       </div>
     </>

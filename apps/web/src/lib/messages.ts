@@ -840,6 +840,19 @@ export const m = {
   "automations.smsReminder.save": "Save text reminders",
   "automations.smsReminder.saved": "Text reminders saved",
   "automations.smsReminder.saveFailed": "Could not save text reminders.",
+  "automations.instantReply.title": "Instant reply to new leads",
+  "automations.instantReply.body": "The moment someone submits one of your forms with a phone number, text them from your number in the language they used, on top of the email receipt they already get. Off until you turn it on, and only for companies whose A2P registration is approved.",
+  "automations.instantReply.enabled": "Send an instant reply",
+  "automations.instantReply.messageEn": "English message",
+  "automations.instantReply.messageEnHint": "Sent to people who filled the form in English. Sent exactly as written.",
+  "automations.instantReply.messageEs": "Spanish message",
+  "automations.instantReply.messageEsHint": "Sent to people who filled the form in Spanish. Sent exactly as written.",
+  "automations.instantReply.previewEn": "English preview",
+  "automations.instantReply.previewEs": "Spanish preview",
+  "automations.instantReply.save": "Save instant reply",
+  "automations.instantReply.saved": "Instant reply saved",
+  "automations.instantReply.saveFailed": "Could not save the instant reply.",
+  "automations.instantReply.bodiesRequired": "Write both the English and the Spanish message before turning this on.",
 
   // The client-facing Calls log — /dashboard/accounts/<id>/calls. BOTH
   // audiences: this is the client's own business data (who rang, what the

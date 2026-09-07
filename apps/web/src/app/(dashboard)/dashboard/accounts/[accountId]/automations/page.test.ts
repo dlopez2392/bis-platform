@@ -38,10 +38,13 @@ vi.mock("./actions", () => ({
   saveReviewRequestAction: async () => ({ ok: true }),
   saveNoShowNudgeAction: async () => ({ ok: true }),
   saveSmsReminderAction: async () => ({ ok: true }),
+  saveInstantReplyAction: async () => ({ ok: true }),
 }));
 
 type Props = Record<string, unknown>;
-const captured = vi.hoisted(() => ({ review: null as Props | null, noShow: null as Props | null, sms: null as Props | null }));
+const captured = vi.hoisted(() => ({
+  review: null as Props | null, noShow: null as Props | null, sms: null as Props | null, instant: null as Props | null,
+}));
 vi.mock("./automations-settings", () => ({
   AutomationsSettings: (props: Props) => { captured.review = props; return null; },
 }));
@@ -51,6 +54,9 @@ vi.mock("./no-show-nudge-card", () => ({
 vi.mock("./sms-reminder-card", () => ({
   SmsReminderCard: (props: Props) => { captured.sms = props; return null; },
 }));
+vi.mock("./instant-reply-card", () => ({
+  InstantReplyCard: (props: Props) => { captured.instant = props; return null; },
+}));
 
 const { default: AutomationsPage } = await import("./page");
 
@@ -59,10 +65,11 @@ const ROWS: Record<string, AutomationRow> = {
   review_request: { ...base, id: "au1", recipe_key: "review_request", enabled: true, body: "Hi",
     config: { channel: "sms", reviewUrl: "https://g.page/r/x/review" } },
   no_show_nudge: { ...base, id: "au2", recipe_key: "no_show_nudge", enabled: false, body: "Come back", config: { channel: "email" } },
+  instant_reply: { ...base, id: "au4", recipe_key: "instant_reply", enabled: false, body: "Hi", config: { bodyEs: "Hola" } },
 };
 
 async function render() {
-  captured.review = captured.noShow = captured.sms = null;
+  captured.review = captured.noShow = captured.sms = captured.instant = null;
   renderToStaticMarkup(await AutomationsPage({ params: Promise.resolve({ accountId: "a1" }) }));
   return captured;
 }
@@ -112,6 +119,16 @@ describe("automations page", () => {
   it("hands the text-reminder card the account's zone for its sample time", async () => {
     expect((await render()).sms!.accountTimezone).toBe("America/Chicago");
   });
+
+  it("hands the instant-reply card ITS OWN row, the customer-facing name for its defaults, and the SMS gate", async () => {
+    // Mutation: hand it the review row, or accounts.name.
+    dbFixture.brandName = "Rio Roofing";
+    const c = await render();
+    expect(c.instant!.automation).toEqual(ROWS.instant_reply);
+    expect(c.instant!.brandName).toBe("Rio Roofing");
+    expect(c.instant!.smsGate).toEqual({ ok: false, reason: "a2p_not_approved" });
+    expect(dbMock.getAutomation).toHaveBeenCalledWith(expect.anything(), "a1", "instant_reply");
+  });
 });
 
 describe("automations page — no calendar yet", () => {
@@ -122,5 +139,11 @@ describe("automations page — no calendar yet", () => {
     expect(c.sms).not.toBeNull();
     expect(c.noShow!.bookingUrl).toBe("");
     expect(c.noShow!.calendarEnabled).toBe(false);
+  });
+
+  it("the instant-reply card renders too — it has no calendar to depend on", async () => {
+    dbMock.getCalendarForAccount.mockResolvedValue(null);
+    const c = await render();
+    expect(c.instant).not.toBeNull();
   });
 });
