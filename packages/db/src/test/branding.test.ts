@@ -110,8 +110,12 @@ describe("branding service", () => {
     await withTestAccount(async (db, accountId) => {
       await setBranding(db, accountId, {}, "user_test");
 
+      // createAccount seeds brand_name from the account's own name
+      // ("Fixture Co" for this fixture) -- it must never be null. An empty
+      // `setBranding` call is a no-op, so that seeded value is exactly what
+      // should still be here.
       expect(await getBranding(db, accountId)).toEqual({
-        brandName: null, brandLogoPath: null, brandColor: null,
+        brandName: "Fixture Co", brandLogoPath: null, brandColor: null,
         brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
         replyToEmail: null,
       });
@@ -171,8 +175,11 @@ describe("branding service", () => {
         brandType: "serif", brandMode: "dark",
       }, "user_test");
 
+      // The seeded brand_name ("Fixture Co", from createAccount's new
+      // never-null invariant) is untouched: only the four theme fields
+      // above were set.
       expect(await getBranding(db, accountId)).toEqual({
-        brandName: null, brandLogoPath: null, brandColor: null,
+        brandName: "Fixture Co", brandLogoPath: null, brandColor: null,
         brandNeutral: "warm", brandCorners: "round",
         brandType: "serif", brandMode: "dark",
         replyToEmail: null,
