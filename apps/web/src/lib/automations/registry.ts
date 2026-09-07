@@ -2,6 +2,7 @@ import type { Pass } from "./context";
 import { remindersPass } from "./passes/reminders";
 import { followupsPass } from "./passes/followups";
 import { reviewRequestPass } from "./passes/review-request";
+import { noShowNudgePass } from "./passes/no-show-nudge";
 
 /**
  * Every pass the cron tick runs, IN ORDER. Order is part of the contract:
@@ -12,4 +13,4 @@ import { reviewRequestPass } from "./passes/review-request";
  *
  * Adding a recipe = one line here plus its pass file. Nothing else.
  */
-export const PASSES: readonly Pass[] = [remindersPass, followupsPass, reviewRequestPass];
+export const PASSES: readonly Pass[] = [remindersPass, followupsPass, reviewRequestPass, noShowNudgePass];

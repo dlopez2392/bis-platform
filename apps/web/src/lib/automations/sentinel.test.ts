@@ -14,6 +14,8 @@ const dbMocks = vi.hoisted(() => ({
   listDueReminders: vi.fn(), stampReminderSent: vi.fn(),
   listDueFollowups: vi.fn(), stampFollowupSent: vi.fn(),
   listDueReviewRequests: vi.fn(), stampReviewRequested: vi.fn(), countReviewRequestsSince: vi.fn(),
+  stampReviewRequestSmsFailed: vi.fn(),
+  listDueNoShowNudges: vi.fn(), stampNoShowNudged: vi.fn(), stampNoShowNudgeSmsFailed: vi.fn(), countNoShowNudgesSince: vi.fn(),
   ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
@@ -54,6 +56,16 @@ beforeEach(() => {
       config: { channel: "sms", reviewUrl: "https://g.page/r/x/review" } },
   ]);
   dbMocks.countReviewRequestsSince.mockResolvedValue(0);
+  const nudge = {
+    accountId: "acct_1", endsAt: "2026-09-08T20:00:00.000Z", noShowAt: "2026-09-08T20:30:00.000Z", smsFailedAt: null,
+    calendarPublicId: "cal_pub_1", calendarEnabled: true, brandName: BRAND, branding,
+    accountTimezone: "America/New_York", fromEmail: null, replyToEmail: null, body: "",
+  };
+  dbMocks.listDueNoShowNudges.mockResolvedValue([
+    { ...nudge, bookingId: "bk_ns_email", contactId: "ct_3", contactEmail: "d@example.com", contactPhone: null, config: { channel: "email" } },
+    { ...nudge, bookingId: "bk_ns_sms", contactId: "ct_4", contactEmail: null, contactPhone: "9565550102", config: { channel: "sms" } },
+  ]);
+  dbMocks.countNoShowNudgesSince.mockResolvedValue(0);
   dbMocks.ensureConversation.mockResolvedValue({ id: "convo_1", created: false });
   dbMocks.createMessage.mockResolvedValue({ id: "msg_1" });
 });
@@ -73,6 +85,7 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(results.reminders?.sent).toBe(1);
     expect(results.followups?.sent).toBe(1);
     expect(results.reviewRequests?.sent).toBe(2);
+    expect(results.noShowNudges?.sent).toBe(2);
 
     const everything = [...emailSend.mock.calls, ...smsSend.mock.calls, ...dbMocks.createMessage.mock.calls]
       .map((args) => JSON.stringify(args)).join("\n");
@@ -82,6 +95,6 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
   });
 
   it("the registry runs reminders, then follow-ups, then review requests — the collision depends on it", () => {
-    expect(PASSES.map((p) => p.key)).toEqual(["reminders", "followups", "reviewRequests"]);
+    expect(PASSES.map((p) => p.key)).toEqual(["reminders", "followups", "reviewRequests", "noShowNudges"]);
   });
 });

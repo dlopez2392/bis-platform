@@ -26,6 +26,12 @@ vi.mock("@bis/db", () => ({
   stampReviewRequested: async () => undefined,
   countReviewRequestsSince: async () => 0,
   stampReviewRequestSmsFailed: async () => undefined,
+  // The no-show nudge pass (Milestone B): same shape, one idle read.
+  listDueNoShowNudges: async () => [],
+  stampNoShowNudged: async () => undefined,
+  stampNoShowNudgeSmsFailed: async () => undefined,
+  countNoShowNudgesSince: async () => 0,
+  NO_SHOW_NUDGE_MAX_AGE_MS: 37 * 60 * 60 * 1000,
   ensureConversation: async () => ({ id: "convo", created: false }),
   createMessage: async () => ({ id: "msg" }),
   updateMessageStatus: async () => undefined,
@@ -133,6 +139,11 @@ const EMPTY_REVIEW_REQUESTS = {
   skippedSmsGate: 0, skippedCap: 0, waitingForMorning: 0, unresolvableTimezone: 0,
   skippedRecentFailure: 0,
 };
+const EMPTY_NO_SHOW_NUDGES = {
+  sent: 0, failed: 0, unstamped: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
+  skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0, skippedCalendarOff: 0,
+  waitingForMorning: 0, unresolvableTimezone: 0,
+};
 
 /**
  * The route reads `new Date()` to decide whether a follow-up's morning has
@@ -198,7 +209,7 @@ describe("GET /api/cron/reminders", () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body).toEqual({ sent: 1, failed: 1, unstamped: 0, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS });
+    expect(body).toEqual({ sent: 1, failed: 1, unstamped: 0, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, noShowNudges: EMPTY_NO_SHOW_NUDGES });
     expect(stampReminderSentMock).toHaveBeenCalledTimes(1);
     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_ok");
     expect(stampReminderSentMock).not.toHaveBeenCalledWith(expect.anything(), "bk_fail");
@@ -221,7 +232,7 @@ describe("GET /api/cron/reminders", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS });
+    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, noShowNudges: EMPTY_NO_SHOW_NUDGES });
     expect(stampReminderSentMock).toHaveBeenCalledTimes(2);
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
@@ -244,7 +255,7 @@ describe("GET /api/cron/reminders", () => {
 
     // Counted as sent, never as failed: folding the stamp into the outer catch
     // would misreport a stamp failure as a send failure in triage.
-    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 1, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS });
+    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 1, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, noShowNudges: EMPTY_NO_SHOW_NUDGES });
     expect(stampReminderSentMock).toHaveBeenCalledTimes(STAMP_ATTEMPTS);
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
@@ -260,7 +271,7 @@ describe("GET /api/cron/reminders", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS });
+    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, noShowNudges: EMPTY_NO_SHOW_NUDGES });
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_fail");
   });
@@ -353,7 +364,7 @@ describe("GET /api/cron/reminders", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body).toEqual({ sent: 0, failed: 1, unstamped: 0, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS });
+    expect(body).toEqual({ sent: 0, failed: 1, unstamped: 0, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, noShowNudges: EMPTY_NO_SHOW_NUDGES });
     expect(sendMock).not.toHaveBeenCalled();
     expect(stampReminderSentMock).not.toHaveBeenCalled();
   });
@@ -375,6 +386,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
         skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
       },
       reviewRequests: EMPTY_REVIEW_REQUESTS,
+      noShowNudges: EMPTY_NO_SHOW_NUDGES,
     });
     expect(sendMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -405,6 +417,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
         skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
       },
       reviewRequests: EMPTY_REVIEW_REQUESTS,
+      noShowNudges: EMPTY_NO_SHOW_NUDGES,
     });
     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_r1");
     expect(stampFollowupSentMock).toHaveBeenCalledWith(expect.anything(), "bk_f1");
