@@ -108,6 +108,36 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
   }
 }
 
+/**
+ * Operator override: send every call on this number to a human instead of to
+ * Sofía, for as long as the env var is set.
+ *
+ * Exists because Telnyx REFUSES its own per-number call forwarding on a
+ * TeXML-utilizing number — "You cannot use automatic call forwarding with a
+ * Call Control or TeXML-utilizing number. Please use the Call Control and/or
+ * TeXML functionality to control your call behavior." This is that
+ * functionality. The immediate need was a WhatsApp Business verification
+ * code, which arrives by voice on a line an AI answers, but the general case
+ * is worth having: any time a human must take this number back for a few
+ * minutes, this is the lever.
+ *
+ * Deliberately placed AHEAD of the routability and cap checks in `respond`.
+ * An override is an override: if an operator has taken the line back, a
+ * disabled profile or a daily cap must not silently swallow the call they are
+ * standing by for.
+ *
+ * `callerId` is OUR number, not the original caller's. Telnyx requires an
+ * owned number on the outbound leg, and the caller's own number is not one.
+ */
+export function forwardTarget(env: NodeJS.ProcessEnv = process.env): string | null {
+  return toE164(env.VOICE_FORWARD_TO);
+}
+
+export function forwardXml(to: string, callerId: string | null): string {
+  const cid = callerId ? ` callerId="${callerId}"` : "";
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Dial${cid} timeout="30">${to}</Dial></Response>`;
+}
+
 function dialXml(calledE164: string | null): string {
   const projectId = process.env.VOICE_OPENAI_PROJECT_ID;
   if (!projectId) {
@@ -128,6 +158,15 @@ function xmlResponse(body: string): NextResponse {
 }
 
 async function respond(calledE164: string | null, callerE164: string | null): Promise<NextResponse> {
+  const forward = forwardTarget();
+  if (forward) {
+    // Logged on EVERY forwarded call, not once at boot. This mode bypasses
+    // Sofía entirely, and the failure it invites is leaving it on: a line
+    // that quietly rings a personal mobile for a week is worse than one that
+    // is briefly unavailable.
+    console.log(`texml FORWARDING to ${forward} — Sofía is bypassed while VOICE_FORWARD_TO is set`);
+    return xmlResponse(forwardXml(forward, calledE164));
+  }
   if (calledE164) {
     const result = await classify(calledE164, callerE164);
     if (result.kind === "refuse") return xmlResponse(sayXml(result.languages, COPY.refuse));
