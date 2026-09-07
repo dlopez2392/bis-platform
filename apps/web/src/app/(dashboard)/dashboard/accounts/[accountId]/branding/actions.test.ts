@@ -44,8 +44,10 @@ describe("setBrandingAction — brand name is required", () => {
   });
 
   it("refuses a whitespace-only brandName without writing", async () => {
-    // Mutation: restore `|| null` — a whitespace name would silently clear
-    // the column instead of being refused.
+    // Mutation: delete the `if (!brandName) return …` guard in the action —
+    // a whitespace name then saves as "" instead of being refused. (Restoring
+    // the old `|| null` alone is NOT a mutation that bites: null is falsy, so
+    // the guard still refuses it.)
     expect(await setBrandingAction("acct_1", fd({ brandName: "   " })))
       .toEqual({ ok: false, error: m["branding.nameRequired"] });
     expect(dbMocks.setBranding).not.toHaveBeenCalled();

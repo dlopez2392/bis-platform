@@ -146,11 +146,11 @@ export function SetupPanel({
   const nextKey = nextStepKey(steps);
 
   // `!s.done` alone is sufficient TODAY, and `|| s.unknown` is the insurance.
-  // The reason it is sufficient is narrow: each of the four
-  // GO_LIVE_PREREQ_KEYS has exactly ONE read behind it (hours←calendar,
-  // voice_profile←profile, number←numbers, test_call←calls), so a failed read
-  // feeds deriveSetupStatus a neutral input and the step comes back
-  // `done: false`. That is a property of those four keys — NOT a general rule
+  // The reason it is sufficient is narrow: each of the five
+  // GO_LIVE_PREREQ_KEYS has exactly ONE read behind it (branding←account,
+  // hours←calendar, voice_profile←profile, number←numbers, test_call←calls),
+  // so a failed read feeds deriveSetupStatus a neutral input and the step
+  // comes back `done: false`. That is a property of those five keys — NOT a general rule
   // about `unknown`: `email` reads two sources and can carry `done: true`
   // alongside `unknown: true`. Give go-live a two-read prerequisite one day
   // and `!s.done` would silently stop naming it in the blocked list while

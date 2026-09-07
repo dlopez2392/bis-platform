@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { deriveSetupStatus, type SetupInputs, type SetupStepKey } from "./setup-status";
+import {
+  deriveSetupStatus, goLivePrereqsMet, type SetupInputs, type SetupStepKey,
+} from "./setup-status";
 import {
   buildSetupViews, kindOf, resolveAssignedNumber, requiresMoveConfirm, canEnableTestCalls,
-  testCallNoteKind, READS_BEHIND, type ReadKey, type SetupStepView,
+  testCallNoteKind, READS_BEHIND, GO_LIVE_PREREQ_KEYS, type ReadKey, type SetupStepView,
 } from "./setup-view";
 
 // Same fully-configured fixture setup-status.test.ts uses: every step reads
@@ -67,6 +69,49 @@ describe("buildSetupViews — READS_BEHIND fault mapping", () => {
     // step itself, but the read that would confirm it never answered.
     const { views, prereqsMet } = buildSetupViews(steps, { ...noFailures, calendar: true });
     expect(views.find((v) => v.key === "hours")?.done).toBe(true);
+    expect(prereqsMet).toBe(false);
+  });
+});
+
+describe("GO_LIVE_PREREQ_KEYS — the mirror of goLivePrereqsMet, pinned in lockstep", () => {
+  // One override per step that undoes EXACTLY that step in the full fixture.
+  // Typed as a Record over every key but `account` (hardcoded done — nothing
+  // can undo it), so a step cannot be added to the wizard without a row here.
+  const undo: Record<Exclude<SetupStepKey, "account">, Partial<SetupInputs>> = {
+    branding: { brandName: null },
+    hours: { calendar: { enabled: true, open_hours: {} } },
+    voice_profile: { profile: null },
+    number: { numbers: [] },
+    email: { fromEmail: null },
+    forwarding: { ticks: { emailSkipped: false, forwardingDone: false } },
+    test_call: { callCount: 0 },
+    go_live: { profile: { ...fullInputs().profile!, enabled: false } },
+  };
+
+  it("lists exactly the steps whose undoing flips the predicate — undo any one, and goLivePrereqsMet is false iff the key is listed", () => {
+    // Mutation: drop "branding" from GO_LIVE_PREREQ_KEYS (or `isDone("branding")`
+    // from goLivePrereqsMet) — the branding row disagrees. This is the pin the
+    // list's own doc comment asks for: the predicate gained `branding` with the
+    // brand-name resolver (spec 2026-09-07) while the list did not, and the Go
+    // live button went dead with no step named under it.
+    for (const [key, override] of Object.entries(undo) as [SetupStepKey, Partial<SetupInputs>][]) {
+      const steps = deriveSetupStatus(fullInputs(override));
+      // The override really undid THIS step — otherwise a no-op row would pass
+      // for every unlisted key.
+      expect(steps.find((s) => s.key === key)?.done, `${key} undone`).toBe(false);
+      expect(goLivePrereqsMet(steps), `goLivePrereqsMet with ${key} undone`)
+        .toBe(!GO_LIVE_PREREQ_KEYS.includes(key));
+    }
+  });
+
+  it("a failed accounts read makes go-live unverifiable: prereqsMet false while every step still reads done", () => {
+    // `account` backs `branding`, now one of GO_LIVE_PREREQ_KEYS — the same
+    // shape as the calendar/hours case above. Mutation: drop "branding" from
+    // GO_LIVE_PREREQ_KEYS — the narrowing stops seeing the unknown step and
+    // prereqsMet stays true on a read that never answered.
+    const steps = deriveSetupStatus(fullInputs());
+    const { views, prereqsMet } = buildSetupViews(steps, { ...noFailures, account: true });
+    expect(views.find((v) => v.key === "branding")).toMatchObject({ done: true, unknown: true });
     expect(prereqsMet).toBe(false);
   });
 });
