@@ -131,6 +131,9 @@ export async function saveInstantReplyAction(
   if (enabled && (!bodyEn || !bodyEs)) return { ok: false, error: m["automations.instantReply.bodiesRequired"] };
 
   // The send path's own parser, on write — the review request's discipline.
+  // With `bodyEs` already a string the null branch cannot fire today; it
+  // stays so a stricter parser (a length rule, a forbidden character) is
+  // enforced on write the moment it is added on read, with no second edit.
   const config = parseInstantReplyConfig({ bodyEs });
   if (!config) return { ok: false, error: m["automations.instantReply.saveFailed"] };
 

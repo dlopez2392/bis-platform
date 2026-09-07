@@ -93,6 +93,11 @@ export async function sendInstantReply(input: InstantReplyInput): Promise<Instan
     return { kind: "skipped", reason: "smsGate", detail: gate.reason };
   }
 
+  // Read-then-send, not atomic: two non-identical submissions from one
+  // contact landing within the same second can both read "no recent text"
+  // and both send (identical answers are already caught by the form's
+  // duplicate guard). Bounded by the daily cap; a database-level guard is
+  // not worth its weight at this volume — noted here so nobody hunts for it.
   const holdSince = new Date(now.getTime() - INSTANT_REPLY_THREAD_HOLD_MS);
   if (await hasRecentOutboundSms(db, accountId, input.conversationId, holdSince)) {
     return { kind: "skipped", reason: "recentText" };

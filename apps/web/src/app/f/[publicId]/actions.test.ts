@@ -669,6 +669,8 @@ describe("submitFormAction — the instant reply to the person who wrote in (Mil
     getPublishedFormByPublicIdMock.mockResolvedValue(withPhone());
     // Honeypot filled.
     await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token(), locale: "en", phone: PHONE, [HONEYPOT_FIELD]: "bot" }));
+    // Too fast: a token minted this instant is inside MIN_FILL_MS.
+    await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: signRenderToken(Date.now(), PUBLIC_ID), locale: "en", phone: PHONE }));
     // Rate-limited.
     countRecentSubmissionsMock.mockResolvedValue(RATE_LIMIT_MAX);
     await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token(), locale: "en", phone: PHONE }));
