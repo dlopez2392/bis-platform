@@ -168,12 +168,12 @@ export function AppSidebar({
       style={clientAccentColor
         ? ({ "--sidebar-accent": clientAccentColor } as React.CSSProperties)
         : undefined}
+      // DESIGN.md rule 10: the sidebar itself is exactly one viewport tall
+      // and pinned there (h-dvh + sticky), so its middle nav — the one
+      // child below given overflow-y-auto — is what scrolls, while the
+      // footer cluster after it stays on screen at every viewport height.
       className={cn(
-        // DESIGN.md rule 10: the sidebar itself is exactly one viewport tall
-        // and pinned there (h-dvh + sticky), so its middle nav — the one
-        // child below given overflow-y-auto — is what scrolls, while the
-        // footer cluster after it stays on screen at every viewport height.
-        "sticky top-0 flex h-dvh shrink-0 flex-col gap-3 bg-sidebar p-3 text-sidebar-foreground transition-[width] duration-200",
+        "sticky top-0 flex h-dvh shrink-0 flex-col gap-3 sidebar-chrome p-3 text-sidebar-foreground transition-[width] duration-200",
         collapsed ? "w-16" : "w-56",
       )}
     >
@@ -194,7 +194,7 @@ export function AppSidebar({
             It was also a dead link for them: "/dashboard" is agency-only and
             bounces a client straight back out. */}
         {collapsed || !isAgency ? null : (
-          <Link href="/dashboard" className="px-1 text-sm font-semibold text-white">
+          <Link href="/dashboard" className="px-1 text-sm font-semibold text-[var(--sidebar-text-strong)]">
             {m["shell.brand"]}
           </Link>
         )}
@@ -202,7 +202,7 @@ export function AppSidebar({
           type="button"
           onClick={toggle}
           aria-label={collapsed ? m["shell.expand"] : m["shell.collapse"]}
-          className="rounded p-1.5 text-sidebar-foreground/70 transition-colors hover:bg-white/5 hover:text-sidebar-foreground"
+          className="rounded p-1.5 text-sidebar-foreground/70 transition-colors hover:bg-[var(--sidebar-line)] hover:text-[var(--sidebar-text-strong)]"
         >
           {collapsed ? (
             <PanelLeft className="size-4" aria-hidden />
@@ -236,7 +236,7 @@ export function AppSidebar({
               // light one. Sitting it on a white chip keeps a dark-on-
               // transparent mark legible against this dark sidebar; the tinted
               // chip stays for the generic icon, which is drawn to suit it.
-              clientLogoUrl ? "bg-white p-0.5" : "bg-sidebar-accent/20 text-sidebar-accent",
+              clientLogoUrl ? "bg-white p-0.5" : "bg-[linear-gradient(135deg,var(--sidebar-accent),var(--sidebar-tint-2))] text-[var(--sidebar-ground)]",
             )}
           >
             {clientLogoUrl ? (
@@ -383,13 +383,13 @@ function SidebarLink({
         "relative flex items-center gap-3 rounded-md px-2.5 py-2 text-sm transition-colors",
         collapsed && "justify-center px-0",
         active
-          ? "bg-sidebar-accent/15 font-medium text-white"
-          : "text-sidebar-foreground/75 hover:bg-white/5 hover:text-sidebar-foreground",
+          ? "bg-sidebar-accent/15 font-medium text-[var(--sidebar-text-strong)] shadow-[var(--glass-highlight)]"
+          : "text-sidebar-foreground/75 hover:bg-[var(--sidebar-line)] hover:text-[var(--sidebar-text-strong)]",
       )}
     >
       {active ? (
         <span
-          className="absolute left-0 h-5 w-[3px] rounded-r bg-sidebar-accent"
+          className="absolute left-0 h-5 w-[3px] rounded-r bg-[linear-gradient(var(--sidebar-accent),var(--sidebar-tint-2))]"
           aria-hidden
         />
       ) : null}
@@ -410,7 +410,7 @@ function SidebarLink({
         // Visual-only: the Link's aria-label already carries "(N unread)",
         // so exposing this span's text too would double-announce the count.
         <span
-          className="min-w-4 shrink-0 rounded-full bg-sidebar-accent px-1.5 text-center text-[10px] font-medium text-sidebar"
+          className="min-w-4 shrink-0 rounded-full bg-sidebar-accent/15 px-1.5 text-center text-[10px] font-medium text-sidebar-accent"
           aria-hidden
         >
           {unreadDisplay}
@@ -459,7 +459,7 @@ function SetupMeterLink({
       title={collapsed ? m["nav.setup"] : undefined}
       aria-label={`${m["nav.setup"]} (${progressText})`}
       className={cn(
-        "flex flex-col gap-1.5 rounded-md px-2.5 py-2 text-sm text-sidebar-foreground/75 transition-colors hover:bg-white/5 hover:text-sidebar-foreground",
+        "flex flex-col gap-1.5 rounded-md px-2.5 py-2 text-sm text-sidebar-foreground/75 transition-colors hover:bg-[var(--sidebar-line)] hover:text-[var(--sidebar-text-strong)]",
         // Collapsed: no room for the label/count row (hidden below), so this
         // link keeps only the bar — full rail-button width, same reasoning
         // as every other collapsed row's `px-0` above.
@@ -474,8 +474,8 @@ function SetupMeterLink({
           </span>
         </span>
       )}
-      <span className="h-0.5 w-full overflow-hidden rounded-full bg-white/10" aria-hidden>
-        <span className="block h-full rounded-full bg-sidebar-accent" style={{ width: `${percent}%` }} />
+      <span className="h-0.5 w-full overflow-hidden rounded-full bg-[var(--sidebar-line)]" aria-hidden>
+        <span className="block h-full rounded-full bg-[linear-gradient(90deg,var(--sidebar-accent),var(--sidebar-tint-2))]" style={{ width: `${percent}%` }} />
       </span>
     </Link>
   );

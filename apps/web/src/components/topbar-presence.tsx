@@ -40,7 +40,7 @@ export function TopbarPresence() {
             color, not BIS violet — deliberate (final review recorded it):
             the whole shell re-tints for themed clients and a hardcoded
             violet dot would be the one off-brand element. */}
-        <span aria-hidden className="size-2 shrink-0 rounded-full bg-primary animate-pulse" />
+        <span aria-hidden className="size-2 shrink-0 rounded-full bg-primary animate-pulse shadow-[0_0_0_4px_color-mix(in_srgb,var(--good)_22%,transparent)]" />
         {m["shell.presence.onCall"]}
       </span>
     );
