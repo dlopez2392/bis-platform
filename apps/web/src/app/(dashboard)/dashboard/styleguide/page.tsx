@@ -1,6 +1,8 @@
 import { Inbox } from "lucide-react";
 import { requireAgency } from "@/lib/auth";
 import { PageHeader } from "@/components/page-header";
+import { DailyChart } from "../accounts/[accountId]/website/daily-chart";
+import { DeviceStrip } from "../accounts/[accountId]/website/device-strip";
 import { EmptyState } from "@/components/empty-state";
 import { TagChips } from "@/components/tag-chips";
 import { Button } from "@/components/ui/button";
@@ -155,6 +157,16 @@ export default async function StyleguidePage() {
             <Skeleton className="h-4 w-40" />
             <Skeleton className="h-3 w-24" />
           </div>
+        </Section>
+
+        <Section title="Website chart + device strip" file="…/website/{daily-chart,device-strip}.tsx">
+          <DailyChart days={[
+            { day: "2026-08-31", visitors: 42, pageviews: 90, isWeekend: false }, { day: "2026-09-01", visitors: 55, pageviews: 120, isWeekend: false },
+            { day: "2026-09-02", visitors: 48, pageviews: 101, isWeekend: false }, { day: "2026-09-03", visitors: 61, pageviews: 133, isWeekend: false },
+            { day: "2026-09-04", visitors: 80, pageviews: 170, isWeekend: false }, { day: "2026-09-05", visitors: 30, pageviews: 61, isWeekend: true },
+            { day: "2026-09-06", visitors: 26, pageviews: 50, isWeekend: true },
+          ]} />
+          <DeviceStrip devices={[{ name: "mobile", visitors: 71, share: 0.71 }, { name: "desktop", visitors: 26, share: 0.26 }, { name: "tablet", visitors: 3, share: 0.03 }]} />
         </Section>
 
         <Section title="Empty state" file="components/empty-state.tsx">
