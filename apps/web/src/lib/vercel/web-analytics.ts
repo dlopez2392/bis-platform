@@ -17,6 +17,14 @@ export type DayTraffic = {
  *  shows a Devices panel in that slot instead. */
 export const PLACE_DIMENSION: "city" | "region" | "country" = "country";
 export const BREAKDOWN_LIMIT = 20;
+/** Past `limit` the API folds the tail into ONE row with this value
+ *  (docs: "groups the remaining values into Others"). It is not a page, a
+ *  place or a source, and the count query already carries the true total. */
+export const OTHERS_ROLLUP = "Others";
+/** Count endpoints are documented as production-only; aggregate endpoints are
+ *  not. Pinning the environment keeps every breakdown on the same footing as
+ *  the totals it is compared against (OData, per the API docs). */
+export const PRODUCTION_FILTER = "environment eq 'production'";
 
 const BASE = "https://api.vercel.com/v1/query/web-analytics";
 
@@ -42,16 +50,22 @@ export function parseCount(json: unknown): { visitors: number; pageviews: number
 export function parseAggregate(json: unknown, by: string): DimRow[] {
   const data = (json as { data?: unknown[] } | null)?.data;
   if (!Array.isArray(data)) throw new Error(`aggregate response for ${by}: data is not an array`);
-  return data.map((raw) => {
+  const rows: DimRow[] = [];
+  for (const raw of data) {
     const row = raw as Record<string, unknown>;
-    const value = row[by];
+    // What a direct visit carries as referrerHostname is documented nowhere.
+    // A null/absent value becomes "" (channelOf reads that as Direct) rather
+    // than failing the whole day for every day that has one.
+    const value = row[by] == null ? "" : row[by];
     const visitors = num(row.visitors);
     const pageviews = num(row.pageviews) ?? num(row.count);
     if (typeof value !== "string" || visitors === null || pageviews === null) {
       throw new Error(`aggregate response for ${by}: row missing ${by}/visitors/pageviews`);
     }
-    return { value, visitors, pageviews };
-  });
+    if (value === OTHERS_ROLLUP) continue;
+    rows.push({ value, visitors, pageviews });
+  }
+  return rows;
 }
 
 export class VercelAnalytics {
@@ -93,7 +107,7 @@ export class VercelAnalytics {
 
   async aggregate(projectId: string, sinceIso: string, untilIso: string, by: string, limit: number): Promise<DimRow[]> {
     return parseAggregate(
-      await this.#get(this.#query("visits/aggregate", { projectId, since: sinceIso, until: untilIso, by, limit: String(limit) })),
+      await this.#get(this.#query("visits/aggregate", { projectId, since: sinceIso, until: untilIso, by, limit: String(limit), filter: PRODUCTION_FILTER })),
       by,
     );
   }

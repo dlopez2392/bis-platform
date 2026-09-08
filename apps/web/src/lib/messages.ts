@@ -1154,6 +1154,9 @@ export const m = {
   "website.link.saved": "Site linked — the first numbers arrive tomorrow morning.",
   "website.link.linked": "Linked to {domain}",
   "website.link.noToken": "The platform's Vercel token isn't set, so projects can't be listed yet (runbook step 1).",
+  "website.link.alreadyLinked": "That project is already linked to another client. A site belongs to one account — pick a different project, or unlink it there first.",
+  "website.link.projectChange": "This client already has a site with traffic on record. Unlink it first (runbook: When something is wrong), then link the new project.",
+  "website.link.saveFailed": "Couldn't save the link just now. Try again in a moment.",
 } as const;
 
 export type MessageKey = keyof typeof m;

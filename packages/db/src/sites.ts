@@ -46,7 +46,9 @@ export async function upsertSite(
   if (input.analyticsEnabledAt !== undefined) row.analytics_enabled_at = input.analyticsEnabledAt;
   const { data, error } = await db.from("sites")
     .upsert(row, { onConflict: "account_id" }).select(SITE_COLS).single();
-  if (error || !data) throw new Error(`upsertSite failed: ${error?.message}`);
+  // The SQLSTATE rides along: `vercel_project_id` is unique across accounts,
+  // and the link action tells 23505 apart from everything else.
+  if (error || !data) throw Object.assign(new Error(`upsertSite failed: ${error?.message}`), { code: error?.code ?? null });
   return toSite(data as SiteDbRow);
 }
 

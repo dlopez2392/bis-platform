@@ -20,6 +20,10 @@ vi.mock("@bis/db", () => ({
   // The site-traffic pass reads sites; none are linked in this suite, so it
   // reports its empty counters under its own key beside the others.
   listSitesToSync: async () => [],
+  // No site is due here; these exist so a future change that makes one due
+  // fails loudly instead of tripping vitest's missing-export throw.
+  writeTrafficDay: async () => { throw new Error("route.test: no site is due"); },
+  stampSiteSynced: async () => { throw new Error("route.test: no site is due"); },
   stampFollowupSent: (...a: unknown[]) => stampFollowupSentMock(...a),
   // The review-request pass runs on the same harness; with nothing due it
   // makes exactly one query. Enumerated because a factory mock THROWS on any

@@ -36,6 +36,15 @@ describe("parsers", () => {
     expect(parseAggregate({ data: [] }, "requestPath")).toEqual([]);
     expect(() => parseAggregate({ data: [{ nope: 1 }] }, "requestPath")).toThrow(/requestPath/);
   });
+  // Mutation: restore `const value = row[by]` — the null row throws and the
+  // day fails; delete the Others skip — the fold ranks as a page.
+  it("parseAggregate reads a null dimension as '' (direct traffic) and drops the API's Others fold", () => {
+    expect(parseAggregate({ data: [{ referrerHostname: null, visitors: 5, pageviews: 7 }] }, "referrerHostname"))
+      .toEqual([{ value: "", visitors: 5, pageviews: 7 }]);
+    expect(parseAggregate({ data: [
+      { requestPath: "Others", visitors: 900, pageviews: 1000 }, { requestPath: "/", visitors: 3, pageviews: 4 },
+    ] }, "requestPath")).toEqual([{ value: "/", visitors: 3, pageviews: 4 }]);
+  });
 });
 
 describe("VercelAnalytics", () => {
@@ -68,6 +77,9 @@ describe("VercelAnalytics", () => {
     const bys = f.mock.calls.map(([u]) => new URL(u as string).searchParams.get("by")).filter(Boolean);
     expect(bys).toEqual(["requestPath", "referrerHostname", "country", "deviceType"]);
     expect(new URL(f.mock.calls[1]![0] as string).searchParams.get("limit")).toBe("20");
+    // Mutation: drop the filter from aggregate() — previews leak into the breakdowns.
+    expect(new URL(f.mock.calls[1]![0] as string).searchParams.get("filter")).toBe("environment eq 'production'");
+    expect(new URL(f.mock.calls[0]![0] as string).searchParams.has("filter")).toBe(false);
     expect(day.visitors).toBe(980);
     expect(day.pages).toHaveLength(2);
   });

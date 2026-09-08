@@ -14,6 +14,10 @@ async function requireAgency(accountId: string): Promise<void> {
   if (!isAgency) throw new Error("only the agency may link a website");
 }
 
+/** Vercel project ids are `prj_` + alphanumerics; anything else is a tampered
+ *  hidden field, refused with the same sentence as an empty pick. */
+const PROJECT_ID = /^prj_[A-Za-z0-9_]+$/;
+
 function normalizeDomain(raw: string): string {
   return raw.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
 }
@@ -23,10 +27,29 @@ export async function saveSiteAction(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   await requireAgency(accountId);
   const vercelProjectId = String(formData.get("vercelProjectId") ?? "").trim();
-  if (!vercelProjectId) return { ok: false, error: m["website.link.projectRequired"] };
+  if (!PROJECT_ID.test(vercelProjectId)) return { ok: false, error: m["website.link.projectRequired"] };
   const domain = normalizeDomain(String(formData.get("domain") ?? ""));
   if (!domain) return { ok: false, error: m["website.link.domainRequired"] };
-  await upsertSite(serviceDb(), accountId, { vercelProjectId, domain });
+  const db = serviceDb();
+  // Re-pointing an account at a different project would file the new site's
+  // days under the old site id and resume from the old stamp — two sites'
+  // history under one heading. Refused once any day is on record; the
+  // runbook's unlink order is the way through. Before the first sync there
+  // is nothing to mix, and a domain correction on the same project is fine.
+  const current = await getSiteForAccount(db, accountId);
+  if (current && current.vercelProjectId !== vercelProjectId && current.lastSyncedDay !== null) {
+    return { ok: false, error: m["website.link.projectChange"] };
+  }
+  try {
+    await upsertSite(db, accountId, { vercelProjectId, domain });
+  } catch (e) {
+    // One project, one account (0029's unique): a second client picking a
+    // project already linked elsewhere is 23505 and gets its own sentence.
+    // Everything else is generic — the raw message names tables and ids.
+    if ((e as { code?: unknown }).code === "23505") return { ok: false, error: m["website.link.alreadyLinked"] };
+    console.error(`website: link save failed for account ${accountId}, project ${vercelProjectId}: ${String(e)}`);
+    return { ok: false, error: m["website.link.saveFailed"] };
+  }
   revalidatePath(`/dashboard/accounts/${accountId}/settings`);
   revalidatePath(`/dashboard/accounts/${accountId}/website`);
   return { ok: true };

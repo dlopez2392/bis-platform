@@ -46,7 +46,14 @@ Plan: `docs/superpowers/plans/2026-09-07-website-traffic.md`.
    skippedCap, unresolvableTimezone }`. With no sites linked every counter is
    0. A non-zero `failed` with `VERCEL_API_TOKEN/VERCEL_TEAM_ID unset` in the
    log means step 2 missed. Until Part A is done, Settings → Website lists no
-   projects and says why; the domain can still be typed and saved.
+   projects and says why — a new site cannot be linked (nothing to pick); an
+   already-linked one keeps showing its domain.
+5. First night after the token lands, read the cron log and the first
+   `site_traffic_breakdown` rows for the dogfood and record in Findings:
+   what a direct visit carries as `referrerHostname` (the parser reads
+   null as ""), whether an `Others` row appeared (dropped by the parser),
+   and that the `environment eq 'production'` filter was accepted (a 400
+   on every aggregate would show as `failed: 1` every tick).
 
 ## Part B — every BIS-built site (five steps)
 

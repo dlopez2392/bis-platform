@@ -25,6 +25,18 @@ describe("sites data layer", () => {
       expect(mine?.accountTimezone).toBe("America/Chicago");
     }));
 
+  // Mutation: drop `{ code }` from upsertSite's throw — the action can no
+  // longer tell "another client holds that project" from any other failure.
+  it("a project already linked to another account is refused, and the error carries SQLSTATE 23505", () =>
+    withTestAccount(async (db, first) =>
+      withTestAccount(async (_db, second) => {
+        const prj = `prj_t_${first.slice(0, 8)}`;
+        await upsertSite(db, first, { vercelProjectId: prj, domain: "one.example" });
+        await expect(upsertSite(db, second, { vercelProjectId: prj, domain: "two.example" }))
+          .rejects.toMatchObject({ code: "23505" });
+        expect(await getSiteForAccount(db, second)).toBeNull();
+      })));
+
   it("writes a day (totals + breakdown), replaces it on rewrite, stamps, and reads back in order", () =>
     withTestAccount(async (db, accountId) => {
       const site = await upsertSite(db, accountId, { vercelProjectId: `prj_t_${accountId.slice(0, 8)}`, domain: "one.example" });

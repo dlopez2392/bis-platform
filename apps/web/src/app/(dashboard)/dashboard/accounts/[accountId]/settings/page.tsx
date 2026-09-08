@@ -80,8 +80,8 @@ export default async function CrmSettingsPage({
     getSendingIdentity(db, accountId),
     getSiteForAccount(db, accountId),
     // Listing Vercel projects needs the platform token (runbook step 1).
-    // Without it the card still renders — the domain can be typed and a
-    // linked site still shows — and says why the list is empty. Same
+    // Without it the card still renders — an already-linked site keeps
+    // showing its domain; a new one cannot be picked — and says why. Same
     // fail-soft shape as the member list below: one missing integration
     // must never take the whole settings page offline.
     (async (): Promise<{ list: VercelProjectOption[]; unavailable: boolean }> => {
