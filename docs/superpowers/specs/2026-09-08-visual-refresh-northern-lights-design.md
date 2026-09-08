@@ -54,7 +54,9 @@ Four steps, never more. Dark values change from opaque fills to translucent whit
 | `--surface-3` | `rgba(255,255,255,.09)` | `#252132` | `#F1EFF7` (unchanged) |
 | `--line` | `rgba(255,255,255,.08)` | `#28243A` | `#E8E5F0` (unchanged) |
 | `--line-strong` | `rgba(255,255,255,.14)` | `#38334F` | `#D8D4E6` (unchanged) |
-| `--text-1/2/3` | `#F1EEFA` / `#9A94B4` / `#6F6987` | `#F2F0F7` / `#A9A3BD` / `#6F6987` | unchanged |
+| `--text-1/2/3` | `#F1EEFA` / `#9A94B4` / `#7B7593` | `#F2F0F7` / `#A9A3BD` / `#6F6987` | unchanged |
+
+`--text-3` is lifted one step in dark (`#6F6987` → `#7B7593`): on glass over the lit ground the old value falls to about 2.7:1; the new one clears 3:1 at the brightest on-canvas point. Tone is unchanged to the eye.
 
 New material tokens:
 - `--glass-blur`: `14px` dark, `0px` light (light cards are solid; blur costs nothing when 0).
@@ -70,11 +72,11 @@ New material tokens:
 ### 3.3 Second accent
 New token `--accent-2`, with `--accent-2-dim` (14% alpha) and `--ring-glow-2`.
 - **BIS default (no brand color active):** pinned constants, not derived. Dark `#4FD8E6`, light `#0891B2`.
-- **Brand color active (per-tenant theme):** derived in `deriveTheme` from the brand hue in OKLCH: lightness +0.18 (clamped to 0.85), chroma ×0.9, hue rotated −30°. Analogous, never complementary, so any brand pairs cleanly. The derivation is a pure function with table tests (violet → cyan family, orange → yellow family, teal → green-cyan family, red → magenta family, gray → a slightly lighter gray).
-- **Where it appears, exhaustively:** glow 2; the second chart series; the far end of the active-rail gradient; the second stop of the hero gradient; the accent word in a toast. Nowhere else.
+- **Brand color active (per-tenant theme):** derived in `deriveTheme` from the brand hue in OKLCH: lightness +0.18 (clamped to 0.85), chroma ×0.9, hue rotated −30°. Analogous, never complementary, so any brand pairs cleanly. The derivation is a pure function with table tests that pin the RULE for five input hues (hue delta −30° ± 6°, chroma ×0.9, lightness +0.18 clamped to .85, a gray stays gray), not color-family names: a single rotation cannot promise "violet → cyan" for every brand, and it does not need to — analogous is the guarantee.
+- **Where it appears, exhaustively:** glow 2; the second chart series; the far end of the active-rail gradient; the second stop of the hero gradient. Nowhere else. (An accent word inside toasts was considered and dropped: toasts are plain strings at every call site.)
 
 ### 3.4 The hero gradient
-`--gradient-hero`: `linear-gradient(90deg, color-mix(in srgb, var(--accent) 70%, white), color-mix(in srgb, var(--accent-2) 80%, white))` in dark; in light the stops are `var(--accent)` and `var(--accent-2)` unlightened.
+`--gradient-hero`: `linear-gradient(90deg, color-mix(in srgb, var(--accent) 50%, white), color-mix(in srgb, var(--accent-2) 60%, white))` in dark (the mockup's stops); in light the stops are `var(--accent)` and `var(--accent-2)` unlightened.
 Used only on text at display size (≥ 22px) via `background-clip: text`, and only on the elements §5 names. The lightest stop must clear AA large-text contrast (3:1) on the darkest effective ground; the contrast test in §8 pins it.
 
 ### 3.5 Unchanged
@@ -85,13 +87,13 @@ Type roles (Bricolage 650 for display, Geist for UI, Geist Mono labels), radii (
 Everything here happens through the semantic variables in `(dashboard)/globals.css` and the `Card` primitive unless a file is named.
 
 - **Card** (`components/ui/card.tsx`): background `--surface-1`, border `--line`, `box-shadow: var(--shadow-card)`, `backdrop-filter: blur(var(--glass-blur))`, and a `::before` sheen layer (`--sheen`, pointer-events none). Cards nest as today (`--surface-2` inside `--surface-1`).
-- **Sidebar** (`components/app-sidebar.tsx` + the sidebar literal island in globals): background becomes `rgba(255,255,255,.02)` dark with blur; the sidebar-literal island (`--sidebar`, `--sidebar-border`, `--sidebar-foreground`) is retired in favour of tokens. Active item: keeps the 3px left rail; the rail becomes `linear-gradient(var(--accent), var(--accent-2))`; the item background stays `--accent-dim` with `--glass-highlight`. Group labels unchanged. Client switcher: the avatar background becomes the accent→accent-2 gradient at 135°. Unread badges: `--accent-dim` fill, accent text (were solid).
+- **Sidebar** (`components/app-sidebar.tsx` + the sidebar literal island in globals): the sidebar stays DARK in both themes for the BIS default (the recorded decision stands; the mockup shows it that way). It is chrome, not a fifth content surface: tokens.css gains `--sidebar-ground: #0B0A12`, `--sidebar-surface: rgba(255,255,255,.02)` (the mockup value, with blur), `--sidebar-line` and `--sidebar-text`, identical in `:root` and `.dark`; globals' `--sidebar*` semantic variables route to them and the literal island is retired. Active item: keeps the 3px left rail; the rail becomes `linear-gradient(var(--accent), var(--accent-2))`; the item background stays `--accent-dim` with `--glass-highlight`. Group labels unchanged. Client switcher: the avatar background becomes the accent→accent-2 gradient at 135°. Unread badges: `--accent-dim` fill, accent text (were solid).
 - **Topbar** (`components/topbar.tsx`): transparent, bottom hairline `--line`. Sofía's presence dot gets `box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 22%, transparent)`.
-- **Buttons** (`components/ui/button.tsx`): default (primary) variant → `background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 70%, white), var(--accent))`, text `--surface-0`, `box-shadow: var(--shadow-glow)`. Light mode: gradient stops `var(--accent)` → `var(--accent-strong)`, text white, glow at half alpha. Ghost/outline: `--surface-1` fill, `--line-strong` border, no shadow. Destructive: `--crit-bg` fill, `--crit` text, no gradient, no glow. One primary per view (rule 8) is what keeps this quiet.
+- **Buttons** (`components/ui/button.tsx`): default (primary) variant → `background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 70%, white), var(--accent))`, text stays `--primary-foreground` (derived by `readableTextOn`, so it is contrast-safe on every tenant primary; `--surface-0` is not), `box-shadow: var(--shadow-glow)`. Light mode: gradient stops `var(--accent)` → `var(--accent-strong)`, text white, glow at half alpha. Ghost/outline: `--surface-1` fill, `--line-strong` border, no shadow. Destructive: `--crit-bg` fill, `--crit` text, no gradient, no glow. One primary per view (rule 8) is what keeps this quiet.
 - **Inputs / Select / Textarea**: `--surface-2` fill, `--line` border; focus = `border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring-glow)`; no hard outline.
 - **Period pills** (Website header; any segmented control): container `--surface-1` with `--line`; selected segment `--accent-dim` fill, `--text-1`, `box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent), 0 0 18px color-mix(in srgb, var(--accent) 25%, transparent)`.
 - **Badges / chips**: fills soften to `--surface-2` (neutral) and the existing `--good-bg / --warn-bg / --crit-bg` (status); dot + word rule unchanged.
-- **Toasts** (`components/ui/sonner.tsx`): `--surface-overlay`, `--glass-highlight`, `0 16px 40px -16px rgba(0,0,0,.9)` dark; the one accent word (e.g. "first numbers tomorrow") in `--accent-2`.
+- **Toasts** (`components/ui/sonner.tsx`): `--surface-overlay`, `--glass-highlight`, `0 16px 40px -16px rgba(0,0,0,.9)` dark. Plain text as today.
 - **Dialog / Drawer / Popover / Command palette**: `--surface-overlay` + blur; borders `--line-strong`.
 - **Tables** (`components/ui/table.tsx`): unchanged behaviour; hover row `--surface-2`; header labels mono as today. No blur on rows.
 - **Skeletons** (`components/ui/skeleton.tsx`): `--surface-2` with `--glass-highlight` so they read as the same material as cards.
@@ -100,7 +102,7 @@ Everything here happens through the semantic variables in `(dashboard)/globals.c
 ## 5. Data surfaces
 
 - **One hero per screen.** Each screen names its hero KPI in code (a `hero` prop on `StatTile`); only that number renders in `--gradient-hero`. Named now: Website → Visitors; Dashboard → the week's headline count (calls handled). A screen with no KPI has no hero. Lint: a test asserts at most one `hero` tile per rendered screen in the two screens above.
-- **Sentence panel** (`website-section.tsx`): unchanged copy; the emphasised segment (the `SentenceSegment` marked as emphasis) renders in `--gradient-hero`. Nothing else in the sentence is colored.
+- **Sentence panel** (`website-section.tsx`): unchanged copy; the sentence moves from 17px UI to 24px display (the mockup's size, which is what makes the gradient legal under §3.4); the emphasised segment (`SentenceSegment.strong`) renders in `--gradient-hero`. Nothing else in the sentence is colored.
 - **StatTile** (`components/stat-tile.tsx`): label (mono), number (display; hero or plain), delta pill (semantic), sparkline.
 - **Sparkline** (`components/sparkline.tsx`): line stroke `--accent` 1.8px, area fill `--accent` at 14%, end point dot r 2.4. Colors from tokens; no literals.
 - **Daily chart** (`website/daily-chart.tsx`): bars `linear-gradient(180deg, color-mix(in srgb, var(--accent) 95%, transparent), color-mix(in srgb, var(--accent) 25%, transparent))`, 4px tops kept, weekends `--surface-3` as today; hover: `filter: brightness(1.15)` and `box-shadow: 0 0 22px color-mix(in srgb, var(--accent) 45%, transparent)`; tooltip on `--surface-overlay`. **Second series allowed:** an SVG polyline in `--accent-2`, 2px, end dot r 4, on the SAME axis, with a mono legend naming both series ("Visitors", "Pageviews ÷ 3" or whatever the screen defines). Never a second axis. Two dashed gridlines at 33% and 66% in `--line`.
@@ -125,7 +127,7 @@ Reference mockup line at the top of DESIGN.md points to `docs/design/northern-li
 
 ## 8. Accessibility
 
-- **Composite contrast test** (`branding/theme.test.ts`, extended): for each brand color in the existing sweep and for the BIS default, compute the effective background under a `--surface-1` card at (a) the glow-1 centre and (b) the darkest point (ground with no glow), by alpha-compositing glow → ground → surface. Assert `--text-1` ≥ 4.5:1 and `--text-2` ≥ 4.5:1 at both, `--text-3` ≥ 3:1 at both, and the lightest hero-gradient stop ≥ 3:1 at (b) (large text). Same for light. The test must fail first when run against the old tokens with the new glow alphas set to 1.0 (proof it computes).
+- **Composite contrast test** (`branding/theme.test.ts`, extended): for each brand color in the existing sweep and for the BIS default, compute the effective background under a `--surface-1` card at (a) the glow-1 centre and (b) the darkest point (ground with no glow), by alpha-compositing glow → ground → surface. Point (a) is the brightest point a card can actually occupy (the glow centre sits off-canvas; the plan derives the on-canvas factor). Assert `--text-1` ≥ 4.5:1 and `--text-2` ≥ 4.5:1 at both, `--text-3` ≥ 3:1 at both, and the lightest hero-gradient stop ≥ 3:1 at (b) (large text). Same for light. If a brand color in the sweep still fails in dark after the `--text-3` lift, `themeStyle` emits the three glow alphas at half strength whenever a brand color is active (BIS default keeps full strength), and the sweep is asserted with that. The test must fail first when run against the old tokens with the new glow alphas set to 1.0 (proof it computes).
 - Gradient text only at ≥ 22px.
 - Focus: every control shows the 3px `--ring-glow` ring; overlays trap focus as today; Esc closes.
 - Status never by color alone (unchanged).
