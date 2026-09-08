@@ -51,10 +51,10 @@ export const NEUTRAL_RAMPS: Record<NeutralName, Ramp> = {
 };
 
 /**
- * Matches globals.css's sidebar-literal island: the sidebar's text is the
- * same in both themes. Was `#d4d4d8` pre-cut-over; Phase 1's semantic
- * remap moved the sidebar block to violet-biased dark-ladder literals and
- * this now tracks that block's `--sidebar-foreground` (`#A9A3BD`, tokens.css's
- * dark `--text-2`).
+ * Mirrors tokens.css's `--sidebar-text` (`#B9B3CF`, identical in :root and
+ * .dark): globals.css's `--sidebar-foreground` routes to it since the
+ * Northern Lights refresh moved the sidebar-literal island into a chrome
+ * token set. Mode-independent on purpose — the sidebar is dark in both
+ * themes. theme.test.ts's parity block pins this against tokens.css.
  */
-export const SIDEBAR_FOREGROUND = "#a9a3bd";
+export const SIDEBAR_FOREGROUND = "#b9b3cf";

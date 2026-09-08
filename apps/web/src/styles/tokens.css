@@ -38,7 +38,8 @@
   --ring-glow-2:  rgba(8, 145, 178, .28);
 
   /* sidebar CHROME, not a fifth content surface: the rail is dark in BOTH
-     themes (recorded decision), so these are identical in :root and .dark.
+     themes (recorded decision), so these are identical in :root and .dark
+     except --sidebar-ground — see .dark.
      --sidebar-surface is the mockup's .02 glass over --sidebar-ground; the
      tints are the dark-mode accents as seen on that chrome. globals.css's
      --sidebar* semantic vars route here; theme-style.ts overrides them per

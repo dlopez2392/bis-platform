@@ -381,22 +381,26 @@ describe("globals.css / tokens.css / BIS parity", () => {
     expect(darkBlock).toMatch(/--primary:\s*var\(--accent\);/);
   });
 
-  // sidebar-accent is a sanctioned literal (the sidebar-literal island), not
-  // tokenized, so its hex truth still lives directly in globals.css.
-  it("keeps :root --sidebar-accent equal to its BIS.light constant", () => {
-    expect(declared(rootBlock, "sidebar-accent")).toBe(BIS.light.sidebarAccent);
+  // The sidebar-literal island moved to tokens.css as a CHROME token set
+  // (Northern Lights spec §4 as decided 2026-09-08): the four --sidebar*
+  // names survive as shadcn semantic vars, ROUTE to --sidebar-tint /
+  // --sidebar-text / … in :root, and .dark no longer re-declares them. The
+  // hex truth now lives in tokens.css, identical in both blocks — the sidebar
+  // is dark in both themes.
+  it("keeps :root --sidebar-accent wired to var(--sidebar-tint), and BIS.*.sidebarAccent equal to --sidebar-tint in both token blocks", () => {
+    expect(rootBlock).toMatch(/--sidebar-accent:\s*var\(--sidebar-tint\);/);
+    expect(BIS.light.sidebarAccent).toBe(declared(tokensRootBlock, "sidebar-tint"));
+    expect(BIS.dark.sidebarAccent).toBe(declared(tokensDarkBlock, "sidebar-tint"));
   });
 
-  it("keeps .dark --sidebar-accent equal to BIS.dark.sidebarAccent", () => {
-    expect(declared(darkBlock, "sidebar-accent")).toBe(BIS.dark.sidebarAccent);
+  it("no longer re-declares any --sidebar* name in .dark (the island is gone)", () => {
+    expect(darkBlock).not.toMatch(/--sidebar/);
   });
 
-  // SIDEBAR_FOREGROUND is deliberately mode-independent, so BOTH blocks must
-  // agree with the one constant — the sidebar does not invert. Also a
-  // sanctioned literal, so this still reads globals.css directly.
-  it("keeps --sidebar-foreground equal to SIDEBAR_FOREGROUND in both modes", () => {
-    expect(declared(rootBlock, "sidebar-foreground")).toBe(SIDEBAR_FOREGROUND);
-    expect(declared(darkBlock, "sidebar-foreground")).toBe(SIDEBAR_FOREGROUND);
+  it("keeps --sidebar-foreground wired to var(--sidebar-text) and SIDEBAR_FOREGROUND equal to --sidebar-text in both token blocks", () => {
+    expect(rootBlock).toMatch(/--sidebar-foreground:\s*var\(--sidebar-text\);/);
+    expect(SIDEBAR_FOREGROUND).toBe(declared(tokensRootBlock, "sidebar-text"));
+    expect(SIDEBAR_FOREGROUND).toBe(declared(tokensDarkBlock, "sidebar-text"));
   });
 
   // themeStyle falls back to these when a value fails validation. --background

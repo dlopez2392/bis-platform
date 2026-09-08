@@ -92,10 +92,11 @@ export const FONT: Record<TypeName, string> = {
  * Since Phase 1's semantic cut-over, these three values come from
  * `apps/web/src/styles/tokens.css`, not from a literal in globals.css:
  * `primary`/`ring` are tokens.css's `--accent` per mode (`#6D28D9` light,
- * `#8B7CF7` dark) and `sidebarAccent` is the sanctioned sidebar-literal
- * island's `--sidebar-accent` (`#A99EFF`, identical in both modes — the
- * sidebar does not invert). All three passed the contrast sweep below
- * untouched; no lift was needed this round.
+ * `#8B7CF7` dark) and, since the Northern Lights refresh retired the
+ * sidebar-literal island, `sidebarAccent` mirrors tokens.css's
+ * `--sidebar-tint` (`#8B7CF7`, identical in both modes — the sidebar does
+ * not invert). All three passed the contrast sweep below untouched; no
+ * lift was needed this round.
  *
  * dark.ring is kept equal to dark.primary (and light.ring to light.primary)
  * for the same reason the old literal-lift history recorded: before
@@ -107,8 +108,8 @@ export const FONT: Record<TypeName, string> = {
  * these constants.
  */
 export const BIS = {
-  light: { primary: "#6d28d9", ring: "#6d28d9", sidebarAccent: "#a99eff" },
-  dark:  { primary: "#8b7cf7", ring: "#8b7cf7", sidebarAccent: "#a99eff" },
+  light: { primary: "#6d28d9", ring: "#6d28d9", sidebarAccent: "#8b7cf7" },
+  dark:  { primary: "#8b7cf7", ring: "#8b7cf7", sidebarAccent: "#8b7cf7" },
 } as const;
 
 /**
