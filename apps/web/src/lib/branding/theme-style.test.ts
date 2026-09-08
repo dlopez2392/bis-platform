@@ -14,6 +14,14 @@ describe("themeStyle", () => {
     expect(style["--radius"]).toBe("1rem");
     expect(style["--font-sans"]).toBe("var(--font-source-serif)");
     expect(style["--sidebar-accent"]).toBe(theme.sidebarAccent);
+    expect(style["--accent"]).toBe(theme.primary);
+    expect(style["--accent-strong"]).toBe(theme.primary);
+    expect(style["--accent-dim"]).toBe(`color-mix(in srgb, ${theme.primary} 14%, transparent)`);
+    expect(style["--ring-glow"]).toBe(`color-mix(in srgb, ${theme.ring} 35%, transparent)`);
+    expect(style["--accent-2"]).toBe(theme.accent2);
+    expect(style["--accent-2-dim"]).toBe(`color-mix(in srgb, ${theme.accent2} 14%, transparent)`);
+    expect(style["--ring-glow-2"]).toBe(`color-mix(in srgb, ${theme.accent2} 35%, transparent)`);
+    expect(style["--sidebar-tint-2"]).toBe(theme.accent2);
   });
 
   // --radius-sm/md/lg are defined in globals.css as calc() over var(--radius).
@@ -39,18 +47,27 @@ describe("themeStyle", () => {
   });
 
   // The brand `--accent` custom property (tokens.css) must never be shadowed
-  // on <body> for a themed client account. themeStyle used to re-emit
-  // `--accent`/`--accent-foreground` as the OLD shadcn hover-surface pair
-  // (dead for rendering since globals.css's @theme inline now reads
-  // --surface-3/--text-1 directly) — but the NAME collided with the brand
-  // token, so a themed account's body subtree still had the brand accent
-  // overridden by whatever the ramp's subtle/fg pair happened to be. Checked
-  // against the serialized string, not just the two keys, so a future
-  // emission of either name under a different code path still trips this.
-  it("never shadows the brand --accent token: no --accent or --accent-foreground in the emitted set", () => {
+  // on <body> by the OLD shadcn hover-surface pair. themeStyle used to
+  // re-emit `--accent`/`--accent-foreground` as that pair (dead for rendering
+  // since globals.css's @theme inline now reads --surface-3/--text-1
+  // directly) — but the NAME collided with the brand token, so a themed
+  // account's body subtree had the brand accent overridden by whatever the
+  // ramp's subtle/fg pair happened to be.
+  //
+  // Since the Northern Lights refresh, `--accent` IS emitted here — carrying
+  // the tenant's own lifted primary, which is the value the collision was
+  // stealing the name from. So the invariant is no longer "never emitted",
+  // it is "never the ramp's hover surface": the guard is retargeted at the
+  // actual defect rather than dropped. `--accent-foreground` has no brand
+  // meaning at all and is still never emitted. Checked against the
+  // serialized string, not just the keys, so an emission under a different
+  // code path still trips this.
+  it("never shadows the brand --accent token: --accent is the brand primary, never the ramp's hover surface", () => {
     const style = themeStyle(theme) as Record<string, string>;
     const serialized = Object.entries(style).map(([k, v]) => `${k}:${v};`).join("");
-    expect(serialized).not.toMatch(/--accent:/);
+    expect(serialized).toMatch(`--accent:${theme.primary};`);
+    expect(style["--accent"]).not.toBe(theme.secondary);
+    expect(style["--accent"]).not.toBe(theme.muted);
     expect(serialized).not.toMatch(/--accent-foreground:/);
   });
 

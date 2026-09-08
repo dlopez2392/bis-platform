@@ -9,6 +9,7 @@
  */
 import { contrastRatio, ensureContrast, parseHexColor, readableTextOn } from "./color";
 import { NEUTRAL_RAMPS, SIDEBAR_FOREGROUND, type NeutralName } from "./neutral-ramps";
+import { deriveAccent2 } from "./oklch";
 
 export type { NeutralName };
 
@@ -71,6 +72,8 @@ export type ResolvedTheme = {
   border: string; input: string; ring: string;
   sidebar: string; sidebarForeground: string;
   sidebarAccent: string; sidebarBorder: string;
+  /** Second accent (spec §3.3): pinned for BIS, derived from the lifted primary for a brand. */
+  accent2: string;
   radius: string;
   fontSans: string;
 };
@@ -89,14 +92,19 @@ export const FONT: Record<TypeName, string> = {
 /**
  * What globals.css uses today, per mode. Every fallback lands here.
  *
- * Since Phase 1's semantic cut-over, these three values come from
+ * Since Phase 1's semantic cut-over, every value here comes from
  * `apps/web/src/styles/tokens.css`, not from a literal in globals.css:
  * `primary`/`ring` are tokens.css's `--accent` per mode (`#6D28D9` light,
  * `#8B7CF7` dark) and, since the Northern Lights refresh retired the
  * sidebar-literal island, `sidebarAccent` mirrors tokens.css's
  * `--sidebar-tint` (`#8B7CF7`, identical in both modes — the sidebar does
- * not invert). All three passed the contrast sweep below untouched; no
- * lift was needed this round.
+ * not invert). `accent2` mirrors tokens.css's `--accent-2` (`#0891B2` light,
+ * `#4FD8E6` dark): spec §3.3 pins the BIS second accent as a constant rather
+ * than deriving it, so an unthemed account and a themed one agree. It carries
+ * no text and is not part of the contrast sweep — it paints glows, the far
+ * rail stop and the second chart series. `primary`, `ring` and
+ * `sidebarAccent` all passed the sweep below untouched; no lift was needed
+ * this round.
  *
  * dark.ring is kept equal to dark.primary (and light.ring to light.primary)
  * for the same reason the old literal-lift history recorded: before
@@ -104,12 +112,12 @@ export const FONT: Record<TypeName, string> = {
  * and letting one drift from the other here would silently diverge them.
  * ring carries no text label, so its floor is 3:1 (already cleared) — this
  * is consistency, not a contrast repair. theme.test.ts reads globals.css's
- * `:root` and `.dark` blocks directly and asserts all three still resolve to
- * these constants.
+ * and tokens.css's `:root` and `.dark` blocks directly and asserts every one
+ * of these constants still resolves to the token it mirrors.
  */
 export const BIS = {
-  light: { primary: "#6d28d9", ring: "#6d28d9", sidebarAccent: "#8b7cf7" },
-  dark:  { primary: "#8b7cf7", ring: "#8b7cf7", sidebarAccent: "#8b7cf7" },
+  light: { primary: "#6d28d9", ring: "#6d28d9", sidebarAccent: "#8b7cf7", accent2: "#0891b2" },
+  dark:  { primary: "#8b7cf7", ring: "#8b7cf7", sidebarAccent: "#8b7cf7", accent2: "#4fd8e6" },
 } as const;
 
 /**
@@ -233,6 +241,10 @@ export function deriveTheme(
     ring = ensureContrast(ring, steps.card, 3) ?? bis.ring;
   }
 
+  // Derived from the LIFTED primary, not the raw brand: the primary is what
+  // --accent will be on <body>, so the pair is analogous to what renders.
+  const accent2 = brand ? deriveAccent2(primary) : bis.accent2;
+
   return {
     background: steps.bg,
     foreground: steps.fg,
@@ -257,6 +269,7 @@ export function deriveTheme(
     sidebarForeground: SIDEBAR_FOREGROUND,
     sidebarAccent,
     sidebarBorder: ramp.sidebarBorder,
+    accent2,
     radius: RADIUS[inputs.corners ?? "soft"],
     fontSans: FONT[inputs.type ?? "geist"],
   };

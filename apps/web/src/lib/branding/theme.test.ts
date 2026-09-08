@@ -6,6 +6,7 @@ import type { Branding } from "@bis/db";
 import { contrastRatio } from "./color";
 import { publicFormTheme } from "./public-form-theme";
 import { NEUTRAL_RAMPS, SIDEBAR_FOREGROUND, type NeutralName } from "./neutral-ramps";
+import { deriveAccent2 } from "./oklch";
 import { deriveTheme, parseAllowlisted, NEUTRAL_NAMES, BIS, FONT, type CornerName, type TypeName } from "./theme";
 import { FONT_ALLOWLIST, SAFE_STYLE_FALLBACKS } from "./theme-style";
 
@@ -123,6 +124,21 @@ describe("deriveTheme", () => {
       "light",
     );
     expect(t?.primary).toBe("#6d28d9"); // the BIS light default, not the input
+  });
+
+  it("pins accent2 to the BIS constants when no brand colour is set (not derived)", () => {
+    const light = deriveTheme({ color: null, neutral: "slate", corners: null, type: null, mode: null }, "light");
+    const dark = deriveTheme({ color: null, neutral: "slate", corners: null, type: null, mode: null }, "dark");
+    expect(light?.accent2).toBe("#0891b2");
+    expect(dark?.accent2).toBe("#4fd8e6");
+  });
+
+  it("derives accent2 from the LIFTED primary when a brand colour is set", () => {
+    for (const mode of MODES) {
+      const t = deriveTheme({ color: "#6d28d9", neutral: "slate", corners: null, type: null, mode: null }, mode)!;
+      expect(t.accent2).toBe(deriveAccent2(t.primary));
+      expect(t.accent2).toMatch(/^#[0-9a-f]{6}$/);
+    }
   });
 
   // The whole point of the milestone: no combination of stored inputs can
@@ -366,6 +382,16 @@ describe("globals.css / tokens.css / BIS parity", () => {
 
   it("keeps BIS.light.ring equal to tokens.css's light --accent", () => {
     expect(BIS.light.ring).toBe(declared(tokensRootBlock, "accent"));
+  });
+
+  // Spec §3.3 pins the BIS second accent as CONSTANTS rather than deriving
+  // it, which makes theme.ts and tokens.css a mirror of exactly the kind
+  // this block exists to keep in lockstep: an unthemed account renders
+  // tokens.css's --accent-2, a themed one renders BIS.*.accent2 through
+  // themeStyle, and nothing else would notice them disagreeing.
+  it("keeps BIS.*.accent2 equal to tokens.css's --accent-2 in both token blocks", () => {
+    expect(BIS.light.accent2).toBe(declared(tokensRootBlock, "accent-2"));
+    expect(BIS.dark.accent2).toBe(declared(tokensDarkBlock, "accent-2"));
   });
 
   // globals.css itself still has to confirm --primary/--ring actually route
