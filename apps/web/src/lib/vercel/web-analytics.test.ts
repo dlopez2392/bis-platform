@@ -13,8 +13,12 @@ const AGG_JSON = { version: 1, query: { groupBy: ["requestPath"] }, data: [
   { requestPath: "/services", count: 120, visitors: 90 },
 ] };
 
+type FetchLike = (url: string, init?: RequestInit) => Promise<{
+  ok: boolean; status: number; json: () => Promise<unknown>; text: () => Promise<string>;
+}>;
+
 function fetchStub(status: number, body: unknown) {
-  return vi.fn(async (_url: string, _init?: RequestInit) =>
+  return vi.fn<FetchLike>(async () =>
     ({ ok: status < 400, status, json: async () => body, text: async () => JSON.stringify(body) }));
 }
 
