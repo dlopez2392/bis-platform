@@ -84,10 +84,14 @@ Nothing in Part B involves the client.
 
 ## The dogfood — BIS's own website
 
-An internal account exists for it: name `BIS (internal — never invoice)`,
-client access OFF, timezone America/Chicago, `clerk_org_id = org_internal_bis`
-(no Clerk org; nobody signs in as it). Linked to project `bis-website`
-(`prj_TDD9bT1z3Ow0fjLFaXxfxqIeH6w0`), domain `bis-rgv.com`. The site has
+The site is linked to danlo's own company account, **Bespoke Intelligent
+Solutions** (`9c458ab4-8f32-4e74-b660-f2c9b490431c`, Clerk org
+`org_3IejCERXojXO4BGgiKSHL34lT5O`, America/Chicago, client access OFF):
+project `bis-website` (`prj_TDD9bT1z3Ow0fjLFaXxfxqIeH6w0`), domain
+`bis-rgv.com`, site row `c982bce3-71ba-44f8-ab51-58f439ac2320`. (A separate
+"BIS (internal — never invoice)" account was created for this on 2026-09-08
+and deleted the same day at danlo's direction; the site and its 30 stored
+days were moved, not re-pulled.) The site has
 carried `<Analytics />` since 2026-07-08 (BIS-Website `d17625a`) and
 bis-rgv.com serves the insights script. Its Website section is the prospect
 demo until the prospect audit piece exists.
