@@ -24,7 +24,13 @@ const Toaster = ({ ...props }: ToasterProps) => {
         error: <OctagonXIcon className="size-4" />,
         loading: <Loader2Icon className="size-4 animate-spin" />,
       }}
-      toastOptions={{ className: "glass-overlay" }}
+      toastOptions={{
+        className: "glass-overlay",
+        // sonner's own [data-sonner-toast][data-styled=true] rule (specificity
+        // 0,2,0) outranks .glass-overlay's box-shadow, so its grey blur shadow
+        // would survive the utility. An inline style wins over both.
+        style: { boxShadow: "var(--shadow-overlay)" },
+      }}
       style={
         {
           "--normal-bg": "var(--popover)",

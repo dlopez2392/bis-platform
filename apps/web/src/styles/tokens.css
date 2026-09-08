@@ -172,6 +172,9 @@
     --surface-1: #15131F;
     --surface-2: #1B1826;
     --surface-3: #211D2E;
+    /* Dialogs and sheets were fully opaque before the glass pass; at 88% with
+       no blur to separate them they would leak the page behind. */
+    --surface-overlay: #1B1826;
   }
 }
 

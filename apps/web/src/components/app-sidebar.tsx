@@ -234,9 +234,10 @@ export function AppSidebar({
               "flex size-7 shrink-0 items-center justify-center overflow-hidden rounded",
               // A logo is artwork with its own background, usually drawn for a
               // light one. Sitting it on a white chip keeps a dark-on-
-              // transparent mark legible against this dark sidebar; the tinted
-              // chip stays for the generic icon, which is drawn to suit it.
-              clientLogoUrl ? "bg-white p-0.5" : "bg-[linear-gradient(135deg,var(--sidebar-accent),var(--sidebar-tint-2))] text-[var(--sidebar-ground)]",
+              // transparent mark legible against this dark sidebar; without a
+              // logo the chip is the mockup's avatar — the full-strength 135°
+              // gradient carrying white ink.
+              clientLogoUrl ? "bg-white p-0.5" : "bg-[linear-gradient(135deg,var(--sidebar-accent),var(--sidebar-tint-2))] text-[var(--sidebar-text-strong)]",
             )}
           >
             {clientLogoUrl ? (
@@ -383,7 +384,7 @@ function SidebarLink({
         "relative flex items-center gap-3 rounded-md px-2.5 py-2 text-sm transition-colors",
         collapsed && "justify-center px-0",
         active
-          ? "bg-sidebar-accent/15 font-medium text-[var(--sidebar-text-strong)] shadow-[var(--glass-highlight)]"
+          ? "bg-sidebar-accent/15 font-medium text-[var(--sidebar-text-strong)] shadow-[inset_0_1px_0_var(--sidebar-line)]"
           : "text-sidebar-foreground/75 hover:bg-[var(--sidebar-line)] hover:text-[var(--sidebar-text-strong)]",
       )}
     >

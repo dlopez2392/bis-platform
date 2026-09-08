@@ -76,6 +76,9 @@ describe("tokens.css — Northern Lights (spec §3)", () => {
     expect(value(fallback!, "surface-1")).toBe("#15131F");
     expect(value(fallback!, "surface-2")).toBe("#1B1826");
     expect(value(fallback!, "surface-3")).toBe("#211D2E");
+    // Dialog and sheet were fully opaque before the glass pass; with no blur
+    // to separate them, 88% alpha would leak the page behind.
+    expect(value(fallback!, "surface-overlay")).toBe("#1B1826");
   });
 
   it("keeps the fallback AFTER the main .dark block, so theme.test.ts's first-match regex still reads the live values", () => {
