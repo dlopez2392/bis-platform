@@ -14,7 +14,8 @@ const AGG_JSON = { version: 1, query: { groupBy: ["requestPath"] }, data: [
 ] };
 
 function fetchStub(status: number, body: unknown) {
-  return vi.fn(async () => ({ ok: status < 400, status, json: async () => body, text: async () => JSON.stringify(body) }));
+  return vi.fn(async (_url: string, _init?: RequestInit) =>
+    ({ ok: status < 400, status, json: async () => body, text: async () => JSON.stringify(body) }));
 }
 
 describe("parsers", () => {
