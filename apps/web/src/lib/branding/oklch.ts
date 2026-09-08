@@ -96,10 +96,22 @@ export function deriveAccent2(hex: string): string {
  * Chroma is fitted to sRGB by `fitChroma` for the same reason `deriveAccent2`
  * fits it: a per-channel clamp would repair an out-of-gamut result by moving
  * the HUE, and holding the hue is the whole point of a "strong" partner.
+ *
+ * The preferred move can leave [0, 1] only at the lightness extremes — a
+ * black brand in light mode, a white brand in dark mode. Clamping there (the
+ * previous behaviour) pins the result to the source itself, so
+ * `accentStrong === primary` and the gradient goes flat, which is the one
+ * outcome this function exists to prevent. Flipping direction by the same
+ * step instead always lands in [0, 1] (step < 1), so `clamp01` below is
+ * belt-and-braces, not load-bearing.
  */
 export function deriveAccentStrong(hex: string, mode: "light" | "dark"): string {
   const { l, c, h } = hexToOklch(hex);
-  const l2 = clamp01(mode === "light" ? l - 0.06 : l + 0.09);
+  const step = mode === "light" ? 0.06 : 0.09;
+  const preferred = mode === "light" ? l - step : l + step;
+  const l2 = clamp01(
+    preferred >= 0 && preferred <= 1 ? preferred : (mode === "light" ? l + step : l - step),
+  );
   const c2 = c * (mode === "light" ? 0.9 : 0.8);
   return oklchToHex({ l: l2, c: fitChroma(l2, c2, h), h });
 }

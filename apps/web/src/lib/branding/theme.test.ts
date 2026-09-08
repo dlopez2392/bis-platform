@@ -172,6 +172,17 @@ describe("deriveTheme", () => {
       { color: "#6d28d9", neutral: "slate", corners: null, type: null, mode: null }, "light",
     )!;
     expect(light.accentStrong).not.toBe(light.primary);
+
+    // Black and white are the boundary brands that used to alias: a clamp at
+    // the lightness extremes pinned accentStrong to the (lifted) primary
+    // itself, flattening --gradient-primary's two stops into one colour.
+    // Asserted across BOTH modes for both adversarial hues.
+    for (const color of ["#000000", "#ffffff"]) {
+      for (const mode of MODES) {
+        const t = deriveTheme({ color, neutral: "slate", corners: null, type: null, mode: null }, mode)!;
+        expect(t.accentStrong, `${color} ${mode}`).not.toBe(t.primary);
+      }
+    }
   });
 
   // The tint alphas are per MODE, never per brand: tokens.css pins .09/.28 on

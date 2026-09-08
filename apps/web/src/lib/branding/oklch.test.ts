@@ -36,6 +36,9 @@ describe("deriveAccent2 — L +0.18 (clamp .85), C ×0.9, H −30° (spec §3.3)
     expect(out.c).toBeLessThan(src.c);
     expect(out.l).toBeGreaterThan(src.l);
     expect(out.l).toBeLessThanOrEqual(0.86);
+    // Upper bound, not equality: the gamut fit can only ever LOWER chroma
+    // below the ×0.9 target, never raise it above.
+    expect(out.c).toBeLessThanOrEqual(0.9 * src.c + 0.003);
   });
 
   it("gray → a slightly lighter gray (chroma stays ~0)", () => {
@@ -95,17 +98,59 @@ describe("deriveAccentStrong — darker in light, lighter in dark, hue held", ()
       const src = hexToOklch(hex);
       const strong = deriveAccentStrong(hex, mode);
       const out = hexToOklch(strong);
-      // ±0.015: the gamut fit can cost a little, and an 8-bit round trip more.
+      const mult = mode === "light" ? 0.9 : 0.8;
+      // ±0.005: measured worst error 0.001 (fitChroma never touches L; the
+      // rest is an 8-bit hex round trip). Tighter than the ±0.015 this table
+      // used to carry, which no case here actually needed.
       expect(Math.abs(out.l - (src.l + (mode === "light" ? -0.06 : 0.09))))
-        .toBeLessThanOrEqual(0.015);
+        .toBeLessThanOrEqual(0.005);
       expect(hueDelta(out.h, src.h)).toBeLessThanOrEqual(2);
-      expect(out.c).toBeLessThanOrEqual(src.c);
+      // Upper bound, not equality: the gamut fit can only ever LOWER chroma
+      // below the target, never raise it above.
+      expect(out.c).toBeLessThanOrEqual(mult * src.c + 0.003);
       expect(strong).toMatch(/^#[0-9a-f]{6}$/);
     });
 
-  it("clamps lightness at 1 for a near-white input in dark mode", () => {
-    const out = deriveAccentStrong("#fdfcff", "dark");
-    expect(out).toMatch(/^#[0-9a-f]{6}$/);
-    expect(hexToOklch(out).l).toBeLessThanOrEqual(1);
+  // At least one in-gamut case per mode, so the multiplier itself is pinned
+  // and not just its upper bound. Teal is the hue that stays in sRGB gamut at
+  // BOTH targets (L −0.06/C ×0.9 light, L +0.09/C ×0.8 dark) — violet and
+  // orange run out of gamut in DARK mode (measured chroma short of the ×0.8
+  // target by 0.0055 and 0.0211 respectively), where only the upper-bound
+  // check above applies.
+  it("teal keeps exactly the pinned chroma multiplier in both modes (in gamut, the fit never bites)", () => {
+    const src = hexToOklch("#14b8a6");
+    const light = hexToOklch(deriveAccentStrong("#14b8a6", "light"));
+    const dark = hexToOklch(deriveAccentStrong("#14b8a6", "dark"));
+    expect(Math.abs(light.c - src.c * 0.9)).toBeLessThanOrEqual(0.003);
+    expect(Math.abs(dark.c - src.c * 0.8)).toBeLessThanOrEqual(0.003);
+  });
+
+  // R1: the direction flips at the extremes instead of clamping to the
+  // source. Clamping is the defect this replaces: it pinned accentStrong to
+  // the primary itself for a black brand in light mode (and a white one in
+  // dark mode), rendering --gradient-primary's two stops as one flat colour.
+  it("flips direction for a black brand in light mode: L rises, never aliases black", () => {
+    const src = hexToOklch("#000000");
+    const strong = deriveAccentStrong("#000000", "light");
+    const out = hexToOklch(strong);
+    expect(strong).not.toBe("#000000");
+    expect(out.l).toBeGreaterThan(src.l);
+    // ±0.01, not the ±0.005 every other case in this file uses: pure black is
+    // achromatic (c = 0), and the first 8-bit-representable gray above L = 0
+    // is #010101 at L ≈ 0.0672 — there is no representable gray between
+    // L = 0 and L = 0.0672, so a +0.06 target necessarily lands ~0.0072 high.
+    // That is gamut quantization, not the algorithm: every other adversarial
+    // hue in this file (including #ffffff/dark just below) lands within
+    // ~0.001 of its target.
+    expect(Math.abs(out.l - (src.l + 0.06))).toBeLessThanOrEqual(0.01);
+  });
+
+  it("flips direction for a white brand in dark mode: L falls, never aliases white", () => {
+    const src = hexToOklch("#ffffff");
+    const strong = deriveAccentStrong("#ffffff", "dark");
+    const out = hexToOklch(strong);
+    expect(strong).not.toBe("#ffffff");
+    expect(out.l).toBeLessThan(src.l);
+    expect(Math.abs(out.l - (src.l - 0.09))).toBeLessThanOrEqual(0.005);
   });
 });

@@ -140,6 +140,24 @@ describe("publicFormTheme — mode selection", () => {
     for (const [key, value] of emitted) {
       expect(css, `${key}:${value}`).toContain(`${key}:${value} !important;`);
     }
+
+    // The dark rule also carries the CTA and error tokens -- built by
+    // resolveCta(...) and errorStyle(...) (public-form-theme.ts, around the
+    // darkRule(serializeDeclarations({...})) call), neither of which is
+    // exported (both are private to this module), so this cannot
+    // independently recompute their expected values the way the loop above
+    // does for themeStyle's output. What IS pinned: none of the three keys
+    // can silently vanish from the dark rule with a malformed or missing
+    // value -- which is exactly the shape of the F3 defect this whole
+    // describe block exists to catch -- and --form-accent's value is
+    // cross-checked against a second, independent publicFormTheme call for
+    // the same branding (a determinism/consistency check, not a correctness
+    // oracle for resolveCta itself).
+    for (const key of ["--form-accent", "--form-accent-foreground", "--form-error"]) {
+      expect(css, key).toMatch(new RegExp(`${key}:#[0-9a-f]{6} !important;`));
+    }
+    const darkCta = css.match(/--form-accent:(#[0-9a-f]{6})/)![1]!;
+    expect(darkCta).toBe(publicFormTheme(b, false).darkCss!.match(/--form-accent:(#[0-9a-f]{6})/)![1]!);
   });
 
   // The tint alphas are per mode (.09 light, .14 dark), so the dark rule's

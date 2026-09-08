@@ -134,7 +134,8 @@ export const BIS = {
 } as const;
 
 export type AccentAlphas = {
-  accentDim: number; ringGlow: number; accent2Dim: number; ringGlow2: number;
+  readonly accentDim: number; readonly ringGlow: number;
+  readonly accent2Dim: number; readonly ringGlow2: number;
 };
 
 /**
