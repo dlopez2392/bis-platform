@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
 import {
-  getSiteForAccount, upsertSite, listSitesToSync, writeTrafficDay, stampSiteSynced,
+  getSiteForAccount, upsertSite, listSitesToSync, writeTrafficDay, stampSiteSynced, unlinkSite, countTrafficDays,
   listTrafficDays, listTrafficBreakdown,
 } from "../sites";
 
@@ -36,6 +36,26 @@ describe("sites data layer", () => {
           .rejects.toMatchObject({ code: "23505" });
         expect(await getSiteForAccount(db, second)).toBeNull();
       })));
+
+  // Mutation: delete the site before its traffic rows — the RESTRICT FKs
+  // refuse and nothing is removed; skip the breakdown delete — the daily
+  // delete goes through but the site delete refuses (breakdown's FK is to
+  // sites), and the breakdown rows are still there.
+  it("unlinkSite removes breakdown, days and the site in FK order and reports the days removed; countTrafficDays sees them first", () =>
+    withTestAccount(async (db, accountId) => {
+      const site = await upsertSite(db, accountId, { vercelProjectId: `prj_t_${accountId.slice(0, 8)}`, domain: "one.example" });
+      await writeTrafficDay(db, site, "2026-09-01", { visitors: 3, pageviews: 4 },
+        [{ dimension: "page", value: "/", visitors: 3, pageviews: 4 }]);
+      await writeTrafficDay(db, site, "2026-09-02", { visitors: 1, pageviews: 1 }, []);
+      expect(await countTrafficDays(db, accountId)).toBe(2);
+      expect(await unlinkSite(db, accountId)).toEqual({ daysDeleted: 2 });
+      expect(await getSiteForAccount(db, accountId)).toBeNull();
+      expect(await listTrafficDays(db, accountId, "2026-01-01", "2026-12-31")).toEqual([]);
+      expect(await listTrafficBreakdown(db, accountId, "2026-01-01", "2026-12-31")).toEqual([]);
+      expect(await countTrafficDays(db, accountId)).toBe(0);
+      // Nothing linked: a no-op that says so.
+      expect(await unlinkSite(db, accountId)).toEqual({ daysDeleted: 0 });
+    }));
 
   it("writes a day (totals + breakdown), replaces it on rewrite, stamps, and reads back in order", () =>
     withTestAccount(async (db, accountId) => {

@@ -37,18 +37,24 @@ Plan: `docs/superpowers/plans/2026-09-07-website-traffic.md`.
 1. Vercel → Account → Tokens → create `bis-platform-analytics`, scope = the
    team, expiry 1 year. Copy it once.
 2. Vercel → bis-platform project → Settings → Environment Variables:
-   `VERCEL_API_TOKEN` = the token, `VERCEL_TEAM_ID` = `team_8zjV46sJxQDsVzikNQa1JaO2`
-   (Production + Preview). No redeploy is needed: the pass builds its client
-   lazily, on the tick, from the env it finds then.
-3. Local: the same two lines in `apps/web/.env.local`.
-4. Verify: the next `/api/cron/reminders` tick's JSON carries a `siteTraffic`
+   `VERCEL_API_TOKEN` = the token (mark it Sensitive), `VERCEL_TEAM_ID` =
+   `team_8zjV46sJxQDsVzikNQa1JaO2` (Production + Preview).
+3. **Redeploy.** Vercel applies environment variables to NEW deployments
+   only (docs: "Changes to environment variables are not applied to
+   previous deployments"). Deployments → the current production deployment
+   → ⋯ → Redeploy, or `vercel redeploy --scope danlopez508-8452s-projects`
+   with the deployment URL. The pass constructs its client lazily, which
+   only means a missing token cannot crash a tick — it does not let a
+   running deployment see a variable added after it was built.
+4. Local: the same two lines in `apps/web/.env.local`.
+5. Verify: the next `/api/cron/reminders` tick's JSON carries a `siteTraffic`
    key shaped `{ synced, daysSynced, failed, skippedNotYet, skippedUpToDate,
    skippedCap, unresolvableTimezone }`. With no sites linked every counter is
    0. A non-zero `failed` with `VERCEL_API_TOKEN/VERCEL_TEAM_ID unset` in the
    log means step 2 missed. Until Part A is done, Settings → Website lists no
    projects and says why — a new site cannot be linked (nothing to pick); an
    already-linked one keeps showing its domain.
-5. First night after the token lands, read the cron log and the first
+6. First night after the token lands, read the cron log and the first
    `site_traffic_breakdown` rows for the dogfood and record in Findings:
    what a direct visit carries as `referrerHostname` (the parser reads
    null as ""), whether an `Others` row appeared (dropped by the parser),
@@ -76,12 +82,23 @@ Plan: `docs/superpowers/plans/2026-09-07-website-traffic.md`.
 
 Nothing in Part B involves the client.
 
+**Removing a site:** Settings → Website → **Unlink site** → confirm. It deletes
+the stored days and the link (agency-only, recorded as a `site.unlinked`
+event); the website itself is untouched. Linking again later re-fetches the
+last 30 days on the next tick, so only history older than that is lost. Use
+this before re-pointing a client at a different project: once a day of
+traffic is on record, Save refuses a project change on purpose.
+
 ## The dogfood — BIS's own website
 
-An internal account exists for it: name `BIS (internal — never invoice)`,
-client access OFF, timezone America/Chicago, `clerk_org_id = org_internal_bis`
-(no Clerk org; nobody signs in as it). Linked to project `bis-website`
-(`prj_TDD9bT1z3Ow0fjLFaXxfxqIeH6w0`), domain `bis-rgv.com`. The site has
+The site is linked to danlo's own company account, **Bespoke Intelligent
+Solutions** (`9c458ab4-8f32-4e74-b660-f2c9b490431c`, Clerk org
+`org_3IejCERXojXO4BGgiKSHL34lT5O`, America/Chicago, client access OFF):
+project `bis-website` (`prj_TDD9bT1z3Ow0fjLFaXxfxqIeH6w0`), domain
+`bis-rgv.com`, site row `c982bce3-71ba-44f8-ab51-58f439ac2320`. (A separate
+"BIS (internal — never invoice)" account was created for this on 2026-09-08
+and deleted the same day at danlo's direction; the site and its 30 stored
+days were moved, not re-pulled.) The site has
 carried `<Analytics />` since 2026-07-08 (BIS-Website `d17625a`) and
 bis-rgv.com serves the insights script. Its Website section is the prospect
 demo until the prospect audit piece exists.
@@ -95,5 +112,41 @@ demo until the prospect audit piece exists.
 - Log says `site traffic HELD for site …: … timezone … is not a zone we can
   resolve`: the account's timezone is not an IANA zone; fix it on the
   account, the next tick picks the site up.
-- A site needs unlinking: delete `site_traffic_breakdown`, then
-  `site_traffic_daily`, then the `sites` row (FKs are RESTRICT on purpose).
+- A site needs unlinking and the button is not an option (no agency login
+  at hand): delete `site_traffic_breakdown`, then `site_traffic_daily`, then
+  the `sites` row (FKs are RESTRICT on purpose) — the same order the button
+  uses.
+
+## First-night findings (2026-09-08, first real pull)
+
+- **Part A done by danlo 13:44Z; redeploy 13:45Z; first pull on the 14:00Z
+  tick**: 30 days written in ~3 minutes, stamp `2026-09-07`, no failures.
+  Token scope (All Projects on the team) and the `environment eq 'production'`
+  filter were accepted.
+- **Every backfilled day is zero — genuinely.** Web Analytics was enabled on
+  the project at ~02:15Z on 2026-09-08 and its routes only exist on
+  deployments made after that (quickstart: "will add new routes … after your
+  next deployment"); bis-website was deployed at 03:18Z, so collection
+  started then. Vercel's own report agrees: 0 through 2026-09-07, then
+  1 visitor at 13:00Z on `/en` on 2026-09-08. The section fills after the
+  first pull that covers 2026-09-08 (the 03:00 Chicago tick on the 9th).
+- **Direct traffic's `referrerHostname` is `""`** (empty string, not null).
+  `channelOf("")` → Direct, as designed. No `Others` row appeared (one path).
+- 🔴 **Two API window behaviours the pass does not account for** (verified
+  by probing with the MCP analytics tool, same endpoints):
+  1. `visits/count` FLOORS `since` and `until` to UTC midnight. A local-day
+     window such as Chicago `05:00Z → 05:00Z` is answered for the UTC day
+     `00:00Z → 00:00Z`. Probe: since `14:00Z` returned the 13:00Z view.
+  2. `visits/aggregate` honours `since` to the hour but treats `until` as
+     INCLUSIVE of its bucket (echoed back +1h): `until 13:00Z` returned a
+     13:00–14:00 view. So the breakdowns cover local midnight → local
+     midnight **plus one hour**, while the totals cover the UTC day.
+  Consequence: within one stored day, totals and breakdowns span different
+  windows; shares (breakdown ÷ total) can drift or exceed 100%. Not visible
+  yet (all zeros). **Decision owed:** either store UTC days honestly
+  (count at UTC midnights; aggregate `until = day end − 1h`; label days as
+  UTC in copy) — the smallest change — or keep local days by summing hourly
+  buckets (`by=hour`), which overcounts unique visitors. Tracked in the
+  ledger; no code changed on the first night.
+- Local `.env.local` carries `VERCEL_TEAM_ID` only; the token line was left
+  for danlo to add at the machine (a pasted token would live in the chat).

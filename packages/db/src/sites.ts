@@ -95,6 +95,33 @@ export async function stampSiteSynced(db: SupabaseClient, siteId: string, day: s
   if (error) throw new Error(`stampSiteSynced failed: ${error.message}`);
 }
 
+/** How many days of traffic are stored for the account's site — what an
+ *  unlink would remove, named in its confirmation. */
+export async function countTrafficDays(db: SupabaseClient, accountId: string): Promise<number> {
+  const { count, error } = await db.from("site_traffic_daily")
+    .select("day", { count: "exact", head: true }).eq("account_id", accountId);
+  if (error) throw new Error(`countTrafficDays failed: ${error.message}`);
+  return count ?? 0;
+}
+
+/** Removes the account's site and everything stored for it, in the order the
+ *  RESTRICT foreign keys demand: breakdown rows, daily rows, then the site.
+ *  Service role only — `sites` has no client write grant (0029). Idempotent:
+ *  with nothing linked it deletes nothing and says so. Not a transaction
+ *  (PostgREST): a failure at the last step leaves a stamped site with no
+ *  rows; the operator's retry completes it — nothing re-pulls until then. */
+export async function unlinkSite(db: SupabaseClient, accountId: string): Promise<{ daysDeleted: number }> {
+  const site = await getSiteForAccount(db, accountId);
+  if (!site) return { daysDeleted: 0 };
+  const breakdown = await db.from("site_traffic_breakdown").delete().eq("site_id", site.id);
+  if (breakdown.error) throw new Error(`unlinkSite breakdown delete failed: ${breakdown.error.message}`);
+  const daily = await db.from("site_traffic_daily").delete({ count: "exact" }).eq("site_id", site.id);
+  if (daily.error) throw new Error(`unlinkSite daily delete failed: ${daily.error.message}`);
+  const row = await db.from("sites").delete().eq("id", site.id);
+  if (row.error) throw new Error(`unlinkSite site delete failed: ${row.error.message}`);
+  return { daysDeleted: daily.count ?? 0 };
+}
+
 export async function listTrafficDays(
   db: SupabaseClient, accountId: string, fromDay: string, toDay: string,
 ): Promise<TrafficDay[]> {

@@ -62,3 +62,29 @@ test.describe("the Website section, as the client", () => {
     await expect(page.getByRole("link", { name: "Link a site" })).toHaveCount(0);
   });
 });
+
+test.describe("unlinking a site, as the agency", () => {
+  // Last in the file on purpose (one worker, file order): the client test
+  // above still needs the linked state, and this leaves the fixture unlinked.
+  test("Settings → Unlink site asks first, then the Website section sells the feature again", async ({ page }) => {
+    const { accountId } = fixture();
+    await page.goto(`/dashboard/accounts/${accountId}/settings#website`);
+    await expect(page.getByText("Linked to fixture.example")).toBeVisible();
+    await page.getByRole("button", { name: "Unlink site" }).click();
+    // The confirmation names the domain; Cancel leaves everything in place.
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("heading", { name: "Unlink fixture.example?" })).toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(page.getByText("Linked to fixture.example")).toBeVisible();
+    await page.getByRole("button", { name: "Unlink site" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Unlink", exact: true }).click();
+    await expect(page.getByText("Site unlinked")).toBeVisible();
+    // The card re-rendered unlinked: no button, the sell copy back.
+    await expect(page.getByRole("button", { name: "Unlink site" })).toHaveCount(0);
+    await expect(page.getByText("Connect the site BIS built for this client")).toBeVisible();
+    await page.goto(`/dashboard/accounts/${accountId}/website`);
+    await expect(page.getByText("See who visits your website")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Link a site" })).toBeVisible();
+  });
+});
+
