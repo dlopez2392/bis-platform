@@ -728,7 +728,7 @@ export type DayTraffic = {
 
 /** Task 1's finding. "city" when the API accepts it, else "region", else
  *  "country" (and Task 7 hides the Places panel). */
-export const PLACE_DIMENSION: "city" | "region" | "country" = "city";
+export const PLACE_DIMENSION: "city" | "region" | "country" = "country";
 export const BREAKDOWN_LIMIT = 20;
 
 const BASE = "https://api.vercel.com/v1/query/web-analytics";
@@ -1596,7 +1596,7 @@ cd /c/Users/danlo/bis-platform && git add apps/web/src/lib/website/view-model.ts
   "website.panel.pages": "Pages people read",
   "website.panel.sources": "Where visitors came from",
   "website.panel.places": "Where they were",
-  "website.panel.devices": "Devices and browsers",
+  "website.panel.devices": "Devices",
   "website.panel.empty": "Nothing here yet",
   "website.empty.title": "See who visits your website",
   "website.empty.body": "Where they come from, what they read, and how many there are, every morning.",
