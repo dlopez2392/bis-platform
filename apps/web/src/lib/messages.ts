@@ -1157,6 +1157,14 @@ export const m = {
   "website.link.alreadyLinked": "That project is already linked to another client. A site belongs to one account — pick a different project, or unlink it there first.",
   "website.link.projectChange": "This client already has a site with traffic on record. Unlink it first (runbook: When something is wrong), then link the new project.",
   "website.link.saveFailed": "Couldn't save the link just now. Try again in a moment.",
+  "website.link.unlink": "Unlink site",
+  "website.link.unlinkTitle": "Unlink {domain}?",
+  "website.link.unlinkBody": "This removes the {days} days of traffic stored for {domain}. The website itself is untouched. Link it again later and the next pull re-fetches the last 30 days from Vercel.",
+  "website.link.unlinkBodyNone": "Nothing has been stored for {domain} yet. The website itself is untouched.",
+  "website.link.unlinkConfirm": "Unlink",
+  "website.link.unlinked": "Site unlinked.",
+  "website.link.unlinkFailed": "Couldn't unlink just now. Try again in a moment.",
+  "website.link.notLinked": "No site is linked to this client.",
 } as const;
 
 export type MessageKey = keyof typeof m;

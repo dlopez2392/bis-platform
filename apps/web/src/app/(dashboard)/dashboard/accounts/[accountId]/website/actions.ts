@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { serviceDb, upsertSite, getSiteForAccount } from "@bis/db";
+import { serviceDb, upsertSite, getSiteForAccount, unlinkSite, emit } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { vercelAnalyticsFromEnv, VercelApiError } from "@/lib/vercel/web-analytics";
 import { m } from "@/lib/messages";
@@ -9,9 +9,10 @@ import { m } from "@/lib/messages";
 /** Agency-only, re-checked here (hiding the card is not authorization) — the
  *  voice/automations precedent. Writes through serviceDb(): `sites` has no
  *  client write grant by design (0029). */
-async function requireAgency(accountId: string): Promise<void> {
-  const { isAgency } = await requireAccountAccess(accountId);
+async function requireAgency(accountId: string): Promise<string> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
   if (!isAgency) throw new Error("only the agency may link a website");
+  return userId;
 }
 
 /** Vercel project ids are `prj_` + alphanumerics; anything else is a tampered
@@ -25,7 +26,7 @@ function normalizeDomain(raw: string): string {
 export async function saveSiteAction(
   accountId: string, formData: FormData,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  await requireAgency(accountId);
+  const userId = await requireAgency(accountId);
   const vercelProjectId = String(formData.get("vercelProjectId") ?? "").trim();
   if (!PROJECT_ID.test(vercelProjectId)) return { ok: false, error: m["website.link.projectRequired"] };
   const domain = normalizeDomain(String(formData.get("domain") ?? ""));
@@ -50,9 +51,33 @@ export async function saveSiteAction(
     console.error(`website: link save failed for account ${accountId}, project ${vercelProjectId}: ${String(e)}`);
     return { ok: false, error: m["website.link.saveFailed"] };
   }
+  await emit(db, accountId, "site.linked", userId, { vercelProjectId, domain });
   revalidatePath(`/dashboard/accounts/${accountId}/settings`);
   revalidatePath(`/dashboard/accounts/${accountId}/website`);
   return { ok: true };
+}
+
+/** Removes the link and every stored day (the runbook's manual order, in
+ *  code). The event is written AFTER the delete so the record never claims a
+ *  removal that did not happen; the raw error stays in the server log. */
+export async function unlinkSiteAction(
+  accountId: string,
+): Promise<{ ok: true; daysDeleted: number } | { ok: false; error: string }> {
+  const userId = await requireAgency(accountId);
+  const db = serviceDb();
+  const site = await getSiteForAccount(db, accountId);
+  if (!site) return { ok: false, error: m["website.link.notLinked"] };
+  let daysDeleted: number;
+  try {
+    ({ daysDeleted } = await unlinkSite(db, accountId));
+  } catch (e) {
+    console.error(`website: unlink failed for account ${accountId}, site ${site.id}: ${String(e)}`);
+    return { ok: false, error: m["website.link.unlinkFailed"] };
+  }
+  await emit(db, accountId, "site.unlinked", userId, { vercelProjectId: site.vercelProjectId, domain: site.domain, daysDeleted });
+  revalidatePath(`/dashboard/accounts/${accountId}/settings`);
+  revalidatePath(`/dashboard/accounts/${accountId}/website`);
+  return { ok: true, daysDeleted };
 }
 
 /** One count query for the last 7 days. The raw error never reaches the

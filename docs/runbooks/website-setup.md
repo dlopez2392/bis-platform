@@ -82,6 +82,13 @@ Plan: `docs/superpowers/plans/2026-09-07-website-traffic.md`.
 
 Nothing in Part B involves the client.
 
+**Removing a site:** Settings → Website → **Unlink site** → confirm. It deletes
+the stored days and the link (agency-only, recorded as a `site.unlinked`
+event); the website itself is untouched. Linking again later re-fetches the
+last 30 days on the next tick, so only history older than that is lost. Use
+this before re-pointing a client at a different project: once a day of
+traffic is on record, Save refuses a project change on purpose.
+
 ## The dogfood — BIS's own website
 
 The site is linked to danlo's own company account, **Bespoke Intelligent
@@ -105,8 +112,10 @@ demo until the prospect audit piece exists.
 - Log says `site traffic HELD for site …: … timezone … is not a zone we can
   resolve`: the account's timezone is not an IANA zone; fix it on the
   account, the next tick picks the site up.
-- A site needs unlinking: delete `site_traffic_breakdown`, then
-  `site_traffic_daily`, then the `sites` row (FKs are RESTRICT on purpose).
+- A site needs unlinking and the button is not an option (no agency login
+  at hand): delete `site_traffic_breakdown`, then `site_traffic_daily`, then
+  the `sites` row (FKs are RESTRICT on purpose) — the same order the button
+  uses.
 
 ## First-night findings (2026-09-08, first real pull)
 

@@ -1,7 +1,7 @@
 import { Braces, SlidersHorizontal } from "lucide-react";
 import { clerkClient } from "@clerk/nextjs/server";
 import { serviceDb, listCustomFields, listCustomValues, listBlueprints, getBranding,
-         getSendingIdentity, brandLogoUrl, getSiteForAccount, type CustomFieldDef } from "@bis/db";
+         getSendingIdentity, brandLogoUrl, getSiteForAccount, countTrafficDays, type CustomFieldDef } from "@bis/db";
 import { SubmitButton } from "../../submit-button";
 import { createFieldAction, upsertValueAction, setClientAccessAction, inviteClientAdminAction,
          setFromEmailAction } from "./actions";
@@ -10,7 +10,7 @@ import { SaveBlueprintDialog } from "./save-blueprint-dialog";
 import { ClientAccessPanel, type ClientAccessMember } from "./client-access-panel";
 import { SendingAddressCard } from "./sending-address-card";
 import { LinkSiteCard, type VercelProjectOption } from "../website/link-site-card";
-import { saveSiteAction, testSiteConnectionAction } from "../website/actions";
+import { saveSiteAction, testSiteConnectionAction, unlinkSiteAction } from "../website/actions";
 import { vercelAnalyticsFromEnv } from "@/lib/vercel/web-analytics";
 import { BrandingPanel } from "@/components/branding-panel";
 import { captureBlueprintAction } from "../../../blueprints/actions";
@@ -54,7 +54,7 @@ export default async function CrmSettingsPage({
   const { from } = await searchParams;
   await requireAgencyOnlyAccountAccess(accountId);
   const db = await dbForRequest();
-  const [fields, values, blueprints, account, branding, sendingIdentity, site, projects] = await Promise.all([
+  const [fields, values, blueprints, account, branding, sendingIdentity, site, daysStored, projects] = await Promise.all([
     listCustomFields(db, accountId, "contact"),
     listCustomValues(db, accountId),
     // Agency-wide, not account-scoped — this account is just where the
@@ -79,6 +79,7 @@ export default async function CrmSettingsPage({
     getBranding(db, accountId),
     getSendingIdentity(db, accountId),
     getSiteForAccount(db, accountId),
+    countTrafficDays(db, accountId),
     // Listing Vercel projects needs the platform token (runbook step 1).
     // Without it the card still renders — an already-linked site keeps
     // showing its domain; a new one cannot be picked — and says why. Same
@@ -206,8 +207,10 @@ export default async function CrmSettingsPage({
           projects={projects.list}
           projectsUnavailable={projects.unavailable}
           linked={site ? { vercelProjectId: site.vercelProjectId, domain: site.domain } : null}
+          daysStored={daysStored}
           saveAction={saveSiteAction.bind(null, accountId)}
           testAction={testSiteConnectionAction.bind(null, accountId)}
+          unlinkAction={unlinkSiteAction.bind(null, accountId)}
         />
         <div className="grid gap-6 lg:grid-cols-2">
           <Card id="custom-fields" className="scroll-mt-24">

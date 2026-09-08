@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
-const dbMocks = vi.hoisted(() => ({ upsertSite: vi.fn(), getSiteForAccount: vi.fn() }));
+const dbMocks = vi.hoisted(() => ({ upsertSite: vi.fn(), getSiteForAccount: vi.fn(), unlinkSite: vi.fn(), emit: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({}) }));
 const authMock = vi.hoisted(() => ({ requireAccountAccess: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ requireAccountAccess: (...a: unknown[]) => authMock.requireAccountAccess(...a) }));
@@ -12,7 +12,7 @@ vi.mock("@/lib/vercel/web-analytics", async (importOriginal) => ({
 
 import { VercelApiError } from "@/lib/vercel/web-analytics";
 import { m } from "@/lib/messages";
-import { saveSiteAction, testSiteConnectionAction } from "./actions";
+import { saveSiteAction, testSiteConnectionAction, unlinkSiteAction } from "./actions";
 
 const fd = (o: Record<string, string>) => { const f = new FormData(); for (const [k, v] of Object.entries(o)) f.set(k, v); return f; };
 
@@ -43,6 +43,8 @@ describe("saveSiteAction", () => {
   it("saves a trimmed, lower-cased domain without scheme or path", async () => {
     expect(await saveSiteAction("acct_1", fd({ vercelProjectId: "prj_1", domain: " https://Rio.Example/path " }))).toEqual({ ok: true });
     expect(dbMocks.upsertSite).toHaveBeenCalledWith(expect.anything(), "acct_1", { vercelProjectId: "prj_1", domain: "rio.example" });
+    // Mutation: drop the emit — who linked which site stops being recorded.
+    expect(dbMocks.emit).toHaveBeenCalledWith(expect.anything(), "acct_1", "site.linked", "user_agency", { vercelProjectId: "prj_1", domain: "rio.example" });
   });
   it("refuses a project id that is not prj_-shaped, without writing", async () => {
     expect(await saveSiteAction("acct_1", fd({ vercelProjectId: "not a project", domain: "rio.example" }))).toEqual({ ok: false, error: m["website.link.projectRequired"] });
@@ -90,5 +92,36 @@ describe("testSiteConnectionAction", () => {
   it("a missing token is the generic failure too, and the client is constructed only inside the action", async () => {
     vercelMocks.fromEnv.mockImplementation(() => { throw new Error("VERCEL_API_TOKEN/VERCEL_TEAM_ID unset"); });
     expect(await testSiteConnectionAction("acct_1", fd({ vercelProjectId: "prj_1" }))).toEqual({ ok: false, error: m["website.link.testFailed"] });
+  });
+});
+
+describe("unlinkSiteAction", () => {
+  // Mutation: drop the isAgency throw in requireAgency — the client case deletes.
+  it("refuses a non-agency caller before touching the database", async () => {
+    authMock.requireAccountAccess.mockResolvedValue({ userId: "user_client", isAgency: false });
+    await expect(unlinkSiteAction("acct_1")).rejects.toThrow(/agency/);
+    expect(dbMocks.unlinkSite).not.toHaveBeenCalled();
+  });
+  it("says so when nothing is linked, without deleting", async () => {
+    expect(await unlinkSiteAction("acct_1")).toEqual({ ok: false, error: m["website.link.notLinked"] });
+    expect(dbMocks.unlinkSite).not.toHaveBeenCalled();
+  });
+  // Mutation: drop the emit, or emit before the delete — the record of who
+  // removed which site (and how much history went with it) disappears or
+  // claims a deletion that may not have happened.
+  it("deletes the site and its history, then records site.unlinked with the domain, project and days, and reports the days", async () => {
+    dbMocks.getSiteForAccount.mockResolvedValue(linked());
+    dbMocks.unlinkSite.mockResolvedValue({ daysDeleted: 30 });
+    expect(await unlinkSiteAction("acct_1")).toEqual({ ok: true, daysDeleted: 30 });
+    expect(dbMocks.unlinkSite).toHaveBeenCalledWith(expect.anything(), "acct_1");
+    expect(dbMocks.emit).toHaveBeenCalledWith(expect.anything(), "acct_1", "site.unlinked", "user_agency",
+      { vercelProjectId: "prj_old", domain: "old.example", daysDeleted: 30 });
+    expect(dbMocks.unlinkSite.mock.invocationCallOrder[0]!).toBeLessThan(dbMocks.emit.mock.invocationCallOrder[0]!);
+  });
+  it("a failure is generic and never leaks the message", async () => {
+    dbMocks.getSiteForAccount.mockResolvedValue(linked());
+    dbMocks.unlinkSite.mockRejectedValueOnce(new Error("table-naming message"));
+    expect(await unlinkSiteAction("acct_1")).toEqual({ ok: false, error: m["website.link.unlinkFailed"] });
+    expect(dbMocks.emit).not.toHaveBeenCalled();
   });
 });
