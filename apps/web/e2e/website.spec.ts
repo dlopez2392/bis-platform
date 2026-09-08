@@ -79,6 +79,9 @@ test.describe("unlinking a site, as the agency", () => {
     await page.getByRole("button", { name: "Unlink site" }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Unlink", exact: true }).click();
     await expect(page.getByText("Site unlinked")).toBeVisible();
+    // The card re-rendered unlinked: no button, the sell copy back.
+    await expect(page.getByRole("button", { name: "Unlink site" })).toHaveCount(0);
+    await expect(page.getByText("Connect the site BIS built for this client")).toBeVisible();
     await page.goto(`/dashboard/accounts/${accountId}/website`);
     await expect(page.getByText("See who visits your website")).toBeVisible();
     await expect(page.getByRole("link", { name: "Link a site" })).toBeVisible();

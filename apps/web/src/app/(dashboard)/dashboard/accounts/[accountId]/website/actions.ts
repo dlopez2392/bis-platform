@@ -19,6 +19,20 @@ async function requireAgency(accountId: string): Promise<string> {
  *  hidden field, refused with the same sentence as an empty pick. */
 const PROJECT_ID = /^prj_[A-Za-z0-9_]+$/;
 
+/** The ledger entry for a link/unlink is written AFTER the row change and
+ *  must never undo its report: a failed event write is logged, the caller
+ *  still hears what actually happened to the row. */
+async function recordSiteEvent(
+  db: ReturnType<typeof serviceDb>, accountId: string, type: "site.linked" | "site.unlinked",
+  userId: string, payload: Record<string, unknown>,
+): Promise<void> {
+  try {
+    await emit(db, accountId, type, userId, payload);
+  } catch (e) {
+    console.error(`website: ${type} event failed for account ${accountId}: ${String(e)}`);
+  }
+}
+
 function normalizeDomain(raw: string): string {
   return raw.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
 }
@@ -51,7 +65,7 @@ export async function saveSiteAction(
     console.error(`website: link save failed for account ${accountId}, project ${vercelProjectId}: ${String(e)}`);
     return { ok: false, error: m["website.link.saveFailed"] };
   }
-  await emit(db, accountId, "site.linked", userId, { vercelProjectId, domain });
+  await recordSiteEvent(db, accountId, "site.linked", userId, { vercelProjectId, domain });
   revalidatePath(`/dashboard/accounts/${accountId}/settings`);
   revalidatePath(`/dashboard/accounts/${accountId}/website`);
   return { ok: true };
@@ -59,7 +73,8 @@ export async function saveSiteAction(
 
 /** Removes the link and every stored day (the runbook's manual order, in
  *  code). The event is written AFTER the delete so the record never claims a
- *  removal that did not happen; the raw error stays in the server log. */
+ *  removal that did not happen — and a failed event write does not turn a
+ *  completed delete into a crash; the raw error stays in the server log. */
 export async function unlinkSiteAction(
   accountId: string,
 ): Promise<{ ok: true; daysDeleted: number } | { ok: false; error: string }> {
@@ -74,7 +89,7 @@ export async function unlinkSiteAction(
     console.error(`website: unlink failed for account ${accountId}, site ${site.id}: ${String(e)}`);
     return { ok: false, error: m["website.link.unlinkFailed"] };
   }
-  await emit(db, accountId, "site.unlinked", userId, { vercelProjectId: site.vercelProjectId, domain: site.domain, daysDeleted });
+  await recordSiteEvent(db, accountId, "site.unlinked", userId, { vercelProjectId: site.vercelProjectId, domain: site.domain, daysDeleted });
   revalidatePath(`/dashboard/accounts/${accountId}/settings`);
   revalidatePath(`/dashboard/accounts/${accountId}/website`);
   return { ok: true, daysDeleted };

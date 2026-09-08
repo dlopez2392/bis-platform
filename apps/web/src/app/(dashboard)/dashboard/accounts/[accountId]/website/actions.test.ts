@@ -124,4 +124,20 @@ describe("unlinkSiteAction", () => {
     expect(await unlinkSiteAction("acct_1")).toEqual({ ok: false, error: m["website.link.unlinkFailed"] });
     expect(dbMocks.emit).not.toHaveBeenCalled();
   });
+  // Mutation: let emit reject through — a completed delete is reported as a
+  // crash, the card keeps showing a site that no longer exists, and the retry
+  // says nothing is linked.
+  it("a failed event write after a successful delete is logged, not surfaced: the delete happened", async () => {
+    dbMocks.getSiteForAccount.mockResolvedValue(linked());
+    dbMocks.unlinkSite.mockResolvedValue({ daysDeleted: 3 });
+    dbMocks.emit.mockRejectedValueOnce(new Error("events table down"));
+    expect(await unlinkSiteAction("acct_1")).toEqual({ ok: true, daysDeleted: 3 });
+  });
+});
+
+describe("saveSiteAction, when the event write fails", () => {
+  it("still reports the link as saved: the row is there", async () => {
+    dbMocks.emit.mockRejectedValueOnce(new Error("events table down"));
+    expect(await saveSiteAction("acct_1", fd({ vercelProjectId: "prj_1", domain: "rio.example" }))).toEqual({ ok: true });
+  });
 });

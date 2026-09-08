@@ -39,7 +39,8 @@ describe("sites data layer", () => {
 
   // Mutation: delete the site before its traffic rows — the RESTRICT FKs
   // refuse and nothing is removed; skip the breakdown delete — the daily
-  // delete refuses for the same reason.
+  // delete goes through but the site delete refuses (breakdown's FK is to
+  // sites), and the breakdown rows are still there.
   it("unlinkSite removes breakdown, days and the site in FK order and reports the days removed; countTrafficDays sees them first", () =>
     withTestAccount(async (db, accountId) => {
       const site = await upsertSite(db, accountId, { vercelProjectId: `prj_t_${accountId.slice(0, 8)}`, domain: "one.example" });

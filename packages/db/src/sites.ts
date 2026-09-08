@@ -107,7 +107,9 @@ export async function countTrafficDays(db: SupabaseClient, accountId: string): P
 /** Removes the account's site and everything stored for it, in the order the
  *  RESTRICT foreign keys demand: breakdown rows, daily rows, then the site.
  *  Service role only — `sites` has no client write grant (0029). Idempotent:
- *  with nothing linked it deletes nothing and says so. */
+ *  with nothing linked it deletes nothing and says so. Not a transaction
+ *  (PostgREST): a failure at the last step leaves a stamped site with no
+ *  rows; the operator's retry completes it — nothing re-pulls until then. */
 export async function unlinkSite(db: SupabaseClient, accountId: string): Promise<{ daysDeleted: number }> {
   const site = await getSiteForAccount(db, accountId);
   if (!site) return { daysDeleted: 0 };

@@ -46,6 +46,12 @@ export function LinkSiteCard({
       } else {
         toast.error(r.error);
       }
+    } catch {
+      // try/FINALLY alone lets a stale-deployment or network rejection skip
+      // the toast and leave the dialog armed over an unknown outcome (the
+      // setup-move-number-button lesson). Say so and collapse the confirm.
+      toast.error(m["common.actionCrashed"]);
+      setConfirmOpen(false);
     } finally { setUnlinking(false); }
   }
 
@@ -101,20 +107,22 @@ export function LinkSiteCard({
           </div>
         </form>
         {linked ? (
-          <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-            <DialogContent>
+          <Dialog open={confirmOpen} onOpenChange={(open) => { if (!unlinking) setConfirmOpen(open); }}>
+            <DialogContent showCloseButton={!unlinking}>
               <DialogHeader>
                 <DialogTitle>{m["website.link.unlinkTitle"].replace("{domain}", linked.domain)}</DialogTitle>
                 <DialogDescription>
-                  {daysStored > 0
+                  {daysStored > 1
                     ? m["website.link.unlinkBody"].replace("{days}", String(daysStored)).replace("{domain}", linked.domain)
-                    : m["website.link.unlinkBodyNone"].replace("{domain}", linked.domain)}
+                    : daysStored === 1
+                      ? m["website.link.unlinkBodyOne"].replace("{domain}", linked.domain)
+                      : m["website.link.unlinkBodyNone"].replace("{domain}", linked.domain)}
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setConfirmOpen(false)} disabled={unlinking}>{m["common.cancel"]}</Button>
                 <Button variant="destructive" onClick={() => void unlink()} disabled={unlinking}>
-                  {unlinking ? m["common.saving"] : m["website.link.unlinkConfirm"]}
+                  {unlinking ? m["website.link.unlinking"] : m["website.link.unlinkConfirm"]}
                 </Button>
               </DialogFooter>
             </DialogContent>
