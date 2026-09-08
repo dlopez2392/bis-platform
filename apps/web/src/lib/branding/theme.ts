@@ -9,7 +9,7 @@
  */
 import { contrastRatio, ensureContrast, parseHexColor, readableTextOn } from "./color";
 import { NEUTRAL_RAMPS, SIDEBAR_FOREGROUND, type NeutralName } from "./neutral-ramps";
-import { deriveAccent2 } from "./oklch";
+import { deriveAccent2, deriveAccentStrong } from "./oklch";
 
 export type { NeutralName };
 
@@ -74,6 +74,10 @@ export type ResolvedTheme = {
   sidebarAccent: string; sidebarBorder: string;
   /** Second accent (spec §3.3): pinned for BIS, derived from the lifted primary for a brand. */
   accent2: string;
+  /** The emphatic end of --gradient-primary: darker in light, lighter in dark — never the primary. */
+  accentStrong: string;
+  /** This MODE's tint alphas (ACCENT_ALPHAS), which themeStyle mixes the color-mix() tints at. */
+  accentAlphas: AccentAlphas;
   radius: string;
   fontSans: string;
 };
@@ -102,9 +106,12 @@ export const FONT: Record<TypeName, string> = {
  * `#4FD8E6` dark): spec §3.3 pins the BIS second accent as a constant rather
  * than deriving it, so an unthemed account and a themed one agree. It carries
  * no text and is not part of the contrast sweep — it paints glows, the far
- * rail stop and the second chart series. `primary`, `ring` and
- * `sidebarAccent` all passed the sweep below untouched; no lift was needed
- * this round.
+ * rail stop and the second chart series. `accentStrong` mirrors
+ * `--accent-strong` the same way (`#5B21B8` light, `#A99EFF` dark) and is the
+ * far stop of `--gradient-primary`; it carries no text either, and it is
+ * deliberately NOT equal to `primary` — the gradient needs two colours.
+ * `primary`, `ring` and `sidebarAccent` all passed the sweep below untouched;
+ * no lift was needed this round.
  *
  * dark.ring is kept equal to dark.primary (and light.ring to light.primary)
  * for the same reason the old literal-lift history recorded: before
@@ -116,8 +123,41 @@ export const FONT: Record<TypeName, string> = {
  * of these constants still resolves to the token it mirrors.
  */
 export const BIS = {
-  light: { primary: "#6d28d9", ring: "#6d28d9", sidebarAccent: "#8b7cf7", accent2: "#0891b2" },
-  dark:  { primary: "#8b7cf7", ring: "#8b7cf7", sidebarAccent: "#8b7cf7", accent2: "#4fd8e6" },
+  light: {
+    primary: "#6d28d9", ring: "#6d28d9", sidebarAccent: "#8b7cf7",
+    accent2: "#0891b2", accentStrong: "#5b21b8",
+  },
+  dark: {
+    primary: "#8b7cf7", ring: "#8b7cf7", sidebarAccent: "#8b7cf7",
+    accent2: "#4fd8e6", accentStrong: "#a99eff",
+  },
+} as const;
+
+export type AccentAlphas = {
+  accentDim: number; ringGlow: number; accent2Dim: number; ringGlow2: number;
+};
+
+/**
+ * The alpha each accent tint is mixed at, keyed on MODE and nothing else.
+ *
+ * tokens.css pins these as literal `rgba()` on the BIS colours — light
+ * `--accent-dim .09` / `--ring-glow .28`, dark `.14` / `.35`, with both
+ * second-accent tints at `.14` and `--ring-glow-2` following `--ring-glow`
+ * per mode. `themeStyle` builds the same four tints for a tenant with
+ * `color-mix()` and takes its percentages from here, so this is the
+ * TypeScript half of a cross-file mirror: `theme.test.ts`'s parity block
+ * reads the alphas straight out of tokens.css and pins them against this
+ * table, the same way it pins `BIS` itself.
+ *
+ * A table rather than four constants because a single hard-coded pair is
+ * exactly the bug this replaces: `themeStyle` emitted the DARK alphas in both
+ * modes, so a themed LIGHT tenant — the client default — was painted with
+ * tints half again as strong as the design calls for. They belong to the mode,
+ * never to the brand: BIS and tenants alike get the same numbers.
+ */
+export const ACCENT_ALPHAS = {
+  light: { accentDim: 0.09, ringGlow: 0.28, accent2Dim: 0.14, ringGlow2: 0.28 },
+  dark: { accentDim: 0.14, ringGlow: 0.35, accent2Dim: 0.14, ringGlow2: 0.35 },
 } as const;
 
 /**
@@ -245,6 +285,12 @@ export function deriveTheme(
   // --accent will be on <body>, so the pair is analogous to what renders.
   const accent2 = brand ? deriveAccent2(primary) : bis.accent2;
 
+  // Same reasoning and the same lifted primary. NOT primary itself:
+  // --gradient-primary is linear-gradient(180deg, var(--accent),
+  // var(--accent-strong)), so aliasing the two renders the tenant's one
+  // primary button as a flat fill.
+  const accentStrong = brand ? deriveAccentStrong(primary, mode) : bis.accentStrong;
+
   return {
     background: steps.bg,
     foreground: steps.fg,
@@ -270,6 +316,9 @@ export function deriveTheme(
     sidebarAccent,
     sidebarBorder: ramp.sidebarBorder,
     accent2,
+    accentStrong,
+    // Per mode, never per brand — see ACCENT_ALPHAS.
+    accentAlphas: ACCENT_ALPHAS[mode],
     radius: RADIUS[inputs.corners ?? "soft"],
     fontSans: FONT[inputs.type ?? "geist"],
   };

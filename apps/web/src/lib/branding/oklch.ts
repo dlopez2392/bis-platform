@@ -1,7 +1,6 @@
-// apps/web/src/lib/branding/oklch.ts
-//
-// Pure hex ↔ OKLCH (Björn Ottosson's matrices) and the second-accent rule
-// from the Northern Lights spec §3.3. No I/O, no DOM.
+// Pure hex ↔ OKLCH (Björn Ottosson's matrices), the second-accent rule from
+// the Northern Lights spec §3.3, and the emphatic partner of an accent.
+// No I/O, no DOM.
 export type Oklch = { l: number; c: number; h: number };
 
 const srgbToLinear = (v: number) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
@@ -80,4 +79,27 @@ export function deriveAccent2(hex: string): string {
   const l2 = Math.min(0.85, l + 0.18);
   const h2 = (h - 30 + 360) % 360;
   return oklchToHex({ l: l2, c: fitChroma(l2, c * 0.9, h2), h: h2 });
+}
+
+/**
+ * The emphatic end of `--gradient-primary`, which tokens.css writes as
+ * `linear-gradient(180deg, var(--accent), var(--accent-strong))` — two stops,
+ * so a tenant whose `--accent-strong` aliased `--accent` would render the
+ * primary button as a flat fill.
+ *
+ * "Strong" means more emphatic, which inverts with the mode: DARKER in light,
+ * LIGHTER in dark. The amounts mirror the BIS pairs tokens.css pins —
+ * light `#6d28d9` → `#5b21b8` (L −0.057, C ×0.88) and dark `#8b7cf7` →
+ * `#a99eff` (L +0.090, C ×0.78), hue unchanged in both — rounded to
+ * L ∓0.06/+0.09 and C ×0.9/×0.8.
+ *
+ * Chroma is fitted to sRGB by `fitChroma` for the same reason `deriveAccent2`
+ * fits it: a per-channel clamp would repair an out-of-gamut result by moving
+ * the HUE, and holding the hue is the whole point of a "strong" partner.
+ */
+export function deriveAccentStrong(hex: string, mode: "light" | "dark"): string {
+  const { l, c, h } = hexToOklch(hex);
+  const l2 = clamp01(mode === "light" ? l - 0.06 : l + 0.09);
+  const c2 = c * (mode === "light" ? 0.9 : 0.8);
+  return oklchToHex({ l: l2, c: fitChroma(l2, c2, h), h });
 }

@@ -6,8 +6,11 @@ import type { Branding } from "@bis/db";
 import { contrastRatio } from "./color";
 import { publicFormTheme } from "./public-form-theme";
 import { NEUTRAL_RAMPS, SIDEBAR_FOREGROUND, type NeutralName } from "./neutral-ramps";
-import { deriveAccent2 } from "./oklch";
-import { deriveTheme, parseAllowlisted, NEUTRAL_NAMES, BIS, FONT, type CornerName, type TypeName } from "./theme";
+import { deriveAccent2, deriveAccentStrong } from "./oklch";
+import {
+  deriveTheme, parseAllowlisted, NEUTRAL_NAMES, ACCENT_ALPHAS, BIS, FONT,
+  type CornerName, type TypeName,
+} from "./theme";
 import { FONT_ALLOWLIST, SAFE_STYLE_FALLBACKS } from "./theme-style";
 
 const NEUTRALS: NeutralName[] = ["warm", "cool", "slate"];
@@ -138,7 +141,53 @@ describe("deriveTheme", () => {
       const t = deriveTheme({ color: "#6d28d9", neutral: "slate", corners: null, type: null, mode: null }, mode)!;
       expect(t.accent2).toBe(deriveAccent2(t.primary));
       expect(t.accent2).toMatch(/^#[0-9a-f]{6}$/);
+      if (mode === "dark") {
+        // On the slate dark surfaces #6d28d9 cannot be seen, so primary is
+        // lifted — which makes "lifted" and "raw" two genuinely different
+        // answers here rather than the same one by coincidence.
+        expect(t.primary).not.toBe("#6d28d9");
+        expect(t.accent2).not.toBe(deriveAccent2("#6d28d9"));
+      }
     }
+  });
+
+  // tokens.css keeps --accent and --accent-strong distinct per mode, and
+  // --gradient-primary reads BOTH (linear-gradient(180deg, var(--accent),
+  // var(--accent-strong))) — so a themed tenant whose accent-strong aliased
+  // the primary would render the main button as a flat fill.
+  it("pins accentStrong to the BIS constants when no brand colour is set (not derived)", () => {
+    const light = deriveTheme({ color: null, neutral: "slate", corners: null, type: null, mode: null }, "light");
+    const dark = deriveTheme({ color: null, neutral: "slate", corners: null, type: null, mode: null }, "dark");
+    expect(light?.accentStrong).toBe("#5b21b8");
+    expect(dark?.accentStrong).toBe("#a99eff");
+  });
+
+  it("derives accentStrong from the LIFTED primary, and never aliases the primary", () => {
+    for (const mode of MODES) {
+      const t = deriveTheme({ color: "#6d28d9", neutral: "slate", corners: null, type: null, mode: null }, mode)!;
+      expect(t.accentStrong).toBe(deriveAccentStrong(t.primary, mode));
+      expect(t.accentStrong).toMatch(/^#[0-9a-f]{6}$/);
+    }
+    const light = deriveTheme(
+      { color: "#6d28d9", neutral: "slate", corners: null, type: null, mode: null }, "light",
+    )!;
+    expect(light.accentStrong).not.toBe(light.primary);
+  });
+
+  // The tint alphas are per MODE, never per brand: tokens.css pins .09/.28 on
+  // light and .14/.35 on dark. themeStyle hard-coded the dark pair for one
+  // commit, so a themed LIGHT tenant — the client default — was painted with
+  // the stronger dark tints.
+  it("carries the per-mode accent alphas, so neither mode can borrow the other's", () => {
+    const of = (mode: (typeof MODES)[number]) => deriveTheme(
+      { color: "#6d28d9", neutral: "slate", corners: null, type: null, mode: null }, mode,
+    )!.accentAlphas;
+    expect(of("light")).toEqual(ACCENT_ALPHAS.light);
+    expect(of("dark")).toEqual(ACCENT_ALPHAS.dark);
+    expect(of("light").accentDim).not.toBe(of("dark").accentDim);
+    // Unthemed accounts too: the alphas do not depend on the brand at all.
+    const bis = deriveTheme({ color: null, neutral: "slate", corners: null, type: null, mode: null }, "light")!;
+    expect(bis.accentAlphas).toEqual(ACCENT_ALPHAS.light);
   });
 
   // The whole point of the milestone: no combination of stored inputs can
@@ -392,6 +441,32 @@ describe("globals.css / tokens.css / BIS parity", () => {
   it("keeps BIS.*.accent2 equal to tokens.css's --accent-2 in both token blocks", () => {
     expect(BIS.light.accent2).toBe(declared(tokensRootBlock, "accent-2"));
     expect(BIS.dark.accent2).toBe(declared(tokensDarkBlock, "accent-2"));
+  });
+
+  // Same mirror, same reason, for the emphatic end of --gradient-primary.
+  it("keeps BIS.*.accentStrong equal to tokens.css's --accent-strong in both token blocks", () => {
+    expect(BIS.light.accentStrong).toBe(declared(tokensRootBlock, "accent-strong"));
+    expect(BIS.dark.accentStrong).toBe(declared(tokensDarkBlock, "accent-strong"));
+  });
+
+  // tokens.css pins each tint's alpha as a literal rgba() on the BIS colours;
+  // themeStyle builds the same tints for a tenant with color-mix() and reads
+  // its percentages out of ACCENT_ALPHAS. Two copies of one number in two
+  // languages is exactly what this block exists to keep honest — and the pair
+  // was wrong in one direction already (the dark alphas emitted in light mode).
+  it("keeps ACCENT_ALPHAS equal to the alphas tokens.css pins in both token blocks", () => {
+    const alpha = (block: string | undefined, token: string) => {
+      const m = block?.match(new RegExp(`--${token}:\\s*rgba\\([^)]*,\\s*([0-9.]+)\\)`));
+      return m ? Number(m[1]) : null;
+    };
+    const TINTS = [
+      ["accent-dim", "accentDim"], ["ring-glow", "ringGlow"],
+      ["accent-2-dim", "accent2Dim"], ["ring-glow-2", "ringGlow2"],
+    ] as const;
+    for (const [token, key] of TINTS) {
+      expect(alpha(tokensRootBlock, token), `light --${token}`).toBe(ACCENT_ALPHAS.light[key]);
+      expect(alpha(tokensDarkBlock, token), `dark --${token}`).toBe(ACCENT_ALPHAS.dark[key]);
+    }
   });
 
   // globals.css itself still has to confirm --primary/--ring actually route

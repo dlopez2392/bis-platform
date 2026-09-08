@@ -1,11 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { deriveTheme } from "./theme";
+import { deriveTheme, type ThemeInputs } from "./theme";
 import { themeStyle } from "./theme-style";
 
-const theme = deriveTheme(
-  { color: "#1e3a8a", neutral: "slate", corners: "round", type: "serif", mode: null },
-  "light",
-)!;
+const INPUTS: ThemeInputs = {
+  color: "#1e3a8a", neutral: "slate", corners: "round", type: "serif", mode: null,
+};
+
+const theme = deriveTheme(INPUTS, "light")!;
+
+/** The percentage themeStyle mixes a tint at, from the theme's own table. */
+const pct = (a: number) => Math.round(a * 100);
 
 describe("themeStyle", () => {
   it("emits every token as a CSS custom property", () => {
@@ -14,14 +18,38 @@ describe("themeStyle", () => {
     expect(style["--radius"]).toBe("1rem");
     expect(style["--font-sans"]).toBe("var(--font-source-serif)");
     expect(style["--sidebar-accent"]).toBe(theme.sidebarAccent);
+    const a = theme.accentAlphas;
     expect(style["--accent"]).toBe(theme.primary);
-    expect(style["--accent-strong"]).toBe(theme.primary);
-    expect(style["--accent-dim"]).toBe(`color-mix(in srgb, ${theme.primary} 14%, transparent)`);
-    expect(style["--ring-glow"]).toBe(`color-mix(in srgb, ${theme.ring} 35%, transparent)`);
+    expect(style["--accent-strong"]).toBe(theme.accentStrong);
+    expect(style["--accent-dim"]).toBe(`color-mix(in srgb, ${theme.primary} ${pct(a.accentDim)}%, transparent)`);
+    expect(style["--ring-glow"]).toBe(`color-mix(in srgb, ${theme.ring} ${pct(a.ringGlow)}%, transparent)`);
     expect(style["--accent-2"]).toBe(theme.accent2);
-    expect(style["--accent-2-dim"]).toBe(`color-mix(in srgb, ${theme.accent2} 14%, transparent)`);
-    expect(style["--ring-glow-2"]).toBe(`color-mix(in srgb, ${theme.accent2} 35%, transparent)`);
+    expect(style["--accent-2-dim"]).toBe(`color-mix(in srgb, ${theme.accent2} ${pct(a.accent2Dim)}%, transparent)`);
+    expect(style["--ring-glow-2"]).toBe(`color-mix(in srgb, ${theme.accent2} ${pct(a.ringGlow2)}%, transparent)`);
     expect(style["--sidebar-tint-2"]).toBe(theme.accent2);
+  });
+
+  // --gradient-primary is linear-gradient(180deg, var(--accent),
+  // var(--accent-strong)): the two stops must be two colours, or a themed
+  // tenant's primary button renders as a flat fill.
+  it("gives --accent-strong its own value rather than aliasing --accent", () => {
+    const style = themeStyle(theme) as Record<string, string>;
+    expect(style["--accent-strong"]).not.toBe(theme.primary);
+    expect(style["--accent-strong"]).not.toBe(style["--accent"]);
+  });
+
+  // tokens.css pins the tint alphas PER MODE — light .09/.28, dark .14/.35 —
+  // and themeStyle hard-coded the dark pair for one commit, so a themed light
+  // tenant (the client default) got the stronger dark tints. Both modes are
+  // built from the same inputs here, so only the alphas can separate them.
+  it("mixes the tints at the light alphas in light mode and the dark alphas in dark mode", () => {
+    const light = themeStyle(deriveTheme(INPUTS, "light")!) as Record<string, string>;
+    const dark = themeStyle(deriveTheme(INPUTS, "dark")!) as Record<string, string>;
+    expect(light["--accent-dim"]).toContain(" 9%,");
+    expect(dark["--accent-dim"]).toContain(" 14%,");
+    expect(light["--accent-dim"]).not.toBe(dark["--accent-dim"]);
+    expect(light["--ring-glow"]).toContain(" 28%,");
+    expect(dark["--ring-glow"]).toContain(" 35%,");
   });
 
   // --radius-sm/md/lg are defined in globals.css as calc() over var(--radius).

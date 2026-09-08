@@ -179,12 +179,20 @@ const errorStyle = (theme: ResolvedTheme) => ({
 // The one place on this route that emits CSS as TEXT rather than as a React
 // style object, so it forfeits React's entity-escaping. Every value here has
 // already passed themeStyle's validators (hex colours, a plain CSS length,
-// three allowlisted var() references) or is a hex this module lifted itself,
-// so nothing hostile should arrive — and these two patterns are the belt for
-// the case where "should" is wrong. A key or value that fails is dropped, not
-// printed.
-const SAFE_KEY = /^--[a-z-]+$/;
-const SAFE_VALUE = /^[#a-z0-9(),.\- ]+$/;
+// three allowlisted var() references, color-mix() over an already-validated
+// hex) or is a hex this module lifted itself, so nothing hostile should
+// arrive — and these two patterns are the belt for the case where "should" is
+// wrong. A key or value that fails is dropped, not printed.
+//
+// A DIGIT in the key and `%` in the value are admitted because the accent
+// family needs both — `--accent-2`, `--sidebar-tint-2`, and the four
+// `color-mix(in srgb, #xxxxxx 14%, transparent)` tints — and refusing them
+// dropped that whole family from a `follow` tenant's dark rule while the
+// inline light style kept it. Neither character widens what the guards
+// defend against: `;`, `{`, `}` and `:` are what end a declaration or a
+// block, and none of them is in either class.
+const SAFE_KEY = /^--[a-z0-9-]+$/;
+const SAFE_VALUE = /^[#a-z0-9(),.%\- ]+$/;
 
 /**
  * `!important` on every declaration, and it is load-bearing rather than
@@ -197,9 +205,13 @@ const SAFE_VALUE = /^[#a-z0-9(),.\- ]+$/;
  * would silently paint light on a dark device, which is the exact shape of
  * failure `brand_type` had for the whole of M4a.
  *
- * Exported only so its charset guard can be driven directly: nothing reachable
- * through `publicFormTheme` can produce a key or value that fails it, which is
- * the point of the guard and also why it cannot be exercised through it.
+ * Exported so its charset guard can be driven directly with the hostile values
+ * nothing reachable through `publicFormTheme` should ever produce. That
+ * "nothing reachable" is no longer only a claim: the `follow` cases above pin
+ * that every declaration `themeStyle` emits survives this filter. It was false
+ * for one commit — a digit in the key and a `%` in the value were both
+ * refused — and the symptom was invisible from here, because the dropped
+ * declarations were still present in the inline LIGHT style.
  */
 export function serializeDeclarations(style: Record<string, string>): string {
   return Object.entries(style)

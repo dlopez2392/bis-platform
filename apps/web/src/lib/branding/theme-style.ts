@@ -33,6 +33,14 @@ export const FONT_ALLOWLIST = new Set([
 
 const c = (v: string) => parseHexColor(v) ?? SAFE_STYLE_FALLBACKS.color;
 
+/**
+ * A tint's alpha as the percentage `color-mix()` wants. The number always
+ * comes from `ACCENT_ALPHAS` by way of `theme.accentAlphas` — a closed table
+ * keyed on mode — so no tenant text can reach a CSS value through this, and
+ * reading it off the theme is what keeps the light and dark tints distinct.
+ */
+const pct = (alpha: number) => Math.round(alpha * 100);
+
 export function themeStyle(theme: ResolvedTheme): CSSProperties {
   return {
     "--background": c(theme.background),
@@ -62,15 +70,24 @@ export function themeStyle(theme: ResolvedTheme): CSSProperties {
     // The whole accent family follows the brand (Northern Lights spec §6):
     // glows, rail, hero gradient, primary button and focus glow all read
     // var(--accent)/var(--accent-2) from tokens.css, so a themed tenant's
-    // dashboard never shows BIS violet. Alpha variants are built from the
-    // already-validated hex, so no tenant text reaches CSS.
+    // dashboard never shows BIS violet.
+    //
+    // `--accent-strong` is DERIVED, not an alias of the primary:
+    // `--gradient-primary` is linear-gradient(180deg, var(--accent),
+    // var(--accent-strong)), and two identical stops render the tenant's one
+    // primary button as a flat fill.
+    //
+    // The four tints are color-mix() over an already-validated hex, at a
+    // percentage from ACCENT_ALPHAS — a closed table keyed on MODE, because
+    // tokens.css pins lighter tints on light (.09/.28) than on dark
+    // (.14/.35). No tenant text reaches CSS through either half.
     "--accent": c(theme.primary),
-    "--accent-strong": c(theme.primary),
-    "--accent-dim": `color-mix(in srgb, ${c(theme.primary)} 14%, transparent)`,
-    "--ring-glow": `color-mix(in srgb, ${c(theme.ring)} 35%, transparent)`,
+    "--accent-strong": c(theme.accentStrong),
+    "--accent-dim": `color-mix(in srgb, ${c(theme.primary)} ${pct(theme.accentAlphas.accentDim)}%, transparent)`,
+    "--ring-glow": `color-mix(in srgb, ${c(theme.ring)} ${pct(theme.accentAlphas.ringGlow)}%, transparent)`,
     "--accent-2": c(theme.accent2),
-    "--accent-2-dim": `color-mix(in srgb, ${c(theme.accent2)} 14%, transparent)`,
-    "--ring-glow-2": `color-mix(in srgb, ${c(theme.accent2)} 35%, transparent)`,
+    "--accent-2-dim": `color-mix(in srgb, ${c(theme.accent2)} ${pct(theme.accentAlphas.accent2Dim)}%, transparent)`,
+    "--ring-glow-2": `color-mix(in srgb, ${c(theme.accent2)} ${pct(theme.accentAlphas.ringGlow2)}%, transparent)`,
     // The far end of the active rail / avatar / meter gradient on the dark chrome.
     "--sidebar-tint-2": c(theme.accent2),
     "--sidebar": c(theme.sidebar),

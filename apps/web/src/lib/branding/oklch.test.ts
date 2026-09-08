@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveAccent2, hexToOklch, oklchToHex } from "./oklch";
+import { deriveAccent2, deriveAccentStrong, hexToOklch, oklchToHex } from "./oklch";
 
 const wrap = (h: number) => ((h % 360) + 360) % 360;
 const hueDelta = (a: number, b: number) => { const d = Math.abs(wrap(a) - wrap(b)); return Math.min(d, 360 - d); };
@@ -50,5 +50,62 @@ describe("deriveAccent2 — L +0.18 (clamp .85), C ×0.9, H −30° (spec §3.3)
 
   it("returns lower-case #rrggbb", () => {
     expect(deriveAccent2("#8B7CF7")).toMatch(/^#[0-9a-f]{6}$/);
+  });
+
+  // The gamut fit exists to keep L and H exactly rather than let a per-channel
+  // clamp move the hue, and it must not pay for that with chroma it does not
+  // have to give up. Both halves are pinned: a target sRGB already contains
+  // keeps all of its chroma, and one it does not keeps its lightness.
+  it("gives up no chroma when the target is already in gamut, and holds L when it is not", () => {
+    const teal = hexToOklch("#14b8a6");
+    const fitted = hexToOklch(deriveAccent2("#14b8a6"));
+    expect(Math.abs(fitted.c - teal.c * 0.9)).toBeLessThanOrEqual(0.003);
+
+    // #8b7cf7 lifted by .18 wants more chroma than blue has up there, so the
+    // fit bites — and what it must not do is pay for that in LIGHTNESS, which
+    // is what the per-channel clamp did (L .8154 against a .8376 target,
+    // 0.022 out; the fit lands 0.001 out). Measured against the target rather
+    // than the literal .85: #8b7cf7 sits at L .6576, so +0.18 is .8376 and
+    // the .85 clamp never binds for it.
+    const src = hexToOklch("#8b7cf7");
+    const target = Math.min(0.85, src.l + 0.18);
+    const violet = hexToOklch(deriveAccent2("#8b7cf7"));
+    expect(Math.abs(violet.l - target)).toBeLessThanOrEqual(0.01);
+    expect(violet.c).toBeGreaterThan(0);
+    expect(violet.c).toBeLessThan(src.c * 0.9); // the fit really did bite
+  });
+});
+
+// tokens.css keeps --accent and --accent-strong distinct per mode, and
+// --gradient-primary is linear-gradient(180deg, var(--accent),
+// var(--accent-strong)) — so aliasing the two renders the primary button
+// FLAT. This mirrors the BIS pairs: light #6d28d9 → #5b21b8 (L −0.057,
+// C ×0.88), dark #8b7cf7 → #a99eff (L +0.090, C ×0.78), hue held in both.
+describe("deriveAccentStrong — darker in light, lighter in dark, hue held", () => {
+  const STRONG_CASES: [string, string, "light" | "dark"][] = [
+    ["violet", "#8b7cf7", "light"], ["violet", "#8b7cf7", "dark"],
+    ["orange", "#f97316", "light"], ["orange", "#f97316", "dark"],
+    ["teal", "#14b8a6", "light"], ["teal", "#14b8a6", "dark"],
+    ["red", "#dc2626", "light"], ["red", "#dc2626", "dark"],
+  ];
+
+  it.each(STRONG_CASES)(
+    "%s %s in %s mode: L moves the pinned amount, hue holds, chroma never grows",
+    (_name, hex, mode) => {
+      const src = hexToOklch(hex);
+      const strong = deriveAccentStrong(hex, mode);
+      const out = hexToOklch(strong);
+      // ±0.015: the gamut fit can cost a little, and an 8-bit round trip more.
+      expect(Math.abs(out.l - (src.l + (mode === "light" ? -0.06 : 0.09))))
+        .toBeLessThanOrEqual(0.015);
+      expect(hueDelta(out.h, src.h)).toBeLessThanOrEqual(2);
+      expect(out.c).toBeLessThanOrEqual(src.c);
+      expect(strong).toMatch(/^#[0-9a-f]{6}$/);
+    });
+
+  it("clamps lightness at 1 for a near-white input in dark mode", () => {
+    const out = deriveAccentStrong("#fdfcff", "dark");
+    expect(out).toMatch(/^#[0-9a-f]{6}$/);
+    expect(hexToOklch(out).l).toBeLessThanOrEqual(1);
   });
 });

@@ -8,6 +8,9 @@ import { NEUTRAL_RAMPS } from "./neutral-ramps";
 import {
   FORM_CSS_FALLBACKS, publicFormTheme, parseHostMode, serializeDeclarations,
 } from "./public-form-theme";
+import { deriveTheme } from "./theme";
+import { themeInputsFrom } from "./tenant-theme";
+import { themeStyle } from "./theme-style";
 
 const NONE: Branding = {
   brandName: null, brandLogoPath: null, brandColor: null,
@@ -116,6 +119,37 @@ describe("publicFormTheme — mode selection", () => {
     expect(darkCta).not.toBe("#1e3a8a");
     expect(darkCta).not.toBe(lightCta);
     expect(contrastRatio(darkCta, NEUTRAL_RAMPS.warm.dark.bg)).toBeGreaterThanOrEqual(3);
+  });
+
+  // serializeDeclarations documents an invariant — "nothing reachable through
+  // publicFormTheme can produce a key or value that fails it". That was FALSE
+  // for one commit: SAFE_KEY refused a digit (`--accent-2`, `--sidebar-tint-2`,
+  // `--accent-2-dim`, `--ring-glow-2`) and SAFE_VALUE refused `%` (all four
+  // color-mix tints), so the whole accent family vanished from the dark rule
+  // while the inline LIGHT style kept it — a follow tenant on a dark device
+  // painted the light accents. The invariant is pinned here rather than
+  // claimed in a comment: everything themeStyle emits must survive the guard.
+  it("nothing reachable fails the guard: the dark rule carries every declaration themeStyle emits", () => {
+    const b = branding({ brandNeutral: "warm", brandMode: "follow", brandColor: "#1e3a8a" });
+    const css = publicFormTheme(b, false).darkCss!;
+    // The set the module itself builds for the dark half, by the same route.
+    const emitted = Object.entries(
+      themeStyle(deriveTheme(themeInputsFrom(b), "dark")!) as unknown as Record<string, string>,
+    );
+    expect(emitted.length).toBeGreaterThan(10);
+    for (const [key, value] of emitted) {
+      expect(css, `${key}:${value}`).toContain(`${key}:${value} !important;`);
+    }
+  });
+
+  // The tint alphas are per mode (.09 light, .14 dark), so the dark rule's
+  // --accent-dim is not the inline light one — which is also the only way a
+  // reader can see the rule is carrying its own answer rather than none.
+  it("carries its own --accent-dim, not the inline light one", () => {
+    const b = branding({ brandNeutral: "warm", brandMode: "follow", brandColor: "#1e3a8a" });
+    const css = publicFormTheme(b, false).darkCss!;
+    const darkDim = css.match(/--accent-dim:([^;]*) !important;/)![1]!;
+    expect(darkDim).not.toBe(style(b)["--accent-dim"]);
   });
 });
 
@@ -229,6 +263,27 @@ describe("serializeDeclarations", () => {
     ]) {
       expect(serializeDeclarations({ "--background": value }), value).toBe("");
     }
+  });
+
+  // The two characters the accent family needs and the old guards refused: a
+  // DIGIT in the key and a `%` in the value. Both are inert — neither can end
+  // a declaration or a block — and dropping them is what emptied a follow
+  // tenant's dark rule of its accents.
+  it("emits a key with a digit and a value with a percentage", () => {
+    expect(serializeDeclarations({ "--accent-2": "#4fd8e6" }))
+      .toBe("--accent-2:#4fd8e6 !important;");
+    expect(serializeDeclarations({ "--accent-dim": "color-mix(in srgb, #1e3a8a 14%, transparent)" }))
+      .toBe("--accent-dim:color-mix(in srgb, #1e3a8a 14%, transparent) !important;");
+  });
+
+  // Widening the charset must not widen what it defends against: `;`, `{`,
+  // `}` and `:` are the characters that end a declaration or a block, and
+  // none of them was admitted.
+  it("still drops a smuggled declaration that rides in behind a digit or a percentage", () => {
+    for (const value of ["14%;position:fixed", "#12100e}body{color:red", "--x:1"]) {
+      expect(serializeDeclarations({ "--accent-dim": value }), value).toBe("");
+    }
+    expect(serializeDeclarations({ "--x;color": "14%" })).toBe("");
   });
 });
 
