@@ -37,18 +37,24 @@ Plan: `docs/superpowers/plans/2026-09-07-website-traffic.md`.
 1. Vercel → Account → Tokens → create `bis-platform-analytics`, scope = the
    team, expiry 1 year. Copy it once.
 2. Vercel → bis-platform project → Settings → Environment Variables:
-   `VERCEL_API_TOKEN` = the token, `VERCEL_TEAM_ID` = `team_8zjV46sJxQDsVzikNQa1JaO2`
-   (Production + Preview). No redeploy is needed: the pass builds its client
-   lazily, on the tick, from the env it finds then.
-3. Local: the same two lines in `apps/web/.env.local`.
-4. Verify: the next `/api/cron/reminders` tick's JSON carries a `siteTraffic`
+   `VERCEL_API_TOKEN` = the token (mark it Sensitive), `VERCEL_TEAM_ID` =
+   `team_8zjV46sJxQDsVzikNQa1JaO2` (Production + Preview).
+3. **Redeploy.** Vercel applies environment variables to NEW deployments
+   only (docs: "Changes to environment variables are not applied to
+   previous deployments"). Deployments → the current production deployment
+   → ⋯ → Redeploy, or `vercel redeploy --scope danlopez508-8452s-projects`
+   with the deployment URL. The pass constructs its client lazily, which
+   only means a missing token cannot crash a tick — it does not let a
+   running deployment see a variable added after it was built.
+4. Local: the same two lines in `apps/web/.env.local`.
+5. Verify: the next `/api/cron/reminders` tick's JSON carries a `siteTraffic`
    key shaped `{ synced, daysSynced, failed, skippedNotYet, skippedUpToDate,
    skippedCap, unresolvableTimezone }`. With no sites linked every counter is
    0. A non-zero `failed` with `VERCEL_API_TOKEN/VERCEL_TEAM_ID unset` in the
    log means step 2 missed. Until Part A is done, Settings → Website lists no
    projects and says why — a new site cannot be linked (nothing to pick); an
    already-linked one keeps showing its domain.
-5. First night after the token lands, read the cron log and the first
+6. First night after the token lands, read the cron log and the first
    `site_traffic_breakdown` rows for the dogfood and record in Findings:
    what a direct visit carries as `referrerHostname` (the parser reads
    null as ""), whether an `Others` row appeared (dropped by the parser),
