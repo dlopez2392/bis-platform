@@ -22,6 +22,7 @@ const dbMocks = vi.hoisted(() => ({
   listDueSmsReminders: vi.fn(), stampSmsReminderSent: vi.fn(), stampSmsReminderFailed: vi.fn(),
   getAutomation: vi.fn(), hasRecentOutboundSms: vi.fn(), countInstantRepliesSince: vi.fn(), stampInstantReplySent: vi.fn(),
   ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(),
+  listSitesToSync: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: async () => ({ ok: true, from: "+19565550000" }) }));
@@ -89,6 +90,10 @@ beforeEach(() => {
   }]);
   dbMocks.ensureConversation.mockResolvedValue({ id: "convo_1", created: false });
   dbMocks.createMessage.mockResolvedValue({ id: "msg_1" });
+  // The site-traffic pass sends nothing, so it has no row here — but it must
+  // RUN under the sentinel, not error out of the harness: a pass that quietly
+  // fails is a pass the scan never looked at (the withBookingCancelled lesson).
+  dbMocks.listSitesToSync.mockResolvedValue([]);
 });
 
 describe("the sentinel: the internal label never reaches a customer, through ANY registered pass", () => {
@@ -108,6 +113,9 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(results.reviewRequests?.sent).toBe(2);
     expect(results.noShowNudges?.sent).toBe(2);
     expect(results.smsReminders?.sent).toBe(1);
+    // …and the one pass that sends nothing ran to its counters, not to `errored`.
+    expect(results.siteTraffic).toEqual(expect.objectContaining({ synced: 0, failed: 0 }));
+    expect(results.siteTraffic).not.toHaveProperty("errored");
 
     const everything = [...emailSend.mock.calls, ...smsSend.mock.calls, ...dbMocks.createMessage.mock.calls]
       .map((args) => JSON.stringify(args)).join("\n");
@@ -116,8 +124,8 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(everything).toContain(BRAND);   // and the brand name DID go out, in its place
   });
 
-  it("the registry runs reminders, follow-ups, review requests, no-show nudges, then text reminders — the first three's order is the collision's contract", () => {
-    expect(PASSES.map((p) => p.key)).toEqual(["reminders", "followups", "reviewRequests", "noShowNudges", "smsReminders"]);
+  it("the registry runs reminders, follow-ups, review requests, no-show nudges, text reminders, then site traffic — the first three's order is the collision's contract", () => {
+    expect(PASSES.map((p) => p.key)).toEqual(["reminders", "followups", "reviewRequests", "noShowNudges", "smsReminders", "siteTraffic"]);
   });
 
   /**
