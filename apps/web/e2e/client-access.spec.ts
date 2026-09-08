@@ -82,7 +82,7 @@ test("a client sees only their own account, and nothing when access is off", asy
   // is exact is exactly why it had to be updated here rather than loosened:
   // `calls.spec.ts` asserts the same item from the other direction.
   const CLIENT_NAV = [
-    "Dashboard", "Contacts", "Opportunities", "Conversations", "Calls", "Forms", "Calendar",
+    "Dashboard", "Website", "Contacts", "Opportunities", "Conversations", "Calls", "Forms", "Calendar",
     "Branding",
   ];
   await expect(page.locator("aside nav a")).toHaveText(CLIENT_NAV);

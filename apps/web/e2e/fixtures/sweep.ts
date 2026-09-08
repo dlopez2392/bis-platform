@@ -73,7 +73,9 @@ export async function deleteAccountCascade(
   // and both sit FK-upstream of the contacts delete below. Exported so
   // auth.teardown.ts runs THIS list rather than a second copy that can
   // drift — the drift already happened once (teardown lacked these tables).
-  for (const table of ["calls", "bookings", "messages", "conversations", "calendars",
+  // 0029: traffic restricts on sites, sites on accounts — these three first.
+  for (const table of ["site_traffic_breakdown", "site_traffic_daily", "sites",
+                       "calls", "bookings", "messages", "conversations", "calendars",
                        "checklist_items", "form_submissions",
                        "forms", "contacts", "events", "voice_profiles", "phone_numbers",
                        "automations"]) {

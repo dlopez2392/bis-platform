@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Website section — merged direction</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,650&family=Geist:wght@400;500;600&family=Geist+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --s0:#0f0d17;--s1:#16131f;--s2:#1d1928;--s3:#262133;
+    --line:#2a2537;--line-strong:#3a3450;
+    --t1:#f2f0f7;--t2:#a9a3bd;--t3:#6f6a85;
+    --accent:#8B7CF7;--accent-dim:rgba(139,124,247,.16);--accent-soft:rgba(139,124,247,.42);
+    --ok:#4ade80;--warn:#fbbf24;
+    --r-ctl:8px;--r-card:11px;
+    --ui:"Geist",system-ui,sans-serif;--disp:"Bricolage Grotesque",var(--ui);--mono:"Geist Mono",ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--s0);color:var(--t1);font-family:var(--ui);font-size:14px;line-height:1.45}
+  body{padding:28px 32px 60px}
+  h2{font-family:var(--disp);font-weight:650;font-size:26px;letter-spacing:-.01em;margin:0 0 6px}
+  .subtitle{color:var(--t2);margin:0 0 22px;max-width:78ch}
+  .frame{max-width:1040px}
+  .shell{display:grid;grid-template-columns:200px 1fr;border:1px solid var(--line);border-radius:var(--r-card);overflow:hidden;background:var(--s0)}
+  .side{background:var(--s1);border-right:1px solid var(--line);padding:14px 12px}
+  .side .brand{font-family:var(--disp);font-weight:650;font-size:15px;margin:2px 4px 14px}
+  .side .grp{font:500 10px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--t3);margin:12px 6px 4px}
+  .side .it{padding:6px 8px;border-radius:var(--r-ctl);color:var(--t2);font-size:13px;display:flex;align-items:center;gap:8px}
+  .side .it.on{background:var(--accent-dim);color:var(--t1);box-shadow:inset 3px 0 0 var(--accent)}
+  .side .ic{width:14px;height:14px;border-radius:4px;background:var(--s3);display:inline-block}
+  .side .it.on .ic{background:var(--accent-soft)}
+  .page{padding:18px 20px 22px}
+  .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+  .title{font-family:var(--disp);font-weight:650;font-size:22px;letter-spacing:-.01em}
+  .right{display:flex;align-items:center;gap:14px}
+  .pills{display:flex;gap:4px}
+  .pill{font:500 11px var(--mono);letter-spacing:.06em;color:var(--t2);padding:4px 10px;border-radius:999px;border:1px solid var(--line)}
+  .pill.on{background:var(--accent-dim);color:var(--accent);border-color:transparent}
+  .stamp{font:500 10px var(--mono);letter-spacing:.08em;color:var(--t3)}
+  .lbl{font:500 10px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--t3)}
+  .panel{background:var(--s1);border:1px solid var(--line);border-radius:var(--r-card);padding:14px 16px;box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .num{font-family:var(--disp);font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+  .delta{display:inline-flex;align-items:center;gap:4px;font:500 11px var(--mono);color:var(--ok);background:rgba(74,222,128,.12);padding:2px 7px;border-radius:999px}
+  .period{color:var(--t3);font-size:12px}
+  .story{font-size:17px;line-height:1.5;color:var(--t1);margin:6px 0 0;max-width:62ch}
+  .story b{font-weight:600;color:var(--accent)}
+  .spark{display:flex;align-items:flex-end;gap:2px;height:26px;width:72px}
+  .spark i{flex:1;background:var(--accent-soft);border-radius:2px 2px 0 0;display:block}
+  .chart{position:relative}
+  .bars{display:flex;align-items:flex-end;gap:7px;height:120px;margin-top:12px}
+  .bars i{flex:1;background:var(--accent);border-radius:4px 4px 0 0;display:block;transition:opacity .15s}
+  .bars i.we{background:var(--s3)}
+  .bars i.hot{box-shadow:0 0 0 2px var(--accent-dim)}
+  .tip{position:absolute;left:66%;top:-2px;transform:translateX(-50%);background:var(--s3);border:1px solid var(--line-strong);border-radius:var(--r-ctl);padding:6px 9px;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,.35)}
+  .tip .lbl{display:block;margin-bottom:2px}
+  .tip b{font:600 13px var(--ui);color:var(--t1)}
+  .axis{display:flex;justify-content:space-between;margin-top:8px}
+  .axis span{font:500 10px var(--mono);color:var(--t3);letter-spacing:.04em}
+  .row{display:flex;align-items:center;gap:10px;padding:6px 0}
+  .row .k{flex:1;color:var(--t1);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .v{font:500 12px var(--mono);color:var(--t2);font-variant-numeric:tabular-nums;min-width:36px;text-align:right}
+  .bar{height:6px;border-radius:999px;background:var(--s3);width:96px;overflow:hidden}
+  .bar b{display:block;height:100%;background:var(--accent);border-radius:999px}
+  .devices{display:flex;align-items:center;gap:14px;margin-top:12px}
+  .seg{flex:1;display:flex;height:8px;border-radius:999px;overflow:hidden;background:var(--s3)}
+  .seg i{display:block;height:100%}
+  .leg{display:flex;gap:12px}
+  .leg span{font-size:12px;color:var(--t2);display:inline-flex;align-items:center;gap:6px}
+  .leg .d{width:8px;height:8px;border-radius:2px;display:inline-block}
+  .leg .v{font:500 11px var(--mono);color:var(--t3)}
+  .notes{margin-top:18px;color:var(--t2);font-size:13px;line-height:1.6;max-width:78ch}
+  .notes b{color:var(--t1);font-weight:600}
+</style>
+</head>
+<body>
+<h2>The merged direction, at full width</h2>
+<p class="subtitle">C's sentence on top, B's four tiles and chart under it, and C's "Where they were" panel sitting beside pages and sources. Shown inside the real sidebar so you can judge it as a page, not a widget. One bar is drawn in its hover state so you can see the tooltip treatment.</p>
+
+<div class="frame">
+<div class="shell">
+  <div class="side">
+    <div class="brand">Rio Roofing</div>
+    <div class="grp">Overview</div>
+    <div class="it"><span class="ic"></span>Dashboard</div>
+    <div class="it on"><span class="ic"></span>Website</div>
+    <div class="grp">CRM</div>
+    <div class="it"><span class="ic"></span>Contacts</div>
+    <div class="it"><span class="ic"></span>Opportunities</div>
+    <div class="grp">Communications</div>
+    <div class="it"><span class="ic"></span>Conversations</div>
+    <div class="it"><span class="ic"></span>Calls</div>
+    <div class="grp">Growth</div>
+    <div class="it"><span class="ic"></span>Forms</div>
+    <div class="it"><span class="ic"></span>Calendar</div>
+  </div>
+  <div class="page">
+    <div class="top">
+      <div class="title">Website</div>
+      <div class="right"><span class="stamp">UPDATED THIS MORNING · 6:00 AM</span><div class="pills"><span class="pill">7D</span><span class="pill on">14D</span><span class="pill">30D</span></div></div>
+    </div>
+
+    <div class="panel">
+      <div class="lbl">The last 14 days</div>
+      <p class="story"><b>1,284 people</b> visited your website, <b>18% more</b> than the two weeks before. Most of them found you on <b>Google</b>, the page they read most was <b>Services</b>, and seven in ten were on a phone.</p>
+    </div>
+
+    <div class="grid4" style="margin-top:12px">
+      <div class="panel"><div class="lbl">Visitors</div><div style="display:flex;justify-content:space-between;align-items:flex-end;margin-top:8px"><div><div class="num" style="font-size:28px;line-height:1.1">1,284</div><span class="delta">▲ 18%</span></div><div class="spark"><i style="height:40%"></i><i style="height:52%"></i><i style="height:46%"></i><i style="height:60%"></i><i style="height:58%"></i><i style="height:66%"></i><i style="height:74%"></i><i style="height:80%"></i></div></div></div>
+      <div class="panel"><div class="lbl">Pageviews</div><div style="display:flex;justify-content:space-between;align-items:flex-end;margin-top:8px"><div><div class="num" style="font-size:28px;line-height:1.1">3,910</div><span class="delta">▲ 12%</span></div><div class="spark"><i style="height:50%"></i><i style="height:48%"></i><i style="height:56%"></i><i style="height:62%"></i><i style="height:60%"></i><i style="height:70%"></i><i style="height:68%"></i><i style="height:78%"></i></div></div></div>
+      <div class="panel"><div class="lbl">From Google</div><div style="display:flex;justify-content:space-between;align-items:flex-end;margin-top:8px"><div><div class="num" style="font-size:28px;line-height:1.1">61%</div><span class="delta">▲ 4 pts</span></div><div class="spark"><i style="height:44%"></i><i style="height:50%"></i><i style="height:52%"></i><i style="height:58%"></i><i style="height:57%"></i><i style="height:64%"></i><i style="height:70%"></i><i style="height:72%"></i></div></div></div>
+      <div class="panel"><div class="lbl">Top page</div><div style="margin-top:8px"><div class="num" style="font-size:20px;line-height:1.2">Services</div><span class="period">412 visitors · 32% of all</span></div></div>
+    </div>
+
+    <div class="panel chart" style="margin-top:12px">
+      <div class="lbl">Visitors by day</div>
+      <div class="tip"><span class="lbl">Thu, Sep 4</span><b>114 visitors</b> · 341 pageviews</div>
+      <div class="bars">
+        <i style="height:42%"></i><i style="height:55%"></i><i style="height:48%"></i><i style="height:61%"></i><i style="height:58%"></i><i class="we" style="height:30%"></i><i class="we" style="height:26%"></i><i style="height:66%"></i><i style="height:72%"></i><i style="height:64%"></i><i class="hot" style="height:80%"></i><i style="height:74%"></i><i class="we" style="height:38%"></i><i class="we" style="height:33%"></i>
+      </div>
+      <div class="axis"><span>AUG 25</span><span>AUG 28</span><span>SEP 1</span><span>SEP 4</span><span>SEP 7</span></div>
+      <div class="devices">
+        <div class="seg"><i style="width:71%;background:var(--accent)"></i><i style="width:26%;background:var(--accent-soft)"></i><i style="width:3%;background:var(--line-strong)"></i></div>
+        <div class="leg"><span><i class="d" style="background:var(--accent)"></i>Phone <i class="v">71%</i></span><span><i class="d" style="background:var(--accent-soft)"></i>Desktop <i class="v">26%</i></span><span><i class="d" style="background:var(--line-strong)"></i>Tablet <i class="v">3%</i></span></div>
+      </div>
+    </div>
+
+    <div class="grid3" style="margin-top:12px">
+      <div class="panel"><div class="lbl">Pages people read</div>
+        <div class="row"><span class="k">Services</span><span class="bar"><b style="width:100%"></b></span><span class="v">412</span></div>
+        <div class="row"><span class="k">Home</span><span class="bar"><b style="width:94%"></b></span><span class="v">388</span></div>
+        <div class="row"><span class="k">Free estimate</span><span class="bar"><b style="width:49%"></b></span><span class="v">201</span></div>
+        <div class="row"><span class="k">Reviews</span><span class="bar"><b style="width:31%"></b></span><span class="v">128</span></div>
+        <div class="row"><span class="k">Contact</span><span class="bar"><b style="width:22%"></b></span><span class="v">91</span></div>
+      </div>
+      <div class="panel"><div class="lbl">Where visitors came from</div>
+        <div class="row"><span class="k">Google</span><span class="bar"><b style="width:100%"></b></span><span class="v">783</span></div>
+        <div class="row"><span class="k">Direct</span><span class="bar"><b style="width:36%"></b></span><span class="v">282</span></div>
+        <div class="row"><span class="k">Facebook</span><span class="bar"><b style="width:18%"></b></span><span class="v">141</span></div>
+        <div class="row"><span class="k">Other websites</span><span class="bar"><b style="width:10%"></b></span><span class="v">78</span></div>
+      </div>
+      <div class="panel"><div class="lbl">Where they were</div>
+        <div class="row"><span class="k">McAllen</span><span class="bar"><b style="width:100%"></b></span><span class="v">54%</span></div>
+        <div class="row"><span class="k">Edinburg</span><span class="bar"><b style="width:35%"></b></span><span class="v">19%</span></div>
+        <div class="row"><span class="k">Mission</span><span class="bar"><b style="width:22%"></b></span><span class="v">12%</span></div>
+        <div class="row"><span class="k">Pharr</span><span class="bar"><b style="width:15%"></b></span><span class="v">8%</span></div>
+        <div class="row"><span class="k">Elsewhere</span><span class="bar"><b style="width:13%"></b></span><span class="v">7%</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<p class="notes"><b>Things to notice.</b> The sentence is generated from the same rows as the tiles, so it can never disagree with them; it names the top source and top page only when one clearly leads, and says "roughly the same as" instead of a percentage when the change is under 5%. Weekend bars are muted so the weekday rhythm reads at a glance. "Where they were" shows cities when Vercel gives them, else states; the last row rolls up the rest as "Elsewhere". The devices strip lives under the chart so the four tiles stay the four that matter. <b>Reply in the terminal:</b> lock this, or tell me what to change.</p>
+</body>
+</html>

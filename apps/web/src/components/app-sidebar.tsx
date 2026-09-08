@@ -9,6 +9,7 @@ import {
   KanbanSquare,
   MessagesSquare,
   Calendar,
+  Globe,
   FileText,
   Settings,
   Building2,
@@ -42,6 +43,7 @@ type NavItem = { href: string; label: string; icon: LucideIcon };
 // one place that maps an icon key to one.
 const NAV_ICONS: Record<NavIconKey, LucideIcon> = {
   dashboard: LayoutDashboard,
+  website: Globe,
   contacts: Users,
   opportunities: KanbanSquare,
   conversations: MessagesSquare,

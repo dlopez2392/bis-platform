@@ -29,10 +29,18 @@ describe("buildNavGroups", () => {
     const [overview, crm, comms, growth] = buildNavGroups(BASE, true);
     // Checklist joined OVERVIEW on 2026-09-05: the page hosts the A2P
     // registration panel that gates SMS, and nothing in the nav reached it.
-    expect(overview!.items.map((i) => i.labelKey)).toEqual(["nav.dashboard", "nav.checklist"]);
+    expect(overview!.items.map((i) => i.labelKey)).toEqual(["nav.dashboard", "nav.website", "nav.checklist"]);
     expect(crm!.items.map((i) => i.labelKey)).toEqual(["nav.contacts", "nav.opportunities"]);
     expect(comms!.items.map((i) => i.labelKey)).toEqual(["nav.conversations", "nav.calls", "nav.voice"]);
     expect(growth!.items.map((i) => i.labelKey)).toEqual(["nav.forms", "nav.calendar", "nav.automations"]);
+  });
+
+  it("shows Website to both audiences, directly below Dashboard", () => {
+    // Mutation: gate the item on isAgency — the client case fails.
+    for (const isAgency of [true, false]) {
+      const [overview] = buildNavGroups(BASE, isAgency);
+      expect(overview!.items.slice(0, 2).map((i) => i.labelKey)).toEqual(["nav.dashboard", "nav.website"]);
+    }
   });
 
   it("shows Voice to the agency and hides it from a client", () => {

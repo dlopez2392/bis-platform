@@ -8,6 +8,7 @@ import type { MessageKey } from "./messages";
  */
 export type NavIconKey =
   | "dashboard"
+  | "website"
   | "contacts"
   | "opportunities"
   | "conversations"
@@ -64,6 +65,10 @@ export function buildNavGroups(base: string | null, isAgency: boolean): NavGroup
       label: "nav.group.overview",
       items: [
         { href: `${base}/dashboard`, labelKey: "nav.dashboard", iconKey: "dashboard" },
+        // Both audiences: the section exists for the client even before a site
+        // is linked (it sells the feature, spec §The screen); the agency sees
+        // the same page inside any account.
+        { href: `${base}/website`, labelKey: "nav.website", iconKey: "website" },
         // Agency only, matching the route's own requireAgencyOnlyAccountAccess.
         //
         // Added 2026-09-05 because the page was genuinely unreachable: the
