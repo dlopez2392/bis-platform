@@ -78,6 +78,8 @@ export type ResolvedTheme = {
   accentStrong: string;
   /** This MODE's tint alphas (ACCENT_ALPHAS), which themeStyle mixes the color-mix() tints at. */
   accentAlphas: AccentAlphas;
+  /** The lit ground's glow alphas (GLOW_ALPHAS), halved when a brand colour is active. */
+  glowAlphas: GlowAlphas;
   radius: string;
   fontSans: string;
 };
@@ -159,6 +161,30 @@ export type AccentAlphas = {
 export const ACCENT_ALPHAS = {
   light: { accentDim: 0.09, ringGlow: 0.28, accent2Dim: 0.14, ringGlow2: 0.28 },
   dark: { accentDim: 0.14, ringGlow: 0.35, accent2Dim: 0.14, ringGlow2: 0.35 },
+} as const;
+
+export type GlowAlphas = {
+  readonly glow1: number; readonly glow2: number; readonly glow3: number;
+};
+
+/**
+ * tokens.css's alphas for the lit ground's three radial glows, per mode —
+ * light `.07/.05/.04`, dark `.28/.16/.12` — pinned against the CSS by
+ * theme.test.ts's parity block, exactly like ACCENT_ALPHAS above.
+ *
+ * Unlike the tint alphas, these are NOT per-mode-only: a brand-active tenant
+ * gets them HALVED (see `glowScale` in deriveTheme). The glow paints the page
+ * background itself, and `primary` has already been lifted for text, so a very
+ * light brand — white, `#fde047` — becomes a very bright ground: the composite
+ * sweep in theme.test.ts measured page-level muted text at 4.02:1 in dark on
+ * every ramp for white, and 4.43/4.45:1 for the yellow, against a 4.5:1 floor.
+ * Halving reads 5.7–5.96:1 (decided 2026-09-08). BIS itself emits no theme at
+ * all, so it keeps the numbers below by construction, and so does a themed
+ * tenant that never set a brand colour.
+ */
+export const GLOW_ALPHAS = {
+  light: { glow1: 0.07, glow2: 0.05, glow3: 0.04 },
+  dark: { glow1: 0.28, glow2: 0.16, glow3: 0.12 },
 } as const;
 
 /**
@@ -283,14 +309,38 @@ export function deriveTheme(
   }
 
   // Derived from the LIFTED primary, not the raw brand: the primary is what
-  // --accent will be on <body>, so the pair is analogous to what renders.
-  const accent2 = brand ? deriveAccent2(primary) : bis.accent2;
+  // --accent will be on <body>, so the pair is analogous to what renders —
+  // and then lifted against the CARD, because --gradient-hero paints the raw
+  // token there in light mode (dark mode mixes it 60% with white first).
+  // deriveAccent2's +0.18 lightness is right against a dark card and wrong
+  // against a white one: six of the nine adversarial brands landed between
+  // 2.26:1 and 2.58:1 on white. ensureContrast returns its input untouched
+  // when it already clears 3:1, so dark mode is a no-op and light darkens
+  // only as far as it must; the unlifted value is still the fallback, because
+  // an unreachable target must not blank the gradient's far stop.
+  const accent2 = brand
+    ? (ensureContrast(deriveAccent2(primary), steps.card, 3) ?? deriveAccent2(primary))
+    : bis.accent2;
 
   // Same reasoning and the same lifted primary. NOT primary itself:
   // --gradient-primary is linear-gradient(180deg, var(--accent),
   // var(--accent-strong)), so aliasing the two renders the tenant's one
   // primary button as a flat fill.
   const accentStrong = brand ? deriveAccentStrong(primary, mode) : bis.accentStrong;
+
+  // The lit ground is the ONE place a brand colour paints a surface that text
+  // is then read on directly, and `primary` arrives here already lifted FOR
+  // text — so a very light brand becomes a very bright ground. Half strength
+  // is what keeps page-level muted text over 4.5:1 for every brand in the
+  // composite sweep; see GLOW_ALPHAS. An unthemed BIS account never reaches
+  // this line at all (deriveTheme returned null above), and a themed tenant
+  // that set no brand colour keeps tokens.css's own numbers.
+  const glowScale = brand ? 0.5 : 1;
+  const glowAlphas: GlowAlphas = {
+    glow1: GLOW_ALPHAS[mode].glow1 * glowScale,
+    glow2: GLOW_ALPHAS[mode].glow2 * glowScale,
+    glow3: GLOW_ALPHAS[mode].glow3 * glowScale,
+  };
 
   return {
     background: steps.bg,
@@ -320,6 +370,7 @@ export function deriveTheme(
     accentStrong,
     // Per mode, never per brand — see ACCENT_ALPHAS.
     accentAlphas: ACCENT_ALPHAS[mode],
+    glowAlphas,
     radius: RADIUS[inputs.corners ?? "soft"],
     fontSans: FONT[inputs.type ?? "geist"],
   };

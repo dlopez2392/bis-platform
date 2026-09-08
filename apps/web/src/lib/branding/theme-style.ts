@@ -90,6 +90,14 @@ export function themeStyle(theme: ResolvedTheme): CSSProperties {
     "--ring-glow-2": `color-mix(in srgb, ${c(theme.accent2)} ${pct(theme.accentAlphas.ringGlow2)}%, transparent)`,
     // The far end of the active rail / avatar / meter gradient on the dark chrome.
     "--sidebar-tint-2": c(theme.accent2),
+    // The lit ground's three radial glows, which now paint in the TENANT's
+    // accent — so their strength has to travel with the theme rather than stay
+    // at tokens.css's BIS numbers. Values come from a closed constant table
+    // (GLOW_ALPHAS × 1, or × 0.5 once a brand colour is active), never from
+    // tenant text, so `c()`'s hex validation has nothing to do here.
+    "--glow-1-alpha": String(theme.glowAlphas.glow1),
+    "--glow-2-alpha": String(theme.glowAlphas.glow2),
+    "--glow-3-alpha": String(theme.glowAlphas.glow3),
     "--sidebar": c(theme.sidebar),
     "--sidebar-foreground": c(theme.sidebarForeground),
     "--sidebar-accent": c(theme.sidebarAccent),

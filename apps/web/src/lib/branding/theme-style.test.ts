@@ -27,6 +27,9 @@ describe("themeStyle", () => {
     expect(style["--accent-2-dim"]).toBe(`color-mix(in srgb, ${theme.accent2} ${pct(a.accent2Dim)}%, transparent)`);
     expect(style["--ring-glow-2"]).toBe(`color-mix(in srgb, ${theme.accent2} ${pct(a.ringGlow2)}%, transparent)`);
     expect(style["--sidebar-tint-2"]).toBe(theme.accent2);
+    expect(style["--glow-1-alpha"]).toBe(String(theme.glowAlphas.glow1));
+    expect(style["--glow-2-alpha"]).toBe(String(theme.glowAlphas.glow2));
+    expect(style["--glow-3-alpha"]).toBe(String(theme.glowAlphas.glow3));
   });
 
   // --gradient-primary is linear-gradient(180deg, var(--accent),
