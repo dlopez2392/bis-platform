@@ -63,3 +63,6 @@ export { getAutomation, upsertAutomation, parseReviewRequestConfig,
          type NoShowNudgeChannel, type NoShowNudgeConfig, type DueNoShowNudge,
          type DueSmsReminder, type InstantReplyConfig } from "./automations";
 export * from "./voice";
+export { getSiteForAccount, upsertSite, listSitesToSync, writeTrafficDay, stampSiteSynced,
+         listTrafficDays, listTrafficBreakdown,
+         type SiteRow, type TrafficDay, type TrafficDimension, type TrafficBreakdownRow } from "./sites";
