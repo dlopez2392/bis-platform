@@ -103,3 +103,37 @@ demo until the prospect audit piece exists.
   account, the next tick picks the site up.
 - A site needs unlinking: delete `site_traffic_breakdown`, then
   `site_traffic_daily`, then the `sites` row (FKs are RESTRICT on purpose).
+
+## First-night findings (2026-09-08, first real pull)
+
+- **Part A done by danlo 13:44Z; redeploy 13:45Z; first pull on the 14:00Z
+  tick**: 30 days written in ~3 minutes, stamp `2026-09-07`, no failures.
+  Token scope (All Projects on the team) and the `environment eq 'production'`
+  filter were accepted.
+- **Every backfilled day is zero — genuinely.** Web Analytics was enabled on
+  the project at ~02:15Z on 2026-09-08 and its routes only exist on
+  deployments made after that (quickstart: "will add new routes … after your
+  next deployment"); bis-website was deployed at 03:18Z, so collection
+  started then. Vercel's own report agrees: 0 through 2026-09-07, then
+  1 visitor at 13:00Z on `/en` on 2026-09-08. The section fills after the
+  first pull that covers 2026-09-08 (the 03:00 Chicago tick on the 9th).
+- **Direct traffic's `referrerHostname` is `""`** (empty string, not null).
+  `channelOf("")` → Direct, as designed. No `Others` row appeared (one path).
+- 🔴 **Two API window behaviours the pass does not account for** (verified
+  by probing with the MCP analytics tool, same endpoints):
+  1. `visits/count` FLOORS `since` and `until` to UTC midnight. A local-day
+     window such as Chicago `05:00Z → 05:00Z` is answered for the UTC day
+     `00:00Z → 00:00Z`. Probe: since `14:00Z` returned the 13:00Z view.
+  2. `visits/aggregate` honours `since` to the hour but treats `until` as
+     INCLUSIVE of its bucket (echoed back +1h): `until 13:00Z` returned a
+     13:00–14:00 view. So the breakdowns cover local midnight → local
+     midnight **plus one hour**, while the totals cover the UTC day.
+  Consequence: within one stored day, totals and breakdowns span different
+  windows; shares (breakdown ÷ total) can drift or exceed 100%. Not visible
+  yet (all zeros). **Decision owed:** either store UTC days honestly
+  (count at UTC midnights; aggregate `until = day end − 1h`; label days as
+  UTC in copy) — the smallest change — or keep local days by summing hourly
+  buckets (`by=hour`), which overcounts unique visitors. Tracked in the
+  ledger; no code changed on the first night.
+- Local `.env.local` carries `VERCEL_TEAM_ID` only; the token line was left
+  for danlo to add at the machine (a pasted token would live in the chat).
