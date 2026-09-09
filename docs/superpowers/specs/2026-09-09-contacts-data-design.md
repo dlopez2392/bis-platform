@@ -85,10 +85,14 @@ is invisible until an import exists — which is precisely why both land togethe
 
 ### Total count
 
-The header reads "1,284 contacts". A second query with
-`{ count: "exact", head: true }` against the same filters, run in parallel with
-the page query. Counting is separate from the page on purpose: the count must
-reflect the filter, not the page size.
+The header reads "1,284 contacts". `countContacts` already exists
+(`contacts.ts:257`) and already does the `{ count: "exact", head: true }` query —
+but it counts the whole account and takes no search argument, so on a searched
+list it would report the wrong number.
+
+Give it the same optional `search` the list takes, so the count reflects the
+filter rather than the page size, and its one existing caller (the account
+dashboard, `dashboard/page.tsx:99`) keeps working unchanged by omitting it.
 
 ## 2. Import
 
@@ -131,13 +135,36 @@ was dropped rather than wondering.
 
 ### Matching an existing contact
 
-Match on **email or phone**, reusing `findByEmail` / `findByPhone` — the same
-helpers the app already uses, so import and manual entry agree on what "the
-same person" means.
+Match on **email or phone** through the existing `findDuplicate`
+(`contacts.ts:72`, module-private — the spec previously named `findByEmail` /
+`findByPhone`, which do not exist). It already handles the case that matters:
+`(956) 292-1696` and `+19562921696` are the same person, compared on normalised
+digits.
 
 **Update semantics, stated precisely:** a non-empty CSV cell overwrites; a blank
-CSV cell never overwrites. Re-importing the same file is therefore idempotent,
-which matters because people always import twice.
+CSV cell never overwrites. Re-importing the same file is therefore idempotent.
+
+**Do not reuse `fillContactBlanks` for this.** It exists (`contacts.ts:151`) and
+looks like the right helper, but its rule is different by design: it fills
+*only* blank fields and never overwrites, because it serves the voice path where
+a misheard name must not clobber a good record. Import needs the opposite on a
+changed cell — otherwise "export → edit in Excel → re-import" silently applies
+nothing, which is the main workflow this feature exists to support. Import uses
+`findDuplicate` then `updateContact` with only the non-empty cells in the patch.
+
+### The dedupe path will not survive a large import as-is
+
+`findDuplicate`'s phone fallback, when an exact string match misses, **selects
+every non-null phone on the account and compares in memory**. That is correct
+and cheap for one contact at a time, which is all it has ever served. Called
+once per CSV row it is O(n²): a 5,000-row import into a 5,000-contact account
+does 5,000 full scans.
+
+Import therefore builds the match index **once per import**, not per row: one
+pass over the account's `id, email, phone`, normalised through the same
+`phoneDigits` rule, held for the life of the job and updated as rows are
+created. `findDuplicate` itself is left alone — every existing caller is
+single-row and correct.
 
 ### Tags
 
