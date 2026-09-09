@@ -47,6 +47,15 @@ describe("DailyChart second series (spec §5): same axis, --accent-2, mono legen
     const points = html.match(/<polyline[^>]*points="([^"]+)"/)![1]!;
     expect(points).toBe("12.5,20 37.5,60 62.5,80 87.5,100");
   });
+  it("a second series taller than the bars raises the SHARED max instead of clipping", () => {
+    // visitors max 100, second max 200 → scale 200: line y 0,50,75,100; the tallest bar drops to 50%.
+    const tall = { label: "Pageviews ÷ 3", values: [200, 100, 50, 0] };
+    const h = renderToStaticMarkup(createElement(DailyChart, { days: DAYS, secondSeries: tall }));
+    expect(h.match(/<polyline[^>]*points="([^"]+)"/)![1]!).toBe("12.5,0 37.5,50 62.5,75 87.5,100");
+    expect(h).toContain("height:50%");
+    expect(h.match(/data-slot="chart-axis"/g)?.length).toBe(1);
+  });
+
   it("still has exactly one axis row (never a dual axis)", () => {
     expect(html.match(/data-slot="chart-axis"/g)?.length).toBe(1);
     expect(html).not.toMatch(/<text\b/);

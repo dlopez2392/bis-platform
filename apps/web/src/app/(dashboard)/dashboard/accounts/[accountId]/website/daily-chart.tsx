@@ -19,7 +19,13 @@ export type SecondSeries = { label: string; values: number[] };
  */
 export function DailyChart({ days, secondSeries }: { days: Day[]; secondSeries?: SecondSeries }) {
   const [active, setActive] = useState<number | null>(null);
-  const max = Math.max(1, ...days.map((d) => d.visitors));
+  // ONE axis for both series: the scale is the larger of the bars' max and
+  // the second series' max. Scaling by the bars alone clipped the line flat
+  // at the top whenever pageviews ÷ 3 exceeded visitors (any site averaging
+  // more than three pages per visit); scaling the line by its OWN max would
+  // be a second axis in disguise. Bars shorten when the line is taller —
+  // the tooltip still reports the true numbers.
+  const max = Math.max(1, ...days.map((d) => d.visitors), ...(secondSeries?.values ?? []));
   const labelAt = (i: number) => i === 0 || i === days.length - 1 || i === Math.floor(days.length / 2);
   const shortDate = (day: string) => formatDateUTC(day).replace(/,.*$/, "");
   const xAt = (i: number) => ((i + 0.5) / days.length) * 100;
