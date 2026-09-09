@@ -47,6 +47,7 @@ export function StatTile({
   spark,
   period,
   valueTestId,
+  hero,
 }: {
   label: string;
   value: string;
@@ -58,6 +59,9 @@ export function StatTile({
    *  tile's rendered value, since the label text alone isn't a safe
    *  Playwright selector once several tiles share this component. */
   valueTestId?: string;
+  /** Spec §5: the ONE number on this screen that renders in --gradient-hero.
+   *  The screen names it in code; a test counts at most one per screen. */
+  hero?: boolean;
 }) {
   if (process.env.NODE_ENV !== "production" && !hasStatContext({ delta, spark, period })) {
     throw new Error(
@@ -73,7 +77,11 @@ export function StatTile({
       <div className="mt-2 flex items-baseline gap-2">
         <p
           data-testid={valueTestId}
-          className="font-display font-[650] text-3xl tracking-[-0.01em] tabular-nums text-card-foreground"
+          data-hero={hero ? "true" : undefined}
+          className={cn(
+            "font-display font-[650] text-3xl tracking-[-0.01em] tabular-nums",
+            hero ? "hero-text" : "text-card-foreground",
+          )}
         >
           {value}
         </p>
