@@ -66,10 +66,6 @@
   --glass-highlight: inset 0 1px 0 rgba(255,255,255,.9);
   --sheen:           none;
 
-  /* gradients — text at display size only (hero) / the ONE primary button */
-  --gradient-hero:    linear-gradient(90deg, var(--accent), var(--accent-2));
-  --gradient-primary: linear-gradient(180deg, var(--accent), var(--accent-strong));
-
   /* status — always rendered with dot + text label, never color alone */
   --good: #15803D;  --good-bg: rgba(21, 128, 61, .10);
   --warn: #B45309;  --warn-bg: rgba(180, 83, 9, .10);
@@ -82,7 +78,6 @@
 
   /* elevation */
   --shadow-card:    0 1px 2px rgba(29,25,48,.05), 0 12px 32px -18px rgba(29,25,48,.22);
-  --shadow-glow:    0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent), 0 8px 24px -8px color-mix(in srgb, var(--accent) 35%, transparent);
   --shadow-overlay: var(--glass-highlight), 0 12px 32px -18px rgba(29,25,48,.22);
 
   /* motion */
@@ -140,9 +135,6 @@
   --glass-highlight: inset 0 1px 0 rgba(255,255,255,.06);
   --sheen:           linear-gradient(180deg, rgba(255,255,255,.03), transparent 40%);
 
-  --gradient-hero:    linear-gradient(90deg, color-mix(in srgb, var(--accent) 50%, white), color-mix(in srgb, var(--accent-2) 60%, white));
-  --gradient-primary: linear-gradient(180deg, color-mix(in srgb, var(--accent) 70%, white), var(--accent));
-
   /* status — always rendered with dot + text label, never color alone */
   --good: #4ADE97;  --good-bg: rgba(74, 222, 151, .12);
   --warn: #F0B35E;  --warn-bg: rgba(240, 179, 94, .12);
@@ -155,7 +147,6 @@
 
   /* elevation: 1px top highlight + deep soft ambient, no gray blurs */
   --shadow-card:    var(--glass-highlight), 0 20px 50px -30px rgba(0,0,0,.8);
-  --shadow-glow:    0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent), 0 8px 24px -8px color-mix(in srgb, var(--accent) 70%, transparent);
   --shadow-overlay: var(--glass-highlight), 0 16px 40px -16px rgba(0,0,0,.9);
 
   /* motion */
@@ -166,6 +157,32 @@
   --font-display: var(--font-bricolage), "Bricolage Grotesque", "Geist", sans-serif;
   --font-ui:      "Geist", -apple-system, "Segoe UI", sans-serif;
   --font-mono:    "Geist Mono", ui-monospace, monospace;
+}
+
+/* ---------- composed FROM the accent family: declared on every element ----------
+   The gradients (hero text at display size only / the ONE primary button) and
+   the primary button's glow. They live here, on `*`, and NOT in the two blocks
+   above, on purpose.
+
+   A custom property whose value contains var() is substituted on the element
+   that DECLARES it. Declared on :root these resolve exactly once — against
+   BIS's own accent — and inherit downward as already-frozen strings, so the
+   tenant accent family that themeStyle paints on <body> could never reach
+   them: a branded dashboard's primary button, hero number and button glow all
+   stayed BIS violet (spec §6). Declared on `*`, every element re-resolves
+   them against the accent IT inherits, which is what lets <body> (and the
+   branding panel's live preview, which sets the same family inline) reach
+   btn-primary and hero-text. Same six formulas as before, same per-mode split;
+   only the selector they hang on moved. Pinned in northern-lights.test.ts. */
+* {
+  --gradient-hero:    linear-gradient(90deg, var(--accent), var(--accent-2));
+  --gradient-primary: linear-gradient(180deg, var(--accent), var(--accent-strong));
+  --shadow-glow:      0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent), 0 8px 24px -8px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.dark * {
+  --gradient-hero:    linear-gradient(90deg, color-mix(in srgb, var(--accent) 50%, white), color-mix(in srgb, var(--accent-2) 60%, white));
+  --gradient-primary: linear-gradient(180deg, color-mix(in srgb, var(--accent) 70%, white), var(--accent));
+  --shadow-glow:      0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent), 0 8px 24px -8px color-mix(in srgb, var(--accent) 70%, transparent);
 }
 
 /* Nothing depends on the blur: without backdrop-filter the glass steps

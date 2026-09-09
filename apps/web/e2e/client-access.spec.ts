@@ -138,6 +138,26 @@ test("a client sees only their own account, and nothing when access is off", asy
   await expect(sidebar.locator('nav [data-slot="nav-rail"]').first())
     .toHaveCSS("background-image", /^linear-gradient\(rgb\(58, 98, 212\), rgb\(\d+, \d+, \d+\)\)$/);
 
+  // The tenant's accent reaches the ONE primary button. This is the cascade
+  // half of the composed-token fix and cannot be unit-tested: tokens.css
+  // declares --gradient-primary on `*` rather than :root precisely so each
+  // element re-resolves it against the accent it INHERITS from <body>, where
+  // themeStyle paints the tenant's family. Declared on :root it resolved once
+  // against BIS violet and inherited down frozen, and this button read
+  // "linear-gradient(color(srgb 0.681569 0.640392 0.978039), rgb(139, 124, 247))"
+  // — BIS's dark accent — on a fully branded dashboard.
+  //
+  // The value is derived, not decorative: this fixture is brand #1e3a8a with
+  // brand_mode "dark" (auth.setup.ts), so resolveThemeMode paints dark and
+  // deriveTheme's dark primary is #5b7ddb = rgb(91, 125, 219) — the second
+  // stop, verbatim. The first stop is the dark formula's
+  // color-mix(in srgb, var(--accent) 70%, white), which Chromium serializes in
+  // the srgb space: 0.7 x (91,125,219)/255 + 0.3 per channel.
+  await expect(page.getByRole("button", { name: "Add contact" })).toHaveCSS(
+    "background-image",
+    "linear-gradient(color(srgb 0.549804 0.643137 0.901176), rgb(91, 125, 219))",
+  );
+
   // The agency's own name must be gone from the client's chrome entirely.
   // This is the milestone's headline promise, and the one thing danlo flagged
   // from live QA: "the only branding says BIS — the AGENCY's name".

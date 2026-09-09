@@ -51,7 +51,10 @@ and the whole accent family (`--accent`, `--accent-strong`, `--accent-dim`,
 not tenant-keyed, and a themed tenant's `--card` is the ramp's opaque colour,
 so glass reads only on unthemed (BIS) accounts. A component that paints from a
 chrome neutral is choosing the mode-keyed side of the seam on purpose. The
-exact emitted key set is pinned in `branding/theme-style.test.ts`.
+exact emitted key set is pinned in `branding/theme-style.test.ts`. Tokens
+composed from the accent family (`--gradient-hero`, `--gradient-primary`,
+`--shadow-glow`) are declared on `*`, not `:root`, so they re-resolve against
+the accent each element inherits.
 
 ## Rules (enforced in review)
 

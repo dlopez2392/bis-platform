@@ -29,11 +29,8 @@ describe("tokens.css — Northern Lights (spec §3)", () => {
     ["sheen", "linear-gradient(180deg, rgba(255,255,255,.03), transparent 40%)"],
     ["surface-overlay", "rgba(22,20,34,.88)"],
     ["shadow-card", "var(--glass-highlight), 0 20px 50px -30px rgba(0,0,0,.8)"],
-    ["shadow-glow", "0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent), 0 8px 24px -8px color-mix(in srgb, var(--accent) 70%, transparent)"],
     ["shadow-overlay", "var(--glass-highlight), 0 16px 40px -16px rgba(0,0,0,.9)"],
     ["accent-2", "#4FD8E6"], ["accent-2-dim", "rgba(79, 216, 230, .14)"], ["ring-glow-2", "rgba(79, 216, 230, .35)"],
-    ["gradient-hero", "linear-gradient(90deg, color-mix(in srgb, var(--accent) 50%, white), color-mix(in srgb, var(--accent-2) 60%, white))"],
-    ["gradient-primary", "linear-gradient(180deg, color-mix(in srgb, var(--accent) 70%, white), var(--accent))"],
   ])("dark --%s is %s", (token, expected) => {
     expect(value(darkBlock, token)).toBe(expected);
   });
@@ -61,11 +58,8 @@ describe("tokens.css — Northern Lights (spec §3)", () => {
     ["glass-filter", "none"], ["glass-highlight", "inset 0 1px 0 rgba(255,255,255,.9)"], ["sheen", "none"],
     ["surface-overlay", "rgba(255,255,255,.96)"],
     ["shadow-card", "0 1px 2px rgba(29,25,48,.05), 0 12px 32px -18px rgba(29,25,48,.22)"],
-    ["shadow-glow", "0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent), 0 8px 24px -8px color-mix(in srgb, var(--accent) 35%, transparent)"],
     ["shadow-overlay", "var(--glass-highlight), 0 12px 32px -18px rgba(29,25,48,.22)"],
     ["accent-2", "#0891B2"], ["accent-2-dim", "rgba(8, 145, 178, .14)"], ["ring-glow-2", "rgba(8, 145, 178, .28)"],
-    ["gradient-hero", "linear-gradient(90deg, var(--accent), var(--accent-2))"],
-    ["gradient-primary", "linear-gradient(180deg, var(--accent), var(--accent-strong))"],
   ])("light --%s is %s", (token, expected) => {
     expect(value(rootBlock, token)).toBe(expected);
   });
@@ -88,6 +82,56 @@ describe("tokens.css — Northern Lights (spec §3)", () => {
   it("keeps SAFE_STYLE_FALLBACKS.color equal to the light --surface-0", () => {
     expect(SAFE_STYLE_FALLBACKS.color).toBe(value(rootBlock, "surface-0")!.toLowerCase());
   });
+});
+
+// The three tokens COMPOSED from the accent family (`--gradient-hero`,
+// `--gradient-primary`, `--shadow-glow`) are declared on `*`, not on
+// `:root`/`.dark`. A custom property whose value contains var() is substituted
+// on the element that DECLARES it, so on :root each one resolves once against
+// BIS's own accent and inherits down as a frozen string — the tenant accent
+// family themeStyle paints on <body> could never reach btn-primary, hero-text
+// or the button glow, and a branded dashboard showed BIS violet (spec §6).
+// These are the SAME six formulas the :root/.dark tables above used to pin,
+// per mode; only the selector they hang on moved.
+describe("composed accent tokens re-resolve on every element", () => {
+  // The `*` is escaped and both blocks are anchored to a line start, so the
+  // `*` that opens or closes a /* … */ comment can never be read as the
+  // universal selector. Empty-string fallbacks rather than `!`: deleting a
+  // block must fail the value pins below by NAME, not explode collection.
+  const starBlock = tokens.match(/(?:^|\n)\*\s*\{([^}]*)\}/)?.[1] ?? "";
+  const darkStarBlock = tokens.match(/(?:^|\n)\.dark\s+\*\s*\{([^}]*)\}/)?.[1] ?? "";
+
+  it("declares a * block and a .dark * block", () => {
+    expect(starBlock).not.toBe("");
+    expect(darkStarBlock).not.toBe("");
+  });
+
+  it.each([
+    ["gradient-hero", "linear-gradient(90deg, var(--accent), var(--accent-2))"],
+    ["gradient-primary", "linear-gradient(180deg, var(--accent), var(--accent-strong))"],
+    ["shadow-glow", "0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent), 0 8px 24px -8px color-mix(in srgb, var(--accent) 35%, transparent)"],
+  ])("light * --%s is %s", (token, expected) => {
+    expect(value(starBlock, token)).toBe(expected);
+  });
+
+  it.each([
+    ["gradient-hero", "linear-gradient(90deg, color-mix(in srgb, var(--accent) 50%, white), color-mix(in srgb, var(--accent-2) 60%, white))"],
+    ["gradient-primary", "linear-gradient(180deg, color-mix(in srgb, var(--accent) 70%, white), var(--accent))"],
+    ["shadow-glow", "0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent), 0 8px 24px -8px color-mix(in srgb, var(--accent) 70%, transparent)"],
+  ])("dark .dark * --%s is %s", (token, expected) => {
+    expect(value(darkStarBlock, token)).toBe(expected);
+  });
+
+  // The guard, and the whole point of the move: a declaration left behind on
+  // :root or .dark wins nothing on `*`'s own elements, but it DOES resolve on
+  // the root element itself and re-freezes BIS violet into everything that
+  // inherits from there before `*` ever re-declares it — the exact defect.
+  it.each(["gradient-hero", "gradient-primary", "shadow-glow"])(
+    "does NOT declare --%s on :root or .dark, where it would freeze the BIS accent into an inherited string",
+    (token) => {
+      expect(value(rootBlock, token)).toBeUndefined();
+      expect(value(darkBlock, token)).toBeUndefined();
+    });
 });
 
 describe("globals.css — semantic mapping (spec §3.2, §4)", () => {

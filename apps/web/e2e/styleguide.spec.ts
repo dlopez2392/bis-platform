@@ -23,7 +23,13 @@ test.describe("the style guide", () => {
         document.documentElement.classList.toggle("dark", isDark);
         const card = document.querySelector('[data-slot="card"]')!;
         const cs = getComputedStyle(card);
-        return { filter: cs.backdropFilter || (cs as unknown as { webkitBackdropFilter?: string }).webkitBackdropFilter || "", bg: cs.backgroundColor };
+        const btn = [...document.querySelectorAll('[data-slot="button"]')]
+          .find((b) => b.textContent?.trim() === "Primary action")!;
+        return {
+          filter: cs.backdropFilter || (cs as unknown as { webkitBackdropFilter?: string }).webkitBackdropFilter || "",
+          bg: cs.backgroundColor,
+          btn: getComputedStyle(btn).backgroundImage,
+        };
       }, dark);
     const d = await probe(true);
     // Pin the RADIUS, not just "some blur". Chromium supports backdrop-filter,
@@ -32,11 +38,23 @@ test.describe("the style guide", () => {
     // @supports-not fallback is pinned by the unit parity test instead
     // (src/lib/branding/northern-lights.test.ts).
     expect(d.filter, "dark card must actually blur").toBe("blur(14px)");
+    // The BIS half of the composed-token fix: tokens.css declares
+    // --gradient-primary on `*`/`.dark *` instead of :root/.dark, so every
+    // element re-resolves it against the accent it inherits. The unthemed
+    // agency path must still land on BIS's own accents — #8B7CF7 in dark
+    // (first stop mixed 70% with white, which Chromium serializes in srgb),
+    // #6D28D9 → #5B21B8 in light. client-access.spec.ts pins the tenant half.
+    expect(d.btn, "dark primary button paints the BIS dark gradient").toBe(
+      "linear-gradient(color(srgb 0.681569 0.640392 0.978039), rgb(139, 124, 247))",
+    );
     const l = await probe(false);
     expect(l.bg).toBe("rgb(255, 255, 255)");
     // Light ships NO filter at all: blur(0px) is a non-none filter list and
     // would still cost a stacking context + a backdrop surface per card.
     expect(l.filter).toBe("none");
+    expect(l.btn, "light primary button paints the BIS light gradient").toBe(
+      "linear-gradient(rgb(109, 40, 217), rgb(91, 33, 184))",
+    );
     // The lit ground actually paints: relative-colour glows resolved, behind
     // everything, fixed to the viewport.
     const g = await page.evaluate(() => {
