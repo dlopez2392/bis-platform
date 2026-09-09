@@ -1124,6 +1124,7 @@ export const m = {
   "website.tile.topPage": "Top page",
   "website.tile.topPageDetail": "{visitors} visitors · {share} of all",
   "website.tile.noTopPage": "No page stood out yet",
+  "website.summary.detail": "{visitors} people, {pageviews} pages. Your busiest day was {day}.",
   "website.chart.title": "Visitors by day",
   "website.chart.tooltip": "{visitors} visitors · {pageviews} pageviews",
   "website.chart.series.pageviewsThird": "Pageviews ÷ 3",

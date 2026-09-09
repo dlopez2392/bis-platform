@@ -42,14 +42,20 @@ describe("Button variants (spec §4)", () => {
   });
 });
 
-describe("text controls: surface-2 fill, accent border + 3px ring-glow on focus", () => {
+// The mockup's .input (northern-lights.html:145): --input-bg rgba(255,255,255,.04)
+// — HALF the old --surface-2 fill — on --input-line, 8px (--r-ctl, not the card
+// radius minus 2), 13px, and no invented shadow. The focus treatment is unchanged.
+describe("text controls: the mockup's --input-bg fill, accent border + 3px ring-glow on focus", () => {
   it.each([
     ["input", () => cls(renderToStaticMarkup(createElement(Input)))],
     ["textarea", () => cls(renderToStaticMarkup(createElement(Textarea)))],
     ["select-trigger", () => readFileSync(path.join(here, "select.tsx"), "utf8").split('data-slot="select-trigger"')[1]!.slice(0, 700)],
   ])("%s", (_name, get) => {
     const c = get();
-    expect(c).toContain("bg-[var(--surface-2)]");
+    expect(c).toContain("bg-[var(--input-bg)]");
+    expect(c).toContain("border-[var(--input-line)]");
+    expect(c).toContain("rounded-[8px]");
+    expect(c).not.toContain("shadow-xs");
     expect(c).toContain("focus-visible:border-[var(--accent)]");
     expect(c).toContain("focus-visible:ring-[3px]");
     expect(c).toContain("focus-visible:ring-[var(--ring-glow)]");

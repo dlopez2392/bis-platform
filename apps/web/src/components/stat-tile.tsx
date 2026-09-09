@@ -71,20 +71,23 @@ export function StatTile({
 
   const glyph = delta ? (delta.direction === "up" ? "▲" : delta.direction === "down" ? "▼" : null) : null;
 
+  // The mockup's .tile: label / number / a foot pinned to the tile floor that
+  // holds the delta pill on the left and either the 84x26 sparkline or the
+  // 12px .sub line on the right (northern-lights.html:85-95, 258-261).
   return (
-    <div className="rounded-lg border border-border bg-card p-5">
+    <div className="flex min-h-[108px] flex-col gap-1.5 rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
       <p className={LABEL_ROLE}>{label}</p>
-      <div className="mt-2 flex items-baseline gap-2">
-        <p
-          data-testid={valueTestId}
-          data-hero={hero ? "true" : undefined}
-          className={cn(
-            "font-display font-[650] text-3xl tracking-[-0.01em] tabular-nums",
-            hero ? "hero-text" : "text-card-foreground",
-          )}
-        >
-          {value}
-        </p>
+      <p
+        data-testid={valueTestId}
+        data-hero={hero ? "true" : undefined}
+        className={cn(
+          "font-display text-[30px] leading-none font-[600] tracking-[-0.03em] tabular-nums",
+          hero ? "hero-text" : "text-card-foreground",
+        )}
+      >
+        {value}
+      </p>
+      <div className="mt-auto flex items-end justify-between gap-2">
         {delta ? (
           <>
             {/* `aria-label` on a generic `<span>` is unreliable — naming is
@@ -96,10 +99,10 @@ export function StatTile({
             <span
               aria-hidden
               className={cn(
-                "text-xs font-medium",
-                delta.direction === "up" && "text-success",
-                delta.direction === "down" && "text-destructive",
-                delta.direction === "flat" && "text-muted-foreground",
+                "rounded-full px-[7px] py-[2px] font-mono text-[11px] tabular-nums",
+                delta.direction === "up" && "bg-[var(--good-bg)] text-[var(--good)]",
+                delta.direction === "down" && "bg-[var(--crit-bg)] text-[var(--crit)]",
+                delta.direction === "flat" && "bg-[var(--flat-bg)] text-muted-foreground",
               )}
             >
               {glyph ? `${glyph} ` : ""}
@@ -107,14 +110,15 @@ export function StatTile({
             </span>
             <span className="sr-only">{deltaAriaLabel(delta)}</span>
           </>
+        ) : (
+          <span aria-hidden />
+        )}
+        {spark && spark.length > 0 ? (
+          <Sparkline counts={spark} className="h-[26px] w-[84px] shrink-0 text-primary" />
+        ) : period ? (
+          <span className="min-w-0 truncate text-right text-xs text-muted-foreground">{period}</span>
         ) : null}
       </div>
-      {spark && spark.length > 0 ? (
-        <div className="mt-3 h-[26px] text-primary">
-          <Sparkline counts={spark} className="h-full w-full" />
-        </div>
-      ) : null}
-      {period ? <p className={cn(LABEL_ROLE, "mt-2")}>{period}</p> : null}
     </div>
   );
 }

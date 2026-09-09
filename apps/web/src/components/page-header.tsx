@@ -25,7 +25,7 @@ export function PageHeader({
   return (
     <div className={cn("border-b border-border bg-card", className)}>
       <div className="flex items-center gap-6 px-6 pt-5">
-        <h1 className="text-xl font-display font-[650] tracking-[-0.01em] text-card-foreground">
+        <h1 className="text-[22px] font-display font-[600] tracking-[-0.02em] text-card-foreground">
           {title}
         </h1>
         {tabs}

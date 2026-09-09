@@ -79,7 +79,7 @@ export default async function StyleguidePage() {
             </div>
           </div>
           {/* The hero gradient — display size only (≥ 22px), one per screen. */}
-          <p className="hero-text font-display text-3xl font-[650] tracking-[-0.01em] tabular-nums">1,248</p>
+          <p className="hero-text font-display text-[30px] leading-none font-[600] tracking-[-0.03em] tabular-nums">1,248</p>
           <div className="flex w-full flex-wrap gap-2">
             <Button>Primary action</Button>
             <Button variant="ghost">Ghost action</Button>

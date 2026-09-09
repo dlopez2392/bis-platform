@@ -229,7 +229,7 @@ export default async function AccountDashboardPage({
   return (
     <>
       <div className="border-b border-border bg-card px-6 py-5">
-        <h1 className="font-display text-xl font-[650] tracking-[-0.01em] text-card-foreground">
+        <h1 className="font-display text-[22px] font-[600] tracking-[-0.02em] text-card-foreground">
           {greetingText}
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">

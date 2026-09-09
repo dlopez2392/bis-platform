@@ -173,8 +173,8 @@ export function AppSidebar({
       // child below given overflow-y-auto — is what scrolls, while the
       // footer cluster after it stays on screen at every viewport height.
       className={cn(
-        "sticky top-0 flex h-dvh shrink-0 flex-col gap-3 sidebar-chrome border-r border-[var(--sidebar-line)] p-3 text-sidebar-foreground transition-[width] duration-200",
-        collapsed ? "w-16" : "w-56",
+        "sticky top-0 flex h-dvh shrink-0 flex-col gap-1.5 sidebar-chrome border-r border-[var(--sidebar-line)] px-3 py-3.5 text-sidebar-foreground transition-[width] duration-200",
+        collapsed ? "w-16" : "w-[236px]",
       )}
     >
       <div
@@ -231,7 +231,7 @@ export function AppSidebar({
         >
           <span
             className={cn(
-              "flex size-7 shrink-0 items-center justify-center overflow-hidden rounded",
+              "flex size-[30px] shrink-0 items-center justify-center overflow-hidden rounded-[9px] text-[13px] font-bold",
               // A logo is artwork with its own background, usually drawn for a
               // light one. Sitting it on a white chip keeps a dark-on-
               // transparent mark legible against this dark sidebar; without a
@@ -253,7 +253,9 @@ export function AppSidebar({
                 className="size-full object-contain"
               />
             ) : (
-              <Building2 className="size-4" aria-hidden />
+              // The mockup's .avatar carries the account's INITIAL, not a
+              // generic building glyph (northern-lights.html:44).
+              <span aria-hidden>{clientLabel.trim().charAt(0).toUpperCase()}</span>
             )}
           </span>
           {collapsed ? null : (
@@ -279,7 +281,12 @@ export function AppSidebar({
         </div>
       ) : null}
 
-      <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
+      {/* -mx-3 px-3 cancels then re-adds the aside's own padding on the SCROLL
+          container itself: overflow-y-auto also clips the x axis, and the active
+          rail sits 12px left of its item (the mockup's left: -12px). Inside the
+          nav's own padding area it survives; against a bare content edge it was
+          clipped away entirely. */}
+      <nav className="-mx-3 flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-3">
         {groups.map((group, i) => (
           // Label when present; only the agency top-level group has
           // label=null and falls back to an index-based key.
@@ -293,7 +300,7 @@ export function AppSidebar({
               <div
                 role="presentation"
                 className={cn(
-                  "px-2.5 pt-3 pb-1 font-mono text-[10px] font-medium tracking-[0.14em] text-sidebar-foreground/50 uppercase",
+                  "px-2.5 pt-3.5 pb-1.5 font-mono text-[10px] font-medium tracking-[0.14em] text-[var(--sidebar-muted)] uppercase",
                   collapsed && "hidden",
                 )}
               >
@@ -381,22 +388,25 @@ function SidebarLink({
       // pairs anyway (naming prohibited on the generic role).
       aria-label={hasUnread ? `${item.label} (${unreadCount} unread)` : undefined}
       className={cn(
-        "relative flex items-center gap-3 rounded-md px-2.5 py-2 text-sm transition-colors",
+        "relative flex items-center gap-2.5 rounded-[8px] px-2.5 py-2 text-[13.5px] font-medium transition-colors",
         collapsed && "justify-center px-0",
         active
           ? "bg-sidebar-accent/15 font-medium text-[var(--sidebar-text-strong)] shadow-[inset_0_1px_0_var(--sidebar-line)]"
-          : "text-sidebar-foreground/75 hover:bg-[var(--sidebar-line)] hover:text-[var(--sidebar-text-strong)]",
+          : "text-[var(--sidebar-text)] hover:bg-[var(--sidebar-line)] hover:text-[var(--sidebar-text-strong)]",
       )}
     >
       {active ? (
         <span
           data-slot="nav-rail"
-          className="absolute left-0 h-5 w-[3px] rounded-r bg-[linear-gradient(var(--sidebar-accent),var(--sidebar-tint-2))]"
+          // -left-3 cancels the aside's 12px padding, so the rail sits flush
+          // with the sidebar's own edge exactly as the mockup's
+          // `.nav.active::before { left: -12px }` does.
+          className="absolute inset-y-[7px] -left-3 w-[3px] rounded-[3px] bg-[linear-gradient(var(--sidebar-accent),var(--sidebar-tint-2))]"
           aria-hidden
         />
       ) : null}
       <span className="relative flex shrink-0">
-        <Icon className="size-4" aria-hidden />
+        <Icon className="size-4 opacity-90" strokeWidth={1.8} aria-hidden />
         {hasUnread && collapsed ? (
           // Collapsed state: a dot rather than the pill below, since there is
           // no room for a count beside a centered icon. Purely decorative —
@@ -476,7 +486,7 @@ function SetupMeterLink({
           </span>
         </span>
       )}
-      <span className="h-0.5 w-full overflow-hidden rounded-full bg-[var(--sidebar-line)]" aria-hidden>
+      <span className="h-[5px] w-full overflow-hidden rounded-full bg-[var(--meter-bg)]" aria-hidden>
         <span className="block h-full rounded-full bg-[linear-gradient(90deg,var(--sidebar-accent),var(--sidebar-tint-2))]" style={{ width: `${percent}%` }} />
       </span>
     </Link>
