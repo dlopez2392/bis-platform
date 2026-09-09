@@ -23,8 +23,10 @@ export function Topbar({
   palette?: React.ReactNode;
 }) {
   return (
-    <header className="flex h-14 shrink-0 items-center justify-end gap-3 border-b border-border bg-transparent px-6">
-      {palette}
+    <header className="flex h-[54px] shrink-0 items-center justify-end gap-[14px] border-b border-[var(--top-line)] bg-transparent px-[22px]">
+      {/* The mockup puts the search control on the LEFT of the bar at 300px
+          wide, with everything else pushed right (northern-lights.html:60-62). */}
+      {palette ? <div className="mr-auto flex w-[300px] min-w-0 items-center">{palette}</div> : null}
       {/* Task 5: DESIGN.md's "AI presence" pattern — in-account only, both
           audiences, renders nothing outside an account or with no enabled
           voice profile. A "use client" child so the pathname-keyed read it

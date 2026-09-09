@@ -16,6 +16,9 @@ const badgeVariants = cva(
           "bg-[var(--crit-bg)] text-[var(--crit)] focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 [a&]:hover:brightness-[1.08]",
         outline:
           "border-border bg-[var(--surface-3)] text-foreground [a&]:hover:bg-[var(--line-strong)]",
+        // The mockup's neutral .chip: a much softer fill than --surface-3,
+        // its own ink, and a real 1px edge (northern-lights.html:147, 180).
+        chip: "border-[var(--chip-line)] bg-[var(--chip-bg)] text-[var(--chip-text)]",
         ghost: "[a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
         link: "text-primary underline-offset-4 [a&]:hover:underline",
       },

@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { requireAgency } from "@/lib/auth";
 import { formatDate } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { ACCOUNT_STATUS_LABEL } from "@/lib/labels";
 
@@ -43,17 +44,28 @@ export default async function AccountsPage() {
                 <Link
                   href={`/dashboard/accounts/${a.id}/contacts`}
                   data-testid={`account-${a.id}`}
-                  className="block rounded-lg border border-border bg-card p-5 transition-colors hover:border-primary/40"
+                  // The agency's home screen was a grid of flat rectangles —
+                  // the one screen every session starts on.
+                  className="block rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3 transition-colors hover:border-[var(--accent)]"
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <span className="flex size-9 items-center justify-center rounded-md bg-primary/10 text-primary">
+                    <span className="flex size-9 items-center justify-center rounded-[8px] bg-[var(--accent-dim)] text-[var(--accent)]">
                       <Building2 className="size-4" aria-hidden />
                     </span>
-                    <Badge variant={a.status === "active" ? "secondary" : "outline"}>
+                    {/* DESIGN.md rule 3: status is dot + word, never the word
+                        in a differently-coloured box. */}
+                    <Badge variant="chip" className="gap-1.5 py-1 pr-2.5 pl-2">
+                      <span
+                        className={cn(
+                          "size-[7px] rounded-full",
+                          a.status === "active" ? "bg-[var(--good)]" : "bg-muted-foreground/60",
+                        )}
+                        aria-hidden
+                      />
                       {ACCOUNT_STATUS_LABEL[a.status] ?? a.status}
                     </Badge>
                   </div>
-                  <p className="mt-4 truncate font-medium text-card-foreground">{a.name}</p>
+                  <p className="mt-4 truncate text-[13.5px] font-semibold text-card-foreground">{a.name}</p>
                   <p className="mt-1 text-sm text-muted-foreground">{a.timezone}</p>
                   <p className="mt-3 text-xs text-muted-foreground">
                     {m["accounts.created"].replace("{date}", formatDate(a.created_at))}

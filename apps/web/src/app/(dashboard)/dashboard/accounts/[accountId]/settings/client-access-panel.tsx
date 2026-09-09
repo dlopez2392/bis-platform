@@ -65,11 +65,11 @@ export function ClientAccessPanel({
           ) : members.length === 0 && pendingInvites.length === 0 ? (
             <p className="text-sm text-muted-foreground">{m["common.none"]}</p>
           ) : (
-            <ul className="space-y-2">
+            <ul className="flex flex-col">
               {members.map((member) => (
                 <li
                   key={member.id}
-                  className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border p-3 text-sm"
+                  className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-[var(--row-line)] py-[7px] text-[13px] first:border-t-0"
                 >
                   <span className="font-medium text-card-foreground">{member.email}</span>
                   <Badge variant="secondary" className="font-normal">{member.role}</Badge>
@@ -78,7 +78,7 @@ export function ClientAccessPanel({
               {pendingInvites.map((invite) => (
                 <li
                   key={invite.id}
-                  className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-dashed border-border p-3 text-sm"
+                  className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-dashed border-[var(--line-strong)] py-[7px] text-[13px] first:border-t-0"
                 >
                   <span className="font-medium text-muted-foreground">{invite.email}</span>
                   <Badge variant="secondary" className="font-normal">{invite.role}</Badge>

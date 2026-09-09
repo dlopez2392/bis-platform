@@ -106,9 +106,11 @@ export function FormEditor({
           {fields.length === 0 ? (
             <p className="text-sm text-muted-foreground">{m["forms.noFields"]}</p>
           ) : (
-            <ol className="space-y-2">
+            /* Rules, never a box per row: these sit inside a glass `<Card>`
+               and a bordered box each was the nested-card shape. */
+            <ol className="flex flex-col">
               {fields.map((field, index) => (
-                <li key={field.key} className="flex flex-wrap items-center gap-2 rounded-md border border-border p-2">
+                <li key={field.key} className="flex flex-wrap items-center gap-2 border-t border-[var(--row-line)] py-[7px] first:border-t-0">
                   <span className="w-40 shrink-0 truncate text-xs text-muted-foreground">
                     {kindLabel(field.kind, customFields)}
                   </span>

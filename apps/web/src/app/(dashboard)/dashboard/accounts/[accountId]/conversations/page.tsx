@@ -76,9 +76,11 @@ export default async function ConversationsPage({
             />
           </div>
         ) : (
-          <div className="flex items-center justify-center rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
-            {m["conversations.pickThread"]}
-          </div>
+          /* A bare dashed box was the one empty state on this route that did
+             not carry the sanctioned treatment (the accent radial + icon).
+             `EmptyState` is already imported for the no-conversations case
+             eight lines up; this pane now reads as the same design. */
+          <EmptyState icon={MessagesSquare} title={m["conversations.pickThread"]} />
         )}
       </div>
     </>

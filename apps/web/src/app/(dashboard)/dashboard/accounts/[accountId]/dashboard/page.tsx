@@ -7,6 +7,7 @@ import {
   getA2pRegistration,
 } from "@bis/db";
 import { StatTile } from "@/components/stat-tile";
+import { PageHeader } from "@/components/page-header";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { formatCurrency } from "@/lib/format";
@@ -228,15 +229,13 @@ export default async function AccountDashboardPage({
 
   return (
     <>
-      <div className="border-b border-border bg-card px-6 py-5">
-        <h1 className="font-display text-xl font-[650] tracking-[-0.01em] text-card-foreground">
-          {greetingText}
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {dateText}
-          {showVoiceSub ? ` · ${m["dashboard.sub.voice"]}` : ""}
-        </p>
-      </div>
+      {/* The shared head, not a second copy of it: this slab was the
+          hand-rolled twin of `PageHeader` and carried the same opaque
+          `--surface-1` fill over the aurora's brightest glow. */}
+      <PageHeader
+        title={greetingText}
+        subtitle={`${dateText}${showVoiceSub ? ` · ${m["dashboard.sub.voice"]}` : ""}`}
+      />
       <div className="space-y-6 p-6">
         <div className={cn("grid gap-4 sm:grid-cols-2", hasAfterHours ? "xl:grid-cols-4" : "xl:grid-cols-3")}>
           <StatTile

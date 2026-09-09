@@ -12,9 +12,13 @@ const DAYS = [
 
 describe("DailyChart bars (spec §5)", () => {
   const html = renderToStaticMarkup(createElement(DailyChart, { days: DAYS }));
-  it("weekday bars wear the accent gradient, weekends --surface-3, and no colour literal appears", () => {
+  it("weekday bars wear the accent gradient, weekends the mockup's --bar-wk (NOT --surface-3, which is 29% too bright), and no colour literal appears", () => {
     expect(html.match(/data-slot="chart-bar"[^>]*class="[^"]*\bbar-accent\b/g)?.length).toBe(2);
-    expect(html.match(/data-slot="chart-bar"[^>]*class="[^"]*\bbg-accent\b/g)?.length).toBe(2);
+    expect(html.match(/data-slot="chart-bar"[^>]*class="[^"]*bg-\[var\(--bar-wk\)\]/g)?.length).toBe(2);
+    expect(html).not.toMatch(/data-slot="chart-bar"[^>]*class="[^"]*\bbg-accent\b/);
+    // 4px tops, 2px feet, and a real axis rule under the bars.
+    expect(html).toMatch(/rounded-t-\[4px\] rounded-b-\[2px\]/);
+    expect(html).toContain("border-b border-[var(--axis)]");
     expect(html).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(/);
   });
   it("draws two dashed gridlines at 33% and 66% in --line", () => {
@@ -23,6 +27,13 @@ describe("DailyChart bars (spec §5)", () => {
     expect(grid.join(" ")).toContain("bottom:33%");
     expect(grid.join(" ")).toContain("bottom:66%");
     for (const g of grid) expect(g).toMatch(/border-dashed[^"]*border-border|border-border[^"]*border-dashed/);
+  });
+  it("labels EVERY day on the axis — the mockup draws all of them; the odd ones only hide their text at narrow widths, keeping their column", () => {
+    const axis = html.match(/data-slot="chart-axis"[\s\S]*?<\/div>\s*<\/div>/)![0]!;
+    expect(axis.match(/<span class="min-w-0 flex-1/g)?.length).toBe(DAYS.length);
+    expect(axis.match(/hidden xl:inline/g)?.length).toBe(2);
+    expect(axis).toContain("Sep 1");
+    expect(axis).toContain("Sep 4");
   });
   it("has exactly one axis row and no second series or legend when none is given", () => {
     expect(html.match(/data-slot="chart-axis"/g)?.length).toBe(1);
@@ -36,6 +47,12 @@ describe("DailyChart second series (spec §5): same axis, --accent-2, mono legen
   // scaled by its own max would put 80 at the top and betray a second axis.
   const second = { label: "Pageviews ÷ 3", values: [80, 40, 20, 0] };
   const html = renderToStaticMarkup(createElement(DailyChart, { days: DAYS, secondSeries: second }));
+  it("puts the second series' dot at its PEAK, not its last point (the mockup marks the maximum)", () => {
+    // values [80, 40, 20, 0] → peak is index 0 → x = (0+.5)/4·100 = 12.5%,
+    // y 20 of 100 → bottom 80%. The last point (index 3) would be 87.5% / 0%.
+    expect(html).toContain("left:12.5%");
+    expect(html).toContain("bottom:80%");
+  });
   it("renders one polyline in --accent-2, 2px, with an end dot", () => {
     expect(html.match(/data-slot="chart-series-2"/g)?.length).toBe(1);
     expect(html).toMatch(/<polyline[^>]*stroke="var\(--accent-2\)"[^>]*stroke-width="2"/);
@@ -67,5 +84,8 @@ describe("DailyChart second series (spec §5): same axis, --accent-2, mono legen
     expect(legend).toContain("Pageviews ÷ 3");
     expect(legend).toContain("bg-[var(--accent)]");
     expect(legend).toContain("bg-[var(--accent-2)]");
+    // Both swatches are the mockup's 10px rounded SQUARE — no circle.
+    expect(legend.match(/size-2\.5 rounded-\[3px\]/g)?.length).toBe(2);
+    expect(legend).not.toContain("rounded-full");
   });
 });

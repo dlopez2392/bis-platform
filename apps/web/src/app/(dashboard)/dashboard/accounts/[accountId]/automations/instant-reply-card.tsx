@@ -97,7 +97,7 @@ export function InstantReplyCard({
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="instant-preview-en">{m["automations.instantReply.previewEn"]}</Label>
-            <output id="instant-preview-en" className="block rounded-md border border-input px-3 py-2 text-sm" data-testid="instant-reply-preview-en">{previewEn}</output>
+            <output id="instant-preview-en" className="block rounded-[8px] border border-[var(--input-line)] bg-[var(--input-bg)] px-3 py-2 text-[13px]" data-testid="instant-reply-preview-en">{previewEn}</output>
             <p className="text-xs text-muted-foreground" data-testid="instant-reply-count-en">{countText(segmentsFor(previewEn))}</p>
           </div>
 
@@ -111,7 +111,7 @@ export function InstantReplyCard({
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="instant-preview-es">{m["automations.instantReply.previewEs"]}</Label>
-            <output id="instant-preview-es" className="block rounded-md border border-input px-3 py-2 text-sm" data-testid="instant-reply-preview-es">{previewEs}</output>
+            <output id="instant-preview-es" className="block rounded-[8px] border border-[var(--input-line)] bg-[var(--input-bg)] px-3 py-2 text-[13px]" data-testid="instant-reply-preview-es">{previewEs}</output>
             <p className="text-xs text-muted-foreground" data-testid="instant-reply-count-es">{countText(segmentsFor(previewEs))}</p>
           </div>
 

@@ -73,11 +73,16 @@ export function BulkActionBar({
     );
   }
 
+  // This renders as the FIRST CHILD of the contacts `ListPanel`, so the
+  // bordered, radiused, card-filled box that used to be here was a card
+  // floating inside a card. It is a band across the top of the panel instead:
+  // ladder step 2, a `--row-line` rule below it, no radius, and no card
+  // material of its own — nested surfaces never get one.
   return (
     <div
       role="toolbar"
       aria-label={m["bulk.selected"].replace("{count}", String(count))}
-      className="border-border bg-card mb-3 flex items-center gap-3 rounded-lg border px-4 py-2"
+      className="flex items-center gap-3 border-b border-[var(--row-line)] bg-[var(--surface-2)] px-4 py-2"
       data-testid="bulk-action-bar"
     >
       <span className="text-sm font-medium">

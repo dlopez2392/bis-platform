@@ -31,10 +31,27 @@ describe("Website screen (spec §5)", () => {
     expect(html).toMatch(/data-hero="true"[^>]*>175</);
   });
 
-  it("renders the emphasised sentence segment in the hero gradient at display size (≥ 22px), nothing else coloured", () => {
-    expect(html).toMatch(/<strong[^>]*class="[^"]*\bhero-text\b[^"]*">175 visitors<\/strong>/);
+  it("renders the emphasised sentence segment in the em gradient at display size (≥ 22px), nothing else coloured", () => {
+    // em-text, not hero-text: the mockup gives the sentence its OWN, deeper
+    // pair (--em-bg) and reserves --kpi-hero-bg for the hero KPI.
+    expect(html).toMatch(/<strong[^>]*class="[^"]*\bem-text\b[^"]*">175 visitors<\/strong>/);
     expect(html).not.toMatch(/<strong[^>]*text-primary/);
     expect(html).toMatch(/aria-label="Summary"[\s\S]*?<p class="[^"]*text-\[24px\]/);
+  });
+
+  it("keeps the period label and the update stamp INSIDE the summary card, and adds the mockup's supporting line", () => {
+    const card = html.match(/aria-label="Summary"[\s\S]*?<\/section>/)![0]!;
+    expect(card).toContain("The last 14 days");
+    expect(card).toContain("Last updated");
+    // busiest day = 2026-09-01 (100 visitors), totals 175 / 511
+    expect(card).toMatch(/175 people, 511 pages\. Your busiest day was Sep 1, 2026\./);
+  });
+
+  it("every card on the screen is glass (the sheen, the 1px highlight and the card shadow)", () => {
+    expect(html.match(/class="[^"]*\bbg-card\b[^"]*\bglass\b/g)?.length).toBe(
+      // summary + 4 tiles + chart + 3 panels
+      9,
+    );
   });
 
   it("passes pageviews ÷ 3 (rounded) as the second series with the legend label", () => {

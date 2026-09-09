@@ -24,12 +24,20 @@ describe("tokens.css — Northern Lights (spec §3)", () => {
     ["surface-2", "rgba(255,255,255,.06)"], ["surface-3", "rgba(255,255,255,.09)"],
     ["line", "rgba(255,255,255,.08)"], ["line-strong", "rgba(255,255,255,.14)"],
     ["text-1", "#F1EEFA"], ["text-2", "#9A94B4"], ["text-3", "#7B7593"],
-    ["glow-1-alpha", ".28"], ["glow-2-alpha", ".16"], ["glow-3-alpha", ".12"], ["grid-alpha", ".025"],
+    ["glow-1-alpha", ".28"], ["glow-2-alpha", ".16"], ["glow-3-alpha", ".12"], ["grid-alpha", ".0125"],
     ["glass-filter", "blur(14px)"], ["glass-highlight", "inset 0 1px 0 rgba(255,255,255,.06)"],
     ["sheen", "linear-gradient(180deg, rgba(255,255,255,.03), transparent 40%)"],
     ["surface-overlay", "rgba(22,20,34,.88)"],
-    ["shadow-card", "var(--glass-highlight), 0 20px 50px -30px rgba(0,0,0,.8)"],
-    ["shadow-overlay", "var(--glass-highlight), 0 16px 40px -16px rgba(0,0,0,.9)"],
+    // --shadow-card / --shadow-overlay moved to the `.dark *` block (below):
+    // light's twins are accent-tinted, so a var()-carrying value on :root
+    // would freeze BIS violet into every branded tenant.
+    ["flat-bg", "rgba(255,255,255,.06)"], ["axis", "rgba(255,255,255,.1)"],
+    ["bar-wk", "rgba(255,255,255,.07)"], ["row-line", "rgba(255,255,255,.06)"],
+    ["share-bg", "rgba(255,255,255,.07)"], ["top-line", "rgba(255,255,255,.06)"],
+    ["input-bg", "rgba(255,255,255,.04)"], ["input-line", "rgba(255,255,255,.09)"],
+    ["tip-line", "rgba(255,255,255,.12)"],
+    ["chip-bg", "rgba(255,255,255,.05)"], ["chip-text", "#D7D2EA"], ["chip-line", "rgba(255,255,255,.1)"],
+    ["pill-on-text", "#FFFFFF"],
     ["accent-2", "#4FD8E6"], ["accent-2-dim", "rgba(79, 216, 230, .14)"], ["ring-glow-2", "rgba(79, 216, 230, .35)"],
   ])("dark --%s is %s", (token, expected) => {
     expect(value(darkBlock, token)).toBe(expected);
@@ -40,7 +48,8 @@ describe("tokens.css — Northern Lights (spec §3)", () => {
   // post-dating the spec, so the page glow shows through in dark mode).
   it.each([
     ["sidebar-surface", "rgba(255,255,255,.02)"], ["sidebar-line", "rgba(255,255,255,.07)"],
-    ["sidebar-text", "#B9B3CF"], ["sidebar-text-strong", "#FFFFFF"], ["sidebar-tint", "#8B7CF7"], ["sidebar-tint-2", "#4FD8E6"],
+    ["sidebar-text", "#B9B3CF"], ["sidebar-muted", "#9A94B4"], ["sidebar-text-strong", "#FFFFFF"],
+    ["sidebar-tint", "#8B7CF7"], ["sidebar-tint-2", "#4FD8E6"], ["meter-bg", "rgba(255,255,255,.08)"],
   ])("--%s is %s in :root AND .dark", (token, expected) => {
     expect(value(rootBlock, token)).toBe(expected);
     expect(value(darkBlock, token)).toBe(expected);
@@ -53,12 +62,22 @@ describe("tokens.css — Northern Lights (spec §3)", () => {
   });
 
   it.each([
-    ["surface-0", "#F6F5FA"], ["surface-1", "#FFFFFF"], ["surface-2", "#FFFFFF"], ["surface-3", "#F1EFF7"],
-    ["glow-1-alpha", ".07"], ["glow-2-alpha", ".05"], ["glow-3-alpha", ".04"], ["grid-alpha", ".012"],
-    ["glass-filter", "none"], ["glass-highlight", "inset 0 1px 0 rgba(255,255,255,.9)"], ["sheen", "none"],
+    // Light is glass too now: a pale-violet ground, a 72%-white card the lit
+    // ground reads through, a real sheen and a grid that is actually visible.
+    // paintOf (theme.test.ts) throws on anything but #hex / rgba(), so
+    // --surface-1 must stay spelled rgba(255,255,255,.72).
+    ["surface-0", "#EFEBF9"], ["surface-1", "rgba(255,255,255,.72)"], ["surface-2", "#F3F0FB"], ["surface-3", "#E9E4F5"],
+    ["glow-1-alpha", ".12"], ["glow-2-alpha", ".09"], ["glow-3-alpha", ".07"], ["grid-alpha", ".04"],
+    ["glass-filter", "none"], ["glass-highlight", "inset 0 1px 0 rgba(255,255,255,.9)"],
+    ["sheen", "linear-gradient(180deg, rgba(255,255,255,.55), transparent 40%)"],
     ["surface-overlay", "rgba(255,255,255,.96)"],
-    ["shadow-card", "0 1px 2px rgba(29,25,48,.05), 0 12px 32px -18px rgba(29,25,48,.22)"],
-    ["shadow-overlay", "var(--glass-highlight), 0 12px 32px -18px rgba(29,25,48,.22)"],
+    ["flat-bg", "rgba(29,25,48,.05)"], ["axis", "rgba(29,25,48,.12)"],
+    ["bar-wk", "rgba(29,25,48,.07)"], ["row-line", "rgba(29,25,48,.07)"],
+    ["share-bg", "rgba(29,25,48,.08)"], ["top-line", "rgba(29,25,48,.08)"],
+    ["input-bg", "rgba(29,25,48,.03)"], ["input-line", "rgba(29,25,48,.10)"],
+    ["tip-line", "rgba(29,25,48,.12)"],
+    ["chip-bg", "rgba(29,25,48,.04)"], ["chip-text", "#3A3550"], ["chip-line", "rgba(29,25,48,.10)"],
+    ["pill-on-text", "#1D1930"],
     ["accent-2", "#0891B2"], ["accent-2-dim", "rgba(8, 145, 178, .14)"], ["ring-glow-2", "rgba(8, 145, 178, .28)"],
   ])("light --%s is %s", (token, expected) => {
     expect(value(rootBlock, token)).toBe(expected);
@@ -108,16 +127,22 @@ describe("composed accent tokens re-resolve on every element", () => {
 
   it.each([
     ["gradient-hero", "linear-gradient(90deg, var(--accent), var(--accent-2))"],
+    ["gradient-em", "linear-gradient(90deg, var(--accent), var(--accent-2))"],
     ["gradient-primary", "linear-gradient(180deg, var(--accent), var(--accent-strong))"],
     ["shadow-glow", "0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent), 0 8px 24px -8px color-mix(in srgb, var(--accent) 35%, transparent)"],
+    ["shadow-card", "var(--glass-highlight), 0 1px 2px color-mix(in srgb, var(--accent) 8%, transparent), 0 18px 40px -22px color-mix(in srgb, var(--accent) 30%, transparent)"],
+    ["shadow-overlay", "var(--glass-highlight), 0 16px 40px -20px color-mix(in srgb, var(--accent) 32%, transparent)"],
   ])("light * --%s is %s", (token, expected) => {
     expect(value(starBlock, token)).toBe(expected);
   });
 
   it.each([
-    ["gradient-hero", "linear-gradient(90deg, color-mix(in srgb, var(--accent) 50%, white), color-mix(in srgb, var(--accent-2) 60%, white))"],
-    ["gradient-primary", "linear-gradient(180deg, color-mix(in srgb, var(--accent) 70%, white), var(--accent))"],
+    ["gradient-hero", "linear-gradient(90deg, color-mix(in srgb, var(--accent) 50%, white), color-mix(in srgb, var(--accent-2) 73%, white))"],
+    ["gradient-em", "linear-gradient(90deg, color-mix(in srgb, var(--accent) 62%, white), color-mix(in srgb, var(--accent-2) 82%, white))"],
+    ["gradient-primary", "linear-gradient(180deg, color-mix(in srgb, var(--accent) 50%, white), var(--accent))"],
     ["shadow-glow", "0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent), 0 8px 24px -8px color-mix(in srgb, var(--accent) 70%, transparent)"],
+    ["shadow-card", "var(--glass-highlight), 0 20px 50px -30px rgba(0,0,0,.8)"],
+    ["shadow-overlay", "var(--glass-highlight), 0 16px 40px -16px rgba(0,0,0,.9)"],
   ])("dark .dark * --%s is %s", (token, expected) => {
     expect(value(darkStarBlock, token)).toBe(expected);
   });
@@ -126,7 +151,7 @@ describe("composed accent tokens re-resolve on every element", () => {
   // :root or .dark wins nothing on `*`'s own elements, but it DOES resolve on
   // the root element itself and re-freezes BIS violet into everything that
   // inherits from there before `*` ever re-declares it — the exact defect.
-  it.each(["gradient-hero", "gradient-primary", "shadow-glow"])(
+  it.each(["gradient-hero", "gradient-em", "gradient-primary", "shadow-glow", "shadow-card", "shadow-overlay"])(
     "does NOT declare --%s on :root or .dark, where it would freeze the BIS accent into an inherited string",
     (token) => {
       expect(value(rootBlock, token)).toBeUndefined();
@@ -170,22 +195,39 @@ describe("globals.css — semantic mapping (spec §3.2, §4)", () => {
     expect(body).not.toMatch(/-webkit-backdrop-filter/);
   });
 
-  it.each(["glass", "glass-overlay", "sidebar-chrome", "btn-primary", "pill-on", "hero-text", "bar-accent", "bar-hot"])(
+  it.each(["glass", "glass-overlay", "sidebar-chrome", "btn-primary", "pill-on", "em-text", "hero-text", "bar-accent", "bar-hot"])(
     "defines the %s utility", (name) => {
       expect(globals).toMatch(new RegExp(`@utility ${name}\\s*\\{`));
     });
 
-  it("glass = sheen + shadow-card and NO backdrop-filter (cards scroll — §9 decision 2026-09-09), never a background colour (tenant --card must win)", () => {
+  it("glass = sheen + shadow-card + the per-mode blur (restored 2026-09-09 for literal mockup fidelity), never a background colour (tenant --card must win)", () => {
     const body = globals.match(/@utility glass\s*\{([^}]*)\}/)![1]!;
     expect(body).toMatch(/background-image:\s*var\(--sheen\);/);
     expect(body).toMatch(/box-shadow:\s*var\(--shadow-card\);/);
-    // Unprefixed only — see the sidebar-chrome test above for why.
-    // Cards do not blur: measured 7–9 of 52 dropped frames on an integrated GPU
-    // with the cards' blur on, 0 with it off (sidebar still blurring).
-    // Declaration-shaped: the utility comment mentions the property in prose.
-    expect(body).not.toMatch(/backdrop-filters*:/);
+    // The mockup blurs cards at 14px (.card / --card-blur). Unprefixed only —
+    // see the sidebar-chrome test above for why a -webkit- twin ships zero blur.
+    expect(body).toMatch(/(^|[^-])backdrop-filter:\s*var\(--glass-filter\);/);
     expect(body).not.toMatch(/-webkit-backdrop-filter/);
     expect(body).not.toMatch(/background-color/);
+  });
+
+  it("em-text clips --gradient-em (the sentence panel's deeper pair) to text", () => {
+    const body = globals.match(/@utility em-text\s*\{([^}]*)\}/)![1]!;
+    expect(body).toMatch(/background-image:\s*var\(--gradient-em\);/);
+    expect(body).toMatch(/background-clip:\s*text;/);
+  });
+
+  it("pill-on lifts the accent to the mockup's 22% instead of moving --accent-dim (the table row-selection fill reads it too)", () => {
+    const body = globals.match(/@utility pill-on\s*\{([^}]*)\}/)![1]!;
+    expect(body).toMatch(/background-color:\s*color-mix\(in srgb, var\(--accent\) 22%, transparent\);/);
+    expect(body).toMatch(/color:\s*var\(--pill-on-text\);/);
+    expect(body).not.toMatch(/var\(--accent-dim\)/);
+  });
+
+  it("bar-hot is the mockup's violet→cyan gradient, not the accent bar brightened", () => {
+    const body = globals.match(/@utility bar-hot\s*\{([^}]*)\}/)![1]!;
+    expect(body).toMatch(/background-image:\s*linear-gradient\(180deg, color-mix\(in srgb, var\(--accent\) 62%, white\), color-mix\(in srgb, var\(--accent-2\) 50%, transparent\)\);/);
+    expect(body).not.toMatch(/filter:\s*brightness/);
   });
 
   it("hero-text clips --gradient-hero to text", () => {

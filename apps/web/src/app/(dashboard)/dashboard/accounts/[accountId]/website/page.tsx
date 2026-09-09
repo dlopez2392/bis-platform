@@ -20,7 +20,7 @@ const LABEL = "font-mono text-[10px] font-medium uppercase tracking-[0.14em] tex
  *  page stays a server component and the switch works without JavaScript. */
 function PeriodSwitch({ base, period }: { base: string; period: Period }) {
   return (
-    <nav aria-label="Period" className="flex gap-1 rounded-full border border-border bg-card p-0.5">
+    <nav aria-label="Period" className="flex gap-1 rounded-full border border-[var(--line)] bg-[var(--surface-1)] p-[3px]">
       {PERIODS.map((p) => (
         <Link
           key={p}
@@ -84,9 +84,13 @@ export default async function WebsitePage({
       <>
         <PageHeader title={m["website.title"]} actions={<PeriodSwitch base={base} period={period} />} />
         <div className="space-y-3 p-6">
-          <div className="rounded-lg border border-border bg-card p-5">
+          {/* The one card on this route the fidelity pass missed — and it is
+              the first thing a newly linked site shows. It is the sentence
+              panel's twin, so it takes the sentence panel's display role
+              (24px at 600, not 18px at 650). */}
+          <div className="rounded-xl border border-border bg-card glass px-[22px] py-[18px]">
             <p className={LABEL}>{m[`website.periodLabel.${period}`]}</p>
-            <p className="mt-2 font-display text-lg font-[650] text-card-foreground">{m["website.waiting.title"]}</p>
+            <p className="mt-2 font-display text-[24px] font-[600] leading-[1.15] tracking-[-0.02em] text-card-foreground">{m["website.waiting.title"]}</p>
             <p className="mt-1 text-sm text-muted-foreground">{m["website.waiting.body"].replace("{domain}", result.domain)}</p>
           </div>
           <WebsiteSkeleton />

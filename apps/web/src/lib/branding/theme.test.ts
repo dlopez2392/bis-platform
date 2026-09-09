@@ -667,9 +667,14 @@ const paintOf = (block: string, token: string): Paint => {
   if (!m) throw new Error(`--${token}: ${raw} is neither #hex nor rgba()`);
   return { hex: rgbToHex([+m[1]!, +m[2]!, +m[3]!]), alpha: Number(m[4]) };
 };
-// Glow-1's centre is at y = −10%; on a 720px-tall layout the top edge is 72px
-// into the 420px radius whose stop ends at 60%: 1 − 72/(420·0.6).
-const ON_CANVAS = 1 - 72 / (420 * 0.6);
+// Glow-1's centre is at y = −10% of the VIEWPORT and its vertical radius is
+// 55vh (Ground moved off px on 2026-09-09 so the mockup's proportions survive
+// any screen). Both the off-canvas offset and the radius now scale with the
+// viewport, so the fraction is viewport-INDEPENDENT: the top edge sits 10vh
+// into a 55vh radius whose stop ends at 60% → 1 − 10/(55·0.6) = 0.69697.
+// (The old px geometry gave 1 − 72/(420·0.6) = 0.714286 on a 720px layout and
+// silently drifted on every other height.)
+const ON_CANVAS = 1 - 10 / (55 * 0.6);
 
 describe("composite contrast — BIS default (spec §8)", () => {
   // In light mode --surface-1 is fully opaque, so the card paint dominates
@@ -686,10 +691,10 @@ describe("composite contrast — BIS default (spec §8)", () => {
     "utf8",
   );
   it("pins ON_CANVAS to the shipped Ground geometry", () => {
-    expect(groundSource).toContain("700px 420px");
+    expect(groundSource).toContain("59vw 55vh");
     expect(groundSource).toContain("12% -10%");
     expect(groundSource).toContain("transparent 60%");
-    expect(groundSource).toContain("620px 380px");
+    expect(groundSource).toContain("53vw 50vh");
     expect(groundSource).toContain("96% 8%");
   });
 
@@ -723,7 +728,7 @@ describe("composite contrast — BIS default (spec §8)", () => {
     });
 
     it(`${mode}: the hero gradient's stops clear 3:1 (large text) at the glow-1 peak, the glow-2 centre, and the darkest point`, () => {
-      const stops = mode === "dark" ? [mixWhite(accent, 50), mixWhite(accent2, 60)] : [accent, accent2];
+      const stops = mode === "dark" ? [mixWhite(accent, 50), mixWhite(accent2, 73)] : [accent, accent2];
       for (const bg of [atGlow, atGlow2, darkest])
         for (const s of stops) expect(contrastRatio(s, bg), `hero stop ${s} on ${bg}`).toBeGreaterThanOrEqual(3);
     });
@@ -757,7 +762,7 @@ describe("composite contrast — every brand in the sweep (spec §8)", () => {
           expect(contrastRatio(t.mutedForeground, litGround), `muted on lit ground ${where}`).toBeGreaterThanOrEqual(4.5);
           const litGround2 = over(t.accent2, glowAlpha2, t.background);
           expect(contrastRatio(t.mutedForeground, litGround2), `muted on glow-2 lit ground ${where}`).toBeGreaterThanOrEqual(4.5);
-          const stops = mode === "dark" ? [mixWhite(t.primary, 50), mixWhite(t.accent2, 60)] : [t.primary, t.accent2];
+          const stops = mode === "dark" ? [mixWhite(t.primary, 50), mixWhite(t.accent2, 73)] : [t.primary, t.accent2];
           for (const s of stops) expect(contrastRatio(s, t.card), `hero stop ${s} on card ${where}`).toBeGreaterThanOrEqual(3);
         }
     });

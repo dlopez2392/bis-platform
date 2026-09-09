@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { SubmitButton } from "../../submit-button";
+import { Notice } from "@/components/ui/notice";
 import { m } from "@/lib/messages";
 
 export function SaveBlueprintDialog({
@@ -58,10 +59,7 @@ export function SaveBlueprintDialog({
             />
             <p className="text-xs text-muted-foreground">{m["blueprints.saveHint"]}</p>
             {collision ? (
-              <p
-                role="alert"
-                className="rounded-md border border-warning/40 bg-warning/10 px-2.5 py-1.5 text-xs text-warning"
-              >
+              <Notice tone="warn" className="px-2.5 py-1.5 text-xs">
                 {m["blueprints.overwriteWarning"]
                   // collision.name is a user-typed blueprint name used here as a
                   // *replacement* string, where $&, $$ and $` are special to
@@ -71,7 +69,7 @@ export function SaveBlueprintDialog({
                   // inserted literally, with no special-sequence handling.
                   .replace("{name}", () => collision.name)
                   .replace("{version}", String(collision.version))}
-              </p>
+              </Notice>
             ) : null}
           </div>
           <SubmitButton>{m["common.save"]}</SubmitButton>

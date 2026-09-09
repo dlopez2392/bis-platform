@@ -63,16 +63,19 @@ export default async function ContactDetailPage({
           emailAction={sendEmailAction.bind(null, accountId)}
           smsAction={sendSmsAction.bind(null, accountId)}
         />
-        <aside className="rounded-lg border border-border bg-card p-4">
-          <p className="mb-3 text-sm font-medium text-card-foreground">
+        <aside className="rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
+          <p className="mb-2 text-[13.5px] font-semibold text-card-foreground">
             {m["contact.opportunities"]}
           </p>
           {opps.length === 0 ? (
             <p className="text-sm text-muted-foreground">{m["contact.noOpportunities"]}</p>
           ) : (
-            <ul className="space-y-2 text-sm">
+            /* The mockup's list idiom is a RULE, never a box per row
+               (`.row`, northern-lights.html:122) — and a bordered box inside
+               a glass card is the nested-card shape the ladder forbids. */
+            <ul className="flex flex-col text-sm">
               {opps.map((o) => (
-                <li key={o.id} className="rounded-md border border-border p-2">
+                <li key={o.id} className="border-t border-[var(--row-line)] py-[7px] first:border-t-0">
                   <p className="truncate font-medium">{o.name}</p>
                   <p className="text-xs text-muted-foreground">
                     {formatCurrency(Number(o.monetary_value))} · {STATUS_LABEL[o.status] ?? o.status}

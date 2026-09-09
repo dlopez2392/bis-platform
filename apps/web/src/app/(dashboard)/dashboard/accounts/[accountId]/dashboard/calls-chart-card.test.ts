@@ -61,42 +61,111 @@ function render(opts: {
   );
 }
 
-/** The class list immediately BEFORE a marker string in the rendered HTML —
- *  each bar's colored `<div>` (carrying `bg-primary`/`bg-muted`) is emitted
- *  ahead of its tooltip text in DOM order, so this proves which treatment a
- *  SPECIFIC day's bar actually got, not just that both classes appear
- *  somewhere in the document. */
+/** The markup of the ONE bar that owns a given tooltip string — from that
+ *  bar's own `data-slot="chart-bar"` up to its tooltip text. This proves
+ *  which treatment a SPECIFIC day's bar actually got, not just that both
+ *  classes appear somewhere in the document.
+ *
+ *  Anchored on the slot rather than sliced by a fixed window: the window used
+ *  to be 400 characters, and the tooltip's own class list grew past that when
+ *  the chart language landed (`glass-overlay`, the mono type, the gridline
+ *  divs) — a fixed window either stops short of the bar's class attribute or
+ *  reaches back far enough to read the PREVIOUS day's bar and report its
+ *  colour instead. Both failure modes are silent. */
 function htmlBefore(html: string, marker: string): string {
   const idx = html.indexOf(marker);
   expect(idx, `expected to find "${marker}" in the rendered HTML`).toBeGreaterThan(-1);
-  return html.slice(Math.max(0, idx - 400), idx);
+  const start = html.lastIndexOf('data-slot="chart-bar"', idx);
+  expect(start, `no chart-bar slot before "${marker}"`).toBeGreaterThan(-1);
+  return html.slice(start, idx);
 }
 
 describe("CallsChartCard", () => {
-  it("gives every one of the 14 bars a visible tooltip and an sr-only twin", () => {
+  // RETARGETED + RENAMED (wave 2): the long form used to live in an `sr-only`
+  // span beside the bar, which served screen readers and nobody else — the
+  // tooltip was hover-only, so a SIGHTED keyboard user got nothing. The column
+  // is a tab stop now and the long form is its `aria-label`; the twin span is
+  // gone because `role="img"` with a name makes children presentational, and
+  // keeping both announced the day twice. Renamed because a `-t` filter
+  // matching a stale name skips silently instead of failing.
+  it("gives every one of the 14 bars a visible tooltip and a focusable accessible name", () => {
     const html = render();
     expect(html).toContain("Aug 18 · 5 calls");
     expect(html).toContain("Aug 31 · 13 calls");
-    expect(html).toContain("August 18, 5 calls");
-    expect(html).toContain("August 31, 13 calls");
+    expect(html).toContain('aria-label="August 18, 5 calls"');
+    expect(html).toContain('aria-label="August 31, 13 calls"');
   });
 
-  it("weekday bars carry the accent (bg-primary); weekend bars are muted (bg-muted)", () => {
+  it("every bar column is reachable by keyboard and reveals its tooltip on focus", () => {
+    const html = render();
+    // 14 tab stops, one per day — on the COLUMN, because a 2%-tall zero-day
+    // bar is an unhittable focus target.
+    expect(html.match(/tabindex="0"/g)?.length).toBe(14);
+    expect(html).toContain("group-focus-visible/bar:opacity-100");
+    expect(html).toContain("focus-visible:ring-2 focus-visible:ring-ring");
+    // The twin it replaced must be gone, not merely outranked.
+    expect(html).not.toContain('class="sr-only"');
+  });
+
+  // RETARGETED with the chart-language rewrite, and RENAMED with it: the old
+  // name said `bg-primary`/`bg-muted`, and a `-t` filter matching a stale
+  // name skips silently rather than failing. Mirrors daily-chart.test.ts.
+  it("weekday bars carry the accent gradient (bar-accent); weekend bars are muted (--bar-wk, never --surface-3)", () => {
     const html = render();
     const weekday = htmlBefore(html, "Aug 18 · 5 calls");
-    expect(weekday).toContain("bg-primary");
-    expect(weekday).not.toContain("bg-muted");
+    expect(weekday).toContain("bar-accent");
+    expect(weekday).not.toContain("bg-[var(--bar-wk)]");
+    // The flat single hue and the 29%-too-bright weekend step are both gone.
+    expect(html).not.toContain("bg-primary");
+    expect(html).not.toContain("bg-muted");
 
     const weekend = htmlBefore(html, "Aug 23 · 3 calls");
-    expect(weekend).toContain("bg-muted");
-    expect(weekend).not.toContain("bg-primary");
+    expect(weekend).toContain("bg-[var(--bar-wk)]");
+    expect(weekend).not.toContain("bar-accent");
   });
 
-  it("axis: the window's start date, the weekends-muted caption, and today", () => {
+  it("the busiest day is the sanctioned violet→cyan bar-hot, and it is the ONLY one", () => {
     const html = render();
-    expect(html).toContain("Aug 18");
+    // Aug 31 = 13 calls, the window max.
+    expect(htmlBefore(html, "Aug 31 · 13 calls")).toContain("bar-hot");
+    expect(htmlBefore(html, "Aug 18 · 5 calls")).not.toContain("bar-hot");
+    expect(html.match(/bar-hot/g)?.length).toBe(1);
+  });
+
+  it("bars sit on the --axis rule with two dashed gridlines and scale in PERCENT, not px", () => {
+    const html = render();
+    expect(html).toContain("border-b border-[var(--axis)]");
+    expect(html.match(/data-slot="chart-grid"/g)?.length).toBe(2);
+    // 5/13 of the plot, as a percentage — the px arithmetic against a
+    // 113px content box is gone with the container's old padding.
+    expect(html).toContain(`height:${(5 / 13) * 100}%`);
+    expect(html).not.toMatch(/height:\d+px/);
+  });
+
+  it("the tooltip is a glass-overlay chip in mono — no bg-popover, no grey shadow-sm", () => {
+    const html = render();
+    expect(html).toContain("glass-overlay");
+    expect(html).toContain("font-mono text-[10.5px]");
+    expect(html).not.toContain("bg-popover");
+    expect(html).not.toContain("shadow-sm");
+  });
+
+  // RETARGETED: the axis was three stray words spread by `justify-between`
+  // (start date / "Weekends muted" / "Today"). It is now a 14-column mono row
+  // with a label under EVERY day; "Weekends muted" moved out to a legend,
+  // where it belongs, and "Today" left entirely — the last tick IS today and
+  // carries its own date, so the word was a second name for the same mark.
+  // `dashboard.calls.axis.today` was deleted from lib/messages.ts with it.
+  it("axis: one mono tick under every one of the 14 days, thinned by parity, with the weekends legend beside it", () => {
+    const html = render();
+    expect(html).toContain('data-slot="chart-axis"');
+    for (const tick of ["Aug 18", "Aug 23", "Aug 31"]) expect(html).toContain(tick);
+    // 14 ticks, and the odd ones keep their column while hiding their text.
+    expect(html.match(/min-w-0 flex-1 text-center font-mono/g)?.length).toBe(14);
+    expect(html.match(/hidden xl:inline/g)?.length).toBe(7);
+    expect(html).toContain('data-slot="chart-legend"');
     expect(html).toContain("Weekends muted");
-    expect(html).toContain("Today");
+    expect(html).not.toContain("Today");
   });
 
   it("mini table: contact name, duration · language, outcome pill, local time, and a link to the call", () => {

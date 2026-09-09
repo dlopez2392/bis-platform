@@ -8,6 +8,7 @@ import {
   SETUP_STEP_KEYS, parseStepParam, lockedPrereqKeys, railKindOf,
 } from "@/lib/setup/setup-rail";
 import { cn } from "@/lib/utils";
+import { Notice } from "@/components/ui/notice";
 import { m } from "@/lib/messages";
 import { STEP_COPY } from "./steps/step-shared";
 import {
@@ -137,7 +138,7 @@ export function SetupShell({
         id={SETUP_PANE_ID}
         role="region"
         aria-labelledby={SETUP_PANE_HEADING_ID}
-        className="min-w-0 rounded-lg border border-border bg-card p-5"
+        className="min-w-0 rounded-xl border border-border bg-card glass p-5"
       >
         <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
           <div className="min-w-0 flex-1">
@@ -169,15 +170,17 @@ export function SetupShell({
         </div>
 
         {locked ? (
-          <div
+          <Notice
+            tone="warn"
             role="note"
             // Prose is `text-foreground`, NOT `text-warning`. `--warning`
             // measures ~3.6:1 on this surface: over the 3:1 bar a dot, ring
             // or ICON has to clear, under AA for a LABEL. Exactly why every
             // state chip keeps its text foreground and puts the hue in the
             // dot and the border (TONE.unknown.chip, steps/step-shared.tsx)
-            // — the hue stays on this banner's border and its icon.
-            className="mt-3 flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-foreground"
+            // — the hue now stays on this banner's tinted GROUND and its
+            // icon, since the mockup's status shape gives it no border.
+            className="mt-3 flex items-start gap-2 text-foreground"
           >
             <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
             <div className="min-w-0 space-y-1.5">
@@ -208,9 +211,12 @@ export function SetupShell({
                       key={key}
                       type="button"
                       onClick={() => select(key)}
+                      // The blocker chips sit INSIDE the detail pane, so a
+                      // card fill here was a mini card-on-card. They take the
+                      // mockup's neutral chip instead — never glass (nested).
                       className={cn(
-                        "rounded-md border border-border bg-card px-2 py-0.5 text-xs font-medium text-foreground",
-                        "transition-colors hover:bg-muted",
+                        "rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-2.5 py-1 text-xs font-medium text-[var(--chip-text)]",
+                        "transition-colors hover:bg-[var(--surface-3)]",
                         "focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none",
                       )}
                     >
@@ -221,7 +227,7 @@ export function SetupShell({
                 </div>
               ) : null}
             </div>
-          </div>
+          </Notice>
         ) : null}
 
         {details[selected]}

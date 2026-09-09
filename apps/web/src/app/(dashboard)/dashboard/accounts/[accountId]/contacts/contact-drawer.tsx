@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { InlineField } from "@/components/inline-field";
 import { contactDisplayName, initials } from "@/lib/format";
 import { relativeTime } from "@/lib/dashboard/relative-time";
+import { Notice } from "@/components/ui/notice";
 import { m } from "@/lib/messages";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { updateContactFieldAction } from "./actions";
@@ -160,7 +161,7 @@ export function ContactDrawer({
                   <Skeleton className="h-4 w-2/3" />
                 </div>
               ) : load.status === "error" ? (
-                <div className="border-border rounded-md border p-3 text-sm" role="alert">
+                <Notice tone="crit" className="p-3">
                   <p className="text-muted-foreground">{m["drawer.loadFailed"]}</p>
                   <div className="mt-2 flex gap-3">
                     <Button size="sm" variant="outline" onClick={() => {
@@ -177,7 +178,7 @@ export function ContactDrawer({
                     </Button>
                     <Link href={fullHref} className="text-sm underline">{m["drawer.openFull"]}</Link>
                   </div>
-                </div>
+                </Notice>
               ) : (
                 <>
                   <TagsRow

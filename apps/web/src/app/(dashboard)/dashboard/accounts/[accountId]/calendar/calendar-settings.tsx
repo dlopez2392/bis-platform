@@ -5,10 +5,11 @@ import { toast } from "sonner";
 import type { CalendarRow } from "@bis/db";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
+import { Input, nativeFieldClass } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SubmitButton } from "../../submit-button";
+import { Notice } from "@/components/ui/notice";
 import { m } from "@/lib/messages";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
@@ -108,9 +109,7 @@ export function CalendarSettings({
           </div>
 
           {enabled && notifyEmailsEmpty ? (
-            <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              {m["calendar.settings.notifyEmailsWarning"]}
-            </p>
+            <Notice tone="crit">{m["calendar.settings.notifyEmailsWarning"]}</Notice>
           ) : null}
 
           <div className="space-y-2">
@@ -215,7 +214,7 @@ export function CalendarSettings({
               id="notifyEmails" name="notifyEmails" rows={3}
               value={notifyEmailsText}
               onChange={(e) => setNotifyEmailsText(e.target.value)}
-              className="w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className={nativeFieldClass}
             />
             <p className="text-xs text-muted-foreground">{m["calendar.settings.notifyEmailsHint"]}</p>
           </div>
@@ -236,7 +235,7 @@ export function CalendarSettings({
               value={followupBodyText}
               onChange={(e) => setFollowupBodyText(e.target.value)}
               placeholder={DEFAULT_FOLLOWUP_BODY}
-              className="w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className={nativeFieldClass}
             />
           </div>
 

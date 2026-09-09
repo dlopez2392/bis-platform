@@ -12,27 +12,28 @@ const dashboardLayout = readFileSync(
   join(__dirname, "../../app/(dashboard)/layout.tsx"), "utf-8");
 
 describe("design foundation: fonts", () => {
-  it("exposes --font-display mapped to the Bricolage variable", () => {
-    expect(globals).toMatch(/--font-display:\s*var\(--font-bricolage\)/);
+  // The DISPLAY ROLE is the UI face at weight 600, not Bricolage: the mockup
+  // loads Bricolage for its own page chrome but .dir-a — the direction the app
+  // ships — overrides it (northern-lights.html:157, `--f-disp: "Geist";
+  // --disp-w: 600`). Decided 2026-09-09; the mockup is the source.
+  it("exposes --font-display mapped to the Geist variable (the mockup's .dir-a --f-disp)", () => {
+    expect(globals).toMatch(/--font-display:\s*var\(--font-geist-sans\)/);
+    expect(globals).not.toMatch(/--font-display:\s*var\(--font-bricolage\)/);
   });
 
-  it("tokens.css repoints --font-display to var(--font-bricolage) in BOTH blocks (light :root and .dark) — a bare literal stack here would resolve to the browser/system face, not next/font's optimized one", () => {
-    const matches = [...tokens.matchAll(/--font-display:\s*var\(--font-bricolage\)/g)];
+  it("tokens.css repoints --font-display to var(--font-geist-sans) in BOTH blocks (light :root and .dark) — a bare literal stack here would resolve to the browser/system face, not next/font's optimized one", () => {
+    const matches = [...tokens.matchAll(/--font-display:\s*var\(--font-geist-sans\)/g)];
     expect(matches.length).toBe(2);
+    expect(tokens).not.toMatch(/--font-bricolage/);
   });
 
-  it("Bricolage preloads now that page-header.tsx consumes --font-display", () => {
+  it("Bricolage no longer preloads — nothing consumes --font-bricolage since the display role became Geist 600", () => {
     // Scoped to the bricolage object literal ([^}]* stops at its closing
     // brace) so this cannot false-match the unrelated "next/font/google
     // defaults to `preload: true`" prose in a later comment.
     expect(dashboardLayout).toMatch(
-      /const bricolage = Bricolage_Grotesque\(\{[^}]*preload:\s*true[^}]*\}\)/
+      /const bricolage = Bricolage_Grotesque\(\{[^}]*preload:\s*false[^}]*\}\)/
     );
-  });
-
-  it("layout.tsx's Bricolage comment no longer claims no consumer exists", () => {
-    expect(dashboardLayout).not.toMatch(/Preload off until P2\/P3/);
-    expect(dashboardLayout).not.toMatch(/flip back when --font-display enters the UI/);
   });
 });
 
@@ -42,7 +43,7 @@ describe("design foundation: tokens scaffolding", () => {
     expect(tokens).toMatch(/\.dark\s*\{/);
   });
   it("light default: :root carries the light surface ladder", () => {
-    expect(tokens).toMatch(/:root\s*\{[^}]*--surface-0:\s*#F6F5FA/i);
+    expect(tokens).toMatch(/:root\s*\{[^}]*--surface-0:\s*#EFEBF9/i);
   });
   it("dark values live under .dark", () => {
     expect(tokens).toMatch(/\.dark\s*\{[^}]*--surface-0:\s*#0B0A12/i);

@@ -2,14 +2,15 @@
 //
 // Decorative trend line for a StatTile (Task 4). Geometry comes from
 // `sparklinePath` in `@/lib/dashboard/metrics` — this component renders
-// that geometry, it never recomputes it. Viewbox and stroke/dot treatment
-// are pinned by the mockup (`docs/design/bis-design-direction.html`, the
-// `.spark` SVGs around lines 315-321): 100x26, `preserveAspectRatio="none"`
-// so the line stretches to fill its container. stroke-width 1.8, endpoint
-// dot r 2.4, area fill at 14% opacity (Northern Lights spec §5).
+// that geometry, it never recomputes it. Viewbox and stroke/dot treatment come
+// from the Northern Lights mockup's `.spark` (northern-lights.html:95 and the
+// tile markup): a fixed 84x26 box at its NATURAL aspect — no
+// preserveAspectRatio="none", which stretched the line horizontally to
+// whatever width the tile happened to be. stroke-width 1.8, endpoint dot
+// r 2.4, area fill at 14% opacity (spec §5).
 import { sparklinePath } from "@/lib/dashboard/metrics";
 
-const VIEW_WIDTH = 100;
+const VIEW_WIDTH = 84;
 const VIEW_HEIGHT = 26;
 
 /**
@@ -25,7 +26,6 @@ export function Sparkline({ counts, className }: { counts: number[]; className?:
   return (
     <svg
       viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
-      preserveAspectRatio="none"
       className={className}
       aria-hidden="true"
     >

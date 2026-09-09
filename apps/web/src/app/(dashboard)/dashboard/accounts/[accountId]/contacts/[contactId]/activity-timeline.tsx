@@ -136,7 +136,7 @@ export function ActivityTimeline({
         <form
           action={boundAddTask}
           aria-label={m["contact.tasks"]}
-          className="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-border p-2"
+          className="flex flex-wrap items-center gap-2 rounded-[8px] border border-dashed border-[var(--line-strong)] p-2"
         >
           {hidden}
           <Input
@@ -157,16 +157,34 @@ export function ActivityTimeline({
             body={m["contact.noActivityBody"]}
           />
         ) : (
-          <ol className="space-y-3">
+          /* These were five stacked, bordered, card-filled boxes INSIDE a
+             glass `<Card>` — five card shadows piling up on one, and a
+             nested-card shape the ladder forbids. They are timeline ROWS:
+             the panel is the card, the rows are `--row-line` rules (the
+             mockup's `.row`, northern-lights.html:122). */
+          <ol className="flex flex-col">
             {items.map((item, i) => {
               const day = formatDate(item.at);
               // Derive the separator from the previous item rather than a
               // carried variable — mutating during render is not safe.
               const showSeparator = i === 0 || day !== formatDate(items[i - 1]!.at);
               return (
-                <li key={`${item.kind}-${item.id}`}>
+                <li
+                  key={`${item.kind}-${item.id}`}
+                  // A day separator is already a divider; a row rule directly
+                  // above one would read as two lines.
+                  className={cn(
+                    "border-t border-[var(--row-line)] first:border-t-0",
+                    showSeparator && "border-t-0",
+                  )}
+                >
                   {showSeparator ? (
-                    <div className="mb-3 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                    <div
+                      className={cn(
+                        "mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground",
+                        i > 0 && "mt-3",
+                      )}
+                    >
                       <Separator className="flex-1" />
                       {day}
                       <Separator className="flex-1" />
@@ -205,7 +223,7 @@ function TimelineRow({
 }) {
   if (item.kind === "note") {
     return (
-      <div className="flex gap-3 rounded-lg border border-border bg-card p-3">
+      <div className="flex gap-3 py-[7px]">
         <StickyNote className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
         <div className="min-w-0 flex-1">
           <p className="text-sm text-card-foreground">{item.body}</p>
@@ -219,7 +237,7 @@ function TimelineRow({
     const done = Boolean(item.completedAt);
     const Icon = done ? CheckSquare : Square;
     return (
-      <div className="flex items-start gap-3 rounded-lg border border-border bg-card p-3">
+      <div className="flex items-start gap-3 py-[7px]">
         <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
         <div className="min-w-0 flex-1">
           <p className={cn("text-sm", done ? "text-muted-foreground line-through" : "text-card-foreground")}>
@@ -253,7 +271,7 @@ function TimelineRow({
     const Icon = MESSAGE_CHANNEL_ICON[item.channel as NewMessage["channel"]] ?? Mail;
     const channelLabel = messageChannelLabel(item.channel);
     return (
-      <div className="flex gap-3 rounded-lg border border-border bg-card p-3">
+      <div className="flex gap-3 py-[7px]">
         <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-card-foreground">
@@ -278,7 +296,7 @@ function TimelineRow({
 
   if (item.kind === "submission") {
     return (
-      <div className="flex gap-3 rounded-lg border border-border bg-card p-3">
+      <div className="flex gap-3 py-[7px]">
         <FileText className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-card-foreground">
@@ -299,7 +317,7 @@ function TimelineRow({
   }
 
   return (
-    <div className="flex gap-3 rounded-lg border border-border bg-card p-3">
+    <div className="flex gap-3 py-[7px]">
       <DollarSign className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-card-foreground">{item.name}</p>

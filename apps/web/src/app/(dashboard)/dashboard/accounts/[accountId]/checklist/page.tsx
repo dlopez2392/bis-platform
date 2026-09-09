@@ -3,6 +3,7 @@ import { PageHeader } from "@/components/page-header";
 import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { mergeChecklist } from "@/lib/checklist-catalogue";
+import { Notice } from "@/components/ui/notice";
 import { m } from "@/lib/messages";
 import { safeZone } from "@/lib/booking/time";
 import { formatDateInZone } from "@/lib/format";
@@ -60,12 +61,7 @@ export default async function ChecklistPage({
       <PageHeader title={m["checklist.title"]} />
       <div className="max-w-2xl space-y-4 p-6">
         {apply === "partial" ? (
-          <p
-            role="alert"
-            className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning"
-          >
-            {m["accounts.blueprintPartial"]}
-          </p>
+          <Notice tone="warn">{m["accounts.blueprintPartial"]}</Notice>
         ) : null}
         <ChecklistPanel
           entries={mergeChecklist(rows, { a2pStatus: a2p?.status })}

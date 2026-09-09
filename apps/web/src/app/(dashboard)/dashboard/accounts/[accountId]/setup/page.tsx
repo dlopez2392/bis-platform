@@ -5,6 +5,7 @@ import { dbForRequest } from "@/lib/db";
 import { deriveSetupStatus } from "@/lib/setup/setup-status";
 import { gatherSetupInputs } from "@/lib/setup/setup-inputs";
 import { buildSetupViews, resolveAssignedNumber } from "@/lib/setup/setup-view";
+import { Notice } from "@/components/ui/notice";
 import { m } from "@/lib/messages";
 import { SetupPanel, type MovableNumber } from "./setup-panel";
 import { setSetupTickAction, goLiveAction, renameAccountAction } from "./actions";
@@ -133,12 +134,7 @@ export default async function SetupPage({
             visible nowhere. The checklist route keeps its own copy — it is
             still reachable directly. */}
         {apply === "partial" ? (
-          <p
-            role="alert"
-            className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning"
-          >
-            {m["accounts.blueprintPartial"]}
-          </p>
+          <Notice tone="warn">{m["accounts.blueprintPartial"]}</Notice>
         ) : null}
         <SetupPanel
           accountId={accountId}
