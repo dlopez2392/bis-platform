@@ -31,7 +31,7 @@
 - `apps/web/src/lib/contacts/csv.ts` — pure CSV shaping: header auto-match, row→`ContactInput`, validation, error rows. No I/O, no React.
 - `apps/web/src/lib/contacts/csv.test.ts`
 - `packages/db/src/contact-import.ts` — `buildMatchIndex`, `applyImportBatch`. Server-only.
-- `packages/db/src/contact-import.test.ts`
+- `packages/db/src/test/contact-import.test.ts`
 - `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/import/page.tsx` — the import screen (upload → map → preview → commit).
 - `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/import/import-wizard.tsx` — client component driving the three steps.
 - `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/import/actions.ts` — `importContactsBatchAction`.
@@ -200,7 +200,7 @@ cd C:/Users/danlo/bis-platform && git add apps/web/src/lib/cursor.ts apps/web/sr
 
 **Files:**
 - Modify: `packages/db/src/contacts.ts:201-217` (`listContacts`), `:257-263` (`countContacts`)
-- Test: `packages/db/src/contacts.test.ts`
+- Test: `packages/db/src/test/contacts.test.ts`
 
 **Interfaces:**
 - Consumes: `RowCursor` from Task 1 — but `@bis/db` must not import from `apps/web`, so the shape is redeclared locally as `{ at: string; id: string }`. Structurally identical on purpose.
@@ -211,7 +211,7 @@ cd C:/Users/danlo/bis-platform && git add apps/web/src/lib/cursor.ts apps/web/sr
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-// packages/db/src/contacts.test.ts — add to the existing file
+// packages/db/src/test/contacts.test.ts — add to the existing file
 describe("listContacts paging", () => {
   it("pages past 100 and never repeats or skips a row when timestamps collide", async () => {
     // Every row shares ONE created_at — exactly what an import produces, and
@@ -245,7 +245,7 @@ describe("listContacts paging", () => {
 
 - [ ] **Step 2: Run and watch both fail**
 
-Run: `cd C:/Users/danlo/bis-platform && npx vitest run --dir packages/db -t "listContacts paging"`
+Run: `cd C:/Users/danlo/bis-platform/packages/db && npx vitest run -t "listContacts paging"`
 Expected: FAIL. The paging test fails on repeats/skips (the 100 cap and the missing `before`); the count test fails because `countContacts` takes no second argument.
 
 **Read the failing test NAME, not just the exit code** — a `-t` filter that matches nothing skips silently and reports success.
@@ -305,7 +305,7 @@ export async function countContacts(
 
 - [ ] **Step 4: Run and watch them pass**
 
-Run: `cd C:/Users/danlo/bis-platform && npx vitest run --dir packages/db -t "listContacts"`
+Run: `cd C:/Users/danlo/bis-platform/packages/db && npx vitest run -t "listContacts"`
 Expected: PASS.
 
 - [ ] **Step 5: Mutation-check the tiebreaker**
@@ -322,7 +322,7 @@ Expected: `EXIT=0`.
 - [ ] **Step 7: Commit**
 
 ```bash
-cd C:/Users/danlo/bis-platform && git add packages/db/src/contacts.ts packages/db/src/contacts.test.ts && git commit -m "feat(contacts): tuple cursor paging and a search-aware count"
+cd C:/Users/danlo/bis-platform && git add packages/db/src/contacts.ts packages/db/src/test/contacts.test.ts && git commit -m "feat(contacts): tuple cursor paging and a search-aware count"
 ```
 
 ---
@@ -644,7 +644,7 @@ cd C:/Users/danlo/bis-platform && git add apps/web/package.json pnpm-lock.yaml a
 
 **Files:**
 - Create: `packages/db/src/contact-import.ts`
-- Create: `packages/db/src/contact-import.test.ts`
+- Create: `packages/db/src/test/contact-import.test.ts`
 - Modify: `packages/db/src/index.ts`
 
 **Interfaces:**
@@ -664,7 +664,7 @@ collapse to one contact.
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-// packages/db/src/contact-import.test.ts
+// packages/db/src/test/contact-import.test.ts
 describe("applyImportBatch", () => {
   it("creates a new contact and updates a matching one in the same batch", async () => {
     const existing = await createContact(db, accountId,
@@ -722,7 +722,7 @@ describe("applyImportBatch", () => {
 
 - [ ] **Step 2: Run and watch them fail**
 
-Run: `cd C:/Users/danlo/bis-platform && npx vitest run --dir packages/db -t "applyImportBatch"`
+Run: `cd C:/Users/danlo/bis-platform/packages/db && npx vitest run -t "applyImportBatch"`
 Expected: FAIL — module not found. Confirm the reported test NAMES are the five above.
 
 - [ ] **Step 3: Implement**
@@ -739,7 +739,7 @@ case-insensitively; unknown names are applied only when `createTags` is true.
 
 - [ ] **Step 4: Run and watch them pass**
 
-Run: `cd C:/Users/danlo/bis-platform && npx vitest run --dir packages/db -t "applyImportBatch"`
+Run: `cd C:/Users/danlo/bis-platform/packages/db && npx vitest run -t "applyImportBatch"`
 Expected: PASS, 5 tests.
 
 - [ ] **Step 5: Mutation-check the in-batch index update**
