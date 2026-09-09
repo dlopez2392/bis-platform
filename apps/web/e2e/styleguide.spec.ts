@@ -72,6 +72,9 @@ test.describe("the style guide", () => {
     expect(g.pos).toBe("fixed");
     await expect(page.getByText("Ground & light", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Primary action" })).toBeVisible();
+    // Spec §5: one hero per screen — the styleguide is a screen too.
+    await expect(page.locator('[data-hero="true"]')).toHaveCount(1);
+    await expect(page.getByText("Pageviews ÷ 3")).toBeVisible();
   });
 });
 

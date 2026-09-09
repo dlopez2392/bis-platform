@@ -1,6 +1,7 @@
 import { Inbox } from "lucide-react";
 import { requireAgency } from "@/lib/auth";
 import { PageHeader } from "@/components/page-header";
+import { StatTile } from "@/components/stat-tile";
 import { DailyChart } from "../accounts/[accountId]/website/daily-chart";
 import { DeviceStrip } from "../accounts/[accountId]/website/device-strip";
 import { EmptyState } from "@/components/empty-state";
@@ -182,13 +183,22 @@ export default async function StyleguidePage() {
           </div>
         </Section>
 
-        <Section title="Website chart + device strip" file="…/website/{daily-chart,device-strip}.tsx">
-          <DailyChart days={[
-            { day: "2026-08-31", visitors: 42, pageviews: 90, isWeekend: false }, { day: "2026-09-01", visitors: 55, pageviews: 120, isWeekend: false },
-            { day: "2026-09-02", visitors: 48, pageviews: 101, isWeekend: false }, { day: "2026-09-03", visitors: 61, pageviews: 133, isWeekend: false },
-            { day: "2026-09-04", visitors: 80, pageviews: 170, isWeekend: false }, { day: "2026-09-05", visitors: 30, pageviews: 61, isWeekend: true },
-            { day: "2026-09-06", visitors: 26, pageviews: 50, isWeekend: true },
-          ]} />
+        <Section title="Stat tiles + website chart" file="components/stat-tile.tsx · …/website/{daily-chart,device-strip}.tsx">
+          <div className="grid w-full gap-3 md:grid-cols-2">
+            <StatTile hero label="Visitors" value="1,248" delta={{ direction: "up", label: "12%" }} spark={[3, 5, 4, 7, 9, 6, 8]} />
+            <StatTile label="Pageviews" value="3,910" delta={{ direction: "flat", label: "0%" }} spark={[9, 8, 9, 10, 9, 8, 9]} />
+          </div>
+          <div className="w-full">
+            <DailyChart
+              days={[
+                { day: "2026-08-31", visitors: 42, pageviews: 90, isWeekend: false }, { day: "2026-09-01", visitors: 55, pageviews: 120, isWeekend: false },
+                { day: "2026-09-02", visitors: 48, pageviews: 101, isWeekend: false }, { day: "2026-09-03", visitors: 61, pageviews: 133, isWeekend: false },
+                { day: "2026-09-04", visitors: 80, pageviews: 170, isWeekend: false }, { day: "2026-09-05", visitors: 30, pageviews: 61, isWeekend: true },
+                { day: "2026-09-06", visitors: 26, pageviews: 50, isWeekend: true },
+              ]}
+              secondSeries={{ label: m["website.chart.series.pageviewsThird"], values: [30, 40, 34, 44, 57, 20, 17] }}
+            />
+          </div>
           <DeviceStrip devices={[{ name: "mobile", visitors: 71, share: 0.71 }, { name: "desktop", visitors: 26, share: 0.26 }, { name: "tablet", visitors: 3, share: 0.03 }]} />
         </Section>
 
