@@ -25,7 +25,7 @@ describe("tokens.css — Northern Lights (spec §3)", () => {
     ["line", "rgba(255,255,255,.08)"], ["line-strong", "rgba(255,255,255,.14)"],
     ["text-1", "#F1EEFA"], ["text-2", "#9A94B4"], ["text-3", "#7B7593"],
     ["glow-1-alpha", ".28"], ["glow-2-alpha", ".16"], ["glow-3-alpha", ".12"], ["grid-alpha", ".025"],
-    ["glass-blur", "14px"], ["glass-highlight", "inset 0 1px 0 rgba(255,255,255,.06)"],
+    ["glass-filter", "blur(14px)"], ["glass-highlight", "inset 0 1px 0 rgba(255,255,255,.06)"],
     ["sheen", "linear-gradient(180deg, rgba(255,255,255,.03), transparent 40%)"],
     ["surface-overlay", "rgba(22,20,34,.88)"],
     ["shadow-card", "var(--glass-highlight), 0 20px 50px -30px rgba(0,0,0,.8)"],
@@ -58,7 +58,7 @@ describe("tokens.css — Northern Lights (spec §3)", () => {
   it.each([
     ["surface-0", "#F6F5FA"], ["surface-1", "#FFFFFF"], ["surface-2", "#FFFFFF"], ["surface-3", "#F1EFF7"],
     ["glow-1-alpha", ".07"], ["glow-2-alpha", ".05"], ["glow-3-alpha", ".04"], ["grid-alpha", ".012"],
-    ["glass-blur", "0px"], ["glass-highlight", "inset 0 1px 0 rgba(255,255,255,.9)"], ["sheen", "none"],
+    ["glass-filter", "none"], ["glass-highlight", "inset 0 1px 0 rgba(255,255,255,.9)"], ["sheen", "none"],
     ["surface-overlay", "rgba(255,255,255,.96)"],
     ["shadow-card", "0 1px 2px rgba(29,25,48,.05), 0 12px 32px -18px rgba(29,25,48,.22)"],
     ["shadow-glow", "0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent), 0 8px 24px -8px color-mix(in srgb, var(--accent) 35%, transparent)"],
@@ -113,16 +113,16 @@ describe("globals.css — semantic mapping (spec §3.2, §4)", () => {
     // Unprefixed only — Lightning CSS folds a hand-written -webkit- twin into
     // the prefixed form and drops the standard property, and Chromium does
     // not alias it, so a -webkit- line here silently ships zero blur.
-    expect(body).toMatch(/(^|[^-])backdrop-filter:\s*blur\(var\(--glass-blur\)\);/);
+    expect(body).toMatch(/(^|[^-])backdrop-filter:\s*var\(--glass-filter\);/);
     expect(body).not.toMatch(/-webkit-backdrop-filter/);
   });
 
-  it("glass-overlay = popover surface + shadow-overlay + blur(var(--glass-blur)), unprefixed only", () => {
+  it("glass-overlay = popover surface + shadow-overlay + var(--glass-filter), unprefixed only", () => {
     const body = globals.match(/@utility glass-overlay\s*\{([^}]*)\}/)![1]!;
     expect(body).toMatch(/background-color:\s*var\(--popover\);/);
     expect(body).toMatch(/box-shadow:\s*var\(--shadow-overlay\);/);
     // Unprefixed only — see the sidebar-chrome test above for why.
-    expect(body).toMatch(/(^|[^-])backdrop-filter:\s*blur\(var\(--glass-blur\)\);/);
+    expect(body).toMatch(/(^|[^-])backdrop-filter:\s*var\(--glass-filter\);/);
     expect(body).not.toMatch(/-webkit-backdrop-filter/);
   });
 
@@ -131,12 +131,12 @@ describe("globals.css — semantic mapping (spec §3.2, §4)", () => {
       expect(globals).toMatch(new RegExp(`@utility ${name}\\s*\\{`));
     });
 
-  it("glass = sheen + shadow-card + blur(var(--glass-blur)), never a background colour (tenant --card must win)", () => {
+  it("glass = sheen + shadow-card + var(--glass-filter), never a background colour (tenant --card must win)", () => {
     const body = globals.match(/@utility glass\s*\{([^}]*)\}/)![1]!;
     expect(body).toMatch(/background-image:\s*var\(--sheen\);/);
     expect(body).toMatch(/box-shadow:\s*var\(--shadow-card\);/);
     // Unprefixed only — see the sidebar-chrome test above for why.
-    expect(body).toMatch(/(^|[^-])backdrop-filter:\s*blur\(var\(--glass-blur\)\);/);
+    expect(body).toMatch(/(^|[^-])backdrop-filter:\s*var\(--glass-filter\);/);
     expect(body).not.toMatch(/-webkit-backdrop-filter/);
     expect(body).not.toMatch(/background-color/);
   });

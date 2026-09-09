@@ -18,20 +18,35 @@ test.describe("the style guide", () => {
     await page.goto("/dashboard/styleguide");
     await expect(page.getByText("Ground & light", { exact: true })).toBeVisible();
 
-    const probe = () =>
-      page.evaluate((dark: boolean) => {
-        document.documentElement.classList.toggle("dark", dark);
+    const probe = (dark: boolean) =>
+      page.evaluate((isDark: boolean) => {
+        document.documentElement.classList.toggle("dark", isDark);
         const card = document.querySelector('[data-slot="card"]')!;
         const cs = getComputedStyle(card);
         return { filter: cs.backdropFilter || (cs as unknown as { webkitBackdropFilter?: string }).webkitBackdropFilter || "", bg: cs.backgroundColor };
       }, dark);
-    let dark = true;
-    const d = await probe();
-    // Glass shipped: blur(14px) — or, where backdrop-filter is unsupported, the opaque fallback #15131F.
-    expect(d.filter.includes("blur") || d.bg === "rgb(21, 19, 31)").toBe(true);
-    dark = false;
-    const l = await probe();
+    const d = await probe(true);
+    // Pin the RADIUS, not just "some blur". Chromium supports backdrop-filter,
+    // so the old `includes("blur") || opaque fallback` OR passed on either
+    // branch and could not tell blur(14px) from blur(0px). The
+    // @supports-not fallback is pinned by the unit parity test instead
+    // (src/lib/branding/northern-lights.test.ts).
+    expect(d.filter, "dark card must actually blur").toBe("blur(14px)");
+    const l = await probe(false);
     expect(l.bg).toBe("rgb(255, 255, 255)");
+    // Light ships NO filter at all: blur(0px) is a non-none filter list and
+    // would still cost a stacking context + a backdrop surface per card.
+    expect(l.filter).toBe("none");
+    // The lit ground actually paints: relative-colour glows resolved, behind
+    // everything, fixed to the viewport.
+    const g = await page.evaluate(() => {
+      const el = document.querySelector('[data-slot="ground"]') as HTMLElement;
+      const cs = getComputedStyle(el.firstElementChild as HTMLElement);
+      return { img: cs.backgroundImage, z: getComputedStyle(el).zIndex, pos: getComputedStyle(el).position };
+    });
+    expect(g.img).toContain("radial-gradient(");
+    expect(g.z).toBe("-10");
+    expect(g.pos).toBe("fixed");
     await expect(page.getByText("Ground & light", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Primary action" })).toBeVisible();
   });

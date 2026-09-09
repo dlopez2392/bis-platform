@@ -58,8 +58,11 @@
   --glow-3-alpha: .04;
   --grid-alpha:   .012;
 
-  /* material: light cards are solid, so blur is 0 and the sheen is off */
-  --glass-blur:      0px;
+  /* material: light cards are solid, so there is NO blur filter at all and
+     the sheen is off. Not blur(0px): a zero-radius blur is still a non-none
+     filter list, so it costs a stacking context and a backdrop render
+     surface per card in the client default theme, for nothing. */
+  --glass-filter:    none;
   --glass-highlight: inset 0 1px 0 rgba(255,255,255,.9);
   --sheen:           none;
 
@@ -133,7 +136,7 @@
   --glow-3-alpha: .12;
   --grid-alpha:   .025;
 
-  --glass-blur:      14px;
+  --glass-filter:    blur(14px);
   --glass-highlight: inset 0 1px 0 rgba(255,255,255,.06);
   --sheen:           linear-gradient(180deg, rgba(255,255,255,.03), transparent 40%);
 

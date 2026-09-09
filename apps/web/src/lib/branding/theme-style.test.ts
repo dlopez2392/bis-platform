@@ -32,6 +32,32 @@ describe("themeStyle", () => {
     expect(style["--glow-3-alpha"]).toBe(String(theme.glowAlphas.glow3));
   });
 
+  // The tenant seam, written down in DESIGN.md → Foundations → "Tenant seam":
+  // this list mirrors that paragraph and is exactly what a tenant's theme
+  // overrides. Everything NOT here is mode-keyed chrome (--surface-0..3,
+  // --surface-overlay, --line, --line-strong, --text-1..3), so adding or
+  // dropping a key is a deliberate change to the seam — and to that paragraph
+  // — rather than an implementation detail nobody notices.
+  const SEAM_KEYS = [
+    "--background", "--foreground",
+    "--card", "--card-foreground",
+    "--popover", "--popover-foreground",
+    "--primary", "--primary-foreground",
+    "--secondary", "--secondary-foreground",
+    "--muted", "--muted-foreground",
+    "--border", "--input", "--ring",
+    "--accent", "--accent-strong", "--accent-dim", "--ring-glow",
+    "--accent-2", "--accent-2-dim", "--ring-glow-2",
+    "--sidebar-tint-2",
+    "--glow-1-alpha", "--glow-2-alpha", "--glow-3-alpha",
+    "--sidebar", "--sidebar-foreground", "--sidebar-accent", "--sidebar-border",
+    "--radius", "--font-sans",
+  ];
+
+  it("emits exactly the seam's key set — adding or dropping a tenant-driven property is a deliberate DESIGN.md change", () => {
+    expect(Object.keys(themeStyle(theme)).sort()).toEqual([...SEAM_KEYS].sort());
+  });
+
   // --gradient-primary is linear-gradient(180deg, var(--accent),
   // var(--accent-strong)): the two stops must be two colours, or a themed
   // tenant's primary button renders as a flat fill.

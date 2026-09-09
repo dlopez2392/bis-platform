@@ -112,20 +112,20 @@
   /* no solid background: the element keeps bg-card so a tenant's --card wins */
   background-image: var(--sheen);
   box-shadow: var(--shadow-card);
-  backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: var(--glass-filter);
 }
 @utility glass-overlay {
   background-color: var(--popover);
   color: var(--popover-foreground);
   box-shadow: var(--shadow-overlay);
-  backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: var(--glass-filter);
 }
 @utility sidebar-chrome {
   /* chrome, not a fifth content surface: an opaque dark ground under the
      (tenant-overridable) --sidebar layer, so the rail is dark in both themes */
   background-color: var(--sidebar-ground);
   background-image: linear-gradient(var(--sidebar), var(--sidebar));
-  backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: var(--glass-filter);
 }
 @utility btn-primary {
   background-image: var(--gradient-primary);

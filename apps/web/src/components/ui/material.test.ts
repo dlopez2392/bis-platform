@@ -100,9 +100,13 @@ describe("shell chrome", () => {
   it("the presence dot carries the --good halo", () => {
     expect(src("../topbar-presence.tsx")).toContain("shadow-[0_0_0_4px_color-mix(in_srgb,var(--good)_22%,transparent)]");
   });
-  it("sidebar: blur, gradient rail, token badges, no white alpha or text-white literals", () => {
+  it("sidebar: blur, right hairline, gradient rail, token badges, no white alpha or text-white literals", () => {
     const s = src("../app-sidebar.tsx");
     expect(s).toMatch(/className=\{cn\(\s*"[^"]*\bsidebar-chrome\b/);
+    // The mockup's `.side { border-right: 1px solid var(--side-line) }`. It has
+    // to sit on the aside's OWN class string — a wrapper would not follow the
+    // collapse width transition, and a child would draw inside the padding.
+    expect(s).toMatch(/className=\{cn\(\s*"[^"]*\bsidebar-chrome\b[^"]*\bborder-r\b[^"]*border-\[var\(--sidebar-line\)\]/);
     expect(s).toContain("bg-[linear-gradient(var(--sidebar-accent),var(--sidebar-tint-2))]");
     expect(s).toContain("bg-[linear-gradient(135deg,var(--sidebar-accent),var(--sidebar-tint-2))]");
     expect(s).toContain("bg-[linear-gradient(90deg,var(--sidebar-accent),var(--sidebar-tint-2))]");

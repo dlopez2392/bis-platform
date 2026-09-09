@@ -22,9 +22,12 @@
 cards/sidebar → `--surface-2` nested panels/inputs → `--surface-3`
 hover/raised/tooltips. Two border tokens: `--line` (structure),
 `--line-strong` (interactive edges). Depth in dark mode comes from the lit
-ground (two accent glows + a masked grid), glass surfaces (translucent steps
-1–3 with a 1px top highlight and `--glass-blur`), and `--shadow-card` — never
-gray blur shadows on dark; ambient light is accent-tinted.
+ground (three accent glows — two `--accent`, one `--accent-2` — plus a masked
+grid), glass surfaces (translucent steps 1–3 with a 1px top highlight and
+`--glass-filter`: `blur(14px)` in dark, `none` in light — never `blur(0px)`,
+which still costs a stacking context and a backdrop surface per card), and
+`--shadow-card` — never gray blur shadows on dark; ambient light is
+accent-tinted.
 
 **Type roles (3, no exceptions):**
 - Display — Bricolage Grotesque 650: page titles and KPI numbers ONLY.
@@ -37,6 +40,18 @@ gray blur shadows on dark; ambient light is accent-tinted.
 **Shape & motion:** radii are 8px (controls), 11px (cards), 999px (pills) —
 no other values. Spacing on a 4px grid. Motion: 150ms hovers, 250ms panels,
 `prefers-reduced-motion` respected, and NOTHING animates on scroll.
+
+**Tenant seam:** `deriveTheme`/`themeStyle` override the semantic surfaces
+(`--background`, `--card`, `--popover`, `--muted`, `--secondary`, `--border`,
+`--input`, `--ring`, the four `--sidebar*` names, `--radius`, `--font-sans`)
+and the whole accent family (`--accent`, `--accent-strong`, `--accent-dim`,
+`--ring-glow`, `--accent-2`, `--accent-2-dim`, `--ring-glow-2`,
+`--sidebar-tint-2`, `--glow-1/2/3-alpha`). The chrome neutrals `--surface-0..3`,
+`--surface-overlay`, `--line`, `--line-strong`, `--text-1..3` are MODE-keyed,
+not tenant-keyed, and a themed tenant's `--card` is the ramp's opaque colour,
+so glass reads only on unthemed (BIS) accounts. A component that paints from a
+chrome neutral is choosing the mode-keyed side of the seam on purpose. The
+exact emitted key set is pinned in `branding/theme-style.test.ts`.
 
 ## Rules (enforced in review)
 

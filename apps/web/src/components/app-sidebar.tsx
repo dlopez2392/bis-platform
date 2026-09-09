@@ -173,7 +173,7 @@ export function AppSidebar({
       // child below given overflow-y-auto — is what scrolls, while the
       // footer cluster after it stays on screen at every viewport height.
       className={cn(
-        "sticky top-0 flex h-dvh shrink-0 flex-col gap-3 sidebar-chrome p-3 text-sidebar-foreground transition-[width] duration-200",
+        "sticky top-0 flex h-dvh shrink-0 flex-col gap-3 sidebar-chrome border-r border-[var(--sidebar-line)] p-3 text-sidebar-foreground transition-[width] duration-200",
         collapsed ? "w-16" : "w-56",
       )}
     >
