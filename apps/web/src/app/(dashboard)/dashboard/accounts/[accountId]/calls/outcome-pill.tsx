@@ -16,8 +16,15 @@ import { OUTCOMES } from "./format";
 export function OutcomePill({ outcome }: { outcome: CallOutcome }) {
   const treatment = OUTCOMES[outcome];
   return (
-    <Badge variant="outline" className={cn("gap-1.5 py-1 pr-2.5 pl-2", treatment.chip)}>
-      <span className={cn("size-1.5 rounded-full", treatment.dot)} aria-hidden />
+    // `chip`, not `outline`: `outline`'s ground is `--surface-3` (.09) — the
+    // hover/raised step of the ladder used as a resting fill. The mockup's
+    // neutral `.chip` (northern-lights.html:147) is `--chip-bg` (.05) with its
+    // own 1px edge, and the outcomes that deliberately recede (abandoned,
+    // spam) now recede onto that instead of onto a raised surface.
+    <Badge variant="chip" className={cn("gap-1.5 py-1 pr-2.5 pl-2", treatment.chip)}>
+      {/* 7px, the mockup's `.chip i` (148) — 6px reads as a speck at this
+          text size, and the dot is the whole of DESIGN.md rule 3 here. */}
+      <span className={cn("size-[7px] rounded-full", treatment.dot)} aria-hidden />
       {treatment.label}
     </Badge>
   );

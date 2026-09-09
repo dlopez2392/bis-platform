@@ -276,3 +276,89 @@ describe("the routes above dashboard/layout.tsx get a ground of their own", () =
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Northern Lights, all sections — WAVE 2, the per-section surfaces. Wave 1
+// treated the shared components; these are the ~25 hand-rolled
+// `rounded-lg border border-border bg-card` panels the fidelity pass left
+// flat, plus the per-section details. Same reasoning as the block above: a
+// surface nobody pins is a surface the next pass walks past.
+// ---------------------------------------------------------------------------
+
+const APP = "../../app/(dashboard)/dashboard";
+const ACCT = `${APP}/accounts/[accountId]`;
+
+/** `bg-card` then `glass`, the one true card string, anywhere in the file. */
+const hasGlassCard = (s: string) => /\bbg-card\b[^"]*\bglass\b/.test(s);
+
+describe("wave 2 — no section still hand-rolls a flat card", () => {
+  // Every file here rendered at least one `rounded-lg border border-border
+  // bg-card` panel before wave 2. The negative is the load-bearing half: a
+  // future panel added in the old shape fails here even if the glass one
+  // beside it still passes.
+  const flat = [
+    `${ACCT}/calls/page.tsx`,
+    `${ACCT}/calls/[callId]/page.tsx`,
+    `${ACCT}/contacts/[contactId]/page.tsx`,
+    `${ACCT}/contacts/[contactId]/activity-timeline.tsx`,
+    `${ACCT}/contacts/bulk-action-bar.tsx`,
+  ];
+  it.each(flat)("%s carries no `rounded-lg border border-border bg-card`", (rel) => {
+    expect(src(rel)).not.toContain("rounded-lg border border-border bg-card");
+  });
+});
+
+describe("wave 2 — calls", () => {
+  it("the usage card and the call-detail CARD are glass", () => {
+    expect(hasGlassCard(src(`${ACCT}/calls/page.tsx`))).toBe(true);
+    const detail = src(`${ACCT}/calls/[callId]/page.tsx`);
+    // One constant, six stacked sections — none of them was glass.
+    expect(detail).toContain('const CARD = "overflow-hidden rounded-xl border border-border bg-card glass"');
+  });
+  it("CARD_HEAD is the Label role, not 12px sans at tracking-wider", () => {
+    const detail = src(`${ACCT}/calls/[callId]/page.tsx`);
+    expect(detail).toMatch(/const CARD_HEAD =\s*\n?\s*"[^"]*font-mono[^"]*text-\[10px\][^"]*tracking-\[0\.14em\][^"]*uppercase"/);
+    expect(detail).not.toContain("text-xs font-medium tracking-wider text-muted-foreground uppercase");
+    // The rule under a card header is --row-line like every other row rule.
+    expect(detail).toContain("border-b border-[var(--row-line)]");
+  });
+  it("the transcript facts block takes ladder step 2 and NEVER glass (it is nested in CARD)", () => {
+    const detail = src(`${ACCT}/calls/[callId]/page.tsx`);
+    expect(detail).toContain("bg-[var(--surface-2)] px-4 py-3 font-mono");
+    expect(detail).not.toContain("bg-muted/50");
+    // A second --shadow-card inside the first doubles the ambient.
+    expect(detail).not.toMatch(/bg-\[var\(--surface-2\)\][^"]*\bglass\b/);
+  });
+  it("the outcome pill is the mockup's neutral chip with a 7px dot, not a --surface-3 outline with a 6px speck", () => {
+    const pill = src(`${ACCT}/calls/outcome-pill.tsx`);
+    expect(pill).toContain('variant="chip"');
+    expect(pill).not.toContain('variant="outline"');
+    expect(pill).toContain("size-[7px] rounded-full");
+    expect(pill).not.toContain("size-1.5");
+  });
+});
+
+describe("wave 2 — contacts", () => {
+  it("the bulk-action bar is a BAND inside the ListPanel, not a card floating in one", () => {
+    const bar = src(`${ACCT}/contacts/bulk-action-bar.tsx`);
+    expect(bar).toContain("border-b border-[var(--row-line)] bg-[var(--surface-2)]");
+    expect(bar).not.toContain("bg-card");
+    expect(bar).not.toContain("rounded-lg");
+    expect(bar).not.toMatch(/\bglass\b/);
+  });
+  it("the opportunities aside is glass and its rows are rules, never boxes", () => {
+    const page = src(`${ACCT}/contacts/[contactId]/page.tsx`);
+    expect(hasGlassCard(page)).toBe(true);
+    expect(page).toContain("border-t border-[var(--row-line)] py-[7px] first:border-t-0");
+    expect(page).not.toContain('className="rounded-md border border-border p-2"');
+  });
+  it("the five timeline events are ROWS in the one Card, not five stacked cards", () => {
+    const tl = src(`${ACCT}/contacts/[contactId]/activity-timeline.tsx`);
+    // Five card shadows piling up inside one glass Card was the failure.
+    expect(tl).not.toContain("bg-card p-3");
+    expect(tl).toContain("border-t border-[var(--row-line)] first:border-t-0");
+    // Dashed edges use the INTERACTIVE line token.
+    expect(tl).toContain("border-dashed border-[var(--line-strong)]");
+    expect(tl).not.toContain("border-dashed border-border");
+  });
+});

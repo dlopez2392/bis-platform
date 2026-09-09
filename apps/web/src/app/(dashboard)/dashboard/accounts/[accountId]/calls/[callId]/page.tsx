@@ -28,9 +28,17 @@ import { TextbackResend } from "./textback-resend";
 
 export const dynamic = "force-dynamic";
 
-const CARD = "overflow-hidden rounded-lg border border-border bg-card";
+// The detail page is six of these stacked and not one of them was glass, so
+// the whole route read as flat rectangles on a lit ground. `bg-card` BEFORE
+// `glass`, the order `ui/card.tsx` uses: a tenant's `--card` still wins the
+// fill and the utility adds only the sheen, the highlight and `--shadow-card`.
+const CARD = "overflow-hidden rounded-xl border border-border bg-card glass";
+// DESIGN.md's Label role — Geist Mono 500, 10px, +0.14em — the same role
+// `TableHead` now carries. This is a card header on a `<div>`, not a
+// `TableHead`, so wave 1's shared fix did not reach it. The rule under it is
+// `--row-line` (.06), not `--line` (.08), like every other row rule.
 const CARD_HEAD =
-  "border-b border-border px-5 py-3 text-xs font-medium tracking-wider text-muted-foreground uppercase";
+  "border-b border-[var(--row-line)] px-5 py-3 font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase";
 
 export default async function CallDetailPage({
   params,
@@ -323,7 +331,10 @@ function SummaryBlockView({ block }: { block: SummaryBlock }) {
 
   if (block.kind === "facts") {
     return (
-      <p className="rounded-md border border-border bg-muted/50 px-4 py-3 font-mono text-[13px] leading-6 break-words whitespace-pre-wrap text-foreground">
+      // Ladder step 2 (`--surface-2`), the nested-panel step, not an alpha of
+      // `--muted`. NO `glass` — this sits inside `CARD`, and a second
+      // `--shadow-card` inside the first doubles the ambient.
+      <p className="rounded-[8px] border border-[var(--input-line)] bg-[var(--surface-2)] px-4 py-3 font-mono text-[13px] leading-6 break-words whitespace-pre-wrap text-foreground">
         {block.text}
       </p>
     );
