@@ -228,13 +228,31 @@ describe("Notice is the one status banner", () => {
 
 describe("Meter is the one progress bar", () => {
   const s = src("../meter.tsx");
-  it("is the mockup's 5px track on --meter-bg with the CONTENT accent pair", () => {
+  it("is the mockup's 5px track on --meter-track with the CONTENT accent pair", () => {
     expect(s).toContain("h-[5px]");
-    expect(s).toContain("bg-[var(--meter-bg)]");
+    expect(s).toContain("bg-[var(--meter-track)]");
     expect(s).toContain("bg-[linear-gradient(90deg,var(--accent),var(--accent-2))]");
     // A themed tenant re-points --accent but not --sidebar-*; a shared meter
     // painted from the sidebar's chrome tokens goes wrong on every brand.
     expect(s).not.toContain("--sidebar-accent");
+    // --meter-bg is the SIDEBAR's own track (white in both themes because that
+    // rail is dark chrome in both). On a light content card it is invisible.
+    // Scoped to the class string — the docstring names the token to explain why.
+    expect(s).not.toContain("bg-[var(--meter-bg)]");
+  });
+
+  it("the sidebar's own meter keeps the chrome track, and it is the only --meter-bg reader", () => {
+    expect(src("../app-sidebar.tsx")).toContain("bg-[var(--meter-bg)]");
+  });
+
+  it("the track is BLOCK — h-[5px] does nothing to an inline span, and one consumer is a span", () => {
+    // Measured on the built app before this: the dashboard's checklist row
+    // rendered its track at height 0, width 0, at every progress value. It
+    // copies SetupMeterLink's shape but wraps it in a `block` Link rather
+    // than a `flex flex-col` one, and a flex container is the only reason
+    // the sidebar's identical inline span gets a height (flex items are
+    // blockified). Meter itself uses a div, so this costs it nothing.
+    expect(s).toContain("block h-[5px]");
   });
   it("no content-area meter is still 6px on --surface-3 with a flat fill", () => {
     const app = "../../app/(dashboard)/dashboard/accounts/[accountId]";
@@ -401,14 +419,15 @@ describe("wave 2 — pipeline", () => {
     expect(board).not.toContain("shadow-lg");
     expect(board).not.toContain("ring-primary/40");
   });
-  it("the opportunity card lands on the 12px card radius and stays UN-GLASSED pending a frame reading", () => {
-    // 40+ blurred cards can share one viewport here. DESIGN.md's own
-    // amendment records cards being un-blurred for a morning over a measured
-    // 7-9 dropped frames of 52; the findings license glass here only after a
-    // reading on real hardware, which no headless run can give.
-    expect(board).toContain('"rounded-xl border border-border bg-card p-3"');
-    expect(board).not.toMatch(/bg-card p-3",\s*\n?\s*\/\/[^\n]*\n?\s*dragging && "[^"]*glass/);
-    expect(board).not.toMatch(/\bbg-card\b[^"]*\bglass\b/);
+  it("the opportunity card is glass like every other card — the frame-reading gate was the blur, and cards no longer blur", () => {
+    // This was the ONE surface held back, and the hold was entirely about the
+    // backdrop-filter: 40+ blurred cards can share one viewport here, and the
+    // blur had cost 7-9 dropped frames of 52 on an integrated GPU. Cards no
+    // longer carry a backdrop-filter at all (2026-09-09 pm), so `glass` is now
+    // a background-image and a box-shadow — no backdrop surfaces to allocate,
+    // nothing left for a frame reading to measure.
+    expect(hasGlassCard(board)).toBe(true);
+    expect(board).toContain('"rounded-xl border border-border bg-card glass p-3"');
   });
 });
 

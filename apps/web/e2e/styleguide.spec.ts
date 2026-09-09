@@ -33,14 +33,15 @@ test.describe("the style guide", () => {
         };
       }, dark);
     const d = await probe(true);
-    // Cards DO blur again (decision 2026-09-09 pm): the mockup's .card carries
-    // backdrop-filter: var(--card-blur) = blur(14px), and literal mockup
-    // fidelity outranks the morning's scroll-cost removal. Pin the RADIUS, not
-    // just "some blur": Chromium supports backdrop-filter, so an
-    // `includes("blur")` check cannot tell blur(14px) from blur(0px). The
-    // @supports-not fallback is pinned by the unit parity test
-    // (src/lib/branding/northern-lights.test.ts).
-    expect(d.filter, "dark card blurs at 14px like the mockup").toBe("blur(14px)");
+    // Cards do NOT blur (danlo 2026-09-09 pm, deciding on the measurement:
+    // blurred vs not on the real dashboard differs by a mean of 2.3/765 with
+    // only 0.07% of pixels past 8/765, and it cost 7-9 of 52 frames scrolling
+    // on an integrated GPU). The blur lives on the sidebar and the overlays,
+    // which never scroll. Pin the RADIUS on the sidebar, not just "some blur":
+    // Chromium supports backdrop-filter, so an `includes("blur")` check cannot
+    // tell blur(14px) from blur(0px). The @supports-not fallback is pinned by
+    // the unit parity test (src/lib/branding/northern-lights.test.ts).
+    expect(d.filter, "dark card does not blur").toBe("none");
     expect(d.aside, "dark sidebar keeps the 14px blur").toBe("blur(14px)");
     // The BIS half of the composed-token fix: tokens.css declares
     // --gradient-primary on `*`/`.dark *` instead of :root/.dark, so every
@@ -73,7 +74,18 @@ test.describe("the style guide", () => {
     expect(g.pos).toBe("fixed");
     await expect(page.getByText("Ground & light", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Primary action" })).toBeVisible();
-    // Spec §5: one hero per screen — the styleguide is a screen too.
+    // This counts what actually PAINTS the hero gradient, not the marker
+    // attribute. `data-hero` is set only by StatTile, so counting it here
+    // under-measured DESIGN.md rule 11 — the styleguide also renders a
+    // standalone `hero-text` specimen in its own type section, a second
+    // gradient number the attribute count never saw.
+    //
+    // Two is correct HERE and only here: the styleguide is a gallery, and a
+    // specimen of the treatment is the point of it. Rule 11's real enforcement
+    // is per-screen and at unit level, where the screen's tiles are read from
+    // source — dashboard/hero.test.ts and website-section.test.ts each pin
+    // exactly one.
+    await expect(page.locator(".hero-text")).toHaveCount(2);
     await expect(page.locator('[data-hero="true"]')).toHaveCount(1);
     await expect(page.getByText("Pageviews ÷ 3")).toBeVisible();
   });

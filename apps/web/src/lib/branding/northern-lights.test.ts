@@ -61,6 +61,19 @@ describe("tokens.css — Northern Lights (spec §3)", () => {
     expect(value(darkBlock, "sidebar-ground")).toBe("transparent");
   });
 
+  // --meter-bg above is the SIDEBAR's track and rightly white in both themes:
+  // that rail is dark chrome in light mode too. The CONTENT area's meters
+  // (checklist row, Calls usage, Setup progress) sit on a 72%-white card in
+  // light, where a white-at-8% track is invisible — the bar disappeared
+  // entirely, and at 0% so did the fill, leaving the checklist row reading as
+  // plain text. --meter-track is the content twin: ink in light, the same
+  // white tint in dark. Same ink and alpha as --share-bg, the other light
+  // twin that paints a track-like fill on a card.
+  it("--meter-track is ink in :root and a white tint in .dark — the content meter reads on a light card", () => {
+    expect(value(rootBlock, "meter-track")).toBe("rgba(29,25,48,.08)");
+    expect(value(darkBlock, "meter-track")).toBe("rgba(255,255,255,.08)");
+  });
+
   it.each([
     // Light is glass too now: a pale-violet ground, a 72%-white card the lit
     // ground reads through, a real sheen and a grid that is actually visible.
@@ -200,13 +213,18 @@ describe("globals.css — semantic mapping (spec §3.2, §4)", () => {
       expect(globals).toMatch(new RegExp(`@utility ${name}\\s*\\{`));
     });
 
-  it("glass = sheen + shadow-card + the per-mode blur (restored 2026-09-09 for literal mockup fidelity), never a background colour (tenant --card must win)", () => {
+  it("glass = sheen + shadow-card and NO backdrop-filter (danlo 2026-09-09 pm, on the measurement), never a background colour (tenant --card must win)", () => {
     const body = globals.match(/@utility glass\s*\{([^}]*)\}/)![1]!;
     expect(body).toMatch(/background-image:\s*var\(--sheen\);/);
     expect(body).toMatch(/box-shadow:\s*var\(--shadow-card\);/);
-    // The mockup blurs cards at 14px (.card / --card-blur). Unprefixed only —
-    // see the sidebar-chrome test above for why a -webkit- twin ships zero blur.
-    expect(body).toMatch(/(^|[^-])backdrop-filter:\s*var\(--glass-filter\);/);
+    // Cards do not blur. Measured on the real account dashboard, blurred vs
+    // not: 23.2% of pixels differ AT ALL, but by a mean of 2.3/765 and only
+    // 0.07% by more than 8/765 — a card sits over the lit ground's smooth
+    // gradients, so the blur has almost nothing to resolve. It cost 7-9 of 52
+    // frames scrolling on an Intel UHD 630. The blur stays on sidebar-chrome
+    // and glass-overlay, which sit over real content and never scroll.
+    // Matches a DECLARATION only: the utility's comment names the property.
+    expect(body).not.toMatch(/backdrop-filter\s*:/);
     expect(body).not.toMatch(/-webkit-backdrop-filter/);
     expect(body).not.toMatch(/background-color/);
   });

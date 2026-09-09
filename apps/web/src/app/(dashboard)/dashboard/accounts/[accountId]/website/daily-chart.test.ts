@@ -35,6 +35,18 @@ describe("DailyChart bars (spec §5)", () => {
     expect(axis).toContain("Sep 1");
     expect(axis).toContain("Sep 4");
   });
+  it("lays the bars in EQUAL columns with no flex gap — xAt's (i+0.5)/n is only true if they are", () => {
+    // xAt places the second-series polyline, its peak dot and the tooltip at
+    // ((i+0.5)/n)·100% of the row, and the axis labels use their own equal
+    // flex-1 columns. A `gap` (and the row's own horizontal padding) makes a
+    // bar's real centre something else entirely — the bars drifted ~3px from
+    // the line and from their own labels. Expressing the same 7px as 3.5px
+    // of padding INSIDE each column makes all three geometries agree exactly.
+    const row = html.match(/<div class="relative flex h-\[168px\][^"]*"/)![0]!;
+    expect(row).not.toMatch(/\bgap-\[/);
+    expect(row).not.toMatch(/\bpx-\[/);
+    expect(html.match(/class="flex h-full min-w-0 flex-1 items-end px-\[3\.5px\]"/g)?.length).toBe(DAYS.length);
+  });
   it("has exactly one axis row and no second series or legend when none is given", () => {
     expect(html.match(/data-slot="chart-axis"/g)?.length).toBe(1);
     expect(html).not.toContain("chart-series-2");
@@ -77,9 +89,21 @@ describe("DailyChart second series (spec §5): same axis, --accent-2, mono legen
     expect(html.match(/data-slot="chart-axis"/g)?.length).toBe(1);
     expect(html).not.toMatch(/<text\b/);
   });
+  it("the primary label is the caller's, not a website-specific message baked into the chart", () => {
+    // Both callers happen to plot visitors today, so the hard-coded
+    // m["website.tile.visitors"] was right by coincidence; the chart is a
+    // generic component and must not name its caller's domain.
+    const named = renderToStaticMarkup(createElement(DailyChart, {
+      days: DAYS, secondSeries: second, primaryLabel: "Calls answered",
+    }));
+    const legend = named.match(/data-slot="chart-legend"[\s\S]*?<\/div>/)![0]!;
+    expect(legend).toContain("Calls answered");
+    expect(legend).not.toContain("Visitors");
+  });
   it("legend names both series in mono", () => {
     const legend = html.match(/data-slot="chart-legend"[\s\S]*?<\/div>/)![0]!;
     expect(legend).toContain("font-mono");
+    // Default stays Visitors, so the website caller needs no change.
     expect(legend).toContain("Visitors");
     expect(legend).toContain("Pageviews ÷ 3");
     expect(legend).toContain("bg-[var(--accent)]");

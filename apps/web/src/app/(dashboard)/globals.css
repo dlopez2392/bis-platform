@@ -110,14 +110,20 @@
    alias it); it adds vendor prefixes itself from the browser targets. ---- */
 @utility glass {
   /* no solid background: the element keeps bg-card so a tenant's --card wins.
-     The card blur is BACK (decision 2026-09-09 pm, superseding the morning's
-     scroll-cost removal): the mockup blurs cards at 14px (northern-lights.html
-     .card / --card-blur) and literal mockup fidelity outranks the measured
-     7–9 dropped frames of 52 on an integrated GPU. --glass-filter is per mode,
-     so light (none) still pays nothing. */
+     No backdrop-filter either — danlo's call, 2026-09-09 pm, made on the
+     measurement rather than on the principle. Blurred vs not on the real
+     account dashboard: 23.2% of pixels differ AT ALL, but by a mean of 2.3
+     out of 765, and only 0.07% differ by more than 8/765; the amplified
+     difference map is black except for faint edges where a card overlaps the
+     tall chart bar. A card sits over the lit ground — smooth gradients — so
+     the blur has almost nothing to resolve, and it cost 7–9 of 52 frames
+     scrolling on an Intel UHD 630. The glass still reads: sheen, inset
+     highlight, translucent fill, accent-tinted shadow. sidebar-chrome and
+     glass-overlay KEEP the blur — they sit over real content and never
+     scroll. (This is where §9 stood before the fidelity pass restored the
+     blur for literal mockup parity; the measurement settled it.) */
   background-image: var(--sheen);
   box-shadow: var(--shadow-card);
-  backdrop-filter: var(--glass-filter);
 }
 @utility glass-overlay {
   background-color: var(--popover);

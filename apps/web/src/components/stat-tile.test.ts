@@ -53,6 +53,16 @@ describe("StatTile hero (spec §5)", () => {
     expect(html).not.toMatch(/data-hero="true"[^>]*text-card-foreground/);
   });
 
+  it("both tiles speak the display role at DESIGN.md's KPI size — 30px/600, -.03em", () => {
+    // The size was never pinned, so the one number DESIGN.md sizes explicitly
+    // ("KPI numbers (30px, -.03em)") could drift on either tile without a
+    // failure. Hero and plain must match: the gradient is the only difference
+    // between them.
+    for (const html of [render(true), render()]) {
+      expect(html).toMatch(/font-display text-\[30px\] leading-none font-\[600\] tracking-\[-0\.03em\] tabular-nums/);
+    }
+  });
+
   it("a plain tile has no data-hero and stays text-coloured", () => {
     const html = render();
     expect(html).not.toContain("data-hero");

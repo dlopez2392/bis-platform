@@ -31,9 +31,9 @@ describe("ChecklistRow", () => {
     expect(html).toContain('aria-label="Activation checklist (2 of 7 done)"');
   });
 
-  it("the meter fill reflects the fraction done, on the shared --meter-bg/--accent gradient tokens", () => {
+  it("the meter fill reflects the fraction done, on the shared --meter-track/--accent gradient tokens", () => {
     const html = render(0, 4);
-    expect(html).toContain("bg-[var(--meter-bg)]");
+    expect(html).toContain("bg-[var(--meter-track)]");
     expect(html).toContain("bg-[linear-gradient(90deg,var(--accent),var(--accent-2))]");
     // A themed tenant re-points --accent but not --sidebar-*; this row lives
     // in the content area and must never paint from the sidebar's chrome

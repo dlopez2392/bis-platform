@@ -27,11 +27,14 @@ grid, all sized in `vw`/`vh` so the mockup's proportions survive any viewport),
 glass surfaces (translucent steps 1–3 with a 1px top highlight — light's
 `--surface-1` is `rgba(255,255,255,.72)`, not white, so the aurora reads
 through a card there too), the backdrop blur `--glass-filter` — `blur(14px)`
-in dark, `none` in light, never `blur(0px)` — on cards, the sidebar and the
-overlays alike (**amended 2026-09-09**: cards blurred, then did not for one
-morning on a measured 7–9 dropped frames of 52, and now do again, because the
-mockup's `.card` carries `backdrop-filter: var(--card-blur)` and literal
-mockup fidelity is the standing instruction), and `--shadow-card` — never gray
+in dark, `none` in light, never `blur(0px)` — applied to **the sidebar and the
+overlays ONLY, never to cards** (**settled 2026-09-09**: cards blurred, then
+did not on a measured 7–9 dropped frames of 52, then did again for literal
+mockup parity; danlo then decided on the A/B measurement — blurred vs not on
+the real dashboard, 23.2% of pixels differ at all but by a mean of 2.3/765 and
+only 0.07% past 8/765, because a card sits over the lit ground's smooth
+gradients and the blur has nothing to resolve. The sidebar and overlays sit
+over real content and never scroll, so they keep it), and `--shadow-card` — never gray
 blur shadows in either mode; ambient light is accent-tinted, which is why
 `--shadow-card` and `--shadow-overlay` are declared on `*`, not `:root`.
 
