@@ -949,3 +949,134 @@ separately and named differently on purpose — `@bis/db` must not import from
 once in Task 4 and consumed in Tasks 5 and 8. `ImportRow.input` is
 `ContactInput`, the existing exported type. `applyImportBatch`'s return
 `{ created, updated }` is the shape asserted in Tasks 6, 7 and 8.
+
+---
+
+## Task 3b: Server-side sorting, and one pager instead of two
+
+Added 2026-09-09 mid-execution. Task 3's implementer reported that
+`contacts-table.tsx` already had its own client-side pager, so the list ended up
+with two stacked. danlo chose: **drop the client pager, and make sorting work
+across the whole list rather than the visible page.**
+
+**Files:**
+- Modify: `apps/web/src/lib/cursor.ts` + `cursor.test.ts` — cursor value becomes opaque
+- Modify: `packages/db/src/contacts.ts` + `src/test/contacts.test.ts` — sort-aware list
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/page.tsx`
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contacts-table.tsx`
+- Modify: `apps/web/src/lib/messages.ts`
+
+**Interfaces produced:**
+- `type SortKey = "name" | "company" | "created"`, `type SortDir = "asc" | "desc"`
+- `listContacts(db, accountId, { search?, limit?, before?, sort? })` where
+  `sort` is `{ key: SortKey; dir: SortDir }`, defaulting to `{ key: "created", dir: "desc" }`
+- Cursor is `{ v: string | null; id: string }` — `v` is the sort column's value
+
+**MIGRATION 0030 IS ALREADY APPLIED. Do not write, re-run, or re-apply it.**
+`contacts.sort_name` exists as a stored generated column
+(`nullif(lower(trim(coalesce(first_name,'') || ' ' || coalesce(last_name,''))), '')`),
+indexed `(account_id, sort_name, id)`, with `select (sort_name)` granted to
+`authenticated`. Verified against live data: `Caller` → `caller`,
+`Carlos Mendoza` → `carlos mendoza`.
+
+### Why the cursor encoding must change first
+
+Today `encodeCursor` joins with `|`. That was safe for a timestamp. A sort value
+is now a **name or company**, which can contain a `|`, and a raw `+` in a query
+string still decodes to a space. Both go away by encoding the pair as
+base64url of JSON:
+
+```ts
+export type RowCursor = { v: string | null; id: string };
+
+export function encodeCursor(c: RowCursor): string {
+  return Buffer.from(JSON.stringify([c.v, c.id]), "utf8").toString("base64url");
+}
+
+export function parseCursor(raw: string | undefined): RowCursor | undefined {
+  if (typeof raw !== "string" || raw === "") return undefined;
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+    if (!Array.isArray(parsed) || parsed.length !== 2) return undefined;
+    const [v, id] = parsed as [unknown, unknown];
+    if (typeof id !== "string" || !UUID.test(id)) return undefined;
+    if (v !== null && typeof v !== "string") return undefined;
+    return { v, id };
+  } catch { return undefined; }
+}
+```
+
+`parseTimeCursor` is UNTOUCHED — `calls` still uses it and must not change.
+The value is still validated and never re-serialised: a timestamp rides through
+`JSON` as the same string it arrived as.
+
+### Null ordering is the part that will be got wrong
+
+`sort_name` and `company_name` are both nullable. Order them `nulls last` in
+BOTH directions so nameless contacts always sit at the end, and the cursor has
+to step across the null boundary. For ascending, with cursor value `v`:
+
+- `v` is **not null** — the remaining rows are the greater non-nulls *plus every
+  null*: `col.gt.v, and(col.eq.v,id.gt.ID), col.is.null`
+- `v` **is null** — we are already inside the null block, so only the id moves:
+  `and(col.is.null,id.gt.ID)`
+
+Descending is the mirror (`lt`, `id.lt`), still with `col.is.null` appended,
+because nulls stay last in both directions.
+
+`created` sorts on `created_at`, which is `not null`, so its cursor keeps the
+simple two-branch form.
+
+- [ ] **Step 1: Write the failing tests**
+
+In `cursor.test.ts`: a value containing `|`, a value containing `+`, and a
+`null` value each round-trip; a non-base64 string, a base64 string whose JSON is
+not a 2-array, and a well-formed pair with a non-uuid id each return `undefined`.
+
+In `packages/db/src/test/contacts.test.ts`: seed contacts whose names sort
+differently from their creation order, plus **two with no name at all**, then for
+each of `name` and `company`, in both directions, page the whole list with the
+cursor and assert every row is seen exactly once, in the right order, with the
+nameless ones last in both directions.
+
+- [ ] **Step 2: Run them and watch them fail**
+
+```
+cd C:/Users/danlo/bis-platform/apps/web && npx vitest run src/lib/cursor.test.ts
+cd C:/Users/danlo/bis-platform/packages/db && npx vitest run -t "sort"
+```
+
+- [ ] **Step 3: Implement**
+
+Cursor module as above. In `listContacts`, map `sort.key` to its column
+(`name` → `sort_name`, `company` → `company_name`, `created` → `created_at`),
+order by `(column, id)` in `sort.dir` with `nullsLast: true`, and build the
+cursor `.or()` per the null rules above. The row the page hands back for the
+next cursor carries that column's value as `v`.
+
+- [ ] **Step 4: Run them and watch them pass**
+
+- [ ] **Step 5: Mutation-check the null boundary**
+
+Drop the `col.is.null` term from the non-null branch, re-run: the "nameless
+contacts last" test must FAIL by skipping them entirely. Restore.
+
+- [ ] **Step 6: One pager, and sort in the URL**
+
+In `contacts-table.tsx`: delete `PAGE_SIZE`, the `page` state, the `sorted`
+`useMemo`, `pageCount`/`current`/`visible`, and the Page-X-of-Y control. Render
+`rows` directly. `toggleSort` becomes a link/router push that sets `?sort=` and
+`?dir=` instead of local state — keep the header's existing aria-sort and
+focus behaviour. Selection state keys off `rows` rather than `visible`.
+
+In `page.tsx`: read `sort`/`dir` from `searchParams`, validate against the three
+keys and two directions (anything else falls back to the default rather than
+throwing), pass them to `listContacts`, and **carry them into the Newer/Older
+hrefs** — a cursor from a name-sorted page is meaningless on a date-sorted one,
+so changing the sort must also drop the cursor.
+
+- [ ] **Step 7: Run the contacts web tests, then commit**
+
+```
+cd C:/Users/danlo/bis-platform/apps/web && npx vitest run "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/"
+```

@@ -38,7 +38,7 @@ about half the work and covers onboarding); saved views and filters (own spec);
 duplicate *merge* for records already in the database (own spec, but it becomes
 the obvious next thing once import ships); scheduled or API-based sync.
 
-**No migration.** Every field this needs already exists on `contacts`:
+**One migration, 0030 (added 2026-09-09 after danlo chose server-side sorting).** The spec originally promised none, and that held until sorting moved to the server: the UI sorts by `contactDisplayName`, a JS expression, which Postgres cannot order by. `0030_contacts_sort_name` adds a STORED GENERATED column plus an index and — the part that is easy to miss — a column-level `grant select (sort_name) … to authenticated`, because this table grants SELECT per column and the service client most fixtures use bypasses grants entirely, so a missing grant passes every unit test and fails only in the real app. Everything else this needs already exists on `contacts`:
 `first_name`, `last_name`, `email`, `phone`, `company_name`, `source`, and the
 `custom` jsonb column. Verified against the live schema.
 
