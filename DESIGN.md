@@ -21,26 +21,39 @@
 **Surface ladder (4 steps, never more):** `--surface-0` page → `--surface-1`
 cards/sidebar → `--surface-2` nested panels/inputs → `--surface-3`
 hover/raised/tooltips. Two border tokens: `--line` (structure),
-`--line-strong` (interactive edges). Depth in dark mode comes from the lit
+`--line-strong` (interactive edges). Depth in **both** modes comes from the lit
 ground (three accent glows — two `--accent`, one `--accent-2` — plus a masked
-grid), glass surfaces (translucent steps 1–3 with a 1px top highlight; the backdrop
-blur `--glass-filter` — `blur(14px)` in dark, `none` in light, never
-`blur(0px)` — is applied to the sidebar and the overlays ONLY: cards scroll,
-and their backdrop surfaces dropped 7–9 of 52 frames on an integrated GPU
-(measured 2026-09-09, spec §9), while a card over the lit ground has nothing
-for a blur to resolve), and
-`--shadow-card` — never gray blur shadows on dark; ambient light is
-accent-tinted.
+grid, all sized in `vw`/`vh` so the mockup's proportions survive any viewport),
+glass surfaces (translucent steps 1–3 with a 1px top highlight — light's
+`--surface-1` is `rgba(255,255,255,.72)`, not white, so the aurora reads
+through a card there too), the backdrop blur `--glass-filter` — `blur(14px)`
+in dark, `none` in light, never `blur(0px)` — on cards, the sidebar and the
+overlays alike (**amended 2026-09-09**: cards blurred, then did not for one
+morning on a measured 7–9 dropped frames of 52, and now do again, because the
+mockup's `.card` carries `backdrop-filter: var(--card-blur)` and literal
+mockup fidelity is the standing instruction), and `--shadow-card` — never gray
+blur shadows in either mode; ambient light is accent-tinted, which is why
+`--shadow-card` and `--shadow-overlay` are declared on `*`, not `:root`.
 
 **Type roles (3, no exceptions):**
-- Display — Bricolage Grotesque 650: page titles and KPI numbers ONLY (exception since Task 11: the Website sentence panel at 24px, mockup `--sentence-size`, also uses the display face).
+- Display — **Geist 600** (amended 2026-09-09): page titles (22px, `-.02em`),
+  KPI numbers (30px, `-.03em`) and the Website sentence panel (24px,
+  `--sentence-size`, `-.02em`). It is a WEIGHT-and-tracking role, not a second
+  typeface: the mockup loads Bricolage Grotesque for its own page chrome, but
+  `.dir-a` — the direction this app ships — deliberately overrides it
+  (`docs/design/northern-lights.html:157`, `--f-disp: "Geist"; --disp-w: 600`),
+  and the mockup is the source on any disagreement. `--font-display` therefore
+  points at `var(--font-geist-sans)`; Bricolage stays declared in the dashboard
+  layout but no longer preloads, because nothing paints it.
 - UI — Geist 400/500/600: everything functional. Hierarchy by weight first,
   size second, color last.
 - Label — Geist Mono 500, 10px, +0.14em, uppercase: sidebar group headers,
   chart captions, table headers, timestamps.
 - All aligned digits get `font-variant-numeric: tabular-nums`.
 
-**Shape & motion:** radii are 8px (controls), 11px (cards), 999px (pills) —
+**Shape & motion:** radii are 8px (controls, `--radius-ctl` / the mockup's
+`--r-ctl`), 12px (cards, `--radius-card` / `--r-card`; `--radius` is
+`0.75rem` so `rounded-lg` and `rounded-xl` finally agree), 999px (pills) —
 no other values. Spacing on a 4px grid. Motion: 150ms hovers, 250ms panels,
 `prefers-reduced-motion` respected, and NOTHING animates on scroll.
 
@@ -55,9 +68,10 @@ not tenant-keyed, and a themed tenant's `--card` is the ramp's opaque colour,
 so glass reads only on unthemed (BIS) accounts. A component that paints from a
 chrome neutral is choosing the mode-keyed side of the seam on purpose. The
 exact emitted key set is pinned in `branding/theme-style.test.ts`. Tokens
-composed from the accent family (`--gradient-hero`, `--gradient-primary`,
-`--shadow-glow`) are declared on `*`, not `:root`, so they re-resolve against
-the accent each element inherits.
+composed from the accent family (`--gradient-hero`, `--gradient-em`,
+`--gradient-primary`, `--shadow-glow`, and since 2026-09-09 the accent-tinted
+`--shadow-card` and `--shadow-overlay`) are declared on `*`, not `:root`, so
+they re-resolve against the accent each element inherits.
 
 ## Rules (enforced in review)
 
@@ -65,7 +79,8 @@ the accent each element inherits.
 2. New components use the existing 4 surfaces; needing a 5th means redesign.
 3. Status (Booked/Abandoned/Spam etc.) is never color alone — dot + word.
 4. Tables: whole row is the click target, hover shifts to `--surface-3` (the
-   ladder's raised step; light's `--surface-2` is white), visible
+   ladder's raised step; light's `--surface-2` sits ON a card, so the raised
+   step has to go darker still), visible
    `:focus-visible` ring, bulk-action bar appears when a checkbox is
    ticked (never render checkboxes without bulk actions).
 5. Every screen has designed loaded / empty / error states. Empty states sell
@@ -79,14 +94,21 @@ the accent each element inherits.
 10. Sidebar: middle nav scrolls, footer cluster (Settings + setup meter) is
     pinned and visible at every viewport height.
 11. One hero gradient per screen, named in the screen's spec and marked in
-    code; all other numbers are text-colored.
+    code (`data-hero`); all other numbers are text-colored. The Website
+    sentence panel's emphasised clause is the one sanctioned second gradient
+    moment — the mockup gives it its OWN, deeper pair (`--gradient-em`, the
+    mockup's `--em-bg`) and reserves `--gradient-hero` for the KPI.
 
 ## Key patterns
 
 - **Sidebar:** grouped nav (OVERVIEW / CRM / COMMUNICATIONS / GROWTH) with
-  mono uppercase group labels, active item gets `--accent-dim` bg + 3px left
-  rail, unread counts as small accent badges. Client switcher at top with
-  avatar + timezone. Footer: Settings link + setup progress meter, pinned.
+  mono uppercase group labels, active item gets `--accent-dim` bg + a 3px
+  gradient rail FLUSH WITH THE SIDEBAR'S EDGE (the mockup's
+  `.nav.active::before { left: -12px }`, which needs `-mx-3 px-3` on the
+  scrolling nav — `overflow-y-auto` clips the x axis too and ate the rail),
+  unread counts as small accent badges. Client switcher at top with a 30px/9px
+  avatar carrying the account's initial + timezone. Footer: Settings link +
+  a 5px setup progress meter on `--meter-bg`, pinned.
 - **Setup:** two-pane wizard — stepper rail (done ✓ / current / todo /
   locked-with-reason) + one step detail pane. First incomplete step
   pre-selected. When all steps complete, Setup leaves the nav; checklist
@@ -106,10 +128,15 @@ the accent each element inherits.
 ## Charts
 
 Accent for the primary series; ONE second series in `--accent-2` is allowed
-on the same axis, with a legend. Never a dual axis. Status colors only for
-status. Thin marks, 4px rounded tops, hover tooltip on every mark, weekend
-bars muted (`--surface-3`), mono axis labels. Text on charts uses text
-tokens, never the series color.
+on the same axis, with a legend (both swatches the same 10px rounded square —
+never a square and a circle). Never a dual axis. Status colors only for
+status. Thin marks, 4px rounded tops and 2px feet, a 1px `--axis` rule under
+the bars, hover tooltip on every mark, weekend bars muted on `--bar-wk`
+(`--surface-3` is 29% too bright for this), and a mono label under EVERY
+period — thin by parity when the width will not take them all, never down to
+three. The busiest bar is `bar-hot`: the sanctioned violet→cyan gradient, not
+the accent bar brightened. Text on charts uses text tokens, never the series
+color.
 
 ## Installation status (2026-08-31 — Phase 1 COMPLETE, tokens import LIVE)
 
@@ -154,7 +181,9 @@ or loosened): `neutral-ramps.ts`'s `SIDEBAR_FOREGROUND` `#d4d4d8` →
 `theme-style.ts`'s `SAFE_STYLE_FALLBACKS` `color` `#f8f8fb` → `#f6f5fa`
 (tokens.css's light `--surface-0`) and `radius` `0.625rem` → `0.6875rem`
 (globals' own `--radius` literal, 11px — control convergence deferred to
-Phase 2). `theme.test.ts`'s parity block was retargeted, not weakened: where
+Phase 2). **Both moved again on 2026-09-09** with the fidelity pass: `color`
+is `#efebf9` (the light ground is a real pale violet now) and `radius` is
+`0.75rem` (12px cards). `theme.test.ts`'s parity block was retargeted, not weakened: where
 its regexes expected a literal hex in `globals.css` that is now
 `var(--accent)`, the assertions now read `tokens.css`'s `--accent` per mode
 instead (plus a check that globals' `--primary`/`--ring` still route through
@@ -164,7 +193,9 @@ shadcn-`--accent` case asserts the new `@theme inline` mapping directly.
 ## Definition of done for any UI PR
 
 - [ ] No hard-coded colors/radii/shadows — tokens only
-- [ ] Renders correctly in dark AND light (`data-theme="light"`)
+- [ ] Renders correctly in dark AND light (the app's `.dark` class, not
+      `data-theme`) — and in light that means the aurora reads THROUGH the
+      card, because `--surface-1` is translucent there too
 - [ ] Renders correctly with the blur fallback (`@supports not (backdrop-filter)`)
 - [ ] Passes the composite contrast test in both themes (`branding/theme.test.ts`)
 - [ ] Loaded, empty, and error states implemented
