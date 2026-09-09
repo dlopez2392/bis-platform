@@ -770,9 +770,12 @@ it("re-validates on the server: the action never trusts the browser's mapping", 
   expect(action).toContain("mapRows");
 });
 
-it("builds the match index once per job, not per batch", () => {
+it("builds the match index once per BATCH, never once per row", () => {
+  // Structural, not a comment scan: buildMatchIndex must be called outside
+  // any loop over rows. The behavioural guarantee this protects — that two
+  // identical rows collapse — is tested for real in contact-import.test.ts.
   expect(action).toContain("buildMatchIndex");
-  expect(action).toMatch(/index passed in|cached|once per import/i);
+  expect(action).not.toMatch(/for\s*\([^)]*rows[^)]*\)[\s\S]{0,200}buildMatchIndex/);
 });
 ```
 
@@ -791,8 +794,13 @@ counts and the error list → confirm → slice into 200-row batches and call th
 action per batch, showing progress and stopping on the first failure with
 `contacts.import.partial`.
 
-`actions.ts` re-runs `mapRows` on what it received, builds the index on the
-first batch and passes it forward, calls `applyImportBatch`, and `emit`s a
+`actions.ts` re-runs `mapRows` on what it received, builds the match index
+**once per batch** — not once per row, and deliberately not cached across
+batches: rows committed by an earlier batch are already in the database when
+the next batch builds its index, so cross-batch duplicates are caught with no
+server-side session state to hold or invalidate. A 5,000-row import does 25
+index builds rather than 5,000 duplicate lookups. Then it calls
+`applyImportBatch`, and `emit`s a
 `contact.imported` event with the counts. It uses `useFormSubmit` from
 `@/lib/forms/use-form-submit` (see `dashboard/accounts/create-account-dialog.tsx:38`
 for the established call shape) — **not** a bare `<form action>`, which React
