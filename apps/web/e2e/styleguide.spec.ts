@@ -13,6 +13,66 @@ test.describe("the style guide", () => {
     // The rail's sixth kind, which only exists on the rail (StateKind + locked).
     await expect(page.getByText("Locked", { exact: true })).toBeVisible();
   });
+
+  test("ships the Northern Lights material in both themes", async ({ page }) => {
+    await page.goto("/dashboard/styleguide");
+    await expect(page.getByText("Ground & light", { exact: true })).toBeVisible();
+
+    const probe = (dark: boolean) =>
+      page.evaluate((isDark: boolean) => {
+        document.documentElement.classList.toggle("dark", isDark);
+        const card = document.querySelector('[data-slot="card"]')!;
+        const cs = getComputedStyle(card);
+        const btn = [...document.querySelectorAll('[data-slot="button"]')]
+          .find((b) => b.textContent?.trim() === "Primary action")!;
+        return {
+          filter: cs.backdropFilter || (cs as unknown as { webkitBackdropFilter?: string }).webkitBackdropFilter || "",
+          bg: cs.backgroundColor,
+          aside: getComputedStyle(document.querySelector("aside")!).backdropFilter,
+          btn: getComputedStyle(btn).backgroundImage,
+        };
+      }, dark);
+    const d = await probe(true);
+    // Cards do NOT blur (decision 2026-09-09, spec §9): their backdrop
+    // surfaces dropped 7–9 of 52 frames while scrolling on an integrated GPU,
+    // 0 with the cards' blur off. The blur lives on the sidebar and the
+    // overlays, which never scroll. Pin the RADIUS on the sidebar, not just
+    // "some blur": Chromium supports backdrop-filter, so an `includes("blur")`
+    // check cannot tell blur(14px) from blur(0px). The @supports-not fallback
+    // is pinned by the unit parity test (src/lib/branding/northern-lights.test.ts).
+    expect(d.filter, "dark card does not blur").toBe("none");
+    expect(d.aside, "dark sidebar keeps the 14px blur").toBe("blur(14px)");
+    // The BIS half of the composed-token fix: tokens.css declares
+    // --gradient-primary on `*`/`.dark *` instead of :root/.dark, so every
+    // element re-resolves it against the accent it inherits. The unthemed
+    // agency path must still land on BIS's own accents — #8B7CF7 in dark
+    // (first stop mixed 70% with white, which Chromium serializes in srgb),
+    // #6D28D9 → #5B21B8 in light. client-access.spec.ts pins the tenant half.
+    expect(d.btn, "dark primary button paints the BIS dark gradient").toBe(
+      "linear-gradient(color(srgb 0.681569 0.640392 0.978039), rgb(139, 124, 247))",
+    );
+    const l = await probe(false);
+    expect(l.bg).toBe("rgb(255, 255, 255)");
+    // Light ships NO filter at all: blur(0px) is a non-none filter list and
+    // would still cost a stacking context + a backdrop surface per element.
+    expect(l.filter).toBe("none");
+    expect(l.aside).toBe("none");
+    expect(l.btn, "light primary button paints the BIS light gradient").toBe(
+      "linear-gradient(rgb(109, 40, 217), rgb(91, 33, 184))",
+    );
+    // The lit ground actually paints: relative-colour glows resolved, behind
+    // everything, fixed to the viewport.
+    const g = await page.evaluate(() => {
+      const el = document.querySelector('[data-slot="ground"]') as HTMLElement;
+      const cs = getComputedStyle(el.firstElementChild as HTMLElement);
+      return { img: cs.backgroundImage, z: getComputedStyle(el).zIndex, pos: getComputedStyle(el).position };
+    });
+    expect(g.img).toContain("radial-gradient(");
+    expect(g.z).toBe("-10");
+    expect(g.pos).toBe("fixed");
+    await expect(page.getByText("Ground & light", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Primary action" })).toBeVisible();
+  });
 });
 
 test.describe("the style guide is agency-only", () => {

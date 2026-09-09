@@ -1,0 +1,319 @@
+<title>BIS — Northern Lights</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@500&family=Bricolage+Grotesque:wght@600;700;800&family=Manrope:wght@600;700;800&display=swap">
+<style>
+  :root {
+    --pg-bg: #131218; --pg-card: #1A1822; --pg-line: #29263400; --pg-hair: #2A2735;
+    --pg-text: #ECEAF3; --pg-muted: #A29DB8; --pg-faint: #6F6987; --pg-accent: #9D8DFF;
+    --ui: "Geist", -apple-system, "Segoe UI", sans-serif;
+    --mono: "Geist Mono", ui-monospace, "SFMono-Regular", monospace;
+    --disp: "Bricolage Grotesque", "Geist", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { color-scheme: dark; }
+  body { margin: 0; background: var(--pg-bg); color: var(--pg-text); font-family: var(--ui); font-size: 15px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  a { color: var(--pg-accent); }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 0 28px; }
+  .intro { padding: 56px 0 28px; max-width: 68ch; }
+  .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--pg-faint); margin: 0 0 12px; }
+  h1 { font-family: var(--disp); font-weight: 700; font-size: 40px; line-height: 1.08; letter-spacing: -.02em; margin: 0 0 16px; text-wrap: balance; }
+  .intro p { margin: 0 0 12px; color: var(--pg-muted); }
+  .intro p strong { color: var(--pg-text); font-weight: 600; }
+  .jump { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 20px; }
+  .jump a { text-decoration: none; font-size: 13px; font-weight: 500; color: var(--pg-text); border: 1px solid var(--pg-hair); border-radius: 999px; padding: 7px 14px; background: var(--pg-card); }
+  .jump a:hover, .jump a:focus-visible { border-color: var(--pg-accent); outline: none; }
+  .jump a b { font-family: var(--mono); font-weight: 500; color: var(--pg-faint); margin-right: 8px; font-size: 11px; }
+
+  /* ---------- direction sections ---------- */
+  .dir { padding: 44px 0 56px; border-top: 1px solid var(--pg-hair); }
+  .dir-head { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 32px; align-items: end; margin-bottom: 22px; }
+  .dir-head .k { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--pg-faint); margin: 0 0 8px; }
+  .dir-head h2 { font-family: var(--disp); font-weight: 700; font-size: 30px; letter-spacing: -.015em; margin: 0 0 8px; line-height: 1.1; }
+  .dir-head .thesis { margin: 0; color: var(--pg-muted); font-size: 16px; }
+  .dir-head .refs { margin: 0; color: var(--pg-muted); font-size: 13px; text-align: right; }
+  .dir-head .refs b { color: var(--pg-text); font-weight: 600; }
+  @media (max-width: 800px) { .dir-head { grid-template-columns: 1fr; } .dir-head .refs { text-align: left; } }
+
+  .frame-wrap { overflow-x: auto; border-radius: 16px; border: 1px solid var(--pg-hair); background: #0A0A0F; }
+  .frame { width: 1180px; height: 760px; position: relative; overflow: hidden; font-family: var(--f-ui); color: var(--text); background: var(--bg); }
+
+  /* the app skeleton — identical markup in all three directions */
+  .app { position: relative; display: grid; grid-template-columns: 236px 1fr; height: 100%; }
+  .side { display: flex; flex-direction: column; padding: 14px 12px; gap: 6px; border-right: 1px solid var(--side-line); background: var(--side-bg); position: relative; z-index: 1; }
+  .switcher { display: flex; align-items: center; gap: 10px; padding: 10px 10px; border-radius: var(--r-ctl); background: var(--sw-bg); border: 1px solid var(--sw-line); margin-bottom: 10px; }
+  .avatar { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; font-weight: 700; font-size: 13px; color: #fff; background: var(--av-bg); flex: none; }
+  .switcher .name { font-size: 13px; font-weight: 600; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .switcher .tz { font-family: var(--f-mono); font-size: 10px; color: var(--muted); letter-spacing: .04em; }
+  .group { font-family: var(--f-mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); padding: 14px 10px 6px; display: flex; align-items: center; gap: 8px; }
+  .group i { width: 6px; height: 6px; border-radius: 2px; background: var(--g-hue, var(--muted)); display: inline-block; opacity: var(--g-dot-op, 0); }
+  .nav { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--r-ctl); font-size: 13.5px; font-weight: 500; color: var(--nav-text); position: relative; }
+  .nav svg { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; opacity: .9; }
+  .nav.active { color: var(--nav-active-text); background: var(--nav-active-bg); box-shadow: var(--nav-active-shadow); }
+  .nav.active::before { content: ""; position: absolute; left: -12px; top: 7px; bottom: 7px; width: 3px; border-radius: 3px; background: var(--rail); opacity: var(--rail-op, 1); }
+  .nav .badge { margin-left: auto; font-family: var(--f-mono); font-size: 10px; padding: 1px 7px; border-radius: 999px; background: var(--badge-bg); color: var(--badge-text); }
+  .side-foot { margin-top: auto; padding: 10px 10px 4px; border-top: 1px solid var(--side-line); }
+  .side-foot .row { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
+  .meter { height: 5px; border-radius: 999px; background: var(--meter-bg); overflow: hidden; }
+  .meter i { display: block; width: 44%; height: 100%; background: var(--meter-fill); border-radius: 999px; }
+
+  .main { position: relative; z-index: 1; display: flex; flex-direction: column; min-width: 0; }
+  .topbar { height: 54px; display: flex; align-items: center; gap: 14px; padding: 0 22px; border-bottom: 1px solid var(--top-line); background: var(--top-bg); }
+  .search { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); padding: 7px 12px; border-radius: var(--r-ctl); background: var(--input-bg); border: 1px solid var(--input-line); width: 300px; }
+  .search kbd { margin-left: auto; font-family: var(--f-mono); font-size: 10px; padding: 1px 6px; border-radius: 5px; border: 1px solid var(--input-line); color: var(--muted); }
+  .presence { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
+  .presence .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 22%, transparent); }
+  .who { width: 30px; height: 30px; border-radius: 50%; background: var(--who-bg); border: 1px solid var(--input-line); }
+
+  .content { padding: 22px 24px 24px; display: flex; flex-direction: column; gap: 14px; overflow: hidden; }
+  .page-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  .page-head h1 { font-family: var(--f-disp); font-weight: var(--disp-w); font-size: var(--title-size); letter-spacing: -.02em; margin: 0; color: var(--text); }
+  .pills { display: flex; gap: 4px; padding: 3px; border-radius: 999px; background: var(--pills-bg); border: 1px solid var(--pills-line); }
+  .pills span { font-family: var(--f-mono); font-size: 11px; padding: 5px 11px; border-radius: 999px; color: var(--muted); }
+  .pills span.on { background: var(--pill-on-bg); color: var(--pill-on-text); box-shadow: var(--pill-on-shadow); }
+
+  .card { background: var(--card); border: 1px solid var(--card-line); border-radius: var(--r-card); box-shadow: var(--card-shadow); backdrop-filter: var(--card-blur); -webkit-backdrop-filter: var(--card-blur); position: relative; overflow: hidden; }
+  .card::before { content: ""; position: absolute; inset: 0; pointer-events: none; background: var(--card-sheen, none); }
+
+  .sentence { padding: 18px 22px; }
+  .sentence .lbl { font-family: var(--f-mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; display: flex; gap: 10px; align-items: center; }
+  .sentence .lbl .stamp { margin-left: auto; letter-spacing: .06em; text-transform: none; color: var(--muted); }
+  .sentence h2 { font-family: var(--f-disp); font-weight: var(--disp-w); font-size: var(--sentence-size); letter-spacing: -.02em; line-height: 1.15; margin: 0 0 6px; color: var(--text); }
+  .sentence h2 em { font-style: normal; color: var(--em); background: var(--em-bg); -webkit-background-clip: var(--em-clip); background-clip: var(--em-clip); -webkit-text-fill-color: var(--em-fill); }
+  .sentence p { margin: 0; color: var(--muted); font-size: 13.5px; }
+
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .tile { padding: 14px 16px 12px; display: flex; flex-direction: column; gap: 6px; min-height: 108px; }
+  .tile .lbl { font-family: var(--f-mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: 7px; }
+  .tile .lbl i { width: 7px; height: 7px; border-radius: 50%; background: var(--t-hue, var(--accent)); display: var(--t-dot, none); }
+  .tile .num { font-family: var(--f-disp); font-weight: var(--disp-w); font-size: var(--kpi-size); letter-spacing: -.03em; line-height: 1; font-variant-numeric: tabular-nums; color: var(--text); }
+  .tile .num.hero { background: var(--kpi-hero-bg, none); -webkit-background-clip: var(--kpi-hero-clip, border-box); background-clip: var(--kpi-hero-clip, border-box); -webkit-text-fill-color: var(--kpi-hero-fill, currentColor); }
+  .tile .foot { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; margin-top: auto; }
+  .delta { font-family: var(--f-mono); font-size: 11px; padding: 2px 7px; border-radius: 999px; font-variant-numeric: tabular-nums; }
+  .delta.up { color: var(--good); background: var(--good-bg); }
+  .delta.flat { color: var(--muted); background: var(--flat-bg); }
+  .tile .sub { font-size: 12px; color: var(--muted); }
+  .spark { width: 84px; height: 26px; }
+  .spark polyline { fill: none; stroke: var(--t-hue, var(--accent)); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .spark path { fill: var(--t-hue, var(--accent)); opacity: .14; }
+  .spark circle { fill: var(--t-hue, var(--accent)); }
+
+  .chart { padding: 16px 20px 14px; }
+  .chart .hd { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
+  .chart .hd b { font-size: 13.5px; font-weight: 600; }
+  .chart .hd span { font-family: var(--f-mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .legend { display: flex; gap: 14px; font-family: var(--f-mono); font-size: 10px; color: var(--muted); letter-spacing: .06em; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; vertical-align: -1px; margin-right: 6px; }
+  .bars { display: grid; grid-template-columns: repeat(14, 1fr); gap: var(--bar-gap); align-items: end; height: 168px; padding: 0 2px; border-bottom: 1px solid var(--axis); position: relative; }
+  .bars::before { content: ""; position: absolute; left: 0; right: 0; top: 33%; border-top: 1px dashed var(--grid); }
+  .bars::after { content: ""; position: absolute; left: 0; right: 0; top: 66%; border-top: 1px dashed var(--grid); }
+  .bar { position: relative; height: calc(var(--v) * 1.3px); border-radius: var(--bar-r) var(--bar-r) var(--bar-r-b) var(--bar-r-b); background: var(--bar-fill); box-shadow: var(--bar-shadow); }
+  .bar.wk { background: var(--bar-wk); box-shadow: none; }
+  .bar.hot { background: var(--bar-hot); box-shadow: var(--bar-hot-shadow); }
+  .bar.hot::after { content: attr(data-tip); position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); white-space: nowrap; font-family: var(--f-mono); font-size: 10.5px; padding: 5px 8px; border-radius: 7px; background: var(--tip-bg); color: var(--tip-text); border: 1px solid var(--tip-line); box-shadow: var(--tip-shadow); }
+  .line-series { position: absolute; inset: 0 2px; width: calc(100% - 4px); height: 100%; pointer-events: none; }
+  .line-series polyline { fill: none; stroke: var(--series-2); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .line-series circle { fill: var(--series-2); }
+  .axis { display: grid; grid-template-columns: repeat(14, 1fr); font-family: var(--f-mono); font-size: 10px; color: var(--muted); text-align: center; padding-top: 6px; }
+
+  .panels { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .panel { padding: 14px 16px 10px; }
+  .panel .hd { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; margin-bottom: 8px; }
+  .panel .hd i { width: 8px; height: 8px; border-radius: 3px; background: var(--p-hue, var(--accent)); display: var(--p-dot, none); }
+  .row { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; padding: 7px 0; border-top: 1px solid var(--row-line); font-size: 13px; }
+  .row:first-of-type { border-top: 0; }
+  .row .n { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .v { font-family: var(--f-mono); font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .row .share { grid-column: 1 / -1; height: 4px; border-radius: 999px; background: var(--share-bg); overflow: hidden; }
+  .row .share i { display: block; height: 100%; width: var(--w); background: var(--p-hue, var(--accent)); border-radius: 999px; }
+
+  /* notes below each mockup */
+  .notes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 22px; }
+  .note { border: 1px solid var(--pg-hair); border-radius: 12px; padding: 16px 18px; background: var(--pg-card); }
+  .note h3 { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--pg-faint); margin: 0 0 10px; font-weight: 500; }
+  .note ul { margin: 0; padding-left: 18px; color: var(--pg-muted); font-size: 13.5px; }
+  .note li { margin: 0 0 6px; }
+  .note li b { color: var(--pg-text); font-weight: 600; }
+  @media (max-width: 900px) { .notes { grid-template-columns: 1fr; } }
+
+  /* component strip */
+  .strip { margin-top: 14px; border-radius: 14px; border: 1px solid var(--pg-hair); overflow: hidden; }
+  .strip-in { display: flex; align-items: center; gap: 14px; padding: 16px 18px; flex-wrap: wrap; font-family: var(--f-ui); color: var(--text); background: var(--bg); position: relative; }
+  .strip-in > * { position: relative; z-index: 1; }
+  .btn { font-size: 13px; font-weight: 600; padding: 8px 14px; border-radius: var(--r-ctl); border: 1px solid transparent; color: var(--btn-text); background: var(--btn-bg); box-shadow: var(--btn-shadow); }
+  .btn.ghost { color: var(--text); background: var(--ghost-bg); border-color: var(--ghost-line); box-shadow: none; }
+  .btn.danger { color: var(--crit); background: var(--crit-bg); border-color: transparent; box-shadow: none; }
+  .input { font-size: 13px; color: var(--muted); padding: 8px 12px; border-radius: var(--r-ctl); background: var(--input-bg); border: 1px solid var(--input-line); width: 200px; }
+  .input.focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); color: var(--text); }
+  .chip { font-size: 12px; font-weight: 500; padding: 4px 10px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; background: var(--chip-bg); color: var(--chip-text); border: 1px solid var(--chip-line); }
+  .chip i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .chip.good { color: var(--good); background: var(--good-bg); border-color: transparent; }
+  .chip.warn { color: var(--warn); background: var(--warn-bg); border-color: transparent; }
+  .toast { font-size: 13px; padding: 9px 12px; border-radius: var(--r-ctl); background: var(--toast-bg); color: var(--toast-text); border: 1px solid var(--toast-line); box-shadow: var(--toast-shadow); display: inline-flex; gap: 10px; align-items: center; }
+  .toast b { color: var(--accent-2, var(--accent)); font-weight: 600; }
+  .strip-lbl { font-family: var(--mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--pg-faint); padding: 8px 18px; background: var(--pg-card); border-bottom: 1px solid var(--pg-hair); }
+
+  /* =================== DIRECTION A — Northern Lights =================== */
+  .dir-a {
+    --f-ui: "Geist", sans-serif; --f-mono: "Geist Mono", monospace; --f-disp: "Geist", sans-serif; --disp-w: 600;
+    --title-size: 22px; --sentence-size: 24px; --kpi-size: 30px;
+    --bg: #0B0A12; --text: #F1EEFA; --muted: #9A94B4;
+    --accent: #8B7CF7; --accent-2: #4FD8E6; --ring: rgba(139,124,247,.35);
+    --good: #4ADE97; --good-bg: rgba(74,222,151,.12); --warn: #F0B35E; --warn-bg: rgba(240,179,94,.12); --crit: #F2708A; --crit-bg: rgba(242,112,138,.12); --flat-bg: rgba(255,255,255,.06);
+    --r-ctl: 8px; --r-card: 12px;
+    --side-bg: rgba(255,255,255,.02); --side-line: rgba(255,255,255,.07);
+    --sw-bg: rgba(255,255,255,.04); --sw-line: rgba(255,255,255,.08); --av-bg: linear-gradient(135deg, #8B7CF7, #4FD8E6);
+    --nav-text: #B9B3CF; --nav-active-text: #FFFFFF; --nav-active-bg: rgba(139,124,247,.14); --nav-active-shadow: inset 0 1px 0 rgba(255,255,255,.06); --rail: linear-gradient(#8B7CF7, #4FD8E6);
+    --badge-bg: rgba(139,124,247,.2); --badge-text: #C9C1FF; --meter-bg: rgba(255,255,255,.08); --meter-fill: linear-gradient(90deg, #8B7CF7, #4FD8E6);
+    --top-bg: transparent; --top-line: rgba(255,255,255,.06); --input-bg: rgba(255,255,255,.04); --input-line: rgba(255,255,255,.09); --who-bg: linear-gradient(135deg,#3b3560,#1a1826);
+    --pills-bg: rgba(255,255,255,.03); --pills-line: rgba(255,255,255,.07); --pill-on-bg: rgba(139,124,247,.22); --pill-on-text: #FFFFFF; --pill-on-shadow: 0 0 0 1px rgba(139,124,247,.35), 0 0 18px rgba(139,124,247,.25);
+    --card: rgba(255,255,255,.035); --card-line: rgba(255,255,255,.08); --card-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 20px 50px -30px rgba(0,0,0,.8); --card-blur: blur(14px);
+    --card-sheen: linear-gradient(180deg, rgba(255,255,255,.03), transparent 40%);
+    --em: #F1EEFA; --em-bg: linear-gradient(90deg, #B7ACFF, #6FE3F0); --em-clip: text; --em-fill: transparent;
+    --kpi-hero-bg: linear-gradient(90deg, #C9C1FF, #7FE7F2); --kpi-hero-clip: text; --kpi-hero-fill: transparent;
+    --bar-gap: 7px; --bar-r: 4px; --bar-r-b: 2px; --bar-fill: linear-gradient(180deg, rgba(139,124,247,.95), rgba(139,124,247,.25)); --bar-shadow: none;
+    --bar-wk: rgba(255,255,255,.07); --bar-hot: linear-gradient(180deg, #B7ACFF, rgba(79,216,230,.5)); --bar-hot-shadow: 0 0 22px rgba(139,124,247,.45);
+    --axis: rgba(255,255,255,.1); --grid: rgba(255,255,255,.06); --series-2: #4FD8E6;
+    --tip-bg: rgba(20,18,32,.9); --tip-text: #F1EEFA; --tip-line: rgba(255,255,255,.12); --tip-shadow: 0 10px 30px -10px rgba(0,0,0,.8);
+    --row-line: rgba(255,255,255,.06); --share-bg: rgba(255,255,255,.07);
+    --btn-text: #0B0A12; --btn-bg: linear-gradient(180deg, #C9C1FF, #8B7CF7); --btn-shadow: 0 0 0 1px rgba(139,124,247,.5), 0 8px 24px -8px rgba(139,124,247,.7);
+    --ghost-bg: rgba(255,255,255,.03); --ghost-line: rgba(255,255,255,.1);
+    --chip-bg: rgba(255,255,255,.05); --chip-text: #D7D2EA; --chip-line: rgba(255,255,255,.1);
+    --toast-bg: rgba(22,20,34,.85); --toast-text: #F1EEFA; --toast-line: rgba(255,255,255,.1); --toast-shadow: 0 16px 40px -16px rgba(0,0,0,.9);
+  }
+  .dir-a .frame::before, .dir-a .strip-in::before { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 0;
+    background:
+      radial-gradient(700px 420px at 12% -10%, rgba(139,124,247,.28), transparent 60%),
+      radial-gradient(620px 380px at 96% 8%, rgba(79,216,230,.16), transparent 60%),
+      radial-gradient(560px 360px at 60% 110%, rgba(139,124,247,.12), transparent 60%); }
+  .dir-a .frame::after { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 0; opacity: .5;
+    background-image: linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px); background-size: 48px 48px;
+    mask-image: radial-gradient(800px 500px at 30% 0%, #000 20%, transparent 70%); -webkit-mask-image: radial-gradient(800px 500px at 30% 0%, #000 20%, transparent 70%); }
+
+  /* verdict */
+  .verdict { padding: 44px 0 72px; border-top: 1px solid var(--pg-hair); }
+  .verdict h2 { font-family: var(--disp); font-weight: 700; font-size: 28px; margin: 0 0 14px; letter-spacing: -.015em; }
+  .verdict .cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .verdict .col { border: 1px solid var(--pg-hair); border-radius: 12px; padding: 16px 18px; background: var(--pg-card); }
+  .verdict .col h3 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
+  .verdict .col p { margin: 0; color: var(--pg-muted); font-size: 13.5px; }
+  .verdict .pick { border-color: var(--pg-accent); box-shadow: 0 0 0 1px var(--pg-accent) inset; }
+  .verdict .pick h3::after { content: "Studio pick"; font-family: var(--mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--pg-accent); margin-left: 10px; font-weight: 500; }
+  .verdict > p { color: var(--pg-muted); max-width: 70ch; margin: 0 0 20px; }
+  @media (max-width: 900px) { .verdict .cols { grid-template-columns: 1fr; } }
+  @media (prefers-reduced-motion: no-preference) {
+    .bar { transition: filter 150ms cubic-bezier(.2,.7,.3,1); }
+    .bar:hover { filter: brightness(1.15); }
+  }
+  .sample { font-family: var(--mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--pg-faint); margin: 10px 0 0; }
+</style>
+
+<header class="wrap intro">
+  <p class="eyebrow">BIS Platform · design direction · reference mockup (approved 2026-09-08)</p>
+  <h1>Northern Lights</h1>
+  <p>This file is the visual source of truth for the dashboard refresh: the <strong>Website section</strong> rendered in the approved direction, followed by the core components. Tokens in <code>apps/web/src/styles/tokens.css</code> are extracted from the values here; when the app and this file disagree, this file wins. Numbers are sample data. Spec: <code>docs/superpowers/specs/2026-09-08-visual-refresh-northern-lights-design.md</code>.</p>
+</header>
+
+<!-- ================= A ================= -->
+<section class="dir dir-a" id="a">
+  <div class="wrap">
+    <div class="dir-head">
+      <div>
+        <p class="k">Approved direction</p>
+        <h2>Northern Lights</h2>
+        <p class="thesis">Depth from light, not from color. Translucent cards float over a slow aurora of violet and cyan; one gradient number per screen carries the whole mood.</p>
+      </div>
+      <p class="refs">Plus one idea from the Ledger direction: a <b>second series color</b> in charts, on one axis.</p>
+    </div>
+
+    <div class="frame-wrap"><div class="frame"><div class="app">
+      <aside class="side">
+        <div class="switcher"><div class="avatar">B</div><div><div class="name">Bespoke Intelligent Solutions</div><div class="tz">America/Chicago</div></div></div>
+        <div class="group g-over"><i></i>Overview</div>
+        <div class="nav"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>Dashboard</div>
+        <div class="nav active"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>Website</div>
+        <div class="nav"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Checklist</div>
+        <div class="group g-crm"><i></i>CRM</div>
+        <div class="nav"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>Contacts</div>
+        <div class="nav"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 4 5-6"/></svg>Opportunities</div>
+        <div class="group g-comm"><i></i>Communications</div>
+        <div class="nav"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Conversations<span class="badge">3</span></div>
+        <div class="nav"><svg viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8.1 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7A2 2 0 0 1 22 16.9z"/></svg>Calls</div>
+        <div class="nav"><svg viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/></svg>Voice</div>
+        <div class="group g-growth"><i></i>Growth</div>
+        <div class="nav"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8"/></svg>Forms</div>
+        <div class="nav"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Calendar</div>
+        <div class="nav"><svg viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>Automations</div>
+        <div class="side-foot"><div class="row"><span>Setup</span><span>4 / 9</span></div><div class="meter"><i></i></div></div>
+      </aside>
+      <div class="main">
+        <div class="topbar"><div class="search">Search<kbd>⌘K</kbd></div><div class="presence"><span class="dot"></span>Sofía · on a call</div><div class="who"></div></div>
+        <div class="content">
+          <div class="page-head"><h1>Website</h1><div class="pills"><span>7D</span><span class="on">14D</span><span>30D</span></div></div>
+          <div class="card sentence">
+            <div class="lbl">The last 14 days <span class="stamp">Updated this morning</span></div>
+            <h2>Visitors are <em>up 18%</em> on the two weeks before, and most of them came from Google.</h2>
+            <p>1,284 people, 3,912 pages. Your busiest day was Tuesday the 2nd.</p>
+          </div>
+          <div class="tiles">
+            <div class="card tile t1"><div class="lbl"><i></i>Visitors</div><div class="num hero">1,284</div><div class="foot"><span class="delta up">▲ 18%</span><svg class="spark" viewBox="0 0 84 26" aria-hidden="true"><path d="M2 20 L14 16 L26 18 L38 12 L50 9 L62 11 L74 6 L82 5 L82 26 L2 26 Z"/><polyline points="2,20 14,16 26,18 38,12 50,9 62,11 74,6 82,5"/><circle cx="82" cy="5" r="2.4"/></svg></div></div>
+            <div class="card tile t2"><div class="lbl"><i></i>Pageviews</div><div class="num">3,912</div><div class="foot"><span class="delta up">▲ 11%</span><svg class="spark" viewBox="0 0 84 26" aria-hidden="true"><path d="M2 18 L14 19 L26 14 L38 15 L50 10 L62 12 L74 8 L82 7 L82 26 L2 26 Z"/><polyline points="2,18 14,19 26,14 38,15 50,10 62,12 74,8 82,7"/><circle cx="82" cy="7" r="2.4"/></svg></div></div>
+            <div class="card tile t3"><div class="lbl"><i></i>From Google</div><div class="num">46%</div><div class="foot"><span class="delta up">▲ 6 pts</span><span class="sub">of all visitors</span></div></div>
+            <div class="card tile t4"><div class="lbl"><i></i>Top page</div><div class="num">/services</div><div class="foot"><span class="delta flat">31% of visits</span><span class="sub">398 visitors</span></div></div>
+          </div>
+          <div class="card chart">
+            <div class="hd"><b>Visitors by day</b><div class="legend"><span><i style="background:var(--accent)"></i>Visitors</span><span><i style="background:var(--series-2)"></i>Pageviews ÷ 3</span></div></div>
+            <div class="bars">
+              <div class="bar" style="--v:62"></div><div class="bar" style="--v:71"></div><div class="bar" style="--v:58"></div><div class="bar" style="--v:80"></div><div class="bar" style="--v:95"></div><div class="bar wk" style="--v:40"></div><div class="bar wk" style="--v:35"></div>
+              <div class="bar" style="--v:88"></div><div class="bar hot" style="--v:121" data-tip="Tue 2 · 121 visitors · 402 pageviews"></div><div class="bar" style="--v:97"></div><div class="bar" style="--v:110"></div><div class="bar" style="--v:104"></div><div class="bar wk" style="--v:66"></div><div class="bar wk" style="--v:59"></div>
+              <svg class="line-series" viewBox="0 0 1000 168" preserveAspectRatio="none" aria-hidden="true"><polyline points="36,92 107,80 178,96 250,68 321,50 393,118 464,124 536,60 607,14 679,44 750,32 821,38 893,90 964,98"/><circle cx="607" cy="14" r="4"/></svg>
+            </div>
+            <div class="axis"><span>25</span><span>26</span><span>27</span><span>28</span><span>29</span><span>30</span><span>31</span><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span></div>
+          </div>
+          <div class="panels">
+            <div class="card panel p1"><div class="hd"><i></i>Pages people read</div>
+              <div class="row"><span class="n">/services</span><span class="v">398 · 31%</span><span class="share"><i style="--w:31%"></i></span></div>
+              <div class="row"><span class="n">/</span><span class="v">341 · 27%</span><span class="share"><i style="--w:27%"></i></span></div>
+              <div class="row"><span class="n">/contact</span><span class="v">180 · 14%</span><span class="share"><i style="--w:14%"></i></span></div>
+              <div class="row"><span class="n">/insights/find-your-first-hour-back</span><span class="v">96 · 7%</span><span class="share"><i style="--w:7%"></i></span></div></div>
+            <div class="card panel p2"><div class="hd"><i></i>Where visitors came from</div>
+              <div class="row"><span class="n">Google</span><span class="v">590 · 46%</span><span class="share"><i style="--w:46%"></i></span></div>
+              <div class="row"><span class="n">Direct</span><span class="v">385 · 30%</span><span class="share"><i style="--w:30%"></i></span></div>
+              <div class="row"><span class="n">Facebook</span><span class="v">154 · 12%</span><span class="share"><i style="--w:12%"></i></span></div>
+              <div class="row"><span class="n">Other websites</span><span class="v">155 · 12%</span><span class="share"><i style="--w:12%"></i></span></div></div>
+            <div class="card panel p3"><div class="hd"><i></i>Devices</div>
+              <div class="row"><span class="n">Phone</span><span class="v">834 · 65%</span><span class="share"><i style="--w:65%"></i></span></div>
+              <div class="row"><span class="n">Desktop</span><span class="v">398 · 31%</span><span class="share"><i style="--w:31%"></i></span></div>
+              <div class="row"><span class="n">Tablet</span><span class="v">52 · 4%</span><span class="share"><i style="--w:4%"></i></span></div></div>
+          </div>
+        </div>
+      </div>
+    </div></div></div>
+    <p class="sample">Sample data · 1180 × 760 · dark theme shown; light theme keeps the aurora at a quarter of the strength on a pale violet ground</p>
+
+    <div class="strip"><div class="strip-lbl">Components in this direction</div><div class="strip-in">
+      <span class="btn">Save</span><span class="btn ghost">Test connection</span><span class="btn danger">Unlink site</span>
+      <span class="input">rioroofing.com</span><span class="input focus">rioroofing.com</span>
+      <span class="chip good"><i></i>Booked</span><span class="chip warn"><i></i>Waiting</span><span class="chip"><i></i>Spam</span>
+      <span class="toast">Site linked <b>· first numbers tomorrow</b></span>
+    </div></div>
+
+    <div class="notes">
+      <div class="note"><h3>What changes in the contract</h3><ul>
+        <li><b>Surfaces become translucent.</b> The four-step ladder stays, but steps 1–3 are glass over a lit ground instead of flat fills; the "no gray blur shadows" rule becomes "no gray blur shadows, colored ambient light instead".</li>
+        <li><b>A second accent, cyan,</b> reserved for one gradient moment per screen (hero number, sentence emphasis, the active rail) and for a second data series.</li>
+        <li><b>One faint grid</b> and two radial glows on the page ground; everything else unchanged, including the fonts.</li>
+      </ul></div>
+      <div class="note"><h3>Trade-offs</h3><ul>
+        <li>The least disruptive: every existing component keeps its shape and copy. The gain is atmosphere and hierarchy, not novelty.</li>
+        <li>Backdrop blur costs a little GPU on long tables; needs a solid fallback for the drawer over a scrolling list.</li>
+        <li>Light theme is the harder twin: the aurora must drop to a whisper or it reads as smudged.</li>
+        <li>White-label is easy: a client's brand color replaces violet; cyan is derived from it.</li>
+      </ul></div>
+      <div class="note"><h3>Best for</h3><ul>
+        <li>An operator tool you use every day: calm at 7 AM, impressive in a demo, and still recognisably BIS.</li>
+        <li>Teams who want depth without a louder palette.</li>
+      </ul></div>
+    </div>
+  </div>
+</section>
+

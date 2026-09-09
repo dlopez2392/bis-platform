@@ -30,10 +30,13 @@ test("account switcher navigates into a company", async ({ page }) => {
 // class assertion passes whether or not the custom property was set.
 test("the agency sidebar keeps the default accent", async ({ page }) => {
   await page.goto("/dashboard/accounts");
-  // Targets the 3px active-item rail specifically (`.w-\[3px\]`), not just
-  // any `span.bg-sidebar-accent` — see client-access.spec.ts's own note on
-  // the identical tightening: that class is shared by the unread-count
-  // badge and the collapsed-state dot too (app-sidebar.tsx).
-  await expect(page.locator("aside nav span.bg-sidebar-accent.w-\\[3px\\]").first())
-    .toHaveCSS("background-color", "rgb(169, 158, 255)"); // #A99EFF — the P1 token cut-over's sidebar accent (both themes)
+  // The rail is a two-stop gradient (app-sidebar.tsx) — see client-access
+  // .spec.ts's identical note. The locator keys on `data-slot="nav-rail"`,
+  // not the old `bg-sidebar-accent` class: that class is shared by the
+  // unread-count badge and the collapsed-state dot too. Both stops are
+  // pinned for the BIS default because Task 2 of the Northern Lights branch
+  // routed `--sidebar-accent` to the chrome tint (`--sidebar-tint` #8B7CF7,
+  // `--sidebar-tint-2` #4FD8E6 — both themes).
+  await expect(page.locator('aside nav [data-slot="nav-rail"]').first())
+    .toHaveCSS("background-image", "linear-gradient(rgb(139, 124, 247), rgb(79, 216, 230))");
 });

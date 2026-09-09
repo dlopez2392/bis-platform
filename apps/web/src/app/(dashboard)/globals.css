@@ -11,11 +11,11 @@
   --foreground: var(--text-1);
   --card: var(--surface-1);
   --card-foreground: var(--text-1);
-  --popover: var(--surface-1);
+  --popover: var(--surface-overlay);   /* every Radix surface + Sonner float over scroll: opaque enough that text never reads through */
   --popover-foreground: var(--text-1);
 
-  --primary: var(--accent);            /* tokens.css light --accent, #6D28D9 — cleared the AA sweep untouched */
-  --primary-foreground: #ffffff;       /* readableTextOn("#6d28d9") — 7.105:1, confirmed by the sweep */
+  --primary: var(--accent);            /* tokens.css's light --accent — cleared the AA sweep untouched */
+  --primary-foreground: #ffffff;       /* readableTextOn(light --accent) — 7.105:1, confirmed by the sweep */
   --secondary: var(--surface-3);
   --secondary-foreground: var(--text-1);
   --muted: var(--surface-3);
@@ -29,12 +29,14 @@
   --input: var(--line);
   --ring: var(--accent);
 
-  /* Sidebar is dark in BOTH themes (recorded decision) — violet-biased
-     dark-ladder literals, not theme-flipping tokens. */
-  --sidebar: #16141E;
-  --sidebar-foreground: #A9A3BD;
-  --sidebar-accent: #A99EFF;
-  --sidebar-border: #28243A;
+  /* The sidebar's four shadcn names route to tokens.css's CHROME set (dark in
+     BOTH themes — recorded decision; the literal island is gone).
+     theme-style.ts still overrides them per tenant with the neutral ramp's
+     dark sidebar. */
+  --sidebar: var(--sidebar-surface);
+  --sidebar-foreground: var(--sidebar-text);
+  --sidebar-accent: var(--sidebar-tint);
+  --sidebar-border: var(--sidebar-line);
 
   --stage-1: #8b5cf6;
   --stage-2: #0891b2;
@@ -45,15 +47,11 @@
 }
 
 .dark {
-  --primary: var(--accent);           /* tokens.css dark --accent, #8B7CF7 — cleared the AA sweep untouched */
-  --primary-foreground: #111111;      /* readableTextOn("#8b7cf7") — 5.686:1, confirmed by the sweep */
+  --primary: var(--accent);           /* tokens.css's dark --accent — cleared the AA sweep untouched */
+  --primary-foreground: #111111;      /* readableTextOn(dark --accent) — 5.686:1, confirmed by the sweep */
   --destructive: var(--crit);
   --success: var(--good);
   --warning: var(--warn);
-  --sidebar: #131120;                 /* keep current: one step below cards */
-  --sidebar-foreground: #A9A3BD;
-  --sidebar-accent: #A99EFF;
-  --sidebar-border: #28243A;
   --stage-1: #a78bfa;
   --stage-2: #22d3ee;
   --stage-3: #60a5fa;
@@ -105,6 +103,59 @@
   --font-display: var(--font-bricolage);
 }
 
+/* ---- Northern Lights material (spec §3.2, §4, §5). Named utilities so a
+   component swaps one class and the values stay in tokens.css.
+   unprefixed only — Lightning CSS folds a hand-written -webkit- twin into
+   the prefixed form and drops the standard property (Chromium does not
+   alias it); it adds vendor prefixes itself from the browser targets. ---- */
+@utility glass {
+  /* no solid background: the element keeps bg-card so a tenant's --card wins.
+     No backdrop-filter either (decision 2026-09-09, spec §9): cards scroll,
+     and on an integrated GPU their backdrop surfaces dropped 7–9 of 52
+     frames (0 with the cards' blur off, sidebar still blurring). A card sits
+     over the lit ground — smooth gradients — so a blur has nothing to
+     resolve; the glass reads from the sheen, the highlight and the
+     translucent fill. sidebar-chrome and glass-overlay keep the blur: they
+     sit over real content and never scroll. */
+  background-image: var(--sheen);
+  box-shadow: var(--shadow-card);
+}
+@utility glass-overlay {
+  background-color: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: var(--shadow-overlay);
+  backdrop-filter: var(--glass-filter);
+}
+@utility sidebar-chrome {
+  /* chrome, not a fifth content surface: an opaque dark ground under the
+     (tenant-overridable) --sidebar layer, so the rail is dark in both themes */
+  background-color: var(--sidebar-ground);
+  background-image: linear-gradient(var(--sidebar), var(--sidebar));
+  backdrop-filter: var(--glass-filter);
+}
+@utility btn-primary {
+  background-image: var(--gradient-primary);
+  box-shadow: var(--shadow-glow);
+}
+@utility pill-on {
+  background-color: var(--accent-dim);
+  color: var(--text-1);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent), 0 0 18px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+@utility hero-text {
+  background-image: var(--gradient-hero);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+@utility bar-accent {
+  background-image: linear-gradient(180deg, color-mix(in srgb, var(--accent) 95%, transparent), color-mix(in srgb, var(--accent) 25%, transparent));
+}
+@utility bar-hot {
+  filter: brightness(1.15);
+  box-shadow: 0 0 22px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
@@ -115,13 +166,17 @@ body {
    fully honors the OS setting. Un-layered on purpose: these must beat the
    Tailwind layers. */
 :focus-visible {
-  /* var(--ring), NOT var(--accent): themed client accounts override --accent
-     on <body> with the ramp's hover-surface tint (theme-style.ts), which
-     would render keyboard focus invisible there. --ring is the token whose
-     derivation is LIFTED to ≥3:1 against bg and card for exactly this job
-     (theme.ts), and resolves to the same violet when unthemed. */
+  /* var(--ring), NOT var(--accent): --ring is the token whose derivation is
+     LIFTED to ≥3:1 against bg and card (theme.ts), and resolves to the same
+     violet when unthemed. Text controls opt out of the hard outline: they
+     draw the 3px --ring-glow ring + accent border themselves (spec §4). */
   outline: 2px solid var(--ring);
   outline-offset: 2px;
+}
+[data-slot="input"]:focus-visible,
+[data-slot="textarea"]:focus-visible,
+[data-slot="select-trigger"]:focus-visible {
+  outline: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

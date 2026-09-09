@@ -10,6 +10,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { Topbar } from "@/components/topbar";
 import { ShellDataProvider } from "@/components/shell-data";
 import { CommandPalette } from "@/components/command-palette";
+import { Ground } from "@/components/ground";
 
 // generateMetadata and the layout body below are separate invocations that
 // need the same answers the root layout also needs for the very same tenant
@@ -130,7 +131,8 @@ export default async function DashboardLayout({
     // comment for why this single fetch replaces what used to be three
     // separate per-navigation POSTs.
     <ShellDataProvider>
-      <div className="flex min-h-screen">
+      <div className="relative flex min-h-screen">
+        <Ground />
         <AppSidebar
           accounts={accounts.map((a) => ({ id: a.id, name: a.name, timezone: a.timezone }))}
           defaultCollapsed={collapsed}

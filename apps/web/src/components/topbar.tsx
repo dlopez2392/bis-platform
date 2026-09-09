@@ -23,7 +23,7 @@ export function Topbar({
   palette?: React.ReactNode;
 }) {
   return (
-    <header className="flex h-14 shrink-0 items-center justify-end gap-3 border-b border-border bg-card px-6">
+    <header className="flex h-14 shrink-0 items-center justify-end gap-3 border-b border-border bg-transparent px-6">
       {palette}
       {/* Task 5: DESIGN.md's "AI presence" pattern — in-account only, both
           audiences, renders nothing outside an account or with no enabled

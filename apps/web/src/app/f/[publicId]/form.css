@@ -37,11 +37,13 @@
   border: 1px solid var(--border, #d4d4d8); border-radius: var(--radius, 0.5rem);
   background: var(--card, #ffffff); color: inherit;
 }
-/* --form-accent, not --accent: in the derived token set --accent is the ramp's
-   own subtle HOVER surface and is deliberately not brand-driven, so painting
-   the Submit button with it would turn every client's CTA into a pale grey
-   block — with a green test suite, since the property would be set and
-   consumed exactly as written. The form's brand accent gets its own name. */
+/* --form-accent, not --accent. Since the Northern Lights refresh --accent IS
+   the tenant's brand primary, emitted by themeStyle; before it, the name meant
+   the ramp's subtle HOVER surface, which is why this stylesheet never adopted
+   it. Either way this stylesheet does not read --accent at all: the public
+   form renders outside the dashboard's token scope, so it paints its CTA and
+   focus ring from --form-accent — its own name, with its own literal
+   fallback. */
 .bis-form input:focus, .bis-form textarea:focus {
   outline: 2px solid var(--form-accent, #6d28d9); outline-offset: 1px;
   border-color: var(--form-accent, #6d28d9);

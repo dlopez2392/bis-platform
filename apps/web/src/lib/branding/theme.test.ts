@@ -6,8 +6,12 @@ import type { Branding } from "@bis/db";
 import { contrastRatio } from "./color";
 import { publicFormTheme } from "./public-form-theme";
 import { NEUTRAL_RAMPS, SIDEBAR_FOREGROUND, type NeutralName } from "./neutral-ramps";
-import { deriveTheme, parseAllowlisted, NEUTRAL_NAMES, BIS, FONT, type CornerName, type TypeName } from "./theme";
-import { FONT_ALLOWLIST, SAFE_STYLE_FALLBACKS } from "./theme-style";
+import { deriveAccent2, deriveAccentStrong } from "./oklch";
+import {
+  deriveTheme, parseAllowlisted, NEUTRAL_NAMES, ACCENT_ALPHAS, GLOW_ALPHAS, BIS, FONT,
+  type CornerName, type TypeName,
+} from "./theme";
+import { FONT_ALLOWLIST, SAFE_STYLE_FALLBACKS, themeStyle } from "./theme-style";
 
 const NEUTRALS: NeutralName[] = ["warm", "cool", "slate"];
 const CORNERS: CornerName[] = ["sharp", "soft", "round"];
@@ -123,6 +127,129 @@ describe("deriveTheme", () => {
       "light",
     );
     expect(t?.primary).toBe("#6d28d9"); // the BIS light default, not the input
+  });
+
+  it("pins accent2 to the BIS constants when no brand colour is set (not derived)", () => {
+    const light = deriveTheme({ color: null, neutral: "slate", corners: null, type: null, mode: null }, "light");
+    const dark = deriveTheme({ color: null, neutral: "slate", corners: null, type: null, mode: null }, "dark");
+    expect(light?.accent2).toBe("#0891b2");
+    expect(dark?.accent2).toBe("#4fd8e6");
+  });
+
+  it("derives accent2 from the LIFTED primary when a brand colour is set", () => {
+    for (const mode of MODES) {
+      const t = deriveTheme({ color: "#6d28d9", neutral: "slate", corners: null, type: null, mode: null }, mode)!;
+      expect(t.accent2).toBe(deriveAccent2(t.primary));
+      expect(t.accent2).toMatch(/^#[0-9a-f]{6}$/);
+      if (mode === "dark") {
+        // On the slate dark surfaces #6d28d9 cannot be seen, so primary is
+        // lifted — which makes "lifted" and "raw" two genuinely different
+        // answers here rather than the same one by coincidence.
+        expect(t.primary).not.toBe("#6d28d9");
+        expect(t.accent2).not.toBe(deriveAccent2("#6d28d9"));
+      }
+    }
+  });
+
+  // accent2 is the far stop of --gradient-hero, and in LIGHT mode that
+  // gradient paints the raw token straight onto the card (dark mode mixes it
+  // 60% with white first). deriveAccent2 lifts L by +0.18 by design, which is
+  // right against a dark card and wrong against a white one: the composite
+  // sweep measured six of the nine adversarial brands between 2.26:1 and
+  // 2.58:1 on white. So the derived value is lifted against the card the same
+  // way primary and sidebarAccent are, at the 3:1 non-text floor.
+  it("keeps accent2 clear of 3:1 on the card for every brand in the sweep, both modes", () => {
+    for (const neutral of NEUTRALS)
+      for (const mode of MODES)
+        for (const color of ADVERSARIAL) {
+          const t = deriveTheme({ color, neutral, corners: null, type: null, mode: null }, mode)!;
+          expect(contrastRatio(t.accent2, t.card), `accent2 on card ${neutral}/${mode}/${color}`)
+            .toBeGreaterThanOrEqual(3);
+        }
+  });
+
+  // The lift is a repair, not a recolour: ensureContrast returns its input
+  // untouched when it already clears the target, so only the brands that
+  // actually fail move. Asserted in both directions so a lift that fired
+  // unconditionally (and shifted every tenant's second accent) is a red test.
+  it("lifts accent2 only when the derived value fails the card", () => {
+    const lifted = deriveTheme(
+      { color: "#8b5cf6", neutral: "slate", corners: null, type: null, mode: null }, "light",
+    )!;
+    expect(lifted.accent2).not.toBe(deriveAccent2(lifted.primary));
+    expect(contrastRatio(lifted.accent2, lifted.card)).toBeGreaterThanOrEqual(3);
+
+    const untouched = deriveTheme(
+      { color: "#6d28d9", neutral: "slate", corners: null, type: null, mode: null }, "dark",
+    )!;
+    expect(untouched.accent2).toBe(deriveAccent2(untouched.primary));
+  });
+
+  // tokens.css keeps --accent and --accent-strong distinct per mode, and
+  // --gradient-primary reads BOTH (linear-gradient(180deg, var(--accent),
+  // var(--accent-strong))) — so a themed tenant whose accent-strong aliased
+  // the primary would render the main button as a flat fill.
+  it("pins accentStrong to the BIS constants when no brand colour is set (not derived)", () => {
+    const light = deriveTheme({ color: null, neutral: "slate", corners: null, type: null, mode: null }, "light");
+    const dark = deriveTheme({ color: null, neutral: "slate", corners: null, type: null, mode: null }, "dark");
+    expect(light?.accentStrong).toBe("#5b21b8");
+    expect(dark?.accentStrong).toBe("#a99eff");
+  });
+
+  it("derives accentStrong from the LIFTED primary, and never aliases the primary", () => {
+    for (const mode of MODES) {
+      const t = deriveTheme({ color: "#6d28d9", neutral: "slate", corners: null, type: null, mode: null }, mode)!;
+      expect(t.accentStrong).toBe(deriveAccentStrong(t.primary, mode));
+      expect(t.accentStrong).toMatch(/^#[0-9a-f]{6}$/);
+    }
+    const light = deriveTheme(
+      { color: "#6d28d9", neutral: "slate", corners: null, type: null, mode: null }, "light",
+    )!;
+    expect(light.accentStrong).not.toBe(light.primary);
+
+    // Black and white are the boundary brands that used to alias: a clamp at
+    // the lightness extremes pinned accentStrong to the (lifted) primary
+    // itself, flattening --gradient-primary's two stops into one colour.
+    // Asserted across BOTH modes for both adversarial hues.
+    for (const color of ["#000000", "#ffffff"]) {
+      for (const mode of MODES) {
+        const t = deriveTheme({ color, neutral: "slate", corners: null, type: null, mode: null }, mode)!;
+        expect(t.accentStrong, `${color} ${mode}`).not.toBe(t.primary);
+      }
+    }
+  });
+
+  // The tint alphas are per MODE, never per brand: tokens.css pins .09/.28 on
+  // light and .14/.35 on dark. themeStyle hard-coded the dark pair for one
+  // commit, so a themed LIGHT tenant — the client default — was painted with
+  // the stronger dark tints.
+  it("carries the per-mode accent alphas, so neither mode can borrow the other's", () => {
+    const of = (mode: (typeof MODES)[number]) => deriveTheme(
+      { color: "#6d28d9", neutral: "slate", corners: null, type: null, mode: null }, mode,
+    )!.accentAlphas;
+    expect(of("light")).toEqual(ACCENT_ALPHAS.light);
+    expect(of("dark")).toEqual(ACCENT_ALPHAS.dark);
+    expect(of("light").accentDim).not.toBe(of("dark").accentDim);
+    // Unthemed accounts too: the alphas do not depend on the brand at all.
+    const bis = deriveTheme({ color: null, neutral: "slate", corners: null, type: null, mode: null }, "light")!;
+    expect(bis.accentAlphas).toEqual(ACCENT_ALPHAS.light);
+  });
+
+  // The GLOW alphas are the one alpha table that is NOT per-mode-only: a very
+  // light brand (white, yellow) is lifted for text and then paints a very
+  // bright lit ground, which dropped page-level muted text under 4.5:1 in the
+  // composite sweep at the end of this file. Halving for a brand-active
+  // tenant is the decided fallback (2026-09-08); BIS itself and a themed
+  // tenant with no brand colour keep tokens.css's own numbers.
+  it("keeps the token glow alphas for a tenant with no brand colour, and halves them when a brand is active", () => {
+    for (const mode of MODES) {
+      const plain = deriveTheme({ color: null, neutral: "slate", corners: null, type: null, mode: null }, mode)!;
+      const branded = deriveTheme({ color: "#6d28d9", neutral: "slate", corners: null, type: null, mode: null }, mode)!;
+      expect(plain.glowAlphas).toEqual(GLOW_ALPHAS[mode]);
+      expect(branded.glowAlphas.glow1).toBeCloseTo(GLOW_ALPHAS[mode].glow1 / 2, 10);
+      expect(branded.glowAlphas.glow2).toBeCloseTo(GLOW_ALPHAS[mode].glow2 / 2, 10);
+      expect(branded.glowAlphas.glow3).toBeCloseTo(GLOW_ALPHAS[mode].glow3 / 2, 10);
+    }
   });
 
   // The whole point of the milestone: no combination of stored inputs can
@@ -311,6 +438,18 @@ describe("parseAllowlisted", () => {
   });
 });
 
+// tokens.css's two blocks, read once at module scope: the parity block below
+// pins the TypeScript constants against them, and the composite-contrast
+// block at the end of this file composites the very same declarations. Two
+// readFileSync copies of one file is how the two drift.
+const tokensPath = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../styles/tokens.css",
+);
+const tokensCss = readFileSync(tokensPath, "utf8");
+const tokensRootBlock = tokensCss.match(/:root\s*\{([^}]*)\}/)?.[1];
+const tokensDarkBlock = tokensCss.match(/\.dark\s*\{([^}]*)\}/)?.[1];
+
 // BIS.dark.primary and BIS.dark.ring must stay equal to the color the app
 // actually paints — theme.ts's own comment says so, but a comment enforces
 // nothing. Since Phase 1's semantic cut-over, globals.css's `--primary`/
@@ -327,14 +466,6 @@ describe("globals.css / tokens.css / BIS parity", () => {
   const css = readFileSync(cssPath, "utf8");
   const darkBlock = css.match(/\.dark\s*\{([^}]*)\}/)?.[1];
   const rootBlock = css.match(/:root\s*\{([^}]*)\}/)?.[1];
-
-  const tokensPath = path.join(
-    path.dirname(fileURLToPath(import.meta.url)),
-    "../../styles/tokens.css",
-  );
-  const tokensCss = readFileSync(tokensPath, "utf8");
-  const tokensRootBlock = tokensCss.match(/:root\s*\{([^}]*)\}/)?.[1];
-  const tokensDarkBlock = tokensCss.match(/\.dark\s*\{([^}]*)\}/)?.[1];
 
   const declared = (block: string | undefined, token: string) =>
     block?.match(new RegExp(`--${token}:\\s*(#[0-9a-fA-F]{6});`))?.[1]?.toLowerCase();
@@ -368,6 +499,52 @@ describe("globals.css / tokens.css / BIS parity", () => {
     expect(BIS.light.ring).toBe(declared(tokensRootBlock, "accent"));
   });
 
+  // Spec §3.3 pins the BIS second accent as CONSTANTS rather than deriving
+  // it, which makes theme.ts and tokens.css a mirror of exactly the kind
+  // this block exists to keep in lockstep: an unthemed account renders
+  // tokens.css's --accent-2, a themed one renders BIS.*.accent2 through
+  // themeStyle, and nothing else would notice them disagreeing.
+  it("keeps BIS.*.accent2 equal to tokens.css's --accent-2 in both token blocks", () => {
+    expect(BIS.light.accent2).toBe(declared(tokensRootBlock, "accent-2"));
+    expect(BIS.dark.accent2).toBe(declared(tokensDarkBlock, "accent-2"));
+  });
+
+  // Same mirror, same reason, for the emphatic end of --gradient-primary.
+  it("keeps BIS.*.accentStrong equal to tokens.css's --accent-strong in both token blocks", () => {
+    expect(BIS.light.accentStrong).toBe(declared(tokensRootBlock, "accent-strong"));
+    expect(BIS.dark.accentStrong).toBe(declared(tokensDarkBlock, "accent-strong"));
+  });
+
+  // tokens.css pins each tint's alpha as a literal rgba() on the BIS colours;
+  // themeStyle builds the same tints for a tenant with color-mix() and reads
+  // its percentages out of ACCENT_ALPHAS. Two copies of one number in two
+  // languages is exactly what this block exists to keep honest — and the pair
+  // was wrong in one direction already (the dark alphas emitted in light mode).
+  it("keeps ACCENT_ALPHAS equal to the alphas tokens.css pins in both token blocks", () => {
+    const alpha = (block: string | undefined, token: string) => {
+      const m = block?.match(new RegExp(`--${token}:\\s*rgba\\([^)]*,\\s*([0-9.]+)\\)`));
+      return m ? Number(m[1]) : null;
+    };
+    const TINTS = [
+      ["accent-dim", "accentDim"], ["ring-glow", "ringGlow"],
+      ["accent-2-dim", "accent2Dim"], ["ring-glow-2", "ringGlow2"],
+    ] as const;
+    for (const [token, key] of TINTS) {
+      expect(alpha(tokensRootBlock, token), `light --${token}`).toBe(ACCENT_ALPHAS.light[key]);
+      expect(alpha(tokensDarkBlock, token), `dark --${token}`).toBe(ACCENT_ALPHAS.dark[key]);
+    }
+  });
+
+  // The same mirror for the lit ground's three glow alphas. tokens.css owns
+  // them as bare numbers on the Ground component; deriveTheme reads GLOW_ALPHAS
+  // so a themed tenant's ground is lit at the mode's own strength (halved when
+  // a brand colour is active). Two copies of one number in two languages.
+  it.each([["glow1", "glow-1-alpha"], ["glow2", "glow-2-alpha"], ["glow3", "glow-3-alpha"]] as const)(
+    "keeps GLOW_ALPHAS.%s equal to tokens.css's --%s in both modes", (key, token) => {
+      expect(GLOW_ALPHAS.dark[key]).toBe(Number(tokensDarkBlock!.match(new RegExp(`--${token}:\\s*([^;]+);`))![1]));
+      expect(GLOW_ALPHAS.light[key]).toBe(Number(tokensRootBlock!.match(new RegExp(`--${token}:\\s*([^;]+);`))![1]));
+    });
+
   // globals.css itself still has to confirm --primary/--ring actually route
   // through --accent (not some other token) in both blocks — a regression
   // that repointed the var() at the wrong name would slip past the
@@ -381,22 +558,26 @@ describe("globals.css / tokens.css / BIS parity", () => {
     expect(darkBlock).toMatch(/--primary:\s*var\(--accent\);/);
   });
 
-  // sidebar-accent is a sanctioned literal (the sidebar-literal island), not
-  // tokenized, so its hex truth still lives directly in globals.css.
-  it("keeps :root --sidebar-accent equal to its BIS.light constant", () => {
-    expect(declared(rootBlock, "sidebar-accent")).toBe(BIS.light.sidebarAccent);
+  // The sidebar-literal island moved to tokens.css as a CHROME token set
+  // (Northern Lights spec §4 as decided 2026-09-08): the four --sidebar*
+  // names survive as shadcn semantic vars, ROUTE to --sidebar-tint /
+  // --sidebar-text / … in :root, and .dark no longer re-declares them. The
+  // hex truth now lives in tokens.css, identical in both blocks — the sidebar
+  // is dark in both themes.
+  it("keeps :root --sidebar-accent wired to var(--sidebar-tint), and BIS.*.sidebarAccent equal to --sidebar-tint in both token blocks", () => {
+    expect(rootBlock).toMatch(/--sidebar-accent:\s*var\(--sidebar-tint\);/);
+    expect(BIS.light.sidebarAccent).toBe(declared(tokensRootBlock, "sidebar-tint"));
+    expect(BIS.dark.sidebarAccent).toBe(declared(tokensDarkBlock, "sidebar-tint"));
   });
 
-  it("keeps .dark --sidebar-accent equal to BIS.dark.sidebarAccent", () => {
-    expect(declared(darkBlock, "sidebar-accent")).toBe(BIS.dark.sidebarAccent);
+  it("no longer re-declares any --sidebar* name in .dark (the island is gone)", () => {
+    expect(darkBlock).not.toMatch(/--sidebar/);
   });
 
-  // SIDEBAR_FOREGROUND is deliberately mode-independent, so BOTH blocks must
-  // agree with the one constant — the sidebar does not invert. Also a
-  // sanctioned literal, so this still reads globals.css directly.
-  it("keeps --sidebar-foreground equal to SIDEBAR_FOREGROUND in both modes", () => {
-    expect(declared(rootBlock, "sidebar-foreground")).toBe(SIDEBAR_FOREGROUND);
-    expect(declared(darkBlock, "sidebar-foreground")).toBe(SIDEBAR_FOREGROUND);
+  it("keeps --sidebar-foreground wired to var(--sidebar-text) and SIDEBAR_FOREGROUND equal to --sidebar-text in both token blocks", () => {
+    expect(rootBlock).toMatch(/--sidebar-foreground:\s*var\(--sidebar-text\);/);
+    expect(SIDEBAR_FOREGROUND).toBe(declared(tokensRootBlock, "sidebar-text"));
+    expect(SIDEBAR_FOREGROUND).toBe(declared(tokensDarkBlock, "sidebar-text"));
   });
 
   // themeStyle falls back to these when a value fails validation. --background
@@ -460,4 +641,120 @@ describe("font variable names agree across the three places that hold them", () 
   it("allows exactly the values FONT can produce", () => {
     expect([...FONT_ALLOWLIST].sort()).toEqual(Object.values(FONT).sort());
   });
+});
+
+// ---------------------------------------------------------------------------
+// Composite contrast (Northern Lights spec §8). Text sits on glass over a lit
+// ground, so the effective background is glow → ground → surface, composited.
+// ---------------------------------------------------------------------------
+type Paint = { hex: string; alpha: number };
+const hexToRgb = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)) as [number, number, number];
+const rgbToHex = (rgb: number[]) => `#${rgb.map((v) => Math.round(Math.min(255, Math.max(0, v))).toString(16).padStart(2, "0")).join("")}`;
+const over = (top: string, alpha: number, under: string) => {
+  const t = hexToRgb(top), u = hexToRgb(under);
+  return rgbToHex(t.map((c, i) => alpha * c + (1 - alpha) * u[i]!));
+};
+const mixWhite = (hex: string, pct: number) => over(hex, pct / 100, "#ffffff");
+const rawOf = (block: string, token: string) => {
+  const raw = block.match(new RegExp(`--${token}:\\s*([^;]+);`))?.[1]?.trim();
+  if (!raw) throw new Error(`--${token} not declared`);
+  return raw;
+};
+const paintOf = (block: string, token: string): Paint => {
+  const raw = rawOf(block, token);
+  if (/^#[0-9a-fA-F]{6}$/.test(raw)) return { hex: raw.toLowerCase(), alpha: 1 };
+  const m = raw.match(/^rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([0-9.]+)\s*\)$/);
+  if (!m) throw new Error(`--${token}: ${raw} is neither #hex nor rgba()`);
+  return { hex: rgbToHex([+m[1]!, +m[2]!, +m[3]!]), alpha: Number(m[4]) };
+};
+// Glow-1's centre is at y = −10%; on a 720px-tall layout the top edge is 72px
+// into the 420px radius whose stop ends at 60%: 1 − 72/(420·0.6).
+const ON_CANVAS = 1 - 72 / (420 * 0.6);
+
+describe("composite contrast — BIS default (spec §8)", () => {
+  // ON_CANVAS is derived from the shipped Ground geometry (700px 420px glow,
+  // -10% vertical centre, 60% transparent stop, on a 720px viewport). Pin
+  // those exact numbers here so a retune of the radius, stop, or centre
+  // invalidates the derived constant loudly instead of it going stale.
+  const groundSource = readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "../../components/ground.tsx"),
+    "utf8",
+  );
+  it("pins ON_CANVAS to the shipped Ground geometry", () => {
+    expect(groundSource).toContain("700px 420px");
+    expect(groundSource).toContain("12% -10%");
+    expect(groundSource).toContain("transparent 60%");
+    expect(groundSource).toContain("620px 380px");
+    expect(groundSource).toContain("96% 8%");
+  });
+
+  for (const [mode, block] of [["dark", tokensDarkBlock!], ["light", tokensRootBlock!]] as const) {
+    const ground = paintOf(block, "surface-0").hex;
+    const card = paintOf(block, "surface-1");
+    const accent = paintOf(block, "accent").hex;
+    const accent2 = paintOf(block, "accent-2").hex;
+    // Glow-1 centres at 12% -10% — off canvas — so only ON_CANVAS of its
+    // token alpha reaches the viewport at its visible peak. Glow-2 centres at
+    // 96% 8% — ON canvas — so the FULL --glow-2-alpha applies at its centre.
+    const glow1 = Number(rawOf(block, "glow-1-alpha")) * ON_CANVAS;
+    const glow2Alpha = Number(rawOf(block, "glow-2-alpha"));
+    const underCard = (glowAlpha: number) => over(card.hex, card.alpha, over(accent, glowAlpha, ground));
+    const atGlow = underCard(glow1);
+    const atGlow2 = over(card.hex, card.alpha, over(accent2, glow2Alpha, ground));
+    const darkest = underCard(0);
+    const text = (n: 1 | 2 | 3) => paintOf(block, `text-${n}`).hex;
+
+    it(`${mode}: --text-1 and --text-2 ≥ 4.5:1 under a card at the glow-1 peak, the glow-2 centre, and the darkest point`, () => {
+      for (const bg of [atGlow, atGlow2, darkest]) {
+        expect(contrastRatio(text(1), bg), `text-1 on ${bg}`).toBeGreaterThanOrEqual(4.5);
+        expect(contrastRatio(text(2), bg), `text-2 on ${bg}`).toBeGreaterThanOrEqual(4.5);
+      }
+    });
+
+    it(`${mode}: --text-3 ≥ 3:1 at the glow-1 peak, the glow-2 centre, and the darkest point`, () => {
+      for (const bg of [atGlow, atGlow2, darkest]) {
+        expect(contrastRatio(text(3), bg), `text-3 on ${bg}`).toBeGreaterThanOrEqual(3);
+      }
+    });
+
+    it(`${mode}: the hero gradient's stops clear 3:1 (large text) at the glow-1 peak, the glow-2 centre, and the darkest point`, () => {
+      const stops = mode === "dark" ? [mixWhite(accent, 50), mixWhite(accent2, 60)] : [accent, accent2];
+      for (const bg of [atGlow, atGlow2, darkest])
+        for (const s of stops) expect(contrastRatio(s, bg), `hero stop ${s} on ${bg}`).toBeGreaterThanOrEqual(3);
+    });
+  }
+});
+
+describe("composite contrast — every brand in the sweep (spec §8)", () => {
+  // Tenant cards are the ramp's opaque colours (theme-style.ts overrides
+  // --card), so under a card the composite IS the card — the existing sweep
+  // covers it. What the glow changes for a tenant is text painted directly on
+  // the ground (page-level labels), and the hero stops on the card. The glow
+  // alpha is whatever themeStyle EMITS for that theme when it emits one
+  // (brand-active tenants glow at half alpha), else the token value. Glow-2's
+  // centre (96% 8%) is on canvas, so its check uses the full alpha with no
+  // ON_CANVAS factor — unlike glow-1's off-canvas centre.
+  for (const mode of MODES) {
+    const tokenAlpha = Number(rawOf(mode === "dark" ? tokensDarkBlock! : tokensRootBlock!, "glow-1-alpha"));
+    const tokenAlpha2 = Number(rawOf(mode === "dark" ? tokensDarkBlock! : tokensRootBlock!, "glow-2-alpha"));
+    it(`${mode}: muted text stays ≥ 4.5:1 on the lit ground, hero stops ≥ 3:1 on the card`, () => {
+      for (const neutral of NEUTRALS)
+        for (const color of ADVERSARIAL) {
+          const t = deriveTheme({ color, neutral, corners: null, type: null, mode: null }, mode)!;
+          const style = themeStyle(t) as Record<string, string>;
+          // The ?? fallback is a belt for a future theme that emits no glow
+          // alpha; themeStyle emits one for every resolved theme today, so
+          // this expression never actually takes the fallback branch.
+          const glowAlpha = Number(style["--glow-1-alpha"] ?? tokenAlpha) * ON_CANVAS;
+          const glowAlpha2 = Number(style["--glow-2-alpha"] ?? tokenAlpha2);
+          const where = `${neutral}/${mode}/${color}`;
+          const litGround = over(t.primary, glowAlpha, t.background);
+          expect(contrastRatio(t.mutedForeground, litGround), `muted on lit ground ${where}`).toBeGreaterThanOrEqual(4.5);
+          const litGround2 = over(t.accent2, glowAlpha2, t.background);
+          expect(contrastRatio(t.mutedForeground, litGround2), `muted on glow-2 lit ground ${where}`).toBeGreaterThanOrEqual(4.5);
+          const stops = mode === "dark" ? [mixWhite(t.primary, 50), mixWhite(t.accent2, 60)] : [t.primary, t.accent2];
+          for (const s of stops) expect(contrastRatio(s, t.card), `hero stop ${s} on card ${where}`).toBeGreaterThanOrEqual(3);
+        }
+    });
+  }
 });

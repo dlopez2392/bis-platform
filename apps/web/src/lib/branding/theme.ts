@@ -9,6 +9,7 @@
  */
 import { contrastRatio, ensureContrast, parseHexColor, readableTextOn } from "./color";
 import { NEUTRAL_RAMPS, SIDEBAR_FOREGROUND, type NeutralName } from "./neutral-ramps";
+import { deriveAccent2, deriveAccentStrong } from "./oklch";
 
 export type { NeutralName };
 
@@ -71,6 +72,14 @@ export type ResolvedTheme = {
   border: string; input: string; ring: string;
   sidebar: string; sidebarForeground: string;
   sidebarAccent: string; sidebarBorder: string;
+  /** Second accent (spec §3.3): pinned for BIS, derived from the lifted primary for a brand. */
+  accent2: string;
+  /** The emphatic end of --gradient-primary: darker in light, lighter in dark — never the primary. */
+  accentStrong: string;
+  /** This MODE's tint alphas (ACCENT_ALPHAS), which themeStyle mixes the color-mix() tints at. */
+  accentAlphas: AccentAlphas;
+  /** The lit ground's glow alphas (GLOW_ALPHAS), halved when a brand colour is active. */
+  glowAlphas: GlowAlphas;
   radius: string;
   fontSans: string;
 };
@@ -89,13 +98,22 @@ export const FONT: Record<TypeName, string> = {
 /**
  * What globals.css uses today, per mode. Every fallback lands here.
  *
- * Since Phase 1's semantic cut-over, these three values come from
+ * Since Phase 1's semantic cut-over, every value here comes from
  * `apps/web/src/styles/tokens.css`, not from a literal in globals.css:
  * `primary`/`ring` are tokens.css's `--accent` per mode (`#6D28D9` light,
- * `#8B7CF7` dark) and `sidebarAccent` is the sanctioned sidebar-literal
- * island's `--sidebar-accent` (`#A99EFF`, identical in both modes — the
- * sidebar does not invert). All three passed the contrast sweep below
- * untouched; no lift was needed this round.
+ * `#8B7CF7` dark) and, since the Northern Lights refresh retired the
+ * sidebar-literal island, `sidebarAccent` mirrors tokens.css's
+ * `--sidebar-tint` (`#8B7CF7`, identical in both modes — the sidebar does
+ * not invert). `accent2` mirrors tokens.css's `--accent-2` (`#0891B2` light,
+ * `#4FD8E6` dark): spec §3.3 pins the BIS second accent as a constant rather
+ * than deriving it, so an unthemed account and a themed one agree. It carries
+ * no text and is not part of the contrast sweep — it paints glows, the far
+ * rail stop and the second chart series. `accentStrong` mirrors
+ * `--accent-strong` the same way (`#5B21B8` light, `#A99EFF` dark) and is the
+ * far stop of `--gradient-primary`; it carries no text either, and it is
+ * deliberately NOT equal to `primary` — the gradient needs two colours.
+ * `primary`, `ring` and `sidebarAccent` all passed the sweep below untouched;
+ * no lift was needed this round.
  *
  * dark.ring is kept equal to dark.primary (and light.ring to light.primary)
  * for the same reason the old literal-lift history recorded: before
@@ -103,12 +121,70 @@ export const FONT: Record<TypeName, string> = {
  * and letting one drift from the other here would silently diverge them.
  * ring carries no text label, so its floor is 3:1 (already cleared) — this
  * is consistency, not a contrast repair. theme.test.ts reads globals.css's
- * `:root` and `.dark` blocks directly and asserts all three still resolve to
- * these constants.
+ * and tokens.css's `:root` and `.dark` blocks directly and asserts every one
+ * of these constants still resolves to the token it mirrors.
  */
 export const BIS = {
-  light: { primary: "#6d28d9", ring: "#6d28d9", sidebarAccent: "#a99eff" },
-  dark:  { primary: "#8b7cf7", ring: "#8b7cf7", sidebarAccent: "#a99eff" },
+  light: {
+    primary: "#6d28d9", ring: "#6d28d9", sidebarAccent: "#8b7cf7",
+    accent2: "#0891b2", accentStrong: "#5b21b8",
+  },
+  dark: {
+    primary: "#8b7cf7", ring: "#8b7cf7", sidebarAccent: "#8b7cf7",
+    accent2: "#4fd8e6", accentStrong: "#a99eff",
+  },
+} as const;
+
+export type AccentAlphas = {
+  readonly accentDim: number; readonly ringGlow: number;
+  readonly accent2Dim: number; readonly ringGlow2: number;
+};
+
+/**
+ * The alpha each accent tint is mixed at, keyed on MODE and nothing else.
+ *
+ * tokens.css pins these as literal `rgba()` on the BIS colours — light
+ * `--accent-dim .09` / `--ring-glow .28`, dark `.14` / `.35`, with both
+ * second-accent tints at `.14` and `--ring-glow-2` following `--ring-glow`
+ * per mode. `themeStyle` builds the same four tints for a tenant with
+ * `color-mix()` and takes its percentages from here, so this is the
+ * TypeScript half of a cross-file mirror: `theme.test.ts`'s parity block
+ * reads the alphas straight out of tokens.css and pins them against this
+ * table, the same way it pins `BIS` itself.
+ *
+ * A table rather than four constants because a single hard-coded pair is
+ * exactly the bug this replaces: `themeStyle` emitted the DARK alphas in both
+ * modes, so a themed LIGHT tenant — the client default — was painted with
+ * tints half again as strong as the design calls for. They belong to the mode,
+ * never to the brand: BIS and tenants alike get the same numbers.
+ */
+export const ACCENT_ALPHAS = {
+  light: { accentDim: 0.09, ringGlow: 0.28, accent2Dim: 0.14, ringGlow2: 0.28 },
+  dark: { accentDim: 0.14, ringGlow: 0.35, accent2Dim: 0.14, ringGlow2: 0.35 },
+} as const;
+
+export type GlowAlphas = {
+  readonly glow1: number; readonly glow2: number; readonly glow3: number;
+};
+
+/**
+ * tokens.css's alphas for the lit ground's three radial glows, per mode —
+ * light `.07/.05/.04`, dark `.28/.16/.12` — pinned against the CSS by
+ * theme.test.ts's parity block, exactly like ACCENT_ALPHAS above.
+ *
+ * Unlike the tint alphas, these are NOT per-mode-only: a brand-active tenant
+ * gets them HALVED (see `glowScale` in deriveTheme). The glow paints the page
+ * background itself, and `primary` has already been lifted for text, so a very
+ * light brand — white, `#fde047` — becomes a very bright ground: the composite
+ * sweep in theme.test.ts measured page-level muted text at 4.02:1 in dark on
+ * every ramp for white, and 4.43/4.45:1 for the yellow, against a 4.5:1 floor.
+ * Halving reads 5.7–5.96:1 (decided 2026-09-08). BIS itself emits no theme at
+ * all, so it keeps the numbers below by construction, and so does a themed
+ * tenant that never set a brand colour.
+ */
+export const GLOW_ALPHAS = {
+  light: { glow1: 0.07, glow2: 0.05, glow3: 0.04 },
+  dark: { glow1: 0.28, glow2: 0.16, glow3: 0.12 },
 } as const;
 
 /**
@@ -232,6 +308,40 @@ export function deriveTheme(
     ring = ensureContrast(ring, steps.card, 3) ?? bis.ring;
   }
 
+  // Derived from the LIFTED primary, not the raw brand: the primary is what
+  // --accent will be on <body>, so the pair is analogous to what renders —
+  // and then lifted against the CARD, because --gradient-hero paints the raw
+  // token there in light mode (dark mode mixes it 60% with white first).
+  // deriveAccent2's +0.18 lightness is right against a dark card and wrong
+  // against a white one: six of the nine adversarial brands landed between
+  // 2.26:1 and 2.58:1 on white. ensureContrast returns its input untouched
+  // when it already clears 3:1, so dark mode is a no-op and light darkens
+  // only as far as it must; the unlifted value is still the fallback, because
+  // an unreachable target must not blank the gradient's far stop.
+  const accent2 = brand
+    ? (ensureContrast(deriveAccent2(primary), steps.card, 3) ?? deriveAccent2(primary))
+    : bis.accent2;
+
+  // Same reasoning and the same lifted primary. NOT primary itself:
+  // --gradient-primary is linear-gradient(180deg, var(--accent),
+  // var(--accent-strong)), so aliasing the two renders the tenant's one
+  // primary button as a flat fill.
+  const accentStrong = brand ? deriveAccentStrong(primary, mode) : bis.accentStrong;
+
+  // The lit ground is the ONE place a brand colour paints a surface that text
+  // is then read on directly, and `primary` arrives here already lifted FOR
+  // text — so a very light brand becomes a very bright ground. Half strength
+  // is what keeps page-level muted text over 4.5:1 for every brand in the
+  // composite sweep; see GLOW_ALPHAS. An unthemed BIS account never reaches
+  // this line at all (deriveTheme returned null above), and a themed tenant
+  // that set no brand colour keeps tokens.css's own numbers.
+  const glowScale = brand ? 0.5 : 1;
+  const glowAlphas: GlowAlphas = {
+    glow1: GLOW_ALPHAS[mode].glow1 * glowScale,
+    glow2: GLOW_ALPHAS[mode].glow2 * glowScale,
+    glow3: GLOW_ALPHAS[mode].glow3 * glowScale,
+  };
+
   return {
     background: steps.bg,
     foreground: steps.fg,
@@ -256,6 +366,11 @@ export function deriveTheme(
     sidebarForeground: SIDEBAR_FOREGROUND,
     sidebarAccent,
     sidebarBorder: ramp.sidebarBorder,
+    accent2,
+    accentStrong,
+    // Per mode, never per brand — see ACCENT_ALPHAS.
+    accentAlphas: ACCENT_ALPHAS[mode],
+    glowAlphas,
     radius: RADIUS[inputs.corners ?? "soft"],
     fontSans: FONT[inputs.type ?? "geist"],
   };

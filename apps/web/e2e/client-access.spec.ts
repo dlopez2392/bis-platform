@@ -127,13 +127,36 @@ test("a client sees only their own account, and nothing when access is off", asy
   // #1e3a8a scores 1.62:1 on the dark sidebar and is lightened to #3a62d4 to
   // clear 3:1 — so this value ALSO proves the lightening ran.
   //
-  // Targets the 3px active-item rail specifically (`.w-\[3px\]`), not just
-  // any `span.bg-sidebar-accent` — that class is shared by the unread-count
-  // badge and the collapsed-state dot too (app-sidebar.tsx), so the old
-  // broader selector could pass against the wrong element entirely if the
-  // rail itself ever stopped rendering.
-  await expect(sidebar.locator("nav span.bg-sidebar-accent.w-\\[3px\\]").first())
-    .toHaveCSS("background-color", "rgb(58, 98, 212)");
+  // The rail is a two-stop gradient (app-sidebar.tsx): the first stop is
+  // `var(--sidebar-accent)`, the second is the tenant's derived second
+  // accent (matched as any rgb() below — its exact value isn't this test's
+  // concern). The locator keys on `data-slot="nav-rail"`, not the old
+  // `bg-sidebar-accent` class: that class is gone from the rail (replaced by
+  // the gradient utility) and still shared by the unread-count badge and the
+  // collapsed-state dot, so a class-based selector could pass against the
+  // wrong element entirely if the rail itself ever stopped rendering.
+  await expect(sidebar.locator('nav [data-slot="nav-rail"]').first())
+    .toHaveCSS("background-image", /^linear-gradient\(rgb\(58, 98, 212\), rgb\(\d+, \d+, \d+\)\)$/);
+
+  // The tenant's accent reaches the ONE primary button. This is the cascade
+  // half of the composed-token fix and cannot be unit-tested: tokens.css
+  // declares --gradient-primary on `*` rather than :root precisely so each
+  // element re-resolves it against the accent it INHERITS from <body>, where
+  // themeStyle paints the tenant's family. Declared on :root it resolved once
+  // against BIS violet and inherited down frozen, and this button read
+  // "linear-gradient(color(srgb 0.681569 0.640392 0.978039), rgb(139, 124, 247))"
+  // — BIS's dark accent — on a fully branded dashboard.
+  //
+  // The value is derived, not decorative: this fixture is brand #1e3a8a with
+  // brand_mode "dark" (auth.setup.ts), so resolveThemeMode paints dark and
+  // deriveTheme's dark primary is #5b7ddb = rgb(91, 125, 219) — the second
+  // stop, verbatim. The first stop is the dark formula's
+  // color-mix(in srgb, var(--accent) 70%, white), which Chromium serializes in
+  // the srgb space: 0.7 x (91,125,219)/255 + 0.3 per channel.
+  await expect(page.getByRole("button", { name: "Add contact" })).toHaveCSS(
+    "background-image",
+    "linear-gradient(color(srgb 0.549804 0.643137 0.901176), rgb(91, 125, 219))",
+  );
 
   // The agency's own name must be gone from the client's chrome entirely.
   // This is the milestone's headline promise, and the one thing danlo flagged

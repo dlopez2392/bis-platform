@@ -45,7 +45,7 @@ describe("design foundation: tokens scaffolding", () => {
     expect(tokens).toMatch(/:root\s*\{[^}]*--surface-0:\s*#F6F5FA/i);
   });
   it("dark values live under .dark", () => {
-    expect(tokens).toMatch(/\.dark\s*\{[^}]*--surface-0:\s*#0E0D14/i);
+    expect(tokens).toMatch(/\.dark\s*\{[^}]*--surface-0:\s*#0B0A12/i);
   });
   it("carries no base element rules — globals owns those", () => {
     expect(tokens).not.toMatch(/^\s*body\s*\{/m);

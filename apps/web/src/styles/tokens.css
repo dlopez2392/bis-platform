@@ -1,17 +1,20 @@
 /* ============================================================
    BIS Platform — design tokens
-   Source of truth: docs/design/bis-design-direction.html
+   Source of truth: docs/design/northern-lights.html (.dir-a block)
+   History: docs/design/bis-design-direction.html
    Wire components to tokens ONLY. Never hard-code a color,
    radius, or shadow in a component.
    ============================================================ */
 
 /* ---------- light (default) ---------- */
 :root {
-  /* surface ladder: page → card → nested → raised */
+  /* surface ladder: page → card → nested → raised (light stays solid) */
   --surface-0: #F6F5FA;
   --surface-1: #FFFFFF;
   --surface-2: #FFFFFF;
   --surface-3: #F1EFF7;
+  /* anything floating over scrolling content — text must never read through */
+  --surface-overlay: rgba(255,255,255,.96);
 
   --line:        #E8E5F0;
   --line-strong: #D8D4E6;
@@ -21,11 +24,47 @@
   --text-3: #8B86A0;
 
   /* accent is per-mode: desaturated on dark, full on light.
-     The per-client branding engine overrides --accent only. */
+     The per-client branding engine (theme-style.ts) overrides the whole
+     accent family below, so nothing here is hard-wired to violet. */
   --accent:        #6D28D9;
   --accent-strong: #5B21B8;
   --accent-dim:    rgba(109, 40, 217, .09);
   --ring-glow:     rgba(109, 40, 217, .28);
+
+  /* second accent — pinned for the BIS default, derived for a brand
+     (deriveTheme). Appears ONLY where the Northern Lights spec §3.3 lists. */
+  --accent-2:     #0891B2;
+  --accent-2-dim: rgba(8, 145, 178, .14);
+  --ring-glow-2:  rgba(8, 145, 178, .28);
+
+  /* sidebar CHROME, not a fifth content surface: the rail is dark in BOTH
+     themes (recorded decision), so these are identical in :root and .dark
+     except --sidebar-ground — see .dark.
+     --sidebar-surface is the mockup's .02 glass over --sidebar-ground; the
+     tints are the dark-mode accents as seen on that chrome. globals.css's
+     --sidebar* semantic vars route here; theme-style.ts overrides them per
+     tenant with the neutral ramp's own dark sidebar. */
+  --sidebar-ground:      #0B0A12;
+  --sidebar-surface:     rgba(255,255,255,.02);
+  --sidebar-line:        rgba(255,255,255,.07);
+  --sidebar-text:        #B9B3CF;
+  --sidebar-text-strong: #FFFFFF;
+  --sidebar-tint:        #8B7CF7;
+  --sidebar-tint-2:      #4FD8E6;
+
+  /* the lit ground (Ground component): three static radial glows + a masked grid */
+  --glow-1-alpha: .07;
+  --glow-2-alpha: .05;
+  --glow-3-alpha: .04;
+  --grid-alpha:   .012;
+
+  /* material: light cards are solid, so there is NO blur filter at all and
+     the sheen is off. Not blur(0px): a zero-radius blur is still a non-none
+     filter list, so it costs a stacking context and a backdrop render
+     surface per card in the client default theme, for nothing. */
+  --glass-filter:    none;
+  --glass-highlight: inset 0 1px 0 rgba(255,255,255,.9);
+  --sheen:           none;
 
   /* status — always rendered with dot + text label, never color alone */
   --good: #15803D;  --good-bg: rgba(21, 128, 61, .10);
@@ -37,8 +76,9 @@
   --radius-card: 11px;      /* cards, panels, drawers  */
   --radius-pill: 999px;
 
-  /* elevation: light mode = small tight shadows */
-  --shadow-card: 0 1px 2px rgba(29,25,48,.05), 0 10px 28px -18px rgba(29,25,48,.18);
+  /* elevation */
+  --shadow-card:    0 1px 2px rgba(29,25,48,.05), 0 12px 32px -18px rgba(29,25,48,.22);
+  --shadow-overlay: var(--glass-highlight), 0 12px 32px -18px rgba(29,25,48,.22);
 
   /* motion */
   --ease-hover: 150ms cubic-bezier(.2,.7,.3,1);
@@ -52,25 +92,48 @@
 
 /* ---------- dark ---------- */
 .dark {
-  /* surface ladder: page → card → nested → raised */
-  --surface-0: #0E0D14;
-  --surface-1: #16141E;
-  --surface-2: #1D1A28;
-  --surface-3: #252132;
+  /* surface ladder: page → card → nested → raised. Steps 1–3 are glass:
+     translucent whites over the lit ground (Ground component). */
+  --surface-0: #0B0A12;
+  --surface-1: rgba(255,255,255,.035);
+  --surface-2: rgba(255,255,255,.06);
+  --surface-3: rgba(255,255,255,.09);
+  --surface-overlay: rgba(22,20,34,.88);
 
-  --line:        #28243A;   /* structural borders */
-  --line-strong: #38334F;   /* interactive edges  */
+  --line:        rgba(255,255,255,.08);   /* structural borders */
+  --line-strong: rgba(255,255,255,.14);   /* interactive edges  */
 
-  --text-1: #F2F0F7;        /* primary   */
-  --text-2: #A9A3BD;        /* secondary */
-  --text-3: #6F6987;        /* tertiary / labels */
+  --text-1: #F1EEFA;        /* primary   */
+  --text-2: #9A94B4;        /* secondary */
+  --text-3: #7B7593;        /* tertiary / labels — lifted from #6F6987 so it clears 3:1 on glass over the lit ground (composite contrast test) */
 
-  /* accent is per-mode: desaturated on dark, full on light.
-     The per-client branding engine overrides --accent only. */
   --accent:        #8B7CF7;
   --accent-strong: #A99EFF;
   --accent-dim:    rgba(139, 124, 247, .14);
   --ring-glow:     rgba(139, 124, 247, .35);
+
+  --accent-2:     #4FD8E6;
+  --accent-2-dim: rgba(79, 216, 230, .14);
+  --ring-glow-2:  rgba(79, 216, 230, .35);
+
+  /* sidebar chrome — mostly identical to :root; exception: --sidebar-ground
+     is transparent here (not #0B0A12) so the lit ground glow shows through */
+  --sidebar-ground:      transparent;
+  --sidebar-surface:     rgba(255,255,255,.02);
+  --sidebar-line:        rgba(255,255,255,.07);
+  --sidebar-text:        #B9B3CF;
+  --sidebar-text-strong: #FFFFFF;
+  --sidebar-tint:        #8B7CF7;
+  --sidebar-tint-2:      #4FD8E6;
+
+  --glow-1-alpha: .28;
+  --glow-2-alpha: .16;
+  --glow-3-alpha: .12;
+  --grid-alpha:   .025;
+
+  --glass-filter:    blur(14px);
+  --glass-highlight: inset 0 1px 0 rgba(255,255,255,.06);
+  --sheen:           linear-gradient(180deg, rgba(255,255,255,.03), transparent 40%);
 
   /* status — always rendered with dot + text label, never color alone */
   --good: #4ADE97;  --good-bg: rgba(74, 222, 151, .12);
@@ -78,21 +141,61 @@
   --crit: #F2708A;  --crit-bg: rgba(242, 112, 138, .12);
 
   /* shape */
-  --radius-ctl:  8px;       /* buttons, inputs, chips  */
-  --radius-card: 11px;      /* cards, panels, drawers  */
+  --radius-ctl:  8px;
+  --radius-card: 11px;
   --radius-pill: 999px;
 
-  /* elevation: dark mode = inner top highlight + soft ambient, no gray blurs */
-  --shadow-card: 0 1px 0 rgba(255,255,255,.03) inset, 0 8px 24px -12px rgba(0,0,0,.6);
+  /* elevation: 1px top highlight + deep soft ambient, no gray blurs */
+  --shadow-card:    var(--glass-highlight), 0 20px 50px -30px rgba(0,0,0,.8);
+  --shadow-overlay: var(--glass-highlight), 0 16px 40px -16px rgba(0,0,0,.9);
 
   /* motion */
   --ease-hover: 150ms cubic-bezier(.2,.7,.3,1);
   --ease-panel: 250ms cubic-bezier(.2,.7,.3,1);
 
   /* type roles */
-  --font-display: var(--font-bricolage), "Bricolage Grotesque", "Geist", sans-serif; /* titles + KPI numbers ONLY */
+  --font-display: var(--font-bricolage), "Bricolage Grotesque", "Geist", sans-serif;
   --font-ui:      "Geist", -apple-system, "Segoe UI", sans-serif;
-  --font-mono:    "Geist Mono", ui-monospace, monospace;      /* micro-labels, ids, timestamps */
+  --font-mono:    "Geist Mono", ui-monospace, monospace;
+}
+
+/* ---------- composed FROM the accent family: declared on every element ----------
+   The gradients (hero text at display size only / the ONE primary button) and
+   the primary button's glow. They live here, on `*`, and NOT in the two blocks
+   above, on purpose.
+
+   A custom property whose value contains var() is substituted on the element
+   that DECLARES it. Declared on :root these resolve exactly once — against
+   BIS's own accent — and inherit downward as already-frozen strings, so the
+   tenant accent family that themeStyle paints on <body> could never reach
+   them: a branded dashboard's primary button, hero number and button glow all
+   stayed BIS violet (spec §6). Declared on `*`, every element re-resolves
+   them against the accent IT inherits, which is what lets <body> (and the
+   branding panel's live preview, which sets the same family inline) reach
+   btn-primary and hero-text. Same six formulas as before, same per-mode split;
+   only the selector they hang on moved. Pinned in northern-lights.test.ts. */
+* {
+  --gradient-hero:    linear-gradient(90deg, var(--accent), var(--accent-2));
+  --gradient-primary: linear-gradient(180deg, var(--accent), var(--accent-strong));
+  --shadow-glow:      0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent), 0 8px 24px -8px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.dark * {
+  --gradient-hero:    linear-gradient(90deg, color-mix(in srgb, var(--accent) 50%, white), color-mix(in srgb, var(--accent-2) 60%, white));
+  --gradient-primary: linear-gradient(180deg, color-mix(in srgb, var(--accent) 70%, white), var(--accent));
+  --shadow-glow:      0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent), 0 8px 24px -8px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+/* Nothing depends on the blur: without backdrop-filter the glass steps
+   become the opaque composites they would have rendered as over --surface-0. */
+@supports not (backdrop-filter: blur(1px)) {
+  .dark {
+    --surface-1: #15131F;
+    --surface-2: #1B1826;
+    --surface-3: #211D2E;
+    /* Dialogs and sheets were fully opaque before the glass pass; at 88% with
+       no blur to separate them they would leak the page behind. */
+    --surface-overlay: #1B1826;
+  }
 }
 
 /* ============================================================

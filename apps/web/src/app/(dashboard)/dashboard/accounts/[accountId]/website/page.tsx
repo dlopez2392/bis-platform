@@ -20,7 +20,7 @@ const LABEL = "font-mono text-[10px] font-medium uppercase tracking-[0.14em] tex
  *  page stays a server component and the switch works without JavaScript. */
 function PeriodSwitch({ base, period }: { base: string; period: Period }) {
   return (
-    <nav aria-label="Period" className="flex gap-1">
+    <nav aria-label="Period" className="flex gap-1 rounded-full border border-border bg-card p-0.5">
       {PERIODS.map((p) => (
         <Link
           key={p}
@@ -28,8 +28,8 @@ function PeriodSwitch({ base, period }: { base: string; period: Period }) {
           aria-current={p === period ? "true" : undefined}
           className={
             p === period
-              ? "rounded-full bg-primary/15 px-3 py-1 font-mono text-[11px] font-medium tracking-[0.06em] text-primary"
-              : "rounded-full border border-border px-3 py-1 font-mono text-[11px] font-medium tracking-[0.06em] text-muted-foreground hover:bg-accent"
+              ? "pill-on rounded-full px-3 py-1 font-mono text-[11px] font-medium tracking-[0.06em]"
+              : "rounded-full px-3 py-1 font-mono text-[11px] font-medium tracking-[0.06em] text-muted-foreground hover:bg-[var(--surface-3)]"
           }
         >
           {m[`website.period.${p}`]}
