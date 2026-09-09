@@ -109,10 +109,16 @@
    the prefixed form and drops the standard property (Chromium does not
    alias it); it adds vendor prefixes itself from the browser targets. ---- */
 @utility glass {
-  /* no solid background: the element keeps bg-card so a tenant's --card wins */
+  /* no solid background: the element keeps bg-card so a tenant's --card wins.
+     No backdrop-filter either (decision 2026-09-09, spec §9): cards scroll,
+     and on an integrated GPU their backdrop surfaces dropped 7–9 of 52
+     frames (0 with the cards' blur off, sidebar still blurring). A card sits
+     over the lit ground — smooth gradients — so a blur has nothing to
+     resolve; the glass reads from the sheen, the highlight and the
+     translucent fill. sidebar-chrome and glass-overlay keep the blur: they
+     sit over real content and never scroll. */
   background-image: var(--sheen);
   box-shadow: var(--shadow-card);
-  backdrop-filter: var(--glass-filter);
 }
 @utility glass-overlay {
   background-color: var(--popover);

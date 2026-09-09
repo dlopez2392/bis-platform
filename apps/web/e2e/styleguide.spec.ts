@@ -28,16 +28,20 @@ test.describe("the style guide", () => {
         return {
           filter: cs.backdropFilter || (cs as unknown as { webkitBackdropFilter?: string }).webkitBackdropFilter || "",
           bg: cs.backgroundColor,
+          aside: getComputedStyle(document.querySelector("aside")!).backdropFilter,
           btn: getComputedStyle(btn).backgroundImage,
         };
       }, dark);
     const d = await probe(true);
-    // Pin the RADIUS, not just "some blur". Chromium supports backdrop-filter,
-    // so the old `includes("blur") || opaque fallback` OR passed on either
-    // branch and could not tell blur(14px) from blur(0px). The
-    // @supports-not fallback is pinned by the unit parity test instead
-    // (src/lib/branding/northern-lights.test.ts).
-    expect(d.filter, "dark card must actually blur").toBe("blur(14px)");
+    // Cards do NOT blur (decision 2026-09-09, spec §9): their backdrop
+    // surfaces dropped 7–9 of 52 frames while scrolling on an integrated GPU,
+    // 0 with the cards' blur off. The blur lives on the sidebar and the
+    // overlays, which never scroll. Pin the RADIUS on the sidebar, not just
+    // "some blur": Chromium supports backdrop-filter, so an `includes("blur")`
+    // check cannot tell blur(14px) from blur(0px). The @supports-not fallback
+    // is pinned by the unit parity test (src/lib/branding/northern-lights.test.ts).
+    expect(d.filter, "dark card does not blur").toBe("none");
+    expect(d.aside, "dark sidebar keeps the 14px blur").toBe("blur(14px)");
     // The BIS half of the composed-token fix: tokens.css declares
     // --gradient-primary on `*`/`.dark *` instead of :root/.dark, so every
     // element re-resolves it against the accent it inherits. The unthemed
@@ -50,8 +54,9 @@ test.describe("the style guide", () => {
     const l = await probe(false);
     expect(l.bg).toBe("rgb(255, 255, 255)");
     // Light ships NO filter at all: blur(0px) is a non-none filter list and
-    // would still cost a stacking context + a backdrop surface per card.
+    // would still cost a stacking context + a backdrop surface per element.
     expect(l.filter).toBe("none");
+    expect(l.aside).toBe("none");
     expect(l.btn, "light primary button paints the BIS light gradient").toBe(
       "linear-gradient(rgb(109, 40, 217), rgb(91, 33, 184))",
     );

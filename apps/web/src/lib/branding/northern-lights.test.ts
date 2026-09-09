@@ -175,12 +175,15 @@ describe("globals.css — semantic mapping (spec §3.2, §4)", () => {
       expect(globals).toMatch(new RegExp(`@utility ${name}\\s*\\{`));
     });
 
-  it("glass = sheen + shadow-card + var(--glass-filter), never a background colour (tenant --card must win)", () => {
+  it("glass = sheen + shadow-card and NO backdrop-filter (cards scroll — §9 decision 2026-09-09), never a background colour (tenant --card must win)", () => {
     const body = globals.match(/@utility glass\s*\{([^}]*)\}/)![1]!;
     expect(body).toMatch(/background-image:\s*var\(--sheen\);/);
     expect(body).toMatch(/box-shadow:\s*var\(--shadow-card\);/);
     // Unprefixed only — see the sidebar-chrome test above for why.
-    expect(body).toMatch(/(^|[^-])backdrop-filter:\s*var\(--glass-filter\);/);
+    // Cards do not blur: measured 7–9 of 52 dropped frames on an integrated GPU
+    // with the cards' blur on, 0 with it off (sidebar still blurring).
+    // Declaration-shaped: the utility comment mentions the property in prose.
+    expect(body).not.toMatch(/backdrop-filters*:/);
     expect(body).not.toMatch(/-webkit-backdrop-filter/);
     expect(body).not.toMatch(/background-color/);
   });

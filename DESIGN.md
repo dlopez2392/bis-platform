@@ -23,9 +23,12 @@ cards/sidebar → `--surface-2` nested panels/inputs → `--surface-3`
 hover/raised/tooltips. Two border tokens: `--line` (structure),
 `--line-strong` (interactive edges). Depth in dark mode comes from the lit
 ground (three accent glows — two `--accent`, one `--accent-2` — plus a masked
-grid), glass surfaces (translucent steps 1–3 with a 1px top highlight and
-`--glass-filter`: `blur(14px)` in dark, `none` in light — never `blur(0px)`,
-which still costs a stacking context and a backdrop surface per card), and
+grid), glass surfaces (translucent steps 1–3 with a 1px top highlight; the backdrop
+blur `--glass-filter` — `blur(14px)` in dark, `none` in light, never
+`blur(0px)` — is applied to the sidebar and the overlays ONLY: cards scroll,
+and their backdrop surfaces dropped 7–9 of 52 frames on an integrated GPU
+(measured 2026-09-09, spec §9), while a card over the lit ground has nothing
+for a blur to resolve), and
 `--shadow-card` — never gray blur shadows on dark; ambient light is
 accent-tinted.
 
