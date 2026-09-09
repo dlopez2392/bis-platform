@@ -672,33 +672,55 @@ const paintOf = (block: string, token: string): Paint => {
 const ON_CANVAS = 1 - 72 / (420 * 0.6);
 
 describe("composite contrast — BIS default (spec §8)", () => {
+  // ON_CANVAS is derived from the shipped Ground geometry (700px 420px glow,
+  // -10% vertical centre, 60% transparent stop, on a 720px viewport). Pin
+  // those exact numbers here so a retune of the radius, stop, or centre
+  // invalidates the derived constant loudly instead of it going stale.
+  const groundSource = readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "../../components/ground.tsx"),
+    "utf8",
+  );
+  it("pins ON_CANVAS to the shipped Ground geometry", () => {
+    expect(groundSource).toContain("700px 420px");
+    expect(groundSource).toContain("12% -10%");
+    expect(groundSource).toContain("transparent 60%");
+    expect(groundSource).toContain("620px 380px");
+    expect(groundSource).toContain("96% 8%");
+  });
+
   for (const [mode, block] of [["dark", tokensDarkBlock!], ["light", tokensRootBlock!]] as const) {
     const ground = paintOf(block, "surface-0").hex;
     const card = paintOf(block, "surface-1");
     const accent = paintOf(block, "accent").hex;
     const accent2 = paintOf(block, "accent-2").hex;
+    // Glow-1 centres at 12% -10% — off canvas — so only ON_CANVAS of its
+    // token alpha reaches the viewport at its visible peak. Glow-2 centres at
+    // 96% 8% — ON canvas — so the FULL --glow-2-alpha applies at its centre.
     const glow1 = Number(rawOf(block, "glow-1-alpha")) * ON_CANVAS;
+    const glow2Alpha = Number(rawOf(block, "glow-2-alpha"));
     const underCard = (glowAlpha: number) => over(card.hex, card.alpha, over(accent, glowAlpha, ground));
     const atGlow = underCard(glow1);
+    const atGlow2 = over(card.hex, card.alpha, over(accent2, glow2Alpha, ground));
     const darkest = underCard(0);
     const text = (n: 1 | 2 | 3) => paintOf(block, `text-${n}`).hex;
 
-    it(`${mode}: --text-1 and --text-2 ≥ 4.5:1 under a card at the glow-1 peak and at the darkest point`, () => {
-      for (const bg of [atGlow, darkest]) {
+    it(`${mode}: --text-1 and --text-2 ≥ 4.5:1 under a card at the glow-1 peak, the glow-2 centre, and the darkest point`, () => {
+      for (const bg of [atGlow, atGlow2, darkest]) {
         expect(contrastRatio(text(1), bg), `text-1 on ${bg}`).toBeGreaterThanOrEqual(4.5);
         expect(contrastRatio(text(2), bg), `text-2 on ${bg}`).toBeGreaterThanOrEqual(4.5);
       }
     });
 
-    it(`${mode}: --text-3 ≥ 3:1 at both points`, () => {
-      for (const bg of [atGlow, darkest]) {
+    it(`${mode}: --text-3 ≥ 3:1 at the glow-1 peak, the glow-2 centre, and the darkest point`, () => {
+      for (const bg of [atGlow, atGlow2, darkest]) {
         expect(contrastRatio(text(3), bg), `text-3 on ${bg}`).toBeGreaterThanOrEqual(3);
       }
     });
 
-    it(`${mode}: the hero gradient's stops clear 3:1 (large text) at the darkest point`, () => {
+    it(`${mode}: the hero gradient's stops clear 3:1 (large text) at the glow-1 peak, the glow-2 centre, and the darkest point`, () => {
       const stops = mode === "dark" ? [mixWhite(accent, 50), mixWhite(accent2, 60)] : [accent, accent2];
-      for (const s of stops) expect(contrastRatio(s, darkest), `hero stop ${s} on ${darkest}`).toBeGreaterThanOrEqual(3);
+      for (const bg of [atGlow, atGlow2, darkest])
+        for (const s of stops) expect(contrastRatio(s, bg), `hero stop ${s} on ${bg}`).toBeGreaterThanOrEqual(3);
     });
   }
 });
@@ -709,18 +731,27 @@ describe("composite contrast — every brand in the sweep (spec §8)", () => {
   // covers it. What the glow changes for a tenant is text painted directly on
   // the ground (page-level labels), and the hero stops on the card. The glow
   // alpha is whatever themeStyle EMITS for that theme when it emits one
-  // (brand-active tenants glow at half alpha), else the token value.
+  // (brand-active tenants glow at half alpha), else the token value. Glow-2's
+  // centre (96% 8%) is on canvas, so its check uses the full alpha with no
+  // ON_CANVAS factor — unlike glow-1's off-canvas centre.
   for (const mode of MODES) {
     const tokenAlpha = Number(rawOf(mode === "dark" ? tokensDarkBlock! : tokensRootBlock!, "glow-1-alpha"));
+    const tokenAlpha2 = Number(rawOf(mode === "dark" ? tokensDarkBlock! : tokensRootBlock!, "glow-2-alpha"));
     it(`${mode}: muted text stays ≥ 4.5:1 on the lit ground, hero stops ≥ 3:1 on the card`, () => {
       for (const neutral of NEUTRALS)
         for (const color of ADVERSARIAL) {
           const t = deriveTheme({ color, neutral, corners: null, type: null, mode: null }, mode)!;
           const style = themeStyle(t) as Record<string, string>;
+          // The ?? fallback is a belt for a future theme that emits no glow
+          // alpha; themeStyle emits one for every resolved theme today, so
+          // this expression never actually takes the fallback branch.
           const glowAlpha = Number(style["--glow-1-alpha"] ?? tokenAlpha) * ON_CANVAS;
+          const glowAlpha2 = Number(style["--glow-2-alpha"] ?? tokenAlpha2);
           const where = `${neutral}/${mode}/${color}`;
           const litGround = over(t.primary, glowAlpha, t.background);
           expect(contrastRatio(t.mutedForeground, litGround), `muted on lit ground ${where}`).toBeGreaterThanOrEqual(4.5);
+          const litGround2 = over(t.accent2, glowAlpha2, t.background);
+          expect(contrastRatio(t.mutedForeground, litGround2), `muted on glow-2 lit ground ${where}`).toBeGreaterThanOrEqual(4.5);
           const stops = mode === "dark" ? [mixWhite(t.primary, 50), mixWhite(t.accent2, 60)] : [t.primary, t.accent2];
           for (const s of stops) expect(contrastRatio(s, t.card), `hero stop ${s} on card ${where}`).toBeGreaterThanOrEqual(3);
         }
