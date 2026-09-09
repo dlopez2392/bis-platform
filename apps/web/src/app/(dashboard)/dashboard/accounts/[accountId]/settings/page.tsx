@@ -253,11 +253,11 @@ export default async function CrmSettingsPage({
               {fields.length === 0 ? (
                 <EmptyState icon={SlidersHorizontal} title={m["settings.noFields"]} />
               ) : (
-                <ul className="space-y-2">
+                <ul className="flex flex-col">
                   {fields.map((f) => (
                     <li
                       key={f.id}
-                      className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border p-3 text-sm"
+                      className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-[var(--row-line)] py-[7px] text-[13px] first:border-t-0"
                     >
                       <span className="font-medium text-card-foreground">{f.name}</span>
                       <code className="font-mono text-xs text-muted-foreground">{f.field_key}</code>
@@ -299,11 +299,11 @@ export default async function CrmSettingsPage({
               {values.length === 0 ? (
                 <EmptyState icon={Braces} title={m["settings.noValues"]} />
               ) : (
-                <ul className="space-y-2">
+                <ul className="flex flex-col">
                   {values.map((v) => (
                     <li
                       key={v.id}
-                      className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border p-3 text-sm"
+                      className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-[var(--row-line)] py-[7px] text-[13px] first:border-t-0"
                     >
                       <span className="font-medium text-card-foreground">{v.name}</span>
                       <code className="font-mono text-xs text-muted-foreground">{v.value_key}</code>

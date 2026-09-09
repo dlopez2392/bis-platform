@@ -2,6 +2,7 @@ import { Inbox } from "lucide-react";
 import { requireAgency } from "@/lib/auth";
 import { PageHeader } from "@/components/page-header";
 import { StatTile } from "@/components/stat-tile";
+import { Meter } from "@/components/meter";
 import { DailyChart } from "../accounts/[accountId]/website/daily-chart";
 import { DeviceStrip } from "../accounts/[accountId]/website/device-strip";
 import { EmptyState } from "@/components/empty-state";
@@ -104,11 +105,44 @@ export default async function StyleguidePage() {
         </Section>
 
         <Section title="Badges" file="components/ui/badge.tsx">
-          {(["default", "secondary", "destructive", "outline", "ghost"] as const).map((variant) => (
+          {(["default", "secondary", "destructive", "outline", "chip", "ghost"] as const).map((variant) => (
             <Badge key={variant} variant={variant}>
               {variant}
             </Badge>
           ))}
+          {/* `chip` is the status shape wave 2 pushed onto the outcome pill,
+              the form status and the accounts list: DESIGN.md rule 3 wants a
+              7px dot beside the word, never the word in a coloured box. */}
+          <Badge variant="chip" className="gap-1.5 py-1 pr-2.5 pl-2">
+            <span className="size-[7px] rounded-full bg-[var(--good)]" aria-hidden />
+            chip + dot
+          </Badge>
+        </Section>
+
+        <Section title="Meter" file="components/meter.tsx">
+          {/* The mockup's `.meter` (northern-lights.html:56): a 5px track on
+              --meter-bg. The default fill is the CONTENT accent pair; a
+              STATUS reading passes a flat fill, because status is never a
+              gradient. */}
+          <div className="flex w-full max-w-sm flex-col gap-3">
+            <Meter percent={38} label="Calls used" max={100} now={38} valueText="38 of 100 calls" />
+            <Meter
+              percent={86}
+              label="Calls used (near cap)"
+              max={100}
+              now={86}
+              valueText="86 of 100 calls"
+              fill="bg-[var(--warn)]"
+            />
+            <Meter
+              percent={100}
+              label="Setup progress (done)"
+              max={6}
+              now={6}
+              valueText="6 of 6 steps"
+              fill="bg-[var(--good)]"
+            />
+          </div>
         </Section>
 
         <Section title="Tag chips" file="components/tag-chips.tsx">

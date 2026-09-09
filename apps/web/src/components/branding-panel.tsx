@@ -4,6 +4,8 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { badgeVariants } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
 import { SubmitButton } from "@/app/(dashboard)/dashboard/accounts/submit-button";
 import { m } from "@/lib/messages";
@@ -239,7 +241,7 @@ export function BrandingPanel({
                 aria-label={m["branding.color"]}
                 value={/^#[0-9a-fA-F]{6}$/.test(color) ? color : FORM_ACCENT_FALLBACK}
                 onChange={(e) => setColor(e.target.value)}
-                className="h-9 w-12 shrink-0 rounded-md border border-border bg-background p-1"
+                className="h-9 w-12 shrink-0 rounded-[8px] border border-border bg-[var(--surface-2)] p-1"
               />
             </div>
             <p className="text-xs text-muted-foreground">{copy.colorHint}</p>
@@ -310,9 +312,16 @@ export function BrandingPanel({
                       key={pm}
                       type="button"
                       onClick={() => setPreviewMode(pm)}
-                      className={`rounded-md border px-2 py-0.5 text-xs ${
-                        previewMode === pm ? "border-primary text-primary" : "border-border text-muted-foreground"
-                      }`}
+                      // The mockup's chip, not an ad-hoc bordered box. It
+                      // stays a <button> rather than becoming a <Badge>: this
+                      // is a two-way toggle and a span would drop the role,
+                      // the focus ring and the keyboard activation.
+                      className={cn(
+                        badgeVariants({ variant: "chip" }),
+                        "px-2.5 py-1 transition-colors",
+                        previewMode === pm &&
+                          "border-[var(--accent)] bg-[var(--accent-dim)] text-[var(--accent)]",
+                      )}
                     >
                       {pm === "light" ? m["branding.previewLight"] : m["branding.previewDark"]}
                     </button>
@@ -325,10 +334,18 @@ export function BrandingPanel({
               // The derived tokens, scoped to this box. The specimen is the
               // only honest way to show a full theme: the operator is choosing
               // surfaces and type, not just an accent.
+              // `bg-background` KEPT here, against the audit's "the ladder
+              // never goes backwards" note that moved the swatch and the logo
+              // box to step 2. This element carries `themeStyle(previewTheme)`
+              // and its whole job is to show the TENANT's page ground behind
+              // the tenant's sidebar and card. `--surface-2` is mode-keyed
+              // chrome, not tenant-keyed (DESIGN.md, Tenant seam), so painting
+              // the specimen from it would make it stop demonstrating the very
+              // thing it is a specimen of. Radius only.
               <div
                 data-testid="theme-specimen"
                 style={themeStyle(previewTheme)}
-                className="flex gap-3 rounded-md border border-border bg-background p-3"
+                className="flex gap-3 rounded-[8px] border border-border bg-background p-3"
               >
                 <span
                   className="flex items-center gap-2 rounded-md px-3 py-2"
@@ -339,7 +356,12 @@ export function BrandingPanel({
                     {m["branding.previewSidebar"]}
                   </span>
                 </span>
-                <span className="flex-1 rounded-md border border-border bg-card p-3"
+                {/* A card inside a Card BY DESIGN — it is the live brand
+                    preview, and `--card` is exactly what it must demonstrate.
+                    Radius only; never `glass` here, because the doubled
+                    `--shadow-card` is the failure mode this specimen exists to
+                    make visible. */}
+                <span className="flex-1 rounded-xl border border-border bg-card p-3"
                       style={{ borderRadius: "var(--radius)", fontFamily: "var(--font-sans)" }}>
                   <span className="block text-sm font-medium text-card-foreground">{m["branding.previewHeading"]}</span>
                   <span className="block text-xs text-muted-foreground">{m["branding.previewBody"]}</span>
@@ -396,7 +418,7 @@ export function BrandingPanel({
               <img
                 src={logoUrl}
                 alt={brandName ?? m["branding.logo"]}
-                className="max-h-12 w-auto rounded-md border border-border bg-background p-1"
+                className="max-h-12 w-auto rounded-[8px] border border-border bg-[var(--surface-2)] p-1"
               />
             ) : (
               <p className="text-sm text-muted-foreground">{m["branding.noLogo"]}</p>

@@ -502,3 +502,64 @@ describe("wave 2 — forms and automations", () => {
     }
   });
 });
+
+describe("wave 2 — dashboard activity, settings, branding, accounts", () => {
+  it("the activity card is glass with the panel title role and --row-line rows", () => {
+    const card = src(`${ACCT}/dashboard/activity-card.tsx`);
+    expect(card).toContain("rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3");
+    expect(card).toContain('className="text-[13.5px] font-semibold text-card-foreground"');
+    expect(card).toContain("border-t border-[var(--row-line)]");
+    // --line is a third stronger than the mockup's row rule.
+    expect(card).not.toContain("divide-y divide-border");
+  });
+  it("settings and client-access member rows are rules inside the Card, not a box each", () => {
+    for (const rel of [`${ACCT}/settings/page.tsx`, `${ACCT}/settings/client-access-panel.tsx`]) {
+      const s = src(rel);
+      expect(s, rel).toContain("border-t border-[var(--row-line)] py-[7px] text-[13px] first:border-t-0");
+      expect(s, rel).not.toContain("rounded-md border border-border p-3 text-sm");
+      expect(s, rel).not.toMatch(/\bglass\b/);
+    }
+    // The pending invite keeps its dashed edge, on the interactive line token.
+    expect(src(`${ACCT}/settings/client-access-panel.tsx`))
+      .toContain("border-t border-dashed border-[var(--line-strong)]");
+  });
+  it("the accounts grid is glass, with a tokenised avatar and a dotted status chip", () => {
+    const page = src(`${APP}/accounts/page.tsx`);
+    expect(page).toContain("rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3");
+    expect(page).toContain("hover:border-[var(--accent)]");
+    expect(page).toContain("rounded-[8px] bg-[var(--accent-dim)] text-[var(--accent)]");
+    expect(page).toContain('<Badge variant="chip"');
+    expect(page).toContain("size-[7px] rounded-full");
+    expect(page).toContain('className="mt-4 truncate text-[13.5px] font-semibold text-card-foreground"');
+    // An un-tokenised alpha of the brand colour, and status by word alone.
+    expect(page).not.toContain("bg-primary/10");
+    expect(page).not.toContain("hover:border-primary/40");
+  });
+  it("branding: the swatch and the logo box stop going BACKWARDS down the ladder", () => {
+    const s = src("../branding-panel.tsx");
+    // --background is --surface-0, a step BELOW the card they sit on.
+    expect(s).not.toContain("border border-border bg-background p-1");
+    expect(s).toContain("h-9 w-12 shrink-0 rounded-[8px] border border-border bg-[var(--surface-2)] p-1");
+    expect(s).toContain("max-h-12 w-auto rounded-[8px] border border-border bg-[var(--surface-2)] p-1");
+  });
+  it("branding: the mode toggle is the chip, and the brand preview stays a card-in-a-Card WITHOUT glass", () => {
+    const s = src("../branding-panel.tsx");
+    expect(s).toContain('badgeVariants({ variant: "chip" })');
+    // The deliberate card-in-card: --card is exactly what it demonstrates, and
+    // a doubled --shadow-card is the failure mode it exists to make visible.
+    expect(s).toContain('className="flex-1 rounded-xl border border-border bg-card p-3"');
+    expect(s).not.toMatch(/\bbg-card\b[^"]*\bglass\b/);
+  });
+});
+
+describe("wave 2 — styleguide carries this pass's variants (DESIGN.md DoD)", () => {
+  const s = src(`${APP}/styleguide/page.tsx`);
+  it("indexes the chip badge and the Meter", () => {
+    expect(s).toContain('"chip"');
+    expect(s).toContain('<Section title="Meter" file="components/meter.tsx">');
+    expect(s).toContain("<Meter");
+    // Status tones pass a FLAT fill — status is never a gradient.
+    expect(s).toContain('fill="bg-[var(--good)]"');
+    expect(s).toContain('fill="bg-[var(--warn)]"');
+  });
+});

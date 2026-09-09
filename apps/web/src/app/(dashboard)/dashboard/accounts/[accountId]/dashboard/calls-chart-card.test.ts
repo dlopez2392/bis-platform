@@ -81,12 +81,30 @@ function htmlBefore(html: string, marker: string): string {
 }
 
 describe("CallsChartCard", () => {
-  it("gives every one of the 14 bars a visible tooltip and an sr-only twin", () => {
+  // RETARGETED + RENAMED (wave 2): the long form used to live in an `sr-only`
+  // span beside the bar, which served screen readers and nobody else — the
+  // tooltip was hover-only, so a SIGHTED keyboard user got nothing. The column
+  // is a tab stop now and the long form is its `aria-label`; the twin span is
+  // gone because `role="img"` with a name makes children presentational, and
+  // keeping both announced the day twice. Renamed because a `-t` filter
+  // matching a stale name skips silently instead of failing.
+  it("gives every one of the 14 bars a visible tooltip and a focusable accessible name", () => {
     const html = render();
     expect(html).toContain("Aug 18 · 5 calls");
     expect(html).toContain("Aug 31 · 13 calls");
-    expect(html).toContain("August 18, 5 calls");
-    expect(html).toContain("August 31, 13 calls");
+    expect(html).toContain('aria-label="August 18, 5 calls"');
+    expect(html).toContain('aria-label="August 31, 13 calls"');
+  });
+
+  it("every bar column is reachable by keyboard and reveals its tooltip on focus", () => {
+    const html = render();
+    // 14 tab stops, one per day — on the COLUMN, because a 2%-tall zero-day
+    // bar is an unhittable focus target.
+    expect(html.match(/tabindex="0"/g)?.length).toBe(14);
+    expect(html).toContain("group-focus-visible/bar:opacity-100");
+    expect(html).toContain("focus-visible:ring-2 focus-visible:ring-ring");
+    // The twin it replaced must be gone, not merely outranked.
+    expect(html).not.toContain('class="sr-only"');
   });
 
   // RETARGETED with the chart-language rewrite, and RENAMED with it: the old

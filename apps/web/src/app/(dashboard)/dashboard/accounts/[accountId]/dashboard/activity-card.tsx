@@ -174,9 +174,9 @@ export function ActivityCard({
   const pipelineHref = `/dashboard/accounts/${accountId}/pipeline`;
 
   return (
-    <div className="rounded-lg border border-border bg-card p-5">
+    <div className="rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
       <div className="flex items-baseline gap-2">
-        <h5 className="text-sm font-semibold text-card-foreground">{m["dashboard.activity.title"]}</h5>
+        <h5 className="text-[13.5px] font-semibold text-card-foreground">{m["dashboard.activity.title"]}</h5>
         <span className="ml-auto font-mono text-[10px] font-normal tracking-[0.14em] text-muted-foreground uppercase">
           {m["dashboard.activity.caption"]}
         </span>
@@ -192,9 +192,14 @@ export function ActivityCard({
       {isEmpty ? (
         <EmptyState icon={Activity} title={m["dashboard.activity.empty"]} />
       ) : (
-        <div className="mt-2 flex flex-col divide-y divide-border">
+        // The rule is --row-line (.06), the mockup's `.row`; `divide-border`
+        // was --line (.08), a third stronger than every other row rule here.
+        <div className="mt-2 flex flex-col">
           {rows.map((row) => (
-            <div key={row.key} className="flex items-start gap-2.5 py-2.5 first:pt-0 last:pb-0">
+            <div
+              key={row.key}
+              className="flex items-start gap-2.5 border-t border-[var(--row-line)] py-2.5 first:border-t-0 first:pt-0 last:pb-0"
+            >
               <span
                 aria-hidden
                 className={cn(

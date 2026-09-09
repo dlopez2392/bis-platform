@@ -20,7 +20,9 @@
 // the formatted string, so stashing it in a data attribute only to have
 // `::after` read it back would be a round-trip for no benefit, and risks a
 // Tailwind arbitrary-value escaping mistake nothing here could catch without
-// a live browser. The `sr-only` twin per bar covers assistive tech.
+// a live browser. Each bar column carries the same fact as an `aria-label`
+// on a focusable `role="img"`, which is what covers assistive tech AND the
+// sighted keyboard user the hover-only tooltip used to leave with nothing.
 import Link from "next/link";
 import { PhoneIncoming } from "lucide-react";
 import type { CallListRow } from "@bis/db";
@@ -120,8 +122,8 @@ export function CallsChartCard({
 }
 
 /** "Aug 18 · 5 calls" / "August 18, 5 calls" — shared count→copy resolution
- *  so the visible tooltip and its `sr-only` twin can never disagree about
- *  which noun ("call" vs "calls") a given count takes. */
+ *  so the visible tooltip and the column's accessible name can never disagree
+ *  about which noun ("call" vs "calls") a given count takes. */
 function callsUnit(count: number): string {
   return count === 1 ? m["dashboard.calls.unit.call"] : m["dashboard.calls.unit.calls"];
 }
@@ -173,7 +175,24 @@ function Bars({ dayBuckets }: { dayBuckets: { dayKey: string; count: number; isW
           // The COLUMN is the hover target and the group, so a 2%-tall zero
           // day is still reachable; the tooltip lives inside the bar so it
           // anchors above the bar's own top rather than the plot's.
-          <div key={bucket.dayKey} className="group/bar relative flex h-full flex-1 flex-col justify-end">
+          //
+          // FOCUSABLE, and this is the half wave 1 deferred. The tooltip used
+          // to be hover-only, so a SIGHTED keyboard user got nothing at all —
+          // the `sr-only` twin served screen readers and nobody else. The
+          // column takes the tab stop rather than the bar (a 2%-tall bar is
+          // an unhittable focus target), and `role="img"` + `aria-label`
+          // replaces that twin: with a name and that role its children are
+          // presentational, so keeping both would have announced the day
+          // twice. The reference chart reaches the same place with a
+          // `<button>` because its bars drive React state; these do not, so
+          // this file stays a server component with no hydration cost.
+          <div
+            key={bucket.dayKey}
+            tabIndex={0}
+            role="img"
+            aria-label={srText}
+            className="group/bar relative flex h-full flex-1 flex-col justify-end rounded-[4px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
             <div
               data-slot="chart-bar"
               className={cn(
@@ -183,19 +202,18 @@ function Bars({ dayBuckets }: { dayBuckets: { dayKey: string; count: number; isW
               )}
               style={{ height: `${heightPercent}%` }}
             >
-              {/* The hover tooltip — every mark carries one (DESIGN.md's chart
-                  section). `aria-hidden`: the `sr-only` span below is the
-                  accessible copy of the same fact, not this element.
+              {/* The hover/focus tooltip — every mark carries one (DESIGN.md's
+                  chart section). `aria-hidden`: the column's own `aria-label`
+                  is the accessible copy of this fact, not this element.
                   `glass-overlay` carries both the fill and `--shadow-overlay`,
                   so there is no `bg-popover` and no grey `shadow-sm` here. */}
               <div
                 aria-hidden
-                className="pointer-events-none absolute bottom-[calc(100%+8px)] left-1/2 z-10 -translate-x-1/2 rounded-[7px] border border-[var(--tip-line)] glass-overlay px-2 py-[5px] font-mono text-[10.5px] whitespace-nowrap opacity-0 transition-opacity group-hover/bar:opacity-100"
+                className="pointer-events-none absolute bottom-[calc(100%+8px)] left-1/2 z-10 -translate-x-1/2 rounded-[7px] border border-[var(--tip-line)] glass-overlay px-2 py-[5px] font-mono text-[10.5px] whitespace-nowrap opacity-0 transition-opacity group-hover/bar:opacity-100 group-focus-visible/bar:opacity-100 motion-reduce:transition-none"
               >
                 {tooltip}
               </div>
             </div>
-            <span className="sr-only">{srText}</span>
           </div>
         );
       })}
