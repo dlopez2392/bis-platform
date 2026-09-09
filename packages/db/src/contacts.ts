@@ -198,19 +198,50 @@ export async function fillContactBlanks(
   return filled;
 }
 
+/** A row's position in this list's `created_at desc, id desc` ordering.
+ *  Structurally identical to apps/web's `RowCursor` (apps/web/src/lib/cursor.ts);
+ *  redeclared because @bis/db must not import from the app. */
+export type ContactCursor = { at: string; id: string };
+
+/**
+ * Applies the shared name/email/phone search filter, or returns `q` unchanged.
+ *
+ * Was a local `.replace(/[%,()]/g, "")`, which left `"` and `\` in place —
+ * both break the interpolated .or() string below (see search-term.ts, and
+ * this file's own comment block above escapeLikePattern). Harmless while only
+ * a deliberate CRM search reached it; P6 put this call behind every keystroke
+ * of the ⌘K palette.
+ */
+function withSearch<T>(q: T, search?: string): T {
+  const s = search ? sanitizeSearchTerm(search) : undefined;
+  if (!s) return q;
+  return (q as { or: (f: string) => T }).or(
+    `first_name.ilike.%${s}%,last_name.ilike.%${s}%,email.ilike.%${s}%,phone.ilike.%${s}%`,
+  );
+}
+
 export async function listContacts(
-  db: SupabaseClient, accountId: string, opts: { search?: string; limit?: number } = {},
+  db: SupabaseClient, accountId: string,
+  opts: { search?: string; limit?: number; before?: ContactCursor } = {},
 ) {
-  let q = db.from("contacts").select(COLS)
-    .eq("account_id", accountId).order("created_at", { ascending: false })
-    .limit(opts.limit ?? 100);
-  // Was a local `.replace(/[%,()]/g, "")`, which left `"` and `\` in place —
-  // both break the interpolated .or() string one line below (see
-  // search-term.ts, and this file's own comment block above escapeLikePattern).
-  // Harmless while only a deliberate CRM search reached it; P6 put this call
-  // behind every keystroke of the ⌘K palette.
-  const s = opts.search ? sanitizeSearchTerm(opts.search) : undefined;
-  if (s) q = q.or(`first_name.ilike.%${s}%,last_name.ilike.%${s}%,email.ilike.%${s}%,phone.ilike.%${s}%`);
+  let q = db.from("contacts").select(COLS).eq("account_id", accountId)
+    // Two-key ordering: created_at alone is not unique — a CSV import (Task 6)
+    // writes thousands of rows in the same millisecond — so the id breaks the
+    // tie and makes the cursor below total (every row has a strict position).
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(opts.limit ?? 50);
+  q = withSearch(q, opts.search);
+  if (opts.before) {
+    // Row-value comparison: everything strictly after (created_at, id) in the
+    // ordering above. PostgREST expresses this as an `or` of the two cases.
+    // `at` is a raw Postgres timestamptz string (microseconds + offset) and
+    // must reach the filter exactly as received — never round-tripped
+    // through `Date`, which truncates to milliseconds and can skip a row
+    // sharing the boundary microsecond.
+    const { at, id } = opts.before;
+    q = q.or(`created_at.lt.${at},and(created_at.eq.${at},id.lt.${id})`);
+  }
   const { data, error } = await q;
   if (error) throw new Error(error.message);
   return data;
@@ -253,11 +284,19 @@ export async function listContactTags(db: SupabaseClient, accountId: string, con
   return (data ?? []).map((r: any) => ({ id: r.tags.id as string, name: r.tags.name as string }));
 }
 
-/** Dashboard KPI tile: total contacts on the account, right now. */
-export async function countContacts(db: SupabaseClient, accountId: string): Promise<number> {
-  const { count, error } = await db.from("contacts")
-    .select("id", { count: "exact", head: true })
+/**
+ * Dashboard KPI tile: total contacts on the account, right now. `opts` is
+ * optional so the dashboard's existing two-argument call keeps compiling
+ * untouched; the contacts list (Task 3) passes `search` so its "N results"
+ * caption counts what the filter matches, not the whole account.
+ */
+export async function countContacts(
+  db: SupabaseClient, accountId: string, opts: { search?: string } = {},
+): Promise<number> {
+  let q = db.from("contacts").select("id", { count: "exact", head: true })
     .eq("account_id", accountId);
+  q = withSearch(q, opts.search);
+  const { count, error } = await q;
   if (error) throw new Error(`countContacts failed: ${error.message}`);
   return count ?? 0;
 }

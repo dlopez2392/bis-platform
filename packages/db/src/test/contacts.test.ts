@@ -5,6 +5,34 @@ import { createContact, updateContact, listContacts, getContact,
          addTagToContact, listContactTags, fillContactBlanks, countContacts,
          deleteContacts, addTagToContacts, removeTagFromContacts, listTags } from "../contacts";
 
+/** Seed helper: inserts a contact row directly, bypassing createContact's
+ *  dedupe + event emission — this suite exercises listContacts/countContacts,
+ *  not create semantics. */
+async function seedContact(
+  db: any, accountId: string, input: { firstName?: string; lastName?: string },
+) {
+  const { data, error } = await db.from("contacts")
+    .insert({ account_id: accountId, first_name: input.firstName, last_name: input.lastName })
+    .select("id").single();
+  if (error || !data) throw new Error(`seedContact failed: ${error?.message}`);
+  return { id: data.id as string };
+}
+
+/** Seed helper: inserts `count` contact rows that all share ONE `created_at`
+ *  — exactly what a CSV import (Task 6) produces, and exactly what a
+ *  timestamp-only cursor cannot page through. Returns the inserted ids.
+ *  Bypasses createContact: it has no way to override created_at, and
+ *  emitting one event per row for hundreds of rows would make this test
+ *  needlessly slow. */
+async function seedContacts(db: any, accountId: string, count: number, at: string) {
+  const rows = Array.from({ length: count }, (_, i) => ({
+    account_id: accountId, first_name: `Seed ${i}`, created_at: at,
+  }));
+  const { data, error } = await db.from("contacts").insert(rows).select("id");
+  if (error) throw new Error(`seedContacts failed: ${error.message}`);
+  return (data ?? []).map((r: { id: string }) => r.id);
+}
+
 describe("contacts service", () => {
   it("creates, emits event, dedupes by email", () =>
     withTestAccount(async (db, accountId) => {
@@ -234,6 +262,38 @@ describe("countContacts", () => {
       });
     });
   });
+});
+
+describe("listContacts paging", () => {
+  it("pages past 100 and never repeats or skips a row when timestamps collide", () =>
+    withTestAccount(async (db, accountId) => {
+      // Every row shares ONE created_at — exactly what an import produces, and
+      // exactly what a timestamp-only cursor cannot page through.
+      const at = "2026-09-09T12:00:00.000Z";
+      const ids = await seedContacts(db, accountId, 250, at);
+
+      const seen: string[] = [];
+      let before: { at: string; id: string } | undefined;
+      for (let page = 0; page < 10; page++) {
+        const rows = await listContacts(db, accountId, { limit: 50, before });
+        if (rows.length === 0) break;
+        seen.push(...rows.map((r: any) => r.id));
+        const last = rows[rows.length - 1]!;
+        before = { at: last.created_at, id: last.id };
+      }
+
+      expect(seen.length).toBe(250);
+      expect(new Set(seen).size).toBe(250);              // no repeats
+      expect([...seen].sort()).toEqual([...ids].sort()); // no skips
+    }));
+
+  it("counts what the search matches, not the whole account", () =>
+    withTestAccount(async (db, accountId) => {
+      await seedContact(db, accountId, { firstName: "Ada", lastName: "Lovelace" });
+      await seedContact(db, accountId, { firstName: "Grace", lastName: "Hopper" });
+      expect(await countContacts(db, accountId)).toBe(2);
+      expect(await countContacts(db, accountId, { search: "Ada" })).toBe(1);
+    }));
 });
 
 describe("bulk contact ops", () => {
