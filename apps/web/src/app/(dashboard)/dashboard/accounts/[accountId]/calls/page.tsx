@@ -10,6 +10,7 @@ import { readLimitConfig, utcDayStart } from "@/lib/voice/call-limits";
 import { cn } from "@/lib/utils";
 import { Meter } from "@/components/meter";
 import { m } from "@/lib/messages";
+import { parseTimeCursor } from "@/lib/cursor";
 import { CallsTable } from "./calls-table";
 import { textbackWindow } from "./textback-window";
 
@@ -19,20 +20,6 @@ export const dynamic = "force-dynamic";
  *  — `listCalls` returns rows, not a total — so it is also what decides
  *  whether the "Older calls" link renders. */
 const PAGE_SIZE = 50;
-
-/**
- * The `?before=` cursor is a hand-editable URL parameter that ends up inside
- * a PostgREST `lt("started_at", …)` filter. Anything that is not an ISO
- * timestamp is dropped rather than forwarded: an unparseable value makes
- * Postgres raise, which would turn a mistyped URL into a 500 error page.
- * Validated, not rewritten — `started_at` carries microseconds, and
- * round-tripping through `Date` would truncate the cursor to milliseconds and
- * could silently skip a row.
- */
-function cursorFrom(raw: string | undefined): string | undefined {
-  if (!raw || !/^\d{4}-\d{2}-\d{2}T/.test(raw) || Number.isNaN(Date.parse(raw))) return undefined;
-  return raw;
-}
 
 export default async function CallsPage({
   params,
@@ -51,11 +38,11 @@ export default async function CallsPage({
 
   // Validated once, reused twice: as the query's own cursor below, and as
   // the signal that decides which empty state a zero-row result means (see
-  // the render below). An unparseable `?before=` is dropped by `cursorFrom`
+  // the render below). An unparseable `?before=` is dropped by `parseTimeCursor`
   // and so, correctly, reads as "no cursor" here too — a mistyped URL falls
   // back to page one rather than to the false "no calls yet" reading a
   // client scrolled fifty-deep into their own history would otherwise get.
-  const cursor = cursorFrom(before);
+  const cursor = parseTimeCursor(before);
 
   const [rows, todayCount, account] = await Promise.all([
     listCalls(db, accountId, { limit: PAGE_SIZE, before: cursor }),
