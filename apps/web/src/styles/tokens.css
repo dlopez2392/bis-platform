@@ -85,7 +85,7 @@
   --ease-panel: 250ms cubic-bezier(.2,.7,.3,1);
 
   /* type roles */
-  --font-display: var(--font-bricolage), "Bricolage Grotesque", "Geist", sans-serif; /* titles + KPI numbers ONLY */
+  --font-display: var(--font-bricolage), "Bricolage Grotesque", "Geist", sans-serif; /* titles + KPI numbers ONLY (exception since Task 11: the Website sentence panel at 24px, mockup --sentence-size, also uses the display face) */
   --font-ui:      "Geist", -apple-system, "Segoe UI", sans-serif;
   --font-mono:    "Geist Mono", ui-monospace, monospace;      /* micro-labels, ids, timestamps */
 }
@@ -108,6 +108,9 @@
   --text-3: #7B7593;        /* tertiary / labels — lifted from #6F6987 so it clears 3:1 on glass over the lit ground (composite contrast test) */
 
   --accent:        #8B7CF7;
+  /* dark --gradient-primary (below, the composed-token `*` / `.dark *`
+     blocks) does not read --accent-strong — only the light derivation does —
+     so this dark value protects nothing that renders today. */
   --accent-strong: #A99EFF;
   --accent-dim:    rgba(139, 124, 247, .14);
   --ring-glow:     rgba(139, 124, 247, .35);
