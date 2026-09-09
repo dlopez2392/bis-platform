@@ -240,6 +240,7 @@ export default async function AccountDashboardPage({
       <div className="space-y-6 p-6">
         <div className={cn("grid gap-4 sm:grid-cols-2", hasAfterHours ? "xl:grid-cols-4" : "xl:grid-cols-3")}>
           <StatTile
+            hero
             label={m["dashboard.kpi.callsAnswered"]}
             value={String(currentCallsIso.length)}
             delta={callsDelta}
