@@ -127,13 +127,16 @@ test("a client sees only their own account, and nothing when access is off", asy
   // #1e3a8a scores 1.62:1 on the dark sidebar and is lightened to #3a62d4 to
   // clear 3:1 — so this value ALSO proves the lightening ran.
   //
-  // Targets the 3px active-item rail specifically (`.w-\[3px\]`), not just
-  // any `span.bg-sidebar-accent` — that class is shared by the unread-count
-  // badge and the collapsed-state dot too (app-sidebar.tsx), so the old
-  // broader selector could pass against the wrong element entirely if the
-  // rail itself ever stopped rendering.
-  await expect(sidebar.locator("nav span.bg-sidebar-accent.w-\\[3px\\]").first())
-    .toHaveCSS("background-color", "rgb(58, 98, 212)");
+  // The rail is a two-stop gradient (app-sidebar.tsx): the first stop is
+  // `var(--sidebar-accent)`, the second is the tenant's derived second
+  // accent (matched as any rgb() below — its exact value isn't this test's
+  // concern). The locator keys on `data-slot="nav-rail"`, not the old
+  // `bg-sidebar-accent` class: that class is gone from the rail (replaced by
+  // the gradient utility) and still shared by the unread-count badge and the
+  // collapsed-state dot, so a class-based selector could pass against the
+  // wrong element entirely if the rail itself ever stopped rendering.
+  await expect(sidebar.locator('nav [data-slot="nav-rail"]').first())
+    .toHaveCSS("background-image", /^linear-gradient\(rgb\(58, 98, 212\), rgb\(\d+, \d+, \d+\)\)$/);
 
   // The agency's own name must be gone from the client's chrome entirely.
   // This is the milestone's headline promise, and the one thing danlo flagged

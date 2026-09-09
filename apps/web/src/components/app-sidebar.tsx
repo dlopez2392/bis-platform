@@ -390,6 +390,7 @@ function SidebarLink({
     >
       {active ? (
         <span
+          data-slot="nav-rail"
           className="absolute left-0 h-5 w-[3px] rounded-r bg-[linear-gradient(var(--sidebar-accent),var(--sidebar-tint-2))]"
           aria-hidden
         />
