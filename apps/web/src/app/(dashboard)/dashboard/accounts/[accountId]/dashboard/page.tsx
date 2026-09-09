@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ListChecks } from "lucide-react";
 import {
-  listChecklistState, countFormsMissingNotify, countContacts,
+  listChecklistState, countContacts,
   getVoiceProfile, getCalendarForAccount, listCalls, listRecentEvents,
   listCallStartsBetween, listBookingCreationsBetween, listOpportunityValuesCreatedBetween,
   getA2pRegistration,
@@ -19,10 +19,9 @@ import { m } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 import { greetingPeriod, formatLocalLongDate } from "@/lib/dashboard/greeting";
 import { localDayWindow, bucketByLocalDay, bucketValueByLocalDay, deltaVsPrior, countAfterHours } from "@/lib/dashboard/metrics";
-import { ChecklistPanel } from "../checklist/checklist-panel";
-import { setChecklistItemAction, addChecklistItemAction } from "../checklist/actions";
 import { CallsChartCard } from "./calls-chart-card";
 import { ActivityCard } from "./activity-card";
+import { ChecklistRow } from "./checklist-row";
 
 // The activity card curates a small set of known event types out of a much
 // noisier raw ledger (CRM housekeeping, setup plumbing, …) — see
@@ -92,12 +91,11 @@ export default async function AccountDashboardPage({
   const window7FromMs = Date.parse(window7.fromIso);
 
   const [
-    checklistRows, formsMissingNotify, contactsCount, opps,
+    checklistRows, contactsCount, opps,
     voiceProfile, calendar, callsIso, bookingsIso, oppPairs, recentCalls, recentEvents,
     a2p,
   ] = await Promise.all([
     listChecklistState(db, accountId),
-    countFormsMissingNotify(db, accountId),
     countContacts(db, accountId),
     // PostgREST caps rows at max_rows (1000). Above that, this sum and count
     // silently undercount — an accurate figure needs a DB-side aggregate.
@@ -287,25 +285,24 @@ export default async function AccountDashboardPage({
             voiceEnabled={showVoiceSub}
           />
           {/* Both audiences (see the `listRecentEvents` call above's own
-              grants comment) — no isAgency gate, unlike the checklist panel
+              grants comment) — no isAgency gate, unlike the checklist row
               below. */}
           <ActivityCard accountId={accountId} events={recentEvents} now={now} />
         </div>
 
         {/* Below the metrics on purpose (danlo, 2026-09-02): the dashboard
             leads with what the business DID — the checklist is the agency's
-            onboarding worklist, not the day's news, so it reads last. */}
+            onboarding worklist, not the day's news, so it reads last. A
+            compact row (danlo, 2026-09-09), not the full /checklist panel —
+            that panel duplicated a whole nav section from the same data;
+            see checklist-row.tsx. */}
         {isAgency ? (
           checklistRemaining > 0 ? (
-            <div className="max-w-2xl">
-              <ChecklistPanel
-                entries={checklistEntries}
-                formsMissingNotify={formsMissingNotify}
-                setAction={setChecklistItemAction.bind(null, accountId)}
-                addAction={addChecklistItemAction.bind(null, accountId)}
-                titleHref={`/dashboard/accounts/${accountId}/checklist`}
-              />
-            </div>
+            <ChecklistRow
+              accountId={accountId}
+              done={checklistEntries.length - checklistRemaining}
+              total={checklistEntries.length}
+            />
           ) : (
             // A finished checklist should not compete with the rest of the
             // dashboard, but it still has to stay reachable — un-ticking an
