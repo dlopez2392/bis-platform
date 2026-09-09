@@ -18,7 +18,14 @@ export type SecondSeries = { label: string; values: number[] };
  * --accent-2 on the SAME axis — its y is scaled by the bars' max, never its
  * own — with a mono legend naming both. Never a second axis.
  */
-export function DailyChart({ days, secondSeries }: { days: Day[]; secondSeries?: SecondSeries }) {
+export function DailyChart({ days, secondSeries, primaryLabel = m["website.tile.visitors"] }: {
+  days: Day[];
+  secondSeries?: SecondSeries;
+  /** What the BARS are. Defaults to Visitors because both callers plot
+   *  visitors today — but the chart is generic and must not name its
+   *  caller's domain, the way `secondSeries` already carries its own label. */
+  primaryLabel?: string;
+}) {
   const [active, setActive] = useState<number | null>(null);
   // ONE axis for both series: the scale is the larger of the bars' max and
   // the second series' max. Scaling by the bars alone clipped the line flat
@@ -49,20 +56,29 @@ export function DailyChart({ days, secondSeries }: { days: Day[]; secondSeries?:
           </span>
         </div>
       ) : null}
-      <div className="relative flex h-[168px] items-end gap-[7px] border-b border-[var(--axis)] px-[2px]" onMouseLeave={() => setActive(null)}>
+      {/* EQUAL COLUMNS, no flex gap: xAt below places the second series, its
+          peak dot and the tooltip at ((i+0.5)/n)·100% of this row, and the
+          axis labels underneath sit in their own equal flex-1 columns. A
+          `gap` plus the row's own padding makes a bar's true centre a
+          function of the rendered width, so the line and the labels drifted
+          about 3px from the bars they describe. The same 7px of air, spent as
+          3.5px of padding INSIDE each column, keeps the three geometries
+          identical at every viewport. */}
+      <div className="relative flex h-[168px] items-end border-b border-[var(--axis)]" onMouseLeave={() => setActive(null)}>
         {[33, 66].map((pct) => (
           <div key={pct} aria-hidden data-slot="chart-grid" className="pointer-events-none absolute inset-x-0 border-t border-dashed border-border" style={{ bottom: `${pct}%` }} />
         ))}
         {days.map((d, i) => (
-          <button
-            key={d.day}
-            type="button"
-            data-slot="chart-bar"
-            aria-label={`${formatDateUTC(d.day)}: ${d.visitors} visitors, ${d.pageviews} pageviews`}
-            onMouseEnter={() => setActive(i)} onFocus={() => setActive(i)} onBlur={() => setActive(null)}
-            className={`relative flex-1 rounded-t-[4px] rounded-b-[2px] outline-none transition-opacity duration-150 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none ${d.isWeekend ? "bg-[var(--bar-wk)]" : "bar-accent"} ${active === i ? "bar-hot" : ""} ${active !== null && active !== i ? "opacity-70" : ""}`}
-            style={{ height: `${Math.max(2, (d.visitors / max) * 100)}%` }}
-          />
+          <span key={d.day} className="flex h-full min-w-0 flex-1 items-end px-[3.5px]">
+            <button
+              type="button"
+              data-slot="chart-bar"
+              aria-label={`${formatDateUTC(d.day)}: ${d.visitors} visitors, ${d.pageviews} pageviews`}
+              onMouseEnter={() => setActive(i)} onFocus={() => setActive(i)} onBlur={() => setActive(null)}
+              className={`relative w-full rounded-t-[4px] rounded-b-[2px] outline-none transition-[opacity,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none ${d.isWeekend ? "bg-[var(--bar-wk)]" : "bar-accent"} ${active === i ? "bar-hot" : ""} ${active !== null && active !== i ? "opacity-70" : ""}`}
+              style={{ height: `${Math.max(2, (d.visitors / max) * 100)}%` }}
+            />
+          </span>
         ))}
         {points ? (
           <>
@@ -88,7 +104,7 @@ export function DailyChart({ days, secondSeries }: { days: Day[]; secondSeries?:
       </div>
       {secondSeries ? (
         <div data-slot="chart-legend" className="mt-2 flex items-center gap-[14px] font-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground">
-          <span className="flex items-center gap-1.5"><span aria-hidden className="size-2.5 rounded-[3px] bg-[var(--accent)]" />{m["website.tile.visitors"]}</span>
+          <span className="flex items-center gap-1.5"><span aria-hidden className="size-2.5 rounded-[3px] bg-[var(--accent)]" />{primaryLabel}</span>
           <span className="flex items-center gap-1.5"><span aria-hidden className="size-2.5 rounded-[3px] bg-[var(--accent-2)]" />{secondSeries.label}</span>
         </div>
       ) : null}

@@ -74,7 +74,18 @@ test.describe("the style guide", () => {
     expect(g.pos).toBe("fixed");
     await expect(page.getByText("Ground & light", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Primary action" })).toBeVisible();
-    // Spec §5: one hero per screen — the styleguide is a screen too.
+    // This counts what actually PAINTS the hero gradient, not the marker
+    // attribute. `data-hero` is set only by StatTile, so counting it here
+    // under-measured DESIGN.md rule 11 — the styleguide also renders a
+    // standalone `hero-text` specimen in its own type section, a second
+    // gradient number the attribute count never saw.
+    //
+    // Two is correct HERE and only here: the styleguide is a gallery, and a
+    // specimen of the treatment is the point of it. Rule 11's real enforcement
+    // is per-screen and at unit level, where the screen's tiles are read from
+    // source — dashboard/hero.test.ts and website-section.test.ts each pin
+    // exactly one.
+    await expect(page.locator(".hero-text")).toHaveCount(2);
     await expect(page.locator('[data-hero="true"]')).toHaveCount(1);
     await expect(page.getByText("Pageviews ÷ 3")).toBeVisible();
   });

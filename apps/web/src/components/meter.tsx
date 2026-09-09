@@ -25,7 +25,15 @@ import { cn } from "@/lib/utils";
  * `fill` overrides the gradient for a STATUS reading (near/over cap, done):
  * status is never a gradient.
  */
-export const METER_TRACK = "h-[5px] w-full overflow-hidden rounded-full bg-[var(--meter-track)]";
+/**
+ * `block` is load-bearing, not decoration: `h-[5px]` and `w-full` are ignored
+ * on an inline box, and one consumer (the dashboard's checklist row) applies
+ * this to a `<span>` inside a plain block Link — where the track measured 0×0
+ * on the built app at every progress value. The sidebar's hand-rolled twin
+ * survives the same mistake only because its Link is `flex flex-col`, which
+ * blockifies its children. On `Meter`'s own div this is a no-op.
+ */
+export const METER_TRACK = "block h-[5px] w-full overflow-hidden rounded-full bg-[var(--meter-track)]";
 export const METER_FILL = "bg-[linear-gradient(90deg,var(--accent),var(--accent-2))]";
 
 export function Meter({

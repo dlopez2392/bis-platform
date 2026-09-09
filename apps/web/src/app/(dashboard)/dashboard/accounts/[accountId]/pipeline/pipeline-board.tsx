@@ -230,15 +230,16 @@ function DraggableCard({
 function CardBody({ opp, dragging }: { opp: BoardOpportunity; dragging?: boolean }) {
   return (
     <div
-      // NO `glass` here, on purpose and pending one measurement. This is the
-      // one screen that can put 40+ of these on a viewport at once, and
-      // DESIGN.md's own amendment records cards being un-blurred for a morning
-      // on a measured 7-9 dropped frames of 52. The findings sanction glass
-      // here only AFTER a frame reading on a real GPU; a headless run is
-      // software raster and its numbers mean nothing. Geometry lands on the
-      // 12px card radius now; the material waits for that reading.
+      // Glass, like every other card. This was the one surface held back, and
+      // the hold was entirely about the backdrop-filter: this screen can put
+      // 40+ of these on a viewport at once, and blurred cards had cost 7-9
+      // dropped frames of 52 on an integrated GPU, so the findings licensed
+      // glass here only after a frame reading on real hardware. Cards no
+      // longer blur at all (2026-09-09 pm), which leaves `glass` as a sheen
+      // gradient and an accent-tinted shadow — no backdrop surface per card,
+      // and nothing left for that reading to measure.
       className={cn(
-        "rounded-xl border border-border bg-card p-3",
+        "rounded-xl border border-border bg-card glass p-3",
         // This used to be a grey Tailwind blur shadow, which DESIGN.md forbids
         // in either mode; ambient light in this system is accent-tinted.
         dragging && "shadow-[var(--shadow-overlay)] ring-1 ring-[var(--accent)]",

@@ -247,6 +247,21 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     await expect(checklistRow).toBeVisible();
     await expect(checklistRow)
       .toHaveAttribute("href", `/dashboard/accounts/${accountId}/checklist`);
+    // The row's meter has to actually occupy space. It shipped as an inline
+    // <span> carrying h-[5px]/w-full — properties an inline box ignores — so
+    // it rendered 0x0 at every progress value and the row read as plain text.
+    // A class assertion cannot catch that (the classes were all present and
+    // correct); only a measured box can. The sidebar's identical markup
+    // escapes it because its Link is `flex flex-col`, which blockifies
+    // children — so this must be measured HERE, on the block-Link copy.
+    // `overflow-hidden` is the track's alone — the fill inside it is also
+    // rounded-full, so a rounded-full selector would match both.
+    const track = checklistRow.locator("span.overflow-hidden");
+    await expect(async () => {
+      const box = await track.boundingBox();
+      expect(box?.height).toBe(5);
+      expect(box?.width ?? 0).toBeGreaterThan(100);
+    }).toPass();
 
     // Everything above is generic post-account-creation behavior: the
     // checklist route, its heading, and the toggle-persists-after-reload
