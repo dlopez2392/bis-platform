@@ -91,7 +91,9 @@ export const TONE: Record<StateKind, { marker: string; chip: string; dot: string
     dot: "bg-success",
   },
   open: {
-    marker: "border-border bg-card text-muted-foreground",
+    // Step 2, not the card colour: a --surface-1 disc floating on a
+    // --surface-1 card is an invisible marker.
+    marker: "border-[var(--line)] bg-[var(--surface-2)] text-muted-foreground",
     chip: "border-border bg-transparent text-muted-foreground",
     dot: "bg-muted-foreground/50",
   },
@@ -119,7 +121,7 @@ export const TONE: Record<StateKind, { marker: string; chip: string; dot: string
  *  someone else's carrier portal. */
 export function NumberChip({ e164 }: { e164: string }) {
   return (
-    <code className="rounded-md border border-border bg-muted/60 px-2 py-1 font-mono text-xs text-foreground tabular-nums">
+    <code className="rounded-[8px] border border-[var(--input-line)] bg-[var(--input-bg)] px-2 py-1 font-mono text-xs text-foreground tabular-nums">
       {e164}
     </code>
   );

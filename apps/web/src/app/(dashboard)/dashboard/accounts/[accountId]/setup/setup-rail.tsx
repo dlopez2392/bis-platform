@@ -188,12 +188,23 @@ export function SetupRail({
                   if (next instanceof HTMLElement) next.focus();
                 }
               }}
+              // The stepper is the same "active item in a vertical list" the
+              // sidebar already solved: --accent-dim ground, a transparent
+              // edge, and the 3px gradient rail — not an alpha of the brand
+              // colour used as an outline.
               className={cn(
-                "flex w-full items-start gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-colors",
-                "hover:bg-muted focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none",
-                isSelected ? "border-primary/40 bg-primary/5" : "border-transparent",
+                "relative flex w-full items-start gap-2.5 rounded-[8px] border px-2.5 py-2 text-left transition-colors",
+                "hover:bg-[var(--surface-3)] focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none",
+                isSelected ? "border-transparent bg-[var(--accent-dim)]" : "border-transparent",
               )}
             >
+              {isSelected ? (
+                <span
+                  data-slot="step-rail"
+                  className="absolute inset-y-[7px] left-0 w-[3px] rounded-[3px] bg-[linear-gradient(var(--accent),var(--accent-2))]"
+                  aria-hidden
+                />
+              ) : null}
               <span
                 aria-hidden
                 className={cn(

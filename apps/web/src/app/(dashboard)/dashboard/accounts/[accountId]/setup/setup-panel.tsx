@@ -226,7 +226,7 @@ function SetupProgress({ done, total }: { done: number; total: number }) {
     .replace("{total}", String(total));
 
   return (
-    <section className="flex flex-col gap-4 rounded-lg border border-border bg-card p-4 sm:flex-row sm:items-center sm:gap-6">
+    <section className="flex flex-col gap-4 rounded-xl border border-border bg-card glass p-4 sm:flex-row sm:items-center sm:gap-6">
       <span
         className={cn(
           "flex size-9 shrink-0 items-center justify-center rounded-md",

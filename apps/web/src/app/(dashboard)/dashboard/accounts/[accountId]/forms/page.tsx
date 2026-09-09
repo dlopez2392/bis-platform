@@ -56,7 +56,21 @@ export default async function FormsPage({
                     <span className="text-xs text-muted-foreground">
                       {form.submissionCount} {m["forms.submissions"].toLowerCase()}
                     </span>
-                    <Badge variant={form.status === "published" ? "default" : "secondary"}>
+                    {/* `default` is the solid primary fill — a second
+                        primary-weight element in every row of the list, and
+                        DESIGN.md allows one per view. The mockup's chip plus
+                        a dot carries the same reading, and rule 3 wants the
+                        dot regardless: status is never colour alone. */}
+                    <Badge variant="chip" className="gap-1.5 py-1 pr-2.5 pl-2">
+                      <span
+                        className={cn(
+                          "size-[7px] rounded-full",
+                          form.status === "published"
+                            ? "bg-[var(--good)]"
+                            : "bg-muted-foreground/60",
+                        )}
+                        aria-hidden
+                      />
                       {FORM_STATUS_LABEL[form.status] ?? form.status}
                     </Badge>
                   </span>

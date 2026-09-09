@@ -437,3 +437,68 @@ describe("wave 2 — website, the three surfaces the fidelity pass missed", () =
     expect(panel).not.toContain("bg-primary");
   });
 });
+
+describe("wave 2 — setup / checklist", () => {
+  it("the wizard's detail pane and the progress card are glass", () => {
+    const shell = src(`${ACCT}/setup/setup-shell.tsx`);
+    expect(shell).toContain("min-w-0 rounded-xl border border-border bg-card glass p-5");
+    expect(hasGlassCard(src(`${ACCT}/setup/setup-panel.tsx`))).toBe(true);
+  });
+  it("the blocker chips are the mockup's neutral chip, not a mini card-on-card", () => {
+    const shell = src(`${ACCT}/setup/setup-shell.tsx`);
+    expect(shell).toContain("rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)]");
+    expect(shell).not.toContain("rounded-md border border-border bg-card");
+  });
+  it("the stepper's active item is the sidebar's pattern — --accent-dim plus the 3px gradient rail", () => {
+    const rail = src(`${ACCT}/setup/setup-rail.tsx`);
+    expect(rail).toContain("border-transparent bg-[var(--accent-dim)]");
+    expect(rail).toContain('data-slot="step-rail"');
+    expect(rail).toContain("w-[3px] rounded-[3px] bg-[linear-gradient(var(--accent),var(--accent-2))]");
+    // The CONTENT accent pair, never the sidebar chrome tokens — a themed
+    // tenant re-points --accent but not --sidebar-*.
+    expect(rail).not.toContain("--sidebar-accent");
+    expect(rail).not.toContain("border-primary/40 bg-primary/5");
+    expect(rail).toContain("hover:bg-[var(--surface-3)]");
+  });
+  it("the step marker is step 2, not a --surface-1 disc invisible on a --surface-1 card", () => {
+    const shared = src(`${ACCT}/setup/steps/step-shared.tsx`);
+    expect(shared).toContain('marker: "border-[var(--line)] bg-[var(--surface-2)] text-muted-foreground"');
+    // The number chip is a field, so it paints like one.
+    expect(shared).toContain("border-[var(--input-line)] bg-[var(--input-bg)] px-2 py-1 font-mono");
+    expect(shared).not.toContain("bg-muted/60");
+  });
+  it("the move-number panel is step 2 and takes no glass (nested in the detail pane)", () => {
+    const num = src(`${ACCT}/setup/steps/number.tsx`);
+    expect(num).toContain("rounded-[8px] border border-[var(--line)] bg-[var(--surface-2)] p-3");
+    expect(num).not.toContain("bg-muted/30");
+    expect(num).not.toMatch(/\bglass\b/);
+  });
+});
+
+describe("wave 2 — forms and automations", () => {
+  it("the form status badge is a chip WITH A DOT, not a second solid primary per row", () => {
+    const page = src(`${ACCT}/forms/page.tsx`);
+    // DESIGN.md rule 3 (status is never colour alone) and rule 8 (one primary
+    // button per view — a filled primary badge in fifty rows is neither).
+    expect(page).toContain('<Badge variant="chip"');
+    expect(page).toContain("size-[7px] rounded-full");
+    expect(page).not.toContain('variant={form.status === "published" ? "default" : "secondary"}');
+  });
+  it("the field editor's rows are rules inside the Card, not a box each", () => {
+    const ed = src(`${ACCT}/forms/[formId]/form-editor.tsx`);
+    expect(ed).toContain("border-t border-[var(--row-line)] py-[7px] first:border-t-0");
+    expect(ed).not.toContain('className="flex flex-wrap items-center gap-2 rounded-md border border-border p-2"');
+  });
+  it("the automation previews have a FILL — an unfilled outline on a card is not a field", () => {
+    for (const rel of [
+      `${ACCT}/automations/instant-reply-card.tsx`,
+      `${ACCT}/automations/sms-reminder-card.tsx`,
+    ]) {
+      const s = src(rel);
+      expect(s, rel).toContain("border-[var(--input-line)] bg-[var(--input-bg)] px-3 py-2 text-[13px]");
+      expect(s, rel).not.toContain("rounded-md border border-input px-3 py-2 text-sm");
+      // Nested in a Card in every case.
+      expect(s, rel).not.toMatch(/\bglass\b/);
+    }
+  });
+});

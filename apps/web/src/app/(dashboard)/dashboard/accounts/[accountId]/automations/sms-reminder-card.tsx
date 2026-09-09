@@ -79,7 +79,7 @@ export function SmsReminderCard({
 
           <div className="space-y-1.5">
             <Label htmlFor="smsrem-preview">{m["automations.smsReminder.preview"]}</Label>
-            <output id="smsrem-preview" className="block rounded-md border border-input px-3 py-2 text-sm" data-testid="sms-reminder-preview">{composed}</output>
+            <output id="smsrem-preview" className="block rounded-[8px] border border-[var(--input-line)] bg-[var(--input-bg)] px-3 py-2 text-[13px]" data-testid="sms-reminder-preview">{composed}</output>
             <p className="text-xs text-muted-foreground" data-testid="sms-reminder-count">
               {m["compose.smsSegments"]
                 .replace("{chars}", String(preview.chars))

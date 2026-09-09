@@ -138,7 +138,7 @@ export function SetupShell({
         id={SETUP_PANE_ID}
         role="region"
         aria-labelledby={SETUP_PANE_HEADING_ID}
-        className="min-w-0 rounded-lg border border-border bg-card p-5"
+        className="min-w-0 rounded-xl border border-border bg-card glass p-5"
       >
         <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
           <div className="min-w-0 flex-1">
@@ -211,9 +211,12 @@ export function SetupShell({
                       key={key}
                       type="button"
                       onClick={() => select(key)}
+                      // The blocker chips sit INSIDE the detail pane, so a
+                      // card fill here was a mini card-on-card. They take the
+                      // mockup's neutral chip instead — never glass (nested).
                       className={cn(
-                        "rounded-md border border-border bg-card px-2 py-0.5 text-xs font-medium text-foreground",
-                        "transition-colors hover:bg-muted",
+                        "rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-2.5 py-1 text-xs font-medium text-[var(--chip-text)]",
+                        "transition-colors hover:bg-[var(--surface-3)]",
                         "focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none",
                       )}
                     >
