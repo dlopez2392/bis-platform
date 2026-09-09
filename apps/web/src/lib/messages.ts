@@ -263,6 +263,20 @@ export const m = {
 
   "contacts.title": "Contacts",
   "contacts.add": "Add contact",
+  // The header badge (Task 3): a whole-phrase pick by count, never a plural
+  // template reused for one — see contacts.page below for the {placeholder}
+  // convention this departs from on purpose. The platform already shipped a
+  // "1 people" bug on the Website screen by templating a plural with no
+  // singular form; this is the same shape, fixed at the source.
+  "contacts.count": "{count} contacts",
+  "contacts.countOne": "1 contact",
+  // Cursor pager (Task 3): "Newer" always returns to the unpaged head rather
+  // than walking back one page at a time — see page.tsx's own comment on
+  // newerHref for why a full back-stack isn't worth the state here.
+  "contacts.newer": "Newer",
+  "contacts.older": "Older",
+  "contacts.import": "Import CSV",
+  "contacts.export": "Export CSV",
   "contacts.search": "Search name, email, phone…",
   "contacts.col.name": "Contact name",
   "contacts.col.phone": "Phone",

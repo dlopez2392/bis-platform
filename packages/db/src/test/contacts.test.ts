@@ -33,6 +33,18 @@ async function seedContacts(db: any, accountId: string, count: number, at: strin
   return (data ?? []).map((r: { id: string }) => r.id);
 }
 
+/** Seed helper: inserts one contact row with an explicit `first_name` AND
+ *  `created_at` — needed to interleave matching/non-matching rows at known
+ *  positions in the `created_at desc, id desc` ordering `listContacts` pages
+ *  by. Bypasses createContact for the same reasons as the helpers above. */
+async function seedContactAt(db: any, accountId: string, firstName: string, at: string) {
+  const { data, error } = await db.from("contacts")
+    .insert({ account_id: accountId, first_name: firstName, created_at: at })
+    .select("id").single();
+  if (error || !data) throw new Error(`seedContactAt failed: ${error?.message}`);
+  return { id: data.id as string };
+}
+
 describe("contacts service", () => {
   it("creates, emits event, dedupes by email", () =>
     withTestAccount(async (db, accountId) => {
@@ -293,6 +305,41 @@ describe("listContacts paging", () => {
       await seedContact(db, accountId, { firstName: "Grace", lastName: "Hopper" });
       expect(await countContacts(db, accountId)).toBe(2);
       expect(await countContacts(db, accountId, { search: "Ada" })).toBe(1);
+    }));
+
+  // Gap a Task 2 review flagged: source-reading confirmed the search .or()
+  // and the cursor's .or() compose (PostgREST ANDs separate filter calls)
+  // but nothing ever exercised it end to end — and the contacts list (Task 3)
+  // combines both live the moment an operator searches and clicks "Older".
+  // If they composed as OR instead of AND, this would either leak a
+  // non-matching row into a searched page or skip a matching one hiding
+  // behind a non-matching row's position — the interleaved timestamps below
+  // put a non-match between every pair of matches so either failure mode
+  // would show up as a wrong `seen` set.
+  it("composes search and before: paging the SEARCHED list sees every match once and no non-match", () =>
+    withTestAccount(async (db, accountId) => {
+      const base = Date.parse("2026-09-09T12:00:00.000Z");
+      const matchIds: string[] = [];
+      for (let i = 0; i < 12; i++) {
+        const at = new Date(base + i * 1000).toISOString();
+        const isMatch = i % 2 === 0;
+        const { id } = await seedContactAt(db, accountId, isMatch ? `Ada${i}` : `Bob${i}`, at);
+        if (isMatch) matchIds.push(id);
+      }
+
+      const seen: string[] = [];
+      let before: { at: string; id: string } | undefined;
+      for (let page = 0; page < 10; page++) {
+        const rows = await listContacts(db, accountId, { search: "ada", limit: 2, before });
+        if (rows.length === 0) break;
+        seen.push(...rows.map((r: any) => r.id));
+        const last = rows[rows.length - 1]!;
+        before = { at: last.created_at, id: last.id };
+      }
+
+      expect(seen.length).toBe(matchIds.length);              // every match, nothing extra
+      expect(new Set(seen).size).toBe(matchIds.length);        // no repeats across pages
+      expect([...seen].sort()).toEqual([...matchIds].sort()); // exactly the matches — no "Bob" leaked
     }));
 });
 
