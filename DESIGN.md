@@ -33,7 +33,7 @@ for a blur to resolve), and
 accent-tinted.
 
 **Type roles (3, no exceptions):**
-- Display — Bricolage Grotesque 650: page titles and KPI numbers ONLY.
+- Display — Bricolage Grotesque 650: page titles and KPI numbers ONLY (exception since Task 11: the Website sentence panel at 24px, mockup `--sentence-size`, also uses the display face).
 - UI — Geist 400/500/600: everything functional. Hierarchy by weight first,
   size second, color last.
 - Label — Geist Mono 500, 10px, +0.14em, uppercase: sidebar group headers,

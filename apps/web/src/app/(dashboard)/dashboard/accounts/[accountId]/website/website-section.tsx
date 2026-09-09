@@ -35,15 +35,16 @@ export function WebsiteSection({ view }: { view: WebsiteView }) {
       </div>
 
       <section className="rounded-lg border border-border bg-card p-5" aria-label="Summary">
-        <p className="max-w-[62ch] text-[17px] leading-[1.5] text-card-foreground">
+        {/* 24px (mockup --sentence-size): gradient text is legal only at display size (spec §3.4). */}
+        <p className="max-w-[62ch] font-display text-[24px] font-[650] leading-[1.3] tracking-[-0.01em] text-card-foreground">
           {view.sentence.map((s, i) => s.strong
-            ? <strong key={i} className="font-semibold text-primary">{s.text}</strong>
+            ? <strong key={i} className="hero-text font-[650]">{s.text}</strong>
             : <span key={i}>{s.text}</span>)}
         </p>
       </section>
 
       <div className="grid gap-3 md:grid-cols-4">
-        <StatTile label={m["website.tile.visitors"]} value={fmt(view.totals.visitors)} delta={view.visitorsDelta} spark={view.days.map((d) => d.visitors)} />
+        <StatTile hero label={m["website.tile.visitors"]} value={fmt(view.totals.visitors)} delta={view.visitorsDelta} spark={view.days.map((d) => d.visitors)} />
         <StatTile label={m["website.tile.pageviews"]} value={fmt(view.totals.pageviews)} delta={view.pageviewsDelta} spark={view.days.map((d) => d.pageviews)} />
         <StatTile
           label={m["website.tile.fromGoogle"]} value={pct(view.fromGoogle.share)}
@@ -61,7 +62,10 @@ export function WebsiteSection({ view }: { view: WebsiteView }) {
 
       <section className="rounded-lg border border-border bg-card p-5" aria-label={m["website.chart.title"]}>
         <p className={LABEL}>{m["website.chart.title"]}</p>
-        <DailyChart days={view.days} />
+        <DailyChart
+          days={view.days}
+          secondSeries={{ label: m["website.chart.series.pageviewsThird"], values: view.days.map((d) => Math.round(d.pageviews / 3)) }}
+        />
         {showPlaces ? <DeviceStrip devices={view.devices} /> : null}
       </section>
 

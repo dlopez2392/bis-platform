@@ -79,7 +79,7 @@ describe("overlays float on --surface-overlay (opaque-over-scroll rule)", () => 
   });
 
   it("table rows hover to --surface-3 (raised, visible in both themes), select to --accent-dim, and never blur", () => {
-    const row = src("./table.tsx").slice(src("./table.tsx").indexOf('data-slot="table-row"'), src("./table.tsx").indexOf('data-slot="table-row"') + 300);
+    const row = classLiteralAfter(src("./table.tsx"), 'data-slot="table-row"');
     expect(row).toContain("hover:bg-[var(--surface-3)]");
     expect(row).toContain("data-[state=selected]:bg-[var(--accent-dim)]");
     expect(row).not.toMatch(/glass|blur/);

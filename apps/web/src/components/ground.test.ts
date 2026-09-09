@@ -43,5 +43,6 @@ describe("Ground — the lit page layer (spec §3.1)", () => {
     // Sharpen, don't loosen: prove the paint is still provably token-derived.
     expect(html).toContain("rgb(from var(--accent) r g b / var(--glow-1-alpha))");
     expect(html).toContain("rgb(from var(--accent-2) r g b / var(--glow-2-alpha))");
+    expect(html).toContain("rgb(from var(--accent) r g b / var(--glow-3-alpha))");
   });
 });

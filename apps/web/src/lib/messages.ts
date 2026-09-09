@@ -1126,6 +1126,7 @@ export const m = {
   "website.tile.noTopPage": "No page stood out yet",
   "website.chart.title": "Visitors by day",
   "website.chart.tooltip": "{visitors} visitors · {pageviews} pageviews",
+  "website.chart.series.pageviewsThird": "Pageviews ÷ 3",
   "website.devices.phone": "Phone",
   "website.devices.desktop": "Desktop",
   "website.devices.tablet": "Tablet",

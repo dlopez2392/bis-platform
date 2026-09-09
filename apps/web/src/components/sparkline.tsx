@@ -5,8 +5,8 @@
 // that geometry, it never recomputes it. Viewbox and stroke/dot treatment
 // are pinned by the mockup (`docs/design/bis-design-direction.html`, the
 // `.spark` SVGs around lines 315-321): 100x26, `preserveAspectRatio="none"`
-// so the line stretches to fill its container, stroke-width 2, endpoint
-// dot r 2.4, area fill at 12% opacity.
+// so the line stretches to fill its container. stroke-width 1.8, endpoint
+// dot r 2.4, area fill at 14% opacity (Northern Lights spec §5).
 import { sparklinePath } from "@/lib/dashboard/metrics";
 
 const VIEW_WIDTH = 100;
@@ -29,8 +29,8 @@ export function Sparkline({ counts, className }: { counts: number[]; className?:
       className={className}
       aria-hidden="true"
     >
-      <polygon points={area} fill="currentColor" opacity={0.12} />
-      <polyline points={line} fill="none" stroke="currentColor" strokeWidth={2} />
+      <polygon points={area} fill="currentColor" opacity={0.14} />
+      <polyline points={line} fill="none" stroke="currentColor" strokeWidth={1.8} />
       <circle cx={endX} cy={endY} r={2.4} fill="currentColor" />
     </svg>
   );

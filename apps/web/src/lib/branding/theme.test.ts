@@ -672,6 +672,11 @@ const paintOf = (block: string, token: string): Paint => {
 const ON_CANVAS = 1 - 72 / (420 * 0.6);
 
 describe("composite contrast — BIS default (spec §8)", () => {
+  // In light mode --surface-1 is fully opaque, so the card paint dominates
+  // the composite and atGlow/atGlow2/darkest collapse to the same white
+  // regardless of glow — these light-mode checks below are true but not
+  // discriminating. The brand sweep's light checks (next describe) are the
+  // ones that actually exercise a translucent card over the lit ground.
   // ON_CANVAS is derived from the shipped Ground geometry (700px 420px glow,
   // -10% vertical centre, 60% transparent stop, on a 720px viewport). Pin
   // those exact numbers here so a retune of the radius, stop, or centre

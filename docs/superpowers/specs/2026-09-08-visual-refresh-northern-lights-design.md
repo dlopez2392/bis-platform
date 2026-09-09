@@ -73,7 +73,7 @@ New material tokens:
 New token `--accent-2`, with `--accent-2-dim` (14% alpha) and `--ring-glow-2`.
 - **BIS default (no brand color active):** pinned constants, not derived. Dark `#4FD8E6`, light `#0891B2`.
 - **Brand color active (per-tenant theme):** derived in `deriveTheme` from the brand hue in OKLCH: lightness +0.18 (clamped to 0.85), chroma ×0.9, hue rotated −30°. Analogous, never complementary, so any brand pairs cleanly. The derivation is a pure function with table tests that pin the RULE for five input hues (hue delta −30° ± 6°, chroma ×0.9, lightness +0.18 clamped to .85, a gray stays gray), not color-family names: a single rotation cannot promise "violet → cyan" for every brand, and it does not need to — analogous is the guarantee.
-- **Where it appears, exhaustively:** glow 2; the second chart series; the far end of the active-rail gradient; the second stop of the hero gradient. Nowhere else. (An accent word inside toasts was considered and dropped: toasts are plain strings at every call site.)
+- **Where it appears, exhaustively:** glow 2; the second chart series; the far end of the active-rail gradient; the second stop of the hero gradient; the sidebar identity chip (`--av-bg`); the setup meter fill (`--meter-fill`). Nowhere else. (An accent word inside toasts was considered and dropped: toasts are plain strings at every call site.) (Amended 2026-09-09: the identity chip and setup meter, both mockup-sanctioned in `docs/design/northern-lights.html`, were missing from this list.)
 
 ### 3.4 The hero gradient
 `--gradient-hero`: `linear-gradient(90deg, color-mix(in srgb, var(--accent) 50%, white), color-mix(in srgb, var(--accent-2) 60%, white))` in dark (the mockup's stops); in light the stops are `var(--accent)` and `var(--accent-2)` unlightened.
@@ -117,7 +117,7 @@ Everything here happens through the semantic variables in `(dashboard)/globals.c
 
 ## 7. DESIGN.md amendments (exact)
 
-1. **Foundations → Surface ladder:** "Depth in dark mode comes from the ladder plus `--shadow-card` … never gray blur shadows on dark" → "Depth in dark mode comes from the lit ground (two accent glows + a masked grid), glass surfaces (translucent steps 1–3 with a 1px top highlight and `--glass-blur`), and `--shadow-card` — never gray blur shadows on dark; ambient light is accent-tinted."
+1. **Foundations → Surface ladder:** "Depth in dark mode comes from the ladder plus `--shadow-card` … never gray blur shadows on dark" → "Depth in dark mode comes from the lit ground (three accent glows — two `--accent`, one `--accent-2` — plus a masked grid), glass surfaces (translucent steps 1–3 with a 1px top highlight and `--glass-blur`), and `--shadow-card` — never gray blur shadows on dark; ambient light is accent-tinted." (Corrected 2026-09-09: §3.1 defines three glows, not two.)
 2. **Identity:** add "Second accent `--accent-2` (cyan by default; derived from the brand hue when a brand color is active). Used only where §3.3 of the Northern Lights spec lists."
 3. **Rules:** add rule 11 — "One hero gradient per screen, named in the screen's spec and marked in code; all other numbers are text-colored."
 4. **Charts:** "Single-hue (accent) for single-series" → "Accent for the primary series; ONE second series in `--accent-2` is allowed on the same axis, with a legend. Never a dual axis."
@@ -138,6 +138,7 @@ Reference mockup line at the top of DESIGN.md points to `docs/design/northern-li
 - Blur only on: Card, sidebar, overlays (dialog/drawer/popover/palette/toast). Never on table rows, list items, badges, inputs inside long lists.
 - The glow layers are three fixed `radial-gradient` backgrounds on one element and one masked repeating gradient; no images, no canvas, no animation.
 - Measured gate in PR 1: the Contacts table at 500 rows scrolls without dropped frames in Chrome on the dev laptop with the styleguide open beside it (manual, recorded in the ledger).
+- **2026-09-09 decision (PR 2):** measured on an Intel UHD 630, the Card's backdrop blur dropped 7–9 of 52 frames while scrolling; 0 dropped with the cards' blur removed. Decision: blur stays on the sidebar and the overlays only (neither scrolls); cards keep the sheen + translucency but no `backdrop-filter`. Already shipped in PR #37; recorded in DESIGN.md's Foundations section.
 
 ## 10. Rollout
 
