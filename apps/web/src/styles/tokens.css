@@ -77,6 +77,10 @@
   --row-line:   rgba(29,25,48,.07);
   --share-bg:   rgba(29,25,48,.08);
   --top-line:   rgba(29,25,48,.08);
+  /* the CONTENT area's meter track (Meter, checklist row) — ink here, because
+     a light card is 72% white and --meter-bg's white tint vanishes on it. The
+     sidebar keeps --meter-bg: that rail is dark chrome in both themes. */
+  --meter-track: rgba(29,25,48,.08);
   --input-bg:   rgba(29,25,48,.03);
   --input-line: rgba(29,25,48,.10);
   --tip-line:   rgba(29,25,48,.12);
@@ -166,6 +170,7 @@
   --row-line:   rgba(255,255,255,.06);
   --share-bg:   rgba(255,255,255,.07);
   --top-line:   rgba(255,255,255,.06);
+  --meter-track: rgba(255,255,255,.08);
   --input-bg:   rgba(255,255,255,.04);
   --input-line: rgba(255,255,255,.09);
   --tip-line:   rgba(255,255,255,.12);

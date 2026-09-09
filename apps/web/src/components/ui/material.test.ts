@@ -228,13 +228,21 @@ describe("Notice is the one status banner", () => {
 
 describe("Meter is the one progress bar", () => {
   const s = src("../meter.tsx");
-  it("is the mockup's 5px track on --meter-bg with the CONTENT accent pair", () => {
+  it("is the mockup's 5px track on --meter-track with the CONTENT accent pair", () => {
     expect(s).toContain("h-[5px]");
-    expect(s).toContain("bg-[var(--meter-bg)]");
+    expect(s).toContain("bg-[var(--meter-track)]");
     expect(s).toContain("bg-[linear-gradient(90deg,var(--accent),var(--accent-2))]");
     // A themed tenant re-points --accent but not --sidebar-*; a shared meter
     // painted from the sidebar's chrome tokens goes wrong on every brand.
     expect(s).not.toContain("--sidebar-accent");
+    // --meter-bg is the SIDEBAR's own track (white in both themes because that
+    // rail is dark chrome in both). On a light content card it is invisible.
+    // Scoped to the class string — the docstring names the token to explain why.
+    expect(s).not.toContain("bg-[var(--meter-bg)]");
+  });
+
+  it("the sidebar's own meter keeps the chrome track, and it is the only --meter-bg reader", () => {
+    expect(src("../app-sidebar.tsx")).toContain("bg-[var(--meter-bg)]");
   });
   it("no content-area meter is still 6px on --surface-3 with a flat fill", () => {
     const app = "../../app/(dashboard)/dashboard/accounts/[accountId]";
