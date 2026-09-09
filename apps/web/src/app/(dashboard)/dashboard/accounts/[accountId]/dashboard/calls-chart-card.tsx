@@ -6,20 +6,21 @@
 // the page (`page.tsx`'s own `Promise.all`); this file issues no queries of
 // its own beyond the pure `dayBuckets`/`recentCalls` it is handed.
 //
-// Construction reference: docs/design/bis-design-direction.html's `.bars`/
-// `.axis`/`table.mini` rules (~lines 126-151) — CSS bars (a div per day,
-// height as a percentage of the window max), a hover tooltip on every mark,
-// and a headerless 3-row mini table. Rebuilt with tokens (`bg-primary`/
-// `bg-muted`, never a literal color) rather than the mockup's raw `--ac`/
-// `--s3` custom properties, and the tooltip's TEXT is rendered as an
-// ordinary child node instead of the mockup's `data-v` + CSS
-// `content:attr()` indirection — React already holds the formatted string,
-// so stashing it in a data attribute only to have `::after` read it back
-// would be a round-trip for no benefit, and risks a Tailwind arbitrary-value
-// escaping mistake nothing here could catch without a live browser. The
-// visible behavior (a token-styled tooltip above the mark, shown on hover)
-// is identical either way; the `sr-only` twin per bar covers assistive tech
-// exactly as the brief specifies.
+// Construction reference: `…/website/daily-chart.tsx`, which is the repo's
+// chart language, and docs/design/northern-lights.html behind it. This file
+// was a SECOND, completely separate chart implementation that predated that
+// language and got none of it — a 120px plot of flat `bg-primary` blocks on a
+// `--line` baseline, weekends on `--surface-3`, no gridlines, no busiest-day
+// mark, an opaque `bg-popover` tooltip with a grey `shadow-sm`, and an "axis"
+// that was three stray words spread by `justify-between`. Every one of those
+// is the same defect the other chart already fixed; see `Bars` below.
+//
+// The tooltip's TEXT is rendered as an ordinary child node rather than the
+// mockup's `data-v` + CSS `content:attr()` indirection — React already holds
+// the formatted string, so stashing it in a data attribute only to have
+// `::after` read it back would be a round-trip for no benefit, and risks a
+// Tailwind arbitrary-value escaping mistake nothing here could catch without
+// a live browser. The `sr-only` twin per bar covers assistive tech.
 import Link from "next/link";
 import { PhoneIncoming } from "lucide-react";
 import type { CallListRow } from "@bis/db";
@@ -32,23 +33,13 @@ import { longDayLabel, shortDayLabel } from "@/lib/dashboard/day-label";
 import { callerLabel, formatDuration } from "../calls/format";
 import { OutcomePill } from "../calls/outcome-pill";
 
-/** Fixed bars-container height, pinned by the brief (not the mockup's own
- *  110px). */
-const BARS_HEIGHT_PX = 120;
-/** Every bar stays visible — including a genuine zero-call day sitting next
- *  to a 13-call one — the same reason the mockup floors its own bars at
- *  `min-height:6px`. 4px keeps this on the repo's 4px spacing grid (Shape &
- *  motion) rather than lifting the mockup's un-aligned 6px verbatim. */
-const MIN_BAR_HEIGHT_PX = 4;
-/** The container below is `box-sizing: border-box` (Tailwind preflight), so
- *  its `pt-1.5` (6px) and `border-b` (1px) both eat into the fixed
- *  `BARS_HEIGHT_PX` total rather than sitting outside it — the space a bar
- *  can actually occupy, measured up from the border to the padding edge, is
- *  6px + 1px shorter than the full 120px. Scaling the tallest bar against
- *  THIS (not `BARS_HEIGHT_PX` itself) keeps it inside the visible box;
- *  scaling against the full 120 let the max-value bar's flex child poke
- *  through the top padding by the same 7px it was short. */
-const BARS_CONTENT_HEIGHT_PX = BARS_HEIGHT_PX - 6 - 1;
+/** Percent of the tallest bar, floored so a genuine zero-call day sitting
+ *  next to a 13-call one is still a visible mark — the same reason the
+ *  mockup floors its own bars, and the same floor `daily-chart.tsx` uses.
+ *  Percentages, not px: the plot has a definite height (`h-[168px]`), so the
+ *  px arithmetic that used to compensate for a `pt-1.5` this container no
+ *  longer has is gone with it. */
+const MIN_BAR_PERCENT = 2;
 
 export function CallsChartCard({
   accountId,
@@ -93,9 +84,9 @@ export function CallsChartCard({
   const ctaLabel = offerVoiceSetup ? m["dashboard.calls.emptySetupVoice"] : m["dashboard.calls.emptyViewCalls"];
 
   return (
-    <div className="rounded-lg border border-border bg-card p-5">
+    <div className="rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
       <div className="flex items-baseline gap-2">
-        <h5 className="text-sm font-semibold text-card-foreground">{m["dashboard.calls.title"]}</h5>
+        <h5 className="text-[13.5px] font-semibold text-card-foreground">{m["dashboard.calls.title"]}</h5>
         <span className="ml-auto font-mono text-[10px] font-normal tracking-[0.14em] text-muted-foreground uppercase">
           {m["dashboard.calls.caption"]}
         </span>
@@ -112,14 +103,7 @@ export function CallsChartCard({
           }
         />
       ) : (
-        <>
-          <Bars dayBuckets={dayBuckets} />
-          <div className="mt-1.5 flex justify-between font-mono text-[10px] tracking-[0.14em] text-muted-foreground uppercase">
-            <span>{shortDayLabel(dayBuckets[0]!.dayKey)}</span>
-            <span>{m["dashboard.calls.axis.weekendsMuted"]}</span>
-            <span>{m["dashboard.calls.axis.today"]}</span>
-          </div>
-        </>
+        <Bars dayBuckets={dayBuckets} />
       )}
 
       {/* Keyed on `recentCalls` itself, independent of the 14-day `isEmpty`
@@ -142,13 +126,39 @@ function callsUnit(count: number): string {
   return count === 1 ? m["dashboard.calls.unit.call"] : m["dashboard.calls.unit.calls"];
 }
 
+/**
+ * The chart language, shared with `…/website/daily-chart.tsx`: a 168px plot
+ * on a `--axis` rule, 7px gaps, the accent-gradient bar with a 4px top and a
+ * 2px foot, weekends on `--bar-wk` (`--surface-3` is 29% too bright for
+ * this), the busiest day in `bar-hot` — one of the three sanctioned
+ * `--accent-2` moments, and it was missing from the first screen the owner
+ * opens — two dashed gridlines, a `glass-overlay` tooltip, and a mono label
+ * under EVERY day, thinned by parity rather than down to three stray words.
+ *
+ * Still a server component: every hover effect is CSS-only (`group/bar`), so
+ * there is nothing here to hydrate. The reference chart is a client component
+ * only because its bars are `<button>`s that drive React state.
+ */
 function Bars({ dayBuckets }: { dayBuckets: { dayKey: string; count: number; isWeekend: boolean }[] }) {
   const max = Math.max(1, ...dayBuckets.map((b) => b.count));
+  // The BUSIEST day, resolved once. Ties keep the earliest, which is the same
+  // rule `dayBuckets`' own ascending order already implies.
+  const peak = dayBuckets.reduce((best, b, i) => (b.count > dayBuckets[best]!.count ? i : best), 0);
 
   return (
-    <div className="mt-3.5 flex h-[120px] items-end gap-1 border-b border-border pt-1.5">
-      {dayBuckets.map((bucket) => {
-        const heightPx = Math.max(MIN_BAR_HEIGHT_PX, Math.round((bucket.count / max) * BARS_CONTENT_HEIGHT_PX));
+    <>
+    <div className="relative mt-3 flex h-[168px] items-end gap-[7px] border-b border-[var(--axis)] px-[2px]">
+      {[33, 66].map((pct) => (
+        <div
+          key={pct}
+          aria-hidden
+          data-slot="chart-grid"
+          className="pointer-events-none absolute inset-x-0 border-t border-dashed border-border"
+          style={{ bottom: `${pct}%` }}
+        />
+      ))}
+      {dayBuckets.map((bucket, i) => {
+        const heightPercent = Math.max(MIN_BAR_PERCENT, (bucket.count / max) * 100);
         const unit = callsUnit(bucket.count);
         const tooltip = m["dashboard.calls.tooltip"]
           .replace("{date}", shortDayLabel(bucket.dayKey))
@@ -160,25 +170,60 @@ function Bars({ dayBuckets }: { dayBuckets: { dayKey: string; count: number; isW
           .replace("{unit}", unit);
 
         return (
-          <div key={bucket.dayKey} className="group/bar relative flex flex-1 flex-col justify-end">
+          // The COLUMN is the hover target and the group, so a 2%-tall zero
+          // day is still reachable; the tooltip lives inside the bar so it
+          // anchors above the bar's own top rather than the plot's.
+          <div key={bucket.dayKey} className="group/bar relative flex h-full flex-1 flex-col justify-end">
             <div
-              className={cn("rounded-t-[4px]", bucket.isWeekend ? "bg-muted" : "bg-primary")}
-              style={{ height: `${heightPx}px` }}
-            />
-            {/* The hover tooltip — every mark carries one (DESIGN.md's chart
-                section). `aria-hidden`: the `sr-only` span below is the
-                accessible copy of the same fact, not this element. */}
-            <div
-              aria-hidden
-              className="pointer-events-none absolute bottom-[calc(100%+6px)] left-1/2 z-10 -translate-x-1/2 rounded-md border border-border bg-popover px-2 py-1 text-[10px] whitespace-nowrap text-popover-foreground opacity-0 shadow-sm transition-opacity group-hover/bar:opacity-100"
+              data-slot="chart-bar"
+              className={cn(
+                "relative rounded-t-[4px] rounded-b-[2px]",
+                bucket.isWeekend ? "bg-[var(--bar-wk)]" : "bar-accent",
+                i === peak && "bar-hot",
+              )}
+              style={{ height: `${heightPercent}%` }}
             >
-              {tooltip}
+              {/* The hover tooltip — every mark carries one (DESIGN.md's chart
+                  section). `aria-hidden`: the `sr-only` span below is the
+                  accessible copy of the same fact, not this element.
+                  `glass-overlay` carries both the fill and `--shadow-overlay`,
+                  so there is no `bg-popover` and no grey `shadow-sm` here. */}
+              <div
+                aria-hidden
+                className="pointer-events-none absolute bottom-[calc(100%+8px)] left-1/2 z-10 -translate-x-1/2 rounded-[7px] border border-[var(--tip-line)] glass-overlay px-2 py-[5px] font-mono text-[10.5px] whitespace-nowrap opacity-0 transition-opacity group-hover/bar:opacity-100"
+              >
+                {tooltip}
+              </div>
             </div>
             <span className="sr-only">{srText}</span>
           </div>
         );
       })}
     </div>
+    {/* Every day is labelled, each in its own equal column so the labels line
+        up under their bars; narrow viewports thin by PARITY — the odd labels'
+        text hides while their column stays — so the axis never collapses to
+        three stray words, which is what stood here before. */}
+    <div className="flex pt-1.5" aria-hidden data-slot="chart-axis">
+      {dayBuckets.map((bucket, i) => (
+        <span
+          key={bucket.dayKey}
+          className="min-w-0 flex-1 text-center font-mono text-[10px] text-muted-foreground"
+        >
+          <span className={i % 2 === 1 ? "hidden xl:inline" : ""}>{shortDayLabel(bucket.dayKey)}</span>
+        </span>
+      ))}
+    </div>
+    {/* "Weekends muted" is a LEGEND, not a tick — it never belonged in the
+        axis row. Same shape as the reference chart's own legend. */}
+    <div
+      data-slot="chart-legend"
+      className="mt-2 flex items-center gap-1.5 font-mono text-[10px] tracking-[0.06em] text-muted-foreground uppercase"
+    >
+      <span aria-hidden className="size-2.5 rounded-[3px] bg-[var(--bar-wk)]" />
+      {m["dashboard.calls.axis.weekendsMuted"]}
+    </div>
+    </>
   );
 }
 

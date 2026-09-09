@@ -231,7 +231,6 @@ export const m = {
   "dashboard.calls.title": "Calls",
   "dashboard.calls.caption": "Last 14 days",
   "dashboard.calls.axis.weekendsMuted": "Weekends muted",
-  "dashboard.calls.axis.today": "Today",
   "dashboard.calls.tooltip": "{date} · {count} {unit}",
   "dashboard.calls.tooltipSr": "{date}, {count} {unit}",
   "dashboard.calls.unit.call": "call",
