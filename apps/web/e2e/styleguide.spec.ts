@@ -13,6 +13,28 @@ test.describe("the style guide", () => {
     // The rail's sixth kind, which only exists on the rail (StateKind + locked).
     await expect(page.getByText("Locked", { exact: true })).toBeVisible();
   });
+
+  test("ships the Northern Lights material in both themes", async ({ page }) => {
+    await page.goto("/dashboard/styleguide");
+    await expect(page.getByText("Ground & light", { exact: true })).toBeVisible();
+
+    const probe = () =>
+      page.evaluate((dark: boolean) => {
+        document.documentElement.classList.toggle("dark", dark);
+        const card = document.querySelector('[data-slot="card"]')!;
+        const cs = getComputedStyle(card);
+        return { filter: cs.backdropFilter || (cs as unknown as { webkitBackdropFilter?: string }).webkitBackdropFilter || "", bg: cs.backgroundColor };
+      }, dark);
+    let dark = true;
+    const d = await probe();
+    // Glass shipped: blur(14px) — or, where backdrop-filter is unsupported, the opaque fallback #15131F.
+    expect(d.filter.includes("blur") || d.bg === "rgb(21, 19, 31)").toBe(true);
+    dark = false;
+    const l = await probe();
+    expect(l.bg).toBe("rgb(255, 255, 255)");
+    await expect(page.getByText("Ground & light", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Primary action" })).toBeVisible();
+  });
 });
 
 test.describe("the style guide is agency-only", () => {

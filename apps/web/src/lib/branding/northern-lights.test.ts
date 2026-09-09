@@ -110,7 +110,20 @@ describe("globals.css — semantic mapping (spec §3.2, §4)", () => {
     const body = globals.match(/@utility sidebar-chrome\s*\{([^}]*)\}/)![1]!;
     expect(body).toMatch(/background-color:\s*var\(--sidebar-ground\);/);
     expect(body).toMatch(/background-image:\s*linear-gradient\(var\(--sidebar\), var\(--sidebar\)\);/);
-    expect(body).toMatch(/backdrop-filter:\s*blur\(var\(--glass-blur\)\);/);
+    // Unprefixed only — Lightning CSS folds a hand-written -webkit- twin into
+    // the prefixed form and drops the standard property, and Chromium does
+    // not alias it, so a -webkit- line here silently ships zero blur.
+    expect(body).toMatch(/(^|[^-])backdrop-filter:\s*blur\(var\(--glass-blur\)\);/);
+    expect(body).not.toMatch(/-webkit-backdrop-filter/);
+  });
+
+  it("glass-overlay = popover surface + shadow-overlay + blur(var(--glass-blur)), unprefixed only", () => {
+    const body = globals.match(/@utility glass-overlay\s*\{([^}]*)\}/)![1]!;
+    expect(body).toMatch(/background-color:\s*var\(--popover\);/);
+    expect(body).toMatch(/box-shadow:\s*var\(--shadow-overlay\);/);
+    // Unprefixed only — see the sidebar-chrome test above for why.
+    expect(body).toMatch(/(^|[^-])backdrop-filter:\s*blur\(var\(--glass-blur\)\);/);
+    expect(body).not.toMatch(/-webkit-backdrop-filter/);
   });
 
   it.each(["glass", "glass-overlay", "sidebar-chrome", "btn-primary", "pill-on", "hero-text", "bar-accent", "bar-hot"])(
@@ -122,7 +135,9 @@ describe("globals.css — semantic mapping (spec §3.2, §4)", () => {
     const body = globals.match(/@utility glass\s*\{([^}]*)\}/)![1]!;
     expect(body).toMatch(/background-image:\s*var\(--sheen\);/);
     expect(body).toMatch(/box-shadow:\s*var\(--shadow-card\);/);
-    expect(body).toMatch(/backdrop-filter:\s*blur\(var\(--glass-blur\)\);/);
+    // Unprefixed only — see the sidebar-chrome test above for why.
+    expect(body).toMatch(/(^|[^-])backdrop-filter:\s*blur\(var\(--glass-blur\)\);/);
+    expect(body).not.toMatch(/-webkit-backdrop-filter/);
     expect(body).not.toMatch(/background-color/);
   });
 

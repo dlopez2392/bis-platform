@@ -63,6 +63,29 @@ export default async function StyleguidePage() {
       <div className="space-y-6 p-6">
         <p className="max-w-prose text-sm text-muted-foreground">{m["styleguide.body"]}</p>
 
+        <Section title="Ground & light" file="styles/tokens.css · components/ground.tsx">
+          {/* The glass ladder: four steps, never more. Each swatch is a token. */}
+          <div className="flex w-full flex-wrap gap-3">
+            {(["--surface-0", "--surface-1", "--surface-2", "--surface-3"] as const).map((t) => (
+              <div key={t} className="flex flex-col gap-1">
+                <div className="h-14 w-28 rounded-lg border border-border glass" style={{ backgroundColor: `var(${t})` }} />
+                <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{t}</span>
+              </div>
+            ))}
+            <div className="flex flex-col gap-1">
+              <div className="h-14 w-28 rounded-lg" style={{ backgroundColor: "var(--accent-2)" }} />
+              <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">--accent-2</span>
+            </div>
+          </div>
+          {/* The hero gradient — display size only (≥ 22px), one per screen. */}
+          <p className="hero-text font-display text-3xl font-[650] tracking-[-0.01em] tabular-nums">1,248</p>
+          <div className="flex w-full flex-wrap gap-2">
+            <Button>Primary action</Button>
+            <Button variant="ghost">Ghost action</Button>
+            <Button variant="destructive">Delete</Button>
+          </div>
+        </Section>
+
         <Section title="Buttons" file="components/ui/button.tsx">
           {(["default", "destructive", "outline", "secondary", "ghost", "link"] as const).map(
             (variant) => (

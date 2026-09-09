@@ -104,20 +104,21 @@
 }
 
 /* ---- Northern Lights material (spec §3.2, §4, §5). Named utilities so a
-   component swaps one class and the values stay in tokens.css. ---- */
+   component swaps one class and the values stay in tokens.css.
+   unprefixed only — Lightning CSS folds a hand-written -webkit- twin into
+   the prefixed form and drops the standard property (Chromium does not
+   alias it); it adds vendor prefixes itself from the browser targets. ---- */
 @utility glass {
   /* no solid background: the element keeps bg-card so a tenant's --card wins */
   background-image: var(--sheen);
   box-shadow: var(--shadow-card);
   backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
 }
 @utility glass-overlay {
   background-color: var(--popover);
   color: var(--popover-foreground);
   box-shadow: var(--shadow-overlay);
   backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
 }
 @utility sidebar-chrome {
   /* chrome, not a fifth content surface: an opaque dark ground under the
@@ -125,7 +126,6 @@
   background-color: var(--sidebar-ground);
   background-image: linear-gradient(var(--sidebar), var(--sidebar));
   backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
 }
 @utility btn-primary {
   background-image: var(--gradient-primary);

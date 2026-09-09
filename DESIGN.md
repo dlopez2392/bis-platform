@@ -1,7 +1,7 @@
 # BIS Platform — Design System
 
 > This file is the design contract for every UI change in this repo.
-> Reference mockups: `docs/design/bis-design-direction.html` (open it in a browser).
+> Reference mockups: `docs/design/northern-lights.html` (current — the Northern Lights refresh, 2026-09-08); `docs/design/bis-design-direction.html` (history).
 > Tokens: `apps/web/src/styles/tokens.css` — components consume tokens ONLY.
 > If a change conflicts with this file, stop and flag it instead of improvising.
 
@@ -9,6 +9,9 @@
 
 - Dark-first operator UI; light theme is the default for client-role users.
 - Violet accent, violet-biased neutrals (no pure grays anywhere).
+- Second accent `--accent-2` (cyan by default; derived from the brand hue when
+  a brand color is active). Used only where §3.3 of the Northern Lights spec
+  lists.
 - Voice: plain language a business owner reads at 7 AM. Never expose internal
   milestone codes (M2/M5/M1c), carrier jargon, or `{{template_syntax}}` in
   client-facing copy.
@@ -18,9 +21,10 @@
 **Surface ladder (4 steps, never more):** `--surface-0` page → `--surface-1`
 cards/sidebar → `--surface-2` nested panels/inputs → `--surface-3`
 hover/raised/tooltips. Two border tokens: `--line` (structure),
-`--line-strong` (interactive edges). Depth in dark mode comes from the ladder
-plus `--shadow-card` (inset top highlight + soft ambient) — never gray blur
-shadows on dark.
+`--line-strong` (interactive edges). Depth in dark mode comes from the lit
+ground (two accent glows + a masked grid), glass surfaces (translucent steps
+1–3 with a 1px top highlight and `--glass-blur`), and `--shadow-card` — never
+gray blur shadows on dark; ambient light is accent-tinted.
 
 **Type roles (3, no exceptions):**
 - Display — Bricolage Grotesque 650: page titles and KPI numbers ONLY.
@@ -39,8 +43,9 @@ no other values. Spacing on a 4px grid. Motion: 150ms hovers, 250ms panels,
 1. Every metric ships with context — a delta, sparkline, or period label.
 2. New components use the existing 4 surfaces; needing a 5th means redesign.
 3. Status (Booked/Abandoned/Spam etc.) is never color alone — dot + word.
-4. Tables: whole row is the click target, hover shifts to `--surface-2`,
-   visible `:focus-visible` ring, bulk-action bar appears when a checkbox is
+4. Tables: whole row is the click target, hover shifts to `--surface-3` (the
+   ladder's raised step; light's `--surface-2` is white), visible
+   `:focus-visible` ring, bulk-action bar appears when a checkbox is
    ticked (never render checkboxes without bulk actions).
 5. Every screen has designed loaded / empty / error states. Empty states sell
    the feature: one sentence of what appears here + the action that causes it.
@@ -52,6 +57,8 @@ no other values. Spacing on a 4px grid. Motion: 150ms hovers, 250ms panels,
    the client's logo + brand color from the theming engine.
 10. Sidebar: middle nav scrolls, footer cluster (Settings + setup meter) is
     pinned and visible at every viewport height.
+11. One hero gradient per screen, named in the screen's spec and marked in
+    code; all other numbers are text-colored.
 
 ## Key patterns
 
@@ -77,10 +84,11 @@ no other values. Spacing on a 4px grid. Motion: 150ms hovers, 250ms panels,
 
 ## Charts
 
-Single-hue (accent) for single-series; status colors only for status.
-Thin marks, 4px rounded tops, hover tooltip on every mark, weekend bars
-muted (`--surface-3`), mono axis labels. Never a dual-axis chart. Text on
-charts uses text tokens, never the series color.
+Accent for the primary series; ONE second series in `--accent-2` is allowed
+on the same axis, with a legend. Never a dual axis. Status colors only for
+status. Thin marks, 4px rounded tops, hover tooltip on every mark, weekend
+bars muted (`--surface-3`), mono axis labels. Text on charts uses text
+tokens, never the series color.
 
 ## Installation status (2026-08-31 — Phase 1 COMPLETE, tokens import LIVE)
 
@@ -136,6 +144,8 @@ shadcn-`--accent` case asserts the new `@theme inline` mapping directly.
 
 - [ ] No hard-coded colors/radii/shadows — tokens only
 - [ ] Renders correctly in dark AND light (`data-theme="light"`)
+- [ ] Renders correctly with the blur fallback (`@supports not (backdrop-filter)`)
+- [ ] Passes the composite contrast test in both themes (`branding/theme.test.ts`)
 - [ ] Loaded, empty, and error states implemented
 - [ ] Keyboard: focus ring visible, Esc closes overlays, row nav works
 - [ ] Copy passes the "landscaper at 7 AM" read
