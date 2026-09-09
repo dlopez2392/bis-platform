@@ -362,3 +362,78 @@ describe("wave 2 — contacts", () => {
     expect(tl).not.toContain("border-dashed border-border");
   });
 });
+
+describe("wave 2 — conversations", () => {
+  const thread = src(`${ACCT}/conversations/message-thread.tsx`);
+  it("the thread pane is glass — the blur is on the CARD, never on the scrolling rows", () => {
+    expect(hasGlassCard(thread)).toBe(true);
+    expect(thread).toContain("rounded-xl");
+    expect(thread).toContain("border-b border-[var(--row-line)]");
+    expect(thread).toContain("border-t border-[var(--row-line)] p-4");
+  });
+  it("message bubbles are ladder step 2 / --accent-dim and NEVER glass (hundreds per thread)", () => {
+    expect(thread).toContain("ml-auto bg-[var(--accent-dim)]");
+    expect(thread).toContain('"bg-[var(--surface-2)]"');
+    // An un-tokenised alpha of the brand colour is what outbound carried.
+    expect(thread).not.toContain("bg-primary/10");
+    expect(thread).not.toContain("bg-secondary");
+    // The bubble's own class list must not pick up the card material.
+    expect(thread).not.toMatch(/max-w-\[75%\][^"]*\bglass\b/);
+  });
+  it("the pick-a-thread pane is the sanctioned EmptyState, not a bare dashed box", () => {
+    const page = src(`${ACCT}/conversations/page.tsx`);
+    expect(page).toContain('<EmptyState icon={MessagesSquare} title={m["conversations.pickThread"]} />');
+    expect(page).not.toContain("rounded-lg border border-dashed border-border p-6");
+  });
+});
+
+describe("wave 2 — pipeline", () => {
+  const board = src(`${ACCT}/pipeline/pipeline-board.tsx`);
+  it("the column body is a WELL — step 2 with the interactive dashed edge — not a card", () => {
+    expect(board).toContain("border-[var(--line-strong)] bg-[var(--surface-2)]");
+    expect(board).toContain("border-[var(--accent)] bg-[var(--accent-dim)]");
+    expect(board).not.toContain("border-primary/50 bg-primary/5");
+    expect(board).not.toContain("border-border/70 bg-muted/40");
+  });
+  it("the drag state uses the accent-tinted overlay shadow, never a grey Tailwind blur", () => {
+    expect(board).toContain("shadow-[var(--shadow-overlay)] ring-1 ring-[var(--accent)]");
+    // DESIGN.md: never gray blur shadows in either mode.
+    expect(board).not.toContain("shadow-lg");
+    expect(board).not.toContain("ring-primary/40");
+  });
+  it("the opportunity card lands on the 12px card radius and stays UN-GLASSED pending a frame reading", () => {
+    // 40+ blurred cards can share one viewport here. DESIGN.md's own
+    // amendment records cards being un-blurred for a morning over a measured
+    // 7-9 dropped frames of 52; the findings license glass here only after a
+    // reading on real hardware, which no headless run can give.
+    expect(board).toContain('"rounded-xl border border-border bg-card p-3"');
+    expect(board).not.toMatch(/bg-card p-3",\s*\n?\s*\/\/[^\n]*\n?\s*dragging && "[^"]*glass/);
+    expect(board).not.toMatch(/\bbg-card\b[^"]*\bglass\b/);
+  });
+});
+
+describe("wave 2 — website, the three surfaces the fidelity pass missed", () => {
+  it("the waiting card is glass and speaks the display role at 24/600", () => {
+    const page = src(`${ACCT}/website/page.tsx`);
+    expect(hasGlassCard(page)).toBe(true);
+    expect(page).toContain('font-display text-[24px] font-[600] leading-[1.15] tracking-[-0.02em]');
+    // 18px at weight 650 — a weight the three type roles do not contain.
+    expect(page).not.toContain("font-[650]");
+  });
+  it("the device strip is one hue in three strengths on --share-bg, and the tail is --accent-2", () => {
+    const strip = src(`${ACCT}/website/device-strip.tsx`);
+    expect(strip).toContain("bg-[var(--share-bg)]");
+    // `bg-accent` here was --surface-3 (.09), 29% too bright for a track.
+    expect(strip).not.toContain('rounded-full bg-accent"');
+    expect(strip).toContain('"bg-[var(--accent)]"');
+    expect(strip).toContain('"bg-[var(--accent-2)]"');
+    // The BORDER token as a chart series made the tablet share read as a gap.
+    expect(strip).not.toContain('"bg-border"');
+    expect(strip).not.toContain("bg-primary");
+  });
+  it("the breakdown share fill names the accent, not the shadcn semantic a tenant re-points", () => {
+    const panel = src(`${ACCT}/website/breakdown-panel.tsx`);
+    expect(panel).toContain("rounded-full bg-[var(--accent)]");
+    expect(panel).not.toContain("bg-primary");
+  });
+});

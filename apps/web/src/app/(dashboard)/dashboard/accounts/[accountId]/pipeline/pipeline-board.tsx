@@ -182,10 +182,13 @@ function Column({
           // The column body needs to read as a column even with nothing in
           // it — otherwise the board is just floating headers over dead space
           // and there is no visible target to drag onto.
-          "flex min-h-64 flex-1 flex-col gap-2 rounded-lg border border-dashed p-2 transition-colors",
+          // A WELL, not a card: ladder step 2 with the interactive dashed
+          // edge, and deliberately no glass — a card material here would put a
+          // second ambient behind every opportunity that sits on it.
+          "flex min-h-64 flex-1 flex-col gap-2 rounded-xl border border-dashed p-2 transition-colors",
           isOver
-            ? "border-primary/50 bg-primary/5"
-            : "border-border/70 bg-muted/40",
+            ? "border-[var(--accent)] bg-[var(--accent-dim)]"
+            : "border-[var(--line-strong)] bg-[var(--surface-2)]",
         )}
       >
         {column.opportunities.length === 0 ? (
@@ -227,9 +230,18 @@ function DraggableCard({
 function CardBody({ opp, dragging }: { opp: BoardOpportunity; dragging?: boolean }) {
   return (
     <div
+      // NO `glass` here, on purpose and pending one measurement. This is the
+      // one screen that can put 40+ of these on a viewport at once, and
+      // DESIGN.md's own amendment records cards being un-blurred for a morning
+      // on a measured 7-9 dropped frames of 52. The findings sanction glass
+      // here only AFTER a frame reading on a real GPU; a headless run is
+      // software raster and its numbers mean nothing. Geometry lands on the
+      // 12px card radius now; the material waits for that reading.
       className={cn(
-        "rounded-lg border border-border bg-card p-3",
-        dragging && "shadow-lg ring-1 ring-primary/40",
+        "rounded-xl border border-border bg-card p-3",
+        // This used to be a grey Tailwind blur shadow, which DESIGN.md forbids
+        // in either mode; ambient light in this system is accent-tinted.
+        dragging && "shadow-[var(--shadow-overlay)] ring-1 ring-[var(--accent)]",
       )}
     >
       <p className="truncate font-medium text-card-foreground">{opp.name}</p>

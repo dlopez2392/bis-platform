@@ -21,17 +21,26 @@ export function MessageThread({
     // applies — that's what lets the inner overflow-y-auto region actually
     // engage instead of growing the whole page. Below `lg` the panes stack,
     // where a fixed cap would look wrong, so it's left unbounded there.
-    <div className="flex flex-col rounded-lg border border-border bg-card lg:max-h-[calc(100vh-173px)]">
-      <div className="border-b border-border px-4 py-3">
-        <p className="text-sm font-medium text-card-foreground">{contactName}</p>
+    // The blur is on the CARD, not on the rows — this pane scrolls internally
+    // (the region below) and the mockup's own note only warns off blurring the
+    // long list itself, which is why the bubbles stay flat.
+    <div className="flex flex-col rounded-xl border border-border bg-card glass lg:max-h-[calc(100vh-173px)]">
+      <div className="border-b border-[var(--row-line)] px-4 py-3">
+        <p className="text-[13.5px] font-semibold text-card-foreground">{contactName}</p>
       </div>
       <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
         {messages.map((message) => (
           <div
             key={message.id}
+            // Ladder step 2 inbound, `--accent-dim` outbound — the selection
+            // colour the rest of the app uses. NEVER glass: there can be
+            // hundreds of these in one thread. Outbound used to carry a raw
+            // 10% alpha of the brand colour, which no token names.
             className={cn(
-              "max-w-[75%] rounded-lg px-3 py-2",
-              message.direction === "outbound" ? "ml-auto bg-primary/10" : "bg-secondary",
+              "max-w-[75%] rounded-[8px] px-3 py-2",
+              message.direction === "outbound"
+                ? "ml-auto bg-[var(--accent-dim)]"
+                : "bg-[var(--surface-2)]",
             )}
           >
             {message.subject ? (
@@ -56,7 +65,7 @@ export function MessageThread({
           </div>
         ))}
       </div>
-      <div className="border-t border-border p-4">{composer}</div>
+      <div className="border-t border-[var(--row-line)] p-4">{composer}</div>
     </div>
   );
 }

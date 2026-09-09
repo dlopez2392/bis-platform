@@ -26,7 +26,7 @@ export function BreakdownPanel({ title, rows, asShare = false }: { title: string
                 {asShare ? `${Math.round(r.share * 100)}%` : r.visitors.toLocaleString("en-US")}
               </span>
               <span className="col-span-2 h-1 overflow-hidden rounded-full bg-[var(--share-bg)]" aria-hidden>
-                <span className="block h-full rounded-full bg-primary" style={{ width: `${max > 0 ? Math.round((r.visitors / max) * 100) : 0}%` }} />
+                <span className="block h-full rounded-full bg-[var(--accent)]" style={{ width: `${max > 0 ? Math.round((r.visitors / max) * 100) : 0}%` }} />
               </span>
             </li>
           ))}

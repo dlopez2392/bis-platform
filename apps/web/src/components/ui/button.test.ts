@@ -85,8 +85,17 @@ describe("Badge fills soften (dot + word rule unchanged)", () => {
 
 describe("period pills (Website header)", () => {
   const page = readFileSync(path.join(here, "../../app/(dashboard)/dashboard/accounts/[accountId]/website/page.tsx"), "utf8");
-  it("selected segment uses pill-on; container is surface-1 with --line", () => {
-    expect(page).toMatch(/aria-label="Period" className="[^"]*\brounded-full\b[^"]*\bborder-border\b[^"]*\bbg-card\b/);
+  it("selected segment uses pill-on; container is surface-1 with --line, at the mockup's 3px inset", () => {
+    // RETARGETED (Northern Lights wave 2): the container used to be pinned as
+    // `border-border bg-card` — the semantic pair, which a tenant re-points —
+    // at `p-0.5` (2px). The mockup's `.pills` (northern-lights.html:70) is a
+    // 3px inset on the mode-keyed chrome neutrals; this is page chrome, not a
+    // card, so it chooses the mode-keyed side of the tenant seam on purpose.
+    expect(page).toMatch(
+      /aria-label="Period" className="[^"]*\brounded-full\b[^"]*border-\[var\(--line\)\][^"]*bg-\[var\(--surface-1\)\][^"]*\bp-\[3px\]/,
+    );
+    // The old pair must be gone, not merely outranked further along the string.
+    expect(page).not.toMatch(/aria-label="Period" className="[^"]*\bbg-card\b/);
     expect(page).toMatch(/\? "pill-on rounded-full px-3 py-1/);
     expect(page).not.toContain("bg-primary/15");
     // Same white-surface-2-in-light reasoning as the button/badge cases
