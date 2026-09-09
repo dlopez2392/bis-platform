@@ -565,10 +565,16 @@ export const m = {
   "checklist.remaining": "remaining",
   "checklist.open": "Open",
   "checklist.reviewLink": "Checklist complete — review",
+  // The dashboard's compact row (checklist-row.tsx), not the full panel — it
+  // sits under checklist.title as the row's own count, mirroring
+  // setup.progress's "{done} of {total}" shape but in the checklist's own
+  // plain voice ("done", not "steps done" — a checklist item isn't always a
+  // step, e.g. "Add a step" itself adds an arbitrary custom item).
+  "checklist.dashboardProgress": "{done} of {total} done",
   // Shown on the A2P item, which no longer has a working tick. Names what
-  // decides it, so the operator is not left clicking a dead box. Deliberately
-  // NOT "the registration below": this panel also renders on the account
-  // dashboard, where the A2P card is not on the page at all.
+  // decides it, so the operator is not left clicking a dead box. Worded to
+  // stand alone rather than "the registration below" — ChecklistPanel is a
+  // reusable component, not guaranteed to render next to A2pPanel.
   "checklist.derivedFromA2p": "Ticks itself once the A2P registration is approved",
 
   // The A2P item above is no longer a manual tick — it reads from what the

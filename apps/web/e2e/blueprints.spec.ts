@@ -233,18 +233,19 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     await expect(page.getByRole("button", { name: "Register A2P 10DLC brand and campaign" }))
       .toHaveAttribute("aria-pressed", "false");
 
-    // GAP 3: on the account dashboard, ChecklistPanel's title links back to
-    // the full checklist route (via the titleHref prop) so an unfinished
-    // checklist stays reachable from the summary view. This account has only
-    // "phone_number" ticked, and A2P sitting at `rejected` from the block
-    // above — 6 of the 7 catalogue items remain — so the panel renders in its
-    // non-compact form with the link. If titleHref stopped
-    // being passed, CardTitle would render the plain string instead and no
-    // such link would exist at all.
+    // GAP 3: the account dashboard's compact checklist row (checklist-row.tsx)
+    // — NOT the full ChecklistPanel /checklist itself renders — links back to
+    // the full checklist route, so an unfinished checklist stays reachable
+    // from the summary view. This account has only "phone_number" ticked,
+    // and A2P sitting at `rejected` from the block above — 1 of the 7
+    // catalogue items done — so the row's own accessible name (an aria-label
+    // on the Link, carrying the count) reads "Activation checklist (1 of 7
+    // done)". If the row stopped rendering (or the isAgency gate around it
+    // dropped for a client), no such link would exist at all.
     await page.goto(`/dashboard/accounts/${accountId}/dashboard`);
-    const checklistTitleLink = page.getByRole("link", { name: "Activation checklist" });
-    await expect(checklistTitleLink).toBeVisible();
-    await expect(checklistTitleLink)
+    const checklistRow = page.getByRole("link", { name: "Activation checklist (1 of 7 done)" });
+    await expect(checklistRow).toBeVisible();
+    await expect(checklistRow)
       .toHaveAttribute("href", `/dashboard/accounts/${accountId}/checklist`);
 
     // Everything above is generic post-account-creation behavior: the

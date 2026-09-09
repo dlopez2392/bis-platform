@@ -112,7 +112,8 @@ they re-resolve against the accent each element inherits.
 - **Setup:** two-pane wizard — stepper rail (done ✓ / current / todo /
   locked-with-reason) + one step detail pane. First incomplete step
   pre-selected. When all steps complete, Setup leaves the nav; checklist
-  remains reachable from Settings.
+  remains reachable from the nav's own Checklist entry and from a compact
+  progress row on the account dashboard.
 - **Record views:** list click opens a right-side drawer over the list
   (Esc closes, deep link opens full page). Small edits are inline
   (click value → edit → save on blur + undo toast), not form+Save.
