@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useFormStatus } from "react-dom";
 import { Rocket } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Notice } from "@/components/ui/notice";
 import { m } from "@/lib/messages";
 import type { SetupGoLiveAction } from "./setup-panel";
 
@@ -65,12 +66,9 @@ export function SetupGoLiveButton({
           measures ~3.6:1 on this card, fine for a graphical mark and below AA
           for a sentence. Same rule the panel's state chips follow. */}
       {error !== null ? (
-        <p
-          role="alert"
-          className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-foreground"
-        >
+        <Notice tone="warn" className="text-foreground">
           {error}
-        </p>
+        </Notice>
       ) : null}
     </div>
   );

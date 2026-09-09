@@ -70,7 +70,10 @@ function TableHead({ className, ...props }: React.ComponentProps<"th">) {
     <th
       data-slot="table-head"
       className={cn(
-        "h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+        // DESIGN.md's Label role — Geist Mono 500, 10px, +0.14em, uppercase —
+        // lives HERE rather than in each table's own HEAD constant, which is
+        // how eight tables ended up with 12px sans at `tracking-wider`.
+        "h-10 px-2 text-left align-middle font-mono text-[10px] font-medium tracking-[0.14em] whitespace-nowrap text-muted-foreground uppercase [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
         className
       )}
       {...props}

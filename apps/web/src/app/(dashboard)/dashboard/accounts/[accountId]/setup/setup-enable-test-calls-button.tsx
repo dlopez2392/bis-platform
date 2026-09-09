@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useFormStatus } from "react-dom";
 import { PhoneCall } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Notice } from "@/components/ui/notice";
 import { m } from "@/lib/messages";
 import type { SetNumberStatusAction } from "./setup-panel";
 
@@ -75,12 +76,9 @@ export function SetupEnableTestCallsButton({
       {/* Hue in the border and the fill, never in the text — same rule the
           panel's state chips and SetupGoLiveButton's own error follow. */}
       {error !== null ? (
-        <p
-          role="alert"
-          className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-foreground"
-        >
+        <Notice tone="warn" className="text-foreground">
           {error}
-        </p>
+        </Notice>
       ) : null}
     </div>
   );

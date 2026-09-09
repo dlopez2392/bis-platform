@@ -8,6 +8,7 @@ import { dbForRequest } from "@/lib/db";
 import { safeZone } from "@/lib/booking/time";
 import { readLimitConfig, utcDayStart } from "@/lib/voice/call-limits";
 import { cn } from "@/lib/utils";
+import { Meter } from "@/components/meter";
 import { m } from "@/lib/messages";
 import { CallsTable } from "./calls-table";
 import { textbackWindow } from "./textback-window";
@@ -165,12 +166,15 @@ function UsageMeter({ used, cap }: { used: number; cap: number }) {
   // only thing that reaches the style attribute.
   const percent = used > 0 ? Math.max(2, Math.round(ratio * 100)) : 0;
 
-  const tone =
+  // `fill: undefined` on the normal tone means "the meter's own accent
+  // gradient" (components/meter.tsx). The other two are STATUS readings, and
+  // status is never a gradient.
+  const tone: { fill?: string; chip: string } =
     used >= denominator
-      ? { fill: "bg-destructive", chip: "bg-destructive/10 text-destructive" }
+      ? { fill: "bg-[var(--crit)]", chip: "bg-[var(--crit-bg)] text-[var(--crit)]" }
       : ratio >= 0.8
-        ? { fill: "bg-warning", chip: "bg-warning/10 text-warning" }
-        : { fill: "bg-primary", chip: "bg-primary/10 text-primary" };
+        ? { fill: "bg-[var(--warn)]", chip: "bg-[var(--warn-bg)] text-[var(--warn)]" }
+        : { chip: "bg-[var(--accent-dim)] text-[var(--accent)]" };
 
   // Split rather than a plain double `.replace()` so the two numbers can be
   // set apart typographically while the sentence — including the order of its
@@ -211,17 +215,15 @@ function UsageMeter({ used, cap }: { used: number; cap: number }) {
         ))}
       </p>
 
-      <div
-        role="progressbar"
-        aria-label={m["calls.usageLabel"]}
-        aria-valuemin={0}
-        aria-valuemax={denominator}
-        aria-valuenow={Math.min(used, denominator)}
-        aria-valuetext={plain}
-        className="h-1.5 w-full overflow-hidden rounded-full bg-muted sm:w-56"
-      >
-        <div className={cn("h-full rounded-full", tone.fill)} style={{ width: `${percent}%` }} />
-      </div>
+      <Meter
+        percent={percent}
+        label={m["calls.usageLabel"]}
+        max={denominator}
+        now={Math.min(used, denominator)}
+        valueText={plain}
+        fill={tone.fill}
+        className="sm:w-56"
+      />
     </section>
   );
 }

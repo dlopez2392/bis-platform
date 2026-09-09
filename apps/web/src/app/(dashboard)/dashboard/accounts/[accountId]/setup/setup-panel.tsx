@@ -4,6 +4,7 @@ import type { SetupStepKey } from "@/lib/setup/setup-status";
 import { GO_LIVE_PREREQ_KEYS, kindOf, type SetupStepView, type AssignedNumber } from "@/lib/setup/setup-view";
 import { nextStepKey } from "@/lib/setup/setup-rail";
 import { cn } from "@/lib/utils";
+import { Meter } from "@/components/meter";
 import { m } from "@/lib/messages";
 import {
   STEP_COPY, STEP_PATH, type StepDetailProps,
@@ -252,20 +253,17 @@ function SetupProgress({ done, total }: { done: number; total: number }) {
       {/* aria-valuetext, not aria-label, carries the sentence — the paragraph
           beside it already says it once, and a name repeating it would have
           AT announce the same words twice. Mirrors the Calls usage meter. */}
-      <div
-        role="progressbar"
-        aria-label={m["setup.progressLabel"]}
-        aria-valuemin={0}
-        aria-valuemax={denominator}
-        aria-valuenow={Math.min(done, denominator)}
-        aria-valuetext={plain}
-        className="h-1.5 w-full overflow-hidden rounded-full bg-muted sm:w-56"
-      >
-        <div
-          className={cn("h-full rounded-full", complete ? "bg-success" : "bg-primary")}
-          style={{ width: `${percent}%` }}
-        />
-      </div>
+      <Meter
+        percent={percent}
+        label={m["setup.progressLabel"]}
+        max={denominator}
+        now={Math.min(done, denominator)}
+        valueText={plain}
+        // Done is a STATUS reading, so it is a flat --good; everything before
+        // that is the meter's own accent gradient.
+        fill={complete ? "bg-[var(--good)]" : undefined}
+        className="sm:w-56"
+      />
     </section>
   );
 }

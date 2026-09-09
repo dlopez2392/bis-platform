@@ -8,6 +8,7 @@ import {
   SETUP_STEP_KEYS, parseStepParam, lockedPrereqKeys, railKindOf,
 } from "@/lib/setup/setup-rail";
 import { cn } from "@/lib/utils";
+import { Notice } from "@/components/ui/notice";
 import { m } from "@/lib/messages";
 import { STEP_COPY } from "./steps/step-shared";
 import {
@@ -169,15 +170,17 @@ export function SetupShell({
         </div>
 
         {locked ? (
-          <div
+          <Notice
+            tone="warn"
             role="note"
             // Prose is `text-foreground`, NOT `text-warning`. `--warning`
             // measures ~3.6:1 on this surface: over the 3:1 bar a dot, ring
             // or ICON has to clear, under AA for a LABEL. Exactly why every
             // state chip keeps its text foreground and puts the hue in the
             // dot and the border (TONE.unknown.chip, steps/step-shared.tsx)
-            // — the hue stays on this banner's border and its icon.
-            className="mt-3 flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-foreground"
+            // — the hue now stays on this banner's tinted GROUND and its
+            // icon, since the mockup's status shape gives it no border.
+            className="mt-3 flex items-start gap-2 text-foreground"
           >
             <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
             <div className="min-w-0 space-y-1.5">
@@ -221,7 +224,7 @@ export function SetupShell({
                 </div>
               ) : null}
             </div>
-          </div>
+          </Notice>
         ) : null}
 
         {details[selected]}

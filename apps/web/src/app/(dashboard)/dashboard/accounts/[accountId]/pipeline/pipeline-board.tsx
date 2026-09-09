@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { formatCurrency, contactDisplayName } from "@/lib/format";
 import { m } from "@/lib/messages";
 import { EmptyState } from "@/components/empty-state";
+import { ListPanel } from "@/components/ui/list-panel";
 import { OpportunityDrawer } from "./opportunity-drawer";
 
 export type BoardOpportunity = {
@@ -164,15 +165,17 @@ function Column({
   const { setNodeRef, isOver } = useDroppable({ id: column.stage.id });
   return (
     <div className="flex w-72 shrink-0 flex-col gap-3">
-      <div className="overflow-hidden rounded-lg border border-border bg-card">
-        <div className={cn("h-1", STAGE_BAR[index % STAGE_BAR.length])} aria-hidden />
+      <ListPanel>
+        {/* The stage hue is a STATUS colour and correctly not the accent; only
+            the height moves, onto the mockup's 5px meter. */}
+        <div className={cn("h-[5px]", STAGE_BAR[index % STAGE_BAR.length])} aria-hidden />
         <div className="px-4 py-3">
-          <p className="font-medium text-card-foreground">{column.stage.name}</p>
+          <p className="text-[13.5px] font-semibold text-card-foreground">{column.stage.name}</p>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {column.opportunities.length} · {formatCurrency(column.totalValue)}
           </p>
         </div>
-      </div>
+      </ListPanel>
       <div
         ref={setNodeRef}
         className={cn(

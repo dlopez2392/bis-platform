@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ListPanel } from "@/components/ui/list-panel";
 import { contactDisplayName, formatDate, initials } from "@/lib/format";
 import { m } from "@/lib/messages";
 import { usePeek } from "@/lib/contacts/use-peek";
@@ -86,7 +87,7 @@ export function ContactsTable({
   }
 
   return (
-    <div className="rounded-lg border border-border bg-card">
+    <ListPanel>
       <BulkActionBar
         accountId={accountId}
         selectedIds={[...selected]}
@@ -211,7 +212,7 @@ export function ContactsTable({
         row={rows.find((r) => r.id === peekId) ?? (peekId ? missingRow(peekId) : null)}
         onClose={close}
       />
-    </div>
+    </ListPanel>
   );
 }
 

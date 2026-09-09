@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import type { PhoneNumberStatus } from "@bis/db";
 import { Button } from "@/components/ui/button";
 import { requiresMoveConfirm } from "@/lib/setup/setup-view";
+import { Notice } from "@/components/ui/notice";
 import { m } from "@/lib/messages";
 import type { SetupMoveNumberAction } from "./setup-panel";
 
@@ -107,15 +108,12 @@ export function SetupMoveNumberButton({
   if (needsConfirm) {
     return (
       <div className="flex flex-wrap items-center gap-2">
-        <p
-          role="alert"
-          className="w-full basis-full rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-foreground"
-        >
+        <Notice tone="crit" className="w-full basis-full text-foreground">
           {m["setup.number.moveConfirmWarning"].replace(
             "{account}",
             accountName ?? m["setup.number.unknownAccount"],
           )}
-        </p>
+        </Notice>
         <form action={submit}>
           <ConfirmMoveButton e164={e164} />
         </form>

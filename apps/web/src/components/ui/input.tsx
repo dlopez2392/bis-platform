@@ -18,4 +18,20 @@ function Input({ className, type, ...props }: React.ComponentProps<"input">) {
   )
 }
 
+/**
+ * A native form control painted exactly like `Input` above. Seven copies of a
+ * hand-rolled `"… bg-transparent px-3 py-1.5 text-sm shadow-xs …
+ * focus-visible:ring-ring/50"` shipped before this existed, and
+ * `bg-transparent` on a translucent card is the actual visible bug — the
+ * aurora reads straight through the control, so it stops looking like a field.
+ *
+ * NOT `nativeSelectClass`: all seven call sites (calendar-settings ×2,
+ * voice-settings ×5) are `<textarea>`s, not `<select>`s — the audit that found
+ * them named the wrong element. A string rather than a component because these
+ * are controlled textareas with `value`/`onChange`, `placeholder` and
+ * server-action `name` wiring, and a wrapper would only get in the way.
+ */
+export const nativeFieldClass =
+  "w-full rounded-[8px] border border-[var(--input-line)] bg-[var(--input-bg)] px-3 py-2 text-[13px] outline-none focus-visible:border-[var(--accent)] focus-visible:ring-[3px] focus-visible:ring-[var(--ring-glow)]"
+
 export { Input }

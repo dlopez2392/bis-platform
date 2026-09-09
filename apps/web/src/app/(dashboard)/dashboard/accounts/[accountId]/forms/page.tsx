@@ -4,6 +4,8 @@ import { listForms } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
+import { ListPanel, LIST_ROW } from "@/components/ui/list-panel";
+import { cn } from "@/lib/utils";
 import { formatDateTime } from "@/lib/format";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
@@ -30,12 +32,17 @@ export default async function FormsPage({
         {forms.length === 0 ? (
           <EmptyState icon={FileText} title={m["forms.empty.title"]} body={m["forms.empty.body"]} />
         ) : (
-          <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-card">
+          <ListPanel as="ul">
             {forms.map((form) => (
-              <li key={form.id}>
+              <li key={form.id} className={LIST_ROW}>
                 <Link
                   href={`/dashboard/accounts/${accountId}/forms/${form.id}`}
-                  className="flex items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-secondary/60"
+                  className={cn(
+                    "flex items-center justify-between gap-3 px-4 py-3 transition-colors",
+                    // The ladder's raised step, the same one table rows use —
+                    // `bg-secondary/60` was a 60% alpha of --surface-3.
+                    "hover:bg-[var(--surface-3)]",
+                  )}
                 >
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-medium text-card-foreground">
@@ -56,7 +63,7 @@ export default async function FormsPage({
                 </Link>
               </li>
             ))}
-          </ul>
+          </ListPanel>
         )}
       </div>
     </>

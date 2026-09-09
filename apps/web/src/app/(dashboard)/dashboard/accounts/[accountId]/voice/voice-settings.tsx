@@ -7,7 +7,7 @@ import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import type { PhoneNumberRow, PhoneNumberStatus, VoiceProfileRow } from "@bis/db";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
+import { Input, nativeFieldClass } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SubmitButton } from "../../submit-button";
@@ -114,14 +114,14 @@ function VoiceProfileForm({
               <Label htmlFor="greeting_en">{m["voice.profile.greetingEn"]}</Label>
               <textarea
                 id="greeting_en" name="greeting_en" rows={3} defaultValue={p.greeting_en}
-                className="w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                className={nativeFieldClass}
               />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="greeting_es">{m["voice.profile.greetingEs"]}</Label>
               <textarea
                 id="greeting_es" name="greeting_es" rows={3} defaultValue={p.greeting_es}
-                className="w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                className={nativeFieldClass}
               />
             </div>
           </div>
@@ -130,7 +130,7 @@ function VoiceProfileForm({
             <Label htmlFor="facts">{m["voice.profile.facts"]}</Label>
             <textarea
               id="facts" name="facts" rows={5} defaultValue={p.facts}
-              className="w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className={nativeFieldClass}
             />
             <p className="text-xs text-muted-foreground">{m["voice.profile.factsHint"]}</p>
           </div>
@@ -139,7 +139,7 @@ function VoiceProfileForm({
             <Label htmlFor="services">{m["voice.profile.services"]}</Label>
             <textarea
               id="services" name="services" rows={3} defaultValue={p.services}
-              className="w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className={nativeFieldClass}
             />
           </div>
 
@@ -192,7 +192,7 @@ function VoiceProfileForm({
               value={textbackBody}
               onChange={(e) => setTextbackBody(e.target.value)}
               placeholder={defaultTextbackBody(brandName, previewLanguage)}
-              className="w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className={nativeFieldClass}
             />
             <p className="text-xs text-muted-foreground">
               {m["compose.smsSegments"]

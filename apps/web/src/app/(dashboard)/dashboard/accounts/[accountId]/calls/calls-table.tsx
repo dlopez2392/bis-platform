@@ -10,6 +10,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { buttonVariants } from "@/components/ui/button";
+import { ListPanel } from "@/components/ui/list-panel";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { callerLabel, formatCallTime, formatDuration } from "./format";
@@ -17,7 +18,10 @@ import { OutcomePill } from "./outcome-pill";
 import { TextbackFailedBadge } from "./textback-failed-badge";
 import { CallRow, StopPropagation } from "./call-row";
 
-const HEAD = "px-4 text-xs font-medium tracking-wider text-muted-foreground uppercase";
+// The Label role now lives on `TableHead` itself (ui/table.tsx) — this
+// constant was 12px sans at `tracking-wider`, an approximation of it, and the
+// only thing left worth saying per column is the padding.
+const HEAD = "px-4";
 const CELL = "px-4 py-3";
 
 /**
@@ -51,9 +55,12 @@ export function CallsTable({
   const base = `/dashboard/accounts/${accountId}`;
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-card">
+    <ListPanel>
       <Table>
-        <TableHeader className="bg-muted/40">
+        {/* No fill: a 40% muted band was the only filled table header in the app
+            and the mockup separates with rules, never bands. `TableHeader`'s
+            own `[&_tr]:border-b` is the separation. */}
+        <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead className={HEAD}>{m["calls.col.when"]}</TableHead>
             <TableHead className={HEAD}>{m["calls.col.caller"]}</TableHead>
@@ -161,13 +168,13 @@ export function CallsTable({
       </Table>
 
       {olderHref ? (
-        <div className="flex justify-end border-t border-border px-4 py-3">
+        <div className="flex justify-end border-t border-[var(--row-line)] px-4 py-3">
           <Link href={olderHref} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
             {m["calls.older"]}
             <ArrowRight className="size-3.5" aria-hidden />
           </Link>
         </div>
       ) : null}
-    </div>
+    </ListPanel>
   );
 }

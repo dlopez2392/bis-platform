@@ -302,7 +302,10 @@
 
 /* tables: whole row is the target */
 .row-interactive { transition: background var(--ease-hover); cursor: pointer; }
-.row-interactive:hover { background: var(--surface-2); }
+/* the ladder's RAISED step — the same value ui/table.tsx's row hover and
+   DESIGN.md rule 4 both name. --surface-2 shipped here and gave one gesture
+   two different colours side by side. */
+.row-interactive:hover { background: var(--surface-3); }
 
 /* sidebar shell: middle scrolls, footer pinned (Settings never hides) */
 .sidebar { display: flex; flex-direction: column; height: 100dvh; }

@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { Inbox } from "lucide-react";
 import { Card } from "./card";
 import { Skeleton } from "./skeleton";
+import { Notice } from "./notice";
 import { EmptyState } from "../empty-state";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -121,5 +122,157 @@ describe("shell chrome", () => {
     // --glass-highlight is a .9 white line in light, on an always-dark rail.
     expect(s).toContain("shadow-[inset_0_1px_0_var(--sidebar-line)]");
     expect(s).not.toContain("shadow-[var(--glass-highlight)]");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Northern Lights, all sections — wave 1. The shared surfaces the per-section
+// pass kept re-implementing. Each of these was UNPINNED before this block,
+// which is precisely why the fidelity pass walked past them.
+// ---------------------------------------------------------------------------
+
+describe("PageHeader is not a card", () => {
+  const s = src("../page-header.tsx");
+  it("carries NO fill and NO bottom rule — the mockup's .page-head is a bare flex row over the aurora", () => {
+    // The one edit that treats all 14 routes: an opaque --surface-1 slab sat
+    // exactly over the ground's brightest glow (`12% -10%`) on every screen.
+    expect(s).not.toContain("bg-card");
+    expect(s).not.toContain("border-b");
+    // Its INTERNAL rule (row 3) is the mockup's row rule, not --line.
+    expect(s).toContain("border-t border-[var(--row-line)]");
+    // And the head's own top padding is `.content`'s 22px, not 20.
+    expect(s).toContain("pt-[22px]");
+  });
+  it("the dashboard greeting uses the component instead of a second copy of it", () => {
+    const page = src("../../app/(dashboard)/dashboard/accounts/[accountId]/dashboard/page.tsx");
+    expect(page).toContain("<PageHeader");
+    expect(page).not.toContain("border-b border-border bg-card");
+  });
+});
+
+describe("TableHead carries the Label role", () => {
+  const head = classLiteralAfter(src("./table.tsx"), 'data-slot="table-head"');
+  it("is Geist Mono 500, 10px, +0.14em, uppercase (DESIGN.md's third type role)", () => {
+    expect(head).toContain("font-mono");
+    expect(head).toContain("text-[10px]");
+    expect(head).toContain("tracking-[0.14em]");
+    expect(head).toContain("uppercase");
+    // 14px sans is what eight tables rendered before this moved here.
+    expect(head).not.toContain("text-foreground");
+  });
+  it("no table paints a filled header band — the mockup separates with rules, never fills", () => {
+    expect(src("../../app/(dashboard)/dashboard/accounts/[accountId]/calls/calls-table.tsx"))
+      .not.toContain("bg-muted/40");
+  });
+});
+
+describe("ListPanel is the one list-card idiom", () => {
+  const s = src("./list-panel.tsx");
+  it("keeps bg-card BEFORE glass, the same order Card uses", () => {
+    expect(s).toMatch(/\bbg-card\b[^"]*\bglass\b/);
+    expect(s).toContain("rounded-xl");
+  });
+  it("rules its rows with --row-line, never divide-border (--line is a third stronger)", () => {
+    expect(s).toContain("border-t border-[var(--row-line)] first:border-t-0");
+  });
+  it("retired every hand-rolled copy: no list panel still divides on --border", () => {
+    const app = "../../app/(dashboard)/dashboard";
+    for (const rel of [
+      `${app}/accounts/[accountId]/forms/page.tsx`,
+      `${app}/blueprints/blueprints-table.tsx`,
+      `${app}/accounts/[accountId]/conversations/conversation-list.tsx`,
+      `${app}/accounts/[accountId]/contacts/contacts-table.tsx`,
+      `${app}/accounts/[accountId]/calls/calls-table.tsx`,
+      `${app}/accounts/[accountId]/pipeline/pipeline-board.tsx`,
+    ]) {
+      expect(src(rel), rel).not.toContain("divide-y divide-border");
+      expect(src(rel), rel).toContain("ListPanel");
+    }
+  });
+});
+
+describe("Notice is the one status banner", () => {
+  it("is a tinted ground with a TRANSPARENT border (the mockup's .chip.good/.warn/.crit)", () => {
+    // Rendered, not read from source: the file's own doc comment names the
+    // classes it is explaining, so a source scan would pass on the prose.
+    const warn = renderToStaticMarkup(createElement(Notice, { tone: "warn" }, "x"));
+    const crit = renderToStaticMarkup(createElement(Notice, { tone: "crit" }, "x"));
+    const good = renderToStaticMarkup(createElement(Notice, { tone: "good" }, "x"));
+    expect(warn).toContain("border-transparent");
+    expect(warn).toContain("bg-[var(--warn-bg)]");
+    expect(crit).toContain("bg-[var(--crit-bg)]");
+    expect(good).toContain("bg-[var(--good-bg)]");
+    // An alpha of the hue used as an OUTLINE is what the ten copies did.
+    expect(warn).not.toMatch(/border-(warning|destructive)\//);
+    // Nested in a card, a dialog or a sheet in every case.
+    expect(warn).not.toMatch(/\bglass\b/);
+    expect(warn).toContain('role="alert"');
+  });
+  it("no banner still hand-rolls the border-{warning,destructive}/40 box", () => {
+    const app = "../../app/(dashboard)/dashboard/accounts/[accountId]";
+    for (const rel of [
+      `${app}/setup/setup-shell.tsx`,
+      `${app}/setup/page.tsx`,
+      `${app}/checklist/page.tsx`,
+      `${app}/setup/setup-enable-test-calls-button.tsx`,
+      `${app}/setup/setup-go-live-button.tsx`,
+      `${app}/setup/setup-move-number-button.tsx`,
+      `${app}/settings/save-blueprint-dialog.tsx`,
+      `${app}/calendar/calendar-settings.tsx`,
+      `${app}/contacts/contact-drawer.tsx`,
+    ]) {
+      expect(src(rel), rel).not.toMatch(/border-(warning|destructive)\/40/);
+    }
+  });
+});
+
+describe("Meter is the one progress bar", () => {
+  const s = src("../meter.tsx");
+  it("is the mockup's 5px track on --meter-bg with the CONTENT accent pair", () => {
+    expect(s).toContain("h-[5px]");
+    expect(s).toContain("bg-[var(--meter-bg)]");
+    expect(s).toContain("bg-[linear-gradient(90deg,var(--accent),var(--accent-2))]");
+    // A themed tenant re-points --accent but not --sidebar-*; a shared meter
+    // painted from the sidebar's chrome tokens goes wrong on every brand.
+    expect(s).not.toContain("--sidebar-accent");
+  });
+  it("no content-area meter is still 6px on --surface-3 with a flat fill", () => {
+    const app = "../../app/(dashboard)/dashboard/accounts/[accountId]";
+    for (const rel of [`${app}/calls/page.tsx`, `${app}/setup/setup-panel.tsx`]) {
+      expect(src(rel), rel).not.toContain("h-1.5 w-full overflow-hidden rounded-full bg-muted");
+    }
+  });
+});
+
+describe("native <textarea> paints like Input", () => {
+  it("one exported string (all seven call sites are textareas, not selects), and no file still carries the transparent copy", () => {
+    expect(src("./input.tsx")).toContain("export const nativeFieldClass");
+    // bg-transparent on a translucent card is the actual visible bug.
+    expect(src("./input.tsx")).toContain("bg-[var(--input-bg)]");
+    const app = "../../app/(dashboard)/dashboard/accounts/[accountId]";
+    for (const rel of [`${app}/calendar/calendar-settings.tsx`, `${app}/voice/voice-settings.tsx`]) {
+      expect(src(rel), rel).not.toContain("bg-transparent px-3 py-1.5 text-sm shadow-xs");
+    }
+  });
+});
+
+describe("the raised hover step is one colour", () => {
+  it(".row-interactive:hover is --surface-3, the same step ui/table.tsx uses", () => {
+    const css = src("../../styles/tokens.css");
+    expect(css).toContain(".row-interactive:hover { background: var(--surface-3); }");
+    expect(css).not.toContain(".row-interactive:hover { background: var(--surface-2); }");
+  });
+});
+
+describe("the routes above dashboard/layout.tsx get a ground of their own", () => {
+  it("no-access and the landing page mount <Ground /> so their glass has something to be glass over", () => {
+    for (const rel of ["../../app/(dashboard)/no-access/page.tsx", "../../app/(dashboard)/page.tsx"]) {
+      const s = src(rel);
+      expect(s, rel).toContain("<Ground />");
+      expect(s, rel).toContain('from "@/components/ground"');
+      // A fixed -z-10 child needs a positioned ancestor to sit behind.
+      expect(s, rel).toMatch(/<main className="relative /);
+      expect(s, rel).toMatch(/\bbg-card\b[^"]*\bglass\b/);
+    }
   });
 });
