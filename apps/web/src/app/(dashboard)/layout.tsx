@@ -18,15 +18,16 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-// Design system display face — page titles and KPI numbers ONLY (DESIGN.md
-// type roles). Not a tenant-selectable face. Variable font: weight 650 is
-// picked at the use site, not loaded per-weight. Preloaded: page-header.tsx
-// (Task 6) is the first consumer of --font-display, so this now paints on
-// every dashboard route's first render.
+// Bricolage is no longer the display face: the mockup's .dir-a overrides
+// --f-disp to Geist 600 (northern-lights.html:157), so --font-display points
+// at var(--font-geist-sans) and nothing reads --font-bricolage any more. The
+// family stays declared here — removing it is a separate call — but it must
+// NOT preload: next/font/google would emit a <link rel="preload" as="font">
+// on every dashboard route for a face no element paints.
 const bricolage = Bricolage_Grotesque({
   subsets: ["latin"],
   variable: "--font-bricolage",
-  preload: true,
+  preload: false,
 });
 
 // The two tenant-selectable faces carry `preload: false`, and that is the

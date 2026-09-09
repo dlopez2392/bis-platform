@@ -18,12 +18,12 @@ import type { ResolvedTheme } from "./theme";
  * `color` mirrors tokens.css's light `--surface-0` (globals.css's `--background`
  * is now `var(--surface-0)`, not a literal, since Phase 1's semantic
  * cut-over — was `#f8f8fb` pre-cut-over). `radius` mirrors globals.css's own
- * `--radius` literal (`0.6875rem`, 11px — was `0.625rem`; controls converge
+ * `--radius` literal (`0.75rem`, 12px — was `0.6875rem`; controls converge
  * in P2).
  */
 export const SAFE_STYLE_FALLBACKS = {
-  color: "#f6f5fa",
-  radius: "0.6875rem",
+  color: "#efebf9",
+  radius: "0.75rem",
   fontSans: "var(--font-geist-sans)",
 } as const;
 

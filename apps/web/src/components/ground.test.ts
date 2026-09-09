@@ -13,9 +13,12 @@ describe("Ground — the lit page layer (spec §3.1)", () => {
   });
 
   it("paints three glows from the accent tokens at the token alphas", () => {
-    expect(html).toContain("radial-gradient(700px 420px at 12% -10%");
-    expect(html).toContain("radial-gradient(620px 380px at 96% 8%");
-    expect(html).toContain("radial-gradient(560px 360px at 60% 110%");
+    // Viewport-relative, so the mockup's proportions (59%x55%, 53%x50%,
+    // 47%x47% of its 1180x760 frame) survive a 1440x900 or 1920x1080 screen
+    // instead of shrinking into corner smudges.
+    expect(html).toContain("radial-gradient(59vw 55vh at 12% -10%");
+    expect(html).toContain("radial-gradient(53vw 50vh at 96% 8%");
+    expect(html).toContain("radial-gradient(47vw 47vh at 60% 110%");
     expect(html).toContain("var(--glow-1-alpha)");
     expect(html).toContain("var(--glow-2-alpha)");
     expect(html).toContain("var(--glow-3-alpha)");
@@ -25,7 +28,7 @@ describe("Ground — the lit page layer (spec §3.1)", () => {
   it("paints a 48px grid at --grid-alpha, masked to the top third", () => {
     expect(html).toContain("background-size:48px 48px");
     expect(html).toContain("var(--grid-alpha)");
-    expect(html).toContain("mask-image:radial-gradient(800px 500px at 30% 0%");
+    expect(html).toContain("mask-image:radial-gradient(68vw 66vh at 30% 0%");
   });
 
   it("uses no colour literal — tokens only", () => {

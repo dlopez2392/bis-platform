@@ -5,7 +5,7 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --radius: 0.6875rem; /* 11px — --radius-card; controls converge in P2 */
+  --radius: 0.75rem; /* 12px — --radius-card (mockup --r-card); controls converge in P2 */
 
   --background: var(--surface-0);
   --foreground: var(--text-1);
@@ -100,7 +100,7 @@
   --radius-lg: var(--radius);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-  --font-display: var(--font-bricolage);
+  --font-display: var(--font-geist-sans);
 }
 
 /* ---- Northern Lights material (spec §3.2, §4, §5). Named utilities so a
@@ -110,15 +110,14 @@
    alias it); it adds vendor prefixes itself from the browser targets. ---- */
 @utility glass {
   /* no solid background: the element keeps bg-card so a tenant's --card wins.
-     No backdrop-filter either (decision 2026-09-09, spec §9): cards scroll,
-     and on an integrated GPU their backdrop surfaces dropped 7–9 of 52
-     frames (0 with the cards' blur off, sidebar still blurring). A card sits
-     over the lit ground — smooth gradients — so a blur has nothing to
-     resolve; the glass reads from the sheen, the highlight and the
-     translucent fill. sidebar-chrome and glass-overlay keep the blur: they
-     sit over real content and never scroll. */
+     The card blur is BACK (decision 2026-09-09 pm, superseding the morning's
+     scroll-cost removal): the mockup blurs cards at 14px (northern-lights.html
+     .card / --card-blur) and literal mockup fidelity outranks the measured
+     7–9 dropped frames of 52 on an integrated GPU. --glass-filter is per mode,
+     so light (none) still pays nothing. */
   background-image: var(--sheen);
   box-shadow: var(--shadow-card);
+  backdrop-filter: var(--glass-filter);
 }
 @utility glass-overlay {
   background-color: var(--popover);
@@ -138,9 +137,20 @@
   box-shadow: var(--shadow-glow);
 }
 @utility pill-on {
-  background-color: var(--accent-dim);
-  color: var(--text-1);
+  /* the mockup's --pill-on-bg is the accent at 22%, NOT --accent-dim (.14):
+     that token is also the table's row-selection fill and the empty-state
+     radial, so the lift is mixed here instead of moved on the token. */
+  background-color: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--pill-on-text);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent), 0 0 18px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+@utility em-text {
+  /* the sentence panel's emphasis. The mockup uses a DIFFERENT, deeper pair
+     than the KPI hero (--em-bg vs --kpi-hero-bg), so it gets its own token. */
+  background-image: var(--gradient-em);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 @utility hero-text {
   background-image: var(--gradient-hero);
@@ -152,7 +162,11 @@
   background-image: linear-gradient(180deg, color-mix(in srgb, var(--accent) 95%, transparent), color-mix(in srgb, var(--accent) 25%, transparent));
 }
 @utility bar-hot {
-  filter: brightness(1.15);
+  /* the mockup's --bar-hot is a violet→cyan gradient (a near-white violet into
+     the cyan accent at half alpha),
+     one of the three sanctioned accent-2 moments — not the accent bar turned up.
+     its head is --accent mixed ~62% with white; the tail is --accent-2 at 50% alpha. */
+  background-image: linear-gradient(180deg, color-mix(in srgb, var(--accent) 62%, white), color-mix(in srgb, var(--accent-2) 50%, transparent));
   box-shadow: 0 0 22px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 

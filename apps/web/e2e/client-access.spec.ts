@@ -151,11 +151,11 @@ test("a client sees only their own account, and nothing when access is off", asy
   // brand_mode "dark" (auth.setup.ts), so resolveThemeMode paints dark and
   // deriveTheme's dark primary is #5b7ddb = rgb(91, 125, 219) — the second
   // stop, verbatim. The first stop is the dark formula's
-  // color-mix(in srgb, var(--accent) 70%, white), which Chromium serializes in
-  // the srgb space: 0.7 x (91,125,219)/255 + 0.3 per channel.
+  // color-mix(in srgb, var(--accent) 50%, white), which Chromium serializes in
+  // the srgb space: 0.5 x (91,125,219)/255 + 0.5 per channel.
   await expect(page.getByRole("button", { name: "Add contact" })).toHaveCSS(
     "background-image",
-    "linear-gradient(color(srgb 0.549804 0.643137 0.901176), rgb(91, 125, 219))",
+    "linear-gradient(color(srgb 0.678431 0.745098 0.929412), rgb(91, 125, 219))",
   );
 
   // The agency's own name must be gone from the client's chrome entirely.

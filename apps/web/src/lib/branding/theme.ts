@@ -169,7 +169,9 @@ export type GlowAlphas = {
 
 /**
  * tokens.css's alphas for the lit ground's three radial glows, per mode —
- * light `.07/.05/.04`, dark `.28/.16/.12` — pinned against the CSS by
+ * light `.12/.09/.07` (raised 2026-09-09: light cards went translucent, so the
+ * aurora finally reads THROUGH them; at the old quarter-strength it could never
+ * appear anywhere a card sat, i.e. 90% of the screen), dark `.28/.16/.12` — pinned against the CSS by
  * theme.test.ts's parity block, exactly like ACCENT_ALPHAS above.
  *
  * Unlike the tint alphas, these are NOT per-mode-only: a brand-active tenant
@@ -183,7 +185,7 @@ export type GlowAlphas = {
  * tenant that never set a brand colour.
  */
 export const GLOW_ALPHAS = {
-  light: { glow1: 0.07, glow2: 0.05, glow3: 0.04 },
+  light: { glow1: 0.12, glow2: 0.09, glow3: 0.07 },
   dark: { glow1: 0.28, glow2: 0.16, glow3: 0.12 },
 } as const;
 
