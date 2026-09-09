@@ -33,6 +33,12 @@ export function encodeCursor(c: RowCursor): string {
 }
 
 export function parseCursor(raw: string | undefined): RowCursor | undefined {
+  // Next.js types a searchParams value as `string | string[] | undefined`,
+  // and a duplicated query key (`?before=A&before=B`) produces an ARRAY at
+  // runtime whatever the page's own annotation says. `Array.prototype.split`
+  // does not exist, so without this guard a hand-editable URL can throw a
+  // TypeError instead of reading as a cold start.
+  if (typeof raw !== "string") return undefined;
   if (!raw) return undefined;
   const parts = raw.split("|");
   if (parts.length !== 2) return undefined;
@@ -44,6 +50,12 @@ export function parseCursor(raw: string | undefined): RowCursor | undefined {
 /** The timestamp-only form `calls` already ships — byte-for-byte the same
  *  rule as the `cursorFrom` it replaces, so calls' behaviour is unchanged. */
 export function parseTimeCursor(raw: string | undefined): string | undefined {
+  // Same array-at-runtime hazard as `parseCursor` above. Previously this
+  // survived an array input only by accident — `TS.test` coerces its
+  // argument via `String(v)` — which is a real asymmetry with `parseCursor`
+  // throwing on the same input. Explicit guard, no behaviour change for any
+  // string input.
+  if (typeof raw !== "string") return undefined;
   if (!raw || !isTs(raw)) return undefined;
   return raw;
 }

@@ -22,12 +22,32 @@ describe("cursor", () => {
   });
 
   // A hand-editable URL parameter. Every one of these must yield undefined
-  // (cold start) rather than throwing a 500 on a page a user can reach.
+  // (cold start) rather than throwing a 500 on a page a user can reach. The
+  // last two pair a WELL-FORMED uuid with an unusable timestamp — pinning
+  // that `parseCursor` actually validates `at`, not just `id` — and the
+  // second of those is regex-shaped but rejected by `Date.parse`, so it pins
+  // the `Date.parse` half of `isTs` separately from the regex half.
   it.each([undefined, "", "not-a-cursor", "2026-09-09T12:00:00.000Z", "abc|def",
-    "2026-09-09T12:00:00.000Z|not-a-uuid", "|", "a|b|c", "9999|x"])(
+    "2026-09-09T12:00:00.000Z|not-a-uuid", "|", "a|b|c", "9999|x",
+    "not-a-timestamp|6b503e2f-3cd3-4531-a0af-5cfaf9bc158e",
+    "2026-13-45T99:99:99Z|6b503e2f-3cd3-4531-a0af-5cfaf9bc158e"])(
     "drops the unusable cursor %j", (raw) => {
       expect(parseCursor(raw as string | undefined)).toBeUndefined();
     });
+
+  // Next.js types a searchParams value as `string | string[] | undefined`,
+  // and a duplicated query key (`?before=A&before=B`) produces an ARRAY at
+  // runtime whatever the page's own annotation says. Both parsers must stay
+  // TOTAL against that too: undefined, never a thrown TypeError from
+  // `Array.prototype.split` not existing. The cast is deliberate — the whole
+  // point is behaviour when the declared type is violated at runtime.
+  it("parseCursor returns undefined for an array input rather than throwing", () => {
+    expect(parseCursor(["a", "b"] as unknown as string)).toBeUndefined();
+  });
+
+  it("parseTimeCursor returns undefined for an array input rather than throwing", () => {
+    expect(parseTimeCursor(["a", "b"] as unknown as string)).toBeUndefined();
+  });
 
   it("parseTimeCursor keeps calls' EXACT existing behaviour, microseconds included", () => {
     const pg = "2026-01-01T00:00:00.000000+00:00";

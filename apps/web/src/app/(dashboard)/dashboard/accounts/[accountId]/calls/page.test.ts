@@ -112,7 +112,7 @@ describe("CallsPage", () => {
     expect(html).not.toContain("No calls yet");
   });
 
-  it("still reads as cold-start when `?before=` is unparseable — `cursorFrom` drops it, so it is not a real cursor", async () => {
+  it("still reads as cold-start when `?before=` is unparseable — `parseTimeCursor` drops it, so it is not a real cursor", async () => {
     listCallsMock.mockResolvedValue([]);
     const html = renderToStaticMarkup(await CallsPage(route("not-a-timestamp")));
 
