@@ -33,14 +33,15 @@ test.describe("the style guide", () => {
         };
       }, dark);
     const d = await probe(true);
-    // Cards DO blur again (decision 2026-09-09 pm): the mockup's .card carries
-    // backdrop-filter: var(--card-blur) = blur(14px), and literal mockup
-    // fidelity outranks the morning's scroll-cost removal. Pin the RADIUS, not
-    // just "some blur": Chromium supports backdrop-filter, so an
-    // `includes("blur")` check cannot tell blur(14px) from blur(0px). The
-    // @supports-not fallback is pinned by the unit parity test
-    // (src/lib/branding/northern-lights.test.ts).
-    expect(d.filter, "dark card blurs at 14px like the mockup").toBe("blur(14px)");
+    // Cards do NOT blur (danlo 2026-09-09 pm, deciding on the measurement:
+    // blurred vs not on the real dashboard differs by a mean of 2.3/765 with
+    // only 0.07% of pixels past 8/765, and it cost 7-9 of 52 frames scrolling
+    // on an integrated GPU). The blur lives on the sidebar and the overlays,
+    // which never scroll. Pin the RADIUS on the sidebar, not just "some blur":
+    // Chromium supports backdrop-filter, so an `includes("blur")` check cannot
+    // tell blur(14px) from blur(0px). The @supports-not fallback is pinned by
+    // the unit parity test (src/lib/branding/northern-lights.test.ts).
+    expect(d.filter, "dark card does not blur").toBe("none");
     expect(d.aside, "dark sidebar keeps the 14px blur").toBe("blur(14px)");
     // The BIS half of the composed-token fix: tokens.css declares
     // --gradient-primary on `*`/`.dark *` instead of :root/.dark, so every
