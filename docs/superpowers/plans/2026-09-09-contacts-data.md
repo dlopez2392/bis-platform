@@ -549,6 +549,17 @@ cd C:/Users/danlo/bis-platform && git add "apps/web/src/app/(dashboard)/dashboar
   - `autoMap(headers: string[]): Record<string, string | null>` — CSV header → field key
   - `mapRows(rows: ParsedRow[], mapping: Record<string, string | null>): { mapped: MappedRow[]; errors: RowError[] }`
 
+
+**BINDING (Task 4 review) — `autoMap` MUST strip a leading `\uFEFF` from the
+first header before matching.** Export now writes a UTF-8 BOM so Excel on
+Windows renders á/ñ/é correctly. Verified empirically in Task 4:
+`Response.text()` and `Blob.text()` strip that BOM silently, but
+`fs.readFileSync(path, "utf8")` and `Buffer#toString("utf8")` do NOT — so the
+importer cannot assume its runtime handled it. An unstripped BOM makes the first
+header `\uFEFFfirst_name`, which matches nothing and silently drops that whole
+column on re-import. `toCsv`'s round-trip test cannot catch it (`toCsv` never
+emits a BOM — only the GET handler does), so this needs its OWN test.
+
 - [ ] **Step 1: Add the dependency**
 
 ```bash
