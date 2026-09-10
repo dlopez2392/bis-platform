@@ -120,6 +120,23 @@ they re-resolve against the accent each element inherits.
 - **Record views:** list click opens a right-side drawer over the list
   (Esc closes, deep link opens full page). Small edits are inline
   (click value → edit → save on blur + undo toast), not form+Save.
+- **Paged lists:** cursor paging, never offset — "Older"/"Newer" links carrying
+  `?before=`, and exactly ONE pager. (The contact list briefly had two stacked:
+  a server pager under a client-side one that only reordered the rows already
+  in the browser. A list that pages must page and sort on the SERVER, or
+  "sort by name" is a lie past the first screen.) The header states a real
+  total, not the number on screen — the contact list is the first list in the
+  app to do so. A row is not a link; the whole row opens the drawer, so a row's
+  identity is addressed by `data-contact-row`. Selection survives a page
+  change.
+- **CSV import:** its own route, three steps — choose a file, match the
+  columns, confirm. The file is parsed in the BROWSER and never uploaded; only
+  mapped rows travel, in bounded batches, and the server re-validates every
+  batch rather than trusting the browser's mapping. Blank cells are dropped
+  before the patch is built, so re-importing an export can never blank a
+  column. Never promise a number the screen cannot know: which rows are new is
+  only knowable against the stored contacts, so the preview counts rows that
+  are ready and the add/update split is reported afterwards, from real results.
 - **Command palette (⌘K):** finds contacts/calls/conversations, jumps to any
   settings section by name, runs actions. Settings sections must be
   registered in the palette index.
