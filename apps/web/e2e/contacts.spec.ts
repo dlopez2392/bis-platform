@@ -16,6 +16,18 @@ test("contacts table renders and sorts", async ({ page }) => {
   const table = page.getByRole("table");
   await expect(table).toBeVisible();
 
-  await page.getByRole("button", { name: /Contact name/ }).click();
+  const nameHeader = page.getByRole("button", { name: /Contact name/ });
+  await nameHeader.click();
   await expect(table).toBeVisible();
+
+  // Review finding: `toggleSort` is a real `router.push` now, not local
+  // `setState` — a navigation that re-renders the Server Component tree
+  // (see use-peek.ts's own comment on exactly this). Keyboard users must
+  // not be dumped back to the top of the document mid-task: the clicked
+  // header button itself should still hold focus once the sort lands, the
+  // same way `aria-sort` on its `<th>` is preserved and already asserted
+  // elsewhere. `nameHeader` re-resolves against the live DOM, so this checks
+  // the CURRENT button (post-navigation), not a stale reference to the one
+  // that existed before the click.
+  await expect(nameHeader).toBeFocused();
 });

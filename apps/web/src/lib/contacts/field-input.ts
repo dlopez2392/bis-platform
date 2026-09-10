@@ -9,7 +9,9 @@ export const FIELD_TO_INPUT_KEY: Record<EditableField, "firstName" | "lastName" 
   phone: "phone", company_name: "companyName",
 };
 
-const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/** Exported so CSV import validates an email exactly as inline editing does —
+ *  two rules would mean a value the grid accepts and the importer rejects. */
+export const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_CHARS = /^[+()\-. \d]+$/;
 
 export function normalizeFieldInput(

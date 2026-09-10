@@ -5,6 +5,46 @@ import { createContact, updateContact, listContacts, getContact,
          addTagToContact, listContactTags, fillContactBlanks, countContacts,
          deleteContacts, addTagToContacts, removeTagFromContacts, listTags } from "../contacts";
 
+/** Seed helper: inserts a contact row directly, bypassing createContact's
+ *  dedupe + event emission — this suite exercises listContacts/countContacts,
+ *  not create semantics. */
+async function seedContact(
+  db: any, accountId: string, input: { firstName?: string; lastName?: string },
+) {
+  const { data, error } = await db.from("contacts")
+    .insert({ account_id: accountId, first_name: input.firstName, last_name: input.lastName })
+    .select("id").single();
+  if (error || !data) throw new Error(`seedContact failed: ${error?.message}`);
+  return { id: data.id as string };
+}
+
+/** Seed helper: inserts `count` contact rows that all share ONE `created_at`
+ *  — exactly what a CSV import (Task 6) produces, and exactly what a
+ *  timestamp-only cursor cannot page through. Returns the inserted ids.
+ *  Bypasses createContact: it has no way to override created_at, and
+ *  emitting one event per row for hundreds of rows would make this test
+ *  needlessly slow. */
+async function seedContacts(db: any, accountId: string, count: number, at: string) {
+  const rows = Array.from({ length: count }, (_, i) => ({
+    account_id: accountId, first_name: `Seed ${i}`, created_at: at,
+  }));
+  const { data, error } = await db.from("contacts").insert(rows).select("id");
+  if (error) throw new Error(`seedContacts failed: ${error.message}`);
+  return (data ?? []).map((r: { id: string }) => r.id);
+}
+
+/** Seed helper: inserts one contact row with an explicit `first_name` AND
+ *  `created_at` — needed to interleave matching/non-matching rows at known
+ *  positions in the `created_at desc, id desc` ordering `listContacts` pages
+ *  by. Bypasses createContact for the same reasons as the helpers above. */
+async function seedContactAt(db: any, accountId: string, firstName: string, at: string) {
+  const { data, error } = await db.from("contacts")
+    .insert({ account_id: accountId, first_name: firstName, created_at: at })
+    .select("id").single();
+  if (error || !data) throw new Error(`seedContactAt failed: ${error?.message}`);
+  return { id: data.id as string };
+}
+
 describe("contacts service", () => {
   it("creates, emits event, dedupes by email", () =>
     withTestAccount(async (db, accountId) => {
@@ -234,6 +274,215 @@ describe("countContacts", () => {
       });
     });
   });
+});
+
+describe("listContacts paging", () => {
+  it("pages past 100 and never repeats or skips a row when timestamps collide", () =>
+    withTestAccount(async (db, accountId) => {
+      // Every row shares ONE created_at — exactly what an import produces, and
+      // exactly what a timestamp-only cursor cannot page through.
+      const at = "2026-09-09T12:00:00.000Z";
+      const ids = await seedContacts(db, accountId, 250, at);
+
+      const seen: string[] = [];
+      let before: { v: string | null; id: string } | undefined;
+      for (let page = 0; page < 10; page++) {
+        const rows = await listContacts(db, accountId, { limit: 50, before });
+        if (rows.length === 0) break;
+        seen.push(...rows.map((r: any) => r.id));
+        const last = rows[rows.length - 1]!;
+        before = { v: last.created_at, id: last.id };
+      }
+
+      expect(seen.length).toBe(250);
+      expect(new Set(seen).size).toBe(250);              // no repeats
+      expect([...seen].sort()).toEqual([...ids].sort()); // no skips
+    }));
+
+  it("counts what the search matches, not the whole account", () =>
+    withTestAccount(async (db, accountId) => {
+      await seedContact(db, accountId, { firstName: "Ada", lastName: "Lovelace" });
+      await seedContact(db, accountId, { firstName: "Grace", lastName: "Hopper" });
+      expect(await countContacts(db, accountId)).toBe(2);
+      expect(await countContacts(db, accountId, { search: "Ada" })).toBe(1);
+    }));
+
+  // Gap a Task 2 review flagged: source-reading confirmed the search .or()
+  // and the cursor's .or() compose (PostgREST ANDs separate filter calls)
+  // but nothing ever exercised it end to end — and the contacts list (Task 3)
+  // combines both live the moment an operator searches and clicks "Older".
+  // If they composed as OR instead of AND, this would either leak a
+  // non-matching row into a searched page or skip a matching one hiding
+  // behind a non-matching row's position — the interleaved timestamps below
+  // put a non-match between every pair of matches so either failure mode
+  // would show up as a wrong `seen` set.
+  it("composes search and before: paging the SEARCHED list sees every match once and no non-match", () =>
+    withTestAccount(async (db, accountId) => {
+      const base = Date.parse("2026-09-09T12:00:00.000Z");
+      const matchIds: string[] = [];
+      for (let i = 0; i < 12; i++) {
+        const at = new Date(base + i * 1000).toISOString();
+        const isMatch = i % 2 === 0;
+        const { id } = await seedContactAt(db, accountId, isMatch ? `Ada${i}` : `Bob${i}`, at);
+        if (isMatch) matchIds.push(id);
+      }
+
+      const seen: string[] = [];
+      let before: { v: string | null; id: string } | undefined;
+      for (let page = 0; page < 10; page++) {
+        const rows = await listContacts(db, accountId, { search: "ada", limit: 2, before });
+        if (rows.length === 0) break;
+        seen.push(...rows.map((r: any) => r.id));
+        const last = rows[rows.length - 1]!;
+        before = { v: last.created_at, id: last.id };
+      }
+
+      expect(seen.length).toBe(matchIds.length);              // every match, nothing extra
+      expect(new Set(seen).size).toBe(matchIds.length);        // no repeats across pages
+      expect([...seen].sort()).toEqual([...matchIds].sort()); // exactly the matches — no "Bob" leaked
+    }));
+});
+
+describe("listContacts sort", () => {
+  /** Pages the WHOLE list under a given sort, cursoring by whichever column
+   *  `key` names — exactly what apps/web's contacts/page.tsx does with the
+   *  last row of each page. Small `limit` on purpose: with 4 non-null rows
+   *  and 2 null ones, `limit: 2` forces a THIRD page whose cursor's `v` is
+   *  the last non-null value — the exact request that must cross into the
+   *  null block, which is the boundary Step 5's mutation check breaks. */
+  async function pageAll(
+    db: any, accountId: string, key: "name" | "company" | "created", dir: "asc" | "desc",
+  ): Promise<string[]> {
+    const column = key === "name" ? "sort_name" : key === "company" ? "company_name" : "created_at";
+    const seen: string[] = [];
+    let before: { v: string | null; id: string } | undefined;
+    for (let page = 0; page < 10; page++) {
+      const rows: any[] = await listContacts(db, accountId, { limit: 2, before, sort: { key, dir } });
+      if (rows.length === 0) break;
+      seen.push(...rows.map((r) => r.id));
+      const last = rows[rows.length - 1]!;
+      before = { v: last[column], id: last.id };
+    }
+    return seen;
+  }
+
+  it("pages the whole list sorted by name in both directions, nameless contacts last both times", () =>
+    withTestAccount(async (db, accountId) => {
+      // Insertion order deliberately NOT alphabetical — proves the order
+      // came from sort_name, not from created_at happening to agree with it.
+      const zed = await seedContact(db, accountId, { firstName: "Zed" });
+      const mike = await seedContact(db, accountId, { firstName: "Mike" });
+      const ana = await seedContact(db, accountId, { firstName: "Ana" });
+      const bob = await seedContact(db, accountId, { firstName: "Bob" });
+      // Two with no name at all — sort_name is NULL for both (0030's
+      // `nullif(..., '')`), and nulls must sort last in BOTH directions.
+      const nameless1 = await seedContact(db, accountId, {});
+      const nameless2 = await seedContact(db, accountId, {});
+      const namelessIds = new Set([nameless1.id, nameless2.id]);
+
+      const asc = await pageAll(db, accountId, "name", "asc");
+      expect(asc).toHaveLength(6);
+      expect(new Set(asc).size).toBe(6); // no repeats, no skips
+      expect(asc.slice(0, 4)).toEqual([ana.id, bob.id, mike.id, zed.id]);
+      expect(new Set(asc.slice(4))).toEqual(namelessIds); // last, either order
+
+      const desc = await pageAll(db, accountId, "name", "desc");
+      expect(desc).toHaveLength(6);
+      expect(new Set(desc).size).toBe(6);
+      expect(desc.slice(0, 4)).toEqual([zed.id, mike.id, bob.id, ana.id]);
+      expect(new Set(desc.slice(4))).toEqual(namelessIds); // STILL last, not first
+    }));
+
+  it("pages the whole list sorted by company in both directions, company-less contacts last both times", () =>
+    withTestAccount(async (db, accountId) => {
+      const zeta = await createContact(db, accountId, { firstName: "P1", companyName: "Zeta Corp" }, "user_test");
+      const mango = await createContact(db, accountId, { firstName: "P2", companyName: "Mango LLC" }, "user_test");
+      const acme = await createContact(db, accountId, { firstName: "P3", companyName: "Acme Inc" }, "user_test");
+      const bravo = await createContact(db, accountId, { firstName: "P4", companyName: "Bravo Co" }, "user_test");
+      const solo1 = await createContact(db, accountId, { firstName: "P5" }, "user_test"); // no company
+      const solo2 = await createContact(db, accountId, { firstName: "P6" }, "user_test"); // no company
+      const soloIds = new Set([solo1.id, solo2.id]);
+
+      const asc = await pageAll(db, accountId, "company", "asc");
+      expect(asc).toHaveLength(6);
+      expect(new Set(asc).size).toBe(6);
+      expect(asc.slice(0, 4)).toEqual([acme.id, bravo.id, mango.id, zeta.id]);
+      expect(new Set(asc.slice(4))).toEqual(soloIds);
+
+      const desc = await pageAll(db, accountId, "company", "desc");
+      expect(desc).toHaveLength(6);
+      expect(new Set(desc).size).toBe(6);
+      expect(desc.slice(0, 4)).toEqual([zeta.id, mango.id, bravo.id, acme.id]);
+      expect(new Set(desc.slice(4))).toEqual(soloIds);
+    }));
+
+  it("defaults to created desc, unaffected by an absent sort option", () =>
+    withTestAccount(async (db, accountId) => {
+      const first = await seedContact(db, accountId, { firstName: "First" });
+      await new Promise((r) => setTimeout(r, 5));
+      const second = await seedContact(db, accountId, { firstName: "Second" });
+      const rows: any[] = await listContacts(db, accountId, {});
+      expect(rows.map((r) => r.id)).toEqual([second.id, first.id]); // newest first
+    }));
+
+  /**
+   * sort_name/company_name are free text off first_name/last_name — unlike
+   * the OLD timestamp-only cursor (regex-validated to exclude every
+   * PostgREST-reserved character), the new cursor's `v` is opaque
+   * (apps/web/src/lib/cursor.ts) and a real name can contain any of
+   * PostgREST's `.or()` grammar characters: comma, parens, a period, a
+   * double quote. This is the same class of bug contacts.ts's own
+   * dedupe/search already got bitten by once (see this file's "tolerates
+   * PostgREST filter syntax" tests) — proving listContacts' cursor filter
+   * survives it too, now that the sorted value is free text rather than a
+   * shape-validated timestamp.
+   */
+  it("pages past a name containing every PostgREST-reserved character without breaking the filter or skipping a row", () =>
+    withTestAccount(async (db, accountId) => {
+      const tricky = await seedContact(db, accountId, { firstName: `O'Brien, "Big" (Sr.)` });
+      const after = await seedContact(db, accountId, { firstName: "Zed" }); // sorts after, ascending
+
+      const page1: any[] = await listContacts(db, accountId, { limit: 1, sort: { key: "name", dir: "asc" } });
+      expect(page1).toHaveLength(1);
+      expect(page1[0]!.id).toBe(tricky.id);
+
+      const cursor = { v: page1[0]!.sort_name as string, id: page1[0]!.id as string };
+      const page2: any[] = await listContacts(db, accountId,
+        { limit: 1, before: cursor, sort: { key: "name", dir: "asc" } });
+      expect(page2).toHaveLength(1);
+      expect(page2[0]!.id).toBe(after.id);
+    }));
+
+  /**
+   * Review finding: the test above has no backslash in it, so the ONE thing
+   * that makes `quoteFilterValue` (contacts.ts) safe — escaping a literal
+   * backslash BEFORE escaping a double quote — was never exercised against
+   * the real database. Order matters: escape the quote first and the
+   * backslash pass afterward doubles every backslash the quote step just
+   * inserted, so what should have been an escaped quote (`\"`) becomes an
+   * escaped backslash followed by a BARE, unescaped quote (`\\"`) — which
+   * PostgREST reads as the end of the quoted string. Everything after that
+   * spills out as raw, unquoted filter syntax instead of literal text, and
+   * the filter either throws on malformed grammar or silently mis-parses —
+   * either way this page/cursor request breaks. A name with a backslash and
+   * a quote right next to each other (as here) is the minimal case that
+   * tells the two orderings apart.
+   */
+  it("pages past a name containing both a backslash and a double quote without breaking the filter or skipping a row", () =>
+    withTestAccount(async (db, accountId) => {
+      const tricky = await seedContact(db, accountId, { firstName: `Back\\Slash "Quote"` });
+      const after = await seedContact(db, accountId, { firstName: "Zed" }); // sorts after, ascending
+
+      const page1: any[] = await listContacts(db, accountId, { limit: 1, sort: { key: "name", dir: "asc" } });
+      expect(page1).toHaveLength(1);
+      expect(page1[0]!.id).toBe(tricky.id);
+
+      const cursor = { v: page1[0]!.sort_name as string, id: page1[0]!.id as string };
+      const page2: any[] = await listContacts(db, accountId,
+        { limit: 1, before: cursor, sort: { key: "name", dir: "asc" } });
+      expect(page2).toHaveLength(1);
+      expect(page2[0]!.id).toBe(after.id);
+    }));
 });
 
 describe("bulk contact ops", () => {

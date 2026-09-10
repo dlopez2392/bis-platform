@@ -200,7 +200,7 @@ export const m = {
   "account.pipelineValue": "Pipeline value",
 
   // The in-account dashboard's greeting header (Task 5), both audiences.
-  // "{name}" is the house {placeholder} convention (see contacts.page) — the
+  // "{name}" is the house {placeholder} convention (see setup.progress) — the
   // component .replace()s it with the account's own name. Time-of-day comes
   // from `greetingPeriod` (lib/dashboard/greeting.ts), read from the
   // ACCOUNT's timezone, never the viewer's.
@@ -225,7 +225,7 @@ export const m = {
   // The 14-day calls chart card (Task 6) — CSS bars, hover tooltip on every
   // mark (DESIGN.md's chart section), a recent-calls mini table beneath it.
   // "{date}"/"{count}"/"{unit}" are the house {placeholder} convention (see
-  // contacts.page above); the component .replace()s them, and picks "{unit}"
+  // setup.progress above); the component .replace()s them, and picks "{unit}"
   // itself (call vs calls) the same way shell.presence.idleOne pins its own
   // singular case.
   "dashboard.calls.title": "Calls",
@@ -263,6 +263,53 @@ export const m = {
 
   "contacts.title": "Contacts",
   "contacts.add": "Add contact",
+  // The header badge (Task 3): a whole-phrase pick by count, never a plural
+  // template reused for one — see setup.progress below for the {placeholder}
+  // convention this departs from on purpose. The platform already shipped a
+  // "1 people" bug on the Website screen by templating a plural with no
+  // singular form; this is the same shape, fixed at the source.
+  "contacts.count": "{count} contacts",
+  "contacts.countOne": "1 contact",
+  // Cursor pager (Task 3): "Newer" always returns to the unpaged head rather
+  // than walking back one page at a time — see page.tsx's own comment on
+  // newerHref for why a full back-stack isn't worth the state here.
+  "contacts.newer": "Newer",
+  "contacts.older": "Older",
+  "contacts.import": "Import CSV",
+  "contacts.export": "Export CSV",
+  // Import wizard. Singular twins are not decoration: the Website screen ships
+  // a live "1 people" bug from exactly this omission, and every count below can
+  // legitimately be 1.
+  "contacts.import.title": "Import contacts",
+  "contacts.import.drop": "Choose a CSV file",
+  "contacts.import.mapTitle": "Match your columns",
+  "contacts.import.ignore": "Don't import this column",
+  "contacts.import.ignored": "{count} columns won't be imported",
+  "contacts.import.ignoredOne": "1 column won't be imported",
+  // NOT "will add X and update Y": which rows are new is only knowable against
+  // the account's existing contacts, which this screen has not read. The real
+  // split is reported in `done`, after the work.
+  "contacts.import.preview": "{count} rows ready to import.",
+  "contacts.import.previewOne": "1 row ready to import.",
+  "contacts.import.errors": "{count} rows have problems and will be skipped.",
+  "contacts.import.errorsOne": "1 row has a problem and will be skipped.",
+  "contacts.import.downloadErrors": "Download the skipped rows",
+  "contacts.import.createTags": "Also create {count} new tags",
+  "contacts.import.createTagsOne": "Also create 1 new tag",
+  "contacts.import.confirm": "Import",
+  "contacts.import.importing": "Importing {done} of {total}...",
+  "contacts.import.done": "Added {created}, updated {updated}.",
+  "contacts.import.partial": "Stopped after {done} rows. Nothing after that was imported.",
+  "contacts.import.failed": "That import didn't go through. Nothing was changed. Please try again.",
+  "contacts.import.tooMany": "That's too many rows at once. Try a smaller file.",
+  "contacts.import.empty": "That file has no rows we can read.",
+  "contacts.import.back": "Back to contacts",
+  // The downloaded file's own name (Task 4) — "{date}" is the house
+  // {placeholder} convention (see setup.progress below). yyyy-mm-dd, filled
+  // in by the export route itself; see that file's own comment for why it's
+  // UTC rather than the account's timezone (a cosmetic export timestamp, not
+  // a business date).
+  "contacts.export.filename": "contacts-{date}.csv",
   "contacts.search": "Search name, email, phone…",
   "contacts.col.name": "Contact name",
   "contacts.col.phone": "Phone",
@@ -278,14 +325,11 @@ export const m = {
   "contacts.lastName": "Last name",
   "contacts.email": "Email",
   "contacts.phone": "Phone",
-  "contacts.page": "Page {current} of {total}",
   "contacts.createFailed": "Could not add that contact. Check the details and try again.",
-  "common.prev": "Prev",
-  "common.next": "Next",
 
   // The contacts table's bulk-action bar (DESIGN.md rule 4 — checkboxes
   // never render without bulk actions). "{count}"/"{tag}"/"{skipped}" are
-  // the house {placeholder} convention (see contacts.page above).
+  // the house {placeholder} convention (see setup.progress above).
   "bulk.selectPage": "Select all on this page",
   "bulk.selected": "{count} selected",
   "bulk.addTag": "Add tag",
@@ -340,7 +384,7 @@ export const m = {
 
   // The contact drawer's recent-activity feed (Task 2's summary route,
   // Task 6's drawer). "{outcome}"/"{name}"/"{value}" are the house
-  // {placeholder} convention (see contacts.page above) — the route
+  // {placeholder} convention (see setup.progress above) — the route
   // .replace()s them before the string ever reaches the client.
   "drawer.recent.call": "Call — {outcome}",
   "drawer.recent.note": "Note added",
@@ -867,7 +911,7 @@ export const m = {
   // gated by requireAccountAccess like contacts and the calendar are — and
   // it is the one screen where a client SEES what they are paying for.
   //
-  // `calls.usage` interpolates like `contacts.page` above: the component
+  // `calls.usage` interpolates like `setup.progress` above: the component
   // .replace()s the placeholders, so a future translation may reorder them.
   "calls.title": "Calls",
   "calls.usage": "{n} of {cap} calls today",

@@ -162,15 +162,22 @@ test.beforeAll(async () => {
   const { error: tagErr } = await db.from("tags").insert({ account_id: accountId, name: seededTagName });
   if (tagErr) throw new Error(`contacts-drawer e2e: seed tag failed: ${tagErr.message}`);
 
-  // Addition D: enough contacts to force a second table page (PAGE_SIZE = 20
-  // in contacts-table.tsx). This test locates rows by POSITION, not name, so
-  // nothing else depends on these ids beyond their count.
-  for (let i = 0; i < 21; i++) {
-    const c = await createContact(
-      db, accountId, { firstName: "Paging", lastName: `Item ${i + 1}` }, ACTOR,
-    );
-    pagingIds.push(c.id);
-  }
+  // Addition D: enough contacts to force a SECOND page. PAGE_SIZE is 50 and
+  // lives in contacts/page.tsx now — the client pager this originally targeted
+  // (PAGE_SIZE 20, inside contacts-table.tsx) was REMOVED when sorting and
+  // paging moved to the server, so 21 rows no longer fill even one page and
+  // this spec's cross-page assertions had nothing to page through.
+  //
+  // One insert rather than 55 createContact round trips: this test locates
+  // rows by POSITION, not name, and nothing depends on these beyond their
+  // count (`pagingIds` is collected and never read).
+  const pagingRows = Array.from({ length: 55 }, (_, i) => ({
+    account_id: accountId, first_name: "Paging", last_name: `Item ${i + 1}`,
+  }));
+  const { data: pagingData, error: pagingErr } = await db.from("contacts")
+    .insert(pagingRows).select("id");
+  if (pagingErr) throw new Error(`contacts-drawer e2e: seed paging rows failed: ${pagingErr.message}`);
+  pagingIds.push(...(pagingData ?? []).map((r: { id: string }) => r.id));
 
   // Addition G: one phone number and two calls — one linked to a contact
   // (the contact-link-not-call-row proof), one not (the keyboard-nav
@@ -445,8 +452,10 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
   // Addition D (T7 review): the bulk bar's own visibility rule, the header
   // checkbox's tri-state (including indeterminate at partial selection),
   // and cross-page selection surviving a page change — `selected` lives in
-  // ContactsTable's own state, entirely independent of the `page` state
-  // that drives which 20 rows are currently rendered.
+  // ContactsTable's own state, independent of which rows are rendered. That
+  // independence used to be from the client table's own `page` state; the
+  // pager is a server navigation now, so it is independence from a re-render
+  // of the whole server tree.
   test("bulk bar: appears/hides with selection; header checkbox is tri-state; selection survives paging", async ({ page }) => {
     await page.goto(`${base()}/contacts`);
     const bar = page.getByTestId("bulk-action-bar");
@@ -465,27 +474,35 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
 
     await headerCheckbox.click();
     await expect(headerCheckbox).toHaveAttribute("aria-checked", "true");
-    await expect(bar.getByText("20 selected")).toBeVisible();
+    // COUNTED, not hard-coded at 20. The page size moved from the client
+    // table's 20 to the server page's 50 and this assertion silently encoded
+    // the old one; asserting the RULE — select-all selects exactly the rows
+    // rendered — is what survives the next move.
     const pageCheckboxes = page.locator("tbody tr").getByRole("checkbox");
-    await expect(pageCheckboxes).toHaveCount(20);
+    const rendered = await pageCheckboxes.count();
+    expect(rendered).toBeGreaterThan(1);
+    await expect(bar.getByText(`${rendered} selected`)).toBeVisible();
     await expect(pageCheckboxes.first()).toHaveAttribute("aria-checked", "true");
     await expect(pageCheckboxes.last()).toHaveAttribute("aria-checked", "true");
 
     await headerCheckbox.click();
     await expect(bar).toHaveCount(0);
 
-    // Cross-page selection.
+    // Cross-page selection. Paging is a SERVER navigation now — the Older /
+    // Newer links carrying ?before=, not the removed client pager's Next/Prev
+    // buttons — so selection surviving it is a stronger claim than it was:
+    // the rows are re-fetched and the server tree re-renders between these
+    // two clicks.
     await firstRowCheckbox.click();
     await expect(bar.getByText("1 selected")).toBeVisible();
 
-    await page.getByRole("button", { name: "Next", exact: true }).click();
-    await expect(page.getByText(/Page 2 of/)).toBeVisible();
+    await page.getByRole("link", { name: "Older" }).click();
+    await expect(page).toHaveURL(/[?&]before=/);
     const page2FirstCheckbox = page.locator("tbody tr").first().getByRole("checkbox");
     await page2FirstCheckbox.click();
     await expect(bar.getByText("2 selected")).toBeVisible();
 
-    await page.getByRole("button", { name: "Prev", exact: true }).click();
-    await expect(page.getByText(/Page 1 of/)).toBeVisible();
+    await page.getByRole("link", { name: "Newer" }).click();
     await expect(bar.getByText("2 selected")).toBeVisible();
     await expect(firstRowCheckbox).toHaveAttribute("aria-checked", "true");
 

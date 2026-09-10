@@ -1,7 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { ArrowUpDown, Mail, Phone } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { ArrowDown, ArrowUp, ArrowUpDown, Mail, Phone } from "lucide-react";
+import type { SortKey, SortDir } from "@bis/db";
 import {
   Table,
   TableBody,
@@ -10,7 +12,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ListPanel } from "@/components/ui/list-panel";
 import { contactDisplayName, formatDate, initials } from "@/lib/format";
@@ -31,9 +32,10 @@ export type ContactRow = {
 };
 
 // A `?peek=` id absent from the current page's rows (deleted, or on another
-// page of the client-side paging) still opens the drawer — the stub's empty
-// fields render as empty InlineFields and the summary fetch 404s into the
-// drawer's error state, which is exactly the spec's deleted-contact behavior.
+// page of the server's cursor pager) still opens the drawer — the stub's
+// empty fields render as empty InlineFields and the summary fetch 404s into
+// the drawer's error state, which is exactly the spec's deleted-contact
+// behavior.
 function missingRow(id: string): ContactRow {
   return {
     id, first_name: null, last_name: null, email: null, phone: null,
@@ -41,40 +43,84 @@ function missingRow(id: string): ContactRow {
   };
 }
 
-type SortKey = "name" | "company" | "created";
-
-const PAGE_SIZE = 20;
+/**
+ * The href a click on `key`'s column header navigates to. Toggles direction
+ * when `key` is already the active sort; otherwise starts that column at
+ * ascending (the old client-side toggleSort's own default for a
+ * newly-clicked column, preserved here). `q` rides along so a search stays
+ * applied across a re-sort; `before` NEVER does — there is no parameter here
+ * to plumb one through even by accident. A cursor taken from one sort's
+ * ordering is meaningless on another's, so changing the sort always returns
+ * to the head of the (newly ordered) list, exactly like a fresh page load.
+ */
+export function sortHref(
+  accountId: string, current: { key: SortKey; dir: SortDir }, key: SortKey, q?: string,
+): string {
+  const dir: SortDir = current.key === key && current.dir === "asc" ? "desc" : "asc";
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  params.set("sort", key);
+  params.set("dir", dir);
+  return `/dashboard/accounts/${accountId}/contacts?${params}`;
+}
 
 export function ContactsTable({
   rows,
   accountId,
   existingTags,
+  sort,
+  dir,
+  q,
 }: {
   rows: ContactRow[];
   accountId: string;
   existingTags: { id: string; name: string }[];
+  /** The sort actually applied to `rows` server-side — already validated by
+   *  the page, so this component only ever has to render it, never guess a
+   *  fallback for it. */
+  sort: SortKey;
+  dir: SortDir;
+  /** The current search text, carried into a re-sort's href so it survives
+   *  clicking a column header. */
+  q?: string;
 }) {
-  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "created", dir: -1 });
-  const [page, setPage] = useState(0);
+  const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const { peekId, open, close } = usePeek();
+  // Which column's header button should regain focus once THIS click's
+  // navigation lands — a ref, not state, because setting it must not itself
+  // trigger a render; it only needs to survive until the effect below runs
+  // against the NEW `sort`/`dir` props the navigation produced.
+  const pendingFocusKey = useRef<SortKey | null>(null);
 
-  const sorted = useMemo(() => {
-    const value = (r: ContactRow) =>
-      sort.key === "name"
-        ? contactDisplayName(r).toLowerCase()
-        : sort.key === "company"
-          ? (r.company_name ?? "").toLowerCase()
-          : r.created_at;
-    return [...rows].sort((a, b) => (value(a) < value(b) ? -sort.dir : value(a) > value(b) ? sort.dir : 0));
-  }, [rows, sort]);
-
-  const pageCount = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
-  const current = Math.min(page, pageCount - 1);
-  const visible = sorted.slice(current * PAGE_SIZE, current * PAGE_SIZE + PAGE_SIZE);
+  useEffect(() => {
+    const key = pendingFocusKey.current;
+    if (!key) return;
+    pendingFocusKey.current = null;
+    // Deferred one frame past this commit's own effects — and past Next's,
+    // which fire the same way — so this call is the LAST word on focus
+    // rather than one more effect the App Router's own post-navigation
+    // handling could still override. Queried by attribute rather than a
+    // stored ref because the re-render behind this navigation may hand back
+    // an entirely new DOM node for this button, not the one that had focus
+    // when it was clicked.
+    const raf = requestAnimationFrame(() => {
+      document.querySelector<HTMLButtonElement>(`[data-sort-key="${key}"]`)?.focus();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [sort, dir]);
 
   function toggleSort(key: SortKey) {
-    setSort((s) => (s.key === key ? { key, dir: s.dir === 1 ? -1 : 1 } : { key, dir: 1 }));
+    pendingFocusKey.current = key;
+    // A sort click re-renders this same page with new rows, not a real page
+    // change (use-peek.ts documents the same router.push re-renders the
+    // whole server component tree) — `scroll: false` stops the App Router's
+    // default post-navigation behaviour (scroll-to-top, and moving focus to
+    // the new content, its accessibility parity with a full page load) from
+    // firing at all here. The effect above is the second half: it wins
+    // focus back even if the re-render itself replaces the clicked button's
+    // DOM node, which `scroll: false` alone does not cover.
+    router.push(sortHref(accountId, { key: sort, dir }, key, q), { scroll: false });
   }
 
   function toggleRow(id: string) {
@@ -85,6 +131,9 @@ export function ContactsTable({
       return next;
     });
   }
+
+  const rowIds = rows.map((r) => r.id);
+  const selectionState = pageSelectionState(selected, rowIds);
 
   return (
     <ListPanel>
@@ -99,30 +148,44 @@ export function ContactsTable({
           <TableRow>
             <TableHead className="w-10" onClick={(e) => e.stopPropagation()}>
               <Checkbox
-                checked={pageSelectionState(selected, visible.map((r) => r.id)) === "all"
-                  ? true
-                  : pageSelectionState(selected, visible.map((r) => r.id)) === "some"
-                    ? "indeterminate"
-                    : false}
-                onCheckedChange={() => setSelected((s) => togglePageSelection(s, visible.map((r) => r.id)))}
+                checked={selectionState === "all" ? true : selectionState === "some" ? "indeterminate" : false}
+                onCheckedChange={() => setSelected((s) => togglePageSelection(s, rowIds))}
                 aria-label={m["bulk.selectPage"]}
               />
             </TableHead>
-            <TableHead>
-              <SortButton label={m["contacts.col.name"]} onClick={() => toggleSort("name")} />
+            <TableHead aria-sort={sort === "name" ? (dir === "asc" ? "ascending" : "descending") : "none"}>
+              <SortButton
+                sortKey="name"
+                label={m["contacts.col.name"]}
+                active={sort === "name"}
+                dir={dir}
+                onClick={() => toggleSort("name")}
+              />
             </TableHead>
             <TableHead>{m["contacts.col.phone"]}</TableHead>
             <TableHead>{m["contacts.col.email"]}</TableHead>
-            <TableHead>
-              <SortButton label={m["contacts.col.company"]} onClick={() => toggleSort("company")} />
+            <TableHead aria-sort={sort === "company" ? (dir === "asc" ? "ascending" : "descending") : "none"}>
+              <SortButton
+                sortKey="company"
+                label={m["contacts.col.company"]}
+                active={sort === "company"}
+                dir={dir}
+                onClick={() => toggleSort("company")}
+              />
             </TableHead>
-            <TableHead>
-              <SortButton label={m["contacts.col.created"]} onClick={() => toggleSort("created")} />
+            <TableHead aria-sort={sort === "created" ? (dir === "asc" ? "ascending" : "descending") : "none"}>
+              <SortButton
+                sortKey="created"
+                label={m["contacts.col.created"]}
+                active={sort === "created"}
+                dir={dir}
+                onClick={() => toggleSort("created")}
+              />
             </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {visible.map((c) => {
+          {rows.map((c) => {
             const name = contactDisplayName(c);
             return (
               <TableRow
@@ -182,31 +245,6 @@ export function ContactsTable({
           })}
         </TableBody>
       </Table>
-      <div className="flex items-center justify-between border-t border-border px-4 py-3 text-sm text-muted-foreground">
-        <span>
-          {m["contacts.page"]
-            .replace("{current}", String(current + 1))
-            .replace("{total}", String(pageCount))}
-        </span>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={current === 0}
-            onClick={() => setPage(current - 1)}
-          >
-            {m["common.prev"]}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={current >= pageCount - 1}
-            onClick={() => setPage(current + 1)}
-          >
-            {m["common.next"]}
-          </Button>
-        </div>
-      </div>
       <ContactDrawer
         accountId={accountId}
         row={rows.find((r) => r.id === peekId) ?? (peekId ? missingRow(peekId) : null)}
@@ -216,15 +254,24 @@ export function ContactsTable({
   );
 }
 
-function SortButton({ label, onClick }: { label: string; onClick: () => void }) {
+function SortButton({ sortKey, label, active, dir, onClick }: {
+  sortKey: SortKey; label: string; active: boolean; dir: SortDir; onClick: () => void;
+}) {
+  // A neutral glyph until a column is actually driving the order, then the
+  // direction it is actually in — `aria-sort` on the enclosing `<th>` is the
+  // real accessible signal; this is sighted-user affordance on top of it.
+  const Icon = active ? (dir === "asc" ? ArrowUp : ArrowDown) : ArrowUpDown;
   return (
     <button
       type="button"
+      // Looked up by the focus-restoration effect above after a sort click's
+      // navigation lands — never read here, only written for that query.
+      data-sort-key={sortKey}
       onClick={onClick}
       className="flex items-center gap-1 font-medium hover:text-foreground"
     >
       {label}
-      <ArrowUpDown className="size-3" aria-hidden />
+      <Icon className="size-3" aria-hidden />
     </button>
   );
 }

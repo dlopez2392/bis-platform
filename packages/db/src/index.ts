@@ -9,7 +9,9 @@ export type { A2pStatus, A2pRegistration, A2pRegistrationRecord } from "./accoun
 export { createContact, updateContact, listContacts, getContact,
          addTagToContact, removeTagFromContact, listContactTags, fillContactBlanks,
          countContacts, deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
-         type ContactInput } from "./contacts";
+         type ContactInput, type SortKey, type SortDir } from "./contacts";
+export { buildMatchIndex, applyImportBatch,
+         type MatchIndex, type ImportRow } from "./contact-import";
 export { addNote, listNotes, addTask, listContactTasks, completeTask } from "./activities";
 export { listCustomFields, createCustomField, listCustomValues, upsertCustomValue,
          ensureDefaultPipeline, listPipelinesWithStages, type CustomFieldDef } from "./crm-config";
