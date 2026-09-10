@@ -88,6 +88,28 @@ export function buildOlderHref(
       before: encodeCursor({ v: cursorValue(sort, lastRow), id: lastRow.id }) })}`;
 }
 
+/**
+ * The href for the "Export" link: the export route under this page's own
+ * `base`, carrying the CURRENT search and sort so "export what I'm looking
+ * at" (the product decision behind export/route.ts, proven there by
+ * route.get.test.ts) actually holds at the link too — previously a bare
+ * `${base}/export` with no query string, so Export always downloaded the
+ * unfiltered, default-order list regardless of what the page was showing.
+ * Same reason as buildNewerHref/buildOlderHref above: an exported pure
+ * function so this claim is executable by a test, not just readable in JSX.
+ *
+ * Deliberately takes no cursor parameter: the export route pages the WHOLE
+ * matching set itself (route.ts's own CHUNK_SIZE loop), so there is nothing
+ * here a caller could even pass a `before` through as — carrying one would
+ * silently truncate the downloaded file to a single page, a data-loss bug
+ * rather than a cosmetic one.
+ */
+export function buildExportHref(
+  base: string, q: string | undefined, sort: SortKey, dir: SortDir,
+): string {
+  return `${base}/export?${new URLSearchParams({ ...(q ? { q } : {}), sort, dir })}`;
+}
+
 export default async function ContactsPage({
   params,
   searchParams,
@@ -139,7 +161,7 @@ export default async function ContactsPage({
         actions={
           <>
             <Link
-              href={`${base}/export`}
+              href={buildExportHref(base, q, sort, dir)}
               className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
             >
               <Download className="size-4" aria-hidden />

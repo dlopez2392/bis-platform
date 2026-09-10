@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildNewerHref, buildOlderHref } from "./page";
+import { buildExportHref, buildNewerHref, buildOlderHref } from "./page";
 
 const page = readFileSync(
   path.join(path.dirname(fileURLToPath(import.meta.url)), "page.tsx"), "utf8");
@@ -99,5 +99,52 @@ describe("buildOlderHref", () => {
       Buffer.from(new URLSearchParams(companyHref.slice(1)).get("before")!, "base64url").toString("utf8"));
     expect(beforeName).toEqual(["ana lovelace", lastRow.id]);
     expect(beforeCompany).toEqual(["Acme Inc", lastRow.id]);
+  });
+});
+
+// Defect: the Export link used to be a bare `${base}/export` with no query
+// string at all, so clicking it always downloaded the unfiltered,
+// default-order list even from a search or a re-sorted view — even though
+// the route itself honours q/sort/dir correctly (export/route.get.test.ts).
+// Same fix as buildNewerHref/buildOlderHref above: an exported pure
+// function so "the Export link carries the current search and sort" is a
+// claim a test can execute, not just read off the JSX.
+describe("buildExportHref", () => {
+  it("points at the export route under the current base", () => {
+    const href = buildExportHref("/dashboard/accounts/a1/contacts", undefined, "created", "desc");
+    expect(href.split("?")[0]).toBe("/dashboard/accounts/a1/contacts/export");
+  });
+
+  it("carries the current sort and dir", () => {
+    const href = buildExportHref("/dashboard/accounts/a1/contacts", undefined, "company", "asc");
+    expect(href).toContain("sort=company");
+    expect(href).toContain("dir=asc");
+  });
+
+  it("carries sort and dir for the created column too", () => {
+    const href = buildExportHref("/dashboard/accounts/a1/contacts", undefined, "created", "asc");
+    expect(href).toContain("sort=created");
+    expect(href).toContain("dir=asc");
+  });
+
+  it("carries the current search term along", () => {
+    const href = buildExportHref("/dashboard/accounts/a1/contacts", "trevino", "created", "desc");
+    expect(href).toContain("q=trevino");
+  });
+
+  it("drops an empty search term rather than writing a bare ?q=", () => {
+    const href = buildExportHref("/dashboard/accounts/a1/contacts", "", "created", "desc");
+    expect(href).not.toContain("q=");
+  });
+
+  // The export route pages the WHOLE matching set itself (route.ts's own
+  // CHUNK_SIZE loop) — a `before` cursor on this link would silently
+  // truncate the download to one page's worth, a data-loss bug rather than
+  // a cosmetic one. buildExportHref takes no cursor parameter at all, so
+  // there is nothing a caller could even pass one through as; this test
+  // pins the resulting href as a second, executable line of defence.
+  it("never carries a before cursor — export walks the whole list itself, not one page of it", () => {
+    const href = buildExportHref("/dashboard/accounts/a1/contacts", "trevino", "name", "asc");
+    expect(href).not.toContain("before=");
   });
 });

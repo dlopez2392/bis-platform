@@ -116,6 +116,15 @@ export async function GET(
           // correctness problem.
           if (chunk.length < CHUNK_SIZE) break;
           const last = chunk[chunk.length - 1];
+          // noUncheckedIndexedAccess types this access as `... | undefined`
+          // regardless of the length checks above — chunk.length >=
+          // CHUNK_SIZE here so this is unreachable in practice, but a
+          // non-null assertion would turn a wrong assumption into an
+          // infinite loop (cursor.id stays undefined forever) or a crash
+          // mid-download instead of a clean stop. Ending the export is the
+          // only safe response to a chunk the code can't prove has a last
+          // row, so treat it exactly like the already-handled empty chunk.
+          if (!last) break;
           cursor = { v: cursorValue(sort, last), id: last.id };
         }
       } catch (err) {
