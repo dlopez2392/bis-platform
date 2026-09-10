@@ -1,7 +1,11 @@
 import "dotenv/config";
 import { describe, it, expect } from "vitest";
+import { serviceDb } from "../service";
 import { withTestAccount } from "./fixtures";
-import { listAccountsDueWeeklyReport, stampWeeklyReportSent } from "../weekly-report";
+import {
+  listAccountsDueWeeklyReport, stampWeeklyReportSent,
+  listAccountsForWeeklyRollup, getAgencyReportTarget, stampAgencyReportSent,
+} from "../weekly-report";
 
 /**
  * The due query's whole job is to hand the pass rows it can act on without a
@@ -51,5 +55,79 @@ describe("listAccountsDueWeeklyReport", () => {
       const row = (await listAccountsDueWeeklyReport(db)).find((r) => r.accountId === accountId);
       expect(row!.lastSentWeek).toBe("2026-03-02");
     });
+  });
+});
+
+/**
+ * The roll-up's own read, deliberately separate from `listAccountsDueWeeklyReport`
+ * above: that query filters to accounts WITH a recipient because it exists to
+ * drive sends, and correctly hides an account with none. The roll-up's job is
+ * the opposite of that — a client silently receiving nothing must be visible
+ * to the agency — so it cannot reuse a read that was built to hide exactly
+ * that case.
+ */
+describe("listAccountsForWeeklyRollup", () => {
+  it("the roll-up read includes an account with no recipients", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const row = (await listAccountsForWeeklyRollup(db)).find((r) => r.accountId === accountId);
+      expect(row).toBeDefined();
+      expect(row!.hasRecipients).toBe(false);
+    });
+  });
+});
+
+/**
+ * `agencies` carries exactly ONE row and it is shared with production (spec
+ * 2026-09-10-weekly-report-design, "agencies.report_email is nullable and
+ * has no editing screen"). There is no `withTestAccount`-style fixture for a
+ * second, throwaway agency, and there cannot be one through this read path:
+ * `getAgencyReportTarget`/`stampAgencyReportSent` take a `SupabaseClient`
+ * (PostgREST), while `withRollback` (rls.test.ts) opens a SEPARATE raw `pg`
+ * connection whose uncommitted transaction is invisible to a PostgREST
+ * request on a different connection — the two cannot be combined here.
+ *
+ * So this test reads the real row FIRST and restores it in `finally`
+ * regardless of outcome, exactly the "pre-flight read, then write, then
+ * put it back" shape `withTestAccount`'s own teardown uses for an account.
+ */
+describe("getAgencyReportTarget / stampAgencyReportSent", () => {
+  it("getAgencyReportTarget returns the agency row with its zone and stamp", async () => {
+    const db = serviceDb();
+    const { data: before, error: beforeErr } = await db.from("agencies")
+      .select("id, report_email, timezone, weekly_report_week").limit(1).single();
+    if (beforeErr || !before) throw new Error(`pre-flight agency read failed: ${beforeErr?.message}`);
+
+    try {
+      const { error } = await db.from("agencies")
+        .update({
+          report_email: "rollup-fixture@example.com",
+          timezone: "America/Denver",
+          weekly_report_week: "2026-02-16",
+        })
+        .eq("id", before.id);
+      if (error) throw new Error(error.message);
+
+      expect(await getAgencyReportTarget(db)).toEqual({
+        agencyId: before.id,
+        reportEmail: "rollup-fixture@example.com",
+        timezone: "America/Denver",
+        lastSentWeek: "2026-02-16",
+      });
+
+      // stampAgencyReportSent is the "stamp" half of this test's own name —
+      // exercised here, rather than as a second test, the same way the
+      // sibling suite above folds its stamp check into one flow.
+      await stampAgencyReportSent(db, before.id, "2026-02-23");
+      expect((await getAgencyReportTarget(db))?.lastSentWeek).toBe("2026-02-23");
+    } finally {
+      const { error: restoreErr } = await db.from("agencies")
+        .update({
+          report_email: before.report_email,
+          timezone: before.timezone,
+          weekly_report_week: before.weekly_report_week,
+        })
+        .eq("id", before.id);
+      if (restoreErr) throw new Error(`agency row restore failed: ${restoreErr.message}`);
+    }
   });
 });

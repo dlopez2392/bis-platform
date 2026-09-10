@@ -24,6 +24,7 @@ const dbMocks = vi.hoisted(() => ({
   ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(),
   listSitesToSync: vi.fn(),
   listAccountsDueWeeklyReport: vi.fn(),
+  getAgencyReportTarget: vi.fn(), stampAgencyReportSent: vi.fn(), listAccountsForWeeklyRollup: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: async () => ({ ok: true, from: "+19565550000" }) }));
@@ -100,6 +101,12 @@ beforeEach(() => {
   // never be in the Monday band here regardless of account timezone. Empty
   // due-list — it still runs to real counters, not `errored`.
   dbMocks.listAccountsDueWeeklyReport.mockResolvedValue([]);
+  // And the agency roll-up: no agency row configured in this fixture, so it
+  // takes the visible-skip path (skippedNoRecipient) before it would ever
+  // reach the same Wednesday-is-never-Monday gate the client pass above
+  // hits — either way it must run to real counters, never `errored`.
+  dbMocks.getAgencyReportTarget.mockResolvedValue(null);
+  dbMocks.listAccountsForWeeklyRollup.mockResolvedValue([]);
 });
 
 describe("the sentinel: the internal label never reaches a customer, through ANY registered pass", () => {
@@ -125,6 +132,8 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(results.siteTraffic).not.toHaveProperty("errored");
     expect(results.weeklyClientReport).toEqual(expect.objectContaining({ sent: 0, failed: 0 }));
     expect(results.weeklyClientReport).not.toHaveProperty("errored");
+    expect(results.weeklyAgencyReport).toEqual(expect.objectContaining({ sent: 0, failed: 0 }));
+    expect(results.weeklyAgencyReport).not.toHaveProperty("errored");
 
     const everything = [...emailSend.mock.calls, ...smsSend.mock.calls, ...dbMocks.createMessage.mock.calls]
       .map((args) => JSON.stringify(args)).join("\n");
@@ -133,8 +142,8 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(everything).toContain(BRAND);   // and the brand name DID go out, in its place
   });
 
-  it("the registry runs reminders, follow-ups, review requests, no-show nudges, text reminders, site traffic, then the weekly report — the first three's order is the collision's contract", () => {
-    expect(PASSES.map((p) => p.key)).toEqual(["reminders", "followups", "reviewRequests", "noShowNudges", "smsReminders", "siteTraffic", "weeklyClientReport"]);
+  it("the registry runs reminders, follow-ups, review requests, no-show nudges, text reminders, site traffic, then the two weekly reports — the first three's order is the collision's contract", () => {
+    expect(PASSES.map((p) => p.key)).toEqual(["reminders", "followups", "reviewRequests", "noShowNudges", "smsReminders", "siteTraffic", "weeklyClientReport", "weeklyAgencyReport"]);
   });
 
   /**
