@@ -2,11 +2,25 @@ import { describe, expect, it } from "vitest";
 import { inMondayBand, lastWeekMonday, weekWindow } from "./weekly-window";
 
 describe("the Monday band", () => {
-  // ONE instant, TWO zones, OPPOSITE verdicts.
-  it("is Monday morning in Chicago and still Sunday night in Honolulu", () => {
-    const instant = new Date("2026-03-02T15:00:00Z"); // 09:00 CST / 05:00 HST
+  /**
+   * ONE instant, THREE zones, and the two refusals happen for DIFFERENT
+   * reasons — which is the point, and which the first version of this test got
+   * wrong. It paired Chicago with Honolulu and claimed Honolulu was "still
+   * Sunday night"; it is not, it is 05:00 on the same Monday. That test proved
+   * only that the HOUR is read in the right zone, and would still have passed
+   * against an implementation that read the weekday in the system zone.
+   *
+   * Tokyo is the missing half: at this instant it is already TUESDAY there, so
+   * a refusal can only come from the weekday. Honolulu keeps the hour case.
+   */
+  it("reads BOTH the weekday and the hour in the account's own zone", () => {
+    const instant = new Date("2026-03-02T15:00:00Z");
+    // Monday 09:00 — inside the band.
     expect(inMondayBand(instant, "America/Chicago")).toBe(true);
+    // Monday 05:00 — right day, too early.
     expect(inMondayBand(instant, "Pacific/Honolulu")).toBe(false);
+    // Tuesday 00:00 — wrong day entirely.
+    expect(inMondayBand(instant, "Asia/Tokyo")).toBe(false);
   });
 
   it("refuses Monday outside the band, and other days inside it", () => {

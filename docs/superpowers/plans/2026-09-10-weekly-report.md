@@ -323,7 +323,15 @@ Remove the `.not("report_emails", "eq", "{}")` filter. Re-run: the first test mu
 - Produces:
 
 ```ts
-export type WeeklyWindow = { fromIso: string; toIso: string };
+// CORRECTED during execution (this block first shipped with two fields).
+// `listTrafficDays` takes INCLUSIVE `YYYY-MM-DD` day strings, not instants, so
+// the window carries both shapes rather than making each call site re-derive
+// one from the other — which is how two reads drift into describing different
+// weeks. Tasks 5 and 7 build and consume all four.
+export type WeeklyWindow = {
+  fromIso: string; toIso: string;   // HALF-OPEN [from, to) instants
+  fromDay: string; toDay: string;   // INCLUSIVE local days
+};
 export type WeeklyNumbers = {
   calls: number; leads: number; bookings: number;
   /** null = NOT MEASURED (no linked site). Never 0 for an unmeasured account. */
