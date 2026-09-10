@@ -7,7 +7,13 @@ export type ContactInput = {
   companyName?: string; source?: string; custom?: Record<string, unknown>;
 };
 
-const COLS = "id, first_name, last_name, email, phone, company_name, source, custom, created_at, updated_at";
+// `sort_name` (0030, a stored generated column) rides along on every read —
+// not just when sorting by name — because the caller building the NEXT
+// cursor (apps/web's contacts/page.tsx) needs whichever column the CURRENT
+// sort used off the last row, and that is cheapest to guarantee by always
+// selecting it rather than conditionally shaping this string per sort key.
+const COLS =
+  "id, first_name, last_name, email, phone, company_name, source, custom, created_at, updated_at, sort_name";
 
 function toRow(input: Partial<ContactInput>) {
   const row: Record<string, unknown> = {};
@@ -198,10 +204,57 @@ export async function fillContactBlanks(
   return filled;
 }
 
-/** A row's position in this list's `created_at desc, id desc` ordering.
- *  Structurally identical to apps/web's `RowCursor` (apps/web/src/lib/cursor.ts);
- *  redeclared because @bis/db must not import from the app. */
-export type ContactCursor = { at: string; id: string };
+/** The three columns the contacts list can be sorted by, and the two
+ *  directions — Task 3b's server-side sort, replacing the old client-side
+ *  one that could only ever reorder the rows already in the browser. */
+export type SortKey = "name" | "company" | "created";
+export type SortDir = "asc" | "desc";
+export type ContactSort = { key: SortKey; dir: SortDir };
+
+/** `name`/`company` sort on nullable columns (a contact can have neither a
+ *  name nor a company); `created` sorts on `created_at`, which is `not
+ *  null`. Nulls sort LAST in BOTH directions (0030's own design, so a
+ *  nameless contact does not interleave among the Ns) — this table is what
+ *  tells the cursor's `.or()` below whether it needs the extra
+ *  `column.is.null` disjunct to step across that boundary. */
+const SORT_COLUMN: Record<SortKey, string> = {
+  name: "sort_name",
+  company: "company_name",
+  created: "created_at",
+};
+const SORT_NULLABLE: Record<SortKey, boolean> = {
+  name: true,
+  company: true,
+  created: false,
+};
+
+/**
+ * Escapes a value for embedding inside a PostgREST `.or()` filter string.
+ *
+ * The cursor's `v` (apps/web/src/lib/cursor.ts's `RowCursor`) is DELIBERATELY
+ * opaque now — `parseCursor` checks only that it is a string or null, never
+ * its shape. The `created_at` branch below used to interpolate its cursor
+ * value unescaped, which was safe only because the OLD parser's `isTs` regex
+ * validated it as a timestamp first, excluding every character PostgREST's
+ * grammar treats specially. A name or company has no such shape: a real one
+ * can contain a comma, a period, parentheses, or a double quote — this file's
+ * own `escapeLikePattern`/`sanitizeSearchTerm` neighbours exist because this
+ * exact class of bug already happened here once (see the block comment above
+ * `escapeLikePattern`). PostgREST's own escape rule is to double-quote the
+ * value and backslash-escape a literal `\` or `"` inside it — backslash
+ * first, so an input holding both round-trips either way. Proven against the
+ * real database in this file's own "PostgREST-reserved character" test.
+ */
+function quoteFilterValue(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+/** A row's position in this list's (possibly sorted) ordering — `v` is the
+ *  CURRENT sort column's own value off the last row shown, `id` the
+ *  tiebreaker that makes it total. Structurally identical to apps/web's
+ *  `RowCursor` (apps/web/src/lib/cursor.ts); redeclared because @bis/db must
+ *  not import from the app. */
+export type ContactCursor = { v: string | null; id: string };
 
 /**
  * Applies the shared name/email/phone search filter, or returns `q` unchanged.
@@ -222,25 +275,45 @@ function withSearch<T>(q: T, search?: string): T {
 
 export async function listContacts(
   db: SupabaseClient, accountId: string,
-  opts: { search?: string; limit?: number; before?: ContactCursor } = {},
+  opts: { search?: string; limit?: number; before?: ContactCursor; sort?: ContactSort } = {},
 ) {
+  const sort: ContactSort = opts.sort ?? { key: "created", dir: "desc" };
+  const column = SORT_COLUMN[sort.key];
+  const ascending = sort.dir === "asc";
+
   let q = db.from("contacts").select(COLS).eq("account_id", accountId)
-    // Two-key ordering: created_at alone is not unique — a CSV import (Task 6)
-    // writes thousands of rows in the same millisecond — so the id breaks the
-    // tie and makes the cursor below total (every row has a strict position).
-    .order("created_at", { ascending: false })
-    .order("id", { ascending: false })
+    // Two-key ordering: the sort column alone is not unique — two contacts
+    // can share a name or a company, and a CSV import (Task 6) writes
+    // thousands of rows in the same created_at millisecond — so id breaks
+    // the tie and makes the cursor below total (every row has a strict
+    // position). `nullsFirst: false` keeps a nameless/company-less contact
+    // LAST regardless of direction (0030's own design); it is a no-op for
+    // `created_at`, which is `not null`, so this needs no per-key branch.
+    .order(column, { ascending, nullsFirst: false })
+    .order("id", { ascending })
     .limit(opts.limit ?? 50);
   q = withSearch(q, opts.search);
   if (opts.before) {
-    // Row-value comparison: everything strictly after (created_at, id) in the
-    // ordering above. PostgREST expresses this as an `or` of the two cases.
-    // `at` is a raw Postgres timestamptz string (microseconds + offset) and
-    // must reach the filter exactly as received — never round-tripped
-    // through `Date`, which truncates to milliseconds and can skip a row
-    // sharing the boundary microsecond.
-    const { at, id } = opts.before;
-    q = q.or(`created_at.lt.${at},and(created_at.eq.${at},id.lt.${id})`);
+    const { v, id } = opts.before;
+    const cmp = ascending ? "gt" : "lt";
+    if (v === null) {
+      // Already inside the null block (only reachable when this column is
+      // nullable) — every remaining row has a null sort column too, so only
+      // the id tiebreaker advances.
+      q = q.or(`and(${column}.is.null,id.${cmp}.${id})`);
+    } else {
+      // Row-value comparison: everything strictly past (column, id) in the
+      // ordering above, expressed as PostgREST's `or` of the two cases —
+      // `v` is quoted (see quoteFilterValue) because it is now free text,
+      // never re-derived or round-tripped through anything that could
+      // reshape it, so it still matches the stored value exactly.
+      const value = quoteFilterValue(v);
+      const clause = `${column}.${cmp}.${value},and(${column}.eq.${value},id.${cmp}.${id})`;
+      // Nullable columns: the remaining rows are the strictly-greater/lesser
+      // non-nulls PLUS every null — nulls sort last in BOTH directions, so
+      // they are still "not yet shown" the moment `v` is a real value.
+      q = q.or(SORT_NULLABLE[sort.key] ? `${clause},${column}.is.null` : clause);
+    }
   }
   const { data, error } = await q;
   if (error) throw new Error(error.message);

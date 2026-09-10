@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { ArrowLeft, ArrowRight, Download, Upload, Users } from "lucide-react";
-import { countContacts, listContacts, listTags } from "@bis/db";
+import { countContacts, listContacts, listTags, type SortKey, type SortDir } from "@bis/db";
 import { createContactAction } from "./actions";
 import { ContactsTable } from "./contacts-table";
 import { AddContactDialog } from "./add-contact-dialog";
@@ -21,15 +21,46 @@ export const dynamic = "force-dynamic";
 // question (how many match overall, not whether more exist past this batch).
 const PAGE_SIZE = 50;
 
+const SORT_KEYS: readonly SortKey[] = ["name", "company", "created"];
+const SORT_DIRS: readonly SortDir[] = ["asc", "desc"];
+
+/**
+ * `?sort=`/`?dir=` are hand-editable URL parameters exactly like `?before=`
+ * (parseCursor's own doc comment) — anything outside the three keys or two
+ * directions falls back to the default rather than throwing, and a
+ * duplicated query key producing an array at runtime (Next.js's actual
+ * `searchParams` type, whatever a page's own annotation says) must not
+ * throw either.
+ */
+function parseSort(raw: string | undefined): SortKey {
+  return typeof raw === "string" && (SORT_KEYS as readonly string[]).includes(raw)
+    ? (raw as SortKey) : "created";
+}
+function parseDir(raw: string | undefined): SortDir {
+  return typeof raw === "string" && (SORT_DIRS as readonly string[]).includes(raw)
+    ? (raw as SortDir) : "desc";
+}
+
+/** Whichever column `sort` actually ordered by, straight off a returned row —
+ *  what the next page's cursor is built from. Must agree with
+ *  packages/db/src/contacts.ts's own SORT_COLUMN mapping (name → sort_name,
+ *  company → company_name, created → created_at) — that file selects
+ *  `sort_name` on every row for exactly this caller. */
+function cursorValue(
+  sort: SortKey, row: { sort_name: string | null; company_name: string | null; created_at: string },
+): string | null {
+  return sort === "name" ? row.sort_name : sort === "company" ? row.company_name : row.created_at;
+}
+
 export default async function ContactsPage({
   params,
   searchParams,
 }: {
   params: Promise<{ accountId: string }>;
-  searchParams: Promise<{ q?: string; before?: string }>;
+  searchParams: Promise<{ q?: string; before?: string; sort?: string; dir?: string }>;
 }) {
   const { accountId } = await params;
-  const { q, before } = await searchParams;
+  const { q, before, sort: rawSort, dir: rawDir } = await searchParams;
   const db = await dbForRequest();
 
   // Validated once, reused twice: as the query's own cursor below, and as the
@@ -38,9 +69,11 @@ export default async function ContactsPage({
   // unparseable must read as "no cursor" (cold start) rather than a thrown
   // error or a silent trip back to page one on every request.
   const cursor = parseCursor(before);
+  const sort = parseSort(rawSort);
+  const dir = parseDir(rawDir);
 
   const [rows, total, tags] = await Promise.all([
-    listContacts(db, accountId, { search: q, limit: PAGE_SIZE + 1, before: cursor }),
+    listContacts(db, accountId, { search: q, limit: PAGE_SIZE + 1, before: cursor, sort: { key: sort, dir } }),
     countContacts(db, accountId, { search: q }),
     listTags(db, accountId),
   ]);
@@ -51,16 +84,18 @@ export default async function ContactsPage({
   const page = hasOlder ? rows.slice(0, PAGE_SIZE) : rows;
   const last = page[page.length - 1];
   // CALLERS MUST BUILD THE QUERY STRING WITH `URLSearchParams`, never by
-  // concatenation — the cursor's timestamp ends in "+00:00", and a raw "+" in
-  // a query string decodes to a SPACE, which fails validation and silently
-  // sends the user back to page one forever.
+  // concatenation — the cursor is base64url, which is safe unencoded in a
+  // query string, but this is the one habit that keeps working regardless.
+  // `sort`/`dir` are carried along on BOTH links: a client scanning newest
+  // calls first, say, must not have "Older" silently drop back to the
+  // default order.
   const olderHref = hasOlder && last
-    ? `?${new URLSearchParams({ ...(q ? { q } : {}),
-        before: encodeCursor({ at: last.created_at, id: last.id }) })}`
+    ? `?${new URLSearchParams({ ...(q ? { q } : {}), sort, dir,
+        before: encodeCursor({ v: cursorValue(sort, last), id: last.id }) })}`
     : null;
   // "Newer" returns to the unpaged head; a full back-stack is not worth the
   // state for a list an operator scans rather than browses.
-  const newerHref = cursor ? `?${new URLSearchParams(q ? { q } : {})}` : null;
+  const newerHref = cursor ? `?${new URLSearchParams({ ...(q ? { q } : {}), sort, dir })}` : null;
 
   // A whole-phrase pick by count, never a plural template reused for one —
   // see contacts.count's own comment in messages.ts for the bug this avoids.
@@ -117,7 +152,7 @@ export default async function ContactsPage({
           />
         ) : (
           <>
-            <ContactsTable rows={page} accountId={accountId} existingTags={tags} />
+            <ContactsTable rows={page} accountId={accountId} existingTags={tags} sort={sort} dir={dir} q={q} />
             {newerHref || olderHref ? (
               <div className="mt-4 flex items-center justify-between">
                 <div>

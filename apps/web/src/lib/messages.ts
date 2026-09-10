@@ -200,7 +200,7 @@ export const m = {
   "account.pipelineValue": "Pipeline value",
 
   // The in-account dashboard's greeting header (Task 5), both audiences.
-  // "{name}" is the house {placeholder} convention (see contacts.page) — the
+  // "{name}" is the house {placeholder} convention (see setup.progress) — the
   // component .replace()s it with the account's own name. Time-of-day comes
   // from `greetingPeriod` (lib/dashboard/greeting.ts), read from the
   // ACCOUNT's timezone, never the viewer's.
@@ -225,7 +225,7 @@ export const m = {
   // The 14-day calls chart card (Task 6) — CSS bars, hover tooltip on every
   // mark (DESIGN.md's chart section), a recent-calls mini table beneath it.
   // "{date}"/"{count}"/"{unit}" are the house {placeholder} convention (see
-  // contacts.page above); the component .replace()s them, and picks "{unit}"
+  // setup.progress above); the component .replace()s them, and picks "{unit}"
   // itself (call vs calls) the same way shell.presence.idleOne pins its own
   // singular case.
   "dashboard.calls.title": "Calls",
@@ -264,7 +264,7 @@ export const m = {
   "contacts.title": "Contacts",
   "contacts.add": "Add contact",
   // The header badge (Task 3): a whole-phrase pick by count, never a plural
-  // template reused for one — see contacts.page below for the {placeholder}
+  // template reused for one — see setup.progress below for the {placeholder}
   // convention this departs from on purpose. The platform already shipped a
   // "1 people" bug on the Website screen by templating a plural with no
   // singular form; this is the same shape, fixed at the source.
@@ -292,14 +292,11 @@ export const m = {
   "contacts.lastName": "Last name",
   "contacts.email": "Email",
   "contacts.phone": "Phone",
-  "contacts.page": "Page {current} of {total}",
   "contacts.createFailed": "Could not add that contact. Check the details and try again.",
-  "common.prev": "Prev",
-  "common.next": "Next",
 
   // The contacts table's bulk-action bar (DESIGN.md rule 4 — checkboxes
   // never render without bulk actions). "{count}"/"{tag}"/"{skipped}" are
-  // the house {placeholder} convention (see contacts.page above).
+  // the house {placeholder} convention (see setup.progress above).
   "bulk.selectPage": "Select all on this page",
   "bulk.selected": "{count} selected",
   "bulk.addTag": "Add tag",
@@ -354,7 +351,7 @@ export const m = {
 
   // The contact drawer's recent-activity feed (Task 2's summary route,
   // Task 6's drawer). "{outcome}"/"{name}"/"{value}" are the house
-  // {placeholder} convention (see contacts.page above) — the route
+  // {placeholder} convention (see setup.progress above) — the route
   // .replace()s them before the string ever reaches the client.
   "drawer.recent.call": "Call — {outcome}",
   "drawer.recent.note": "Note added",
@@ -881,7 +878,7 @@ export const m = {
   // gated by requireAccountAccess like contacts and the calendar are — and
   // it is the one screen where a client SEES what they are paying for.
   //
-  // `calls.usage` interpolates like `contacts.page` above: the component
+  // `calls.usage` interpolates like `setup.progress` above: the component
   // .replace()s the placeholders, so a future translation may reorder them.
   "calls.title": "Calls",
   "calls.usage": "{n} of {cap} calls today",
