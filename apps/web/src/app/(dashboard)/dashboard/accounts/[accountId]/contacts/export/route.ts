@@ -98,7 +98,27 @@ export async function GET(
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        controller.enqueue(encoder.encode(CSV_COLUMNS.join(",")));
+        // \uFEFF once, before anything else: the UTF-8 BOM Excel needs to
+        // render á/ñ/é correctly when this file is double-clicked open
+        // rather than pulled in through the text-import wizard — the
+        // overwhelmingly likely path for a small-business "Export CSV"
+        // button. NOT added inside toCsv() — that pure function is Task 6's
+        // locked round-trip contract (see its own doc comment above) and
+        // has no header-emission concept of its own to prefix.
+        //
+        // TASK 6 (the CSV importer) MUST explicitly strip a leading
+        // \uFEFF from the parsed header before matching column names —
+        // never assume the runtime already did it. Verified empirically in this
+        // repo: Response.text()/Blob.text() (Fetch's UTF-8-decode
+        // algorithm) DO strip it, but fs.readFileSync(path, "utf8") and
+        // Buffer#toString("utf8") do NOT — the BOM survives as a literal
+        // U+FEFF character. Whichever the importer reads with, an
+        // unstripped BOM turns the first header into "\uFEFFfirst_name",
+        // which matches no known column and silently drops that column's
+        // data on re-import. Also: toCsv()'s own round-trip test (Task 6)
+        // won't exercise this by construction, since toCsv() itself never
+        // emits a BOM — the importer needs its OWN dedicated BOM test.
+        controller.enqueue(encoder.encode("\uFEFF" + CSV_COLUMNS.join(",")));
         let cursor: { v: string | null; id: string } | undefined;
         for (;;) {
           const chunk = await listContacts(db, accountId,
