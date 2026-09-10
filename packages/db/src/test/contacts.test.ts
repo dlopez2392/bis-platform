@@ -452,6 +452,37 @@ describe("listContacts sort", () => {
       expect(page2).toHaveLength(1);
       expect(page2[0]!.id).toBe(after.id);
     }));
+
+  /**
+   * Review finding: the test above has no backslash in it, so the ONE thing
+   * that makes `quoteFilterValue` (contacts.ts) safe — escaping a literal
+   * backslash BEFORE escaping a double quote — was never exercised against
+   * the real database. Order matters: escape the quote first and the
+   * backslash pass afterward doubles every backslash the quote step just
+   * inserted, so what should have been an escaped quote (`\"`) becomes an
+   * escaped backslash followed by a BARE, unescaped quote (`\\"`) — which
+   * PostgREST reads as the end of the quoted string. Everything after that
+   * spills out as raw, unquoted filter syntax instead of literal text, and
+   * the filter either throws on malformed grammar or silently mis-parses —
+   * either way this page/cursor request breaks. A name with a backslash and
+   * a quote right next to each other (as here) is the minimal case that
+   * tells the two orderings apart.
+   */
+  it("pages past a name containing both a backslash and a double quote without breaking the filter or skipping a row", () =>
+    withTestAccount(async (db, accountId) => {
+      const tricky = await seedContact(db, accountId, { firstName: `Back\\Slash "Quote"` });
+      const after = await seedContact(db, accountId, { firstName: "Zed" }); // sorts after, ascending
+
+      const page1: any[] = await listContacts(db, accountId, { limit: 1, sort: { key: "name", dir: "asc" } });
+      expect(page1).toHaveLength(1);
+      expect(page1[0]!.id).toBe(tricky.id);
+
+      const cursor = { v: page1[0]!.sort_name as string, id: page1[0]!.id as string };
+      const page2: any[] = await listContacts(db, accountId,
+        { limit: 1, before: cursor, sort: { key: "name", dir: "asc" } });
+      expect(page2).toHaveLength(1);
+      expect(page2[0]!.id).toBe(after.id);
+    }));
 });
 
 describe("bulk contact ops", () => {

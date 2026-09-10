@@ -52,6 +52,42 @@ function cursorValue(
   return sort === "name" ? row.sort_name : sort === "company" ? row.company_name : row.created_at;
 }
 
+/**
+ * The relative href for the "Newer" link: back to the unpaged head of the
+ * CURRENT sort/search, dropping the cursor entirely — a full back-stack
+ * isn't worth the state for a list an operator scans rather than browses.
+ * Only rendered when `hasCursor` (there is somewhere newer to return to).
+ *
+ * Extracted as a pure, exported function — same reason contacts-table.tsx
+ * exports `sortHref` — so "the Newer link carries the current sort/dir" is
+ * a claim a test can execute, not just read off the source. CALLERS MUST
+ * BUILD THE QUERY STRING WITH `URLSearchParams`, never by concatenation —
+ * see this file's own comment where this used to be inlined.
+ */
+export function buildNewerHref(
+  hasCursor: boolean, q: string | undefined, sort: SortKey, dir: SortDir,
+): string | null {
+  return hasCursor ? `?${new URLSearchParams({ ...(q ? { q } : {}), sort, dir })}` : null;
+}
+
+/**
+ * The relative href for the "Older" link: same search/sort, cursor advanced
+ * past `lastRow` (the last row of THIS page, already sliced to PAGE_SIZE).
+ * `hasOlder` and `lastRow` are asked for separately, matching the exact
+ * condition this replaces (`hasOlder && last`) rather than inferring one
+ * from the other — `hasOlder` is only ever false when the query returned no
+ * extra row, and `lastRow` is only ever absent for an empty page.
+ */
+export function buildOlderHref(
+  hasOlder: boolean,
+  lastRow: { sort_name: string | null; company_name: string | null; created_at: string; id: string } | undefined,
+  q: string | undefined, sort: SortKey, dir: SortDir,
+): string | null {
+  if (!hasOlder || !lastRow) return null;
+  return `?${new URLSearchParams({ ...(q ? { q } : {}), sort, dir,
+      before: encodeCursor({ v: cursorValue(sort, lastRow), id: lastRow.id }) })}`;
+}
+
 export default async function ContactsPage({
   params,
   searchParams,
@@ -83,19 +119,11 @@ export default async function ContactsPage({
   const hasOlder = rows.length > PAGE_SIZE;
   const page = hasOlder ? rows.slice(0, PAGE_SIZE) : rows;
   const last = page[page.length - 1];
-  // CALLERS MUST BUILD THE QUERY STRING WITH `URLSearchParams`, never by
-  // concatenation — the cursor is base64url, which is safe unencoded in a
-  // query string, but this is the one habit that keeps working regardless.
-  // `sort`/`dir` are carried along on BOTH links: a client scanning newest
-  // calls first, say, must not have "Older" silently drop back to the
-  // default order.
-  const olderHref = hasOlder && last
-    ? `?${new URLSearchParams({ ...(q ? { q } : {}), sort, dir,
-        before: encodeCursor({ v: cursorValue(sort, last), id: last.id }) })}`
-    : null;
-  // "Newer" returns to the unpaged head; a full back-stack is not worth the
-  // state for a list an operator scans rather than browses.
-  const newerHref = cursor ? `?${new URLSearchParams({ ...(q ? { q } : {}), sort, dir })}` : null;
+  // `sort`/`dir` are carried along on BOTH links (inside buildNewerHref /
+  // buildOlderHref): a client scanning newest calls first, say, must not
+  // have "Older" silently drop back to the default order.
+  const olderHref = buildOlderHref(hasOlder, last, q, sort, dir);
+  const newerHref = buildNewerHref(!!cursor, q, sort, dir);
 
   // A whole-phrase pick by count, never a plural template reused for one —
   // see contacts.count's own comment in messages.ts for the bug this avoids.

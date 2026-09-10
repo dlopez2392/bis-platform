@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowDown, ArrowUp, ArrowUpDown, Mail, Phone } from "lucide-react";
 import type { SortKey, SortDir } from "@bis/db";
@@ -87,9 +87,40 @@ export function ContactsTable({
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const { peekId, open, close } = usePeek();
+  // Which column's header button should regain focus once THIS click's
+  // navigation lands — a ref, not state, because setting it must not itself
+  // trigger a render; it only needs to survive until the effect below runs
+  // against the NEW `sort`/`dir` props the navigation produced.
+  const pendingFocusKey = useRef<SortKey | null>(null);
+
+  useEffect(() => {
+    const key = pendingFocusKey.current;
+    if (!key) return;
+    pendingFocusKey.current = null;
+    // Deferred one frame past this commit's own effects — and past Next's,
+    // which fire the same way — so this call is the LAST word on focus
+    // rather than one more effect the App Router's own post-navigation
+    // handling could still override. Queried by attribute rather than a
+    // stored ref because the re-render behind this navigation may hand back
+    // an entirely new DOM node for this button, not the one that had focus
+    // when it was clicked.
+    const raf = requestAnimationFrame(() => {
+      document.querySelector<HTMLButtonElement>(`[data-sort-key="${key}"]`)?.focus();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [sort, dir]);
 
   function toggleSort(key: SortKey) {
-    router.push(sortHref(accountId, { key: sort, dir }, key, q));
+    pendingFocusKey.current = key;
+    // A sort click re-renders this same page with new rows, not a real page
+    // change (use-peek.ts documents the same router.push re-renders the
+    // whole server component tree) — `scroll: false` stops the App Router's
+    // default post-navigation behaviour (scroll-to-top, and moving focus to
+    // the new content, its accessibility parity with a full page load) from
+    // firing at all here. The effect above is the second half: it wins
+    // focus back even if the re-render itself replaces the clicked button's
+    // DOM node, which `scroll: false` alone does not cover.
+    router.push(sortHref(accountId, { key: sort, dir }, key, q), { scroll: false });
   }
 
   function toggleRow(id: string) {
@@ -124,6 +155,7 @@ export function ContactsTable({
             </TableHead>
             <TableHead aria-sort={sort === "name" ? (dir === "asc" ? "ascending" : "descending") : "none"}>
               <SortButton
+                sortKey="name"
                 label={m["contacts.col.name"]}
                 active={sort === "name"}
                 dir={dir}
@@ -134,6 +166,7 @@ export function ContactsTable({
             <TableHead>{m["contacts.col.email"]}</TableHead>
             <TableHead aria-sort={sort === "company" ? (dir === "asc" ? "ascending" : "descending") : "none"}>
               <SortButton
+                sortKey="company"
                 label={m["contacts.col.company"]}
                 active={sort === "company"}
                 dir={dir}
@@ -142,6 +175,7 @@ export function ContactsTable({
             </TableHead>
             <TableHead aria-sort={sort === "created" ? (dir === "asc" ? "ascending" : "descending") : "none"}>
               <SortButton
+                sortKey="created"
                 label={m["contacts.col.created"]}
                 active={sort === "created"}
                 dir={dir}
@@ -220,8 +254,8 @@ export function ContactsTable({
   );
 }
 
-function SortButton({ label, active, dir, onClick }: {
-  label: string; active: boolean; dir: SortDir; onClick: () => void;
+function SortButton({ sortKey, label, active, dir, onClick }: {
+  sortKey: SortKey; label: string; active: boolean; dir: SortDir; onClick: () => void;
 }) {
   // A neutral glyph until a column is actually driving the order, then the
   // direction it is actually in — `aria-sort` on the enclosing `<th>` is the
@@ -230,6 +264,9 @@ function SortButton({ label, active, dir, onClick }: {
   return (
     <button
       type="button"
+      // Looked up by the focus-restoration effect above after a sort click's
+      // navigation lands — never read here, only written for that query.
+      data-sort-key={sortKey}
       onClick={onClick}
       className="flex items-center gap-1 font-medium hover:text-foreground"
     >
