@@ -70,7 +70,7 @@ function escapeLikePattern(value: string): string {
  * shape in this database. Comparison-only — this never gets written back;
  * the stored column keeps whatever shape it was entered in.
  */
-function phoneDigits(value: string): string {
+export function phoneDigits(value: string): string {
   const digits = value.replace(/[^0-9]/g, "");
   return digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
 }
