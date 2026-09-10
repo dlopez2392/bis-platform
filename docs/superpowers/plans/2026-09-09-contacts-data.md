@@ -655,6 +655,16 @@ cd C:/Users/danlo/bis-platform && git add apps/web/package.json pnpm-lock.yaml a
   - `type ImportRow = { input: ContactInput; tags: string[] }`
   - `applyImportBatch(db, accountId, rows: ImportRow[], index: MatchIndex, actorId, opts: { createTags: boolean }): Promise<{ created: number; updated: number }>`
 
+**BINDING (Task 4 review, Important 1) — an empty `tags` cell MUST leave existing
+tags untouched.** Export currently emits `tags` empty for every row, because no
+bulk tags-for-many-contacts read exists. So the ordinary flow "export this list,
+fix a phone number in Excel, re-import" hands you a file whose every `tags` cell
+is blank. If an empty cell reads as "clear the tags", that flow silently strips
+every tag from every contact in the account, and both the export and the import
+report success. Treat `tags` exactly like every other blank cell: absent, not
+empty. A test must pin it — seed a contact with a tag, import a row matching it
+with an empty tags cell, assert the tag survives.
+
 **Why an index rather than `findDuplicate` per row:** `findDuplicate`'s phone
 fallback selects **every non-null phone on the account** and compares in memory.
 Correct and cheap for one contact; O(n²) for an import. Build the index once,
