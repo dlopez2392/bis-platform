@@ -73,6 +73,14 @@ Each definition is a choice; stating them here is the point.
 flatters the number; counting abandoned calls the receptionist never handled
 overstates it.
 
+**This needs a new data-layer helper.** Corrected during planning:
+`listCallStartsBetween` returns `Promise<string[]>` — timestamps only, no
+outcome — so it cannot answer either the calls or the leads question. The plan
+adds `listCallOutcomesBetween(db, accountId, fromIso, toIso):
+Promise<string[]>` returning each call's outcome over the window, which serves
+both. `listBookingCreationsBetween` returns timestamps and is sufficient as-is,
+because bookings are counted rather than classified.
+
 Leads deliberately spans both channels. A lead the receptionist took at 9pm is
 a lead, and excluding it would undercount the thing being sold. The cost is
 that a client comparing this email against their form inbox will see a larger
@@ -134,10 +142,16 @@ a client and the email that client received cannot disagree.
   successful send counts `unstamped` — the reminders precedent, which errs
   toward a duplicate over silence and makes it visible.
 - Per-account `try/catch`; `AUTOMATION_TICK_CAP` applies.
-- **One message per account, not per recipient.** Every address in
-  `report_emails` goes in the `to` of a single send: they are colleagues
-  looking at one business's numbers, not separate customers, and one send
-  keeps the stamp meaning exactly one thing.
+- **One send per recipient, failures collected.** Corrected during planning:
+  `SendEmailInput.to` is a single string, and the house pattern (the lead
+  alert's loop over `form.notify_emails`) sends to each address separately and
+  collects failures rather than awaiting in a bare loop — a comment there
+  records the bug that produced it, where one bad address threw and every
+  later recipient silently heard nothing.
+- **Stamp when at least one recipient succeeded.** All-fail does not stamp and
+  retries inside the band; a partial failure stamps and counts the failed
+  addresses, because not stamping would re-send to the addresses that already
+  received it.
 - **Counters:** `{ sent, failed, skippedNotMonday, skippedAlreadySent,
   skippedCap, unresolvableTimezone, unstamped }`.
 
