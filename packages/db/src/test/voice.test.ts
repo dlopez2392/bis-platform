@@ -11,7 +11,8 @@ import {
   hasActiveCallSince,
   findUpcomingBookingForPhone, getBookingById, deleteCallRow,
   listPhoneNumbersForAccount, listAllPhoneNumbers, reassignPhoneNumber,
-  listCalls, getCall, listCallStartsBetween, listContactCalls, searchCalls,
+  listCalls, getCall, listCallStartsBetween, listCallOutcomesBetween,
+  listContactCalls, searchCalls,
 } from "../voice";
 
 describe("voice accessors", () => {
@@ -395,6 +396,39 @@ describe("listContactCalls", () => {
 
       const limited = await listContactCalls(db, accountA, mine.id, 1);
       expect(limited.map((r) => r.id)).toEqual([r2.id]);
+    });
+  });
+});
+
+/**
+ * The twin of listCallStartsBetween, which returns started_at values only and
+ * so cannot answer "how many calls were answered". Seeded by direct insert
+ * rather than startCallRow: that helper sets neither started_at nor outcome,
+ * and both are the point here. calls.phone_number_id is NOT NULL, so a real
+ * phone number has to exist first.
+ */
+describe("listCallOutcomesBetween", () => {
+  it("returns every outcome inside the window and excludes the upper bound", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: "+19565550190" }, "user_test");
+      const seed = async (startedAt: string, outcome: string) => {
+        const { error } = await db.from("calls").insert({
+          account_id: accountId, phone_number_id: num.id,
+          started_at: startedAt, outcome, caller_e164: null,
+        });
+        if (error) throw new Error(`seed call failed: ${error.message}`);
+      };
+      await seed("2026-03-02T10:00:00Z", "booked");
+      await seed("2026-03-03T10:00:00Z", "spam");
+      await seed("2026-03-04T10:00:00Z", "lead");
+      // On the exclusive upper bound to the minute — the row that proves the
+      // window is half-open, and that this agrees with listCallStartsBetween
+      // about which calls belong to a week.
+      await seed("2026-03-09T00:00:00Z", "message");
+
+      const got = await listCallOutcomesBetween(
+        db, accountId, "2026-03-02T00:00:00Z", "2026-03-09T00:00:00Z");
+      expect(got.slice().sort()).toEqual(["booked", "lead", "spam"]);
     });
   });
 });

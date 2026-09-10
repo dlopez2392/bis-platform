@@ -194,6 +194,31 @@ export async function countCallsByCallerSince(
  * caller side, not here. Daily caps are 50/day, so a 14-day window is at
  * most ~700 rows; no pagination needed.
  */
+/**
+ * Every call's OUTCOME in a window — the twin of `listCallStartsBetween`
+ * below, which returns `started_at` values only and therefore cannot answer
+ * "how many calls were answered".
+ *
+ * Half-open `[from, to)` exactly like its twin, deliberately: the weekly
+ * report counts calls and classifies them from these two functions, and a
+ * disagreement about which instant belongs to a week would put a call in one
+ * number and not the other.
+ *
+ * Returns outcomes rather than counting server-side because the caller needs
+ * two different tallies from one read — answered (`booked`/`lead`/`message`)
+ * and leads (`lead`) — and a second round trip to count each would cost more
+ * than carrying a few short strings.
+ */
+export async function listCallOutcomesBetween(
+  db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
+): Promise<string[]> {
+  const { data, error } = await db.from("calls")
+    .select("outcome")
+    .eq("account_id", accountId).gte("started_at", fromIso).lt("started_at", toIso);
+  if (error) throw new Error(`listCallOutcomesBetween failed: ${error.message}`);
+  return (data ?? []).map((r: { outcome: string }) => r.outcome);
+}
+
 export async function listCallStartsBetween(
   db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
 ): Promise<string[]> {
