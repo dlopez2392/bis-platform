@@ -369,7 +369,7 @@ export async function countRecentBookings(
 // trial"), the due-rows built from this read have no field for it, and
 // `brandDisplayName` no longer takes it. Not selected at all, so there is
 // nothing here for a future mapper to reach for.
-const ACCOUNT_BRAND_COLS =
+export const ACCOUNT_BRAND_COLS =
   "timezone, brand_name, brand_logo_path, brand_color, brand_neutral, " +
   "brand_corners, brand_type, brand_mode, reply_to_email, from_email";
 

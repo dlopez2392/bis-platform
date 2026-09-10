@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { loadAccountBrandInfo } from "./booking";
+import { loadAccountBrandInfo, ACCOUNT_BRAND_COLS } from "./booking";
 import { brandDisplayName, type Branding } from "./branding";
 import { emit } from "./events";
 
@@ -174,15 +174,42 @@ export type AccountForWeeklyRollup = {
 export async function listAccountsForWeeklyRollup(
   db: SupabaseClient,
 ): Promise<AccountForWeeklyRollup[]> {
+  // ONE read, brand columns included — deliberately NOT the account list
+  // followed by `loadAccountBrandInfo`.
+  //
+  // That shape had a real race, and the full db suite found it: this function
+  // reads EVERY account (unlike the due query, which reads only accounts with
+  // recipients), and `loadAccountBrandInfo` does a `.single()` per id that
+  // THROWS when a row is missing — correctly, for a due row whose account must
+  // exist. Here it is wrong: an account deleted between the list and the
+  // lookup killed the entire roll-up. A concurrent suite deleting its fixture
+  // account reproduced it; in production a client offboarded mid-tick would do
+  // the same. Selecting the brand columns in the same statement removes both
+  // the race and one query per account.
   const { data, error } = await db.from("accounts")
-    .select("id, created_at, report_emails");
+    .select(`id, created_at, report_emails, ${ACCOUNT_BRAND_COLS}`);
   if (error) throw new Error(`listAccountsForWeeklyRollup failed: ${error.message}`);
 
-  const rows = (data ?? []) as { id: string; created_at: string; report_emails: string[] }[];
+  const rows = (data ?? []) as {
+    id: string; created_at: string; report_emails: string[];
+    timezone: string; brand_name: string | null; brand_logo_path: string | null;
+    brand_color: string | null; brand_neutral: Branding["brandNeutral"];
+    brand_corners: Branding["brandCorners"]; brand_type: Branding["brandType"];
+    brand_mode: Branding["brandMode"]; reply_to_email: string | null;
+  }[];
   if (rows.length === 0) return [];
 
   const ids = rows.map((r) => r.id);
-  const info = await loadAccountBrandInfo(db, ids, "listAccountsForWeeklyRollup");
+  const brandingOf = (r: (typeof rows)[number]): Branding => ({
+    brandName: r.brand_name ?? null,
+    brandLogoPath: r.brand_logo_path ?? null,
+    brandColor: r.brand_color ?? null,
+    brandNeutral: r.brand_neutral ?? null,
+    brandCorners: r.brand_corners ?? null,
+    brandType: r.brand_type ?? null,
+    brandMode: r.brand_mode ?? null,
+    replyToEmail: r.reply_to_email ?? null,
+  });
 
   // Same one-read-for-everyone shape as listAccountsDueWeeklyReport's own
   // site flag above, not one query per account.
@@ -191,17 +218,14 @@ export async function listAccountsForWeeklyRollup(
   if (siteErr) throw new Error(`listAccountsForWeeklyRollup sites failed: ${siteErr.message}`);
   const withSite = new Set((siteRows ?? []).map((s: { account_id: string }) => s.account_id));
 
-  return rows.map((r) => {
-    const brand = info.get(r.id)!;
-    return {
-      accountId: r.id,
-      createdAt: r.created_at,
-      accountTimezone: brand.accountTimezone,
-      brandName: brandDisplayName(brand.branding),
-      hasSite: withSite.has(r.id),
-      hasRecipients: r.report_emails.length > 0,
-    };
-  });
+  return rows.map((r) => ({
+    accountId: r.id,
+    createdAt: r.created_at,
+    accountTimezone: r.timezone,
+    brandName: brandDisplayName(brandingOf(r)),
+    hasSite: withSite.has(r.id),
+    hasRecipients: r.report_emails.length > 0,
+  }));
 }
 
 /**
