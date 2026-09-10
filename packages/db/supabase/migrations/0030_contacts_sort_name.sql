@@ -33,3 +33,17 @@ create index contacts_account_sort_name
 -- grant passes every unit test and fails only in the real app.
 -- No UPDATE/INSERT grant: the column is generated and cannot be written.
 grant select (sort_name) on public.contacts to authenticated;
+
+-- CORRECTION, appended 2026-09-09 after the migration had already been applied.
+-- The comment above the grant is WRONG about this table, and the SQL below it
+-- was a no-op. `public.contacts` carries TABLE-level grants (Supabase's default
+-- `grant all ... to anon, authenticated`), which already cover a newly added
+-- column: all four roles hold all four privileges on all 15 columns, uniformly.
+-- `information_schema.column_privileges` EXPANDS a table-level grant into one
+-- row per column, so a query filtered to a single role and privilege looks
+-- exactly like a per-column grant — which is how the mistake was made.
+-- Access control on this table is RLS, not column grants. Some tables here DO
+-- use real column-level grants (calendars' 7 settings columns), so the habit is
+-- worth keeping — just verify per table before relying on it.
+-- The grant statement is left in place rather than rewritten: it ran, it is
+-- harmless, and an applied migration's SQL should not be edited after the fact.
