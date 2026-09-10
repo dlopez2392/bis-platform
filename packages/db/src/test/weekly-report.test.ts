@@ -98,18 +98,23 @@ describe("getAgencyReportTarget / stampAgencyReportSent", () => {
     if (beforeErr || !before) throw new Error(`pre-flight agency read failed: ${beforeErr?.message}`);
 
     try {
+      // `report_email` is deliberately NOT written, even though the finally
+      // below would restore it. A killed run — this project has had them, and
+      // they are why stray fixture accounts recur — would leave a fake address
+      // on the one real agency row, and the pass only counts
+      // `skippedNoRecipient` for NULL. A leftover address is not a loud
+      // failure: it is the roll-up silently going nowhere every Monday, which
+      // is the exact failure this whole design was built to avoid. The
+      // column's mapping is asserted as a pass-through of whatever is really
+      // there, which proves the same thing about the read.
       const { error } = await db.from("agencies")
-        .update({
-          report_email: "rollup-fixture@example.com",
-          timezone: "America/Denver",
-          weekly_report_week: "2026-02-16",
-        })
+        .update({ timezone: "America/Denver", weekly_report_week: "2026-02-16" })
         .eq("id", before.id);
       if (error) throw new Error(error.message);
 
       expect(await getAgencyReportTarget(db)).toEqual({
         agencyId: before.id,
-        reportEmail: "rollup-fixture@example.com",
+        reportEmail: before.report_email,
         timezone: "America/Denver",
         lastSentWeek: "2026-02-16",
       });
