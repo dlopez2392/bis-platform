@@ -7,6 +7,9 @@ import { dbForRequest } from "@/lib/db";
 import { createForm, getForm, updateForm, type FormField, type FormStatus } from "@bis/db";
 import { m } from "@/lib/messages";
 import { isValidFormFieldList, mergeFormTheme } from "@/lib/forms/editor-helpers";
+// The public form's own validator, reused deliberately rather than a second
+// regex — same reasoning settings/actions.ts records for setFromEmailAction.
+import { isValidEmail } from "@/lib/forms/guards";
 
 export async function createFormAction(accountId: string, formData: FormData): Promise<void> {
   const { userId } = await requireAccountAccess(accountId);
@@ -55,6 +58,20 @@ export async function saveFormAction(accountId: string, formData: FormData): Pro
 
   const notifyEmails = String(formData.get("notifyEmails") ?? "")
     .split(",").map((value) => value.trim()).filter(Boolean);
+
+  // The parked minor closed here (recorded during the booking milestone as
+  // "close BOTH later" alongside the settings report_emails field beside
+  // it): this field has gone straight to storage, unvalidated, since it was
+  // built — an operator's typo silently became a lead alert nobody would
+  // ever get. Same reject-the-whole-save-on-the-first-bad-address shape as
+  // the redirect URL check below, rather than dropping the bad address and
+  // saving the rest, which would look identical to "saved" while quietly
+  // losing a recipient.
+  for (const email of notifyEmails) {
+    if (!isValidEmail(email)) {
+      throw new Error(m["forms.invalidNotifyEmail"].replace("{value}", email));
+    }
+  }
 
   // A javascript: (or other non-http) redirect URL was a real security hole
   // closed at two other layers this milestone (the public form page and

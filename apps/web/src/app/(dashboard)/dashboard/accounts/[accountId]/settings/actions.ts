@@ -4,8 +4,8 @@ import { revalidatePath } from "next/cache";
 import { clerkClient } from "@clerk/nextjs/server";
 import { requireAgencyOnlyAccountAccess, requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
-import { createCustomField, upsertCustomValue, setClientAccess, setFromEmail, serviceDb,
-         type CustomFieldDef } from "@bis/db";
+import { createCustomField, upsertCustomValue, setClientAccess, setFromEmail, setReportEmails,
+         serviceDb, type CustomFieldDef } from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
 import { saveVerifiedFromAddress } from "@/lib/email/preflight";
 // The public form's own validator, reused deliberately rather than a second
@@ -180,6 +180,47 @@ export async function setFromEmailAction(
     return { ok: false, error: e instanceof Error ? e.message : m["settings.sendingAddressSaveFailed"] };
   }
 
+  revalidatePath(`/dashboard/accounts/${accountId}/settings`);
+  return { ok: true };
+}
+
+/**
+ * Sets an account's weekly-report recipient list — the Settings-page twin of
+ * `setFromEmailAction` above, same shape and same reason. BOTH writes in this
+ * file that touch `accounts` go through `serviceDb()`, which no RLS policy or
+ * column grant stands behind, so the `requireAgencyOnlyAccountAccess` guard on
+ * the first line is the ONLY gate on this write — see `setFromEmailAction`'s
+ * own comment for why that is not redundant with the grant story.
+ *
+ * Migration 0031 grants `authenticated` no UPDATE on `report_emails`,
+ * deliberately: a client able to write its own account's recipient list could
+ * redirect its weekly report to any address it chooses. See the migration's
+ * comment for the full reasoning.
+ *
+ * Parses the comma-separated input into a trimmed, validated list — the same
+ * shape the forms notify-email field already used, and (the parked minor this
+ * change closes alongside it) validated the way that field never was. Rejects
+ * the WHOLE save on the first bad address rather than silently dropping it, so
+ * an operator's typo never quietly loses a recipient. An empty list is
+ * meaningful and allowed: it means nobody receives this account's report, and
+ * `listAccountsDueWeeklyReport` already treats such an account as not due at
+ * all rather than as a failure.
+ */
+export async function setReportEmailsAction(
+  accountId: string, formData: FormData,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { userId } = await requireAgencyOnlyAccountAccess(accountId);
+
+  const emails = String(formData.get("reportEmails") ?? "")
+    .split(",").map((value) => value.trim()).filter(Boolean);
+
+  for (const email of emails) {
+    if (!isValidEmail(email)) {
+      return { ok: false, error: m["settings.weeklyReportBadEmail"].replace("{value}", email) };
+    }
+  }
+
+  await setReportEmails(serviceDb(), accountId, emails, userId);
   revalidatePath(`/dashboard/accounts/${accountId}/settings`);
   return { ok: true };
 }

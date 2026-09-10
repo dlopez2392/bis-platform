@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { loadAccountBrandInfo } from "./booking";
 import { brandDisplayName, type Branding } from "./branding";
+import { emit } from "./events";
 
 /**
  * One account the weekly report can be sent for, carrying everything the pass
@@ -97,6 +98,37 @@ export async function stampWeeklyReportSent(
   const { error } = await db.from("accounts")
     .update({ weekly_report_week: week }).eq("id", accountId);
   if (error) throw new Error(`stampWeeklyReportSent failed: ${error.message}`);
+}
+
+/**
+ * Sets an account's weekly-report recipient list. SERVER ONLY, agency-gated
+ * at the call site (`setReportEmailsAction`, behind
+ * `requireAgencyOnlyAccountAccess`) — shaped after `setFromEmail`
+ * (./sending-identity.ts) for the same reason: migration 0031 deliberately
+ * grants `authenticated` no UPDATE on `report_emails`, so a client able to
+ * reach this column directly could redirect its own account's report to any
+ * address it chooses. Nothing in the database stands behind the write below;
+ * the agency-only gate at the call site is the only thing that does.
+ *
+ * `emails` is trusted to already be trimmed and validated — the caller
+ * (`setReportEmailsAction`) does both before calling this. An empty array is
+ * a normal, meaningful value, not an edge case: it is how an account ends up
+ * with no recipients, and `listAccountsDueWeeklyReport` already treats that
+ * as "not a due row" rather than a failure.
+ *
+ * `.select("id")` so the update reports WHICH rows it touched — the same
+ * stale-tab / wrong-id guard `setFromEmail` and `renameAccount` use, since
+ * PostgREST returns no error and no rows for an update matching nothing,
+ * which would otherwise read as a successful save that changed nothing.
+ */
+export async function setReportEmails(
+  db: SupabaseClient, accountId: string, emails: string[], actorId: string,
+): Promise<void> {
+  const { data, error } = await db.from("accounts")
+    .update({ report_emails: emails }).eq("id", accountId).select("id");
+  if (error) throw new Error(`setReportEmails failed: ${error.message}`);
+  if (!data?.length) throw new Error(`setReportEmails: no account ${accountId}`);
+  await emit(db, accountId, "account.report_emails_updated", actorId, { reportEmails: emails });
 }
 
 /**
