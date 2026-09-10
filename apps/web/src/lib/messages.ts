@@ -277,6 +277,12 @@ export const m = {
   "contacts.older": "Older",
   "contacts.import": "Import CSV",
   "contacts.export": "Export CSV",
+  // The downloaded file's own name (Task 4) — "{date}" is the house
+  // {placeholder} convention (see setup.progress below). yyyy-mm-dd, filled
+  // in by the export route itself; see that file's own comment for why it's
+  // UTC rather than the account's timezone (a cosmetic export timestamp, not
+  // a business date).
+  "contacts.export.filename": "contacts-{date}.csv",
   "contacts.search": "Search name, email, phone…",
   "contacts.col.name": "Contact name",
   "contacts.col.phone": "Phone",
