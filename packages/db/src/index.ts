@@ -68,3 +68,4 @@ export * from "./voice";
 export { getSiteForAccount, upsertSite, listSitesToSync, writeTrafficDay, stampSiteSynced,
          listTrafficDays, listTrafficBreakdown, countTrafficDays, unlinkSite,
          type SiteRow, type TrafficDay, type TrafficDimension, type TrafficBreakdownRow } from "./sites";
+export * from "./weekly-report";
