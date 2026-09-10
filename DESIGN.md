@@ -137,6 +137,19 @@ they re-resolve against the accent each element inherits.
   column. Never promise a number the screen cannot know: which rows are new is
   only knowable against the stored contacts, so the preview counts rows that
   are ready and the add/update split is reported afterwards, from real results.
+- **The weekly report:** every Monday morning, in the account's OWN zone, each
+  client with recipients gets four numbers — calls answered, leads captured,
+  bookings, website visitors — each with a week-over-week delta; the agency
+  gets one roll-up across every account, including the ones nobody receives.
+  Three rules it exists to honour, all of which generalise: a delta is **words,
+  never an arrow** ("3 more than the week before"), because an arrow is
+  meaningless in a text/plain part and to a screen reader; a metric we did not
+  MEASURE is **omitted, never zeroed** (no linked site means no website line at
+  all, not "0 visitors"); and a **quiet week still sends**, with copy written
+  for it rather than four zero rows, because silence leaves a client unable to
+  tell a quiet week from a broken product. Recipients live on the account and
+  the field IS the on/off switch — no recipients, no report, and that is not a
+  failure.
 - **Command palette (⌘K):** finds contacts/calls/conversations, jumps to any
   settings section by name, runs actions. Settings sections must be
   registered in the palette index.
