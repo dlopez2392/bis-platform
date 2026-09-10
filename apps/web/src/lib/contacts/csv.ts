@@ -78,6 +78,15 @@ function splitTags(value: string): string[] {
 }
 
 /**
+ * Every column key the importer can target, in the order the export writes
+ * them — the mapping dropdown's options. Declared here rather than imported
+ * from the export route for the bundle reason above; `csv.test.ts` pins it
+ * against `CSV_COLUMNS` so the two cannot drift apart silently.
+ */
+export const IMPORT_FIELDS = ["first_name", "last_name", "email", "phone",
+  "company_name", "source", "tags"] as const;
+
+/**
  * Guesses which column is which. The returned KEY is the header exactly as it
  * arrived — BOM and all — because the caller looks this mapping up against the
  * parser's own row keys. An unrecognised column maps to null rather than to a

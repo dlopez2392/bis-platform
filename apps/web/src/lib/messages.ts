@@ -277,6 +277,33 @@ export const m = {
   "contacts.older": "Older",
   "contacts.import": "Import CSV",
   "contacts.export": "Export CSV",
+  // Import wizard. Singular twins are not decoration: the Website screen ships
+  // a live "1 people" bug from exactly this omission, and every count below can
+  // legitimately be 1.
+  "contacts.import.title": "Import contacts",
+  "contacts.import.drop": "Choose a CSV file",
+  "contacts.import.mapTitle": "Match your columns",
+  "contacts.import.ignore": "Don't import this column",
+  "contacts.import.ignored": "{count} columns won't be imported",
+  "contacts.import.ignoredOne": "1 column won't be imported",
+  // NOT "will add X and update Y": which rows are new is only knowable against
+  // the account's existing contacts, which this screen has not read. The real
+  // split is reported in `done`, after the work.
+  "contacts.import.preview": "{count} rows ready to import.",
+  "contacts.import.previewOne": "1 row ready to import.",
+  "contacts.import.errors": "{count} rows have problems and will be skipped.",
+  "contacts.import.errorsOne": "1 row has a problem and will be skipped.",
+  "contacts.import.downloadErrors": "Download the skipped rows",
+  "contacts.import.createTags": "Also create {count} new tags",
+  "contacts.import.createTagsOne": "Also create 1 new tag",
+  "contacts.import.confirm": "Import",
+  "contacts.import.importing": "Importing {done} of {total}...",
+  "contacts.import.done": "Added {created}, updated {updated}.",
+  "contacts.import.partial": "Stopped after {done} rows. Nothing after that was imported.",
+  "contacts.import.failed": "That import didn't go through. Nothing was changed. Please try again.",
+  "contacts.import.tooMany": "That's too many rows at once. Try a smaller file.",
+  "contacts.import.empty": "That file has no rows we can read.",
+  "contacts.import.back": "Back to contacts",
   // The downloaded file's own name (Task 4) — "{date}" is the house
   // {placeholder} convention (see setup.progress below). yyyy-mm-dd, filled
   // in by the export route itself; see that file's own comment for why it's

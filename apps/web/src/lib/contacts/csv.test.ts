@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { autoMap, mapRows } from "./csv";
+import { autoMap, mapRows, IMPORT_FIELDS } from "./csv";
 import { CSV_COLUMNS } from "@/app/(dashboard)/dashboard/accounts/[accountId]/contacts/export/route";
 
 describe("autoMap", () => {
@@ -25,6 +25,14 @@ describe("autoMap", () => {
   it("places every column our own export writes, so a round trip loses nothing", () => {
     expect(autoMap([...CSV_COLUMNS]))
       .toEqual(Object.fromEntries(CSV_COLUMNS.map((c) => [c, c])));
+  });
+
+  // The wizard's mapping dropdown renders IMPORT_FIELDS. It is declared in
+  // csv.ts rather than imported from the export route, because that route
+  // pulls in Clerk and the db client and the wizard is a client component —
+  // so this is the pin that stops the two lists drifting apart.
+  it("offers exactly the columns the export writes, in the same order", () => {
+    expect([...IMPORT_FIELDS]).toEqual([...CSV_COLUMNS]);
   });
 });
 
