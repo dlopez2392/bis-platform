@@ -216,6 +216,18 @@ for (const mode of ["light", "dark"] as const) {
     });
     expect(cardStyle.padding, `Clerk's card kept its own padding in ${mode}`).toBe("0px");
     expect(cardStyle.shadow, `Clerk's card kept its own shadow in ${mode}`).toBe("none");
+
+    // Clerk's cardBox clips its own overflow, and we flattened away the 32px
+    // padding Clerk positions its "Last used" badge inside — so with clipping
+    // left on, that badge renders 11px cut off on the main sign-in path. The
+    // badge cannot be asserted directly: it only appears when the browser has
+    // prior Clerk history, which a fresh test context never has. The structural
+    // fact is what is testable, so pin that.
+    const cardBoxOverflow = await page
+      .locator(".cl-cardBox")
+      .first()
+      .evaluate((el) => getComputedStyle(el).overflow);
+    expect(cardBoxOverflow, `Clerk's cardBox is clipping again in ${mode}`).toBe("visible");
   });
 }
 

@@ -121,7 +121,24 @@ const appearance = {
     rootBox: { width: "100%" },
     // The shell already IS the card. Flattened rather than restyled: a card
     // inside a card is a fifth surface by another name (DESIGN.md rule 2).
-    cardBox: { width: "100%", boxShadow: "none", border: "0", background: "transparent" },
+    //
+    // overflow: "visible" because Clerk's OWN `.cl-cardBox` clips its own
+    // overflow by default (measured: computed `overflow` is "hidden" without
+    // this line), and Clerk positions its "Last used" badge assuming the
+    // card's default ~32px padding. `card` below flattens that padding to
+    // "0" (DESIGN.md rule 2, same reason as this whole object), so the
+    // badge now lands measured 11px outside where Clerk's own clip boundary
+    // sits — cut off on the main sign-in path. Safe to open here: the
+    // shell's own content column (`auth-shell.tsx`) still carries 24-32px of
+    // padding around this whole form, so that 11px lands inside the shell's
+    // card rather than outside it.
+    cardBox: {
+      width: "100%",
+      boxShadow: "none",
+      border: "0",
+      background: "transparent",
+      overflow: "visible",
+    },
     card: {
       width: "100%",
       boxShadow: "none",
