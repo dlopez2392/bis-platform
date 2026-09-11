@@ -371,7 +371,7 @@ export async function countRecentBookings(
 // nothing here for a future mapper to reach for.
 export const ACCOUNT_BRAND_COLS =
   "timezone, brand_name, brand_logo_path, brand_color, brand_neutral, " +
-  "brand_corners, brand_type, brand_mode, reply_to_email, from_email";
+  "brand_corners, brand_type, brand_mode, reply_to_email, from_email, outbound_suppressed";
 
 /**
  * The cron windows, exported so they can be asserted against the schedule in
@@ -387,6 +387,8 @@ export const FOLLOWUP_QUERY_WINDOW_MS = 37 * 60 * 60 * 1000;
 export type AccountBrandInfo = {
   accountTimezone: string; branding: Branding;
   fromEmail: string | null; replyToEmail: string | null;
+  /** Migration 0032. True = every pass skips this account's due work. */
+  outboundSuppressed: boolean;
 };
 
 /**
@@ -412,6 +414,7 @@ export async function loadAccountBrandInfo(
       brand_neutral: Branding["brandNeutral"]; brand_corners: Branding["brandCorners"];
       brand_type: Branding["brandType"]; brand_mode: Branding["brandMode"];
       reply_to_email: string | null; from_email: string | null;
+      outbound_suppressed: boolean;
     };
     out.set(accountId, {
       accountTimezone: acct.timezone,
@@ -425,6 +428,7 @@ export async function loadAccountBrandInfo(
         brandMode: acct.brand_mode ?? null,
         replyToEmail: acct.reply_to_email ?? null,
       },
+      outboundSuppressed: acct.outbound_suppressed === true,
       fromEmail: acct.from_email ?? null,
       replyToEmail: acct.reply_to_email ?? null,
     });
@@ -493,6 +497,29 @@ export async function loadAccountBrandInfo(
  * can tell "missed" from "not yet" — not a wider window that mistimes every
  * reminder to cover a rare one.
  */
+/**
+ * The due-lists' shared preamble: load each row's account, then drop the rows
+ * belonging to a suppressed account (migration 0032).
+ *
+ * Every `listDue*` goes through here rather than filtering for itself, so the
+ * rule is written once. A new pass that forgets is caught by
+ * `outbound-suppressed.test.ts`, which walks this file and automations.ts and
+ * fails on a `listDue*` still calling `loadAccountBrandInfo` directly.
+ *
+ * The account read is unchanged and still throws on a missing account: a due
+ * row whose account cannot be read is a data problem, not a row to skip.
+ */
+export async function loadSendableRows<T extends { account_id: string }>(
+  db: SupabaseClient, rows: readonly T[], caller: string,
+): Promise<{ sendable: T[]; accountInfo: Map<string, AccountBrandInfo> }> {
+  const accountInfo = await loadAccountBrandInfo(
+    db, [...new Set(rows.map((r) => r.account_id))], caller);
+  return {
+    sendable: rows.filter((r) => !accountInfo.get(r.account_id)!.outboundSuppressed),
+    accountInfo,
+  };
+}
+
 export async function listDueReminders(
   db: SupabaseClient, nowIso: string,
 ): Promise<DueReminder[]> {
@@ -513,10 +540,10 @@ export async function listDueReminders(
 
   // One `accounts` read per distinct account (in practice always one) for
   // the name/timezone and branding — shared with the other due-lists.
-  const accountInfo = await loadAccountBrandInfo(
-    db, [...new Set(rows.map((r) => r.account_id as string))], "listDueReminders");
+  const { sendable, accountInfo } = await loadSendableRows(
+    db, rows as { account_id: string }[], "listDueReminders");
 
-  return rows.map((r) => {
+  return sendable.map((r: any) => {
     const info = accountInfo.get(r.account_id as string)!;
     const contactName = [r.contacts?.first_name, r.contacts?.last_name]
       .filter(Boolean).join(" ").trim();
@@ -623,10 +650,10 @@ export async function listDueFollowups(
   // replyToEmail top-level (not just nested in branding) so the follow-up
   // sender can set a Reply-To without digging into branding the way the
   // reminder path does.
-  const accountInfo = await loadAccountBrandInfo(
-    db, [...new Set(rows.map((r) => r.account_id as string))], "listDueFollowups");
+  const { sendable, accountInfo } = await loadSendableRows(
+    db, rows as { account_id: string }[], "listDueFollowups");
 
-  return rows.map((r) => {
+  return sendable.map((r: any) => {
     const info = accountInfo.get(r.account_id as string)!;
     const contactName = [r.contacts?.first_name, r.contacts?.last_name]
       .filter(Boolean).join(" ").trim();
