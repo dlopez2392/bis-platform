@@ -15,7 +15,7 @@
 - **Tokens only.** No hard-coded colour, radius or shadow in any component (`DESIGN.md`). `globals.css` and `tokens.css` stay the only places values are declared; components consume them.
 - **Tailwind v4 dropped the `[--var]` shorthand.** Write `text-[var(--sidebar-text-strong)]`, never `text-[--sidebar-text-strong]` — the short form emits invalid CSS silently.
 - **Never restate `sidebar-chrome`'s values.** The rail applies the utility; it does not copy `background-color` / `background-image` / `backdrop-filter`.
-- **No `!important` anywhere.** If a Clerk style is winning, the cascade layer (Task 5) is wrong — fix that, don't escalate specificity.
+- **No new `!important`.** If a Clerk style is winning, the cascade layer (Task 5) is wrong — fix that, don't escalate specificity. `globals.css` already carries exactly two, both inside the `@media (prefers-reduced-motion: reduce)` block; those are correct and stay — a motion guard that can be out-specified is not a guard. Do not "clean them up."
 - **No theme toggle on any signed-out screen.** `theme-mode.ts` records a shipped bug where a cookie written at `/sign-in` outranked every tenant's `brand_mode` permanently.
 - **No tagline under "Sign in."** Cut deliberately (spec §10). The vertical gap is a spacing problem; do not solve it by writing a sentence.
 - **Repo is PR-only.** Never push `main`. All work lands on `design/branded-sign-in`.
@@ -656,10 +656,21 @@ describe("the clerk cascade layer (spec §7)", () => {
     expect(layerAt).toBeLessThan(tailwindAt);
   });
 
-  it("never resorts to !important", () => {
-    // If a Clerk style is winning, this layer is wrong. Escalating
-    // specificity hides that and cannot be un-hidden later.
-    expect(globals).not.toContain("!important");
+  it("never resorts to !important to win the cascade", () => {
+    // The only two in this file are the prefers-reduced-motion override,
+    // where !important is correct and required — a motion guard that can be
+    // out-specified is not a guard. Strip that block; there must be none
+    // left. If a Clerk style is winning, this layer is wrong, and escalating
+    // specificity hides that instead of fixing it.
+    const withoutMotionGuard = globals.replace(
+      /@media\s*\(prefers-reduced-motion[\s\S]*?\n\}/,
+      "",
+    );
+    expect(withoutMotionGuard).not.toContain("!important");
+    // Guard the guard: if the reduced-motion block is ever removed or
+    // reshaped, the strip above silently stops covering anything and this
+    // test quietly weakens into a tautology.
+    expect(globals).toContain("prefers-reduced-motion");
   });
 });
 ```
