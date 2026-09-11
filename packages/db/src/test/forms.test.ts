@@ -4,7 +4,7 @@ import { withTestAccount } from "./fixtures";
 import { withRollback, actAs } from "./db";
 import {
   newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId, updateForm,
-  countFormsMissingNotify,
+  countFormsMissingNotify, countRealSubmissionsBetween,
 } from "../forms";
 
 const FIELDS = [
@@ -153,4 +153,34 @@ describe("forms", () => {
       const { rows } = await c.query("select public_id from forms");
       expect(rows.map((r) => r.public_id)).toEqual(["aaaaaaaaaaaa"]);
     }));
+});
+
+/**
+ * The weekly report's "leads captured", form half. A honeypot hit is not a
+ * lead and must never inflate a number a client is shown, so the spam
+ * predicate is the same one `listForms` already uses for its counts.
+ */
+describe("countRealSubmissionsBetween", () => {
+  it("counts real submissions in the window, never spam, never the upper bound", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { id: formId } = await createForm(
+        db, accountId, { name: "Weekly", fields: [] }, "user_test");
+
+      const seed = async (createdAt: string, spamReason: string | null) => {
+        const { error } = await db.from("form_submissions").insert({
+          account_id: accountId, form_id: formId, answers: [], attribution: {},
+          spam_reason: spamReason, created_at: createdAt,
+        });
+        if (error) throw new Error(`seed submission failed: ${error.message}`);
+      };
+
+      await seed("2026-03-02T10:00:00Z", null);        // counts
+      await seed("2026-03-04T10:00:00Z", null);        // counts
+      await seed("2026-03-05T10:00:00Z", "honeypot");  // spam, must not count
+      await seed("2026-03-09T00:00:00Z", null);        // on the exclusive bound
+
+      expect(await countRealSubmissionsBetween(
+        db, accountId, "2026-03-02T00:00:00Z", "2026-03-09T00:00:00Z")).toBe(2);
+    });
+  });
 });

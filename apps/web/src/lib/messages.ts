@@ -441,6 +441,16 @@ export const m = {
   // provider's own wording reaches the operator — this covers a throw that
   // carried no message at all.
   "settings.sendingAddressSaveFailed": "Could not save the sending address. Try again.",
+  // Card title AND the field's accessible name (sr-only Label) share this
+  // key on purpose here — unlike sendingIdentity/sendingAddress above, there
+  // is only one field on the card, so there is nothing for a second, more
+  // precise name to disambiguate from. The Label stays sr-only so the text
+  // still renders on screen exactly once.
+  "settings.weeklyReport": "Weekly report",
+  "settings.weeklyReportHint": "Who gets Monday's numbers. Separate addresses with commas.",
+  "settings.weeklyReportSaved": "Saved. The next report goes out Monday morning.",
+  "settings.weeklyReportBadEmail": "That doesn't look like an email address: {value}",
+  "settings.weeklyReportOff": "Nobody is receiving this yet.",
 
   "error.title": "Something went wrong",
   "error.body": "We couldn't complete that action. Your changes may not have been saved.",
@@ -565,6 +575,11 @@ export const m = {
   "forms.kind.message": "Message (starts a conversation)",
   "forms.kind.consent": "Consent checkbox",
   "forms.invalidRedirectUrl": "Redirect URL must start with http:// or https://.",
+  // The parked minor this change closes: notifyEmails has gone unvalidated
+  // since the booking milestone. Same {value} convention and same wording as
+  // settings.weeklyReportBadEmail — one bad-address message, not two that can
+  // drift apart.
+  "forms.invalidNotifyEmail": "That doesn't look like an email address: {value}",
 
   "conversations.unread": "unread",
   "conversations.channel.form": "Form submission",

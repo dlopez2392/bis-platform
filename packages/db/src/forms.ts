@@ -224,6 +224,31 @@ export async function recordRejectedSubmission(
  *
  * Takes no accountId: the caller has the form, not a tenant context.
  */
+/**
+ * Real submissions across the whole account in a window — the weekly report's
+ * "leads captured", form half.
+ *
+ * `spam_reason is null` is the same predicate `listForms` uses for its own
+ * counts, kept in the data layer beside it rather than re-expressed in the web
+ * app, so "what counts as a real submission" has ONE definition. A honeypot
+ * hit is not a lead and must never inflate a number a client is shown.
+ *
+ * Half-open `[from, to)`, matching `listCallOutcomesBetween` and
+ * `listBookingCreationsBetween`, so all three agree about which instants
+ * belong to a week.
+ */
+export async function countRealSubmissionsBetween(
+  db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
+): Promise<number> {
+  const { count, error } = await db.from("form_submissions")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId)
+    .is("spam_reason", null)
+    .gte("created_at", fromIso).lt("created_at", toIso);
+  if (error) throw new Error(`countRealSubmissionsBetween failed: ${error.message}`);
+  return count ?? 0;
+}
+
 export async function countRecentSubmissions(
   db: SupabaseClient, formId: string, ipHash: string, sinceIso: string,
 ): Promise<number> {

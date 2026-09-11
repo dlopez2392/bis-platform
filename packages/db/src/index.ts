@@ -30,6 +30,7 @@ export { ensureConversation, createMessage, updateMessageStatus,
 // NOTE: searchCalls needs no line here — voice is `export * from "./voice"` below.
 export { newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId,
          updateForm, createSubmission, recordRejectedSubmission, countRecentSubmissions,
+         countRealSubmissionsBetween,
          shouldRecordRateLimit, findRecentDuplicate, linkSubmissionContact,
          setSubmissionProcessingError, emitFormSubmitted, listSubmissions, listContactSubmissions,
          countFormsMissingNotify,
@@ -68,3 +69,4 @@ export * from "./voice";
 export { getSiteForAccount, upsertSite, listSitesToSync, writeTrafficDay, stampSiteSynced,
          listTrafficDays, listTrafficBreakdown, countTrafficDays, unlinkSite,
          type SiteRow, type TrafficDay, type TrafficDimension, type TrafficBreakdownRow } from "./sites";
+export * from "./weekly-report";

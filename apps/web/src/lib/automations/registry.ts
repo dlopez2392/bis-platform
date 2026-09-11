@@ -5,6 +5,8 @@ import { reviewRequestPass } from "./passes/review-request";
 import { noShowNudgePass } from "./passes/no-show-nudge";
 import { smsReminderPass } from "./passes/sms-reminder";
 import { siteTrafficPass } from "./passes/site-traffic";
+import { weeklyClientReportPass } from "./passes/weekly-report";
+import { weeklyAgencyReportPass } from "./passes/weekly-agency-report";
 
 /**
  * Every pass the cron tick runs, IN ORDER. Order is part of the contract:
@@ -14,7 +16,12 @@ import { siteTrafficPass } from "./passes/site-traffic";
  * eligible on the same morning.
  *
  * The SMS reminder reads nothing the others write; the site-traffic pull
- * runs last of all — it touches no booking state and sends nothing.
+ * runs after it — it touches no booking state and sends nothing. The weekly
+ * reports run last of all: the client pass first (spec, "Recorded
+ * consequence" — the roll-up fires on its own gate, not after all client
+ * emails, so this order is a reading convenience, not a dependency), then
+ * the agency roll-up, which reads every account's own numbers through the
+ * same `weeklyMetrics` the client pass just used.
  * Adding a recipe = one line here plus its pass file. Nothing else.
  */
-export const PASSES: readonly Pass[] = [remindersPass, followupsPass, reviewRequestPass, noShowNudgePass, smsReminderPass, siteTrafficPass];
+export const PASSES: readonly Pass[] = [remindersPass, followupsPass, reviewRequestPass, noShowNudgePass, smsReminderPass, siteTrafficPass, weeklyClientReportPass, weeklyAgencyReportPass];

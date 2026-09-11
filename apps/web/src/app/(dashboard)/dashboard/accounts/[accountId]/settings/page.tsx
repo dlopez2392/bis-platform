@@ -4,11 +4,12 @@ import { serviceDb, listCustomFields, listCustomValues, listBlueprints, getBrand
          getSendingIdentity, brandLogoUrl, getSiteForAccount, countTrafficDays, type CustomFieldDef } from "@bis/db";
 import { SubmitButton } from "../../submit-button";
 import { createFieldAction, upsertValueAction, setClientAccessAction, inviteClientAdminAction,
-         setFromEmailAction } from "./actions";
+         setFromEmailAction, setReportEmailsAction } from "./actions";
 import { setBrandingAction } from "../branding/actions";
 import { SaveBlueprintDialog } from "./save-blueprint-dialog";
 import { ClientAccessPanel, type ClientAccessMember } from "./client-access-panel";
 import { SendingAddressCard } from "./sending-address-card";
+import { WeeklyReportCard } from "./weekly-report-card";
 import { LinkSiteCard, type VercelProjectOption } from "../website/link-site-card";
 import { saveSiteAction, testSiteConnectionAction, unlinkSiteAction } from "../website/actions";
 import { vercelAnalyticsFromEnv } from "@/lib/vercel/web-analytics";
@@ -70,7 +71,7 @@ export default async function CrmSettingsPage({
     // an in-account surface — worth the owner's judgment on whether clients
     // should see this at all.
     listBlueprints(serviceDb()),
-    db.from("accounts").select("clerk_org_id, client_access_enabled").eq("id", accountId).maybeSingle()
+    db.from("accounts").select("clerk_org_id, client_access_enabled, report_emails").eq("id", accountId).maybeSingle()
       .then(({ data, error }) => {
         if (error) throw new Error(`settings: account lookup failed: ${error.message}`);
         if (!data) throw new Error("settings: account not found");
@@ -149,6 +150,7 @@ export default async function CrmSettingsPage({
   // accountId is bound here, server-side. It must never travel as a form field.
   const boundSetBranding = setBrandingAction.bind(null, accountId);
   const boundSetFromEmail = setFromEmailAction.bind(null, accountId);
+  const boundSetReportEmails = setReportEmailsAction.bind(null, accountId);
   return (
     <>
       {from === "setup" ? <BackToSetup accountId={accountId} /> : null}
@@ -197,6 +199,10 @@ export default async function CrmSettingsPage({
         <SendingAddressCard
           fromEmail={sendingIdentity.fromEmail}
           action={boundSetFromEmail}
+        />
+        <WeeklyReportCard
+          reportEmails={account.report_emails}
+          action={boundSetReportEmails}
         />
         <LinkSiteCard
           // Same reason as BrandingPanel's key: the card holds the picked
