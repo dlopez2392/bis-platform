@@ -92,8 +92,13 @@ they re-resolve against the accent each element inherits.
    confirm by typing the name. No reflexive "Are you sure?" dialogs.
 7. Loading = skeletons shaped like the content. No spinners.
 8. One primary button per view; everything else is ghost.
-9. Client-customer surfaces (booking page, forms, emails, login) always carry
-   the client's logo + brand color from the theming engine.
+9. Client-customer surfaces (booking page, forms, emails) always carry the
+   client's logo + brand color from the theming engine. **Login is the one
+   exception and carries the platform's mark and accent instead** — nobody is
+   authenticated at `/sign-in`, so `getRequestTheme()` resolves "no tenant" and
+   there is no account whose brand could be read. Do not "fix" this by branding
+   sign-in per tenant without first solving how the tenant is identified before
+   authentication (2026-09-11).
 10. Sidebar: middle nav scrolls, footer cluster (Settings + setup meter) is
     pinned and visible at every viewport height.
 11. One hero gradient per screen, named in the screen's spec and marked in
