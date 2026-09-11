@@ -829,6 +829,13 @@ Append to `apps/web/e2e/signed-out.spec.ts`, inside the existing `for (const mod
 
     await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 
+    // EXACTLY one. Naming our own heading cannot see a second heading whose
+    // text differs — and that is precisely what shipped: Clerk's own
+    // "Continue to BIS Platform (dev)" rendered directly above ours, with the
+    // name-matched assertion green, because "Sign in" is not a substring of
+    // it. A count is the assertion that was actually wanted.
+    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
+
     // Nobody is authenticated here, so there is no tenant and the root layout
     // must not have painted one. This is the assertion that keeps a future
     // "let's brand sign-in per client" change honest.
@@ -903,9 +910,21 @@ const appearance = {
     logoPlacement: "none",
   },
   elements: {
-    // Clerk's header is "Sign in to {applicationName}" — which on the current
-    // instance reads "Sign in to BIS Platform (dev)". Ours replaces it.
-    header: "hidden",
+    // A STYLE OBJECT, not the `hidden` class — and that difference is the
+    // whole finding of this task. `elements` takes `string | CSSObject`, and
+    // the class route does not work here: Clerk's runtime CSS-in-JS emits its
+    // structural `.cl-internal-*` rules UNLAYERED, and unlayered author CSS
+    // beats layered author CSS at any specificity, so Tailwind's `.hidden`
+    // (in `@layer utilities`) loses to Clerk's `display: flex` no matter how
+    // the layers are ordered. `cssLayerName` governs Clerk's themeable styles,
+    // not its structural ones. Confirmed at runtime by walking
+    // document.styleSheets for CSSLayerBlockRule.
+    //
+    // The fix is Clerk's own API rather than out-specifying it: a style object
+    // is applied by Clerk to that element directly, so it lands on the same
+    // side of the cascade as the rule it needs to beat. `!important` would
+    // have "worked" and taught us nothing.
+    header: { display: "none" },
     // The shell already IS the card. Flattened rather than restyled: a card
     // inside a card is a fifth surface by another name (DESIGN.md rule 2).
     rootBox: "w-full",
