@@ -282,10 +282,19 @@ export function AuthShell({ children }: { children: ReactNode }) {
   return (
     <main className="relative flex min-h-screen items-center justify-center px-6 py-10">
       <Ground />
-      <div className="flex w-full max-w-[840px] flex-col overflow-hidden rounded-xl border border-border bg-card glass sm:flex-row">
+      {/* NO overflow-hidden, deliberately. It was there to stop the rail's dark
+          block squaring off the card's corners, and it clipped Clerk's
+          "Last used" badge on the Google button — 11px of it, cut off on the
+          main sign-in path, invisible to every assertion. Clerk renders badges
+          and popovers that overflow this box, so the card must not clip; the
+          rail rounds its own corners instead. */}
+      <div className="flex w-full max-w-[840px] flex-col rounded-xl border border-border bg-card glass sm:flex-row">
         <div
           data-slot="auth-rail"
-          className="sidebar-chrome flex shrink-0 items-center gap-3 border-b border-[var(--sidebar-line)] px-6 py-5 sm:w-[200px] sm:flex-col sm:items-start sm:gap-2 sm:border-b-0 sm:border-r sm:py-8"
+          // rounded-t-xl for the phone bar (both top corners); at sm+ the rail
+          // is the left column, so top-right is unset and bottom-left added.
+          // Each class touches distinct corners, so they do not fight.
+          className="sidebar-chrome flex shrink-0 items-center gap-3 rounded-t-xl border-b border-[var(--sidebar-line)] px-6 py-5 sm:w-[200px] sm:flex-col sm:items-start sm:gap-2 sm:rounded-tr-none sm:rounded-bl-xl sm:border-b-0 sm:border-r sm:py-8"
         >
           <BisMark size={28} className="text-[var(--sidebar-text-strong)]" />
           <span className="text-sm font-semibold text-[var(--sidebar-text-strong)]">
@@ -351,6 +360,13 @@ test.use({ storageState: { cookies: [], origins: [] } });
 // how a test reaches dark, and it is also exactly what a returning user who
 // once clicked the toggle arrives with.
 const THEME_COOKIE = "bis-theme";
+
+// The accent each theme actually paints, from tokens.css. The primary button's
+// gradient must contain it — asserting only that the value contains
+// "linear-gradient" is what let a white-on-white button ship: Clerk declares
+// its own `--accent` on that element, so our gradient re-resolved against
+// Clerk's white and still matched the structural check.
+const ACCENT_RGB = { light: "rgb(109, 40, 217)", dark: "rgb(139, 124, 247)" } as const;
 
 async function visit(
   page: import("@playwright/test").Page,
@@ -854,6 +870,12 @@ Append to `apps/web/e2e/signed-out.spec.ts`, inside the existing `for (const mod
     const bg = await submit.evaluate((el) => getComputedStyle(el).backgroundImage);
     expect(bg, `the primary button in ${mode} is not painting --gradient-primary`)
       .toContain("linear-gradient");
+    // And the VALUE, not just the shape. Structure alone is what let a
+    // white-on-white button ship: Clerk declares its own `--accent` on this
+    // element, our `*`-declared gradient re-resolved against Clerk's white,
+    // and `linear-gradient(white, white)` satisfied the check above perfectly.
+    expect(bg, `the primary button in ${mode} is not painting the accent`)
+      .toContain(ACCENT_RGB[mode]);
 
     // A SECOND element and a different KIND of property, because "we passed a
     // style" is not "it computed". Clerk sets a 6px radius of its own here, so
@@ -1013,6 +1035,23 @@ const appearance = {
       color: "var(--text-1)",
     },
     formButtonPrimary: {
+      // Clerk declares its OWN `--accent` on this button
+      // (light-dark(#2F3037, #ffffff)), which shadows ours. Our
+      // --gradient-primary and --shadow-glow are declared on `*` so they
+      // re-resolve per element — by design, so a tenant's accent reaches them
+      // — and on this button they were re-resolving against CLERK's accent:
+      // the button painted linear-gradient(white, white) with black text, and
+      // the glow was white too. Measured in a browser on the built app, which
+      // is the only place it was visible: every test passed.
+      //
+      // Restoring our accent here fixes every accent-derived token on this
+      // element at once. `--primary` is the source because globals.css
+      // declares it at `:root` as `var(--accent)`, so it resolves THERE and
+      // inherits down as a finished value that Clerk's button-level
+      // declaration cannot intercept. That it does not follow a body-level
+      // tenant override is irrelevant on this page: sign-in has no tenant by
+      // design, which the `data-tenant-theme` assertion pins.
+      "--accent": "var(--primary)",
       height: "36px",
       borderRadius: "var(--radius-ctl)",
       // What `btn-primary` sets, inlined — the utility class itself won here,
