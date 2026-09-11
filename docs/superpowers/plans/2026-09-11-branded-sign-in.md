@@ -608,6 +608,17 @@ export default async function Home() {
   // own of each. Copy is untouched — only the frame around it changed.
   return (
     <AuthShell>
+      {/* Title and tagline sit OUTSIDE the branch, exactly as they did before:
+          in the old file they were unconditional siblings of the three-armed
+          ternary, so they rendered above the no-access card too. Nesting them
+          in the else-arm silently drops both for a signed-in non-agency user —
+          a real, reachable state that no test in this repo exercises, since
+          nothing signs in at `/`. Copy is unchanged by this work. */}
+      <h1 className="font-display text-4xl font-[650] tracking-[-0.01em] text-foreground">
+        {m["landing.title"]}
+      </h1>
+      <p className="max-w-md text-balance text-muted-foreground">{m["landing.tagline"]}</p>
+
       {userId && !hasAccess ? (
         <div className="flex flex-col items-start gap-3">
           <ShieldAlert className="size-8 text-muted-foreground" aria-hidden />
@@ -618,17 +629,11 @@ export default async function Home() {
           </SignOutButton>
         </div>
       ) : (
-        <>
-          <h1 className="font-display text-4xl font-[650] tracking-[-0.01em] text-foreground">
-            {m["landing.title"]}
-          </h1>
-          <p className="max-w-md text-balance text-muted-foreground">{m["landing.tagline"]}</p>
-          <Button asChild size="lg" className="self-start">
-            <Link href="/dashboard">
-              {userId ? m["landing.goToDashboard"] : m["landing.signIn"]}
-            </Link>
-          </Button>
-        </>
+        <Button asChild size="lg" className="self-start">
+          <Link href="/dashboard">
+            {userId ? m["landing.goToDashboard"] : m["landing.signIn"]}
+          </Link>
+        </Button>
       )}
     </AuthShell>
   );
