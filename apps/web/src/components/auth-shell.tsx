@@ -31,15 +31,17 @@ export function AuthShell({ children }: { children: ReactNode }) {
   return (
     <main className="relative flex min-h-screen items-center justify-center px-6 py-10">
       <Ground />
-      {/* overflow-hidden clips anything that overflows the card, including
-          any Clerk POPOVER (a phone/country-code dropdown, say). Latent, not
-          live: today's strategy set (Google, divider, email, password, email
-          code) has nothing that overflows the card. Whoever enables a
-          strategy with a dropdown needs to check this first. */}
-      <div className="flex w-full max-w-[840px] flex-col overflow-hidden rounded-xl border border-border bg-card glass sm:flex-row">
+      {/* Deliberately NOT overflow-hidden. Clerk renders things that overflow
+          the card on purpose — a "Last used" badge on the Google button, any
+          POPOVER (a phone/country-code dropdown, say) — and clipping the card
+          cut the badge off (measured: its right edge landed 11px past the
+          card's). The rail rounds its OWN corners instead, at the specific
+          corners that are actually a card edge, so the card's radius still
+          reads correctly with nothing clipped. */}
+      <div className="flex w-full max-w-[840px] flex-col rounded-xl border border-border bg-card glass sm:flex-row">
         <div
           data-slot="auth-rail"
-          className="sidebar-chrome flex shrink-0 items-center gap-3 border-b border-[var(--sidebar-line)] px-6 py-5 sm:w-[200px] sm:flex-col sm:items-start sm:gap-2 sm:border-b-0 sm:border-r sm:py-8"
+          className="sidebar-chrome flex shrink-0 items-center gap-3 rounded-t-xl border-b border-[var(--sidebar-line)] px-6 py-5 sm:w-[200px] sm:flex-col sm:items-start sm:gap-2 sm:border-b-0 sm:border-r sm:py-8 sm:rounded-tr-none sm:rounded-bl-xl"
         >
           <BisMark size={28} className="text-[var(--sidebar-text-strong)]" />
           <span className="text-sm font-semibold text-[var(--sidebar-text-strong)]">

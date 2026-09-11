@@ -88,11 +88,23 @@ const appearance = {
     // `headerSubtitle` and `headerBackLink` are separate descriptors —
     // hiding `header` wholesale suppressed each screen's own subtitle and
     // back link along with its title, so the org chooser read "Sign in"
-    // over a bare list with no explanation. The TITLE is ours to own: on
-    // every screen this route renders, it only duplicates the app name our
-    // own <h1> below already states. Each screen's SUBTITLE is not ours —
-    // it is the only place a task screen explains what it actually wants —
-    // so it has to stay, and hiding only `headerTitle` leaves it alone.
+    // over a bare list with no explanation. Hiding only `headerTitle`
+    // instead of `header` is what restores each screen's SUBTITLE and back
+    // link — real, and verified.
+    //
+    // The TITLE claim is narrower than that fix. "It only duplicates the
+    // app name our own <h1> below already states" is true of the PLAIN
+    // SIGN-IN screen alone — that is the screen this was verified against.
+    // On a task screen, `headerTitle` is still the ONLY place that screen
+    // names its own step ("Choose an organization", say), exactly like the
+    // subtitle case above, and this one key hides it there too: task
+    // screens still lose their own title under it, same as before this
+    // change, and our static "Sign in" <h1> does not track the step.
+    // Nothing exercises that live — auth.setup.ts drives the org chooser
+    // but asserts nothing about headings. A complete fix needs either a
+    // multi-org fixture to observe that screen directly, or a route-aware
+    // appearance override that hides `headerTitle` only on the base form;
+    // neither is in scope here.
     headerTitle: { display: "none" },
     // EVERY entry below is a style object for the same reason, and this was
     // MEASURED element by element rather than assumed. With class names, only
@@ -147,6 +159,22 @@ const appearance = {
       color: "var(--text-1)",
     },
     formButtonPrimary: {
+      // Clerk declares its OWN `--accent` on this button
+      // (light-dark(#2F3037, #ffffff)), which shadows ours. Our
+      // --gradient-primary and --shadow-glow are declared on `*` so they
+      // re-resolve per element — by design, so a tenant's accent reaches them
+      // — and on this button they were re-resolving against CLERK's accent:
+      // the button painted linear-gradient(white, white) with black text, and
+      // the glow was white too. Measured, not guessed.
+      //
+      // Restoring our accent here fixes every accent-derived token on this
+      // element at once. `--primary` is the source because globals.css
+      // declares it at `:root` as `var(--accent)`, so it resolves THERE and
+      // inherits down as a finished value that Clerk's button-level
+      // declaration cannot intercept. That it does not follow a body-level
+      // tenant override is irrelevant on this page: sign-in has no tenant by
+      // design, which the `data-tenant-theme` assertion pins.
+      "--accent": "var(--primary)",
       height: "36px",
       borderRadius: "var(--radius-ctl)",
       // What `btn-primary` sets, inlined — the utility class itself won here,

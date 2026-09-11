@@ -13,6 +13,13 @@ test.use({ storageState: { cookies: [], origins: [] } });
 // once clicked the toggle arrives with.
 const THEME_COOKIE = "bis-theme";
 
+// The accent each theme actually paints, from tokens.css. The primary button's
+// gradient must contain it — asserting only that the value contains
+// "linear-gradient" is what let a white-on-white button ship: Clerk declares
+// its own `--accent` on that element, so our gradient re-resolved against
+// Clerk's white and still matched the structural check.
+const ACCENT_RGB = { light: "rgb(109, 40, 217)", dark: "rgb(139, 124, 247)" } as const;
+
 async function visit(
   page: import("@playwright/test").Page,
   baseURL: string | undefined,
@@ -152,6 +159,8 @@ for (const mode of ["light", "dark"] as const) {
     const bg = await submit.evaluate((el) => getComputedStyle(el).backgroundImage);
     expect(bg, `the primary button in ${mode} is not painting --gradient-primary`)
       .toContain("linear-gradient");
+    expect(bg, `the primary button in ${mode} is not painting the ${mode} accent (${ACCENT_RGB[mode]})`)
+      .toContain(ACCENT_RGB[mode]);
 
     // A SECOND element and a different KIND of property, because "we passed a
     // style" is not "it computed". Clerk sets a 6px radius of its own here, so
@@ -160,7 +169,10 @@ for (const mode of ["light", "dark"] as const) {
     expect(inputRadius, `the email input kept Clerk's radius in ${mode}`).toBe("8px");
 
     // A FOURTH probe, on the one unguarded key most likely to get mistyped:
-    // `socialButtonsBlockButton` is the longest name in `ElementsConfig`,
+    // `socialButtonsBlockButton` is the longest key in the map — the
+    // longest of the twelve keys page.tsx's `elements` object actually
+    // sets, not the longest name in the whole `ElementsConfig` type (that
+    // has at least fourteen longer keys, up to 56 characters) — and it
     // sits one typo away from three near-neighbours
     // (`socialButtonsBlockButtonText`, `socialButtonsIconButton`,
     // `socialButtonsProviderIcon`), and styles the Google button — the
