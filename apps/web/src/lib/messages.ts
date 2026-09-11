@@ -56,6 +56,13 @@ export const m = {
   "landing.noAccess.title": "No access yet",
   "landing.noAccess.body": "This account isn't set up as an agency admin. Sign out to try a different account, or contact your BIS administrator.",
 
+  // The signed-out shell's rail. This is the line that does real work on
+  // /sign-in: it answers "whose software is this", which is the question
+  // somebody following a weekly bookmark actually has. There is deliberately
+  // no tagline under the "Sign in" heading — see the spec, §10.
+  "signIn.title": "Sign in",
+  "signIn.railCopy": "by Bespoke Intelligent Solutions",
+
   "clientAccess.off.title": "Access has been turned off",
   "clientAccess.off.body": "Your access to this account has been turned off. Contact your account manager if you think this is a mistake.",
   "clientAccess.none.title": "No account linked",

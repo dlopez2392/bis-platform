@@ -283,15 +283,40 @@ describe("the raised hover step is one colour", () => {
 });
 
 describe("the routes above dashboard/layout.tsx get a ground of their own", () => {
-  it("no-access and the landing page mount <Ground /> so their glass has something to be glass over", () => {
-    for (const rel of ["../../app/(dashboard)/no-access/page.tsx", "../../app/(dashboard)/page.tsx"]) {
+  // These render OUTSIDE dashboard/layout.tsx, which is where Ground is mounted
+  // for every /dashboard/* route — so without one of their own they paint on a
+  // flat --surface-0 and their glass has nothing to be glass over.
+  //
+  // This used to pin the literal `<Ground />` in the two page files, because
+  // each carried its own. They now share AuthShell, so the pin moves one hop
+  // rather than being dropped: every one of these routes must go THROUGH the
+  // shell, and the shell must carry everything the pages used to.
+  //
+  // /sign-in is NEW to this list. It had no ground at all — it was a bare
+  // <SignIn /> on a flat page — which is the defect the shell exists to fix, so
+  // the guard covers three routes now instead of two.
+  it("all three signed-out routes render through AuthShell", () => {
+    for (const rel of [
+      "../../app/(dashboard)/no-access/page.tsx",
+      "../../app/(dashboard)/page.tsx",
+      "../../app/(dashboard)/sign-in/[[...sign-in]]/page.tsx",
+    ]) {
       const s = src(rel);
-      expect(s, rel).toContain("<Ground />");
-      expect(s, rel).toContain('from "@/components/ground"');
-      // A fixed -z-10 child needs a positioned ancestor to sit behind.
-      expect(s, rel).toMatch(/<main className="relative /);
-      expect(s, rel).toMatch(/\bbg-card\b[^"]*\bglass\b/);
+      expect(s, rel).toContain("<AuthShell>");
+      expect(s, rel).toContain('from "@/components/auth-shell"');
+      // And no longer its own: a second Ground behind the shell's would paint
+      // every glow twice.
+      expect(s, rel).not.toContain("<Ground />");
     }
+  });
+
+  it("AuthShell carries the ground and the glass the pages no longer do", () => {
+    const s = src("../auth-shell.tsx");
+    expect(s).toContain("<Ground />");
+    expect(s).toContain('from "@/components/ground"');
+    // A fixed -z-10 child needs a positioned ancestor to sit behind.
+    expect(s).toMatch(/<main className="relative /);
+    expect(s).toMatch(/\bbg-card\b[^"]*\bglass\b/);
   });
 });
 
