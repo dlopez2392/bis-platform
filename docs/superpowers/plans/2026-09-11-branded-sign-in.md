@@ -831,10 +831,8 @@ Append to `apps/web/e2e/signed-out.spec.ts`, inside the existing `for (const mod
 
     await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 
-    // Nobody is authenticated here, so there is no tenant and the root layout
-    // must not have painted one. This is the assertion that keeps a future
-    // "let's brand sign-in per client" change honest.
-    await expect(page.locator("body")).not.toHaveAttribute("data-tenant-theme");
+    // (The tenant-theme assertion used to sit here. It moved to the end with
+    // the heading count, for the same reason — see below.)
 
     // Clerk's own form still works. Without this, every assertion above is
     // satisfied by a page that renders a beautiful shell around nothing.
@@ -851,10 +849,6 @@ Append to `apps/web/e2e/signed-out.spec.ts`, inside the existing `for (const mod
     // Google" and matches a loose regex too, and it comes first in the DOM —
     // so `.first()` on a loose match would probe the wrong button and pass
     // for the wrong reason.
-    // Anchored, NOT /continue/i: the Google button reads "Continue with
-    // Google" and matches a loose regex too, and it comes first in the DOM —
-    // so `.first()` on a loose match would probe the wrong button and pass
-    // for the wrong reason.
     const submit = page.getByRole("button", { name: /^Continue$/ });
     await expect(submit).toBeVisible();
     const bg = await submit.evaluate((el) => getComputedStyle(el).backgroundImage);
@@ -867,18 +861,41 @@ Append to `apps/web/e2e/signed-out.spec.ts`, inside the existing `for (const mod
     const inputRadius = await email.evaluate((el) => getComputedStyle(el).borderRadius);
     expect(inputRadius, `the email input kept Clerk's radius in ${mode}`).toBe("8px");
 
-    // LAST, and the position is the whole point. Everything above already
-    // waited for Clerk's form to mount; this counts headings only once the
-    // page has settled.
+    // THESE TWO GO LAST, and the position is the whole point. Every assertion
+    // above already waited for Clerk's form to mount, so by here the page has
+    // settled and these measure the finished DOM.
     //
-    // Placed earlier — directly under the "Sign in" assertion, where it was
-    // first written — it passed 5/5 against a build that genuinely rendered
-    // two headings. `toHaveCount` is a web-first assertion: it resolves the
-    // instant it observes a passing value and stops polling. Our heading is
-    // server-rendered, Clerk's mounts 600ms–2.5s later, so the count read 1
-    // and succeeded BEFORE the duplicate existed. An assertion that runs
-    // before the thing it measures can appear is not a guard.
+    // Both are negative, web-first assertions — they resolve the instant they
+    // observe a passing value and stop polling — which makes them blind to
+    // anything Clerk adds late. The heading count proved it: written directly
+    // under the "Sign in" assertion, it passed 5/5 against a build that
+    // genuinely rendered two headings, because ours is server-rendered and
+    // Clerk's mounts 600ms–2.5s later. It counted 1 before the duplicate
+    // existed. An assertion that runs before the thing it measures can appear
+    // is not a guard, and `not.toHaveAttribute` has exactly the same shape.
     await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
+
+    // Nobody is authenticated here, so there is no tenant and the root layout
+    // must not have painted one. This is what keeps a future "let's brand
+    // sign-in per client" change honest — and that change would add the
+    // attribute CLIENT-side, which is precisely what this could not have seen
+    // from its original position above.
+    await expect(page.locator("body")).not.toHaveAttribute("data-tenant-theme");
+
+    // The card is FLATTENED, not restyled — DESIGN.md rule 2, and the one
+    // finding that actually rendered wrong on the page: with class names
+    // Clerk kept its own background, shadow and 32px padding, so a card sat
+    // inside the shell's card. A third probe, on a third element and a third
+    // kind of property, because the type system provably cannot catch a
+    // mistyped element key here (see the page's own note) — these probes are
+    // the only thing that can.
+    const clerkCard = page.locator(".cl-card").first();
+    const cardStyle = await clerkCard.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { padding: s.padding, shadow: s.boxShadow };
+    });
+    expect(cardStyle.padding, `Clerk's card kept its own padding in ${mode}`).toBe("0px");
+    expect(cardStyle.shadow, `Clerk's card kept its own shadow in ${mode}`).toBe("none");
   });
 ```
 
