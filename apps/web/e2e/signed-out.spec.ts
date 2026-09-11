@@ -136,6 +136,13 @@ for (const mode of ["light", "dark"] as const) {
 
     await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 
+    // EXACTLY one. Naming our own heading cannot see a second heading whose
+    // text differs — and that is precisely what shipped: Clerk's own
+    // "Continue to BIS Platform (dev)" rendered directly above ours, with the
+    // name-matched assertion green, because "Sign in" is not a substring of
+    // it. A count is the assertion that was actually wanted.
+    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
+
     // Nobody is authenticated here, so there is no tenant and the root layout
     // must not have painted one. This is the assertion that keeps a future
     // "let's brand sign-in per client" change honest.
