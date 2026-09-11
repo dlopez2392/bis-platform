@@ -49,7 +49,13 @@ export async function listAccountsDueWeeklyReport(
     // PostgREST spells "array is not the empty array" as a `neq` against the
     // literal `{}`. A `.not("report_emails", "is", null)` would NOT do it:
     // the column is `not null default '{}'`, so the empty case is a value.
-    .neq("report_emails", "{}");
+    .neq("report_emails", "{}")
+    // A suppressed account sends nothing (0032), and this report is a real
+    // send to a real inbox. The recipient list alone is NOT the guard here:
+    // a demo account is branded and configured to look complete, so someone
+    // filling in recipients to screenshot the setting would start mailing
+    // invented numbers. The flag is the thing that cannot be set by accident.
+    .eq("outbound_suppressed", false);
   if (error) throw new Error(`listAccountsDueWeeklyReport failed: ${error.message}`);
 
   const rows = (data ?? []) as {
@@ -164,12 +170,18 @@ export type AccountForWeeklyRollup = {
 };
 
 /**
- * Every account, full stop — the roll-up's own read, deliberately separate
- * from `listAccountsDueWeeklyReport` above: that query filters to accounts
- * WITH a recipient because it exists to drive sends, and an account with
- * none is correctly invisible to it. The roll-up's job is the opposite — a
- * client silently receiving nothing must be visible to the agency — so it
- * cannot reuse a read that was built to hide exactly that case.
+ * Every REAL account — the roll-up's own read, deliberately separate from
+ * `listAccountsDueWeeklyReport` above: that query filters to accounts WITH a
+ * recipient because it exists to drive sends, and an account with none is
+ * correctly invisible to it. The roll-up's job is the opposite — a client
+ * silently receiving nothing must be visible to the agency — so it cannot
+ * reuse a read that was built to hide exactly that case.
+ *
+ * "Real" is the only filter it keeps, and it is one word of difference from
+ * "every account, full stop", which is what this said before 0032 existed:
+ * a suppressed account is a demo, and the reason to show an account with no
+ * recipients is that the agency needs the truth about its book of business.
+ * An invented account in the totals defeats exactly that.
  */
 export async function listAccountsForWeeklyRollup(
   db: SupabaseClient,
@@ -187,7 +199,15 @@ export async function listAccountsForWeeklyRollup(
   // the same. Selecting the brand columns in the same statement removes both
   // the race and one query per account.
   const { data, error } = await db.from("accounts")
-    .select(`id, created_at, report_emails, ${ACCOUNT_BRAND_COLS}`);
+    .select(`id, created_at, report_emails, ${ACCOUNT_BRAND_COLS}`)
+    // "Every account, full stop" means every account the agency actually
+    // RUNS. A suppressed account is a demo — its numbers are invented — and
+    // this roll-up is the one email where the agency reads its whole book of
+    // business as fact. The client report omits a metric it did not measure
+    // rather than zeroing it, for exactly this reason; a fabricated account
+    // in the total is the same lie one level up, and unlike a missing metric
+    // nothing on the page would reveal it.
+    .eq("outbound_suppressed", false);
   if (error) throw new Error(`listAccountsForWeeklyRollup failed: ${error.message}`);
 
   const rows = (data ?? []) as {

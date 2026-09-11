@@ -25,6 +25,36 @@ describe("sites data layer", () => {
       expect(mine?.accountTimezone).toBe("America/Chicago");
     }));
 
+  /**
+   * A suppressed account's site is not a site to sync. Unlike the five
+   * sending passes, nothing here would MAIL anyone — the damage is quieter
+   * and never stops: `vercel_project_id` on a demo account points at no real
+   * Vercel project, so every tick past 03:00 local calls the API, fails,
+   * logs, and burns one of the pass's `AUTOMATION_TICK_CAP` attempts that a
+   * real site is waiting behind.
+   *
+   * The site is asserted present BEFORE the flag is set, so what changes the
+   * answer is the flag and not a site that was never eligible.
+   *
+   * Mutation: drop the `.eq("accounts.outbound_suppressed", false)` from
+   * listSitesToSync — the site comes back after suppression and this fails.
+   */
+  it("a suppressed account's site is never handed to the sync pass", () =>
+    withTestAccount(async (db, accountId) => {
+      const site = await upsertSite(db, accountId,
+        { vercelProjectId: `prj_t_${accountId.slice(0, 8)}`, domain: "demo.example" });
+      expect((await listSitesToSync(db)).some((s) => s.id === site.id)).toBe(true);
+
+      const { error } = await db.from("accounts")
+        .update({ outbound_suppressed: true }).eq("id", accountId);
+      expect(error).toBeNull();
+      expect((await listSitesToSync(db)).some((s) => s.id === site.id)).toBe(false);
+
+      // Reversible, like the booking guard: clearing the flag restores it.
+      await db.from("accounts").update({ outbound_suppressed: false }).eq("id", accountId);
+      expect((await listSitesToSync(db)).some((s) => s.id === site.id)).toBe(true);
+    }));
+
   // Mutation: drop `{ code }` from upsertSite's throw — the action can no
   // longer tell "another client holds that project" from any other failure.
   it("a project already linked to another account is refused, and the error carries SQLSTATE 23505", () =>

@@ -56,6 +56,35 @@ describe("listAccountsDueWeeklyReport", () => {
       expect(row!.lastSentWeek).toBe("2026-03-02");
     });
   });
+
+  /**
+   * The recipient list is the documented on/off switch for this report, and
+   * it is NOT sufficient for a demo account. A demo tenant exists to be
+   * screenshotted, which means every setting on it gets filled in to look
+   * complete — including recipients. `outbound_suppressed` (0032) is the one
+   * gate that survives someone configuring the account to look real.
+   *
+   * Recipients are set FIRST and the account asserted due, so suppression is
+   * what changes the answer rather than an account that was never due.
+   *
+   * Mutation: drop the `.eq("outbound_suppressed", false)` — the account is
+   * still due after suppression and this fails.
+   */
+  it("a suppressed account is not due, even with recipients set", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { error } = await db.from("accounts")
+        .update({ report_emails: ["owner@example.com"], brand_name: "Demo Air" })
+        .eq("id", accountId);
+      if (error) throw new Error(error.message);
+      expect((await listAccountsDueWeeklyReport(db)).some((r) => r.accountId === accountId)).toBe(true);
+
+      await db.from("accounts").update({ outbound_suppressed: true }).eq("id", accountId);
+      expect((await listAccountsDueWeeklyReport(db)).some((r) => r.accountId === accountId)).toBe(false);
+
+      await db.from("accounts").update({ outbound_suppressed: false }).eq("id", accountId);
+      expect((await listAccountsDueWeeklyReport(db)).some((r) => r.accountId === accountId)).toBe(true);
+    });
+  });
 });
 
 /**
@@ -72,6 +101,29 @@ describe("listAccountsForWeeklyRollup", () => {
       const row = (await listAccountsForWeeklyRollup(db)).find((r) => r.accountId === accountId);
       expect(row).toBeDefined();
       expect(row!.hasRecipients).toBe(false);
+    });
+  });
+
+  /**
+   * The one exception to "every account, full stop": a suppressed account is
+   * a demo, and its numbers are invented. This roll-up is the single email
+   * where the agency reads its whole book of business as fact, so a fabricated
+   * account in the totals is the same failure the client report avoids by
+   * omitting a metric it did not measure — except nothing on the page would
+   * reveal it.
+   *
+   * Mutation: drop the `.eq("outbound_suppressed", false)` — the demo account
+   * appears in the agency's totals and this fails.
+   */
+  it("a suppressed account is left out of the agency roll-up entirely", async () => {
+    await withTestAccount(async (db, accountId) => {
+      expect((await listAccountsForWeeklyRollup(db)).some((r) => r.accountId === accountId)).toBe(true);
+
+      await db.from("accounts").update({ outbound_suppressed: true }).eq("id", accountId);
+      expect((await listAccountsForWeeklyRollup(db)).some((r) => r.accountId === accountId)).toBe(false);
+
+      await db.from("accounts").update({ outbound_suppressed: false }).eq("id", accountId);
+      expect((await listAccountsForWeeklyRollup(db)).some((r) => r.accountId === accountId)).toBe(true);
     });
   });
 });

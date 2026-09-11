@@ -53,10 +53,23 @@ export async function upsertSite(
 }
 
 /** Every linked site with its account's timezone — the pass decides per
- *  site whether "yesterday" has ended there. */
+ *  site whether "yesterday" has ended there.
+ *
+ *  Suppressed accounts are excluded, and this one is NOT about sending.
+ *  `outbound_suppressed` (0032) says an account is not a real business, and
+ *  its column comment is already the broad rule: "every automation pass skips
+ *  this account's due work". A demo account's linked site is fiction — there
+ *  is no Vercel project behind it — so including it here would have the
+ *  every-15-minutes tick call the Vercel API for a project id that does not
+ *  exist, log a failure, and do it again forever, while burning one of the
+ *  pass's `AUTOMATION_TICK_CAP` attempts that a REAL site is queued behind.
+ *  Filtering here rather than in the pass keeps the rule in the read that
+ *  defines "a site to sync", where the next pass to be written inherits it. */
 export async function listSitesToSync(db: SupabaseClient): Promise<(SiteRow & { accountTimezone: string })[]> {
   const { data, error } = await db.from("sites")
-    .select(`${SITE_COLS}, accounts!inner(timezone)`).order("created_at", { ascending: true });
+    .select(`${SITE_COLS}, accounts!inner(timezone)`)
+    .eq("accounts.outbound_suppressed", false)
+    .order("created_at", { ascending: true });
   if (error) throw new Error(`listSitesToSync failed: ${error.message}`);
   return ((data ?? []) as unknown as (SiteDbRow & { accounts: { timezone: string } })[]).map((r) => ({
     ...toSite(r), accountTimezone: r.accounts.timezone,
