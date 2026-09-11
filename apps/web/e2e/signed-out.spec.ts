@@ -47,14 +47,37 @@ for (const mode of ["light", "dark"] as const) {
     expect(markBox, "the mark has no box at all").not.toBeNull();
     expect(markBox!.width, `mark width in ${mode}`).toBeGreaterThan(0);
 
-    // The rail is chrome: dark in BOTH themes. Same luminance probe
-    // theme.spec.ts uses on the real sidebar.
+    // The rail is chrome, and the two themes need DIFFERENT assertions. One
+    // luminance probe across both was a NO-OP in dark: `.dark` sets
+    // --sidebar-ground to `transparent`, so backgroundColor resolves to
+    // "rgba(0, 0, 0, 0)", a /\d+/g regex reads that as r=g=b=0, and the
+    // assertion passed unconditionally no matter what the rail rendered.
+    //
+    // LIGHT is the load-bearing half: --sidebar-ground is an opaque #0B0A12,
+    // so backgroundColor IS the rail's real colour, and the claim worth making
+    // is that the rail does NOT invert with the theme.
+    //
+    // DARK gets the contract instead: the rail is transparent ON PURPOSE so
+    // the lit ground reads through (tokens.css says exactly that in its own
+    // comment), and the visible wash comes from sidebar-chrome's
+    // background-IMAGE, which getComputedStyle().backgroundColor never
+    // reflects. Pinning the transparency is a real, falsifiable claim — give
+    // the dark rail an opaque fill and the aurora stops showing through and
+    // this fails.
     const railBg = await rail.evaluate((el) => getComputedStyle(el).backgroundColor);
-    const channels = (railBg.match(/\d+/g) ?? []).map(Number);
-    expect(channels.length, `could not parse rail bg "${railBg}"`).toBeGreaterThanOrEqual(3);
-    const [r = 255, g = 255, b = 255] = channels;
-    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-    expect(luminance, `rail bg ${railBg} must be dark in ${mode}`).toBeLessThan(0.3);
+    if (mode === "light") {
+      // [\d.]+ , not \d+ : the old regex also dropped the fractional alpha, so
+      // a fully transparent rail would have been read as opaque black.
+      const channels = (railBg.match(/[\d.]+/g) ?? []).map(Number);
+      expect(channels.length, `could not parse rail bg "${railBg}"`).toBeGreaterThanOrEqual(3);
+      const [r = 255, g = 255, b = 255, a = 1] = channels;
+      expect(a, `rail bg ${railBg} must be opaque in light`).toBe(1);
+      const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+      expect(luminance, `rail bg ${railBg} must be dark in light mode`).toBeLessThan(0.3);
+    } else {
+      expect(railBg, "the dark rail must stay transparent so the lit ground reads through")
+        .toMatch(/^rgba\(\s*0,\s*0,\s*0,\s*0\s*\)$|^transparent$/);
+    }
 
     // No theme toggle on a signed-out screen, ever (spec §6). This is not a
     // style preference: theme-mode.ts records a shipped bug where a cookie
