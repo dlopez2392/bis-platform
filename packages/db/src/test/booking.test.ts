@@ -131,6 +131,38 @@ describe("booking accessors", () => {
     });
   });
 
+  it("a suppressed account has no due work, however due the row is", async () => {
+    // Migration 0032. The cron runs every pass against serviceDb() with no
+    // account filter, so this flag is the only thing standing between a demo
+    // company's seeded bookings and real mail to its made-up contacts.
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId,
+        { firstName: "Demo", email: "demo@example.com" }, "user_test");
+      const now = new Date("2027-03-01T12:00:00Z");
+      const booking = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId,
+          startsAt: new Date("2027-03-02T11:30:00Z"),
+          endsAt: new Date("2027-03-02T12:30:00Z") }, "user_test");
+
+      // Due while the account sends, so the suppression below is what changes
+      // the answer — not a booking that was never eligible.
+      expect((await listDueReminders(db, now.toISOString())).map((d) => d.bookingId))
+        .toEqual([booking.id]);
+
+      const { error } = await db.from("accounts")
+        .update({ outbound_suppressed: true }).eq("id", accountId);
+      expect(error).toBeNull();
+
+      expect(await listDueReminders(db, now.toISOString())).toEqual([]);
+
+      // And it is the flag, not a one-way door: clearing it restores the row.
+      await db.from("accounts").update({ outbound_suppressed: false }).eq("id", accountId);
+      expect((await listDueReminders(db, now.toISOString())).map((d) => d.bookingId))
+        .toEqual([booking.id]);
+    });
+  });
+
   it("listDueReminders carries meetingUrl through for a video booking, straight off the row", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
