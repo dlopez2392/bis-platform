@@ -1,6 +1,8 @@
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAccount } from "../accounts";
-import { setBranding } from "../branding";
+import { setBranding, uploadBrandLogo, removeBrandLogo } from "../branding";
 import { createContact } from "../contacts";
 import { ensureDefaultPipeline } from "../crm-config";
 import { createOpportunity, moveOpportunityToStage, setOpportunityStatus } from "../opportunities";
@@ -107,6 +109,21 @@ async function backdate(
   if (error) throw new Error(`backdate ${table}.${id} failed: ${error.message}`);
 }
 
+/**
+ * The demo company's own mark: three strokes of moving air on a rounded
+ * square, in the brand blue. Invented for this tenant and nobody's trademark.
+ *
+ * Committed as PNG bytes rather than rendered at seed time, because
+ * `uploadBrandLogo` takes png/jpeg/webp only — no SVG — and adding an image
+ * pipeline to `@bis/db` to produce one file would be a dependency the library
+ * carries forever for a script nobody runs in CI. The SVG sits beside it as
+ * the editable source.
+ *
+ * `import.meta.url`, not `__dirname`: this package is `"type": "module"`, so
+ * under tsx there is no `__dirname` to read.
+ */
+const LOGO_PATH = fileURLToPath(new URL("./assets/resaca-air-mark.png", import.meta.url));
+
 // ---------------------------------------------------------------------------
 // Re-seed
 // ---------------------------------------------------------------------------
@@ -167,6 +184,21 @@ export async function dropDemoAccount(
       `demo seed ABORTED: the account at ${orgId} is not suppressed. Refusing to ` +
       `delete it — an unsuppressed account is not one this seeder created.`);
   }
+  // Storage is not covered by the row cascade, and the logo's path is
+  // content-addressed under the ACCOUNT id — so a re-seed, which mints a new
+  // account id, would orphan the old object in the bucket on every run. Best
+  // effort: a stranded 6 KB object is not worth failing a teardown over, and
+  // the rows are the part that must go.
+  const { data: branded } = await db.from("accounts")
+    .select("brand_logo_path").eq("id", existing.id).maybeSingle();
+  if (branded?.brand_logo_path) {
+    try {
+      await removeBrandLogo(db, branded.brand_logo_path);
+    } catch (e) {
+      console.warn(`dropDemoAccount: left a logo object behind: ${String(e)}`);
+    }
+  }
+
   await deleteAccountCascade(db, existing.id, "dropDemoAccount");
   return true;
 }
@@ -220,8 +252,10 @@ export async function seedDemoTenant(
   // while the booking page's CTA and the client switcher carry the client's
   // colour and name. That pair is the one worth screenshotting — our
   // aesthetic, their brand.
+  const brandLogoPath = await uploadBrandLogo(
+    db, accountId, new Uint8Array(fs.readFileSync(LOGO_PATH)), "image/png");
   await setBranding(db, accountId,
-    { brandName: DEMO_ACCOUNT_NAME, brandColor: DEMO_BRAND_COLOR }, ACTOR);
+    { brandName: DEMO_ACCOUNT_NAME, brandColor: DEMO_BRAND_COLOR, brandLogoPath }, ACTOR);
 
   await seedVoice(db, accountId);
   const contacts = await seedContacts(db, accountId, now, r);

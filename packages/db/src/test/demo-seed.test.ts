@@ -35,7 +35,7 @@ describe("demo tenant seeder", () => {
 
       // --- The account is suppressed. Everything else is downstream of this.
       const { data: account } = await db.from("accounts")
-        .select("outbound_suppressed, brand_name, brand_color, brand_neutral, timezone, report_emails")
+        .select("outbound_suppressed, brand_name, brand_color, brand_neutral, brand_logo_path, timezone, report_emails")
         .eq("id", accountId).single();
       expect(account!.outbound_suppressed).toBe(true);
       expect(account!.timezone).toBe("America/Chicago");
@@ -46,6 +46,10 @@ describe("demo tenant seeder", () => {
       // point is a combination that is easy to break by "completing" it.
       expect(account!.brand_color).toBeTruthy();
       expect(account!.brand_neutral).toBeNull();
+      // The logo really made it into storage, and under this account's own
+      // prefix — the path is content-addressed and account-scoped, which is
+      // also why the teardown has to remove it explicitly.
+      expect(account!.brand_logo_path).toMatch(new RegExp(`^${accountId}/logo-[0-9a-f]{16}\\.png$`));
       // No recipients: the weekly report's own switch, on top of the flag.
       expect(account!.report_emails).toEqual([]);
 

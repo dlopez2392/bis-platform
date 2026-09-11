@@ -167,6 +167,23 @@ describe("demo tenant — the seeder cannot write past the walls", () => {
   it("accepts only org ids Clerk does not mint", () => {
     expect(seed).toMatch(/const SEEDABLE_ORG_ID = \/\^org_\(demo\|test\)_/);
   });
+
+  /**
+   * The logo is a committed binary read off disk at seed time, so it is the
+   * one input to this seeder that a packaging or checkout mistake can remove
+   * without any source change. `uploadBrandLogo` accepts png/jpeg/webp by
+   * content type and does NOT sniff the bytes — it trusts the caller to have
+   * validated them — so the magic number is checked here instead.
+   */
+  it("ships a real PNG for the demo company's mark", () => {
+    const png = fs.readFileSync(path.join(DEMO_DIR, "assets", "resaca-air-mark.png"));
+    expect([...png.subarray(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    // 256x256, big-endian, at the fixed IHDR offset.
+    expect(png.readUInt32BE(16)).toBe(256);
+    expect(png.readUInt32BE(20)).toBe(256);
+    // The editable source sits beside it; losing it makes the mark unfixable.
+    expect(fs.existsSync(path.join(DEMO_DIR, "assets", "resaca-air-mark.svg"))).toBe(true);
+  });
 });
 
 describe("demo tenant — the transcripts sell the right thing", () => {
