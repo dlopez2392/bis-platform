@@ -16,14 +16,19 @@ import { m } from "@/lib/messages";
  * `--radius-ctl`, and more. Clerk's runtime CSS-in-JS emits its structural
  * `.cl-internal-*` rules UNLAYERED, and unlayered author CSS beats layered
  * author CSS — the whole Tailwind utility layer stack included — at any
- * specificity. A style object is applied by Clerk to the element directly,
- * so it lands on the same (unlayered) side of the cascade as the rule it
- * has to beat, and wins regardless of layer order. `var()` inside a style
- * object resolves exactly as it does in a stylesheet, so every colour,
- * radius and shadow below still comes from tokens.css (DESIGN.md:
- * components consume tokens only) and still follows the existing `.dark`
- * class with no Clerk theme swap and no flash — only the delivery
- * mechanism changed, not where the values come from.
+ * specificity, so a class can never win here. A style object sidesteps the
+ * layer question entirely: Clerk merges the object we pass into the SAME
+ * generated rule as its own defaults for that element (confirmed by reading
+ * the merged rule text off a live node), with our declarations appended
+ * after Clerk's. There is no cascade boundary being crossed — it is the
+ * ordinary CSS rule that, within one rule, the later declaration for a given
+ * property wins, so ours simply becomes the value while any property we did
+ * not set passes through as Clerk's own. `var()` inside a style object
+ * resolves exactly as it does in a stylesheet, so every colour, radius and
+ * shadow below still comes from tokens.css (DESIGN.md: components consume
+ * tokens only) and still follows the existing `.dark` class with no Clerk
+ * theme swap and no flash — only the delivery mechanism changed, not where
+ * the values come from.
  *
  * `variables` is deliberately unused. `{ colorPrimary: 'var(--accent)' }` would
  * typecheck — CssColor is a bare `string` — but Clerk derives a whole shade
@@ -36,9 +41,15 @@ import { m } from "@/lib/messages";
  * utility. It does not cover Clerk's structural CSS-in-JS output — that's
  * the unlayered rule set above, and no layer name changes that.
  *
- * `satisfies` rather than a plain const: it keeps excess-property checking on
- * the object literal, so a mistyped element key is a typecheck error instead of
- * a line that silently styles nothing.
+ * `satisfies` checks the TOP-LEVEL keys (`cssLayerName`, `options`,
+ * `elements`) and catches a wrong one there. It does NOT check the keys
+ * inside `elements`: Clerk types that as a union of ~150 single-key
+ * records, and TypeScript's excess-property checking does not fire against
+ * a union that large — verified by compiling a misspelled key against the
+ * real types and getting no error. A wrong element key is therefore
+ * silent, and the computed-style probes in signed-out.spec.ts are the only
+ * thing that catches one: a style that never applies shows up as Clerk's
+ * own value.
  */
 const appearance = {
   cssLayerName: "clerk",
@@ -62,10 +73,11 @@ const appearance = {
     // not its structural ones. Confirmed at runtime by walking
     // document.styleSheets for CSSLayerBlockRule.
     //
-    // The fix is Clerk's own API rather than out-specifying it: a style object
-    // is applied by Clerk to that element directly, so it lands on the same
-    // side of the cascade as the rule it needs to beat. `!important` would
-    // have "worked" and taught us nothing.
+    // The fix is Clerk's own API rather than out-specifying it: Clerk merges
+    // the object we pass into the SAME generated rule as its own defaults,
+    // our declarations appended after Clerk's — ordinary last-declaration-
+    // wins within one rule, not a cascade fight. `!important` would have
+    // "worked" and taught us nothing.
     header: { display: "none" },
     // EVERY entry below is a style object for the same reason, and this was
     // MEASURED element by element rather than assumed. With class names, only
@@ -138,9 +150,15 @@ const appearance = {
   // so `cssLayerName` — real, documented on GlobalAppearanceOptions in the same
   // package's types-*.d.mts, and the one property this whole file exists to set —
   // does not type-check against that narrowed alias. This intersection adds back
-  // only the missing field; every other key (layout, elements, and each element's
-  // sub-keys) still excess-property-checks against Clerk's real Theme type, so a
-  // mistyped element key still fails here exactly as intended.
+  // only the missing field; every TOP-LEVEL key (`cssLayerName`, `options`,
+  // `elements` itself) still excess-property-checks against Clerk's real Theme
+  // type, so a mistyped TOP-LEVEL key still fails here. It does NOT reach inside
+  // `elements`: Clerk types that as a union of ~150 single-key records, a known
+  // TypeScript blind spot for excess-property checking against a union that
+  // large — verified by compiling a misspelled element key (`haeder`) against
+  // the real types on both this widened target and the original narrow one,
+  // and getting no error either way. A wrong element key is therefore silent;
+  // the computed-style probes in signed-out.spec.ts are what catches one.
 } satisfies NonNullable<ComponentProps<typeof SignIn>["appearance"]> & { cssLayerName?: string };
 
 export default function Page() {
