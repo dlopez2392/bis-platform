@@ -416,6 +416,25 @@ for (const mode of ["light", "dark"] as const) {
         .toMatch(/^rgba\(\s*0,\s*0,\s*0,\s*0\s*\)$|^transparent$/);
     }
 
+    // Both branches above read background-COLOR, and in dark that is
+    // `transparent` whether the chrome applied or not — delete `sidebar-chrome`
+    // from the rail's class list entirely and the dark assertion still passes,
+    // on the browser's UA default, with no wash and no blur on screen. These
+    // two close that hole: the gradient and the blur exist ONLY because the
+    // utility landed, so they are what proves it did.
+    const [railImage, railBlur] = await rail.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return [s.backgroundImage, s.backdropFilter] as const;
+    });
+    expect(railImage, `the rail lost sidebar-chrome's wash in ${mode}`)
+      .toContain("linear-gradient");
+    if (mode === "dark") {
+      // The VALUE, not the class. Lightning CSS once folded a hand-written
+      // -webkit- twin into the prefixed form and dropped the standard property
+      // outright: nothing blurred anywhere and the suite stayed green.
+      expect(railBlur, "the dark rail must keep --glass-filter's blur").toBe("blur(14px)");
+    }
+
     // No theme toggle on a signed-out screen, ever (spec §6). This is not a
     // style preference: theme-mode.ts records a shipped bug where a cookie
     // written at /sign-in — a route with no tenant, so it resolves light —
