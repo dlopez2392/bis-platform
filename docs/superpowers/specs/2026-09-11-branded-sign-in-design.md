@@ -110,9 +110,15 @@ content column and its copy does not change.
 BIS has a real logo — a white triangle inside a black disc — and it exists in exactly one place: a
 256×256 PNG frame inside `apps/web/public/favicon.ico`. **Nothing in the app has ever drawn it.**
 
-`components/bis-mark.tsx` re-cuts it as two SVG shapes on a `0 0 48 48` viewBox — a disc and a
-triangle — taking `currentColor` for the disc and the surrounding surface colour for the triangle,
-so it inverts correctly per theme and per surface. No new asset, no image request.
+`components/bis-mark.tsx` re-cuts it as **one** path on a `0 0 48 48` viewBox, with
+`fillRule="evenodd"` so the triangle is a genuine hole, taking `currentColor` for the disc. No new
+asset, no image request.
+
+> **Corrected during execution.** This said "two SVG shapes — a disc and a triangle — taking
+> `currentColor` for the disc and the surrounding surface colour for the triangle". Two shapes
+> would force every caller to declare what is behind the mark, and a triangle filled `--surface-0`
+> is the wrong dark the moment it sits on the sidebar's chrome. One `evenodd` path makes the hole
+> genuinely transparent and needs no such prop.
 
 Rejected: filling the disc with `--gradient-primary`. It looks good, but it would put a third
 gradient on a screen that already has the primary button's, and rule 11 reserves gradient moments
@@ -122,8 +128,10 @@ The favicon itself is not touched.
 
 ## 6. Theme and mode
 
-`<SignIn />` is restyled with class names that read tokens, so **light and dark follow the
-existing `.dark` class with no Clerk theme swap, no second source of truth, and no flash.**
+`<SignIn />` is restyled with **style objects carrying `var()` tokens**, so **light and dark follow
+the existing `.dark` class with no Clerk theme swap, no second source of truth, and no flash.**
+A `var()` inside a style object resolves against the element exactly as it does in a stylesheet, so
+the per-mode token set still does the work. (Corrected during execution — see §7.)
 
 Mode resolution on these routes is **unchanged**: `resolveThemeMode(cookie, null)` — the user's own
 cookie if they have ever chosen one, otherwise light.
@@ -140,18 +148,44 @@ Everything in this section is read off the installed `@clerk/react@6.12.8` type 
 
 `<SignIn />` takes an `appearance` prop:
 
-- **`layout: { logoPlacement: 'none' }`** — the mark lives in the rail, not in Clerk's card.
-- **`elements`** — `UserDefinedStyle = string | CSSObject`, so each key accepts **our own class
-  name**. Confirmed keys to target: `rootBox`, `cardBox`, `card`, `header`, `headerTitle`,
-  `headerSubtitle`, `main`, `footer`, `socialButtonsBlockButton`, `dividerRow`, `dividerLine`,
-  `dividerText`, `formFieldLabel`, `formFieldInput`, `formButtonPrimary`.
-- **`cssLayerName`** — puts Clerk's own stylesheet in a named cascade layer so our classes win
-  **without `!important`**. Any implementation that reaches for `!important` has skipped this.
+> **Corrected during execution — this section's original mechanism was measured false.** It said
+> `elements` keys take "**our own class name**", and that `cssLayerName` "puts Clerk's own
+> stylesheet in a named cascade layer so our classes win **without `!important`**. Any
+> implementation that reaches for `!important` has skipped this." Read as written, that instructs a
+> future implementer to rebuild the approach that did not work. What is below replaces it.
+
+- **`options: { logoPlacement: 'none' }`** — the mark lives in the rail, not in Clerk's card. The
+  key is `options`, not `layout`: Clerk's public docs still say `layout`, but
+  `@clerk/react@6.12.8`'s actual `Theme` type names it `options`. Source wins.
+- **`elements`** — `UserDefinedStyle = string | CSSObject`, and **every entry is a style object**,
+  not a class name. Class names do not work here: Clerk's runtime CSS-in-JS emits its structural
+  `.cl-internal-*` rules **unlayered**, and unlayered author CSS beats layered author CSS at any
+  specificity — so a class wins only for properties Clerk leaves unset. Measured element by
+  element: with classes, `card` kept Clerk's background, shadow and 32px padding (a card inside the
+  shell's card — the rule 2 violation this section exists to prevent), both controls kept Clerk's
+  6px radius over our 8px token, and `main` kept Clerk's 24px gap. A style object is merged by
+  Clerk into the **same generated rule** as its own defaults, so it wins by ordinary
+  last-declaration-wins — not by a cascade contest at all.
+  Keys in use: `headerTitle`, `rootBox`, `cardBox`, `card`, `main`, `footer`,
+  `socialButtonsBlockButton`, `dividerLine`, `dividerText`, `formFieldLabel`, `formFieldInput`,
+  `formButtonPrimary`.
+- **`cssLayerName`** — still set, and still earning its place, but **not** for the reason first
+  given. Without it, *all* of Clerk's CSS is unlayered and outranks every Tailwind utility in the
+  app. With it, Clerk's themeable styles move into a weak named layer and only the structural rules
+  stay unlayered. It was never going to reach those structural rules.
+- **`satisfies` checks only the TOP-LEVEL keys.** It does not check the keys inside `elements`:
+  Clerk types that as a union distributed over `ElementsConfig`'s 555 properties, and TypeScript's
+  excess-property checking does not fire against a union that large — verified by compiling a
+  misspelled key against the real types and getting no error. **A mistyped element key is therefore
+  silent, and the computed-style probes in §11 are the only thing that catches one.**
 
 The card, its border and its shadow come from the shell, so Clerk's `card`/`cardBox` are flattened
 to transparent and unbordered rather than restyled — there must not be a card inside a card.
-Clerk's `header` is hidden; our own heading sits above the form. **Hiding that header is also what
-removes "Sign in to BIS Platform (dev)" from the card**, independently of §8.
+Clerk's **`headerTitle`** is hidden — not the whole `header` — and our own heading sits above the
+form. **Hiding that title is also what removes "Continue to BIS Platform (dev)" from the card**,
+independently of §8. Only the title: this route is a catch-all that also renders Clerk's task
+screens, and hiding the whole `header` suppressed each of those screens' own subtitle and back link
+too, leaving the organization chooser reading "Sign in" above a bare list.
 
 **Deliberately not specified: `appearance.variables`.** `CssColor` is typed as bare `string`, so
 `{ colorPrimary: 'var(--accent)' }` would typecheck — but `colorPrimary` is `CssColorOrScale` and
@@ -233,17 +267,28 @@ Existing `landing.*` and `clientAccess.*` strings are unchanged.
 
 ## 11. Tests
 
-New `apps/web/e2e/sign-in.spec.ts`, unauthenticated:
+New `apps/web/e2e/signed-out.spec.ts`, unauthenticated (it covers all three signed-out routes,
+which is why it is not named for sign-in alone):
 
 - The rail's bounding box is **measured** non-zero in both themes. A presence query is not enough:
   the checklist meter shipped as a `0×0` inline element and passed every query-based check.
 - The mark renders and its box is non-zero in both themes.
 - `data-tenant-theme` is **absent** on `<body>` — the signed-out request must still resolve to
   "no tenant".
-- A computed-style probe proves our classes actually beat Clerk's — reading the resolved
-  **value** on a restyled element, not merely asserting the class is present. Pinning the class
-  would pass even if Clerk's stylesheet won, which is the same failure mode as the
+- **Four computed-style probes**, on four different elements and four kinds of property, reading the
+  resolved **value** rather than asserting a style was passed. These are not belt-and-braces: per
+  §7, `satisfies` cannot check `elements` keys, so a mistyped key is silent and these probes are the
+  only thing that catches one. The elements are the primary button (`backgroundImage`), the email
+  input (`borderRadius`, a value Clerk actively sets to 6px of its own), Clerk's card (`padding` and
+  `boxShadow` — the rule 2 flattening, the one failure that actually rendered wrong), and the Google
+  button (`borderRadius`, chosen because `socialButtonsBlockButton` is the longest key in the map
+  with three near-neighbours in `ElementsConfig`, and it is the button the real sign-in path uses).
+  Pinning a class name instead would pass even when Clerk won, which is the same failure mode as the
   `backdrop-filter` regression that shipped green.
+- **Negative and count assertions go LAST**, after everything that waits on Clerk's mount. Playwright
+  resolves them on first passing observation, so placed early they read a DOM that has not finished
+  arriving — the heading count passed 5/5 against a build rendering two headings before this was
+  understood.
 - Clerk's `<SignIn />` still renders its email field and its Google button.
 
 Extended coverage on the sibling routes: `/` and `/no-access` still render their existing copy
@@ -265,9 +310,13 @@ inside the new shell.
 - **Clerk's `elements` keys are a public API but its internal DOM is not.** A future Clerk release
   can re-shape the card. The computed-style probe in §11 is what turns that from a silent visual
   regression into a red test.
-- **`cssLayerName` is the whole basis for our classes winning.** If it is omitted or misnamed, the
-  styling silently does nothing and the page looks approximately right in a screenshot while
-  actually being Clerk's defaults over our shell.
+- **A mistyped `elements` key is silent** — `satisfies` cannot catch it (§7), so the styling simply
+  never applies and the page looks approximately right in a screenshot while being Clerk's defaults
+  over our shell. The four computed-style probes in §11 are the only guard, and eight of the twelve
+  keys still have none.
+- **`cssLayerName` protects the rest of the app, not the sign-in restyle.** Omitted or misnamed, all
+  of Clerk's CSS goes unlayered and outranks every Tailwind utility everywhere. It does not reach
+  Clerk's structural rules, and the style objects do not depend on it.
 - **Touching `/` and `/no-access` widens the diff into two pages nobody complained about.** Accepted
   deliberately: leaving them out would re-create the exact divergence this work exists to remove.
 
