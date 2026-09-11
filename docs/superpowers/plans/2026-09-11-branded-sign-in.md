@@ -704,12 +704,18 @@ describe("the clerk cascade layer (spec §7)", () => {
   });
 
   it("never resorts to !important to win the cascade", () => {
-    // The only two in this file are the prefers-reduced-motion override,
-    // where !important is correct and required — a motion guard that can be
-    // out-specified is not a guard. Strip that block; there must be none
-    // left. If a Clerk style is winning, this layer is wrong, and escalating
-    // specificity hides that instead of fixing it.
-    const withoutMotionGuard = globals.replace(
+    // COMMENTS ARE STRIPPED FIRST, and that is not incidental: this file's own
+    // commentary discusses `!important` by name, so a whole-file substring
+    // match reports a declaration that does not exist. hero.test.ts fell into
+    // exactly this trap — a tightened regex still matched `/* the hero one */`
+    // — and its own negative control is what caught it.
+    const code = globals.replace(/\/\*[\s\S]*?\*\//g, "");
+    // Of the DECLARATIONS that remain, the only !important belongs to the
+    // prefers-reduced-motion override, where it is correct and required — a
+    // motion guard that can be out-specified is not a guard. Strip that block;
+    // there must be none left. If a Clerk style is winning, this layer is
+    // wrong, and escalating specificity hides that instead of fixing it.
+    const withoutMotionGuard = code.replace(
       /@media\s*\(prefers-reduced-motion[\s\S]*?\n\}/,
       "",
     );
@@ -773,7 +779,7 @@ cd C:/Users/danlo/bis-platform && pnpm --filter web build
 Then:
 
 ```
-cd C:/Users/danlo/bis-platform && grep -ro "@layer[^{;]*clerk[^{;]*[;{]" apps/web/.next/static/css | head
+cd C:/Users/danlo/bis-platform && grep -ro "@layer[^{;]*clerk[^{;]*[;{]" apps/web/.next/static | head
 ```
 
 Expected: at least one match naming `clerk`. **If there is no match, stop and report it** — the whole styling approach in Task 6 rests on this, and the fallback (declaring the full order explicitly as `@layer clerk, theme, base, components, utilities;`) is a decision to raise, not to make silently.
