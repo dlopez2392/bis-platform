@@ -169,6 +169,23 @@ describe("demo tenant — the seeder cannot write past the walls", () => {
   });
 
   /**
+   * `events.id` is `bigint generated ALWAYS as identity`, so Postgres refuses
+   * any statement that supplies a value for it — and an upsert must, because
+   * the id is what it conflicts on.
+   *
+   * This is here because the first version of `backdateEvents` did exactly
+   * that, to turn several hundred single-row updates into two bulk writes. It
+   * typechecked, it passed every database-free test, and CI rejected it with
+   * `cannot insert a non-DEFAULT value into column "id"`. The shape is
+   * tempting enough to be worth writing down rather than rediscovering.
+   *
+   * Mutation: reintroduce an events upsert — this names it.
+   */
+  it("never tries to upsert an events row, because its id is generated ALWAYS", () => {
+    expect(seed).not.toMatch(/from\("events"\)[\s\S]{0,80}\.upsert\(/);
+  });
+
+  /**
    * The logo is a committed binary read off disk at seed time, so it is the
    * one input to this seeder that a packaging or checkout mistake can remove
    * without any source change. `uploadBrandLogo` accepts png/jpeg/webp by

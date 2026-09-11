@@ -98,6 +98,24 @@ async function suppressAndVerify(db: SupabaseClient, accountId: string): Promise
   }
 }
 
+/**
+ * Runs `fn` over every item with at most `CONCURRENCY` in flight.
+ *
+ * The seeder makes several hundred small writes and they have no ordering
+ * dependency on each other, so doing them strictly one at a time spends the
+ * whole seed waiting on round-trip latency. Bounded rather than unbounded
+ * because this is the one Supabase project production runs on: a seeder that
+ * opens four hundred simultaneous connections is a seeder that degrades the
+ * live app while it works.
+ */
+const CONCURRENCY = 12;
+
+async function inParallel<T>(items: readonly T[], fn: (item: T) => Promise<void>): Promise<void> {
+  for (let i = 0; i < items.length; i += CONCURRENCY) {
+    await Promise.all(items.slice(i, i + CONCURRENCY).map(fn));
+  }
+}
+
 /** Rewrites a timestamp column the helpers set to `now()` by default. The
  *  helpers are used deliberately — they validate, emit and enforce the same
  *  rules a real write does — and the price of that is one update per row to
@@ -755,16 +773,25 @@ async function seedSite(
   });
 
   const DAYS = 60;
-  for (let d = DAYS; d >= 1; d--) {
+  // Each day is three writes (breakdown delete, breakdown insert, totals
+  // upsert) and no day depends on another, so this is the seed's biggest
+  // loop and its most obviously parallel one. The per-day random draws are
+  // taken BEFORE anything is dispatched, so the numbers stay deterministic
+  // regardless of what order the writes actually complete in — otherwise the
+  // shared LCG would be consumed in whatever order the scheduler picked and
+  // two seeds with the same clock would produce different charts.
+  const days = Array.from({ length: DAYS }, (_, i) => {
+    const d = DAYS - i;
     const date = new Date(now - d * DAY);
-    const day = date.toISOString().slice(0, 10);
     const weekend = date.getUTCDay() === 0 || date.getUTCDay() === 6;
     // A slow upward trend, so the week-over-week delta on the dashboard is a
     // real number computed from real rows rather than a hardcoded "+12%".
     const base = 38 + Math.floor((DAYS - d) * 0.45);
     const visitors = Math.max(6, Math.round(base * (weekend ? 0.55 : 1) + between(r, -7, 9)));
-    const pageviews = visitors * between(r, 2, 4);
+    return { day: date.toISOString().slice(0, 10), visitors, pageviews: visitors * between(r, 2, 4) };
+  });
 
+  await inParallel(days, async ({ day, visitors, pageviews }) => {
     await writeTrafficDay(db, { id: site.id, accountId }, day, { visitors, pageviews }, [
       { dimension: "page", value: "/", visitors: Math.round(visitors * 0.52), pageviews: Math.round(pageviews * 0.4) },
       { dimension: "page", value: "/ac-repair", visitors: Math.round(visitors * 0.24), pageviews: Math.round(pageviews * 0.28) },
@@ -782,7 +809,7 @@ async function seedSite(
       { dimension: "device", value: "desktop", visitors: Math.round(visitors * 0.21), pageviews: Math.round(pageviews * 0.25) },
       { dimension: "device", value: "tablet", visitors: Math.round(visitors * 0.05), pageviews: Math.round(pageviews * 0.05) },
     ]);
-  }
+  });
   return DAYS;
 }
 
@@ -801,11 +828,9 @@ async function seedSite(
  * hours instead, in their existing order. Setup genuinely did all happen at
  * once.
  *
- * Written back as ONE upsert per chunk rather than one update per row. That
- * is not premature: at ~400 events, per-row updates were the single largest
- * cost in the seed, several times the size of any other step, and the test
- * that runs this end to end has a wall clock to answer to. Upsert needs the
- * whole row, hence `select("*")`.
+ * Written back as one update per row, `CONCURRENCY` at a time. This is the
+ * largest single step in the seed — several hundred rows — so the parallelism
+ * is what keeps it from dominating the wall clock.
  */
 async function backdateEvents(db: SupabaseClient, accountId: string, now: number): Promise<void> {
   const subjects = new Map<string, string>();
@@ -822,7 +847,7 @@ async function backdateEvents(db: SupabaseClient, accountId: string, now: number
   }
 
   const { data: events, error } = await db.from("events")
-    .select("*").eq("account_id", accountId).order("created_at");
+    .select("id, payload").eq("account_id", accountId).order("created_at");
   if (error) throw new Error(`backdateEvents read events failed: ${error.message}`);
 
   const setupStart = now - 180 * DAY;
@@ -836,11 +861,19 @@ async function backdateEvents(db: SupabaseClient, accountId: string, now: number
       if (hit) { when = hit; break; }
     }
     when ??= new Date(setupStart + (setupN++) * 4 * MIN).toISOString();
-    return { ...ev, created_at: when };
+    return { id: ev.id as number, created_at: when };
   });
 
-  for (let i = 0; i < rows.length; i += 200) {
-    const { error: upErr } = await db.from("events").upsert(rows.slice(i, i + 200), { onConflict: "id" });
-    if (upErr) throw new Error(`backdateEvents upsert failed: ${upErr.message}`);
-  }
+  // One UPDATE per row, run `CONCURRENCY` at a time.
+  //
+  // NOT a bulk upsert, which is what this tried first and what CI rejected:
+  // `events.id` is `bigint generated ALWAYS as identity`, so Postgres refuses
+  // any statement that supplies a value for it — and an upsert has to, since
+  // the id is what it conflicts on. There is no PostgREST shape that rewrites
+  // one column across many rows with different values, so the round trips are
+  // real; only the waiting is optional.
+  await inParallel(rows, async ({ id, created_at }) => {
+    const { error: upErr } = await db.from("events").update({ created_at }).eq("id", id);
+    if (upErr) throw new Error(`backdateEvents update failed for event ${id}: ${upErr.message}`);
+  });
 }
