@@ -4,7 +4,9 @@
 
 **Goal:** Give the three signed-out screens (`/sign-in`, `/`, `/no-access`) one shell carrying the platform's mark and the dashboard sidebar's chrome, and restyle Clerk's `<SignIn />` through tokens.
 
-**Architecture:** A new `AuthShell` renders `Ground` + one glass card split `[rail | content]`, where the rail reuses the existing `sidebar-chrome` utility — the one surface that is dark in both themes. Clerk is restyled by passing **our own class names** through `appearance.elements`, with `cssLayerName` putting Clerk's stylesheet in a lower cascade layer so those classes win without `!important`.
+**Architecture:** A new `AuthShell` renders `Ground` + one glass card split `[rail | content]`, where the rail reuses the existing `sidebar-chrome` utility — the one surface that is dark in both themes. Clerk is restyled by passing **style objects carrying `var()` tokens** through `appearance.elements`.
+
+> **Corrected during execution.** This originally said "our own class names … with `cssLayerName` putting Clerk's stylesheet in a lower cascade layer so those classes win". Measured on the real page, that is false: Clerk's runtime CSS-in-JS emits its structural `.cl-internal-*` rules **unlayered**, and unlayered author CSS beats layered author CSS at any specificity. A class therefore wins only for properties Clerk leaves unset — `card` kept Clerk's background, shadow and 32px padding, both controls kept Clerk's 6px radius, `main` kept Clerk's 24px gap. `cssLayerName` is still set and still correct for Clerk's *themeable* styles; it was never going to reach the structural ones.
 
 **Tech Stack:** Next.js App Router (server components), Tailwind v4 (`@utility` / `@layer` in `globals.css`), `@clerk/nextjs@7.6.1`, Vitest (`renderToStaticMarkup`, no DOM), Playwright.
 
@@ -829,13 +831,6 @@ Append to `apps/web/e2e/signed-out.spec.ts`, inside the existing `for (const mod
 
     await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 
-    // EXACTLY one. Naming our own heading cannot see a second heading whose
-    // text differs — and that is precisely what shipped: Clerk's own
-    // "Continue to BIS Platform (dev)" rendered directly above ours, with the
-    // name-matched assertion green, because "Sign in" is not a substring of
-    // it. A count is the assertion that was actually wanted.
-    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
-
     // Nobody is authenticated here, so there is no tenant and the root layout
     // must not have painted one. This is the assertion that keeps a future
     // "let's brand sign-in per client" change honest.
@@ -856,11 +851,34 @@ Append to `apps/web/e2e/signed-out.spec.ts`, inside the existing `for (const mod
     // Google" and matches a loose regex too, and it comes first in the DOM —
     // so `.first()` on a loose match would probe the wrong button and pass
     // for the wrong reason.
+    // Anchored, NOT /continue/i: the Google button reads "Continue with
+    // Google" and matches a loose regex too, and it comes first in the DOM —
+    // so `.first()` on a loose match would probe the wrong button and pass
+    // for the wrong reason.
     const submit = page.getByRole("button", { name: /^Continue$/ });
     await expect(submit).toBeVisible();
     const bg = await submit.evaluate((el) => getComputedStyle(el).backgroundImage);
     expect(bg, `the primary button in ${mode} is not painting --gradient-primary`)
       .toContain("linear-gradient");
+
+    // A SECOND element and a different KIND of property, because "we passed a
+    // style" is not "it computed". Clerk sets a 6px radius of its own here, so
+    // this is a value we can only be reading because ours won.
+    const inputRadius = await email.evaluate((el) => getComputedStyle(el).borderRadius);
+    expect(inputRadius, `the email input kept Clerk's radius in ${mode}`).toBe("8px");
+
+    // LAST, and the position is the whole point. Everything above already
+    // waited for Clerk's form to mount; this counts headings only once the
+    // page has settled.
+    //
+    // Placed earlier — directly under the "Sign in" assertion, where it was
+    // first written — it passed 5/5 against a build that genuinely rendered
+    // two headings. `toHaveCount` is a web-first assertion: it resolves the
+    // instant it observes a passing value and stops polling. Our heading is
+    // server-rendered, Clerk's mounts 600ms–2.5s later, so the count read 1
+    // and succeeded BEFORE the duplicate existed. An assertion that runs
+    // before the thing it measures can appear is not a guard.
+    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
   });
 ```
 
@@ -925,24 +943,79 @@ const appearance = {
     // side of the cascade as the rule it needs to beat. `!important` would
     // have "worked" and taught us nothing.
     header: { display: "none" },
+    // EVERY entry below is a style object for the same reason the header is,
+    // and this was MEASURED element by element rather than assumed. With class
+    // names, only properties Clerk leaves unset came through: `card` kept
+    // Clerk's background, shadow and 32px padding — so the card-inside-a-card
+    // DESIGN.md rule 2 forbids was actually rendering — both controls kept
+    // Clerk's 6px radius over our 8px token, and `main` kept Clerk's 24px gap.
+    //
+    // Tokens still hold: `var()` inside a style object resolves against the
+    // element exactly as it does in a stylesheet, so DESIGN.md's "components
+    // consume tokens only" is satisfied. The sizes written as px are Tailwind
+    // scale values (h-9 = 36px, text-sm = 14px), not design tokens — the rule
+    // names colour, radius and shadow, and every one of those is a var() here.
+    rootBox: { width: "100%" },
     // The shell already IS the card. Flattened rather than restyled: a card
     // inside a card is a fifth surface by another name (DESIGN.md rule 2).
-    rootBox: "w-full",
-    cardBox: "w-full shadow-none border-0 bg-transparent",
-    card: "w-full shadow-none border-0 bg-transparent p-0 gap-3",
-    main: "gap-3",
-    footer: "bg-transparent",
-    socialButtonsBlockButton:
-      "h-9 rounded-[var(--radius-ctl)] border border-[var(--line-strong)] bg-transparent text-sm font-medium text-foreground",
-    dividerLine: "bg-border",
-    dividerText: "font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground",
-    formFieldLabel: "text-xs font-medium text-muted-foreground",
-    formFieldInput:
-      "h-9 rounded-[var(--radius-ctl)] border border-[var(--input-line)] bg-[var(--input-bg)] text-sm text-foreground",
-    formButtonPrimary:
-      "btn-primary h-9 rounded-[var(--radius-ctl)] text-sm font-semibold normal-case",
+    cardBox: { width: "100%", boxShadow: "none", border: "0", background: "transparent" },
+    card: {
+      width: "100%",
+      boxShadow: "none",
+      border: "0",
+      background: "transparent",
+      padding: "0",
+      gap: "12px",
+    },
+    main: { gap: "12px" },
+    footer: { background: "transparent" },
+    socialButtonsBlockButton: {
+      height: "36px",
+      borderRadius: "var(--radius-ctl)",
+      border: "1px solid var(--line-strong)",
+      background: "transparent",
+      fontSize: "14px",
+      fontWeight: "500",
+      color: "var(--text-1)",
+    },
+    dividerLine: { background: "var(--line)" },
+    dividerText: {
+      fontFamily: "var(--font-mono)",
+      fontSize: "10px",
+      textTransform: "uppercase",
+      letterSpacing: "0.14em",
+      color: "var(--text-2)",
+    },
+    formFieldLabel: { fontSize: "12px", fontWeight: "500", color: "var(--text-2)" },
+    formFieldInput: {
+      height: "36px",
+      borderRadius: "var(--radius-ctl)",
+      border: "1px solid var(--input-line)",
+      background: "var(--input-bg)",
+      fontSize: "14px",
+      color: "var(--text-1)",
+    },
+    formButtonPrimary: {
+      height: "36px",
+      borderRadius: "var(--radius-ctl)",
+      // What `btn-primary` sets, inlined — the utility class itself won here,
+      // but mixing one class among eleven style objects hides which mechanism
+      // is load-bearing on which element.
+      backgroundImage: "var(--gradient-primary)",
+      boxShadow: "var(--shadow-glow)",
+      fontSize: "14px",
+      fontWeight: "600",
+      textTransform: "none",
+    },
   },
-} satisfies ComponentProps<typeof SignIn>["appearance"];
+  // The intersection, not a bare `ComponentProps<typeof SignIn>["appearance"]`:
+  // @clerk/react@6.12.8 augments the global ClerkAppearanceRegistry with
+  // `theme: Theme` rather than `Theme & GlobalAppearanceOptions`, so
+  // `cssLayerName` — real, and the one property Task 5 exists to serve — does
+  // not typecheck against that narrowed alias. This adds back only the missing
+  // field; every other key still excess-property-checks against Clerk's real
+  // Theme type, so a mistyped element key still fails here.
+} satisfies NonNullable<ComponentProps<typeof SignIn>["appearance"]> & { cssLayerName?: string };
 
 export default function Page() {
   return (
@@ -981,7 +1054,7 @@ Expected: the whole suite green, ~5 min. Judge a red spec by wall clock first an
 
 - [ ] **Step 7: Mutation-check the probe**
 
-Delete `btn-primary` from `formButtonPrimary`, re-run `signed-out.spec.ts`, and confirm the **computed-style** assertion fails by name in both modes. If it still passes, the probe is theatre and the layer (Task 5) or the element key is wrong — report it rather than weakening the test. Restore and re-run to green.
+Do TWO mutations, reverting fully between them. (a) Delete `backgroundImage` from `formButtonPrimary` — the gradient assertion must fail by name in both modes. (b) Delete `borderRadius` from `formFieldInput` — the 8px assertion must fail by name in both modes, and it must fail by reporting Clerk's own value, which is the proof our style is what was winning. If either still passes, the probe is theatre and the element key or the mechanism is wrong — report it rather than weakening the test.
 
 - [ ] **Step 8: Commit**
 
