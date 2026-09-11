@@ -108,6 +108,22 @@ for (const mode of ["light", "dark"] as const) {
     // The page's own content survived the move into the shell.
     await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
   });
+
+  test(`/ renders through the shell in ${mode}`, async ({ page, baseURL }) => {
+    await visit(page, baseURL, "/", mode);
+
+    const rail = page.locator('[data-slot="auth-rail"]');
+    const box = await rail.boundingBox();
+    expect(box, "the rail has no box at all").not.toBeNull();
+    expect(box!.width, `rail width in ${mode}`).toBeGreaterThan(0);
+
+    // Copy is unchanged by this work — if it moved, that is a regression, not
+    // a redesign.
+    await expect(
+      page.getByRole("heading", { name: "BIS Platform" }),
+    ).toBeVisible();
+    await expect(page.getByRole("link", { name: "Sign in" })).toBeVisible();
+  });
 }
 
 test("the rail collapses to a brand bar on a phone", async ({ page, baseURL }) => {
