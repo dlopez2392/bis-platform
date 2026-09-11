@@ -1,3 +1,11 @@
+/* Clerk's own stylesheet goes here, and this line must stay FIRST.
+   Layer priority follows declaration order, so a layer declared before
+   Tailwind's is weaker than every Tailwind utility — which is what lets the
+   class names we hand Clerk through `appearance.elements` win without a
+   single `!important`. A `@layer` statement is one of the two rules CSS
+   allows to precede `@import`. Move this below the imports and the sign-in
+   page quietly reverts to Clerk's defaults while still rendering. */
+@layer clerk;
 @import "../../styles/tokens.css";
 @import "tailwindcss";
 @import "tw-animate-css";
