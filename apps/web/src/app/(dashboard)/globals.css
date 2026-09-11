@@ -1,10 +1,21 @@
-/* Clerk's own stylesheet goes here, and this line must stay FIRST.
-   Layer priority follows declaration order, so a layer declared before
-   Tailwind's is weaker than every Tailwind utility — which is what lets the
-   class names we hand Clerk through `appearance.elements` win without a
-   single `!important`. A `@layer` statement is one of the two rules CSS
-   allows to precede `@import`. Move this below the imports and the sign-in
-   page quietly reverts to Clerk's defaults while still rendering. */
+/* Clerk's THEMEABLE styles (driven by `variables`/`theme`) land in this
+   layer via `cssLayerName`, set on the sign-in page's appearance config —
+   and this line must stay FIRST. Without `cssLayerName`, ALL of Clerk's CSS,
+   themeable rules included, is unlayered, and unlayered author CSS outranks
+   every layered rule — the whole Tailwind utility stack included — at any
+   specificity, anywhere in this app. Setting `cssLayerName` moves only
+   Clerk's THEMEABLE styles into this weak named layer; Clerk's structural
+   `.cl-internal-*` rules stay unlayered regardless, and no layer name
+   reaches them. So this layer still earns its place — without it, Clerk's
+   themeable rules would outrank Tailwind everywhere Clerk renders — but it
+   is NOT what makes the sign-in page's restyle apply: that's Clerk's own
+   style-object merge, set in that page's `elements` config, which sidesteps
+   the cascade (and this layer) entirely — see that file's comment. Layer
+   priority follows declaration order, so a layer declared before Tailwind's
+   import is weaker than every Tailwind utility, which is why this has to
+   stay first: a `@layer` statement is one of the two rules CSS allows to
+   precede `@import`. Move it below the imports and Clerk's themeable rules
+   go back to outranking Tailwind wherever Clerk renders. */
 @layer clerk;
 @import "../../styles/tokens.css";
 @import "tailwindcss";

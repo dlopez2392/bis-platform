@@ -15,10 +15,14 @@ describe("the clerk cascade layer (spec §7)", () => {
 
   it("is declared BEFORE tailwind is imported", () => {
     // Layer priority follows declaration order: first declared is weakest.
-    // Declaring `clerk` before `@import "tailwindcss"` is the entire reason
-    // our utility classes beat Clerk's own rules WITHOUT !important. Move it
-    // after, and the styling silently stops applying while the page still
-    // renders — no error, no red test, just Clerk's defaults.
+    // Declaring `clerk` before `@import "tailwindcss"` is what keeps
+    // Clerk's THEMEABLE styles (the ones `cssLayerName` routes into this
+    // layer) weaker than every Tailwind utility. It is NOT why the sign-in
+    // page's restyle applies — that rides on Clerk's own style-object merge
+    // in that page's appearance config, indifferent to layer order entirely
+    // (see that file's comment). Move this after Tailwind's import and
+    // Clerk's themeable rules would outrank Tailwind wherever Clerk renders
+    // — no error, no red test here, just Clerk's defaults winning silently.
     const layerAt = globals.search(/@layer\s+clerk\s*;/);
     const tailwindAt = globals.indexOf('@import "tailwindcss"');
     expect(layerAt).toBeGreaterThanOrEqual(0);
@@ -36,8 +40,13 @@ describe("the clerk cascade layer (spec §7)", () => {
     // Of the DECLARATIONS that remain, the only !important belongs to the
     // prefers-reduced-motion override, where it is correct and required — a
     // motion guard that can be out-specified is not a guard. Strip that block;
-    // there must be none left. If a Clerk style is winning, this layer is
-    // wrong, and escalating specificity hides that instead of fixing it.
+    // there must be none left. This layer only governs Clerk's THEMEABLE
+    // styles against Tailwind; the sign-in restyle rides on Clerk's own
+    // style-object merge instead, which no layer or specificity touches. So
+    // if a Clerk style is winning on the sign-in page, this layer is almost
+    // certainly IRRELEVANT — the real suspect is a missing or mistyped key
+    // in that page's `elements` config (see its comment) — and reaching for
+    // `!important` here would hide that instead of fixing it.
     const withoutMotionGuard = code.replace(
       /@media\s*\(prefers-reduced-motion[\s\S]*?\n\}/,
       "",

@@ -140,7 +140,8 @@ for (const mode of ["light", "dark"] as const) {
     // satisfied by a page that renders a beautiful shell around nothing.
     const email = page.getByLabel(/email/i).first();
     await expect(email).toBeVisible();
-    await expect(page.getByRole("button", { name: /Google/i })).toBeVisible();
+    const googleButton = page.getByRole("button", { name: /Google/i });
+    await expect(googleButton).toBeVisible();
 
     // Anchored, NOT /continue/i: the Google button reads "Continue with
     // Google" and matches a loose regex too, and it comes first in the DOM —
@@ -157,6 +158,16 @@ for (const mode of ["light", "dark"] as const) {
     // this is a value we can only be reading because ours won.
     const inputRadius = await email.evaluate((el) => getComputedStyle(el).borderRadius);
     expect(inputRadius, `the email input kept Clerk's radius in ${mode}`).toBe("8px");
+
+    // A FOURTH probe, on the one unguarded key most likely to get mistyped:
+    // `socialButtonsBlockButton` is the longest name in `ElementsConfig`,
+    // sits one typo away from three near-neighbours
+    // (`socialButtonsBlockButtonText`, `socialButtonsIconButton`,
+    // `socialButtonsProviderIcon`), and styles the Google button — the
+    // button the real sign-in path actually uses, today, for the only real
+    // user.
+    const googleRadius = await googleButton.evaluate((el) => getComputedStyle(el).borderRadius);
+    expect(googleRadius, `the Google button kept Clerk's radius in ${mode}`).toBe("8px");
 
     // THESE GO LAST, and the position is the whole point. Every assertion
     // above already waited for Clerk's form to mount, so by here the page has

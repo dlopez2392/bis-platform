@@ -43,9 +43,10 @@ import { m } from "@/lib/messages";
  *
  * `satisfies` checks the TOP-LEVEL keys (`cssLayerName`, `options`,
  * `elements`) and catches a wrong one there. It does NOT check the keys
- * inside `elements`: Clerk types that as a union of ~150 single-key
- * records, and TypeScript's excess-property checking does not fire against
- * a union that large — verified by compiling a misspelled key against the
+ * inside `elements`: `Elements` maps each of `ElementsConfig`'s 555
+ * top-level keys through `Selectors<...>`, so the real union is larger
+ * still, and TypeScript's excess-property checking does not fire against a
+ * union that large — verified by compiling a misspelled key against the
  * real types and getting no error. A wrong element key is therefore
  * silent, and the computed-style probes in signed-out.spec.ts are the only
  * thing that catches one: a style that never applies shows up as Clerk's
@@ -78,7 +79,21 @@ const appearance = {
     // our declarations appended after Clerk's — ordinary last-declaration-
     // wins within one rule, not a cascade fight. `!important` would have
     // "worked" and taught us nothing.
-    header: { display: "none" },
+    //
+    // `headerTitle`, not the whole `header`: this route is a catch-all (see
+    // the default export below) — besides the plain sign-in form it also
+    // renders Clerk's TASK screens, such as /sign-in/tasks/choose-organization,
+    // and every in-flow step (MFA setup included), each a different Clerk
+    // component inside this same appearance config. `header`, `headerTitle`,
+    // `headerSubtitle` and `headerBackLink` are separate descriptors —
+    // hiding `header` wholesale suppressed each screen's own subtitle and
+    // back link along with its title, so the org chooser read "Sign in"
+    // over a bare list with no explanation. The TITLE is ours to own: on
+    // every screen this route renders, it only duplicates the app name our
+    // own <h1> below already states. Each screen's SUBTITLE is not ours —
+    // it is the only place a task screen explains what it actually wants —
+    // so it has to stay, and hiding only `headerTitle` leaves it alone.
+    headerTitle: { display: "none" },
     // EVERY entry below is a style object for the same reason, and this was
     // MEASURED element by element rather than assumed. With class names, only
     // properties Clerk leaves unset came through: `card` kept Clerk's
@@ -153,7 +168,8 @@ const appearance = {
   // only the missing field; every TOP-LEVEL key (`cssLayerName`, `options`,
   // `elements` itself) still excess-property-checks against Clerk's real Theme
   // type, so a mistyped TOP-LEVEL key still fails here. It does NOT reach inside
-  // `elements`: Clerk types that as a union of ~150 single-key records, a known
+  // `elements`: `Elements` maps each of `ElementsConfig`'s 555 top-level keys
+  // through `Selectors<...>`, so the real union is larger still — a known
   // TypeScript blind spot for excess-property checking against a union that
   // large — verified by compiling a misspelled element key (`haeder`) against
   // the real types on both this widened target and the original narrow one,

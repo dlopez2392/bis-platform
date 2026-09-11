@@ -31,6 +31,11 @@ export function AuthShell({ children }: { children: ReactNode }) {
   return (
     <main className="relative flex min-h-screen items-center justify-center px-6 py-10">
       <Ground />
+      {/* overflow-hidden clips anything that overflows the card, including
+          any Clerk POPOVER (a phone/country-code dropdown, say). Latent, not
+          live: today's strategy set (Google, divider, email, password, email
+          code) has nothing that overflows the card. Whoever enables a
+          strategy with a dropdown needs to check this first. */}
       <div className="flex w-full max-w-[840px] flex-col overflow-hidden rounded-xl border border-border bg-card glass sm:flex-row">
         <div
           data-slot="auth-rail"
