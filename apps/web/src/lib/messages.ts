@@ -60,6 +60,7 @@ export const m = {
   // /sign-in: it answers "whose software is this", which is the question
   // somebody following a weekly bookmark actually has. There is deliberately
   // no tagline under the "Sign in" heading — see the spec, §10.
+  "signIn.title": "Sign in",
   "signIn.railCopy": "by Bespoke Intelligent Solutions",
 
   "clientAccess.off.title": "Access has been turned off",

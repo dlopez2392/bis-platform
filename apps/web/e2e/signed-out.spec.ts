@@ -124,6 +124,44 @@ for (const mode of ["light", "dark"] as const) {
     ).toBeVisible();
     await expect(page.getByRole("link", { name: "Sign in" })).toBeVisible();
   });
+
+  test(`/sign-in wears the shell and the restyled Clerk form in ${mode}`, async ({ page, baseURL }) => {
+    await visit(page, baseURL, "/sign-in", mode);
+
+    const rail = page.locator('[data-slot="auth-rail"]');
+    const box = await rail.boundingBox();
+    expect(box, "the rail has no box at all").not.toBeNull();
+    expect(box!.width, `rail width in ${mode}`).toBeGreaterThan(0);
+    expect(box!.height, `rail height in ${mode}`).toBeGreaterThan(0);
+
+    await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+
+    // Nobody is authenticated here, so there is no tenant and the root layout
+    // must not have painted one. This is the assertion that keeps a future
+    // "let's brand sign-in per client" change honest.
+    await expect(page.locator("body")).not.toHaveAttribute("data-tenant-theme");
+
+    // Clerk's own form still works. Without this, every assertion above is
+    // satisfied by a page that renders a beautiful shell around nothing.
+    const email = page.getByLabel(/email/i).first();
+    await expect(email).toBeVisible();
+    await expect(page.getByRole("button", { name: /Google/i })).toBeVisible();
+
+    // The probe that matters: read the resolved VALUE, not the class name.
+    // Asserting the class is present passes even when Clerk's stylesheet won
+    // the cascade — the same failure mode as the backdrop-filter regression
+    // that shipped green because the test pinned the class rather than the
+    // computed style.
+    // Anchored, NOT /continue/i: the Google button reads "Continue with
+    // Google" and matches a loose regex too, and it comes first in the DOM —
+    // so `.first()` on a loose match would probe the wrong button and pass
+    // for the wrong reason.
+    const submit = page.getByRole("button", { name: /^Continue$/ });
+    await expect(submit).toBeVisible();
+    const bg = await submit.evaluate((el) => getComputedStyle(el).backgroundImage);
+    expect(bg, `the primary button in ${mode} is not painting --gradient-primary`)
+      .toContain("linear-gradient");
+  });
 }
 
 test("the rail collapses to a brand bar on a phone", async ({ page, baseURL }) => {
