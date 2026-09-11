@@ -27,6 +27,8 @@ const THROWAWAY = `org_test_demoseed_${Math.random().toString(36).slice(2, 10)}`
 describe("demo tenant seeder", () => {
   it("builds a whole account that cannot reach anybody, and tears itself down", async () => {
     const db = serviceDb();
+    // Used by the assertions below. Deliberately NOT what teardown keys on —
+    // see the `finally`.
     let accountId: string | null = null;
     try {
       const result = await seedDemoTenant(db, { orgId: THROWAWAY, now: new Date("2026-09-11T15:00:00Z") });
@@ -122,9 +124,22 @@ describe("demo tenant seeder", () => {
       }
       expect(leftovers).toEqual([]);
       expect(await findDemoAccount(db, THROWAWAY)).toBeNull();
-      accountId = null;
     } finally {
-      if (accountId) await deleteAccountCascade(db, accountId, "demo-seed.test cleanup");
+      // Resolved BY ORG ID, not from `accountId`.
+      //
+      // `accountId` is only assigned once `seedDemoTenant` RETURNS, so the
+      // first version of this cleaned up nothing whenever the seeder threw —
+      // which is exactly when there is something to clean up. CI proved it:
+      // a run that died inside the seeder left a complete 40-contact account
+      // in the shared project, and the next run failed on
+      // `phone_numbers_e164_key` because the orphan still held the demo's
+      // phone number.
+      //
+      // The seeder now removes its own half-built account, so this is the
+      // second line rather than the first — but it is the line that does not
+      // depend on the seeder's own error handling being correct.
+      const stray = await findDemoAccount(db, THROWAWAY);
+      if (stray) await deleteAccountCascade(db, stray.id, "demo-seed.test cleanup");
     }
   }, 240_000);
 

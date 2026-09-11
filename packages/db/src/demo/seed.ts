@@ -264,6 +264,34 @@ export async function seedDemoTenant(
   });
   await suppressAndVerify(db, accountId);
 
+  // From here on, EVERY failure takes the half-built account with it.
+  //
+  // This is not tidiness. CI proved the cost: the first run failed inside
+  // `backdateEvents` and left a complete account behind — 40 contacts, 34
+  // calls, a business line, a site, 60 days of traffic — in the one Supabase
+  // project production uses. The NEXT run then failed on something with no
+  // apparent connection to the bug, `phone_numbers_e164_key`, because the
+  // orphan still held the demo's phone number and `e164` is unique across
+  // every account. That is the exact failure `withTestAccount`'s own comment
+  // warns about: rows left behind surface later, somewhere else, on a
+  // constraint, far from the cause.
+  //
+  // `dropDemoAccount` re-checks both its guards on the way out, so this
+  // cannot delete anything the seeder did not just create. The original
+  // error is rethrown — a cleanup failure must never replace the reason the
+  // seed failed, which is the thing the operator actually needs to read.
+  try {
+    return await build();
+  } catch (e) {
+    try {
+      await dropDemoAccount(db, orgId);
+    } catch (cleanupError) {
+      console.error(`demo seed: failed to remove the half-built account: ${String(cleanupError)}`);
+    }
+    throw e;
+  }
+
+  async function build(): Promise<SeedResult> {
   // Brand name and colour ONLY. `deriveTheme` returns null unless one of
   // neutral/corners/type/mode is set, so a brand colour alone never engages
   // the tenant theme: the dashboard keeps BIS's own lit ground and glass,
@@ -295,6 +323,7 @@ export async function seedDemoTenant(
       calls, bookings, opportunities, submissions, trafficDays,
     },
   };
+  }
 }
 
 // ---------------------------------------------------------------------------

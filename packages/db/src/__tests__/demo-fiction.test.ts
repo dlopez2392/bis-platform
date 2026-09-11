@@ -169,6 +169,32 @@ describe("demo tenant — the seeder cannot write past the walls", () => {
   });
 
   /**
+   * A seed that fails takes its half-built account with it.
+   *
+   * This is a source walk because forcing a mid-seed failure against a real
+   * database means breaking the seeder to test the seeder. The shape is what
+   * matters and the shape is checkable.
+   *
+   * It exists because the absence of it cost two CI runs. The first died
+   * inside `backdateEvents` and left a COMPLETE account behind — 40 contacts,
+   * 34 calls, a business line, a site, 60 days of traffic — in the one
+   * Supabase project production uses. The second then failed on
+   * `phone_numbers_e164_key`, which looks like an unrelated bug until you
+   * notice `e164` is unique across EVERY account and the orphan still held
+   * the demo's number.
+   *
+   * Mutation: remove the try/catch around `build()` — this fails.
+   */
+  it("removes the half-built account when a seed fails partway", () => {
+    const body = seed.slice(seed.indexOf("export async function seedDemoTenant"));
+    expect(body).toMatch(/try \{\s*\n\s*return await build\(\);/);
+    expect(body).toMatch(/catch \(e\) \{[\s\S]{0,400}await dropDemoAccount\(db, orgId\)/);
+    // The original error survives: a cleanup failure must never replace the
+    // reason the seed failed, which is what the operator actually needs.
+    expect(body).toMatch(/catch \(e\) \{[\s\S]{0,600}throw e;/);
+  });
+
+  /**
    * `events.id` is `bigint generated ALWAYS as identity`, so Postgres refuses
    * any statement that supplies a value for it — and an upsert must, because
    * the id is what it conflicts on.

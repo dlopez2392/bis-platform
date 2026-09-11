@@ -56,7 +56,15 @@ export const DEMO_TIMEZONE = "America/Chicago";
 export const DEMO_BRAND_COLOR = "#0E6BA8";
 
 /** The one business line. Reserved-range, so it can be shown on a screenshot
- *  without sending anybody a call. */
+ *  without sending anybody a call.
+ *
+ *  `phone_numbers.e164` is unique across EVERY account, not per account, so
+ *  this constant is effectively a global lock: exactly one account in the
+ *  project may hold it at a time. A seed that fails and leaves its account
+ *  behind therefore blocks the next seed with
+ *  `duplicate key value violates unique constraint "phone_numbers_e164_key"`
+ *  — an error that names nothing about the real problem. That is why
+ *  `seedDemoTenant` drops its half-built account on any failure. */
 export const DEMO_BUSINESS_LINE = "+19565550100";
 
 /** Fiction-safe by construction, and asserted rather than trusted.
