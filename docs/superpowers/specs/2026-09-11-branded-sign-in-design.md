@@ -98,7 +98,7 @@ on a phone. The card's `max-width` yields to the viewport with a `24px` gutter.
 
 | route | rail | content column |
 |---|---|---|
-| `/sign-in` | mark + wordmark + micro-copy | "Sign in" heading, tagline, then `<SignIn />` |
+| `/sign-in` | mark + wordmark + micro-copy | "Sign in" heading, then `<SignIn />` |
 | `/` (signed out) | same | `landing.title` / `landing.tagline` / the Sign in button |
 | `/no-access` | same | the existing `ShieldAlert` block and `SignOutButton`, unchanged in copy |
 
@@ -214,12 +214,16 @@ later close.
 New strings in `lib/messages.ts`:
 
 - `signIn.title` — "Sign in"
-- `signIn.tagline` — "Calls, leads and bookings, all in one place."
 - `signIn.railCopy` — "by Bespoke Intelligent Solutions"
 
-The rail's line is the one that does real work: it tells a client whose software this is, which is
-the question somebody who followed a bookmark once a week actually has. The tagline states what is
-behind the door without selling — a client signing in has already bought.
+**Two strings, and there is deliberately no third.** An earlier draft of this spec put a tagline
+under the heading ("Calls, leads and bookings, all in one place.") and it was cut on review: a
+client reaching this page has already bought, so a line describing the product sells to somebody
+who is already inside. The rail's line is the one that does real work — it answers "whose software
+is this", which is the actual question somebody following a weekly bookmark has.
+
+"Sign in" therefore stands alone above the form. The vertical gap that leaves is a **spacing**
+problem, not a copy problem, and it must not be solved by re-introducing a sentence.
 
 **No footer line under the form.** Clerk already renders its own "Forgot password?" and reset flow;
 a hand-written line beneath it would either duplicate that or contradict it, and there is no
