@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { brandDisplayName, type Branding } from "./branding";
-import { loadAccountBrandInfo } from "./booking";
+import { loadSendableRows } from "./booking";
 
 /**
  * The automations spine. Config is GENERIC — one row per (account, recipe)
@@ -224,10 +224,10 @@ export async function listDueReviewRequests(
   const rows = (data ?? []) as any[];
   if (rows.length === 0) return [];
 
-  const accountInfo = await loadAccountBrandInfo(
-    db, [...new Set(rows.map((r) => r.account_id as string))], "listDueReviewRequests");
+  const { sendable, accountInfo } = await loadSendableRows(
+    db, rows as { account_id: string }[], "listDueReviewRequests");
 
-  return rows.map((r) => {
+  return sendable.map((r: any) => {
     const info = accountInfo.get(r.account_id as string)!;
     const auto = enabled.get(r.account_id as string)!;
     return {
@@ -357,10 +357,10 @@ export async function listDueNoShowNudges(
   const rows = (data ?? []) as any[];
   if (rows.length === 0) return [];
 
-  const accountInfo = await loadAccountBrandInfo(
-    db, [...new Set(rows.map((r) => r.account_id as string))], "listDueNoShowNudges");
+  const { sendable, accountInfo } = await loadSendableRows(
+    db, rows as { account_id: string }[], "listDueNoShowNudges");
 
-  return rows.map((r) => {
+  return sendable.map((r: any) => {
     const info = accountInfo.get(r.account_id as string)!;
     const auto = enabled.get(r.account_id as string)!;
     return {
@@ -465,10 +465,10 @@ export async function listDueSmsReminders(
   const rows = (data ?? []) as any[];
   if (rows.length === 0) return [];
 
-  const accountInfo = await loadAccountBrandInfo(
-    db, [...new Set(rows.map((r) => r.account_id as string))], "listDueSmsReminders");
+  const { sendable, accountInfo } = await loadSendableRows(
+    db, rows as { account_id: string }[], "listDueSmsReminders");
 
-  return rows.map((r) => {
+  return sendable.map((r: any) => {
     const info = accountInfo.get(r.account_id as string)!;
     const auto = enabled.get(r.account_id as string)!;
     return {
