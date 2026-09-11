@@ -136,13 +136,6 @@ for (const mode of ["light", "dark"] as const) {
 
     await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 
-    // EXACTLY one. Naming our own heading cannot see a second heading whose
-    // text differs — and that is precisely what shipped: Clerk's own
-    // "Continue to BIS Platform (dev)" rendered directly above ours, with the
-    // name-matched assertion green, because "Sign in" is not a substring of
-    // it. A count is the assertion that was actually wanted.
-    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
-
     // Nobody is authenticated here, so there is no tenant and the root layout
     // must not have painted one. This is the assertion that keeps a future
     // "let's brand sign-in per client" change honest.
@@ -154,11 +147,6 @@ for (const mode of ["light", "dark"] as const) {
     await expect(email).toBeVisible();
     await expect(page.getByRole("button", { name: /Google/i })).toBeVisible();
 
-    // The probe that matters: read the resolved VALUE, not the class name.
-    // Asserting the class is present passes even when Clerk's stylesheet won
-    // the cascade — the same failure mode as the backdrop-filter regression
-    // that shipped green because the test pinned the class rather than the
-    // computed style.
     // Anchored, NOT /continue/i: the Google button reads "Continue with
     // Google" and matches a loose regex too, and it comes first in the DOM —
     // so `.first()` on a loose match would probe the wrong button and pass
@@ -168,6 +156,25 @@ for (const mode of ["light", "dark"] as const) {
     const bg = await submit.evaluate((el) => getComputedStyle(el).backgroundImage);
     expect(bg, `the primary button in ${mode} is not painting --gradient-primary`)
       .toContain("linear-gradient");
+
+    // A SECOND element and a different KIND of property, because "we passed a
+    // style" is not "it computed". Clerk sets a 6px radius of its own here, so
+    // this is a value we can only be reading because ours won.
+    const inputRadius = await email.evaluate((el) => getComputedStyle(el).borderRadius);
+    expect(inputRadius, `the email input kept Clerk's radius in ${mode}`).toBe("8px");
+
+    // LAST, and the position is the whole point. Everything above already
+    // waited for Clerk's form to mount; this counts headings only once the
+    // page has settled.
+    //
+    // Placed earlier — directly under the "Sign in" assertion, where it was
+    // first written — it passed 5/5 against a build that genuinely rendered
+    // two headings. `toHaveCount` is a web-first assertion: it resolves the
+    // instant it observes a passing value and stops polling. Our heading is
+    // server-rendered, Clerk's mounts 600ms–2.5s later, so the count read 1
+    // and succeeded BEFORE the duplicate existed. An assertion that runs
+    // before the thing it measures can appear is not a guard.
+    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
   });
 }
 

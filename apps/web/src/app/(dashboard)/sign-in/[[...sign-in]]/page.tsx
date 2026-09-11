@@ -4,21 +4,37 @@ import { AuthShell } from "@/components/auth-shell";
 import { m } from "@/lib/messages";
 
 /**
- * Clerk restyled through OUR class names, not through `appearance.variables`.
+ * Clerk restyled through OUR values, but as STYLE OBJECTS, not class names.
  *
- * `elements` accepts `string | CSSObject` per @clerk/react's own types, so a
- * class name is a first-class value here — which keeps every colour in
- * tokens.css (DESIGN.md: components consume tokens only) and makes light/dark
- * follow the existing `.dark` class with no Clerk theme swap and no flash.
+ * `elements` accepts `string | CSSObject` per @clerk/react's own types.
+ * Class names looked like they worked — Clerk applies them to the element
+ * alongside its own — but measuring the actual computed style, element by
+ * element, showed classes win only for properties Clerk's own base styles
+ * leave unset: `card` still rendered Clerk's own background, shadow and
+ * 32px padding (the fifth-surface DESIGN.md rule 2 forbids, live in
+ * production), both control radii stayed Clerk's 6px over our 8px
+ * `--radius-ctl`, and more. Clerk's runtime CSS-in-JS emits its structural
+ * `.cl-internal-*` rules UNLAYERED, and unlayered author CSS beats layered
+ * author CSS — the whole Tailwind utility layer stack included — at any
+ * specificity. A style object is applied by Clerk to the element directly,
+ * so it lands on the same (unlayered) side of the cascade as the rule it
+ * has to beat, and wins regardless of layer order. `var()` inside a style
+ * object resolves exactly as it does in a stylesheet, so every colour,
+ * radius and shadow below still comes from tokens.css (DESIGN.md:
+ * components consume tokens only) and still follows the existing `.dark`
+ * class with no Clerk theme swap and no flash — only the delivery
+ * mechanism changed, not where the values come from.
  *
  * `variables` is deliberately unused. `{ colorPrimary: 'var(--accent)' }` would
  * typecheck — CssColor is a bare `string` — but Clerk derives a whole shade
  * scale from that value at runtime, which needs a colour it can parse. It
  * compiles and may simply not work, which is the worst of both.
  *
- * `cssLayerName` is what makes any of this apply: it puts Clerk's stylesheet in
- * the `clerk` layer, declared first in globals.css and therefore weaker than
- * every Tailwind utility. Without it these classes lose and nothing says so.
+ * `cssLayerName` still matters for what it actually covers: Clerk's
+ * THEMEABLE styles (driven by `variables`/`theme`) do land in the `clerk`
+ * layer, declared first in globals.css and weaker than every Tailwind
+ * utility. It does not cover Clerk's structural CSS-in-JS output — that's
+ * the unlayered rule set above, and no layer name changes that.
  *
  * `satisfies` rather than a plain const: it keeps excess-property checking on
  * the object literal, so a mistyped element key is a typecheck error instead of
@@ -51,22 +67,70 @@ const appearance = {
     // side of the cascade as the rule it needs to beat. `!important` would
     // have "worked" and taught us nothing.
     header: { display: "none" },
+    // EVERY entry below is a style object for the same reason, and this was
+    // MEASURED element by element rather than assumed. With class names, only
+    // properties Clerk leaves unset came through: `card` kept Clerk's
+    // background, shadow and 32px padding — so the card-inside-a-card
+    // DESIGN.md rule 2 forbids was actually rendering — both controls kept
+    // Clerk's 6px radius over our 8px token, and `main` kept Clerk's 24px gap.
+    //
+    // Tokens still hold: `var()` inside a style object resolves against the
+    // element exactly as it does in a stylesheet. The sizes written as px are
+    // Tailwind scale values (h-9 = 36px, text-sm = 14px), not design tokens —
+    // the rule names colour, radius and shadow, and every one of those is a
+    // var() here.
+    rootBox: { width: "100%" },
     // The shell already IS the card. Flattened rather than restyled: a card
     // inside a card is a fifth surface by another name (DESIGN.md rule 2).
-    rootBox: "w-full",
-    cardBox: "w-full shadow-none border-0 bg-transparent",
-    card: "w-full shadow-none border-0 bg-transparent p-0 gap-3",
-    main: "gap-3",
-    footer: "bg-transparent",
-    socialButtonsBlockButton:
-      "h-9 rounded-[var(--radius-ctl)] border border-[var(--line-strong)] bg-transparent text-sm font-medium text-foreground",
-    dividerLine: "bg-border",
-    dividerText: "font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground",
-    formFieldLabel: "text-xs font-medium text-muted-foreground",
-    formFieldInput:
-      "h-9 rounded-[var(--radius-ctl)] border border-[var(--input-line)] bg-[var(--input-bg)] text-sm text-foreground",
-    formButtonPrimary:
-      "btn-primary h-9 rounded-[var(--radius-ctl)] text-sm font-semibold normal-case",
+    cardBox: { width: "100%", boxShadow: "none", border: "0", background: "transparent" },
+    card: {
+      width: "100%",
+      boxShadow: "none",
+      border: "0",
+      background: "transparent",
+      padding: "0",
+      gap: "12px",
+    },
+    main: { gap: "12px" },
+    footer: { background: "transparent" },
+    socialButtonsBlockButton: {
+      height: "36px",
+      borderRadius: "var(--radius-ctl)",
+      border: "1px solid var(--line-strong)",
+      background: "transparent",
+      fontSize: "14px",
+      fontWeight: "500",
+      color: "var(--text-1)",
+    },
+    dividerLine: { background: "var(--line)" },
+    dividerText: {
+      fontFamily: "var(--font-mono)",
+      fontSize: "10px",
+      textTransform: "uppercase",
+      letterSpacing: "0.14em",
+      color: "var(--text-2)",
+    },
+    formFieldLabel: { fontSize: "12px", fontWeight: "500", color: "var(--text-2)" },
+    formFieldInput: {
+      height: "36px",
+      borderRadius: "var(--radius-ctl)",
+      border: "1px solid var(--input-line)",
+      background: "var(--input-bg)",
+      fontSize: "14px",
+      color: "var(--text-1)",
+    },
+    formButtonPrimary: {
+      height: "36px",
+      borderRadius: "var(--radius-ctl)",
+      // What `btn-primary` sets, inlined — the utility class itself won here,
+      // but mixing one class among eleven style objects hides which mechanism
+      // is load-bearing on which element.
+      backgroundImage: "var(--gradient-primary)",
+      boxShadow: "var(--shadow-glow)",
+      fontSize: "14px",
+      fontWeight: "600",
+      textTransform: "none",
+    },
   },
   // The intersection, not a bare `ComponentProps<typeof SignIn>["appearance"]`:
   // @clerk/react@6.12.8's own types augment the global ClerkAppearanceRegistry
