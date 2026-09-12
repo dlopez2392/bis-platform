@@ -75,6 +75,23 @@ export function phoneDigits(value: string): string {
   return digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
 }
 
+/**
+ * Comparison key for email dedupe, and the twin of `email_key` in migration
+ * 0033. Lowercased, trimmed, and `+suffix` stripped from the local part:
+ * plus-addressing is near-universal, so `dan+bis@example.com` and
+ * `dan@example.com` are one mailbox.
+ *
+ * Gmail's dot-folding is deliberately NOT applied. `john.smith@` and
+ * `johnsmith@` are the same mailbox AT GMAIL ONLY; folding dots globally would
+ * match two distinct people at every other provider.
+ *
+ * Comparison-only — like phoneDigits, this is never written back. The stored
+ * column keeps whatever the operator typed.
+ */
+export function emailKey(value: string): string {
+  return value.trim().toLowerCase().replace(/\+[^@]*@/, "@");
+}
+
 async function findDuplicate(
   db: SupabaseClient, accountId: string, email?: string, phone?: string,
 ): Promise<string | null> {
