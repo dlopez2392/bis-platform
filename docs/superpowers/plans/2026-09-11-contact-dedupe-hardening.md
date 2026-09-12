@@ -78,9 +78,8 @@ Create `packages/db/src/test/contact-dedupe-keys.test.ts`. This asserts the data
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { serviceDb } from "../client";
 import { phoneDigits, emailKey } from "../contacts";
-import { withTestAccount } from "./helpers";
+import { withTestAccount } from "./fixtures";
 
 // Real shapes this database actually holds. "(956) 292-1696" is the majority
 // operator-entered shape; "+19562921696" is what toE164 and inbound SMS
@@ -107,8 +106,7 @@ const EMAILS = [
 
 describe("dedupe keys: the database and TypeScript must agree (spec §4.1)", () => {
   it("phone_key matches phoneDigits for every shape", async () => {
-    const db = serviceDb();
-    await withTestAccount(db, async (accountId) => {
+    await withTestAccount(async (db, accountId) => {
       for (const phone of PHONES) {
         const { data, error } = await db.from("contacts")
           .insert({ account_id: accountId, first_name: "Key", phone: phone || null })
@@ -121,8 +119,7 @@ describe("dedupe keys: the database and TypeScript must agree (spec §4.1)", () 
   });
 
   it("email_key matches emailKey for every shape", async () => {
-    const db = serviceDb();
-    await withTestAccount(db, async (accountId) => {
+    await withTestAccount(async (db, accountId) => {
       for (const email of EMAILS) {
         const { data, error } = await db.from("contacts")
           .insert({ account_id: accountId, first_name: "Key", email: email || null })
@@ -135,8 +132,7 @@ describe("dedupe keys: the database and TypeScript must agree (spec §4.1)", () 
   });
 
   it("the flags table refuses an unordered or duplicate pair", async () => {
-    const db = serviceDb();
-    await withTestAccount(db, async (accountId) => {
+    await withTestAccount(async (db, accountId) => {
       const mk = async (name: string) => {
         const { data } = await db.from("contacts")
           .insert({ account_id: accountId, first_name: name }).select("id").single();
@@ -164,7 +160,10 @@ describe("dedupe keys: the database and TypeScript must agree (spec §4.1)", () 
 });
 ```
 
-If `withTestAccount` is not the helper this package uses, read `packages/db/src/test/` and use the per-run fixture helper that is there — but do **not** create contacts on a live account.
+`withTestAccount` is in `packages/db/src/test/fixtures.ts` and its signature is
+`withTestAccount(fn: (db: SupabaseClient, accountId: string) => Promise<void>)` — it
+supplies the client itself, so do NOT construct one. It creates a throwaway account and
+tears it down, which is why no test here may touch a live account.
 
 - [ ] **Step 3: Run it and watch it fail for the RIGHT reason**
 
@@ -320,8 +319,7 @@ Append to `packages/db/src/test/contacts.test.ts`. These are the four cases in s
 ```ts
 describe("dedupe after the key columns (spec §5)", () => {
   it("returns the email match when email and phone point at DIFFERENT contacts", async () => {
-    const db = serviceDb();
-    await withTestAccount(db, async (accountId) => {
+    await withTestAccount(async (db, accountId) => {
       const a = await createContact(db, accountId,
         { firstName: "Email", email: "shared@example.com" }, "test");
       const b = await createContact(db, accountId,
@@ -350,8 +348,7 @@ describe("dedupe after the key columns (spec §5)", () => {
   // this (northern-lights.test.ts and clerk-layer.test.ts both read files as
   // data), and the spec line is corrected to say so.
   it("matches a reformatted phone through the key", async () => {
-    const db = serviceDb();
-    await withTestAccount(db, async (accountId) => {
+    await withTestAccount(async (db, accountId) => {
       const a = await createContact(db, accountId,
         { firstName: "Formatted", phone: "(956) 292-1696" }, "test");
       const got = await createContact(db, accountId,
@@ -377,8 +374,7 @@ describe("dedupe after the key columns (spec §5)", () => {
   });
 
   it("still creates a contact when nothing matches", async () => {
-    const db = serviceDb();
-    await withTestAccount(db, async (accountId) => {
+    await withTestAccount(async (db, accountId) => {
       const a = await createContact(db, accountId,
         { firstName: "One", email: "one@example.com" }, "test");
       const b = await createContact(db, accountId,
@@ -491,8 +487,7 @@ Append to `packages/db/src/test/contacts.test.ts`:
 
 ```ts
 it("flags the pair when email and phone disagree, and does not duplicate the flag", async () => {
-  const db = serviceDb();
-  await withTestAccount(db, async (accountId) => {
+  await withTestAccount(async (db, accountId) => {
     const a = await createContact(db, accountId,
       { firstName: "Email", email: "clash@example.com" }, "test");
     const b = await createContact(db, accountId,
@@ -517,8 +512,7 @@ it("flags the pair when email and phone disagree, and does not duplicate the fla
 });
 
 it("does not flag when both matches are the same contact", async () => {
-  const db = serviceDb();
-  await withTestAccount(db, async (accountId) => {
+  await withTestAccount(async (db, accountId) => {
     await createContact(db, accountId,
       { firstName: "Same", email: "same@example.com", phone: "(956) 292-1696" }, "test");
     const again = await createContact(db, accountId,
