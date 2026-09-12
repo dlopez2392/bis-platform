@@ -151,8 +151,11 @@ operation is reversible.
 
 - **Parity** (§4.1): the generated columns against their TypeScript twins, per input.
 - **The scan is gone**: `findDuplicate` no longer issues an unfiltered read of the
-  account's contacts. Asserted against the query the function actually makes, not by
-  reading the source.
+  account's contacts. This is a claim about code SHAPE — no behavioural test can see a
+  path that no longer runs, since both implementations return the same contact — so it is
+  pinned by a source read, this repo's established instrument for exactly that
+  (`northern-lights.test.ts`, `clerk-layer.test.ts`), with a guard-the-guard assertion so
+  renaming the function cannot silently empty it.
 - **The four cases in §5's table**, each with its own test, including that a both-match
   case returns the email match *and* writes exactly one flag row.
 - **Idempotence**: the same pair flagged twice leaves one row.
