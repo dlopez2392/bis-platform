@@ -77,9 +77,23 @@ export function phoneDigits(value: string): string {
 
 /**
  * Comparison key for email dedupe, and the twin of `email_key` in migration
- * 0033. Lowercased, trimmed, and `+suffix` stripped from the local part:
- * plus-addressing is near-universal, so `dan+bis@example.com` and
- * `dan@example.com` are one mailbox.
+ * 0034 (0033's original version of this column drifted from this function —
+ * see 0034's own comment). Both sides now strip the SAME explicit whitespace
+ * class rather than this side calling JS's `.trim()`: space, tab (\t),
+ * newline (\n), carriage return (\r), form feed (\f), vertical tab (\v), and
+ * NBSP (\u00A0). `.trim()` looks equivalent but is not — it strips the FULL
+ * Unicode whitespace set, which Postgres's `trim()`/regex engine cannot be
+ * made to reproduce character-for-character, so a `.trim()` on one side and
+ * anything short of an identical class on the other is a standing invitation
+ * for the two to diverge again. Spelling the class out explicitly, in the
+ * same order, on both sides (see `email_key` in
+ * packages/db/supabase/migrations/0034_email_key_whitespace.sql) means a
+ * reader can compare the two lists directly rather than trusting that a
+ * built-in and a hand-written regex happen to agree.
+ *
+ * Lowercased, and `+suffix` stripped from the local part (non-global — only
+ * the first `+...@` run folds): plus-addressing is near-universal, so
+ * `dan+bis@example.com` and `dan@example.com` are one mailbox.
  *
  * Gmail's dot-folding is deliberately NOT applied. `john.smith@` and
  * `johnsmith@` are the same mailbox AT GMAIL ONLY; folding dots globally would
@@ -89,7 +103,10 @@ export function phoneDigits(value: string): string {
  * column keeps whatever the operator typed.
  */
 export function emailKey(value: string): string {
-  return value.trim().toLowerCase().replace(/\+[^@]*@/, "@");
+  return value
+    .replace(/^[ \t\n\r\f\v\u00A0]+|[ \t\n\r\f\v\u00A0]+$/g, "")
+    .toLowerCase()
+    .replace(/\+[^@]*@/, "@");
 }
 
 async function findDuplicate(

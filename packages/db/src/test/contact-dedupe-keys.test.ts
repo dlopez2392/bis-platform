@@ -23,32 +23,41 @@ const EMAILS = [
   "dan+a+b@example.com",
   "dan@example.com",
   "",
+  // 0034's regression fixture: a tab, newline, or NBSP pad — exactly what a
+  // CSV import produces — used to survive JS's `.trim()` but not the
+  // database's old `trim(both ' ' from ...)`, so the two sides silently
+  // computed different keys for the same input. See emailKey()'s doc
+  // comment and migrations/0034_email_key_whitespace.sql.
+  "\tdan@example.com",
+  "dan@example.com\n",
+  "\u00A0dan@example.com\u00A0",
 ];
 
 describe("dedupe keys: the database and TypeScript must agree (spec §4.1)", () => {
-  it("phone_key matches phoneDigits for every shape", async () => {
+  // it.each over a plain expect()-in-a-for-loop: the loop form is fail-fast —
+  // a divergence at an early index throws and aborts the test, so every
+  // shape AFTER it never runs in that pass and a single red run is not a
+  // full audit. it.each gives each shape its own test result, all reported
+  // independently in the same run.
+  it.each(PHONES)("phone_key matches phoneDigits for %j", async (phone) => {
     await withTestAccount(async (db, accountId) => {
-      for (const phone of PHONES) {
-        const { data, error } = await db.from("contacts")
-          .insert({ account_id: accountId, first_name: "Key", phone: phone || null })
-          .select("phone_key").single();
-        expect(error, `insert failed for ${JSON.stringify(phone)}`).toBeNull();
-        const expected = phone ? (phoneDigits(phone) || null) : null;
-        expect(data!.phone_key, `phone_key for ${JSON.stringify(phone)}`).toBe(expected);
-      }
+      const { data, error } = await db.from("contacts")
+        .insert({ account_id: accountId, first_name: "Key", phone: phone || null })
+        .select("phone_key").single();
+      expect(error, `insert failed for ${JSON.stringify(phone)}`).toBeNull();
+      const expected = phone ? (phoneDigits(phone) || null) : null;
+      expect(data!.phone_key, `phone_key for ${JSON.stringify(phone)}`).toBe(expected);
     });
   });
 
-  it("email_key matches emailKey for every shape", async () => {
+  it.each(EMAILS)("email_key matches emailKey for %j", async (email) => {
     await withTestAccount(async (db, accountId) => {
-      for (const email of EMAILS) {
-        const { data, error } = await db.from("contacts")
-          .insert({ account_id: accountId, first_name: "Key", email: email || null })
-          .select("email_key").single();
-        expect(error, `insert failed for ${JSON.stringify(email)}`).toBeNull();
-        const expected = email ? (emailKey(email) || null) : null;
-        expect(data!.email_key, `email_key for ${JSON.stringify(email)}`).toBe(expected);
-      }
+      const { data, error } = await db.from("contacts")
+        .insert({ account_id: accountId, first_name: "Key", email: email || null })
+        .select("email_key").single();
+      expect(error, `insert failed for ${JSON.stringify(email)}`).toBeNull();
+      const expected = email ? (emailKey(email) || null) : null;
+      expect(data!.email_key, `email_key for ${JSON.stringify(email)}`).toBe(expected);
     });
   });
 
