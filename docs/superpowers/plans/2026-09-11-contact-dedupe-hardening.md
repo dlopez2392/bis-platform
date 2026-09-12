@@ -52,7 +52,11 @@ Using the Supabase MCP `execute_sql` against project `tlbkbmlrfafquucsmsmm`, con
 
 ```sql
 select
-  (select count(*) from supabase_migrations.schema_migrations where version like '0033%') as m0033,
+  -- NOTE: match on NAME, not version. schema_migrations.version holds a
+  -- TIMESTAMP in this project; the human migration number lives in `name`. A
+  -- `version like '0033%'` check reads 0 both before AND after applying, so it
+  -- guards nothing - the two checks below are what actually gate this step.
+  (select count(*) from supabase_migrations.schema_migrations where name like '0033%') as m0033,
   (select count(*) from information_schema.columns
      where table_schema='public' and table_name='contacts'
        and column_name in ('phone_key','email_key')) as new_cols,
