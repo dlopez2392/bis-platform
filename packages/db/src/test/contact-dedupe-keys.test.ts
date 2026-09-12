@@ -31,6 +31,27 @@ const EMAILS = [
   "\tdan@example.com",
   "dan@example.com\n",
   "\u00A0dan@example.com\u00A0",
+  // \u3000 (IDEOGRAPHIC SPACE, Unicode category Space_Separator) is
+  // deliberately OUTSIDE the shared class above -- it is not a space, tab,
+  // newline, CR, form feed, vertical tab, or NBSP. Under correct code
+  // NEITHER side strips it: the SQL column's explicit character class
+  // doesn't list it, and neither does emailKey()'s regex. So this row
+  // passes today, the same as any other character both sides leave alone,
+  // and that passing result IS the assertion that the two sides still
+  // agree on the class's edge. What it's really here for is the failure
+  // mode every other row in this array is structurally unable to produce:
+  // every other pad character (space/tab/newline/NBSP) is a member of the
+  // shared class AND of JS's `.trim()` set, and `.trim()` strips a strict
+  // superset of the shared class -- so if emailKey() ever regresses back to
+  // `.trim()` (reading its own doc comment as "basically `.trim()` with
+  // extra steps"), or gets swapped for some Unicode-aware whitespace
+  // helper, every existing row keeps passing because trimming MORE than
+  // the shared class is invisible to a fixture built only from characters
+  // already IN that class. \u3000 is whitespace `.trim()` removes but the
+  // shared class does not, so the moment JS starts stripping it and SQL
+  // still doesn't, this row's two sides diverge and it fails by name --
+  // exactly the widening regression this migration exists to prevent.
+  "\u3000dan@example.com\u3000",
 ];
 
 describe("dedupe keys: the database and TypeScript must agree (spec §4.1)", () => {
