@@ -121,9 +121,14 @@ export type ImportRow = { input: ContactInput; tags: string[] };
 export async function applyImportBatch(
   db: SupabaseClient, accountId: string, rows: ImportRow[], index: MatchIndex,
   actorId: string, opts: { createTags: boolean },
-): Promise<{ created: number; updated: number }> {
+): Promise<{ created: number; updated: number; flagged: number }> {
   let created = 0;
   let updated = 0;
+  // Pairs this RUN flagged, not the table's lifetime total — every other number
+  // this function returns reads that way, and the summary reports what this
+  // import did. Only the createContact path can flag: an index hit resolved to
+  // exactly one contact, so there is no second match to conflict with.
+  let flagged = 0;
 
   const known = new Set((await listTags(db, accountId)).map((t) => t.name.toLowerCase()));
   // tag name (already lowercased — the stored form) -> every contact id this
@@ -145,6 +150,7 @@ export async function applyImportBatch(
     } else {
       const result = await createContact(db, accountId, row.input, actorId);
       contactId = result.id;
+      if (result.flagged) flagged++;
       if (result.existing) {
         // Trap 2's second half: apply the row's fields exactly as an index
         // hit would, before counting — see the function comment above.
@@ -176,5 +182,5 @@ export async function applyImportBatch(
     await addTagToContacts(db, accountId, [...contactIds], name);
   }
 
-  return { created, updated };
+  return { created, updated, flagged };
 }

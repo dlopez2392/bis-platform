@@ -20,7 +20,7 @@ export async function importContactsBatchAction(
   accountId: string,
   rows: ParsedRow[],
   opts: { mapping: Record<string, string | null>; createTags: boolean },
-): Promise<{ ok: true; created: number; updated: number } | { ok: false; error: string }> {
+): Promise<{ ok: true; created: number; updated: number; flagged: number } | { ok: false; error: string }> {
   const { userId } = await requireAccountAccess(accountId);
   if (!Array.isArray(rows)) return { ok: false, error: m["contacts.import.failed"] };
   if (rows.length > MAX_ROWS_PER_CALL) return { ok: false, error: m["contacts.import.tooMany"] };
@@ -31,7 +31,7 @@ export async function importContactsBatchAction(
   // could otherwise hand us a patch for any column with none of Task 5's
   // validation applied.
   const { mapped } = mapRows(rows, opts.mapping);
-  if (mapped.length === 0) return { ok: true, created: 0, updated: 0 };
+  if (mapped.length === 0) return { ok: true, created: 0, updated: 0, flagged: 0 };
 
   try {
     const db = await dbForRequest();
@@ -40,7 +40,7 @@ export async function importContactsBatchAction(
     // database when the next batch builds its index, so cross-batch duplicates
     // are caught with no server-side session state to hold or invalidate.
     const index = await buildMatchIndex(db, accountId);
-    const { created, updated } = await applyImportBatch(
+    const { created, updated, flagged } = await applyImportBatch(
       db, accountId,
       mapped.map((row) => ({ input: row.input, tags: row.tags })),
       index, userId, { createTags: opts.createTags },
@@ -60,7 +60,7 @@ export async function importContactsBatchAction(
     }
 
     revalidatePath(`/dashboard/accounts/${accountId}/contacts`);
-    return { ok: true, created, updated };
+    return { ok: true, created, updated, flagged };
   } catch {
     return { ok: false, error: m["contacts.import.failed"] };
   }

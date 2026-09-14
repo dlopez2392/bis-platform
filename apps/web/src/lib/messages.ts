@@ -306,6 +306,11 @@ export const m = {
   "contacts.import.confirm": "Import",
   "contacts.import.importing": "Importing {done} of {total}...",
   "contacts.import.done": "Added {created}, updated {updated}.",
+  // Shown only when the count is non-zero. "Possible" is doing real work: these
+  // are pairs where an email and a phone pointed at different contacts, which
+  // is usually one person entered twice — but not always, and the product has
+  // no merge screen yet, so it must not promise a resolution it cannot offer.
+  "contacts.import.flagged": "{flagged} possible duplicates flagged for review.",
   "contacts.import.partial": "Stopped after {done} rows. Nothing after that was imported.",
   "contacts.import.failed": "That import didn't go through. Nothing was changed. Please try again.",
   "contacts.import.tooMany": "That's too many rows at once. Try a smaller file.",

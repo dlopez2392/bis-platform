@@ -20,7 +20,7 @@ describe("applyImportBatch", () => {
         { input: { email: "grace@example.com", firstName: "Grace" }, tags: [] },
       ], index, "user_test", { createTags: false });
 
-      expect(r).toEqual({ created: 1, updated: 1 });
+      expect(r).toEqual({ created: 1, updated: 1, flagged: 0 });
       const ada = await getContact(db, accountId, existing.id);
       expect(ada!.company_name).toBe("Analytical Engines");
       expect(ada!.first_name).toBe("Ada"); // untouched: the CSV had no first name
@@ -33,7 +33,7 @@ describe("applyImportBatch", () => {
       const r = await applyImportBatch(db, accountId,
         [{ input: { phone: "(956) 292-1696", firstName: "Dan" }, tags: [] }],
         index, "user_test", { createTags: false });
-      expect(r).toEqual({ created: 0, updated: 1 });
+      expect(r).toEqual({ created: 0, updated: 1, flagged: 0 });
       expect((await getContact(db, accountId, existing.id))!.first_name).toBe("Dan");
     }));
 
@@ -72,7 +72,7 @@ describe("applyImportBatch", () => {
         { input: { email: "dup@example.com", firstName: "A" }, tags: [] },
         { input: { email: "dup@example.com", lastName: "B" }, tags: [] },
       ], index, "user_test", { createTags: false });
-      expect(r).toEqual({ created: 1, updated: 1 });
+      expect(r).toEqual({ created: 1, updated: 1, flagged: 0 });
     }));
 
   it("does not create an unknown tag when createTags is false", () =>
@@ -123,7 +123,7 @@ describe("applyImportBatch", () => {
       const r = await applyImportBatch(db, accountId,
         [{ input: { email: "race@example.com", firstName: "After" }, tags: [] }],
         staleIndex, "user_test", { createTags: false });
-      expect(r).toEqual({ created: 0, updated: 1 });
+      expect(r).toEqual({ created: 0, updated: 1, flagged: 0 });
       expect((await getContact(db, accountId, existing.id))!.first_name).toBe("After");
     }));
 
