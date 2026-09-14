@@ -94,21 +94,85 @@ token, and paste the JSON from Part A verbatim:
 Enable Organizations on the production instance as well, or `{{org.id}}`
 resolves to nothing and every client lands on `/no-access`.
 
+## Part C2 — primary or secondary application
+
+The Change-domain dialog asks this, and the answer is **Secondary**.
+
+|  | Primary | **Secondary** |
+|---|---|---|
+| Clerk's API | `clerk.bis-rgv.com` | `clerk.app.bis-rgv.com` |
+| Verification mail from | `@bis-rgv.com` | `@app.bis-rgv.com` |
+
+`bis-rgv.com` is where Resend sends client mail from (`crm@bis-rgv.com`), and
+its DKIM/SPF records live in that zone. Primary would put Clerk's own DKIM
+keys — and possibly a DMARC policy — on top of them. Secondary nests
+everything under `app.bis-rgv.com`, which carries no email. The cost is that
+Clerk's sign-in codes then come from a subdomain with no sending reputation;
+that is the better trade, because the alternative risks the weekly reports.
+
 ## Part D — DNS
 
-Clerk gives the production instance a set of CNAME records for
-`clerk.app.bis-rgv.com` and friends (it is several records, not one). Add them
-all at the registrar and wait for Clerk to report them verified. Nothing below
-works until it does.
+Clerk gives the production instance five CNAMEs under `app.bis-rgv.com`:
+`clerk.app`, `accounts.app`, `clkmail.app`, `clk._domainkey.app`,
+`clk2._domainkey.app`. `bis-rgv.com` runs on Vercel's nameservers
+(`ns1/ns2.vercel-dns.com`), so Clerk's **Configure automatically** button
+(Domain Connect) places all five for you.
+
+Before approving in Vercel, check that every record is under **`app`**.
+Anything at the bare `bis-rgv.com` level — especially `_dmarc` or
+`_domainkey` — means Part C2 was answered Primary; cancel and fix that first.
+
+> ### 🔴 This step took production down, on 2026-09-14. Read it.
+>
+> **Adding those records removed the `app` record itself**, and
+> `app.bis-rgv.com` stopped resolving entirely — no A, no AAAA, no CNAME.
+> `curl` reported `Could not resolve host`. The deployment was healthy the
+> whole time; only DNS was broken, which is why the Vercel deployment list
+> looks reassuring and tells you nothing.
+>
+> **The cause is that `app` was a CNAME.** A CNAME is an alias for everything
+> at and below its name, so it cannot coexist with `clerk.app`,
+> `accounts.app` and the rest. Something in the Domain Connect flow resolved
+> the conflict by dropping `app`.
+>
+> **The fix, and the way to avoid it:** `app.bis-rgv.com` must be an **A
+> record**, not a CNAME.
+>
+> ```
+> Name: app     Type: A     Value: 76.76.21.21     TTL: 60
+> ```
+>
+> Vercel's Domains page will recommend a CNAME
+> (`<hash>.vercel-dns-017.com`). **Do not use it here** — it re-creates the
+> conflict. Vercel's own note on that page says the legacy `76.76.21.21`
+> continues to work, and an A record has no restriction on names beneath it.
+> Add it under **Domains → bis-rgv.com → DNS Records** (team level, not the
+> project). The Name field takes the subdomain only — `app`, not
+> `app.bis-rgv.com` — and the greyed `76.76.21.21` in the Value box is
+> placeholder text that must actually be typed.
+>
+> **Check `app.bis-rgv.com` resolves before and after this part**, e.g.
+> `nslookup app.bis-rgv.com 8.8.8.8`. Clerk's own DNS screen reports 5/5
+> Verified while the app is down, because it only checks its own records.
 
 ## Part E — tell Supabase about the new domain
 
-Supabase dashboard → Authentication → Third-Party Auth. Add a Clerk provider
-whose domain is the new production domain.
+Supabase dashboard → Authentication → Third-Party Auth → **Add provider** →
+Clerk → `https://clerk.app.bis-rgv.com`.
 
-> **Decide here:** whether Supabase will hold **both** domains at once
-> determines whether e2e can stay where it is (Part H). Check this before you
-> remove the development entry — and do not remove it until Part H is settled.
+Take the domain from the instance itself rather than assembling it by hand:
+
+```
+curl -s https://clerk.app.bis-rgv.com/.well-known/openid-configuration
+```
+
+The `issuer` field is the value Supabase wants, and a 200 here also proves the
+SSL certificate has finished issuing.
+
+**Leave the development entry in place.** Settled 2026-09-14: **Supabase holds
+two Clerk providers at once** — both show ENABLED side by side. That is what
+lets e2e stay on the development instance (Part H), and removing the dev entry
+before the key swap would take production down immediately.
 
 ## Part F — your user, and the two accounts
 
@@ -117,29 +181,91 @@ The production instance starts empty. Recreate, in this order:
 1. **Your own user** (`danlopez508@gmail.com`), then set its `public_metadata`
    to `{"app_role": "agency_admin"}`. Without this you cannot reach anything.
 2. **An organization per real account.** Two matter: Bespoke Intelligent
-   Solutions and Test Client One. Record each new `org_…` id.
-3. **Re-point the account rows.** This is the data half of the migration, and
-   it is two rows:
+   Solutions and Test Client One. Record each new `org_…` id — Clerk's ids
+   differ only well into the string, so copy rather than retype.
+
+**Do NOT re-point the account rows yet.** That step moved after the key swap
+— see Part I — so that the whole migration stays reversible by environment
+variable until you have proved sign-in works.
+
+### What the copy-from-development option does and does not carry
+
+Creating the production instance offers to copy settings from development.
+Take it: organization settings, sign-in methods and customization all come
+across, **including the session-token customization in Part C** (verify it
+anyway; it is the one setting where "probably" is not good enough).
+
+It does **not** carry: users, organizations, or **Google's OAuth credentials**.
+Development instances borrow Clerk's shared Google credentials and production
+instances may not, so `oauth_google` arrives enabled but non-functional and
+the setup checklist will keep asking for it. Nothing in this repo references
+Google sign-in — no `oauth_google`, no provider strategy, and e2e signs in
+through the Backend API — so you may either supply your own credentials (a
+Google Cloud project, consent screen, and a redirect URI pointing at
+`clerk.app.bis-rgv.com`) or switch it off and rely on email code and password.
+Neither blocks the migration.
+
+## Part G — Vercel env
+
+Take the keys from **Instance → API keys**, not Configure → Developers → API
+keys; the latter is an unrelated product feature for minting your users' own
+keys.
+
+Set both on **Production ONLY**:
+
+| Variable | Value | Type |
+|---|---|---|
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | `pk_live_…` | **Config** |
+| `CLERK_SECRET_KEY` | `sk_live_…` | Secret |
+
+**Not Preview.** A Clerk production instance is bound to `app.bis-rgv.com`;
+preview deployments run on `*.vercel.app`, where the session cookie does not
+apply. Leave Preview on the `pk_test_` pair. `NEXT_PUBLIC_CLERK_SIGN_IN_URL`
+stays `/sign-in`.
+
+`NEXT_PUBLIC_` variables cannot be Vercel "Secret" type — Vercel rejects them
+with *"Environment variables with a public framework prefix cannot use
+`visibility: secret`"* — and a variable already saved as Secret cannot be
+converted. Delete that row and re-add it as **Config**.
+
+**Then redeploy, uncached.** `NEXT_PUBLIC_` values are compiled into the
+browser bundle at build time, so changing them in Vercel does nothing until a
+new build runs.
+
+Verify the swap from outside the dashboard:
+
+```
+curl -s https://app.bis-rgv.com/sign-in | grep -oE "pk_(live|test)_[A-Za-z0-9]{6,24}"
+```
+
+The `pk_live_` value base64-decodes to the Frontend API host, so it also
+confirms which instance is being served.
+
+## Part H2 — re-point the account rows (the irreversible step)
+
+Only now, after sign-in is proven in Part I steps 1–3. Two rows, run one at a
+time in the Supabase SQL editor:
 
 ```sql
--- Run as a SEPARATE statement per row, and read the table back afterwards.
 update public.accounts set clerk_org_id = '<new prod org id>'
  where clerk_org_id = 'org_3IejCERXojXO4BGgiKSHL34lT5O';  -- Bespoke
 update public.accounts set clerk_org_id = '<new prod org id>'
  where clerk_org_id = 'org_3H2aweJ6b2GRZghk3DCrNDmrMXU';  -- Test Client One
 ```
 
+The editor reports **"Success. No rows returned"** for both — an `UPDATE`
+without `RETURNING` never returns rows, so that message says nothing about
+whether anything changed. Read the table back to confirm:
+
+```sql
+select name, clerk_org_id, client_access_enabled from public.accounts order by created_at;
+```
+
 Test Client One is the only row with `client_access_enabled = true`, so it is
 the only one where a client signing in is even possible. Bespoke has client
-access off; re-point it anyway so the agency side stays coherent.
-
-## Part G — Vercel env
-
-Set `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` (now `pk_live_…`) and
-`CLERK_SECRET_KEY` on **Production and Preview**, plus `apps/web/.env.local`
-for local dev. `NEXT_PUBLIC_CLERK_SIGN_IN_URL` stays `/sign-in`.
-
-Redeploy. The keys are read at build time.
+access off; re-point it anyway so the agency side stays coherent. The
+`Fixture Co` rows are test residue with synthetic `org_test_*` ids — leave
+them.
 
 ## Part H — e2e (a decision, not a step)
 
@@ -169,17 +295,28 @@ does not, move e2e and accept the fixture churn.
 
 ## Part I — verify, in this order, and stop at the first failure
 
-1. `/sign-in` renders with **no** Development-mode banner and no "(dev)".
-2. Sign in as yourself → you reach the agency dashboard, not `/`. (Proves
-   `app_role` survived into the token.)
+**Steps 1–3 gate Part H2.** Do not touch the database until all three pass;
+everything up to here is undone by putting the old keys back and redeploying.
+
+1. `app.bis-rgv.com` **resolves**, and `/` 200 · `/sign-in` 200 ·
+   `/api/cron/reminders` 401 · `/b/bogus` 404.
+2. `/sign-in` renders with **no** Development-mode banner. Sign in as
+   yourself → you reach the agency dashboard, not `/`. That proves `app_role`
+   survived into the token.
+   🔑 **Type the email; do not let autofill choose it.** The production
+   instance holds exactly one user. An unknown address sends you down
+   `/sign-in/**create**/…`, which signs up a second user with no `app_role`
+   — which then bounces to `/` and reads exactly like a failed migration.
 3. On any in-account screen, a list that reads through `dbForRequest()`
    returns **rows**. Zero rows here is the silent failure from Part C/E, not
    an empty account — check the token claims before assuming data is missing.
-4. Mint a token and read its claims directly; confirm all three of `org_id`,
-   `role=authenticated`, `app_role` are present.
-5. Smoke production: `/` 200 · `/sign-in` 200 · `/api/cron/reminders` 401 ·
-   `/b/bogus` 404.
-6. Run the e2e suite once, alone.
+4. Run Part H2.
+5. Sign in as a client user of Test Client One and confirm they reach their
+   own account rather than `/no-access`. This is the only thing Part H2
+   buys: the agency path never reads `org_id`, because `app.is_agency()`
+   short-circuits every policy ahead of it.
+6. Run the e2e suite once, alone. It still authenticates against the
+   development instance and needs no changes.
 
 ## When something is wrong
 
@@ -196,13 +333,29 @@ does not, move e2e and accept the fixture churn.
   mismatched pair — the publishable and secret keys must come from the same
   instance.
 
+## When something is wrong — one more
+
+- **`app.bis-rgv.com` will not resolve at all.** DNS, not the deployment. See
+  the boxed warning in Part D; the `app` A record is missing.
+
 ## Rollback
 
-Every step is reversible until Part F step 3. Put the old `pk_test_` /
+Every step is reversible until **Part H2**. Put the old `pk_test_` /
 `sk_test_` pair back in Vercel, redeploy, and the app is on the development
-instance again.
+instance again. Nothing else needs undoing: the production instance, its DNS
+records and the second Supabase provider are all additive and harmless while
+unused.
 
-After Part F step 3 it is no longer reversible by env alone: the account rows
-now hold production org ids, so a rollback also means running the two `update`
+After Part H2 it is no longer reversible by env alone: the account rows now
+hold production org ids, so a rollback also means running the two `update`
 statements back to the ids recorded in Part A. **Keep that pre-flight output
 until the migration is verified.**
+
+## Done — 2026-09-14
+
+Executed on this date. Production serves `pk_live_…` against
+`clerk.app.bis-rgv.com`; the agency dashboard renders live data, which proves
+both silent failures clear; both account rows re-pointed and read back.
+Outstanding afterwards: the application is still named "BIS Platform (dev)"
+(Application → Settings — the instance move removed the banner, not the
+name), and Google sign-in still has no production credentials.
