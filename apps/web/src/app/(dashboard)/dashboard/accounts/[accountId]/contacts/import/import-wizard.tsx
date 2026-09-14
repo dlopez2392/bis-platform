@@ -24,7 +24,7 @@ type Phase =
   | { name: "choose" }
   | { name: "map" }
   | { name: "running"; done: number; total: number }
-  | { name: "done"; created: number; updated: number }
+  | { name: "done"; created: number; updated: number; flagged: number }
   | { name: "stopped"; done: number; error: string };
 
 export function ImportWizard(
@@ -99,6 +99,7 @@ export function ImportWizard(
   const { pending, onSubmit } = useFormSubmit(async () => {
     let created = 0;
     let updated = 0;
+    let flagged = 0;
     let done = 0;
     setPhase({ name: "running", done: 0, total: rows.length });
 
@@ -115,10 +116,11 @@ export function ImportWizard(
       }
       created += result.created;
       updated += result.updated;
+      flagged += result.flagged;
       done += slice.length;
       setPhase({ name: "running", done, total: rows.length });
     }
-    setPhase({ name: "done", created, updated });
+    setPhase({ name: "done", created, updated, flagged });
   });
 
   if (phase.name === "done") {
@@ -129,6 +131,11 @@ export function ImportWizard(
             .replace("{created}", String(phase.created))
             .replace("{updated}", String(phase.updated))}
         </p>
+        {phase.flagged > 0 ? (
+          <p className="mt-2 text-sm text-text-2">
+            {m["contacts.import.flagged"].replace("{flagged}", String(phase.flagged))}
+          </p>
+        ) : null}
         <Link href={contactsHref} className="mt-4 inline-block text-sm text-accent underline">
           {m["contacts.import.back"]}
         </Link>

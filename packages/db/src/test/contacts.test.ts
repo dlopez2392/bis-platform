@@ -1,4 +1,7 @@
 import "dotenv/config";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
 import { createContact, updateContact, listContacts, getContact,
@@ -537,5 +540,104 @@ describe("bulk contact ops", () => {
       await addTagToContact(db, accountId, c.id, "Alpha ");
       const tags = await listTags(db, accountId);
       expect(tags.map((t) => ({ name: t.name }))).toEqual([{ name: "alpha" }, { name: "zeta" }]);
+    }));
+});
+
+describe("dedupe after the key columns (spec §5)", () => {
+  it("returns the email match when email and phone point at DIFFERENT contacts", () =>
+    withTestAccount(async (db, accountId) => {
+      const a = await createContact(db, accountId,
+        { firstName: "Email", email: "shared@example.com" }, "test");
+      const b = await createContact(db, accountId,
+        { firstName: "Phone", phone: "(956) 292-1696" }, "test");
+
+      // Incoming row carries BOTH — it matches a by email and b by phone.
+      const got = await createContact(db, accountId,
+        { firstName: "Both", email: "shared@example.com", phone: "+19562921696" }, "test");
+
+      // Email wins, unchanged. This is deliberate: a phone-wins rule is
+      // defensible but would shift every existing caller for no present gain.
+      expect(got.existing).toBe(true);
+      expect(got.id).toBe(a.id);
+      expect(got.id).not.toBe(b.id);
+    }));
+
+  // NOTE on what this file can and cannot prove. The spec's §8 asked for the
+  // scan's absence to be "asserted against the query the function actually
+  // makes, not by reading the source" — but "the fallback is gone" is a claim
+  // about code SHAPE, and no behavioural test can see a code path that no
+  // longer runs: both the old and new implementations return the same contact
+  // here. Instrumenting the Supabase builder to record calls would be real
+  // work for one assertion. So the deletion is pinned by a source read in the
+  // next test instead, which is this repo's established instrument for exactly
+  // this (northern-lights.test.ts and clerk-layer.test.ts both read files as
+  // data), and the spec line is corrected to say so.
+  it("matches a reformatted phone through the key", () =>
+    withTestAccount(async (db, accountId) => {
+      const a = await createContact(db, accountId,
+        { firstName: "Formatted", phone: "(956) 292-1696" }, "test");
+      const got = await createContact(db, accountId,
+        { firstName: "E164", phone: "+19562921696" }, "test");
+      expect(got.existing).toBe(true);
+      expect(got.id).toBe(a.id);
+    }));
+
+  it("no longer reads the account's phones into memory", () => {
+    // The point of the whole exercise, and unobservable from behaviour — see
+    // the note above. `.not("phone", "is", null)` was the fallback's tell: an
+    // unfiltered read of every non-null phone on the account, once per insert.
+    // If it reappears, the O(n^2) import cliff is back and every other test
+    // here still passes.
+    const src = readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "../contacts.ts"), "utf8",
+    );
+    expect(src).not.toContain('.not("phone", "is", null)');
+    // Guard the guard: if findDuplicate is renamed or moved out of this file,
+    // the assertion above silently stops covering anything.
+    expect(src).toContain("async function findDuplicate");
+  });
+
+  it("still creates a contact when nothing matches", () =>
+    withTestAccount(async (db, accountId) => {
+      const a = await createContact(db, accountId,
+        { firstName: "One", email: "one@example.com" }, "test");
+      const b = await createContact(db, accountId,
+        { firstName: "Two", email: "two@example.com" }, "test");
+      expect(b.existing).toBe(false);
+      expect(b.id).not.toBe(a.id);
+    }));
+
+  it("flags the pair when email and phone disagree, and does not duplicate the flag", () =>
+    withTestAccount(async (db, accountId) => {
+      const a = await createContact(db, accountId,
+        { firstName: "Email", email: "clash@example.com" }, "test");
+      const b = await createContact(db, accountId,
+        { firstName: "Phone", phone: "(956) 292-1696" }, "test");
+
+      const first = await createContact(db, accountId,
+        { firstName: "Both", email: "clash@example.com", phone: "+19562921696" }, "test");
+      expect(first.flagged, "the conflicting pair should be flagged").toBe(true);
+
+      // The same conflict seen again must not accumulate rows — the queue shows
+      // a duplicate pair once, however many times an import re-encounters it.
+      await createContact(db, accountId,
+        { firstName: "Again", email: "clash@example.com", phone: "956-292-1696" }, "test");
+
+      const [lo, hi] = [a.id, b.id].sort();
+      const { data } = await db.from("contact_duplicate_flags")
+        .select("id, reason").eq("account_id", accountId)
+        .eq("contact_a", lo).eq("contact_b", hi);
+      expect(data?.length, "exactly one flag row for the pair").toBe(1);
+      expect(data![0]!.reason).toBe("email_phone_conflict");
+    }));
+
+  it("does not flag when both matches are the same contact", () =>
+    withTestAccount(async (db, accountId) => {
+      await createContact(db, accountId,
+        { firstName: "Same", email: "same@example.com", phone: "(956) 292-1696" }, "test");
+      const again = await createContact(db, accountId,
+        { firstName: "Same", email: "same@example.com", phone: "+19562921696" }, "test");
+      expect(again.existing).toBe(true);
+      expect(again.flagged, "one contact matching both ways is not a conflict").toBe(false);
     }));
 });
