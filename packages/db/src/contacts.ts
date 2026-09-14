@@ -28,37 +28,6 @@ function toRow(input: Partial<ContactInput>) {
 }
 
 /**
- * Two plain filters instead of one interpolated `.or()` string.
- *
- * The previous form built `email.ilike."${email}",phone.eq."${phone}"` by
- * interpolation. That was safe only because every caller was an operator
- * typing into the CRM; a public form makes this value attacker-controlled, and
- * an email containing `"` or `,` breaks out of PostgREST's filter grammar.
- * `.eq`/`.ilike` send their operand as a parameter, so nothing can escape it.
- * Two round trips instead of one is the right price.
- *
- * The previous form also discarded the query's `error` (`const { data: dupe }
- * = await q`), so a filter that failed to parse silently became "no duplicate
- * found" rather than a thrown error — a second, duplicate contact row got
- * written instead of anything visibly failing. Both branches below check
- * `error` and throw, so a broken lookup can no longer masquerade as "no
- * match."
- *
- * `email` still reaches `.ilike()`, and `.ilike()`'s operand is a SQL ILIKE
- * *pattern*, not a plain equality value — parameterizing it (above) stops it
- * from escaping PostgREST's filter grammar, but does nothing about `%`/`_`,
- * which ILIKE itself interprets as wildcards. `guards.ts`'s `EMAIL_RE` now
- * rejects both at the public form boundary, but this lookup is also reached
- * by the authenticated operator path (typing an email into the CRM directly),
- * which has no such validation. `escapeLikePattern` neutralizes both
- * characters (and a literal backslash, which would otherwise itself become an
- * escape) so the email is matched as a literal string either way.
- */
-function escapeLikePattern(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
-}
-
-/**
  * Comparison key for phone dedupe: digits only, with a leading NANP country
  * code folded off. contacts.phone is only trimmed on write, never reshaped
  * — an operator or a web form routinely leaves it as "(956) 292-1696", while
@@ -109,45 +78,67 @@ export function emailKey(value: string): string {
     .replace(/\+[^@]*@/, "@");
 }
 
+type DuplicateMatch = { emailMatch: string | null; phoneMatch: string | null };
+
+/**
+ * Both lookups ALWAYS run, and that is the change. The old version returned on
+ * the email match and never looked at the phone — so an incoming contact whose
+ * email matched one record and whose phone matched ANOTHER was indistinguishable
+ * from a plain email match, and the second record silently stayed a duplicate.
+ * That is how a duplicate gets created quietly, and it is what the caller now
+ * flags (spec §5).
+ *
+ * Each lookup is a single indexed equality on the generated key columns from
+ * migration 0033. The previous phone path had a fast path plus a fallback that
+ * pulled every non-null phone on the account into memory and compared in JS —
+ * once per inserted contact. The keys make the fallback unnecessary: the
+ * database already holds the normalized form, so the same comparison is an
+ * index lookup.
+ *
+ * --- WHY THESE ARE TWO PLAIN FILTERS, AND WHY NEITHER IS AN `ilike` ---
+ * This lookup is reached from a PUBLIC form, so both operands are
+ * attacker-controlled, and it has been the site of that bug class twice.
+ * Recorded here because two comments further down this file cite this block as
+ * the landmark for it:
+ *
+ *   1. It once built `email.ilike."${email}",phone.eq."${phone}"` as one
+ *      interpolated `.or()` string. An email containing `"` or `,` breaks out
+ *      of PostgREST's filter grammar. `.eq()` sends its operand as a parameter,
+ *      so nothing can escape it — see `quoteFilterValue` below for the rule
+ *      that applies when a value genuinely must be interpolated into `.or()`.
+ *   2. It then discarded the query's `error`, so a filter that failed to parse
+ *      silently became "no duplicate found" and wrote a second contact row
+ *      rather than failing visibly. Both branches below check `error` and throw.
+ *   3. The email side matched with `.ilike()`, whose operand is a SQL ILIKE
+ *      *pattern*: `%` and `_` stayed live wildcards, so a submitted
+ *      `%@example.com` could match — and hijack — any contact at that domain.
+ *      An `escapeLikePattern` helper neutralized them. It is gone with the
+ *      `ilike`: `.eq("email_key", …)` has no pattern grammar at all, so `%` and
+ *      `_` are literal characters by construction rather than by escaping. The
+ *      tests that pinned that behaviour are unchanged and still pass.
+ */
 async function findDuplicate(
   db: SupabaseClient, accountId: string, email?: string, phone?: string,
-): Promise<string | null> {
-  if (email) {
-    const { data, error } = await db.from("contacts").select("id")
-      .eq("account_id", accountId).ilike("email", escapeLikePattern(email)).limit(1);
-    if (error) throw new Error(`contact dedupe failed: ${error.message}`);
-    if (data && data.length > 0) return data[0]!.id;
-  }
-  if (phone) {
-    // Fast path first: an exact string match still hits the
-    // `contacts_account_phone (account_id, phone)` index directly, and
-    // covers the common case where both sides already agree on shape (two
-    // inbound texts from the same already-E.164-stored number; two
-    // identical operator entries).
-    const { data: exact, error: exactErr } = await db.from("contacts").select("id")
-      .eq("account_id", accountId).eq("phone", phone).limit(1);
-    if (exactErr) throw new Error(`contact dedupe failed: ${exactErr.message}`);
-    if (exact && exact.length > 0) return exact[0]!.id;
+): Promise<DuplicateMatch> {
+  const result: DuplicateMatch = { emailMatch: null, phoneMatch: null };
 
-    // Fallback: normalized-digit comparison for the case the exact match
-    // can't see (see phoneDigits' comment). Still scoped by the same
-    // account_id the exact match used, so this still uses that index's
-    // leading column — it just can't use the second column once the
-    // comparison is digits-based rather than string-based, so it pulls
-    // every non-null phone on THIS account (never cross-tenant) and
-    // compares in memory.
-    const key = phoneDigits(phone);
-    if (key) {
-      const { data, error } = await db.from("contacts").select("id, phone")
-        .eq("account_id", accountId).not("phone", "is", null);
-      if (error) throw new Error(`contact dedupe failed: ${error.message}`);
-      const match = (data ?? []).find(
-        (row) => row.phone && phoneDigits(row.phone as string) === key,
-      );
-      if (match) return match.id as string;
-    }
+  const eKey = email ? emailKey(email) : "";
+  if (eKey) {
+    const { data, error } = await db.from("contacts").select("id")
+      .eq("account_id", accountId).eq("email_key", eKey).limit(1);
+    if (error) throw new Error(`contact dedupe failed: ${error.message}`);
+    if (data && data.length > 0) result.emailMatch = data[0]!.id as string;
   }
-  return null;
+
+  const pKey = phone ? phoneDigits(phone) : "";
+  if (pKey) {
+    const { data, error } = await db.from("contacts").select("id")
+      .eq("account_id", accountId).eq("phone_key", pKey).limit(1);
+    if (error) throw new Error(`contact dedupe failed: ${error.message}`);
+    if (data && data.length > 0) result.phoneMatch = data[0]!.id as string;
+  }
+
+  return result;
 }
 
 export async function createContact(
@@ -156,8 +147,9 @@ export async function createContact(
 ): Promise<{ id: string; existing: boolean }> {
   const email = input.email?.trim().toLowerCase();
   const phone = input.phone?.trim();
-  const dupe = await findDuplicate(db, accountId, email || undefined, phone || undefined);
-  if (dupe) return { id: dupe, existing: true };
+  const match = await findDuplicate(db, accountId, email || undefined, phone || undefined);
+  const winner = match.emailMatch ?? match.phoneMatch;
+  if (winner) return { id: winner, existing: true };
 
   const { data, error } = await db.from("contacts")
     .insert({ account_id: accountId, ...toRow(input) }).select("id").single();
@@ -271,10 +263,10 @@ const SORT_NULLABLE: Record<SortKey, boolean> = {
  * value unescaped, which was safe only because the OLD parser's `isTs` regex
  * validated it as a timestamp first, excluding every character PostgREST's
  * grammar treats specially. A name or company has no such shape: a real one
- * can contain a comma, a period, parentheses, or a double quote — this file's
- * own `escapeLikePattern`/`sanitizeSearchTerm` neighbours exist because this
- * exact class of bug already happened here once (see the block comment above
- * `escapeLikePattern`). PostgREST's own escape rule is to double-quote the
+ * can contain a comma, a period, parentheses, or a double quote — this
+ * function and its `sanitizeSearchTerm` neighbour exist because this exact
+ * class of bug already happened here twice (see the block comment above
+ * `findDuplicate`). PostgREST's own escape rule is to double-quote the
  * value and backslash-escape a literal `\` or `"` inside it — backslash
  * first, so an input holding both round-trips either way. Proven against the
  * real database in this file's own "PostgREST-reserved character" test.
@@ -295,7 +287,7 @@ export type ContactCursor = { v: string | null; id: string };
  *
  * Was a local `.replace(/[%,()]/g, "")`, which left `"` and `\` in place —
  * both break the interpolated .or() string below (see search-term.ts, and
- * this file's own comment block above escapeLikePattern). Harmless while only
+ * this file's own comment block above findDuplicate). Harmless while only
  * a deliberate CRM search reached it; P6 put this call behind every keystroke
  * of the ⌘K palette.
  */
