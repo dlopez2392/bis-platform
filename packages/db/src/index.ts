@@ -13,6 +13,7 @@ export { createContact, updateContact, listContacts, getContact,
 export { buildMatchIndex, applyImportBatch,
          type MatchIndex, type ImportRow } from "./contact-import";
 export { addNote, listNotes, addTask, listContactTasks, completeTask } from "./activities";
+export { listAccountWork, listAgencyWork, type WorkRow, type WorkSource } from "./work-queue";
 export { listCustomFields, createCustomField, listCustomValues, upsertCustomValue,
          ensureDefaultPipeline, listPipelinesWithStages, type CustomFieldDef } from "./crm-config";
 export { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
