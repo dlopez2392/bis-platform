@@ -10,6 +10,12 @@
 
 Spec: `docs/superpowers/specs/2026-09-14-work-queue-design.md`.
 
+> ⚠️ **Task 1 below is SUPERSEDED and already built.** Its `call` source was
+> withdrawn during review as unsatisfiable (spec §1.2). The shipped design has
+> THREE sources — task, conversation, booking — and the conversation row
+> carries the latest call summary as its title. Read `packages/db/src/work-queue.ts`
+> for what actually exists; do not re-derive from Task 1's code blocks.
+
 ## Global Constraints
 
 - **NO MIGRATION.** Every column already ships. Needing a schema change means the design drifted — stop and report, do not add one.
@@ -322,8 +328,11 @@ const task = (id: string, dueAt: string | null, occurredAt = "2026-09-01T00:00:0
   id: `task:${id}`, source: "task", accountId: "a", contactId: null,
   title: id, dueAt, occurredAt,
 });
+// NOTE: there is no "call" source. It was specified, found unsatisfiable in
+// review, and WITHDRAWN before implementation — see the spec §1.2. The three
+// sources are task | conversation | booking. Do not reintroduce `call:` ids.
 const derived = (id: string, occurredAt: string): WorkRow => ({
-  id: `call:${id}`, source: "call", accountId: "a", contactId: "c",
+  id: `conversation:${id}`, source: "conversation", accountId: "a", contactId: "c",
   title: id, dueAt: null, occurredAt,
 });
 
@@ -360,7 +369,7 @@ describe("bucketWork", () => {
       derived("old", "2026-09-08T09:00:00Z"),
     ];
     const b = bucketWork(rows, now, "America/Chicago");
-    expect(b.waiting.map((r) => r.id)).toEqual(["call:old", "task:undated", "call:new"]);
+    expect(b.waiting.map((r) => r.id)).toEqual(["conversation:old", "task:undated", "conversation:new"]);
     expect(b.overdue).toHaveLength(0);
   });
 
