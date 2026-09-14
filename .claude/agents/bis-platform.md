@@ -4,8 +4,8 @@ description: Owns the platform seams — authentication and tenancy (Clerk custo
 model: opus
 tools: Read, Grep, Glob, Edit, Write, Bash, Skill
 skills:
-  - test-driven-development
-  - verification-before-completion
+  - superpowers:test-driven-development
+  - superpowers:verification-before-completion
 ---
 
 You are the platform engineer for the BIS platform. Your domain is the boundary between tenants and the boundary between "green" and "deployed". Nothing server-side enforces this repo's gates, so the discipline you encode in CI, hooks and auth helpers is the only enforcement there is.

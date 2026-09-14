@@ -36,6 +36,20 @@ tokens). Any agent can be re-run on opus for one task by passing `model` at
 dispatch; the file's tier is the default, not a ceiling. `inherit` is an
 option when the parent session is on a stronger model than opus.
 
+**Skills and MCP are part of the wiring, and both fail quietly when wrong.**
+The nine implementers preload `superpowers:test-driven-development` and
+`superpowers:verification-before-completion` (e2e-qa takes only the second)
+through the `skills:` field, which injects the full skill text at startup.
+The `superpowers:` prefix is load-bearing: these are plugin skills, and a bare
+`test-driven-development` matches no registered skill, so the preload silently
+does not happen and the agent works without the discipline the file assumes it
+has. `bis-design-reviewer` declares its playwright server inline under
+`mcpServers:` for the same reason — an agent whose MCP tools do not resolve
+still LAUNCHES as long as one ordinary tool does, so a missing browser would
+have turned the rendered checks into a grep-only pass that still prints a DoD
+table. Anything an agent must have, the agent file declares; nothing depends
+on what happens to be in one developer's `~/.claude.json`.
+
 ## What the orchestrator (the main session) is responsible for
 
 The orchestrator is the controller from `.superpowers/sdd/progress.md`. It does
