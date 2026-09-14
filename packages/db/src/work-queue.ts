@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-export type WorkSource = "task" | "call" | "conversation" | "booking";
+export type WorkSource = "task" | "conversation" | "booking";
 
 export type WorkRow = {
   id: string;
@@ -11,12 +11,6 @@ export type WorkRow = {
   dueAt: string | null;
   occurredAt: string;
 };
-
-/** Calls that need returning. `booked` and `spam` need nothing; `abandoned` is
- *  DELIBERATELY excluded (spec §1.2) — a hang-up is usually a wrong number,
- *  and flooding the queue is how a queue loses its reader. Widening this is a
- *  product decision, not a fix. */
-const NEEDS_RETURN = ["lead", "message"] as const;
 
 async function openTasks(db: SupabaseClient, accountId: string): Promise<WorkRow[]> {
   // Uses the partial index tasks_account_open (account_id) where completed_at is null.
@@ -31,54 +25,49 @@ async function openTasks(db: SupabaseClient, accountId: string): Promise<WorkRow
   }));
 }
 
-async function unreturnedCalls(db: SupabaseClient, accountId: string): Promise<WorkRow[]> {
-  const { data, error } = await db.from("calls")
-    .select("id, contact_id, started_at, summary")
-    .eq("account_id", accountId).in("outcome", NEEDS_RETURN as unknown as string[])
-    .not("contact_id", "is", null)
-    .order("started_at", { ascending: true }).limit(200);
-  if (error) throw new Error(`unreturnedCalls failed: ${error.message}`);
-  const calls = data ?? [];
-  if (calls.length === 0) return [];
-
-  // "Returned" = any OUTBOUND message on that contact after the call. One read
-  // for every candidate contact rather than one per call.
-  const contactIds = [...new Set(calls.map((c) => c.contact_id as string))];
-  const { data: outbound, error: mErr } = await db.from("messages")
-    .select("created_at, conversations!inner(contact_id)")
-    .eq("direction", "outbound")
-    .in("conversations.contact_id", contactIds);
-  if (mErr) throw new Error(`unreturnedCalls outbound read failed: ${mErr.message}`);
-
-  const latestOut = new Map<string, string>();
-  for (const row of (outbound ?? []) as unknown as
-       { created_at: string; conversations: { contact_id: string } }[]) {
-    const cid = row.conversations.contact_id;
-    const prev = latestOut.get(cid);
-    if (!prev || row.created_at > prev) latestOut.set(cid, row.created_at);
-  }
-
-  return calls
-    .filter((c) => {
-      const out = latestOut.get(c.contact_id as string);
-      return !out || out <= c.started_at;
-    })
-    .map((c) => ({
-      id: `call:${c.id}`, source: "call" as const, accountId,
-      contactId: c.contact_id, title: c.summary || "",
-      dueAt: null, occurredAt: c.started_at,
-    }));
-}
-
+/**
+ * There is deliberately no separate "unreturned call" source any more. The
+ * platform's own missed-call text-back writes an outbound message seconds
+ * after a call ends (finish-call.ts:388-390), and `createMessage` persists no
+ * author on `messages` — so a rule keyed on "any outbound message follows the
+ * call" could never tell our own send apart from a human's. `finishCall`
+ * already writes the call's summary as an INBOUND message and bumps
+ * `unread_count` for any meaningful outcome (finish-call.ts:226-237), so the
+ * conversation row IS the truer signal, with clearing semantics that already
+ * work. `title` here carries that call's summary when one exists, so the
+ * queue still shows what the call was about — ONE extra account-scoped read
+ * for the whole batch, never one per row.
+ */
 async function unansweredConversations(db: SupabaseClient, accountId: string): Promise<WorkRow[]> {
   const { data, error } = await db.from("conversations")
     .select("id, contact_id, unread_count, last_message_at")
     .eq("account_id", accountId).gt("unread_count", 0)
     .order("last_message_at", { ascending: true }).limit(200);
   if (error) throw new Error(`unansweredConversations failed: ${error.message}`);
-  return (data ?? []).map((c) => ({
+  const convos = data ?? [];
+  if (convos.length === 0) return [];
+
+  const ids = convos.map((c) => c.id);
+  const { data: calls, error: cErr } = await db.from("calls")
+    .select("conversation_id, summary, started_at")
+    .eq("account_id", accountId).in("conversation_id", ids);
+  if (cErr) throw new Error(`unansweredConversations calls read failed: ${cErr.message}`);
+
+  // Latest call per conversation, picked in memory rather than with a second
+  // per-row query.
+  const latestByConvo = new Map<string, { summary: string; startedAt: string }>();
+  for (const row of (calls ?? []) as
+       { conversation_id: string | null; summary: string; started_at: string }[]) {
+    if (!row.conversation_id) continue;
+    const prev = latestByConvo.get(row.conversation_id);
+    if (!prev || row.started_at > prev.startedAt) {
+      latestByConvo.set(row.conversation_id, { summary: row.summary, startedAt: row.started_at });
+    }
+  }
+
+  return convos.map((c) => ({
     id: `conversation:${c.id}`, source: "conversation" as const, accountId,
-    contactId: c.contact_id, title: "",
+    contactId: c.contact_id, title: latestByConvo.get(c.id)?.summary ?? "",
     dueAt: null, occurredAt: c.last_message_at ?? new Date(0).toISOString(),
   }));
 }
@@ -101,20 +90,19 @@ async function staleBookings(db: SupabaseClient, accountId: string): Promise<Wor
 
 /**
  * SUPPRESSION (spec §3): an open task against a contact hides that contact's
- * derived call and conversation rows, so a "Not now" dismissal does not leave
- * the original showing alongside the task it created. Bookings are exempt —
+ * derived conversation row, so a "Not now" dismissal does not leave the
+ * original showing alongside the task it created. Bookings are exempt —
  * marking one changes `status`, so it stops matching on its own.
  */
 export async function listAccountWork(db: SupabaseClient, accountId: string): Promise<WorkRow[]> {
-  const [tasks, calls, convos, bookings] = await Promise.all([
+  const [tasks, convos, bookings] = await Promise.all([
     openTasks(db, accountId),
-    unreturnedCalls(db, accountId),
     unansweredConversations(db, accountId),
     staleBookings(db, accountId),
   ]);
   const suppressed = new Set(tasks.map((t) => t.contactId).filter(Boolean) as string[]);
   const keep = (r: WorkRow) => !r.contactId || !suppressed.has(r.contactId);
-  return [...tasks, ...calls.filter(keep), ...convos.filter(keep), ...bookings];
+  return [...tasks, ...convos.filter(keep), ...bookings];
 }
 
 export async function listAgencyWork(
