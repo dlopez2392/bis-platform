@@ -606,4 +606,38 @@ describe("dedupe after the key columns (spec §5)", () => {
       expect(b.existing).toBe(false);
       expect(b.id).not.toBe(a.id);
     }));
+
+  it("flags the pair when email and phone disagree, and does not duplicate the flag", () =>
+    withTestAccount(async (db, accountId) => {
+      const a = await createContact(db, accountId,
+        { firstName: "Email", email: "clash@example.com" }, "test");
+      const b = await createContact(db, accountId,
+        { firstName: "Phone", phone: "(956) 292-1696" }, "test");
+
+      const first = await createContact(db, accountId,
+        { firstName: "Both", email: "clash@example.com", phone: "+19562921696" }, "test");
+      expect(first.flagged, "the conflicting pair should be flagged").toBe(true);
+
+      // The same conflict seen again must not accumulate rows — the queue shows
+      // a duplicate pair once, however many times an import re-encounters it.
+      await createContact(db, accountId,
+        { firstName: "Again", email: "clash@example.com", phone: "956-292-1696" }, "test");
+
+      const [lo, hi] = [a.id, b.id].sort();
+      const { data } = await db.from("contact_duplicate_flags")
+        .select("id, reason").eq("account_id", accountId)
+        .eq("contact_a", lo).eq("contact_b", hi);
+      expect(data?.length, "exactly one flag row for the pair").toBe(1);
+      expect(data![0]!.reason).toBe("email_phone_conflict");
+    }));
+
+  it("does not flag when both matches are the same contact", () =>
+    withTestAccount(async (db, accountId) => {
+      await createContact(db, accountId,
+        { firstName: "Same", email: "same@example.com", phone: "(956) 292-1696" }, "test");
+      const again = await createContact(db, accountId,
+        { firstName: "Same", email: "same@example.com", phone: "+19562921696" }, "test");
+      expect(again.existing).toBe(true);
+      expect(again.flagged, "one contact matching both ways is not a conflict").toBe(false);
+    }));
 });

@@ -144,19 +144,44 @@ async function findDuplicate(
 export async function createContact(
   db: SupabaseClient, accountId: string, input: ContactInput, actorId: string,
   actorType: ActorType = "user",
-): Promise<{ id: string; existing: boolean }> {
+): Promise<{ id: string; existing: boolean; flagged: boolean }> {
   const email = input.email?.trim().toLowerCase();
   const phone = input.phone?.trim();
   const match = await findDuplicate(db, accountId, email || undefined, phone || undefined);
   const winner = match.emailMatch ?? match.phoneMatch;
-  if (winner) return { id: winner, existing: true };
+
+  // Two DIFFERENT existing contacts both look like this person. The row still
+  // lands on the email match, unchanged — but the second one is the thing that
+  // used to vanish, and it is exactly what a merge tool needs to find later.
+  const conflict =
+    match.emailMatch !== null &&
+    match.phoneMatch !== null &&
+    match.emailMatch !== match.phoneMatch;
+
+  let flagged = false;
+  if (conflict) {
+    const [contactA, contactB] = [match.emailMatch!, match.phoneMatch!].sort();
+    // The unique index makes a repeat a no-op rather than a second row, so a
+    // 23505 here is the DESIGNED outcome, not a failure. Anything else is real
+    // and must not be swallowed: a flag that silently fails to write leaves the
+    // queue looking empty, which is worse than not having one.
+    const { error } = await db.from("contact_duplicate_flags")
+      .insert({ account_id: accountId, contact_a: contactA, contact_b: contactB,
+                reason: "email_phone_conflict" });
+    if (error && error.code !== "23505") {
+      throw new Error(`contact duplicate flag failed: ${error.message}`);
+    }
+    flagged = true;
+  }
+
+  if (winner) return { id: winner, existing: true, flagged };
 
   const { data, error } = await db.from("contacts")
     .insert({ account_id: accountId, ...toRow(input) }).select("id").single();
   if (error || !data) throw new Error(`createContact failed: ${error?.message}`);
   await emit(db, accountId, "contact.created", actorId, { contactId: data.id, email, phone },
     actorType);
-  return { id: data.id, existing: false };
+  return { id: data.id, existing: false, flagged: false };
 }
 
 export async function updateContact(
