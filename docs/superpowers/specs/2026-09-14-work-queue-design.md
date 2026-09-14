@@ -66,10 +66,38 @@ and is exactly the right one.
 `due_at` is **nullable**, and most rows will have no due date. That is why the
 screen buckets rather than sorts (§2).
 
-### 1.2 Unreturned calls
+### 1.2 Unreturned calls — WITHDRAWN 2026-09-14, before implementation
 
-`calls` where `outcome in ('lead','message')` and no **outbound** message
-exists on that contact after `calls.started_at`.
+**This source does not exist. It was specified, found broken in review, and
+removed rather than repaired.** The record is kept because the reasoning
+governs §1.3.
+
+It was to be: `calls` where `outcome in ('lead','message')` and no **outbound**
+message exists on that contact after `calls.started_at`.
+
+🔴 **That rule can never match.** The platform's own missed-call text-back
+writes an outbound SMS on the contact's conversation seconds after the call
+ends (`apps/web/src/lib/voice/finish-call.ts:388-390`), so every returnable
+call marks itself returned immediately. `createMessage` does not persist an
+author on the `messages` row — `actorId`/`actorType` reach `emit()` only — so
+the platform's own sends cannot be filtered out without a schema change, which
+the zero-migration constraint forbids.
+
+**Withdrawn in favour of §1.3 carrying the work**, which is the better design
+rather than a workaround: `finishCall` already writes the call's summary as an
+**inbound** message and bumps `unread_count` (`finish-call.ts:226-237`), so an
+unreturned call is *already* an unanswered conversation — and `unread_count`
+dropping when somebody reads the thread is a truer "handled" signal than the
+existence of an outbound row.
+
+🔑 **The `abandoned` exclusion is therefore also withdrawn**, and its test
+deleted rather than retained. `isMeaningful` (`finish-call.ts:99-101`) is
+`booked || lead || message`, so a hang-up never writes an inbound message and
+never bumps `unread_count`. The exclusion is enforced structurally upstream,
+and a test over code that can no longer break is theatre — this repo has a
+recorded lesson about exactly that.
+
+**The queue therefore has three sources, not four.**
 
 `outcome` is constrained to `('booked','lead','message','abandoned','spam')`
 (`0019_voice_core.sql:53`). `booked` and `spam` need nothing.
@@ -89,6 +117,12 @@ logging.
 
 `conversations` where `unread_count > 0`. The column already exists and is
 maintained today — the forms e2e asserts on the unread badge it drives.
+
+Since §1.2 was withdrawn, this source also carries unreturned calls. The row's
+**title is the most recent call's `summary`** for that conversation, where one
+exists, so the queue still reads "Maria called about a quote" rather than a
+bare contact name. One extra account-scoped read for the whole batch, never
+one per row.
 
 ### 1.4 Past bookings not closed out
 
