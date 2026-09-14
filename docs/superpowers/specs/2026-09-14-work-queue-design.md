@@ -251,11 +251,20 @@ The screen is named **To do** in the nav.
 
 ## Testing
 
-- **Bucketing is the unit under test.** A pure function takes the four source
+- **Bucketing is the unit under test.** A pure function takes the three source
   arrays plus a reference instant and an IANA zone, and returns the three
   buckets. Every timezone case lives here: the pin is the **account** zone, and
-  the test spies the constructor rather than relying on the runner's zone —
-  a fixture zone equal to the dev zone cannot discriminate.
+  a fixture zone equal to the dev zone cannot discriminate — so the test runs
+  ONE instant through TWO zones and asserts opposite verdicts, which no fixed
+  or ambient zone can satisfy. (Delegating the zone read to `partsInZone`
+  turned out to make constructor-spying unnecessary; the two-zone pair is the
+  stronger pin anyway.)
+- **It must degrade, not throw.** An invalid IANA zone reaches this function
+  today — `create-account-dialog.tsx:80` is a free-text input and
+  `accounts/actions.ts:13` passes it through unchecked. On a bad zone every
+  row goes to Waiting rather than being classified; on an unparseable
+  `due_at` that one row does. Never a UTC fallback: a silent one would
+  reintroduce the previous-day defect this repo has already shipped.
 - **One named test per source**, each proved by mutation: remove the source
   from the union and the test fails by name.
 - **The `abandoned` exclusion gets its own test**, so a later widening is a
