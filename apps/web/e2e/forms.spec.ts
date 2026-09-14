@@ -47,14 +47,38 @@ async function purge(formName: string, leadEmail: string): Promise<void> {
 // The status control is a Radix Select (a combobox), not the radio group the
 // plan assumed — Task 7's review replaced the radios.
 async function publish(page: Page): Promise<string> {
+  const editorUrl = page.url();
+
   await page.getByRole("combobox", { name: "Status" }).click();
   await page.getByRole("option", { name: "Published" }).click();
   await page.getByRole("button", { name: "Save" }).click();
 
-  // The direct link only renders once the saved row comes back published, so
-  // waiting for it is also the assertion that the save landed.
+  // Wait for the editor's OWN success toast, which is what "the save landed"
+  // actually means, and give it the describe block's budget rather than the
+  // 10s default. This file already documents why: it runs against a dev
+  // server that compiles each route on first hit, and the timeout at the top
+  // was raised to 120s for exactly that. But a describe timeout does not
+  // cover an `expect` — so the assertions inside kept the 10s default, and
+  // this one sat right on the boundary. A trace from a failed run shows the
+  // sibling test passing the same helper in 17.9s.
+  await expect(page.getByText("Saved", { exact: true }))
+    .toBeVisible({ timeout: 30_000 });
+
+  // Then read the link off a FRESH load of the editor.
+  //
+  // Not paranoia: on the run that produced that trace, the page at failure
+  // was the forms LIST, with the form correctly marked Published. The save
+  // had landed; the direct link simply only renders on the editor, and
+  // `saveForm` revalidates BOTH paths. Re-loading removes the question of
+  // where the router settled.
+  //
+  // This is a STRONGER assertion than the in-place one it replaces — a fresh
+  // load proves the published status came back from the server, not from
+  // optimistic state still sitting in the client.
+  await page.goto(editorUrl);
+
   const link = page.getByRole("link", { name: /\/f\// });
-  await expect(link).toBeVisible();
+  await expect(link).toBeVisible({ timeout: 30_000 });
   const href = await link.getAttribute("href");
   expect(href, "a published form must expose a direct link").toBeTruthy();
   return new URL(href!).pathname;
