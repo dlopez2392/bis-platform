@@ -58,4 +58,34 @@ describe("bucketWork", () => {
     expect(b.overdue).toHaveLength(0);
     expect(b.waiting).toHaveLength(1);
   });
+
+  it("degrades to Waiting (not a throw) when the zone is invalid", () => {
+    // "Not/AZone" is not a real IANA zone. Reachable today: the free-text
+    // timezone input at create-account-dialog.tsx:80 has no validation, and
+    // actions.ts:13 passes it straight through to the stored account. If we
+    // cannot resolve the account's day boundary at all, we genuinely do not
+    // know what is late — so nothing may be classified Overdue or Today —
+    // but the work must still be visible, so every row waits, oldest first.
+    const rows = [
+      task("t1", "2026-09-13T15:00:00Z", "2026-09-10T00:00:00Z"), // would be Overdue
+      task("t2", "2026-09-14T11:00:00Z", "2026-09-11T00:00:00Z"), // would be Today
+      derived("d1", "2026-09-08T09:00:00Z"),
+    ];
+    let b!: ReturnType<typeof bucketWork>;
+    expect(() => { b = bucketWork(rows, now, "Not/AZone"); }).not.toThrow();
+    expect(b.overdue).toHaveLength(0);
+    expect(b.today).toHaveLength(0);
+    expect(b.waiting.map((r) => r.id)).toEqual(["conversation:d1", "task:t1", "task:t2"]);
+  });
+
+  it("an unparseable dueAt takes down only its own row, not the batch", () => {
+    const rows = [
+      task("bad", "not-a-date"),
+      task("good", "2026-09-13T15:00:00Z"), // due yesterday in Chicago -> Overdue
+    ];
+    let b!: ReturnType<typeof bucketWork>;
+    expect(() => { b = bucketWork(rows, now, "America/Chicago"); }).not.toThrow();
+    expect(b.waiting.map((r) => r.id)).toEqual(["task:bad"]);
+    expect(b.overdue.map((r) => r.id)).toEqual(["task:good"]);
+  });
 });
