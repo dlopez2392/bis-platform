@@ -34,7 +34,7 @@ function row(overrides: Partial<AgencyWorkRow> = {}): AgencyWorkRow {
   return {
     id: "task:1", source: "task", accountId: "acct-a", contactId: null,
     title: "Call back", dueAt: null, occurredAt: "2026-09-01T00:00:00Z",
-    brandName: "Rio Roofing", timezone: "America/Chicago",
+    brandName: "Rio Roofing", timezone: "America/Chicago", suppressed: false,
     ...overrides,
   };
 }

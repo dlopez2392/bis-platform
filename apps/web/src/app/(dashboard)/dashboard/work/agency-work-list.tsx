@@ -31,6 +31,7 @@ import type { AgencyWorkRow } from "@bis/db";
 import type { Bucket } from "@/lib/work/buckets";
 import type { AgencyBucketedWork } from "@/lib/work/agency-buckets";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/empty-state";
 import { ListPanel, LIST_ROW } from "@/components/ui/list-panel";
 import { formatDateInZone } from "@/lib/format";
@@ -125,9 +126,22 @@ function AgencyWorkRowItem({
             type role (DESIGN.md: Geist Mono 500, 10px, +0.14em, uppercase),
             the same treatment the bucket headings below already use, so it
             reads as a caption identifying which company this row belongs
-            to, never as the row's own status or title. */}
-        <span className="truncate font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase">
-          {row.brandName}
+            to, never as the row's own status or title. A suppressed
+            account's mark lives right here, next to the caption — this is
+            "the interface where the company is identified" (danlo,
+            2026-09-15): the account's own work is no longer hidden (a
+            suppressed account used to be dropped from this read entirely),
+            so the agency sees it and is told, dot plus word, not to text. */}
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase">
+            {row.brandName}
+          </span>
+          {row.suppressed ? (
+            <span className="inline-flex shrink-0 items-center gap-1 text-[10px] font-medium text-[var(--warn)]">
+              <span className="size-[5px] shrink-0 rounded-full bg-[var(--warn)]" aria-hidden />
+              {m["work.agency.suppressed"]}
+            </span>
+          ) : null}
         </span>
         <span className="truncate text-sm font-medium text-card-foreground">{primary}</span>
         {secondary ? <span className="truncate text-xs text-muted-foreground">{secondary}</span> : null}
@@ -175,7 +189,23 @@ export function AgencyWorkList({
   const shown = visibleAgencyBuckets(buckets);
 
   if (shown.length === 0) {
-    return <EmptyState icon={ListTodo} title={m["work.empty"]} body={m["work.agency.empty.body"]} />;
+    return (
+      <EmptyState
+        icon={ListTodo}
+        title={m["work.empty"]}
+        body={m["work.agency.empty.body"]}
+        // The sentence plus the action that causes it (DESIGN.md rule 5).
+        // This screen's rows are derived and pooled across every account —
+        // there is no single "create" action on THIS screen — so the action
+        // is the jumping-off point into the account list, where the tasks,
+        // replies and closed-out bookings that would show up here happen.
+        action={
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/dashboard/accounts">{m["work.agency.empty.action"]}</Link>
+          </Button>
+        }
+      />
+    );
   }
 
   return (

@@ -25,7 +25,7 @@ function row(overrides: Partial<AgencyWorkRow> = {}): AgencyWorkRow {
   return {
     id: "task:1", source: "task", accountId: "acct-a", contactId: null,
     title: "Call back", dueAt: null, occurredAt: "2026-09-01T00:00:00Z",
-    brandName: "Rio Roofing", timezone: "America/Chicago",
+    brandName: "Rio Roofing", timezone: "America/Chicago", suppressed: false,
     ...overrides,
   };
 }
@@ -173,5 +173,29 @@ describe("AgencyWorkList", () => {
     } finally {
       forceFormatError = false;
     }
+  });
+
+  // A suppressed account's rows must not be invisible (Important 1) — but
+  // the reader also needs to know not to text them, marked where the
+  // company is identified: the brand-name caption. Dot + word (rule 3).
+  it("marks a suppressed account's row where the company is identified, dot plus word", () => {
+    const html = renderList(buckets({ waiting: [row({ brandName: "Resaca Roofing", suppressed: true })] }));
+    expect(html).toContain("Resaca Roofing");
+    expect(html).toContain(m["work.agency.suppressed"]);
+    expect(html).toContain("rounded-full");
+  });
+
+  it("does not mark an unsuppressed account's row", () => {
+    const html = renderList(buckets({ waiting: [row({ brandName: "Rio Roofing", suppressed: false })] }));
+    expect(html).not.toContain(m["work.agency.suppressed"]);
+  });
+
+  // DESIGN.md rule 5: an empty state sells the feature with the sentence AND
+  // the action that causes it — this screen pools read-only, derived rows,
+  // so the action is going to the account list to create the work.
+  it("gives the empty state a real action, not just the sentence", () => {
+    const html = renderList(buckets());
+    expect(html).toContain(m["work.agency.empty.action"]);
+    expect(html).toContain('href="/dashboard/accounts"');
   });
 });

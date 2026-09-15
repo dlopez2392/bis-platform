@@ -14,9 +14,16 @@ export type WorkRow = {
 
 async function openTasks(db: SupabaseClient, accountId: string): Promise<WorkRow[]> {
   // Uses the partial index tasks_account_open (account_id) where completed_at is null.
+  // The only one of the three sources with no cap until this line — the
+  // other two (below) both order-then-limit(200); oldest-first here matches
+  // their own ascending order and this screen's general oldest-first bias
+  // (spec §2's Waiting bucket), and bucketWork re-sorts everything by its
+  // own due/occurred date regardless, so this only decides WHICH 200 make
+  // the cut when an account somehow has more open tasks than that.
   const { data, error } = await db.from("tasks")
     .select("id, contact_id, title, due_at, created_at")
-    .eq("account_id", accountId).is("completed_at", null);
+    .eq("account_id", accountId).is("completed_at", null)
+    .order("created_at", { ascending: true }).limit(200);
   if (error) throw new Error(`openTasks failed: ${error.message}`);
   return (data ?? []).map((t) => ({
     id: `task:${t.id}`, source: "task" as const, accountId,
@@ -105,25 +112,67 @@ export async function listAccountWork(db: SupabaseClient, accountId: string): Pr
   return [...tasks, ...convos.filter(keep), ...bookings];
 }
 
-/** `listAgencyWork`'s own row shape: every `WorkRow` field plus the two the
+/** `listAgencyWork`'s own row shape: every `WorkRow` field plus the three the
  *  agency-wide screen needs and a per-account row does not — `brandName`
- *  (never `accounts.name`, see below) and `timezone`, so the zone a row's
- *  own bucket depends on travels WITH the row rather than requiring a
- *  second, separate account read to look it up (Work Queue Task 6). */
-export type AgencyWorkRow = WorkRow & { brandName: string; timezone: string };
+ *  (never `accounts.name`, see below), `timezone`, so the zone a row's own
+ *  bucket depends on travels WITH the row rather than requiring a second,
+ *  separate account read to look it up (Work Queue Task 6), and
+ *  `suppressed`, carried the same way, since 2026-09-15: a suppressed
+ *  account's own customers still wait on a reply, and the previous behaviour
+ *  — dropping the account from this read entirely — made a blank queue
+ *  indistinguishable from a finished one on the exact account that most
+ *  needed to be seen. Nothing about actual sending changes; this is a
+ *  read-only screen that now shows the row and flags it, so the agency
+ *  knows not to text. */
+export type AgencyWorkRow = WorkRow & { brandName: string; timezone: string; suppressed: boolean };
+
+/**
+ * Runs `fn` over `items` with at most `AGENCY_READ_CONCURRENCY` in flight,
+ * returning results in INPUT order (`Promise.all` resolves in input order,
+ * not completion order, so chunked results can be concatenated as-is).
+ *
+ * `listAgencyWork` measured at ~95ms + ~135ms per account, SERIAL, on live
+ * data — a third of a second at two accounts, several seconds at
+ * twenty-five, paid on every uncached pageview. Bounded rather than
+ * unbounded for the same reason `demo/seed.ts`'s own `inParallel` is: this
+ * reads the ONE Supabase project production runs on, and an unbounded
+ * fan-out over every account trades a linear-latency cost for a
+ * connection-storm risk instead of removing it.
+ */
+export const AGENCY_READ_CONCURRENCY = 8;
+
+export async function mapBounded<T, R>(
+  items: readonly T[],
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += AGENCY_READ_CONCURRENCY) {
+    const chunk = items.slice(i, i + AGENCY_READ_CONCURRENCY);
+    out.push(...(await Promise.all(chunk.map(fn))));
+  }
+  return out;
+}
 
 export async function listAgencyWork(
   db: SupabaseClient,
 ): Promise<AgencyWorkRow[]> {
+  // No `.eq("outbound_suppressed", false)` here any more (2026-09-15) — see
+  // `AgencyWorkRow.suppressed`'s own comment above. `name` stays selected
+  // and is now genuinely used, below, as this screen's OWN fallback for a
+  // null/blank `brand_name` — the caption is the only thing on this screen
+  // that says which company a row belongs to, and this screen is agency-only
+  // by construction (requireAgency, page.tsx), so the internal label is
+  // safe here in a way it is not on any customer-facing surface.
   const { data, error } = await db.from("accounts")
-    .select("id, brand_name, name, timezone").eq("outbound_suppressed", false);
+    .select("id, brand_name, name, timezone, outbound_suppressed");
   if (error) throw new Error(`listAgencyWork accounts read failed: ${error.message}`);
-  const out: AgencyWorkRow[] = [];
-  for (const a of data ?? []) {
-    // brand_name, never name — the internal label has leaked to customers.
-    const brandName = a.brand_name ?? "";
+
+  const perAccount = await mapBounded(data ?? [], async (a) => {
+    const brandName = a.brand_name?.trim() || a.name;
     const rows = await listAccountWork(db, a.id);
-    for (const r of rows) out.push({ ...r, brandName, timezone: a.timezone });
-  }
-  return out;
+    return rows.map((r): AgencyWorkRow => ({
+      ...r, brandName, timezone: a.timezone, suppressed: a.outbound_suppressed === true,
+    }));
+  });
+  return perAccount.flat();
 }

@@ -1335,6 +1335,18 @@ export const m = {
   // than imply the one this reader happens to be looking at.
   "work.agency.empty.body":
     "Tasks, contacts waiting on a reply, and jobs nobody has confirmed happened will show up here, across every account.",
+  // The empty state's own action (DESIGN.md rule 5 — the sentence plus the
+  // action that causes it) — this screen pools read-only rows derived from
+  // every account, so there is no single "create" action; the action is
+  // going to the account list to create the work that would show up here.
+  "work.agency.empty.action": "Go to Companies",
+  // Marks a row whose account has outbound sending suppressed (0032) — a
+  // pre-go-live or demo account, MOST often, but Resaca-shaped: the newest
+  // account, waiting on carrier registration, with real customers already
+  // waiting on a reply. Nothing about actual sending changes; this is a
+  // read-only screen and the mark exists so the agency sees the work and
+  // knows not to text. Dot + word (rule 3), never color alone.
+  "work.agency.suppressed": "Not texting",
 } as const;
 
 export type MessageKey = keyof typeof m;

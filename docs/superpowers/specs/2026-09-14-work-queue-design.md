@@ -232,8 +232,11 @@ while this is the screen to open every morning.
 
 ### 4.2 Agency-wide — `/dashboard/work`
 
-Top level, beside Accounts and Blueprints. Same four sources across every
-account, with the account's **`brand_name`** on every row.
+Top level, beside Accounts and Blueprints. Same three sources across every
+account (§1.2: the fourth, unreturned calls, was withdrawn before
+implementation — the rule it needed could never match, and its work is
+already carried by §1.3's unanswered conversations instead), with the
+account's **`brand_name`** on every row.
 
 🔴 **Agency only.** `requireAgency`, and a client must never reach it. This is
 the first screen in the product whose entire purpose is to span tenants, so its
