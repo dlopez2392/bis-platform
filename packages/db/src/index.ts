@@ -70,3 +70,14 @@ export { getSiteForAccount, upsertSite, listSitesToSync, writeTrafficDay, stampS
          listTrafficDays, listTrafficBreakdown, countTrafficDays, unlinkSite,
          type SiteRow, type TrafficDay, type TrafficDimension, type TrafficBreakdownRow } from "./sites";
 export * from "./weekly-report";
+
+// The demo tenant's fiction — data only, no seeder. `seed.ts` deliberately
+// stays out of the package's public surface: it DELETES the account it finds,
+// and nothing in apps/web has any business reaching it. The one export the
+// app genuinely needs is the forwarding tick key, which
+// setup-status.test.ts asserts against its own copy so the two cannot drift.
+export {
+  DEMO_ORG_ID, DEMO_ACCOUNT_NAME, DEMO_TIMEZONE, DEMO_BRAND_COLOR,
+  DEMO_BUSINESS_LINE, DEMO_FROM_EMAIL, DEMO_OPEN_HOURS,
+  DEMO_FORWARDING_TICK_KEY,
+} from "./demo/fiction";
