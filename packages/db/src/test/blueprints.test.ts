@@ -158,6 +158,64 @@ describe("blueprint capture", () => {
       expect(secondBp!.assets).toEqual(firstBp!.assets);
     }));
 
+  /**
+   * Captures are not serialized — two agency users can save a blueprint of the
+   * same name at the same instant, and the row they contend for is ONE row
+   * (`unique (agency_id, name)`, migration 0007).
+   *
+   * Deterministic rather than a thrash test: bumping `version` out from under
+   * a capture is exactly what a concurrent capture does between another's read
+   * and its write. Before the compare-and-swap, the second capture here wrote
+   * version 2 over version 99 — the other capture's bundle, gone, with nothing
+   * reported. Now the pinned UPDATE matches no row, it re-reads, and the write
+   * lands on top of the real current state.
+   */
+  it("re-reads instead of overwriting a capture that landed mid-flight", () =>
+    withTestAccount(async (db, accountId) => {
+      await seedConfig(db, accountId);
+      const name = blueprintName("Mid-flight");
+      const first = await captureBlueprint(db, accountId, { name }, "user_test");
+      expect(first.version).toBe(1);
+
+      // Stand in for a concurrent capture that completed in between.
+      await db.from("blueprints").update({ version: 99 }).eq("id", first.id);
+
+      const second = await captureBlueprint(db, accountId, { name }, "user_test");
+      expect(second.id).toBe(first.id);
+      // 100, not 2: the write is computed from what is actually in the row.
+      expect(second.version).toBe(100);
+    }));
+
+  /**
+   * The other window, and the one that was visible to a user: both captures
+   * miss the lookup, both INSERT, and the loser got a raw
+   * "duplicate key value violates unique constraint" where it asked for a
+   * version bump. Both must now succeed against the same row.
+   *
+   * Genuinely concurrent — every call here is a network round trip, so
+   * Promise.all interleaves them. It is the one test in this file whose
+   * INTERLEAVING is not guaranteed; what it pins down regardless is that two
+   * captures of one new name never produce a duplicate-key error, two rows, or
+   * two captures both claiming version 1.
+   */
+  it("gives both of two simultaneous captures of a new name a version", () =>
+    withTestAccount(async (db, accountId) => {
+      await seedConfig(db, accountId);
+      const name = blueprintName("Simultaneous");
+
+      const [a, b] = await Promise.all([
+        captureBlueprint(db, accountId, { name }, "user_test"),
+        captureBlueprint(db, accountId, { name }, "user_test"),
+      ]);
+
+      expect(a.id).toBe(b.id);
+      expect([a.version, b.version].sort((x, y) => x - y)).toEqual([1, 2]);
+
+      const rows = (await listBlueprints(db)).filter((r) => r.name === name);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.version).toBe(2);
+    }));
+
   it("buildBundle fails loud, naming the query, instead of persisting an incomplete bundle", async () => {
     // An invalid account id makes every one of buildBundle's six queries
     // error at the database (invalid uuid input) rather than match zero

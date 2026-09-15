@@ -95,6 +95,32 @@ function makeKeyer() {
   };
 }
 
+/**
+ * Captures are not serialized: two agency users can hit "Save as blueprint"
+ * for the same name at the same instant, and `blueprints` is agency-scoped
+ * with `unique (agency_id, name)` (migration 0007), so they contend for ONE
+ * row. Read-then-write left two windows open between the read and the write:
+ *
+ *   - Both miss the lookup and both INSERT. One wins; the other surfaced a raw
+ *     "duplicate key value violates unique constraint" to whoever clicked
+ *     second, instead of the version bump they asked for.
+ *   - Both find the row, both compute `version + 1`, and both UPDATE. The
+ *     second overwrites the first — a silently lost capture and a version that
+ *     undercounts. Worse than the first case, because nothing reports it.
+ *
+ * Closed here without a schema change, because `version` is already the token
+ * a compare-and-swap needs: the UPDATE is pinned to the version that was read,
+ * so a row someone else bumped in between matches zero rows instead of being
+ * clobbered, and the INSERT treats a unique violation as "someone else created
+ * it first". Either way the attempt re-reads and tries again. A serialized
+ * caller — every test, and every real single-operator capture — takes the same
+ * path it always did and never spends a retry.
+ */
+const CAPTURE_ATTEMPTS = 3;
+
+/** Postgres unique_violation: another writer inserted this name first. */
+const UNIQUE_VIOLATION = "23505";
+
 export async function captureBlueprint(
   db: SupabaseClient, sourceAccountId: string, input: { name: string }, actorId: string,
 ): Promise<{ id: string; version: number }> {
@@ -103,33 +129,52 @@ export async function captureBlueprint(
   const { data: agency, error: agErr } = await db.from("agencies").select("id").limit(1).single();
   if (agErr || !agency) throw new Error(`agency row missing: ${agErr?.message}`);
 
-  const { data: existing, error: existingErr } = await db.from("blueprints").select("id, version")
-    .eq("agency_id", agency.id).eq("name", input.name).maybeSingle();
-  // Fail loud: falling through to the insert branch below on a lost lookup
-  // surfaces as "duplicate key value violates unique constraint" instead of
-  // naming the query that actually failed.
-  if (existingErr) throw new Error(`captureBlueprint: existing blueprint lookup failed: ${existingErr.message}`);
+  for (let attempt = 1; attempt <= CAPTURE_ATTEMPTS; attempt++) {
+    const { data: existing, error: existingErr } = await db.from("blueprints").select("id, version")
+      .eq("agency_id", agency.id).eq("name", input.name).maybeSingle();
+    // Fail loud: falling through to the insert branch below on a lost lookup
+    // surfaces as "duplicate key value violates unique constraint" instead of
+    // naming the query that actually failed.
+    if (existingErr) throw new Error(`captureBlueprint: existing blueprint lookup failed: ${existingErr.message}`);
 
-  if (existing) {
-    const version = existing.version + 1;
-    const { error } = await db.from("blueprints")
-      .update({ assets, version, source_account_id: sourceAccountId,
-                updated_at: new Date().toISOString() })
-      .eq("id", existing.id);
-    if (error) throw new Error(`captureBlueprint failed: ${error.message}`);
+    if (existing) {
+      const version = existing.version + 1;
+      // `.eq("version", existing.version)` is the compare-and-swap: if another
+      // capture bumped this row since the read, zero rows match and we re-read
+      // rather than overwrite their assets with a stale bundle.
+      const { data: updated, error } = await db.from("blueprints")
+        .update({ assets, version, source_account_id: sourceAccountId,
+                  updated_at: new Date().toISOString() })
+        .eq("id", existing.id).eq("version", existing.version)
+        .select("id");
+      if (error) throw new Error(`captureBlueprint failed: ${error.message}`);
+      if (updated === null || updated.length === 0) continue; // lost the race; re-read
+
+      await emit(db, sourceAccountId, "blueprint.captured", actorId,
+        { blueprintId: existing.id, name: input.name, version });
+      return { id: existing.id, version };
+    }
+
+    const { data, error } = await db.from("blueprints")
+      .insert({ agency_id: agency.id, name: input.name,
+                source_account_id: sourceAccountId, assets })
+      .select("id").single();
+    // Someone else inserted this name between our lookup and our insert. The
+    // row exists now, so the next attempt finds it and takes the update path.
+    if (error && (error as { code?: string }).code === UNIQUE_VIOLATION) continue;
+    if (error || !data) throw new Error(`captureBlueprint failed: ${error?.message}`);
+
     await emit(db, sourceAccountId, "blueprint.captured", actorId,
-      { blueprintId: existing.id, name: input.name, version });
-    return { id: existing.id, version };
+      { blueprintId: data.id, name: input.name, version: 1 });
+    return { id: data.id, version: 1 };
   }
 
-  const { data, error } = await db.from("blueprints")
-    .insert({ agency_id: agency.id, name: input.name,
-              source_account_id: sourceAccountId, assets })
-    .select("id").single();
-  if (error || !data) throw new Error(`captureBlueprint failed: ${error?.message}`);
-  await emit(db, sourceAccountId, "blueprint.captured", actorId,
-    { blueprintId: data.id, name: input.name, version: 1 });
-  return { id: data.id, version: 1 };
+  // Bounded rather than a spin: losing three times in a row means sustained
+  // contention on one name, and reporting that beats looping in a request.
+  throw new Error(
+    `captureBlueprint: "${input.name}" was changed by another capture ` +
+    `${CAPTURE_ATTEMPTS} times running; nothing was written. Try again.`,
+  );
 }
 
 async function buildBundle(db: SupabaseClient, accountId: string): Promise<BlueprintBundle> {
