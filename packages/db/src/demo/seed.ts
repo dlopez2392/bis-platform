@@ -171,6 +171,34 @@ function assertSeedableOrgId(orgId: string): void {
   }
 }
 
+/**
+ * The demo's Vercel project id — the seeder's OTHER global lock, and the same
+ * defect one table down from the phone number.
+ *
+ * `sites.vercel_project_id` is unique across every account exactly like
+ * `phone_numbers.e164`, so the fixed literal this used to write meant a
+ * throwaway tenant and the real demo could not both exist. It cost 75 seconds
+ * to find out, because the site is the last thing the seeder builds: the
+ * suite got all the way through contacts, calls, bookings and forms and then
+ * died on `sites_vercel_project_id_key`.
+ *
+ * Derived from the org id rather than injected, unlike `businessLine`. A
+ * phone number has to come from the 01xx block and so has to be chosen; a
+ * project id has no reserved range and no format anyone depends on, so
+ * deriving it means a caller who passes a throwaway org id cannot forget to
+ * pass a matching project id. `accounts.clerk_org_id` is itself unique, so
+ * the derived value is unique for the same reason the org id is.
+ *
+ * The real demo's id is unchanged and pinned by a test: it is what a re-seed
+ * of the live tenant writes, and it stays deliberately unmistakable so that
+ * nobody hunting a broken sync goes looking for it in the Vercel dashboard.
+ */
+export function siteProjectIdFor(orgId: string): string {
+  return orgId === DEMO_ORG_ID
+    ? "prj_demo_resaca_air_not_a_real_project"
+    : `prj_${orgId}_not_a_real_project`;
+}
+
 export async function findDemoAccount(
   db: SupabaseClient, orgId: string = DEMO_ORG_ID,
 ): Promise<{ id: string; outboundSuppressed: boolean } | null> {
@@ -248,13 +276,28 @@ export type SeedResult = { accountId: string; replacedExisting: boolean; counts:
  * Every timestamp is derived from it, so the demo is always "this week"
  * relative to its last seed: a dashboard whose newest call is four months old
  * sells nothing.
+ *
+ * `businessLine` is injectable for the same reason `orgId` is, and covers the
+ * half `orgId` cannot: `phone_numbers.e164` is unique across every account, so
+ * the demo's number is a global lock and a throwaway tenant that reused it
+ * could only be built while no demo tenant existed. A throwaway org id does
+ * not help — the org id is not what collides. With its own reserved number
+ * (01-09 in the block `fiction.ts` allots), a throwaway tenant and the real
+ * demo coexist permanently, which is what lets the suite run on a project
+ * where somebody has actually seeded the demo.
+ *
+ * Injectable, not arbitrary: it goes through `assertFiction` HERE, before an
+ * account exists, so a dialable number is refused with nothing written. That
+ * guard is what keeps demo seeding from ever reaching a real person.
  */
 export async function seedDemoTenant(
-  db: SupabaseClient, opts: { now?: Date; orgId?: string } = {},
+  db: SupabaseClient, opts: { now?: Date; orgId?: string; businessLine?: string } = {},
 ): Promise<SeedResult> {
   const now = (opts.now ?? new Date()).getTime();
   const orgId = opts.orgId ?? DEMO_ORG_ID;
   assertSeedableOrgId(orgId);
+  const businessLine = opts.businessLine ?? DEMO_BUSINESS_LINE;
+  assertFiction(undefined, businessLine, "the business line");
   const r = rng(0x5e5ca17);
 
   const replacedExisting = await dropDemoAccount(db, orgId);
@@ -303,7 +346,7 @@ export async function seedDemoTenant(
   await setBranding(db, accountId,
     { brandName: DEMO_ACCOUNT_NAME, brandColor: DEMO_BRAND_COLOR, brandLogoPath }, ACTOR);
 
-  await seedVoice(db, accountId);
+  await seedVoice(db, accountId, businessLine);
   const contacts = await seedContacts(db, accountId, now, r);
   const convos = await seedConversations(db, accountId, contacts, now, r);
   const calls = await seedCalls(db, accountId, contacts, convos, now, r);
@@ -311,7 +354,7 @@ export async function seedDemoTenant(
   const opportunities = await seedPipeline(db, accountId, contacts, now, r);
   const submissions = await seedForm(db, accountId, contacts, now, r);
   await seedAutomations(db, accountId);
-  const trafficDays = await seedSite(db, accountId, now, r);
+  const trafficDays = await seedSite(db, accountId, now, r, siteProjectIdFor(orgId));
   await backdateEvents(db, accountId, now);
 
   return {
@@ -328,9 +371,14 @@ export async function seedDemoTenant(
 
 // ---------------------------------------------------------------------------
 
-async function seedVoice(db: SupabaseClient, accountId: string): Promise<void> {
-  assertFiction(undefined, DEMO_BUSINESS_LINE, "the business line");
-  await assignPhoneNumber(db, accountId, { e164: DEMO_BUSINESS_LINE, status: "live" }, ACTOR);
+async function seedVoice(
+  db: SupabaseClient, accountId: string, businessLine: string,
+): Promise<void> {
+  // Checked again at the writer, not only at the entry point: this is the one
+  // line that reaches `phone_numbers`, and a number that can be dialled must
+  // not get past it whatever the caller did upstream.
+  assertFiction(undefined, businessLine, "the business line");
+  await assignPhoneNumber(db, accountId, { e164: businessLine, status: "live" }, ACTOR);
   await upsertVoiceProfile(db, accountId, {
     persona_name: "Sofía",
     greeting_en:
@@ -791,12 +839,10 @@ async function seedAutomations(db: SupabaseClient, accountId: string): Promise<v
  * for exactly that and a flat series never exercises it.
  */
 async function seedSite(
-  db: SupabaseClient, accountId: string, now: number, r: Rng,
+  db: SupabaseClient, accountId: string, now: number, r: Rng, vercelProjectId: string,
 ): Promise<number> {
   const site = await upsertSite(db, accountId, {
-    // Not a real Vercel project id — and deliberately unmistakable, so nobody
-    // hunting a broken sync goes looking for it in the Vercel dashboard.
-    vercelProjectId: "prj_demo_resaca_air_not_a_real_project",
+    vercelProjectId,
     domain: "resaca-air.example",
     analyticsEnabledAt: new Date(now - 90 * DAY).toISOString(),
   });

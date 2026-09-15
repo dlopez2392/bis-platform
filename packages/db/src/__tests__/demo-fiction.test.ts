@@ -153,6 +153,32 @@ describe("demo tenant — the seeder cannot write past the walls", () => {
     expect(firstWrite).toBeGreaterThan(suppress);
   });
 
+  /**
+   * The business line is injectable — it has to be, because
+   * `phone_numbers.e164` is unique across every account, so a throwaway
+   * tenant that reused the demo's number could only be seeded while no demo
+   * tenant existed. Injectable means a number now arrives from OUTSIDE this
+   * file's data, which is exactly the case `assertFiction` exists for, and it
+   * is checked before the account is created so a dialable number is refused
+   * with nothing written at all.
+   *
+   * A source walk, because the database cannot tell the two orderings apart:
+   * the seeder drops its half-built account on any failure, so a guard that
+   * fired late would leave the same rejection and the same absent account.
+   *
+   * Mutation: delete the assertFiction line from seedDemoTenant, or move it
+   * below createAccount — this fails and names which.
+   */
+  it("checks the business line it was handed before it creates the account", () => {
+    const body = seed.slice(seed.indexOf("export async function seedDemoTenant"));
+    const guard = body.indexOf('assertFiction(undefined, businessLine, "the business line")');
+    expect(guard, "seedDemoTenant does not check the business line it was handed")
+      .toBeGreaterThan(-1);
+    const create = body.indexOf("await createAccount(db, {");
+    expect(create, "createAccount is not called in seedDemoTenant").toBeGreaterThan(-1);
+    expect(guard, "the business line is checked after the account exists").toBeLessThan(create);
+  });
+
   /** Mutation: drop either condition from dropDemoAccount — this fails. */
   it("guards the destructive path on both the org id and the flag", () => {
     const drop = seed.slice(seed.indexOf("export async function dropDemoAccount"));

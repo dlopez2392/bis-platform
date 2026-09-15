@@ -55,8 +55,8 @@ export const DEMO_TIMEZONE = "America/Chicago";
  *  That is the pair worth screenshotting: our aesthetic, their brand. */
 export const DEMO_BRAND_COLOR = "#0E6BA8";
 
-/** The one business line. Reserved-range, so it can be shown on a screenshot
- *  without sending anybody a call.
+/** The REAL demo tenant's business line. Reserved-range, so it can be shown
+ *  on a screenshot without sending anybody a call.
  *
  *  `phone_numbers.e164` is unique across EVERY account, not per account, so
  *  this constant is effectively a global lock: exactly one account in the
@@ -64,7 +64,19 @@ export const DEMO_BRAND_COLOR = "#0E6BA8";
  *  behind therefore blocks the next seed with
  *  `duplicate key value violates unique constraint "phone_numbers_e164_key"`
  *  — an error that names nothing about the real problem. That is why
- *  `seedDemoTenant` drops its half-built account on any failure. */
+ *  `seedDemoTenant` drops its half-built account on any failure.
+ *
+ *  And it is why `seedDemoTenant` takes `businessLine` the way it takes
+ *  `orgId`: a throwaway tenant that reused this number could only be built
+ *  while no demo tenant existed, which made the suite pass or fail on whether
+ *  anybody had seeded the demo lately. A throwaway org id does not avoid that
+ *  — the org id is not what collides. Its own number is.
+ *
+ *  THE 01xx BLOCK IS ALLOTTED, and every part of it is spoken for:
+ *    00      this line, the real demo tenant's
+ *    01-09   throwaway business lines for the test harness
+ *    10-49   `DEMO_PEOPLE` — one each, fixed, so reordering moves nothing
+ *    50-99   the strangers who call in (`seedCalls`, `seedForm`) */
 export const DEMO_BUSINESS_LINE = "+19565550100";
 
 /** Fiction-safe by construction, and asserted rather than trusted.
