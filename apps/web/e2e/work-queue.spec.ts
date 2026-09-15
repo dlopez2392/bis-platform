@@ -1,7 +1,16 @@
 import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
+import { config as loadEnv } from "dotenv";
+import { serviceDb, createContact, getOrCreateCalendar, createBooking } from "@bis/db";
 import { m } from "../src/lib/messages";
 import { SEEDED_ACCOUNT_NAME } from "./support";
+
+// This file's last describe block talks to Supabase directly from the
+// Playwright runner process (creating the booking the closing assertion
+// needs), not through a Next.js request — same two paths, same reason, as
+// automations.spec.ts and booking.spec.ts.
+loadEnv({ path: "apps/web/.env.local" });
+loadEnv({ path: ".env.local" });
 
 // The first screen in this app whose whole purpose is to span every
 // account (design spec docs/superpowers/specs/2026-09-14-work-queue-design.md
@@ -128,5 +137,87 @@ test.describe("the agency admin can reach the queue this file guards", () => {
     await expect(
       page.getByRole("heading", { name: m["work.agency.title"] }),
     ).toBeVisible();
+  });
+});
+
+// The assertion this whole milestone rests on (Task 7 brief). The
+// review-request automation's own query (`listDueReviewRequests`,
+// packages/db/src/automations.ts:218) selects bookings whose `status` is
+// `completed` and whose `completed_at` is not null — and across every
+// booking ever created in this database, that status had never once been
+// set. Nothing was broken; the close-out buttons simply sat behind a screen
+// nobody had a reason to open. The To do screen's booking row
+// (`staleBookings`, work-queue.ts: `status = "booked"` AND `ends_at` in the
+// past) is the thing that asks, and "It happened" (`WorkRowActions` →
+// `closeOutBooking` → `setBookingStatusAction` → `setBookingStatus`,
+// booking.ts) is the one path in the product that flips both columns the
+// automation's query reads. This proves that path actually stamps them — not
+// that the automation then sends, which is automations.spec.ts's and the db
+// package's own job — on the per-run fixture account (CLAUDE.md: booking
+// state is a mutation, and this shared database is also production, so this
+// never runs against `Test Client One` or any live account).
+test.describe("It happened closes the loop the milestone exists for", () => {
+  test("a stale booking marked It happened becomes completed and stamped", async ({ page }) => {
+    const fixture = JSON.parse(
+      readFileSync("e2e/.auth/client-fixture.json", "utf-8"),
+    ) as { accountId: string };
+    const db = serviceDb();
+
+    // A real calendar, a real contact, and a real booking whose `ends_at` is
+    // already an hour in the past with `status: "booked"` — the column's own
+    // default, never set explicitly here — so this row is exactly what
+    // `staleBookings` selects on, without the test faking `bucketWork`'s
+    // classification.
+    const calendar = await getOrCreateCalendar(db, fixture.accountId, "e2e-work-queue");
+    const stamp = Date.now();
+    const { id: contactId } = await createContact(
+      db, fixture.accountId,
+      { firstName: "E2E", lastName: `WorkQueue ${stamp}` },
+      "e2e-work-queue",
+    );
+    const contactName = `E2E WorkQueue ${stamp}`;
+    const now = Date.now();
+    const { id: bookingId } = await createBooking(
+      db, fixture.accountId,
+      {
+        calendarId: calendar.id,
+        contactId,
+        startsAt: new Date(now - 2 * 60 * 60 * 1000),
+        endsAt: new Date(now - 60 * 60 * 1000),
+      },
+      "e2e-work-queue",
+    );
+
+    try {
+      await page.goto(`/dashboard/accounts/${fixture.accountId}/tasks`);
+
+      // Scoped to THIS booking's own row by the contact name it renders
+      // (`secondaryLine`, work-list.tsx) — every booking row shares the same
+      // primary sentence ("Did this job happen?", `work.booking`), so a bare
+      // role query for the button alone would be ambiguous if another stale
+      // booking exists on this account.
+      const row = page.locator("li").filter({ hasText: contactName });
+      await expect(row).toBeVisible();
+      await row.getByRole("button", { name: m["work.booking.completed"] }).click();
+      await expect(page.getByText(m["work.booking.completed.toast"])).toBeVisible();
+
+      // THE assertion: both columns the automation's own query filters on.
+      const { data, error } = await db
+        .from("bookings")
+        .select("status, completed_at")
+        .eq("id", bookingId)
+        .single();
+      if (error) throw new Error(`work-queue e2e: booking re-read failed: ${error.message}`);
+      expect(data?.status).toBe("completed");
+      expect(data?.completed_at).not.toBeNull();
+    } finally {
+      // The whole fixture account is deleted by auth.teardown.ts regardless,
+      // but cleaning up here (not just there) matches booking.spec.ts's own
+      // precedent: teardown only runs when the suite COMPLETES, and a
+      // same-run retry of this spec should not find the previous attempt's
+      // booking still sitting on this contact.
+      await db.from("bookings").delete().eq("id", bookingId);
+      await db.from("contacts").delete().eq("id", contactId);
+    }
   });
 });
