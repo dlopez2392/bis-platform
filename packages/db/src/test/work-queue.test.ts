@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { withTestAccount } from "./fixtures";
+import { withTestAccount, testPhoneNumber } from "./fixtures";
 import { listAccountWork, listAgencyWork, mapBounded, AGENCY_READ_CONCURRENCY } from "../work-queue";
 import { addTask } from "../activities";
 import { getOrCreateCalendar, createBooking } from "../booking";
@@ -81,9 +81,18 @@ describe("listAccountWork", () => {
       }).select("id").single();
       // Fresh fixture accounts carry no phone_numbers row — insert one rather
       // than selecting; calls.phone_number_id is NOT NULL.
-      const { data: pn } = await db.from("phone_numbers")
-        .insert({ account_id: accountId, e164: "+15559990004" })
+      //
+      // The number comes from the harness, not from a literal: `e164` is
+      // unique across every account in the project, so a fixed one loses to
+      // any other run holding it. And the insert's error is CHECKED, because
+      // the unchecked version is how that loss actually presented — `pn` came
+      // back null and the next line read `.id` off it, so a duplicate key
+      // arrived as `TypeError: Cannot read properties of null` naming neither
+      // the table nor the constraint.
+      const { data: pn, error: pnErr } = await db.from("phone_numbers")
+        .insert({ account_id: accountId, e164: testPhoneNumber() })
         .select("id").single();
+      expect(pnErr, `phone_numbers insert failed: ${pnErr?.message}`).toBeNull();
       await db.from("calls").insert({
         account_id: accountId, phone_number_id: pn!.id, contact_id: c!.id,
         conversation_id: convo!.id, outcome: "lead",
