@@ -55,7 +55,13 @@ test.describe("the Website section, as the client", () => {
     await page.goto(`/dashboard/accounts/${accountId}/dashboard`);
     const nav = page.locator("aside nav");
     const links = await nav.getByRole("link").allTextContents();
-    expect(links.indexOf("Website")).toBe(links.indexOf("Dashboard") + 1);
+    // "To do" (nav.tasks) joined the nav directly under Dashboard on
+    // 2026-09-14 (Work Queue Task 3), ahead of Website — see
+    // nav-groups.ts's buildNavGroups. Checking the whole two-item chain
+    // (rather than dropping back to "Website is somewhere after Dashboard")
+    // keeps this exact enough to still catch a real reordering.
+    expect(links.indexOf("To do")).toBe(links.indexOf("Dashboard") + 1);
+    expect(links.indexOf("Website")).toBe(links.indexOf("To do") + 1);
     await nav.getByRole("link", { name: "Website", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/dashboard/accounts/${accountId}/website$`));
     await expect(page.getByText("Your first numbers arrive tomorrow morning")).toBeVisible();

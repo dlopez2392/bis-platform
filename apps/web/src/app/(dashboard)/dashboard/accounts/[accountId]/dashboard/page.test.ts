@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { WorkRow } from "@bis/db";
 import { m } from "@/lib/messages";
 
 /**
@@ -70,6 +71,9 @@ const dbMocks = vi.hoisted(() => ({
   listCallStartsBetween: vi.fn(),
   listBookingCreationsBetween: vi.fn(),
   listOpportunityValuesCreatedBetween: vi.fn(),
+  // Task 5's dashboard row — the same `listAccountWork` read tasks/page.tsx
+  // already makes; mocked here in this file's own vi.fn() shape.
+  listAccountWork: vi.fn(),
 }));
 // mergeChecklist (@/lib/checklist-catalogue) is NOT mocked — the real
 // 7-item CHECKLIST_CATALOGUE is what makes "the right counts" a meaningful
@@ -85,6 +89,7 @@ vi.mock("@bis/db", () => ({
   listCallStartsBetween: (...a: unknown[]) => dbMocks.listCallStartsBetween(...a),
   listBookingCreationsBetween: (...a: unknown[]) => dbMocks.listBookingCreationsBetween(...a),
   listOpportunityValuesCreatedBetween: (...a: unknown[]) => dbMocks.listOpportunityValuesCreatedBetween(...a),
+  listAccountWork: (...a: unknown[]) => dbMocks.listAccountWork(...a),
 }));
 
 vi.mock("./calls-chart-card", () => ({ CallsChartCard: () => null }));
@@ -98,6 +103,21 @@ const checklistRowProps = vi.hoisted(() => ({ current: null as { accountId: stri
 vi.mock("./checklist-row", () => ({
   ChecklistRow: (props: { accountId: string; done: number; total: number }) => {
     checklistRowProps.current = props;
+    return null;
+  },
+}));
+
+// Task 5 review fix (Important 2): the work row was wired into page.tsx but
+// nothing asserted it — deleting `<WorkRowCard>` from page.tsx, or gating it
+// behind `workTotal > 0`, or behind `isAgency`, left this whole file green.
+// Same idiom as `checklistRowProps` above: captured rather than rendered, so
+// the page-level wiring (which counts it's handed, and that it renders at
+// zero for both audiences) is what's under test here, not work-row.tsx's own
+// markup (that's work-row.test.ts's job).
+const workRowProps = vi.hoisted(() => ({ current: null as { accountId: string; total: number; overdue: number } | null }));
+vi.mock("./work-row", () => ({
+  WorkRowCard: (props: { accountId: string; total: number; overdue: number }) => {
+    workRowProps.current = props;
     return null;
   },
 }));
@@ -120,25 +140,32 @@ const ALL_CATALOGUE_KEYS = [
   "phone_number", "email_domain", "form_notify", "reply_to", "gbp_connect", "invite_owner",
 ];
 
+// Shared by both describe blocks below (checklist row + work row) — the same
+// reset either page-level row needs, factored out rather than duplicated
+// when the work row's own describe block was added for the Task 5 review fix.
+function resetFixtures() {
+  authFixture.isAgency = true;
+  dbFixture.openOpps = [];
+  checklistRowProps.current = null;
+  workRowProps.current = null;
+  for (const fn of Object.values(dbMocks)) fn.mockReset();
+  dbMocks.countContacts.mockResolvedValue(0);
+  dbMocks.getVoiceProfile.mockResolvedValue(null);
+  dbMocks.getCalendarForAccount.mockResolvedValue(null);
+  dbMocks.listCalls.mockResolvedValue([]);
+  dbMocks.listRecentEvents.mockResolvedValue([]);
+  dbMocks.listCallStartsBetween.mockResolvedValue([]);
+  dbMocks.listBookingCreationsBetween.mockResolvedValue([]);
+  dbMocks.listOpportunityValuesCreatedBetween.mockResolvedValue([]);
+  dbMocks.listAccountWork.mockResolvedValue([]);
+  // Default: 1 of 7 catalogue items done, A2P not approved — mirrors
+  // blueprints.spec.ts's own GAP 3 fixture shape (1 ticked, A2P rejected).
+  dbMocks.listChecklistState.mockResolvedValue([row("phone_number")]);
+  dbMocks.getA2pRegistration.mockResolvedValue({ status: "rejected", updatedAt: null });
+}
+
 describe("AccountDashboardPage — the checklist row (replaces the old full ChecklistPanel)", () => {
-  beforeEach(() => {
-    authFixture.isAgency = true;
-    dbFixture.openOpps = [];
-    checklistRowProps.current = null;
-    for (const fn of Object.values(dbMocks)) fn.mockReset();
-    dbMocks.countContacts.mockResolvedValue(0);
-    dbMocks.getVoiceProfile.mockResolvedValue(null);
-    dbMocks.getCalendarForAccount.mockResolvedValue(null);
-    dbMocks.listCalls.mockResolvedValue([]);
-    dbMocks.listRecentEvents.mockResolvedValue([]);
-    dbMocks.listCallStartsBetween.mockResolvedValue([]);
-    dbMocks.listBookingCreationsBetween.mockResolvedValue([]);
-    dbMocks.listOpportunityValuesCreatedBetween.mockResolvedValue([]);
-    // Default: 1 of 7 catalogue items done, A2P not approved — mirrors
-    // blueprints.spec.ts's own GAP 3 fixture shape (1 ticked, A2P rejected).
-    dbMocks.listChecklistState.mockResolvedValue([row("phone_number")]);
-    dbMocks.getA2pRegistration.mockResolvedValue({ status: "rejected", updatedAt: null });
-  });
+  beforeEach(resetFixtures);
 
   it("an agency sees the row, handed the account's real done/total counts (not a made-up number)", async () => {
     await renderToStaticMarkup(await AccountDashboardPage(route()));
@@ -173,5 +200,63 @@ describe("AccountDashboardPage — the checklist row (replaces the old full Chec
     expect(checklistRowProps.current).toBeNull();
     expect(html).toContain(m["checklist.reviewLink"]);
     expect(html).toContain('href="/dashboard/accounts/acct1/checklist"');
+  });
+});
+
+// Task 5 review fix (Important 2). Before this block, nothing in this file —
+// or anywhere else — asserted `<WorkRowCard>` is ever rendered: deleting it
+// from page.tsx, gating it behind `workTotal > 0`, or gating it behind
+// `isAgency` all left the suite green, including the three tests above whose
+// `listAccountWork` mock entry existed only to keep the page's own
+// `Promise.all` from throwing.
+describe("AccountDashboardPage — the work row (unlike the checklist row, both audiences and every count)", () => {
+  beforeEach(resetFixtures);
+
+  /** `dueAt` fixed far in the past or far in the future rather than relative
+   *  to "now" — page.tsx buckets against the real `new Date()`, not an
+   *  injectable clock, so a date near "today" would make this test's own
+   *  overdue/waiting split depend on when it happens to run. Derived rows
+   *  (conversation/booking) always land in `waiting` regardless of date
+   *  (bucketWork's own doc comment), so `dueAt: null` there is enough. */
+  function workRow(source: WorkRow["source"], dueAt: string | null): WorkRow {
+    return {
+      id: `${source}:${dueAt ?? "none"}`, source, accountId: "acct1", contactId: null,
+      title: "", dueAt, occurredAt: "2020-01-01T00:00:00Z",
+    };
+  }
+
+  it("hands WorkRowCard the account's real total/overdue counts from a mix of sources", async () => {
+    dbMocks.listAccountWork.mockResolvedValue([
+      workRow("task", "2020-01-01T00:00:00Z"), // always overdue
+      workRow("task", "2099-01-01T00:00:00Z"), // always waiting (future)
+      // The current instant — shares a local day with page.tsx's own `now`
+      // in ANY zone by construction (both are `new Date()` a moment apart),
+      // unlike a relative offset that would need its own zone reasoning.
+      // Pins the bucket a plain overdue+waiting fixture leaves uncovered:
+      // `workTotal`'s middle term (`workBuckets.today.length`) could be
+      // deleted from page.tsx and this test stayed green without a row that
+      // actually lands in Today.
+      workRow("task", new Date().toISOString()), // today
+      workRow("conversation", null), // derived — always waiting
+      workRow("booking", null), // derived — always waiting
+    ]);
+
+    await renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    expect(workRowProps.current).toEqual({ accountId: "acct1", total: 5, overdue: 1 });
+  });
+
+  it("still renders the row at an empty queue, for an agency session", async () => {
+    await renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    expect(workRowProps.current).toEqual({ accountId: "acct1", total: 0, overdue: 0 });
+  });
+
+  it("still renders the row at an empty queue, for a client session", async () => {
+    authFixture.isAgency = false;
+
+    await renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    expect(workRowProps.current).toEqual({ accountId: "acct1", total: 0, overdue: 0 });
   });
 });

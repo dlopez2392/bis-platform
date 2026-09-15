@@ -13,7 +13,7 @@ import {
   FileText,
   Settings,
   Building2,
-  Layers, ListChecks,
+  Layers, ListChecks, ListTodo,
   PanelLeftClose,
   PanelLeft,
   ArrowLeft,
@@ -43,6 +43,7 @@ type NavItem = { href: string; label: string; icon: LucideIcon };
 // one place that maps an icon key to one.
 const NAV_ICONS: Record<NavIconKey, LucideIcon> = {
   dashboard: LayoutDashboard,
+  tasks: ListTodo,
   website: Globe,
   contacts: Users,
   opportunities: KanbanSquare,
@@ -58,6 +59,10 @@ const NAV_ICONS: Record<NavIconKey, LucideIcon> = {
   accounts: Building2,
   blueprints: Layers,
   checklist: ListChecks,
+  // Same icon as `tasks` — the two never render in the same sidebar (`base`
+  // selects one nav shape or the other, never both), and it is the same
+  // feature at a different scope: one account's to-dos vs. every account's.
+  work: ListTodo,
 };
 
 // Active when pathname matches href exactly, or is nested under it (href + "/…").

@@ -1,12 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { withTestAccount } from "./fixtures";
+import { withTestAccount, testPhoneNumber } from "./fixtures";
 
 describe("0019 voice schema", () => {
   it("phone_numbers accepts a valid row and rejects a bad e164", async () => {
     await withTestAccount(async (db, accountId) => {
+      // Unique across every account, so the accepted number is drawn per run.
+      // The REJECTED one stays a literal: it is refused by
+      // `phone_numbers_e164_check` before uniqueness is ever consulted, and
+      // its exact shape — a number written the way a human writes it — is the
+      // point of the assertion.
       const ok = await db.from("phone_numbers")
-        .insert({ account_id: accountId, e164: "+19565550111" }).select("id, status").single();
-      expect(ok.error).toBeNull();
+        .insert({ account_id: accountId, e164: testPhoneNumber() }).select("id, status").single();
+      expect(ok.error, `phone_numbers insert failed: ${ok.error?.message}`).toBeNull();
       expect(ok.data!.status).toBe("provisioned");
       const bad = await db.from("phone_numbers")
         .insert({ account_id: accountId, e164: "956-555-0111" }).select("id");
@@ -30,7 +35,8 @@ describe("0019 voice schema", () => {
   it("calls row lifecycle: insert minimal at accept, update at finish", async () => {
     await withTestAccount(async (db, accountId) => {
       const num = await db.from("phone_numbers")
-        .insert({ account_id: accountId, e164: "+19565550112" }).select("id").single();
+        .insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
+      expect(num.error, `phone_numbers insert failed: ${num.error?.message}`).toBeNull();
       const call = await db.from("calls")
         .insert({ account_id: accountId, phone_number_id: num.data!.id, caller_e164: "+19562921696" })
         .select("id, outcome, transcript").single();

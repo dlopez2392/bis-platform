@@ -81,8 +81,15 @@ test("a client sees only their own account, and nothing when access is off", asy
   // and the one screen where they see what they are paying for. That the list
   // is exact is exactly why it had to be updated here rather than loosened:
   // `calls.spec.ts` asserts the same item from the other direction.
+  //
+  // "To do" (nav.tasks) joined directly under Dashboard on 2026-09-14 (Work
+  // Queue Task 3), shown to both audiences same as Website beside it
+  // (buildNavGroups in nav-groups.ts, unit-tested in nav-groups.test.ts).
+  // The nav unit test was updated when Task 3 shipped; this file carries its
+  // own separate list and was not, and a `next start` production-build run
+  // is what caught it, not a reviewer reading the diff.
   const CLIENT_NAV = [
-    "Dashboard", "Website", "Contacts", "Opportunities", "Conversations", "Calls", "Forms", "Calendar",
+    "Dashboard", "To do", "Website", "Contacts", "Opportunities", "Conversations", "Calls", "Forms", "Calendar",
     "Branding",
   ];
   await expect(page.locator("aside nav a")).toHaveText(CLIENT_NAV);

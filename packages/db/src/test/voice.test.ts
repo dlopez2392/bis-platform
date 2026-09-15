@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { withTestAccount } from "./fixtures";
+import { withTestAccount, testPhoneNumber } from "./fixtures";
 import { createContact } from "../contacts";
 import { ensureConversation } from "../messaging";
 import { getOrCreateCalendar, createBooking, setBookingStatus, getCalendarForAccount } from "../booking";
@@ -15,15 +15,29 @@ import {
   listContactCalls, searchCalls,
 } from "../voice";
 
+/**
+ * Every `e164` in this file comes from `testPhoneNumber()`, never from a
+ * literal. `phone_numbers.e164` is unique across EVERY account in the project
+ * (0019), so fixed numbers here are green only while this is the only run
+ * touching the project: two `voice.test.ts` runs at once failed 15 tests
+ * between them on `phone_numbers_e164_key`.
+ *
+ * Contact phones and `caller_e164` stay as written literals on purpose —
+ * those columns are per-account, two tenants may hold the same value all day,
+ * and `searchCalls` below matches on the digits of one of them.
+ */
 describe("voice accessors", () => {
   it("phone number assign → lookup → status walk", async () => {
     await withTestAccount(async (db, accountId) => {
-      const row = await assignPhoneNumber(db, accountId, { e164: "+19565550120" }, "user_test");
+      const e164 = testPhoneNumber();
+      const row = await assignPhoneNumber(db, accountId, { e164 }, "user_test");
       expect(row.status).toBe("provisioned");
-      expect(await getPhoneNumberByE164(db, "+19565550120")).toMatchObject({ account_id: accountId });
-      expect(await getPhoneNumberByE164(db, "+19999999999")).toBeNull();
+      expect(await getPhoneNumberByE164(db, e164)).toMatchObject({ account_id: accountId });
+      // A number drawn and never inserted — a literal "nothing is here" could
+      // be something another run had just assigned.
+      expect(await getPhoneNumberByE164(db, testPhoneNumber())).toBeNull();
       await setPhoneNumberStatus(db, accountId, row.id, "live", "user_test");
-      expect((await getPhoneNumberByE164(db, "+19565550120"))!.status).toBe("live");
+      expect((await getPhoneNumberByE164(db, e164))!.status).toBe("live");
       // wrong account must throw, not silently no-op
       await expect(setPhoneNumberStatus(db, "00000000-0000-0000-0000-000000000000", row.id, "released", "user_test"))
         .rejects.toThrow();
@@ -44,7 +58,7 @@ describe("voice accessors", () => {
 
   it("call rows: start → finish; finish on a wrong id throws", async () => {
     await withTestAccount(async (db, accountId) => {
-      const num = await assignPhoneNumber(db, accountId, { e164: "+19565550121" }, "user_test");
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
       const { id } = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: "+19562921696" });
       await finishCallRow(db, accountId, id, {
         outcome: "message", endedAt: new Date(), durationSecs: 45, turnCount: 6,
@@ -60,7 +74,7 @@ describe("voice accessors", () => {
 
   it("deleteCallRow: removes the row; deleting an already-gone id is not an error", async () => {
     await withTestAccount(async (db, accountId) => {
-      const num = await assignPhoneNumber(db, accountId, { e164: "+19565550135" }, "user_test");
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
       const { id } = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: "+19562921696" });
 
       await deleteCallRow(db, accountId, id);
@@ -84,7 +98,7 @@ describe("voice accessors", () => {
 
   it("deleteCallRow: cross-tenant delete resolves but does not touch another account's row", async () => {
     await withTestAccount(async (db, accountId) => {
-      const num = await assignPhoneNumber(db, accountId, { e164: "+19565550136" }, "user_test");
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
       const { id } = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: "+19562921696" });
 
       // A different (fabricated, non-existent) account attempting to delete
@@ -103,7 +117,7 @@ describe("voice accessors", () => {
 
   it("cap counters count in-flight (unfinished) calls too", async () => {
     await withTestAccount(async (db, accountId) => {
-      const num = await assignPhoneNumber(db, accountId, { e164: "+19565550122" }, "user_test");
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
       const since = new Date(Date.now() - 60_000).toISOString();
       await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: "+19565550001" });
       await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: "+19565550001" });
@@ -115,7 +129,7 @@ describe("voice accessors", () => {
 
   it("hasActiveCallSince: true only for an unfinished call started after the floor", async () => {
     await withTestAccount(async (db, accountId) => {
-      const num = await assignPhoneNumber(db, accountId, { e164: "+19565550142" }, "user_test");
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
       const floor = new Date(Date.now() - 60 * 60_000).toISOString(); // one hour ago
       // Nothing yet.
       expect(await hasActiveCallSince(db, accountId, floor)).toBe(false);
@@ -152,7 +166,7 @@ describe("voice accessors", () => {
 
   it("setPhoneNumberStatus and upsertVoiceProfile thread actorType through to events", async () => {
     await withTestAccount(async (db, accountId) => {
-      const row = await assignPhoneNumber(db, accountId, { e164: "+19565550140" }, "voice", "ai");
+      const row = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "voice", "ai");
       await setPhoneNumberStatus(db, accountId, row.id, "testing", "voice", "ai");
       await upsertVoiceProfile(db, accountId, { greeting_en: "Hi" }, "voice", "ai");
       const { data: ev } = await db.from("events").select("type, actor_type")
@@ -199,8 +213,8 @@ describe("listPhoneNumbersForAccount / listAllPhoneNumbers / reassignPhoneNumber
   it("lists only the account's numbers, oldest first", async () => {
     await withTestAccount(async (db, accountA) => {
       await withTestAccount(async (_db2, accountB) => {
-        const a = await assignPhoneNumber(db, accountA, { e164: "+15550000001" }, "user_test");
-        await assignPhoneNumber(db, accountB, { e164: "+15550000002" }, "user_test");
+        const a = await assignPhoneNumber(db, accountA, { e164: testPhoneNumber() }, "user_test");
+        await assignPhoneNumber(db, accountB, { e164: testPhoneNumber() }, "user_test");
         const rows = await listPhoneNumbersForAccount(db, accountA);
         expect(rows.map((r) => r.id)).toEqual([a.id]);
       });
@@ -209,9 +223,12 @@ describe("listPhoneNumbersForAccount / listAllPhoneNumbers / reassignPhoneNumber
 
   it("listAllPhoneNumbers returns every account's numbers with the account name embedded", async () => {
     await withTestAccount(async (db, accountA) => {
-      await assignPhoneNumber(db, accountA, { e164: "+15550000003" }, "user_test");
+      const e164 = testPhoneNumber();
+      await assignPhoneNumber(db, accountA, { e164 }, "user_test");
       const all = await listAllPhoneNumbers(db);
-      const mine = all.find((r) => r.e164 === "+15550000003");
+      // This read crosses every account, so the row it finds has to be THIS
+      // run's: with a fixed literal, a concurrent run's row answers to it.
+      const mine = all.find((r) => r.e164 === e164);
       expect(mine?.account?.name).toBeTruthy();
     });
   });
@@ -219,7 +236,7 @@ describe("listPhoneNumbersForAccount / listAllPhoneNumbers / reassignPhoneNumber
   it("reassignPhoneNumber moves the row to the target account and resets status to provisioned", async () => {
     await withTestAccount(async (db, accountA) => {
       await withTestAccount(async (_db2, accountB) => {
-        const n = await assignPhoneNumber(db, accountA, { e164: "+15550000004", status: "live" }, "user_test");
+        const n = await assignPhoneNumber(db, accountA, { e164: testPhoneNumber(), status: "live" }, "user_test");
         const moved = await reassignPhoneNumber(db, n.id, accountB, "user_test");
         expect(moved.account_id).toBe(accountB);
         expect(moved.status).toBe("provisioned");
@@ -247,7 +264,7 @@ describe("listPhoneNumbersForAccount / listAllPhoneNumbers / reassignPhoneNumber
 describe("listCalls / getCall", () => {
   it("lists newest-first, embeds the contact name, respects limit and before-cursor", async () => {
     await withTestAccount(async (db, accountA) => {
-      const n = await assignPhoneNumber(db, accountA, { e164: "+15550000010" }, "user_test");
+      const n = await assignPhoneNumber(db, accountA, { e164: testPhoneNumber() }, "user_test");
       const c = await createContact(db, accountA, { firstName: "Maria", lastName: "Garcia", phone: "+15550000011" }, "user_test");
       const convo = await ensureConversation(db, accountA, c.id, "user_test");
       const r1 = await startCallRow(db, accountA, { phoneNumberId: n.id, callerE164: "+15550000011" });
@@ -310,7 +327,7 @@ describe("listCalls / getCall", () => {
   it("getCall returns the full row for the account and null cross-account or unknown", async () => {
     await withTestAccount(async (db, accountA) => {
       await withTestAccount(async (_db2, accountB) => {
-        const n = await assignPhoneNumber(db, accountA, { e164: "+15550000012" }, "user_test");
+        const n = await assignPhoneNumber(db, accountA, { e164: testPhoneNumber() }, "user_test");
         const r = await startCallRow(db, accountA, { phoneNumberId: n.id, callerE164: null });
         const detail = await getCall(db, accountA, r.id);
         expect(detail?.transcript).toEqual([]);
@@ -325,8 +342,8 @@ describe("listCallStartsBetween", () => {
   it("[from, to) — pins both boundary edges, ascending order, cross-tenant rows excluded", async () => {
     await withTestAccount(async (db, accountA) => {
       await withTestAccount(async (db2, accountB) => {
-        const numA = await assignPhoneNumber(db, accountA, { e164: "+15550000030" }, "user_test");
-        const numB = await assignPhoneNumber(db2, accountB, { e164: "+15550000031" }, "user_test");
+        const numA = await assignPhoneNumber(db, accountA, { e164: testPhoneNumber() }, "user_test");
+        const numB = await assignPhoneNumber(db2, accountB, { e164: testPhoneNumber() }, "user_test");
 
         const from = "2027-06-01T00:00:00.000Z";
         const to = "2027-06-15T00:00:00.000Z";
@@ -369,7 +386,7 @@ describe("listCallStartsBetween", () => {
 describe("listContactCalls", () => {
   it("newest-first, scoped to one contact, respects limit", async () => {
     await withTestAccount(async (db, accountA) => {
-      const n = await assignPhoneNumber(db, accountA, { e164: "+15550000040" }, "user_test");
+      const n = await assignPhoneNumber(db, accountA, { e164: testPhoneNumber() }, "user_test");
       const mine = await createContact(db, accountA, { firstName: "Ana", phone: "+15550000041" }, "user_test");
       const other = await createContact(db, accountA, { firstName: "Zed", phone: "+15550000042" }, "user_test");
 
@@ -410,7 +427,7 @@ describe("listContactCalls", () => {
 describe("listCallOutcomesBetween", () => {
   it("returns every outcome inside the window and excludes the upper bound", async () => {
     await withTestAccount(async (db, accountId) => {
-      const num = await assignPhoneNumber(db, accountId, { e164: "+19565550190" }, "user_test");
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
       const seed = async (startedAt: string, outcome: string) => {
         const { error } = await db.from("calls").insert({
           account_id: accountId, phone_number_id: num.id,

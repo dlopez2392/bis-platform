@@ -7,6 +7,7 @@ export const m = {
   "nav.group.communications": "Communications",
   "nav.group.growth": "Growth",
   "nav.dashboard": "Dashboard",
+  "nav.tasks": "To do",
   "nav.website": "Website",
   // "Checklist", not "Activation checklist": every other sidebar entry is one
   // word, and the longer form is byte-identical to the dashboard card's own
@@ -27,6 +28,14 @@ export const m = {
   "nav.setup": "Setup",
   "nav.accounts": "Companies",
   "nav.blueprints": "Blueprints",
+  // Work Queue Task 6 — the agency-wide queue, top level beside Companies
+  // and Blueprints. "Work queue" rather than reusing "To do" (nav.tasks):
+  // that label already names the per-account screen one level down, and the
+  // sidebar can show both on screen at once (inside an account, the agency
+  // still sees the top-level group's own back-link). "Queue" is the accurate
+  // word here in a way it stops being on the per-account screen: nothing at
+  // that level is ever pooled across more than one company.
+  "nav.work": "Work queue",
 
   "shell.brand": "BIS",
   "shell.switchAccount": "Switch company",
@@ -1245,6 +1254,106 @@ export const m = {
   "website.link.unlinked": "Site unlinked.",
   "website.link.unlinkFailed": "Couldn't unlink just now. Try again in a moment.",
   "website.link.notLinked": "No site is linked to this client.",
+
+  // The account's "To do" screen (Task 3, read-only) — everything that
+  // needs a human: open tasks, contacts owed a reply, and jobs nobody has
+  // confirmed happened. `work.call` is deliberately absent: the "call"
+  // WorkSource it would have named was specified, found unsatisfiable in
+  // review, and withdrawn before implementation (spec §1.2) — an
+  // unreturned call now surfaces as its own conversation row instead, via
+  // `work.conversation`. The four `work.notNow`/`work.done`/
+  // `work.booking.completed`/`work.booking.noShow` keys belong to Task 4's
+  // action buttons, added here so this namespace is edited once rather
+  // than twice; this read-only screen renders none of them.
+  "work.title": "To do",
+  "work.empty": "Nothing needs you right now.",
+  "work.empty.body":
+    "Tasks you create, contacts waiting on a reply, and jobs nobody has confirmed happened will show up here.",
+  "work.bucket.overdue": "Overdue",
+  "work.bucket.today": "Today",
+  "work.bucket.waiting": "Waiting",
+  "work.conversation": "Reply to {name}",
+  "work.booking": "Did this job happen?",
+  "work.notNow": "Not now",
+  "work.done": "Done",
+  "work.booking.completed": "It happened",
+  "work.booking.noShow": "They didn't show",
+  // Task 4's toasts for the four buttons above. One shared failure string —
+  // every action here fails the same honest way (try again in a moment) —
+  // and the booking close-out's OWN failure copy is never used: it passes
+  // through whatever `setBookingStatusAction` (the calendar screen's own,
+  // reused action) already returns, so the two screens never say two
+  // different things about the same write.
+  "work.done.toast": "Marked done.",
+  "work.notNow.toast": "Moved to tomorrow.",
+  // "Not now" on the zone-degrade path creates the task with no due date —
+  // nothing actually moved to tomorrow, so that toast would be a lie here.
+  "work.notNow.toastNoDate": "Added to your to-do list.",
+  // The two close-out buttons are both irreversible and each arms a
+  // different outbound message to the customer (a review request on
+  // completion, a no-show follow-up on no-show — automations.noShow.title/
+  // .body name that same automation for the operator elsewhere) — a shared
+  // "Updated." toast made a misclick invisible. Each toast now names the
+  // outcome that was actually recorded AND says a message may follow, so a
+  // wrong click is caught immediately rather than discovered when the wrong
+  // one goes out. Both say "may", never a bare promise: either automation
+  // can decline a given row (no phone/email on file, the account's booking
+  // page switched off, an unresolvable timezone, a quiet-hours gate, a
+  // daily cap — see no-show-nudge.ts's own per-row refusal list), so
+  // "will" would overclaim for a row the pass is about to skip.
+  "work.booking.completed.toast": "Marked as completed. A review request may go out.",
+  "work.booking.noShow.toast": "Marked as a no-show. A follow-up message may go out.",
+  "work.actionFailed": "Couldn't update that just now. Try again in a moment.",
+  // Task 5's dashboard row — a compact link into /tasks. `work.empty` above
+  // (Task 3) already carries the zero-queue sentence, reused rather than
+  // duplicated. The two below compose the non-empty count: "{count} things
+  // to do" alone, or with " · {count} overdue" appended when the account has
+  // any — see work-row.tsx's `workRowText`. `work.row.countOne` is the
+  // singular's own whole-phrase twin, the same convention as
+  // contacts.count/contacts.countOne above: a plural template reused for a
+  // count of one shipped a live "1 people" bug on the Website screen once
+  // already, and a count of one is not a corner case here — it is the
+  // designed first experience (spec §3: dismissing a row is what first
+  // populates `tasks` on an account with none). `work.row.overdue` needs no
+  // singular twin of its own: "1 overdue" already reads correctly.
+  "work.row.count": "{count} things to do",
+  "work.row.countOne": "1 thing to do",
+  "work.row.overdue": "{count} overdue",
+
+  // Work Queue Task 6 — the agency-wide queue (/dashboard/work), agency-only
+  // by construction (requireAgency, first line, before any read). Same three
+  // buckets and the same row language as the per-account screen above, pooled
+  // across every account instead of scoped to one, so every row also carries
+  // that account's brand name. `work.title`/`work.empty`/`work.bucket.*` are
+  // reused verbatim rather than duplicated — same convention work-row.tsx's
+  // dashboard card already follows for `work.empty` — only the strings that
+  // are genuinely agency-scope-specific get their own key below.
+  "work.agency.title": "Everything that needs you",
+  "work.agency.subtitle": "Every account, in one queue.",
+  // work.empty ("Nothing needs you right now.") is reused as this screen's
+  // own empty title; only the body differs, to say "every account" rather
+  // than imply the one this reader happens to be looking at.
+  "work.agency.empty.body":
+    "Tasks, contacts waiting on a reply, and jobs nobody has confirmed happened will show up here, across every account.",
+  // The empty state's own action (DESIGN.md rule 5 — the sentence plus the
+  // action that causes it) — this screen pools read-only rows derived from
+  // every account, so there is no single "create" action; the action is
+  // going to the account list to create the work that would show up here.
+  "work.agency.empty.action": "Go to Companies",
+  // Marks a row whose account has outbound sending suppressed (0032) — a
+  // pre-go-live or demo account, MOST often, but Resaca-shaped: the newest
+  // account, waiting on carrier registration, with real customers already
+  // waiting on a reply. Nothing about actual sending changes; this is a
+  // read-only screen and the mark exists so the agency sees the work and
+  // knows not to text. Dot + word (rule 3), never color alone.
+  "work.agency.suppressed": "Not texting",
+  // `listAgencyWork`'s `brandName` has no fallback to `accounts.name` any
+  // more (2026-09-15) — see that function's own doc comment in
+  // work-queue.ts. A blank result is unreachable through the product today
+  // (migration 0028 backfilled every row), but if `brand_name` is ever
+  // blank, the row's caption reads this instead of going empty or falling
+  // back to the internal label.
+  "work.agency.unbranded": "Unnamed account",
 } as const;
 
 export type MessageKey = keyof typeof m;

@@ -79,6 +79,14 @@ describe("filterEntries", () => {
     expect(filterEntries(entries, "deals").some((e) => e.label === "Opportunities")).toBe(true);
   });
 
+  it("finds the tasks route by keyword even though its own label is 'To do'", () => {
+    // nav-groups.ts's `nav.tasks` label reads "To do" — an operator typing
+    // the route's own name ("task") found nothing on a route literally
+    // called /tasks and full of records called tasks (NAV_KEYWORDS had no
+    // "/tasks" entry at all).
+    expect(filterEntries(entries, "task").some((e) => e.label === "To do")).toBe(true);
+  });
+
   it("requires every term, so a multi-word query narrows", () => {
     expect(filterEntries(entries, "custom fields").some((e) => e.label === "Custom fields")).toBe(true);
     expect(filterEntries(entries, "custom zzz")).toEqual([]);

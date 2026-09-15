@@ -12,7 +12,7 @@ describe("buildNavGroups", () => {
     const groups = buildNavGroups(null, true);
     expect(groups).toHaveLength(1);
     expect(groups[0]!.label).toBeNull();
-    expect(hrefs(groups)).toEqual(["/dashboard/accounts", "/dashboard/blueprints"]);
+    expect(hrefs(groups)).toEqual(["/dashboard/accounts", "/dashboard/blueprints", "/dashboard/work"]);
   });
 
   it("groups in-account items under OVERVIEW / CRM / COMMUNICATIONS / GROWTH, in that order", () => {
@@ -29,17 +29,18 @@ describe("buildNavGroups", () => {
     const [overview, crm, comms, growth] = buildNavGroups(BASE, true);
     // Checklist joined OVERVIEW on 2026-09-05: the page hosts the A2P
     // registration panel that gates SMS, and nothing in the nav reached it.
-    expect(overview!.items.map((i) => i.labelKey)).toEqual(["nav.dashboard", "nav.website", "nav.checklist"]);
+    // Tasks joined directly under Dashboard on 2026-09-14 (Work Queue Task 3).
+    expect(overview!.items.map((i) => i.labelKey)).toEqual(["nav.dashboard", "nav.tasks", "nav.website", "nav.checklist"]);
     expect(crm!.items.map((i) => i.labelKey)).toEqual(["nav.contacts", "nav.opportunities"]);
     expect(comms!.items.map((i) => i.labelKey)).toEqual(["nav.conversations", "nav.calls", "nav.voice"]);
     expect(growth!.items.map((i) => i.labelKey)).toEqual(["nav.forms", "nav.calendar", "nav.automations"]);
   });
 
-  it("shows Website to both audiences, directly below Dashboard", () => {
-    // Mutation: gate the item on isAgency — the client case fails.
+  it("shows Tasks and Website to both audiences, directly below Dashboard in that order", () => {
+    // Mutation: gate either item on isAgency — the client case fails.
     for (const isAgency of [true, false]) {
       const [overview] = buildNavGroups(BASE, isAgency);
-      expect(overview!.items.slice(0, 2).map((i) => i.labelKey)).toEqual(["nav.dashboard", "nav.website"]);
+      expect(overview!.items.slice(0, 3).map((i) => i.labelKey)).toEqual(["nav.dashboard", "nav.tasks", "nav.website"]);
     }
   });
 

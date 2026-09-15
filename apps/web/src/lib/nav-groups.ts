@@ -8,6 +8,7 @@ import type { MessageKey } from "./messages";
  */
 export type NavIconKey =
   | "dashboard"
+  | "tasks"
   | "website"
   | "contacts"
   | "opportunities"
@@ -20,7 +21,8 @@ export type NavIconKey =
   | "automations"
   | "accounts"
   | "blueprints"
-  | "checklist";
+  | "checklist"
+  | "work";
 
 export type NavItemSpec = {
   href: string;
@@ -55,6 +57,14 @@ export function buildNavGroups(base: string | null, isAgency: boolean): NavGroup
         items: [
           { href: "/dashboard/accounts", labelKey: "nav.accounts", iconKey: "accounts" },
           { href: "/dashboard/blueprints", labelKey: "nav.blueprints", iconKey: "blueprints" },
+          // Work Queue Task 6 — /dashboard/work, agency-only by construction
+          // (requireAgency, first line, before any read; hiding this link
+          // for a client is convenience only, never the boundary). Appended
+          // rather than leading the list: this registry's own convention is
+          // "add a line, never reorder" — the design spec's own placement
+          // ("Top level, beside Accounts and Blueprints") does not require
+          // a particular side.
+          { href: "/dashboard/work", labelKey: "nav.work", iconKey: "work" },
         ],
       },
     ];
@@ -65,6 +75,11 @@ export function buildNavGroups(base: string | null, isAgency: boolean): NavGroup
       label: "nav.group.overview",
       items: [
         { href: `${base}/dashboard`, labelKey: "nav.dashboard", iconKey: "dashboard" },
+        // Both audiences, directly under Dashboard (Task 3 spec, Step 4):
+        // open tasks, contacts owed a reply, jobs nobody confirmed — the
+        // one place both a client and the agency see what needs a human
+        // TODAY, ahead of Website's own longer-horizon numbers.
+        { href: `${base}/tasks`, labelKey: "nav.tasks", iconKey: "tasks" },
         // Both audiences: the section exists for the client even before a site
         // is linked (it sells the feature, spec §The screen); the agency sees
         // the same page inside any account.
