@@ -3,7 +3,10 @@ import { describe, it, expect } from "vitest";
 import { serviceDb } from "../service";
 import { seedDemoTenant, dropDemoAccount, findDemoAccount } from "../demo/seed";
 import { ACCOUNT_OWNED_TABLES, deleteAccountCascade } from "../account-teardown";
-import { DEMO_EMAIL_RE, DEMO_PHONE_RE, DEMO_ORG_ID } from "../demo/fiction";
+import {
+  DEMO_EMAIL_RE, DEMO_PHONE_RE, DEMO_ORG_ID, DEMO_BUSINESS_LINE,
+  demoVercelProjectId,
+} from "../demo/fiction";
 import { listSitesToSync } from "../sites";
 import { listDueReminders } from "../booking";
 import { listAccountsForWeeklyRollup, listAccountsDueWeeklyReport } from "../weekly-report";
@@ -73,6 +76,20 @@ describe("demo tenant seeder", () => {
       const { data: lines } = await db.from("phone_numbers")
         .select("e164").eq("account_id", accountId);
       for (const l of lines as { e164: string }[]) expect(l.e164).toMatch(DEMO_PHONE_RE);
+
+      // --- And it did not take anything the REAL demo owns. This is the
+      //     assertion that would have failed the day this test started
+      //     breaking CI: `phone_numbers.e164` and `sites.vercel_project_id`
+      //     are unique across every account in the project, so a throwaway
+      //     that reached for the demo's values could only run while the demo
+      //     did not exist. Asserted against the database rather than against
+      //     `demoBusinessLines`, because the point is what was WRITTEN.
+      expect(lines!.map((l) => (l as { e164: string }).e164))
+        .not.toContain(DEMO_BUSINESS_LINE);
+      const { data: site } = await db.from("sites")
+        .select("vercel_project_id").eq("account_id", accountId).single();
+      expect(site!.vercel_project_id).toBe(demoVercelProjectId(THROWAWAY));
+      expect(site!.vercel_project_id).not.toBe(demoVercelProjectId(DEMO_ORG_ID));
 
       // --- It actually built something. A seeder that silently wrote four
       //     rows would pass every safety assertion above.
