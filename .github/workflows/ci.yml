@@ -13,7 +13,8 @@ name: CI
 #           `pnpm check` and `pnpm --filter web build` from CLAUDE.md, no
 #           more and no less, so CI and a contributor's terminal cannot
 #           disagree about what "green" means. A newer push to the same
-#           branch cancels the older run.
+#           BRANCH cancels the older run; on main nothing is cancelled, so
+#           the commit being deployed always finishes being checked.
 #
 #   e2e     the Playwright journey. Serialized ACROSS THE WHOLE REPO, never
 #           cancelled: two runs against the one shared database at the same
@@ -65,7 +66,30 @@ jobs:
     timeout-minutes: 35
     concurrency:
       group: verify-${{ github.ref }}
-      cancel-in-progress: true
+      # Cancel a superseded run on a BRANCH, never on main.
+      #
+      # Two reasons, and the second is the one that made this worth changing.
+      #
+      # A cancelled run on main means the commit that is being DEPLOYED never
+      # finished being checked. Merging #62 and #64 each had their main run
+      # killed by the next merge (runs #107 and #109, both recorded as
+      # `cancelled`), so nothing ever established that either commit was green
+      # on main — and pushing to main deploys production.
+      #
+      # And a killed job takes the db suite down mid-test, so the `finally` in
+      # `withTestAccount` never runs and its account is left in the Supabase
+      # project that also serves production. That happened three times on
+      # 2026-09-15 alone. `src/test/sweep-fixtures.ts` now reclaims those, but
+      # repairing a leak is worse than not causing one.
+      #
+      # On a branch, cancelling is still right: a newer push makes the older
+      # run's answer irrelevant, and any fixture it abandons gets swept.
+      #
+      # This does not queue main's runs without bound. GitHub keeps at most one
+      # PENDING run per concurrency group and cancels the older pending one —
+      # and a run cancelled before it starts has nothing to leak. So the worst
+      # case is one running plus one waiting.
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v5
 
