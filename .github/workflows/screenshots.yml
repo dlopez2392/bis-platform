@@ -1,0 +1,84 @@
+name: Capture demo screenshots
+
+# The six images /platform on bis-rgv.com is waiting for.
+#
+# A button for the same reason the seeder has one: this needs the Clerk AND
+# Supabase secrets plus a production build, all of which already exist on a
+# runner and none of which exist on a phone. The captures come back as an
+# artifact rather than being committed — this repo has no use for them; the
+# website does.
+on:
+  workflow_dispatch:
+    inputs:
+      reseed:
+        description: 'Re-seed the demo first (recommended — every timestamp is anchored to the seed)'
+        type: boolean
+        default: true
+
+# Takes the e2e job's OWN lock. This drives a browser through the shared
+# Supabase project and, when re-seeding, rewrites a whole account in it.
+concurrency:
+  group: e2e-shared-supabase
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NEXT_PUBLIC_CLERK_SIGN_IN_URL: /sign-in
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_h2GmSCjLzD74RotkQAvMbA_BL6FAI4k
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+      CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+    steps:
+      - name: Check that the repository secrets are configured
+        run: |
+          missing=""
+          for name in NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY CLERK_SECRET_KEY NEXT_PUBLIC_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # Default on, because a capture of a stale demo is a dashboard whose
+      # "this week" panels are honestly empty — the product looking broken.
+      - name: Re-seed the demo tenant
+        if: ${{ inputs.reseed }}
+        run: pnpm --filter @bis/db db:seed-demo
+
+      - name: Install Chromium for Playwright
+        run: pnpm --filter web exec playwright install --with-deps chromium
+
+      # The config's webServer builds and starts the app itself.
+      - name: Capture
+        run: pnpm --filter web screenshots
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: demo-screenshots
+          path: apps/web/screenshots/out/
+          if-no-files-found: error
+          retention-days: 14
+
+      # Traces only when something went wrong, same as the e2e job.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: screenshot-traces
+          path: apps/web/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
