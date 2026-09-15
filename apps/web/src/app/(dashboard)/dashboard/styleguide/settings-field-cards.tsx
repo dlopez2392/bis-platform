@@ -3,6 +3,7 @@
 import { SendingAddressCard } from "@/app/(dashboard)/dashboard/accounts/[accountId]/settings/sending-address-card";
 import { WeeklyReportCard } from "@/app/(dashboard)/dashboard/accounts/[accountId]/settings/weekly-report-card";
 import { AlertPhoneCard } from "@/components/alert-phone-card";
+import { m } from "@/lib/messages";
 
 /**
  * WHY THIS IS ITS OWN CLIENT COMPONENT — same reason rail-states.tsx gives:
@@ -24,8 +25,19 @@ import { AlertPhoneCard } from "@/components/alert-phone-card";
  * settings-field card in the app to drop the form entirely for a read-only
  * audience rather than rendering it disabled, which is exactly the kind of
  * new pattern this page exists to document (DESIGN.md's definition of done).
+ *
+ * 0036 added the agency's two-phase claim-a-number flow (send a code, then
+ * confirm it) below the states above. Three more demos document it, all of
+ * them REAL and clickable — this page's cards were never static pictures —
+ * because the pending phase is internal React state with nothing server-side
+ * to derive it from (the card's own doc comment says why), so there is no
+ * prop that could freeze it into a snapshot the way `smsNotReady` freezes
+ * the not-ready demo above. Typing a number into "verify a new number" and
+ * clicking through is the only way to see the pending phase render at all.
  */
 const demoOk = async () => ({ ok: true as const });
+const demoSelfLoopRefusal = async () => ({ ok: false as const, error: m["settings.alertPhoneSelfWarning"] });
+const demoWrongCode = async () => ({ ok: false as const, error: m["settings.alertPhoneWrongCode"] });
 
 function Demo({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -56,9 +68,28 @@ export function SettingsFieldCards() {
             a route that does not exist. */}
         <div onClickCapture={(e) => e.preventDefault()}>
           <AlertPhoneCard
-            isAgency accountId="demo" alertPhone="+19562921696" smsNotReady action={demoOk}
+            isAgency accountId="demo" alertPhone="+19562921696" smsNotReady
+            clearAction={demoOk} startVerificationAction={demoOk} confirmVerificationAction={demoOk}
           />
         </div>
+      </Demo>
+      <Demo label="Agency — verify a new number (type one, click Send code, then Confirm)">
+        <AlertPhoneCard
+          isAgency accountId="demo" alertPhone={null}
+          clearAction={demoOk} startVerificationAction={demoOk} confirmVerificationAction={demoOk}
+        />
+      </Demo>
+      <Demo label="Agency — sending a code is refused (the number is the account's own)">
+        <AlertPhoneCard
+          isAgency accountId="demo" alertPhone={null}
+          clearAction={demoOk} startVerificationAction={demoSelfLoopRefusal} confirmVerificationAction={demoOk}
+        />
+      </Demo>
+      <Demo label="Agency — wrong code (send a real code, then type any 6 digits)">
+        <AlertPhoneCard
+          isAgency accountId="demo" alertPhone={null}
+          clearAction={demoOk} startVerificationAction={demoOk} confirmVerificationAction={demoWrongCode}
+        />
       </Demo>
       <Demo label="Client — no alert number">
         <AlertPhoneCard isAgency={false} accountId="demo" alertPhone={null} />
