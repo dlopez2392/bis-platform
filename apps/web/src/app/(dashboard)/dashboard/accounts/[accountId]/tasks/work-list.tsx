@@ -13,7 +13,7 @@ import type { Bucket, BucketedWork } from "@/lib/work/buckets";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/empty-state";
 import { ListPanel, LIST_ROW } from "@/components/ui/list-panel";
-import { formatDate } from "@/lib/format";
+import { formatDateInZone } from "@/lib/format";
 import { m, type MessageKey } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 
@@ -84,11 +84,44 @@ function secondaryLine(row: WorkRow, contactName: string): string | null {
   return row.contactId ? contactName : null;
 }
 
+/**
+ * The exact sentinel `listAccountWork`'s conversation branch falls back to
+ * when a conversation has no `last_message_at` yet
+ * (packages/db/src/work-queue.ts:71) — reachable in production, not just
+ * theoretical: the conversation touch in messaging.ts is deliberately
+ * best-effort and the unread-increment path never sets that column at all.
+ * Printing "Jan 1, 1970" (or, in a negative-offset zone, "Dec 31, 1969")
+ * next to a row would read as a real, wildly-stale date rather than "we
+ * don't know" — so a row whose only available timestamp IS this sentinel
+ * gets no date text at all. Fixed here, in the UI, rather than in
+ * `work-queue.ts`, which is Task 1's already-reviewed code.
+ */
+const NO_TIMESTAMP = new Date(0).toISOString();
+
+/**
+ * The row's own date, in the ACCOUNT's zone — never the server's, never the
+ * browser's (the milestone's binding constraint). `formatDateInZone` throws
+ * `RangeError` on an unparseable timestamp; the degrade requirement this
+ * screen inherits (commit 3649d41, `bucketWork`'s own per-row degrade on a
+ * bad `dueAt`) means a single bad row must not take the whole page down, so
+ * a throw here costs at most this row's own date text.
+ */
+function rowDateText(row: WorkRow, timezone: string): string | null {
+  const iso = row.dueAt ?? row.occurredAt;
+  if (iso === NO_TIMESTAMP) return null;
+  try {
+    return formatDateInZone(iso, timezone);
+  } catch {
+    return null;
+  }
+}
+
 function WorkRowItem({
   row,
   bucket,
   accountId,
   contactName,
+  timezone,
 }: {
   row: WorkRow;
   bucket: Bucket;
@@ -96,11 +129,17 @@ function WorkRowItem({
   /** Never a raw id and never "undefined" — WorkList resolves this to
    *  `m["contact.noName"]` for a contactId with no matching (or no) row. */
   contactName: string;
+  /** The account's own IANA zone, already resolved by page.tsx (`safeZone`).
+   *  Every date on this row is the company's own wall-clock day — the bucket
+   *  chip beside it is computed in this same zone by `bucketWork`, and a row
+   *  formatted in a different zone (the server's, via the bare `formatDate`
+   *  this replaced) could disagree with its own chip inside a single row. */
+  timezone: string;
 }) {
   const treatment = BUCKET_TREATMENT[bucket];
   const primary = primaryLabel(row, contactName);
   const secondary = secondaryLine(row, contactName);
-  const dateText = formatDate(row.dueAt ?? row.occurredAt);
+  const dateText = rowDateText(row, timezone);
 
   const body = (
     <>
@@ -112,7 +151,9 @@ function WorkRowItem({
         <span className={cn("size-[7px] rounded-full", treatment.dot)} aria-hidden />
         {m[treatment.labelKey]}
       </Badge>
-      <span className="shrink-0 text-xs text-muted-foreground">{dateText}</span>
+      {dateText ? (
+        <span className="shrink-0 text-xs text-muted-foreground">{dateText}</span>
+      ) : null}
     </>
   );
 
@@ -141,6 +182,7 @@ export function WorkList({
   buckets,
   accountId,
   contactNames,
+  timezone,
 }: {
   buckets: BucketedWork;
   accountId: string;
@@ -150,11 +192,16 @@ export function WorkList({
    *  back to `m["contact.noName"]` below — never a raw id, never
    *  "undefined". */
   contactNames: Record<string, string>;
+  /** The account's own IANA zone, already resolved by page.tsx (`safeZone`,
+   *  same contract as `calls-table.tsx`'s identically-named prop) — never
+   *  the server's, never the browser's. Threaded straight through to every
+   *  row's own date text. */
+  timezone: string;
 }) {
   const shown = visibleBuckets(buckets);
 
   if (shown.length === 0) {
-    return <EmptyState icon={ListTodo} title={m["work.empty"]} />;
+    return <EmptyState icon={ListTodo} title={m["work.empty"]} body={m["work.empty.body"]} />;
   }
 
   return (
@@ -172,6 +219,7 @@ export function WorkList({
                 bucket={bucket}
                 accountId={accountId}
                 contactName={contactNames[row.contactId ?? ""] ?? m["contact.noName"]}
+                timezone={timezone}
               />
             ))}
           </ListPanel>

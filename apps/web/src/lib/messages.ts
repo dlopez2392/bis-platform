@@ -1259,6 +1259,8 @@ export const m = {
   // than twice; this read-only screen renders none of them.
   "work.title": "To do",
   "work.empty": "Nothing needs you right now.",
+  "work.empty.body":
+    "Tasks you create, contacts waiting on a reply, and jobs nobody has confirmed happened will show up here.",
   "work.bucket.overdue": "Overdue",
   "work.bucket.today": "Today",
   "work.bucket.waiting": "Waiting",

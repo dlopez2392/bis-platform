@@ -68,9 +68,13 @@ const NOW = new Date("2026-09-14T14:00:00Z");
 const ZONE = "America/Chicago";
 const ACCOUNT_ID = "acct1";
 
-function renderList(buckets: BucketedWork, contactNames: Record<string, string> = {}) {
+function renderList(
+  buckets: BucketedWork,
+  contactNames: Record<string, string> = {},
+  timezone: string = ZONE,
+) {
   return renderToStaticMarkup(
-    createElement(WorkList, { buckets, accountId: ACCOUNT_ID, contactNames }),
+    createElement(WorkList, { buckets, accountId: ACCOUNT_ID, contactNames, timezone }),
   );
 }
 
@@ -79,6 +83,9 @@ describe("WorkList", () => {
     const b = bucketWork([], NOW, ZONE);
     const html = renderList(b);
     expect(html).toContain(m["work.empty"]);
+    // DESIGN.md rule 5: an empty state sells the feature — one sentence of
+    // what appears here — not just a bare announcement of emptiness.
+    expect(html).toContain(m["work.empty.body"]);
     expect(html).not.toContain(m["work.bucket.overdue"]);
     expect(html).not.toContain(m["work.bucket.today"]);
     expect(html).not.toContain(m["work.bucket.waiting"]);
@@ -87,7 +94,11 @@ describe("WorkList", () => {
   it("renders only the Waiting heading when only Waiting has rows", () => {
     const b = bucketWork([conversationRow({ contactId: "c1" })], NOW, ZONE);
     const html = renderList(b, { c1: "Maria Garcia" });
-    expect(html).toContain(m["work.bucket.waiting"]);
+    // Pinned to the HEADING ELEMENT itself, not a bare string — the per-row
+    // status chip (work-list.tsx's BUCKET_TREATMENT) renders the exact same
+    // "Waiting" text, so `toContain(m["work.bucket.waiting"])` alone stays
+    // green even if the <h2> is deleted outright.
+    expect(html).toMatch(new RegExp(`<h2[^>]*>${m["work.bucket.waiting"]}</h2>`));
     expect(html).not.toContain(m["work.bucket.overdue"]);
     expect(html).not.toContain(m["work.bucket.today"]);
   });
@@ -139,5 +150,32 @@ describe("WorkList", () => {
     const b = bucketWork([taskRow({ contactId: null, dueAt: "2026-09-01T00:00:00Z" })], NOW, ZONE);
     const html = renderList(b, {});
     expect(html).not.toMatch(/<a\b/);
+  });
+
+  it("stamps the row's date in the ACCOUNT's zone, not the server's", () => {
+    // Two zones, one instant — same trap `calls-table.test.ts` and
+    // `format.test.ts` both record: a fixture zone equal to the dev
+    // machine's zone cannot tell "formatted in the account zone" apart from
+    // "formatted in whatever zone this process happens to be in". 01:00 UTC
+    // is still the previous day in Chicago (format.test.ts's own boundary).
+    const row = taskRow({ dueAt: "2026-09-04T01:00:00Z" });
+    const b = bucketWork([row], NOW, ZONE);
+    const chicago = renderList(b, { c1: "Maria Garcia" }, "America/Chicago");
+    expect(chicago).toContain("Sep 3, 2026");
+    const utc = renderList(b, { c1: "Maria Garcia" }, "UTC");
+    expect(utc).toContain("Sep 4, 2026");
+  });
+
+  it("renders no date at all for the epoch-sentinel timestamp a conversation with no last_message_at carries", () => {
+    // packages/db/src/work-queue.ts:71 falls back to `new Date(0).toISOString()`
+    // when a conversation's `last_message_at` is null — genuinely reachable in
+    // production (messaging.ts's conversation touch is best-effort and the
+    // unread-increment path never sets that column). "Jan 1, 1970" (or, in a
+    // negative-offset zone, "Dec 31, 1969") would read as a real date, not
+    // "unknown" — so this row must print no date at all instead.
+    const row = conversationRow({ contactId: "c1", occurredAt: new Date(0).toISOString() });
+    const b = bucketWork([row], NOW, ZONE);
+    const html = renderList(b, { c1: "Maria Garcia" });
+    expect(html).not.toMatch(/19(69|70)/);
   });
 });

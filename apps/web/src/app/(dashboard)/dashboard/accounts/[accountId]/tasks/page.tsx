@@ -7,6 +7,7 @@ import { listAccountWork } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
+import { safeZone } from "@/lib/booking/time";
 import { bucketWork } from "@/lib/work/buckets";
 import { contactDisplayName } from "@/lib/format";
 import { m } from "@/lib/messages";
@@ -49,6 +50,13 @@ export default async function TasksPage({
   // dated.
   const buckets = bucketWork(rows, new Date(), account.timezone);
 
+  // The account's zone, safeZone-clamped — for RENDERING every row's own
+  // date, never for bucketing (bucketWork above needs the raw value to
+  // degrade correctly on its own terms). Same contract as
+  // calls/page.tsx:65 → calls-table.tsx: a row's date is the company's own
+  // wall-clock day, never the server's or the browser's.
+  const timezone = safeZone(account.timezone, "UTC");
+
   // ONE batch read for every contact these rows reference — never one read
   // per row. Scoped by account_id so a row's contactId can never resolve a
   // different account's person.
@@ -74,7 +82,12 @@ export default async function TasksPage({
     <>
       <PageHeader title={m["work.title"]} />
       <div className="p-6">
-        <WorkList buckets={buckets} accountId={accountId} contactNames={contactNames} />
+        <WorkList
+          buckets={buckets}
+          accountId={accountId}
+          contactNames={contactNames}
+          timezone={timezone}
+        />
       </div>
     </>
   );
