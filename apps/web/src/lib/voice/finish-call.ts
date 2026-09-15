@@ -8,7 +8,7 @@ import { getEmailProvider } from "@/lib/email";
 import { voiceCallAlertEmail } from "@/lib/email/templates/voice";
 import { getSmsProvider } from "@/lib/sms";
 import { resolveSmsSender } from "@/lib/sms/sender";
-import { composeCallAlertSms, sendAlertSms } from "@/lib/sms/alerts";
+import { composeCallAlertSms, prepareAlertSms, deliverAlertSms, type PendingAlertSms } from "@/lib/sms/alerts";
 import { defaultTextbackBody } from "./textback-body";
 import type { CallState } from "./call-state";
 import { classifyOutcome, wasServed } from "./call-state";
@@ -295,15 +295,31 @@ export async function finishCall(
   // `meaningful` local) so `outcome` narrows to `composeCallAlertSms`'s own
   // literal union with no cast — matching the email alert's gate exactly,
   // per the brief.
+  //
+  // `ctx.notifyEmails.length > 0` tells `composeCallAlertSms` whether it may
+  // promise "check your email" — an account with no notify emails never got
+  // one from the block above, and the text used to claim it regardless
+  // (alert-send-report follow-up review, finding 3).
+  //
+  // Only the PREPARE half — `getAlertPhone` and `prepareAlertSms`'s gate/
+  // loop-guard reads — runs here. The carrier POST is deliberately held
+  // until after `finishCallRow` below, mirroring the missed-call text-back's
+  // own split around the same row write and for the identical reason
+  // (finding 4): a 10-second provider call ahead of the durable call row is
+  // how a slow carrier loses that row on an invocation running out of
+  // budget. `sendAlertSms` (used unchanged by `app/b/[publicId]/actions.ts`,
+  // which has no such ordering constraint) is `prepareAlertSms` immediately
+  // followed by `deliverAlertSms`; this leg calls the two halves separately.
+  let pendingAlertSms: PendingAlertSms | null = null;
   if (isMeaningful(outcome)) {
     try {
       const alertPhone = await getAlertPhone(ctx.db, ctx.accountId);
-      // sendAlertSms (@/lib/sms/alerts) never throws by contract — see its
-      // own doc — but this try/catch stays anyway, the same defense-in-depth
-      // `b/[publicId]/actions.ts` carries around its identical call.
-      await sendAlertSms(ctx.db, ctx.accountId, alertPhone, composeCallAlertSms(outcome));
+      pendingAlertSms = await prepareAlertSms(
+        ctx.db, ctx.accountId, alertPhone,
+        composeCallAlertSms(outcome, ctx.notifyEmails.length > 0),
+      );
     } catch (e) {
-      console.error(`finishCall ${meta.callRowId ?? "(no row)"}: alert SMS failed: ${String(e)}`);
+      console.error(`finishCall ${meta.callRowId ?? "(no row)"}: alert SMS prepare failed: ${String(e)}`);
     }
   }
 
@@ -446,6 +462,20 @@ export async function finishCall(
       stored = true;
     } catch (e) {
       console.error(`finishCall ${meta.callRowId}: finishCallRow failed: ${String(e)}`);
+    }
+  }
+
+  // The other half of the staff alert SMS leg: the actual carrier POST,
+  // deliberately AFTER the durable row above — same ordering, same reason as
+  // the text-back's own split just below (finding 4, alert-send-report
+  // follow-up review). `deliverAlertSms` never throws by contract (its own
+  // doc, @/lib/sms/alerts) but this try/catch stays anyway, the same
+  // defense-in-depth every other leg in this function carries.
+  if (pendingAlertSms) {
+    try {
+      await deliverAlertSms(ctx.accountId, pendingAlertSms);
+    } catch (e) {
+      console.error(`finishCall ${meta.callRowId ?? "(no row)"}: alert SMS deliver failed: ${String(e)}`);
     }
   }
 

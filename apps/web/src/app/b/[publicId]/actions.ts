@@ -449,11 +449,21 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     // failure — the same reasoning the email block's own try carries. Reads
     // `account?.alert_phone`: the field IS the switch (0035_alert_phone.sql)
     // — `sendAlertSms` no-ops on null, so no separate guard is needed here.
+    //
+    // `calendar.notify_emails.length > 0` tells `composeBookingAlertSms`
+    // whether its no-name fallback may promise "check email" — a calendar
+    // with no notify emails never got one (alert-send-report follow-up
+    // review, finding 3). Guarded on `whenCompanyZone` being non-empty too:
+    // it is set inside the try above and stays "" if `formatWhen` itself
+    // threw, and an empty when-string would otherwise read as "New booking:
+    //  - Maria Lopez." on a real handset (same review, minors).
     try {
-      await sendAlertSms(
-        db, calendar.account_id, account?.alert_phone ?? null,
-        composeBookingAlertSms(whenCompanyZone, contactName),
-      );
+      if (whenCompanyZone) {
+        await sendAlertSms(
+          db, calendar.account_id, account?.alert_phone ?? null,
+          composeBookingAlertSms(whenCompanyZone, contactName, calendar.notify_emails.length > 0),
+        );
+      }
     } catch (e) {
       console.error(`booking ${bookingId} alert SMS failed: ${String(e)}`);
     }

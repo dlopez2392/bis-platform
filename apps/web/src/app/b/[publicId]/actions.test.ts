@@ -138,6 +138,27 @@ vi.mock("@/lib/sms/alerts", async () => {
   return { ...actual, sendAlertSms: (...a: unknown[]) => sendAlertSmsMock(...a) };
 });
 
+// `formatWhenThrowsRef` lets one test simulate `formatWhen` itself throwing
+// (a junk account timezone reaching `Intl.DateTimeFormat` mid-flight) —
+// real `safeZone`/other `formatWhen` calls stay untouched. Only the FIRST
+// call (`formatWhen(startsAt, timezone)`, no locale arg — `whenCompanyZone`)
+// throws; `whenBookerZone`/`whenCompanyZoneForBooker` always pass a locale
+// and keep working, matching what a real Intl failure on the company's own
+// zone would do.
+const { formatWhenThrowsRef } = vi.hoisted(() => ({ formatWhenThrowsRef: { current: false } }));
+vi.mock("@/lib/booking/time", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/booking/time")>();
+  return {
+    ...actual,
+    formatWhen: (...args: Parameters<typeof actual.formatWhen>) => {
+      if (formatWhenThrowsRef.current && args.length === 2) {
+        throw new Error("Intl formatting failed");
+      }
+      return actual.formatWhen(...args);
+    },
+  };
+});
+
 import { headers } from "next/headers";
 import { computeSlots, type SlotConfig } from "@/lib/booking/slots";
 import { submitBookingAction, getSlotsAction } from "./actions";
@@ -232,6 +253,7 @@ beforeEach(() => {
   emailProviderThrowsRef.current = false;
   accountRow.alert_phone = null;
   sendAlertSmsMock.mockReset().mockResolvedValue(undefined);
+  formatWhenThrowsRef.current = false;
 });
 
 describe("submitBookingAction — spam gates (each mutation named)", () => {
@@ -612,6 +634,25 @@ describe("submitBookingAction — the booking alert text, alongside the email (d
 
     expect(result.ok).toBe(true);
     expect(createBookingMock).toHaveBeenCalledTimes(1);
+  });
+
+  // Minor (alert-send-report follow-up review): `whenCompanyZone` is set
+  // inside the try that computes it and stays "" if `formatWhen` itself
+  // throws (a junk account timezone reaching `Intl.DateTimeFormat`
+  // mid-flight) — without a guard, the alert SMS would read "New booking:
+  //  - Maria Lopez." on a real handset. The booking itself is unaffected;
+  // only the alert attempt is skipped (mutation: drop the `if
+  // (whenCompanyZone)` guard → FAILS, sees sendAlertSmsMock called with an
+  // empty when-string baked into the body).
+  it("skips the alert SMS entirely when formatWhen fails and whenCompanyZone stays empty", async () => {
+    accountRow.alert_phone = "+19565550001";
+    formatWhenThrowsRef.current = true;
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+
+    expect(result.ok).toBe(true);
+    expect(createBookingMock).toHaveBeenCalledTimes(1);
+    expect(sendAlertSmsMock).not.toHaveBeenCalled();
   });
 });
 

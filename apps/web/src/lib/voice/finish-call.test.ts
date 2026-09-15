@@ -69,7 +69,9 @@ beforeEach(() => {
   emailRefs.send.mockReset().mockResolvedValue({ providerMessageId: "x" });
   smsRefs.providerShouldThrow = false;
   smsRefs.send.mockReset().mockResolvedValue({ providerMessageId: "sm1" });
-  senderMocks.resolveSmsSender.mockReset().mockResolvedValue({ ok: true, from: "+19565550100" });
+  senderMocks.resolveSmsSender.mockReset().mockResolvedValue({
+    ok: true, from: "+19565550100", ownedNumbers: ["+19565550100"],
+  });
   dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: false });
   dbMocks.ensureConversation.mockResolvedValue({ id: "cv1", created: true });
   dbMocks.createMessage.mockResolvedValue({ id: "m1" });
@@ -632,7 +634,7 @@ describe("finishCall — the staff alert SMS", () => {
   // deliberately leaves this to the send path. alert_phone can equal the
   // account's own resolved sending number with nothing in the schema
   // stopping it.
-  it("refuses and logs both numbers when alert_phone equals the account's own resolved sending number (mutation: drop the loop guard → FAILS)", async () => {
+  it("refuses and logs when alert_phone equals the account's own resolved sending number (mutation: drop the loop guard → FAILS)", async () => {
     dbMocks.getAlertPhone.mockResolvedValue("+19565550100"); // == senderMocks' default `from`
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const r = await finishCall(leadState(), ctx, meta);
@@ -640,6 +642,84 @@ describe("finishCall — the staff alert SMS", () => {
     expect(smsRefs.send).not.toHaveBeenCalled();
     const logged = errSpy.mock.calls.map((c) => c.join(" ")).join("\n");
     expect(logged).toContain("+19565550100");
+    errSpy.mockRestore();
+  });
+
+  // Finding 2 (alert-send-report follow-up review): the old loop guard only
+  // ever compared against `gate.from`, the single resolved sending number.
+  // api/sms/inbound/route.ts treats `testing` OR `live` as owned, so a
+  // SECOND owned row (e.g. one still mid-provisioning) was an unguarded loop
+  // even though it is not the number resolveSmsSender picked to send from.
+  it("refuses when alert_phone matches a SECOND owned number, not only the resolved `from` (mutation: compare against gate.from alone → FAILS)", async () => {
+    senderMocks.resolveSmsSender.mockResolvedValue({
+      ok: true, from: "+19565550100", ownedNumbers: ["+19565550100", "+19565559000"],
+    });
+    dbMocks.getAlertPhone.mockResolvedValue("+19565559000"); // owned, but NOT `from`
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await finishCall(leadState(), ctx, meta);
+    expect(r.notified).toBe(true);
+    expect(smsRefs.send).not.toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  // Finding 3 (alert-send-report follow-up review): live data showed two of
+  // four calendars have no notify emails at all. For those accounts the
+  // staff alert text was the only notification they get, and it used to
+  // claim "Check your email for details" regardless.
+  it("omits the email mention when ctx.notifyEmails is empty (mutation: ignore notifyEmails.length → FAILS)", async () => {
+    dbMocks.getAlertPhone.mockResolvedValue("+19565559000");
+    const noEmailCtx: FinishContext = { ...ctx, notifyEmails: [] };
+    await finishCall(leadState(), noEmailCtx, meta);
+    const body = smsRefs.send.mock.calls[0]![0].body as string;
+    expect(body.toLowerCase()).not.toContain("email");
+  });
+
+  it("still mentions email when ctx.notifyEmails is non-empty", async () => {
+    dbMocks.getAlertPhone.mockResolvedValue("+19565559000");
+    await finishCall(leadState(), ctx, meta); // ctx.notifyEmails = ["staff@example.com"]
+    const body = smsRefs.send.mock.calls[0]![0].body as string;
+    expect(body.toLowerCase()).toContain("email");
+  });
+
+  // Finding 4 (alert-send-report follow-up review): finishCall spends a
+  // dozen lines establishing that a 10-second provider call ahead of the
+  // durable call row is how a slow carrier loses that row on an invocation
+  // running out of budget, and splits the missed-call text-back around
+  // `finishCallRow` for exactly that reason. The staff alert SMS leg used to
+  // run its own carrier POST entirely BEFORE the row write; it must now
+  // mirror the text-back's split — resolve/compose above, send below.
+  it("hands the alert SMS to the carrier AFTER the durable call row is written, not before (mutation: put the send back before finishCallRow → FAILS)", async () => {
+    dbMocks.getAlertPhone.mockResolvedValue("+19565559000");
+    await finishCall(leadState(), ctx, meta);
+    const rowWritten = dbMocks.finishCallRow.mock.invocationCallOrder[0]!;
+    const sent = smsRefs.send.mock.invocationCallOrder[0]!;
+    expect(rowWritten).toBeLessThan(sent);
+  });
+
+  it("a carrier that never answers the alert SMS cannot cost the call its row", async () => {
+    dbMocks.getAlertPhone.mockResolvedValue("+19565559000");
+    let releaseSend: (v: { providerMessageId: string }) => void = () => {};
+    smsRefs.send.mockImplementation(() => new Promise((resolve) => { releaseSend = resolve; }));
+
+    const finishing = finishCall(leadState(), ctx, meta);
+    await vi.waitFor(() => expect(smsRefs.send).toHaveBeenCalled());
+    expect(dbMocks.finishCallRow).toHaveBeenCalled();
+
+    releaseSend({ providerMessageId: "sm1" });
+    await expect(finishing).resolves.toMatchObject({ stored: true });
+  });
+
+  // Finding 5 (alert-send-report follow-up review): a failed (or successful)
+  // alert had no symptom anywhere — no message row exists for this send
+  // (0035 decision 3), so a success was never logged at all. The cheap fix:
+  // log the provider message id and destination on success too.
+  it("logs the providerMessageId and destination on a successful alert send (mutation: drop the success log → FAILS)", async () => {
+    dbMocks.getAlertPhone.mockResolvedValue("+19565559000");
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await finishCall(leadState(), ctx, meta);
+    const logged = errSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(logged).toContain("sm1");
+    expect(logged).toContain("+19565559000");
     errSpy.mockRestore();
   });
 

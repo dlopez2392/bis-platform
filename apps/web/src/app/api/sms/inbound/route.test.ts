@@ -144,6 +144,39 @@ describe("POST /api/sms/inbound", () => {
     );
   });
 
+  // Finding 1 (alert-send-report follow-up review): a transient getAlertPhone
+  // read failure used to escape handleInbound into the route's outer catch,
+  // which logs and still returns 200 — so Telnyx is told "handled" and never
+  // retries, and the text is gone. The loop guard is a nicety; the customer's
+  // message is not. A read error must be contained to "no alert phone" so
+  // the rest of the write still happens.
+  it("still records the inbound text when getAlertPhone's read rejects (mutation: let the throw escape → FAILS)", async () => {
+    dbMocks.getPhoneNumberByE164.mockResolvedValue({
+      id: "pn_1", account_id: "acct_1", e164: "+15550000000", telnyx_id: null, status: "live",
+    });
+    dbMocks.getAlertPhone.mockRejectedValue(new Error("db blip"));
+    dbMocks.createContact.mockResolvedValue({ id: "contact_1", existing: false });
+    dbMocks.ensureConversation.mockResolvedValue({ id: "conv_1", created: true });
+    dbMocks.createMessage.mockResolvedValue({ id: "msg_1" });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await POST(post({
+      data: { event_type: "message.received", payload: {
+        id: "msg_evt_blip",
+        to: [{ phone_number: "+15550000000" }], from: { phone_number: "+15551112222" }, text: "hi there" } },
+    }));
+
+    expect(res.status).toBe(200);
+    expect(dbMocks.createContact).toHaveBeenCalledTimes(1);
+    expect(dbMocks.createMessage).toHaveBeenCalledWith(
+      expect.anything(), "acct_1",
+      expect.objectContaining({ conversationId: "conv_1", channel: "sms", direction: "inbound", body: "hi there" }),
+      expect.any(String), expect.any(String),
+    );
+    expect(dbMocks.incrementUnreadCount).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
   it("skips a retried message.received (same payload.id) — writes exactly one message", async () => {
     // Telnyx retries webhooks at-least-once. createContact dedupes by phone
     // and ensureConversation by account+contact, but createMessage itself

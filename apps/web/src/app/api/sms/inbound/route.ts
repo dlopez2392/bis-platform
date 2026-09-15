@@ -111,7 +111,21 @@ async function handleInbound(db: SupabaseClient, payload: TelnyxPayload | undefi
   // BEFORE the retry-dedupe check: there is no message worth deduping
   // against, only a sender worth never filing.
   const fromNumber = toE164(payload?.from?.phone_number ?? null);
-  const alertPhone = await getAlertPhone(db, accountId);
+  // Contained on purpose: getAlertPhone is a plain accounts.alert_phone
+  // SELECT, and a transient read failure here (a DB blip, not a real
+  // "the operator texted their own line" case) must never escape into the
+  // route's outer catch. That catch logs and still returns 200 — Telnyx is
+  // told "handled" and never retries — so an uncontained throw here reads as
+  // "handled" while the whole inbound text, from every account, is silently
+  // discarded. A failed read is treated as "no alert phone" (the guard below
+  // simply does not fire), which is the loop guard degrading, not the
+  // customer's message. The guard is a nicety; the message is not.
+  let alertPhone: string | null = null;
+  try {
+    alertPhone = await getAlertPhone(db, accountId);
+  } catch (e) {
+    log("getAlertPhone read failed — proceeding without the loop guard rather than dropping the text", accountId, String(e));
+  }
   if (alertPhone && fromNumber === alertPhone) {
     log("dropping inbound text from the account's own alert_phone — recognized, not filed as a contact", accountId, alertPhone);
     return;

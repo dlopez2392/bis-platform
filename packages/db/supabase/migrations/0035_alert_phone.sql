@@ -125,10 +125,15 @@ alter table public.accounts
 -- that fails to send at 2 AM is the failure mode this feature exists to avoid.
 -- Without the constraint a typo saves cleanly, the screen says the number is
 -- set, and the only evidence is a provider error in a background job nobody
--- is reading at 2 AM. With it the save fails in front of the person who typed
--- it, at the moment they typed it. The agency being the writer makes the
--- constraint MORE useful, not less — there is no client to notice the
--- silence.
+-- is reading at 2 AM. With it, a MALFORMED shape — not E.164 at all, or an
+-- obviously wrong digit count — fails in front of the person who typed it, at
+-- the moment they typed it. CORRECTED (alert-send-report follow-up review,
+-- 2026-09-15): this constraint is shape-only, not completeness. A truncated
+-- but still-plausible number — one digit short of the real one, still
+-- `^\+[0-9]{8,15}$` — satisfies the regex and saves cleanly with the WRONG
+-- number; the constraint catches the typo that breaks the shape, not the one
+-- that doesn't. The agency being the writer still makes the constraint MORE
+-- useful, not less — there is no client to notice either kind of silence.
 --
 -- THE EMPTY STRING IS REFUSED, and that is load-bearing rather than tidy. A
 -- blank form field posts "", and "" is the shape that gives "off" a second
@@ -150,6 +155,19 @@ alter table public.accounts
 -- disconnected line, and a number whose owner replied STOP all satisfy this
 -- constraint. Shape is all a CHECK can know; deliverability is Telnyx's answer
 -- and belongs in the send path's error handling.
+--
+-- STATUS (alert-send-report follow-up review, 2026-09-15): partially there,
+-- named honestly rather than left to imply more than it does. `deliverAlertSms`
+-- (lib/sms/alerts.ts) now logs the provider message id and destination on
+-- BOTH a successful send and a failed one — the cheap end of "belongs in the
+-- send path's error handling." What is still NOT true: there is no message
+-- row for an alert send (this decision's own reasoning is why there must
+-- never be one — no contact to file it under), so a delivery callback has
+-- nothing durable to correlate against, and no screen anywhere shows an
+-- agency this account's alert-phone health. That thorough end — a durable,
+-- agency-visible send record — needs a product decision about where an
+-- agency would see it, and is deliberately left undone here rather than
+-- built without one.
 
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -182,6 +200,17 @@ alter table public.accounts
 -- the state as it is, refusing to send and saying why. A save-time warning on
 -- the settings screen is worth adding too, but as help, not as the guard — the
 -- guard has to be at send time or it is not a guard.
+--
+-- CORRECTED (alert-send-report follow-up review, 2026-09-15): "the account's
+-- live from-number, singular" above was itself the bug this review found —
+-- `api/sms/inbound/route.ts` treats `testing` OR `live` as owned, not `live`
+-- alone, so a second owned row (one still mid-provisioning) was an unguarded
+-- loop when the send-path guard only ever compared against the ONE number
+-- `resolveSmsSender` resolved to send FROM. `resolveSmsSender`
+-- (lib/sms/sender.ts) now returns every owned number alongside `from`, and
+-- the guard (`refusesAlertLoop`) compares `alert_phone` against that whole
+-- set — this migration's own argument (`phone_numbers` rows move on their
+-- own) implied every owned row from the start.
 
 
 comment on column public.accounts.alert_phone is
