@@ -229,13 +229,21 @@ describe("AccountDashboardPage — the work row (unlike the checklist row, both 
     dbMocks.listAccountWork.mockResolvedValue([
       workRow("task", "2020-01-01T00:00:00Z"), // always overdue
       workRow("task", "2099-01-01T00:00:00Z"), // always waiting (future)
+      // The current instant — shares a local day with page.tsx's own `now`
+      // in ANY zone by construction (both are `new Date()` a moment apart),
+      // unlike a relative offset that would need its own zone reasoning.
+      // Pins the bucket a plain overdue+waiting fixture leaves uncovered:
+      // `workTotal`'s middle term (`workBuckets.today.length`) could be
+      // deleted from page.tsx and this test stayed green without a row that
+      // actually lands in Today.
+      workRow("task", new Date().toISOString()), // today
       workRow("conversation", null), // derived — always waiting
       workRow("booking", null), // derived — always waiting
     ]);
 
     await renderToStaticMarkup(await AccountDashboardPage(route()));
 
-    expect(workRowProps.current).toEqual({ accountId: "acct1", total: 4, overdue: 1 });
+    expect(workRowProps.current).toEqual({ accountId: "acct1", total: 5, overdue: 1 });
   });
 
   it("still renders the row at an empty queue, for an agency session", async () => {

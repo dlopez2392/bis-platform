@@ -157,7 +157,13 @@ describe("WorkList", () => {
     const b = bucketWork([conversationRow({ contactId: "c1" })], NOW, ZONE);
     const html = renderList(b, { c1: "Maria Garcia" });
     expect(html).toContain("size-[7px] rounded-full");
-    expect(html).toContain(m["work.bucket.waiting"]);
+    // Pinned to the CHIP's own <span data-slot="badge"> — the section
+    // heading above renders this exact same "Waiting" text, so
+    // `toContain(m["work.bucket.waiting"])` alone stayed green even after
+    // the word was deleted from the chip outright, leaving only the dot.
+    expect(html).toMatch(
+      new RegExp(`<span data-slot="badge"[^>]*>.*?</span>${m["work.bucket.waiting"]}</span>`),
+    );
   });
 
   it("names the contact on a conversation row via work.conversation", () => {
