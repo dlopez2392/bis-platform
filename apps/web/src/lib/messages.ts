@@ -7,6 +7,7 @@ export const m = {
   "nav.group.communications": "Communications",
   "nav.group.growth": "Growth",
   "nav.dashboard": "Dashboard",
+  "nav.tasks": "To do",
   "nav.website": "Website",
   // "Checklist", not "Activation checklist": every other sidebar entry is one
   // word, and the longer form is byte-identical to the dashboard card's own
@@ -1245,6 +1246,28 @@ export const m = {
   "website.link.unlinked": "Site unlinked.",
   "website.link.unlinkFailed": "Couldn't unlink just now. Try again in a moment.",
   "website.link.notLinked": "No site is linked to this client.",
+
+  // The account's "To do" screen (Task 3, read-only) — everything that
+  // needs a human: open tasks, contacts owed a reply, and jobs nobody has
+  // confirmed happened. `work.call` is deliberately absent: the "call"
+  // WorkSource it would have named was specified, found unsatisfiable in
+  // review, and withdrawn before implementation (spec §1.2) — an
+  // unreturned call now surfaces as its own conversation row instead, via
+  // `work.conversation`. The four `work.notNow`/`work.done`/
+  // `work.booking.completed`/`work.booking.noShow` keys belong to Task 4's
+  // action buttons, added here so this namespace is edited once rather
+  // than twice; this read-only screen renders none of them.
+  "work.title": "To do",
+  "work.empty": "Nothing needs you right now.",
+  "work.bucket.overdue": "Overdue",
+  "work.bucket.today": "Today",
+  "work.bucket.waiting": "Waiting",
+  "work.conversation": "Reply to {name}",
+  "work.booking": "Did this job happen?",
+  "work.notNow": "Not now",
+  "work.done": "Done",
+  "work.booking.completed": "It happened",
+  "work.booking.noShow": "They didn't show",
 } as const;
 
 export type MessageKey = keyof typeof m;

@@ -13,7 +13,7 @@ import {
   FileText,
   Settings,
   Building2,
-  Layers, ListChecks,
+  Layers, ListChecks, ListTodo,
   PanelLeftClose,
   PanelLeft,
   ArrowLeft,
@@ -43,6 +43,7 @@ type NavItem = { href: string; label: string; icon: LucideIcon };
 // one place that maps an icon key to one.
 const NAV_ICONS: Record<NavIconKey, LucideIcon> = {
   dashboard: LayoutDashboard,
+  tasks: ListTodo,
   website: Globe,
   contacts: Users,
   opportunities: KanbanSquare,

@@ -8,6 +8,7 @@ import type { MessageKey } from "./messages";
  */
 export type NavIconKey =
   | "dashboard"
+  | "tasks"
   | "website"
   | "contacts"
   | "opportunities"
@@ -65,6 +66,11 @@ export function buildNavGroups(base: string | null, isAgency: boolean): NavGroup
       label: "nav.group.overview",
       items: [
         { href: `${base}/dashboard`, labelKey: "nav.dashboard", iconKey: "dashboard" },
+        // Both audiences, directly under Dashboard (Task 3 spec, Step 4):
+        // open tasks, contacts owed a reply, jobs nobody confirmed — the
+        // one place both a client and the agency see what needs a human
+        // TODAY, ahead of Website's own longer-horizon numbers.
+        { href: `${base}/tasks`, labelKey: "nav.tasks", iconKey: "tasks" },
         // Both audiences: the section exists for the client even before a site
         // is linked (it sells the feature, spec §The screen); the agency sees
         // the same page inside any account.
