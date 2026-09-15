@@ -134,7 +134,11 @@ function AgencyWorkRowItem({
             so the agency sees it and is told, dot plus word, not to text. */}
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="truncate font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase">
-            {row.brandName}
+            {/* brandDisplayName (packages/db/src/branding.ts) has no fallback
+                to accounts.name any more — a blank result reaches here as ""
+                rather than the internal label, and this is where it degrades
+                to a neutral placeholder instead of an empty caption. */}
+            {row.brandName || m["work.agency.unbranded"]}
           </span>
           {row.suppressed ? (
             <span className="inline-flex shrink-0 items-center gap-1 text-[10px] font-medium text-[var(--warn)]">

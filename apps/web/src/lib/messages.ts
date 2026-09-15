@@ -1347,6 +1347,13 @@ export const m = {
   // read-only screen and the mark exists so the agency sees the work and
   // knows not to text. Dot + word (rule 3), never color alone.
   "work.agency.suppressed": "Not texting",
+  // `listAgencyWork`'s `brandName` has no fallback to `accounts.name` any
+  // more (2026-09-15) — see that function's own doc comment in
+  // work-queue.ts. A blank result is unreachable through the product today
+  // (migration 0028 backfilled every row), but if `brand_name` is ever
+  // blank, the row's caption reads this instead of going empty or falling
+  // back to the internal label.
+  "work.agency.unbranded": "Unnamed account",
 } as const;
 
 export type MessageKey = keyof typeof m;

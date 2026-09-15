@@ -247,6 +247,30 @@ client's behalf.
 The row label uses `brand_name`, never `accounts.name` — the internal label
 ("Rio Roofing — trial") has leaked to customers three times in this codebase.
 The agency screen is not a customer surface, but the habit is the protection.
+`brandDisplayName` (`packages/db/src/branding.ts`) takes no second argument to
+fall back to, deliberately, so there is nothing here for a future edit to pass
+`name` into even under pressure; a blank `brand_name` (unreachable through the
+product today — migration 0028 backfilled it) reads as a neutral placeholder
+in the UI, not as the internal label and not as an empty caption.
+
+**Suppressed accounts still appear on this screen, marked (danlo, 2026-09-15).**
+`outbound_suppressed` (migration 0032) no longer excludes an account from
+`listAgencyWork` — dropping the account made a blank queue on a suppressed
+account indistinguishable from a finished one, on the exact account (newest,
+pending carrier registration) most likely to have real customers waiting. Every
+row from a suppressed account carries `suppressed: true`, and the row is
+marked right where the company is identified — the brand-name caption — dot
+plus word (rule 3), never color alone. Nothing about actual outbound sending
+changes; this is a read-only screen, and the mark exists so the agency sees
+the work and knows not to text.
+
+**Company blocks within a bucket rank by urgency, not account id or read
+order (danlo, 2026-09-15).** Rows are grouped by account inside each bucket,
+and the account blocks are then ordered by that account's own MOST URGENT
+row in that bucket — the same comparator that already sorts the rows
+themselves (`due_at` ascending for Overdue/Today, oldest-first for Waiting),
+never a second, different notion of urgency. Ties break on `accountId`
+ascending, so two equally-urgent companies never swap order between renders.
 
 ### 4.3 Dashboard row
 

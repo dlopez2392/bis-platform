@@ -117,6 +117,15 @@ describe("AgencyWorkList", () => {
     expect((html.match(/Rio Roofing/g) ?? []).length).toBe(1);
   });
 
+  // listAgencyWork's brandName has no fallback to accounts.name any more
+  // (2026-09-15 reviewer fix) — a blank result is unreachable through the
+  // product today, but this screen must still not render an empty caption
+  // or, worse, silently swallow the row's identity.
+  it("renders a neutral caption, never a blank one, for a row whose brand name is blank", () => {
+    const html = renderList(buckets({ waiting: [row({ brandName: "" })] }));
+    expect(html).toContain(m["work.agency.unbranded"]);
+  });
+
   it("links each row to ITS OWN account's contact page, never a different row's account", () => {
     const html = renderList(
       buckets({
@@ -182,7 +191,12 @@ describe("AgencyWorkList", () => {
     const html = renderList(buckets({ waiting: [row({ brandName: "Resaca Roofing", suppressed: true })] }));
     expect(html).toContain("Resaca Roofing");
     expect(html).toContain(m["work.agency.suppressed"]);
-    expect(html).toContain("rounded-full");
+    // Pinned to the marker's OWN dot, not the status badge's — "rounded-full"
+    // alone is satisfied by the badge's 7px dot on every row regardless of
+    // suppression, so it proves nothing about THIS marker. size-[5px] is the
+    // marker's own size (agency-work-list.tsx), distinct from the badge's
+    // size-[7px] pinned above ("shows status as a dot plus a word...").
+    expect(html).toContain("size-[5px] shrink-0 rounded-full");
   });
 
   it("does not mark an unsuppressed account's row", () => {

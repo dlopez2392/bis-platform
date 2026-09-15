@@ -115,6 +115,32 @@ describe("listAccountWork", () => {
       expect(taskCount).toBeLessThanOrEqual(200);
     });
   });
+
+  // The screen buckets by due_at (Overdue/Today take priority over Waiting),
+  // but the cap above used to order the READ by created_at — so an account
+  // past the cap could have a task due today fall off in favour of tasks
+  // created earlier that carry no due date at all. 200 undated tasks are
+  // inserted FIRST (so they'd win a created_at-ascending race), then one more
+  // dated task is created last — the shape that would have been dropped
+  // under the old order.
+  it("keeps a task with a due date over undated ones when open tasks exceed the cap", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const undated = Array.from({ length: 200 }, (_, i) => ({
+        account_id: accountId, title: `Bulk task ${i}`,
+      }));
+      const { error } = await db.from("tasks").insert(undated);
+      expect(error).toBeNull();
+
+      const dueToday = await addTask(
+        db, accountId,
+        { title: "Call about the estimate", dueAt: new Date().toISOString() },
+        "user_test",
+      );
+
+      const work = await listAccountWork(db, accountId);
+      expect(work.map((r) => r.id)).toContain(`task:${dueToday.id}`);
+    });
+  });
 });
 
 describe("listAgencyWork", () => {
@@ -139,12 +165,19 @@ describe("listAgencyWork", () => {
     });
   });
 
-  // The column is nullable, and on this agency-only screen the brand-name
-  // caption is the ONLY thing saying which company a row belongs to — a
-  // null produces an unattributable row. Falls back to the account's own
-  // internal name (defensible here, unlike a customer surface, because
-  // requireAgency gates the whole route).
-  it("falls back to the account's own internal name when brand_name is null", async () => {
+  // The column is nullable. `brandDisplayName` (branding.ts) takes no second
+  // argument, deliberately — `accounts.name` is the agency's internal label
+  // and reached customers three times while a resolver still accepted it as
+  // a fallback; removing the parameter is what makes that leak impossible
+  // rather than merely discouraged. A blank brand_name is unreachable
+  // through the product today (migration 0028 backfilled every existing
+  // row; createAccount, the Branding save, and go-live all keep it
+  // populated since) — this test reaches the path only by nulling the
+  // column by hand — but when it IS blank, the row still must not fall back
+  // to the internal label. `agency-work-list.tsx` is the one that renders a
+  // neutral placeholder for the reader; this level just proves the value
+  // itself stays blank rather than becoming `accounts.name`.
+  it("returns a blank brand name, never the account's internal label, when brand_name is null", async () => {
     await withTestAccount(async (db, accountId) => {
       const open = await addTask(db, accountId, { title: "Call Maria back" }, "user_test");
       await db.from("accounts").update({ brand_name: null }).eq("id", accountId);
@@ -152,8 +185,7 @@ describe("listAgencyWork", () => {
       const rows = await listAgencyWork(db);
       const mine = rows.filter((r) => r.accountId === accountId);
       expect(mine.some((r) => r.id === `task:${open.id}`)).toBe(true);
-      // withTestAccount's own fixture name — see fixtures.ts.
-      expect(mine.every((r) => r.brandName === "Fixture Co")).toBe(true);
+      expect(mine.every((r) => r.brandName === "")).toBe(true);
     });
   });
 
