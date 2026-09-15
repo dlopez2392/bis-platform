@@ -21,7 +21,8 @@ export type NavIconKey =
   | "automations"
   | "accounts"
   | "blueprints"
-  | "checklist";
+  | "checklist"
+  | "work";
 
 export type NavItemSpec = {
   href: string;
@@ -56,6 +57,14 @@ export function buildNavGroups(base: string | null, isAgency: boolean): NavGroup
         items: [
           { href: "/dashboard/accounts", labelKey: "nav.accounts", iconKey: "accounts" },
           { href: "/dashboard/blueprints", labelKey: "nav.blueprints", iconKey: "blueprints" },
+          // Work Queue Task 6 — /dashboard/work, agency-only by construction
+          // (requireAgency, first line, before any read; hiding this link
+          // for a client is convenience only, never the boundary). Appended
+          // rather than leading the list: this registry's own convention is
+          // "add a line, never reorder" — the design spec's own placement
+          // ("Top level, beside Accounts and Blueprints") does not require
+          // a particular side.
+          { href: "/dashboard/work", labelKey: "nav.work", iconKey: "work" },
         ],
       },
     ];

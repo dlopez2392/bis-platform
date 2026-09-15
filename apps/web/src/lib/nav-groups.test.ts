@@ -12,7 +12,7 @@ describe("buildNavGroups", () => {
     const groups = buildNavGroups(null, true);
     expect(groups).toHaveLength(1);
     expect(groups[0]!.label).toBeNull();
-    expect(hrefs(groups)).toEqual(["/dashboard/accounts", "/dashboard/blueprints"]);
+    expect(hrefs(groups)).toEqual(["/dashboard/accounts", "/dashboard/blueprints", "/dashboard/work"]);
   });
 
   it("groups in-account items under OVERVIEW / CRM / COMMUNICATIONS / GROWTH, in that order", () => {

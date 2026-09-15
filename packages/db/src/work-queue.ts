@@ -105,18 +105,25 @@ export async function listAccountWork(db: SupabaseClient, accountId: string): Pr
   return [...tasks, ...convos.filter(keep), ...bookings];
 }
 
+/** `listAgencyWork`'s own row shape: every `WorkRow` field plus the two the
+ *  agency-wide screen needs and a per-account row does not — `brandName`
+ *  (never `accounts.name`, see below) and `timezone`, so the zone a row's
+ *  own bucket depends on travels WITH the row rather than requiring a
+ *  second, separate account read to look it up (Work Queue Task 6). */
+export type AgencyWorkRow = WorkRow & { brandName: string; timezone: string };
+
 export async function listAgencyWork(
   db: SupabaseClient,
-): Promise<(WorkRow & { brandName: string })[]> {
+): Promise<AgencyWorkRow[]> {
   const { data, error } = await db.from("accounts")
-    .select("id, brand_name, name").eq("outbound_suppressed", false);
+    .select("id, brand_name, name, timezone").eq("outbound_suppressed", false);
   if (error) throw new Error(`listAgencyWork accounts read failed: ${error.message}`);
-  const out: (WorkRow & { brandName: string })[] = [];
+  const out: AgencyWorkRow[] = [];
   for (const a of data ?? []) {
     // brand_name, never name — the internal label has leaked to customers.
     const brandName = a.brand_name ?? "";
     const rows = await listAccountWork(db, a.id);
-    for (const r of rows) out.push({ ...r, brandName });
+    for (const r of rows) out.push({ ...r, brandName, timezone: a.timezone });
   }
   return out;
 }

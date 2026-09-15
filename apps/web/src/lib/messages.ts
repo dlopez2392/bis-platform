@@ -28,6 +28,14 @@ export const m = {
   "nav.setup": "Setup",
   "nav.accounts": "Companies",
   "nav.blueprints": "Blueprints",
+  // Work Queue Task 6 — the agency-wide queue, top level beside Companies
+  // and Blueprints. "Work queue" rather than reusing "To do" (nav.tasks):
+  // that label already names the per-account screen one level down, and the
+  // sidebar can show both on screen at once (inside an account, the agency
+  // still sees the top-level group's own back-link). "Queue" is the accurate
+  // word here in a way it stops being on the per-account screen: nothing at
+  // that level is ever pooled across more than one company.
+  "nav.work": "Work queue",
 
   "shell.brand": "BIS",
   "shell.switchAccount": "Switch company",
@@ -1311,6 +1319,22 @@ export const m = {
   "work.row.count": "{count} things to do",
   "work.row.countOne": "1 thing to do",
   "work.row.overdue": "{count} overdue",
+
+  // Work Queue Task 6 — the agency-wide queue (/dashboard/work), agency-only
+  // by construction (requireAgency, first line, before any read). Same three
+  // buckets and the same row language as the per-account screen above, pooled
+  // across every account instead of scoped to one, so every row also carries
+  // that account's brand name. `work.title`/`work.empty`/`work.bucket.*` are
+  // reused verbatim rather than duplicated — same convention work-row.tsx's
+  // dashboard card already follows for `work.empty` — only the strings that
+  // are genuinely agency-scope-specific get their own key below.
+  "work.agency.title": "Everything that needs you",
+  "work.agency.subtitle": "Every account, in one queue.",
+  // work.empty ("Nothing needs you right now.") is reused as this screen's
+  // own empty title; only the body differs, to say "every account" rather
+  // than imply the one this reader happens to be looking at.
+  "work.agency.empty.body":
+    "Tasks, contacts waiting on a reply, and jobs nobody has confirmed happened will show up here, across every account.",
 } as const;
 
 export type MessageKey = keyof typeof m;

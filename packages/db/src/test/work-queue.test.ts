@@ -100,20 +100,24 @@ describe("listAccountWork", () => {
 });
 
 describe("listAgencyWork", () => {
-  it("carries each account's brand_name (never name) and honors outbound_suppressed", async () => {
+  it("carries each account's brand_name (never name) and timezone, and honors outbound_suppressed", async () => {
     await withTestAccount(async (db, accountId) => {
       const open = await addTask(db, accountId, { title: "Call Maria back" }, "user_test");
 
       // createAccount seeds brand_name from name, so both start "Fixture Co"
       // — identical values can't distinguish a read of the wrong column, so
-      // diverge them before asserting.
-      await db.from("accounts").update({ brand_name: "Fixture Co — branded" })
+      // diverge them before asserting. timezone also diverges from
+      // createAccount's own default ("America/Chicago") so a passing
+      // assertion proves the column travelled rather than coincidentally
+      // matching the fixture's default.
+      await db.from("accounts").update({ brand_name: "Fixture Co — branded", timezone: "America/New_York" })
         .eq("id", accountId);
 
       const before = await listAgencyWork(db);
       const mine = before.filter((r) => r.accountId === accountId);
       expect(mine.map((r) => r.id)).toContain(`task:${open.id}`);
       expect(mine.every((r) => r.brandName === "Fixture Co — branded")).toBe(true);
+      expect(mine.every((r) => r.timezone === "America/New_York")).toBe(true);
 
       await db.from("accounts").update({ outbound_suppressed: true }).eq("id", accountId);
       const after = await listAgencyWork(db);
