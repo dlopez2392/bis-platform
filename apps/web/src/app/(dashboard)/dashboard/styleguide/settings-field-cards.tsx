@@ -48,9 +48,17 @@ export function SettingsFieldCards() {
         <WeeklyReportCard reportEmails={["owner@rioroofing.test"]} action={demoOk} />
       </Demo>
       <Demo label="Agency — alert texts, not ready to send">
-        <AlertPhoneCard
-          isAgency accountId="demo" alertPhone="+19562921696" smsNotReady action={demoOk}
-        />
+        {/* This branch's own Notice links to a real
+            `/dashboard/accounts/${accountId}/checklist` route, and this page
+            has no real account to hand it (page.tsx's own comment: "this
+            route has no accountId") — accountId="demo" below is a display
+            value only. Swallow the click here rather than let it navigate to
+            a route that does not exist. */}
+        <div onClickCapture={(e) => e.preventDefault()}>
+          <AlertPhoneCard
+            isAgency accountId="demo" alertPhone="+19562921696" smsNotReady action={demoOk}
+          />
+        </div>
       </Demo>
       <Demo label="Client — no alert number">
         <AlertPhoneCard isAgency={false} accountId="demo" alertPhone={null} />

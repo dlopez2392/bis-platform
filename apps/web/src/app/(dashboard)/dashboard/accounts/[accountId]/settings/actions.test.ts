@@ -88,7 +88,9 @@ describe("setAlertPhoneAction — agency-gated, like setFromEmailAction and setR
 
 describe("setAlertPhoneAction — the self-text loop warning is help, not the guard", () => {
   it("still saves, and returns a warning, when the number equals the account's own resolved sending number (mutation: block the save instead → FAILS)", async () => {
-    resolveSmsSenderMock.mockResolvedValue({ ok: true, from: "+19565550001" });
+    resolveSmsSenderMock.mockResolvedValue({
+      ok: true, from: "+19565550001", ownedNumbers: ["+19565550001"],
+    });
     expect(await setAlertPhoneAction("acct_1", fd("+19565550001")))
       .toEqual({ ok: true, warning: m["settings.alertPhoneSelfWarning"] });
     expect(dbMocks.setAlertPhone).toHaveBeenCalledWith(
@@ -96,8 +98,18 @@ describe("setAlertPhoneAction — the self-text loop warning is help, not the gu
     );
   });
 
-  it("carries no warning when the resolved sending number differs (mutation: warn unconditionally → FAILS)", async () => {
-    resolveSmsSenderMock.mockResolvedValue({ ok: true, from: "+19565550002" });
+  it("also warns when the number matches a second owned number that differs from the resolved sender — e.g. one still mid-registration, not only the one resolveSmsSender picked to send FROM (mutation: compare only to gate.from → FAILS)", async () => {
+    resolveSmsSenderMock.mockResolvedValue({
+      ok: true, from: "+19565550001", ownedNumbers: ["+19565550001", "+19565550002"],
+    });
+    expect(await setAlertPhoneAction("acct_1", fd("+19565550002")))
+      .toEqual({ ok: true, warning: m["settings.alertPhoneSelfWarning"] });
+  });
+
+  it("carries no warning when the number matches none of the account's owned numbers (mutation: warn unconditionally → FAILS)", async () => {
+    resolveSmsSenderMock.mockResolvedValue({
+      ok: true, from: "+19565550002", ownedNumbers: ["+19565550002"],
+    });
     expect(await setAlertPhoneAction("acct_1", fd("+19565550001"))).toEqual({ ok: true });
   });
 

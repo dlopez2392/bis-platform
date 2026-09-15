@@ -88,4 +88,13 @@ describe("branding page — alert-phone readiness", () => {
     const props = await render();
     expect(props.smsNotReady).toBe(true);
   });
+
+  it("passes smsNotReady=true when the gate is otherwise clear but the stored alert phone matches one of the account's own owned numbers — the widened send-side loop definition, not just gate.ok (mutation: check only !smsGate.ok → FAILS)", async () => {
+    gateFixture.ok = true;
+    // Matches the mocked resolveSmsSender's ownedNumbers list above, even
+    // though the gate itself reports ok (a live number exists to send from).
+    dbFixture.alertPhone = "+15550000000";
+    const props = await render();
+    expect(props.smsNotReady).toBe(true);
+  });
 });

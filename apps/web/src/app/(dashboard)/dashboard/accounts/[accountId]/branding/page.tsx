@@ -98,7 +98,14 @@ export default async function BrandingPage({
         isAgency={false}
         accountId={accountId}
         alertPhone={alertPhone}
-        smsNotReady={!smsGate.ok}
+        // Not ready when the gate itself is closed OR the stored number is
+        // one this account already owns (`smsGate.ownedNumbers` —
+        // `resolveSmsSender`'s widened `testing` OR `live` set, the same
+        // one `refusesAlertLoop` refuses against at send time). A gate that
+        // is otherwise "ok" still refuses THIS specific send when the alert
+        // phone loops back to the account's own number, so `!smsGate.ok`
+        // alone was the narrow, pre-widening comparison read back in here.
+        smsNotReady={!smsGate.ok || (alertPhone !== null && smsGate.ownedNumbers.includes(alertPhone))}
       />
     </div>
   );

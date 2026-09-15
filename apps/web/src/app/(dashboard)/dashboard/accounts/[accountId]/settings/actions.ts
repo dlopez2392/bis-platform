@@ -265,6 +265,14 @@ export async function setReportEmailsAction(
  * number who's already live) immediately, in front of the person who typed
  * it, rather than leaving them to notice only from a text that never
  * arrived.
+ *
+ * Checked against `gate.ownedNumbers` — every row this account owns
+ * (`testing` OR `live`, `resolveSmsSender`'s own widened set) — not only
+ * `gate.from`, the single one it resolves to send FROM. `refusesAlertLoop`
+ * widened to that same set for the same reason (a second owned number, even
+ * one still mid-provisioning, is an unguarded loop); this save-time help
+ * mirrors the send guard, so it stays wrong on the exact case the guard
+ * refuses if it does not ask the same question.
  */
 export async function setAlertPhoneAction(
   accountId: string, formData: FormData,
@@ -288,7 +296,7 @@ export async function setAlertPhoneAction(
   revalidatePath(`/dashboard/accounts/${accountId}/settings`);
 
   const gate = await resolveSmsSender(serviceDb(), accountId);
-  if (gate.ok && gate.from === normalized) {
+  if (gate.ok && gate.ownedNumbers.includes(normalized)) {
     return { ok: true, warning: m["settings.alertPhoneSelfWarning"] };
   }
   return { ok: true };
