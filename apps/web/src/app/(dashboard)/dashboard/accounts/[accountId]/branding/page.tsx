@@ -1,5 +1,6 @@
-import { getBranding, brandLogoUrl, serviceDb } from "@bis/db";
+import { getBranding, getAlertPhone, brandLogoUrl, serviceDb } from "@bis/db";
 import { BrandingPanel } from "@/components/branding-panel";
+import { AlertPhoneCard } from "@/components/alert-phone-card";
 import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
 import { requireAccountAccess } from "@/lib/auth";
@@ -9,7 +10,9 @@ import { setBrandingAction } from "./actions";
 export const dynamic = "force-dynamic";
 
 /**
- * The client's own door onto their branding.
+ * The client's own door onto their branding — and, alongside it, the one
+ * other account fact 0035_alert_phone.sql says a client should be able to
+ * SEE even though only the agency can change it: where alert texts go.
  *
  * Deliberately NOT the Settings page. That one also carries custom-field
  * definitions, blueprints and the client-access switch, so opening it to
@@ -18,9 +21,13 @@ export const dynamic = "force-dynamic";
  * where dashboard/layout.tsx held the only guard on three agency-wide
  * serviceDb() reads and admitting clients would have exposed every account.
  *
- * This page fetches branding and nothing else. That is a property of what it
- * reads rather than of a conditional, which is what makes it safe to expose:
- * there is no branch here for a future edit to get wrong.
+ * What keeps this page safe to expose is not "branding and nothing else" —
+ * it is that every read on it is UNCONDITIONAL and already known to be safe
+ * for this account's own users to see (`getBranding` and `getAlertPhone` are
+ * both just `accounts_member_read` reads of columns the client's own RLS
+ * already returns; `AlertPhoneCard` below renders with no `action`, so there
+ * is no write path here to gate at all). There is still no branch here for a
+ * future edit to get wrong — only more reads that share that property.
  */
 export default async function BrandingPage({
   params,
@@ -40,11 +47,16 @@ export default async function BrandingPage({
   // rather than 404ing in a way someone would later have to debug.
   await requireAccountAccess(accountId);
 
-  // serviceDb for the READ, matching every other in-account read of this row.
-  // It changes no boundary: accounts_member_read already returns the whole row
-  // to this account's own users. The WRITE is the one that moved to the
-  // RLS-enforced client — see ./actions.ts.
-  const branding = await getBranding(serviceDb(), accountId);
+  // serviceDb for the READS, matching every other in-account read of this
+  // row. It changes no boundary: accounts_member_read already returns the
+  // whole row to this account's own users. The branding WRITE is the one
+  // that moved to the RLS-enforced client — see ./actions.ts. alert_phone
+  // has no write here at all — AlertPhoneCard renders with no `action`,
+  // which is what makes it read-only rather than merely disabled-looking.
+  const [branding, alertPhone] = await Promise.all([
+    getBranding(serviceDb(), accountId),
+    getAlertPhone(serviceDb(), accountId),
+  ]);
 
   return (
     <div className="space-y-6">
@@ -70,6 +82,7 @@ export default async function BrandingPage({
         logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
         action={setBrandingAction.bind(null, accountId)}
       />
+      <AlertPhoneCard isAgency={false} alertPhone={alertPhone} />
     </div>
   );
 }

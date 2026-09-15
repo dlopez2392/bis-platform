@@ -38,6 +38,7 @@ const SETTINGS_SECTIONS: { anchor: string; label: string; keywords: string[] }[]
   { anchor: "sending-address", label: m["palette.settings.sendingAddress"], keywords: ["email", "from", "domain"] },
   { anchor: "custom-fields", label: m["palette.settings.customFields"], keywords: ["field", "crm"] },
   { anchor: "custom-values", label: m["palette.settings.customValues"], keywords: ["value", "variable", "merge"] },
+  { anchor: "alert-phone", label: m["palette.settings.alertPhone"], keywords: ["sms", "text", "notify", "lead alert"] },
 ];
 
 /** Extra search words per nav destination, keyed by the href SUFFIX so this

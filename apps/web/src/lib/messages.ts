@@ -473,6 +473,30 @@ export const m = {
   "settings.weeklyReportBadEmail": "That doesn't look like an email address: {value}",
   "settings.weeklyReportOff": "Nobody is receiving this yet.",
 
+  // accounts.alert_phone (0035_alert_phone.sql) — agency-write, client-read.
+  // Card title and the agency field's sr-only Label share this string, same
+  // reason as settings.weeklyReport above: one field, nothing to disambiguate.
+  "settings.alertPhone": "Alert texts",
+  "settings.alertPhoneHint": "Where a text goes the moment a booking lands or a call finishes. Leave it blank and this account gets no alert texts — that's not a bug, it's off.",
+  "settings.alertPhonePlaceholder": "(956) 292-1696",
+  "settings.alertPhoneSaved": "Alert phone updated",
+  "settings.alertPhoneBad": "Enter a phone number, like (956) 292-1696.",
+  "settings.alertPhoneOff": "No alert texts are going out yet.",
+  // Agency-only help — a number is set, but nothing would actually send
+  // (A2P not approved, or no live number yet). Never shown to a client:
+  // only the agency's own Checklist can act on it.
+  "settings.alertPhoneNotReady": "Texting isn't turned on for this account yet, so no alert texts will go out until it is. See Checklist.",
+  // Save-time HELP, not the guard — the guard (refusesAlertLoop, sender.ts)
+  // already refuses the send at the moment it matters. This just says so now
+  // instead of leaving the operator to notice a text that never arrived.
+  "settings.alertPhoneSelfWarning": "Heads up — that's this account's own texting number. A text sent there loops back instead of reaching anyone, so none will go out while it's set to this number.",
+  // The client's read-only view (branding page) — honest about the
+  // asymmetry rather than silent about it: says where alerts go and who can
+  // change it, never implies the field is unfinished.
+  "settings.alertPhoneClientOn": "Alert texts go to {value}.",
+  "settings.alertPhoneClientOff": "This account doesn't receive alert texts.",
+  "settings.alertPhoneClientBody": "Texts land here the moment a booking comes in or a call finishes. Only your agency can change this number.",
+
   "error.title": "Something went wrong",
   "error.body": "We couldn't complete that action. Your changes may not have been saved.",
   "error.retry": "Try again",
@@ -1187,6 +1211,7 @@ export const m = {
   "palette.settings.sendingAddress": "Sending address",
   "palette.settings.customFields": "Custom fields",
   "palette.settings.customValues": "Custom values",
+  "palette.settings.alertPhone": "Alert texts",
 
   // ── /styleguide ────────────────────────────────────────────────────────
   "styleguide.title": "Style guide",

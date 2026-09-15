@@ -39,6 +39,13 @@ describe("buildPaletteEntries", () => {
     }
   });
 
+  it("registers the alert-phone settings section (mutation: remove the SETTINGS_SECTIONS entry → FAILS)", () => {
+    const settings = buildPaletteEntries(BASE, true).filter((e) => e.group === "settings");
+    const entry = settings.find((e) => e.id === "settings:alert-phone");
+    expect(entry).toBeTruthy();
+    expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#alert-phone`);
+  });
+
   it("has no duplicate ids and no entry without a label", () => {
     for (const isAgency of [true, false]) {
       const entries = buildPaletteEntries(BASE, isAgency);

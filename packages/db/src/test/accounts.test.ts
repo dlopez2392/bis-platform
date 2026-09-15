@@ -4,7 +4,7 @@ import { serviceDb } from "../service";
 import { withTestAccount, testPhoneNumber } from "./fixtures";
 import {
   createAccount, listAccounts, renameAccount,
-  setA2pRegistration, getA2pRegistration, getAlertPhone,
+  setA2pRegistration, getA2pRegistration, getAlertPhone, setAlertPhone,
 } from "../accounts";
 
 const suffix = () => Math.random().toString(36).slice(2, 10);
@@ -178,5 +178,48 @@ describe("getAlertPhone", () => {
 
       expect(await getAlertPhone(db, accountId)).toBe(drawn);
     });
+  });
+});
+
+/**
+ * `setAlertPhone` — the write side of 0035_alert_phone.sql, shaped after
+ * `setFromEmail` (sending-identity.ts) for the reason its own doc comment
+ * gives: `.select("id")` so PostgREST's own "no error, no rows" on a
+ * zero-row update cannot read as success for a stale tab or a typed id that
+ * names no account.
+ */
+describe("setAlertPhone", () => {
+  it("round-trips a drawn E.164 value, clears back to null, and emits account.alert_phone_updated (mutation: update a different column → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const drawn = testPhoneNumber();
+      await setAlertPhone(db, accountId, drawn, "user_test");
+      expect(await getAlertPhone(db, accountId)).toBe(drawn);
+
+      const { data: ev } = await db.from("events").select("type, actor_type, actor_id, payload")
+        .eq("account_id", accountId).eq("type", "account.alert_phone_updated").single();
+      expect(ev).toMatchObject({
+        type: "account.alert_phone_updated", actor_type: "user", actor_id: "user_test",
+        payload: { alertPhone: drawn },
+      });
+
+      // NULL is the only "off" — 0035's own comment. Clearing round-trips too.
+      await setAlertPhone(db, accountId, null, "user_test");
+      expect(await getAlertPhone(db, accountId)).toBeNull();
+    });
+  });
+
+  /** Same claim, same reason, as renameAccount's and setA2pRegistration's own
+   *  zero-row tests above: PostgREST reports no error for an update matching
+   *  nothing, which reads as success for a save that changed nothing. */
+  it("throws rather than reporting success for an account that does not exist, and emits nothing", async () => {
+    const db = serviceDb();
+    const ghost = "00000000-0000-0000-0000-000000000000";
+    await expect(
+      setAlertPhone(db, ghost, "+19565550001", "user_test"),
+    ).rejects.toThrow(/no account/);
+
+    const { data } = await db.from("events").select("id")
+      .eq("account_id", ghost).eq("type", "account.alert_phone_updated");
+    expect(data ?? []).toHaveLength(0);
   });
 });
