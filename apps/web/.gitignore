@@ -44,3 +44,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Capture output and its signed-in state. The images belong in the WEBSITE
+# repo under public/screenshots/, not here; the auth state is a live session.
+screenshots/out/
+screenshots/.auth/
