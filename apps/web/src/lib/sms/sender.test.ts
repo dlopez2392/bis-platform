@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { resolveSmsSender } from "./sender";
+import { resolveSmsSender, refusesAlertLoop } from "./sender";
 
 const a2p = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", () => ({ getA2pRegistration: a2p }));
@@ -63,5 +63,23 @@ describe("resolveSmsSender", () => {
     // whatever comes back. A refactor flipping this flag must fail loudly —
     // the sending number must not change under an account between two sends.
     expect(captured.call).toEqual({ column: "created_at", opts: { ascending: true } });
+  });
+});
+
+describe("refusesAlertLoop", () => {
+  it("refuses (true) when alert_phone equals the resolved sending number, logging both (mutation: invert the equality check → FAILS)", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(refusesAlertLoop("acc_1", "+15551112222", "+15551112222")).toBe(true);
+    const logged = spy.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(logged).toContain("acc_1");
+    expect(logged).toContain("+15551112222");
+    spy.mockRestore();
+  });
+
+  it("does not refuse (false), and logs nothing, when the two numbers differ", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(refusesAlertLoop("acc_1", "+15551112222", "+15559998888")).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 });

@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
 import "dotenv/config";
 import { serviceDb } from "../service";
-import { withTestAccount } from "./fixtures";
+import { withTestAccount, testPhoneNumber } from "./fixtures";
 import {
   createAccount, listAccounts, renameAccount,
-  setA2pRegistration, getA2pRegistration,
+  setA2pRegistration, getA2pRegistration, getAlertPhone,
 } from "../accounts";
 
 const suffix = () => Math.random().toString(36).slice(2, 10);
@@ -157,5 +157,26 @@ describe("serviceDb-only account writes", () => {
     const { data } = await db.from("events").select("id")
       .eq("account_id", ghost).eq("type", "account.a2p_updated");
     expect(data ?? []).toHaveLength(0);
+  });
+});
+
+/**
+ * `getAlertPhone` — the read side of 0035_alert_phone.sql. Every send site
+ * (`b/[publicId]/actions.ts`, `finish-call.ts`) and the inbound loop guard
+ * treat a null return as "no work to do," never as an error — pinned here
+ * against the real column and its default (nullable, no default: every new
+ * account starts with alerts off).
+ */
+describe("getAlertPhone", () => {
+  it("null on a fresh account, the drawn E.164 value once set (mutation: return a hardcoded string → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      expect(await getAlertPhone(db, accountId)).toBeNull();
+
+      const drawn = testPhoneNumber();
+      const { error } = await db.from("accounts").update({ alert_phone: drawn }).eq("id", accountId);
+      expect(error).toBeNull();
+
+      expect(await getAlertPhone(db, accountId)).toBe(drawn);
+    });
   });
 });

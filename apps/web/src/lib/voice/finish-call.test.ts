@@ -4,6 +4,7 @@ const dbMocks = vi.hoisted(() => ({
   finishCallRow: vi.fn(), createContact: vi.fn(), ensureConversation: vi.fn(),
   createMessage: vi.fn(), incrementUnreadCount: vi.fn(), emit: vi.fn(),
   fillContactBlanks: vi.fn(), updateMessageStatus: vi.fn(), hasRecentOutboundSms: vi.fn(),
+  getAlertPhone: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const emailRefs = vi.hoisted(() => ({ providerShouldThrow: false, send: vi.fn() }));
@@ -25,7 +26,12 @@ vi.mock("@/lib/sms", () => ({
   },
 }));
 const senderMocks = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
-vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: senderMocks.resolveSmsSender }));
+// `refusesAlertLoop` stays REAL (importOriginal) — only `resolveSmsSender`'s
+// gate is faked. The staff-alert-SMS suite below relies on the genuine loop
+// guard running against these mocked from/alert numbers.
+vi.mock("@/lib/sms/sender", async (importOriginal) => ({
+  ...(await importOriginal<object>()), resolveSmsSender: senderMocks.resolveSmsSender,
+}));
 const summaryMocks = vi.hoisted(() => ({ generateSummary: vi.fn() }));
 vi.mock("./summary-service", () => ({ generateSummary: summaryMocks.generateSummary }));
 
@@ -73,6 +79,10 @@ beforeEach(() => {
   // "This caller has not been texted recently" is the ordinary case, so it is
   // the default here; the cooldown block below flips it.
   dbMocks.hasRecentOutboundSms.mockResolvedValue(false);
+  // Off by default, same as a real account (0035_alert_phone.sql: the field
+  // IS the switch) — the "the field is the switch" test below is the
+  // regression guard for this default.
+  dbMocks.getAlertPhone.mockResolvedValue(null);
 });
 
 describe("finishCall", () => {
@@ -553,6 +563,92 @@ describe("finishCall — text-back cooldown", () => {
     expect(smsRefs.send).not.toHaveBeenCalled();
     expect(dbMocks.createMessage).not.toHaveBeenCalled();
     expect(r).toMatchObject({ stored: true, outcome: "abandoned" });
+    errSpy.mockRestore();
+  });
+});
+
+/**
+ * The staff ALERT text (danlo, 2026-09-15) — the SMS twin of the staff alert
+ * EMAIL above, sent ALONGSIDE it, never instead. Distinct from the
+ * "missed-call text-back" suite above in every way that matters: that one
+ * texts the CUSTOMER on `abandoned` outcomes; this one texts the BUSINESS on
+ * `isMeaningful` outcomes (booked/lead/message) — the same gate the email
+ * alert already uses, matched exactly per the brief. `getAlertPhone` is
+ * mocked via `@bis/db` (imported-original spread), same as every other
+ * `@bis/db` read in this file; `resolveSmsSender`/`getSmsProvider` reuse the
+ * SAME `senderMocks`/`smsRefs` the text-back suite above already mocks —
+ * `lib/sms/alerts.ts` itself is NOT mocked, so this exercises the real
+ * compose + gate + loop-guard logic, only the provider boundary is faked.
+ */
+describe("finishCall — the staff alert SMS", () => {
+  const leadState = () => withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
+    { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
+
+  it("fires alongside the email alert when the account has an alert_phone (mutation: drop the SMS leg entirely → FAILS)", async () => {
+    dbMocks.getAlertPhone.mockResolvedValue("+19565559000");
+    const r = await finishCall(leadState(), ctx, meta);
+    expect(r).toMatchObject({ outcome: "lead", notified: true });
+    expect(emailRefs.send).toHaveBeenCalledTimes(1);
+    expect(smsRefs.send).toHaveBeenCalledTimes(1);
+    expect(smsRefs.send).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "+19565559000", from: "+19565550100" }),
+    );
+  });
+
+  it("the field is the switch — no alert_phone, no attempt at all (mutation: attempt regardless of alert_phone → FAILS)", async () => {
+    // dbMocks.getAlertPhone resolves null by default (set in beforeEach).
+    await finishCall(leadState(), ctx, meta);
+    expect(senderMocks.resolveSmsSender).not.toHaveBeenCalled();
+    expect(smsRefs.send).not.toHaveBeenCalled();
+  });
+
+  it("matches isMeaningful EXACTLY — an abandoned call never attempts the alert SMS even with alert_phone set (mutation: drop the isMeaningful gate on this leg → FAILS)", async () => {
+    dbMocks.getAlertPhone.mockResolvedValue("+19565559000");
+    // ctx (not textbackCtx): text-back stays OFF, so any send here can only
+    // be the alert leg misfiring on a non-meaningful outcome.
+    const r = await finishCall(abandonedState(), ctx, meta);
+    expect(r.outcome).toBe("abandoned");
+    expect(smsRefs.send).not.toHaveBeenCalled();
+  });
+
+  it("a spam call (no meaningful transcript) never attempts the alert SMS either", async () => {
+    dbMocks.getAlertPhone.mockResolvedValue("+19565559000");
+    const r = await finishCall(emptyCallState(), ctx, meta);
+    expect(r.outcome).toBe("spam");
+    expect(smsRefs.send).not.toHaveBeenCalled();
+  });
+
+  it("names the outcome and carries no phone number — booked/lead/message read distinctly", async () => {
+    dbMocks.getAlertPhone.mockResolvedValue("+19565559000");
+    const bookedState = withBooking(emptyCallState(), { id: "bk1", contactName: "Ana", startsAt: "x", endsAt: "y" });
+    await finishCall(bookedState, ctx, meta);
+    const body = smsRefs.send.mock.calls[0]![0].body as string;
+    expect(body.toLowerCase()).toContain("booked");
+    expect(body).not.toMatch(/\+?\d{7,}/);
+    expect(segmentsFor(body).segments).toBe(1);
+  });
+
+  // THE loop guard (0035_alert_phone.sql's decision 3): the migration
+  // deliberately leaves this to the send path. alert_phone can equal the
+  // account's own resolved sending number with nothing in the schema
+  // stopping it.
+  it("refuses and logs both numbers when alert_phone equals the account's own resolved sending number (mutation: drop the loop guard → FAILS)", async () => {
+    dbMocks.getAlertPhone.mockResolvedValue("+19565550100"); // == senderMocks' default `from`
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await finishCall(leadState(), ctx, meta);
+    expect(r.notified).toBe(true); // the EMAIL alert still succeeded
+    expect(smsRefs.send).not.toHaveBeenCalled();
+    const logged = errSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(logged).toContain("+19565550100");
+    errSpy.mockRestore();
+  });
+
+  it("a provider send failure never throws and never flips `notified` off (mutation: let the SMS leg's rejection escape → FAILS)", async () => {
+    dbMocks.getAlertPhone.mockResolvedValue("+19565559000");
+    smsRefs.send.mockRejectedValue(new Error("telnyx down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await finishCall(leadState(), ctx, meta);
+    expect(r).toMatchObject({ notified: true, stored: true });
     errSpy.mockRestore();
   });
 });

@@ -1,13 +1,14 @@
 import type { serviceDb, Branding, CallOutcome } from "@bis/db";
 import {
   createContact, fillContactBlanks, ensureConversation, createMessage, incrementUnreadCount,
-  updateMessageStatus, hasRecentOutboundSms, finishCallRow, emit,
+  updateMessageStatus, hasRecentOutboundSms, finishCallRow, emit, getAlertPhone,
 } from "@bis/db";
 import { emailBrand, brandDisplayName } from "@/lib/email/templates/shell";
 import { getEmailProvider } from "@/lib/email";
 import { voiceCallAlertEmail } from "@/lib/email/templates/voice";
 import { getSmsProvider } from "@/lib/sms";
 import { resolveSmsSender } from "@/lib/sms/sender";
+import { composeCallAlertSms, sendAlertSms } from "@/lib/sms/alerts";
 import { defaultTextbackBody } from "./textback-body";
 import type { CallState } from "./call-state";
 import { classifyOutcome, wasServed } from "./call-state";
@@ -95,8 +96,14 @@ const TEXTBACK_COOLDOWN_MS = TEXTBACK_COOLDOWN_HOURS * 60 * 60 * 1000;
  * there is no one to hand off to. (`abandoned` may still get a contact and a
  * conversation from the text-back leg further down, when the account has
  * opted in; that trail exists to hold the text, not to summon a human.)
+ *
+ * A type predicate (not a plain boolean) so the staff alert SMS leg below
+ * can call this directly and get `outcome` narrowed to
+ * `composeCallAlertSms`'s own literal union — no cast, and the two alert
+ * legs (email above, SMS below) are provably gated on the identical set of
+ * outcomes rather than two hand-copies of the same three strings.
  */
-function isMeaningful(outcome: CallOutcome): boolean {
+function isMeaningful(outcome: CallOutcome): outcome is "booked" | "lead" | "message" {
   return outcome === "booked" || outcome === "lead" || outcome === "message";
 }
 
@@ -277,6 +284,26 @@ export async function finishCall(
       // An outer catch keeps config failure from violating never-throws.
       // Same fix as apps/web/src/app/b/[publicId]/actions.ts.
       console.error(`finishCall ${meta.callRowId ?? "(no row)"}: staff alert setup failed: ${String(e)}`);
+    }
+  }
+
+  // The staff alert's SMS twin — ALONGSIDE the email above, never instead
+  // (danlo, 2026-09-15). Its own leg, own try/catch, independent of the
+  // email alert's: an email outage above must not cost the account its
+  // text, and a carrier outage here must not cost the call its email. Gated
+  // on `isMeaningful(outcome)` called directly (not the pre-computed
+  // `meaningful` local) so `outcome` narrows to `composeCallAlertSms`'s own
+  // literal union with no cast — matching the email alert's gate exactly,
+  // per the brief.
+  if (isMeaningful(outcome)) {
+    try {
+      const alertPhone = await getAlertPhone(ctx.db, ctx.accountId);
+      // sendAlertSms (@/lib/sms/alerts) never throws by contract — see its
+      // own doc — but this try/catch stays anyway, the same defense-in-depth
+      // `b/[publicId]/actions.ts` carries around its identical call.
+      await sendAlertSms(ctx.db, ctx.accountId, alertPhone, composeCallAlertSms(outcome));
+    } catch (e) {
+      console.error(`finishCall ${meta.callRowId ?? "(no row)"}: alert SMS failed: ${String(e)}`);
     }
   }
 

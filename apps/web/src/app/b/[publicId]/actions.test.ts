@@ -51,6 +51,11 @@ const accountRow = {
   brand_name: "Rio Roofing", brand_logo_path: null,
   brand_color: null, brand_neutral: null, brand_corners: null,
   brand_type: null, brand_mode: null,
+  // Off by default, same as a real account (0035_alert_phone.sql: the field
+  // IS the switch). Mutated in place by the SMS-alert describe block below
+  // and reset here every test — same shared-object discipline the file's
+  // own header comment documents for `from_email`.
+  alert_phone: null as string | null,
 };
 
 /**
@@ -122,6 +127,16 @@ vi.mock("@/app/f/[publicId]/actions", () => ({
 vi.mock("@/lib/meetings/provider", () => ({
   getMeetingProvider: (...a: unknown[]) => getMeetingProviderMock(...a),
 }));
+
+// The SMS alert twin of the email one. `composeBookingAlertSms` stays REAL
+// (pure, already pinned in alerts.test.ts) so assertions here can check the
+// actual composed body; only `sendAlertSms` — the side-effecting half — is
+// replaced, so this file never touches a real provider or `resolveSmsSender`.
+const sendAlertSmsMock = vi.fn();
+vi.mock("@/lib/sms/alerts", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/sms/alerts")>("@/lib/sms/alerts");
+  return { ...actual, sendAlertSms: (...a: unknown[]) => sendAlertSmsMock(...a) };
+});
 
 import { headers } from "next/headers";
 import { computeSlots, type SlotConfig } from "@/lib/booking/slots";
@@ -215,6 +230,8 @@ beforeEach(() => {
   createMeetingRoomMock.mockReset();
   accountErrorRef.current = null;
   emailProviderThrowsRef.current = false;
+  accountRow.alert_phone = null;
+  sendAlertSmsMock.mockReset().mockResolvedValue(undefined);
 });
 
 describe("submitBookingAction — spam gates (each mutation named)", () => {
@@ -557,6 +574,44 @@ describe("submitBookingAction — the alert and the confirmation are not the sam
     if (result.ok) {
       expect(result.cancelUrl).toBe(`https://book.example.com/b/${PUBLIC_ID}/cancel/tok_1`);
     }
+  });
+});
+
+describe("submitBookingAction — the booking alert text, alongside the email (danlo, 2026-09-15)", () => {
+  it("attempts the SMS alert with the account's alert_phone and the real when/name (mutation: hardcode alert_phone or drop the account read → FAILS)", async () => {
+    accountRow.alert_phone = "+19565550001";
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+
+    expect(result.ok).toBe(true);
+    // Both channels fire for the same event — SMS alongside email, never
+    // instead of it.
+    expect(sendMock).toHaveBeenCalled();
+    expect(sendAlertSmsMock).toHaveBeenCalledTimes(1);
+    const [db, accountId, alertPhone, body] = sendAlertSmsMock.mock.calls[0]!;
+    expect(db).toBeDefined();
+    expect(accountId).toBe(ACCOUNT_ID);
+    expect(alertPhone).toBe("+19565550001");
+    expect(body).toContain("Maria Lopez");
+  });
+
+  it("passes null through when the account has no alert_phone — the field is the switch (mutation: pass a hardcoded number → FAILS)", async () => {
+    // accountRow.alert_phone is reset to null in the top-level beforeEach.
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+
+    expect(result.ok).toBe(true);
+    expect(sendAlertSmsMock).toHaveBeenCalledTimes(1);
+    expect(sendAlertSmsMock.mock.calls[0]![2]).toBeNull();
+  });
+
+  it("a rejecting sendAlertSms never turns a real booking into a reported failure (merge-hold, mutation: remove the try/catch around the SMS call → FAILS)", async () => {
+    accountRow.alert_phone = "+19565550001";
+    sendAlertSmsMock.mockRejectedValue(new Error("boom"));
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+
+    expect(result.ok).toBe(true);
+    expect(createBookingMock).toHaveBeenCalledTimes(1);
   });
 });
 

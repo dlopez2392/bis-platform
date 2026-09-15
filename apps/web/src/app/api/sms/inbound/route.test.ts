@@ -9,6 +9,7 @@ const dbMocks = vi.hoisted(() => ({
   createContact: vi.fn(),
   incrementUnreadCount: vi.fn(),
   getPhoneNumberByE164: vi.fn(),
+  getAlertPhone: vi.fn(),
   serviceDb: vi.fn(),
 }));
 vi.mock("@/lib/voice/telnyx-signature", () => ({ verifyTelnyxSignature: verify }));
@@ -32,6 +33,9 @@ beforeEach(() => {
   // Default: no prior delivery on record. Individual tests override this to
   // simulate a replay.
   dbMocks.findMessageByProviderId.mockResolvedValue(null);
+  // Off by default, same as a real account (0035_alert_phone.sql: the field
+  // IS the switch) — the loop-guard test below overrides it.
+  dbMocks.getAlertPhone.mockResolvedValue(null);
 });
 
 describe("POST /api/sms/inbound", () => {
@@ -185,5 +189,53 @@ describe("POST /api/sms/inbound", () => {
     expect(dbMocks.updateMessageStatusByProviderId).toHaveBeenCalledWith(
       expect.anything(), "prov_1", "delivered",
     );
+  });
+
+  // THE loop guard (danlo, 2026-09-15): 0035_alert_phone.sql deliberately
+  // leaves this to the send path rather than the schema. Nothing stops
+  // `accounts.alert_phone` from equalling this account's own `phone_numbers`
+  // row, and a text FROM that number would otherwise create a contact and a
+  // conversation for the business's own owner — quietly corrupting the CRM
+  // with a record of the operator as their own lead.
+  it("recognizes and drops an inbound text FROM the account's own alert_phone — no contact, no conversation (mutation: drop the loop guard → FAILS)", async () => {
+    dbMocks.getPhoneNumberByE164.mockResolvedValue({
+      id: "pn_1", account_id: "acct_1", e164: "+15550000000", telnyx_id: null, status: "live",
+    });
+    dbMocks.getAlertPhone.mockResolvedValue("+15551112222"); // == the inbound `from`
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await POST(post({
+      data: { event_type: "message.received", payload: {
+        id: "msg_evt_alert", to: [{ phone_number: "+15550000000" }],
+        from: { phone_number: "+15551112222" }, text: "thanks!" } },
+    }));
+
+    expect(res.status).toBe(200);
+    expect(dbMocks.createContact).not.toHaveBeenCalled();
+    expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(dbMocks.incrementUnreadCount).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("leaves every other inbound number untouched — the guard checks equality, not merely presence of an alert_phone", async () => {
+    dbMocks.getPhoneNumberByE164.mockResolvedValue({
+      id: "pn_1", account_id: "acct_1", e164: "+15550000000", telnyx_id: null, status: "live",
+    });
+    // An alert_phone IS set, but it is NOT the number this text came from.
+    dbMocks.getAlertPhone.mockResolvedValue("+15559990000");
+    dbMocks.createContact.mockResolvedValue({ id: "contact_1", existing: false });
+    dbMocks.ensureConversation.mockResolvedValue({ id: "conv_1", created: true });
+    dbMocks.createMessage.mockResolvedValue({ id: "msg_1" });
+
+    const res = await POST(post({
+      data: { event_type: "message.received", payload: {
+        id: "msg_evt_ok", to: [{ phone_number: "+15550000000" }],
+        from: { phone_number: "+15551112222" }, text: "hi" } },
+    }));
+
+    expect(res.status).toBe(200);
+    expect(dbMocks.createContact).toHaveBeenCalledTimes(1);
   });
 });

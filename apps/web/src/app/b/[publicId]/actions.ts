@@ -12,6 +12,7 @@ import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { originFrom } from "@/lib/email/origin";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { bookingAlertEmail, bookingConfirmationEmail } from "@/lib/email/templates/booking";
+import { composeBookingAlertSms, sendAlertSms } from "@/lib/sms/alerts";
 import { safeZone, formatWhen } from "@/lib/booking/time";
 import { computeAllSlots, dayKeyInZone } from "@/lib/booking/availability";
 import {
@@ -95,7 +96,7 @@ const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 async function loadAccount(db: ReturnType<typeof serviceDb>, accountId: string) {
   const { data, error } = await db.from("accounts")
     .select("timezone, from_email, reply_to_email, brand_name, brand_logo_path, "
-      + "brand_color, brand_neutral, brand_corners, brand_type, brand_mode")
+      + "brand_color, brand_neutral, brand_corners, brand_type, brand_mode, alert_phone")
     .eq("id", accountId).maybeSingle();
   if (error) throw new Error(`loadAccount(${accountId}) failed: ${error.message}`);
   return data as {
@@ -106,6 +107,9 @@ async function loadAccount(db: ReturnType<typeof serviceDb>, accountId: string) 
     brand_corners: "sharp" | "soft" | "round" | null;
     brand_type: "geist" | "inter" | "serif" | null;
     brand_mode: "light" | "dark" | "follow" | null;
+    // 0035_alert_phone.sql: the ONE number bookings text when work arrives.
+    // NULL is "off," not an error — see sendAlertSms (@/lib/sms/alerts).
+    alert_phone: string | null;
   } | null;
 }
 
@@ -436,6 +440,22 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       });
     } catch (e) {
       console.error("booking emails failed", e);
+    }
+
+    // The SMS twin of the alert email above — ALONGSIDE it, never instead
+    // (danlo, 2026-09-15). Its own try/catch even though `sendAlertSms`
+    // (@/lib/sms/alerts) never throws by contract: the booking above is
+    // already real, and nothing past this point may turn it into a reported
+    // failure — the same reasoning the email block's own try carries. Reads
+    // `account?.alert_phone`: the field IS the switch (0035_alert_phone.sql)
+    // — `sendAlertSms` no-ops on null, so no separate guard is needed here.
+    try {
+      await sendAlertSms(
+        db, calendar.account_id, account?.alert_phone ?? null,
+        composeBookingAlertSms(whenCompanyZone, contactName),
+      );
+    } catch (e) {
+      console.error(`booking ${bookingId} alert SMS failed: ${String(e)}`);
     }
 
     return { ok: true, cancelUrl };

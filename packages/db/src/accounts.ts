@@ -168,3 +168,20 @@ export async function getAccountByOrgId(
   if (error) throw new Error(`getAccountByOrgId failed: ${error.message}`);
   return data ?? null;
 }
+
+/**
+ * Reads `accounts.alert_phone` (0035_alert_phone.sql) — the ONE number
+ * bookings and finished calls text when work arrives. NULL means the
+ * account gets no alert texts, and that is not a failure: every send site
+ * (`b/[publicId]/actions.ts`, `lib/voice/finish-call.ts`) and the inbound
+ * loop guard (`api/sms/inbound/route.ts`) treat a null return the same way
+ * — as "no work to do," never as an error to surface.
+ */
+export async function getAlertPhone(
+  db: SupabaseClient, accountId: string,
+): Promise<string | null> {
+  const { data, error } = await db.from("accounts")
+    .select("alert_phone").eq("id", accountId).maybeSingle();
+  if (error) throw new Error(`getAlertPhone failed: ${error.message}`);
+  return data?.alert_phone ?? null;
+}

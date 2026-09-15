@@ -34,3 +34,28 @@ export async function resolveSmsSender(
   if (!first) return { ok: false, reason: "no_live_number" };
   return { ok: true, from: first.e164 };
 }
+
+/**
+ * THE loop guard 0035_alert_phone.sql's own comment says belongs to the send
+ * path, never the schema. `alert_phone` can equal an account's own live
+ * sending number — nothing in the CHECK constraint or a trigger can catch
+ * it, because a `phone_numbers` row walks to `live` on its own, with no
+ * write to `accounts` to fire on (see the migration's decision 3). Texting
+ * that number would have `api/sms/inbound/route.ts` create a CONTACT for
+ * the business owner and a conversation with them — the platform quietly
+ * filing its own operator as their own lead.
+ *
+ * Call this with the destination already in hand and the FROM number
+ * `resolveSmsSender` just resolved — the only moment the comparison is
+ * current, per the migration's own reasoning. Logs BOTH numbers, because a
+ * log naming only one of them cannot be told apart from any other refusal.
+ */
+export function refusesAlertLoop(accountId: string, alertPhone: string, from: string): boolean {
+  if (alertPhone !== from) return false;
+  console.error(
+    `alert SMS refused for account ${accountId}: alert_phone ${alertPhone} is this ` +
+    `account's own sending number ${from} — texting it would create a contact and ` +
+    "conversation for the business's own owner",
+  );
+  return true;
+}
