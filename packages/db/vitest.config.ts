@@ -2,6 +2,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["src/**/*.test.ts"],
+    // Clears fixture accounts a killed run left behind in the shared Supabase
+    // project, before anything else touches it — see src/test/sweep-fixtures.ts.
+    globalSetup: ["src/test/global-setup.ts"],
     exclude: [
       "**/node_modules/**",
       "**/dist/**",
