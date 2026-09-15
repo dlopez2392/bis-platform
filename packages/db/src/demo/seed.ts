@@ -15,8 +15,9 @@ import { assignPhoneNumber, upsertVoiceProfile, startCallRow, finishCallRow } fr
 import { deleteAccountCascade } from "../account-teardown";
 import {
   DEMO_ORG_ID, DEMO_ACCOUNT_NAME, DEMO_TIMEZONE, DEMO_BRAND_COLOR,
-  DEMO_BUSINESS_LINE, DEMO_PEOPLE, DEMO_SERVICES,
+  DEMO_PEOPLE, DEMO_SERVICES,
   DEMO_EMAIL_RE, DEMO_PHONE_RE, demoPhone, demoEmail,
+  demoBusinessLines, demoVercelProjectId,
   type DemoPerson,
 } from "./fiction";
 import { DEMO_TRANSCRIPTS } from "./transcripts";
@@ -303,7 +304,7 @@ export async function seedDemoTenant(
   await setBranding(db, accountId,
     { brandName: DEMO_ACCOUNT_NAME, brandColor: DEMO_BRAND_COLOR, brandLogoPath }, ACTOR);
 
-  await seedVoice(db, accountId);
+  await seedVoice(db, accountId, orgId);
   const contacts = await seedContacts(db, accountId, now, r);
   const convos = await seedConversations(db, accountId, contacts, now, r);
   const calls = await seedCalls(db, accountId, contacts, convos, now, r);
@@ -311,7 +312,7 @@ export async function seedDemoTenant(
   const opportunities = await seedPipeline(db, accountId, contacts, now, r);
   const submissions = await seedForm(db, accountId, contacts, now, r);
   await seedAutomations(db, accountId);
-  const trafficDays = await seedSite(db, accountId, now, r);
+  const trafficDays = await seedSite(db, accountId, orgId, now, r);
   await backdateEvents(db, accountId, now);
 
   return {
@@ -328,9 +329,57 @@ export async function seedDemoTenant(
 
 // ---------------------------------------------------------------------------
 
-async function seedVoice(db: SupabaseClient, accountId: string): Promise<void> {
-  assertFiction(undefined, DEMO_BUSINESS_LINE, "the business line");
-  await assignPhoneNumber(db, accountId, { e164: DEMO_BUSINESS_LINE, status: "live" }, ACTOR);
+/**
+ * Takes the first business line in the reserved block that nobody else holds.
+ *
+ * READ FIRST, then insert. `assignPhoneNumber` reports a duplicate as a bare
+ * `Error` carrying the constraint name and nothing else, so probing by
+ * insert-and-catch would mean matching on `phone_numbers_e164_key` in a
+ * message string — and would still have to tell "somebody holds this" apart
+ * from every other reason an insert can fail. A select answers the question
+ * being asked and can name the account holding the number in the error.
+ *
+ * The gap between the read and the insert is a real race, and it is left
+ * unclosed deliberately: it needs two seeds inside a few milliseconds of each
+ * other landing on the same slot, and if that ever happens the loser fails
+ * loudly on the unique index, drops its half-built account, and can simply be
+ * re-run. The alternative — an advisory lock held across the whole seed —
+ * would be more machinery than the hazard it prevents.
+ */
+async function claimBusinessLine(
+  db: SupabaseClient, orgId: string,
+): Promise<string> {
+  const candidates = demoBusinessLines(orgId);
+  const { data, error } = await db.from("phone_numbers")
+    .select("e164, account_id").in("e164", candidates);
+  if (error) {
+    throw new Error(`demo seed: could not read the reserved business lines: ${error.message}`);
+  }
+  const taken = new Map(
+    (data ?? []).map((row) => [row.e164 as string, row.account_id as string]));
+  const free = candidates.find((e164) => !taken.has(e164));
+  if (free) return free;
+
+  // Both failures mean the same thing — an account that should not exist
+  // does — so both name every holder and neither falls back to a number the
+  // caller did not ask for. Silently answering on a different line is how a
+  // demo drifts away from the screenshots taken of it.
+  const holders = candidates.map((e164) => `${e164} held by ${taken.get(e164)}`).join(", ");
+  throw new Error(
+    (candidates.length === 1
+      ? `demo seed ABORTED: the demo's pinned business line is taken — ${holders}. `
+      : `demo seed ABORTED: every one of the ${candidates.length} spare business lines `
+        + `in the reserved block is taken — ${holders}. `)
+    + `Each of those accounts is one a seed left behind; remove it with `
+    + `deleteAccountCascade and re-run.`);
+}
+
+async function seedVoice(
+  db: SupabaseClient, accountId: string, orgId: string,
+): Promise<void> {
+  const businessLine = await claimBusinessLine(db, orgId);
+  assertFiction(undefined, businessLine, "the business line");
+  await assignPhoneNumber(db, accountId, { e164: businessLine, status: "live" }, ACTOR);
   await upsertVoiceProfile(db, accountId, {
     persona_name: "Sofía",
     greeting_en:
@@ -791,12 +840,14 @@ async function seedAutomations(db: SupabaseClient, accountId: string): Promise<v
  * for exactly that and a flat series never exercises it.
  */
 async function seedSite(
-  db: SupabaseClient, accountId: string, now: number, r: Rng,
+  db: SupabaseClient, accountId: string, orgId: string, now: number, r: Rng,
 ): Promise<number> {
   const site = await upsertSite(db, accountId, {
-    // Not a real Vercel project id — and deliberately unmistakable, so nobody
-    // hunting a broken sync goes looking for it in the Vercel dashboard.
-    vercelProjectId: "prj_demo_resaca_air_not_a_real_project",
+    // Derived from the org id, because `sites.vercel_project_id` is unique
+    // across every account — the same trap as the business line, and the one
+    // that would have failed the instant that was fixed. See
+    // `demoVercelProjectId`.
+    vercelProjectId: demoVercelProjectId(orgId),
     domain: "resaca-air.example",
     analyticsEnabledAt: new Date(now - 90 * DAY).toISOString(),
   });
