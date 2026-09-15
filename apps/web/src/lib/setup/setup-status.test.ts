@@ -3,6 +3,7 @@ import {
   deriveSetupStatus, goLivePrereqsMet, reduceSetupProgress, SETUP_TICK_KEYS,
   type SetupInputs, type SetupStepState, type SetupStepKey,
 } from "./setup-status";
+import { DEMO_FORWARDING_TICK_KEY } from "@bis/db";
 
 // A fully-configured tenant: every check should read done. Individual tests
 // override one field at a time so each assertion isolates a single check —
@@ -373,5 +374,27 @@ describe("SETUP_TICK_KEYS", () => {
   it("has the exact persisted key strings Tasks 13/14 write to and read from storage", () => {
     expect(SETUP_TICK_KEYS.emailSkipped).toBe("setup:email_skipped");
     expect(SETUP_TICK_KEYS.forwardingDone).toBe("setup:forwarding_done");
+  });
+});
+
+/**
+ * The one string the demo seeder has to know about this file.
+ *
+ * Eight of the nine setup steps are computed from live rows, so the seeder
+ * gets them for free by writing those rows. "forwarding" cannot be computed
+ * — no row proves a carrier-side change — so it is a stored tick, and
+ * packages/db's `DEMO_FORWARDING_TICK_KEY` carries a second copy of the key
+ * because the dependency only runs one way (apps/web imports @bis/db, never
+ * the reverse).
+ *
+ * Two hand-maintained copies of a string is exactly how this repo's
+ * neutral-ramps and theme-style mirrors drifted, so the duplication is held
+ * by an assertion rather than by a comment asking people to be careful. If
+ * the key here is ever renamed, the demo silently stops ticking the step and
+ * every screenshot goes back to reading "Setup 8/9" — this fails first.
+ */
+describe("the forwarding tick key is mirrored in @bis/db", () => {
+  it("matches the demo seeder's copy exactly", () => {
+    expect(DEMO_FORWARDING_TICK_KEY).toBe(SETUP_TICK_KEYS.forwardingDone);
   });
 });

@@ -7,7 +7,10 @@ import { createContact } from "../contacts";
 import { ensureDefaultPipeline } from "../crm-config";
 import { createOpportunity, moveOpportunityToStage, setOpportunityStatus } from "../opportunities";
 import { ensureConversation, createMessage } from "../messaging";
-import { getOrCreateCalendar, createBooking, setBookingStatus } from "../booking";
+import { getOrCreateCalendar, createBooking, setBookingStatus,
+         updateCalendarSettings } from "../booking";
+import { setChecklistItem } from "../checklist";
+import { setFromEmail } from "../sending-identity";
 import { createForm, updateForm, createSubmission, recordRejectedSubmission, linkSubmissionContact } from "../forms";
 import { upsertAutomation } from "../automations";
 import { upsertSite, writeTrafficDay } from "../sites";
@@ -18,6 +21,7 @@ import {
   DEMO_PEOPLE, DEMO_SERVICES,
   DEMO_EMAIL_RE, DEMO_PHONE_RE, demoPhone, demoEmail,
   demoBusinessLines, demoVercelProjectId,
+  DEMO_OPEN_HOURS, DEMO_FROM_EMAIL, DEMO_FORWARDING_TICK_KEY,
   type DemoPerson,
 } from "./fiction";
 import { DEMO_TRANSCRIPTS } from "./transcripts";
@@ -312,6 +316,7 @@ export async function seedDemoTenant(
   const opportunities = await seedPipeline(db, accountId, contacts, now, r);
   const submissions = await seedForm(db, accountId, contacts, now, r);
   await seedAutomations(db, accountId);
+  await seedSetupState(db, accountId);
   const trafficDays = await seedSite(db, accountId, orgId, now, r);
   await backdateEvents(db, accountId, now);
 
@@ -547,13 +552,28 @@ async function seedCalls(
     .select("id").eq("account_id", accountId).single();
   if (error || !phone) throw new Error(`demo seed: no business line: ${error?.message}`);
 
+  // Split ONCE, so a transcript can only ever land on somebody who speaks
+  // its language. The previous version indexed the contact list directly and
+  // the two were unrelated: the call log showed María Guzmán and Verónica
+  // Alaniz on English calls while Kevin Braun and Owen Serrato took Spanish
+  // ones. Individually each is possible in the Valley; as a column of six it
+  // reads as a product that does not know who it is talking to — on the one
+  // page whose argument is that it does.
+  const byLang: Record<"en" | "es", Seeded[]> = {
+    en: contacts.filter((c) => c.person.lang === "en"),
+    es: contacts.filter((c) => c.person.lang === "es"),
+  };
+
   const TOTAL = 34;
   for (let i = 0; i < TOTAL; i++) {
     const script = DEMO_TRANSCRIPTS[i % DEMO_TRANSCRIPTS.length]!;
     // Spam and abandoned callers are strangers: no contact row, which is
     // exactly how the real product records them.
     const known = script.outcome !== "spam" && script.outcome !== "abandoned";
-    const contact = known ? contacts[(i * 7) % contacts.length]! : null;
+    // Same stride as before so the spread across the book is unchanged; it
+    // just walks the matching pool instead of the whole list.
+    const pool = byLang[script.lang];
+    const contact = known && pool.length > 0 ? pool[(i * 7) % pool.length]! : null;
     const callerE164 = contact ? demoPhone(contact.person.line) : demoPhone(between(r, 50, 99));
     assertFiction(undefined, callerE164, `caller on call ${i}`);
 
@@ -607,6 +627,26 @@ async function seedBookings(
   db: SupabaseClient, accountId: string, contacts: Seeded[], now: number, r: Rng,
 ): Promise<number> {
   const cal = await getOrCreateCalendar(db, accountId, ACTOR);
+
+  // ENABLE IT. `calendars.enabled` defaults to false and `/b/[publicId]`
+  // answers a disabled calendar with notFound(), so without this the demo's
+  // booking page is a 404 — which is exactly what the first capture run
+  // photographed and shipped as a marketing screenshot. The hours are the
+  // same ones Sofía reads out in seedVoice; see DEMO_OPEN_HOURS.
+  //
+  // Enabling it does make the page publicly bookable by anyone holding the
+  // link. That is the point of a demo booking page, and it is safe for the
+  // same reason everything else here is: the account is suppressed, so a
+  // stranger's booking notifies nobody, and the next re-seed clears it.
+  await updateCalendarSettings(db, accountId, {
+    enabled: true,
+    openHours: DEMO_OPEN_HOURS,
+    slotDurationMinutes: 120,
+    minNoticeHours: 12,
+    maxAdvanceDays: 21,
+    meetingType: "in_person",
+  }, ACTOR);
+
   const NOTES = [
     "Upstairs unit not cooling. Gate code 4417.",
     "Annual maintenance — two units.",
@@ -828,6 +868,29 @@ async function seedAutomations(db: SupabaseClient, accountId: string): Promise<v
       "Reply here if you need to move it.",
     config: {},
   }, ACTOR);
+}
+
+/**
+ * The last two setup steps, so the sidebar's meter reads 9/9 rather than 6/9.
+ *
+ * Seven of the nine are already true of a seeded account — the eighth,
+ * `hours`, is true as of the calendar being enabled in seedBookings. These
+ * are the remaining two, and neither is cosmetic:
+ *
+ *   email       `accounts.from_email`. Reserved domain like everything else
+ *               here; the account is suppressed, so this configures an
+ *               identity that can never actually send.
+ *   forwarding  The one step with no derivable source — no row can prove a
+ *               carrier-side change — so the wizard stores a tick, and a
+ *               business that has been taking calls for months has made it.
+ *
+ * A demo that shows the product's own setup wizard two-thirds finished is a
+ * demo arguing that the product is hard to set up.
+ */
+async function seedSetupState(db: SupabaseClient, accountId: string): Promise<void> {
+  assertFiction(DEMO_FROM_EMAIL, undefined, "the sending identity");
+  await setFromEmail(db, accountId, DEMO_FROM_EMAIL, ACTOR);
+  await setChecklistItem(db, accountId, DEMO_FORWARDING_TICK_KEY, { done: true }, ACTOR);
 }
 
 /**

@@ -109,7 +109,14 @@ async function settled(page: Page) {
 
 async function shoot(page: Page, file: string) {
   mkdirSync(OUT, { recursive: true });
-  await page.screenshot({ path: path.join(OUT, file), scale: "css" });
+  // NO `scale: "css"`. That option means one image pixel per CSS pixel, which
+  // throws away the deviceScaleFactor: 2 the contexts below are created with
+  // — the first capture run produced 1280x800 and 640x800 while the website's
+  // lib/platform-tour.ts declares 2560x1600 and 1280x1600, so every image
+  // would have been half-resolution on any retina screen. Playwright's
+  // default is "device", which is what the comment under WIDE has always
+  // claimed this does.
+  await page.screenshot({ path: path.join(OUT, file) });
 }
 
 // Output is 2x the viewport: deviceScaleFactor 2 in the project's device

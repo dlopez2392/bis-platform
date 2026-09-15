@@ -5,7 +5,8 @@ import { seedDemoTenant, dropDemoAccount, findDemoAccount } from "../demo/seed";
 import { ACCOUNT_OWNED_TABLES, deleteAccountCascade } from "../account-teardown";
 import {
   DEMO_EMAIL_RE, DEMO_PHONE_RE, DEMO_ORG_ID, DEMO_BUSINESS_LINE,
-  demoVercelProjectId,
+  DEMO_FROM_EMAIL, DEMO_FORWARDING_TICK_KEY, DEMO_PEOPLE,
+  demoVercelProjectId, demoPhone,
 } from "../demo/fiction";
 import { listSitesToSync } from "../sites";
 import { listDueReminders } from "../booking";
@@ -90,6 +91,64 @@ describe("demo tenant seeder", () => {
         .select("vercel_project_id").eq("account_id", accountId).single();
       expect(site!.vercel_project_id).toBe(demoVercelProjectId(THROWAWAY));
       expect(site!.vercel_project_id).not.toBe(demoVercelProjectId(DEMO_ORG_ID));
+
+      // --- The demo looks like a business that finished setting up. Each of
+      //     these was a visible defect in the first capture run, and none was
+      //     a rendering bug — the demo was honestly reporting itself as
+      //     half-configured.
+
+      // The booking page 404'd because `calendars.enabled` defaults to false
+      // and /b/[publicId] answers a disabled calendar with notFound(). A
+      // capture of that shipped as one of six marketing screenshots.
+      const { data: cal } = await db.from("calendars")
+        .select("enabled, open_hours").eq("account_id", accountId).single();
+      expect(cal!.enabled).toBe(true);
+      // Not merely present: `deriveSetupStatus`'s hours step wants at least
+      // one day with a non-empty window, because `open_hours: {}` passes
+      // "enabled" and still reads "no availability" on every day.
+      const windows = Object.values(cal!.open_hours as Record<string, unknown[]>);
+      expect(windows.some((w) => w.length > 0)).toBe(true);
+
+      // The two setup steps with nothing else to derive them from.
+      const { data: acct2 } = await db.from("accounts")
+        .select("from_email").eq("id", accountId).single();
+      expect(acct2!.from_email).toBe(DEMO_FROM_EMAIL);
+      expect(acct2!.from_email).toMatch(DEMO_EMAIL_RE);
+
+      const { data: ticks } = await db.from("checklist_items")
+        .select("item_key, done_at").eq("account_id", accountId)
+        .eq("item_key", DEMO_FORWARDING_TICK_KEY);
+      expect(ticks).toHaveLength(1);
+      expect(ticks![0]!.done_at).not.toBeNull();
+
+      // --- A caller's language matches the person taking the call.
+      //
+      //     The seeder used to pick the transcript by index and the contact
+      //     by a different index, so the two were unrelated: the captured
+      //     call log showed María Guzmán and Verónica Alaniz on English calls
+      //     and Kevin Braun and Owen Serrato on Spanish ones. Each is
+      //     possible in the Valley; a whole column of them reads as a product
+      //     that does not know who it is talking to.
+      //
+      //     Asserted by joining back through the PHONE, because `contacts`
+      //     stores no language — the person's language lives only in
+      //     DEMO_PEOPLE, which is the thing the seeder is supposed to honour.
+      const langByPhone = new Map(DEMO_PEOPLE.map((p) => [demoPhone(p.line), p.lang]));
+      const { data: callRows } = await db.from("calls")
+        .select("language, contact_id").eq("account_id", accountId)
+        .not("contact_id", "is", null);
+      const { data: contactRows } = await db.from("contacts")
+        .select("id, phone").eq("account_id", accountId);
+      const phoneById = new Map(
+        (contactRows ?? []).map((c) => [c.id as string, c.phone as string]));
+
+      expect(callRows!.length).toBeGreaterThan(0);
+      const mismatched = callRows!.filter((call) => {
+        const phone = phoneById.get(call.contact_id as string);
+        const personLang = phone ? langByPhone.get(phone) : undefined;
+        return personLang !== undefined && personLang !== call.language;
+      });
+      expect(mismatched).toEqual([]);
 
       // --- It actually built something. A seeder that silently wrote four
       //     rows would pass every safety assertion above.

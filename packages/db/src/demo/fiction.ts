@@ -253,6 +253,53 @@ export const DEMO_PEOPLE: readonly DemoPerson[] = [
     company: "Los Fresnos Feed & Supply" },
 ] as const;
 
+/**
+ * The booking calendar's opening hours — and they are NOT decoration.
+ *
+ * `calendars.enabled` defaults to false, and `/b/[publicId]` answers a
+ * disabled calendar with `notFound()` (b/[publicId]/page.tsx). The first
+ * capture run therefore photographed a 404 and uploaded it as one of six
+ * marketing screenshots, because a 404 is still a valid PNG and
+ * `if-no-files-found: error` only catches files that are MISSING, not files
+ * that are wrong.
+ *
+ * The windows deliberately match, to the hour, what `seedVoice` has Sofía
+ * say out loud ("Monday to Friday 8 AM to 5 PM, Saturday 8 AM to noon").
+ * A demo whose booking page contradicts its own receptionist is a demo that
+ * loses the argument in the one screenshot where both are visible.
+ */
+export const DEMO_OPEN_HOURS: Record<string, [string, string][]> = {
+  mon: [["08:00", "17:00"]],
+  tue: [["08:00", "17:00"]],
+  wed: [["08:00", "17:00"]],
+  thu: [["08:00", "17:00"]],
+  fri: [["08:00", "17:00"]],
+  sat: [["08:00", "12:00"]],
+};
+
+/** The sending identity. Reserved domain, like every other address here —
+ *  `outbound_suppressed` is what actually stops the cron, this is the second
+ *  wall. It exists so the setup checklist's "email" step reads done: a demo
+ *  that shows its own product half-configured argues against the product. */
+export const DEMO_FROM_EMAIL = "resaca.air@example.com";
+
+/**
+ * The one checklist item with no derivable source.
+ *
+ * Eight of the nine setup steps are COMPUTED from live rows, which is the
+ * wizard's whole promise. "I forwarded my number" cannot be — no row proves
+ * a carrier-side change — so it is a stored tick, and the demo has to set it
+ * the way a real operator would.
+ *
+ * THIS STRING IS MIRRORED in apps/web's `SETUP_TICK_KEYS.forwardingDone`.
+ * Duplicated rather than imported because the dependency only runs one way
+ * (apps/web depends on @bis/db, never the reverse), and this repo has been
+ * bitten before by two hand-maintained copies drifting apart — so
+ * `setup-status.test.ts` over there asserts the two are identical rather
+ * than trusting a comment.
+ */
+export const DEMO_FORWARDING_TICK_KEY = "setup:forwarding_done";
+
 /** What Sofía says she does, and what the booking page says the visit is.
  *  Written to the DESIGN.md copy rule: a business owner reads this at 7 AM. */
 export const DEMO_SERVICES = [

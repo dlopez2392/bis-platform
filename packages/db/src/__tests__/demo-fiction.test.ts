@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   DEMO_PEOPLE, DEMO_EMAIL_RE, DEMO_PHONE_RE, DEMO_BUSINESS_LINE, DEMO_ORG_ID,
   BUSINESS_LINE_SLOTS, CONTACT_LINE_SLOTS,
+  DEMO_OPEN_HOURS, DEMO_FROM_EMAIL,
   demoPhone, demoEmail, demoBusinessLines, demoVercelProjectId,
 } from "../demo/fiction";
 import { DEMO_TRANSCRIPTS } from "../demo/transcripts";
@@ -229,6 +230,69 @@ describe("demo tenant — two seeded accounts can coexist in one project", () =>
     const src = sourceOf("seed.ts");
     expect(src).not.toMatch(/["'`]prj_/);
     expect(src).not.toMatch(/DEMO_BUSINESS_LINE/);
+  });
+});
+
+/**
+ * The demo has to look like a business that finished setting up.
+ *
+ * All three of these were visible defects in the first capture run, and none
+ * of them was a rendering bug — each was the demo honestly reporting that it
+ * was half-configured:
+ *   - `booking-page.png` was a 404, because `calendars.enabled` defaults to
+ *     false and /b/[publicId] answers a disabled calendar with notFound().
+ *   - The sidebar meter read "Setup 6/9" in every dashboard screenshot.
+ *   - The three undone steps were exactly `hours`, `email` and `forwarding`.
+ */
+describe("demo tenant — a business that finished setting up", () => {
+  it("opens the hours Sofía says it opens", () => {
+    // The voice profile tells callers "Monday to Friday 8 AM to 5 PM,
+    // Saturday 8 AM to noon". The booking page is the one screen where a
+    // visitor can check that claim against the product, so the two are
+    // asserted against each other rather than merely written next to each
+    // other.
+    const facts = sourceOf("seed.ts");
+    expect(facts).toMatch(/Monday to Friday 8 AM to 5 PM, Saturday 8 AM to noon/);
+    for (const day of ["mon", "tue", "wed", "thu", "fri"]) {
+      expect(DEMO_OPEN_HOURS[day], day).toEqual([["08:00", "17:00"]]);
+    }
+    expect(DEMO_OPEN_HOURS.sat).toEqual([["08:00", "12:00"]]);
+    expect(DEMO_OPEN_HOURS.sun).toBeUndefined();
+  });
+
+  /**
+   * `deriveSetupStatus`'s `hours` step is
+   * `calendar.enabled === true && hasOpenHours(open_hours)`, where
+   * hasOpenHours means at least one day has a non-empty window array. An
+   * `open_hours: {}` passes "enabled" and still makes every day read "no
+   * availability" — the exact wiped-config state that comment warns about.
+   */
+  it("gives at least one day a real window, which is what the hours step checks", () => {
+    const windows = Object.values(DEMO_OPEN_HOURS);
+    expect(windows.length).toBeGreaterThan(0);
+    expect(windows.some((w) => w.length > 0)).toBe(true);
+  });
+
+  it("keeps the sending identity on the reserved domain", () => {
+    // It configures an identity that can never send: the account is
+    // suppressed, and the address is unresolvable by RFC 2606 regardless.
+    expect(DEMO_FROM_EMAIL).toMatch(DEMO_EMAIL_RE);
+  });
+
+  /**
+   * Mutation: delete the `updateCalendarSettings` call from seedBookings —
+   * the booking page goes back to being a 404 and this fails.
+   */
+  it("enables the calendar in the seeder, not just in a comment", () => {
+    const src = sourceOf("seed.ts");
+    // Scoped to the updateCalendarSettings CALL, not merely to the presence
+    // of `enabled: true` anywhere in the file — seedAutomations sets that on
+    // the SMS reminder, so the loose version of this assertion passed with
+    // the calendar enable deleted. Found by running the mutation.
+    const call = /updateCalendarSettings\(\s*db,\s*accountId,\s*\{([\s\S]*?)\},/.exec(src);
+    expect(call, "seedBookings no longer calls updateCalendarSettings").not.toBeNull();
+    expect(call![1]).toMatch(/enabled:\s*true/);
+    expect(call![1]).toMatch(/openHours:\s*DEMO_OPEN_HOURS/);
   });
 });
 
