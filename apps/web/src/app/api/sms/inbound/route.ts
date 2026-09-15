@@ -26,7 +26,7 @@
 import { NextResponse } from "next/server";
 import {
   serviceDb, ensureConversation, createMessage, createContact, incrementUnreadCount,
-  updateMessageStatusByProviderId, findMessageByProviderId, getPhoneNumberByE164,
+  updateMessageStatusByProviderId, findMessageByProviderId, getPhoneNumberByE164, getAlertPhone,
   type MessageStatus, type SupabaseClient,
 } from "@bis/db";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
@@ -98,6 +98,39 @@ async function handleInbound(db: SupabaseClient, payload: TelnyxPayload | undefi
   }
   const accountId = phoneRow.account_id;
 
+  // THE loop guard 0035_alert_phone.sql's own comment leaves to the send
+  // path, deliberately: `accounts.alert_phone` can equal this account's own
+  // `phone_numbers` row with nothing in the schema stopping it (a
+  // `phone_numbers` row walks to `live` on its own, no write to `accounts`
+  // to catch it — see that migration's decision 3). A text FROM that number
+  // is the platform receiving its own outbound alert reply, or the business
+  // owner texting their own alert line by habit — either way, running it
+  // through the ordinary path below would create a CONTACT for the business
+  // owner and a CONVERSATION with them, quietly corrupting the CRM with a
+  // record of the operator as their own lead. Recognised and dropped here,
+  // BEFORE the retry-dedupe check: there is no message worth deduping
+  // against, only a sender worth never filing.
+  const fromNumber = toE164(payload?.from?.phone_number ?? null);
+  // Contained on purpose: getAlertPhone is a plain accounts.alert_phone
+  // SELECT, and a transient read failure here (a DB blip, not a real
+  // "the operator texted their own line" case) must never escape into the
+  // route's outer catch. That catch logs and still returns 200 — Telnyx is
+  // told "handled" and never retries — so an uncontained throw here reads as
+  // "handled" while the whole inbound text, from every account, is silently
+  // discarded. A failed read is treated as "no alert phone" (the guard below
+  // simply does not fire), which is the loop guard degrading, not the
+  // customer's message. The guard is a nicety; the message is not.
+  let alertPhone: string | null = null;
+  try {
+    alertPhone = await getAlertPhone(db, accountId);
+  } catch (e) {
+    log("getAlertPhone read failed — proceeding without the loop guard rather than dropping the text", accountId, String(e));
+  }
+  if (alertPhone && fromNumber === alertPhone) {
+    log("dropping inbound text from the account's own alert_phone — recognized, not filed as a contact", accountId, alertPhone);
+    return;
+  }
+
   // Telnyx retries message.received at-least-once. payload.id is the
   // message's own id (file header note 1) and stable across retries, so a
   // row already recorded under it means this exact delivery has been seen
@@ -118,8 +151,8 @@ async function handleInbound(db: SupabaseClient, payload: TelnyxPayload | undefi
   // Match an existing contact on this account by phone, or create one —
   // createContact already dedupes on phone (contacts.ts's findDuplicate),
   // so a single call gets both cases: a known customer's text joins their
-  // existing thread instead of forking a duplicate contact.
-  const fromNumber = toE164(payload?.from?.phone_number ?? null);
+  // existing thread instead of forking a duplicate contact. `fromNumber` was
+  // already resolved above, for the loop guard.
   const contact = await createContact(
     db, accountId, { phone: fromNumber ?? undefined }, ACTOR_ID, ACTOR_TYPE,
   );

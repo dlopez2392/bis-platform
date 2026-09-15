@@ -81,11 +81,19 @@ requires `a2p_status === 'approved'`. An operator alert is arguably
 business-to-self rather than business-to-consumer, but the carrier does not
 know that, and the number sending it is the same one.
 
-**What happens when the business replies to the alert?** Inbound texts land in
-`api/sms/inbound/route.ts`, which creates a contact and a conversation. A reply
-from the operator's own phone would create a contact **for the operator**.
-That is a real bug waiting to happen and it needs an answer before any of this
-ships.
+**What happens when the business replies to the alert?** ANSWERED (built as
+of `ef5d965`, hardened by the alert-send-report follow-up review,
+2026-09-15). `api/sms/inbound/route.ts` reads `accounts.alert_phone` and, when
+the inbound `from` number equals it, recognizes and drops the text before the
+retry-dedupe check — no contact, no conversation, logged instead. The follow-up
+review widened the equivalent send-side loop guard
+(`refusesAlertLoop`/`resolveSmsSender`, lib/sms/sender.ts) to compare against
+every number the account OWNS (`testing` OR `live`, matching the inbound
+route's own definition), not only the one number resolved to send FROM, and
+contained a transient `getAlertPhone` read failure on the inbound side so a DB
+blip degrades the guard rather than dropping a real customer's text. Both are
+covered by tests (`route.test.ts`, `sender.test.ts`, `alerts.test.ts`,
+`finish-call.test.ts`).
 
 ## Out of scope
 

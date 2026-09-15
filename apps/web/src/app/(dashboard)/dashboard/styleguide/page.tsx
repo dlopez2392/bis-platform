@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RailStates } from "./rail-states";
+import { SettingsFieldCards } from "./settings-field-cards";
 import { PublicBrand } from "@/components/public-brand";
 import "@/styles/public-brand.css";
 import { m } from "@/lib/messages";
@@ -187,6 +188,13 @@ export default async function StyleguidePage() {
               <Checkbox id="sg-check" /> Checkbox
             </label>
           </div>
+        </Section>
+
+        <Section
+          title="Settings field cards"
+          file="…/settings/{sending-address,weekly-report}-card.tsx · components/alert-phone-card.tsx"
+        >
+          <SettingsFieldCards />
         </Section>
 
         <Section title="Table + row states" file="components/ui/table.tsx">

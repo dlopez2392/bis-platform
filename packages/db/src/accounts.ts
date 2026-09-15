@@ -168,3 +168,52 @@ export async function getAccountByOrgId(
   if (error) throw new Error(`getAccountByOrgId failed: ${error.message}`);
   return data ?? null;
 }
+
+/**
+ * Reads `accounts.alert_phone` (0035_alert_phone.sql) — the ONE number
+ * bookings and finished calls text when work arrives. NULL means the
+ * account gets no alert texts, and that is not a failure: every send site
+ * (`b/[publicId]/actions.ts`, `lib/voice/finish-call.ts`) and the inbound
+ * loop guard (`api/sms/inbound/route.ts`) treat a null return the same way
+ * — as "no work to do," never as an error to surface.
+ */
+export async function getAlertPhone(
+  db: SupabaseClient, accountId: string,
+): Promise<string | null> {
+  const { data, error } = await db.from("accounts")
+    .select("alert_phone").eq("id", accountId).maybeSingle();
+  if (error) throw new Error(`getAlertPhone failed: ${error.message}`);
+  return data?.alert_phone ?? null;
+}
+
+/**
+ * Sets or clears `accounts.alert_phone` (0035_alert_phone.sql). SERVER ONLY,
+ * agency-gated at the call site (`setAlertPhoneAction`, behind
+ * `requireAgencyOnlyAccountAccess`) — shaped after `setFromEmail`
+ * (./sending-identity.ts) for the same reason: 0035 deliberately grants
+ * `authenticated` no UPDATE on this column, so a client able to reach it
+ * directly could redirect the account's own lead-alert texts to a handset
+ * they choose. Nothing in the database stands behind the write below; the
+ * agency-only gate at the call site is the only thing that does.
+ *
+ * `alertPhone` is trusted to already be E.164 or null — the caller
+ * (`setAlertPhoneAction`) runs it through `toE164` first and passes `null`
+ * straight through for a blank field, never `""`: 0035's CHECK constraint
+ * refuses the empty string outright so that NULL stays the only spelling of
+ * "off", and a caller that got this wrong would see the write fail loudly
+ * rather than the switch going ambiguous.
+ *
+ * `.select("id")` so the update reports WHICH rows it touched — the same
+ * stale-tab / wrong-id guard `setFromEmail` and `renameAccount` use, since
+ * PostgREST returns no error and no rows for an update matching nothing,
+ * which would otherwise read as a successful save that changed nothing.
+ */
+export async function setAlertPhone(
+  db: SupabaseClient, accountId: string, alertPhone: string | null, actorId: string,
+): Promise<void> {
+  const { data, error } = await db.from("accounts")
+    .update({ alert_phone: alertPhone }).eq("id", accountId).select("id");
+  if (error) throw new Error(`setAlertPhone failed: ${error.message}`);
+  if (!data?.length) throw new Error(`setAlertPhone: no account ${accountId}`);
+  await emit(db, accountId, "account.alert_phone_updated", actorId, { alertPhone });
+}

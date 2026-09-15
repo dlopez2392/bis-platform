@@ -4,15 +4,17 @@ import { serviceDb, listCustomFields, listCustomValues, listBlueprints, getBrand
          getSendingIdentity, brandLogoUrl, getSiteForAccount, countTrafficDays, type CustomFieldDef } from "@bis/db";
 import { SubmitButton } from "../../submit-button";
 import { createFieldAction, upsertValueAction, setClientAccessAction, inviteClientAdminAction,
-         setFromEmailAction, setReportEmailsAction } from "./actions";
+         setFromEmailAction, setReportEmailsAction, setAlertPhoneAction } from "./actions";
 import { setBrandingAction } from "../branding/actions";
 import { SaveBlueprintDialog } from "./save-blueprint-dialog";
 import { ClientAccessPanel, type ClientAccessMember } from "./client-access-panel";
 import { SendingAddressCard } from "./sending-address-card";
 import { WeeklyReportCard } from "./weekly-report-card";
+import { AlertPhoneCard } from "@/components/alert-phone-card";
 import { LinkSiteCard, type VercelProjectOption } from "../website/link-site-card";
 import { saveSiteAction, testSiteConnectionAction, unlinkSiteAction } from "../website/actions";
 import { vercelAnalyticsFromEnv } from "@/lib/vercel/web-analytics";
+import { resolveSmsSender } from "@/lib/sms/sender";
 import { BrandingPanel } from "@/components/branding-panel";
 import { captureBlueprintAction } from "../../../blueprints/actions";
 import { BackToSetup } from "@/components/back-to-setup";
@@ -55,7 +57,7 @@ export default async function CrmSettingsPage({
   const { from } = await searchParams;
   await requireAgencyOnlyAccountAccess(accountId);
   const db = await dbForRequest();
-  const [fields, values, blueprints, account, branding, sendingIdentity, site, daysStored, projects] = await Promise.all([
+  const [fields, values, blueprints, account, branding, sendingIdentity, site, daysStored, projects, smsGate] = await Promise.all([
     listCustomFields(db, accountId, "contact"),
     listCustomValues(db, accountId),
     // Agency-wide, not account-scoped — this account is just where the
@@ -71,7 +73,7 @@ export default async function CrmSettingsPage({
     // an in-account surface — worth the owner's judgment on whether clients
     // should see this at all.
     listBlueprints(serviceDb()),
-    db.from("accounts").select("clerk_org_id, client_access_enabled, report_emails").eq("id", accountId).maybeSingle()
+    db.from("accounts").select("clerk_org_id, client_access_enabled, report_emails, alert_phone").eq("id", accountId).maybeSingle()
       .then(({ data, error }) => {
         if (error) throw new Error(`settings: account lookup failed: ${error.message}`);
         if (!data) throw new Error("settings: account not found");
@@ -94,6 +96,10 @@ export default async function CrmSettingsPage({
         return { list: [], unavailable: true };
       }
     })(),
+    // The same gate the send path itself consults (resolveSmsSender), read
+    // here purely to decide whether AlertPhoneCard's "nothing will actually
+    // send yet" notice applies — not a guard, just the fact behind one.
+    resolveSmsSender(db, accountId),
   ]);
 
   // No Clerk->Postgres member sync exists (see design doc §7) — Clerk is the
@@ -151,6 +157,7 @@ export default async function CrmSettingsPage({
   const boundSetBranding = setBrandingAction.bind(null, accountId);
   const boundSetFromEmail = setFromEmailAction.bind(null, accountId);
   const boundSetReportEmails = setReportEmailsAction.bind(null, accountId);
+  const boundSetAlertPhone = setAlertPhoneAction.bind(null, accountId);
   return (
     <>
       {from === "setup" ? <BackToSetup accountId={accountId} /> : null}
@@ -203,6 +210,13 @@ export default async function CrmSettingsPage({
         <WeeklyReportCard
           reportEmails={account.report_emails}
           action={boundSetReportEmails}
+        />
+        <AlertPhoneCard
+          isAgency
+          accountId={accountId}
+          alertPhone={account.alert_phone}
+          smsNotReady={!smsGate.ok}
+          action={boundSetAlertPhone}
         />
         <LinkSiteCard
           // Same reason as BrandingPanel's key: the card holds the picked

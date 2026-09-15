@@ -1,13 +1,14 @@
 import type { serviceDb, Branding, CallOutcome } from "@bis/db";
 import {
   createContact, fillContactBlanks, ensureConversation, createMessage, incrementUnreadCount,
-  updateMessageStatus, hasRecentOutboundSms, finishCallRow, emit,
+  updateMessageStatus, hasRecentOutboundSms, finishCallRow, emit, getAlertPhone,
 } from "@bis/db";
 import { emailBrand, brandDisplayName } from "@/lib/email/templates/shell";
 import { getEmailProvider } from "@/lib/email";
 import { voiceCallAlertEmail } from "@/lib/email/templates/voice";
 import { getSmsProvider } from "@/lib/sms";
 import { resolveSmsSender } from "@/lib/sms/sender";
+import { composeCallAlertSms, prepareAlertSms, deliverAlertSms, type PendingAlertSms } from "@/lib/sms/alerts";
 import { defaultTextbackBody } from "./textback-body";
 import type { CallState } from "./call-state";
 import { classifyOutcome, wasServed } from "./call-state";
@@ -95,8 +96,14 @@ const TEXTBACK_COOLDOWN_MS = TEXTBACK_COOLDOWN_HOURS * 60 * 60 * 1000;
  * there is no one to hand off to. (`abandoned` may still get a contact and a
  * conversation from the text-back leg further down, when the account has
  * opted in; that trail exists to hold the text, not to summon a human.)
+ *
+ * A type predicate (not a plain boolean) so the staff alert SMS leg below
+ * can call this directly and get `outcome` narrowed to
+ * `composeCallAlertSms`'s own literal union — no cast, and the two alert
+ * legs (email above, SMS below) are provably gated on the identical set of
+ * outcomes rather than two hand-copies of the same three strings.
  */
-function isMeaningful(outcome: CallOutcome): boolean {
+function isMeaningful(outcome: CallOutcome): outcome is "booked" | "lead" | "message" {
   return outcome === "booked" || outcome === "lead" || outcome === "message";
 }
 
@@ -280,6 +287,42 @@ export async function finishCall(
     }
   }
 
+  // The staff alert's SMS twin — ALONGSIDE the email above, never instead
+  // (danlo, 2026-09-15). Its own leg, own try/catch, independent of the
+  // email alert's: an email outage above must not cost the account its
+  // text, and a carrier outage here must not cost the call its email. Gated
+  // on `isMeaningful(outcome)` called directly (not the pre-computed
+  // `meaningful` local) so `outcome` narrows to `composeCallAlertSms`'s own
+  // literal union with no cast — matching the email alert's gate exactly,
+  // per the brief.
+  //
+  // `ctx.notifyEmails.length > 0` tells `composeCallAlertSms` whether it may
+  // promise "check your email" — an account with no notify emails never got
+  // one from the block above, and the text used to claim it regardless
+  // (alert-send-report follow-up review, finding 3).
+  //
+  // Only the PREPARE half — `getAlertPhone` and `prepareAlertSms`'s gate/
+  // loop-guard reads — runs here. The carrier POST is deliberately held
+  // until after `finishCallRow` below, mirroring the missed-call text-back's
+  // own split around the same row write and for the identical reason
+  // (finding 4): a 10-second provider call ahead of the durable call row is
+  // how a slow carrier loses that row on an invocation running out of
+  // budget. `sendAlertSms` (used unchanged by `app/b/[publicId]/actions.ts`,
+  // which has no such ordering constraint) is `prepareAlertSms` immediately
+  // followed by `deliverAlertSms`; this leg calls the two halves separately.
+  let pendingAlertSms: PendingAlertSms | null = null;
+  if (isMeaningful(outcome)) {
+    try {
+      const alertPhone = await getAlertPhone(ctx.db, ctx.accountId);
+      pendingAlertSms = await prepareAlertSms(
+        ctx.db, ctx.accountId, alertPhone,
+        composeCallAlertSms(outcome, ctx.notifyEmails.length > 0),
+      );
+    } catch (e) {
+      console.error(`finishCall ${meta.callRowId ?? "(no row)"}: alert SMS prepare failed: ${String(e)}`);
+    }
+  }
+
   // Fourth leg: the missed-call text-back. Its own try/catch for the same
   // reason as the three around it — finishCall is contractually never-throws,
   // because the caller has already hung up and there is nobody for a
@@ -419,6 +462,20 @@ export async function finishCall(
       stored = true;
     } catch (e) {
       console.error(`finishCall ${meta.callRowId}: finishCallRow failed: ${String(e)}`);
+    }
+  }
+
+  // The other half of the staff alert SMS leg: the actual carrier POST,
+  // deliberately AFTER the durable row above — same ordering, same reason as
+  // the text-back's own split just below (finding 4, alert-send-report
+  // follow-up review). `deliverAlertSms` never throws by contract (its own
+  // doc, @/lib/sms/alerts) but this try/catch stays anyway, the same
+  // defense-in-depth every other leg in this function carries.
+  if (pendingAlertSms) {
+    try {
+      await deliverAlertSms(ctx.accountId, pendingAlertSms);
+    } catch (e) {
+      console.error(`finishCall ${meta.callRowId ?? "(no row)"}: alert SMS deliver failed: ${String(e)}`);
     }
   }
 

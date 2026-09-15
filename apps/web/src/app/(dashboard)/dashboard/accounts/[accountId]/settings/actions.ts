@@ -5,13 +5,15 @@ import { clerkClient } from "@clerk/nextjs/server";
 import { requireAgencyOnlyAccountAccess, requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { createCustomField, upsertCustomValue, setClientAccess, setFromEmail, setReportEmails,
-         serviceDb, type CustomFieldDef } from "@bis/db";
+         setAlertPhone, serviceDb, type CustomFieldDef } from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
 import { saveVerifiedFromAddress } from "@/lib/email/preflight";
 // The public form's own validator, reused deliberately rather than a second
 // regex — the same reasoning branding/actions.ts records: one email regex
 // that drifts from another is worse than one that is strict.
 import { isValidEmail } from "@/lib/forms/guards";
+import { toE164 } from "@/lib/voice/phone-number";
+import { resolveSmsSender } from "@/lib/sms/sender";
 import { m } from "@/lib/messages";
 
 export async function createFieldAction(accountId: string, formData: FormData): Promise<void> {
@@ -222,5 +224,80 @@ export async function setReportEmailsAction(
 
   await setReportEmails(serviceDb(), accountId, emails, userId);
   revalidatePath(`/dashboard/accounts/${accountId}/settings`);
+  return { ok: true };
+}
+
+/**
+ * Sets or clears `accounts.alert_phone` (0035_alert_phone.sql) — the
+ * Settings-page twin of `setFromEmailAction` and `setReportEmailsAction`
+ * above, same shape and same reason. BOTH writes those actions make go
+ * through `serviceDb()`, which no RLS policy or column grant stands behind,
+ * so the `requireAgencyOnlyAccountAccess` guard on the first line is the
+ * ONLY gate on this write too — see `setFromEmailAction`'s own comment for
+ * why that is not redundant with the grant story.
+ *
+ * 0035 grants `authenticated` no UPDATE on `alert_phone`, deliberately: a
+ * client able to write its own account's alert destination could redirect
+ * lead-carrying texts — and the account's own billable segments — to any
+ * handset it chooses. See the migration's own comment for the full
+ * reasoning, including why SELECT needs no grant at all (a client should
+ * SEE where their alerts go even though they cannot change it — the client
+ * read of this column lives on the Branding page, not here).
+ *
+ * A blank field writes NULL, never `""`: 0035's CHECK constraint refuses
+ * the empty string outright so NULL stays the ONLY spelling of "off" — the
+ * due-query and the send path would otherwise disagree about the same row.
+ * A filled field is normalized through `toE164`, the app's single
+ * normalizer and the exact codomain of the column's own constraint — never
+ * stored raw, so this column can never hold a shape the send path cannot
+ * dial.
+ *
+ * The self-text loop warning runs only on a value actually being saved
+ * (never on a clearing save — there is nothing to compare a cleared field
+ * against) and only reports what `resolveSmsSender` — the same gate the
+ * send path itself consults — resolves RIGHT NOW. It is deliberately HELP,
+ * not the guard: the save still succeeds. The guard that actually stops the
+ * text (`refusesAlertLoop`, lib/sms/sender.ts) lives at send time, per the
+ * migration's own decision 3 — the condition is not stable in time (a
+ * `phone_numbers` row can walk to `live` on its own, with no write to
+ * `accounts` to catch it), so only the moment of sending can judge it for
+ * real. This is a courtesy that catches the common case (saving a wrong
+ * number who's already live) immediately, in front of the person who typed
+ * it, rather than leaving them to notice only from a text that never
+ * arrived.
+ *
+ * Checked against `gate.ownedNumbers` — every row this account owns
+ * (`testing` OR `live`, `resolveSmsSender`'s own widened set) — not only
+ * `gate.from`, the single one it resolves to send FROM. `refusesAlertLoop`
+ * widened to that same set for the same reason (a second owned number, even
+ * one still mid-provisioning, is an unguarded loop); this save-time help
+ * mirrors the send guard, so it stays wrong on the exact case the guard
+ * refuses if it does not ask the same question.
+ */
+export async function setAlertPhoneAction(
+  accountId: string, formData: FormData,
+): Promise<{ ok: true; warning?: string } | { ok: false; error: string }> {
+  const { userId } = await requireAgencyOnlyAccountAccess(accountId);
+
+  const raw = String(formData.get("alertPhone") ?? "").trim();
+
+  if (!raw) {
+    await setAlertPhone(serviceDb(), accountId, null, userId);
+    revalidatePath(`/dashboard/accounts/${accountId}/settings`);
+    return { ok: true };
+  }
+
+  const normalized = toE164(raw);
+  if (!normalized) {
+    return { ok: false, error: m["settings.alertPhoneBad"] };
+  }
+
+  await setAlertPhone(serviceDb(), accountId, normalized, userId);
+  revalidatePath(`/dashboard/accounts/${accountId}/settings`);
+
+  const gate = await resolveSmsSender(serviceDb(), accountId);
+  if (gate.ok && gate.ownedNumbers.includes(normalized)) {
+    return { ok: true, warning: m["settings.alertPhoneSelfWarning"] };
+  }
   return { ok: true };
 }
