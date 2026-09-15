@@ -30,7 +30,10 @@ import { m } from "@/lib/messages";
  */
 export function workRowText(total: number, overdue: number): string {
   if (total === 0) return m["work.empty"];
-  const base = m["work.row.count"].replace("{count}", String(total));
+  // A whole-phrase pick by count, never the plural template reused for
+  // one — see work.row.countOne's own comment in messages.ts for the bug
+  // this avoids (the same shape as contacts.count/contacts.countOne).
+  const base = total === 1 ? m["work.row.countOne"] : m["work.row.count"].replace("{count}", String(total));
   if (overdue === 0) return base;
   return `${base} · ${m["work.row.overdue"].replace("{count}", String(overdue))}`;
 }

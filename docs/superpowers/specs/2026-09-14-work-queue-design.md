@@ -256,7 +256,12 @@ Overdue or Today (§2), and most accounts have no tasks at all — so a row
 reading `0 overdue · 0 today` would sit above a queue holding seven unreturned
 calls, and would be worse than showing nothing. The row leads with the total
 and breaks it down only where a breakdown exists: `7 things to do · 2 overdue`,
-falling back to `7 things to do` when none are dated.
+falling back to `7 things to do` when none are dated. A total of exactly one
+takes its own singular phrase, never the plural template with the number
+swapped in: `1 thing to do`, or `1 thing to do · 1 overdue`. One is not an
+edge case here — §3's dismiss-to-task action is what first populates `tasks`
+on an account that has never created one by hand, so one is the first
+non-zero state most accounts reach.
 
 When the queue is empty the row says so in one plain sentence rather than
 vanishing; a row that disappears reads as a broken feature.
@@ -266,6 +271,13 @@ vanishing; a row that disappears reads as a broken feature.
 Every string goes through `lib/messages.ts` under a `work.` namespace, and
 passes the landscaper-at-7am read. "Call Maria Garcia back", not "Unreturned
 inbound voice interaction". No milestone codes, no `{{syntax}}`, no arrows.
+Any string that carries a count needs a singular twin — a whole-phrase pick by
+count, never a plural template reused for a count of one (the same shape as
+`contacts.count`/`contacts.countOne`, and see that key's own comment in
+`messages.ts` for the "1 people" bug this convention exists to prevent). The
+landscaper-at-7am read alone did not catch this the first time a `work.`
+string shipped without one, so it is named here explicitly rather than left
+implicit in the read.
 
 The screen is named **To do** in the nav.
 

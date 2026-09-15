@@ -1270,7 +1270,7 @@ export const m = {
   "work.done": "Done",
   "work.booking.completed": "It happened",
   "work.booking.noShow": "They didn't show",
-  // Task 4's toasts for the three buttons above. One shared failure string —
+  // Task 4's toasts for the four buttons above. One shared failure string —
   // every action here fails the same honest way (try again in a moment) —
   // and the booking close-out's OWN failure copy is never used: it passes
   // through whatever `setBookingStatusAction` (the calendar screen's own,
@@ -1283,20 +1283,33 @@ export const m = {
   "work.notNow.toastNoDate": "Added to your to-do list.",
   // The two close-out buttons are both irreversible and each arms a
   // different outbound message to the customer (a review request on
-  // completion, a no-show nudge on no-show) — a shared "Updated." toast made
-  // a misclick invisible. Each toast now names the outcome that was actually
-  // recorded, and the completed one says a review request may follow so a
+  // completion, a no-show follow-up on no-show — automations.noShow.title/
+  // .body name that same automation for the operator elsewhere) — a shared
+  // "Updated." toast made a misclick invisible. Each toast now names the
+  // outcome that was actually recorded AND says a message may follow, so a
   // wrong click is caught immediately rather than discovered when the wrong
-  // message goes out.
+  // one goes out. Both say "may", never a bare promise: either automation
+  // can decline a given row (no phone/email on file, the account's booking
+  // page switched off, an unresolvable timezone, a quiet-hours gate, a
+  // daily cap — see no-show-nudge.ts's own per-row refusal list), so
+  // "will" would overclaim for a row the pass is about to skip.
   "work.booking.completed.toast": "Marked as completed. A review request may go out.",
-  "work.booking.noShow.toast": "Marked as a no-show.",
+  "work.booking.noShow.toast": "Marked as a no-show. A follow-up message may go out.",
   "work.actionFailed": "Couldn't update that just now. Try again in a moment.",
   // Task 5's dashboard row — a compact link into /tasks. `work.empty` above
   // (Task 3) already carries the zero-queue sentence, reused rather than
   // duplicated. The two below compose the non-empty count: "{count} things
   // to do" alone, or with " · {count} overdue" appended when the account has
-  // any — see work-row.tsx's `workRowText`.
+  // any — see work-row.tsx's `workRowText`. `work.row.countOne` is the
+  // singular's own whole-phrase twin, the same convention as
+  // contacts.count/contacts.countOne above: a plural template reused for a
+  // count of one shipped a live "1 people" bug on the Website screen once
+  // already, and a count of one is not a corner case here — it is the
+  // designed first experience (spec §3: dismissing a row is what first
+  // populates `tasks` on an account with none). `work.row.overdue` needs no
+  // singular twin of its own: "1 overdue" already reads correctly.
   "work.row.count": "{count} things to do",
+  "work.row.countOne": "1 thing to do",
   "work.row.overdue": "{count} overdue",
 } as const;
 
