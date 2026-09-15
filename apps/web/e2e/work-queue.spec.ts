@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { readFileSync } from "node:fs";
 
 // The first screen in this app whose whole purpose is to span every
 // account (design spec docs/superpowers/specs/2026-09-14-work-queue-design.md
@@ -9,9 +10,23 @@ import { test, expect } from "@playwright/test";
 // requireAgency() (src/lib/auth.ts:7-13) redirects anyone whose session
 // claims carry app_role !== "agency_admin" to "/", on the very first line,
 // before any read happens — so the agency-wide query is never even issued
-// on a client's behalf. The proof is therefore two-sided: the client does
-// not end up sitting on /dashboard/work, AND that screen's own content
-// never rendered on whatever page they DO land on.
+// on a client's behalf. "/" itself then redirects a client straight to
+// their OWN account dashboard (resolveClientAccount(), (dashboard)/page.tsx
+// — the same redirect client-access.spec.ts's own first assertion proves).
+// That destination, not merely the absence of /dashboard/work, is what this
+// spec asserts: an original draft also asserted the work queue's heading
+// was absent from whatever page the client landed on, but that was vacuous
+// twice over — once the redirect has already carried the client to an
+// unrelated page, "this unrelated page lacks that heading" is true of
+// nearly any page, proving nothing about the guard; and it can never
+// observe anything else in the first place, because requireAgency() runs
+// before the page's own first read, so the work queue's markup is never
+// generated, let alone sent to the browser, redirect or not. A heading
+// check would only mean something if the browser had a chance to paint the
+// guarded content and didn't — that never happens here. Asserting the
+// actual redirect target is the assertion that fails if requireAgency()
+// ever pointed somewhere other than "/" (an open error page, say, with no
+// boundary of its own) while still trivially not being /dashboard/work.
 //
 // Signed in as the client fixture auth.setup.ts creates ("authenticate as
 // client user (no app_role)") — the same identity, and the same
@@ -32,20 +47,21 @@ import { test, expect } from "@playwright/test";
 test.use({ storageState: "e2e/.auth/client-state.json" });
 
 test("a client cannot reach the agency work queue", async ({ page }) => {
+  const fixture = JSON.parse(
+    readFileSync("e2e/.auth/client-fixture.json", "utf-8"),
+  ) as { accountId: string };
+
   await page.goto("/dashboard/work");
 
-  // requireAgency() redirects to "/" before any read, so the client must
-  // not still be sitting on /dashboard/work once navigation settles.
-  await expect(page).not.toHaveURL(/\/dashboard\/work$/);
-
-  // And the agency screen's own content must never have rendered, on
-  // whatever page the redirect actually lands on. Task 6 has not added this
-  // heading to `messages.ts` yet — this spec is written and run BEFORE the
-  // route exists (task-6-brief.md step 1) — so the name below is the
-  // working title carried by both the task brief and
-  // docs/superpowers/plans/2026-09-14-work-queue.md's own Task 6 sketch, not
-  // a confirmed string read from shipped copy. If Task 6 lands with a
-  // different heading, this line needs updating to match it when this spec
-  // is re-run to green — a pass against the wrong text would prove nothing.
-  await expect(page.getByRole("heading", { name: /everything due/i })).toHaveCount(0);
+  // The client lands on their OWN account dashboard, not merely "somewhere
+  // that isn't /dashboard/work" — see the file-level comment for why the
+  // stronger, positive assertion is the one that actually exercises the
+  // guard. This is the shipped heading's replacement for the plan-sketch
+  // "everything due" this spec asserted before the route existed
+  // (work.agency.title in messages.ts is "Everything that needs you" — see
+  // AgencyWorkPage in dashboard/work/page.tsx); that string plays no part
+  // here because the redirect means the client's browser never receives it.
+  await expect(page).toHaveURL(
+    new RegExp(`/dashboard/accounts/${fixture.accountId}/dashboard$`),
+  );
 });
