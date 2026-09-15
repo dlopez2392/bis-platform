@@ -577,8 +577,15 @@ async function seedCalls(
     const callerE164 = contact ? demoPhone(contact.person.line) : demoPhone(between(r, 50, 99));
     assertFiction(undefined, callerE164, `caller on call ${i}`);
 
-    // Business hours, working backwards day by day, two or three a day.
-    const daysAgo = Math.floor(i / 2);
+    // Working backwards day by day, but NOT uniformly: three a day across the
+    // last week and two a day before it. The dashboard's KPIs compare the
+    // last 7 local days against the 7 before, and a flat 2-a-day spread makes
+    // every one of those deltas a coin flip — the first capture came back
+    // with calls down 14% and after-hours down 50% on the hero row of a
+    // screenshot whose job is to argue the product works. A demo tenant is a
+    // business we are choosing to portray; portraying it as growing is as
+    // honest as portraying it as flat, and far more use.
+    const daysAgo = i < 21 ? Math.floor(i / 3) : 7 + Math.floor((i - 21) / 2);
     const startedAt = now - daysAgo * DAY - (between(r, 8, 17) * HOUR) + between(r, 0, 59) * MIN;
 
     const { id: callId } = await startCallRow(db, accountId,
@@ -642,7 +649,13 @@ async function seedBookings(
     enabled: true,
     openHours: DEMO_OPEN_HOURS,
     slotDurationMinutes: 120,
-    minNoticeHours: 12,
+    // TWO hours, not twelve. The capture opens the booking page on the demo's
+    // own "today", and a twelve-hour notice window against a 08:00-17:00 day
+    // wipes every remaining slot out — the first booking capture read "No
+    // times available this day", which is the emptiest possible version of
+    // the one screen that exists to show somebody booking. Two hours is also
+    // what an HVAC shop with a van already out actually offers.
+    minNoticeHours: 2,
     maxAdvanceDays: 21,
     meetingType: "in_person",
   }, ACTOR);
@@ -721,23 +734,34 @@ async function seedPipeline(
     .select("id, name, position").eq("pipeline_id", pipelineId).order("position");
   if (error || !stages?.length) throw new Error(`demo seed: no stages: ${error?.message}`);
 
-  const DEALS: { name: string; value: number; stage: number; won?: boolean }[] = [
-    { name: "Diagnostic — upstairs not cooling", value: 89, stage: 0 },
-    { name: "Diagnostic — no enfría, zumbido afuera", value: 89, stage: 0 },
-    { name: "Capacitor + contactor replacement", value: 340, stage: 0 },
-    { name: "Maintenance plan — 2 units", value: 380, stage: 0 },
-    { name: "Drain line clear + safety switch", value: 225, stage: 1 },
-    { name: "Mini-split, room over garage", value: 3_950, stage: 1 },
-    { name: "Maintenance plan — 4 rental units", value: 760, stage: 1 },
-    { name: "Evaporator coil replacement", value: 1_880, stage: 2 },
-    { name: "3-ton 16 SEER changeout", value: 4_780, stage: 2 },
-    { name: "Duct cleaning — 1,900 sq ft", value: 640, stage: 2 },
-    { name: "4-ton system + return rework", value: 6_400, stage: 3 },
-    { name: "Two-story dual system replacement", value: 11_300, stage: 3 },
-    { name: "Commercial RTU swap — 3 units", value: 14_200, stage: 3 },
-    { name: "Service contract — storage facility", value: 2_400, stage: 3 },
-    { name: "2.5-ton changeout, La Feria", value: 4_150, stage: 4, won: true },
-    { name: "Heat strip replacement", value: 520, stage: 4, won: true },
+  // `daysAgo` is EXPLICIT, the way DEMO_PEOPLE's `line` is, and for the same
+  // reason: it used to be derived (`deal.stage * 6 + between(r, 1, 9)`), which
+  // tied a deal's age to how far it had travelled. That reads as sensible and
+  // is quietly ruinous — it means every RECENTLY added deal is a stage-0 deal,
+  // and stage-0 deals are the cheap ones. "Pipeline added" compares the last
+  // 7 days against the 7 before, so the demo's dashboard reported $178 and a
+  // 97% COLLAPSE on the hero row of a marketing screenshot.
+  //
+  // Decoupling the two is also the more truthful model: a stage says where a
+  // deal is now, not when it arrived, and a commercial RTU swap can land on
+  // Monday and be quoted by Friday.
+  const DEALS: { name: string; value: number; stage: number; daysAgo: number; won?: boolean }[] = [
+    { name: "Diagnostic — upstairs not cooling", value: 89, stage: 0, daysAgo: 2 },
+    { name: "Diagnostic — no enfría, zumbido afuera", value: 89, stage: 0, daysAgo: 3 },
+    { name: "Capacitor + contactor replacement", value: 340, stage: 0, daysAgo: 1 },
+    { name: "Maintenance plan — 2 units", value: 380, stage: 0, daysAgo: 5 },
+    { name: "Drain line clear + safety switch", value: 225, stage: 1, daysAgo: 4 },
+    { name: "Mini-split, room over garage", value: 3_950, stage: 1, daysAgo: 2 },
+    { name: "Maintenance plan — 4 rental units", value: 760, stage: 1, daysAgo: 6 },
+    { name: "Evaporator coil replacement", value: 1_880, stage: 2, daysAgo: 3 },
+    { name: "3-ton 16 SEER changeout", value: 4_780, stage: 2, daysAgo: 5 },
+    { name: "Duct cleaning — 1,900 sq ft", value: 640, stage: 2, daysAgo: 6 },
+    { name: "4-ton system + return rework", value: 6_400, stage: 3, daysAgo: 4 },
+    { name: "Commercial RTU swap — 3 units", value: 14_200, stage: 3, daysAgo: 5 },
+    { name: "Two-story dual system replacement", value: 11_300, stage: 3, daysAgo: 10 },
+    { name: "Service contract — storage facility", value: 2_400, stage: 3, daysAgo: 12 },
+    { name: "2.5-ton changeout, La Feria", value: 4_150, stage: 4, daysAgo: 10, won: true },
+    { name: "Heat strip replacement", value: 520, stage: 4, daysAgo: 13, won: true },
   ];
 
   for (let i = 0; i < DEALS.length; i++) {
@@ -751,9 +775,8 @@ async function seedPipeline(
     }
     if (deal.won) await setOpportunityStatus(db, accountId, id, "won", ACTOR);
 
-    // Deeper stages are older — a deal does not reach "Quote Sent" the same
-    // hour it arrives, and the board's age column is read in demos.
-    const createdAt = now - (deal.stage * 6 + between(r, 1, 9)) * DAY;
+    // Taken from the deal, not computed from its stage. See DEALS above.
+    const createdAt = now - deal.daysAgo * DAY;
     const movedAt = now - between(r, 0, deal.stage * 3 + 1) * DAY;
     const oppPatch: Record<string, string> = {
       created_at: new Date(createdAt).toISOString(),

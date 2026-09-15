@@ -2,7 +2,8 @@ import { test, expect, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { config as loadEnv } from "dotenv";
-import { serviceDb, getBranding, getVoiceProfile, brandDisplayName } from "@bis/db";
+import { serviceDb, getBranding, getVoiceProfile, brandDisplayName,
+         DEMO_TIMEZONE } from "@bis/db";
 import { emailBrandNamed } from "@/lib/email/templates/shell";
 import { weeklyReportEmail } from "@/lib/email/templates/weekly-report";
 import { weeklyMetrics } from "@/lib/reports/weekly-metrics";
@@ -107,7 +108,7 @@ async function settled(page: Page) {
   await page.waitForTimeout(250);
 }
 
-async function shoot(page: Page, file: string) {
+async function shoot(page: Page, file: string, opts: { fullPage?: boolean } = {}) {
   mkdirSync(OUT, { recursive: true });
   // NO `scale: "css"`. That option means one image pixel per CSS pixel, which
   // throws away the deviceScaleFactor: 2 the contexts below are created with
@@ -116,7 +117,7 @@ async function shoot(page: Page, file: string) {
   // would have been half-resolution on any retina screen. Playwright's
   // default is "device", which is what the comment under WIDE has always
   // claimed this does.
-  await page.screenshot({ path: path.join(OUT, file) });
+  await page.screenshot({ path: path.join(OUT, file), ...opts });
 }
 
 // Output is 2x the viewport: deviceScaleFactor 2 in the project's device
@@ -164,7 +165,14 @@ test.describe("demo captures", () => {
     // 5. The booking page, LIGHT and signed out — this is what a customer
     //    sees, and a customer is not logged into anything. A fresh context
     //    rather than the authenticated one, so no dashboard chrome leaks in.
-    const narrow = await browser.newContext({ viewport: NARROW, deviceScaleFactor: 2 });
+    // `timezoneId` matters: the booking page renders slot times in the
+    // VISITOR's zone and says so under the day strip. A runner with no zone
+    // set is UTC, so the first capture read "Times shown in UTC" on a page
+    // selling a Harlingen HVAC company. A customer looking at this is in the
+    // Valley; so is the context now.
+    const narrow = await browser.newContext({
+      viewport: NARROW, deviceScaleFactor: 2, timezoneId: DEMO_TIMEZONE,
+    });
     const pub = await narrow.newPage();
     await pinClock(pub, demo);
     await useTheme(pub, "light");
@@ -210,8 +218,13 @@ test.describe("demo captures", () => {
     await mail.evaluate(() => document.fonts.ready);
     // Full page: an email is as tall as it is, and cropping one to a viewport
     // would cut the four numbers this section exists to show.
-    mkdirSync(OUT, { recursive: true });
-    await mail.screenshot({ path: path.join(OUT, "weekly-report.png"), fullPage: true, scale: "css" });
+    //
+    // Through `shoot` rather than its own page.screenshot call. This WAS its
+    // own call, and it carried a second `scale: "css"` that the fix in shoot()
+    // never touched — so five images came back at 2x and this one stayed at
+    // 640x800 against a declared 1280x1600. One call site is the fix; a
+    // second one is how the first bug survived being fixed.
+    await shoot(mail, "weekly-report.png", { fullPage: true });
 
     await narrow.close();
   });
