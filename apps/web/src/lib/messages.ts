@@ -1270,6 +1270,16 @@ export const m = {
   "work.done": "Done",
   "work.booking.completed": "It happened",
   "work.booking.noShow": "They didn't show",
+  // Task 4's toasts for the three buttons above. One shared failure string —
+  // every action here fails the same honest way (try again in a moment) —
+  // and the booking close-out's OWN failure copy is never used: it passes
+  // through whatever `setBookingStatusAction` (the calendar screen's own,
+  // reused action) already returns, so the two screens never say two
+  // different things about the same write.
+  "work.done.toast": "Marked done.",
+  "work.notNow.toast": "Moved to tomorrow.",
+  "work.booking.toast": "Updated.",
+  "work.actionFailed": "Couldn't update that just now. Try again in a moment.",
 } as const;
 
 export type MessageKey = keyof typeof m;

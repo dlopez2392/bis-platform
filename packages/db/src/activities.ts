@@ -56,3 +56,22 @@ export async function completeTask(
   if (error) throw new Error(error.message);
   await emit(db, accountId, "task.completed", actorId, { taskId }, actorType);
 }
+
+/**
+ * Reverses `completeTask` — the "Done" button's undo (DESIGN.md rule 6:
+ * reversible actions run immediately with an undo toast; the undo needs the
+ * reverse operation to actually exist). Zero-migration: `completed_at` is
+ * already nullable, so reopening is just setting it back to null. Mirrors
+ * `completeTask`'s own shape, including emitting its own event rather than
+ * silently reusing `task.created` or staying silent.
+ */
+export async function reopenTask(
+  db: SupabaseClient, accountId: string, taskId: string, actorId: string,
+  actorType: ActorType = "user",
+): Promise<void> {
+  const { error } = await db.from("tasks")
+    .update({ completed_at: null })
+    .eq("account_id", accountId).eq("id", taskId);
+  if (error) throw new Error(error.message);
+  await emit(db, accountId, "task.reopened", actorId, { taskId }, actorType);
+}

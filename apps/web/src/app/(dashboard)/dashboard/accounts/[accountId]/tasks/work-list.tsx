@@ -1,13 +1,14 @@
 // apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/tasks/work-list.tsx
 //
-// The To do queue's own row rendering (Work Queue Task 3, READ-ONLY — Task 4
-// wires the Not now / Done / booking-outcome buttons; nothing rendered here
-// is a mutation). `visibleBuckets` is its own exported pure function, not a
-// `.filter()` inlined in the component below, so a regression back to
+// The To do queue's own row rendering (Work Queue Task 3 built the read-only
+// shell; Task 4 wires the Not now / Done / booking-outcome buttons via
+// `WorkRowActions`, a small "use client" boundary — this file itself stays a
+// server component). `visibleBuckets` is its own exported pure function, not
+// a `.filter()` inlined in the component below, so a regression back to
 // rendering an empty heading for a bucket with no rows is something a test
 // can catch by name (page.test.ts) rather than by reading rendered output.
 import Link from "next/link";
-import type { WorkRow } from "@bis/db";
+import type { WorkRow, WorkSource } from "@bis/db";
 import { ListTodo } from "lucide-react";
 import type { Bucket, BucketedWork } from "@/lib/work/buckets";
 import { Badge } from "@/components/ui/badge";
@@ -16,6 +17,20 @@ import { ListPanel, LIST_ROW } from "@/components/ui/list-panel";
 import { formatDateInZone } from "@/lib/format";
 import { m, type MessageKey } from "@/lib/messages";
 import { cn } from "@/lib/utils";
+import {
+  completeWorkTask, reopenWorkTask, dismissToTask, closeOutBooking,
+  type ActionResult, type DismissResult,
+} from "./actions";
+import { WorkRowActions } from "./work-row-actions";
+
+/** The four Task 4 actions, bound to one `accountId` by `WorkList` and
+ *  threaded down through `WorkRowItem` into the "use client" boundary. */
+type WorkActionProps = {
+  completeWorkTask: (taskId: string) => Promise<ActionResult>;
+  reopenWorkTask: (taskId: string) => Promise<ActionResult>;
+  dismissToTask: (row: { source: WorkSource; contactId: string | null; title: string }) => Promise<DismissResult>;
+  closeOutBooking: (bookingId: string, status: "completed" | "no_show") => Promise<ActionResult>;
+};
 
 const BUCKET_ORDER: Bucket[] = ["overdue", "today", "waiting"];
 
@@ -125,12 +140,20 @@ function rowDateText(row: WorkRow, timezone: string): string | null {
   }
 }
 
+/** `WorkRow.id` is `\`${source}:${dbId}\`` (work-queue.ts) — every mutation
+ *  below (`completeTask`, `addTask`'s suppression target, `setBookingStatus`)
+ *  wants the bare database id, never the prefixed one. */
+function rawRowId(row: WorkRow): string {
+  return row.id.slice(row.source.length + 1);
+}
+
 function WorkRowItem({
   row,
   bucket,
   accountId,
   contactName,
   timezone,
+  actions,
 }: {
   row: WorkRow;
   bucket: Bucket;
@@ -147,6 +170,12 @@ function WorkRowItem({
    *  could disagree with its own chip inside a single row. `rowDateText`
    *  above is what actually declines on an invalid zone, per-row. */
   timezone: string;
+  /** The four Task 4 server actions, already bound to `accountId` by
+   *  `WorkList` below — passed down as props into the "use client" boundary
+   *  (`WorkRowActions`) rather than imported there directly, matching
+   *  `bookings-list.tsx`'s own precedent for a client list under a server
+   *  page. */
+  actions: WorkActionProps;
 }) {
   const treatment = BUCKET_TREATMENT[bucket];
   const primary = primaryLabel(row, contactName);
@@ -174,18 +203,36 @@ function WorkRowItem({
   // Only a row tied to a real contact has anywhere to go — a contact-less
   // task (no `contact_id` on the `tasks` row) renders the same content as a
   // plain, non-interactive row rather than a link to nowhere.
+  //
+  // The `<li>` is now the flex row (Task 4): the informational Link/div
+  // shrinks to `min-w-0 flex-1` beside the action buttons rather than the
+  // buttons nesting INSIDE the Link — a `<button>` inside an `<a>` is
+  // invalid markup and makes a click ambiguous between "navigate" and "act".
+  // `body` itself (the date/badge/label spans above) is untouched.
   return (
-    <li className={LIST_ROW}>
+    <li className={cn(LIST_ROW, "flex items-center")}>
       {row.contactId ? (
         <Link
           href={`/dashboard/accounts/${accountId}/contacts/${row.contactId}`}
-          className={cn(rowClassName, "hover:bg-[var(--surface-3)]")}
+          className={cn(rowClassName, "min-w-0 flex-1", "hover:bg-[var(--surface-3)]")}
         >
           {body}
         </Link>
       ) : (
-        <div className={rowClassName}>{body}</div>
+        <div className={cn(rowClassName, "min-w-0 flex-1")}>{body}</div>
       )}
+      <div className="pr-4">
+        <WorkRowActions
+          source={row.source}
+          rawId={rawRowId(row)}
+          contactId={row.contactId}
+          label={primary}
+          completeWorkTask={actions.completeWorkTask}
+          reopenWorkTask={actions.reopenWorkTask}
+          dismissToTask={actions.dismissToTask}
+          closeOutBooking={actions.closeOutBooking}
+        />
+      </div>
     </li>
   );
 }
@@ -218,6 +265,17 @@ export function WorkList({
     return <EmptyState icon={ListTodo} title={m["work.empty"]} body={m["work.empty.body"]} />;
   }
 
+  // Bound to THIS account once, here — the same shape as
+  // `calendar/page.tsx`'s `boundSetStatus` — so every row's client-side
+  // action button below is a plain `(id) => Promise<Result>` with no
+  // `accountId` of its own to get wrong.
+  const actions: WorkActionProps = {
+    completeWorkTask: completeWorkTask.bind(null, accountId),
+    reopenWorkTask: reopenWorkTask.bind(null, accountId),
+    dismissToTask: dismissToTask.bind(null, accountId),
+    closeOutBooking: closeOutBooking.bind(null, accountId),
+  };
+
   return (
     <div className="flex flex-col gap-6">
       {shown.map((bucket) => (
@@ -234,6 +292,7 @@ export function WorkList({
                 accountId={accountId}
                 contactName={contactNames[row.contactId ?? ""] ?? m["contact.noName"]}
                 timezone={timezone}
+                actions={actions}
               />
             ))}
           </ListPanel>
