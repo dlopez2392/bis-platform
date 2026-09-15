@@ -505,6 +505,26 @@ export const m = {
   "settings.alertPhoneClientOff": "This account doesn't receive alert texts.",
   "settings.alertPhoneClientBody": "Texts land here the moment a booking comes in or a call finishes. Only your agency can change this number.",
 
+  // The verification flow (0036_alert_phone_verifications.sql) — claiming a
+  // NEW alert number now means proving somebody holds it, not just typing
+  // it in. Clearing the number stays proof-free (setAlertPhoneAction below
+  // keeps doing that directly): nobody needs to prove possession to turn
+  // alerts off.
+  "settings.alertPhoneNeedsVerification": "A new alert number has to be verified first — request a code below, then enter it to confirm the number.",
+  // Same predicate as settings.alertPhoneNotReady (resolveSmsSender's own
+  // gate), but phrased as a plain error string for a form action's result
+  // rather than a Notice with a link slot: there is nothing to send a code
+  // FROM yet.
+  "settings.alertPhoneNotClearedToSend": "Texting isn't turned on for this account yet, so no verification code can go out. See the Checklist page.",
+  "settings.alertPhoneTooManyCodes": "Too many codes have been requested for this number in the last hour. Wait a bit and try again.",
+  "settings.alertPhoneSendFailed": "The verification code couldn't be sent. Try again in a moment.",
+  "settings.alertPhoneCodeSent": "Code sent — check that phone for a text.",
+  // Deliberately does not say the number was right or wrong — only that
+  // THIS code was. See verifyAlertPhoneCode's own comment for why "wrong"
+  // and "expired" are kept as two different, narrow messages.
+  "settings.alertPhoneWrongCode": "That code doesn't match. Check the digits and try again.",
+  "settings.alertPhoneCodeExpired": "That code has expired, or none was ever sent for this number. Request a new one.",
+
   "error.title": "Something went wrong",
   "error.body": "We couldn't complete that action. Your changes may not have been saved.",
   "error.retry": "Try again",

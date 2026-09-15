@@ -5,7 +5,9 @@ import { clerkClient } from "@clerk/nextjs/server";
 import { requireAgencyOnlyAccountAccess, requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { createCustomField, upsertCustomValue, setClientAccess, setFromEmail, setReportEmails,
-         setAlertPhone, serviceDb, type CustomFieldDef } from "@bis/db";
+         setAlertPhone, serviceDb, type CustomFieldDef,
+         startAlertPhoneVerification, verifyAlertPhoneCode, countRecentAlertPhoneVerifications,
+         ALERT_CODE_MAX_SENDS_PER_HOUR } from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
 import { saveVerifiedFromAddress } from "@/lib/email/preflight";
 // The public form's own validator, reused deliberately rather than a second
@@ -13,7 +15,9 @@ import { saveVerifiedFromAddress } from "@/lib/email/preflight";
 // that drifts from another is worse than one that is strict.
 import { isValidEmail } from "@/lib/forms/guards";
 import { toE164 } from "@/lib/voice/phone-number";
-import { resolveSmsSender } from "@/lib/sms/sender";
+import { resolveSmsSender, refusesAlertLoop } from "@/lib/sms/sender";
+import { composeAlertPhoneVerificationSms } from "@/lib/sms/alerts";
+import { getSmsProvider } from "@/lib/sms";
 import { m } from "@/lib/messages";
 
 export async function createFieldAction(accountId: string, formData: FormData): Promise<void> {
@@ -228,76 +232,133 @@ export async function setReportEmailsAction(
 }
 
 /**
- * Sets or clears `accounts.alert_phone` (0035_alert_phone.sql) — the
- * Settings-page twin of `setFromEmailAction` and `setReportEmailsAction`
- * above, same shape and same reason. BOTH writes those actions make go
- * through `serviceDb()`, which no RLS policy or column grant stands behind,
- * so the `requireAgencyOnlyAccountAccess` guard on the first line is the
- * ONLY gate on this write too — see `setFromEmailAction`'s own comment for
- * why that is not redundant with the grant story.
+ * Clears `accounts.alert_phone` (0035_alert_phone.sql), or refuses to touch
+ * it at all — this is no longer the write path for a NEW number.
  *
- * 0035 grants `authenticated` no UPDATE on `alert_phone`, deliberately: a
- * client able to write its own account's alert destination could redirect
- * lead-carrying texts — and the account's own billable segments — to any
- * handset it chooses. See the migration's own comment for the full
- * reasoning, including why SELECT needs no grant at all (a client should
- * SEE where their alerts go even though they cannot change it — the client
- * read of this column lives on the Branding page, not here).
+ * 0036_alert_phone_verifications.sql closed the gap this action used to
+ * leave open: a mistyped digit here used to send a stranger a continuous
+ * stream of customers' names and appointment times, with no symptom
+ * anywhere. Clearing the number needs no such proof — nobody has to
+ * demonstrate possession to turn alerts OFF, and requiring it would strand
+ * an account whose stored number is already wrong with no way to stop the
+ * texts. So a blank field still writes NULL directly, exactly as before;
+ * a non-blank field is refused outright and points at
+ * `startAlertPhoneVerificationAction` below, the only remaining path that
+ * can end in a WRITTEN, proven number.
+ *
+ * Same shape as `setFromEmailAction`/`setReportEmailsAction` beside it for
+ * the clearing branch: BOTH go through `serviceDb()`, which no RLS policy
+ * or column grant stands behind, so `requireAgencyOnlyAccountAccess` on the
+ * first line is the ONLY gate on this write.
  *
  * A blank field writes NULL, never `""`: 0035's CHECK constraint refuses
  * the empty string outright so NULL stays the ONLY spelling of "off" — the
  * due-query and the send path would otherwise disagree about the same row.
- * A filled field is normalized through `toE164`, the app's single
- * normalizer and the exact codomain of the column's own constraint — never
- * stored raw, so this column can never hold a shape the send path cannot
- * dial.
- *
- * The self-text loop warning runs only on a value actually being saved
- * (never on a clearing save — there is nothing to compare a cleared field
- * against) and only reports what `resolveSmsSender` — the same gate the
- * send path itself consults — resolves RIGHT NOW. It is deliberately HELP,
- * not the guard: the save still succeeds. The guard that actually stops the
- * text (`refusesAlertLoop`, lib/sms/sender.ts) lives at send time, per the
- * migration's own decision 3 — the condition is not stable in time (a
- * `phone_numbers` row can walk to `live` on its own, with no write to
- * `accounts` to catch it), so only the moment of sending can judge it for
- * real. This is a courtesy that catches the common case (saving a wrong
- * number who's already live) immediately, in front of the person who typed
- * it, rather than leaving them to notice only from a text that never
- * arrived.
- *
- * Checked against `gate.ownedNumbers` — every row this account owns
- * (`testing` OR `live`, `resolveSmsSender`'s own widened set) — not only
- * `gate.from`, the single one it resolves to send FROM. `refusesAlertLoop`
- * widened to that same set for the same reason (a second owned number, even
- * one still mid-provisioning, is an unguarded loop); this save-time help
- * mirrors the send guard, so it stays wrong on the exact case the guard
- * refuses if it does not ask the same question.
  */
 export async function setAlertPhoneAction(
   accountId: string, formData: FormData,
-): Promise<{ ok: true; warning?: string } | { ok: false; error: string }> {
+): Promise<{ ok: true } | { ok: false; error: string }> {
   const { userId } = await requireAgencyOnlyAccountAccess(accountId);
 
   const raw = String(formData.get("alertPhone") ?? "").trim();
+  if (raw) {
+    return { ok: false, error: m["settings.alertPhoneNeedsVerification"] };
+  }
 
-  if (!raw) {
-    await setAlertPhone(serviceDb(), accountId, null, userId);
+  await setAlertPhone(serviceDb(), accountId, null, userId);
+  revalidatePath(`/dashboard/accounts/${accountId}/settings`);
+  return { ok: true };
+}
+
+/**
+ * Opens proof of possession for a NEW alert number
+ * (0036_alert_phone_verifications.sql): draws a code, stores only its hash,
+ * and texts the code to the claimed number through the SAME A2P-gated
+ * sender every alert uses — an account that cannot send alerts cannot
+ * verify one either, which is correct rather than a limitation, since a
+ * number that could never be texted has nothing to prove. Never touches
+ * `accounts.alert_phone` — that happens only in
+ * `confirmAlertPhoneVerificationAction`, and only on the right code.
+ *
+ * Refuses outright, rather than merely warning, when the claimed number
+ * equals one the account already owns (`refusesAlertLoop`, checked against
+ * `gate.ownedNumbers` — every `testing` OR `live` row, not only the one
+ * `gate.from` resolves to send FROM, for the reason `refusesAlertLoop`'s own
+ * comment gives). The old direct-write action could still save that number
+ * and merely warn, because the save had already happened; this action saves
+ * nothing yet, and a code sent to an owned number loops back into the
+ * inbound webhook instead of ever reaching a handset, so the operator could
+ * never complete verification for it anyway.
+ *
+ * Rate-limited per (account, claimed number): every code is a real,
+ * billed text, and 0036's own comment says this limit is the send path's
+ * job, not the schema's — no UNIQUE index can express "no more than N in an
+ * hour," and the migration deliberately allows unlimited live rows so a
+ * corrected typo is never blocked. `ALERT_CODE_MAX_SENDS_PER_HOUR` (5)
+ * mirrors the attempt cap for the same practical reason.
+ */
+export async function startAlertPhoneVerificationAction(
+  accountId: string, formData: FormData,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  await requireAgencyOnlyAccountAccess(accountId);
+
+  const raw = String(formData.get("alertPhone") ?? "").trim();
+  const normalized = toE164(raw);
+  if (!normalized) return { ok: false, error: m["settings.alertPhoneBad"] };
+
+  const db = serviceDb();
+  const gate = await resolveSmsSender(db, accountId);
+  if (!gate.ok) return { ok: false, error: m["settings.alertPhoneNotClearedToSend"] };
+  if (refusesAlertLoop(accountId, normalized, gate.ownedNumbers)) {
+    return { ok: false, error: m["settings.alertPhoneSelfWarning"] };
+  }
+
+  const recentSends = await countRecentAlertPhoneVerifications(db, accountId, normalized);
+  if (recentSends >= ALERT_CODE_MAX_SENDS_PER_HOUR) {
+    return { ok: false, error: m["settings.alertPhoneTooManyCodes"] };
+  }
+
+  const { code } = await startAlertPhoneVerification(db, accountId, normalized);
+  try {
+    await getSmsProvider().send({
+      to: normalized, from: gate.from, body: composeAlertPhoneVerificationSms(code),
+    });
+  } catch (e) {
+    console.error(`alert phone verification send failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["settings.alertPhoneSendFailed"] };
+  }
+  return { ok: true };
+}
+
+/**
+ * Confirms a code against the account's own newest live verification for
+ * the claimed number and, only on a match, writes `accounts.alert_phone`
+ * (`verifyAlertPhoneCode`, `@bis/db` — that function is what enforces
+ * consume-then-write; this action makes no ordering decision of its own).
+ *
+ * A wrong code and an expired code are deliberately reported with two
+ * different strings (`settings.alertPhoneWrongCode` /
+ * `settings.alertPhoneCodeExpired`) — the operator deserves to know which,
+ * per the brief this closes — and neither copy, nor `verifyAlertPhoneCode`'s
+ * own "expired" bucket, ever reveals whether the claimed number itself was
+ * ever right: a code that was never sent for this number reads exactly like
+ * one that expired.
+ */
+export async function confirmAlertPhoneVerificationAction(
+  accountId: string, formData: FormData,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { userId } = await requireAgencyOnlyAccountAccess(accountId);
+
+  const raw = String(formData.get("alertPhone") ?? "").trim();
+  const normalized = toE164(raw);
+  if (!normalized) return { ok: false, error: m["settings.alertPhoneBad"] };
+  const code = String(formData.get("code") ?? "").trim();
+
+  const outcome = await verifyAlertPhoneCode(serviceDb(), accountId, normalized, code, userId);
+  if (outcome === "verified") {
     revalidatePath(`/dashboard/accounts/${accountId}/settings`);
     return { ok: true };
   }
-
-  const normalized = toE164(raw);
-  if (!normalized) {
-    return { ok: false, error: m["settings.alertPhoneBad"] };
-  }
-
-  await setAlertPhone(serviceDb(), accountId, normalized, userId);
-  revalidatePath(`/dashboard/accounts/${accountId}/settings`);
-
-  const gate = await resolveSmsSender(serviceDb(), accountId);
-  if (gate.ok && gate.ownedNumbers.includes(normalized)) {
-    return { ok: true, warning: m["settings.alertPhoneSelfWarning"] };
-  }
-  return { ok: true };
+  if (outcome === "wrong_code") return { ok: false, error: m["settings.alertPhoneWrongCode"] };
+  return { ok: false, error: m["settings.alertPhoneCodeExpired"] };
 }

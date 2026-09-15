@@ -8,7 +8,9 @@ export { createAccount, listAccounts, setClientAccess, renameAccount, getAccount
 export type { A2pStatus, A2pRegistration, A2pRegistrationRecord } from "./accounts";
 export { getAlertPhone, setAlertPhone } from "./accounts";
 export { ALERT_CODE_DIGITS, ALERT_CODE_MAX_ATTEMPTS, ALERT_CODE_TTL_MINUTES,
-         generateAlertCode, hashAlertCode } from "./alert-phone-verification";
+         generateAlertCode, hashAlertCode, ALERT_CODE_MAX_SENDS_PER_HOUR,
+         countRecentAlertPhoneVerifications, startAlertPhoneVerification,
+         verifyAlertPhoneCode, type AlertPhoneVerificationOutcome } from "./alert-phone-verification";
 export { createContact, updateContact, listContacts, getContact,
          addTagToContact, removeTagFromContact, listContactTags, fillContactBlanks,
          countContacts, deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
