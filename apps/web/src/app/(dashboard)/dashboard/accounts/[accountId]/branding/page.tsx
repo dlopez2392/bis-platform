@@ -4,6 +4,7 @@ import { AlertPhoneCard } from "@/components/alert-phone-card";
 import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
 import { requireAccountAccess } from "@/lib/auth";
+import { resolveSmsSender } from "@/lib/sms/sender";
 import { m } from "@/lib/messages";
 import { setBrandingAction } from "./actions";
 
@@ -26,8 +27,15 @@ export const dynamic = "force-dynamic";
  * for this account's own users to see (`getBranding` and `getAlertPhone` are
  * both just `accounts_member_read` reads of columns the client's own RLS
  * already returns; `AlertPhoneCard` below renders with no `action`, so there
- * is no write path here to gate at all). There is still no branch here for a
- * future edit to get wrong — only more reads that share that property.
+ * is no write path here to gate at all). `resolveSmsSender` below is the
+ * same shape: it reads THE gate's own tables via `serviceDb()` and hands
+ * the card only the derived boolean, never the A2P/carrier detail behind
+ * it — so a client whose agency saved a number but never finished
+ * registration reads a qualified claim instead of a present-tense one that
+ * is not yet true (the send path's own gate is `resolveSmsSender`, sender.ts
+ * — this reads it purely to decide which sentence is honest right now, not
+ * as a second gate). There is still no branch here for a future edit to get
+ * wrong — only more reads that share that property.
  */
 export default async function BrandingPage({
   params,
@@ -53,9 +61,13 @@ export default async function BrandingPage({
   // that moved to the RLS-enforced client — see ./actions.ts. alert_phone
   // has no write here at all — AlertPhoneCard renders with no `action`,
   // which is what makes it read-only rather than merely disabled-looking.
-  const [branding, alertPhone] = await Promise.all([
+  const [branding, alertPhone, smsGate] = await Promise.all([
     getBranding(serviceDb(), accountId),
     getAlertPhone(serviceDb(), accountId),
+    // The SAME gate the send path (and the agency's own Settings copy of
+    // this card) consults — never re-derived. Only `!smsGate.ok` crosses
+    // into the card; the reason never does.
+    resolveSmsSender(serviceDb(), accountId),
   ]);
 
   return (
@@ -82,7 +94,12 @@ export default async function BrandingPage({
         logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
         action={setBrandingAction.bind(null, accountId)}
       />
-      <AlertPhoneCard isAgency={false} alertPhone={alertPhone} />
+      <AlertPhoneCard
+        isAgency={false}
+        accountId={accountId}
+        alertPhone={alertPhone}
+        smsNotReady={!smsGate.ok}
+      />
     </div>
   );
 }

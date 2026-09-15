@@ -213,6 +213,7 @@ export default async function CrmSettingsPage({
         />
         <AlertPhoneCard
           isAgency
+          accountId={accountId}
           alertPhone={account.alert_phone}
           smsNotReady={!smsGate.ok}
           action={boundSetAlertPhone}
