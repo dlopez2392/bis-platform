@@ -150,6 +150,17 @@ test("a published form captures a lead into the CRM", async ({ page }) => {
     await expect(thread).toBeVisible();
     await expect(thread.getByLabel(/unread/)).toBeVisible();
 
+    // The submission's contact and conversation, looked up once and reused
+    // below — for the DB-level wait on the read state further down, and for
+    // the contact's own timeline at the end of this test.
+    const { data: contact } = await serviceDb()
+      .from("contacts").select("id").eq("email", leadEmail).single();
+    expect(contact, "the submission must have created a contact").toBeTruthy();
+    const { data: convoRow } = await serviceDb()
+      .from("conversations").select("id")
+      .eq("account_id", accountId).eq("contact_id", contact!.id).single();
+    expect(convoRow, "the submission must have opened a conversation").toBeTruthy();
+
     // Task 8's whole reason for marking read in an effect instead of during the
     // render: Next prefetches <Link> targets, so a render-time write would
     // clear the badge on hover alone. Hover, let the prefetch land, reload —
@@ -176,17 +187,35 @@ test("a published form captures a lead into the CRM", async ({ page }) => {
     await expect(bubble).toContainText("Form submission");
     await expect(bubble).not.toContainText("Sent");
 
-    // Opening it for real does clear the count.
+    // Opening it for real does clear the count — but mark-read.tsx fires the
+    // clearing write fire-and-forget (an effect, `void action(...)`,
+    // deliberately unawaited: it exists specifically so a hover's Link
+    // prefetch can never trigger a read). Nothing on this page tells the
+    // test when that request's own server round trip lands, and leaving via
+    // `page.goto` is a REAL navigation — proven, not assumed, to abort a
+    // still-in-flight fetch from the page being left (see
+    // forms-flake-report.md: with every POST on this page delayed 4s,
+    // navigating away and then re-navigating in a retry loop never saw the
+    // count clear, because the FIRST departure killed the write in flight;
+    // staying put for the same 4s and navigating once afterward passed every
+    // time). So wait on the row itself — the same table the UI reads from —
+    // before leaving this page at all, rather than trusting one snapshot,
+    // padding a guessed delay, or "retrying" a navigation that would only
+    // repeat the kill.
+    await expect
+      .poll(async () => {
+        const { data } = await serviceDb()
+          .from("conversations").select("unread_count").eq("id", convoRow!.id).single();
+        return data?.unread_count ?? null;
+      }, "the mark-read write must actually land before this page is left")
+      .toBe(0);
+
     await page.goto(`/dashboard/accounts/${accountId}/conversations`);
     await expect(
       page.getByRole("link").filter({ hasText: leadName }).getByLabel(/unread/),
     ).toHaveCount(0);
 
     // --- And on the contact's own timeline -----------------------------
-    const { data: contact } = await serviceDb()
-      .from("contacts").select("id").eq("email", leadEmail).single();
-    expect(contact, "the submission must have created a contact").toBeTruthy();
-
     await page.goto(`/dashboard/accounts/${accountId}/contacts/${contact!.id}`);
     await expect(page.getByText(formName).first()).toBeVisible();
     await expect(page.getByText(messageBody).first()).toBeVisible();
