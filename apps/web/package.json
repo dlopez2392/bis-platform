@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "e2e:sweep": "playwright test --project=sweep"
+    "e2e:sweep": "playwright test --project=sweep",
+    "screenshots": "playwright test --config playwright.screenshots.config.ts"
   },
   "dependencies": {
     "@bis/db": "workspace:*",

@@ -1,0 +1,85 @@
+name: Seed demo tenant
+
+# A button, because the alternative was a terminal.
+#
+# `pnpm --filter @bis/db db:seed-demo` needs Node, a clone, and the service-role
+# key. Every one of those is already sitting on a GitHub runner, and the key is
+# already a repository secret — so the only thing standing between the demo
+# tenant and existing was somebody's laptop. This removes that.
+#
+# MANUAL ONLY. There is no `push:` trigger and there must never be one: this
+# writes to the same Supabase project production runs on, and a seed that
+# happens as a side effect of a merge is exactly the kind of surprise the
+# outbound_suppressed guard exists to make survivable rather than routine.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "seed" to confirm. This replaces the existing demo account.'
+        required: true
+        default: ''
+
+# The seeder writes to the one shared Supabase project, so it takes the SAME
+# lock the e2e suite takes rather than a lock of its own. A seed racing an e2e
+# run would have both fighting over the same database, and CLAUDE.md already
+# records what that costs.
+concurrency:
+  group: e2e-shared-supabase
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      # Checked before anything else, so a mis-click costs nothing. The seeder
+      # DELETES the account it finds at the demo org id before rebuilding it;
+      # that is safe (it re-checks both its own guards) but it is not something
+      # to start by accident from a dropdown.
+      - name: Check the confirmation
+        run: |
+          if [ "${{ inputs.confirm }}" != "seed" ]; then
+            echo '::error::Type "seed" in the confirmation box to run this. Nothing was changed.'
+            exit 1
+          fi
+
+      - name: Check that the repository secrets are configured
+        run: |
+          missing=""
+          for name in NEXT_PUBLIC_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing — add them under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # The script prints which database it is writing to before it touches it,
+      # then a count per table. It drops its own half-built account on any
+      # failure, so a red run here leaves nothing behind to clean up by hand.
+      - name: Seed
+        run: pnpm --filter @bis/db db:seed-demo | tee "$RUNNER_TEMP/seed.log"
+
+      # Repeated into the run summary so the counts are readable without
+      # opening the log — this is the output somebody actually wants to see.
+      - name: Report
+        if: always()
+        run: |
+          {
+            echo '## Demo tenant'
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/seed.log" 2>/dev/null || echo 'The seeder produced no output — check the Seed step.'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

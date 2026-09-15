@@ -7,7 +7,10 @@ import { createContact } from "../contacts";
 import { ensureDefaultPipeline } from "../crm-config";
 import { createOpportunity, moveOpportunityToStage, setOpportunityStatus } from "../opportunities";
 import { ensureConversation, createMessage } from "../messaging";
-import { getOrCreateCalendar, createBooking, setBookingStatus } from "../booking";
+import { getOrCreateCalendar, createBooking, setBookingStatus,
+         updateCalendarSettings } from "../booking";
+import { setChecklistItem } from "../checklist";
+import { setFromEmail } from "../sending-identity";
 import { createForm, updateForm, createSubmission, recordRejectedSubmission, linkSubmissionContact } from "../forms";
 import { upsertAutomation } from "../automations";
 import { upsertSite, writeTrafficDay } from "../sites";
@@ -15,8 +18,10 @@ import { assignPhoneNumber, upsertVoiceProfile, startCallRow, finishCallRow } fr
 import { deleteAccountCascade } from "../account-teardown";
 import {
   DEMO_ORG_ID, DEMO_ACCOUNT_NAME, DEMO_TIMEZONE, DEMO_BRAND_COLOR,
-  DEMO_BUSINESS_LINE, DEMO_PEOPLE, DEMO_SERVICES,
+  DEMO_PEOPLE, DEMO_SERVICES,
   DEMO_EMAIL_RE, DEMO_PHONE_RE, demoPhone, demoEmail,
+  demoBusinessLines, demoVercelProjectId,
+  DEMO_OPEN_HOURS, DEMO_FROM_EMAIL, DEMO_FORWARDING_TICK_KEY,
   type DemoPerson,
 } from "./fiction";
 import { DEMO_TRANSCRIPTS } from "./transcripts";
@@ -171,34 +176,6 @@ function assertSeedableOrgId(orgId: string): void {
   }
 }
 
-/**
- * The demo's Vercel project id — the seeder's OTHER global lock, and the same
- * defect one table down from the phone number.
- *
- * `sites.vercel_project_id` is unique across every account exactly like
- * `phone_numbers.e164`, so the fixed literal this used to write meant a
- * throwaway tenant and the real demo could not both exist. It cost 75 seconds
- * to find out, because the site is the last thing the seeder builds: the
- * suite got all the way through contacts, calls, bookings and forms and then
- * died on `sites_vercel_project_id_key`.
- *
- * Derived from the org id rather than injected, unlike `businessLine`. A
- * phone number has to come from the 01xx block and so has to be chosen; a
- * project id has no reserved range and no format anyone depends on, so
- * deriving it means a caller who passes a throwaway org id cannot forget to
- * pass a matching project id. `accounts.clerk_org_id` is itself unique, so
- * the derived value is unique for the same reason the org id is.
- *
- * The real demo's id is unchanged and pinned by a test: it is what a re-seed
- * of the live tenant writes, and it stays deliberately unmistakable so that
- * nobody hunting a broken sync goes looking for it in the Vercel dashboard.
- */
-export function siteProjectIdFor(orgId: string): string {
-  return orgId === DEMO_ORG_ID
-    ? "prj_demo_resaca_air_not_a_real_project"
-    : `prj_${orgId}_not_a_real_project`;
-}
-
 export async function findDemoAccount(
   db: SupabaseClient, orgId: string = DEMO_ORG_ID,
 ): Promise<{ id: string; outboundSuppressed: boolean } | null> {
@@ -276,28 +253,13 @@ export type SeedResult = { accountId: string; replacedExisting: boolean; counts:
  * Every timestamp is derived from it, so the demo is always "this week"
  * relative to its last seed: a dashboard whose newest call is four months old
  * sells nothing.
- *
- * `businessLine` is injectable for the same reason `orgId` is, and covers the
- * half `orgId` cannot: `phone_numbers.e164` is unique across every account, so
- * the demo's number is a global lock and a throwaway tenant that reused it
- * could only be built while no demo tenant existed. A throwaway org id does
- * not help — the org id is not what collides. With its own reserved number
- * (01-09 in the block `fiction.ts` allots), a throwaway tenant and the real
- * demo coexist permanently, which is what lets the suite run on a project
- * where somebody has actually seeded the demo.
- *
- * Injectable, not arbitrary: it goes through `assertFiction` HERE, before an
- * account exists, so a dialable number is refused with nothing written. That
- * guard is what keeps demo seeding from ever reaching a real person.
  */
 export async function seedDemoTenant(
-  db: SupabaseClient, opts: { now?: Date; orgId?: string; businessLine?: string } = {},
+  db: SupabaseClient, opts: { now?: Date; orgId?: string } = {},
 ): Promise<SeedResult> {
   const now = (opts.now ?? new Date()).getTime();
   const orgId = opts.orgId ?? DEMO_ORG_ID;
   assertSeedableOrgId(orgId);
-  const businessLine = opts.businessLine ?? DEMO_BUSINESS_LINE;
-  assertFiction(undefined, businessLine, "the business line");
   const r = rng(0x5e5ca17);
 
   const replacedExisting = await dropDemoAccount(db, orgId);
@@ -346,7 +308,7 @@ export async function seedDemoTenant(
   await setBranding(db, accountId,
     { brandName: DEMO_ACCOUNT_NAME, brandColor: DEMO_BRAND_COLOR, brandLogoPath }, ACTOR);
 
-  await seedVoice(db, accountId, businessLine);
+  await seedVoice(db, accountId, orgId);
   const contacts = await seedContacts(db, accountId, now, r);
   const convos = await seedConversations(db, accountId, contacts, now, r);
   const calls = await seedCalls(db, accountId, contacts, convos, now, r);
@@ -354,7 +316,8 @@ export async function seedDemoTenant(
   const opportunities = await seedPipeline(db, accountId, contacts, now, r);
   const submissions = await seedForm(db, accountId, contacts, now, r);
   await seedAutomations(db, accountId);
-  const trafficDays = await seedSite(db, accountId, now, r, siteProjectIdFor(orgId));
+  await seedSetupState(db, accountId);
+  const trafficDays = await seedSite(db, accountId, orgId, now, r);
   await backdateEvents(db, accountId, now);
 
   return {
@@ -371,12 +334,55 @@ export async function seedDemoTenant(
 
 // ---------------------------------------------------------------------------
 
+/**
+ * Takes the first business line in the reserved block that nobody else holds.
+ *
+ * READ FIRST, then insert. `assignPhoneNumber` reports a duplicate as a bare
+ * `Error` carrying the constraint name and nothing else, so probing by
+ * insert-and-catch would mean matching on `phone_numbers_e164_key` in a
+ * message string — and would still have to tell "somebody holds this" apart
+ * from every other reason an insert can fail. A select answers the question
+ * being asked and can name the account holding the number in the error.
+ *
+ * The gap between the read and the insert is a real race, and it is left
+ * unclosed deliberately: it needs two seeds inside a few milliseconds of each
+ * other landing on the same slot, and if that ever happens the loser fails
+ * loudly on the unique index, drops its half-built account, and can simply be
+ * re-run. The alternative — an advisory lock held across the whole seed —
+ * would be more machinery than the hazard it prevents.
+ */
+async function claimBusinessLine(
+  db: SupabaseClient, orgId: string,
+): Promise<string> {
+  const candidates = demoBusinessLines(orgId);
+  const { data, error } = await db.from("phone_numbers")
+    .select("e164, account_id").in("e164", candidates);
+  if (error) {
+    throw new Error(`demo seed: could not read the reserved business lines: ${error.message}`);
+  }
+  const taken = new Map(
+    (data ?? []).map((row) => [row.e164 as string, row.account_id as string]));
+  const free = candidates.find((e164) => !taken.has(e164));
+  if (free) return free;
+
+  // Both failures mean the same thing — an account that should not exist
+  // does — so both name every holder and neither falls back to a number the
+  // caller did not ask for. Silently answering on a different line is how a
+  // demo drifts away from the screenshots taken of it.
+  const holders = candidates.map((e164) => `${e164} held by ${taken.get(e164)}`).join(", ");
+  throw new Error(
+    (candidates.length === 1
+      ? `demo seed ABORTED: the demo's pinned business line is taken — ${holders}. `
+      : `demo seed ABORTED: every one of the ${candidates.length} spare business lines `
+        + `in the reserved block is taken — ${holders}. `)
+    + `Each of those accounts is one a seed left behind; remove it with `
+    + `deleteAccountCascade and re-run.`);
+}
+
 async function seedVoice(
-  db: SupabaseClient, accountId: string, businessLine: string,
+  db: SupabaseClient, accountId: string, orgId: string,
 ): Promise<void> {
-  // Checked again at the writer, not only at the entry point: this is the one
-  // line that reaches `phone_numbers`, and a number that can be dialled must
-  // not get past it whatever the caller did upstream.
+  const businessLine = await claimBusinessLine(db, orgId);
   assertFiction(undefined, businessLine, "the business line");
   await assignPhoneNumber(db, accountId, { e164: businessLine, status: "live" }, ACTOR);
   await upsertVoiceProfile(db, accountId, {
@@ -546,18 +552,40 @@ async function seedCalls(
     .select("id").eq("account_id", accountId).single();
   if (error || !phone) throw new Error(`demo seed: no business line: ${error?.message}`);
 
+  // Split ONCE, so a transcript can only ever land on somebody who speaks
+  // its language. The previous version indexed the contact list directly and
+  // the two were unrelated: the call log showed María Guzmán and Verónica
+  // Alaniz on English calls while Kevin Braun and Owen Serrato took Spanish
+  // ones. Individually each is possible in the Valley; as a column of six it
+  // reads as a product that does not know who it is talking to — on the one
+  // page whose argument is that it does.
+  const byLang: Record<"en" | "es", Seeded[]> = {
+    en: contacts.filter((c) => c.person.lang === "en"),
+    es: contacts.filter((c) => c.person.lang === "es"),
+  };
+
   const TOTAL = 34;
   for (let i = 0; i < TOTAL; i++) {
     const script = DEMO_TRANSCRIPTS[i % DEMO_TRANSCRIPTS.length]!;
     // Spam and abandoned callers are strangers: no contact row, which is
     // exactly how the real product records them.
     const known = script.outcome !== "spam" && script.outcome !== "abandoned";
-    const contact = known ? contacts[(i * 7) % contacts.length]! : null;
+    // Same stride as before so the spread across the book is unchanged; it
+    // just walks the matching pool instead of the whole list.
+    const pool = byLang[script.lang];
+    const contact = known && pool.length > 0 ? pool[(i * 7) % pool.length]! : null;
     const callerE164 = contact ? demoPhone(contact.person.line) : demoPhone(between(r, 50, 99));
     assertFiction(undefined, callerE164, `caller on call ${i}`);
 
-    // Business hours, working backwards day by day, two or three a day.
-    const daysAgo = Math.floor(i / 2);
+    // Working backwards day by day, but NOT uniformly: three a day across the
+    // last week and two a day before it. The dashboard's KPIs compare the
+    // last 7 local days against the 7 before, and a flat 2-a-day spread makes
+    // every one of those deltas a coin flip — the first capture came back
+    // with calls down 14% and after-hours down 50% on the hero row of a
+    // screenshot whose job is to argue the product works. A demo tenant is a
+    // business we are choosing to portray; portraying it as growing is as
+    // honest as portraying it as flat, and far more use.
+    const daysAgo = i < 21 ? Math.floor(i / 3) : 7 + Math.floor((i - 21) / 2);
     const startedAt = now - daysAgo * DAY - (between(r, 8, 17) * HOUR) + between(r, 0, 59) * MIN;
 
     const { id: callId } = await startCallRow(db, accountId,
@@ -606,6 +634,32 @@ async function seedBookings(
   db: SupabaseClient, accountId: string, contacts: Seeded[], now: number, r: Rng,
 ): Promise<number> {
   const cal = await getOrCreateCalendar(db, accountId, ACTOR);
+
+  // ENABLE IT. `calendars.enabled` defaults to false and `/b/[publicId]`
+  // answers a disabled calendar with notFound(), so without this the demo's
+  // booking page is a 404 — which is exactly what the first capture run
+  // photographed and shipped as a marketing screenshot. The hours are the
+  // same ones Sofía reads out in seedVoice; see DEMO_OPEN_HOURS.
+  //
+  // Enabling it does make the page publicly bookable by anyone holding the
+  // link. That is the point of a demo booking page, and it is safe for the
+  // same reason everything else here is: the account is suppressed, so a
+  // stranger's booking notifies nobody, and the next re-seed clears it.
+  await updateCalendarSettings(db, accountId, {
+    enabled: true,
+    openHours: DEMO_OPEN_HOURS,
+    slotDurationMinutes: 120,
+    // TWO hours, not twelve. The capture opens the booking page on the demo's
+    // own "today", and a twelve-hour notice window against a 08:00-17:00 day
+    // wipes every remaining slot out — the first booking capture read "No
+    // times available this day", which is the emptiest possible version of
+    // the one screen that exists to show somebody booking. Two hours is also
+    // what an HVAC shop with a van already out actually offers.
+    minNoticeHours: 2,
+    maxAdvanceDays: 21,
+    meetingType: "in_person",
+  }, ACTOR);
+
   const NOTES = [
     "Upstairs unit not cooling. Gate code 4417.",
     "Annual maintenance — two units.",
@@ -680,23 +734,34 @@ async function seedPipeline(
     .select("id, name, position").eq("pipeline_id", pipelineId).order("position");
   if (error || !stages?.length) throw new Error(`demo seed: no stages: ${error?.message}`);
 
-  const DEALS: { name: string; value: number; stage: number; won?: boolean }[] = [
-    { name: "Diagnostic — upstairs not cooling", value: 89, stage: 0 },
-    { name: "Diagnostic — no enfría, zumbido afuera", value: 89, stage: 0 },
-    { name: "Capacitor + contactor replacement", value: 340, stage: 0 },
-    { name: "Maintenance plan — 2 units", value: 380, stage: 0 },
-    { name: "Drain line clear + safety switch", value: 225, stage: 1 },
-    { name: "Mini-split, room over garage", value: 3_950, stage: 1 },
-    { name: "Maintenance plan — 4 rental units", value: 760, stage: 1 },
-    { name: "Evaporator coil replacement", value: 1_880, stage: 2 },
-    { name: "3-ton 16 SEER changeout", value: 4_780, stage: 2 },
-    { name: "Duct cleaning — 1,900 sq ft", value: 640, stage: 2 },
-    { name: "4-ton system + return rework", value: 6_400, stage: 3 },
-    { name: "Two-story dual system replacement", value: 11_300, stage: 3 },
-    { name: "Commercial RTU swap — 3 units", value: 14_200, stage: 3 },
-    { name: "Service contract — storage facility", value: 2_400, stage: 3 },
-    { name: "2.5-ton changeout, La Feria", value: 4_150, stage: 4, won: true },
-    { name: "Heat strip replacement", value: 520, stage: 4, won: true },
+  // `daysAgo` is EXPLICIT, the way DEMO_PEOPLE's `line` is, and for the same
+  // reason: it used to be derived (`deal.stage * 6 + between(r, 1, 9)`), which
+  // tied a deal's age to how far it had travelled. That reads as sensible and
+  // is quietly ruinous — it means every RECENTLY added deal is a stage-0 deal,
+  // and stage-0 deals are the cheap ones. "Pipeline added" compares the last
+  // 7 days against the 7 before, so the demo's dashboard reported $178 and a
+  // 97% COLLAPSE on the hero row of a marketing screenshot.
+  //
+  // Decoupling the two is also the more truthful model: a stage says where a
+  // deal is now, not when it arrived, and a commercial RTU swap can land on
+  // Monday and be quoted by Friday.
+  const DEALS: { name: string; value: number; stage: number; daysAgo: number; won?: boolean }[] = [
+    { name: "Diagnostic — upstairs not cooling", value: 89, stage: 0, daysAgo: 2 },
+    { name: "Diagnostic — no enfría, zumbido afuera", value: 89, stage: 0, daysAgo: 3 },
+    { name: "Capacitor + contactor replacement", value: 340, stage: 0, daysAgo: 1 },
+    { name: "Maintenance plan — 2 units", value: 380, stage: 0, daysAgo: 5 },
+    { name: "Drain line clear + safety switch", value: 225, stage: 1, daysAgo: 4 },
+    { name: "Mini-split, room over garage", value: 3_950, stage: 1, daysAgo: 2 },
+    { name: "Maintenance plan — 4 rental units", value: 760, stage: 1, daysAgo: 6 },
+    { name: "Evaporator coil replacement", value: 1_880, stage: 2, daysAgo: 3 },
+    { name: "3-ton 16 SEER changeout", value: 4_780, stage: 2, daysAgo: 5 },
+    { name: "Duct cleaning — 1,900 sq ft", value: 640, stage: 2, daysAgo: 6 },
+    { name: "4-ton system + return rework", value: 6_400, stage: 3, daysAgo: 4 },
+    { name: "Commercial RTU swap — 3 units", value: 14_200, stage: 3, daysAgo: 5 },
+    { name: "Two-story dual system replacement", value: 11_300, stage: 3, daysAgo: 10 },
+    { name: "Service contract — storage facility", value: 2_400, stage: 3, daysAgo: 12 },
+    { name: "2.5-ton changeout, La Feria", value: 4_150, stage: 4, daysAgo: 10, won: true },
+    { name: "Heat strip replacement", value: 520, stage: 4, daysAgo: 13, won: true },
   ];
 
   for (let i = 0; i < DEALS.length; i++) {
@@ -710,9 +775,8 @@ async function seedPipeline(
     }
     if (deal.won) await setOpportunityStatus(db, accountId, id, "won", ACTOR);
 
-    // Deeper stages are older — a deal does not reach "Quote Sent" the same
-    // hour it arrives, and the board's age column is read in demos.
-    const createdAt = now - (deal.stage * 6 + between(r, 1, 9)) * DAY;
+    // Taken from the deal, not computed from its stage. See DEALS above.
+    const createdAt = now - deal.daysAgo * DAY;
     const movedAt = now - between(r, 0, deal.stage * 3 + 1) * DAY;
     const oppPatch: Record<string, string> = {
       created_at: new Date(createdAt).toISOString(),
@@ -830,6 +894,29 @@ async function seedAutomations(db: SupabaseClient, accountId: string): Promise<v
 }
 
 /**
+ * The last two setup steps, so the sidebar's meter reads 9/9 rather than 6/9.
+ *
+ * Seven of the nine are already true of a seeded account — the eighth,
+ * `hours`, is true as of the calendar being enabled in seedBookings. These
+ * are the remaining two, and neither is cosmetic:
+ *
+ *   email       `accounts.from_email`. Reserved domain like everything else
+ *               here; the account is suppressed, so this configures an
+ *               identity that can never actually send.
+ *   forwarding  The one step with no derivable source — no row can prove a
+ *               carrier-side change — so the wizard stores a tick, and a
+ *               business that has been taking calls for months has made it.
+ *
+ * A demo that shows the product's own setup wizard two-thirds finished is a
+ * demo arguing that the product is hard to set up.
+ */
+async function seedSetupState(db: SupabaseClient, accountId: string): Promise<void> {
+  assertFiction(DEMO_FROM_EMAIL, undefined, "the sending identity");
+  await setFromEmail(db, accountId, DEMO_FROM_EMAIL, ACTOR);
+  await setChecklistItem(db, accountId, DEMO_FORWARDING_TICK_KEY, { done: true }, ACTOR);
+}
+
+/**
  * Sixty days of website traffic. Written straight through `writeTrafficDay`
  * rather than pulled: the demo's `vercel_project_id` points at no real
  * project, and since the suppression guard covers `listSitesToSync`, nothing
@@ -839,10 +926,14 @@ async function seedAutomations(db: SupabaseClient, accountId: string): Promise<v
  * for exactly that and a flat series never exercises it.
  */
 async function seedSite(
-  db: SupabaseClient, accountId: string, now: number, r: Rng, vercelProjectId: string,
+  db: SupabaseClient, accountId: string, orgId: string, now: number, r: Rng,
 ): Promise<number> {
   const site = await upsertSite(db, accountId, {
-    vercelProjectId,
+    // Derived from the org id, because `sites.vercel_project_id` is unique
+    // across every account — the same trap as the business line, and the one
+    // that would have failed the instant that was fixed. See
+    // `demoVercelProjectId`.
+    vercelProjectId: demoVercelProjectId(orgId),
     domain: "resaca-air.example",
     analyticsEnabledAt: new Date(now - 90 * DAY).toISOString(),
   });

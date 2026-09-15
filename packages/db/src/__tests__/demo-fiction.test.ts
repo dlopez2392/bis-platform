@@ -2,8 +2,10 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  DEMO_PEOPLE, DEMO_EMAIL_RE, DEMO_PHONE_RE, DEMO_BUSINESS_LINE,
-  demoPhone, demoEmail,
+  DEMO_PEOPLE, DEMO_EMAIL_RE, DEMO_PHONE_RE, DEMO_BUSINESS_LINE, DEMO_ORG_ID,
+  BUSINESS_LINE_SLOTS, CONTACT_LINE_SLOTS,
+  DEMO_OPEN_HOURS, DEMO_FROM_EMAIL,
+  demoPhone, demoEmail, demoBusinessLines, demoVercelProjectId,
 } from "../demo/fiction";
 import { DEMO_TRANSCRIPTS } from "../demo/transcripts";
 
@@ -112,6 +114,185 @@ describe("demo tenant — nothing here can reach a real person", () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * The values that are unique across EVERY account, not per account.
+ *
+ * This suite exists because of a specific outage, and the shape of it
+ * generalises. The seeder hard-coded one business line and one Vercel project
+ * id. That was invisible while the demo was the only thing ever seeded — and
+ * the hour danlo seeded the real demo for the first time, every CI run after
+ * it went red, because `demo-seed.test.ts` seeds a throwaway account in the
+ * same Supabase project and `phone_numbers.e164` is unique project-wide. The
+ * error named `phone_numbers_e164_key` and nothing about a demo.
+ *
+ * `sites.vercel_project_id` was the identical trap one line further on, and
+ * would have surfaced the moment the phone was fixed. So the rule is not "fix
+ * the phone": anything the seeder writes into a globally unique column is
+ * derived from the org id, and these tests are what hold that.
+ *
+ * Checked against the live schema on 2026-09-15, the complete set of unique
+ * indexes on the seeder's tables that do NOT include `account_id` is:
+ * `accounts.clerk_org_id` (the org id itself), `phone_numbers.e164`,
+ * `sites.vercel_project_id`, `calendars.public_id`, `forms.public_id`,
+ * `bookings.cancel_token`, and the two partial ones on
+ * `phone_numbers.telnyx_id` and `messages.provider_message_id`. The public
+ * ids and the cancel token are random per row; the two partial indexes ignore
+ * NULL and the seeder writes NULL to both. Which leaves exactly the two
+ * covered here.
+ */
+describe("demo tenant — two seeded accounts can coexist in one project", () => {
+  // Stand-ins for what `demo-seed.test.ts` generates: same prefix, random
+  // suffix, two of them, because one is not a collision.
+  const THROWAWAYS = Array.from({ length: 2 }, (_, i) => `org_test_demoseed_case${i}`);
+
+  it("keeps the contact block clear of the business-line block", () => {
+    // If a 41st person were ever added at line 09 this would be a
+    // globally-unique collision wearing an ordinary contact's clothes.
+    for (const p of DEMO_PEOPLE) {
+      expect(p.line, `${p.first} ${p.last}`)
+        .toBeGreaterThanOrEqual(CONTACT_LINE_SLOTS.first);
+      expect(p.line, `${p.first} ${p.last}`)
+        .toBeLessThanOrEqual(CONTACT_LINE_SLOTS.last);
+    }
+    expect(CONTACT_LINE_SLOTS.first).toBeGreaterThan(BUSINESS_LINE_SLOTS.last);
+  });
+
+  it("offers the real demo its pinned line and nothing else", () => {
+    // One candidate, not nine. A demo that quietly answered on a different
+    // number would invalidate every screenshot already taken of it, and the
+    // failure it is falling back FROM — an orphaned account holding 00 — is
+    // one a human has to clear anyway.
+    expect(demoBusinessLines(DEMO_ORG_ID)).toEqual([DEMO_BUSINESS_LINE]);
+  });
+
+  it("offers a throwaway every spare slot, in a stable order, never the demo's", () => {
+    const spare = BUSINESS_LINE_SLOTS.last - BUSINESS_LINE_SLOTS.first; // 00 is the demo's
+    for (const orgId of THROWAWAYS) {
+      const lines = demoBusinessLines(orgId);
+      expect(lines).toHaveLength(spare);
+      expect(new Set(lines).size).toBe(spare);
+      expect(lines).not.toContain(DEMO_BUSINESS_LINE);
+      for (const line of lines) expect(line).toMatch(DEMO_PHONE_RE);
+      // Deterministic: a re-seed of the same org must reuse the same number,
+      // or a re-seed is a number change.
+      expect(demoBusinessLines(orgId)).toEqual(lines);
+    }
+  });
+
+  /**
+   * The property that actually matters, run the way `claimBusinessLine` runs
+   * it: nine different orgs seed one after another, each taking the first
+   * line nobody holds. All nine must get one, and all nine must differ —
+   * which is guaranteed only because each list is a PERMUTATION of every
+   * spare slot rather than a single hashed pick.
+   *
+   * A single hashed slot per org would collide about one run in nine. That is
+   * the worst failure rate there is: rare enough that the first few are
+   * written off as flakes, frequent enough to cost a day before anybody
+   * reads the log.
+   *
+   * Mutation: truncate `demoBusinessLines` to its first candidate — the
+   * simulation below runs out of lines and this fails.
+   */
+  it("seats every org that fits in the block, on a distinct line", () => {
+    const orgs = Array.from({ length: BUSINESS_LINE_SLOTS.last - BUSINESS_LINE_SLOTS.first },
+      (_, i) => `org_test_demoseed_sim${i}`);
+    const taken = new Set<string>();
+    for (const orgId of orgs) {
+      const free = demoBusinessLines(orgId).find((l) => !taken.has(l));
+      expect(free, `${orgId} found nothing with ${taken.size} lines held`).toBeDefined();
+      taken.add(free!);
+    }
+    expect(taken.size).toBe(orgs.length);
+    expect(taken.has(DEMO_BUSINESS_LINE)).toBe(false);
+  });
+
+  it("gives every org its own Vercel project id, and leaves the demo's alone", () => {
+    // The canonical string is asserted literally: the `org_` strip exists so
+    // that this fix changed what a throwaway writes and NOTHING about the
+    // account already seeded in production.
+    expect(demoVercelProjectId(DEMO_ORG_ID)).toBe("prj_demo_resaca_air_not_a_real_project");
+    const ids = [DEMO_ORG_ID, ...THROWAWAYS].map(demoVercelProjectId);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  /**
+   * The source scan, for the same reason the email and phone scans exist: the
+   * tests above check the derived values, and a literal pasted back into the
+   * seeder would pass all of them.
+   *
+   * Mutation: put `vercelProjectId: "prj_anything"` back in seed.ts.
+   */
+  it("hard-codes neither globally-unique value in the seeder", () => {
+    const src = sourceOf("seed.ts");
+    expect(src).not.toMatch(/["'`]prj_/);
+    expect(src).not.toMatch(/DEMO_BUSINESS_LINE/);
+  });
+});
+
+/**
+ * The demo has to look like a business that finished setting up.
+ *
+ * All three of these were visible defects in the first capture run, and none
+ * of them was a rendering bug — each was the demo honestly reporting that it
+ * was half-configured:
+ *   - `booking-page.png` was a 404, because `calendars.enabled` defaults to
+ *     false and /b/[publicId] answers a disabled calendar with notFound().
+ *   - The sidebar meter read "Setup 6/9" in every dashboard screenshot.
+ *   - The three undone steps were exactly `hours`, `email` and `forwarding`.
+ */
+describe("demo tenant — a business that finished setting up", () => {
+  it("opens the hours Sofía says it opens", () => {
+    // The voice profile tells callers "Monday to Friday 8 AM to 5 PM,
+    // Saturday 8 AM to noon". The booking page is the one screen where a
+    // visitor can check that claim against the product, so the two are
+    // asserted against each other rather than merely written next to each
+    // other.
+    const facts = sourceOf("seed.ts");
+    expect(facts).toMatch(/Monday to Friday 8 AM to 5 PM, Saturday 8 AM to noon/);
+    for (const day of ["mon", "tue", "wed", "thu", "fri"]) {
+      expect(DEMO_OPEN_HOURS[day], day).toEqual([["08:00", "17:00"]]);
+    }
+    expect(DEMO_OPEN_HOURS.sat).toEqual([["08:00", "12:00"]]);
+    expect(DEMO_OPEN_HOURS.sun).toBeUndefined();
+  });
+
+  /**
+   * `deriveSetupStatus`'s `hours` step is
+   * `calendar.enabled === true && hasOpenHours(open_hours)`, where
+   * hasOpenHours means at least one day has a non-empty window array. An
+   * `open_hours: {}` passes "enabled" and still makes every day read "no
+   * availability" — the exact wiped-config state that comment warns about.
+   */
+  it("gives at least one day a real window, which is what the hours step checks", () => {
+    const windows = Object.values(DEMO_OPEN_HOURS);
+    expect(windows.length).toBeGreaterThan(0);
+    expect(windows.some((w) => w.length > 0)).toBe(true);
+  });
+
+  it("keeps the sending identity on the reserved domain", () => {
+    // It configures an identity that can never send: the account is
+    // suppressed, and the address is unresolvable by RFC 2606 regardless.
+    expect(DEMO_FROM_EMAIL).toMatch(DEMO_EMAIL_RE);
+  });
+
+  /**
+   * Mutation: delete the `updateCalendarSettings` call from seedBookings —
+   * the booking page goes back to being a 404 and this fails.
+   */
+  it("enables the calendar in the seeder, not just in a comment", () => {
+    const src = sourceOf("seed.ts");
+    // Scoped to the updateCalendarSettings CALL, not merely to the presence
+    // of `enabled: true` anywhere in the file — seedAutomations sets that on
+    // the SMS reminder, so the loose version of this assertion passed with
+    // the calendar enable deleted. Found by running the mutation.
+    const call = /updateCalendarSettings\(\s*db,\s*accountId,\s*\{([\s\S]*?)\},/.exec(src);
+    expect(call, "seedBookings no longer calls updateCalendarSettings").not.toBeNull();
+    expect(call![1]).toMatch(/enabled:\s*true/);
+    expect(call![1]).toMatch(/openHours:\s*DEMO_OPEN_HOURS/);
   });
 });
 

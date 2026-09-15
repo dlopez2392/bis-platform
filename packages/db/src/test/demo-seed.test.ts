@@ -1,10 +1,12 @@
 import "dotenv/config";
 import { describe, it, expect } from "vitest";
 import { serviceDb } from "../service";
-import { seedDemoTenant, dropDemoAccount, findDemoAccount, siteProjectIdFor } from "../demo/seed";
+import { seedDemoTenant, dropDemoAccount, findDemoAccount } from "../demo/seed";
 import { ACCOUNT_OWNED_TABLES, deleteAccountCascade } from "../account-teardown";
 import {
-  DEMO_EMAIL_RE, DEMO_PHONE_RE, DEMO_ORG_ID, DEMO_BUSINESS_LINE, demoPhone,
+  DEMO_EMAIL_RE, DEMO_PHONE_RE, DEMO_ORG_ID, DEMO_BUSINESS_LINE,
+  DEMO_FROM_EMAIL, DEMO_FORWARDING_TICK_KEY, DEMO_PEOPLE,
+  demoVercelProjectId, demoPhone,
 } from "../demo/fiction";
 import { listSitesToSync } from "../sites";
 import { listDueReminders } from "../booking";
@@ -26,22 +28,6 @@ import { listAccountsForWeeklyRollup, listAccountsDueWeeklyReport } from "../wee
  */
 const THROWAWAY = `org_test_demoseed_${Math.random().toString(36).slice(2, 10)}`;
 
-/**
- * And a throwaway BUSINESS LINE, for the same reason and one the org id
- * cannot cover: `phone_numbers.e164` is unique across every account, not per
- * account, so the demo's own number is a global lock. A test that seeded
- * `DEMO_BUSINESS_LINE` could only pass while no demo tenant existed — it went
- * red the first time somebody actually seeded the demo, on
- * `phone_numbers_e164_key`, which names nothing about the cause.
- *
- * The reserved 01xx block is allotted in `fiction.ts`: 00 is the real demo's
- * line, 10-49 are the people, 50-99 are the strangers who call it. 01-09 is
- * the harness's, and the pick is per-run — mirroring the org id above — so a
- * run killed hard enough to strand its account does not block the next one on
- * the same key.
- */
-const THROWAWAY_LINE = demoPhone(1 + Math.floor(Math.random() * 9));
-
 describe("demo tenant seeder", () => {
   it("builds a whole account that cannot reach anybody, and tears itself down", async () => {
     const db = serviceDb();
@@ -49,9 +35,7 @@ describe("demo tenant seeder", () => {
     // see the `finally`.
     let accountId: string | null = null;
     try {
-      const result = await seedDemoTenant(db, {
-        orgId: THROWAWAY, businessLine: THROWAWAY_LINE, now: new Date("2026-09-11T15:00:00Z"),
-      });
+      const result = await seedDemoTenant(db, { orgId: THROWAWAY, now: new Date("2026-09-11T15:00:00Z") });
       accountId = result.accountId;
       expect(result.replacedExisting).toBe(false);
 
@@ -93,18 +77,111 @@ describe("demo tenant seeder", () => {
       const { data: lines } = await db.from("phone_numbers")
         .select("e164").eq("account_id", accountId);
       for (const l of lines as { e164: string }[]) expect(l.e164).toMatch(DEMO_PHONE_RE);
-      // --- And the line it took is its OWN, not the demo tenant's. This is
-      //     the assertion that keeps this test runnable in the only state the
-      //     project is ever in once somebody has seeded the demo: `e164` is
-      //     unique across every account, so a shared number means exactly one
-      //     of the two accounts may exist at a time.
-      expect(lines!.map((l) => (l as { e164: string }).e164)).toEqual([THROWAWAY_LINE]);
-      expect(THROWAWAY_LINE).not.toBe(DEMO_BUSINESS_LINE);
-      // Same argument, same shape, one table down: `vercel_project_id` is
-      // unique across every account as well.
+
+      // --- And it did not take anything the REAL demo owns. This is the
+      //     assertion that would have failed the day this test started
+      //     breaking CI: `phone_numbers.e164` and `sites.vercel_project_id`
+      //     are unique across every account in the project, so a throwaway
+      //     that reached for the demo's values could only run while the demo
+      //     did not exist. Asserted against the database rather than against
+      //     `demoBusinessLines`, because the point is what was WRITTEN.
+      expect(lines!.map((l) => (l as { e164: string }).e164))
+        .not.toContain(DEMO_BUSINESS_LINE);
       const { data: site } = await db.from("sites")
         .select("vercel_project_id").eq("account_id", accountId).single();
-      expect(site!.vercel_project_id).toBe(siteProjectIdFor(THROWAWAY));
+      expect(site!.vercel_project_id).toBe(demoVercelProjectId(THROWAWAY));
+      expect(site!.vercel_project_id).not.toBe(demoVercelProjectId(DEMO_ORG_ID));
+
+      // --- The demo looks like a business that finished setting up. Each of
+      //     these was a visible defect in the first capture run, and none was
+      //     a rendering bug — the demo was honestly reporting itself as
+      //     half-configured.
+
+      // The booking page 404'd because `calendars.enabled` defaults to false
+      // and /b/[publicId] answers a disabled calendar with notFound(). A
+      // capture of that shipped as one of six marketing screenshots.
+      const { data: cal } = await db.from("calendars")
+        .select("enabled, open_hours").eq("account_id", accountId).single();
+      expect(cal!.enabled).toBe(true);
+      // Not merely present: `deriveSetupStatus`'s hours step wants at least
+      // one day with a non-empty window, because `open_hours: {}` passes
+      // "enabled" and still reads "no availability" on every day.
+      const windows = Object.values(cal!.open_hours as Record<string, unknown[]>);
+      expect(windows.some((w) => w.length > 0)).toBe(true);
+
+      // The two setup steps with nothing else to derive them from.
+      const { data: acct2 } = await db.from("accounts")
+        .select("from_email").eq("id", accountId).single();
+      expect(acct2!.from_email).toBe(DEMO_FROM_EMAIL);
+      expect(acct2!.from_email).toMatch(DEMO_EMAIL_RE);
+
+      const { data: ticks } = await db.from("checklist_items")
+        .select("item_key, done_at").eq("account_id", accountId)
+        .eq("item_key", DEMO_FORWARDING_TICK_KEY);
+      expect(ticks).toHaveLength(1);
+      expect(ticks![0]!.done_at).not.toBeNull();
+
+      // --- The business is growing, which is the whole point of showing it.
+      //
+      //     The dashboard's KPI row compares the last 7 local days against the
+      //     7 before. "Pipeline added" used to derive a deal's age from its
+      //     STAGE, so everything recent was a stage-0 deal and stage-0 deals
+      //     are the cheap ones — the captured dashboard reported $178 and a
+      //     97% collapse across the hero row. Asserted on the rows rather than
+      //     on the DEALS table, because what matters is what landed in the
+      //     database, and a re-seed moves every date.
+      const dayMs = 24 * 60 * 60 * 1000;
+      const seededAt = Date.parse("2026-09-11T15:00:00Z");
+      //     The column is `monetary_value`, not `value`. The first version of
+      //     this assertion asked for `value`, and because it destructured only
+      //     `data` and never looked at `error`, PostgREST's refusal came back
+      //     as a null row set — so both sums were 0 and the failure read
+      //     "expected 0 to be greater than 0" instead of naming the bad
+      //     column. Hence `oppsErr`: a query that cannot run must say so.
+      const { data: opps, error: oppsErr } = await db.from("opportunities")
+        .select("monetary_value, created_at").eq("account_id", accountId);
+      expect(oppsErr, `opportunities read failed: ${oppsErr?.message}`).toBeNull();
+      expect(opps!.length).toBeGreaterThan(0);
+      const valueBetween = (fromDaysAgo: number, toDaysAgo: number) =>
+        opps!.filter((o) => {
+          const age = (seededAt - Date.parse(o.created_at as string)) / dayMs;
+          return age >= toDaysAgo && age < fromDaysAgo;
+        }).reduce((sum, o) => sum + Number(o.monetary_value), 0);
+
+      const addedLast7 = valueBetween(7, 0);
+      const addedPrior7 = valueBetween(14, 7);
+      expect(addedLast7).toBeGreaterThan(0);
+      expect(addedPrior7).toBeGreaterThan(0);
+      expect(addedLast7).toBeGreaterThan(addedPrior7);
+
+      // --- A caller's language matches the person taking the call.
+      //
+      //     The seeder used to pick the transcript by index and the contact
+      //     by a different index, so the two were unrelated: the captured
+      //     call log showed María Guzmán and Verónica Alaniz on English calls
+      //     and Kevin Braun and Owen Serrato on Spanish ones. Each is
+      //     possible in the Valley; a whole column of them reads as a product
+      //     that does not know who it is talking to.
+      //
+      //     Asserted by joining back through the PHONE, because `contacts`
+      //     stores no language — the person's language lives only in
+      //     DEMO_PEOPLE, which is the thing the seeder is supposed to honour.
+      const langByPhone = new Map(DEMO_PEOPLE.map((p) => [demoPhone(p.line), p.lang]));
+      const { data: callRows } = await db.from("calls")
+        .select("language, contact_id").eq("account_id", accountId)
+        .not("contact_id", "is", null);
+      const { data: contactRows } = await db.from("contacts")
+        .select("id, phone").eq("account_id", accountId);
+      const phoneById = new Map(
+        (contactRows ?? []).map((c) => [c.id as string, c.phone as string]));
+
+      expect(callRows!.length).toBeGreaterThan(0);
+      const mismatched = callRows!.filter((call) => {
+        const phone = phoneById.get(call.contact_id as string);
+        const personLang = phone ? langByPhone.get(phone) : undefined;
+        return personLang !== undefined && personLang !== call.language;
+      });
+      expect(mismatched).toEqual([]);
 
       // --- It actually built something. A seeder that silently wrote four
       //     rows would pass every safety assertion above.
@@ -183,47 +260,6 @@ describe("demo tenant seeder", () => {
       .rejects.toThrow(/not a seedable org id/);
     await expect(dropDemoAccount(db, "org_2abcXYZdefGHI"))
       .rejects.toThrow(/not a seedable org id/);
-  });
-
-  /**
-   * The phone number is not the only global lock the seeder writes.
-   * `sites.vercel_project_id` is unique across EVERY account too, and the
-   * seeder used to write one fixed literal — so the seed above got a whole 75
-   * seconds further and then died on `sites_vercel_project_id_key`, the same
-   * defect one table down. Derived from the org id rather than injected: the
-   * id has no reserved range to come from, so there is nothing to choose, and
-   * deriving it means a throwaway tenant cannot forget to.
-   *
-   * Mutation: make `siteProjectIdFor` ignore its argument — the second
-   * assertion fails by name.
-   */
-  it("gives a throwaway tenant its own Vercel project id and leaves the demo's alone", () => {
-    // Unchanged for the real demo, which is the half that must not move: this
-    // id is what a re-seed of the live tenant writes.
-    expect(siteProjectIdFor(DEMO_ORG_ID)).toBe("prj_demo_resaca_air_not_a_real_project");
-    expect(siteProjectIdFor(THROWAWAY)).not.toBe(siteProjectIdFor(DEMO_ORG_ID));
-    expect(siteProjectIdFor(THROWAWAY)).toContain(THROWAWAY);
-    // Still unmistakably not a real project, so nobody hunting a broken sync
-    // goes looking for it in the Vercel dashboard.
-    expect(siteProjectIdFor(THROWAWAY)).toContain("not_a_real_project");
-  });
-
-  it("refuses a business line a real phone would answer", async () => {
-    const db = serviceDb();
-    // Injectable, but not arbitrary — the same bargain the org id strikes.
-    // 956-555-1234 is the trap the fiction file names: 555 ALONE is not
-    // reserved, most of it is assignable and parts of it are assigned. Only
-    // 555-01xx is fiction.
-    //
-    // That the check runs BEFORE the account is created is pinned next door,
-    // by a source walk in demo-fiction.test.ts — not here. This test cannot
-    // tell the two orderings apart: the seeder drops its half-built account
-    // on any failure, so a guard that fired late would leave this same
-    // rejection and this same absent account behind.
-    const org = `org_test_demoseed_guard_${Math.random().toString(36).slice(2, 10)}`;
-    await expect(seedDemoTenant(db, { orgId: org, businessLine: "+19565551234" }))
-      .rejects.toThrow(/dialable phone/);
-    expect(await findDemoAccount(db, org)).toBeNull();
   });
 
   it("refuses to delete an account at the demo org id that is not suppressed", async () => {

@@ -55,28 +55,43 @@ export const DEMO_TIMEZONE = "America/Chicago";
  *  That is the pair worth screenshotting: our aesthetic, their brand. */
 export const DEMO_BRAND_COLOR = "#0E6BA8";
 
-/** The REAL demo tenant's business line. Reserved-range, so it can be shown
- *  on a screenshot without sending anybody a call.
+/**
+ * How the reserved block is divided, and why the split is not arbitrary.
  *
- *  `phone_numbers.e164` is unique across EVERY account, not per account, so
- *  this constant is effectively a global lock: exactly one account in the
- *  project may hold it at a time. A seed that fails and leaves its account
- *  behind therefore blocks the next seed with
- *  `duplicate key value violates unique constraint "phone_numbers_e164_key"`
- *  — an error that names nothing about the real problem. That is why
- *  `seedDemoTenant` drops its half-built account on any failure.
+ * `+1 956 555 01xx` is exactly 100 numbers, and the three uses the seed puts
+ * them to are NOT interchangeable, because only one of them is constrained by
+ * the database. A contact's `phone` and a call's caller id are ordinary
+ * columns — two accounts may hold the same value all day. `phone_numbers.e164`
+ * is unique across EVERY account in the project. So the block is split with
+ * the scarce use first and given room to breathe:
  *
- *  And it is why `seedDemoTenant` takes `businessLine` the way it takes
- *  `orgId`: a throwaway tenant that reused this number could only be built
- *  while no demo tenant existed, which made the suite pass or fail on whether
- *  anybody had seeded the demo lately. A throwaway org id does not avoid that
- *  — the org id is not what collides. Its own number is.
+ *   00-09  business lines — one per seeded account, globally unique
+ *   10-49  the forty contacts
+ *   50-99  callers who are not in the book yet
  *
- *  THE 01xx BLOCK IS ALLOTTED, and every part of it is spoken for:
- *    00      this line, the real demo tenant's
- *    01-09   throwaway business lines for the test harness
- *    10-49   `DEMO_PEOPLE` — one each, fixed, so reordering moves nothing
- *    50-99   the strangers who call in (`seedCalls`, `seedForm`) */
+ * Nine spare business-line slots is not a cushion against nothing. This repo
+ * has ONE Supabase project, and `demo-seed.test.ts` seeds a throwaway account
+ * in it to prove the seeder end to end — so the real demo and a test run must
+ * be able to coexist. They could not, and the day danlo first seeded the real
+ * demo, every CI run after it went red on
+ * `duplicate key value violates unique constraint "phone_numbers_e164_key"`,
+ * on a pull request whose entire diff was a workflow file. An error that names
+ * nothing about the real problem is the signature of this whole class of bug.
+ */
+export const BUSINESS_LINE_SLOTS = { first: 0, last: 9 } as const;
+export const CONTACT_LINE_SLOTS = { first: 10, last: 49 } as const;
+export const CALLER_LINE_SLOTS = { first: 50, last: 99 } as const;
+
+/** The canonical demo's business line — slot 00, and PINNED there.
+ *
+ *  Unlike a throwaway's line, this number is not an implementation detail:
+ *  it is on the Voice settings screen, it is what an operator reads back to
+ *  themselves when checking the demo is alive, and it will be in screenshots
+ *  on the marketing site. A number that moved between seeds would quietly
+ *  invalidate whatever had already been captured, so `demoBusinessLines`
+ *  offers this and nothing else for `DEMO_ORG_ID`: if 00 is held by some
+ *  other account, the right outcome is a loud failure naming the holder, not
+ *  a demo that silently answers on a different line. */
 export const DEMO_BUSINESS_LINE = "+19565550100";
 
 /** Fiction-safe by construction, and asserted rather than trusted.
@@ -94,6 +109,64 @@ export const demoPhone = (n: number): string => {
 
 export const demoEmail = (local: string): string =>
   `${local.toLowerCase().replace(/[^a-z0-9.\-]/g, ".")}@${DEMO_EMAIL_DOMAIN}`;
+
+/**
+ * FNV-1a over the org id. Not for security — for a stable, well-spread
+ * starting point, so two throwaway org ids seeded in the same project
+ * overwhelmingly begin their search at different slots instead of both
+ * walking from 01 and contending on every run.
+ */
+function hashOrgId(orgId: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < orgId.length; i++) {
+    h ^= orgId.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h >>> 0;
+}
+
+/**
+ * The business lines this org may take, in the order it should try them.
+ *
+ * The canonical demo gets exactly one candidate, for the reason on
+ * `DEMO_BUSINESS_LINE`. Every other seedable org — which in practice means
+ * `demo-seed.test.ts`'s throwaway — gets all nine spare slots, ordered from a
+ * hash of its own id, so the caller can take the first one nobody holds.
+ *
+ * A LIST rather than a single derived number on purpose. Hashing nine slots
+ * would collide roughly one run in nine if two seeds ever overlapped, and
+ * "CI is red once every nine pushes" is the worst possible failure mode: rare
+ * enough to be dismissed as a flake, frequent enough to cost real time. Nine
+ * ordered candidates make a collision impossible below nine concurrent
+ * accounts, and if all nine are genuinely taken the caller says so in those
+ * words — which is the truth (nine orphans) and is actionable.
+ */
+export function demoBusinessLines(orgId: string): string[] {
+  if (orgId === DEMO_ORG_ID) return [DEMO_BUSINESS_LINE];
+  const spare = Array.from(
+    { length: BUSINESS_LINE_SLOTS.last - BUSINESS_LINE_SLOTS.first },
+    (_, i) => BUSINESS_LINE_SLOTS.first + 1 + i);
+  const start = hashOrgId(orgId) % spare.length;
+  return [...spare.slice(start), ...spare.slice(0, start)].map(demoPhone);
+}
+
+/**
+ * The site's Vercel project id — the second value that is unique across every
+ * account, and the one that would have failed the instant the phone was fixed.
+ *
+ * Derived from the org id rather than fixed, so the demo and a test run can
+ * both have a linked site. The `org_` prefix is dropped so the canonical demo
+ * keeps the exact string it has always had (`prj_demo_resaca_air_...`) — this
+ * fix changes what a THROWAWAY writes, and nothing about the real demo.
+ *
+ * Deliberately unmistakable: nobody hunting a broken analytics sync should
+ * spend a minute looking for this in the Vercel dashboard. Nothing will ever
+ * call Vercel with it anyway — `listSitesToSync` filters suppressed accounts
+ * out server-side — but the name is the second wall, the same way
+ * `@example.com` is.
+ */
+export const demoVercelProjectId = (orgId: string): string =>
+  `prj_${orgId.replace(/^org_/, "")}_not_a_real_project`;
 
 // ---------------------------------------------------------------------------
 // The people
@@ -179,6 +252,53 @@ export const DEMO_PEOPLE: readonly DemoPerson[] = [
   { first: "Trent",   last: "Villanueva",line: 49, source: "repeat",   lang: "en",
     company: "Los Fresnos Feed & Supply" },
 ] as const;
+
+/**
+ * The booking calendar's opening hours — and they are NOT decoration.
+ *
+ * `calendars.enabled` defaults to false, and `/b/[publicId]` answers a
+ * disabled calendar with `notFound()` (b/[publicId]/page.tsx). The first
+ * capture run therefore photographed a 404 and uploaded it as one of six
+ * marketing screenshots, because a 404 is still a valid PNG and
+ * `if-no-files-found: error` only catches files that are MISSING, not files
+ * that are wrong.
+ *
+ * The windows deliberately match, to the hour, what `seedVoice` has Sofía
+ * say out loud ("Monday to Friday 8 AM to 5 PM, Saturday 8 AM to noon").
+ * A demo whose booking page contradicts its own receptionist is a demo that
+ * loses the argument in the one screenshot where both are visible.
+ */
+export const DEMO_OPEN_HOURS: Record<string, [string, string][]> = {
+  mon: [["08:00", "17:00"]],
+  tue: [["08:00", "17:00"]],
+  wed: [["08:00", "17:00"]],
+  thu: [["08:00", "17:00"]],
+  fri: [["08:00", "17:00"]],
+  sat: [["08:00", "12:00"]],
+};
+
+/** The sending identity. Reserved domain, like every other address here —
+ *  `outbound_suppressed` is what actually stops the cron, this is the second
+ *  wall. It exists so the setup checklist's "email" step reads done: a demo
+ *  that shows its own product half-configured argues against the product. */
+export const DEMO_FROM_EMAIL = "resaca.air@example.com";
+
+/**
+ * The one checklist item with no derivable source.
+ *
+ * Eight of the nine setup steps are COMPUTED from live rows, which is the
+ * wizard's whole promise. "I forwarded my number" cannot be — no row proves
+ * a carrier-side change — so it is a stored tick, and the demo has to set it
+ * the way a real operator would.
+ *
+ * THIS STRING IS MIRRORED in apps/web's `SETUP_TICK_KEYS.forwardingDone`.
+ * Duplicated rather than imported because the dependency only runs one way
+ * (apps/web depends on @bis/db, never the reverse), and this repo has been
+ * bitten before by two hand-maintained copies drifting apart — so
+ * `setup-status.test.ts` over there asserts the two are identical rather
+ * than trusting a comment.
+ */
+export const DEMO_FORWARDING_TICK_KEY = "setup:forwarding_done";
 
 /** What Sofía says she does, and what the booking page says the visit is.
  *  Written to the DESIGN.md copy rule: a business owner reads this at 7 AM. */
