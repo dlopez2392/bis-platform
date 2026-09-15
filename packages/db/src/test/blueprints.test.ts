@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { withTestAccount } from "./fixtures";
+import { withTestAccount, testBlueprintName as blueprintName } from "./fixtures";
 import { serviceDb } from "../service";
 import { createContact, addTagToContact } from "../contacts";
 import { createCustomField, upsertCustomValue, ensureDefaultPipeline } from "../crm-config";
@@ -30,7 +30,7 @@ describe("blueprint capture", () => {
       await seedConfig(db, accountId);
       await createContact(db, accountId, { firstName: "Maria", email: "maria@example.com" }, "user_test");
 
-      const { id } = await captureBlueprint(db, accountId, { name: "Contractor Starter" }, "user_test");
+      const { id } = await captureBlueprint(db, accountId, { name: blueprintName("Contractor Starter") }, "user_test");
       const bp = await getBlueprint(db, id);
 
       expect(bp!.version).toBe(1);
@@ -53,12 +53,13 @@ describe("blueprint capture", () => {
   it("recapturing the same name replaces the bundle and bumps version", () =>
     withTestAccount(async (db, accountId) => {
       await seedConfig(db, accountId);
-      const first = await captureBlueprint(db, accountId, { name: "Contractor Starter" }, "user_test");
+      const name = blueprintName("Contractor Starter");
+      const first = await captureBlueprint(db, accountId, { name }, "user_test");
 
       await createCustomField(db, accountId, {
         model: "contact", fieldKey: "roof_age", name: "Roof age", dataType: "number",
       });
-      const second = await captureBlueprint(db, accountId, { name: "Contractor Starter" }, "user_test");
+      const second = await captureBlueprint(db, accountId, { name }, "user_test");
 
       expect(second.id).toBe(first.id);
       const bp = await getBlueprint(db, second.id);
@@ -68,9 +69,13 @@ describe("blueprint capture", () => {
       // `blueprints` is agency-scoped (no account_id column — see migration
       // 0007), so listBlueprints(db) returns every blueprint in the agency,
       // including ones this test did not create (other tests' fixtures,
-      // manual QA rows, etc). Scope to this test's own name rather than
+      // manual QA rows, etc). Scope to this run's own name rather than
       // asserting on the agency's whole collection.
-      const named = (await listBlueprints(db)).filter((b) => b.name === "Contractor Starter");
+      //
+      // "this run's", not "this test's": filtering on a FIXED name was the
+      // original bug, not the fix. Every concurrent run shared that one name
+      // and therefore that one row — see `testBlueprintName`.
+      const named = (await listBlueprints(db)).filter((b) => b.name === name);
       expect(named).toHaveLength(1);
       expect(named[0]!.id).toBe(second.id);
     }));
@@ -78,7 +83,7 @@ describe("blueprint capture", () => {
   it("capture emits an event against the source account", () =>
     withTestAccount(async (db, accountId) => {
       await seedConfig(db, accountId);
-      await captureBlueprint(db, accountId, { name: "Contractor Starter" }, "user_test");
+      await captureBlueprint(db, accountId, { name: blueprintName("Contractor Starter") }, "user_test");
 
       const { data } = await db.from("events").select("type, actor_type")
         .eq("account_id", accountId).eq("type", "blueprint.captured");
@@ -97,7 +102,7 @@ describe("blueprint capture", () => {
       await addTagToContact(db, accountId, contactId, "Hot Lead");
       await addTagToContact(db, accountId, contactId, "hot-lead");
 
-      const { id } = await captureBlueprint(db, accountId, { name: "Collision Case" }, "user_test");
+      const { id } = await captureBlueprint(db, accountId, { name: blueprintName("Collision Case") }, "user_test");
       const bp = await getBlueprint(db, id);
 
       const tagKeys = bp!.assets.tags.map((t) => t.key).sort();
@@ -122,7 +127,7 @@ describe("blueprint capture", () => {
       await addTagToContact(db, accountId, contactId, "hot-lead");
       await addTagToContact(db, accountId, contactId, "Hot Lead 2");
 
-      const { id } = await captureBlueprint(db, accountId, { name: "Collision Case 3-Way" }, "user_test");
+      const { id } = await captureBlueprint(db, accountId, { name: blueprintName("Collision Case 3-Way") }, "user_test");
       const bp = await getBlueprint(db, id);
 
       const tagKeys = bp!.assets.tags.map((t) => t.key);
@@ -145,9 +150,9 @@ describe("blueprint capture", () => {
       // what makes the resulting key sequence (including the "_2" collision
       // suffix above) come out byte-identical rather than depending on
       // whatever order Postgres happens to return equal-position rows in.
-      const first = await captureBlueprint(db, accountId, { name: "Determinism A" }, "user_test");
+      const first = await captureBlueprint(db, accountId, { name: blueprintName("Determinism A") }, "user_test");
       const firstBp = await getBlueprint(db, first.id);
-      const second = await captureBlueprint(db, accountId, { name: "Determinism B" }, "user_test");
+      const second = await captureBlueprint(db, accountId, { name: blueprintName("Determinism B") }, "user_test");
       const secondBp = await getBlueprint(db, second.id);
 
       expect(secondBp!.assets).toEqual(firstBp!.assets);
@@ -161,11 +166,12 @@ describe("blueprint capture", () => {
     // saved an empty bundle under this name. No account fixture needed:
     // "not-a-uuid" never reaches a real account row.
     const db = serviceDb();
+    const name = blueprintName("Should Never Save");
     await expect(
-      captureBlueprint(db, "not-a-uuid", { name: "Should Never Save" }, "user_test"),
+      captureBlueprint(db, "not-a-uuid", { name }, "user_test"),
     ).rejects.toThrow(/pipelines query failed/);
 
-    const { data } = await db.from("blueprints").select("id").eq("name", "Should Never Save");
+    const { data } = await db.from("blueprints").select("id").eq("name", name);
     expect(data).toHaveLength(0);
   });
 });
@@ -188,7 +194,7 @@ describe("blueprint apply", () => {
   it("applies configuration, and applying twice creates nothing twice", () =>
     withTestAccount(async (db, sourceId) => {
       await seedConfig(db, sourceId);
-      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: "Starter" }, "user_test");
+      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: blueprintName("Starter") }, "user_test");
 
       await withTestAccount(async (db2, targetId) => {
         const first = await applyBlueprint(db2, targetId, blueprintId, "user_test");
@@ -222,7 +228,7 @@ describe("blueprint apply", () => {
     withTestAccount(async (db, sourceId) => {
       const { formId } = await seedConfig(db, sourceId);
       const { data: source } = await db.from("forms").select("public_id").eq("id", formId).single();
-      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: "Starter" }, "user_test");
+      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: blueprintName("Starter") }, "user_test");
 
       await withTestAccount(async (db2, targetId) => {
         await applyBlueprint(db2, targetId, blueprintId, "user_test");
@@ -254,7 +260,7 @@ describe("blueprint apply", () => {
         redirect_url: "https://acmedecks.example/thank-you",
         success_message: "Thanks for reaching out to Acme Decks!",
       }, "user_test");
-      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: "Starter" }, "user_test");
+      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: blueprintName("Starter") }, "user_test");
 
       await withTestAccount(async (db2, targetId) => {
         await applyBlueprint(db2, targetId, blueprintId, "user_test");
@@ -271,7 +277,7 @@ describe("blueprint apply", () => {
   it("applied custom values keep their key and name but not the source value", () =>
     withTestAccount(async (db, sourceId) => {
       await seedConfig(db, sourceId);
-      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: "Starter" }, "user_test");
+      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: blueprintName("Starter") }, "user_test");
 
       await withTestAccount(async (db2, targetId) => {
         await applyBlueprint(db2, targetId, blueprintId, "user_test");
@@ -287,7 +293,7 @@ describe("blueprint apply", () => {
     withTestAccount(async (db, sourceId) => {
       await seedConfig(db, sourceId);
       await createContact(db, sourceId, { firstName: "Maria", email: "maria@example.com" }, "user_test");
-      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: "Starter" }, "user_test");
+      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: blueprintName("Starter") }, "user_test");
 
       await withTestAccount(async (db2, targetId) => {
         await applyBlueprint(db2, targetId, blueprintId, "user_test");
@@ -314,7 +320,7 @@ describe("blueprint apply", () => {
           { key: "custom_proj_type", kind: "custom.proj_type", label: "Project type", required: false },
         ],
       }, "user_test");
-      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: "Starter" }, "user_test");
+      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: blueprintName("Starter") }, "user_test");
 
       await withTestAccount(async (db2, targetId) => {
         const report = await applyBlueprint(db2, targetId, blueprintId, "user_test");
@@ -339,7 +345,7 @@ describe("blueprint apply", () => {
   it("refuses to apply a bundle whose schemaVersion does not match this build's", () =>
     withTestAccount(async (db, sourceId) => {
       await seedConfig(db, sourceId);
-      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: "Stale Schema" }, "user_test");
+      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: blueprintName("Stale Schema") }, "user_test");
 
       // Simulate a bundle captured under a future/older format. Before this
       // guard, applyBlueprint never inspected schemaVersion at all — it just
@@ -368,7 +374,7 @@ describe("blueprint apply", () => {
       await updateForm(db, sourceId, formId, {
         theme: { mode: "dark", radius: "9px;position:fixed;inset:0" },
       }, "user_test");
-      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: "Themed" }, "user_test");
+      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: blueprintName("Themed") }, "user_test");
 
       await withTestAccount(async (db2, targetId) => {
         await applyBlueprint(db2, targetId, blueprintId, "user_test");
@@ -388,7 +394,7 @@ describe("blueprint apply", () => {
       await setBranding(db, sourceId, {
         brandName: "Rio Roofing", brandColor: "#1e3a8a", brandNeutral: "warm",
       }, "user_test");
-      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: "Branded" }, "user_test");
+      const { id: blueprintId } = await captureBlueprint(db, sourceId, { name: blueprintName("Branded") }, "user_test");
 
       await withTestAccount(async (db2, targetId) => {
         await applyBlueprint(db2, targetId, blueprintId, "user_test");
