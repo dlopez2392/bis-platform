@@ -132,13 +132,21 @@ describe("demo tenant seeder", () => {
       //     database, and a re-seed moves every date.
       const dayMs = 24 * 60 * 60 * 1000;
       const seededAt = Date.parse("2026-09-11T15:00:00Z");
-      const { data: opps } = await db.from("opportunities")
-        .select("value, created_at").eq("account_id", accountId);
+      //     The column is `monetary_value`, not `value`. The first version of
+      //     this assertion asked for `value`, and because it destructured only
+      //     `data` and never looked at `error`, PostgREST's refusal came back
+      //     as a null row set — so both sums were 0 and the failure read
+      //     "expected 0 to be greater than 0" instead of naming the bad
+      //     column. Hence `oppsErr`: a query that cannot run must say so.
+      const { data: opps, error: oppsErr } = await db.from("opportunities")
+        .select("monetary_value, created_at").eq("account_id", accountId);
+      expect(oppsErr, `opportunities read failed: ${oppsErr?.message}`).toBeNull();
+      expect(opps!.length).toBeGreaterThan(0);
       const valueBetween = (fromDaysAgo: number, toDaysAgo: number) =>
-        (opps ?? []).filter((o) => {
+        opps!.filter((o) => {
           const age = (seededAt - Date.parse(o.created_at as string)) / dayMs;
           return age >= toDaysAgo && age < fromDaysAgo;
-        }).reduce((sum, o) => sum + Number(o.value), 0);
+        }).reduce((sum, o) => sum + Number(o.monetary_value), 0);
 
       const addedLast7 = valueBetween(7, 0);
       const addedPrior7 = valueBetween(14, 7);
