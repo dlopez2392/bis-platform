@@ -39,7 +39,10 @@ export default function PublicBookingError({
         type="button"
         onClick={() => reset()}
         style={{
-          font: "600 15px inherit", border: "none", borderRadius: "0.5rem",
+          // Same invalid shorthand as the cancel page had: `inherit` is only
+          // legal as a whole value, so this button rendered in the UA's
+          // default 13.3px Arial rather than the 15px face set on the wrapper.
+          font: "inherit", fontWeight: 600, border: "none", borderRadius: "0.5rem",
           background: "#6d28d9", color: "#ffffff", padding: "10px 18px", cursor: "pointer",
         }}
       >
