@@ -1,4 +1,5 @@
 import type { CallState } from "./call-state";
+import { classifyOutcome } from "./call-state";
 import { buildSummaryInput, composeSummary } from "./summarize";
 
 /**
@@ -10,11 +11,34 @@ import { buildSummaryInput, composeSummary } from "./summarize";
  *
  * A failed request (network throw, or a non-ok response) is swallowed the same
  * way — prose becomes "" and the recorded facts are still what's shown.
+ *
+ * `spam` — and ONLY `spam` — skips the model entirely. `classifyOutcome`
+ * returns it exactly when there is no booking, no lead, no message AND no
+ * caller transcript event carrying text (call-state.ts), so the request would
+ * hand the model `TRANSCRIPT:\n(no speech captured)` and ask for 3-4 sentences
+ * about it. That is not a hypothetical: of the nine spam calls on file, the
+ * five real ones (zero caller events each) all bought a completion, and one of
+ * them came back asserting "the caller asked to review availability for
+ * Wednesday, September 4" from an empty transcript — invented, and it tripped
+ * `composeSummary`'s own ⚠ MISMATCH warning on the call detail page. So the
+ * skip buys two things, not one: the token cost, and a fabricated alarm.
+ *
+ * `abandoned` deliberately still calls the model. The classifier only reaches
+ * it when a caller DID speak (transcript, production average 5 events), it is
+ * the outcome the missed-call text-back fires on, and its stored summary is
+ * the only account anywhere of why a real human rang and left.
+ *
+ * The column is never left blank: `composeSummary("", state)` is the same
+ * deterministic fact line a missing key or a failed request already produces,
+ * so the call detail page, the ⌘K `summary.ilike` search and the work queue's
+ * conversation title all read exactly what they read before, minus the prose.
  */
 export async function generateSummary(
   state: CallState,
   opts?: { timezone?: string; fetchImpl?: typeof fetch },
 ): Promise<string> {
+  if (classifyOutcome(state) === "spam") return composeSummary("", state);
+
   const apiKey = process.env.OPENAI_API_KEY;
   let prose = "";
 
