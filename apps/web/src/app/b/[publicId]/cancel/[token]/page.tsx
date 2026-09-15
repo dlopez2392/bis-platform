@@ -177,7 +177,15 @@ const CANCEL_CSS = `
 .bis-cancel-when { color: var(--muted-foreground, #71717a); margin: 0 0 4px; }
 .bis-cancel-title { font-size: 17px; font-weight: 600; margin: 0 0 16px; }
 .bis-cancel-submit {
-  font: 600 15px inherit; border: none; border-radius: var(--radius, 0.5rem);
+  /* font:inherit then the weight, NOT the shorthand with a keyword inside it.
+     A CSS-wide keyword is only legal as a property's SOLE value, so putting
+     inherit in the family slot made the whole declaration invalid and the
+     browser dropped it — leaving this button at the UA default for a form
+     control, measured at 13.3px Arial 400 instead of the page's 15px at 600,
+     in front of clients' customers. booking-page.tsx's own submit rule had it
+     right; this one did not. (No backticks in here: this block lives inside a
+     template literal, and one closes it.) */
+  font: inherit; font-weight: 600; border: none; border-radius: var(--radius, 0.5rem);
   background: var(--form-accent, #6d28d9); color: var(--form-accent-foreground, #ffffff);
   padding: 10px 18px; cursor: pointer;
 }
