@@ -1,0 +1,188 @@
+-- 0035_alert_phone.sql
+-- Where a text goes when work arrives.
+--
+-- Three alert paths fire today and all three are email only (form submission,
+-- booking created, finished call). Outbound SMS has been fully built since
+-- M1b, and every message it has ever sent went to a CUSTOMER. The blocker was
+-- never the channel, it was that nothing in this schema stores a BUSINESS-side
+-- number: `phone_numbers` holds the number customers CALL, which is the same
+-- row and the same field `resolveSmsSender` texts FROM. A destination and a
+-- sender are different facts and one column cannot be both.
+--
+-- One number per account, not a list. The email recipients are arrays
+-- (`forms.notify_emails`, `calendars.notify_emails`, `accounts.report_emails`)
+-- because a mailbox costs nothing to add and an inbox is where people already
+-- triage. A handset is not: every alert is a billable segment on the account's
+-- own A2P registration, and a second number doubles that bill for the same
+-- event. Widening a nullable scalar to an array later is a migration nobody
+-- has to regret; narrowing an array back is one that needs a data decision.
+--
+-- THE FIELD IS THE SWITCH, exactly as `report_emails` is. No number, no texts,
+-- and that is not a failure — it is the state every account is in right now
+-- and the state most of them will stay in. 0031's own comment records the same
+-- reasoning for the weekly report, and the shape here is its scalar twin:
+-- NULL, no default, and (see VALIDATION) no second way to spell "off".
+--
+-- Texts will fire on bookings and finished calls only. Form submissions stay
+-- email-only. Nothing in this migration encodes that — it is the send path's
+-- rule — but it is what the column is FOR, and the next person reading it
+-- should not have to guess.
+alter table public.accounts
+  add column alert_phone text
+    constraint accounts_alert_phone_check
+    check (alert_phone is null or alert_phone ~ '^\+[0-9]{8,15}$');
+
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- DECISION 1 — WHO MAY WRITE IT: the agency, through serviceDb(), behind
+-- requireAgencyOnlyAccountAccess. NO `grant update (alert_phone) to
+-- authenticated`, and that absence is the control, not an oversight.
+-- ⚠️ DO NOT "FIX" THIS BY ADDING ONE.
+--
+-- 0013 revoked UPDATE on public.accounts wholesale and re-granted it one
+-- column at a time, because this table is edited per-column by clients. So
+-- every new column on it has to answer the question, and two answers already
+-- exist in the tree: the seven branding columns plus `reply_to_email` are
+-- granted (0013, 0014); `from_email`, `report_emails` and `weekly_report_week`
+-- are not (0015, 0031).
+--
+-- This column looks at first like the granted kind. It is a number the
+-- business owns, about the business's own work, shown on the business's own
+-- settings screen, and an operator who changes phones should not have to file
+-- a ticket. That argument is real and this migration is not pretending
+-- otherwise — see the cost, recorded below.
+--
+-- It belongs on the ungranted side anyway, for three reasons the branding
+-- columns do not share:
+--
+--   1. It is a SEND DESTINATION, and the platform pays to send. A granted
+--      column is reachable by any `authenticated` token for the org through
+--      PostgREST directly, with no server action involved. Write a number,
+--      cause a booking, and this product texts that number from the tenant's
+--      own live `phone_numbers` row, on the tenant's own A2P registration, at
+--      the tenant's own per-segment cost. `report_emails` was withheld for the
+--      thinner version of this (redirecting a report to any address); here the
+--      redirect also spends money and burns carrier reputation on a campaign
+--      registered to somebody else's business.
+--
+--   2. It carries LEAD PII off the platform. The alert is not a notification
+--      that something happened, it is the thing that happened: a customer's
+--      name and number, from a booking or a finished call, delivered to a
+--      handset. Branding is cosmetic and self-evident — a wrong brand colour
+--      is visible to everyone instantly. A wrong alert phone is invisible:
+--      the texts simply go somewhere else and the screen still says the right
+--      thing. The failure has no symptom on the surface that owns it.
+--
+--   3. RLS is the wrong instrument for this one. `accounts_member_update`
+--      correctly confines the write to the client's own row, so this is not a
+--      cross-tenant question and RLS has nothing more to say. The question is
+--      whether the destination is a handset the business actually holds, and
+--      no policy can evaluate that. The grant is the only place the answer
+--      can live today.
+--
+-- THE COST, named so it is a decision and not a habit: a client cannot change
+-- their own alert number without the agency. That is a real friction and it is
+-- the right trade only while there is no proof-of-possession step. What would
+-- have to be true to grant it: a write path that sends a confirmation code to
+-- the number and stores it only once the code comes back — the same
+-- verify-then-write shape `saveVerifiedFromAddress` already gives
+-- `from_email`, where the preflight is what makes the write safe rather than
+-- the guard. Until that exists, the guard IS the control, and
+-- alert-phone-grants.test.ts pins the absence in both directions.
+--
+-- SELECT needs no grant: it is table-level on public.accounts for
+-- `authenticated` (verified live against information_schema.column_privileges
+-- before this migration, the same check 0031 made), so a table-level grant
+-- covers a column added today and the Settings page can read it with no
+-- further work. That asymmetry is deliberate — the client should SEE where
+-- their alerts go even though they cannot change it.
+
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- DECISION 2 — VALIDATION: yes, and it is `phone_numbers_e164_check`'s regex
+-- verbatim, not a new dialect of it.
+--
+-- `'^\+[0-9]{8,15}$'` is copied character for character from 0019. The reason
+-- is the one settings/actions.ts already records about email: one regex that
+-- drifts from another is worse than one that is strict. This platform has
+-- exactly one definition of "a number we can reach", it is already proven by
+-- every SMS that has ever left here, and a second definition would mean a
+-- number the alert column accepts and the send path cannot dial.
+--
+-- Better still, it is already the codomain of the app's single normaliser.
+-- `toE164` (apps/web/src/lib/voice/phone-number.ts) returns `+1` plus ten
+-- digits, `+` plus eleven, or `+` plus eight-to-fifteen — and NULL for
+-- everything else. Every non-null value it can produce satisfies this
+-- constraint and every value it rejects fails it. So the rule for any caller
+-- is one line: store `toE164(input)`, store NULL when it returns null, never
+-- store the raw string. Behaviour verified read-only against this database
+-- before the constraint was written, on the literal shapes the tree actually
+-- holds — "(956) 292-1696" false, "+19562921696" true, " +19562921696" false,
+-- "+1234567" false, "+1234567890123456" false, a trailing newline false
+-- (Postgres `$` is end-of-string, not end-of-line, without the `n` flag).
+--
+-- WHY VALIDATE AT ALL, since the column is agency-written: because a number
+-- that fails to send at 2 AM is the failure mode this feature exists to avoid.
+-- Without the constraint a typo saves cleanly, the screen says the number is
+-- set, and the only evidence is a provider error in a background job nobody
+-- is reading at 2 AM. With it the save fails in front of the person who typed
+-- it, at the moment they typed it. The agency being the writer makes the
+-- constraint MORE useful, not less — there is no client to notice the
+-- silence.
+--
+-- THE EMPTY STRING IS REFUSED, and that is load-bearing rather than tidy. A
+-- blank form field posts "", and "" is the shape that gives "off" a second
+-- spelling: `if (account.alertPhone)` reads it as off while
+-- `alert_phone is not null` reads it as on, so the due-query and the send path
+-- would disagree about the same row. The regex rejects it, so NULL is the ONLY
+-- "off" this column can hold and the switch has one position. Callers must
+-- write NULL, not "".
+--
+-- WHITESPACE IS REFUSED TOO, deliberately, and there is no trim() here. 0033
+-- and 0034 are what that costs: a column that normalises has a TypeScript twin
+-- that must agree with it on every input, and a tab-padded value silently got
+-- a different answer on each side. A column that refuses has no twin to
+-- disagree with. `toE164` strips non-digits before it builds its output, so a
+-- pasted number with a stray space is already handled one layer up, in one
+-- place, with tests.
+--
+-- WHAT THIS DOES NOT CLAIM: that the number can receive a text. A landline, a
+-- disconnected line, and a number whose owner replied STOP all satisfy this
+-- constraint. Shape is all a CHECK can know; deliverability is Telnyx's answer
+-- and belongs in the send path's error handling.
+
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- DECISION 3 — MAY IT EQUAL THE TENANT'S OWN NUMBER: the schema does not
+-- prevent it. The send path must. Deliberate, and here is why, so that nobody
+-- later "hardens" it with a trigger.
+--
+-- The loop is real: point alerts at a number in this account's own
+-- `phone_numbers` and the platform texts itself. `api/sms/inbound/route.ts`
+-- then creates a CONTACT for the business owner and a conversation with them,
+-- which quietly corrupts the CRM with a record of the operator as their own
+-- lead.
+--
+-- A CHECK constraint cannot express it: SQL forbids subqueries and references
+-- to other tables inside one, and the number to compare against lives in
+-- `phone_numbers`. That much is a mechanical limit. The reason a TRIGGER is
+-- also wrong is the interesting half: THE CONDITION IS NOT STABLE IN TIME. A
+-- trigger on `accounts` could only judge the moment `alert_phone` is written.
+-- `phone_numbers` rows are created and their `status` walks
+-- provisioned → testing → live → released (0019), so a number that was nobody's
+-- when it was saved becomes this account's own line the day it is provisioned,
+-- with no write to `accounts` at all and nothing to fire on. Covering that
+-- takes a second trigger on `phone_numbers` — and then provisioning a number
+-- can fail at 2 AM because of a value in a different table, which is a worse
+-- version of the problem this migration is trying to solve.
+--
+-- The send path already holds both strings at the only moment the answer is
+-- current: `resolveSmsSender` resolves the account's live from-number, and the
+-- alert site has the destination in hand. One comparison, evaluated against
+-- the state as it is, refusing to send and saying why. A save-time warning on
+-- the settings screen is worth adding too, but as help, not as the guard — the
+-- guard has to be at send time or it is not a guard.
+
+
+comment on column public.accounts.alert_phone is
+  'Where a text goes when work arrives (bookings and finished calls). NULL = this account gets no alert texts, and that is not a failure. E.164 only, the same shape as phone_numbers.e164. Agency-written through serviceDb(): authenticated has SELECT but deliberately no UPDATE.';
