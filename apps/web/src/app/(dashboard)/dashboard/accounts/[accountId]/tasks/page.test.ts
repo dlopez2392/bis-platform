@@ -1,10 +1,60 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { WorkRow } from "@bis/db";
 import { bucketWork, type BucketedWork } from "@/lib/work/buckets";
 import { m } from "@/lib/messages";
 import { visibleBuckets, WorkList } from "./work-list";
+
+// --- Mocks for the TasksPage composition tests below (the "zone reaches the
+// page" and "rethrow" findings need the whole route, not just WorkList in
+// isolation). Same shape as calls/page.test.ts's mocks: the auth gate and the
+// DB entry points this async server component actually reaches, rather than
+// exercising Clerk/Supabase for what is a "which value reaches render" bug.
+vi.mock("@/lib/auth", () => ({
+  requireAccountAccess: async () => ({ userId: "user_1", isAgency: true }),
+}));
+
+/** Mutable so each test can pick the account's own (possibly invalid) zone
+ *  without a fresh `vi.mock` per test — assigned in `beforeEach` before the
+ *  dynamic `import("./page")` below ever resolves this factory. */
+let accountTimezone = "America/Chicago";
+vi.mock("@/lib/db", () => ({
+  dbForRequest: async () => ({
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: async () => ({ data: { timezone: accountTimezone }, error: null }),
+          // The contacts lookup shares this same chain shape in page.tsx;
+          // unused by the tests below (they use contactId: null rows), kept
+          // here only so the shape matches if that ever changes.
+          in: async () => ({ data: [], error: null }),
+        }),
+      }),
+    }),
+  }),
+}));
+
+let workRows: WorkRow[] = [];
+vi.mock("@bis/db", () => ({
+  listAccountWork: async () => workRows,
+}));
+
+/** Flips `formatDateInZone` (and ONLY that export — everything else is the
+ *  real module) into throwing a non-`RangeError` for exactly one test, to
+ *  prove the rethrow-on-programming-error path without ever needing an
+ *  input that could naturally produce one. */
+let forceFormatError = false;
+vi.mock("@/lib/format", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/format")>();
+  return {
+    ...actual,
+    formatDateInZone: (iso: string, timeZone: string) => {
+      if (forceFormatError) throw new TypeError("boom: not a RangeError");
+      return actual.formatDateInZone(iso, timeZone);
+    },
+  };
+});
 
 function conversationRow(overrides: Partial<WorkRow> = {}): WorkRow {
   return {
@@ -177,5 +227,61 @@ describe("WorkList", () => {
     const b = bucketWork([row], NOW, ZONE);
     const html = renderList(b, { c1: "Maria Garcia" });
     expect(html).not.toMatch(/19(69|70)/);
+    // Positive half (review finding: negative-only stays green even if the
+    // row stopped rendering at all) — the row is still HERE, sentence and
+    // all, just with no date text next to it.
+    expect(html).toContain("Reply to Maria Garcia");
+  });
+
+  it("also declines a non-canonical spelling of the same epoch instant, not just the exact sentinel string", () => {
+    // `new Date(0).toISOString()` is "1970-01-01T00:00:00.000Z" exactly — a
+    // string-equality guard would let "1970-01-01T00:00:00Z" (same instant,
+    // no milliseconds) through and print "Dec 31, 1969" in Chicago. Not
+    // reachable from today's schema (work-queue.ts only ever writes the
+    // canonical form or a real `last_message_at`), but matching the parsed
+    // instant instead of one exact string closes it for free.
+    const row = conversationRow({ contactId: "c1", occurredAt: "1970-01-01T00:00:00Z" });
+    const b = bucketWork([row], NOW, ZONE);
+    const html = renderList(b, { c1: "Maria Garcia" });
+    expect(html).not.toMatch(/19(69|70)/);
+    expect(html).toContain("Reply to Maria Garcia");
+  });
+
+  it("rethrows a non-RangeError from the format path instead of swallowing it into a permanently blank cell", () => {
+    // The bucketing function this screen mirrors (`bucketWork`) narrows its
+    // own two `catch` blocks the same way: rethrow anything that is not a
+    // `RangeError`. A bare `catch {}` here would instead turn a real bug in
+    // `formatDateInZone` into a silently blank date on every row, forever.
+    forceFormatError = true;
+    try {
+      const b = bucketWork([taskRow({ dueAt: "2026-09-01T00:00:00Z" })], NOW, ZONE);
+      expect(() => renderList(b, { c1: "Maria Garcia" })).toThrow(TypeError);
+    } finally {
+      forceFormatError = false;
+    }
+  });
+});
+
+describe("TasksPage — the account's zone reaches every rendered date", () => {
+  beforeEach(() => {
+    accountTimezone = "America/Chicago";
+    workRows = [];
+  });
+
+  it("never falls back to UTC for the account's own invalid zone — the date is omitted, not guessed", async () => {
+    // The finding this pins: `safeZone(account.timezone, "UTC")` in page.tsx
+    // substituted "UTC" before the row's own date text ever got a chance to
+    // decline, printing a confident "Sep 1, 2026" in a zone nobody chose. The
+    // raw invalid zone, unclamped, makes `formatDateInZone` throw and
+    // `rowDateText` decline instead — no date text for this row at all.
+    accountTimezone = "Not/AZone";
+    workRows = [taskRow({ contactId: null, dueAt: "2026-09-01T00:00:00Z" })];
+    const { default: TasksPage } = await import("./page");
+    const html = renderToStaticMarkup(
+      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }),
+    );
+    // bucketWork's own degrade: still visible, every row waits.
+    expect(html).toContain(m["work.bucket.waiting"]);
+    expect(html).not.toMatch(/Sep \d{1,2}, 2026/);
   });
 });

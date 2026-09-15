@@ -259,12 +259,18 @@ The screen is named **To do** in the nav.
   or ambient zone can satisfy. (Delegating the zone read to `partsInZone`
   turned out to make constructor-spying unnecessary; the two-zone pair is the
   stronger pin anyway.)
-- **It must degrade, not throw.** An invalid IANA zone reaches this function
-  today — `create-account-dialog.tsx:80` is a free-text input and
-  `accounts/actions.ts:13` passes it through unchecked. On a bad zone every
-  row goes to Waiting rather than being classified; on an unparseable
-  `due_at` that one row does. Never a UTC fallback: a silent one would
-  reintroduce the previous-day defect this repo has already shipped.
+- **It must degrade, not throw — and this binds the whole route, not just
+  `bucketWork`.** An invalid IANA zone reaches this screen today —
+  `create-account-dialog.tsx:80` is a free-text input and
+  `accounts/actions.ts:13` passes it through unchecked. The account's zone has
+  a second consumer besides bucketing: the row's own rendered date. Neither
+  consumer may fall back to UTC or the server's zone, anywhere, ever — a
+  silent one would reintroduce the previous-day defect this repo has already
+  shipped. On a bad zone, bucketing sends every row to Waiting rather than
+  classifying it, and the date beside each row is OMITTED rather than
+  guessed; on an unparseable `due_at`, only that one row degrades. A row that
+  cannot be dated must still say "Waiting" without also claiming a specific
+  day it cannot back up.
 - **One named test per source**, each proved by mutation: remove the source
   from the union and the test fails by name.
 - **The `abandoned` exclusion gets its own test**, so a later widening is a

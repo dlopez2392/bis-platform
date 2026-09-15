@@ -85,33 +85,42 @@ function secondaryLine(row: WorkRow, contactName: string): string | null {
 }
 
 /**
- * The exact sentinel `listAccountWork`'s conversation branch falls back to
+ * The epoch INSTANT `listAccountWork`'s conversation branch falls back to
  * when a conversation has no `last_message_at` yet
- * (packages/db/src/work-queue.ts:71) — reachable in production, not just
- * theoretical: the conversation touch in messaging.ts is deliberately
- * best-effort and the unread-increment path never sets that column at all.
- * Printing "Jan 1, 1970" (or, in a negative-offset zone, "Dec 31, 1969")
- * next to a row would read as a real, wildly-stale date rather than "we
- * don't know" — so a row whose only available timestamp IS this sentinel
- * gets no date text at all. Fixed here, in the UI, rather than in
- * `work-queue.ts`, which is Task 1's already-reviewed code.
+ * (packages/db/src/work-queue.ts:71: `new Date(0).toISOString()`) —
+ * reachable in production, not just theoretical: the conversation touch in
+ * messaging.ts is deliberately best-effort and the unread-increment path
+ * never sets that column at all. Printing "Jan 1, 1970" (or, in a
+ * negative-offset zone, "Dec 31, 1969") next to a row would read as a real,
+ * wildly-stale date rather than "we don't know" — so a row whose only
+ * available timestamp resolves to this instant gets no date text at all.
+ * Compared against the PARSED instant below, not one exact sentinel string,
+ * so a non-canonical spelling of the same moment (no milliseconds, or a null)
+ * degrades the same way — neither is reachable from today's schema, but
+ * matching the instant instead of one string closes both for free. Fixed
+ * here, in the UI, rather than in `work-queue.ts`, which is Task 1's
+ * already-reviewed code.
  */
-const NO_TIMESTAMP = new Date(0).toISOString();
+const EPOCH_MS = 0;
 
 /**
  * The row's own date, in the ACCOUNT's zone — never the server's, never the
  * browser's (the milestone's binding constraint). `formatDateInZone` throws
- * `RangeError` on an unparseable timestamp; the degrade requirement this
- * screen inherits (commit 3649d41, `bucketWork`'s own per-row degrade on a
- * bad `dueAt`) means a single bad row must not take the whole page down, so
- * a throw here costs at most this row's own date text.
+ * `RangeError` on an unparseable timestamp or an invalid zone; the degrade
+ * requirement this screen inherits (commit 3649d41, `bucketWork`'s own
+ * per-row degrade on a bad `dueAt`) means a single bad row must not take the
+ * whole page down, so that throw costs at most this row's own date text —
+ * narrowed the same way `bucketWork`'s own two `catch` blocks are narrowed:
+ * rethrow anything that is NOT a `RangeError`, so a real bug in the format
+ * path fails loudly instead of silently going blank on every row forever.
  */
 function rowDateText(row: WorkRow, timezone: string): string | null {
   const iso = row.dueAt ?? row.occurredAt;
-  if (iso === NO_TIMESTAMP) return null;
+  if (new Date(iso).getTime() === EPOCH_MS) return null;
   try {
     return formatDateInZone(iso, timezone);
-  } catch {
+  } catch (err) {
+    if (!(err instanceof RangeError)) throw err;
     return null;
   }
 }
@@ -129,11 +138,14 @@ function WorkRowItem({
   /** Never a raw id and never "undefined" — WorkList resolves this to
    *  `m["contact.noName"]` for a contactId with no matching (or no) row. */
   contactName: string;
-  /** The account's own IANA zone, already resolved by page.tsx (`safeZone`).
-   *  Every date on this row is the company's own wall-clock day — the bucket
-   *  chip beside it is computed in this same zone by `bucketWork`, and a row
-   *  formatted in a different zone (the server's, via the bare `formatDate`
-   *  this replaced) could disagree with its own chip inside a single row. */
+  /** The account's own RAW IANA zone, exactly as page.tsx read it off the
+   *  account row — never `safeZone`-clamped to UTC (see page.tsx's own
+   *  comment on this). Every date on this row is the company's own
+   *  wall-clock day — the bucket chip beside it is computed in this same raw
+   *  zone by `bucketWork`, and a row formatted in a different zone (the
+   *  server's, via the bare `formatDate` this replaced, or a UTC clamp)
+   *  could disagree with its own chip inside a single row. `rowDateText`
+   *  above is what actually declines on an invalid zone, per-row. */
   timezone: string;
 }) {
   const treatment = BUCKET_TREATMENT[bucket];
@@ -192,10 +204,12 @@ export function WorkList({
    *  back to `m["contact.noName"]` below — never a raw id, never
    *  "undefined". */
   contactNames: Record<string, string>;
-  /** The account's own IANA zone, already resolved by page.tsx (`safeZone`,
-   *  same contract as `calls-table.tsx`'s identically-named prop) — never
-   *  the server's, never the browser's. Threaded straight through to every
-   *  row's own date text. */
+  /** The account's own RAW IANA zone, read straight off the account row by
+   *  page.tsx with no `safeZone` clamp — UNLIKE `calls-table.tsx`'s
+   *  identically-named prop. A bad zone must be OMITTED, never guessed at in
+   *  UTC (page.tsx's own comment), so this screen's contract differs from
+   *  Calls' on purpose. Threaded straight through to every row's own date
+   *  text, which is where the actual per-row decline happens. */
   timezone: string;
 }) {
   const shown = visibleBuckets(buckets);
