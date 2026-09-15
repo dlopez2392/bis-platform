@@ -1291,6 +1291,13 @@ export const m = {
   "work.booking.completed.toast": "Marked as completed. A review request may go out.",
   "work.booking.noShow.toast": "Marked as a no-show.",
   "work.actionFailed": "Couldn't update that just now. Try again in a moment.",
+  // Task 5's dashboard row — a compact link into /tasks. `work.empty` above
+  // (Task 3) already carries the zero-queue sentence, reused rather than
+  // duplicated. The two below compose the non-empty count: "{count} things
+  // to do" alone, or with " · {count} overdue" appended when the account has
+  // any — see work-row.tsx's `workRowText`.
+  "work.row.count": "{count} things to do",
+  "work.row.overdue": "{count} overdue",
 } as const;
 
 export type MessageKey = keyof typeof m;

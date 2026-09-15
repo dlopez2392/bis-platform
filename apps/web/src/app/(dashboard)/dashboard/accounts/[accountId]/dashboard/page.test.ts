@@ -70,6 +70,9 @@ const dbMocks = vi.hoisted(() => ({
   listCallStartsBetween: vi.fn(),
   listBookingCreationsBetween: vi.fn(),
   listOpportunityValuesCreatedBetween: vi.fn(),
+  // Task 5's dashboard row — the same `listAccountWork` read tasks/page.tsx
+  // already makes; mocked here in this file's own vi.fn() shape.
+  listAccountWork: vi.fn(),
 }));
 // mergeChecklist (@/lib/checklist-catalogue) is NOT mocked — the real
 // 7-item CHECKLIST_CATALOGUE is what makes "the right counts" a meaningful
@@ -85,6 +88,7 @@ vi.mock("@bis/db", () => ({
   listCallStartsBetween: (...a: unknown[]) => dbMocks.listCallStartsBetween(...a),
   listBookingCreationsBetween: (...a: unknown[]) => dbMocks.listBookingCreationsBetween(...a),
   listOpportunityValuesCreatedBetween: (...a: unknown[]) => dbMocks.listOpportunityValuesCreatedBetween(...a),
+  listAccountWork: (...a: unknown[]) => dbMocks.listAccountWork(...a),
 }));
 
 vi.mock("./calls-chart-card", () => ({ CallsChartCard: () => null }));
@@ -134,6 +138,7 @@ describe("AccountDashboardPage — the checklist row (replaces the old full Chec
     dbMocks.listCallStartsBetween.mockResolvedValue([]);
     dbMocks.listBookingCreationsBetween.mockResolvedValue([]);
     dbMocks.listOpportunityValuesCreatedBetween.mockResolvedValue([]);
+    dbMocks.listAccountWork.mockResolvedValue([]);
     // Default: 1 of 7 catalogue items done, A2P not approved — mirrors
     // blueprints.spec.ts's own GAP 3 fixture shape (1 ticked, A2P rejected).
     dbMocks.listChecklistState.mockResolvedValue([row("phone_number")]);

@@ -4,7 +4,7 @@ import {
   listChecklistState, countContacts,
   getVoiceProfile, getCalendarForAccount, listCalls, listRecentEvents,
   listCallStartsBetween, listBookingCreationsBetween, listOpportunityValuesCreatedBetween,
-  getA2pRegistration,
+  getA2pRegistration, listAccountWork,
 } from "@bis/db";
 import { StatTile } from "@/components/stat-tile";
 import { PageHeader } from "@/components/page-header";
@@ -15,6 +15,7 @@ import { mergeChecklist } from "@/lib/checklist-catalogue";
 import { getTenantBranding } from "@/lib/branding/tenant-theme-reader";
 import { safeZone } from "@/lib/booking/time";
 import { normalizeOpenHours } from "@/lib/booking/slots";
+import { bucketWork } from "@/lib/work/buckets";
 import { m } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 import { greetingPeriod, formatLocalLongDate } from "@/lib/dashboard/greeting";
@@ -22,6 +23,7 @@ import { localDayWindow, bucketByLocalDay, bucketValueByLocalDay, deltaVsPrior, 
 import { CallsChartCard } from "./calls-chart-card";
 import { ActivityCard } from "./activity-card";
 import { ChecklistRow } from "./checklist-row";
+import { WorkRowCard } from "./work-row";
 
 // The activity card curates a small set of known event types out of a much
 // noisier raw ledger (CRM housekeeping, setup plumbing, …) — see
@@ -93,7 +95,7 @@ export default async function AccountDashboardPage({
   const [
     checklistRows, contactsCount, opps,
     voiceProfile, calendar, callsIso, bookingsIso, oppPairs, recentCalls, recentEvents,
-    a2p,
+    a2p, workRows,
   ] = await Promise.all([
     listChecklistState(db, accountId),
     countContacts(db, accountId),
@@ -127,6 +129,14 @@ export default async function AccountDashboardPage({
     // selectable by `authenticated` (only UPDATE is withheld), and
     // accounts_member_read already scopes the row.
     getA2pRegistration(db, accountId),
+    // Task 5's dashboard row — the same three-source read tasks/page.tsx
+    // already uses, bucketed below with the same `bucketWork` rather than a
+    // second way to compute what's waiting. Both audiences: `listAccountWork`
+    // is the exact call tasks/page.tsx makes under `dbForRequest()` for
+    // either role, and the /tasks nav entry itself is ungated
+    // (nav-groups.ts) — this compact row must not be gated behind `isAgency`
+    // either, unlike the checklist row below it.
+    listAccountWork(db, accountId),
   ]);
 
   if (opps.error) {
@@ -139,6 +149,17 @@ export default async function AccountDashboardPage({
 
   const checklistEntries = mergeChecklist(checklistRows, { a2pStatus: a2p?.status });
   const checklistRemaining = checklistEntries.filter((e) => !e.done).length;
+
+  // The work row's counts — bucketed with the RAW `account.timezone`, not
+  // the `safeZone`-clamped `timezone` below: bucketWork's own doc comment
+  // forbids a silent UTC fallback here (it would reintroduce the
+  // previous-day defect this repo already shipped once), same as
+  // tasks/page.tsx's own `bucketWork(rows, new Date(), account.timezone)`
+  // call. An invalid zone still degrades to "every row waits", so the total
+  // stays correct even when `overdue` cannot be judged.
+  const workBuckets = bucketWork(workRows, now, account.timezone);
+  const workTotal = workBuckets.overdue.length + workBuckets.today.length + workBuckets.waiting.length;
+  const workOverdue = workBuckets.overdue.length;
 
   // Greeting header (this page only). Time-of-day and the long date both
   // read the ACCOUNT's timezone, never the viewer's own clock — the same
@@ -235,6 +256,12 @@ export default async function AccountDashboardPage({
         subtitle={`${dateText}${showVoiceSub ? ` · ${m["dashboard.sub.voice"]}` : ""}`}
       />
       <div className="space-y-6 p-6">
+        {/* Above the KPI tiles (Task 5) — both audiences, unlike the
+            checklist row further down: the /tasks nav entry itself is
+            ungated, and a row that vanished at zero would read as a broken
+            feature (work-row.tsx's own doc comment, spec §4.3), so this
+            renders at every count including zero. */}
+        <WorkRowCard accountId={accountId} total={workTotal} overdue={workOverdue} />
         <div className={cn("grid gap-4 sm:grid-cols-2", hasAfterHours ? "xl:grid-cols-4" : "xl:grid-cols-3")}>
           <StatTile
             hero
