@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { withTestAccount } from "./fixtures";
+import { withTestAccount, testProviderMessageId } from "./fixtures";
 import { createContact } from "../contacts";
 import {
   ensureConversation, createMessage, updateMessageStatus,
@@ -9,6 +9,31 @@ import {
   incrementUnreadCount, sumUnreadCount, searchConversations,
 } from "../messaging";
 
+/**
+ * Every `provider_message_id` in this file comes from `testProviderMessageId()`
+ * (test/fixtures.ts), never from a literal.
+ *
+ * `messages_provider_message_id_unique` (`0005_messaging.sql`) is PROJECT-WIDE
+ * and partial, not account-scoped, and the migration's own comment says why: a
+ * delivery webhook arrives with only a provider id and no tenant context, so
+ * the lookup cannot be scoped and neither can the index. That is right and
+ * stays. `withTestAccount` therefore gives these values no isolation at all —
+ * exactly the position `phone_numbers.e164` was in before PR 59 and blueprint
+ * names before PR 58. Two processes running the insert-time test below at once
+ * failed one process on
+ * `createMessage failed: duplicate key value violates unique constraint
+ * "messages_provider_message_id_unique"` in six rounds out of six.
+ *
+ * Where the value is asserted on or looked up again, draw it ONCE into a const
+ * and use that const on both sides. Two separate draws for the write and the
+ * read is the way this goes quietly wrong: the inbound-direction test near the
+ * bottom of this file expects a MISS, so mismatched ids would let it pass while
+ * proving nothing — which is why that test now also asserts the row really
+ * carries the id.
+ *
+ * Bodies, names and conversation ids stay as written literals: those are
+ * account-scoped, and `searchConversations` matches on the words in one.
+ */
 describe("messaging", () => {
   it("ensureConversation is idempotent per contact", () =>
     withTestAccount(async (db, accountId) => {
@@ -100,10 +125,13 @@ describe("messaging", () => {
         conversationId: convo.id, channel: "email", direction: "outbound", body: "x",
       }, "user_test");
 
-      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId: "prov_1" }, "user_test");
+      // Drawn once and compared against itself: the claim is that the patch
+      // reaches the column intact, and that is what a round trip proves.
+      const providerMessageId = testProviderMessageId();
+      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId }, "user_test");
       let [msg] = await listMessages(db, accountId, convo.id);
       expect(msg!.status).toBe("sent");
-      expect(msg!.provider_message_id).toBe("prov_1");
+      expect(msg!.provider_message_id).toBe(providerMessageId);
 
       await updateMessageStatus(db, accountId, id, "failed", { error: "boom" }, "user_test");
       [msg] = await listMessages(db, accountId, convo.id);
@@ -131,7 +159,8 @@ describe("messaging", () => {
         conversationId: convo.id, channel: "sms", direction: "outbound", body: "x",
       }, "voice", "ai");
 
-      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId: "prov_ai" }, "voice", "ai");
+      await updateMessageStatus(db, accountId, id, "sent",
+        { providerMessageId: testProviderMessageId() }, "voice", "ai");
 
       const { data: ev } = await db.from("events").select("actor_type, actor_id")
         .eq("account_id", accountId).eq("type", "message.status_changed")
@@ -160,7 +189,8 @@ describe("messaging", () => {
       // write blew up is left in, and that text DID go out.
       expect(await hasRecentOutboundSms(db, accountId, convo.id, since())).toBe(true);
 
-      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId: "prov_cool" }, "voice", "ai");
+      await updateMessageStatus(db, accountId, id, "sent",
+        { providerMessageId: testProviderMessageId() }, "voice", "ai");
       expect(await hasRecentOutboundSms(db, accountId, convo.id, since())).toBe(true);
 
       // THE DECIDED DIRECTION: `failed` means the provider refused and nothing
@@ -303,7 +333,7 @@ describe("messaging", () => {
         conversationId: a.id, channel: "sms", direction: "outbound", body,
       }, "user_test");
       await updateMessageStatus(db, accountId, resentId, "sent",
-        { providerMessageId: "prov_resend" }, "user_test");
+        { providerMessageId: testProviderMessageId() }, "user_test");
       const kept = await listFailedOutboundSms(db, accountId, [justNow("call-a", a.id)]);
       expect(kept).toHaveLength(1);
       expect(kept[0]!.messageId).toBe(failedId);
@@ -358,7 +388,12 @@ describe("messaging", () => {
       // windows here have to sit between two rows written seconds apart, which
       // is finer than the skew the minute-wide windows above are shaped around.
       const writtenAt = async (id: string) => {
-        const { data } = await db.from("messages").select("created_at").eq("id", id).single();
+        const { data, error } = await db.from("messages").select("created_at").eq("id", id).single();
+        // Checked, not assumed: unchecked, a failed read here reaches the next
+        // line as `Cannot read properties of null` — a message that names
+        // neither this query nor the reason, which is precisely how the
+        // e164 collision presented before PR 59.
+        expect(error, `messages created_at read failed: ${error?.message}`).toBeNull();
         return Date.parse((data as { created_at: string }).created_at);
       };
       const firstAt = await writtenAt(firstCall.id);
@@ -405,9 +440,12 @@ describe("messaging", () => {
       const { id } = await createMessage(db, accountId, {
         conversationId: convo.id, channel: "email", direction: "outbound", body: "x",
       }, "user_test");
-      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId: "prov_2" }, "user_test");
+      const providerMessageId = testProviderMessageId();
+      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId }, "user_test");
 
-      const hit = await updateMessageStatusByProviderId(db, "prov_2", "delivered");
+      // The lookup under test carries no account at all, so with a fixed
+      // literal the row it reaches is only this account's by luck.
+      const hit = await updateMessageStatusByProviderId(db, providerMessageId, "delivered");
       expect(hit.updated).toBe(true);
 
       const [msg] = await listMessages(db, accountId, convo.id);
@@ -416,7 +454,10 @@ describe("messaging", () => {
 
   it("updateMessageStatusByProviderId ignores an unknown id without throwing", () =>
     withTestAccount(async (db) => {
-      const miss = await updateMessageStatusByProviderId(db, "prov_does_not_exist", "delivered");
+      // Drawn and never written. "Unknown" has to be unknown to the whole
+      // PROJECT for this to mean anything, and a literal is only unknown until
+      // some other run writes it — this lookup has no account to hide behind.
+      const miss = await updateMessageStatusByProviderId(db, testProviderMessageId(), "delivered");
       expect(miss.updated).toBe(false);
     }));
 
@@ -427,9 +468,10 @@ describe("messaging", () => {
       const { id } = await createMessage(db, accountId, {
         conversationId: convo.id, channel: "email", direction: "outbound", body: "x",
       }, "user_test");
-      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId: "prov_actor" }, "user_test");
+      const providerMessageId = testProviderMessageId();
+      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId }, "user_test");
 
-      await updateMessageStatusByProviderId(db, "prov_actor", "delivered");
+      await updateMessageStatusByProviderId(db, providerMessageId, "delivered");
 
       const { data: ev } = await db.from("events").select("actor_type, actor_id")
         .eq("account_id", accountId).eq("type", "message.status_changed")
@@ -445,12 +487,13 @@ describe("messaging", () => {
       const { id } = await createMessage(db, accountId, {
         conversationId: convo.id, channel: "email", direction: "outbound", body: "x",
       }, "user_test");
-      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId: "prov_order" }, "user_test");
+      const providerMessageId = testProviderMessageId();
+      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId }, "user_test");
 
-      await updateMessageStatusByProviderId(db, "prov_order", "opened");
+      await updateMessageStatusByProviderId(db, providerMessageId, "opened");
       // "delivered" is earlier than "opened" on the lifecycle scale — a
       // provider replay or reorder must not revert the row.
-      await updateMessageStatusByProviderId(db, "prov_order", "delivered");
+      await updateMessageStatusByProviderId(db, providerMessageId, "delivered");
 
       const [msg] = await listMessages(db, accountId, convo.id);
       expect(msg!.status).toBe("opened");
@@ -463,10 +506,11 @@ describe("messaging", () => {
       const { id } = await createMessage(db, accountId, {
         conversationId: convo.id, channel: "email", direction: "outbound", body: "x",
       }, "user_test");
-      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId: "prov_replay" }, "user_test");
+      const providerMessageId = testProviderMessageId();
+      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId }, "user_test");
 
-      await updateMessageStatusByProviderId(db, "prov_replay", "delivered");
-      await updateMessageStatusByProviderId(db, "prov_replay", "delivered");
+      await updateMessageStatusByProviderId(db, providerMessageId, "delivered");
+      await updateMessageStatusByProviderId(db, providerMessageId, "delivered");
 
       const [msg] = await listMessages(db, accountId, convo.id);
       expect(msg!.status).toBe("delivered");
@@ -483,13 +527,18 @@ describe("messaging", () => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
       const convo = await ensureConversation(db, accountId, contactId, "user_test");
 
+      // ONE draw, used for the write and the read back. The claim is that an id
+      // handed to the INSERT survives onto the row, so the two sides have to be
+      // the same value — and the row's column is `null` when they are not,
+      // which no drawn id can equal.
+      const providerMessageId = testProviderMessageId();
       const { id: messageId } = await createMessage(db, accountId, {
         conversationId: convo.id, channel: "sms", direction: "inbound",
-        body: "hi", providerMessageId: "inbound_evt_1",
+        body: "hi", providerMessageId,
       }, "sms-inbound", "system");
 
       const [msg] = await listMessages(db, accountId, convo.id);
-      expect(msg!.provider_message_id).toBe("inbound_evt_1");
+      expect(msg!.provider_message_id).toBe(providerMessageId);
       expect(msg!.id).toBe(messageId);
     }));
 
@@ -497,15 +546,18 @@ describe("messaging", () => {
     withTestAccount(async (db, accountId) => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
       const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      const providerMessageId = testProviderMessageId();
       await createMessage(db, accountId, {
         conversationId: convo.id, channel: "sms", direction: "inbound",
-        body: "hi", providerMessageId: "inbound_evt_2",
+        body: "hi", providerMessageId,
       }, "sms-inbound", "system");
 
-      const hit = await findMessageByProviderId(db, accountId, "inbound_evt_2");
+      const hit = await findMessageByProviderId(db, accountId, providerMessageId);
       expect(hit).not.toBeNull();
 
-      expect(await findMessageByProviderId(db, accountId, "inbound_evt_does_not_exist")).toBeNull();
+      // Drawn and never written, so the miss is a real miss rather than one
+      // that holds only until another run writes that literal.
+      expect(await findMessageByProviderId(db, accountId, testProviderMessageId())).toBeNull();
     }));
 
   it("createMessage on a replayed inbound webhook is skipped by the caller, proving exactly one row exists", () =>
@@ -517,7 +569,7 @@ describe("messaging", () => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
       const convo = await ensureConversation(db, accountId, contactId, "user_test");
 
-      const providerMessageId = "inbound_evt_replay";
+      const providerMessageId = testProviderMessageId();
       for (const attempt of [1, 2]) {
         const existing = await findMessageByProviderId(db, accountId, providerMessageId);
         if (!existing) {
@@ -577,18 +629,25 @@ describe("messaging", () => {
       const convo = await ensureConversation(db, accountId, contactId, "user_test");
 
       // Create an inbound message with a provider id (for webhook-retry idempotency)
+      const providerMessageId = testProviderMessageId();
       const { id: messageId } = await createMessage(db, accountId, {
         conversationId: convo.id, channel: "sms", direction: "inbound",
-        body: "inbound message", providerMessageId: "inbound_prov_delivery",
+        body: "inbound message", providerMessageId,
       }, "sms-inbound", "system");
 
       // Attempt to update status by provider id — should miss because the row is inbound
-      const result = await updateMessageStatusByProviderId(db, "inbound_prov_delivery", "delivered");
+      const result = await updateMessageStatusByProviderId(db, providerMessageId, "delivered");
       expect(result.updated).toBe(false);
 
       // Verify the message status is unchanged (still at its default queued state)
       const [msg] = await listMessages(db, accountId, convo.id);
       expect(msg!.id).toBe(messageId);
       expect(msg!.status).toBe("queued");
+      // The row DOES carry the id the lookup was given — added with the drawn
+      // ids, because without it the miss above is equally consistent with the
+      // id never having reached the row, and the test would go on passing while
+      // proving nothing about direction. This is the only assertion in the file
+      // that a two-separate-draws mistake would not have failed loudly.
+      expect(msg!.provider_message_id).toBe(providerMessageId);
     }));
 });

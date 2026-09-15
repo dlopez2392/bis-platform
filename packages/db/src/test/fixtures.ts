@@ -49,6 +49,51 @@ export function testPhoneNumber(): string {
   throw new Error("testPhoneNumber: 16 draws in a row were already issued");
 }
 
+/** Every provider message id this process has already handed out — the same
+ *  within-a-run guard `issuedPhoneNumbers` gives the numbers. */
+const issuedProviderMessageIds = new Set<string>();
+
+/**
+ * A `messages.provider_message_id` no other run in this project is holding.
+ *
+ * `messages_provider_message_id_unique` (`0005_messaging.sql`) is a
+ * PROJECT-WIDE partial unique index, not an account-scoped one, and the
+ * migration says why in its own comment: a delivery webhook arrives carrying
+ * only the provider's id and no tenant context, so the lookup
+ * (`updateMessageStatusByProviderId`) has no account to scope to and the index
+ * cannot have one either. That is correct and stays.
+ *
+ * What is wrong is a test writing a FIXED literal into it. `messaging.test.ts`
+ * held about two dozen — `prov_1`, `inbound_evt_1` and the rest — and they were
+ * green only because nothing else in the project happened to write those exact
+ * strings, which is the same accident that hid `phone_numbers.e164` until a
+ * gate run found it. Proven, not assumed: two processes running
+ * `messaging.test.ts -t "persists a providerMessageId set at insert time"` at
+ * the same time, six rounds, one process failed every round on
+ * `createMessage failed: duplicate key value violates unique constraint
+ * "messages_provider_message_id_unique"`.
+ *
+ * Shape: `test_prov_` and twelve random digits. The column is free text with no
+ * constraint, so the shape is chosen for READERS, not for the database —
+ * Telnyx and Resend both issue UUIDs, so anyone who meets one of these values
+ * in the shared project (or in a webhook log) can see at a glance that a test
+ * wrote it and no provider ever did.
+ *
+ * Same draw and same guarantee as `testPhoneNumber` above: a trillion draws
+ * plus the issued set, so one run never repeats itself and two runs writing a
+ * couple of dozen ids each meet with probability about 2 in 10^10.
+ */
+export function testProviderMessageId(): string {
+  for (let attempt = 0; attempt < 16; attempt++) {
+    const id = `test_prov_${String(randomInt(0, 1_000_000_000_000)).padStart(12, "0")}`;
+    if (!issuedProviderMessageIds.has(id)) {
+      issuedProviderMessageIds.add(id);
+      return id;
+    }
+  }
+  throw new Error("testProviderMessageId: 16 draws in a row were already issued");
+}
+
 /** Creates a throwaway account, runs fn, then deletes everything it owns (FK order).
  *
  *  The FK order itself lives in `../account-teardown`, shared with the demo

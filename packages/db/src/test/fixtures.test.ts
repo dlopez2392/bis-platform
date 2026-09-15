@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { testPhoneNumber } from "./fixtures";
+import { testPhoneNumber, testProviderMessageId } from "./fixtures";
 
 /**
  * The harness's own test — no database, no network. `fixtures.ts` imports
@@ -25,9 +25,21 @@ import { testPhoneNumber } from "./fixtures";
  * (partial), `blueprints (agency_id, name)`, and the primary keys. Of those a
  * db test writes by hand: `clerk_org_id` (randomised by `withTestAccount`),
  * `vercel_project_id` (derived per account in `sites.test.ts`), `e164` (this
- * helper), the blueprint name (PR 58) and `provider_message_id` (still fixed
- * literals in `messaging.test.ts` — bis-comms). The public ids and the cancel
- * token are random defaults; the two partial indexes ignore NULL.
+ * helper), the blueprint name (PR 58) and `provider_message_id`
+ * (`testProviderMessageId`, below — `messaging.test.ts` held about two dozen
+ * fixed literals until it did). The public ids and the cancel token are random
+ * defaults; `telnyx_id` is written by no test at all; the two partial indexes
+ * ignore NULL.
+ *
+ * Re-read from `pg_index` on 2026-09-15 after the messaging fix, that list is
+ * unchanged and no COMMITTED write of a project-wide unique value from a fixed
+ * literal is left in this package. What remains is the weaker relative:
+ * `rls.test.ts`, `sites-grants.test.ts`, `automations-grants.test.ts` and
+ * `forms.test.ts` seed fixed `clerk_org_id` / `vercel_project_id` /
+ * `forms.public_id` values (`org_A`, `prj_A`, `aaaaaaaaaaaa`, …) inside
+ * `withRollback`, which never commits. Two runs there do not collide — the
+ * second BLOCKS on the unique index until the first transaction rolls back,
+ * so the cost is wall clock, not a duplicate key.
  */
 describe("testPhoneNumber", () => {
   /** Read from the live database on 2026-09-15:
@@ -69,5 +81,36 @@ describe("testPhoneNumber", () => {
     // would mean widening the fiction rules, which is the one thing that must
     // not happen to keep real numbers out of demo data.
     expect(n).not.toMatch(/^\+195655501\d{2}$/);
+  });
+});
+
+describe("testProviderMessageId", () => {
+  it("hands out a distinct id every time, so one run never collides with itself", () => {
+    const issued = Array.from({ length: 2000 }, () => testProviderMessageId());
+    expect(new Set(issued).size).toBe(issued.length);
+  });
+
+  it("draws at random, so two runs at once do not walk the same sequence", () => {
+    // Same reasoning as the phone helper's: distinctness alone is satisfied by
+    // a per-process counter, and a counter is precisely the version that still
+    // collides, because both processes start it at the same place. These are
+    // the two assertions a counter fails.
+    const issued = Array.from({ length: 50 }, () => testProviderMessageId());
+    expect(issued).not.toEqual([...issued].sort());
+    expect(new Set(issued.map((id) => id.slice(10, 14))).size).toBeGreaterThan(1);
+  });
+
+  it("is obviously test-shaped, so nobody reads a stranded row as a real provider id", () => {
+    const id = testProviderMessageId();
+    // These rows live, however briefly, in the one Supabase project production
+    // also uses, and `updateMessageStatusByProviderId` looks messages up by
+    // this column with NO tenant context at all. Anyone who meets one of these
+    // values has to be able to see at a glance that a test wrote it.
+    expect(id.startsWith("test_prov_")).toBe(true);
+    // Telnyx and Resend both hand out UUIDs, so this deliberately is not one.
+    expect(id).not.toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-/i);
+    // "test_prov_" and twelve digits.
+    expect(id).toHaveLength(22);
+    expect(id.slice(10)).toMatch(/^[0-9]{12}$/);
   });
 });
