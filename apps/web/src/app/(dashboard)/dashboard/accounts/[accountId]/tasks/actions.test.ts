@@ -36,9 +36,23 @@ function fakeDb(result: { data: { timezone: string } | null; error: { message: s
   };
 }
 
+/** The exact object `dbForRequest()` resolves to for the current test — a
+ *  distinct reference each time `beforeEach` runs. Assertions below pin THIS
+ *  object as the client argument rather than `expect.anything()`: a mutation
+ *  that swapped `dbForRequest()` for `serviceDb()` (as `closeOutBooking`'s
+ *  own delegate legitimately does, and as the other three must NOT) would
+ *  pass a real Supabase client or throw before `completeTask`/`reopenTask`/
+ *  `addTask` is ever called — either way, a loose `expect.anything()` cannot
+ *  tell the difference, but pinning the reference (or, for `addTask`, the
+ *  exact fake client contents) can. Matches the pattern
+ *  `calendar/actions.test.ts` already uses for the same reason.
+ */
+let db: ReturnType<typeof fakeDb>;
+
 beforeEach(() => {
   vi.clearAllMocks();
-  dbForRequestMock.mockResolvedValue(fakeDb({ data: { timezone: "America/Chicago" }, error: null }));
+  db = fakeDb({ data: { timezone: "America/Chicago" }, error: null });
+  dbForRequestMock.mockResolvedValue(db);
 });
 
 afterEach(() => {
@@ -51,7 +65,7 @@ describe("completeWorkTask", () => {
     const r = await completeWorkTask("acct_1", "task_1");
     expect(r).toEqual({ ok: true });
     expect(dbMocks.completeTask).toHaveBeenCalledWith(
-      expect.anything(), "acct_1", "task_1", "user_1",
+      db, "acct_1", "task_1", "user_1",
     );
     expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/acct_1/tasks");
   });
@@ -70,7 +84,7 @@ describe("reopenWorkTask", () => {
     const r = await reopenWorkTask("acct_1", "task_1");
     expect(r).toEqual({ ok: true });
     expect(dbMocks.reopenTask).toHaveBeenCalledWith(
-      expect.anything(), "acct_1", "task_1", "user_1",
+      db, "acct_1", "task_1", "user_1",
     );
   });
 
@@ -91,24 +105,25 @@ describe("dismissToTask", () => {
       source: "conversation", contactId: "contact_1", title: "Reply to Maria Garcia",
     });
 
-    expect(r).toEqual({ ok: true, taskId: "task_new" });
+    expect(r).toEqual({ ok: true, taskId: "task_new", dueAt: "2026-09-15T14:00:00.000Z" });
     expect(dbMocks.addTask).toHaveBeenCalledWith(
-      expect.anything(), "acct_1",
+      db, "acct_1",
       { contactId: "contact_1", title: "Reply to Maria Garcia", dueAt: "2026-09-15T14:00:00.000Z" },
       "user_1",
     );
     expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/acct_1/tasks");
   });
 
-  it("omits the due date rather than guessing when the account's zone is unusable", async () => {
-    dbForRequestMock.mockResolvedValue(fakeDb({ data: { timezone: "Not/AZone" }, error: null }));
+  it("omits the due date rather than guessing when the account's zone is unusable, and says so in the result", async () => {
+    const badZoneDb = fakeDb({ data: { timezone: "Not/AZone" }, error: null });
+    dbForRequestMock.mockResolvedValue(badZoneDb);
     dbMocks.addTask.mockResolvedValue({ id: "task_new" });
 
     const r = await dismissToTask("acct_1", { source: "booking", contactId: null, title: "Did this job happen?" });
 
-    expect(r).toEqual({ ok: true, taskId: "task_new" });
+    expect(r).toEqual({ ok: true, taskId: "task_new", dueAt: null });
     expect(dbMocks.addTask).toHaveBeenCalledWith(
-      expect.anything(), "acct_1",
+      badZoneDb, "acct_1",
       { contactId: undefined, title: "Did this job happen?", dueAt: undefined },
       "user_1",
     );

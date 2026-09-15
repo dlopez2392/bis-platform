@@ -198,7 +198,7 @@ function WorkRowItem({
     </>
   );
 
-  const rowClassName = "flex items-center gap-3 px-4 py-3 text-sm transition-colors";
+  const rowClassName = "flex items-center gap-3 px-4 py-3 text-sm";
 
   // Only a row tied to a real contact has anywhere to go — a contact-less
   // task (no `contact_id` on the `tasks` row) renders the same content as a
@@ -209,19 +209,30 @@ function WorkRowItem({
   // buttons nesting INSIDE the Link — a `<button>` inside an `<a>` is
   // invalid markup and makes a click ambiguous between "navigate" and "act".
   // `body` itself (the date/badge/label spans above) is untouched.
+  //
+  // The hover background lives on the `<li>` itself, not on the inner
+  // Link/div: DESIGN.md rule 4 wants the WHOLE row to carry the hover, and
+  // `LIST_ROW` supplies only a border. With the highlight on the Link alone
+  // it stopped short of the right edge on every row — the actions column's
+  // own padding and the gap between the two booking buttons read as dead
+  // strips, and hovering a button lit its own small rectangle disconnected
+  // from the row — and a contact-less row (the plain `<div>` branch) had no
+  // hover treatment at all. Putting `hover:bg-[var(--surface-3)]` on the
+  // `<li>` covers the full row — informational side AND actions side —
+  // regardless of which branch renders inside it.
   return (
-    <li className={cn(LIST_ROW, "flex items-center")}>
+    <li className={cn(LIST_ROW, "flex items-center transition-colors hover:bg-[var(--surface-3)]")}>
       {row.contactId ? (
         <Link
           href={`/dashboard/accounts/${accountId}/contacts/${row.contactId}`}
-          className={cn(rowClassName, "min-w-0 flex-1", "hover:bg-[var(--surface-3)]")}
+          className={cn(rowClassName, "min-w-0 flex-1")}
         >
           {body}
         </Link>
       ) : (
         <div className={cn(rowClassName, "min-w-0 flex-1")}>{body}</div>
       )}
-      <div className="pr-4">
+      <div className="shrink-0 pr-4">
         <WorkRowActions
           source={row.source}
           rawId={rawRowId(row)}

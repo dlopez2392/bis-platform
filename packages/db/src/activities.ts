@@ -69,9 +69,17 @@ export async function reopenTask(
   db: SupabaseClient, accountId: string, taskId: string, actorId: string,
   actorType: ActorType = "user",
 ): Promise<void> {
-  const { error } = await db.from("tasks")
+  const { data, error } = await db.from("tasks")
     .update({ completed_at: null })
-    .eq("account_id", accountId).eq("id", taskId);
+    .eq("account_id", accountId).eq("id", taskId)
+    .select("id");
   if (error) throw new Error(error.message);
+  // Mirrors `setBookingStatus` (booking.ts): select the id back and throw
+  // when nothing matched, rather than resolving success for a write that
+  // touched no row. Undo is the one path where a silent no-op is
+  // user-visible — the toast would say "undone" while the task the operator
+  // is looking at stays completed. `completeTask` shares this gap; left
+  // alone here, recorded for the whole-branch review.
+  if (!data?.length) throw new Error(`reopenTask: no task ${taskId} for account ${accountId}`);
   await emit(db, accountId, "task.reopened", actorId, { taskId }, actorType);
 }

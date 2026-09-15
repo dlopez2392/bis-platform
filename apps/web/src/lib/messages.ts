@@ -1278,7 +1278,18 @@ export const m = {
   // different things about the same write.
   "work.done.toast": "Marked done.",
   "work.notNow.toast": "Moved to tomorrow.",
-  "work.booking.toast": "Updated.",
+  // "Not now" on the zone-degrade path creates the task with no due date —
+  // nothing actually moved to tomorrow, so that toast would be a lie here.
+  "work.notNow.toastNoDate": "Added to your to-do list.",
+  // The two close-out buttons are both irreversible and each arms a
+  // different outbound message to the customer (a review request on
+  // completion, a no-show nudge on no-show) — a shared "Updated." toast made
+  // a misclick invisible. Each toast now names the outcome that was actually
+  // recorded, and the completed one says a review request may follow so a
+  // wrong click is caught immediately rather than discovered when the wrong
+  // message goes out.
+  "work.booking.completed.toast": "Marked as completed. A review request may go out.",
+  "work.booking.noShow.toast": "Marked as a no-show.",
   "work.actionFailed": "Couldn't update that just now. Try again in a moment.",
 } as const;
 

@@ -1,8 +1,10 @@
 // apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/tasks/page.tsx
 //
-// The account's "To do" screen (Work Queue Task 3) — READ-ONLY. Task 4 wires
-// the Not now / Done / booking-outcome buttons; this page only reads and
-// buckets `listAccountWork`'s three sources and renders them.
+// The account's "To do" screen. Task 3 built it read-only; Task 4 wired the
+// Not now / Done / booking-outcome buttons (`work-list.tsx` → `actions.ts` →
+// `WorkRowActions`). This page itself still only reads and buckets
+// `listAccountWork`'s three sources and renders them — the writes live in
+// the files below it, not here.
 import { listAccountWork } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { requireAccountAccess } from "@/lib/auth";

@@ -19,6 +19,19 @@
 // - booking      → the two close-out buttons, terminal, no undo (matches
 //                  the calendar screen's own posture: once a booking leaves
 //                  "booked" there is no un-complete/un-no-show path).
+//
+// The two booking buttons are the one place on this dense, fast-triage row
+// where a misclick is genuinely dangerous: both are irreversible AND both
+// read the contact's own email/phone to arm a different outbound customer
+// message — Completed makes the booking eligible for the review-request
+// automation, No-show for the separate no-show nudge. They therefore do NOT
+// share one visual treatment the way Done/Not now do. `variant="destructive"`
+// on No-show and a distinct, outcome-naming toast on each is the deliberate
+// exception to "everything but one primary is ghost" below — matching the
+// vocabulary `bookings-list.tsx`'s own `STATUS_VARIANT` already uses for
+// these same two outcomes (`completed: "secondary"`, `no_show: "destructive"`).
+// No confirmation dialog either way: DESIGN.md rule 6 bans reflexive "Are you
+// sure?", and terminal-by-construction is this spec's own stance.
 import { useTransition } from "react";
 import { toast } from "sonner";
 import type { WorkSource } from "@bis/db";
@@ -60,7 +73,13 @@ export function WorkRowActions({
       toast.success(m["work.done.toast"], {
         action: {
           label: m["common.undo"],
-          onClick: () => void reopenWorkTask(rawId).then((r) => { if (!r.ok) toast.error(r.error); }),
+          // Inside a SECOND transition of its own — not fired-and-forgotten
+          // outside `pending` — so the row's button stays disabled for the
+          // duration of the undo too, not just the original action.
+          onClick: () => startTransition(async () => {
+            const r = await reopenWorkTask(rawId);
+            if (!r.ok) toast.error(r.error);
+          }),
         },
       });
     });
@@ -71,10 +90,16 @@ export function WorkRowActions({
       const result = await dismissToTask({ source, contactId, title: label });
       if (!result.ok) { toast.error(result.error); return; }
       const newTaskId = result.taskId;
-      toast.success(m["work.notNow.toast"], {
+      // The action reports whether a due date actually got set (the zone
+      // could be unresolvable) — "Moved to tomorrow." is a lie on that
+      // degrade path, since nothing moved and no date was set.
+      toast.success(result.dueAt ? m["work.notNow.toast"] : m["work.notNow.toastNoDate"], {
         action: {
           label: m["common.undo"],
-          onClick: () => void completeWorkTask(newTaskId).then((r) => { if (!r.ok) toast.error(r.error); }),
+          onClick: () => startTransition(async () => {
+            const r = await completeWorkTask(newTaskId);
+            if (!r.ok) toast.error(r.error);
+          }),
         },
       });
     });
@@ -83,14 +108,20 @@ export function WorkRowActions({
   function runBooking(status: "completed" | "no_show") {
     startTransition(async () => {
       const result = await closeOutBooking(rawId, status);
-      if (result.ok) toast.success(m["work.booking.toast"]);
-      else toast.error(result.error);
+      if (!result.ok) { toast.error(result.error); return; }
+      // Names the outcome that was actually recorded — these two buttons
+      // each arm a different outbound customer message and look nearly
+      // identical, so a wrong click must be visible immediately rather than
+      // hidden behind one shared "Updated." toast.
+      toast.success(
+        status === "completed" ? m["work.booking.completed.toast"] : m["work.booking.noShow.toast"],
+      );
     });
   }
 
   if (source === "task") {
     return (
-      <Button type="button" variant="outline" size="sm" disabled={pending} onClick={runComplete}>
+      <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={runComplete}>
         {m["work.done"]}
       </Button>
     );
@@ -98,19 +129,22 @@ export function WorkRowActions({
 
   if (source === "conversation") {
     return (
-      <Button type="button" variant="outline" size="sm" disabled={pending} onClick={runDismiss}>
+      <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={runDismiss}>
         {m["work.notNow"]}
       </Button>
     );
   }
 
-  // source === "booking" — terminal, no undo (see file doc above).
+  // source === "booking" — terminal, no undo (see file doc above). Ghost for
+  // Completed (the everything-but-one-primary default); `destructive` for
+  // No-show is the deliberate exception that makes the two visually
+  // distinguishable, not an accident of copy-paste.
   return (
     <div className="flex shrink-0 gap-2">
-      <Button type="button" variant="outline" size="sm" disabled={pending} onClick={() => runBooking("completed")}>
+      <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => runBooking("completed")}>
         {m["work.booking.completed"]}
       </Button>
-      <Button type="button" variant="outline" size="sm" disabled={pending} onClick={() => runBooking("no_show")}>
+      <Button type="button" variant="destructive" size="sm" disabled={pending} onClick={() => runBooking("no_show")}>
         {m["work.booking.noShow"]}
       </Button>
     </div>

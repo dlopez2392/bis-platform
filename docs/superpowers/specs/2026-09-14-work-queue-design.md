@@ -133,6 +133,26 @@ both calling the existing `setBookingStatus`. It is the cheapest source to
 build and the only one with money behind it — each Completed makes a booking
 eligible for a review request on the next cron tick.
 
+**Both outcomes are terminal — no un-complete, no un-no-show, and Task 4
+deliberately ships no confirmation dialog for either.** Recorded here because
+otherwise it is only discoverable by reading the automations and booking
+modules directly:
+- **Flipping a booking's status back can collide with `bookings_no_overlap`.**
+  The row's slot is not reserved once it leaves `booked` — another booking can
+  legitimately take the same time — so reopening it is not a guaranteed-safe
+  operation the way reopening a task is; it can fail outright, and "sometimes
+  works" is worse than "doesn't exist."
+- **The review-request (and no-show-nudge) automation may already have fired
+  on an intervening scheduled run** by the time anyone would think to undo the
+  click — the cron tick that reads `status = 'completed'` does not wait for a
+  human to confirm the click was intentional. An undo button that cannot undo
+  the message already sent would be a false promise, worse than no undo
+  button at all.
+No confirmation dialog either, per DESIGN.md rule 6 (reflexive "Are you sure?"
+dialogs are banned) — the two buttons are differentiated visually instead
+(destructive for No-show) and the toast on each names the outcome recorded,
+so a wrong click is caught immediately rather than guarded against upfront.
+
 ## 2. Buckets, not a sorted list
 
 Three groups, in this order:
@@ -259,6 +279,28 @@ The screen is named **To do** in the nav.
   or ambient zone can satisfy. (Delegating the zone read to `partsInZone`
   turned out to make constructor-spying unnecessary; the two-zone pair is the
   stronger pin anyway.)
+- **The two-zone shape above binds every consumer of the account's zone, not
+  only `bucketWork`.** The row's rendered date and "Not now"'s due-date write
+  (`tomorrowAt9`) both read the same account zone and both need the same
+  one-instant-two-zones proof, on pain of a fixture that happens to run on
+  the developer's own system zone (America/Chicago, here) quietly certifying
+  nothing. It binds `tomorrowAt9` most of all: bucketing and the row date are
+  read paths that get a fresh chance to be right on every request, but
+  `tomorrowAt9` feeds a WRITE — the only one of the three that turns the
+  account's zone into a stored value (`due_at`). A wrong answer there is not
+  refreshed away on the next page load; it is a row sitting in the wrong
+  bucket until someone notices and hand-edits the task. (This is the gap
+  `dismiss-date.test.ts` shipped with: its first case exercised only Chicago,
+  which is also the dev machine's system zone, so it could not tell a real
+  zone-aware read from a system-zone read wearing an unused parameter.)
+- **A helper making more than one named claim needs one mutation per claim.**
+  `tomorrowAt9` makes two: "uses the ACCOUNT's zone, not the server's" and
+  "crosses a DST boundary without drifting an hour." The prescribed mutation
+  in the Task 4 plan tested only the DST claim (replacing the zone-aware
+  conversion with a flat `+86_400_000`) — a real, useful check, but blind to
+  the first claim, which is exactly why it shipped unpinned. One mutation per
+  claim a helper's own doc comment or name asserts, not one mutation per
+  helper.
 - **It must degrade, not throw — and this binds the whole route, not just
   `bucketWork`.** An invalid IANA zone reaches this screen today —
   `create-account-dialog.tsx:80` is a free-text input and

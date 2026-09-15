@@ -1,8 +1,13 @@
 "use server";
 //
-// The To do screen's three actions (Work Queue Task 4). All three:
-// `requireAccountAccess`, then the write through `dbForRequest()`, then
-// `revalidatePath` this route. `tomorrowAt9` lives in
+// The To do screen's four actions (Work Queue Task 4). Every one starts with
+// `requireAccountAccess`, then `revalidatePath` this route on success — but
+// they do NOT all write through the same client. `completeWorkTask`,
+// `reopenWorkTask` and `dismissToTask` write through `dbForRequest()`, the
+// request-scoped client. `closeOutBooking` does not: it delegates the guard
+// AND the write to `setBookingStatusAction` (calendar/actions.ts), which
+// writes through `serviceDb()` for a reason recorded on that action's own
+// doc comment — reused here rather than re-derived. `tomorrowAt9` lives in
 // `@/lib/work/dismiss-date`, not here — this file carries `"use server"`,
 // where every VALUE export must be an async function, and that helper is
 // synchronous.
@@ -21,7 +26,15 @@ import { tomorrowAt9 } from "@/lib/work/dismiss-date";
 import { setBookingStatusAction } from "../calendar/actions";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
-export type DismissResult = { ok: true; taskId: string } | { ok: false; error: string };
+/** `dueAt` is the ISO instant actually written (or `null` on the zone-degrade
+ *  path) — carried on the result, not just the write, so the CLIENT can tell
+ *  the two cases apart. "Moved to tomorrow." is a lie on the degrade path,
+ *  where no due date was set and nothing moved; the caller decides which
+ *  toast to show from this field rather than always assuming the dated
+ *  case. */
+export type DismissResult =
+  | { ok: true; taskId: string; dueAt: string | null }
+  | { ok: false; error: string };
 
 function tasksPath(accountId: string): string {
   return `/dashboard/accounts/${accountId}/tasks`;
@@ -71,9 +84,15 @@ export async function reopenWorkTask(accountId: string, taskId: string): Promise
  * turns "tomorrow" into a real instant is precisely the thing that must
  * never come from the browser. An unresolvable zone (the timezone column is
  * free text with no validation upstream) degrades to no due date — the task
- * still gets created and still does its suppression job, it just lands in
- * Waiting instead of Today, which is honest rather than a guessed moment
- * (`tomorrowAt9`'s own contract: never a UTC fallback).
+ * still gets created and still does its suppression job, honest rather than
+ * a guessed moment (`tomorrowAt9`'s own contract: never a UTC fallback).
+ * This does NOT mean it "lands in Waiting instead of Today": `bucketWork`
+ * puts a task due tomorrow in Waiting today regardless (only a task due
+ * TODAY buckets to Today), so a dated and an undated dismissal look
+ * identical the moment they're created. The real difference shows up
+ * tomorrow morning — the dated task's due day rolls onto `todayKey` and it
+ * surfaces under Today, while the undated one has no `due_at` at all and
+ * sits in Waiting permanently, the same as any other undated task.
  */
 export async function dismissToTask(
   accountId: string,
@@ -88,16 +107,16 @@ export async function dismissToTask(
     return { ok: false, error: m["work.actionFailed"] };
   }
   const account = data as { timezone: string };
-  const dueAt = tomorrowAt9(new Date(), account.timezone) ?? undefined;
+  const resolvedDueAt = tomorrowAt9(new Date(), account.timezone);
 
   try {
     const { id } = await addTask(
       db, accountId,
-      { contactId: row.contactId ?? undefined, title: row.title, dueAt },
+      { contactId: row.contactId ?? undefined, title: row.title, dueAt: resolvedDueAt ?? undefined },
       userId,
     );
     revalidatePath(tasksPath(accountId));
-    return { ok: true, taskId: id };
+    return { ok: true, taskId: id, dueAt: resolvedDueAt };
   } catch (e) {
     console.error(`dismissToTask: create failed for a "${row.source}" row (account ${accountId}): ${String(e)}`);
     return { ok: false, error: m["work.actionFailed"] };

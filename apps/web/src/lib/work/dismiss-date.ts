@@ -30,6 +30,15 @@ function addOneDay(y: number, m: number, d: number): { y: number; m: number; d: 
  * (create-account-dialog.tsx:80 → actions.ts:13). The caller's job is to
  * treat `null` as "omit the due date", not to guess one.
  *
+ * One substitution the paragraph above used to gloss over: an undefined
+ * `zone` is not caught by the try/catch below at all.
+ * `Intl.DateTimeFormat`'s own `timeZone: undefined` does not throw — it
+ * silently resolves the RUNTIME's zone (`partsInZone`'s formatter
+ * construction), which is exactly the server-zone substitution this helper
+ * exists to refuse. Not reachable today (the `timezone` column is non-null
+ * with a default), but the guard below closes it permanently rather than
+ * leaving it to a future nullable column or a caller mistake.
+ *
  * Deliberately does NOT add 86_400_000 milliseconds — that drifts an hour
  * across a DST boundary (see dismiss-date.test.ts's second case, which is
  * the whole reason this helper exists rather than `now.getTime() + ONE_DAY`
@@ -39,6 +48,7 @@ function addOneDay(y: number, m: number, d: number): { y: number; m: number; d: 
  * slot engine itself uses for zone-correct day arithmetic.
  */
 export function tomorrowAt9(now: Date, zone: string): string | null {
+  if (!zone) return null;
   let today: { y: number; m: number; d: number };
   try {
     today = partsInZone(now, zone);
