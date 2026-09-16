@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  canRepairRouting, indexByE164, routingStatus, type TelnyxNumberFacts,
+  canRepairRouting, indexByE164, missingRoutingConfig, routingStatus,
+  type TelnyxNumberFacts,
 } from "./number-routing";
 
 const OURS = "conn_bis_texml";
@@ -100,5 +101,29 @@ describe("indexByE164", () => {
 
   it("handles an empty carrier account", () => {
     expect(indexByE164([]).size).toBe(0);
+  });
+});
+
+describe("missingRoutingConfig", () => {
+  it("names nothing when both halves are present", () => {
+    expect(missingRoutingConfig("key", "conn")).toEqual([]);
+  });
+
+  it("names the API key alone", () => {
+    expect(missingRoutingConfig(null, "conn")).toEqual(["TELNYX_API_KEY"]);
+  });
+
+  it("names the connection id alone", () => {
+    expect(missingRoutingConfig("key", null)).toEqual(["TELNYX_VOICE_CONNECTION_ID"]);
+  });
+
+  /**
+   * Both, not just the first. Reporting one would send an operator to set it,
+   * redeploy, and rediscover the other — which is two deploys to learn what
+   * one sentence can say.
+   */
+  it("names BOTH when both are missing", () => {
+    expect(missingRoutingConfig(null, null))
+      .toEqual(["TELNYX_API_KEY", "TELNYX_VOICE_CONNECTION_ID"]);
   });
 });

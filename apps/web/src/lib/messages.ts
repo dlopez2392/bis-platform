@@ -1008,8 +1008,15 @@ export const m = {
   "numbers.routing.notConfigured": "Routing isn't wired up yet — set TELNYX_VOICE_CONNECTION_ID to the BIS Platform Voice app's id.",
   // Shown in place of the whole routing column when we could not ask at all,
   // so the blank is explained rather than read as "everything is fine".
-  "numbers.routing.unavailable":
-    "Carrier routing isn't being checked here. A number still has to be pointed at BIS under Voice → Routing in Telnyx before callers reach the company on its row.",
+  // Three different faults used to produce the same blank column: no API key,
+  // no connection id, and a carrier that would not answer. They need
+  // different fixes, so they say different things — naming the env var is the
+  // point on an agency-only operator screen, and a variable's NAME is not a
+  // secret.
+  "numbers.routing.missingConfig":
+    "Carrier routing isn't being checked: {vars} not set for this environment. A number still has to be pointed at BIS under Voice → Routing in Telnyx before callers reach the company on its row.",
+  "numbers.routing.lookupFailed":
+    "Couldn't reach Telnyx just now, so routing isn't shown. The numbers below and their companies are unaffected.",
   // Replaces the standing carrier sentence once routing IS checkable: the app
   // can now see and fix where a number points, so the remaining caveat is
   // only about numbers held at another carrier.
