@@ -37,8 +37,24 @@ export type TakenMessage = { body: string; callbackNumber?: string; at: string }
  *   to check your own appointment time is a complete, successful call that
  *   changes nothing in the database. A `found: false` lookup is NOT served:
  *   we told that caller we had nothing for them.
+ * - `transferred` — the caller asked for a person and was handed to one
+ *   (0037's vocabulary). Written by the handoff route, which arrives later;
+ *   nothing produces it yet. It is the most served a caller can be, and the
+ *   text-back is the one thing that must not fire afterwards: a caller who
+ *   was successfully put through to a human and then gets "Sorry we missed
+ *   you just now" by text is the exact failure this array exists to prevent,
+ *   in its sharpest form. It is ALSO the one `ServedAction` with a second
+ *   reader — `summaryFactLine` (./summarize.ts) leads with it, because the
+ *   transcript stops at the handoff and a model handed that partial
+ *   transcript has no way to know it was partial. Recorded here rather than
+ *   as a boolean of its own precisely because there are two readers: one
+ *   fact in two fields is two chances to write only one of them, and the
+ *   two ways to get that wrong are the two failures this design most cares
+ *   about. `classifyOutcome` still returns `abandoned` for this call at
+ *   socket close — from the socket's point of view the caller did leave —
+ *   and the handoff route upgrades the row afterwards via `setCallOutcome`.
  */
-export type ServedAction = "cancelled" | "rescheduled" | "booking_found";
+export type ServedAction = "cancelled" | "rescheduled" | "booking_found" | "transferred";
 
 export interface CallState {
   contactId: string | null;
@@ -48,25 +64,6 @@ export interface CallState {
   transcript: TranscriptEvent[];
   /** See ServedAction. Append-only, deduplicated, never read by classifyOutcome. */
   served: ServedAction[];
-  /**
-   * The caller was handed to a person (0037's vocabulary).
-   *
-   * OPTIONAL and set by nobody yet — the route that performs the handoff
-   * arrives later and is what will write it. It exists now because it already
-   * has a consumer: `summaryFactLine` (./summarize.ts) has to say that the
-   * transcript below it covers only the part of the call BEFORE the handoff,
-   * and a model handed that same partial transcript has no way to know it was
-   * partial.
-   *
-   * Deliberately NOT a `ServedAction`. That array has exactly one reader — the
-   * missed-call text-back's gate — and folding a handoff into it would change
-   * that gate's behaviour in a task whose whole point is that behaviour does
-   * not change. Also deliberately not read by `classifyOutcome`, which still
-   * returns `abandoned` for a handed-off call at socket close: from the
-   * socket's point of view the caller did leave, and the handoff route
-   * upgrades the row afterwards through `setCallOutcome`.
-   */
-  handedOff?: boolean;
   summary?: string;
 }
 
