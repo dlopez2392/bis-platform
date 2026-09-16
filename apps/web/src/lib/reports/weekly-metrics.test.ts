@@ -4,7 +4,9 @@ import { countFromOutcomes, ANSWERED_OUTCOMES, LEAD_OUTCOME } from "./weekly-met
 /**
  * These two constants ARE the definitions the client's email reports, so they
  * are pinned rather than left to be read off an implementation. `CallOutcome`
- * is `booked | lead | message | abandoned | spam`.
+ * is `booked | lead | message | abandoned | spam | transferred` (0037 added
+ * the sixth, and `ANSWERED_OUTCOMES` counts it — the caller reached a person,
+ * so the phone was answered).
  */
 describe("what counts as an answered call", () => {
   it("counts booked, lead and message — never spam, never abandoned", () => {

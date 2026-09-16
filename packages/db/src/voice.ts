@@ -130,12 +130,23 @@ export async function upsertVoiceProfile(
  * ids. That is a deployment-ordering decision, not a style one, and it is the
  * only place in this package that needs it: a push to `main` deploys
  * production, migrations are applied out of band, and this is the ONE function
- * on the live call path. Naming the column unconditionally means that between
- * the deploy and the migration every insert here fails — and a call whose row
- * cannot be written is a call that is not answered. Omitting it confines that
- * window to handoff calls, of which there are none until the route that mints
- * tokens ships. Post-migration the two forms are identical: the column's
- * default is NULL.
+ * on the live call path. PostgREST rejects an insert naming a column it does
+ * not know about, outright — so naming `handoff_token` unconditionally would
+ * fail EVERY insert here in the window between the deploy and the migration.
+ *
+ * The damage is not a dropped call. `api/voice/incoming/route.ts` (step 10)
+ * fail-opens this call on purpose — a DB blip must not turn away a caller —
+ * so every one of those calls would be answered normally while recording no
+ * row at all: no transcript, no outcome, no duration, no summary, no CRM
+ * trail, and nothing for the daily caps to count. A silent hole in the
+ * record for the length of the window, which is precisely the failure this
+ * product is least able to see. Omitting the column confines that window to
+ * handoff calls, of which there are none until the route that mints tokens
+ * ships. Post-migration the two forms are identical: the column's default is
+ * NULL.
+ *
+ * This comment is the only guard on that decision — no test can express
+ * "before the migration" — so it has to be accurate.
  */
 export async function startCallRow(
   db: SupabaseClient, accountId: string,

@@ -264,9 +264,21 @@ describe("0037 calls.outcome admits a sixth value", () => {
       // and re-adds; keeping the name means the next migration that needs a
       // seventh value finds it exactly where this one did.
       expect(rows, "calls_outcome_check is missing — a dropped constraint that was never re-added").toHaveLength(1);
-      for (const legal of ["booked", "lead", "message", "abandoned", "spam", "transferred"]) {
-        expect(rows[0]!.def, `calls_outcome_check omits ${legal}`).toContain(`'${legal}'`);
+      const LEGAL = ["booked", "lead", "message", "abandoned", "spam", "transferred"];
+      const def = rows[0]!.def;
+      for (const legal of LEGAL) {
+        expect(def, `calls_outcome_check omits ${legal}`).toContain(`'${legal}'`);
       }
+      // "exactly" in this test's name has to MEAN exactly. The loop above only
+      // catches a value going missing from the CHECK; the opposite direction —
+      // a seventh value appearing in the database that `CallOutcome` (../voice.ts)
+      // has never heard of — is the one that produces a stored call row no
+      // screen in this app can render, because the outcome pill switches on that
+      // closed union. So the quoted literals are extracted and compared as a
+      // SET, which guards the database→TypeScript direction too.
+      const quoted = [...def.matchAll(/'([^']*)'/g)].map((m) => m[1]!).sort();
+      expect(quoted, `calls_outcome_check quotes a different set than CallOutcome admits: ${def}`)
+        .toEqual([...LEGAL].sort());
     });
   });
 
