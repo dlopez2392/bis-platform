@@ -20,6 +20,8 @@ import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { requireAgency } from "@/lib/auth";
 import { buildNumberInventory, countByStatus, type InventoryNumber } from "@/lib/voice/number-inventory";
+import { indexByE164, routingStatus, type RoutingStatus } from "@/lib/voice/number-routing";
+import { listTelnyxNumbers, telnyxRoutingConfig } from "@/lib/voice/telnyx-numbers";
 import { m } from "@/lib/messages";
 import { NumbersTable } from "./numbers-table";
 import { StatusCountStrip } from "./status-counts";
@@ -56,6 +58,33 @@ export default async function NumbersPage() {
     (accounts ?? []).map((a) => ({ id: a.id, name: a.name, archived: a.status === "archived" })),
   );
 
+  // The carrier half. ONE listing for the whole page rather than a lookup per
+  // row: Telnyx's own per-number filter matches on as few as three digits, so
+  // a listing matched on exact E.164 is both cheaper and the only way that
+  // cannot return a neighbour's record.
+  //
+  // Unlike the two reads above, this one IS swallowed. It is a second
+  // opinion from a third party about numbers the page has already loaded —
+  // a carrier outage must leave the inventory readable, the move and release
+  // controls working, and the routing column honestly blank. `unchecked`
+  // never reads as an accusation (see number-routing.ts), and
+  // `canRepairRouting` refuses to offer a write against a verdict we could
+  // not form.
+  const { apiKey, connectionId } = telnyxRoutingConfig();
+  let routing: Record<string, RoutingStatus> = {};
+  let routingChecked = false;
+  if (apiKey && connectionId) {
+    try {
+      const carrier = indexByE164(await listTelnyxNumbers(apiKey));
+      routing = Object.fromEntries(
+        rows.map((r) => [r.id, routingStatus(carrier.get(r.e164) ?? null, connectionId)]),
+      );
+      routingChecked = true;
+    } catch (e) {
+      console.error(`numbers: carrier routing lookup failed: ${String(e)}`);
+    }
+  }
+
   return (
     <>
       <PageHeader title={m["numbers.title"]} subtitle={m["numbers.subtitle"]} />
@@ -77,8 +106,10 @@ export default async function NumbersPage() {
                 Not a Notice: nothing is wrong, and a standing warn band on a
                 healthy page is noise an operator learns to skim past. This is
                 the page telling the truth about its own reach. */}
-            <p className="text-xs text-muted-foreground">{m["numbers.carrierSeam"]}</p>
-            <NumbersTable rows={rows} />
+            <p className="text-xs text-muted-foreground">
+              {routingChecked ? m["numbers.routing.seam"] : m["numbers.routing.unavailable"]}
+            </p>
+            <NumbersTable rows={rows} routing={routing} />
           </>
         )}
       </div>

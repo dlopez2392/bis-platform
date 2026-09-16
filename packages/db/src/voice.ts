@@ -88,6 +88,33 @@ export async function setPhoneNumberStatus(
   await emit(db, accountId, "phone_number.status_changed", actorId, { phoneNumberId, status }, actorType);
 }
 
+/**
+ * Records Telnyx's own id for a number.
+ *
+ * The handle the platform never had. `telnyx_id` has been an optional field
+ * an operator could type on the Voice page and, in practice, never did — it
+ * was null for every number in production on 2026-09-16 — so nothing here
+ * could address a number at the carrier even to ask where its calls go.
+ * The routing repair learns the id from Telnyx's own listing and writes it
+ * back here, so the next read already has it.
+ *
+ * Account-scoped like `setPhoneNumberStatus`, and loud on no match for the
+ * same reason (the setBranding lesson): PostgREST reports an UPDATE that
+ * matched nothing as a success, and a silently-skipped write here would leave
+ * the platform claiming a handle it does not hold.
+ */
+export async function setPhoneNumberTelnyxId(
+  db: SupabaseClient, accountId: string, phoneNumberId: string,
+  telnyxId: string, actorId: string, actorType: ActorType = "user",
+): Promise<void> {
+  const { data, error } = await db.from("phone_numbers")
+    .update({ telnyx_id: telnyxId, updated_at: new Date().toISOString() })
+    .eq("id", phoneNumberId).eq("account_id", accountId).select("id");
+  if (error) throw new Error(`setPhoneNumberTelnyxId failed: ${error.message}`);
+  if (!data || data.length === 0) throw new Error("setPhoneNumberTelnyxId matched no row");
+  await emit(db, accountId, "phone_number.carrier_linked", actorId, { phoneNumberId, telnyxId }, actorType);
+}
+
 export async function getVoiceProfile(
   db: SupabaseClient, accountId: string,
 ): Promise<VoiceProfileRow | null> {

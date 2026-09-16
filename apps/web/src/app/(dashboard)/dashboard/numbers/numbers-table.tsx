@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeftRight, PhoneOff, TriangleAlert } from "lucide-react";
+import { ArrowLeftRight, PhoneForwarded, PhoneOff, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import type { PhoneNumberStatus } from "@bis/db";
 import { Button } from "@/components/ui/button";
@@ -16,7 +16,22 @@ import { m } from "@/lib/messages";
 import { requiresMoveConfirm } from "@/lib/setup/setup-view";
 import { NUMBER_STATUS_DOT, NUMBER_STATUS_LABEL } from "@/lib/voice/number-status";
 import type { InventoryRow } from "@/lib/voice/number-inventory";
-import { moveNumberToAccountAction, releaseNumberAction } from "./actions";
+import { canRepairRouting, type RoutingStatus } from "@/lib/voice/number-routing";
+import {
+  moveNumberToAccountAction, releaseNumberAction, repairNumberRoutingAction,
+} from "./actions";
+
+/** Copy and dot per routing verdict. "Routed here" is the ONLY state in which
+ *  a caller dialling this number reaches the company on its row — the rest
+ *  are degrees of "the call goes somewhere else". `unchecked` is deliberately
+ *  neutral, never a warning: it means we could not ask. */
+const ROUTING: Record<RoutingStatus, { label: string; dot: string }> = {
+  routed: { label: m["numbers.routing.routed"], dot: "bg-success" },
+  elsewhere: { label: m["numbers.routing.elsewhere"], dot: "bg-destructive" },
+  unrouted: { label: m["numbers.routing.unrouted"], dot: "bg-warning" },
+  absent: { label: m["numbers.routing.absent"], dot: "bg-warning" },
+  unchecked: { label: m["numbers.routing.unchecked"], dot: "border border-muted-foreground/60 bg-transparent" },
+};
 
 /**
  * Every number the platform holds, one row each, with the two writes an
@@ -29,7 +44,14 @@ import { moveNumberToAccountAction, releaseNumberAction } from "./actions";
  * answering real callers right now — a confirm step that names the
  * consequence rather than asking "are you sure?".
  */
-export function NumbersTable({ rows }: { rows: InventoryRow[] }) {
+export function NumbersTable({
+  rows, routing,
+}: {
+  rows: InventoryRow[];
+  /** Carrier verdict per row id. A missing entry means the carrier was never
+   *  asked (unconfigured, or the lookup failed) and reads as `unchecked`. */
+  routing: Record<string, RoutingStatus>;
+}) {
   return (
     <ListPanel as="ul">
       {rows.map((row) => (
@@ -48,7 +70,8 @@ export function NumbersTable({ rows }: { rows: InventoryRow[] }) {
             </p>
           </div>
           <StatusChip status={row.status} />
-          <RowActions row={row} />
+          <RoutingChip status={routing[row.id] ?? "unchecked"} />
+          <RowActions row={row} routing={routing[row.id] ?? "unchecked"} />
         </li>
       ))}
     </ListPanel>
@@ -61,6 +84,18 @@ function StatusChip({ status }: { status: PhoneNumberStatus }) {
     <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
       <span className={cn("size-1.5 shrink-0 rounded-full", NUMBER_STATUS_DOT[status])} aria-hidden />
       {NUMBER_STATUS_LABEL[status]}
+    </span>
+  );
+}
+
+/** The carrier verdict, dot AND word like every other status in this app
+ *  (DESIGN.md rule 3). */
+function RoutingChip({ status }: { status: RoutingStatus }) {
+  const tone = ROUTING[status];
+  return (
+    <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+      <span className={cn("size-1.5 shrink-0 rounded-full", tone.dot)} aria-hidden />
+      {tone.label}
     </span>
   );
 }
@@ -84,7 +119,7 @@ type Mode = "idle" | "picking" | "moveConfirm" | "releaseConfirm";
  * enough (`requiresMoveConfirm`, lib/setup/setup-view.ts, which carries the
  * decision so it has a test of its own).
  */
-function RowActions({ row }: { row: InventoryRow }) {
+function RowActions({ row, routing }: { row: InventoryRow; routing: RoutingStatus }) {
   const router = useRouter();
   const [mode, setMode] = useState<Mode>("idle");
   const [destination, setDestination] = useState<string>(row.moveTargets[0]?.id ?? "");
@@ -136,6 +171,12 @@ function RowActions({ row }: { row: InventoryRow }) {
     run(
       () => releaseNumberAction(row.id),
       m["numbers.released"].replace("{e164}", row.e164),
+    );
+
+  const doRepair = () =>
+    run(
+      () => repairNumberRoutingAction(row.id),
+      m["numbers.routing.repaired"].replace("{e164}", row.e164),
     );
 
   if (mode === "moveConfirm") {
@@ -231,6 +272,24 @@ function RowActions({ row }: { row: InventoryRow }) {
           {m["numbers.move"]}
         </Button>
       )}
+      {/* Only where a PATCH would actually fix something. `canRepairRouting`
+          withholds it for a number that is already correct, one Telnyx does
+          not have (nothing to address), and one we could not inspect — a
+          button that can only fail, or that writes against a verdict we never
+          formed, is worse than none. */}
+      {canRepairRouting(routing) ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={pending}
+          onClick={() => void doRepair()}
+          aria-label={m["numbers.routing.repairLabel"].replace("{e164}", row.e164)}
+        >
+          {pending ? null : <PhoneForwarded aria-hidden />}
+          {pending ? m["numbers.routing.repairing"] : m["numbers.routing.repair"]}
+        </Button>
+      ) : null}
       {row.status === "released" ? null : (
         <Button
           type="button"

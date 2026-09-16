@@ -25,9 +25,11 @@
 
 import {
   serviceDb, getPhoneNumberById, listAccounts, listPhoneNumbersForAccount,
-  reassignPhoneNumber, setPhoneNumberStatus,
+  reassignPhoneNumber, setPhoneNumberStatus, setPhoneNumberTelnyxId,
 } from "@bis/db";
 import { requireAgency } from "@/lib/auth";
+import { canRepairRouting, indexByE164, routingStatus } from "@/lib/voice/number-routing";
+import { listTelnyxNumbers, setTelnyxVoiceConnection, telnyxRoutingConfig } from "@/lib/voice/telnyx-numbers";
 import { m } from "@/lib/messages";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
@@ -151,6 +153,88 @@ export async function releaseNumberAction(phoneNumberId: string): Promise<Action
   } catch (e) {
     console.error(`releaseNumberAction: release failed for ${phoneNumberId}: ${String(e)}`);
     return { ok: false, error: m["numbers.releaseFailed"] };
+  }
+  return { ok: true };
+}
+
+/**
+ * Points one number's voice routing at this platform, at the carrier.
+ *
+ * The first write in this app that reaches past the database and changes
+ * something at the phone company. Three things keep that safe:
+ *
+ *   1. `requireAgency()` first, as with every action in this file.
+ *   2. The CONNECTION ID IS NEVER SUPPLIED BY THE CALLER. It comes from
+ *      `TELNYX_VOICE_CONNECTION_ID`, and the only phone number that can be
+ *      touched is one this platform already has a row for. A caller chooses
+ *      which of our numbers to repair, never what to point it at — the same
+ *      shape as `moveNumberAction`'s bound destination, for the same reason.
+ *      Without it, a web form would be a way to route any number on the
+ *      Telnyx account anywhere.
+ *   3. The verdict is re-derived from Telnyx HERE, not taken from the page.
+ *      `canRepairRouting` refuses a number that is already correct, one the
+ *      carrier does not have, and — the dangerous case — one we could not
+ *      inspect. Writing a carrier setting on a line we never managed to read
+ *      is how a working phone gets broken by a diagnostic.
+ *
+ * Recording `telnyx_id` afterwards is deliberately NOT allowed to fail the
+ * action. By then the phone line is genuinely fixed, which is the whole
+ * user-visible outcome, and the id is a record rather than a dependency —
+ * every check matches on E.164 against Telnyx's own listing, so the next read
+ * re-derives it regardless. Reporting a failure over a bookkeeping miss would
+ * send an operator to re-fix a number that is already right.
+ */
+export async function repairNumberRoutingAction(phoneNumberId: string): Promise<ActionResult> {
+  const { userId } = await requireAgency();
+  if (!phoneNumberId.trim()) return { ok: false, error: m["numbers.notFound"] };
+
+  const { apiKey, connectionId } = telnyxRoutingConfig();
+  if (!apiKey || !connectionId) return { ok: false, error: m["numbers.routing.notConfigured"] };
+
+  const db = serviceDb();
+
+  let current;
+  try {
+    current = await getPhoneNumberById(db, phoneNumberId);
+  } catch (e) {
+    console.error(`repairNumberRoutingAction: read failed for ${phoneNumberId}: ${String(e)}`);
+    return { ok: false, error: m["numbers.routing.repairFailed"] };
+  }
+  if (!current) return { ok: false, error: m["numbers.notFound"] };
+
+  let found;
+  try {
+    found = indexByE164(await listTelnyxNumbers(apiKey)).get(current.e164) ?? null;
+  } catch (e) {
+    // A carrier that will not answer is NOT a verdict about the number. Say
+    // we could not check, and write nothing.
+    console.error(`repairNumberRoutingAction: carrier lookup failed for ${current.e164}: ${String(e)}`);
+    return { ok: false, error: m["numbers.routing.checkFailed"] };
+  }
+
+  const status = routingStatus(found, connectionId);
+  if (!canRepairRouting(status)) {
+    return {
+      ok: false,
+      error: status === "routed"
+        ? m["numbers.routing.alreadyRouted"]
+        : m["numbers.routing.notAtCarrier"],
+    };
+  }
+
+  try {
+    await setTelnyxVoiceConnection(apiKey, found!.id, connectionId);
+  } catch (e) {
+    console.error(`repairNumberRoutingAction: carrier write failed for ${current.e164}: ${String(e)}`);
+    return { ok: false, error: m["numbers.routing.repairFailed"] };
+  }
+
+  try {
+    await setPhoneNumberTelnyxId(db, current.account_id, phoneNumberId, found!.id, userId);
+  } catch (e) {
+    // See the header: the line is already fixed. Log it and report success,
+    // because success is what actually happened.
+    console.error(`repairNumberRoutingAction: telnyx_id not recorded for ${current.e164}: ${String(e)}`);
   }
   return { ok: true };
 }

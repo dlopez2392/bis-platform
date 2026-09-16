@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const dbMocks = vi.hoisted(() => ({
   getPhoneNumberById: vi.fn(),
   listAccounts: vi.fn(),
+  setPhoneNumberTelnyxId: vi.fn(),
   listPhoneNumbersForAccount: vi.fn(),
   reassignPhoneNumber: vi.fn(),
   setPhoneNumberStatus: vi.fn(),
@@ -32,8 +33,21 @@ vi.mock("@/lib/auth", () => ({
   },
 }));
 
+const carrier = vi.hoisted(() => ({
+  listTelnyxNumbers: vi.fn(),
+  setTelnyxVoiceConnection: vi.fn(),
+  config: { apiKey: "KEY" as string | null, connectionId: "conn_ours" as string | null },
+}));
+vi.mock("@/lib/voice/telnyx-numbers", () => ({
+  listTelnyxNumbers: carrier.listTelnyxNumbers,
+  setTelnyxVoiceConnection: carrier.setTelnyxVoiceConnection,
+  telnyxRoutingConfig: () => carrier.config,
+}));
+
 import { m } from "@/lib/messages";
-import { moveNumberToAccountAction, releaseNumberAction } from "./actions";
+import {
+  moveNumberToAccountAction, releaseNumberAction, repairNumberRoutingAction,
+} from "./actions";
 
 const row = (over: Partial<{ id: string; account_id: string; e164: string; status: string }> = {}) => ({
   id: "num_1", account_id: "acct_source", e164: "+19567055146",
@@ -53,6 +67,15 @@ beforeEach(() => {
   dbMocks.listPhoneNumbersForAccount.mockResolvedValue([]);
   dbMocks.reassignPhoneNumber.mockResolvedValue(row({ account_id: "acct_dest" }));
   dbMocks.setPhoneNumberStatus.mockResolvedValue(undefined);
+  dbMocks.setPhoneNumberTelnyxId.mockResolvedValue(undefined);
+  carrier.listTelnyxNumbers.mockReset();
+  carrier.setTelnyxVoiceConnection.mockReset();
+  carrier.config = { apiKey: "KEY", connectionId: "conn_ours" };
+  // The ordinary case: the number is at Telnyx, pointed somewhere else.
+  carrier.listTelnyxNumbers.mockResolvedValue([
+    { id: "tn_1", phoneNumber: "+19567055146", connectionId: "conn_other", connectionName: "Old", status: "active" },
+  ]);
+  carrier.setTelnyxVoiceConnection.mockResolvedValue(undefined);
 });
 
 describe("moveNumberToAccountAction", () => {
@@ -187,5 +210,106 @@ describe("releaseNumberAction", () => {
     dbMocks.setPhoneNumberStatus.mockRejectedValue(new Error("boom"));
     expect(await releaseNumberAction("num_1"))
       .toEqual({ ok: false, error: m["numbers.releaseFailed"] });
+  });
+});
+
+describe("repairNumberRoutingAction", () => {
+  it("a non-agency caller is rejected before any read, carrier or database", async () => {
+    guardFixture.agency = false;
+    await expect(repairNumberRoutingAction("num_1")).rejects.toThrow("NEXT_REDIRECT");
+    expect(dbMocks.getPhoneNumberById).not.toHaveBeenCalled();
+    expect(carrier.listTelnyxNumbers).not.toHaveBeenCalled();
+    expect(carrier.setTelnyxVoiceConnection).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The safety property this whole action turns on: the caller picks WHICH of
+   * our numbers to repair and never what to point it at. The connection id
+   * comes from the environment, so a tampered submission cannot route a
+   * number to an attacker's connection.
+   */
+  it("points the number at the CONFIGURED connection, never a caller-supplied one", async () => {
+    const r = await repairNumberRoutingAction("num_1");
+    expect(r).toEqual({ ok: true });
+    expect(carrier.setTelnyxVoiceConnection).toHaveBeenCalledWith("KEY", "tn_1", "conn_ours");
+  });
+
+  it("records Telnyx's id for the number, scoped to the account that holds it", async () => {
+    await repairNumberRoutingAction("num_1");
+    expect(dbMocks.setPhoneNumberTelnyxId)
+      .toHaveBeenCalledWith({}, "acct_source", "num_1", "tn_1", "user_agency");
+  });
+
+  /**
+   * The line is genuinely fixed by this point. Reporting a failure over a
+   * bookkeeping miss would send an operator to re-fix a working number — and
+   * the id is re-derived from Telnyx on every check anyway.
+   */
+  it("still reports success when recording the carrier id fails", async () => {
+    dbMocks.setPhoneNumberTelnyxId.mockRejectedValue(new Error("db down"));
+    expect(await repairNumberRoutingAction("num_1")).toEqual({ ok: true });
+    expect(carrier.setTelnyxVoiceConnection).toHaveBeenCalled();
+  });
+
+  it("refuses a number that already comes to BIS, rather than writing again", async () => {
+    carrier.listTelnyxNumbers.mockResolvedValue([
+      { id: "tn_1", phoneNumber: "+19567055146", connectionId: "conn_ours", connectionName: "BIS", status: "active" },
+    ]);
+    expect(await repairNumberRoutingAction("num_1"))
+      .toEqual({ ok: false, error: m["numbers.routing.alreadyRouted"] });
+    expect(carrier.setTelnyxVoiceConnection).not.toHaveBeenCalled();
+  });
+
+  it("repairs a number that has no connection at all", async () => {
+    carrier.listTelnyxNumbers.mockResolvedValue([
+      { id: "tn_1", phoneNumber: "+19567055146", connectionId: null, connectionName: null, status: "active" },
+    ]);
+    expect(await repairNumberRoutingAction("num_1")).toEqual({ ok: true });
+  });
+
+  it("refuses a number the carrier does not have", async () => {
+    carrier.listTelnyxNumbers.mockResolvedValue([]);
+    expect(await repairNumberRoutingAction("num_1"))
+      .toEqual({ ok: false, error: m["numbers.routing.notAtCarrier"] });
+    expect(carrier.setTelnyxVoiceConnection).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The dangerous case. A carrier that will not answer is not a verdict about
+   * the number, and writing a routing setting on a line we never managed to
+   * inspect is how a working phone gets broken by a diagnostic.
+   */
+  it("writes nothing when the carrier cannot be reached", async () => {
+    carrier.listTelnyxNumbers.mockRejectedValue(new Error("502"));
+    expect(await repairNumberRoutingAction("num_1"))
+      .toEqual({ ok: false, error: m["numbers.routing.checkFailed"] });
+    expect(carrier.setTelnyxVoiceConnection).not.toHaveBeenCalled();
+    expect(dbMocks.setPhoneNumberTelnyxId).not.toHaveBeenCalled();
+  });
+
+  it("refuses, and touches nothing, when the connection id is not configured", async () => {
+    carrier.config = { apiKey: "KEY", connectionId: null };
+    expect(await repairNumberRoutingAction("num_1"))
+      .toEqual({ ok: false, error: m["numbers.routing.notConfigured"] });
+    expect(carrier.listTelnyxNumbers).not.toHaveBeenCalled();
+  });
+
+  it("refuses when there is no API key", async () => {
+    carrier.config = { apiKey: null, connectionId: "conn_ours" };
+    expect(await repairNumberRoutingAction("num_1"))
+      .toEqual({ ok: false, error: m["numbers.routing.notConfigured"] });
+  });
+
+  it("reports a carrier write that failed rather than claiming a repair", async () => {
+    carrier.setTelnyxVoiceConnection.mockRejectedValue(new Error("422"));
+    expect(await repairNumberRoutingAction("num_1"))
+      .toEqual({ ok: false, error: m["numbers.routing.repairFailed"] });
+    expect(dbMocks.setPhoneNumberTelnyxId).not.toHaveBeenCalled();
+  });
+
+  it("reports a number that no longer exists here", async () => {
+    dbMocks.getPhoneNumberById.mockResolvedValue(null);
+    expect(await repairNumberRoutingAction("num_gone"))
+      .toEqual({ ok: false, error: m["numbers.notFound"] });
   });
 });
