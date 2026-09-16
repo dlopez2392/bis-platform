@@ -147,9 +147,25 @@ refuses that kind of dishonesty elsewhere — the weekly report omits what it di
 not measure rather than reporting zero, and the summary carries a MISMATCH
 banner rather than asserting what it cannot support.
 
-`transferred` is `isMeaningful`: a staff alert and an alert SMS should fire,
-because a customer reaching a human is exactly the event a business wants to
-know about.
+**No staff alert and no alert text fire on a completed transfer, and
+`transferred` is therefore NOT `isMeaningful`.** An earlier draft of this
+document said the opposite. Two things corrected it, one structural and one
+about what an alert is for.
+
+Structurally, the alert decision happens inside `finishCall`, which runs at
+socket close — before the result route knows whether anyone picked up. Firing
+an alert for a transfer would mean a SECOND send path inside a TeXML route,
+duplicating the email and SMS machinery. This repo has exactly one send path
+and has verified that property deliberately.
+
+And it should not fire anyway: a person at the business just spoke to the
+caller live, so they already know. An alert exists for work that might be
+MISSED. Telling someone about the call they personally answered is noise.
+
+A ring-out is the case that genuinely goes unnoticed — and it records as
+`abandoned`, which is the truth, and follows whatever this product already
+does with an abandoned call. Alerting specifically on a failed transfer is a
+reasonable future refinement; it is not this version.
 
 **The transcript covers only the AI half, and the call row must not pretend
 otherwise.** Transcript capture lives on the OpenAI socket
