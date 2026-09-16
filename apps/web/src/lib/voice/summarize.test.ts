@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildSummaryInput, summaryFactLine, checkSummaryAgainstState, composeSummary } from "./summarize";
-import { emptyCallState, withBooking, withLead, withServed } from "./call-state";
+import { emptyCallState, withBooking, withLead, withTransferred } from "./call-state";
 
 describe("layer 1 — buildSummaryInput", () => {
   it("renders (none) markers, never blanks", () => {
@@ -63,10 +63,15 @@ describe("layer 3 — mismatch detection (the 3 production fabrications)", () =>
  * who was successfully put through to a person gets texted "Sorry we missed
  * you just now"; miss the fact line and half a call is summarised as a whole
  * one. Two fields means two chances to write only one of them.
+ *
+ * Built through `withTransferred`, never `withServed(state, "transferred")`.
+ * Production has exactly one producer of that entry, so a test that spells
+ * the string itself would go on passing if the producer stopped writing it —
+ * it would be testing the string literal, not the path a call takes.
  */
 describe("layer 2 — summaryFactLine on a handed-off call", () => {
   it("says the transcript stops at the handoff, so half a call cannot read as a whole one", () => {
-    const s = withServed(emptyCallState(), "transferred");
+    const s = withTransferred(emptyCallState());
     const line = summaryFactLine(s);
     expect(line).toMatch(/transcript ends at the handoff/i);
     // Plain words, no jargon and no template syntax — a business owner reads
@@ -77,7 +82,7 @@ describe("layer 2 — summaryFactLine on a handed-off call", () => {
   it("leads with it, ahead of the booking and intake facts", () => {
     // A partial record has to be the FIRST thing read, not a clause after two
     // lines of accounting the reader has already started trusting.
-    const line = summaryFactLine(withServed(emptyCallState(), "transferred"));
+    const line = summaryFactLine(withTransferred(emptyCallState()));
     // Both indices asserted present first: `indexOf` returns -1 for a missing
     // needle, and -1 is less than everything — a positional test that does not
     // check for presence passes loudest when the thing is absent.

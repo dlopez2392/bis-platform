@@ -74,7 +74,13 @@ describe("served", () => {
     expect(wasServed(cancelled)).toBe(true);
   });
 
-  it("withTransferred marks the caller served, so the missed-call text-back cannot fire", () => {
+  it("withTransferred writes the marker the text-back gate and the summary both read", () => {
+    // Scope note: this asserts only that the wrapper writes the entry — it
+    // restates one line of production and cannot detect the failure the
+    // marker EXISTS to prevent. The behaviour guard is
+    // finish-call.test.ts's "does NOT text a caller we put THROUGH TO A
+    // PERSON", which goes red when `wasServed` stops counting "transferred";
+    // this one stays green through that mutation.
     const s = withTransferred(emptyCallState());
     expect(s.served).toContain("transferred");
   });

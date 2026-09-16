@@ -53,11 +53,20 @@ export function newHandoffToken(): string {
 }
 
 /**
- * What Sofía says before the socket closes, handing the caller to a human.
- * Same "Say exactly this and nothing else" constrained form as
- * `silenceGoodbye` (`silence-guard.ts`), for the same reason: nothing about
- * a call ending is safe to let the model improvise. `both` takes English,
- * mirroring the greeting's own rule (`incoming/route.ts:746`,
+ * A MODEL INSTRUCTION. What Sofía says before the socket closes, handing the
+ * caller to a human — handed to the still-open OpenAI socket as
+ * `response.instructions` the way `silenceGoodbye` is
+ * (`app/api/voice/incoming/route.ts:415`), which is why it carries the "Say
+ * exactly this and nothing else" wrapper: nothing about a call ending is safe
+ * to let the model improvise.
+ *
+ * Its counterpart `transferFailedLine` below is the OTHER family — TeXML
+ * `<Say>` text, spoken by a route after this socket is gone. The wrapper
+ * belongs to this function ONLY; put it on that one and the caller hears it
+ * read aloud.
+ *
+ * `both` takes English, mirroring the greeting's own rule
+ * (`app/api/voice/incoming/route.ts:764`,
  * `languages === "es" ? greeting_es : greeting_en`) rather than inventing a
  * second language policy for this one line.
  */
@@ -69,15 +78,36 @@ export function handoffLine(languages: "en" | "es" | "both"): string {
 }
 
 /**
- * What the caller hears if the transfer rings out with nobody picking up.
+ * TeXML `<Say>` TEXT — a bare sentence, NOT a model instruction. What the
+ * caller hears if the transfer rings out with nobody picking up.
+ *
+ * Its consumer is a `<Say>` element in `/api/voice/texml/handoff-result`,
+ * reached only after the OpenAI socket has closed: there is no model left to
+ * instruct by then, so `handoffLine`'s `Say exactly this and nothing else:`
+ * wrapper would simply be READ ALOUD to the caller, quotes and all.
+ * The shape to copy is `texml/route.ts`'s own `COPY` — plain sentences that
+ * go straight between the tags — not `silenceGoodbye`/`handoffLine`.
+ *
  * Must be honest that nobody answered — the caller was already told they
  * were being put through, so this line must NOT promise a callback nothing
  * in this flow arranges; it says plainly that no one was reachable and lets
- * the caller decide what to do next.
+ * the caller decide what to do next. The Spanish avoids a gendered object
+ * pronoun ("comunicarlo" addresses a masculine third person) for the same
+ * reason `handoffLine` uses the formal dative: we do not know who is on the
+ * phone.
+ *
+ * `both` takes ENGLISH, not `sayXml`'s EN-then-ES pair, and that is
+ * deliberate on two counts. Product: this sentence answers `handoffLine`,
+ * which the same caller heard seconds earlier in English on a `both`
+ * profile; the two bracket one moment and must match, or the caller is told
+ * they are being connected in one language and that it failed in another.
+ * Mechanical: `sayXml` can offer both languages only because it emits the
+ * ELEMENTS and can hang `language="es-MX"` on the Spanish one. This function
+ * returns text FOR an element, so a two-language string would be Spanish
+ * read by an English voice.
  */
 export function transferFailedLine(languages: "en" | "es" | "both"): string {
-  const line = languages === "es"
-    ? "Lo siento, no pudimos comunicarlo con nadie en este momento."
+  return languages === "es"
+    ? "Lo siento, nadie pudo contestar en este momento."
     : "Sorry, we weren't able to reach anyone just now.";
-  return `Say exactly this and nothing else: "${line}"`;
 }

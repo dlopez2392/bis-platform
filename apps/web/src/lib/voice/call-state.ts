@@ -20,9 +20,14 @@ export type TakenMessage = { body: string; callbackNumber?: string; at: string }
  * Recorded separately from `bookings`/`leads`/`messages` on purpose:
  * `classifyOutcome`'s `abandoned` feeds the calls list, the outcome pill and
  * the dashboard KPIs, and re-labelling a cancellation call there would be a
- * product change, not a bug fix. This flag is read by exactly one consumer —
- * the missed-call text-back's gate — so "we served you" and "what the
- * dashboard calls this call" can differ without either lying.
+ * product change, not a bug fix. Keeping this array separate is what lets
+ * "we served you" and "what the dashboard calls this call" differ without
+ * either lying.
+ *
+ * TWO readers, not one (it was one until `transferred` arrived): the
+ * missed-call text-back's gate via `wasServed` below, and `summaryFactLine`
+ * (./summarize.ts), which reads the `transferred` entry specifically. See
+ * that case below.
  *
  * - `cancelled` — `cancel_appointment` succeeded. The caller rang in to
  *   cancel and we cancelled. For a booking made on a PREVIOUS call this

@@ -107,7 +107,7 @@ export function isCallerAudioEvent(type: string | undefined): boolean {
  * improvise: a fixed sentence, and out.
  *
  * `both` takes English, mirroring the greeting's own rule at
- * `incoming/route.ts:746` (`languages === "es" ? greeting_es : greeting_en`)
+ * `app/api/voice/incoming/route.ts:764` (`languages === "es" ? greeting_es : greeting_en`)
  * rather than inventing a second language policy.
  */
 export function silenceGoodbye(languages: "en" | "es" | "both"): string {

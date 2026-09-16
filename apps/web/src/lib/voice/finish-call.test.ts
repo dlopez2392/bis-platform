@@ -40,6 +40,7 @@ import { segmentsFor } from "@/lib/sms/segments";
 import { finishCall, isMeaningful, type FinishContext } from "./finish-call";
 import {
   emptyCallState, withLead, withMessage, withTranscript, withBooking, withBookingCancelled, withServed,
+  withTransferred,
 } from "./call-state";
 import { defaultTextbackBody } from "./textback-body";
 
@@ -367,6 +368,26 @@ describe("finishCall — missed-call text-back", () => {
     const s = withServed(abandonedState(), "rescheduled");
     await finishCall(s, textbackCtx, meta);
     expect(smsRefs.send).not.toHaveBeenCalled();
+  });
+
+  it("does NOT text a caller we put THROUGH TO A PERSON", async () => {
+    // The sharpest form of the failure this gate exists to prevent, and the
+    // one the design spec calls the finding that most shapes it: a caller who
+    // ASKED for a human, got one, and was then texted "Sorry we missed you
+    // just now" by the system that connected them.
+    //
+    // This is the behaviour test for the `transferred` marker. Its sibling in
+    // call-state.test.ts asserts `served` contains "transferred", which only
+    // restates `withTransferred`'s one line; nothing there fails if the
+    // marker stops SUPPRESSING anything. Mutating `wasServed` to ignore
+    // "transferred" compiles and left the whole suite green — this is the
+    // test that goes red for it.
+    const s = withTransferred(abandonedState());
+    const r = await finishCall(s, textbackCtx, meta);
+    expect(r.outcome).toBe("abandoned");   // the row is unchanged at socket close, on purpose
+    expect(smsRefs.send).not.toHaveBeenCalled();
+    expect(dbMocks.createContact).not.toHaveBeenCalled();
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
   });
 
   it("STILL texts the ordinary abandoned caller — the served gate is not a blanket off switch", async () => {
