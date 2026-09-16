@@ -499,9 +499,16 @@ export const m = {
   // reason as settings.weeklyReport above: one field, nothing to disambiguate.
   "settings.alertPhone": "Alert texts",
   "settings.alertPhoneHint": "Where a text goes the moment a booking lands or a call finishes. Leave it blank and this account gets no alert texts — that's not a bug, it's off.",
-  "settings.alertPhonePlaceholder": "(956) 292-1696",
+  // A RESERVED fictional number (NANP holds 555-0100..555-0199 for exactly
+  // this), not anyone's real line. It was danlo's own mobile until
+  // 2026-09-16: harmless while the repo was private, less so once it went
+  // public, and it renders to every client on their own Branding page. Keep
+  // the local 956 area code so the shape still reads as a Valley number to
+  // the landscaper at 7 AM, and keep it clear of the 555 numbers the seeded
+  // demo account and the test suites already use.
+  "settings.alertPhonePlaceholder": "(956) 555-0142",
   "settings.alertPhoneSaved": "Alert texts updated",
-  "settings.alertPhoneBad": "Enter a phone number, like (956) 292-1696.",
+  "settings.alertPhoneBad": "Enter a phone number, like (956) 555-0142.",
   "settings.alertPhoneOff": "No alert texts are going out yet.",
   // Agency-only help — a number is set, but nothing would actually send
   // (A2P not approved, or no live number yet). Never shown to a client:
