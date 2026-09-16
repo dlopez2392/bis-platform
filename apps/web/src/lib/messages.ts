@@ -718,8 +718,13 @@ export const m = {
   "checklist.phone_number.help":
     "Done in Telnyx. Calling and SMS arrive in M2 — until then this is a record that the number exists.",
   "checklist.a2p_registration.title": "Register A2P 10DLC brand and campaign",
+  // Names where the gather list lives rather than carrying it: this line
+  // renders inside a seven-item list, on the account dashboard as well as the
+  // checklist page, and nine bullets of carrier paperwork would bury the six
+  // other items. Worded as a destination, the way every internal item is,
+  // because ChecklistPanel is reusable and must not say "below".
   "checklist.a2p_registration.help":
-    "Done with the carriers via Telnyx. Expect days to weeks; start it early because nothing you do here speeds it up.",
+    "Done with the carriers via Telnyx. Expect days to weeks; start it early because nothing you do here speeds it up. The A2P registration panel on this company's checklist lists what to collect from them first.",
   "checklist.email_domain.title": "Add a sending subdomain, DKIM and DMARC",
   "checklist.email_domain.help":
     "Done in Resend, then the DNS records at the domain host. DKIM alone is not enough — without a DMARC record the receiving server accepts the mail and may discard it, and every system here will still say delivered. Check the domain's Insights in Resend before the client sends anything real. A subdomain keeps this client's sending reputation separate. Once the domain is verified, set it as the Sending address in this company's Settings — until you do, their mail still goes out from the platform address.",
@@ -778,6 +783,29 @@ export const m = {
   "a2p.approvedNeedsIds": "Both the brand ID and campaign ID are needed before marking this approved",
   "a2p.staleStatus": "That status isn't one of the options — reload the page and try again",
   "a2p.recorded": "Recorded",
+
+  // The gather list, in front of the operator on the checklist page rather
+  // than only in docs/runbooks/a2p-registration.md, because the moment anyone
+  // needs it is the moment they are standing on this page with an empty Brand
+  // ID field and the client on the phone. The runbook keeps the full
+  // procedure — the portal clicks, the sole-proprietor OTP flow, the fees;
+  // what is duplicated here is only the part that has to be ASKED OF THE
+  // CLIENT, because going back a second time is what loses a week.
+  //
+  // Shown only while the recorded status is not_started or rejected: once a
+  // registration is with the carriers the list is noise, and a rejection
+  // means collecting it again.
+  "a2p.gather.title": "Collect this from the client before you start",
+  "a2p.gather.body": "Every submission is charged, so a rejection costs money as well as days. Nothing goes to the carriers until all of it is in hand.",
+  "a2p.gather.legalName": "Legal company name, exactly as the EIN was issued",
+  "a2p.gather.dba": "DBA or brand name, even when it matches the legal name",
+  "a2p.gather.ein": "EIN, their federal tax ID. No EIN means the sole-proprietor path, which is slower and caps them near 1,000 texts a day",
+  "a2p.gather.address": "Business address matching the EIN. A PO box or a mailbox service is rejected",
+  "a2p.gather.website": "A live website that is clearly the same business",
+  "a2p.gather.vertical": "Industry category",
+  "a2p.gather.contact": "A contact name, email and phone for someone who will answer",
+  "a2p.gather.optIn": "A working opt-in on that website: an SMS checkbox that is optional and separate from email consent, wording on message frequency and rates, and Terms and Privacy Policy as real links, not pop-ups",
+  "a2p.gather.link": "Start the brand in Telnyx",
 
   "blueprints.title": "Blueprints",
   "blueprints.empty.title": "No blueprints yet",
