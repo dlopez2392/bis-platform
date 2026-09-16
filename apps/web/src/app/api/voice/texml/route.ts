@@ -102,6 +102,20 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
     // stays authoritative, so a stale count here (or the reads racing an
     // in-flight call) can only ever waste a dial attempt, never let a caller
     // through who should have been refused.
+    //
+    // KNOWN AND ACCEPTED, so the next reader does not rediscover it as a bug:
+    // because the three reads share one `Promise.all` below, ANY of them
+    // rejecting fails the whole batch and this block falls through to `dial`.
+    // So a caller who is genuinely over the per-number cap, on a call where
+    // only the history read failed, hears ringing and then dead air instead of
+    // the cap sentence — the webhook still declines before `acceptCall`, so
+    // the exposure is a worse ten seconds for one caller and zero billing.
+    // That is exactly the "can only ever waste a dial attempt" envelope above,
+    // and splitting the batch per-read would trade it for wall-clock on
+    // Telnyx's answer deadline, which is the thing this route cannot spend.
+    // The incoming webhook makes the opposite trade for the opposite reason:
+    // it binds, it is not on the carrier's clock, and its two reads each carry
+    // their own try/catch so neither can take the other down.
     try {
       const now = new Date();
       const dayStart = utcDayStart(now);
