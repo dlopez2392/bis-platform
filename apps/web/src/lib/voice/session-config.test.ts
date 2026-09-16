@@ -41,4 +41,23 @@ describe("buildRealtimeSessionConfig", () => {
     const c = buildRealtimeSessionConfig({ ...base, bookingEnabled: false }, new Date()) as unknown as SessionConfigShape;
     expect(c.tools.map((t) => t.name)).not.toContain("book_appointment");
   });
+
+  // `handoffAvailable` is OPTIONAL, and the direction of its default is a
+  // safety property, not a style choice: an omitted flag must WITHHOLD the
+  // transfer tool. `base` above has no such key — exactly the shape the web
+  // demo and any future caller that never heard of the handoff pass — and
+  // relaxing the check to `!== false` would advertise a transfer nobody can
+  // perform. The only reason that is not already live is that the web demo
+  // hard-overrides `tools: []`, which is a different fact than this default
+  // being safe.
+  it("an OMITTED handoffAvailable withholds transfer_to_human — the default fails closed", () => {
+    const c = buildRealtimeSessionConfig(base, new Date()) as unknown as SessionConfigShape;
+    expect(base).not.toHaveProperty("handoffAvailable");
+    expect(c.tools.map((t) => t.name)).not.toContain("transfer_to_human");
+  });
+
+  it("...and an explicit true offers it — the flag is what decides, not the omission", () => {
+    const c = buildRealtimeSessionConfig({ ...base, handoffAvailable: true }, new Date()) as unknown as SessionConfigShape;
+    expect(c.tools.map((t) => t.name)).toContain("transfer_to_human");
+  });
 });

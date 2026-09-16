@@ -563,12 +563,23 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
           // the socket goes. Closing here, synchronously, would be dead air
           // followed by a ring.
           //
-          // The two cost timers are cleared for the same reason the silence
+          // All three timers are cleared for the same reason the silence
           // guard clears the cap: this call is ending on its own terms, and a
-          // goodbye sent over the handoff line — or a second closeTimer
-          // overwriting this one — would be a stranger's voice on top of it.
+          // goodbye sent over the handoff line — or an EARLIER closeTimer
+          // still counting down — would be a stranger's voice on top of it,
+          // or silence where the sentence should have been.
+          //
+          // `closeTimer` is the one that is not hypothetical, and it is the
+          // one that was missed: assigning over the variable leaves the
+          // previous timer armed and running. The cap fires at `maxSeconds`,
+          // arms its own 5s close, and a `transfer_to_human` landing inside
+          // that window arms a second one — while the cap's keeps its
+          // original deadline and closes the socket mid-handoff-line. Same
+          // shape for the silence guard's close. Pinned by the
+          // cap-window interleaving test in `lifecycle.test.ts`.
           log("transfer requested, closing the AI leg", { callId });
           clearTimeout(capTimer);
+          clearTimeout(closeTimer);
           clearTimeout(silenceTimer);
           silenceTimer = undefined;
           closeTimer = setTimeout(() => {
