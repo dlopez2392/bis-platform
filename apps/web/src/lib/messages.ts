@@ -74,8 +74,17 @@ export const m = {
 
   "clientAccess.off.title": "Access has been turned off",
   "clientAccess.off.body": "Your access to this account has been turned off. Contact your account manager if you think this is a mistake.",
-  "clientAccess.none.title": "No account linked",
-  "clientAccess.none.body": "Your sign-in isn't linked to a company account yet. Contact your account manager.",
+  // Read by the person who was just invited, on their first visit, at the
+  // moment it fails. "No account linked" stated a fact about our data model
+  // and gave them nothing to do; "contact your account manager" is a title
+  // nobody at a small business has. Say what happened and who can fix it.
+  "clientAccess.none.title": "Your company isn't set up yet",
+  "clientAccess.none.body": "Your invitation worked, but this company hasn't finished being set up on our side. Let the person who invited you know — they can finish it, and your invitation stays valid.",
+
+  // The agency-side half of the same fault. See lib/accounts/orphans.ts.
+  "accounts.orphan.title": "Set up in Clerk but not here",
+  "accounts.orphan.body": "Anyone invited to these can be sent an invitation, but cannot sign in — there is no company behind them yet. Add the company here with the same name, or delete the organization in Clerk.",
+  "accounts.orphan.unavailable": "Could not reach Clerk to check for half-created companies. The list below is unaffected.",
 
   "clientAccess.title": "Client access",
   "clientAccess.body": "When on, invited users at this company can sign in and see this account only.",
