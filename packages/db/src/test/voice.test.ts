@@ -302,6 +302,32 @@ describe("voice accessors", () => {
     });
   });
 
+  // The window floor is a rolling instant, so the boundary edge is not an
+  // incidental case: a caller's redeeming good call landing EXACTLY on
+  // `sinceIso` (the instant the guard drew as "now minus the window") must
+  // still count, or the caller could never earn their way back. `sinceIso`
+  // here is read back from the row's OWN `started_at` rather than a
+  // client-side `Date`, so the comparison is exact rather than approximate —
+  // ".gte" (shipped) counts it; ".gte" mistyped to ".gt" would drop it to 0.
+  it("countCallerHistorySince: a call started exactly at the window floor IS counted", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const caller = "+19565550306";
+      const { id } = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: caller });
+      await finishCallRow(db, accountId, id, {
+        outcome: "lead", endedAt: new Date(), durationSecs: 20, turnCount: 3,
+        transcript: [], summary: "", language: "en",
+      });
+      const { data: row, error } = await db.from("calls")
+        .select("started_at").eq("id", id).single();
+      if (error || !row) throw new Error(`read back started_at failed: ${error?.message}`);
+      const sinceIso = (row as { started_at: string }).started_at;
+
+      expect(await countCallerHistorySince(db, accountId, caller, sinceIso))
+        .toEqual({ spamCalls: 0, otherCalls: 1 });
+    });
+  });
+
   it("countCallerHistorySince: an UNFINISHED row counts as other, never as spam", async () => {
     await withTestAccount(async (db, accountId) => {
       const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
