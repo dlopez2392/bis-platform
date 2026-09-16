@@ -704,7 +704,32 @@ describe("silence cutoff (Guard 1)", () => {
     ws.close = vi.fn(() => { ws.emit("close", 1000, Buffer.from("silence-guard")); });
     ws.emit("open");
 
-    await vi.advanceTimersByTimeAsync(35_000);
+    // Sofía's greeting coming back as her own transcript, ~2s in. This frame
+    // is the ONLY turn a call nobody spoke on ever has, and delivering it is
+    // what makes this test's call the shape GUARD 2 can count. The coupling,
+    // end to end, is load-bearing and nothing else asserts it:
+    //
+    //   this frame  →  `call-events.ts` mirrors it into `state.transcript`
+    //               →  `finish-call.ts` writes `turnCount: transcript.length`
+    //               →  `countCallerHistorySince` counts spam rows with
+    //                  `.gte("turn_count", 1)` (packages/db/src/voice.ts)
+    //
+    // So an assistant turn is what separates a genuine silent call — which
+    // Guard 2 must accumulate toward a block — from a connect-timeout, which
+    // also records `spam` but with `turn_count: 0` and is OUR outage, not a
+    // robot. Without this frame the test's call has `turn_count: 0`: exactly
+    // the shape that query EXCLUDES, so it would prove Guard 1 records a row
+    // while silently proving nothing about whether Guard 2 can ever see it.
+    // A future change that stopped recording assistant turns as "noise" would
+    // disable Guard 2 outright; the length assertion below is what catches it.
+    await vi.advanceTimersByTimeAsync(2_000);
+    ws.emit("message", JSON.stringify({
+      type: "response.output_audio_transcript.done",
+      transcript: "Hi, thanks for calling Rio Roofing.",
+    }));
+    await flushMicrotasks();
+
+    await vi.advanceTimersByTimeAsync(33_000);
     // Asserted BEFORE awaiting `lifecycleDone`: a call the guard never cut
     // never closes its socket, so that await would hang and the failure would
     // read as a 5s test timeout instead of naming what actually went wrong.
@@ -718,6 +743,9 @@ describe("silence cutoff (Guard 1)", () => {
     // condition `classifyOutcome` reads to return "spam" (call-state.ts:62).
     expect(finishCallMock).toHaveBeenCalledTimes(1);
     const [stateArg] = finishCallMock.mock.calls[0]!;
+    // Countable by Guard 2: at least one turn, so the row this becomes clears
+    // `turn_count >= 1`. See the coupling note above the greeting frame.
+    expect(stateArg.transcript.length).toBeGreaterThanOrEqual(1);
     expect(stateArg.transcript.some((t: TranscriptEvent) => t.role === "caller")).toBe(false);
     expect(stateArg.bookings).toEqual([]);
     expect(stateArg.leads).toEqual([]);
