@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@bis/db";
+import { ALERT_CODE_TTL_MINUTES } from "@bis/db";
 import { segmentsFor } from "./segments";
 import { resolveSmsSender, refusesAlertLoop } from "./sender";
 import { getSmsProvider } from "./index";
@@ -83,6 +84,23 @@ export function composeCallAlertSms(
 ): string {
   const lead = CALL_ALERT_LEAD[outcome];
   return hasEmailRecipients ? `${lead}${EMAIL_HINT}` : lead;
+}
+
+/**
+ * The one-line body for proving possession of a NEW alert number
+ * (0036_alert_phone_verifications.sql) — an operator-facing code, not a
+ * customer alert, but composed here beside its siblings for the same
+ * reason: one place that decides what a text from this account says.
+ *
+ * Fixed wording plus a six-digit code is well under the 70-char UCS-2
+ * budget on its own (unlike the booking/call composers above, nothing here
+ * varies with untrusted input the way a contact name does), so this is not
+ * measured with `segmentsFor` at every call site — the test for this
+ * function does that once, and a code is always exactly six digits
+ * (`ALERT_CODE_DIGITS`, `@bis/db`).
+ */
+export function composeAlertPhoneVerificationSms(code: string): string {
+  return `Your BIS verification code is ${code}. It expires in ${ALERT_CODE_TTL_MINUTES} minutes.`;
 }
 
 /** What a caller has resolved and is ready to send — everything

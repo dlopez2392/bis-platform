@@ -488,10 +488,13 @@ export const m = {
   // slot so the word is an actual link, not a bare mention of a route
   // nobody can click to.
   "settings.alertPhoneNotReady": "Texting isn't turned on for this account yet, so no alert texts will go out until it is. See {checklistLink}.",
-  // Save-time HELP, not the guard — the guard (refusesAlertLoop, sender.ts)
-  // already refuses the send at the moment it matters. This just says so now
-  // instead of leaving the operator to notice a text that never arrived.
-  "settings.alertPhoneSelfWarning": "Heads up — that's this account's own texting number. A text sent there loops back instead of reaching anyone, so none will go out while it's set to this number.",
+  // 0036 made this a REFUSAL, not save-time advice: startAlertPhoneVerificationAction
+  // refuses to send a code at all when the claimed number is one of the
+  // account's own — a code sent there loops straight back into the inbound
+  // webhook and could never reach a human to type back, so there is nothing
+  // to save yet when this shows. The copy says so in the present tense, not
+  // as a note about a number already stored.
+  "settings.alertPhoneSelfWarning": "Can't send a code there — that's this account's own texting number, and a code sent there would loop straight back with nobody to read it. Use a different number.",
   // The client's read-only view (branding page) — honest about the
   // asymmetry rather than silent about it: says where alerts go and who can
   // change it, never implies the field is unfinished.
@@ -504,6 +507,39 @@ export const m = {
   "settings.alertPhoneClientNotReady": "Alert texts will go to {value} once texting is turned on for this account.",
   "settings.alertPhoneClientOff": "This account doesn't receive alert texts.",
   "settings.alertPhoneClientBody": "Texts land here the moment a booking comes in or a call finishes. Only your agency can change this number.",
+
+  // The verification flow (0036_alert_phone_verifications.sql) — claiming a
+  // NEW alert number now means proving somebody holds it, not just typing
+  // it in. Clearing the number stays proof-free (setAlertPhoneAction below
+  // keeps doing that directly): nobody needs to prove possession to turn
+  // alerts off.
+  "settings.alertPhoneNeedsVerification": "A new alert number has to be verified first — request a code below, then enter it to confirm the number.",
+  // Same predicate as settings.alertPhoneNotReady (resolveSmsSender's own
+  // gate), but phrased as a plain error string for a form action's result
+  // rather than a Notice with a link slot: there is nothing to send a code
+  // FROM yet.
+  "settings.alertPhoneNotClearedToSend": "Texting isn't turned on for this account yet, so no verification code can go out. See the Checklist page.",
+  "settings.alertPhoneTooManyCodes": "Too many codes have been requested for this number in the last hour. Try again in about an hour.",
+  "settings.alertPhoneSendFailed": "The verification code couldn't be sent. Try again in a moment.",
+  "settings.alertPhoneCodeSent": "Code sent — check that phone for a text.",
+  // Deliberately does not say the number was right or wrong — only that
+  // THIS code was. See verifyAlertPhoneCode's own comment for why "wrong"
+  // and "expired" are kept as two different, narrow messages.
+  "settings.alertPhoneWrongCode": "That code doesn't match. Check the digits and try again.",
+  "settings.alertPhoneCodeExpired": "That code has expired, or none was ever sent for this number. Request a new one.",
+  // The agency's idle-phase button: "Save" only ever clears the field
+  // (setAlertPhoneAction's one remaining direct write); typing any number,
+  // even the one already on the account, always asks for a code instead.
+  "settings.alertPhoneSendCode": "Send code",
+  "settings.alertPhoneConfirmCode": "Confirm code",
+  "settings.alertPhoneCodeLabel": "Verification code",
+  "settings.alertPhoneCodePlaceholder": "123456",
+  // {value} takes a NumberChip, same pattern as the client sentences above —
+  // never raw prose, so the number always reads as a number, not a sentence
+  // fragment.
+  "settings.alertPhonePendingHint": "We texted a 6-digit code to {value}. Enter it below to confirm the number.",
+  "settings.alertPhoneChangeNumber": "Use a different number",
+  "settings.alertPhoneResendCode": "Resend code",
 
   "error.title": "Something went wrong",
   "error.body": "We couldn't complete that action. Your changes may not have been saved.",

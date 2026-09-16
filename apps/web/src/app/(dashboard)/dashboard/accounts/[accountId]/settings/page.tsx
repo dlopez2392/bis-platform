@@ -4,7 +4,8 @@ import { serviceDb, listCustomFields, listCustomValues, listBlueprints, getBrand
          getSendingIdentity, brandLogoUrl, getSiteForAccount, countTrafficDays, type CustomFieldDef } from "@bis/db";
 import { SubmitButton } from "../../submit-button";
 import { createFieldAction, upsertValueAction, setClientAccessAction, inviteClientAdminAction,
-         setFromEmailAction, setReportEmailsAction, setAlertPhoneAction } from "./actions";
+         setFromEmailAction, setReportEmailsAction, setAlertPhoneAction,
+         startAlertPhoneVerificationAction, confirmAlertPhoneVerificationAction } from "./actions";
 import { setBrandingAction } from "../branding/actions";
 import { SaveBlueprintDialog } from "./save-blueprint-dialog";
 import { ClientAccessPanel, type ClientAccessMember } from "./client-access-panel";
@@ -158,6 +159,8 @@ export default async function CrmSettingsPage({
   const boundSetFromEmail = setFromEmailAction.bind(null, accountId);
   const boundSetReportEmails = setReportEmailsAction.bind(null, accountId);
   const boundSetAlertPhone = setAlertPhoneAction.bind(null, accountId);
+  const boundStartAlertPhoneVerification = startAlertPhoneVerificationAction.bind(null, accountId);
+  const boundConfirmAlertPhoneVerification = confirmAlertPhoneVerificationAction.bind(null, accountId);
   return (
     <>
       {from === "setup" ? <BackToSetup accountId={accountId} /> : null}
@@ -216,7 +219,9 @@ export default async function CrmSettingsPage({
           accountId={accountId}
           alertPhone={account.alert_phone}
           smsNotReady={!smsGate.ok}
-          action={boundSetAlertPhone}
+          clearAction={boundSetAlertPhone}
+          startVerificationAction={boundStartAlertPhoneVerification}
+          confirmVerificationAction={boundConfirmAlertPhoneVerification}
         />
         <LinkSiteCard
           // Same reason as BrandingPanel's key: the card holds the picked

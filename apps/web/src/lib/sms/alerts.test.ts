@@ -11,7 +11,10 @@ const sendMock = vi.fn();
 const getSmsProviderMock = vi.fn(() => ({ isFake: true, send: sendMock }));
 vi.mock("./index", () => ({ getSmsProvider: (...a: unknown[]) => getSmsProviderMock() }));
 
-import { composeBookingAlertSms, composeCallAlertSms, sendAlertSms, prepareAlertSms, deliverAlertSms } from "./alerts";
+import {
+  composeBookingAlertSms, composeCallAlertSms, sendAlertSms, prepareAlertSms, deliverAlertSms,
+  composeAlertPhoneVerificationSms,
+} from "./alerts";
 
 const ACCOUNT_ID = "acct_1";
 const ALERT_PHONE = "+19565550001";
@@ -271,5 +274,17 @@ describe("sendAlertSms", () => {
     ).resolves.toBeUndefined();
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();
+  });
+});
+
+describe("composeAlertPhoneVerificationSms", () => {
+  it("carries the exact code and says when it expires (mutation: hardcode a different code → FAILS)", () => {
+    const body = composeAlertPhoneVerificationSms("482913");
+    expect(body).toContain("482913");
+    expect(body).toContain("10 minutes");
+  });
+
+  it("stays a single segment (plain ASCII, fixed short wording)", () => {
+    expect(segmentsFor(composeAlertPhoneVerificationSms("000000")).segments).toBe(1);
   });
 });

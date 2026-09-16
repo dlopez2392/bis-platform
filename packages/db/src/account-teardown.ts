@@ -27,6 +27,23 @@ export const ACCOUNT_OWNED_TABLES = [
 ] as const;
 
 /**
+ * ⚠️ `alert_phone_verifications` (0036) is DELIBERATELY not on that list, and
+ * neither is `contact_duplicate_flags` (0033).
+ *
+ * Both carry `account_id … on delete cascade` rather than `restrict`, so the
+ * account's own deletion below carries their rows away — they are derived or
+ * scratch state, not the lead-bearing rows 0017 made restrict to protect. 0036
+ * argues the case in its own comments;
+ * `alert-phone-verification-grants.test.ts` proves the cascade instead of
+ * assuming it, by inserting a row, letting `withTestAccount` tear the account
+ * down, and then asserting nothing is left.
+ *
+ * A table added with the usual `restrict` and left off the list is a different
+ * story and still a bug: it surfaces as "cleanup failed on accounts" here, or
+ * much later as a unique-constraint failure in an unrelated suite.
+ */
+
+/**
  * Deletes everything one account owns, then the account row itself.
  *
  * Every delete checks `.error` and throws (the M1c lesson: a swallowed delete
