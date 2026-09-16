@@ -94,9 +94,32 @@ Read before assuming this feature is urgent:
   not pretend otherwise — every threshold below is a starting value behind an
   env var, not a measured optimum.
 - **`+19562921696` is simultaneously the top spam caller (4) and the top
-  booker (13).** Any reputation rule that counts spam without also requiring
-  zero good outcomes would have blocked the best customer in the database. This
-  is the single most important constraint in this document.
+  booker (13) — ACROSS BOTH of danlo's accounts.** That pair is a cross-account
+  aggregate, and this document's rule is explicitly per account (below), so the
+  two numbers cannot be reconciled with a per-account query. **Corrected here
+  rather than deleted, because the constraint survives the correction.** Per
+  account the same caller is (2 spam, 11 other) on one and (2 spam, 2 other) on
+  the other: still, on each account separately, a caller with real spam rows and
+  real good outcomes. Any reputation rule that counted spam without also
+  requiring zero good outcomes would have blocked the best customer in the
+  database at either gate. This is the single most important constraint in this
+  document, and `caller-reputation.test.ts:39-43` pins the clause with the
+  aggregate figures as its fixture.
+- **No caller on any account reaches `spamCalls >= 3`.** The maximum anywhere
+  is 2 — one short of the default threshold. So Guard 2 would refuse **nobody**
+  in the database as it stands today. That is the "blast radius today is near
+  zero" claim, established from the data rather than from the argument about how
+  few numbers are reachable. It also means the threshold has never been
+  exercised against a real caller, only against fixtures.
+- **There is not a single `turn_count = 0` row in the entire `calls` table.**
+  The connect-timeout exclusion (`turn_count >= 1` on the spam count, below) is
+  therefore a **prediction, not an observation**: it guards a shape production
+  has never yet produced. Still the right guard — the row it excludes is our own
+  outage being charged to a caller, which is the worst false positive available
+  here, and the cost of being wrong in the other direction is only that one
+  robot gets one extra call. But it must not be described as something the data
+  showed, and if a `turn_count = 0` row ever does appear it is worth reading
+  before trusting this reasoning further.
 
 ## What stands in front of the model today
 
@@ -110,10 +133,10 @@ Only three things, and only one is a volume control:
    `PHONE_MAX_CALLS_PER_ACCOUNT_PER_DAY` (50), counted off the `calls` table.
 
 Refusals in `api/voice/texml` are spoken and hung up **before the SIP bridge**
-(`respond()` at `texml/route.ts:199-219`, where `dialXml` is unconditionally the
+(`respond()` at `texml/route.ts:213-233`, where `dialXml` is unconditionally the
 last line), so a refused call never reaches OpenAI at all. The webhook has a
 second zero-token refusal zone of its own: nothing is billed until `acceptCall`
-at `incoming/route.ts:796`, and a decline there is expressed simply by never
+at `incoming/route.ts:814`, and a decline there is expressed simply by never
 calling it.
 
 **The caps fail open on a database error**, by explicit decision — "losing a
@@ -156,9 +179,43 @@ Two divergences, both load-bearing, both pinned by tests:
 This is not new machinery. It is a second instance of proven machinery with a
 shorter fuse and a cancel condition.
 
-- **Window:** `PHONE_MAX_SILENT_SECONDS`, default **30**, clamped like its
-  siblings. Armed at `ws.on("open")` alongside `capTimer`, not after the
-  greeting — one timer, one origin, no second lifecycle concept.
+- **Window:** `PHONE_MAX_SILENT_SECONDS`, default **30**. Armed at
+  `ws.on("open")` alongside `capTimer`, not after the greeting — one timer, one
+  origin, no second lifecycle concept.
+
+  **The knob's own clamp is not the window, and the difference is
+  operator-visible.** The armed window is
+
+  ```
+  min( clamp(PHONE_MAX_SILENT_SECONDS, 5..120), PHONE_MAX_CALL_SECONDS / 2 )
+  ```
+
+  (`silence-guard.ts:48-52` for the clamp, `incoming/route.ts:389` for the
+  bound). Half the cost cap, because the two knobs are independent in the
+  environment and `120` with a cap of `60` is a legal pair an operator reaches
+  by two individually sensible edits — under which the CAP would fire first on
+  a silent call and hand the model its open-ended "Politely wrap up…", which is
+  exactly how the 247-second call produced a fabricated summary. *Half*
+  specifically, not "cap minus something": half is strictly less than the cap
+  for every positive cap and so can never TIE it, and a tie fires the cap first
+  (same-deadline timers run in insertion order, and `capTimer` is armed a few
+  lines earlier).
+
+  **That bound is why this branch also puts a 10-second FLOOR on
+  `PHONE_MAX_CALL_SECONDS`** (`incoming/route.ts:333`, now clamped `10..750`).
+  The floor has nothing to do with the cap — a 1s cost cap is absurd but
+  harmless on its own. It exists so half the cap can never land under the
+  guard's own 5s minimum: measured off the route's log line, a cap of 8 armed a
+  4s window and a cap of 1 armed 0.5s, and the silent caller heard "I can't
+  hear anything, goodbye" 400ms *before* the 900ms greeting reached them.
+  Flooring the CAP is what makes the half-bound incapable of undercutting the
+  clamp it is applied to; flooring after the `min` instead would let the window
+  TIE the cap. Both ends of the `min` are therefore >= 5, so the 5s floor —
+  which is what guarantees the greeting has played — holds for every legal pair.
+
+  Pinned by two tests in `incoming/lifecycle.test.ts`: "the two cost knobs
+  cannot invert" and "the window's 5s floor survives the half-cap bound".
+  `.env.example` documents both knobs in these terms.
 - **Cancel signal:** any event indicating the caller produced audio. The event
   vocabulary must be **read off a real call, not assumed** — log every inbound
   event `type` for one silent call and one spoken call, then pin the set. This
@@ -169,8 +226,11 @@ shorter fuse and a cancel condition.
   is the faster signal if it is confirmed to arrive under `semantic_vad`. Cancel
   on either. Never cancel on an assistant/response event.
 - **The caller hears a fixed line before the hangup**, not dead air — a human on
-  a broken microphone deserves to know why the call ended, and it costs three
-  seconds. It must use the **constrained** utterance form the greeting already
+  a broken microphone deserves to know why the call ended, and it costs **five
+  seconds**: the guard closes the socket on the same 5000ms playout delay the
+  cost cap uses (`incoming/route.ts:420-423`, matching `344-347`), deliberately
+  the same number so there is one playout constant rather than two. It must use
+  the **constrained** utterance form the greeting already
   uses, `Greet the caller with exactly: ${greeting}`
   (`incoming/route.ts:255-258`) — **not** the cap's open-ended
   `"Politely wrap up and say a brief goodbye to the caller — we're out of time"`
@@ -203,7 +263,7 @@ fires on a call that ends at 30 seconds.
 
 A fourth variant on the `Routability` union in `texml/route.ts:30-39`, branching
 in `respond()` **above** the unconditional `return xmlResponse(dialXml(...))`
-(`texml/route.ts:218`). The decision itself lives in a new pure
+(`texml/route.ts:232`). The decision itself lives in a new pure
 module and is called from **both** voice gates, exactly as `callAnswerable` is:
 
 > *"The ONE shared predicate both voice gates call — the OpenAI webhook's accept
@@ -213,12 +273,18 @@ module and is called from **both** voice gates, exactly as `callAnswerable` is:
 - **New pure module** `lib/voice/caller-reputation.ts`, shaped like
   `call-limits.ts`: no database, trivially unit-testable, with the try/catch and
   fail-open wrapping left to the callers.
-- **New read** in `packages/db/src/voice.ts` returning `outcome` and
-  `turn_count` for one caller on one account since a timestamp. **No migration
-  is needed** — `calls_caller_idx (account_id, caller_e164, started_at desc)`
-  already exists (`0019_voice_core.sql:64`) and is precisely this query's index.
+- **New read** `countCallerHistorySince` in `packages/db/src/voice.ts`. It
+  returns **two counts** — `{ spamCalls, otherCalls }` — for one caller on one
+  account since a timestamp, **not a list of `outcome`/`turn_count` rows**.
+  Corrected to follow the implementation, which argues the point at length
+  (`voice.ts:199-204`): both halves run `count: "exact", head: true`, so no rows
+  travel and neither query needs a `.limit()`. A limited list could truncate
+  away an older good outcome and produce a false block, which is the one
+  failure this guard must not have. **No migration is needed** —
+  `calls_caller_idx (account_id, caller_e164, started_at desc)` already exists
+  (`0019_voice_core.sql:64`) and carries both queries.
 - **In TeXML** the read joins the existing `Promise.all` next to the two cap
-  counts (`texml/route.ts:112-118`), so it adds **no wall-clock** on Telnyx's
+  counts (`texml/route.ts:126-132`), so it adds **no wall-clock** on Telnyx's
   carrier answer deadline. In the webhook it follows the caps' sequential shape.
 
 **The rule.** A caller is refused when, within the window, they have at least
@@ -226,9 +292,10 @@ module and is called from **both** voice gates, exactly as `callAnswerable` is:
 `spam`, and **zero** calls of any other outcome:
 
 - **Zero good outcomes ever in the window is mandatory**, not a refinement. See
-  the live-data constraint above: the top spam caller is also the top booker.
-  One booking, lead, message or even `abandoned` in the window clears the caller
-  completely.
+  the live-data constraint above: the top spam caller is also the top booker —
+  and still is when the aggregate is split per account, which is the sense that
+  matters here. One booking, lead, message or even `abandoned` in the window
+  clears the caller completely.
 - **`turn_count: 0` rows are excluded from the count.** A connect-timeout also
   records `spam` with no turns (`incoming/route.ts:201-209`); that is our
   infrastructure failing, not a robot, and blocking a caller for our own outage
@@ -303,10 +370,10 @@ bill behind it is speculation.
   way. Accepted as consistent with existing behaviour; surfacing refused calls
   is a worthwhile follow-up, not part of this work.
 - **A call whose `To` cannot be parsed skips every gate and dials**
-  (`respond()`'s `if (calledE164)` guard, `texml/route.ts:209-218`, pinned by a
+  (`respond()`'s `if (calledE164)` guard, `texml/route.ts:223-231`, pinned by a
   test). Pre-existing, unrelated to spam, left alone.
 - **`VOICE_FORWARD_TO` bypasses both guards**, deliberately, because it sits
-  ahead of every gate by design (`texml/route.ts:200-208`). An operator who has
+  ahead of every gate by design (`texml/route.ts:214-222`). An operator who has
   taken the line back must not have calls swallowed by a spam rule.
 
 ## Testing
