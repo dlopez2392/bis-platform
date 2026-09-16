@@ -72,6 +72,12 @@ export default async function NumbersPage() {
                 IS its context: four numbers is not the useful fact, how many
                 of them are earning their line rental is. */}
             <StatusCountStrip total={rows.length} counts={countByStatus(inventory)} />
+            {/* The seam this screen cannot cross, stated before the controls
+                that imply otherwise rather than after one has been pressed.
+                Not a Notice: nothing is wrong, and a standing warn band on a
+                healthy page is noise an operator learns to skim past. This is
+                the page telling the truth about its own reach. */}
+            <p className="text-xs text-muted-foreground">{m["numbers.carrierSeam"]}</p>
             <NumbersTable rows={rows} />
           </>
         )}

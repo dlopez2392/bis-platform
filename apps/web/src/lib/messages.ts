@@ -966,7 +966,25 @@ export const m = {
   "numbers.moveLabel": "Move {e164} to another company",
   "numbers.releaseLabel": "Take {e164} out of service",
   "numbers.moveNone": "Every other company already has a number of its own.",
-  "numbers.moved": "{e164} is now on {account}",
+  "numbers.moved": "{e164} now answers as {account} — if it's pointed at BIS at the carrier",
+  // The seam this screen cannot cross, said once, in the place an operator
+  // reads before they touch anything.
+  //
+  // Moving a number here re-points the ANSWERING side: whichever company owns
+  // a number's row is the company the receptionist greets a caller as. It
+  // does not, and today cannot, change where the phone company sends the
+  // call. That is a Routing setting on the number in the Telnyx portal
+  // (docs/runbooks/voice-setup.md Step 4), which nothing in this app writes —
+  // `phone_numbers.telnyx_id` is optional and mostly empty, so the platform
+  // does not even hold the handle it would need.
+  //
+  // On 2026-09-16 a number was moved to a new company here and still
+  // answered as the old one, because the phone company was still sending
+  // those calls somewhere else entirely. The move was recorded correctly and
+  // the screen said nothing about the half it does not control. This
+  // sentence is that missing half.
+  "numbers.carrierSeam":
+    "Moving a number here changes which company the receptionist answers as. It does not change where your phone company sends the call — point the number at BIS under Voice → Routing in Telnyx.",
   "numbers.sameAccount": "That number is already on this company.",
   "numbers.notFound": "We couldn't find that number — this page may be out of date.",
   "numbers.destinationMissing": "We couldn't find that company — this page may be out of date.",

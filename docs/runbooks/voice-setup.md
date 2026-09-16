@@ -154,6 +154,61 @@ as its connection, not "none" or a different app.
 
 ---
 
+## Moving a number between companies
+
+There are TWO halves to a phone number, and the platform owns only one.
+
+| | Where it lives | What changes it |
+|---|---|---|
+| **Who answers** | `phone_numbers.account_id` | `/dashboard/numbers` → Move |
+| **Where the call goes** | Telnyx → the number → Voice → Routing | The Telnyx portal, by hand |
+
+Moving a number on `/dashboard/numbers` re-points the ANSWERING side. The
+TeXML route resolves the tenant from the dialed number (`To`), so whichever
+company holds the row is the company the receptionist greets a caller as.
+Nothing in this app writes the carrier side — `phone_numbers.telnyx_id` is an
+optional field and is usually empty, so the platform does not even hold the
+handle it would need.
+
+So a move is complete only when BOTH are done:
+
+1. `/dashboard/numbers` → **Move…** → pick the company → **Move**.
+2. Telnyx → **Numbers → My Numbers** → the number → **Voice → Routing** →
+   the `BIS Platform Voice` TeXML app from Step 3.
+3. The number lands as `provisioned` after a move, by design
+   (`reassignPhoneNumber` resets status) — walk the test-call and go-live
+   steps again before it answers for real.
+
+### When a number answers as the WRONG company
+
+The symptom is a caller hearing another client's greeting. It means the call
+did not arrive as the number you dialed. Diagnose it from the logs, not by
+guessing:
+
+```
+Vercel → the production deployment → Runtime Logs → "/api/voice/incoming"
+```
+
+Look at the `incoming call` line's `calledNumber`. That is the number the
+platform was told about, and the ONLY thing that picks the tenant:
+
+- **`calledNumber` is the number you dialed** → the platform chose the wrong
+  tenant. That is a bug here; check `phone_numbers` for that e164.
+- **`calledNumber` is a DIFFERENT number** → the carrier sent the call
+  somewhere else and the platform answered correctly for whatever number it
+  actually received. Fix the routing on the dialed number in Telnyx: either
+  it is not pointed at the TeXML app, or it is forwarding to another line.
+
+A worked example, 2026-09-16: `+19567055146` had just been moved to
+956 Woodworks and still answered as Bespoke Intelligent Solutions. The log
+read `calledNumber: '+19565061545'` — BIS's own number. The call never
+arrived as `+19567055146` at all, so every layer behaved correctly; the
+number simply was not pointed at the platform. Both calls were also billed
+and logged against the BIS account, which is the other reason to fix the
+routing rather than live with it.
+
+---
+
 ## Client onboarding (wizard)
 
 Every client — test or real — now onboards through one page:
