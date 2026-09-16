@@ -36,6 +36,12 @@ export const m = {
   // word here in a way it stops being on the per-account screen: nothing at
   // that level is ever pooled across more than one company.
   "nav.work": "Work queue",
+  // The agency numbers inventory (/dashboard/numbers), top level beside
+  // Companies, Blueprints and the work queue. "Phone numbers" in full rather
+  // than "Numbers": at agency scope, alone in a flat list, "Numbers" reads as
+  // metrics. It is the same two words the per-account Voice page's own panel
+  // uses, which is deliberate — one vocabulary for one thing.
+  "nav.numbers": "Phone numbers",
 
   "shell.brand": "BIS",
   "shell.switchAccount": "Switch company",
@@ -928,6 +934,56 @@ export const m = {
   // stale submission must not be able to give an account a second active
   // number just because the render it came from went stale.
   "voice.moveDestinationOccupied": "This client already has a phone number. Release or move it before bringing in another one.",
+
+  // ── The agency numbers inventory (/dashboard/numbers) ──────────────────
+  //
+  // Status words are NOT redefined here: the four labels come from
+  // `voice.numbers.status.*` via NUMBER_STATUS_LABEL, the same vocabulary the
+  // Voice page and the setup wizard already use. A fifth word for the same
+  // four states is how an operator ends up unsure whether "Released" and
+  // "Out of service" are the same thing.
+  "numbers.title": "Phone numbers",
+  "numbers.subtitle": "Every number we hold, the company on it, and where it can go next.",
+  "numbers.inventory": "In the inventory",
+  "numbers.empty.title": "No phone numbers yet",
+  "numbers.empty.body": "Buy a number at Telnyx, then assign it to a company from that company's Voice page. It shows up here with every other number you hold.",
+  "numbers.on": "On {account}",
+  // The join to `accounts` came back empty — same wording as the setup
+  // wizard's own fallback, for the same reason.
+  "numbers.unknownAccount": "an account we couldn't name",
+  "numbers.noCarrierId": "No carrier ID",
+  "numbers.move": "Move…",
+  "numbers.moveTo": "Move to",
+  // Accessible name for the destination picker. Every row has one, so without
+  // the number in the name a screen reader reads a column of identical
+  // "Move to" selects.
+  "numbers.moveToLabel": "Company to move {e164} to",
+  "numbers.moveSubmit": "Move",
+  // Accessible names for the two row buttons. Every row's visible label is
+  // the same word, so without the number in the name a screen reader reads a
+  // column of identical "Move…" and "Take out of service" controls with no
+  // way to tell which line each one touches.
+  "numbers.moveLabel": "Move {e164} to another company",
+  "numbers.releaseLabel": "Take {e164} out of service",
+  "numbers.moveNone": "Every other company already has a number of its own.",
+  "numbers.moved": "{e164} is now on {account}",
+  "numbers.sameAccount": "That number is already on this company.",
+  "numbers.notFound": "We couldn't find that number — this page may be out of date.",
+  "numbers.destinationMissing": "We couldn't find that company — this page may be out of date.",
+  // Archived is the one account state that means "this company is over".
+  // Paused is not: pausing is what you do to a client who may come back, and
+  // giving them a number again is how they come back.
+  "numbers.destinationArchived": "That company is archived. Un-archive it before giving it a phone number.",
+  // Taking a number out of service without moving it: the churn case. The
+  // number stays on the old company's row, costing line rental and still
+  // dialable, but it stops answering — and it stops occupying that company's
+  // one active-number slot, which is what frees the company up to be reused.
+  "numbers.release": "Take out of service",
+  "numbers.releaseConfirm": "Yes, stop answering {e164}",
+  "numbers.releaseWarning": "{account} stops answering calls on this number the moment you do this.",
+  "numbers.released": "{e164} is out of service",
+  "numbers.releaseFailed": "Couldn't take that number out of service. Try again.",
+  "numbers.alreadyReleased": "That number is already out of service.",
 
   // The review request's default body. `{name}` is the house placeholder,
   // filled at send time with the customer-facing brand name (never

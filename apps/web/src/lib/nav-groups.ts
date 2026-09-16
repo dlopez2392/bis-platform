@@ -21,6 +21,7 @@ export type NavIconKey =
   | "automations"
   | "accounts"
   | "blueprints"
+  | "numbers"
   | "checklist"
   | "work";
 
@@ -65,6 +66,12 @@ export function buildNavGroups(base: string | null, isAgency: boolean): NavGroup
           // ("Top level, beside Accounts and Blueprints") does not require
           // a particular side.
           { href: "/dashboard/work", labelKey: "nav.work", iconKey: "work" },
+          // The numbers inventory — /dashboard/numbers, agency-only by
+          // construction (requireAgency, first line). Appended rather than
+          // slotted beside Companies: this registry's convention is "add a
+          // line, never reorder", and nothing about this destination needs a
+          // particular position.
+          { href: "/dashboard/numbers", labelKey: "nav.numbers", iconKey: "numbers" },
         ],
       },
     ];

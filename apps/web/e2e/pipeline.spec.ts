@@ -1,6 +1,13 @@
 import { test, expect } from "@playwright/test";
 import { SEEDED_ACCOUNT_NAME, openAccountByName } from "./support";
 
+// Two full drag round-trips, each ending in a reload against the shared
+// Supabase project, and each gesture now retried up to three times (see
+// `attemptDrag`). Playwright's 30s default was already the ceiling this spec
+// kept hitting; the retries need headroom that does not come out of the same
+// budget the work itself needs.
+test.describe.configure({ timeout: 90_000 });
+
 test("dragging an opportunity persists after reload", async ({ page }) => {
   // This spec needs an account with a real opportunity to drag, not just
   // any company — a positional `.first()` over the account cards picked
@@ -31,20 +38,44 @@ test("dragging an opportunity persists after reload", async ({ page }) => {
     throw new Error(`Could not find a column containing ${cardId}`);
   }
 
-  // Drags the card from column `fromIndex` to column `toIndex` and proves
-  // the move reached the database (not just the optimistic UI) via reload.
-  async function dragTo(fromIndex: number, toIndex: number) {
-    // Since the Phase-2 shell, every account-route load fires two background
-    // server-action POSTs from the sidebar (unread count + setup meter).
-    // dnd-kit's pointer sensor needs a quiet main thread to register the
-    // 6px activation distance — starting the drag while those requests and
-    // their re-renders are in flight is how this spec flaked in-suite (the
-    // drop simply never registered). Settle first; also covers the reload
-    // inside this helper for the second dragTo call.
-    await page.waitForLoadState("networkidle");
-    const fromColumn = columns.nth(fromIndex);
-    const toColumn = columns.nth(toIndex);
-    const draggedCard = fromColumn.locator(`[data-testid="${cardId}"]`);
+  /** How many times one drag gesture may be attempted before giving up. */
+  const DRAG_ATTEMPTS = 3;
+
+  /**
+   * ONE drag gesture. Returns whether the card actually landed in `toColumn`.
+   *
+   * dnd-kit's PointerSensor only starts a drag once the pointer has travelled
+   * past a 6px activation distance, and it measures that on the main thread.
+   * A re-render landing between `mouse.down()` and the first `mouse.move()`
+   * eats the activation and the drop silently never happens — since the
+   * Phase-2 shell, every account-route load fires two background
+   * server-action POSTs from the sidebar (unread count + setup meter), which
+   * is the usual culprit.
+   *
+   * That used to be guarded by `waitForLoadState("networkidle")` before the
+   * gesture. It is a PROXY for "the main thread is quiet", not a measure of
+   * it, and Playwright discourages it for exactly this reason: an App Router
+   * page with RSC link prefetching offers no guaranteed 500ms of network
+   * silence to wait for. It duly became the flake it was added to prevent —
+   * CI run 35128151154 parked a 30s test timeout on that line, while the same
+   * product code had passed this spec minutes earlier on the previous run of
+   * the same branch.
+   *
+   * Retrying the gesture tests the real property instead of a stand-in for
+   * it: either the card moved or it did not, and a missed activation costs
+   * one more attempt rather than the whole run. Nothing here is skipped,
+   * loosened or tolerated — a card that never lands after three honest
+   * gestures still fails the spec.
+   */
+  async function attemptDrag(
+    toColumn: ReturnType<typeof columns.nth>,
+    draggedCard: ReturnType<typeof columns.nth>,
+    landed: ReturnType<typeof columns.nth>,
+  ): Promise<boolean> {
+    // A previous attempt may have succeeded while its own verdict was still
+    // being measured. Checking first keeps a retry from measuring a source
+    // card that is legitimately gone.
+    if (await landed.count()) return true;
 
     // The board is horizontally scrollable (overflow-x-auto) and can have
     // more columns than fit in the viewport. Scroll the destination into
@@ -62,7 +93,11 @@ test("dragging an opportunity persists after reload", async ({ page }) => {
     // comfortably more than the ~304px column width — so the adjacent
     // source column stays on screen too.
     await toColumn.evaluate((el) => el.scrollIntoView({ inline: "center", block: "nearest" }));
-    await expect(draggedCard).toBeVisible();
+    // 5s rather than the project's 10s expect default: three attempts each
+    // paying the full default, twice over for the round trip, would spend
+    // the whole 90s budget waiting and report a timeout instead of the far
+    // more useful "never landed after 3 attempts".
+    await expect(draggedCard).toBeVisible({ timeout: 5_000 });
 
     const cardBox = await draggedCard.boundingBox();
     const targetBox = await toColumn.boundingBox();
@@ -90,6 +125,38 @@ test("dragging an opportunity persists after reload", async ({ page }) => {
     const endX = targetBox.x + targetBox.width / 2;
     const endY = targetBox.y + Math.min(targetBox.height / 2, 150);
 
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    try {
+      // dnd-kit's PointerSensor requires movement past a 6px activation
+      // distance before it registers a drag — a single jump from down() to
+      // up() never crosses that threshold, so step across in increments.
+      await page.mouse.move(endX, endY, { steps: 10 });
+    } finally {
+      // Exactly one up() for the one down() above, on every path. A gesture
+      // abandoned mid-move must not leave the button held: the next
+      // attempt's down() would then be a no-op and every retry would fail
+      // for a reason that has nothing to do with what is being tested.
+      await page.mouse.up();
+    }
+
+    // The verdict, and the only thing this function decides. Short on
+    // purpose: the optimistic re-render is immediate when the activation
+    // registered at all, so a slow answer here is a missed activation, and
+    // the budget is better spent on another attempt than on waiting.
+    return await landed
+      .waitFor({ state: "visible", timeout: 3_000 })
+      .then(() => true, () => false);
+  }
+
+  // Drags the card from column `fromIndex` to column `toIndex` and proves
+  // the move reached the database (not just the optimistic UI) via reload.
+  async function dragTo(fromIndex: number, toIndex: number) {
+    const fromColumn = columns.nth(fromIndex);
+    const toColumn = columns.nth(toIndex);
+    const draggedCard = fromColumn.locator(`[data-testid="${cardId}"]`);
+    const landed = toColumn.locator(`[data-testid="${cardId}"]`);
+
     // handleDragEnd fires the move as a Server Action (a POST back to this
     // same route) inside a transition. Start listening before the drag so
     // we can't miss it, then actually wait for it to finish before we ever
@@ -102,6 +169,10 @@ test("dragging an opportunity persists after reload", async ({ page }) => {
     // wait in place of the move. Only the move's body carries the
     // opportunity id — the BARE id, not the "opp-"-prefixed testid
     // (data-testid is `opp-${opp.id}`; the action is called with opp.id).
+    //
+    // Armed ONCE, outside the retry loop: a missed activation fires no POST
+    // at all, so re-arming per attempt would leave abandoned waits behind,
+    // and the attempt that does register is the one this resolves on.
     const bareOppId = cardId!.replace(/^opp-/, "");
     const movePosted = page.waitForResponse(
       (res) =>
@@ -109,16 +180,23 @@ test("dragging an opportunity persists after reload", async ({ page }) => {
         res.url().includes("/pipeline") &&
         (res.request().postData() ?? "").includes(bareOppId),
     );
+    // Attach a handler now so that if every attempt below misses and this
+    // wait is abandoned, its eventual rejection (on page close) is already
+    // handled rather than surfacing as an unhandled rejection that fails an
+    // unrelated test later in the run. `await movePosted` below still gets
+    // the real value — this only registers a second handler.
+    void movePosted.catch(() => {});
 
-    await page.mouse.move(startX, startY);
-    await page.mouse.down();
-    // dnd-kit's PointerSensor requires movement past a 6px activation
-    // distance before it registers a drag — a single jump from down() to
-    // up() never crosses that threshold, so step across in increments.
-    await page.mouse.move(endX, endY, { steps: 10 });
-    await page.mouse.up();
-
-    await expect(toColumn.locator(`[data-testid="${cardId}"]`)).toBeVisible();
+    let moved = false;
+    for (let attempt = 1; attempt <= DRAG_ATTEMPTS && !moved; attempt++) {
+      moved = await attemptDrag(toColumn, draggedCard, landed);
+    }
+    // Never softened into a skip or a pass: three honest gestures that all
+    // failed to move the card is a real failure of the thing under test.
+    expect(
+      moved,
+      `the card never landed in column ${toIndex} after ${DRAG_ATTEMPTS} drag attempts`,
+    ).toBeTruthy();
 
     const moveResponse = await movePosted;
     expect(moveResponse.ok()).toBeTruthy();
@@ -128,7 +206,7 @@ test("dragging an opportunity persists after reload", async ({ page }) => {
     // move actually persisted to the database — and now that we've awaited
     // the mutation's own response above, the reload can't race ahead of it.
     await page.reload();
-    await expect(toColumn.locator(`[data-testid="${cardId}"]`)).toBeVisible();
+    await expect(landed).toBeVisible();
   }
 
   const sourceIndex = await findColumnIndex();
