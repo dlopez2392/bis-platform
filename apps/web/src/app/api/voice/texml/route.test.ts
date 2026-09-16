@@ -406,6 +406,36 @@ describe("texml route — repeat-offender refusal (Guard 2)", () => {
     expect(days).toBeLessThan(30.1);
   });
 
+  // REPUTATION IS DECIDED BEFORE THE CAP, and until this case existed the two
+  // branches never contended: no test arranged a caller who is BOTH over the
+  // cap and a known repeat offender, so swapping `decideReputation` and
+  // `decideLimit` in `classify()` left 50/50 green. It is not cosmetic. They
+  // emit different copy — under a reversal a robot hears "we can't take more
+  // calls today. Please call back tomorrow", which invites it back — and
+  // different log lines, and `texml declined blocked (repeat-spam)` is the
+  // ONLY telemetry Guard 2 produces at all.
+  it("a caller who is BOTH over the cap and a repeat offender hears the refusal, not the cap copy", async () => {
+    countCallsByCallerSinceMock.mockResolvedValue(9); // well past the default cap of 5
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 3, otherCalls: 0 });
+    const xml = await texmlXml({ To: LIVE_TO, From: SILENT_CALLER });
+    expect(xml).toContain("Sorry, this number can't take your call right now. Please try again later.");
+    expect(xml).not.toContain("can't take more calls today");
+    expect(xml).not.toContain("<Dial");
+  });
+
+  // The blocked verdict passes `profile.languages` through like every other
+  // refusal. The other two refusal kinds each have a Spanish pin; without this
+  // one, hardcoding "en" on the blocked branch left 50/50 green and an
+  // es-only client's wrongly-blocked caller would start hearing English.
+  it("the blocked refusal honors the profile's language (es)", async () => {
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, languages: "es" });
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 3, otherCalls: 0 });
+    const xml = await texmlXml({ To: LIVE_TO, From: SILENT_CALLER });
+    expect(xml).toContain("<Say language=\"es-MX\">Lo sentimos, este número no puede atender su llamada en este momento. Por favor intente más tarde.</Say>");
+    expect(xml).not.toContain("<Say>Sorry");
+    expect(xml).not.toContain("<Dial");
+  });
+
   it("a caller with no number at all is not blocked — there is no history to read", async () => {
     const xml = await texmlXml({ To: LIVE_TO });
     expect(xml).toContain("<Dial");

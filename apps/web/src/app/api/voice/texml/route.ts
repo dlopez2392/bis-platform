@@ -121,6 +121,12 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
       // line of the two. Note the two verdicts read OPPOSITE senses —
       // `decideReputation` reports `blocked`, `decideLimit` reports
       // `allowed` — so each is read on its own field, never combined.
+      //
+      // That order is binding, not stylistic, and is pinned by the case
+      // arranging a caller who is over the cap AND a repeat offender:
+      // reversed, a known robot hears the cap's "call back tomorrow", which
+      // invites it back, and the `blocked (repeat-spam)` line — the only
+      // telemetry Guard 2 produces — is never written.
       const reputation = decideReputation(history, repCfg);
       if (reputation.blocked) {
         console.log(`texml declined blocked (${reputation.reason}) for ${calledE164}, caller ${callerE164 ?? "unknown"}, accountId ${row.account_id}`);
