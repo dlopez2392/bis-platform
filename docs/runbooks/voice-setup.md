@@ -516,7 +516,7 @@ their defaults). This runbook covers the three that MUST be set for voice to
 work at all (Step 2); everything else is optional and ships with a sane
 default — only touch them if a real call revealed a reason to.
 
-Two more env vars, not voice-specific but load-bearing for this milestone:
+Beyond Step 2's three, these are the ones worth knowing by name:
 
 - **`APP_ORIGIN`** — set to `https://app.bis-rgv.com`. Absolute origin used
   to build every link inside outbound email (booking confirmations, staff
@@ -537,9 +537,55 @@ Two more env vars, not voice-specific but load-bearing for this milestone:
   above. Sensitive in Vercel. Unset behavior: not an error — video
   calendars simply book without a meeting link, silently, in every
   environment.
+- **`TELNYX_API_KEY`** — sensitive. Portal →
+  https://portal.telnyx.com/#/app/api-keys → **Create API Key**; the value
+  is shown ONCE. Two features need it and neither announces its absence:
+  outbound SMS (`getSmsProvider` throws in production without it, but only
+  at send time) and the numbers inventory's carrier routing column. On
+  2026-09-16 it was found to have never been set in production at all —
+  nothing had complained because no SMS had ever been sent and no alert
+  phone was configured on any account. Unset behavior: routing reads "Not
+  checked" and the first real SMS send throws.
+- **`TELNYX_VOICE_CONNECTION_ID`** — not sensitive. The `BIS Platform
+  Voice` TeXML application's Application ID (the portal labels it
+  "Application ID (Connection ID)"), from
+  https://portal.telnyx.com/#/app/next/call-control/applications. Turns on
+  the routing column and the **Point at BIS** repair on
+  `/dashboard/numbers` — see "Moving a number between companies" above.
+  Unset behavior: routing reads "Not checked" for every number and no
+  repair is offered anywhere, which is deliberate — the app never guesses
+  at, or writes, a carrier setting it could not first verify.
+- **`PHONE_SPAM_EXEMPT_CALLERS`** — not sensitive. Comma-separated +E.164
+  caller numbers the reputation guard never blocks: the agency's own
+  handsets. Needed because that guard counts history PER ACCOUNT, so a
+  brand-new company is the one place a known-good tester has nothing on
+  record to clear them with — three silent test calls there and the tester
+  is refused, while the same number sails through on older accounts full of
+  real bookings.
+
+  Format is exact-string, unvalidated, and silent when wrong:
+  `+19562921696`, never `9562921696` or `(956) 292-1696`. A malformed value
+  exempts NOBODY — the safe direction, but it means a typo looks identical
+  to leaving it unset and you will not find out until the guard refuses
+  you. Check the string before saving.
+
+  Scope is the BLOCK only. A call where nobody speaks is still recorded as
+  `spam`, because that is what happened, and rewriting the outcome would
+  put false data in a client's call log and in the KPIs the weekly report
+  is built from. It does not lift the per-caller daily cap either
+  (`PHONE_MAX_CALLS_PER_CALLER_PER_DAY`) — different guard, different
+  purpose. Unset behavior: nobody is exempt, which is how the guard
+  shipped.
 
 ## Troubleshooting quick-reference
 
+- **Your OWN test phone gets the "can't take your call" refusal:** the
+  reputation guard, and almost certainly on a NEW client — it counts per
+  account, so three silent test calls on a company with no real calls yet
+  is enough. Add the number to `PHONE_SPAM_EXEMPT_CALLERS` (see the env
+  reference below) and redeploy. Confirm before blaming it: a refused call
+  writes NO `calls` row at all, so the tell is a call that is declined with
+  nothing new in the account's call list.
 - **Call rings then dead air, nothing in `calls`:** check Step 2's env vars
   actually redeployed (the silent-no-op trap), then check Telnyx's TeXML
   app's webhook URL and Voice Method from Step 3 — GET unless you've
