@@ -10,6 +10,7 @@ export { getAlertPhone, setAlertPhone } from "./accounts";
 export { ALERT_CODE_DIGITS, ALERT_CODE_MAX_ATTEMPTS, ALERT_CODE_TTL_MINUTES,
          generateAlertCode, hashAlertCode, ALERT_CODE_MAX_SENDS_PER_HOUR,
          countRecentAlertPhoneVerifications, startAlertPhoneVerification,
+         discardAlertPhoneVerification,
          verifyAlertPhoneCode, type AlertPhoneVerificationOutcome } from "./alert-phone-verification";
 export { createContact, updateContact, listContacts, getContact,
          addTagToContact, removeTagFromContact, listContactTags, fillContactBlanks,

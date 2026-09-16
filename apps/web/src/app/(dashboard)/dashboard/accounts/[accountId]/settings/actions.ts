@@ -7,6 +7,7 @@ import { dbForRequest } from "@/lib/db";
 import { createCustomField, upsertCustomValue, setClientAccess, setFromEmail, setReportEmails,
          setAlertPhone, serviceDb, type CustomFieldDef,
          startAlertPhoneVerification, verifyAlertPhoneCode, countRecentAlertPhoneVerifications,
+         discardAlertPhoneVerification,
          ALERT_CODE_MAX_SENDS_PER_HOUR } from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
 import { saveVerifiedFromAddress } from "@/lib/email/preflight";
@@ -318,13 +319,18 @@ export async function startAlertPhoneVerificationAction(
     return { ok: false, error: m["settings.alertPhoneTooManyCodes"] };
   }
 
-  const { code } = await startAlertPhoneVerification(db, accountId, normalized);
+  const { id, code } = await startAlertPhoneVerification(db, accountId, normalized);
   try {
     await getSmsProvider().send({
       to: normalized, from: gate.from, body: composeAlertPhoneVerificationSms(code),
     });
   } catch (e) {
     console.error(`alert phone verification send failed for account ${accountId}: ${String(e)}`);
+    // No text went out, so this row must not count toward
+    // ALERT_CODE_MAX_SENDS_PER_HOUR — otherwise five carrier failures lock
+    // the number out for an hour with nothing ever delivered, which is
+    // exactly the cost that limit exists to bound.
+    await discardAlertPhoneVerification(db, id);
     return { ok: false, error: m["settings.alertPhoneSendFailed"] };
   }
   return { ok: true };

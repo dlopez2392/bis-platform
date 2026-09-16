@@ -519,7 +519,7 @@ export const m = {
   // rather than a Notice with a link slot: there is nothing to send a code
   // FROM yet.
   "settings.alertPhoneNotClearedToSend": "Texting isn't turned on for this account yet, so no verification code can go out. See the Checklist page.",
-  "settings.alertPhoneTooManyCodes": "Too many codes have been requested for this number in the last hour. Wait a bit and try again.",
+  "settings.alertPhoneTooManyCodes": "Too many codes have been requested for this number in the last hour. Try again in about an hour.",
   "settings.alertPhoneSendFailed": "The verification code couldn't be sent. Try again in a moment.",
   "settings.alertPhoneCodeSent": "Code sent — check that phone for a text.",
   // Deliberately does not say the number was right or wrong — only that

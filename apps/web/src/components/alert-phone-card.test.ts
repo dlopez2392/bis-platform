@@ -107,8 +107,17 @@ describe("AlertPhoneCard — agency idle phase", () => {
     expect(agencyRegion).toMatch(/href=\{`\/dashboard\/accounts\/\$\{accountId\}\/checklist`\}/);
   });
 
+  // NOT `"settings.alertPhoneNotReady"` — that literal message key is only
+  // ever consumed once, in the `notReadyLead`/`notReadyTail` destructuring
+  // ABOVE the return statement (and so always before `clientBranchIdx`,
+  // structurally, regardless of where the Notice JSX itself renders). A
+  // reviewer moved the `{smsNotReady && (<Notice>...)}` block into the
+  // client branch and this test stayed green, because the string it checked
+  // for could never have moved either way. `{notReadyLead}` is the JSX
+  // interpolation INSIDE the Notice block itself, so it moves with the
+  // block — this is what was actually proved red under that mutation.
   it("never shows the agency's carrier-facing readiness Notice to a client (mutation: move it into the client region → FAILS)", () => {
-    expect(clientRegion).not.toContain("settings.alertPhoneNotReady");
+    expect(clientRegion).not.toContain("{notReadyLead}");
   });
 
   it("gates the client's destination sentence on the same send-readiness gate (mutation: drop the smsNotReady check in the client branch → FAILS)", () => {
@@ -122,6 +131,16 @@ describe("AlertPhoneCard — agency idle phase", () => {
 
   it("no longer claims a BrandingPanel precedent that does not exist (mutation: restore 'the same split BrandingPanel already draws' → FAILS)", () => {
     expect(cardFlat).not.toMatch(/same split BrandingPanel already draws/);
+  });
+
+  // Settings passes `smsNotReady={!smsGate.ok}`; Branding passes
+  // `smsNotReady={!smsGate.ok || (alertPhone !== null && smsGate.ownedNumbers
+  // .includes(alertPhone))}` — a real second clause, not a rephrasing of the
+  // first. The two callers read the same GATE (`resolveSmsSender`) but do
+  // NOT apply the same predicate to it, so this doc comment must not claim
+  // otherwise.
+  it("does not claim the two callers apply the same predicate to smsNotReady, since Branding's carries an extra self-loop clause Settings does not (mutation: restore 'via the same predicate' → FAILS)", () => {
+    expect(cardFlat).not.toMatch(/via the same predicate/);
   });
 });
 
@@ -137,8 +156,15 @@ describe("AlertPhoneCard — the code is never made legible on this screen", () 
     expect(card).not.toMatch(/\bcode:\s*string\b[\s\S]*ok:\s*true/);
   });
 
+  // The old pin (`/attempts? (left|remaining)/i`) checked exactly two
+  // phrasings and would have missed "3 tries left" or "2 guesses
+  // remaining" entirely — decorative, since the decision itself (never
+  // fabricate a count the server doesn't return) is right but nothing here
+  // proved it. Broadened to the whole family of words an attempts-count
+  // would plausibly use, on either side of "left"/"remaining", within a
+  // short span (catches "N attempts left", "tries remaining", etc.).
   it("never shows a remaining-attempts count — the server does not return one, and a client-guessed count could drift from the database's own (mutation: this documents a deliberate omission; see the report for why a count is not fabricated here)", () => {
-    expect(cardFlat).not.toMatch(/attempts? (left|remaining)/i);
+    expect(cardFlat).not.toMatch(/\b(attempts?|tries|guesses)\b.{0,12}\b(left|remaining)\b/i);
   });
 });
 
@@ -185,5 +211,10 @@ describe("AlertPhoneCard — copy", () => {
 
   it("the send-refusal copy for the account's own number reads as a refusal, not as advice about a save that already happened (mutation: restore the old 'Heads up ... while it's set to this number' phrasing → FAILS)", () => {
     expect(m["settings.alertPhoneSelfWarning"]).not.toMatch(/while it's set to this number/);
+  });
+
+  it("the too-many-codes copy names the actual wait, not 'a bit' (mutation: restore 'Wait a bit and try again' → FAILS)", () => {
+    expect(m["settings.alertPhoneTooManyCodes"]).not.toMatch(/wait a bit/i);
+    expect(m["settings.alertPhoneTooManyCodes"]).toMatch(/hour/i);
   });
 });

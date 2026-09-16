@@ -119,6 +119,29 @@ export async function startAlertPhoneVerification(
   return { id: data.id, code };
 }
 
+/**
+ * Undoes `startAlertPhoneVerification` when the text that was supposed to
+ * carry the code never went out. Without this, the row `startAlertPhoneVerification`
+ * already inserted still counts toward `countRecentAlertPhoneVerifications`
+ * even though no text was delivered — five carrier failures would lock a
+ * number out for an hour with nothing actually sent, which is exactly the
+ * cost `ALERT_CODE_MAX_SENDS_PER_HOUR`'s own comment says the limit exists
+ * to bound ("how many real texts a claim can cost"). The caller
+ * (`startAlertPhoneVerificationAction`) calls this from the send's own
+ * catch block, using the `id` it already holds from the insert.
+ *
+ * A real DELETE, not a soft mark: nothing else in this table has a "this
+ * attempt never happened" state to mark it into, and a row that was never
+ * texted has nothing worth keeping — the same reasoning 0036 Decision 6
+ * gives for shipping no sweeper at all.
+ */
+export async function discardAlertPhoneVerification(
+  db: SupabaseClient, id: string,
+): Promise<void> {
+  const { error } = await db.from("alert_phone_verifications").delete().eq("id", id);
+  if (error) throw new Error(`discardAlertPhoneVerification failed: ${error.message}`);
+}
+
 /** What `verifyAlertPhoneCode` reports. No fourth state for "never asked" —
  *  see that function's own comment for why "expired" covers it too. */
 export type AlertPhoneVerificationOutcome = "verified" | "wrong_code" | "expired";
@@ -151,7 +174,13 @@ export type AlertPhoneVerificationOutcome = "verified" | "wrong_code" | "expired
  * agency correcting a mistyped number keeps its first attempt alive), but
  * the operator holds exactly one code — the one just texted for THIS
  * number — so an older still-live attempt for the SAME number is left
- * alone rather than folded into this guess.
+ * alone rather than folded into this guess. That is true only while the
+ * newest row is still live: once it exhausts its own five attempts, the
+ * lookup falls through to whichever row is next newest, so the real ceiling
+ * per number per hour is `ALERT_CODE_MAX_ATTEMPTS` guesses per row across up
+ * to `ALERT_CODE_MAX_SENDS_PER_HOUR` rows — 25, not 5 — and each extra row
+ * costs a real, billed text, which is exactly the cost
+ * `ALERT_CODE_MAX_SENDS_PER_HOUR` exists to bound.
  */
 export async function verifyAlertPhoneCode(
   db: SupabaseClient, accountId: string, phone: string, code: string, actorId: string,

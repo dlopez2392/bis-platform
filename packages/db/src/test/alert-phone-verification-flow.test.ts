@@ -1,10 +1,22 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { withTestAccount, testPhoneNumber } from "./fixtures";
 import {
   ALERT_CODE_MAX_ATTEMPTS, ALERT_CODE_MAX_SENDS_PER_HOUR,
   startAlertPhoneVerification, verifyAlertPhoneCode, countRecentAlertPhoneVerifications,
+  discardAlertPhoneVerification,
 } from "../alert-phone-verification";
-import { getAlertPhone } from "../accounts";
+import { getAlertPhone, setAlertPhone } from "../accounts";
+
+// Wraps the REAL setAlertPhone by default (every existing test below still
+// exercises the genuine write), overridable per-test via
+// `vi.mocked(setAlertPhone).mockRejectedValueOnce(...)` to inject a failure
+// on the accounts write without touching verifyAlertPhoneCode's own code —
+// the only way to prove the CONSUME-THEN-WRITE order without editing the
+// function under test.
+vi.mock("../accounts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../accounts")>();
+  return { ...actual, setAlertPhone: vi.fn(actual.setAlertPhone) };
+});
 
 /**
  * The APPLICATION side of 0036: the two functions that actually run the
@@ -53,6 +65,34 @@ describe("verifyAlertPhoneCode — the right code", () => {
     });
   });
 
+  // The test above asserts both writes happened, never which came first —
+  // it stayed green when a reviewer moved the accounts write above the
+  // consume. This one proves the ORDER itself: inject a failure on the
+  // accounts write (mocked, not a real outage) and check what the row and
+  // the column show afterward. Under the real CONSUME-THEN-WRITE order, the
+  // consume has already landed by the time the (mocked) write throws, so the
+  // row reads consumed with accounts.alert_phone still null — "a crash
+  // between the two leaves a burnt code, never an unproven number" (0036
+  // Decision 3). Reverse the order and the mocked write throws before the
+  // consume statement ever runs, so `consumed_at` stays null and this test's
+  // first assertion fails.
+  it("consumes the row BEFORE the accounts write runs, so a failed write still leaves a burnt code, never an unproven number (mutation: swap the two statements → consumed_at stays null → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const phone = testPhoneNumber();
+      const { id, code } = await startAlertPhoneVerification(db, accountId, phone);
+
+      vi.mocked(setAlertPhone).mockRejectedValueOnce(new Error("simulated accounts write failure"));
+      await expect(verifyAlertPhoneCode(db, accountId, phone, code, "user_test")).rejects.toThrow(
+        "simulated accounts write failure",
+      );
+
+      const { data } = await db.from("alert_phone_verifications")
+        .select("consumed_at").eq("id", id).single();
+      expect(data!.consumed_at).not.toBeNull();
+      expect(await getAlertPhone(db, accountId)).toBeNull();
+    });
+  });
+
   // Two independent guards protect this: the lookup's own `is("consumed_at",
   // null)` (never returns an already-spent row as "live" in the first
   // place) and the consume UPDATE's matching guard (refuses to re-stamp a
@@ -96,6 +136,25 @@ describe("verifyAlertPhoneCode — a wrong code", () => {
       // No verification ever started for this phone.
       const outcome = await verifyAlertPhoneCode(db, accountId, testPhoneNumber(), "123456", "user_test");
       expect(outcome).toBe("expired");
+    });
+  });
+
+  // The property that makes this possession proof rather than a formality:
+  // a code texted to ONE number must not verify a DIFFERENT number, even
+  // when that different number's own claim (the parameter this call passes)
+  // is what would get WRITTEN on a match. The near-miss test above uses an
+  // account with no rows at all; this one has a live row for phoneA, so the
+  // lookup's own `.eq("phone", phone)` scope is the only thing standing
+  // between "no match" and "wrong number verified".
+  it("refuses a code texted to one number when checked against a different number, and never writes it (mutation: drop the .eq('phone', phone) scope in the lookup → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const phoneA = testPhoneNumber();
+      const phoneB = testPhoneNumber();
+      const { code } = await startAlertPhoneVerification(db, accountId, phoneA);
+
+      const outcome = await verifyAlertPhoneCode(db, accountId, phoneB, code, "user_test");
+      expect(outcome).toBe("expired");
+      expect(await getAlertPhone(db, accountId)).toBeNull();
     });
   });
 
@@ -174,6 +233,22 @@ describe("countRecentAlertPhoneVerifications", () => {
     await withTestAccount(async (db, accountId) => {
       await startAlertPhoneVerification(db, accountId, testPhoneNumber());
       expect(await countRecentAlertPhoneVerifications(db, accountId, testPhoneNumber())).toBe(0);
+    });
+  });
+});
+
+describe("discardAlertPhoneVerification", () => {
+  it("removes the row so a failed send never spends a rate-limit slot (mutation: no-op the function body → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const phone = testPhoneNumber();
+      const { id } = await startAlertPhoneVerification(db, accountId, phone);
+      expect(await countRecentAlertPhoneVerifications(db, accountId, phone)).toBe(1);
+
+      await discardAlertPhoneVerification(db, id);
+
+      expect(await countRecentAlertPhoneVerifications(db, accountId, phone)).toBe(0);
+      const { data } = await db.from("alert_phone_verifications").select("id").eq("id", id).maybeSingle();
+      expect(data).toBeNull();
     });
   });
 });

@@ -88,8 +88,13 @@ export function AlertPhoneCard({
   alertPhone: string | null;
   /** A number IS set, but nothing would actually send yet — A2P not
    *  approved, or no live number (`resolveSmsSender`'s own gate, read by
-   *  both callers: Settings for the agency, Branding for the client via the
-   *  same predicate). The agency's idle phase turns this into a Notice
+   *  both callers: Settings for the agency, Branding for the client — but
+   *  NOT through the same predicate. Settings passes `!smsGate.ok` alone;
+   *  Branding widens it with its own extra clause for the self-loop case
+   *  (`alertPhone` already equal to one of `smsGate.ownedNumbers`), since a
+   *  client reading "Alert texts go to {value}" deserves to know when that
+   *  value can never actually text them, not only when the account can't
+   *  send at all). The agency's idle phase turns this into a Notice
    *  naming the problem beside the Checklist link that can act on it,
    *  regardless of whether a number is already saved or one is only just
    *  being typed — sending a code needs the same gate a live alert does. The

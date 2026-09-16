@@ -12,6 +12,7 @@ const dbMocks = vi.hoisted(() => ({
   startAlertPhoneVerification: vi.fn(),
   verifyAlertPhoneCode: vi.fn(),
   countRecentAlertPhoneVerifications: vi.fn(),
+  discardAlertPhoneVerification: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({ tag: "serviceDb" }),
@@ -58,6 +59,7 @@ beforeEach(() => {
   dbMocks.startAlertPhoneVerification.mockReset().mockResolvedValue({ id: "ver_1", code: "482913" });
   dbMocks.verifyAlertPhoneCode.mockReset().mockResolvedValue("verified");
   dbMocks.countRecentAlertPhoneVerifications.mockReset().mockResolvedValue(0);
+  dbMocks.discardAlertPhoneVerification.mockReset().mockResolvedValue(undefined);
   sendMock.mockReset().mockResolvedValue({ providerMessageId: "msg_1" });
   // Cleared/live by default — most tests care about one thing at a time, and
   // an unmocked resolveSmsSender() would return undefined and crash the
@@ -184,6 +186,18 @@ describe("startAlertPhoneVerificationAction — the happy path", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
       .toEqual({ ok: false, error: m["settings.alertPhoneSendFailed"] });
+    spy.mockRestore();
+  });
+
+  it("discards the row when the send fails, so a carrier failure never spends a rate-limit slot with nothing delivered (mutation: drop the discard call from the catch block → FAILS)", async () => {
+    dbMocks.startAlertPhoneVerification.mockResolvedValue({ id: "ver_failed", code: "482913" });
+    sendMock.mockRejectedValue(new Error("telnyx down"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
+      .toEqual({ ok: false, error: m["settings.alertPhoneSendFailed"] });
+    expect(dbMocks.discardAlertPhoneVerification).toHaveBeenCalledWith(
+      { tag: "serviceDb" }, "ver_failed",
+    );
     spy.mockRestore();
   });
 });
