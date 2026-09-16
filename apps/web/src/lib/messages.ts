@@ -62,8 +62,14 @@ export const m = {
   "landing.signIn": "Sign in",
   "landing.goToDashboard": "Go to dashboard",
   "landing.signOut": "Sign out",
+  // Reached by a signed-in user who belongs to no company at all — see the
+  // note in dashboard/layout.tsx for why a CLIENT never lands here now.
+  // "Isn't set up as an agency admin" described the one visitor this is not
+  // written for: it told someone who was invited as a client that they had
+  // failed to be staff, which is both wrong and unactionable. Say the thing
+  // that is actually true of this state and what to do about it.
   "landing.noAccess.title": "No access yet",
-  "landing.noAccess.body": "This account isn't set up as an agency admin. Sign out to try a different account, or contact your BIS administrator.",
+  "landing.noAccess.body": "This sign-in isn't connected to a company yet. If you were invited, open the invitation link from your email — it has to be accepted before you can sign in. Otherwise sign out and try the address the invitation was sent to.",
 
   // The signed-out shell's rail. This is the line that does real work on
   // /sign-in: it answers "whose software is this", which is the question
