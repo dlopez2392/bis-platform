@@ -20,7 +20,9 @@ import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { requireAgency } from "@/lib/auth";
 import { buildNumberInventory, countByStatus, type InventoryNumber } from "@/lib/voice/number-inventory";
-import { indexByE164, routingStatus, type RoutingStatus } from "@/lib/voice/number-routing";
+import {
+  indexByE164, missingRoutingConfig, routingStatus, type RoutingStatus,
+} from "@/lib/voice/number-routing";
 import { listTelnyxNumbers, telnyxRoutingConfig } from "@/lib/voice/telnyx-numbers";
 import { m } from "@/lib/messages";
 import { NumbersTable } from "./numbers-table";
@@ -71,17 +73,24 @@ export default async function NumbersPage() {
   // `canRepairRouting` refuses to offer a write against a verdict we could
   // not form.
   const { apiKey, connectionId } = telnyxRoutingConfig();
+  const missingConfig = missingRoutingConfig(apiKey, connectionId);
   let routing: Record<string, RoutingStatus> = {};
-  let routingChecked = false;
-  if (apiKey && connectionId) {
+  let lookupFailed = false;
+  if (missingConfig.length > 0) {
+    // Logged, not silent. The first deploy of this feature reported "Not
+    // checked" on every row and the runtime logs said nothing at all, because
+    // only the FAILURE path logged — so there was no way to tell a missing
+    // variable from a carrier outage without shipping this line.
+    console.warn(`numbers: carrier routing not checked — missing ${missingConfig.join(", ")}`);
+  } else {
     try {
-      const carrier = indexByE164(await listTelnyxNumbers(apiKey));
+      const carrier = indexByE164(await listTelnyxNumbers(apiKey!));
       routing = Object.fromEntries(
-        rows.map((r) => [r.id, routingStatus(carrier.get(r.e164) ?? null, connectionId)]),
+        rows.map((r) => [r.id, routingStatus(carrier.get(r.e164) ?? null, connectionId!)]),
       );
-      routingChecked = true;
     } catch (e) {
       console.error(`numbers: carrier routing lookup failed: ${String(e)}`);
+      lookupFailed = true;
     }
   }
 
@@ -106,8 +115,14 @@ export default async function NumbersPage() {
                 Not a Notice: nothing is wrong, and a standing warn band on a
                 healthy page is noise an operator learns to skim past. This is
                 the page telling the truth about its own reach. */}
+            {/* Three states, three sentences. A blank column that cannot say
+                why is a dead end for whoever has to fix it. */}
             <p className="text-xs text-muted-foreground">
-              {routingChecked ? m["numbers.routing.seam"] : m["numbers.routing.unavailable"]}
+              {missingConfig.length > 0
+                ? m["numbers.routing.missingConfig"].replace("{vars}", missingConfig.join(" and "))
+                : lookupFailed
+                  ? m["numbers.routing.lookupFailed"]
+                  : m["numbers.routing.seam"]}
             </p>
             <NumbersTable rows={rows} routing={routing} />
           </>

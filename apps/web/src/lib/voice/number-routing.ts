@@ -96,3 +96,27 @@ export function indexByE164(
   for (const n of numbers) byE164.set(n.phoneNumber, n);
   return byE164;
 }
+
+/**
+ * Which pieces of carrier config are missing, by NAME.
+ *
+ * "Not checked" with no reason is un-actionable: three different faults —
+ * no API key, no connection id, a carrier that would not answer — all
+ * produce the same blank column, and an operator has no way to tell them
+ * apart. That happened on the feature's own first deploy: every row read
+ * "Not checked" and the only way to find out why was to add this.
+ *
+ * Returns the env var names so the screen can print them. That is the right
+ * trade on an agency-only operator tool — naming the variable an operator
+ * must set is the whole point, and there is no secret in a variable's name.
+ * Both are reported when both are missing, rather than sending someone to
+ * fix one and rediscover the other.
+ */
+export function missingRoutingConfig(
+  apiKey: string | null, connectionId: string | null,
+): string[] {
+  const missing: string[] = [];
+  if (!apiKey) missing.push("TELNYX_API_KEY");
+  if (!connectionId) missing.push("TELNYX_VOICE_CONNECTION_ID");
+  return missing;
+}
