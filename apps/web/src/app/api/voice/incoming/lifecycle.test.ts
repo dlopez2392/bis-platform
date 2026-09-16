@@ -136,6 +136,15 @@ vi.mock("@bis/db", () => ({
   getVoiceProfile: (...a: unknown[]) => getVoiceProfileMock(...a),
   countCallsSince: vi.fn().mockResolvedValue(0),
   countCallsByCallerSince: vi.fn().mockResolvedValue(0),
+  // Guard 2's read. Absent, vitest throws "No `countCallerHistorySince`
+  // export is defined on the `@bis/db` mock" on EVERY call in this file — and
+  // step 8's fail-open catch swallows it, so all 29 tests below stayed green
+  // while exercising a route configuration production can never be in (Guard 2
+  // throwing on every single call). A mock factory that omits a function the
+  // route under test calls is not a smaller mock, it is a different route.
+  // The clean history here is what makes every test in this file a call that
+  // Guard 2 lets through, so Guard 1 is the only thing under test.
+  countCallerHistorySince: vi.fn().mockResolvedValue({ spamCalls: 0, otherCalls: 0 }),
   startCallRow: vi.fn().mockResolvedValue({ id: "call-row-1" }),
   getOrCreateCalendar: vi.fn().mockResolvedValue({
     id: "cal1", account_id: "acct1", public_id: "cal_pub1", enabled: true,
