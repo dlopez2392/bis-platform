@@ -114,8 +114,19 @@ const TEXTBACK_COOLDOWN_MS = TEXTBACK_COOLDOWN_HOURS * 60 * 60 * 1000;
  * A type predicate (not a plain boolean) so the staff alert SMS leg below
  * can call this directly and get `outcome` narrowed to
  * `composeCallAlertSms`'s own literal union — no cast, and the two alert
- * legs (email above, SMS below) are provably gated on the identical set of
- * outcomes rather than two hand-copies of the same strings.
+ * legs (email above, SMS below) are gated on the identical set of outcomes
+ * rather than two hand-copies of the same strings.
+ *
+ * What the compiler does and does NOT do with that, because an earlier
+ * comment here overclaimed it: TypeScript checks the CALL SITES against this
+ * signature, so nothing can hand `composeCallAlertSms` an outcome outside
+ * its union. It does not check this function's BODY against its own return
+ * type — a type predicate is an assertion the author makes, not one the
+ * compiler proves. Add `|| outcome === "transferred"` below and leave the
+ * signature alone and `tsc --noEmit` still exits 0, while the SMS composer
+ * looks up a key it has no copy for. That is why `composeCallAlertSms` has a
+ * runtime floor of its own, and why the two unions widening together is a
+ * rule for a human to follow rather than one the compiler enforces.
  *
  * EXPORTED, unlike its neighbours in this file, and only because of the
  * paragraph above: `classifyOutcome` never returns `transferred` (a
