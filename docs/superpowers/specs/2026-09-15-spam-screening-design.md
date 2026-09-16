@@ -5,6 +5,11 @@
 `docs/feature-specs` — the survey below is kept, the open questions are now
 answered.
 
+> **Line citations below are a snapshot, re-derived after both guards shipped.**
+> Guard 1 alone moved every line under it in `incoming/route.ts` by ~50. Each
+> citation names the symbol or quotes the text it points at — if a number has
+> drifted again, grep the quoted text and trust that, not the number.
+
 ## Why
 
 danlo, 2026-09-15: spam takes token usage from the OpenAI account.
@@ -98,22 +103,23 @@ Read before assuming this feature is urgent:
 Only three things, and only one is a volume control:
 
 1. Tenancy — is this a number we know, is the profile enabled
-   (`texml/route.ts:62-77`, re-checked authoritatively at
-   `incoming/route.ts:432-455`).
+   (`texml/route.ts:77-99`, re-checked authoritatively at
+   `incoming/route.ts:605-628`, steps 6–7).
 2. `callAnswerable` (`lib/voice/accept-gate.ts:26-32`).
 3. Daily caps — `PHONE_MAX_CALLS_PER_NUMBER_PER_DAY` (5) and
    `PHONE_MAX_CALLS_PER_ACCOUNT_PER_DAY` (50), counted off the `calls` table.
 
 Refusals in `api/voice/texml` are spoken and hung up **before the SIP bridge**
-(`respond()` at `texml/route.ts:160-177`, where `dialXml` is unconditionally the
+(`respond()` at `texml/route.ts:199-219`, where `dialXml` is unconditionally the
 last line), so a refused call never reaches OpenAI at all. The webhook has a
 second zero-token refusal zone of its own: nothing is billed until `acceptCall`
-at `incoming/route.ts:557`, and a decline there is expressed simply by never
+at `incoming/route.ts:796`, and a decline there is expressed simply by never
 calling it.
 
 **The caps fail open on a database error**, by explicit decision — "losing a
 prospect costs more than paying for one extra robocall"
-(`incoming/route.ts:44-49`).
+(`incoming/route.ts:43-60`, contract #3, which enumerates every fail-open site
+in that route and is kept exhaustive so an auditor does not "harden" one).
 
 There is no caller reputation check, no blocklist, no first-time-caller screen,
 and no per-account cost budget. Nothing reads CNAM or any carrier risk signal.
@@ -131,7 +137,7 @@ audio at all bills up to 240 seconds.
 In the Realtime lifecycle (`incoming/route.ts`, inside `ws.on("open")`), arm a
 `silenceTimer` beside the existing `capTimer`. Cancel it the first time the
 caller makes any sound. If it fires, run the same SHAPE of goodbye →
-`ws.close()` chain `capTimer` already runs (`incoming/route.ts:307-321`) — a
+`ws.close()` chain `capTimer` already runs (`incoming/route.ts:334-348`) — a
 `response.create` instruction, then the socket closed 5s later so it plays out.
 
 **It is deliberately not the same chain, and must not be "restored" to one.**
@@ -166,9 +172,9 @@ shorter fuse and a cancel condition.
   a broken microphone deserves to know why the call ended, and it costs three
   seconds. It must use the **constrained** utterance form the greeting already
   uses, `Greet the caller with exactly: ${greeting}`
-  (`incoming/route.ts:239-241`) — **not** the cap's open-ended
+  (`incoming/route.ts:255-258`) — **not** the cap's open-ended
   `"Politely wrap up and say a brief goodbye to the caller — we're out of time"`
-  (`incoming/route.ts:311-313`).
+  (`incoming/route.ts:337-340`).
 
   That distinction is the whole reason the fabricated record exists. Asking a
   model to "wrap up" a conversation that never happened is asking it to invent
@@ -195,8 +201,9 @@ fires on a call that ends at 30 seconds.
 
 **The problem it solves:** the same robot calling back tomorrow.
 
-A fourth variant on the `Routability` union in `texml/route.ts:24-27`, branching
-in `respond()` **above** line 176. The decision itself lives in a new pure
+A fourth variant on the `Routability` union in `texml/route.ts:30-39`, branching
+in `respond()` **above** the unconditional `return xmlResponse(dialXml(...))`
+(`texml/route.ts:218`). The decision itself lives in a new pure
 module and is called from **both** voice gates, exactly as `callAnswerable` is:
 
 > *"The ONE shared predicate both voice gates call — the OpenAI webhook's accept
@@ -211,7 +218,7 @@ module and is called from **both** voice gates, exactly as `callAnswerable` is:
   is needed** — `calls_caller_idx (account_id, caller_e164, started_at desc)`
   already exists (`0019_voice_core.sql:64`) and is precisely this query's index.
 - **In TeXML** the read joins the existing `Promise.all` next to the two cap
-  counts (`texml/route.ts:92-95`), so it adds **no wall-clock** on Telnyx's
+  counts (`texml/route.ts:112-118`), so it adds **no wall-clock** on Telnyx's
   carrier answer deadline. In the webhook it follows the caps' sequential shape.
 
 **The rule.** A caller is refused when, within the window, they have at least
@@ -223,7 +230,7 @@ module and is called from **both** voice gates, exactly as `callAnswerable` is:
   One booking, lead, message or even `abandoned` in the window clears the caller
   completely.
 - **`turn_count: 0` rows are excluded from the count.** A connect-timeout also
-  records `spam` with no turns (`incoming/route.ts:185-193`); that is our
+  records `spam` with no turns (`incoming/route.ts:201-209`); that is our
   infrastructure failing, not a robot, and blocking a caller for our own outage
   is the worst possible false positive. A genuine silent call still carries the
   greeting, so it has at least one turn.
@@ -296,10 +303,10 @@ bill behind it is speculation.
   way. Accepted as consistent with existing behaviour; surfacing refused calls
   is a worthwhile follow-up, not part of this work.
 - **A call whose `To` cannot be parsed skips every gate and dials**
-  (`texml/route.ts:170`, pinned by a test). Pre-existing, unrelated to spam,
-  left alone.
+  (`respond()`'s `if (calledE164)` guard, `texml/route.ts:209-218`, pinned by a
+  test). Pre-existing, unrelated to spam, left alone.
 - **`VOICE_FORWARD_TO` bypasses both guards**, deliberately, because it sits
-  ahead of every gate by design (`texml/route.ts:124-127`). An operator who has
+  ahead of every gate by design (`texml/route.ts:200-208`). An operator who has
   taken the line back must not have calls swallowed by a spam rule.
 
 ## Testing

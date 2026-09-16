@@ -96,7 +96,7 @@ describe("silenceGoodbye", () => {
     expect(silenceGoodbye("es")).toContain("No puedo escuchar");
     expect(silenceGoodbye("en")).toContain("can't hear");
     // `both` takes English, exactly as the greeting does at
-    // incoming/route.ts:507 (`languages === "es" ? greeting_es : greeting_en`).
+    // incoming/route.ts:746 (`languages === "es" ? greeting_es : greeting_en`).
     expect(silenceGoodbye("both")).toBe(silenceGoodbye("en"));
   });
 });

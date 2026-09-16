@@ -40,14 +40,24 @@
 //     that's why `runCallLifecycle` delays it by `PHONE_GREETING_DELAY_MS`
 //     (default 900ms) rather than firing it the instant the socket opens.
 //
-//  3. Fail-open, deliberately, in exactly two places: the call-cap and
-//     caller-reputation counts
-//     (step 8 below — a DB blip must not turn away a real caller; losing a
-//     prospect costs more than paying for one extra robocall) and
-//     `startCallRow` (step 10 — a DB blip must not lose the call itself;
-//     `finishCall` already tolerates a null `callRowId` and still gets the
-//     staff alert out). Signature verification and account resolution are
-//     NOT fail-open — those gate who gets to talk to a tenant's AI at all.
+//  3. Fail-open, deliberately, in exactly three places. This list is what a
+//     future auditor checks the code against, so it is kept exhaustive on
+//     purpose — a site missing from it reads as a bug to be "hardened":
+//
+//       - The call-cap and caller-reputation counts (step 8 below) — a DB
+//         blip must not turn away a real caller; losing a prospect costs
+//         more than paying for one extra robocall.
+//       - `startCallRow` (step 10) — a DB blip must not lose the call
+//         itself; `finishCall` already tolerates a null `callRowId` and
+//         still gets the staff alert out.
+//       - The silence-guard cancel check inside `handleMessage` (added with
+//         Guard 1) — a predicate throwing on an untrusted frame DISARMS the
+//         guard rather than leaving it armed, so the call degrades to
+//         exactly the pre-guard behaviour and runs to the cost cap. A bug in
+//         a cost optimisation must never cut off a paying customer.
+//
+//     Signature verification and account resolution are NOT fail-open —
+//     those gate who gets to talk to a tenant's AI at all.
 //
 // Every branch past the initial config/signature checks acks the webhook
 // with 200, `declined` or not: OpenAI's incoming-call webhook is not usefully

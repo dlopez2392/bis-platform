@@ -93,9 +93,10 @@ export function isCallerAudioEvent(type: string | undefined): boolean {
  * The line a silent caller hears before the hangup.
  *
  * MUST stay the CONSTRAINED form ("Say exactly...") the greeting uses at
- * `incoming/route.ts:239-241`. It must NEVER be merged with the cost cap's
- * open-ended "Politely wrap up and say a brief goodbye to the caller — we're
- * out of time" (`incoming/route.ts:311-313`).
+ * `incoming/route.ts:255-258` (`Greet the caller with exactly: ...`). It must
+ * NEVER be merged with the cost cap's open-ended "Politely wrap up and say a
+ * brief goodbye to the caller — we're out of time"
+ * (`incoming/route.ts:337-340`).
  *
  * That is not a style preference. On the 247-second call, the cap's wrap-up
  * instruction was handed to a model that had heard nothing at all, and it
@@ -106,7 +107,8 @@ export function isCallerAudioEvent(type: string | undefined): boolean {
  * improvise: a fixed sentence, and out.
  *
  * `both` takes English, mirroring the greeting's own rule at
- * `incoming/route.ts:507` rather than inventing a second language policy.
+ * `incoming/route.ts:746` (`languages === "es" ? greeting_es : greeting_en`)
+ * rather than inventing a second language policy.
  */
 export function silenceGoodbye(languages: "en" | "es" | "both"): string {
   const line = languages === "es"
