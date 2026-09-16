@@ -69,6 +69,7 @@ import { emptyCallState } from "@/lib/voice/call-state";
 import { finishCall, type FinishContext } from "@/lib/voice/finish-call";
 import type { ToolContext } from "@/lib/voice/tools/registry";
 import { readLimitConfig, decideLimit, utcDayStart } from "@/lib/voice/call-limits";
+import { readSilentSeconds, isCallerAudioEvent, silenceGoodbye } from "@/lib/voice/silence-guard";
 import { configuredOrigin } from "@/lib/email/origin";
 import { brandDisplayName } from "@/lib/email/templates/shell";
 
@@ -125,6 +126,7 @@ interface LifecycleArgs {
   callId: string;
   apiKey: string;
   greeting: string;
+  languages: "en" | "es" | "both";
   callRowId: string | null;
   startedAt: Date;
   toolCtx: ToolContext;
@@ -142,12 +144,13 @@ interface LifecycleArgs {
  * of the demo's own recorder/store.
  */
 function runCallLifecycle(args: LifecycleArgs): Promise<void> {
-  const { callId, apiKey, greeting, callRowId, startedAt, toolCtx, finishCtx } = args;
+  const { callId, apiKey, greeting, languages, callRowId, startedAt, toolCtx, finishCtx } = args;
   let state = emptyCallState();
   let capTimer: NodeJS.Timeout | undefined;
   let closeTimer: NodeJS.Timeout | undefined;
   let greetTimer: NodeJS.Timeout | undefined;
   let connectTimer: NodeJS.Timeout | undefined;
+  let silenceTimer: NodeJS.Timeout | undefined;
   let settled = false;
 
   // `callId` is server-controlled (OpenAI's own webhook payload, not a form
@@ -169,6 +172,7 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       clearTimeout(closeTimer);
       clearTimeout(greetTimer);
       clearTimeout(connectTimer);
+      clearTimeout(silenceTimer);
 
       // Drain in-flight frames, but bounded: a wedged frame must not block
       // the record forever (losing the row is worse than a slightly stale
@@ -319,6 +323,33 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
           ws.close();
         }, 5000);
       }, maxSeconds * 1000);
+
+      // Cost guardrail #2: the cap above bounds a call that is going
+      // somewhere. This one bounds a call that is not. A robot that connects
+      // and says nothing used to bill the full `maxSeconds` — see the
+      // 247-second call in the spec, whose only two transcript events were
+      // four minutes apart and both Sofía's.
+      //
+      // Armed here rather than after the greeting for the same reason
+      // `capTimer` is: one timer, one origin, no second lifecycle concept to
+      // keep in sync. The 5s floor in `readSilentSeconds` is what keeps a
+      // slow greeting safe.
+      const silentSeconds = readSilentSeconds();
+      silenceTimer = setTimeout(() => {
+        log("no caller audio, ending call", { callId, silentSeconds });
+        try {
+          ws.send(JSON.stringify({
+            type: "response.create",
+            response: { instructions: silenceGoodbye(languages) },
+          }));
+        } catch {
+          // socket may already be closing; the closeTimer below still fires.
+        }
+        closeTimer = setTimeout(() => {
+          log("closing call socket after silence goodbye", { callId });
+          ws.close();
+        }, 5000);
+      }, silentSeconds * 1000);
     });
 
     // Serialized on purpose. `ws` never awaits its own event handlers — an
@@ -358,6 +389,16 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       } catch {
         log("failed to parse call event", { callId });
         return;
+      }
+      // Cancelled here — BEFORE `processCallEvent`, so a throw inside tool
+      // handling can never leave the guard armed on a call where the caller
+      // is plainly talking. One sound is enough and it is permanent: this
+      // guard asks "did anyone ever speak", which is exactly the question
+      // `classifyOutcome` asks to decide `spam`, so it is never re-armed.
+      if (silenceTimer && isCallerAudioEvent(event?.type)) {
+        clearTimeout(silenceTimer);
+        silenceTimer = undefined;
+        log("caller audio detected, silence guard cleared", { callId, type: event?.type });
       }
       try {
         const result = await processCallEvent(state, toolCtx, event);
@@ -573,7 +614,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ ok: true });
     }
     log("call accepted", { callId });
-    after(() => runCallLifecycle({ callId, apiKey, greeting, callRowId, startedAt: now, toolCtx, finishCtx }));
+    after(() => runCallLifecycle({
+      callId, apiKey, greeting, languages: profile.languages,
+      callRowId, startedAt: now, toolCtx, finishCtx,
+    }));
 
     return NextResponse.json({ ok: true });
   } catch (e) {

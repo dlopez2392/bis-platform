@@ -192,6 +192,10 @@ beforeEach(() => {
   delete process.env.PHONE_GREETING_DELAY_MS;
   delete process.env.PHONE_MAX_CALL_SECONDS;
   delete process.env.PHONE_CONNECT_TIMEOUT_MS;
+  // The silence cutoff's window, same reason as its neighbours above: every
+  // test below counts on the 30s default, and a stray env var in the shell
+  // that ran vitest would move it silently.
+  delete process.env.PHONE_MAX_SILENT_SECONDS;
 
   unwrapMock.mockReset();
   afterMock.mockReset();
@@ -520,6 +524,158 @@ describe("runCallLifecycle — Minor: late frames after settle", () => {
     expect(runToolMock).not.toHaveBeenCalled();
     expect(ws.send).not.toHaveBeenCalled();
     expect(finishCallMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** Every payload the lifecycle has put on the socket, parsed back out of the
+ *  JSON strings `ws.send` was handed — so a test can assert on the SHAPE of
+ *  an instruction rather than on a substring of a serialized blob. */
+function sentPayloads(send: ReturnType<typeof vi.fn>): unknown[] {
+  return send.mock.calls.map((c) => JSON.parse(String(c[0])));
+}
+
+// Guard 1 of the spam-screening spec. The row it exists to stop: a 247-second
+// call whose only two transcript events were four minutes apart and BOTH the
+// assistant's. Nobody ever spoke, and it billed the full cost cap.
+describe("silence cutoff (Guard 1)", () => {
+  it("a call where nobody ever speaks is ended at PHONE_MAX_SILENT_SECONDS, not the cost cap", async () => {
+    vi.useFakeTimers();
+    const { ws } = await startLifecycle();
+    const sendSpy = vi.fn();
+    const closeSpy = vi.fn();
+    ws.send = sendSpy;
+    ws.close = closeSpy;
+    ws.emit("open");
+
+    // Everything below happens inside 35s. The cost cap is 240s, so a call
+    // still alive at the end of this test is a call the guard did nothing for.
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(sentPayloads(sendSpy)).toContainEqual(expect.objectContaining({
+      type: "response.create",
+      response: expect.objectContaining({
+        instructions: expect.stringContaining("Say exactly this and nothing else"),
+      }),
+    }));
+
+    // Same shape as the cap's: the goodbye plays out before the socket goes.
+    expect(closeSpy).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(closeSpy).toHaveBeenCalled();
+  });
+
+  it("one sound from the caller cancels the cutoff — the call survives past the window", async () => {
+    vi.useFakeTimers();
+    const { ws } = await startLifecycle();
+    const sendSpy = vi.fn();
+    const closeSpy = vi.fn();
+    ws.send = sendSpy;
+    ws.close = closeSpy;
+    ws.emit("open");
+
+    // One VAD onset, five seconds in. That is all a real caller has to do.
+    await vi.advanceTimersByTimeAsync(5_000);
+    ws.emit("message", JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+    await flushMicrotasks();
+
+    // 60s total — double the window and well past the +5s close that would
+    // follow it, but still far short of the 240s cost cap.
+    await vi.advanceTimersByTimeAsync(55_000);
+
+    expect(closeSpy).not.toHaveBeenCalled();
+    expect(sentPayloads(sendSpy)).not.toContainEqual(expect.objectContaining({
+      response: expect.objectContaining({
+        instructions: expect.stringContaining("Say exactly this and nothing else"),
+      }),
+    }));
+  });
+
+  it("Sofía's own audio does NOT cancel the cutoff", async () => {
+    vi.useFakeTimers();
+    const { ws } = await startLifecycle();
+    const sendSpy = vi.fn();
+    const closeSpy = vi.fn();
+    ws.send = sendSpy;
+    ws.close = closeSpy;
+    ws.emit("open");
+
+    // The greeting coming back as an assistant transcript — the 247-second
+    // call's exact shape, assistant turns and nothing else.
+    await vi.advanceTimersByTimeAsync(5_000);
+    ws.emit("message", JSON.stringify({
+      type: "response.output_audio_transcript.done",
+      transcript: "Hi, thanks for calling Rio Roofing.",
+    }));
+    await flushMicrotasks();
+
+    await vi.advanceTimersByTimeAsync(30_000); // 35s total: the window + the close delay
+    expect(closeSpy).toHaveBeenCalled();
+  });
+
+  it("a cut call still records as spam — Guard 1 changes the BILL, not the record", async () => {
+    vi.useFakeTimers();
+    const { lifecycleDone, ws } = await startLifecycle();
+    ws.send = vi.fn();
+    // The real `ws` package answers `close()` with its own "close" event; the
+    // fake's default `close` is a no-op. Wiring it through here on purpose:
+    // it makes `finishCall`'s argument reachable ONLY by the guard actually
+    // closing the socket, so this test is red without the implementation
+    // instead of green off a hand-emitted close event.
+    ws.close = vi.fn(() => { ws.emit("close", 1000, Buffer.from("silence-guard")); });
+    ws.emit("open");
+
+    await vi.advanceTimersByTimeAsync(35_000);
+    // Asserted BEFORE awaiting `lifecycleDone`: a call the guard never cut
+    // never closes its socket, so that await would hang and the failure would
+    // read as a 5s test timeout instead of naming what actually went wrong.
+    expect(finishCallMock).toHaveBeenCalledTimes(1);
+    await lifecycleDone;
+
+    // `finishCall` is MOCKED in this file, so the real `classifyOutcome`
+    // never runs here and the outcome LABEL is not observable — asserting
+    // "spam" against a mock would assert nothing. What is observable is the
+    // state handed over: no caller transcript event, which is exactly the
+    // condition `classifyOutcome` reads to return "spam" (call-state.ts:62).
+    expect(finishCallMock).toHaveBeenCalledTimes(1);
+    const [stateArg] = finishCallMock.mock.calls[0]!;
+    expect(stateArg.transcript.some((t: TranscriptEvent) => t.role === "caller")).toBe(false);
+    expect(stateArg.bookings).toEqual([]);
+    expect(stateArg.leads).toEqual([]);
+    expect(stateArg.messages).toEqual([]);
+  });
+
+  it("the cost cap keeps its own open-ended wrap-up instruction", async () => {
+    vi.useFakeTimers();
+    const { ws } = await startLifecycle();
+    const sendSpy = vi.fn();
+    const closeSpy = vi.fn();
+    ws.send = sendSpy;
+    ws.close = closeSpy;
+    ws.emit("open");
+
+    // A real conversation: the caller makes a sound early, the silence guard
+    // is cancelled, and this call runs the full length to the 240s cap.
+    await vi.advanceTimersByTimeAsync(1_000);
+    ws.emit("message", JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(239_000);
+
+    const sent = sentPayloads(sendSpy);
+    expect(sent).toContainEqual(expect.objectContaining({
+      response: expect.objectContaining({
+        instructions: expect.stringContaining("Politely wrap up"),
+      }),
+    }));
+    // ...and the cap did NOT borrow the silence guard's fixed sentence.
+    // Sharing one goodbye string between the two timers is the refactor this
+    // line exists to stop: there is nothing to wrap up on a silent call, and
+    // asking a model to wrap up a conversation that never happened is asking
+    // it to invent one (which is what the 247-second call's summary recorded).
+    expect(sent).not.toContainEqual(expect.objectContaining({
+      response: expect.objectContaining({
+        instructions: expect.stringContaining("Say exactly this and nothing else"),
+      }),
+    }));
   });
 });
 
