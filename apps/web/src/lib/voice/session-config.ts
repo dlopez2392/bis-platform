@@ -15,6 +15,14 @@ export type VoicePromptInput = {
   afterHours: "hours_then_message" | "message_only";
   callerNumber: string | null;
   meetingType: "in_person" | "phone" | "video";
+  /**
+   * Whether this call has somewhere to transfer a caller who asks for a
+   * person. OPTIONAL and defaulting to false, which is the fail-closed
+   * direction: the web demo (`api/voice/web/session`) has no phone leg to
+   * hand off at all, and a caller offered a transfer that cannot happen is
+   * worse off than one who was never offered it.
+   */
+  handoffAvailable?: boolean;
 };
 
 export function buildRealtimeSessionConfig(input: VoicePromptInput, now: Date) {
@@ -22,7 +30,7 @@ export function buildRealtimeSessionConfig(input: VoicePromptInput, now: Date) {
     type: "realtime",
     model: REALTIME_MODEL,
     instructions: buildSystemPrompt(input, now),
-    tools: toolSchemas(input.bookingEnabled, input.meetingType),
+    tools: toolSchemas(input.bookingEnabled, input.meetingType, input.handoffAvailable === true),
     audio: {
       input: {
         transcription: { model: "gpt-4o-mini-transcribe" },

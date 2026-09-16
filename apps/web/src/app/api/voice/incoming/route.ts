@@ -70,9 +70,13 @@ import WebSocket from "ws";
 import {
   serviceDb, getPhoneNumberByE164, getVoiceProfile, countCallsSince, countCallsByCallerSince,
   countCallerHistorySince, startCallRow, getOrCreateCalendar, deleteCallRow,
+  getTransferPhone, listPhoneNumbersForAccount,
   type Branding,
 } from "@bis/db";
-import { extractCallerNumber, extractCalledNumber, sipHeaderNames } from "@/lib/voice/sip-headers";
+import {
+  extractCallerNumber, extractCalledNumber, extractHandoffToken, sipHeaderNames,
+} from "@/lib/voice/sip-headers";
+import { resolveHandoffTarget, type HandoffTarget } from "@/lib/voice/handoff";
 import { callAnswerable } from "@/lib/voice/accept-gate";
 import { buildRealtimeSessionConfig, type VoicePromptInput } from "@/lib/voice/session-config";
 import { processCallEvent, type RealtimeCallEvent } from "@/lib/voice/call-events";
@@ -133,6 +137,18 @@ async function acceptCall(callId: string, apiKey: string, sessionConfig: object)
     throw new Error(`accept failed: ${res.status} ${detail}`);
   }
 }
+
+/**
+ * How long a last sentence gets to reach the caller before the socket goes.
+ *
+ * ONE constant for all three endings — the cost cap's goodbye, the silence
+ * guard's, and the handoff line — because they are the same physical problem:
+ * `ws.send` only queues the instruction, and closing the socket while the
+ * model is still generating audio cuts the caller off mid-word. The cap's
+ * tail budget (see `maxSeconds` below) is derived from this number, so a
+ * second copy of it somewhere else would silently break that derivation.
+ */
+const CLOSE_AFTER_GOODBYE_MS = 5000;
 
 interface LifecycleArgs {
   callId: string;
@@ -344,7 +360,7 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
         closeTimer = setTimeout(() => {
           log("closing call socket after cap goodbye", { callId });
           ws.close();
-        }, 5000);
+        }, CLOSE_AFTER_GOODBYE_MS);
       }, maxSeconds * 1000);
 
       // Cost guardrail #2: the cap above bounds a call that is going
@@ -420,7 +436,7 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
         closeTimer = setTimeout(() => {
           log("closing call socket after silence goodbye", { callId });
           ws.close();
-        }, 5000);
+        }, CLOSE_AFTER_GOODBYE_MS);
       }, silentSeconds * 1000);
     });
 
@@ -536,7 +552,29 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
         const result = await processCallEvent(state, toolCtx, event);
         state = result.state;
         for (const action of result.actions) {
-          if (action.kind === "send") ws.send(JSON.stringify(action.payload));
+          if (action.kind === "send") {
+            ws.send(JSON.stringify(action.payload));
+            continue;
+          }
+          // `close` — the caller asked for a person and the intent is already
+          // written (`transfer_to_human` awaited that before returning). The
+          // send above it queued the handoff sentence; the SAME playout delay
+          // the cap and the silence guard use lets it reach the caller before
+          // the socket goes. Closing here, synchronously, would be dead air
+          // followed by a ring.
+          //
+          // The two cost timers are cleared for the same reason the silence
+          // guard clears the cap: this call is ending on its own terms, and a
+          // goodbye sent over the handoff line — or a second closeTimer
+          // overwriting this one — would be a stranger's voice on top of it.
+          log("transfer requested, closing the AI leg", { callId });
+          clearTimeout(capTimer);
+          clearTimeout(silenceTimer);
+          silenceTimer = undefined;
+          closeTimer = setTimeout(() => {
+            log("closing call socket after handoff line", { callId });
+            ws.close();
+          }, CLOSE_AFTER_GOODBYE_MS);
         }
       } catch (e) {
         log("error processing call event", { callId, type: event?.type, error: String(e) });
@@ -735,11 +773,57 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const accountRow = await loadAccountContext(db, accountId);
     const calendar = await getOrCreateCalendar(db, accountId, "voice", "ai");
 
+    // --- Step 9b: where a caller who asks for a person can be sent --------
+    // Resolved HERE, above the accept, because the accept body carries the
+    // tool list and the handoff tool is only advertised when there is
+    // somewhere to send them (`toolSchemas`' third argument).
+    //
+    // Its own try/catch, and it fails CLOSED rather than open: the two
+    // fail-open branches in this route (the caps, `startCallRow`) both
+    // protect the caller's ability to be ANSWERED. This one protects a
+    // promise — "let me put you through" — and a promise made off a failed
+    // read is a caller told they are being transferred and then hung up on.
+    // The call itself still happens; only the transfer option is missing.
+    //
+    // Owned numbers come from `listPhoneNumbersForAccount` filtered here to
+    // `testing`/`live`, NOT from `resolveSmsSender`: that helper returns no
+    // list at all for an account holding only a `testing` number, which is
+    // exactly the shape of an account still walking the setup wizard, and the
+    // own-number loop guard would then silently not run for it.
+    let handoffTarget: HandoffTarget = { available: false, reason: "not-configured" };
+    try {
+      const [transferPhone, ownedRows] = await Promise.all([
+        getTransferPhone(db, accountId),
+        listPhoneNumbersForAccount(db, accountId),
+      ]);
+      const owned = ownedRows
+        .filter((n) => n.status === "testing" || n.status === "live")
+        .map((n) => n.e164);
+      handoffTarget = resolveHandoffTarget(transferPhone, owned);
+    } catch (e) {
+      log("handoff target lookup failed — this call answers without a transfer option",
+        { callId, accountId, error: String(e) });
+    }
+    if (!handoffTarget.available) {
+      log("no handoff target for this call", { callId, accountId, reason: handoffTarget.reason });
+    }
+
     // --- Step 10: open the call row, fail-open (a DB blip must not lose
     // the call itself — finishCall tolerates a null callRowId). -----------
+    //
+    // The handoff token rides in on the SIP headers our own TeXML route
+    // wrote (`X-BIS-Handoff`), raw — it is the credential the handoff route
+    // authenticates with, so it is stored, never logged, and never coerced.
+    // Absent on a call from a TeXML app that predates it: the column is then
+    // left unset rather than written empty, so "no token" and "a token that
+    // is the empty string" cannot be confused.
+    const handoffToken = extractHandoffToken(event.data);
     let callRowId: string | null = null;
     try {
-      const row = await startCallRow(db, accountId, { phoneNumberId: phoneRow.id, callerE164: callerNumber });
+      const row = await startCallRow(db, accountId, {
+        phoneNumberId: phoneRow.id, callerE164: callerNumber,
+        ...(handoffToken ? { handoffToken } : {}),
+      });
       callRowId = row.id;
     } catch (e) {
       log("startCallRow failed — proceeding without a row", { callId, accountId, error: String(e) });
@@ -772,6 +856,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       bookingEnabled: profile.booking_enabled, timezone: accountRow.timezone,
       slotDurationMinutes: calendar.slot_duration_minutes, afterHours: profile.after_hours,
       callerNumber, meetingType: calendar.meeting_type,
+      handoffAvailable: handoffTarget.available,
     };
     const sessionConfig = buildRealtimeSessionConfig(promptInput, now);
 
@@ -798,6 +883,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       db, accountId, timezone: accountRow.timezone,
       calendar, profile, branding, fromEmail: accountRow.from_email ?? null,
       callerNumber, origin,
+      callRowId, handoffTarget,
     };
     const finishCtx: FinishContext = {
       db, accountId, branding,

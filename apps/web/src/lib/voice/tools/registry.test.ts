@@ -11,6 +11,7 @@ const dbMocks = vi.hoisted(() => ({
   createContact: vi.fn(), createBooking: vi.fn(),
   setBookingStatus: vi.fn(), getBookingById: vi.fn(),
   fillContactBlanks: vi.fn(), getContact: vi.fn(),
+  markHandoffRequested: vi.fn(),
 }));
 const sendMock = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", async (importOriginal) => {
@@ -35,8 +36,13 @@ const ctx: ToolContext = {
   branding: { brandName: null, brandLogoPath: null, brandColor: null, brandNeutral: null,
     brandCorners: null, brandType: null, brandMode: null, replyToEmail: null },
   fromEmail: null, callerNumber: "+19562921696", origin: "https://x.example",
+  callRowId: null, handoffTarget: { available: false, reason: "not-configured" },
   now: () => new Date("2027-06-01T12:00:00Z"),
 };
+
+// Named for the brief's own shape: `dbMocks` is reset wholesale in the
+// beforeEach below, so this alias stays live across tests.
+const markHandoffRequestedMock = dbMocks.markHandoffRequested;
 
 beforeEach(() => {
   Object.values(dbMocks).forEach((m) => m.mockReset());
@@ -534,5 +540,72 @@ describe("reschedule / cancel", () => {
       expect(result).toMatchObject({ ok: true, bookingId: "new1", emailFailed: true });
       expect(sendMock).not.toHaveBeenCalled();
     });
+  });
+});
+
+/**
+ * The handoff tool. Its whole job is to make the caller's request DURABLE
+ * before the model is told it worked: the socket closes moments later and
+ * Telnyx's request to the Dial action URL races `finishCall`, so anything
+ * held only in memory can be gone by the time the action route looks.
+ */
+describe("transfer_to_human", () => {
+  const TARGET = { available: true as const, to: "+19562921696" };
+
+  it("transfer_to_human persists the intent BEFORE returning — finishCall is too late", async () => {
+    // Telnyx requests the Dial action URL the moment the SIP leg ends, racing
+    // finishCall's database writes. If the intent were written by finishCall,
+    // the action route would sometimes see no transfer and hang up on a caller
+    // who had just been told they were being put through.
+    //
+    // The gate below is what makes "BEFORE returning" testable: an
+    // implementation that CALLS markHandoffRequested without awaiting it would
+    // satisfy every assertion at the bottom of this test, so the tool's
+    // promise is checked for still being pending while the write is in flight.
+    let release!: () => void;
+    const writeInFlight = new Promise<void>((resolve) => { release = resolve; });
+    markHandoffRequestedMock.mockImplementation(() => writeInFlight);
+
+    const c = { ...ctx, callRowId: "call-row-1", handoffTarget: TARGET };
+    const pending = runTool(emptyCallState(), c, "transfer_to_human", {});
+    let returned = false;
+    void pending.then(() => { returned = true; });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(returned).toBe(false);
+
+    release();
+    const { state, result } = await pending;
+    expect(markHandoffRequestedMock).toHaveBeenCalledWith(expect.anything(), c.accountId, "call-row-1");
+    expect(result).toEqual({ ok: true });
+    expect(state.served).toContain("transferred");
+  });
+
+  it("transfer_to_human refuses when no target is available, and writes nothing", async () => {
+    const c = { ...ctx, callRowId: "call-row-1", handoffTarget: { available: false as const, reason: "not-configured" as const } };
+    const { state, result } = await runTool(emptyCallState(), c, "transfer_to_human", {});
+    expect(result).toEqual({ ok: false, error: expect.any(String) });
+    expect(markHandoffRequestedMock).not.toHaveBeenCalled();
+    expect(state.served).not.toContain("transferred");
+  });
+
+  it("transfer_to_human refuses when there is no call row to mark", async () => {
+    // startCallRow fails open (the route's step 10), so callRowId can be null on
+    // a real call. Transferring then would be unrecoverable: the action route
+    // has nothing to find.
+    const c = { ...ctx, callRowId: null, handoffTarget: TARGET };
+    const { state, result } = await runTool(emptyCallState(), c, "transfer_to_human", {});
+    expect(result).toEqual({ ok: false, error: expect.any(String) });
+    expect(markHandoffRequestedMock).not.toHaveBeenCalled();
+    expect(state.served).not.toContain("transferred");
+  });
+
+  it("a database failure while marking does NOT report success to the model", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    markHandoffRequestedMock.mockRejectedValueOnce(new Error("boom"));
+    const c = { ...ctx, callRowId: "call-row-1", handoffTarget: TARGET };
+    const { state, result } = await runTool(emptyCallState(), c, "transfer_to_human", {});
+    errSpy.mockRestore();
+    expect(result).toEqual({ ok: false, error: expect.any(String) });
+    expect(state.served).not.toContain("transferred");
   });
 });

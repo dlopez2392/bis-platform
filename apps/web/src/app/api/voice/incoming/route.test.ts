@@ -39,6 +39,8 @@ const countCallerHistorySinceMock = vi.hoisted(() => vi.fn());
 const startCallRowMock = vi.hoisted(() => vi.fn());
 const getOrCreateCalendarMock = vi.hoisted(() => vi.fn());
 const deleteCallRowMock = vi.hoisted(() => vi.fn());
+const getTransferPhoneMock = vi.hoisted(() => vi.fn());
+const listPhoneNumbersForAccountMock = vi.hoisted(() => vi.fn());
 // Records the route's own inline `accounts` select so a test can assert the
 // query actually hit `accounts` filtered by the resolved account id, not
 // just that SOME `.select().eq().single()` chain was called — a mock that
@@ -90,6 +92,11 @@ vi.mock("@bis/db", () => ({
   startCallRow: (...a: unknown[]) => startCallRowMock(...a),
   getOrCreateCalendar: (...a: unknown[]) => getOrCreateCalendarMock(...a),
   deleteCallRow: (...a: unknown[]) => deleteCallRowMock(...a),
+  // The handoff target's two reads, resolved at step 12 before the accept.
+  // A factory that omits a function the route calls is not a smaller mock,
+  // it is a different route (see the same note in lifecycle.test.ts).
+  getTransferPhone: (...a: unknown[]) => getTransferPhoneMock(...a),
+  listPhoneNumbersForAccount: (...a: unknown[]) => listPhoneNumbersForAccountMock(...a),
 }));
 
 import { POST } from "./route";
@@ -154,6 +161,8 @@ beforeEach(() => {
   startCallRowMock.mockReset().mockResolvedValue({ id: "call-row-1" });
   getOrCreateCalendarMock.mockReset().mockResolvedValue(CALENDAR_ROW);
   deleteCallRowMock.mockReset().mockResolvedValue(undefined);
+  getTransferPhoneMock.mockReset().mockResolvedValue(null);
+  listPhoneNumbersForAccountMock.mockReset().mockResolvedValue([]);
   dbQuerySpy.fromCalls.length = 0;
   dbQuerySpy.eqCalls.length = 0;
 
