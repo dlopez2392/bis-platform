@@ -394,7 +394,7 @@ describe("texml route — repeat-offender refusal (Guard 2)", () => {
     expect(xml).toContain("<Dial");
   });
 
-  it("is read over the configured rolling window, from the caller and account in hand", async () => {
+  it("is read over the DEFAULT rolling window, from the caller and account in hand", async () => {
     countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 0, otherCalls: 0 });
     await texmlXml({ To: LIVE_TO, From: SILENT_CALLER });
     expect(countCallerHistorySinceMock).toHaveBeenCalledWith(
@@ -404,6 +404,33 @@ describe("texml route — repeat-offender refusal (Guard 2)", () => {
     const days = (Date.now() - since.getTime()) / 86_400_000;
     expect(days).toBeGreaterThan(29.9);
     expect(days).toBeLessThan(30.1);
+  });
+
+  // BOTH KNOBS, EXERCISED RATHER THAN DELETED. Every other test in this file
+  // only `delete`s these env vars, so replacing `readReputationConfig()` with a
+  // hardcoded `{ threshold: 3, windowDays: 30 }` left the whole suite green and
+  // the test above could not tell configured from hardcoded. An operator
+  // turning a knob to relieve a false-positive block on a real customer would
+  // have got no effect and no signal — possibly at one gate and not the other.
+  // `beforeEach` deletes both, so setting one here cannot leak into a sibling.
+  it("the WINDOW knob reaches this gate — PHONE_SPAM_BLOCK_WINDOW_DAYS=7 reads 7 days back, not 30", async () => {
+    process.env.PHONE_SPAM_BLOCK_WINDOW_DAYS = "7";
+    await texmlXml({ To: LIVE_TO, From: SILENT_CALLER });
+    const since = new Date(countCallerHistorySinceMock.mock.calls[0][3]);
+    const days = (Date.now() - since.getTime()) / 86_400_000;
+    expect(days).toBeGreaterThan(6.9);
+    expect(days).toBeLessThan(7.1);
+  });
+
+  // Also the threshold's only near-miss at route level: 4 silent calls against
+  // a threshold of 5 must dial. `decideReputation` is non-strict (`>=`), so an
+  // off-by-one here is a caller refused one call early.
+  it("the THRESHOLD knob reaches this gate — PHONE_SPAM_BLOCK_THRESHOLD=5 dials a caller with 4 silent calls", async () => {
+    process.env.PHONE_SPAM_BLOCK_THRESHOLD = "5";
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 4, otherCalls: 0 });
+    const xml = await texmlXml({ To: LIVE_TO, From: SILENT_CALLER });
+    expect(xml).toContain("<Dial");
+    expect(xml).not.toContain("<Say");
   });
 
   // REPUTATION IS DECIDED BEFORE THE CAP, and until this case existed the two

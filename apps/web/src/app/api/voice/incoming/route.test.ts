@@ -379,6 +379,36 @@ describe("POST /api/voice/incoming — step 8: caller reputation", () => {
     expect(daysBack).toBeLessThan(30.1);
   });
 
+  // BOTH KNOBS, EXERCISED RATHER THAN DELETED — the twin of the pair in
+  // `texml/route.test.ts`. `beforeEach` only ever DELETED these two vars, so
+  // replacing `readReputationConfig()` with a hardcoded
+  // `{ threshold: 3, windowDays: 30 }` left both suites green: the knob was
+  // unreachable by any test at either gate, and could have applied at one and
+  // not the other. An operator relieving a false-positive block on a real
+  // customer would have got no effect and no signal.
+  it("step 8: the WINDOW knob reaches this gate — PHONE_SPAM_BLOCK_WINDOW_DAYS=7 reads 7 days back, not 30", async () => {
+    process.env.PHONE_SPAM_BLOCK_WINDOW_DAYS = "7";
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    const since = new Date(countCallerHistorySinceMock.mock.calls[0]![3] as string);
+    const daysBack = (Date.now() - since.getTime()) / 86_400_000;
+    expect(daysBack).toBeGreaterThan(6.9);
+    expect(daysBack).toBeLessThan(7.1);
+  });
+
+  // Also the threshold's only near-miss at route level: 4 silent calls against
+  // a threshold of 5 must be accepted. `decideReputation` is non-strict
+  // (`>=`), so an off-by-one here refuses a caller one call early.
+  it("step 8: the THRESHOLD knob reaches this gate — PHONE_SPAM_BLOCK_THRESHOLD=5 accepts a caller with 4 silent calls", async () => {
+    process.env.PHONE_SPAM_BLOCK_THRESHOLD = "5";
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 4, otherCalls: 0 });
+    const res = await POST(req());
+    const json = await res.json();
+    expect(json.declined).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   // Withheld caller id: there is no caller to have a reputation, and passing
   // a null through to the count would score every anonymous caller on the
   // account as if they were one number.
