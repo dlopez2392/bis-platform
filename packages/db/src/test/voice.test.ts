@@ -8,11 +8,13 @@ import {
   assignPhoneNumber, getPhoneNumberByE164, setPhoneNumberStatus,
   getVoiceProfile, upsertVoiceProfile,
   startCallRow, finishCallRow, countCallsSince, countCallsByCallerSince,
+  countCallerHistorySince,
   hasActiveCallSince,
   findUpcomingBookingForPhone, getBookingById, deleteCallRow,
   listPhoneNumbersForAccount, listAllPhoneNumbers, reassignPhoneNumber,
   listCalls, getCall, listCallStartsBetween, listCallOutcomesBetween,
   listContactCalls, searchCalls,
+  type CallOutcome,
 } from "../voice";
 
 /**
@@ -205,6 +207,113 @@ describe("voice accessors", () => {
       expect(await findUpcomingBookingForPhone(db, accountId, "+19999999998", now.toISOString())).toBeNull();
       const row = await getBookingById(db, accountId, future.id);
       expect(row).toMatchObject({ contact_id: contactId, status: "booked" });
+    });
+  });
+
+  it("countCallerHistorySince: splits one caller's window into spam and everything else", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const since = new Date(Date.now() - 86_400_000).toISOString();
+      const robot = "+19565550301";
+      const human = "+19565550302";
+
+      const finish = async (id: string, outcome: CallOutcome, turnCount: number) =>
+        finishCallRow(db, accountId, id, {
+          outcome, endedAt: new Date(), durationSecs: 20, turnCount,
+          transcript: [], summary: "", language: "en",
+        });
+
+      const a = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: robot });
+      const b = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: robot });
+      const c = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: human });
+      await finish(a.id, "spam", 1);
+      await finish(b.id, "spam", 1);
+      await finish(c.id, "booked", 12);
+
+      expect(await countCallerHistorySince(db, accountId, robot, since))
+        .toEqual({ spamCalls: 2, otherCalls: 0 });
+      // Scoped to ONE caller: the human's booking must not appear in the
+      // robot's history, or the block would never fire.
+      expect(await countCallerHistorySince(db, accountId, human, since))
+        .toEqual({ spamCalls: 0, otherCalls: 1 });
+    });
+  });
+
+  it("countCallerHistorySince: a zero-turn spam row is EXCLUDED — that is our connect timeout, not a robot", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const since = new Date(Date.now() - 86_400_000).toISOString();
+      const caller = "+19565550303";
+
+      // `incoming/route.ts:185-193`: a connect-timeout records outcome "spam"
+      // with turn_count 0, because the socket never opened and nothing was
+      // ever mirrored into the state. That is OUR infrastructure failing.
+      // Counting it toward a block would refuse an innocent caller for our
+      // own outage — the worst false positive this feature can produce.
+      const t = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: caller });
+      await finishCallRow(db, accountId, t.id, {
+        outcome: "spam", endedAt: new Date(), durationSecs: 0, turnCount: 0,
+        transcript: [], summary: "", language: "en",
+      });
+      // A genuine silent call still carries the greeting, so it has >= 1 turn.
+      const g = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: caller });
+      await finishCallRow(db, accountId, g.id, {
+        outcome: "spam", endedAt: new Date(), durationSecs: 30, turnCount: 1,
+        transcript: [], summary: "", language: "en",
+      });
+
+      expect(await countCallerHistorySince(db, accountId, caller, since))
+        .toEqual({ spamCalls: 1, otherCalls: 0 });
+    });
+  });
+
+  it("countCallerHistorySince: honours the window floor and the account boundary", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const caller = "+19565550304";
+      const r = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: caller });
+      await finishCallRow(db, accountId, r.id, {
+        outcome: "spam", endedAt: new Date(), durationSecs: 30, turnCount: 1,
+        transcript: [], summary: "", language: "en",
+      });
+      // A second row, close but NOT a spam member (`abandoned`, the value an
+      // unfinished row carries) so the fabricated-account check below
+      // exercises BOTH queries' `.eq("account_id", ...)` guard — a fixture
+      // that was only ever `spam` could never catch the `otherCalls` query
+      // losing its own tenancy guard.
+      const o = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: caller });
+      await finishCallRow(db, accountId, o.id, {
+        outcome: "abandoned", endedAt: new Date(), durationSecs: 15, turnCount: 1,
+        transcript: [], summary: "", language: "en",
+      });
+
+      const future = new Date(Date.now() + 86_400_000).toISOString();
+      expect(await countCallerHistorySince(db, accountId, caller, future))
+        .toEqual({ spamCalls: 0, otherCalls: 0 });
+
+      // A fabricated other account must see nothing — the tenancy guard is a
+      // security property, not an optimisation. Both counts are exercised:
+      // the spam row above AND the abandoned row above must both stay
+      // invisible to a fabricated account.
+      expect(await countCallerHistorySince(
+        db, "00000000-0000-0000-0000-000000000099", caller,
+        new Date(Date.now() - 86_400_000).toISOString(),
+      )).toEqual({ spamCalls: 0, otherCalls: 0 });
+    });
+  });
+
+  it("countCallerHistorySince: an UNFINISHED row counts as other, never as spam", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const since = new Date(Date.now() - 86_400_000).toISOString();
+      const caller = "+19565550305";
+      // startCallRow leaves outcome at its column default, 'abandoned'. A call
+      // still in flight, or one whose process died before finishCallRow, reads
+      // as "other" and therefore CLEARS the caller. That is the safe direction
+      // — toward letting a call through — and it is intended, not incidental.
+      await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: caller });
+      expect(await countCallerHistorySince(db, accountId, caller, since))
+        .toEqual({ spamCalls: 0, otherCalls: 1 });
     });
   });
 });
