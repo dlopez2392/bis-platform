@@ -7,12 +7,14 @@ const lookupMock = vi.hoisted(() => vi.fn());
 const profileMock = vi.hoisted(() => vi.fn());
 const countCallsSinceMock = vi.hoisted(() => vi.fn());
 const countCallsByCallerSinceMock = vi.hoisted(() => vi.fn());
+const countCallerHistorySinceMock = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({}),
   getPhoneNumberByE164: (...a: unknown[]) => lookupMock(...a),
   getVoiceProfile: (...a: unknown[]) => profileMock(...a),
   countCallsSince: (...a: unknown[]) => countCallsSinceMock(...a),
   countCallsByCallerSince: (...a: unknown[]) => countCallsByCallerSinceMock(...a),
+  countCallerHistorySince: (...a: unknown[]) => countCallerHistorySinceMock(...a),
 }));
 
 const ENABLED_PROFILE = {
@@ -27,6 +29,8 @@ beforeEach(() => {
   delete process.env.PHONE_MAX_CALLS_PER_NUMBER_PER_DAY;
   delete process.env.PHONE_MAX_CALLS_PER_ACCOUNT_PER_DAY;
   delete process.env.TELNYX_PUBLIC_KEY;
+  delete process.env.PHONE_SPAM_BLOCK_THRESHOLD;
+  delete process.env.PHONE_SPAM_BLOCK_WINDOW_DAYS;
   lookupMock.mockReset().mockResolvedValue({ id: "pn1", account_id: "a1", e164: "+19565550999", telnyx_id: null, status: "live" });
   // Default: enabled, under the (default 5/day) cap — the pre-existing "dial"
   // tests below never mention a profile or caps, so they need this to still
@@ -34,6 +38,9 @@ beforeEach(() => {
   profileMock.mockReset().mockResolvedValue(ENABLED_PROFILE);
   countCallsSinceMock.mockReset().mockResolvedValue(0);
   countCallsByCallerSinceMock.mockReset().mockResolvedValue(0);
+  // A clean caller by default, so every pre-existing test above still reaches
+  // the verdict it was written for now that classify() also reads reputation.
+  countCallerHistorySinceMock.mockReset().mockResolvedValue({ spamCalls: 0, otherCalls: 0 });
 });
 
 describe("texml route", () => {
@@ -344,4 +351,182 @@ describe("texml route — guarded body read (Finding B)", () => {
     expect(xml).toContain("<Dial answerOnBridge=\"true\">");
     expect(xml).not.toContain("X-BIS-Called");
   });
+});
+
+// The live number the fixture above hands back from getPhoneNumberByE164, and
+// a caller with no history of speaking to anyone.
+const LIVE_TO = "+19565550999";
+const SILENT_CALLER = "+19565550301";
+
+async function texmlXml(params: { To?: string; From?: string }): Promise<string> {
+  const q = new URLSearchParams();
+  if (params.To) q.set("To", params.To);
+  if (params.From) q.set("From", params.From);
+  const res = await GET(new Request(`https://x.example/api/voice/texml?${q.toString()}`));
+  return res.text();
+}
+
+describe("texml route — repeat-offender refusal (Guard 2)", () => {
+  it("a caller with nothing but silent calls is refused, and never gets a Dial", async () => {
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 3, otherCalls: 0 });
+    const xml = await texmlXml({ To: LIVE_TO, From: SILENT_CALLER });
+    expect(xml).toContain("Sorry, this number can't take your call right now.");
+    expect(xml).not.toContain("<Dial");
+  });
+
+  it("a caller with ANY good outcome is dialled, however much spam they also have", async () => {
+    // The live-data shape: the top spam caller is also the top booker.
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 4, otherCalls: 13 });
+    const xml = await texmlXml({ To: LIVE_TO, From: "+19562921696" });
+    expect(xml).toContain("<Dial");
+  });
+
+  it("uses the EXISTING refusal copy — no new sentence is introduced", async () => {
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 3, otherCalls: 0 });
+    const xml = await texmlXml({ To: LIVE_TO, From: SILENT_CALLER });
+    // Byte-identical to the sentence the disabled-profile test above pins.
+    expect(xml).toContain("<Say>Sorry, this number can't take your call right now. Please try again later.</Say>");
+  });
+
+  it("the history read failing fails OPEN — a database blip dials, never refuses", async () => {
+    countCallerHistorySinceMock.mockRejectedValue(new Error("boom"));
+    const xml = await texmlXml({ To: LIVE_TO, From: SILENT_CALLER });
+    expect(xml).toContain("<Dial");
+  });
+
+  it("is read over the DEFAULT rolling window, from the caller and account in hand", async () => {
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 0, otherCalls: 0 });
+    await texmlXml({ To: LIVE_TO, From: SILENT_CALLER });
+    expect(countCallerHistorySinceMock).toHaveBeenCalledWith(
+      expect.anything(), "a1", SILENT_CALLER, expect.any(String),
+    );
+    const since = new Date(countCallerHistorySinceMock.mock.calls[0]![3] as string);
+    const days = (Date.now() - since.getTime()) / 86_400_000;
+    expect(days).toBeGreaterThan(29.9);
+    expect(days).toBeLessThan(30.1);
+  });
+
+  // BOTH KNOBS, EXERCISED RATHER THAN DELETED. Every other test in this file
+  // only `delete`s these env vars, so replacing `readReputationConfig()` with a
+  // hardcoded `{ threshold: 3, windowDays: 30 }` left the whole suite green and
+  // the test above could not tell configured from hardcoded. An operator
+  // turning a knob to relieve a false-positive block on a real customer would
+  // have got no effect and no signal — possibly at one gate and not the other.
+  // `beforeEach` deletes both, so setting one here cannot leak into a sibling.
+  it("the WINDOW knob reaches this gate — PHONE_SPAM_BLOCK_WINDOW_DAYS=7 reads 7 days back, not 30", async () => {
+    process.env.PHONE_SPAM_BLOCK_WINDOW_DAYS = "7";
+    await texmlXml({ To: LIVE_TO, From: SILENT_CALLER });
+    const since = new Date(countCallerHistorySinceMock.mock.calls[0]![3] as string);
+    const days = (Date.now() - since.getTime()) / 86_400_000;
+    expect(days).toBeGreaterThan(6.9);
+    expect(days).toBeLessThan(7.1);
+  });
+
+  // Also the threshold's only near-miss at route level: 4 silent calls against
+  // a threshold of 5 must dial. `decideReputation` is non-strict (`>=`), so an
+  // off-by-one here is a caller refused one call early.
+  it("the THRESHOLD knob reaches this gate — PHONE_SPAM_BLOCK_THRESHOLD=5 dials a caller with 4 silent calls", async () => {
+    process.env.PHONE_SPAM_BLOCK_THRESHOLD = "5";
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 4, otherCalls: 0 });
+    const xml = await texmlXml({ To: LIVE_TO, From: SILENT_CALLER });
+    expect(xml).toContain("<Dial");
+    expect(xml).not.toContain("<Say");
+  });
+
+  // REPUTATION IS DECIDED BEFORE THE CAP, and until this case existed the two
+  // branches never contended: no test arranged a caller who is BOTH over the
+  // cap and a known repeat offender, so swapping `decideReputation` and
+  // `decideLimit` in `classify()` left 50/50 green. It is not cosmetic. They
+  // emit different copy — under a reversal a robot hears "we can't take more
+  // calls today. Please call back tomorrow", which invites it back — and
+  // different log lines, and `texml declined blocked (repeat-spam)` is the
+  // ONLY telemetry Guard 2 produces at all.
+  it("a caller who is BOTH over the cap and a repeat offender hears the refusal, not the cap copy", async () => {
+    countCallsByCallerSinceMock.mockResolvedValue(9); // well past the default cap of 5
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 3, otherCalls: 0 });
+    const xml = await texmlXml({ To: LIVE_TO, From: SILENT_CALLER });
+    expect(xml).toContain("Sorry, this number can't take your call right now. Please try again later.");
+    expect(xml).not.toContain("can't take more calls today");
+    expect(xml).not.toContain("<Dial");
+  });
+
+  // The blocked verdict passes `profile.languages` through like every other
+  // refusal. The other two refusal kinds each have a Spanish pin; without this
+  // one, hardcoding "en" on the blocked branch left 50/50 green and an
+  // es-only client's wrongly-blocked caller would start hearing English.
+  it("the blocked refusal honors the profile's language (es)", async () => {
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, languages: "es" });
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 3, otherCalls: 0 });
+    const xml = await texmlXml({ To: LIVE_TO, From: SILENT_CALLER });
+    expect(xml).toContain("<Say language=\"es-MX\">Lo sentimos, este número no puede atender su llamada en este momento. Por favor intente más tarde.</Say>");
+    expect(xml).not.toContain("<Say>Sorry");
+    expect(xml).not.toContain("<Dial");
+  });
+
+  it("a caller with no number at all is not blocked — there is no history to read", async () => {
+    const xml = await texmlXml({ To: LIVE_TO });
+    expect(xml).toContain("<Dial");
+    expect(countCallerHistorySinceMock).not.toHaveBeenCalled();
+  });
+
+  it("rides the SAME round trip as the cap counts — it never waits for them", async () => {
+    // This route sits on Telnyx's carrier answer-deadline, so Guard 2 must
+    // cost no extra wall-clock: all three reads start before any of them
+    // finishes. A sequential `await` before the cap block would still fail
+    // open and still refuse correctly — only this test can see the extra
+    // round trip.
+    const events: string[] = [];
+    const traced = <T,>(name: string, value: T) => () => {
+      events.push(`start:${name}`);
+      return new Promise<T>((resolve) => setTimeout(() => {
+        events.push(`end:${name}`);
+        resolve(value);
+      }, 0));
+    };
+    countCallsSinceMock.mockImplementation(traced("account", 0));
+    countCallsByCallerSinceMock.mockImplementation(traced("caller", 0));
+    countCallerHistorySinceMock.mockImplementation(traced("history", { spamCalls: 0, otherCalls: 0 }));
+
+    const xml = await texmlXml({ To: LIVE_TO, From: SILENT_CALLER });
+
+    expect(xml).toContain("<Dial");
+    expect(events.filter((e) => e.startsWith("start:"))).toHaveLength(3);
+    // All three are in flight before ANY of them comes back. Asserted on the
+    // first three events rather than on history's own position: history
+    // running FIRST and the caps waiting on it is still a second round trip.
+    expect(events.slice(0, 3).sort()).toEqual(["start:account", "start:caller", "start:history"]);
+  });
+});
+
+describe("texml route — a refusal and the bridge are mutually exclusive", () => {
+  // The ordering guarantee this architecture admits. Every verdict produces
+  // EITHER spoken refusal copy OR a bridge, never both and never neither.
+  //
+  // Be honest about what this is: it is not an assertion about call order, and
+  // it cannot be — `classify()` and `dialXml()` are module-private. It is a
+  // structural invariant over every verdict, which is the strongest pin
+  // available while one response body holds the whole decision. It is what
+  // would catch a future screen-then-bridge design where a <Gather> and a
+  // <Dial> could legitimately coexist in one document. Each case also names
+  // the side it must land on, so a verdict that quietly flips to the other
+  // side fails here too. The ordering itself is proven by mutation, not by
+  // this test.
+  const cases: [string, "refusal" | "bridge", () => void][] = [
+    ["unknown number", "refusal", () => { lookupMock.mockResolvedValue(null); }],
+    ["disabled profile", "refusal", () => { profileMock.mockResolvedValue({ ...ENABLED_PROFILE, enabled: false }); }],
+    ["over the cap", "refusal", () => { countCallsByCallerSinceMock.mockResolvedValue(9); }],
+    ["repeat offender", "refusal", () => { countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 3, otherCalls: 0 }); }],
+    ["allowed", "bridge", () => {}],
+  ];
+
+  for (const [name, expected, arrange] of cases) {
+    it(`${name}: exactly one of refusal-copy or <Dial> is present, and it is the ${expected}`, async () => {
+      arrange();
+      const xml = await texmlXml({ To: LIVE_TO, From: SILENT_CALLER });
+      const refused = xml.includes("<Say");
+      const bridged = xml.includes("<Dial");
+      expect(refused !== bridged).toBe(true);
+      expect(refused ? "refusal" : "bridge").toBe(expected);
+    });
+  }
 });

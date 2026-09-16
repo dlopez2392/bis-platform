@@ -13,6 +13,12 @@
 // air; the webhook (`/api/voice/incoming`) is untouched and stays
 // authoritative — a stale/racy read here can only ever cost a wasted dial
 // attempt, never a bypass. A DB failure fails OPEN and dials.
+// Same shape for the repeat-offender refusal (spam-screening Guard 2): a
+// caller whose ENTIRE recent history on this account is silent calls is
+// refused here with the shared `decideReputation` predicate, BEFORE the
+// bridge is emitted — a refusal costs nothing, a bridge starts billing — and
+// hears the SAME sentence as any other refusal; only the log line names the
+// reason.
 import { NextResponse } from "next/server";
 import { toE164 } from "@/lib/voice/phone-number";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
@@ -24,7 +30,13 @@ type Languages = "en" | "es" | "both";
 type Routability =
   | { kind: "dial" }
   | { kind: "refuse"; languages: Languages }
-  | { kind: "cap"; languages: Languages };
+  | { kind: "cap"; languages: Languages }
+  // A caller whose whole recent history on this account is silent calls.
+  // Speaks the SAME sentence as `refuse` on purpose — a robot learns nothing
+  // from a distinct message, and a human who has somehow been caught by this
+  // is told to try again later, which the rolling window makes true. Only the
+  // log line distinguishes the reason.
+  | { kind: "blocked"; languages: Languages };
 
 // COPY.refuse.en is byte-identical to the old REFUSAL constant's sentence —
 // an existing test pins it, and a caller who's heard it before should hear
@@ -54,9 +66,13 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
   // open to dial — the webhook resolver still gates authoritatively.
   try {
     const {
-      serviceDb, getPhoneNumberByE164, getVoiceProfile, countCallsSince, countCallsByCallerSince,
+      serviceDb, getPhoneNumberByE164, getVoiceProfile, countCallsSince,
+      countCallsByCallerSince, countCallerHistorySince,
     } = await import("@bis/db");
     const { readLimitConfig, decideLimit, utcDayStart } = await import("@/lib/voice/call-limits");
+    const {
+      readReputationConfig, decideReputation, windowStart,
+    } = await import("@/lib/voice/caller-reputation");
     const db = serviceDb();
     const row = await getPhoneNumberByE164(db, calledE164);
     if (!row || (row.status !== "testing" && row.status !== "live")) {
@@ -81,25 +97,62 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
     if (!profile) {
       return { kind: "refuse", languages: "en" };
     }
-    // Cap UX only — the caller deserves words, not dead air. The incoming
-    // webhook re-checks with the same decideLimit and stays authoritative,
-    // so a stale count here (or the two reads racing an in-flight call) can
-    // only ever waste a dial attempt, never let an over-cap caller through.
+    // Cap and reputation UX only — the caller deserves words, not dead air.
+    // The incoming webhook re-checks BOTH with the same shared predicates and
+    // stays authoritative, so a stale count here (or the reads racing an
+    // in-flight call) can only ever waste a dial attempt, never let a caller
+    // through who should have been refused.
+    //
+    // KNOWN AND ACCEPTED, so the next reader does not rediscover it as a bug:
+    // because the three reads share one `Promise.all` below, ANY of them
+    // rejecting fails the whole batch and this block falls through to `dial`.
+    // So a caller who is genuinely over the per-number cap, on a call where
+    // only the history read failed, hears ringing and then dead air instead of
+    // the cap sentence — the webhook still declines before `acceptCall`, so
+    // the exposure is a worse ten seconds for one caller and zero billing.
+    // That is exactly the "can only ever waste a dial attempt" envelope above,
+    // and splitting the batch per-read would trade it for wall-clock on
+    // Telnyx's answer deadline, which is the thing this route cannot spend.
+    // The incoming webhook makes the opposite trade for the opposite reason:
+    // it binds, it is not on the carrier's clock, and its two reads each carry
+    // their own try/catch so neither can take the other down.
     try {
-      const dayStart = utcDayStart(new Date());
+      const now = new Date();
+      const dayStart = utcDayStart(now);
+      const repCfg = readReputationConfig();
       // Independent reads — run them together, this route sits on Telnyx's
-      // carrier answer-deadline.
-      const [forAccount, forNumber] = await Promise.all([
+      // carrier answer-deadline. The third read joins the existing pair
+      // rather than following them, so Guard 2 costs no wall-clock at all.
+      const [forAccount, forNumber, history] = await Promise.all([
         countCallsSince(db, row.account_id, dayStart),
         callerE164 ? countCallsByCallerSince(db, row.account_id, callerE164, dayStart) : Promise.resolve(0),
+        callerE164
+          ? countCallerHistorySince(db, row.account_id, callerE164, windowStart(now, repCfg.windowDays))
+          : Promise.resolve({ spamCalls: 0, otherCalls: 0 }),
       ]);
+      // Reputation first: a caller we already know to be a robot should not
+      // be described by the day's volume. It is also the more actionable log
+      // line of the two. Note the two verdicts read OPPOSITE senses —
+      // `decideReputation` reports `blocked`, `decideLimit` reports
+      // `allowed` — so each is read on its own field, never combined.
+      //
+      // That order is binding, not stylistic, and is pinned by the case
+      // arranging a caller who is over the cap AND a repeat offender:
+      // reversed, a known robot hears the cap's "call back tomorrow", which
+      // invites it back, and the `blocked (repeat-spam)` line — the only
+      // telemetry Guard 2 produces — is never written.
+      const reputation = decideReputation(history, repCfg);
+      if (reputation.blocked) {
+        console.log(`texml declined blocked (${reputation.reason}) for ${calledE164}, caller ${callerE164 ?? "unknown"}, accountId ${row.account_id}`);
+        return { kind: "blocked", languages: profile.languages };
+      }
       const verdict = decideLimit({ forNumber, forAccount }, readLimitConfig());
       if (!verdict.allowed) {
         console.log(`texml declined cap (${verdict.reason}) for ${calledE164}, caller ${callerE164 ?? "unknown"}, accountId ${row.account_id}`);
         return { kind: "cap", languages: profile.languages };
       }
     } catch (e) {
-      console.error(`texml cap count failed for ${calledE164}: ${String(e)}`); // fail open
+      console.error(`texml cap/reputation count failed for ${calledE164}: ${String(e)}`); // fail open
     }
     return { kind: "dial" };
   } catch (e) {
@@ -170,6 +223,9 @@ async function respond(calledE164: string | null, callerE164: string | null): Pr
   if (calledE164) {
     const result = await classify(calledE164, callerE164);
     if (result.kind === "refuse") return xmlResponse(sayXml(result.languages, COPY.refuse));
+    // Deliberately the same sentence as `refuse`, and deliberately ABOVE the
+    // bridge: a refusal costs nothing, a bridge starts billing.
+    if (result.kind === "blocked") return xmlResponse(sayXml(result.languages, COPY.refuse));
     if (result.kind === "cap") return xmlResponse(sayXml(result.languages, COPY.cap));
     // kind === "dial" → fall through to the same dial path as calledE164===null
   }

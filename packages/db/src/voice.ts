@@ -189,6 +189,50 @@ export async function countCallsByCallerSince(
 }
 
 /**
+ * One caller's history on one account since `sinceIso`, split two ways: how
+ * many calls classified `spam`, and how many classified anything else.
+ *
+ * Feeds the voice gates' repeat-offender refusal (`decideReputation` in
+ * `apps/web/src/lib/voice/caller-reputation.ts`), which blocks only when
+ * `otherCalls` is zero — so the split, not the total, is the whole point.
+ *
+ * TWO COUNTS RATHER THAN A LIST OF ROWS, deliberately. `count: "exact", head:
+ * true` transfers no rows, so neither query needs a `.limit()`; a limited list
+ * could truncate away an older good outcome and produce a false block, which
+ * is the one failure mode this guard must not have. Both queries ride
+ * `calls_caller_idx (account_id, caller_e164, started_at desc)`, already
+ * present since 0019 — no new index is needed.
+ *
+ * `turn_count >= 1` on the spam side is an EXCLUSION, not a filter for
+ * tidiness: a connect-timeout also records `spam`, with `turn_count` 0,
+ * because the socket never opened and nothing was mirrored into the call
+ * state (see the honesty note in `api/voice/incoming/route.ts`). That is our
+ * infrastructure failing, not a robot calling, and refusing a caller because
+ * of our own outage is the worst false positive available here. A genuine
+ * silent call still carries the greeting, so it always has at least one turn.
+ *
+ * An UNFINISHED row (still in flight, or one whose process died before
+ * `finishCallRow`) carries the column default `abandoned` and so counts as
+ * `otherCalls`. That errs toward letting the caller through, which is the
+ * direction every gate in this path errs.
+ */
+export async function countCallerHistorySince(
+  db: SupabaseClient, accountId: string, callerE164: string, sinceIso: string,
+): Promise<{ spamCalls: number; otherCalls: number }> {
+  const [spam, other] = await Promise.all([
+    db.from("calls").select("id", { count: "exact", head: true })
+      .eq("account_id", accountId).eq("caller_e164", callerE164)
+      .gte("started_at", sinceIso).eq("outcome", "spam").gte("turn_count", 1),
+    db.from("calls").select("id", { count: "exact", head: true })
+      .eq("account_id", accountId).eq("caller_e164", callerE164)
+      .gte("started_at", sinceIso).neq("outcome", "spam"),
+  ]);
+  if (spam.error) throw new Error(`countCallerHistorySince failed: ${spam.error.message}`);
+  if (other.error) throw new Error(`countCallerHistorySince failed: ${other.error.message}`);
+  return { spamCalls: spam.count ?? 0, otherCalls: other.count ?? 0 };
+}
+
+/**
  * Raw `started_at` instants in `[fromIso, toIso)` for the dashboard's 14-day
  * call chart — bucketing (day boundaries, timezone) happens in JS on the
  * caller side, not here. Daily caps are 50/day, so a 14-day window is at

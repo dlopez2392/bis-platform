@@ -40,13 +40,24 @@
 //     that's why `runCallLifecycle` delays it by `PHONE_GREETING_DELAY_MS`
 //     (default 900ms) rather than firing it the instant the socket opens.
 //
-//  3. Fail-open, deliberately, in exactly two places: the call-cap counts
-//     (step 8 below — a DB blip must not turn away a real caller; losing a
-//     prospect costs more than paying for one extra robocall) and
-//     `startCallRow` (step 10 — a DB blip must not lose the call itself;
-//     `finishCall` already tolerates a null `callRowId` and still gets the
-//     staff alert out). Signature verification and account resolution are
-//     NOT fail-open — those gate who gets to talk to a tenant's AI at all.
+//  3. Fail-open, deliberately, in exactly three places. This list is what a
+//     future auditor checks the code against, so it is kept exhaustive on
+//     purpose — a site missing from it reads as a bug to be "hardened":
+//
+//       - The call-cap and caller-reputation counts (step 8 below) — a DB
+//         blip must not turn away a real caller; losing a prospect costs
+//         more than paying for one extra robocall.
+//       - `startCallRow` (step 10) — a DB blip must not lose the call
+//         itself; `finishCall` already tolerates a null `callRowId` and
+//         still gets the staff alert out.
+//       - The silence-guard cancel check inside `handleMessage` (added with
+//         Guard 1) — a predicate throwing on an untrusted frame DISARMS the
+//         guard rather than leaving it armed, so the call degrades to
+//         exactly the pre-guard behaviour and runs to the cost cap. A bug in
+//         a cost optimisation must never cut off a paying customer.
+//
+//     Signature verification and account resolution are NOT fail-open —
+//     those gate who gets to talk to a tenant's AI at all.
 //
 // Every branch past the initial config/signature checks acks the webhook
 // with 200, `declined` or not: OpenAI's incoming-call webhook is not usefully
@@ -58,7 +69,7 @@ import OpenAI from "openai";
 import WebSocket from "ws";
 import {
   serviceDb, getPhoneNumberByE164, getVoiceProfile, countCallsSince, countCallsByCallerSince,
-  startCallRow, getOrCreateCalendar, deleteCallRow,
+  countCallerHistorySince, startCallRow, getOrCreateCalendar, deleteCallRow,
   type Branding,
 } from "@bis/db";
 import { extractCallerNumber, extractCalledNumber, sipHeaderNames } from "@/lib/voice/sip-headers";
@@ -69,6 +80,8 @@ import { emptyCallState } from "@/lib/voice/call-state";
 import { finishCall, type FinishContext } from "@/lib/voice/finish-call";
 import type { ToolContext } from "@/lib/voice/tools/registry";
 import { readLimitConfig, decideLimit, utcDayStart } from "@/lib/voice/call-limits";
+import { readReputationConfig, decideReputation, windowStart } from "@/lib/voice/caller-reputation";
+import { readSilentSeconds, isCallerAudioEvent, silenceGoodbye } from "@/lib/voice/silence-guard";
 import { configuredOrigin } from "@/lib/email/origin";
 import { brandDisplayName } from "@/lib/email/templates/shell";
 
@@ -125,6 +138,7 @@ interface LifecycleArgs {
   callId: string;
   apiKey: string;
   greeting: string;
+  languages: "en" | "es" | "both";
   callRowId: string | null;
   startedAt: Date;
   toolCtx: ToolContext;
@@ -142,12 +156,13 @@ interface LifecycleArgs {
  * of the demo's own recorder/store.
  */
 function runCallLifecycle(args: LifecycleArgs): Promise<void> {
-  const { callId, apiKey, greeting, callRowId, startedAt, toolCtx, finishCtx } = args;
+  const { callId, apiKey, greeting, languages, callRowId, startedAt, toolCtx, finishCtx } = args;
   let state = emptyCallState();
   let capTimer: NodeJS.Timeout | undefined;
   let closeTimer: NodeJS.Timeout | undefined;
   let greetTimer: NodeJS.Timeout | undefined;
   let connectTimer: NodeJS.Timeout | undefined;
+  let silenceTimer: NodeJS.Timeout | undefined;
   let settled = false;
 
   // `callId` is server-controlled (OpenAI's own webhook payload, not a form
@@ -169,6 +184,7 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       clearTimeout(closeTimer);
       clearTimeout(greetTimer);
       clearTimeout(connectTimer);
+      clearTimeout(silenceTimer);
 
       // Drain in-flight frames, but bounded: a wedged frame must not block
       // the record forever (losing the row is worse than a slightly stale
@@ -303,7 +319,18 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       // the whole connect budget and this 750 must be re-derived. Nothing
       // enforces that coupling — the two knobs are independent, and this
       // comment is the only thing linking them.
-      const maxSeconds = Math.min(parsedOrDefault, 750);
+      //
+      // THE FLOOR OF 10 IS THE SILENCE WINDOW'S, NOT THE CAP'S. A 1s cost cap
+      // is absurd but harmless on its own. What it was not harmless to is the
+      // silence window below, which is bounded at HALF this number: half of
+      // anything under 10 lands beneath `readSilentSeconds`' own 5s floor, and
+      // measured off that guard's log line a cap of 8 armed a 4s window and a
+      // cap of 1 armed 0.5s — the silent caller heard "I can't hear anything,
+      // goodbye" 400ms BEFORE the 900ms greeting reached them. Flooring the
+      // CAP is what makes the half-bound incapable of undercutting the clamp
+      // it is applied to. Flooring after the min instead would let the window
+      // TIE the cap, and a tie fires the cap first (insertion order).
+      const maxSeconds = Math.min(Math.max(parsedOrDefault, 10), 750);
       capTimer = setTimeout(() => {
         log("call cap reached, sending goodbye", { callId, maxSeconds });
         try {
@@ -319,6 +346,82 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
           ws.close();
         }, 5000);
       }, maxSeconds * 1000);
+
+      // Cost guardrail #2: the cap above bounds a call that is going
+      // somewhere. This one bounds a call that is not. A robot that connects
+      // and says nothing used to bill the full `maxSeconds` — see the
+      // 247-second call in the spec, whose only two transcript events were
+      // four minutes apart and both Sofía's.
+      //
+      // Armed here rather than after the greeting for the same reason
+      // `capTimer` is: one timer, one origin, no second lifecycle concept to
+      // keep in sync.
+      //
+      // THE ARMED WINDOW IS `min(readSilentSeconds() clamped 5..120, half the
+      // cap)` — NOT the module's clamp alone. Both ends of that min are >= 5,
+      // so a slow greeting is safe, but only because `maxSeconds` above is
+      // floored at 10. That floor is load-bearing for this line and exists for
+      // it; the two must move together or the half-bound starts undercutting
+      // the clamp again, which is exactly what it used to do.
+      //
+      // THE ORDERING IS ENFORCED HERE, NOT DESCRIBED. The two knobs are
+      // independent in the environment: PHONE_MAX_SILENT_SECONDS clamps to
+      // 5–120 and PHONE_MAX_CALL_SECONDS to <=750, so `120` and `60` is a
+      // legal pair an operator can reach by two individually sensible edits.
+      // Under it, on a call where nobody speaks, the CAP fires first and
+      // hands the model the open-ended "Politely wrap up…" below — which is
+      // precisely how the 247-second call produced a fabricated summary, and
+      // the whole reason this guard carries its own fixed sentence instead.
+      //
+      // So the window is bounded against the already-resolved `maxSeconds`
+      // rather than trusted: HALF the cap. Half, not "cap minus something",
+      // because half is strictly less than the cap for every positive
+      // `maxSeconds` and therefore can never TIE it — and a tie would fire
+      // the cap first, since `capTimer` was scheduled a few lines earlier and
+      // same-deadline timers run in insertion order. A silent call may spend
+      // at most half the cost budget.
+      //
+      // This is the enforcement PHONE_CONNECT_TIMEOUT_MS's block above still
+      // lacks and says so ("nothing enforces that coupling"). Pinned by the
+      // coupling test in `lifecycle.test.ts` — "the two cost knobs cannot
+      // invert" — in the shape `automations/cron-coupling.test.ts` uses for
+      // the cron/window pair.
+      const silentSeconds = Math.min(readSilentSeconds(), maxSeconds / 2);
+      silenceTimer = setTimeout(() => {
+        // Belt to `finish()`'s own `clearTimeout(silenceTimer)`, matching the
+        // guard `ws.on("open")` and `ws.on("message")` already carry: if a
+        // future edit drops that clear, this leaks inert instead of sending a
+        // goodbye into a socket that was torn down when the caller hung up.
+        if (settled) return;
+        // Disarmed BEFORE anything else, so the cancel branch in
+        // `handleMessage` cannot log "silence guard cleared" for a guard that
+        // has already fired. That log line is the diagnostic an operator
+        // reads off a real call; a call where it appears AND the call ends
+        // five seconds later would be unreadable.
+        //
+        // Late caller audio therefore does NOT cancel the pending close, on
+        // purpose: once the fixed goodbye is playing the call is ending, and
+        // a caller speaking over it must not resurrect the session.
+        silenceTimer = undefined;
+        // The call is over — the cost cap has nothing left to bound. The
+        // bound above ORDERS the two timers; this makes the cap unreachable
+        // outright, including the degenerate configurations where the cap
+        // would land inside the 5s goodbye playout below.
+        clearTimeout(capTimer);
+        log("no caller audio, ending call", { callId, silentSeconds });
+        try {
+          ws.send(JSON.stringify({
+            type: "response.create",
+            response: { instructions: silenceGoodbye(languages) },
+          }));
+        } catch {
+          // socket may already be closing; the closeTimer below still fires.
+        }
+        closeTimer = setTimeout(() => {
+          log("closing call socket after silence goodbye", { callId });
+          ws.close();
+        }, 5000);
+      }, silentSeconds * 1000);
     });
 
     // Serialized on purpose. `ws` never awaits its own event handlers — an
@@ -339,6 +442,12 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
     // itself never throws (the try/catch inside `handleMessage` swallows
     // per-frame failures and logs them), the chain can never get stuck
     // permanently rejected.
+    //
+    // That last clause is an INVARIANT `handleMessage` has to keep, not a
+    // fact about it: every statement in it that touches the parsed payload
+    // belongs inside its try. A single statement placed outside one (the
+    // silence-guard cancel, briefly) is enough to reject this chain forever
+    // and silently drop the rest of the call.
     let chain: Promise<void> = Promise.resolve();
     ws.on("message", (raw) => {
       // Post-drain frames must not mutate recorded state or attempt sends on
@@ -360,6 +469,70 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
         return;
       }
       try {
+        // Cancelled here — INSIDE this try, and still before
+        // `processCallEvent`, so a throw inside tool handling can never leave
+        // the guard armed on a call where the caller is plainly talking. One
+        // sound is enough and it is permanent: this guard asks "did anyone
+        // ever speak", which is exactly the question `classifyOutcome` asks
+        // to decide `spam`, so it is never re-armed.
+        //
+        // INSIDE the try is load-bearing, not tidiness. This function's
+        // promise is chained onto `chain` above; anything that escapes it
+        // rejects that chain PERMANENTLY, and every later frame of the call
+        // is then dropped — no transcript, no lead, no booking, no tool call
+        // — while the caller hears a normal conversation, because the audio
+        // is OpenAI's SIP bridge and not ours. `event.type` is DECLARED a
+        // string and is in fact whatever the socket sent; the same will be
+        // true of every field the predicates added alongside this one read.
+        //
+        // It also rides the serialization chain like any other frame, so a
+        // frame still awaiting a slow tool call ahead of it delays this
+        // cancel by however long that tool takes, and the guard can fire
+        // inside that window. Accepted: reading the cancel off the raw socket
+        // ahead of the chain would reintroduce the exact ordering race the
+        // chain exists to remove, and a call with a tool call in flight is by
+        // definition a call where someone already spoke — so an earlier frame
+        // has already cancelled the guard.
+        //
+        // The INNER try is not redundant with the outer one. Sharing the
+        // outer catch would stop the chain rejecting, but a predicate that
+        // throws on one frame's payload throws on the next one too — and
+        // every throw would skip that frame's `processCallEvent`, losing the
+        // whole call's transcript, leads and bookings just as completely as
+        // the wedged chain did, only more quietly. A predicate over an
+        // untrusted field must cost AT MOST the guard it decides, never the
+        // call it was watching.
+        try {
+          if (silenceTimer && isCallerAudioEvent(event?.type)) {
+            clearTimeout(silenceTimer);
+            silenceTimer = undefined;
+            log("caller audio detected, silence guard cleared", { callId, type: event?.type });
+          }
+        } catch (e) {
+          // FAIL OPEN, like every other decision in this feature: the guard is
+          // DISARMED on a throw, never left armed.
+          //
+          // Leaving it armed was the one branch here that failed the other
+          // way, and a probe showed what that costs — a throwing predicate ran
+          // to the 30s mark on a caller who had produced a VAD onset AND said
+          // "hello, I need a roof repair", and the socket closed on them at
+          // 35s. A bug in a COST OPTIMISATION must never cut off a paying
+          // customer, and must never leave the product worse than it was
+          // before the optimisation existed. Losing a prospect costs more than
+          // paying for one extra robocall.
+          //
+          // `capTimer` is deliberately LEFT ALONE, so the call degrades to
+          // exactly the pre-Guard-1 behaviour: it runs to the cost cap, as
+          // every call did before this timer existed. Disarming the guard is a
+          // retreat to the old bound, not a removal of all bounds.
+          //
+          // Still logged rather than swallowed: this line is what explains a
+          // call that billed the full cap on a day the guard was supposed to
+          // be shortening silent ones.
+          clearTimeout(silenceTimer);
+          silenceTimer = undefined;
+          log("silence guard cancel check threw — guard disarmed, call runs to the cost cap", { callId, error: String(e) });
+        }
         const result = await processCallEvent(state, toolCtx, event);
         state = result.state;
         for (const action of result.actions) {
@@ -454,7 +627,41 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ ok: true, declined: "disabled" });
     }
 
-    // --- Step 8: abuse caps, fail-open on a counting failure ---------------
+    // --- Step 8: abuse caps + caller reputation, fail-open on a counting
+    // failure ---------------------------------------------------------------
+    // Reputation is the SAME predicate the TeXML route speaks its refusal
+    // from (`caller-reputation.ts`), enforced here. TeXML is the UX layer and
+    // gives the caller words; this is the layer that makes the decision
+    // binding — exactly the split `callAnswerable` already documents, and the
+    // reason the OpenAI SIP endpoint being reachable by anyone who knows the
+    // project id does not matter. A decline is expressed by never accepting,
+    // so nothing is billed.
+    //
+    // The two verdicts read OPPOSITE senses — `decideLimit` reports `allowed`,
+    // `decideReputation` reports `blocked` — so each is read on its own field
+    // and never combined into one boolean.
+    //
+    // EACH FLAG IS SET INSIDE ITS OWN `try`, WHERE ITS OWN READ LANDS, AND
+    // ACTED ON AFTER BOTH — so a throw in one read can never discard a decline
+    // the other already earned. That is also why these reads stay sequential
+    // here while TeXML batches the same three in a `Promise.all`: TeXML only
+    // owes the caller words and sits on a carrier answer deadline, whereas
+    // this is the layer that binds, and `Promise.all` rejects as a whole —
+    // one slow `countCallerHistorySince` (two counts over 30 days, against the
+    // cap's one same-day count) would fail the abuse cap open right here.
+    //
+    // TWO `try` BLOCKS, NOT ONE, AND THE SECOND ONE IS WHY. With both reads
+    // sharing a single `try`, the protection ran ONE WAY only: the cap counts
+    // are awaited first, so a throw in either of them aborted the block before
+    // `countCallerHistorySince` was ever called and Guard 2 silently did not
+    // run for that call. Fail-open, so the direction was safe — but it is the
+    // inverse of what this comment advertises, it silently drops the guard
+    // that matters MORE (a cap re-allows the same robot tomorrow; a reputation
+    // block does not), and it hangs the more fragile read's fate on the less
+    // fragile one. Split, neither read can take the other down in either
+    // direction. Pinned from both sides: "caps exceeded AND the history read
+    // throwing → still declined per-number" and "a cap read throwing must
+    // still let Guard 2 block a repeat offender".
     let capsAllowed = true;
     let capsReason: "per-number" | "per-account" | undefined;
     try {
@@ -468,6 +675,56 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       }
     } catch (e) {
       log("call-limit counts failed — failing open", { callId, accountId, error: String(e) });
+    }
+
+    let blocked = false;
+    let blockReason: "repeat-spam" | undefined;
+    // A withheld caller id has no reputation to read: passing the null
+    // through would score every anonymous caller on the account as one
+    // number. `now` is the same instant `utcDayStart` above used, so the
+    // window floor and the day floor come from one clock read.
+    if (callerNumber) {
+      try {
+        const repCfg = readReputationConfig();
+        const history = await countCallerHistorySince(
+          db, accountId, callerNumber, windowStart(now, repCfg.windowDays),
+        );
+        const reputation = decideReputation(history, repCfg);
+        if (reputation.blocked) {
+          blocked = true;
+          blockReason = reputation.reason;
+        }
+      } catch (e) {
+        // Names the reputation read specifically: this is the only line an
+        // operator gets when Guard 2 silently stops firing, and a shared
+        // "call-limit" line would have pointed them at the wrong query
+        // (TeXML's own line says "cap/reputation" because its three reads
+        // genuinely do share one `Promise.all` and one catch).
+        log("caller-reputation count failed — failing open", { callId, accountId, error: String(e) });
+      }
+    }
+    // Reputation before the cap: a caller already known to be a robot should
+    // not be described by the day's volume, and it is the more actionable of
+    // the two log lines. Matches the TeXML route's own ordering, so the two
+    // gates describe the same call the same way. The two orderings are pinned
+    // by a case at each gate arranging a caller who is over the cap AND a
+    // repeat offender; without one, the branches never contend and a swap is
+    // invisible — a robot would hear "call back tomorrow", which invites it
+    // back, and the one log line Guard 2 produces would name the wrong reason.
+    //
+    // RETURNING HERE, ABOVE `startCallRow` (step 10), IS LOAD-BEARING FOR
+    // GUARD 2 — see `caller-reputation.ts`'s `windowStart` doc comment ("a
+    // refused call writes no `calls` row at all"). A row written on a refusal
+    // carries no outcome, `calls.outcome` defaults to `abandoned`, and
+    // `countCallerHistorySince` counts anything that is not `spam` as
+    // `otherCalls` — so the act of blocking a caller would clear their block
+    // on the next call and Guard 2 would fire exactly once per number, in
+    // silence. Anything that needs to surface a decline to an operator goes
+    // through a log line, a metric or a new column, never through a `calls`
+    // row. Pinned by the `startCallRow` assertions on both decline tests.
+    if (blocked) {
+      log("declined: blocked caller", { callId, accountId, reason: blockReason });
+      return NextResponse.json({ ok: true, declined: blockReason });
     }
     if (!capsAllowed) {
       log("declined: call cap", { callId, accountId, reason: capsReason });
@@ -573,7 +830,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ ok: true });
     }
     log("call accepted", { callId });
-    after(() => runCallLifecycle({ callId, apiKey, greeting, callRowId, startedAt: now, toolCtx, finishCtx }));
+    after(() => runCallLifecycle({
+      callId, apiKey, greeting, languages: profile.languages,
+      callRowId, startedAt: now, toolCtx, finishCtx,
+    }));
 
     return NextResponse.json({ ok: true });
   } catch (e) {
