@@ -400,7 +400,7 @@ describe("texml route — repeat-offender refusal (Guard 2)", () => {
     expect(countCallerHistorySinceMock).toHaveBeenCalledWith(
       expect.anything(), "a1", SILENT_CALLER, expect.any(String),
     );
-    const since = new Date(countCallerHistorySinceMock.mock.calls[0][3]);
+    const since = new Date(countCallerHistorySinceMock.mock.calls[0]![3] as string);
     const days = (Date.now() - since.getTime()) / 86_400_000;
     expect(days).toBeGreaterThan(29.9);
     expect(days).toBeLessThan(30.1);
@@ -416,7 +416,7 @@ describe("texml route — repeat-offender refusal (Guard 2)", () => {
   it("the WINDOW knob reaches this gate — PHONE_SPAM_BLOCK_WINDOW_DAYS=7 reads 7 days back, not 30", async () => {
     process.env.PHONE_SPAM_BLOCK_WINDOW_DAYS = "7";
     await texmlXml({ To: LIVE_TO, From: SILENT_CALLER });
-    const since = new Date(countCallerHistorySinceMock.mock.calls[0][3]);
+    const since = new Date(countCallerHistorySinceMock.mock.calls[0]![3] as string);
     const days = (Date.now() - since.getTime()) / 86_400_000;
     expect(days).toBeGreaterThan(6.9);
     expect(days).toBeLessThan(7.1);
