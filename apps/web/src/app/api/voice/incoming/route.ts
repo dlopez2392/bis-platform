@@ -40,7 +40,8 @@
 //     that's why `runCallLifecycle` delays it by `PHONE_GREETING_DELAY_MS`
 //     (default 900ms) rather than firing it the instant the socket opens.
 //
-//  3. Fail-open, deliberately, in exactly two places: the call-cap counts
+//  3. Fail-open, deliberately, in exactly two places: the call-cap and
+//     caller-reputation counts
 //     (step 8 below — a DB blip must not turn away a real caller; losing a
 //     prospect costs more than paying for one extra robocall) and
 //     `startCallRow` (step 10 — a DB blip must not lose the call itself;
@@ -58,7 +59,7 @@ import OpenAI from "openai";
 import WebSocket from "ws";
 import {
   serviceDb, getPhoneNumberByE164, getVoiceProfile, countCallsSince, countCallsByCallerSince,
-  startCallRow, getOrCreateCalendar, deleteCallRow,
+  countCallerHistorySince, startCallRow, getOrCreateCalendar, deleteCallRow,
   type Branding,
 } from "@bis/db";
 import { extractCallerNumber, extractCalledNumber, sipHeaderNames } from "@/lib/voice/sip-headers";
@@ -69,6 +70,7 @@ import { emptyCallState } from "@/lib/voice/call-state";
 import { finishCall, type FinishContext } from "@/lib/voice/finish-call";
 import type { ToolContext } from "@/lib/voice/tools/registry";
 import { readLimitConfig, decideLimit, utcDayStart } from "@/lib/voice/call-limits";
+import { readReputationConfig, decideReputation, windowStart } from "@/lib/voice/caller-reputation";
 import { readSilentSeconds, isCallerAudioEvent, silenceGoodbye } from "@/lib/voice/silence-guard";
 import { configuredOrigin } from "@/lib/email/origin";
 import { brandDisplayName } from "@/lib/email/templates/shell";
@@ -615,9 +617,23 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ ok: true, declined: "disabled" });
     }
 
-    // --- Step 8: abuse caps, fail-open on a counting failure ---------------
+    // --- Step 8: abuse caps + caller reputation, fail-open on a counting
+    // failure ---------------------------------------------------------------
+    // Reputation is the SAME predicate the TeXML route speaks its refusal
+    // from (`caller-reputation.ts`), enforced here. TeXML is the UX layer and
+    // gives the caller words; this is the layer that makes the decision
+    // binding — exactly the split `callAnswerable` already documents, and the
+    // reason the OpenAI SIP endpoint being reachable by anyone who knows the
+    // project id does not matter. A decline is expressed by never accepting,
+    // so nothing is billed.
+    //
+    // The two verdicts read OPPOSITE senses — `decideLimit` reports `allowed`,
+    // `decideReputation` reports `blocked` — so each is read on its own field
+    // and never combined into one boolean.
     let capsAllowed = true;
     let capsReason: "per-number" | "per-account" | undefined;
+    let blocked = false;
+    let blockReason: "repeat-spam" | undefined;
     try {
       const dayStart = utcDayStart(now);
       const forAccount = await countCallsSince(db, accountId, dayStart);
@@ -627,8 +643,35 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         capsAllowed = false;
         capsReason = verdict.reason;
       }
+      // A withheld caller id has no reputation to read: passing the null
+      // through would score every anonymous caller on the account as one
+      // number. `now` is the same instant `utcDayStart` above used, so the
+      // window floor and the day floor come from one clock read.
+      if (callerNumber) {
+        const repCfg = readReputationConfig();
+        const history = await countCallerHistorySince(
+          db, accountId, callerNumber, windowStart(now, repCfg.windowDays),
+        );
+        const reputation = decideReputation(history, repCfg);
+        if (reputation.blocked) {
+          blocked = true;
+          blockReason = reputation.reason;
+        }
+      }
     } catch (e) {
-      log("call-limit counts failed — failing open", { callId, accountId, error: String(e) });
+      // Names BOTH reads this catch now covers: it is the only line an
+      // operator gets when Guard 2 silently stops firing, and "call-limit"
+      // alone would have pointed them at the wrong query (TeXML's own line
+      // says "cap/reputation" for the same reason).
+      log("call-limit/reputation counts failed — failing open", { callId, accountId, error: String(e) });
+    }
+    // Reputation before the cap: a caller already known to be a robot should
+    // not be described by the day's volume, and it is the more actionable of
+    // the two log lines. Matches the TeXML route's own ordering, so the two
+    // gates describe the same call the same way.
+    if (blocked) {
+      log("declined: blocked caller", { callId, accountId, reason: blockReason });
+      return NextResponse.json({ ok: true, declined: blockReason });
     }
     if (!capsAllowed) {
       log("declined: call cap", { callId, accountId, reason: capsReason });

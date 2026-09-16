@@ -35,6 +35,7 @@ const getPhoneNumberByE164Mock = vi.hoisted(() => vi.fn());
 const getVoiceProfileMock = vi.hoisted(() => vi.fn());
 const countCallsSinceMock = vi.hoisted(() => vi.fn());
 const countCallsByCallerSinceMock = vi.hoisted(() => vi.fn());
+const countCallerHistorySinceMock = vi.hoisted(() => vi.fn());
 const startCallRowMock = vi.hoisted(() => vi.fn());
 const getOrCreateCalendarMock = vi.hoisted(() => vi.fn());
 const deleteCallRowMock = vi.hoisted(() => vi.fn());
@@ -85,6 +86,7 @@ vi.mock("@bis/db", () => ({
   getVoiceProfile: (...a: unknown[]) => getVoiceProfileMock(...a),
   countCallsSince: (...a: unknown[]) => countCallsSinceMock(...a),
   countCallsByCallerSince: (...a: unknown[]) => countCallsByCallerSinceMock(...a),
+  countCallerHistorySince: (...a: unknown[]) => countCallerHistorySinceMock(...a),
   startCallRow: (...a: unknown[]) => startCallRowMock(...a),
   getOrCreateCalendar: (...a: unknown[]) => getOrCreateCalendarMock(...a),
   deleteCallRow: (...a: unknown[]) => deleteCallRowMock(...a),
@@ -137,6 +139,8 @@ beforeEach(() => {
   process.env.OPENAI_API_KEY = "sk-test";
   delete process.env.PHONE_MAX_CALLS_PER_NUMBER_PER_DAY;
   delete process.env.PHONE_MAX_CALLS_PER_ACCOUNT_PER_DAY;
+  delete process.env.PHONE_SPAM_BLOCK_THRESHOLD;
+  delete process.env.PHONE_SPAM_BLOCK_WINDOW_DAYS;
 
   unwrapMock.mockReset();
   afterMock.mockReset();
@@ -144,6 +148,9 @@ beforeEach(() => {
   getVoiceProfileMock.mockReset().mockResolvedValue(PROFILE_ROW);
   countCallsSinceMock.mockReset().mockResolvedValue(1);
   countCallsByCallerSinceMock.mockReset().mockResolvedValue(1);
+  // A caller with no history in the window — every test outside the
+  // reputation block below is unaffected by Guard 2.
+  countCallerHistorySinceMock.mockReset().mockResolvedValue({ spamCalls: 0, otherCalls: 0 });
   startCallRowMock.mockReset().mockResolvedValue({ id: "call-row-1" });
   getOrCreateCalendarMock.mockReset().mockResolvedValue(CALENDAR_ROW);
   deleteCallRowMock.mockReset().mockResolvedValue(undefined);
@@ -281,6 +288,116 @@ describe("POST /api/voice/incoming — step 8: call caps", () => {
     expect(json.declined).toBeUndefined();
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(afterMock).toHaveBeenCalledOnce();
+  });
+});
+
+// Guard 2 at the layer that ENFORCES. The TeXML route speaks the refusal from
+// the same `decideReputation` predicate; this one makes it binding, because
+// OpenAI's SIP endpoint is reachable by anyone who knows the project id. A
+// decline here is SILENT — 200, `acceptCall` never called, nothing billed.
+describe("POST /api/voice/incoming — step 8: caller reputation", () => {
+  it("step 8: a repeat silent caller is declined — never accepted, no lifecycle", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 3, otherCalls: 0 });
+    const res = await POST(req());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, declined: "repeat-spam" });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(afterMock).not.toHaveBeenCalled();
+  });
+
+  it("step 8: the same caller WITH a good outcome is accepted — the two gates agree", async () => {
+    // The identical history the TeXML test feeds its own gate. If these two
+    // ever disagree, the shared predicate has been bypassed on one side. This
+    // shape is real: in the live `calls` table one number is at once the top
+    // spam caller (4) and the top booker (13).
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 4, otherCalls: 13 });
+    const res = await POST(req());
+    const json = await res.json();
+    expect(json.declined).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("step 8: the history read failing fails OPEN — the call is accepted", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    countCallerHistorySinceMock.mockRejectedValue(new Error("boom"));
+    const res = await POST(req());
+    const json = await res.json();
+    expect(json.declined).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  // The account id is an ARGUMENT to the count, not an ambient fact: a read
+  // that forgot it would score this caller on every tenant's history at once.
+  it("step 8: the history is read for THIS account, THIS caller, over the rolling window", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(countCallerHistorySinceMock).toHaveBeenCalledWith(
+      expect.anything(), "acct1", "+19562921696", expect.any(String),
+    );
+    const since = new Date(countCallerHistorySinceMock.mock.calls[0]![3] as string);
+    const daysBack = (Date.now() - since.getTime()) / 86_400_000;
+    expect(daysBack).toBeGreaterThan(29.9);
+    expect(daysBack).toBeLessThan(30.1);
+  });
+
+  // Withheld caller id: there is no caller to have a reputation, and passing
+  // a null through to the count would score every anonymous caller on the
+  // account as if they were one number.
+  it("step 8: an anonymous caller is never scored — no history read, call accepted", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent({ callerNumber: null }));
+    const res = await POST(req());
+    const json = await res.json();
+    expect(json.declined).toBeUndefined();
+    expect(countCallerHistorySinceMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  // The blocked verdict must beat the cap to the log line, matching the TeXML
+  // route's own ordering — the two gates describe the same call the same way.
+  it("step 8: a blocked caller who is ALSO over the cap is declined as repeat-spam", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    countCallsByCallerSinceMock.mockResolvedValue(5);
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 3, otherCalls: 0 });
+    const res = await POST(req());
+    expect(await res.json()).toEqual({ ok: true, declined: "repeat-spam" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// The three counting seams above are `vi.mock`ed wholesale, so a `@bis/db`
+// export that does not exist would be invisible here AND swallowed by the
+// route's fail-open catch in production: Guard 2 would silently never fire.
+// This one test resolves the REAL module through the same specifier the route
+// imports, bypassing the mock.
+describe("POST /api/voice/incoming — the counting seam exists for real", () => {
+  it("countCallerHistorySince is genuinely exported by @bis/db and callable with the route's argument shape", async () => {
+    const real = await vi.importActual<typeof import("@bis/db")>("@bis/db");
+    expect(typeof real.countCallerHistorySince).toBe("function");
+
+    // A chainable Supabase stub: every builder method returns the chain, and
+    // awaiting it yields a count response. The SPAM query is the one that
+    // never calls `.neq`, so the two halves are told apart by the query the
+    // real function actually builds rather than by call order.
+    const makeChain = () => {
+      const seen: (string | symbol)[] = [];
+      const chain: unknown = new Proxy({}, {
+        get(_t, prop) {
+          if (prop === "then") {
+            const isOther = seen.includes("neq");
+            return (resolve: (v: unknown) => void) => resolve({ count: isOther ? 0 : 2, error: null });
+          }
+          return (...args: unknown[]) => { seen.push(prop); void args; return chain; };
+        },
+      });
+      return chain;
+    };
+    const stubDb = { from: () => makeChain() } as unknown as Parameters<typeof real.countCallerHistorySince>[0];
+
+    await expect(
+      real.countCallerHistorySince(stubDb, "acct1", "+19562921696", new Date().toISOString()),
+    ).resolves.toEqual({ spamCalls: 2, otherCalls: 0 });
   });
 });
 
