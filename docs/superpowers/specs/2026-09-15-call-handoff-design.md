@@ -87,7 +87,7 @@ a worthwhile follow-up, not a prerequisite — but note the asymmetry it leaves:
 a wrong `alert_phone` leaks a one-line notification, while a wrong
 `transfer_phone` connects a live stranger to whoever answers.
 
-**A transfer must refuse any number the account owns.** Setting
+**A transfer must refuse any number the account owns — in BOTH places, not one.** The check belongs at `setTransferPhone`'s call site *and* in the dial path. A CHECK constraint cannot express it, and a number saved before a `phone_numbers` row exists would pass the save-time guard and still loop at call time. Setting
 `transfer_phone` to the account's own BIS line would loop the caller back into
 Sofía. `refusesAlertLoop` (`lib/sms/sender.ts:71-79`) already performs exactly
 this check for alert texts, against every number the account owns in `testing`

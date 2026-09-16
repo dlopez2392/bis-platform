@@ -52,7 +52,7 @@ Both ends are ours. Nothing is inferred about the carrier's identifier semantics
 | `packages/db/src/voice.ts` | **Modify.** `CallOutcome` gains `transferred`; `startCallRow` accepts the token; new `markHandoffRequested`, `getCallByHandoffToken`, `setCallOutcome`. | 1 |
 | `packages/db/src/accounts.ts` | **Modify.** `getTransferPhone`, `setTransferPhone`. | 1 |
 | every `CallOutcome` consumer | **Modify.** Widening the union breaks the build until each is updated — they ship in one commit with it. | 1 |
-| `apps/web/src/lib/voice/call-state.ts` | **Modify.** `ServedAction` gains `"transferred"`; `withTransferred`. | 2 |
+| `apps/web/src/lib/voice/call-state.ts` | **Modify.** `ServedAction` gains `"transferred"`. **Moved into Task 1's fix wave** — widening the union is behaviour-neutral (proven: 2185 tests green, `tsc` clean), and splitting one fact across two tasks created a two-fields-one-producer hazard. | 1 |
 | `apps/web/src/lib/voice/handoff.ts` | **Create.** Pure: is a transfer possible, and to where. | 2 |
 | `apps/web/src/lib/voice/tools/schemas.ts` + `tools/registry.ts` | **Modify.** The `transfer_to_human` tool. | 3 |
 | `apps/web/src/lib/voice/call-events.ts` | **Modify.** `VoiceAction` gains `{ kind: "close" }`. | 3 |
@@ -71,7 +71,7 @@ Both ends are ours. Nothing is inferred about the carrier's identifier semantics
 **Files:**
 - Create: `packages/db/supabase/migrations/0037_call_handoff.sql`
 - Modify: `packages/db/src/voice.ts`, `packages/db/src/accounts.ts`
-- Modify (forced by the union widening): `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/calls/format.ts`, `apps/web/src/lib/messages.ts`, `apps/web/src/lib/voice/finish-call.ts`, `apps/web/src/lib/reports/weekly-metrics.ts`, `apps/web/src/lib/sms/alerts.ts`, `apps/web/src/lib/voice/summarize.ts`
+- Modify (**only `format.ts` is compiler-forced** — verified with `tsc`, not assumed; the rest are deliberate product decisions the compiler does NOT protect): `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/calls/format.ts`, `apps/web/src/lib/messages.ts`, `apps/web/src/lib/voice/finish-call.ts`, `apps/web/src/lib/reports/weekly-metrics.ts`, `apps/web/src/lib/sms/alerts.ts`, `apps/web/src/lib/voice/summarize.ts`
 - Test: `packages/db/src/test/voice.test.ts`, `packages/db/src/test/accounts.test.ts`, plus the existing tests of each consumer above
 
 **Interfaces:**
@@ -154,7 +154,7 @@ Work through the errors. Each site needs a real decision, not a placeholder:
 
 - `calls/format.ts`'s `OUTCOMES` — a new entry. Per DESIGN.md rule 3 it is dot + word, never colour alone. `transferred` is a **positive** outcome (the caller reached a person), so it belongs with `booked`/`lead`/`message` visually, not with the receding `abandoned`/`spam`. Use existing tokens only.
 - `lib/messages.ts` — the `calls.outcome.transferred` label. One word a business owner reads at 7 AM.
-- `finish-call.ts:106-107` `isMeaningful` — `transferred` IS meaningful. A customer reaching a human is exactly what a business wants alerted.
+- `finish-call.ts:106-107` `isMeaningful` — `transferred` is **NOT** meaningful. No staff alert and no alert text fire on a completed transfer: the decision runs inside `finishCall` at socket close, before the result route knows whether anyone picked up, so alerting would need a second send path inside a TeXML route — and a person who just spoke to the caller live already knows. Keep `isMeaningful` exported; a negative rule on a branch `classifyOutcome` never reaches is otherwise unfalsifiable.
 - `weekly-metrics.ts:35` `ANSWERED_OUTCOMES` — add it. A call where the customer reached a person is answered by any honest reading.
 - `lib/sms/alerts.ts` `composeCallAlertSms` — a fourth line beside the three at `:82-86`, same ASCII register.
 - `lib/voice/summarize.ts` — the deterministic fact line must say the transcript covers only the part before the handoff. Do not let a half-call summarise as a whole one.
@@ -192,7 +192,7 @@ git commit -m "feat(db): 0037 a transfer number, and an outcome for reaching a h
 - Produces:
   - `type HandoffTarget = { available: false; reason: "not-configured" | "own-number" } | { available: true; to: string }`
   - `resolveHandoffTarget(transferPhone: string | null, ownedNumbers: string[]): HandoffTarget` — `ownedNumbers` is every `testing` or `live` number on the account, from `listPhoneNumbersForAccount` filtered in JS
-  - `newHandoffToken(): string`
+  - `newHandoffToken(): string` — 🔴 **must be `crypto.randomUUID()` or 32 crypto-random bytes. NEVER `Math.random()`.** The only token generator in the tree today is a TEST fixture using `Math.random().toString(36)`; correct there, catastrophic if copied here. This token is a credential: it authorises dialling a stranger on the tenant's trunk.
   - `handoffLine(languages: "en" | "es" | "both"): string` — what Sofía says before the socket closes
   - `transferFailedLine(languages: "en" | "es" | "both"): string` — what the caller hears on a ring-out
   - `ServedAction` gains `"transferred"`; `withTransferred(state): CallState`
