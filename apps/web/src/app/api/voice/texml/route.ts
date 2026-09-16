@@ -1,5 +1,17 @@
 // Telnyx hits this for every inbound call on any client number and we answer
 // with TeXML that bridges the call to the platform's OpenAI SIP connector.
+//
+// IT IS NO LONGER "BRIDGE OR REFUSE". Since the handoff feature the bridge
+// also ARMS A CONTINUATION: `<Dial action=…>` names a second URL
+// (`/api/voice/texml/handoff`) that Telnyx fetches when the SIP leg ends,
+// carrying a token minted here and written in two places — onto the SIP URI
+// as `X-BIS-Handoff` and into that URL's query string. So this route decides
+// three things, not two: whether to answer at all, what to say if not, and
+// WHAT HAPPENS AFTER SOFÍA. Without the action, closing the AI socket ends
+// the call and a caller who was just told "one moment, I'll connect you"
+// hears the line go dead; the handoff route is what keeps them connected.
+// `dialXml` below owns the token; `xmlText` owns the reason both of those
+// values are escaped on the way into the document.
 // Telnyx TELLS US the dialed number (To param) — the SIP leg to OpenAI does
 // not reliably carry it — so we smuggle it onto the SIP URI as X-BIS-Called.
 // URI ?X-headers ride the INVITE and surface in the webhook's sip_headers.
@@ -228,7 +240,37 @@ function dialXml(calledE164: string | null, origin: string): string {
   ];
   const uri = `${base}?${params.join("&")}`;
   const action = `${origin}/api/voice/texml/handoff?t=${encodeURIComponent(token)}`;
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Dial answerOnBridge="true" action="${action}" method="POST"><Sip>${uri}</Sip></Dial></Response>`;
+  // xmlText on BOTH: the URI's `&` separators are the live bug, and the
+  // action URL is one appended query parameter away from the same one.
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Dial answerOnBridge="true" action="${xmlText(action)}" method="POST"><Sip>${xmlText(uri)}</Sip></Dial></Response>`;
+}
+
+/**
+ * Turns a VALUE into XML text. Everything this route interpolates into a
+ * document — a URI, an action URL, a phone number — goes through here, and
+ * the reason is one character.
+ *
+ * The SIP URI is CHARACTER DATA inside `<Sip>`, and a URI's own parameter
+ * separator is `&`, which in XML 1.0 §2.4 begins an entity reference: a
+ * strict parser reads `&X-BIS-Handoff` and reports a fatal error, a lenient
+ * one silently drops the token. The bridge carried one URI parameter and no
+ * separator until the handoff feature added a second, so the day that second
+ * parameter appeared, every inbound call emitted a document that is not XML.
+ * Nothing caught it: the whole suite asserted that a token was PRESENT, never
+ * that the document parses. `wellformed.test.ts` now parses every document
+ * this app emits, which is what makes the NEXT parameter safe.
+ *
+ * Escaping here rather than at the join keeps the URI a URI right up to the
+ * moment it becomes XML — the same reason `encodeURIComponent` is applied to
+ * the values and not to the whole string.
+ */
+function xmlText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 
 function xmlResponse(body: string): NextResponse {

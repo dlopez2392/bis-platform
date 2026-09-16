@@ -663,7 +663,12 @@ describe("call handoff accessors", () => {
       // the route that calls this has none — the token IS its credential. The
       // account_id coming BACK is what every read after it is scoped by.
       const found = await getCallByHandoffToken(db, token);
-      expect(found).toMatchObject({ id: call.id, account_id: accountId });
+      // `phone_number_id` is here for the handoff route's caller id: the
+      // business's handset must show THE NUMBER THIS CALLER DIALLED, and on an
+      // account owning two live numbers the number list cannot say which one
+      // rang — only the call row can. Dropping it from the select would send
+      // the route back to guessing.
+      expect(found).toMatchObject({ id: call.id, account_id: accountId, phone_number_id: num.id });
       expect(typeof found!.handoff_requested_at).toBe("string");
 
       // A token nobody minted resolves to nothing rather than to the newest

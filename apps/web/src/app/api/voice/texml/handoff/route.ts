@@ -37,6 +37,37 @@ export const runtime = "nodejs";
  */
 const RING_SECONDS = 20;
 
+/**
+ * How long after the caller asked for a person this token still opens the
+ * door. Ten minutes, and the number is a compromise between two concrete
+ * facts, not a round number.
+ *
+ * Why bounded at all: the token travels in the QUERY STRING of the `action`
+ * URL, so it is written to Telnyx's request logs and Vercel's access logs —
+ * places the `X-BIS-Handoff` SIP-header copy never reaches. A holder of a
+ * logged token can fetch this route and read back the account's private
+ * transfer number and one of its owned numbers. They cannot place a call:
+ * nothing here writes, and only Telnyx executes the TeXML we return. So the
+ * loss is DISCLOSURE OF A PRIVATE BUSINESS LINE, and until this check it was
+ * unbounded in time. `TELNYX_PUBLIC_KEY` is unset today, so there is no second
+ * gate underneath this one.
+ *
+ * Why ten and not two: the legitimate fetch happens seconds after the stamp —
+ * Sofía says her line, the socket closes, Telnyx fetches this URL. But the
+ * upper bound on the gap is the CALL's own length, not that handful of
+ * seconds: if the socket close were ever delayed, the AI leg still runs to
+ * `PHONE_MAX_CALL_SECONDS` (≤ 280s, ~4.7 minutes) before Telnyx comes here.
+ * Ten minutes clears that worst case with room for a carrier retry, and still
+ * turns a permanently-valid logged credential into a ten-minute one. Anything
+ * under five would hang up on a real caller.
+ *
+ * Deliberately NOT single-use, and the token is deliberately NOT cleared:
+ * Task 5's result route is pointed at `handoff-result?t=<the same token>`, so
+ * consuming it here would break that route before it is written. If one-shot
+ * consumption is ever wanted it belongs at the END of the result route.
+ */
+const MAX_TOKEN_AGE_MS = 10 * 60_000;
+
 const HANGUP = `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Hangup/></Response>`;
 
 function xmlResponse(body: string): NextResponse {
@@ -83,7 +114,21 @@ async function decide(token: string, origin: string): Promise<string | null> {
     return null;
   }
 
-  // 3. Both reads scoped to the account the token resolved to, together —
+  // 3. And they asked RECENTLY. Everything past this point discloses the
+  //    account's transfer number, so the gate sits above those reads, not
+  //    next to the dial. `Number.isFinite` catches an unparseable stamp and
+  //    refuses it: this route fails closed, and a timestamp we cannot read is
+  //    not a timestamp we can call fresh. A stamp in the future (clock skew
+  //    between the writer and this reader) is treated as fresh — negative age
+  //    is under the ceiling — because the alternative punishes the caller for
+  //    our own clocks.
+  const askedAt = Date.parse(call.handoff_requested_at);
+  if (!Number.isFinite(askedAt) || Date.now() - askedAt > MAX_TOKEN_AGE_MS) {
+    console.log(`handoff: call ${call.id}'s request is too old to act on — hanging up, accountId ${accountId}`);
+    return null;
+  }
+
+  // 4. Both reads scoped to the account the token resolved to, together —
   //    the caller is holding a silent line while this runs.
   //
   //    Owned numbers come from `listPhoneNumbersForAccount` filtered here to
@@ -97,25 +142,35 @@ async function decide(token: string, origin: string): Promise<string | null> {
     getTransferPhone(db, accountId),
     listPhoneNumbersForAccount(db, accountId),
   ]);
-  const owned = ownedRows
-    .filter((n) => n.status === "testing" || n.status === "live")
-    .map((n) => n.e164);
+  const usable = ownedRows.filter((n) => n.status === "testing" || n.status === "live");
+  const owned = usable.map((n) => n.e164);
   const target = resolveHandoffTarget(transferPhone, owned);
   if (!target.available) {
     console.log(`handoff: no target for call ${call.id} (${target.reason}) — hanging up, accountId ${accountId}`);
     return null;
   }
 
-  // `callerId` is one of OUR numbers, never the original caller's: Telnyx
-  // requires an owned number on the outbound leg (the same constraint
-  // `forwardXml` documents at texml/route.ts:182-184). A live number is
-  // preferred over a testing one so the business sees the number its
-  // customers know. Omitted rather than faked when there is none — an
-  // account with no numbers cannot have received this call in the first
-  // place, so this is belt-and-braces, but a wrong callerId is a rejected
-  // dial and dead air.
-  const callerId = (ownedRows.find((n) => n.status === "live")
-    ?? ownedRows.find((n) => n.status === "testing"))?.e164 ?? null;
+  // `callerId` is THE NUMBER THIS CALLER DIALLED — `calls.phone_number_id`,
+  // which is the only place that fact survives (the design says so twice:
+  // 2026-09-15-call-handoff-design.md:126 and :197-199, "the business sees
+  // the BIS number that was dialled"). Not "any number this account owns":
+  // an account with two live numbers would show its staff the first one in
+  // the list, a number that account's customers never call, on a call that
+  // came in on the second.
+  //
+  // It is still always one of OUR numbers, never the original caller's —
+  // Telnyx requires an owned number on the outbound leg (the same constraint
+  // `forwardXml` documents at texml/route.ts:182-184), which is why the
+  // dialled row must ALSO be testing/live here: a number since released or
+  // moved to another account is not ours to present, and Telnyx rejects the
+  // leg, which is dead air. The list is the fallback for exactly that case,
+  // live preferred over testing. Omitted rather than faked when there is
+  // nothing at all — an account with no numbers cannot have received this
+  // call, so that is belt-and-braces.
+  const dialled = usable.find((n) => n.id === call.phone_number_id);
+  const callerId = (dialled
+    ?? usable.find((n) => n.status === "live")
+    ?? usable.find((n) => n.status === "testing"))?.e164 ?? null;
   if (!callerId) {
     console.log(`handoff: dialling call ${call.id} with no owned caller id, accountId ${accountId}`);
   }

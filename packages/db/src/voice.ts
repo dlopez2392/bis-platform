@@ -205,15 +205,24 @@ export async function markHandoffRequested(
  * An unknown token returns null rather than throwing — a route must be able to
  * tell "no such handoff" (a stale link, a token from a call already cleaned
  * up) from a database that is broken, and they need different answers.
+ *
+ * `phone_number_id` comes back for the handoff route's caller id: the business
+ * must see THE NUMBER THIS CALLER DIALLED on its handset, and an account that
+ * owns two live numbers cannot get that from its number list — only the call
+ * row knows which one rang. `not null` since 0019, so it is always a string.
  */
 export async function getCallByHandoffToken(
   db: SupabaseClient, token: string,
-): Promise<{ id: string; account_id: string; handoff_requested_at: string | null } | null> {
+): Promise<{
+  id: string; account_id: string; phone_number_id: string; handoff_requested_at: string | null;
+} | null> {
   const { data, error } = await db.from("calls")
-    .select("id, account_id, handoff_requested_at")
+    .select("id, account_id, phone_number_id, handoff_requested_at")
     .eq("handoff_token", token).maybeSingle();
   if (error) throw new Error(`getCallByHandoffToken failed: ${error.message}`);
-  return (data as { id: string; account_id: string; handoff_requested_at: string | null } | null) ?? null;
+  return (data as {
+    id: string; account_id: string; phone_number_id: string; handoff_requested_at: string | null;
+  } | null) ?? null;
 }
 
 /**
