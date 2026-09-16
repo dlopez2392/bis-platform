@@ -318,12 +318,13 @@ describe("silence cutoff (Guard 1)", () => {
 
   it("a cut call still records as spam — Guard 1 changes the BILL, not the record", async () => {
     // Nobody speaks; advance past the window; let the close settle.
-    // `finishCall` is already mocked in this file — assert on what it received.
-    // The state handed to it must contain no caller transcript event, which is
-    // exactly the condition classifyOutcome reads to return "spam"
-    // (call-state.ts:62). Assert the CONDITION, not a re-derived label: the
-    // real classifyOutcome runs inside finishCall, so asserting the input is
-    // what proves the outcome rather than restating the mock.
+    // `finishCall` is MOCKED in this file, so the real classifyOutcome never
+    // runs here and this test cannot observe the outcome label at all —
+    // asserting "spam" against a mock would assert nothing. What it CAN prove
+    // is the state handed over: no caller transcript event, which is exactly
+    // the condition classifyOutcome reads to return "spam" (call-state.ts:62).
+    // The label itself is already covered by call-state.test.ts; this pins
+    // that Guard 1 does not disturb the input that produces it.
     expect(finishCallMock).toHaveBeenCalledTimes(1);
     const [stateArg] = finishCallMock.mock.calls[0];
     expect(stateArg.transcript.some((t: { role: string }) => t.role === "caller")).toBe(false);
