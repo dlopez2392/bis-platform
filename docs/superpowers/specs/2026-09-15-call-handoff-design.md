@@ -135,9 +135,13 @@ That is a second feature.
 **A fourth `ServedAction`: `"transferred"`.** That type exists for precisely
 this case — its own comment says it records "a tool outcome that means the
 receptionist actually DID something for this caller, even though the call ends
-with no booking, lead or message of its own" (`call-state.ts:15-18`). It is
-read by exactly one consumer, the text-back gate, which is exactly the thing
-that must not fire here.
+with no booking, lead or message of its own" (`call-state.ts:15-18`). It has
+two readers, and both matter: the text-back gate — the thing that must not
+fire here — and `summaryFactLine`, which uses it to say the transcript covers
+only the part before the handoff. One producer, one fact, two consumers. An
+earlier draft of this document said one reader; folding the summary's flag
+into the same field is what made it two, and that is better than the two
+separate fields it replaced.
 
 **`calls.outcome` gains `transferred`.** This needs a migration to widen the
 CHECK constraint (`0019_voice_core.sql:53-54`) and touches every consumer of
