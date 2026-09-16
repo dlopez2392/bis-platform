@@ -316,10 +316,20 @@ describe("silence cutoff (Guard 1)", () => {
     expect(socket.close).toHaveBeenCalled();
   });
 
-  it("a cut call still records as spam, with no summary and no text-back", async () => {
-    // finishCall is already mocked in this file — assert the recorded outcome
-    // is "spam" and that the summary/text-back paths were not invoked.
-    // Guard 1 must change the BILL, not the record.
+  it("a cut call still records as spam — Guard 1 changes the BILL, not the record", async () => {
+    // Nobody speaks; advance past the window; let the close settle.
+    // `finishCall` is already mocked in this file — assert on what it received.
+    // The state handed to it must contain no caller transcript event, which is
+    // exactly the condition classifyOutcome reads to return "spam"
+    // (call-state.ts:62). Assert the CONDITION, not a re-derived label: the
+    // real classifyOutcome runs inside finishCall, so asserting the input is
+    // what proves the outcome rather than restating the mock.
+    expect(finishCallMock).toHaveBeenCalledTimes(1);
+    const [stateArg] = finishCallMock.mock.calls[0];
+    expect(stateArg.transcript.some((t: { role: string }) => t.role === "caller")).toBe(false);
+    expect(stateArg.bookings).toEqual([]);
+    expect(stateArg.leads).toEqual([]);
+    expect(stateArg.messages).toEqual([]);
   });
 
   it("the cost cap keeps its own open-ended wrap-up instruction", async () => {
