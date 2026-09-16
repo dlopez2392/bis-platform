@@ -48,6 +48,25 @@ export interface CallState {
   transcript: TranscriptEvent[];
   /** See ServedAction. Append-only, deduplicated, never read by classifyOutcome. */
   served: ServedAction[];
+  /**
+   * The caller was handed to a person (0037's vocabulary).
+   *
+   * OPTIONAL and set by nobody yet — the route that performs the handoff
+   * arrives later and is what will write it. It exists now because it already
+   * has a consumer: `summaryFactLine` (./summarize.ts) has to say that the
+   * transcript below it covers only the part of the call BEFORE the handoff,
+   * and a model handed that same partial transcript has no way to know it was
+   * partial.
+   *
+   * Deliberately NOT a `ServedAction`. That array has exactly one reader — the
+   * missed-call text-back's gate — and folding a handoff into it would change
+   * that gate's behaviour in a task whose whole point is that behaviour does
+   * not change. Also deliberately not read by `classifyOutcome`, which still
+   * returns `abandoned` for a handed-off call at socket close: from the
+   * socket's point of view the caller did leave, and the handoff route
+   * upgrades the row afterwards through `setCallOutcome`.
+   */
+  handedOff?: boolean;
   summary?: string;
 }
 

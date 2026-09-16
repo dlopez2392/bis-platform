@@ -1038,6 +1038,11 @@ export const m = {
   "calls.outcome.message": "Message",
   "calls.outcome.abandoned": "Abandoned",
   "calls.outcome.spam": "Spam",
+  // The caller reached a person (0037). One plain word, like its five
+  // siblings — "Handed off" and "Escalated" are both things this product
+  // would say to itself, not things a business owner says about their own
+  // phone ringing.
+  "calls.outcome.transferred": "Transferred",
 
   // The missed-call text-back that never left the building. There is no retry
   // anywhere in that path — one cron, no queue — so saying so on the row the

@@ -97,14 +97,31 @@ const TEXTBACK_COOLDOWN_MS = TEXTBACK_COOLDOWN_HOURS * 60 * 60 * 1000;
  * conversation from the text-back leg further down, when the account has
  * opted in; that trail exists to hold the text, not to summon a human.)
  *
+ * `transferred` (0037) is meaningful: a customer who reached a human is
+ * exactly what a business wants told about. Note that `classifyOutcome`
+ * deliberately never RETURNS it — a handed-off call still classifies
+ * `abandoned` at socket close, and the handoff route upgrades the row
+ * afterwards — so this branch cannot fire through `finishCall` today. It is
+ * set correctly anyway, because the alternative is a rule that quietly says
+ * "a customer reaching a human is not worth an alert" waiting for the first
+ * caller that does route through here.
+ *
  * A type predicate (not a plain boolean) so the staff alert SMS leg below
  * can call this directly and get `outcome` narrowed to
  * `composeCallAlertSms`'s own literal union — no cast, and the two alert
  * legs (email above, SMS below) are provably gated on the identical set of
- * outcomes rather than two hand-copies of the same three strings.
+ * outcomes rather than two hand-copies of the same strings.
+ *
+ * EXPORTED, unlike its neighbours in this file, and only because of the
+ * paragraph above: `finishCall` cannot be driven to the `transferred` branch
+ * from any state, so the rule would be unfalsifiable if it could only be
+ * reached through `classifyOutcome`. finish-call.test.ts calls it directly.
  */
-function isMeaningful(outcome: CallOutcome): outcome is "booked" | "lead" | "message" {
-  return outcome === "booked" || outcome === "lead" || outcome === "message";
+export function isMeaningful(
+  outcome: CallOutcome,
+): outcome is "booked" | "lead" | "message" | "transferred" {
+  return outcome === "booked" || outcome === "lead"
+    || outcome === "message" || outcome === "transferred";
 }
 
 /** Split on the LAST space, so "Ana Maria Ruiz" keeps "Ana Maria" together

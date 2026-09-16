@@ -37,7 +37,7 @@ vi.mock("./summary-service", () => ({ generateSummary: summaryMocks.generateSumm
 
 import type { serviceDb } from "@bis/db";
 import { segmentsFor } from "@/lib/sms/segments";
-import { finishCall, type FinishContext } from "./finish-call";
+import { finishCall, isMeaningful, type FinishContext } from "./finish-call";
 import {
   emptyCallState, withLead, withMessage, withTranscript, withBooking, withBookingCancelled, withServed,
 } from "./call-state";
@@ -730,5 +730,36 @@ describe("finishCall — the staff alert SMS", () => {
     const r = await finishCall(leadState(), ctx, meta);
     expect(r).toMatchObject({ notified: true, stored: true });
     errSpy.mockRestore();
+  });
+});
+
+/**
+ * `isMeaningful` is the ONE definition of "an outcome worth a human seeing",
+ * shared by the staff alert email and the staff alert SMS — its type
+ * predicate narrows to `composeCallAlertSms`'s own parameter union so the two
+ * legs are provably gated on the same set rather than two hand-copies of it.
+ *
+ * It is exercised DIRECTLY here rather than through `finishCall`, and that is
+ * forced rather than preferred: `finishCall` derives its outcome from
+ * `classifyOutcome`, which deliberately never returns `transferred` (at socket
+ * close a handed-off call still classifies `abandoned` — from the socket's
+ * point of view the caller did leave — and the handoff route upgrades the row
+ * afterwards). So there is no state that drives `finishCall` to this branch,
+ * and the rule would otherwise be unfalsifiable.
+ */
+describe("isMeaningful", () => {
+  it("counts a transferred call as worth alerting — the customer reached a human", () => {
+    expect(isMeaningful("transferred")).toBe(true);
+  });
+
+  it("still counts booked, lead and message, and still refuses abandoned and spam", () => {
+    for (const outcome of ["booked", "lead", "message"] as const) {
+      expect(isMeaningful(outcome), outcome).toBe(true);
+    }
+    // Nobody picked those up, so there is no one to hand off to — the whole
+    // reason the predicate exists.
+    for (const outcome of ["abandoned", "spam"] as const) {
+      expect(isMeaningful(outcome), outcome).toBe(false);
+    }
   });
 });

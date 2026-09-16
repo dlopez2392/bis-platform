@@ -288,3 +288,39 @@ describe("composeAlertPhoneVerificationSms", () => {
     expect(segmentsFor(composeAlertPhoneVerificationSms("000000")).segments).toBe(1);
   });
 });
+
+/**
+ * 0037's sixth outcome reaches this composer through `isMeaningful`
+ * (lib/voice/finish-call.ts), whose type predicate narrows to exactly this
+ * function's parameter union — so the two widen together or the compiler
+ * says so.
+ */
+describe("composeCallAlertSms — transferred", () => {
+  it("names what happened in the same ASCII register as the other three, in one segment", () => {
+    const body = composeCallAlertSms("transferred", true);
+    expect(body.startsWith("New call:")).toBe(true);
+    expect(segmentsFor(body).segments).toBe(1);
+    // Plain ASCII: an accented character silently halves the segment budget
+    // (70 UCS-2 chars instead of 160 GSM-7), which is the whole reason the
+    // booking composer measures itself.
+    expect(body).toMatch(/^[\x20-\x7E]+$/);
+    // The caller's own number never rides a handset with no login — the same
+    // rule the three outcomes above are held to.
+    expect(body).not.toMatch(/\+?\d{7,}/);
+  });
+
+  it("says something DIFFERENT from the other three — four outcomes, four lines", () => {
+    // The pre-existing "distinguishes the three outcomes" test cannot catch a
+    // fourth entry that duplicates an existing line, because a Set of three
+    // still has size three.
+    const bodies = new Set(
+      (["booked", "lead", "message", "transferred"] as const).map((o) => composeCallAlertSms(o, true)),
+    );
+    expect(bodies.size).toBe(4);
+  });
+
+  it("honours hasEmailRecipients like its siblings", () => {
+    expect(composeCallAlertSms("transferred", false).toLowerCase()).not.toContain("email");
+    expect(composeCallAlertSms("transferred", true).toLowerCase()).toContain("email");
+  });
+});

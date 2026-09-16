@@ -34,3 +34,25 @@ describe("what counts as a lead from a call", () => {
     expect(countFromOutcomes(week, LEAD_OUTCOME)).toBe(0);
   });
 });
+
+/**
+ * 0037 adds a sixth outcome, and this constant is one of the two places in
+ * the product where a call outcome becomes a NUMBER a client reads. Getting
+ * it wrong here does not throw — it just under-reports the week.
+ */
+describe("a transferred call is an answered call", () => {
+  it("counts transferred alongside booked, lead and message", () => {
+    // The honest reading: the caller reached a person. Whatever else is true
+    // of that call, the phone was answered, and a client whose week contained
+    // four such calls must not be told it contained none.
+    expect(countFromOutcomes(
+      ["booked", "lead", "message", "transferred", "abandoned", "spam"], ANSWERED_OUTCOMES)).toBe(4);
+    expect(countFromOutcomes(["transferred", "transferred"], ANSWERED_OUTCOMES)).toBe(2);
+  });
+
+  it("is still not a lead — reaching a person captures no contact details", () => {
+    // Same distinction the booked/lead pair already draws: the two tallies
+    // come from ONE read of the same array and answer different questions.
+    expect(countFromOutcomes(["transferred", "transferred"], LEAD_OUTCOME)).toBe(0);
+  });
+});

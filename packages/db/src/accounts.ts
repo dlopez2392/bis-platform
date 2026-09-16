@@ -217,3 +217,50 @@ export async function setAlertPhone(
   if (!data?.length) throw new Error(`setAlertPhone: no account ${accountId}`);
   await emit(db, accountId, "account.alert_phone_updated", actorId, { alertPhone });
 }
+
+/**
+ * Reads `accounts.transfer_phone` (0037_call_handoff.sql) — the ONE number a
+ * caller who asks for a person is connected to. NULL means this account
+ * offers no transfer, and that is not a failure: it is the state every
+ * account is in today. Every consumer must treat a null return as "there is
+ * no path to a person on this account" and fall back to the message-and-
+ * callback the product has always offered, never as an error to surface.
+ */
+export async function getTransferPhone(
+  db: SupabaseClient, accountId: string,
+): Promise<string | null> {
+  const { data, error } = await db.from("accounts")
+    .select("transfer_phone").eq("id", accountId).maybeSingle();
+  if (error) throw new Error(`getTransferPhone failed: ${error.message}`);
+  return data?.transfer_phone ?? null;
+}
+
+/**
+ * Sets or clears `accounts.transfer_phone` (0037_call_handoff.sql). SERVER
+ * ONLY, agency-gated at the call site, exactly like `setAlertPhone` above and
+ * for a strictly stronger version of its reason: 0037 deliberately grants
+ * `authenticated` no UPDATE on this column, and whoever can write it decides
+ * who this account's LIVE CALLERS are connected to — on the tenant's own
+ * trunk, at the tenant's own per-minute cost. Nothing in the database stands
+ * behind the write below; the gate at the call site is the only thing that
+ * does.
+ *
+ * `transferPhone` is trusted to already be E.164 or null — callers run it
+ * through `toE164` first and pass `null` straight through for a blank field,
+ * never `""`: 0037's CHECK refuses the empty string outright so that NULL
+ * stays the only spelling of "off", and a caller that got this wrong sees the
+ * write fail loudly rather than the switch going ambiguous.
+ *
+ * `.select("id")` so the update reports WHICH rows it touched — PostgREST
+ * returns no error and no rows for an update matching nothing, which would
+ * otherwise read as a successful save that changed nothing.
+ */
+export async function setTransferPhone(
+  db: SupabaseClient, accountId: string, transferPhone: string | null, actorId: string,
+): Promise<void> {
+  const { data, error } = await db.from("accounts")
+    .update({ transfer_phone: transferPhone }).eq("id", accountId).select("id");
+  if (error) throw new Error(`setTransferPhone failed: ${error.message}`);
+  if (!data?.length) throw new Error(`setTransferPhone: no account ${accountId}`);
+  await emit(db, accountId, "account.transfer_phone_updated", actorId, { transferPhone });
+}

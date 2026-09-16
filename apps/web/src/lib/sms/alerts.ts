@@ -65,10 +65,15 @@ export function composeBookingAlertSms(
   return hasEmailRecipients ? `${fallback}${EMAIL_HINT}` : fallback;
 }
 
-const CALL_ALERT_LEAD: Record<"booked" | "lead" | "message", string> = {
+const CALL_ALERT_LEAD: Record<"booked" | "lead" | "message" | "transferred", string> = {
   booked: "New call: booked a meeting.",
   lead: "New call: a lead came in.",
   message: "New call: left a message.",
+  // 0037's sixth outcome. Same grammar as its three siblings — each says what
+  // the CALLER got — and deliberately not "transferred to you": the transfer
+  // number and the alert number are separate columns on `accounts` and may
+  // well be separate people, so naming the recipient would be a guess.
+  transferred: "New call: reached a person.",
 };
 
 /** One line naming what happened, plain ASCII, always one segment — the
@@ -80,7 +85,7 @@ const CALL_ALERT_LEAD: Record<"booked" | "lead" | "message", string> = {
  *  an email that was never sent (alert-send-report follow-up review, finding
  *  3). */
 export function composeCallAlertSms(
-  outcome: "booked" | "lead" | "message", hasEmailRecipients: boolean,
+  outcome: "booked" | "lead" | "message" | "transferred", hasEmailRecipients: boolean,
 ): string {
   const lead = CALL_ALERT_LEAD[outcome];
   return hasEmailRecipients ? `${lead}${EMAIL_HINT}` : lead;
