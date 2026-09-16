@@ -744,12 +744,23 @@ describe("finishCall — the staff alert SMS", () => {
  * `classifyOutcome`, which deliberately never returns `transferred` (at socket
  * close a handed-off call still classifies `abandoned` — from the socket's
  * point of view the caller did leave — and the handoff route upgrades the row
- * afterwards). So there is no state that drives `finishCall` to this branch,
- * and the rule would otherwise be unfalsifiable.
+ * afterwards). So there is no state that drives `finishCall` to this branch.
+ * That is exactly why the predicate is exported: a NEGATIVE rule on a branch
+ * nothing reaches is unfalsifiable through `finishCall` in precisely the way a
+ * positive one would be, and the export is what makes it testable at all.
  */
 describe("isMeaningful", () => {
-  it("counts a transferred call as worth alerting — the customer reached a human", () => {
-    expect(isMeaningful("transferred")).toBe(true);
+  it("does NOT count a transferred call — a completed transfer fires no staff alert", () => {
+    // Two reasons, both from the design spec
+    // (docs/superpowers/specs/2026-09-15-call-handoff-design.md). Structural:
+    // the alert decision happens inside `finishCall` at socket close, BEFORE
+    // the result route knows whether anyone actually picked up — alerting on a
+    // transfer would mean a second send path inside a TeXML route, duplicating
+    // the email and SMS machinery this repo keeps to exactly one. And about
+    // what an alert is for: a person at the business just spoke to this caller
+    // live, so they already know. An alert exists for work that might be
+    // MISSED; telling someone about the call they personally answered is noise.
+    expect(isMeaningful("transferred")).toBe(false);
   });
 
   it("still counts booked, lead and message, and still refuses abandoned and spam", () => {

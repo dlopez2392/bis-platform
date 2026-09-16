@@ -97,14 +97,19 @@ const TEXTBACK_COOLDOWN_MS = TEXTBACK_COOLDOWN_HOURS * 60 * 60 * 1000;
  * conversation from the text-back leg further down, when the account has
  * opted in; that trail exists to hold the text, not to summon a human.)
  *
- * `transferred` (0037) is meaningful: a customer who reached a human is
- * exactly what a business wants told about. Note that `classifyOutcome`
- * deliberately never RETURNS it — a handed-off call still classifies
- * `abandoned` at socket close, and the handoff route upgrades the row
- * afterwards — so this branch cannot fire through `finishCall` today. It is
- * set correctly anyway, because the alternative is a rule that quietly says
- * "a customer reaching a human is not worth an alert" waiting for the first
- * caller that does route through here.
+ * `transferred` (0037) is deliberately NOT meaningful, and that is the
+ * spec's binding decision rather than an omission
+ * (docs/superpowers/specs/2026-09-15-call-handoff-design.md). Two reasons.
+ * Structural: this decision is made inside `finishCall`, which runs at socket
+ * close — BEFORE the result route knows whether anyone actually picked up. An
+ * alert on a transfer would therefore have to be a SECOND send path living
+ * inside a TeXML route, duplicating the email and SMS machinery this file is
+ * the only copy of. And about what an alert is for: a person at the business
+ * just spoke to this caller live, so they already know. An alert exists for
+ * work that might be MISSED; telling someone about the call they personally
+ * answered is noise. (A ring-out — nobody picked up — is the case that does
+ * go unnoticed, and it records as `abandoned`, which is the truth, and takes
+ * whatever path this product already gives an abandoned call.)
  *
  * A type predicate (not a plain boolean) so the staff alert SMS leg below
  * can call this directly and get `outcome` narrowed to
@@ -113,15 +118,17 @@ const TEXTBACK_COOLDOWN_MS = TEXTBACK_COOLDOWN_HOURS * 60 * 60 * 1000;
  * outcomes rather than two hand-copies of the same strings.
  *
  * EXPORTED, unlike its neighbours in this file, and only because of the
- * paragraph above: `finishCall` cannot be driven to the `transferred` branch
- * from any state, so the rule would be unfalsifiable if it could only be
- * reached through `classifyOutcome`. finish-call.test.ts calls it directly.
+ * paragraph above: `classifyOutcome` never returns `transferred` (a
+ * handed-off call still classifies `abandoned` at socket close), so no state
+ * drives `finishCall` to that outcome — which makes the NEGATIVE rule
+ * unfalsifiable through `finishCall` in exactly the way a positive one would
+ * be. The export is what makes it testable at all; finish-call.test.ts calls
+ * it directly.
  */
 export function isMeaningful(
   outcome: CallOutcome,
-): outcome is "booked" | "lead" | "message" | "transferred" {
-  return outcome === "booked" || outcome === "lead"
-    || outcome === "message" || outcome === "transferred";
+): outcome is "booked" | "lead" | "message" {
+  return outcome === "booked" || outcome === "lead" || outcome === "message";
 }
 
 /** Split on the LAST space, so "Ana Maria Ruiz" keeps "Ana Maria" together

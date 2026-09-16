@@ -65,15 +65,20 @@ export function composeBookingAlertSms(
   return hasEmailRecipients ? `${fallback}${EMAIL_HINT}` : fallback;
 }
 
-const CALL_ALERT_LEAD: Record<"booked" | "lead" | "message" | "transferred", string> = {
+/**
+ * Three outcomes, not six. 0037's `transferred` is deliberately absent: a
+ * completed transfer fires no staff alert at all
+ * (docs/superpowers/specs/2026-09-15-call-handoff-design.md), because the
+ * person who took the call live already knows, and because the decision is
+ * made at socket close before anyone knows whether the transfer connected.
+ * `isMeaningful` (lib/voice/finish-call.ts) is the gate, and its type
+ * predicate narrows to exactly this union — the two widen together or the
+ * compiler says so.
+ */
+const CALL_ALERT_LEAD: Record<"booked" | "lead" | "message", string> = {
   booked: "New call: booked a meeting.",
   lead: "New call: a lead came in.",
   message: "New call: left a message.",
-  // 0037's sixth outcome. Same grammar as its three siblings — each says what
-  // the CALLER got — and deliberately not "transferred to you": the transfer
-  // number and the alert number are separate columns on `accounts` and may
-  // well be separate people, so naming the recipient would be a guess.
-  transferred: "New call: reached a person.",
 };
 
 /** One line naming what happened, plain ASCII, always one segment — the
@@ -85,7 +90,7 @@ const CALL_ALERT_LEAD: Record<"booked" | "lead" | "message" | "transferred", str
  *  an email that was never sent (alert-send-report follow-up review, finding
  *  3). */
 export function composeCallAlertSms(
-  outcome: "booked" | "lead" | "message" | "transferred", hasEmailRecipients: boolean,
+  outcome: "booked" | "lead" | "message", hasEmailRecipients: boolean,
 ): string {
   const lead = CALL_ALERT_LEAD[outcome];
   return hasEmailRecipients ? `${lead}${EMAIL_HINT}` : lead;
