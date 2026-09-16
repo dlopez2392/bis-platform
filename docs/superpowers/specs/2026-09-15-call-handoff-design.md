@@ -26,9 +26,18 @@ it needs neither.
 **`<Dial>` takes an `action` URL**, requested when the dial ends, returning a
 fresh TeXML document that continues the call. So when the AI's SIP leg hangs
 up, the caller stays connected and we get a new decision point. The action
-callback carries `CallSid`, `ParentCallSid`, `DialCallStatus`
-(`completed` / `no-answer` / `busy` / `failed`), `DialCallDuration` and an
-error code.
+callback carries `CallSid`, `ParentCallSid`, `DialCallStatus`,
+`DialCallDuration` and an error code.
+
+`DialCallStatus` values: `completed`, `answered`, `no-answer`, `busy`,
+`failed`, `canceled`. **The set that means a human was reached is
+`{completed, answered}`** — `answered` is in it on purpose, because treating
+it as a failure would tell a caller who had just finished talking to the
+business owner that nobody could be reached, and file the call as abandoned.
+Everything else, `canceled` included, is "reached nobody". The route
+normalises the carrier's string (trim + lowercase) before comparing, because
+the exact casing Telnyx sends is unverified until a real call. Do not narrow
+this set back to the four values an earlier draft of this paragraph listed.
 
 `<Dial>` also takes `callerId`, `timeout` (5–120s, default 30), `timeLimit`,
 and **`passDiversionHeader`** — which matters, because Telnyx validates
@@ -191,6 +200,35 @@ A ring-out is the case that genuinely goes unnoticed — and it records as
 does with an abandoned call. Alerting specifically on a failed transfer is a
 reasonable future refinement; it is not this version.
 
+**Outcome precedence, and the bounds on the one write (decided 2026-09-16).**
+The result route holds the only write in this feature, and until this decision
+nothing said what should happen when the row already holds a better fact. A
+caller can book an appointment and THEN ask for a person: socket close stamps
+`booked`, and the result route arrives claiming `transferred`.
+
+The rule: **an outcome that records what the caller GOT outranks one that
+records where the call WENT.** `booked`, `lead` and `message` are never
+overwritten by `transferred` — the booking is the thing the client pays for,
+and a transfer afterwards does not undo it. `transferred` is protected from
+itself as well, which makes a carrier retry or a replayed callback a no-op
+rather than a second write. What `transferred` may upgrade is `abandoned` and
+`spam`: `abandoned` means "we cannot tell this caller got anything", which a
+dial that reached a person corrects, and that upgrade is the reason the route
+exists.
+
+Two bounds sit above that write, because the `handoff_requested_at` gate
+proves only that the caller ASKED, never that anyone was DIALLED, and with
+`TELNYX_PUBLIC_KEY` unset the route believes the `DialCallStatus` it is sent.
+A token harvested from a carrier or Vercel access log would otherwise stamp
+`transferred` on a call the parent route refused to dial at all. So: the write
+is refused past **four hours** from `handoff_requested_at` — generous on
+purpose, since this callback fires when the HUMAN conversation ENDS and the
+longest realistic one is well under an hour, versus the parent route's ten
+minutes to start a dial — and refused on an unreadable timestamp. **The bound
+is on the WRITE only**: past it a failed dial still speaks, because a stale
+stamp costs a wrong row and silence after "putting you through" costs the
+caller.
+
 **The transcript covers only the AI half, and the call row must not pretend
 otherwise.** Transcript capture lives on the OpenAI socket
 (`call-events.ts:44-57`); once the call leaves it, nothing is recorded,
@@ -202,7 +240,12 @@ line rather than summarising half a call as if it were whole.
 
 - **Nobody answers.** The caller was told they are being put through, so
   silence is the one unacceptable outcome. `timeout="20"` then one spoken line,
-  and the call records `transferred` with the ring-out noted. Letting the
+  and **the call stays exactly as `finishCall` recorded it — `abandoned`.
+  Nothing is stamped; only the spoken line differs.** (This bullet said the
+  call "records `transferred` with the ring-out noted" until 2026-09-16, which
+  contradicted step 6 of the flow above, the code, and this document's own
+  paragraph two screens up. Building from it would ship exactly the lie the
+  design forbids.) Letting the
   existing missed-call text-back fire here is a natural follow-up — it is
   genuinely a missed call — but it runs from `finishCall` on a socket that has
   already closed, so it is plumbing this version does not do.

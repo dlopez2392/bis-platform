@@ -45,6 +45,55 @@ export const runtime = "nodejs";
  */
 const REACHED_A_PERSON = new Set(["completed", "answered"]);
 
+/**
+ * How long after the caller asked for a person this route will still WRITE.
+ *
+ * The gate below it (`handoff_requested_at` is set) proves the caller ASKED.
+ * It does not prove anyone was DIALLED — the parent route can refuse, on no
+ * transfer number, on an own-number loop, or on its own ten-minute expiry —
+ * and with `TELNYX_PUBLIC_KEY` unset this route accepts
+ * `DialCallStatus=completed` from whoever POSTs it. A token harvested from a
+ * carrier or Vercel access log could therefore stamp `transferred` on a call
+ * nobody was ever put through on, forever. That is a lie on the client's own
+ * dashboard, which is the one place they see what this product did for them.
+ *
+ * Four hours, and deliberately NOT the parent's ten minutes. This request
+ * fires when the HUMAN conversation ENDS, so the legitimate gap is "however
+ * long two people talked", plus the handful of seconds before the dial and a
+ * carrier retry. The longest realistic transferred conversation for the
+ * businesses this serves is under an hour; four clears that several times
+ * over, so no real transfer is ever refused, while a leaked token stops being
+ * a permanent credential and becomes a same-morning one.
+ *
+ * It bounds the WRITE ONLY. Past it the caller is still spoken to on a failed
+ * dial: a stale stamp costs a wrong row, and silence after "putting you
+ * through" is the one ending this route exists to prevent.
+ */
+const MAX_WRITE_AGE_MS = 4 * 60 * 60_000;
+
+/**
+ * Outcomes that OUTRANK `transferred` and are never overwritten by it.
+ *
+ * The precedence question is real: a caller can book an appointment and THEN
+ * ask for a person, which stamps `booked` at socket close and arrives here
+ * claiming `transferred`. The rule, decided rather than left to whichever
+ * write lands last: an outcome recording what the caller GOT beats one
+ * recording where the call WENT. The booking is the thing the client pays for
+ * and a transfer afterwards does not undo it; the same holds for a captured
+ * lead and a taken message.
+ *
+ * `transferred` is in the set as itself, which makes a replayed callback — a
+ * carrier retry, or the same logged token POSTed four times — a no-op instead
+ * of four writes.
+ *
+ * What it leaves upgradable is `abandoned` and `spam`, and `abandoned` is
+ * the case this whole feature exists for: it means "we cannot tell that this
+ * caller got anything", which a dial that reached a person corrects. A value
+ * outside the six (or a row that has vanished) is treated as upgradable too,
+ * so an unrecognised outcome loses a true transfer to nothing.
+ */
+const OUTRANKS_TRANSFERRED = new Set(["booked", "lead", "message", "transferred"]);
+
 const HANGUP = `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Hangup/></Response>`;
 
 function xmlResponse(body: string): NextResponse {
@@ -63,6 +112,15 @@ function xmlResponse(body: string): NextResponse {
  * tests stayed green through it. The E164 columns interpolated elsewhere in
  * this directory are safe unescaped because a CHECK constraint bounds them;
  * a sentence is bounded by nothing.
+ *
+ * Three entities, not five: `"` and `'` are only special inside an ATTRIBUTE
+ * VALUE, and this string is only ever character data between `<Say>` and
+ * `</Say>`. The sibling at `../route.ts` (`xmlText`) escapes all five because
+ * the same function there also feeds an attribute — `action="${...}"` — where
+ * a quote would end the attribute early. Neither is a subset of the other by
+ * accident: the rule is TEXT gets three, ANYTHING THAT CAN LAND IN AN
+ * ATTRIBUTE gets five. If a third site ever needs one, promote `xmlText` into
+ * a module both directories import rather than copying either again.
  */
 function escapeXmlText(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -90,7 +148,7 @@ function failedXml(languages: "en" | "es" | "both"): string {
 async function decide(token: string, status: string): Promise<string> {
   // Lazy import: a module-scope DB import breaks `next build` during
   // page-data collection (the documented trap this whole directory obeys).
-  const { serviceDb, getCallByHandoffToken, getVoiceProfile, setCallOutcome } = await import("@bis/db");
+  const { serviceDb, getCallByHandoffToken, getCall, getVoiceProfile, setCallOutcome } = await import("@bis/db");
   const db = serviceDb();
 
   // 1. The token is the credential, and this lookup is the only source of
@@ -109,13 +167,13 @@ async function decide(token: string, status: string): Promise<string> {
   //    stamping it would put a transfer on the client's dashboard that never
   //    happened.
   //
-  //    DELIBERATELY NOT the parent route's ten-minute recency gate, and not
-  //    any other clock bound. This request fires when the HUMAN conversation
-  //    ends, which can be an hour after the caller asked; measuring from
-  //    `handoff_requested_at` would hang up on a long, successful transfer
-  //    and record it as abandoned. A bound measured from this route's own
-  //    fact — the moment the transfer dial started — would be legitimate,
-  //    but nothing persists that moment, so there is no honest clock to read.
+  //    DELIBERATELY NOT the parent route's ten-minute recency gate: this
+  //    request fires when the HUMAN conversation ends, which can be most of
+  //    an hour after the caller asked, so ten minutes would hang up on a long
+  //    successful transfer. The write gets its own, far more generous clock
+  //    (`MAX_WRITE_AGE_MS`) below, inside the branch that writes — the SPOKEN
+  //    line is bounded by nothing, because words cost nothing to be wrong
+  //    about and silence costs everything.
   if (!call.handoff_requested_at) {
     console.log(`handoff-result: call ${call.id} never asked for a person — hanging up, accountId ${accountId}`);
     return HANGUP;
@@ -125,12 +183,37 @@ async function decide(token: string, status: string): Promise<string> {
     // The caller is on a line whose far end has already hung up; this
     // document only ends our side. No `<Say>`: they just finished a real
     // conversation and an apology now would be nonsense.
-    //
-    // Its own try/catch. A failure here is the quietest kind this product
-    // has — the transfer WORKED, the caller was served, and only the row
-    // stays wrong — so it has to be loud in the log and must not turn into
-    // the outer catch's anonymous line.
+
+    // 3. And the ask is recent enough that a dial could plausibly still be
+    //    ending. `Number.isFinite` refuses an unreadable stamp for the same
+    //    reason the parent route does: a timestamp we cannot read is not one
+    //    we can call fresh, and this is the write. A stamp in the future
+    //    (clock skew) is treated as fresh — negative age is under the ceiling
+    //    — because the alternative punishes a real caller for our clocks.
+    const askedAt = Date.parse(call.handoff_requested_at);
+    if (!Number.isFinite(askedAt) || Date.now() - askedAt > MAX_WRITE_AGE_MS) {
+      console.log(`handoff-result: call ${call.id} reached a person (${status}) too long after the ask to record — hanging up, accountId ${accountId}`);
+      return HANGUP;
+    }
+
+    // Its own try/catch, around the read as well as the write. A failure here
+    // is the quietest kind this product has — the transfer WORKED, the caller
+    // was served, and only the row stays wrong — so it has to be loud in the
+    // log and must not turn into the outer catch's anonymous line. Failing
+    // closed on the READ costs exactly what a failed write costs (a row that
+    // keeps saying `abandoned`), and the alternative is overwriting an
+    // outcome we could not check.
     try {
+      // 4. What the row already says decides whether this stamp is an upgrade
+      //    or a downgrade. Account-scoped to the account the TOKEN resolved
+      //    to, like every other read in here. It costs one extra round trip
+      //    on a call whose far end has already hung up and whose next
+      //    document is `<Hangup/>`, so nobody is listening to it.
+      const existing = await getCall(db, accountId, call.id);
+      if (existing && OUTRANKS_TRANSFERRED.has(existing.outcome)) {
+        console.log(`handoff-result: call ${call.id} already recorded ${existing.outcome} — leaving it, accountId ${accountId}`);
+        return HANGUP;
+      }
       await setCallOutcome(db, accountId, call.id, "transferred");
       console.log(`handoff-result: call ${call.id} reached a person (${status}), accountId ${accountId}`);
     } catch (e) {

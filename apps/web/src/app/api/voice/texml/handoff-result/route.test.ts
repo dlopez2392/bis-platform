@@ -7,6 +7,10 @@ import { POST } from "./route";
 const getCallByHandoffTokenMock = vi.hoisted(() => vi.fn());
 const setCallOutcomeMock = vi.hoisted(() => vi.fn());
 const getVoiceProfileMock = vi.hoisted(() => vi.fn());
+// The row as it stands when this callback arrives: `finishCall` has already
+// classified it. The stamp is an UPGRADE of that value, so what the row
+// currently holds is what decides whether the upgrade is honest.
+const getCallMock = vi.hoisted(() => vi.fn());
 // Ordering ledger. `toHaveBeenCalledWith` is "was called at least once
 // with", so it cannot tell a route that resolved the call first from one
 // that stamped an outcome before it knew whose call this was.
@@ -25,6 +29,10 @@ vi.mock("@bis/db", () => ({
   getVoiceProfile: (...a: unknown[]) => {
     events.push("profile");
     return getVoiceProfileMock(...a);
+  },
+  getCall: (...a: unknown[]) => {
+    events.push("call");
+    return getCallMock(...a);
   },
 }));
 
@@ -85,6 +93,7 @@ beforeEach(() => {
   getCallByHandoffTokenMock.mockReset().mockResolvedValue(REQUESTED);
   setCallOutcomeMock.mockReset().mockResolvedValue(undefined);
   getVoiceProfileMock.mockReset().mockResolvedValue(PROFILE);
+  getCallMock.mockReset().mockResolvedValue({ id: "c1", account_id: "acct1", outcome: "abandoned" });
   transferFailedLineMock.mockReset().mockImplementation((l: "en" | "es" | "both") => realLine.fn!(l));
 });
 
@@ -245,11 +254,24 @@ describe("voice texml handoff-result route", () => {
     expect(xml).toContain("Sorry, we weren't able to reach anyone just now.");
   });
 
-  it("answers 200 and XML on every path", async () => {
-    const res = await POST(req("tok_abc", { DialCallStatus: "no-answer" }));
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toContain("application/xml");
-  });
+  // A 5xx or a non-XML body to Telnyx mid-call is the carrier's own error
+  // handling in the caller's ear. The previous version of this test was named
+  // "every path" and exercised the ring-out one.
+  it.each([
+    ["a reached transfer", "tok_abc", { DialCallStatus: "completed" }],
+    ["a ring-out", "tok_abc", { DialCallStatus: "no-answer" }],
+    ["a status nobody planned for", "tok_abc", { DialCallStatus: "canceled" }],
+    ["a missing status", "tok_abc", {}],
+    ["a blank token", "   ", { DialCallStatus: "completed" }],
+    ["no token at all", undefined, { DialCallStatus: "completed" }],
+  ] as [string, string | undefined, Record<string, string>][])(
+    "answers 200 and XML on %s",
+    async (_name, token, body) => {
+      const res = await POST(req(token, body));
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("application/xml");
+    },
+  );
 
   it("escapes the spoken line — copy is character data, and a raw '&' is fatal", async () => {
     // `transferFailedLine`'s text carries no `&` TODAY. It is copy, so the
@@ -266,6 +288,102 @@ describe("voice texml handoff-result route", () => {
     expect(xml).toContain("Tom &amp; Jerry");
     expect(xml).not.toContain("Tom & Jerry");
     expect(xml).toContain("&lt;are&gt;");
+  });
+
+  // ---- What the write itself is allowed to do ----
+  //
+  // The gates above prove the caller ASKED for a person. None of them proves
+  // anyone was DIALLED, and with `TELNYX_PUBLIC_KEY` unset a token harvested
+  // from a carrier or Vercel access log reaches this route holding nothing
+  // else. The checks below are what stands between that token and a false
+  // `transferred` on the client's own dashboard.
+
+  it("a transfer that ends a month after the caller asked is not stamped", async () => {
+    // The probe that found this: a 30-day-old token still wrote.
+    getCallByHandoffTokenMock.mockResolvedValue({
+      ...REQUESTED, handoff_requested_at: new Date(Date.now() - 30 * 24 * 3_600_000).toISOString(),
+    });
+    const xml = await post("tok_abc", { DialCallStatus: "completed" });
+    expect(setCallOutcomeMock).not.toHaveBeenCalled();
+    expect(xml).toContain("<Hangup");
+  });
+
+  it("a ninety-minute conversation is still stamped — the ceiling clears a real transfer", async () => {
+    // The ceiling is generous ON PURPOSE. This request fires when the HUMAN
+    // conversation ends; a bound tight enough to be a security control would
+    // file a long, successful transfer as abandoned.
+    getCallByHandoffTokenMock.mockResolvedValue({
+      ...REQUESTED, handoff_requested_at: new Date(Date.now() - 90 * 60_000).toISOString(),
+    });
+    await post("tok_abc", { DialCallStatus: "completed" });
+    expect(setCallOutcomeMock).toHaveBeenCalledWith(expect.anything(), "acct1", "c1", "transferred");
+  });
+
+  it("an unreadable ask timestamp refuses the stamp", async () => {
+    getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, handoff_requested_at: "whenever" });
+    await post("tok_abc", { DialCallStatus: "completed" });
+    expect(setCallOutcomeMock).not.toHaveBeenCalled();
+  });
+
+  it("past the write ceiling a failed dial still SPEAKS — the bound is on the write, not the words", async () => {
+    getCallByHandoffTokenMock.mockResolvedValue({
+      ...REQUESTED, handoff_requested_at: new Date(Date.now() - 30 * 24 * 3_600_000).toISOString(),
+    });
+    const xml = await post("tok_abc", { DialCallStatus: "no-answer" });
+    expect(xml).toContain("Sorry, we weren't able to reach anyone just now.");
+  });
+
+  it("a replayed callback does not write again — an already-transferred row is left alone", async () => {
+    // The probe that found this: four POSTs produced four writes.
+    getCallMock.mockResolvedValue({ id: "c1", account_id: "acct1", outcome: "transferred" });
+    await post("tok_abc", { DialCallStatus: "completed" });
+    expect(setCallOutcomeMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["booked", "lead", "message"])("a %s call is not overwritten by a transfer", async (outcome) => {
+    // Precedence, decided rather than left to whichever write lands last: an
+    // outcome that records what the caller GOT outranks one that records
+    // where the call went. A booking followed by a transfer is still a
+    // booking, and the booking is the thing the client is paying for.
+    getCallMock.mockResolvedValue({ id: "c1", account_id: "acct1", outcome });
+    await post("tok_abc", { DialCallStatus: "completed" });
+    expect(setCallOutcomeMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["abandoned", "spam"])("a %s call IS upgraded to transferred", async (outcome) => {
+    // The other half of the same rule: `abandoned` is precisely "we cannot
+    // tell that this caller got anything", and a reached transfer corrects it.
+    getCallMock.mockResolvedValue({ id: "c1", account_id: "acct1", outcome });
+    await post("tok_abc", { DialCallStatus: "completed" });
+    expect(setCallOutcomeMock).toHaveBeenCalledWith(expect.anything(), "acct1", "c1", "transferred");
+  });
+
+  it("reads the outcome it is about to overwrite for the TOKEN's account", async () => {
+    await post("tok_abc", { DialCallStatus: "completed", AccountSid: "acct-ATTACKER" });
+    expect(getCallMock).toHaveBeenCalledWith(expect.anything(), "acct1", "c1");
+  });
+
+  it("a carrier status with different case and padding still counts as a person", async () => {
+    // The real string Telnyx sends is unverified until a live call. If it
+    // sends `Completed`, dropping either half of the normalisation would tell
+    // a caller who had just finished speaking to the business owner that
+    // nobody could be reached, and file the call abandoned.
+    const xml = await post("tok_abc", { DialCallStatus: " Completed " });
+    expect(setCallOutcomeMock).toHaveBeenCalledWith(expect.anything(), "acct1", "c1", "transferred");
+    expect(xml).not.toContain("<Say");
+  });
+
+  it("a stamping failure is logged loudly, naming the call", async () => {
+    // This is why the stamp has its OWN try/catch: the outer one produces the
+    // same 200 + `<Hangup/>` and an anonymous line, so without this assertion
+    // the inner catch could be deleted and no test would notice.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    setCallOutcomeMock.mockRejectedValue(new Error("boom"));
+    await post("tok_abc", { DialCallStatus: "completed" });
+    const written = errSpy.mock.calls.flat().map(String).join(" ");
+    expect(written).toContain("transferred but the outcome did not save");
+    expect(written).toContain("c1");
+    errSpy.mockRestore();
   });
 
   it("never writes the token to the log — it is the credential, not an id", async () => {

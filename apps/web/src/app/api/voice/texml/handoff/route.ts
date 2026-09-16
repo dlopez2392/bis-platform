@@ -47,10 +47,21 @@ const RING_SECONDS = 20;
  * places the `X-BIS-Handoff` SIP-header copy never reaches. A holder of a
  * logged token can fetch this route and read back the account's private
  * transfer number and one of its owned numbers. They cannot place a call:
- * nothing here writes, and only Telnyx executes the TeXML we return. So the
- * loss is DISCLOSURE OF A PRIVATE BUSINESS LINE, and until this check it was
- * unbounded in time. `TELNYX_PUBLIC_KEY` is unset today, so there is no second
- * gate underneath this one.
+ * nothing IN THIS ROUTE writes, and only Telnyx executes the TeXML we return.
+ * So the loss here is DISCLOSURE OF A PRIVATE BUSINESS LINE, and until this
+ * check it was unbounded in time.
+ *
+ * THE SAME TOKEN DOES WRITE, one field, in the sibling this route points at,
+ * and this comment claimed otherwise until 2026-09-16.
+ * `handoff-result` stamps the call `transferred` on a `DialCallStatus` it is
+ * simply told, so a holder of a logged token can put a transfer that never
+ * happened on the client's dashboard. That route carries its own bounds for
+ * it: a four-hour ceiling on the WRITE measured from `handoff_requested_at`,
+ * and a refusal to overwrite an outcome that outranks `transferred`, so a
+ * replay is a no-op. The two ceilings are deliberately different quantities —
+ * ten minutes to DIAL a person, four hours to RECORD a conversation that had
+ * to happen first. `TELNYX_PUBLIC_KEY` is unset today, so there is no second
+ * gate underneath either of them.
  *
  * Why ten and not two: the legitimate fetch happens seconds after the stamp —
  * Sofía says her line, the socket closes, Telnyx fetches this URL. But the

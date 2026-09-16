@@ -203,6 +203,12 @@ const getCallByHandoffTokenMock = vi.hoisted(() => vi.fn());
 const getTransferPhoneMock = vi.hoisted(() => vi.fn());
 const listPhoneNumbersForAccountMock = vi.hoisted(() => vi.fn());
 const setCallOutcomeMock = vi.hoisted(() => vi.fn());
+// The handoff result reads the outcome it is about to overwrite before it
+// writes. A name this mock does not export is a THROWN error inside the
+// route, which its outer catch launders into a valid `<Hangup/>` — so a
+// missing export here would quietly turn every document below into a hangup
+// that still parses.
+const getCallMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({}),
@@ -215,6 +221,7 @@ vi.mock("@bis/db", () => ({
   getTransferPhone: (...a: unknown[]) => getTransferPhoneMock(...a),
   listPhoneNumbersForAccount: (...a: unknown[]) => listPhoneNumbersForAccountMock(...a),
   setCallOutcome: (...a: unknown[]) => setCallOutcomeMock(...a),
+  getCall: (...a: unknown[]) => getCallMock(...a),
 }));
 
 const PROFILE = {
@@ -241,6 +248,7 @@ beforeEach(() => {
   });
   getTransferPhoneMock.mockReset().mockResolvedValue(CALLER);
   setCallOutcomeMock.mockReset().mockResolvedValue(undefined);
+  getCallMock.mockReset().mockResolvedValue({ id: "c1", account_id: "a1", outcome: "abandoned" });
   listPhoneNumbersForAccountMock.mockReset().mockResolvedValue([
     { id: "pn1", account_id: "acct1", e164: LIVE_TO, telnyx_id: null, status: "live" },
   ]);
