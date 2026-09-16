@@ -7,14 +7,19 @@
 //
 // The try/catch and fail-open wrapping live in the routes, not here.
 
-export type ReputationConfig = { threshold: number; windowDays: number };
+export type ReputationConfig = {
+  threshold: number;
+  windowDays: number;
+  /** Callers this guard never blocks — see `readReputationConfig`. */
+  exempt: readonly string[];
+};
 export type ReputationVerdict = { blocked: false } | { blocked: true; reason: "repeat-spam" };
 
 /** Counts over the window, from `countCallerHistorySince`. `spamCalls`
  *  counts ONLY rows with at least one turn — see the exclusion note there. */
 export type CallerHistory = { spamCalls: number; otherCalls: number };
 
-const DEFAULTS: ReputationConfig = { threshold: 3, windowDays: 30 };
+const DEFAULTS: ReputationConfig = { threshold: 3, windowDays: 30, exempt: [] };
 
 /** Byte-for-byte the same helper as `call-limits.ts:15-18`, and DELIBERATELY
  *  a copy rather than a shared import: that twin does not export it, and a
@@ -44,7 +49,35 @@ export function readReputationConfig(env: NodeJS.ProcessEnv = process.env): Repu
   return {
     threshold: positiveInt(env.PHONE_SPAM_BLOCK_THRESHOLD, DEFAULTS.threshold),
     windowDays: positiveInt(env.PHONE_SPAM_BLOCK_WINDOW_DAYS, DEFAULTS.windowDays),
+    exempt: exemptList(env.PHONE_SPAM_EXEMPT_CALLERS),
   };
+}
+
+/**
+ * The operator's own phones, in +E.164, comma-separated.
+ *
+ * This exists because the guard is scoped PER ACCOUNT
+ * (`countCallerHistorySince` filters on `account_id`), which makes a brand-new
+ * company the one place a known-good caller has no history to clear them with.
+ * On 2026-09-16 the agency's own test phone stood at one silent call and zero
+ * good calls on a client created that day — two more test calls and the person
+ * who built the product would have been refused by it.
+ *
+ * Deliberately NOT a per-account setting and NOT a database table: this is the
+ * agency's handful of handsets, the same on every account, and a knob that
+ * only ever holds two or three values does not need a schema. It sits beside
+ * the other voice knobs in the environment, where the house rule applies —
+ * junk is ignored rather than taken literally.
+ *
+ * Empty, unset or whitespace yields NO exemptions, which is the safe
+ * direction: a parsing mistake leaves the guard fully armed rather than
+ * silently disarming it for everyone. Note that is the opposite polarity to
+ * `positiveInt` above, and for the same reason — both fall back to the value
+ * that keeps the guard working.
+ */
+function exemptList(raw: string | undefined): readonly string[] {
+  if (!raw) return [];
+  return raw.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
 /**
@@ -84,8 +117,16 @@ export function windowStart(now: Date, windowDays: number): string {
  * become a silent fail-open, and both routes' step-8 comments say so.
  */
 export function decideReputation(
-  history: CallerHistory, cfg: ReputationConfig,
+  history: CallerHistory, cfg: ReputationConfig, callerE164?: string | null,
 ): ReputationVerdict {
+  // FIRST, before any counting. An exempt caller is never blocked whatever
+  // their history says — that is the whole point, and checking it after the
+  // threshold would make the exemption depend on the very counts it exists to
+  // ignore. Compared as an exact string: every caller number reaching here has
+  // already been normalised to +E.164 by `extractCallerNumber`/`toE164`, and
+  // re-normalising would mean an import, which this module deliberately has
+  // none of.
+  if (callerE164 && cfg.exempt.includes(callerE164)) return { blocked: false };
   if (history.otherCalls > 0) return { blocked: false };
   if (history.spamCalls >= cfg.threshold) return { blocked: true, reason: "repeat-spam" };
   return { blocked: false };

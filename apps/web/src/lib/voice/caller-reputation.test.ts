@@ -4,16 +4,16 @@ import {
 } from "./caller-reputation";
 
 const env = (o: Record<string, string>) => o as unknown as NodeJS.ProcessEnv;
-const cfg: ReputationConfig = { threshold: 3, windowDays: 30 };
+const cfg: ReputationConfig = { threshold: 3, windowDays: 30, exempt: [] };
 
 describe("readReputationConfig", () => {
   it("defaults to 3 calls over 30 days", () => {
-    expect(readReputationConfig(env({}))).toEqual({ threshold: 3, windowDays: 30 });
+    expect(readReputationConfig(env({}))).toEqual({ threshold: 3, windowDays: 30, exempt: [] });
   });
   it("reads overrides from env", () => {
     expect(readReputationConfig(env({
       PHONE_SPAM_BLOCK_THRESHOLD: "5", PHONE_SPAM_BLOCK_WINDOW_DAYS: "7",
-    }))).toEqual({ threshold: 5, windowDays: 7 });
+    }))).toEqual({ threshold: 5, windowDays: 7, exempt: [] });
   });
   it("ignores junk rather than blocking on the first silent call", () => {
     expect(readReputationConfig(env({
@@ -76,5 +76,71 @@ describe("windowStart", () => {
     const earlyInTheDay = windowStart(new Date("2026-09-15T00:30:00.000Z"), 30);
     const lateInTheDay = windowStart(new Date("2026-09-15T23:30:00.000Z"), 30);
     expect(lateInTheDay > earlyInTheDay).toBe(true);
+  });
+});
+
+describe("exempt callers", () => {
+  const blockedHistory = { spamCalls: 5, otherCalls: 0 };
+
+  it("never blocks an exempt caller, however bad the history", () => {
+    const cfg: ReputationConfig = { threshold: 3, windowDays: 30, exempt: ["+19562921696"] };
+    expect(decideReputation(blockedHistory, cfg, "+19562921696")).toEqual({ blocked: false });
+  });
+
+  it("still blocks a caller who is not on the list", () => {
+    // Mutation: exempt everyone — this fails, and the guard would be off.
+    const cfg: ReputationConfig = { threshold: 3, windowDays: 30, exempt: ["+19562921696"] };
+    expect(decideReputation(blockedHistory, cfg, "+15550001111"))
+      .toEqual({ blocked: true, reason: "repeat-spam" });
+  });
+
+  it("blocks as before when nothing is exempt", () => {
+    const cfg: ReputationConfig = { threshold: 3, windowDays: 30, exempt: [] };
+    expect(decideReputation(blockedHistory, cfg, "+19562921696"))
+      .toEqual({ blocked: true, reason: "repeat-spam" });
+  });
+
+  it("does not exempt a missing caller number", () => {
+    // An anonymous/withheld caller must not slip through by having no number
+    // to compare — `undefined` and `null` are not a match for anything.
+    const cfg: ReputationConfig = { threshold: 3, windowDays: 30, exempt: ["+19562921696"] };
+    expect(decideReputation(blockedHistory, cfg, null)).toEqual({ blocked: true, reason: "repeat-spam" });
+    expect(decideReputation(blockedHistory, cfg)).toEqual({ blocked: true, reason: "repeat-spam" });
+  });
+
+  it("matches the WHOLE number, never a substring of one", () => {
+    // A caller whose number merely contains an exempt one, or is contained by
+    // it, is a different person.
+    const cfg: ReputationConfig = { threshold: 3, windowDays: 30, exempt: ["+19562921696"] };
+    expect(decideReputation(blockedHistory, cfg, "+1956292169")).toMatchObject({ blocked: true });
+    expect(decideReputation(blockedHistory, cfg, "+195629216960")).toMatchObject({ blocked: true });
+  });
+});
+
+describe("readReputationConfig exempt parsing", () => {
+  it("reads one number", () => {
+    expect(readReputationConfig(env({ PHONE_SPAM_EXEMPT_CALLERS: "+19562921696" })).exempt)
+      .toEqual(["+19562921696"]);
+  });
+
+  it("reads several, trimming the spaces an operator will type", () => {
+    expect(readReputationConfig(env({
+      PHONE_SPAM_EXEMPT_CALLERS: "+19562921696, +19565550123 ,+19565550124",
+    })).exempt).toEqual(["+19562921696", "+19565550123", "+19565550124"]);
+  });
+
+  /**
+   * The safe direction, and the opposite polarity to the numeric knobs: junk
+   * here exempts NOBODY, leaving the guard fully armed. A parse that fell back
+   * to "exempt everything" would disarm spam screening platform-wide from a
+   * stray character.
+   */
+  it("exempts nobody when unset, empty or only separators", () => {
+    // `env({})` covers the unset case; the rest are values an operator can
+    // actually leave behind after deleting the list.
+    expect(readReputationConfig(env({})).exempt).toEqual([]);
+    for (const raw of ["", "   ", ",", " , , "]) {
+      expect(readReputationConfig(env({ PHONE_SPAM_EXEMPT_CALLERS: raw })).exempt).toEqual([]);
+    }
   });
 });
