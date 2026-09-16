@@ -29,6 +29,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { GET as texmlGET } from "./route";
 import { POST as handoffPOST } from "./handoff/route";
+import { POST as handoffResultPOST } from "./handoff-result/route";
 
 // ---------------------------------------------------------------------------
 // The parser.
@@ -201,6 +202,7 @@ const countCallerHistorySinceMock = vi.hoisted(() => vi.fn());
 const getCallByHandoffTokenMock = vi.hoisted(() => vi.fn());
 const getTransferPhoneMock = vi.hoisted(() => vi.fn());
 const listPhoneNumbersForAccountMock = vi.hoisted(() => vi.fn());
+const setCallOutcomeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({}),
@@ -212,6 +214,7 @@ vi.mock("@bis/db", () => ({
   getCallByHandoffToken: (...a: unknown[]) => getCallByHandoffTokenMock(...a),
   getTransferPhone: (...a: unknown[]) => getTransferPhoneMock(...a),
   listPhoneNumbersForAccount: (...a: unknown[]) => listPhoneNumbersForAccountMock(...a),
+  setCallOutcome: (...a: unknown[]) => setCallOutcomeMock(...a),
 }));
 
 const PROFILE = {
@@ -237,6 +240,7 @@ beforeEach(() => {
     handoff_requested_at: new Date().toISOString(),
   });
   getTransferPhoneMock.mockReset().mockResolvedValue(CALLER);
+  setCallOutcomeMock.mockReset().mockResolvedValue(undefined);
   listPhoneNumbersForAccountMock.mockReset().mockResolvedValue([
     { id: "pn1", account_id: "acct1", e164: LIVE_TO, telnyx_id: null, status: "live" },
   ]);
@@ -253,6 +257,18 @@ async function handoff(token: string): Promise<string> {
     method: "POST", body: new URLSearchParams(),
     headers: { "content-type": "application/x-www-form-urlencoded" },
   }));
+  return res.text();
+}
+
+async function handoffResult(token: string, status?: string): Promise<string> {
+  const res = await handoffResultPOST(new Request(
+    `https://x.example/api/voice/texml/handoff-result?t=${token}`,
+    {
+      method: "POST",
+      body: new URLSearchParams(status === undefined ? {} : { DialCallStatus: status }),
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+    },
+  ));
   return res.text();
 }
 
@@ -314,6 +330,41 @@ describe("every emitted TeXML document parses", () => {
   it("the handoff hangup", async () => {
     getTransferPhoneMock.mockResolvedValue(null);
     const xml = await handoff("tok_abc");
+    expect(xml).toContain("<Hangup");
+    parseXmlStrict(xml);
+  });
+
+  it("the handoff result's hangup, after a transfer that reached a person", async () => {
+    const xml = await handoffResult("tok_abc", "completed");
+    expect(xml).toContain("<Hangup");
+    parseXmlStrict(xml);
+  });
+
+  it("the handoff result's English apology, when nobody answered", async () => {
+    const xml = await handoffResult("tok_abc", "no-answer");
+    expect(xml).toContain("<Say");
+    parseXmlStrict(xml);
+  });
+
+  it("the handoff result's Spanish apology (accented copy, language attribute)", async () => {
+    // An apostrophe in the English line and accents plus `¿`/`—`-class
+    // punctuation in the Spanish are exactly where a hand-built document
+    // goes wrong, and this copy travels as character data.
+    profileMock.mockResolvedValue({ ...PROFILE, languages: "es" });
+    const xml = await handoffResult("tok_abc", "busy");
+    expect(xml).toContain("es-MX");
+    parseXmlStrict(xml);
+  });
+
+  it("the handoff result's fail-closed hangup on an unknown token", async () => {
+    getCallByHandoffTokenMock.mockResolvedValue(null);
+    const xml = await handoffResult("tok_nope", "completed");
+    expect(xml).toContain("<Hangup");
+    parseXmlStrict(xml);
+  });
+
+  it("the handoff result's hangup when the carrier sent no status", async () => {
+    const xml = await handoffResult("tok_abc");
     expect(xml).toContain("<Hangup");
     parseXmlStrict(xml);
   });
