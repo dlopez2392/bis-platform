@@ -1,8 +1,9 @@
 # Handing a call to a human — design
 
-**Date:** 2026-09-15 · **Branch:** `docs/feature-specs` · **Base:** `6613c09`
-**Status:** IDEA. Not planned, not scheduled. The findings below were read from
-the tree; the design is not settled.
+**Date:** 2026-09-15, designed 2026-09-16 · **Branch:** `feat/call-handoff`
+**Base:** `41f54d1`
+**Status:** DESIGNED, approved 2026-09-16. Supersedes the IDEA draft — the
+survey below is kept and corrected, the open questions are now answered.
 
 ## Why
 
@@ -10,117 +11,212 @@ danlo, 2026-09-15: when a customer calls the number a business is assigned,
 there should be an option to forward that call to a number the business
 provides, so the caller can reach an actual person.
 
-Today the answer to "can I speak to someone?" is a message and a callback.
+Today the only answer to "can I speak to someone?" is a message and a callback.
+`system-prompt.ts:20` instructs Sofía to answer honestly that she is automated,
+**then offer to take a message**. There is no path where the call leaves the AI
+and reaches a person.
 
-## What happens on a call today, verified
+## What the carrier actually allows
 
-Two entry points, chained:
+The original draft recorded the constraint — *Telnyx refuses its own per-number
+call forwarding on a TeXML-utilising number* — and concluded that a transfer
+would need Call Control or SIP REFER. Checked against Telnyx's documentation,
+it needs neither.
 
-1. `api/voice/texml/route.ts` — Telnyx hits this for every inbound call.
-   `classify()` resolves the dialed number, then returns TeXML. Three exits:
-   spoken refusal + hangup (unknown or inactive number), spoken cap message +
-   hangup, or `<Dial><Sip>` bridging to OpenAI's SIP connector.
-2. `api/voice/incoming/route.ts` — OpenAI's `realtime.call.incoming` webhook.
-   Opens a `calls` row, accepts, then runs `runCallLifecycle()` on a WebSocket
-   that lives for the whole call.
+**`<Dial>` takes an `action` URL**, requested when the dial ends, returning a
+fresh TeXML document that continues the call. So when the AI's SIP leg hangs
+up, the caller stays connected and we get a new decision point. The action
+callback carries `CallSid`, `ParentCallSid`, `DialCallStatus`
+(`completed` / `no-answer` / `busy` / `failed`), `DialCallDuration` and an
+error code.
 
-Exits from the live call: caller hangs up, socket error, connect timeout
-(`PHONE_CONNECT_TIMEOUT_MS`, 15s), or the cost cap
-(`PHONE_MAX_CALL_SECONDS`, 240s) which asks for a goodbye then closes.
+`<Dial>` also takes `callerId`, `timeout` (5–120s, default 30), `timeLimit`,
+and **`passDiversionHeader`** — which matters, because Telnyx validates
+external transfers against call spoofing and *requires* a `Diversion` header
+carrying the Telnyx number on the outbound leg. A transfer without it is
+rejected.
 
-**There is no path where the call leaves the AI and reaches a person.** No
-`<Dial>` to a PSTN number after answering, no SIP REFER, no Call Control
-transfer, no warm or cold handoff.
+**So the whole feature is expressible in TeXML.** No Call Control client, no
+SIP REFER, no new credential. That is worth stating plainly because the repo
+makes exactly **one** outbound Telnyx call today — `POST /v2/messages` in
+`lib/sms/telnyx.ts:22`, messaging-only and not reusable — so a Call Control
+approach would have meant a new authenticated HTTP client for a feature that
+does not need one.
 
-## Two things that look like forwarding and are not
+## The three things that were wrong or missing in the draft
 
-**The setup step named `forwarding`** (`lib/setup/setup-status.ts`, step 7 of 9)
-is the *opposite direction*. Its own copy, `messages.ts:1082-1088`:
+**The draft's "the actual work is an action type that reaches the carrier" is
+half right.** `VoiceAction` is indeed a single-variant union
+(`call-events.ts:6`), produced in one function and consumed at exactly one line
+(`incoming/route.ts:539`). But the new variant does not reach the carrier — it
+only closes the socket. TeXML's `action` URL does the rest. One variant, one
+handling site.
 
-> The client forwards their business line to the number below at their carrier.
-> Tick when confirmed.
+**A transferred call would text the caller "Sorry we missed you just now."**
+This is the finding that most shapes the design. A call ending with no booking,
+lead or message classifies `abandoned` (`call-state.ts:62`), and `abandoned` +
+`textback_enabled` + a caller number fires the missed-call text-back
+(`finish-call.ts:367`). A caller *successfully handed to a human* would receive
+an apology for missing them. Nothing else would fire either: no staff alert, no
+contact, no conversation, because `abandoned` is not `isMeaningful`.
 
-It is a manual localStorage tick (`setup:forwarding_done`). It stores no number,
-triggers no behaviour, and is deliberately excluded from `goLivePrereqsMet()`.
+**`alert_phone` cannot be the transfer target.** It is the only business-side
+phone column in the schema and it is verified by SMS possession — but that flow
+returns `alertPhoneNotClearedToSend` when the A2P gate fails
+(`settings/actions.ts:308-309`). Reusing it would put SMS carrier registration
+in front of a voice feature. It also forces one destination for two different
+jobs: a business may want lead alerts on an office manager's mobile and callers
+on the main line.
 
-**`VOICE_FORWARD_TO`** (`api/voice/texml/route.ts:132-139`) *is* real call
-forwarding, and is the closest existing primitive — but it is a **bypass, not a
-transfer**:
+## The design
 
-- A **global** env var. One value for the entire platform, not per business.
-- It fires **before the AI ever answers**, deliberately ahead of routability and
-  cap checks. Sofía never speaks.
-- Its documented purpose is an operator override, born from needing to receive a
-  voice verification code.
-- Outbound caller ID is **our** number, not the original caller's. Telnyx
-  requires an owned number on the outbound leg.
+### Where the number lives
 
-That file also records the constraint that shapes any design here:
-**Telnyx refuses its own per-number call forwarding on a TeXML-utilising
-number.** Any forwarding must be expressed in TeXML or Call Control.
+A new `accounts.transfer_phone`, E.164-checked exactly like `alert_phone`
+(`0035_alert_phone.sql:30-33`), set by the **agency** on the account's voice
+settings. **The field IS the switch** — no number, no transfer offered, and
+that is not a failure. Same doctrine `alert_phone` already states.
 
-## Where the seam is
+**Not verified by possession, deliberately, and this is the design's weakest
+point stated honestly.** The agency sets it, the agency already has trusted
+write access to everything else about the account, and gating it behind the
+SMS verification would re-import the A2P dependency this decision exists to
+avoid. The mitigations are that a wrong number rings out and falls back
+(below), and that the number is visible in settings. Possession verification is
+a worthwhile follow-up, not a prerequisite — but note the asymmetry it leaves:
+a wrong `alert_phone` leaks a one-line notification, while a wrong
+`transfer_phone` connects a live stranger to whoever answers.
 
-There is a mature mid-call tool mechanism, and it is the right place.
-`lib/voice/tools/registry.ts` and `tools/schemas.ts` already carry eight tools:
-availability, book, reschedule, cancel, find-my-booking, capture-lead,
-take-message, log-transcript.
+**A transfer must refuse any number the account owns.** Setting
+`transfer_phone` to the account's own BIS line would loop the caller back into
+Sofía. `refusesAlertLoop` (`lib/sms/sender.ts:71-79`) already performs exactly
+this check for alert texts, against every number the account owns in `testing`
+or `live` — the transfer guard mirrors it.
 
-**None of them can affect the call itself.** Every tool returns
-`{ state, result }`, and `VoiceAction` is a single-variant union
-(`{ kind: "send" }`), so there is currently no way for a tool to say "do
-something to the telephony leg". Adding a ninth tool is routine. Adding an
-action type that reaches the carrier is the actual work.
+### Who decides
 
-## What happens today when a caller asks for a person
+**The caller asks. Nothing else.** No AI judgement, no after-hours rule, no
+intent classification. `system-prompt.ts:20`'s existing instruction changes
+from "offer to take a message" to "offer to put them through" — but only when
+a transfer target is configured; otherwise the current message copy stands
+unchanged.
 
-Deliberate, and poor. `lib/voice/system-prompt.ts:20` instructs Sofía to answer
-honestly that she is automated, then **offer to take a message**. `take_message`
-writes to `CallState`, and at hangup produces outcome `message`, a contact, a
-conversation, a `voice` message row and a staff alert email.
+A rule-based transfer was considered and rejected for this version. The data
+for "is the business open right now" exists (`calendars.open_hours`) and the
+arithmetic has a working precedent (`countAfterHours`, `metrics.ts:224-238`),
+but there is no live predicate, none of it is wired into the prompt, and
+`after_hours` today changes exactly one block of prompt text and nothing else.
+That is a second feature.
 
-The caller gets an asynchronous callback. Never a live person.
+### The flow
 
-## Open questions — none of these are decided
+1. `dialXml` gains `action` and `method` on the SIP `<Dial>`, plus the Telnyx
+   `CallSid` smuggled onto the SIP URI as `X-BIS-CallSid` — the identical trick
+   `X-BIS-Called` already uses (`texml/route.ts:5`), for the identical reason.
+2. The webhook stores that id on the `calls` row at accept time, so the action
+   callback can find the call it belongs to by `ParentCallSid`.
+3. A new `transfer_to_human` tool records the intent in `CallState` and returns
+   a result telling the model to say one handoff line. A tool cannot touch the
+   call — `ToolContext` carries no socket and no call id — so the tool marks,
+   and the lifecycle acts.
+4. A new `VoiceAction` variant closes the socket after that line is spoken,
+   handled at the one site that consumes actions.
+5. The SIP dial ends. Telnyx requests the action URL. If the call asked for a
+   transfer and the account has a usable target, it answers with
+   `<Dial callerId="{the dialled BIS number}" timeout="20"
+   passDiversionHeader="true" action="{result URL}">{transfer_phone}</Dial>`.
+   Otherwise `<Hangup/>` — the ordinary end of every call that did not ask.
+6. The result URL reads `DialCallStatus`. `completed` stamps the call as
+   transferred. `no-answer` / `busy` / `failed` speaks one honest line and
+   hangs up.
 
-**Whose number, and where does it live?** Nothing in `accounts`, `calendars`,
-`voice_profiles` or the A2P table stores a business phone. This needs a column
-and a settings surface, and it overlaps with
-`2026-09-15-lead-sms-alerts-design.md` — the same number may serve both, or may
-deliberately not.
+### What the call records
 
-**Who decides to transfer?** The caller asking, the AI judging, or a rule
-(after hours, certain intents)? Each is a different product.
+**A fourth `ServedAction`: `"transferred"`.** That type exists for precisely
+this case — its own comment says it records "a tool outcome that means the
+receptionist actually DID something for this caller, even though the call ends
+with no booking, lead or message of its own" (`call-state.ts:15-18`). It is
+read by exactly one consumer, the text-back gate, which is exactly the thing
+that must not fire here.
 
-**What happens when nobody answers?** A transfer that rings out is worse than
-the message we take today, because the caller has already been told they are
-being put through. Voicemail, fall back to Sofía, or take a message anyway.
+**`calls.outcome` gains `transferred`.** This needs a migration to widen the
+CHECK constraint (`0019_voice_core.sql:53-54`) and touches every consumer of
+`CallOutcome`. It is worth it: recording a caller who reached a human as
+`abandoned` is a lie the client reads on their own dashboard, and this codebase
+refuses that kind of dishonesty elsewhere — the weekly report omits what it did
+not measure rather than reporting zero, and the summary carries a MISMATCH
+banner rather than asserting what it cannot support.
 
-**What does the business hear?** A cold transfer drops a stranger on them. A
-warm one needs Sofía to speak to the human first, which the current
-architecture cannot do — it is one SIP leg, not a conference.
+`transferred` is `isMeaningful`: a staff alert and an alert SMS should fire,
+because a customer reaching a human is exactly the event a business wants to
+know about.
 
-**Does the call stay recorded?** Transcript capture lives on the OpenAI socket.
-Transfer away and the transcript stops. A call that becomes a human
-conversation produces a half transcript and a summary of only the first half.
+**The transcript covers only the AI half, and the call row must not pretend
+otherwise.** Transcript capture lives on the OpenAI socket
+(`call-events.ts:44-57`); once the call leaves it, nothing is recorded,
+transcribed or timed. `durationSecs` measures to socket close, so the human
+conversation is invisible. The summary must say so in the deterministic fact
+line rather than summarising half a call as if it were whole.
 
-**Cost and caller ID.** The outbound leg bills, and shows our number. A
-business seeing its own tenant number calling is confusing at best.
+### Failure and cost
 
-**Is it even transfer, or a callback?** "Press 1 and we will call you right
-back" avoids the carrier constraint, the ring-out problem and the caller-ID
-problem entirely. Worth considering before building the harder thing.
+- **Nobody answers.** The caller was told they are being put through, so
+  silence is the one unacceptable outcome. `timeout="20"` then one spoken line,
+  and the call records `transferred` with the ring-out noted. Letting the
+  existing missed-call text-back fire here is a natural follow-up — it is
+  genuinely a missed call — but it runs from `finishCall` on a socket that has
+  already closed, so it is plumbing this version does not do.
+- **No target configured, or the target is an owned number.** No offer is made
+  at all; the prompt keeps today's take-a-message copy. The guard is checked
+  before the model is ever told a transfer is possible, so Sofía never offers
+  what she cannot deliver — the same rule the alert-phone readiness work
+  settled on 2026-09-15.
+- **The outbound leg bills.** It is a normal PSTN call on the account's own
+  number, bounded by `timeLimit`. Unlike the Realtime session there is no model
+  cost, so a long human conversation is cheap by comparison.
+- **Caller ID.** The business sees the BIS number that was dialled, not the
+  original caller. Telnyx requires an owned number on the outbound leg — the
+  same constraint `forwardXml` already documents (`texml/route.ts:182-184`).
+  A business seeing its own tenant number is confusing, and the honest fix is
+  for Sofía to say who is calling before transferring, which she can: she has
+  the caller's number and usually their name.
 
 ## Out of scope
 
-IVR menus. Call queues. Multiple simultaneous destinations. Anything that makes
-this a phone system rather than a receptionist that knows when to step aside.
+IVR menus. Call queues. Multiple simultaneous destinations. Warm transfer
+(Sofía speaking to the human first), which needs a conference, not one SIP leg.
+Recording the human half. Anything that makes this a phone system rather than a
+receptionist that knows when to step aside.
 
-## Testing, when this is real
+## Testing
 
-The boundary that matters: a transfer must never reach a number belonging to a
-different account. The existing agency-only work queue spec's guard test is the
-shape — assert the ordering, not just the presence, of the check.
+**The boundary that matters: a transfer must never reach a number belonging to
+a different account.** `transfer_phone` is read from the account resolved by
+the dialled number, and the test must assert the ordering — that the account is
+resolved before the number is read — not merely that both happened. The agency
+work queue's guard test is the shape.
 
-`api/voice/texml/forward.test.ts` already covers parsing and normalisation of
-the global override and is the obvious place to grow.
+Alongside it, and each proven by mutating the code it guards until a named test
+fails:
+
+- A transfer to a number the account owns is refused. The loop is the failure
+  mode; the test is the guard.
+- A transferred call does **not** fire the missed-call text-back. Remove
+  `"transferred"` from `ServedAction` and this test must go red.
+- A transferred call records `transferred`, not `abandoned`.
+- `no-answer`, `busy` and `failed` each produce a spoken line, never silence.
+- With no `transfer_phone` set, the action URL answers `<Hangup/>` and the
+  prompt never offers a transfer.
+- The `CallSid` smuggled through `X-BIS-CallSid` survives to the `calls` row,
+  and the action callback matches on it. A call that cannot be matched must
+  hang up rather than transfer to a default.
+
+`forward.test.ts` already covers parsing and normalisation of the global
+override and is the obvious place to grow the second half of this.
+
+## What this does not change
+
+`VOICE_FORWARD_TO` stays exactly as it is: a global operator override that
+fires before the AI answers, ahead of every gate, for taking a line back by
+hand. It is not per-account and is not a transfer. Nothing in this design
+touches it.
