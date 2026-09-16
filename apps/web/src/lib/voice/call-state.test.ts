@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   emptyCallState, classifyOutcome, withBooking, withBookingCancelled,
-  withLead, withMessage, withTranscript, withServed, wasServed,
+  withLead, withMessage, withTranscript, withServed, wasServed, withTransferred,
 } from "./call-state";
 
 describe("classifyOutcome priority", () => {
@@ -72,5 +72,23 @@ describe("served", () => {
     expect(cancelled.bookings).toEqual([]);
     expect(classifyOutcome(cancelled)).toBe("abandoned");
     expect(wasServed(cancelled)).toBe(true);
+  });
+
+  it("withTransferred marks the caller served, so the missed-call text-back cannot fire", () => {
+    const s = withTransferred(emptyCallState());
+    expect(s.served).toContain("transferred");
+  });
+  it("withTransferred is idempotent — served is append-only and deduplicated", () => {
+    const s = withTransferred(withTransferred(emptyCallState()));
+    expect(s.served.filter((a) => a === "transferred")).toHaveLength(1);
+  });
+  it("a transferred call still classifies abandoned at socket close — nobody has reached a human YET", () => {
+    // The result route upgrades the row to `transferred` only on
+    // DialCallStatus: completed. At socket close that is not yet known, and
+    // claiming it would be a lie on a call that rings out.
+    const s = withTransferred(withTranscript(emptyCallState(), {
+      role: "caller", text: "can I speak to someone", at: new Date().toISOString(),
+    }));
+    expect(classifyOutcome(s)).toBe("abandoned");
   });
 });

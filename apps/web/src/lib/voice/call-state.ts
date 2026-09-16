@@ -111,6 +111,16 @@ export function withServed(state: CallState, action: ServedAction): CallState {
 }
 
 /**
+ * The caller asked for a person and was handed to one (see `ServedAction`'s
+ * `transferred` case for the full argument). Thin wrapper over `withServed`
+ * so the handoff route has one call to make and gets the same
+ * append-only/deduplicated guarantee every other served action gets.
+ */
+export function withTransferred(state: CallState): CallState {
+  return withServed(state, "transferred");
+}
+
+/**
  * Did the receptionist actually do something for this caller?
  *
  * The missed-call text-back's own gate, deliberately NOT part of
