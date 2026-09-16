@@ -144,10 +144,23 @@ That is a second feature.
 2. The webhook stores that token on the `calls` row at accept time
    (`calls.handoff_token`), so the action callback can find the call it belongs
    to from the token alone.
-3. A new `transfer_to_human` tool records the intent in `CallState` and returns
-   a result telling the model to say one handoff line. A tool cannot touch the
-   call — `ToolContext` carries no socket and no call id — so the tool marks,
-   and the lifecycle acts.
+3. A new `transfer_to_human` tool records the intent in `CallState`. A tool
+   cannot touch the call — `ToolContext` carries no socket and no call id — so
+   the tool marks, and the lifecycle acts.
+
+   **Correction, 2026-09-16 — the shipped design is better than this step
+   described.** This step said the tool "returns a result telling the model to
+   say one handoff line". It does not, and must not: a result string is a
+   SUGGESTION the model paraphrases, and the one sentence in the whole call
+   that must not be improvised is the one that tells a caller they are being
+   connected. What `functionCallActions` (`call-events.ts:48-58`) actually
+   does is PIN the sentence — it rides the SAME frame as the tool result, as
+   `response.create { response: { instructions } }`, never a second frame.
+   That is not a stylistic choice either: a second `response.create` sent
+   while the first response is still generating is REJECTED, and this module
+   ignores the rejection as an unknown event type, so the "say the line" frame
+   would vanish with no error and no log. Same mechanism `silenceGoodbye`
+   uses, for the same reason.
 4. A new `VoiceAction` variant closes the socket after that line is spoken,
    handled at the one site that consumes actions.
 5. The SIP dial ends. Telnyx requests the action URL. If the call asked for a
@@ -249,6 +262,22 @@ line rather than summarising half a call as if it were whole.
   existing missed-call text-back fire here is a natural follow-up — it is
   genuinely a missed call — but it runs from `finishCall` on a socket that has
   already closed, so it is plumbing this version does not do.
+- **A voicemail that picks up reads as a human, and cannot be told apart.**
+  If the business's line rolls to voicemail, the outbound leg is ANSWERED:
+  Telnyx reports `completed`, the result route stamps the call `transferred`,
+  and the weekly report counts it as answered. Nothing in the carrier's
+  payload distinguishes a person saying hello from a greeting playing — there
+  is no "answered by machine" signal on a TeXML `<Dial>` action, and answering
+  machine detection is a separate, paid, per-call Call Control feature this
+  version does not use. So it is not fixable at this layer, and it is written
+  down here rather than left to be rediscovered as a bug: a client whose line
+  rolls to voicemail after twenty seconds will see `transferred` on calls
+  where the caller heard a beep. The mitigation available today is operational
+  — point `transfer_phone` at a line a person answers — and the honest
+  product answer, if it is ever worth the cost, is AMD on the outbound leg.
+  This is also why the leg needs its own `timeLimit`: a voicemail greeting
+  that auto-answers and never hangs up is an open billing leg, and "answered"
+  is exactly what it looks like from here.
 - **No target configured, or the target is an owned number.** No offer is made
   at all; the prompt keeps today's take-a-message copy. The guard is checked
   before the model is ever told a transfer is possible, so Sofía never offers
@@ -257,6 +286,24 @@ line rather than summarising half a call as if it were whole.
 - **The outbound leg bills.** It is a normal PSTN call on the account's own
   number, bounded by `timeLimit`. Unlike the Realtime session there is no model
   cost, so a long human conversation is cheap by comparison.
+
+  **As shipped (2026-09-16):** `timeLimit="3600"` — one hour, the
+  `MAX_TRANSFER_SECONDS` constant beside `RING_SECONDS` in
+  `texml/handoff/route.ts`. It is deliberately NOT derived from the ring
+  timeout, which is a UX number about a caller listening to a ringback, not a
+  billing one. An hour sits above every transferred conversation these
+  businesses actually have (the result route's own four-hour write window
+  rests on the same "under an hour" judgement), so no real call is ever cut
+  off mid-sentence, while the pathological case — an auto-answering voicemail
+  or an IVR that never hangs up, plus a caller who walked away — stops at a
+  number somebody can read off an invoice instead of running until a carrier
+  times it out. Telnyx accepts 60–14400; a value outside that range is
+  rejected, which means no dial at all, which is dead air. **This bullet
+  asserted the bound before the code had it:** the emitted `<Dial>` carried
+  `timeout`, `passDiversionHeader`, `action` and `method` and no `timeLimit`
+  from the day it shipped until the review found it. `timeout` bounds the
+  RINGING; past the answer there was no ceiling on that leg anywhere in the
+  product.
 - **Caller ID.** The business sees the BIS number that was dialled, not the
   original caller. Telnyx requires an owned number on the outbound leg — the
   same constraint `forwardXml` already documents (`texml/route.ts:182-184`).
@@ -334,7 +381,16 @@ fails:
   130/130 green substring assertions.
 
 `forward.test.ts` already covers parsing and normalisation of the global
-override and is the obvious place to grow the second half of this.
+override. **It is NOT where the parsing work went (corrected 2026-09-16):**
+that file is about `VOICE_FORWARD_TO`, and "does the document parse" is a
+question about every document, not about one env var. It went into
+`wellformed.test.ts`, which carries a real well-formedness checker (this
+workspace has no XML parser and no DOM, and adding a dependency to catch a
+one-character bug was not a trade worth making) and runs every document
+either TeXML route emits through it — the bridge, both refusals, the config
+error, the operator forward, the handoff dial and the result route's hangups
+and apologies. The checker itself is proven by negative controls in its own
+first describe block.
 
 ## What this does not change
 
