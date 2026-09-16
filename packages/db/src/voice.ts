@@ -37,6 +37,26 @@ export async function getPhoneNumberByE164(
   return (data as PhoneNumberRow | null) ?? null;
 }
 
+/**
+ * One number by its primary key, for a surface that has an id and needs the
+ * account it currently sits on — the agency numbers inventory
+ * (/dashboard/numbers), whose release write must scope
+ * `setPhoneNumberStatus` to the CURRENT holder rather than to an account id
+ * supplied by the browser.
+ *
+ * Deliberately not account-scoped: the whole point is that the caller does
+ * not yet know which account holds the row. Every caller is agency-gated
+ * before it gets here.
+ */
+export async function getPhoneNumberById(
+  db: SupabaseClient, phoneNumberId: string,
+): Promise<PhoneNumberRow | null> {
+  const { data, error } = await db.from("phone_numbers")
+    .select(PHONE_COLS).eq("id", phoneNumberId).maybeSingle();
+  if (error) throw new Error(`getPhoneNumberById failed: ${error.message}`);
+  return (data as PhoneNumberRow | null) ?? null;
+}
+
 export async function assignPhoneNumber(
   db: SupabaseClient, accountId: string,
   input: { e164: string; telnyxId?: string; status?: PhoneNumberStatus },

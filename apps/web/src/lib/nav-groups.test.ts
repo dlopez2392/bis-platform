@@ -12,7 +12,21 @@ describe("buildNavGroups", () => {
     const groups = buildNavGroups(null, true);
     expect(groups).toHaveLength(1);
     expect(groups[0]!.label).toBeNull();
-    expect(hrefs(groups)).toEqual(["/dashboard/accounts", "/dashboard/blueprints", "/dashboard/work"]);
+    expect(hrefs(groups)).toEqual([
+      "/dashboard/accounts", "/dashboard/blueprints", "/dashboard/work", "/dashboard/numbers",
+    ]);
+  });
+
+  it("offers the numbers inventory at the top level and nowhere inside an account", () => {
+    // Agency-scope only, and NOT repeated inside an account: the inventory
+    // spans every company, so a copy under one company's nav would say
+    // something false about its scope. The route guards itself with
+    // requireAgency regardless — this list is convenience, never the
+    // boundary.
+    expect(hrefs(buildNavGroups(null, true))).toContain("/dashboard/numbers");
+    for (const isAgency of [true, false]) {
+      expect(hrefs(buildNavGroups(BASE, isAgency))).not.toContain("/dashboard/numbers");
+    }
   });
 
   it("groups in-account items under OVERVIEW / CRM / COMMUNICATIONS / GROWTH, in that order", () => {

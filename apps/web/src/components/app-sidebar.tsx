@@ -20,6 +20,7 @@ import {
   Palette,
   Phone,
   PhoneIncoming,
+  PhoneForwarded,
   Zap,
   type LucideIcon,
 } from "lucide-react";
@@ -58,6 +59,11 @@ const NAV_ICONS: Record<NavIconKey, LucideIcon> = {
   automations: Zap,
   accounts: Building2,
   blueprints: Layers,
+  // `PhoneForwarded` rather than `Phone`: the top-level inventory and the
+  // in-account Voice settings are different screens, and the arrow is the
+  // honest glyph for the one whose whole purpose is moving a line from one
+  // company to another.
+  numbers: PhoneForwarded,
   checklist: ListChecks,
   // Same icon as `tasks` — the two never render in the same sidebar (`base`
   // selects one nav shape or the other, never both), and it is the same
