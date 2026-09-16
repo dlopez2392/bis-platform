@@ -110,11 +110,31 @@ That is a second feature.
 
 ### The flow
 
-1. `dialXml` gains `action` and `method` on the SIP `<Dial>`, plus the Telnyx
-   `CallSid` smuggled onto the SIP URI as `X-BIS-CallSid` — the identical trick
-   `X-BIS-Called` already uses (`texml/route.ts:5`), for the identical reason.
-2. The webhook stores that id on the `calls` row at accept time, so the action
-   callback can find the call it belongs to by `ParentCallSid`.
+1. `dialXml` gains `action` and `method` on the SIP `<Dial>`, plus a TOKEN IT
+   MINTS ITSELF (`newHandoffToken()`) written in two places: onto the SIP URI
+   as `X-BIS-Handoff` — the identical trick `X-BIS-Called` already uses
+   (`texml/route.ts:5`), for the identical reason — and into the action URL's
+   own query string as `?t=`. The two must be the same token or the action
+   route can never find the call.
+
+   **Superseded 2026-09-16, and this passage was corrected after the fact:**
+   the draft above this line smuggled the Telnyx `CallSid` as `X-BIS-CallSid`
+   and matched on `ParentCallSid`. The minted token replaced it and is better —
+   a `CallSid` is an IDENTIFIER the carrier also knows and puts in its own
+   webhooks, while a token is a CREDENTIAL only we ever mint, unique
+   (`calls_handoff_token_unique`, 0037) and unguessable, which is what lets the
+   action route resolve a tenant with no session at all. A reader who built
+   from the old two sentences would build the wrong thing.
+
+   The token is minted on EVERY bridge, not only on calls that go on to ask for
+   a person, so holding one proves nothing about intent —
+   `calls.handoff_requested_at` is what proves that. Because it rides a query
+   string it also reaches carrier and platform logs, so the handoff route
+   refuses it once it is more than ten minutes old (`MAX_TOKEN_AGE_MS`); it is
+   NOT single-use, because the result route is handed the same token.
+2. The webhook stores that token on the `calls` row at accept time
+   (`calls.handoff_token`), so the action callback can find the call it belongs
+   to from the token alone.
 3. A new `transfer_to_human` tool records the intent in `CallState` and returns
    a result telling the model to say one handoff line. A tool cannot touch the
    call — `ToolContext` carries no socket and no call id — so the tool marks,
@@ -197,6 +217,16 @@ line rather than summarising half a call as if it were whole.
 - **Caller ID.** The business sees the BIS number that was dialled, not the
   original caller. Telnyx requires an owned number on the outbound leg — the
   same constraint `forwardXml` already documents (`texml/route.ts:182-184`).
+
+  **The rule as shipped (2026-09-16):** the caller id is resolved from
+  `calls.phone_number_id` — the row for the number that actually rang — matched
+  against the account's own numbers and required to still be `testing` or
+  `live`. Only if that row is gone from the list (moved to another account, or
+  released) does it fall back to any owned number, live preferred over testing,
+  and it is omitted rather than faked when the account has none. "Any owned
+  number" was the first implementation and is wrong on the account that owns
+  two live numbers: a customer calls B, the handset shows A, and A is a number
+  that customer never dialled and may not recognise.
   A business seeing its own tenant number is confusing, and the honest fix is
   for Sofía to say who is calling before transferring, which she can: she has
   the caller's number and usually their name.
@@ -247,9 +277,18 @@ fails:
 - `no-answer`, `busy` and `failed` each produce a spoken line, never silence.
 - With no `transfer_phone` set, the action URL answers `<Hangup/>` and the
   prompt never offers a transfer.
-- The `CallSid` smuggled through `X-BIS-CallSid` survives to the `calls` row,
-  and the action callback matches on it. A call that cannot be matched must
-  hang up rather than transfer to a default.
+- The minted token survives to the `calls` row (`calls.handoff_token`) and the
+  action callback resolves the call from it alone — the token on the SIP URI
+  and the token in the action URL must be proven EQUAL, since two separately
+  minted tokens type-check, emit valid TeXML and can never match. A call that
+  cannot be matched must hang up rather than transfer to a default. (Corrected
+  2026-09-16: this bullet named `X-BIS-CallSid` and `ParentCallSid`, the
+  superseded mechanism — see the flow's step 1.)
+- Every document either TeXML route emits PARSES. Asserting that a token is
+  present is not the same measurement, and the difference is not academic: the
+  bridge shipped with a bare `&` joining two SIP URI parameters — a fatal XML
+  well-formedness error on the path every real inbound call takes — under
+  130/130 green substring assertions.
 
 `forward.test.ts` already covers parsing and normalisation of the global
 override and is the obvious place to grow the second half of this.

@@ -677,7 +677,9 @@ cd apps/web && npx vitest run src/app/api/voice/texml/route.test.ts src/app/api/
 
 - [ ] **Step 3: Implement**
 
-**3a.** In `texml/route.ts`, `dialXml` mints a token via `newHandoffToken()`, appends `&X-BIS-Handoff={token}` to the SIP URI (URL-encoded, beside `X-BIS-Called`), and adds `action="{origin}/api/voice/texml/handoff?t={token}"` and `method="POST"` to the `<Dial>`. The origin must come from the same source the rest of the app uses for absolute URLs — find it, do not invent a new env var unless none exists; if you must add one, document it in `.env.example` beside its siblings.
+**3a.** In `texml/route.ts`, `dialXml` mints a token via `newHandoffToken()`, appends `X-BIS-Handoff={token}` to the SIP URI (URL-encoded, beside `X-BIS-Called`) **separated by `&amp;`, never a raw `&`**, and adds `action="{origin}/api/voice/texml/handoff?t={token}"` and `method="POST"` to the `<Dial>`. The origin must come from the same source the rest of the app uses for absolute URLs — find it, do not invent a new env var unless none exists; if you must add one, document it in `.env.example` beside its siblings.
+
+🔴 **The `&` between the two URI parameters is the plan's own bug, corrected 2026-09-16 after it shipped.** That URI is XML CHARACTER DATA inside `<Sip>`, and a bare `&` is a fatal well-formedness error (XML 1.0 §2.4) — a parser reads `&X-BIS-Handoff` as an entity reference. The bridge carried ONE parameter and no separator until this task, so the document was valid until the moment a second one was added, and every real inbound call takes this path: a strict parser means total voice outage on deploy, a lenient one silently strips the token and fails every handoff closed with no symptom. The shipped fix escapes at the point the value becomes XML (`xmlText` in `texml/route.ts`), which also covers the `action` attribute and anything appended later. Emitting `&amp;` directly is equally correct; emitting `&` is not.
 
 **3b.** Create `handoff/route.ts`, `runtime = "nodejs"`. It:
 1. Reads `t` from its **own** query string. No token → `<Hangup/>`.
@@ -704,6 +706,13 @@ Signature verification: match whatever `texml/route.ts` does today for its own P
 | it skips `resolveHandoffTarget` | `a target that is one of the account's own numbers is refused …` |
 | the catch rethrows | `a database failure hangs up rather than 500ing …` |
 | `passDiversionHeader` is dropped | `a call that asked to be transferred gets a Dial …` |
+| the `&` between the two SIP URI parameters is emitted unescaped | `the bridge WITH a dialed number — the document every real inbound call gets` (`texml/wellformed.test.ts`) |
+| the caller id is "any owned number" instead of `calls.phone_number_id` | `the caller id is the number the caller DIALLED, not merely one the account owns` |
+| the handoff route ignores how old `handoff_requested_at` is | `a stamp from an hour ago is refused — a logged token is not a key forever` |
+| the token is also accepted from the request body | `a token in the BODY is not a credential — only the query string we wrote is` |
+| `listPhoneNumbersForAccount` rejecting falls through to an empty list | `the owned-numbers read failing hangs up — the loop guard's input must never open` |
+
+🔴 **No substring assertion can tell valid TeXML from invalid TeXML.** Applying the `&` fix above changed nothing in the suite: 130/130 green before and after, because every assertion measured that a token was PRESENT. `apps/web/src/app/api/voice/texml/wellformed.test.ts` parses every document either route emits and is the only test that catches the next parameter someone appends. It carries its own parser (this workspace has no `jsdom`, no `DOMParser` on Node 24, and no XML dependency) with negative controls that prove the parser can reject.
 
 - [ ] **Step 6: Commit**
 
@@ -722,6 +731,21 @@ git commit -m "feat(voice): continue the call after the AI leg, and dial the bus
 **Interfaces:**
 - Consumes: `getCallByHandoffToken`, `setCallOutcome` (Task 1); `transferFailedLine` (Task 2).
 - Produces: nothing.
+
+🔴 **This route is reached with the SAME token Task 4 minted** — Task 4 points
+its dial at `handoff-result?t=<that token>`, so `getCallByHandoffToken` here
+resolves the same row. Two consequences. First, Task 4 deliberately does NOT
+consume or clear the token, and must not be "hardened" to: doing so would break
+this route before it is written. Second, if one-shot consumption is ever wanted,
+it belongs at the END of this route — after the outcome is stamped and the
+document is built — and nowhere earlier. Task 4 instead bounds the token by
+RECENCY (`MAX_TOKEN_AGE_MS`, 10 minutes from `handoff_requested_at`), because
+the token travels in a query string and therefore into carrier and platform
+logs. That window is NOT inherited here and copying it would be a bug: this
+route is fetched when the HUMAN conversation ends, which can be an hour after
+`handoff_requested_at`. If this route wants a bound, it must measure from its
+own fact — the moment the transfer dial started — not from when the caller
+asked.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -803,6 +827,16 @@ git commit -m "feat(voice): stamp a completed handoff, and say something when no
 **Interfaces:**
 - Consumes: `setTransferPhone` (Task 1), `HandoffTarget` (Task 2).
 - Produces: nothing.
+
+🔴 **The save-time owned-number guard reads `listPhoneNumbersForAccount`
+filtered to `testing`/`live` in JS — never `resolveSmsSender`.** Same source and
+same filter as the runtime guard Task 4 shipped in `handoff/route.ts`. If this
+one uses `resolveSmsSender` instead, the two guards disagree on exactly the
+accounts this feature ships to first: `resolveSmsSender` returns
+`{ ok: false, reason: "no_live_number" }` for an account holding only a
+`testing` number, so its caller gets no list, and the settings screen would
+happily save a transfer number that the runtime guard then refuses to dial —
+a business that thinks it is set up, and a caller who hears a hangup.
 
 🔴 **Do not land this task ahead of Tasks 4–5.** See the sequencing note at the
 end of Task 3: the settings field is the only way an account gets a non-null
