@@ -27,11 +27,12 @@
 import { revalidatePath } from "next/cache";
 import {
   serviceDb, upsertVoiceProfile, assignPhoneNumber, setPhoneNumberStatus, getVoiceProfile,
-  reassignPhoneNumber, listPhoneNumbersForAccount,
+  reassignPhoneNumber, listPhoneNumbersForAccount, setTransferPhone,
   type PhoneNumberStatus, type VoiceProfilePatch,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { toE164 } from "@/lib/voice/phone-number";
+import { resolveHandoffTarget } from "@/lib/voice/handoff";
 import { m } from "@/lib/messages";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
@@ -198,6 +199,88 @@ export async function setNumberStatusAction(
   } catch (e) {
     console.error(`setNumberStatusAction: status update failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["voice.numbers.statusUpdateFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/voice`);
+  return { ok: true };
+}
+
+/**
+ * Sets — or clears — the ONE number a caller who asks for a person is put
+ * through to (`accounts.transfer_phone`, 0037_call_handoff.sql). The only
+ * write path this column has, and the only way Sofía's "one moment, I'll put
+ * you through" ever becomes reachable for an account.
+ *
+ * Agency-only, and that gate is load-bearing in a way the others in this file
+ * are not quite: 0037 deliberately grants `authenticated` NO update on this
+ * column, `serviceDb()` bypasses RLS, and whoever writes it decides where
+ * this tenant's live callers are connected — on the tenant's own trunk, at
+ * the tenant's own per-minute cost. Nothing in the database stands behind
+ * this; the `isAgency` check does.
+ *
+ * Three rules, each with a caller-visible failure behind it:
+ *
+ * ① BLANK CLEARS IT, as NULL — never `""`. The column's CHECK refuses the
+ *    empty string precisely so NULL stays the only spelling of "off"; a
+ *    second spelling is one this screen and the call path would read
+ *    differently. Same rule `setAlertPhoneAction` follows for `alert_phone`.
+ *
+ * ② WHAT IS STORED IS `toE164(input)` OR NULL, never a raw string. The
+ *    handoff TeXML interpolates this column into an XML document UNESCAPED,
+ *    which is safe only because every value in it has passed E.164 — the
+ *    validation here and the CHECK behind it are that safety, not a nicety.
+ *
+ * ③ THE OWNED-NUMBER GUARD RUNS AT SAVE TIME, against the same source, the
+ *    same `testing`/`live` filter and the same `resolveHandoffTarget` the
+ *    call path uses (`api/voice/texml/handoff/route.ts`). NOT
+ *    `resolveSmsSender`: that helper answers `no_live_number` for an account
+ *    holding only a `testing` number — the shape of every account still
+ *    walking the setup wizard, i.e. exactly who this ships to first — so the
+ *    guard would silently not run for them, the save would look clean, and
+ *    the caller would be the one to discover it, mid-call, as a hangup. The
+ *    operator finds out now instead, in words they can act on.
+ *
+ * The read fails CLOSED (refuse the save) where the call path's equivalent
+ * fails closed too. That direction is only correct because it is a save: the
+ * operator sees the refusal and presses the button again. Clearing skips the
+ * read entirely — turning the feature off cannot loop anybody anywhere, and
+ * the off switch must not be gated on something that can be down.
+ */
+export async function setTransferPhoneAction(
+  accountId: string, formData: FormData,
+): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["voice.agencyOnly"] };
+
+  const raw = String(formData.get("transfer_phone") ?? "").trim();
+  const transferPhone = raw ? toE164(raw) : null;
+  if (raw && !transferPhone) return { ok: false, error: m["voice.transfer.badE164"] };
+
+  if (transferPhone) {
+    let owned: string[];
+    try {
+      const rows = await listPhoneNumbersForAccount(serviceDb(), accountId);
+      owned = rows
+        .filter((n) => n.status === "testing" || n.status === "live")
+        .map((n) => n.e164);
+    } catch (e) {
+      console.error(`setTransferPhoneAction: owned-number read failed for account ${accountId}: ${String(e)}`);
+      return { ok: false, error: m["voice.transfer.saveFailed"] };
+    }
+    // The call path's own function, not a second copy of its rule: if these
+    // two ever disagree, a number saves cleanly here and loops the caller
+    // back into Sofía at call time.
+    const target = resolveHandoffTarget(transferPhone, owned);
+    if (!target.available && target.reason === "own-number") {
+      return { ok: false, error: m["voice.transfer.ownNumber"] };
+    }
+  }
+
+  try {
+    await setTransferPhone(serviceDb(), accountId, transferPhone, userId);
+  } catch (e) {
+    console.error(`setTransferPhoneAction: save failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["voice.transfer.saveFailed"] };
   }
 
   revalidatePath(`/dashboard/accounts/${accountId}/voice`);

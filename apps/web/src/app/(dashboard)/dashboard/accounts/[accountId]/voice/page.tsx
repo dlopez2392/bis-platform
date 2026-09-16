@@ -1,11 +1,15 @@
-import { serviceDb, getVoiceProfile, getBranding, type PhoneNumberRow } from "@bis/db";
+import {
+  serviceDb, getVoiceProfile, getBranding, getTransferPhone, type PhoneNumberRow,
+} from "@bis/db";
 import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
 import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { brandDisplayName } from "@/lib/email/templates/shell";
 import { m } from "@/lib/messages";
 import { VoiceSettings } from "./voice-settings";
-import { saveVoiceProfileAction, assignNumberAction, setNumberStatusAction } from "./actions";
+import {
+  saveVoiceProfileAction, assignNumberAction, setNumberStatusAction, setTransferPhoneAction,
+} from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +42,7 @@ export default async function VoicePage({
   await requireAgencyOnlyAccountAccess(accountId);
 
   const db = serviceDb();
-  const [profile, { data: numbersData, error: numbersError }, brandName] =
+  const [profile, { data: numbersData, error: numbersError }, brandName, transferPhone] =
     await Promise.all([
       getVoiceProfile(db, accountId),
       db.from("phone_numbers")
@@ -74,6 +78,14 @@ export default async function VoicePage({
           return "";
         }
       })(),
+      // Where a caller who asks for a person is sent (`accounts.transfer_phone`).
+      // NOT wrapped in a degrade-to-blank catch like the brand name above, and
+      // the difference is the consequence: that value feeds a preview, this one
+      // feeds a form field whose BLANK STATE MEANS OFF. A failed read painted as
+      // an empty box is one Save away from silently clearing a working transfer,
+      // so this read throws and the operator gets the page's error state instead
+      // — the same treatment the phone-number read below already gets.
+      getTransferPhone(db, accountId),
     ]);
   if (numbersError) throw new Error(`voice: phone number lookup failed: ${numbersError.message}`);
   const numbers = (numbersData ?? []) as PhoneNumberRow[];
@@ -81,6 +93,7 @@ export default async function VoicePage({
   const boundSaveProfile = saveVoiceProfileAction.bind(null, accountId);
   const boundAssignNumber = assignNumberAction.bind(null, accountId);
   const boundSetStatus = setNumberStatusAction.bind(null, accountId);
+  const boundSetTransferPhone = setTransferPhoneAction.bind(null, accountId);
 
   return (
     <>
@@ -91,9 +104,11 @@ export default async function VoicePage({
           profile={profile}
           brandName={brandName}
           numbers={numbers}
+          transferPhone={transferPhone}
           saveProfileAction={boundSaveProfile}
           assignNumberAction={boundAssignNumber}
           setStatusAction={boundSetStatus}
+          setTransferPhoneAction={boundSetTransferPhone}
         />
       </div>
     </>

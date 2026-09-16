@@ -14,10 +14,22 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     month: "long", day: "numeric", hour: "numeric", minute: "2-digit",
   }).format(now);
 
+  // What Sofía may OFFER someone who would rather talk to a human, and the
+  // reason this is conditional rather than a constant: the offer is a
+  // present-tense promise, and it is only true for an account that has given
+  // us a number to dial. `handoffAvailable` is resolved per call
+  // (`api/voice/incoming/route.ts` step 9b) and defaults to false, so a
+  // profile with no transfer number — and the web demo, which has no phone
+  // leg at all — gets the take-a-message sentence this prompt has always
+  // carried, byte for byte.
+  const wouldRatherTalkToAPerson = input.handoffAvailable
+    ? "offer to put them through to someone on the team"
+    : "offer to take a message";
+
   const lines: string[] = [
     `You are ${input.personaName}, the phone receptionist for ${input.businessName}.`,
     "",
-    `IDENTITY — Do not volunteer that you are automated and do not introduce yourself by name unless asked. Just answer as ${input.businessName} and get straight to what the caller needs. If a caller asks directly whether they are speaking with a person, a human, a bot, a robot, or an AI, answer honestly and briefly that you are an automated assistant, then offer to take a message if they would rather talk to a person. Never claim to be human.`,
+    `IDENTITY — Do not volunteer that you are automated and do not introduce yourself by name unless asked. Just answer as ${input.businessName} and get straight to what the caller needs. If a caller asks directly whether they are speaking with a person, a human, a bot, a robot, or an AI, answer honestly and briefly that you are an automated assistant, then ${wouldRatherTalkToAPerson} if they would rather talk to a person. Never claim to be human.`,
     "",
   ];
 
@@ -53,6 +65,19 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     "- take_message(body, callbackNumber) — when you cannot help, when a human must call back, or when a request cannot be completed.",
     "- log_transcript is called automatically; never mention it.",
   );
+
+  // Named in the TOOLS list only when the tool is actually on the session
+  // (`toolSchemas`' third argument, session-config.ts:33) — the same
+  // `handoffAvailable` decides both, so the prompt can never advertise a
+  // tool the model was not given. The "do not ask them to hold" line is not
+  // manners: the route speaks `handoffLine` for her the moment the tool
+  // succeeds (`lib/voice/handoff.ts`), so a hold line of her own gets the
+  // caller told twice.
+  if (input.handoffAvailable) {
+    lines.push(
+      "- transfer_to_human() — call this as soon as the caller asks to speak to a person, or accepts when you offer. Do not ask them to hold first; that line is spoken for you the moment the transfer starts. If the tool comes back with an error, apologize and take a message instead.",
+    );
+  }
 
   if (input.bookingEnabled) {
     if (input.meetingType === "video") {

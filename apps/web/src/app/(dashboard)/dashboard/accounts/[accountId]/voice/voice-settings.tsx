@@ -208,6 +208,64 @@ function VoiceProfileForm({
   );
 }
 
+/**
+ * Where a caller who asks for a person gets sent — and the interlock on the
+ * whole handoff feature, because Sofía is only told she can offer a transfer
+ * when this number is set (`handoffAvailable`, lib/voice/system-prompt.ts).
+ *
+ * THE FIELD IS THE SWITCH. No checkbox beside it: a toggle and a number are
+ * two places to say the same thing and they drift, and the drifted state
+ * ("on" with nothing to dial) is a promise made to a caller that the product
+ * cannot keep. Blank means Sofía takes a message, which is what she does
+ * today, and the hint says so in those words rather than calling it "off".
+ *
+ * Its own form and its own action, not a field on the profile form above:
+ * this writes `accounts`, the profile form writes `voice_profiles`, and a
+ * refused transfer number must not take an unrelated greeting edit down with
+ * it. Uncontrolled `defaultValue` — the server component re-reads the stored
+ * value after `revalidatePath`, so what the box shows is what is saved.
+ */
+function TransferPanel({
+  transferPhone, action,
+}: {
+  transferPhone: string | null;
+  action: (formData: FormData) => Promise<ActionResult>;
+}) {
+  const { pending, onSubmit } = useFormSubmit(async (formData) => {
+    // Clearing and saving are the same submit, so the toast has to say which
+    // one happened — "saved" after an operator emptied the box would read as
+    // a transfer that is still on.
+    const cleared = !String(formData.get("transfer_phone") ?? "").trim();
+    await notifyActionResult(() => action(formData), toast, {
+      success: cleared ? m["voice.transfer.cleared"] : m["voice.transfer.saved"],
+      crashed: m["common.actionCrashed"],
+    });
+  });
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{m["voice.transfer.title"]}</CardTitle>
+        <CardDescription>{m["voice.transfer.body"]}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={onSubmit} className="space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="transfer_phone">{m["voice.transfer.label"]}</Label>
+            {/* No `required`: blank is a legitimate value here — it is how the
+                feature is turned off. */}
+            <Input
+              id="transfer_phone" name="transfer_phone" type="tel"
+              autoComplete="tel" defaultValue={transferPhone ?? ""}
+            />
+            <p className="text-xs text-muted-foreground">{m["voice.transfer.hint"]}</p>
+          </div>
+          <SubmitButton pending={pending}>{m["voice.transfer.save"]}</SubmitButton>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
 function NumberStatusSelect({
   phoneNumber, statusAction,
 }: {
@@ -306,7 +364,8 @@ function PhoneNumbersPanel({
 }
 
 export function VoiceSettings({
-  profile, brandName, numbers, saveProfileAction, assignNumberAction, setStatusAction,
+  profile, brandName, numbers, transferPhone,
+  saveProfileAction, assignNumberAction, setStatusAction, setTransferPhoneAction,
 }: {
   profile: VoiceProfileRow | null;
   // The live text-back default (defaultTextbackBody) names the company, so
@@ -318,13 +377,18 @@ export function VoiceSettings({
   // that actually sends.
   brandName: string;
   numbers: PhoneNumberRow[];
+  // Null is "no transfer configured", which is where every account starts and
+  // is not a failure — it is the state that leaves Sofía taking a message.
+  transferPhone: string | null;
   saveProfileAction: (formData: FormData) => Promise<ActionResult>;
   assignNumberAction: (formData: FormData) => Promise<ActionResult>;
   setStatusAction: (phoneNumberId: string, status: string) => Promise<ActionResult>;
+  setTransferPhoneAction: (formData: FormData) => Promise<ActionResult>;
 }) {
   return (
     <div className="space-y-6">
       <VoiceProfileForm profile={profile} brandName={brandName} action={saveProfileAction} />
+      <TransferPanel transferPhone={transferPhone} action={setTransferPhoneAction} />
       <PhoneNumbersPanel numbers={numbers} assignAction={assignNumberAction} statusAction={setStatusAction} />
     </div>
   );

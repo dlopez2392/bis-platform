@@ -914,6 +914,23 @@ export const m = {
   // number just because the render it came from went stale.
   "voice.moveDestinationOccupied": "This client already has a phone number. Release or move it before bringing in another one.",
 
+  // Transfer to a person. The field IS the switch — blank means Sofía takes a
+  // message, which is what she has always done, so the copy never calls it
+  // "off" or shows a toggle that could disagree with the number in the box.
+  // `ownNumber` names the consequence rather than the rule, because the
+  // operator who typed the office line needs to know what the caller would
+  // have heard, not which table it collided with.
+  "voice.transfer.title": "Transfer to a person",
+  "voice.transfer.body": "When a caller asks to speak to someone, Sofía says one moment and rings this number.",
+  "voice.transfer.label": "Number to ring",
+  "voice.transfer.hint": "Any format — normalized automatically. Leave it blank and Sofía takes a message instead, the way she does today.",
+  "voice.transfer.save": "Save transfer number",
+  "voice.transfer.saved": "Transfer number saved",
+  "voice.transfer.cleared": "Transfer number cleared — Sofía will take a message instead",
+  "voice.transfer.badE164": "Enter a real phone number, or leave it blank to keep taking messages.",
+  "voice.transfer.ownNumber": "That's this client's own number, so the call would ring straight back to Sofía. Use a number that reaches a person.",
+  "voice.transfer.saveFailed": "Could not save the transfer number.",
+
   // The review request's default body. `{name}` is the house placeholder,
   // filled at send time with the customer-facing brand name (never
   // accounts.name); the NoName variant drops the identifying clause rather
