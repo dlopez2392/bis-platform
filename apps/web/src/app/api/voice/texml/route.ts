@@ -23,6 +23,8 @@ import { NextResponse } from "next/server";
 import { toE164 } from "@/lib/voice/phone-number";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
 import { callAnswerable } from "@/lib/voice/accept-gate";
+import { newHandoffToken } from "@/lib/voice/handoff";
+import { configuredOrigin } from "@/lib/email/origin";
 
 export const runtime = "nodejs";
 
@@ -191,16 +193,42 @@ export function forwardXml(to: string, callerId: string | null): string {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Dial${cid} timeout="30">${to}</Dial></Response>`;
 }
 
-function dialXml(calledE164: string | null): string {
+/**
+ * The bridge to Sofía — and, since the handoff feature, the thing that lets
+ * the call OUTLIVE her.
+ *
+ * `action` is the whole mechanism: when the SIP leg ends, Telnyx fetches that
+ * URL and does whatever TeXML comes back, instead of hanging up on the
+ * caller. Without it, closing the AI socket ends the call, and a caller who
+ * has just been told "one moment, I'll connect you" hears the line go dead.
+ *
+ * ONE token is minted per response and written in BOTH places — onto the SIP
+ * URI as `X-BIS-Handoff` (the webhook stores it on the call row) and into the
+ * action URL's query string (the handoff route authenticates with it). Two
+ * separately-minted tokens would type-check, emit valid TeXML, and mean the
+ * action route can never find the call: a silent, unloggable dead end. That
+ * equality is pinned by a test, not left to reading.
+ *
+ * It rides the dial with no `To` as well. The webhook can still resolve a
+ * tenant from the To/Diversion fallbacks on such a call, so it can still be
+ * answered — and its caller can still ask for a person.
+ */
+function dialXml(calledE164: string | null, origin: string): string {
   const projectId = process.env.VOICE_OPENAI_PROJECT_ID;
   if (!projectId) {
     // Speak the misconfig: a broken deploy should be audible on a test call,
     // never silent dead air (demo lesson).
     return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Say>Configuration error: the project identifier is not set.</Say><Hangup/></Response>`;
   }
+  const token = newHandoffToken();
   const base = `sip:${projectId}@sip.api.openai.com;transport=tls`;
-  const uri = calledE164 ? `${base}?X-BIS-Called=${encodeURIComponent(calledE164)}` : base;
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Dial answerOnBridge="true"><Sip>${uri}</Sip></Dial></Response>`;
+  const params = [
+    ...(calledE164 ? [`X-BIS-Called=${encodeURIComponent(calledE164)}`] : []),
+    `X-BIS-Handoff=${encodeURIComponent(token)}`,
+  ];
+  const uri = `${base}?${params.join("&")}`;
+  const action = `${origin}/api/voice/texml/handoff?t=${encodeURIComponent(token)}`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Dial answerOnBridge="true" action="${action}" method="POST"><Sip>${uri}</Sip></Dial></Response>`;
 }
 
 function xmlResponse(body: string): NextResponse {
@@ -210,7 +238,7 @@ function xmlResponse(body: string): NextResponse {
   });
 }
 
-async function respond(calledE164: string | null, callerE164: string | null): Promise<NextResponse> {
+async function respond(calledE164: string | null, callerE164: string | null, origin: string): Promise<NextResponse> {
   const forward = forwardTarget();
   if (forward) {
     // Logged on EVERY forwarded call, not once at boot. This mode bypasses
@@ -229,7 +257,18 @@ async function respond(calledE164: string | null, callerE164: string | null): Pr
     if (result.kind === "cap") return xmlResponse(sayXml(result.languages, COPY.cap));
     // kind === "dial" → fall through to the same dial path as calledE164===null
   }
-  return xmlResponse(dialXml(calledE164));
+  return xmlResponse(dialXml(calledE164, origin));
+}
+
+/**
+ * Where the `<Dial action=…>` URL must point. Telnyx is a server-to-server
+ * caller, so `req.url`'s origin is the deployment's own vercel.app URL, not
+ * the custom domain — APP_ORIGIN wins here for the same reason it wins in
+ * `email/origin.ts` and in the incoming webhook (`incoming/route.ts:891`).
+ * The fallback is still correct, just uglier in a log line.
+ */
+function actionOrigin(req: Request): string {
+  return configuredOrigin() ?? new URL(req.url).origin;
 }
 
 export async function GET(req: Request): Promise<NextResponse> {
@@ -242,7 +281,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     return new NextResponse(null, { status: 405 });
   }
   const params = new URL(req.url).searchParams;
-  return respond(toE164(params.get("To")), toE164(params.get("From")));
+  return respond(toE164(params.get("To")), toE164(params.get("From")), actionOrigin(req));
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
@@ -289,5 +328,5 @@ export async function POST(req: Request): Promise<NextResponse> {
       return new NextResponse(null, { status: 403 });
     }
   }
-  return respond(toE164(claimedTo), toE164(claimedFrom));
+  return respond(toE164(claimedTo), toE164(claimedFrom), actionOrigin(req));
 }
