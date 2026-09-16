@@ -967,24 +967,6 @@ export const m = {
   "numbers.releaseLabel": "Take {e164} out of service",
   "numbers.moveNone": "Every other company already has a number of its own.",
   "numbers.moved": "{e164} now answers as {account} — if it's pointed at BIS at the carrier",
-  // The seam this screen cannot cross, said once, in the place an operator
-  // reads before they touch anything.
-  //
-  // Moving a number here re-points the ANSWERING side: whichever company owns
-  // a number's row is the company the receptionist greets a caller as. It
-  // does not, and today cannot, change where the phone company sends the
-  // call. That is a Routing setting on the number in the Telnyx portal
-  // (docs/runbooks/voice-setup.md Step 4), which nothing in this app writes —
-  // `phone_numbers.telnyx_id` is optional and mostly empty, so the platform
-  // does not even hold the handle it would need.
-  //
-  // On 2026-09-16 a number was moved to a new company here and still
-  // answered as the old one, because the phone company was still sending
-  // those calls somewhere else entirely. The move was recorded correctly and
-  // the screen said nothing about the half it does not control. This
-  // sentence is that missing half.
-  "numbers.carrierSeam":
-    "Moving a number here changes which company the receptionist answers as. It does not change where your phone company sends the call — point the number at BIS under Voice → Routing in Telnyx.",
   "numbers.sameAccount": "That number is already on this company.",
   "numbers.notFound": "We couldn't find that number — this page may be out of date.",
   "numbers.destinationMissing": "We couldn't find that company — this page may be out of date.",
@@ -1002,6 +984,37 @@ export const m = {
   "numbers.released": "{e164} is out of service",
   "numbers.releaseFailed": "Couldn't take that number out of service. Try again.",
   "numbers.alreadyReleased": "That number is already out of service.",
+
+  // ── The carrier half (Telnyx voice routing) ───────────────────────────
+  //
+  // Reported per number, because the 2026-09-16 incident was invisible: a
+  // number sat in this list looking healthy while the phone company sent its
+  // calls somewhere else entirely. "Routed here" is the only state that means
+  // a caller dialling this number reaches the company on its row.
+  "numbers.routing.routed": "Routed here",
+  "numbers.routing.elsewhere": "Goes elsewhere",
+  "numbers.routing.unrouted": "No routing",
+  "numbers.routing.absent": "Not in Telnyx",
+  // NEVER an accusation — this is "we could not ask", not "it is broken".
+  "numbers.routing.unchecked": "Not checked",
+  "numbers.routing.repair": "Point at BIS",
+  "numbers.routing.repairLabel": "Point {e164} at BIS at the carrier",
+  "numbers.routing.repairing": "Pointing…",
+  "numbers.routing.repaired": "{e164} now comes to BIS",
+  "numbers.routing.repairFailed": "Couldn't change that number's routing at Telnyx. Try again.",
+  "numbers.routing.checkFailed": "Couldn't reach Telnyx to check that number.",
+  "numbers.routing.alreadyRouted": "That number already comes to BIS.",
+  "numbers.routing.notAtCarrier": "That number isn't in your Telnyx account, so we can't route it. Check which carrier holds it.",
+  "numbers.routing.notConfigured": "Routing isn't wired up yet — set TELNYX_VOICE_CONNECTION_ID to the BIS Platform Voice app's id.",
+  // Shown in place of the whole routing column when we could not ask at all,
+  // so the blank is explained rather than read as "everything is fine".
+  "numbers.routing.unavailable":
+    "Carrier routing isn't being checked here. A number still has to be pointed at BIS under Voice → Routing in Telnyx before callers reach the company on its row.",
+  // Replaces the standing carrier sentence once routing IS checkable: the app
+  // can now see and fix where a number points, so the remaining caveat is
+  // only about numbers held at another carrier.
+  "numbers.routing.seam":
+    "A number must say Routed here for callers to reach the company on its row. One held at another carrier can't be checked or fixed from here.",
 
   // The review request's default body. `{name}` is the house placeholder,
   // filled at send time with the customer-facing brand name (never

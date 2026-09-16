@@ -156,28 +156,60 @@ as its connection, not "none" or a different app.
 
 ## Moving a number between companies
 
-There are TWO halves to a phone number, and the platform owns only one.
+There are TWO halves to a phone number, and `/dashboard/numbers` now shows
+and fixes both.
 
 | | Where it lives | What changes it |
 |---|---|---|
-| **Who answers** | `phone_numbers.account_id` | `/dashboard/numbers` → Move |
-| **Where the call goes** | Telnyx → the number → Voice → Routing | The Telnyx portal, by hand |
+| **Who answers** | `phone_numbers.account_id` | `/dashboard/numbers` → **Move…** |
+| **Where the call goes** | the number's voice connection at Telnyx | `/dashboard/numbers` → **Point at BIS** |
 
-Moving a number on `/dashboard/numbers` re-points the ANSWERING side. The
-TeXML route resolves the tenant from the dialed number (`To`), so whichever
-company holds the row is the company the receptionist greets a caller as.
-Nothing in this app writes the carrier side — `phone_numbers.telnyx_id` is an
-optional field and is usually empty, so the platform does not even hold the
-handle it would need.
+**Moving is only the first half.** The TeXML route resolves the tenant from
+the DIALED number, so whichever company holds the row is the company the
+receptionist greets a caller as — but only if the call arrives as that number
+in the first place. That is the carrier half, and it is what the **Routed
+here** column reports.
 
-So a move is complete only when BOTH are done:
+Note what the carrier half is NOT: it is not per-company. Every client number
+points at the SAME `BIS Platform Voice` TeXML app, because the tenant comes
+from the dialed number and never from the connection. So the carrier side has
+to be right exactly **once per number** — a later move between companies needs
+no carrier change at all.
 
-1. `/dashboard/numbers` → **Move…** → pick the company → **Move**.
-2. Telnyx → **Numbers → My Numbers** → the number → **Voice → Routing** →
-   the `BIS Platform Voice` TeXML app from Step 3.
-3. The number lands as `provisioned` after a move, by design
-   (`reassignPhoneNumber` resets status) — walk the test-call and go-live
-   steps again before it answers for real.
+### The routing column
+
+| Column reads | Means | What to do |
+|---|---|---|
+| **Routed here** | Points at our TeXML app. Calls arrive as themselves. | Nothing. |
+| **Goes elsewhere** | At Telnyx, pointed at a different connection. Calls go somewhere else — this is the 2026-09-16 failure. | **Point at BIS** |
+| **No routing** | At Telnyx with no voice connection. Calls go nowhere. | **Point at BIS** |
+| **Not in Telnyx** | Not in the account this API key can see. | Find which carrier holds it; nothing here can route it. |
+| **Not checked** | We could not ask — see below. NOT a verdict about the number. | Check the env vars. |
+
+**Not checked** appears when `TELNYX_API_KEY` or `TELNYX_VOICE_CONNECTION_ID`
+is unset, or when the Telnyx lookup failed. It never means the number is
+broken, and no repair is offered against it: writing a carrier setting on a
+line the platform never managed to inspect is how a working phone gets broken
+by a diagnostic.
+
+`TELNYX_VOICE_CONNECTION_ID` is the id of the `BIS Platform Voice` TeXML
+application from Step 3 (Telnyx portal → TeXML Applications → the app). The
+API key is the same `TELNYX_API_KEY` that already sends SMS.
+
+### Assigning a number, end to end
+
+1. Buy it at Telnyx (Step 4 above).
+2. `/dashboard/accounts/<id>/voice` → assign the E.164 to the company, or
+   `/dashboard/numbers` → **Move…** to take it from another one.
+3. `/dashboard/numbers` → if the row does not say **Routed here**, press
+   **Point at BIS**. That PATCHes the number's voice connection at Telnyx and
+   records Telnyx's own id on the row.
+4. A moved number lands as `provisioned` by design (`reassignPhoneNumber`
+   resets status) — walk the test-call and go-live steps again before it
+   answers for real.
+
+Step 3 replaces the manual portal step Step 4 describes; the portal route
+still works and the two agree, since both set the same connection.
 
 ### When a number answers as the WRONG company
 
@@ -196,8 +228,11 @@ platform was told about, and the ONLY thing that picks the tenant:
   tenant. That is a bug here; check `phone_numbers` for that e164.
 - **`calledNumber` is a DIFFERENT number** → the carrier sent the call
   somewhere else and the platform answered correctly for whatever number it
-  actually received. Fix the routing on the dialed number in Telnyx: either
-  it is not pointed at the TeXML app, or it is forwarding to another line.
+  actually received. Check the dialed number's routing column on
+  `/dashboard/numbers`: **Goes elsewhere** or **No routing** is one press of
+  **Point at BIS** to fix. **Not in Telnyx** means another carrier holds it,
+  and a forward configured THERE is beyond anything this app can see — that
+  one is still a portal job at whoever owns the number.
 
 A worked example, 2026-09-16: `+19567055146` had just been moved to
 956 Woodworks and still answered as Bespoke Intelligent Solutions. The log
