@@ -84,8 +84,22 @@ test.describe("the agency admin can reach the inventory this file guards", () =>
   test.use({ storageState: "e2e/.auth/state.json" });
 
   test("the agency admin sees the inventory, with real numbers on it", async ({ page }) => {
-    const numbers = await listAllPhoneNumbers(serviceDb());
-    expect(numbers.length).toBeGreaterThan(0);
+    // READ, RENDER, READ. The first draft read the table once and required
+    // every row it returned to be on the page. That raced the rest of the
+    // suite: `calls.spec.ts` and `contacts-drawer.spec.ts` each assign a
+    // timestamp-unique fixture number and delete it in their own teardown,
+    // so a row can exist when this reads and be gone by the time the page
+    // renders. CI caught it on `+999613461693567`, a fixture number that no
+    // longer existed by the time the failure was investigated.
+    //
+    // Bracketing the render closes that properly rather than weakening the
+    // assertion to "at least one row appeared". A number present in BOTH
+    // reads was present for the whole window, so it MUST have been on the
+    // page; anything created or destroyed mid-test simply drops out of the
+    // intersection. (The one theoretical escape — deleted and re-created
+    // under the same e164 inside this window — cannot happen: `e164` is
+    // globally unique and every fixture derives it from a timestamp.)
+    const before = await listAllPhoneNumbers(serviceDb());
 
     await page.goto("/dashboard/numbers");
 
@@ -93,13 +107,18 @@ test.describe("the agency admin can reach the inventory this file guards", () =>
     // has nothing keeping it in step with the copy.
     await expect(page.getByRole("heading", { name: m["numbers.title"] })).toBeVisible();
 
-    // EVERY number the database holds is on the page. Stronger than "a row
-    // rendered" and still immune to reassignment: the inventory's one
-    // promise is that it is the whole inventory, and a filter that quietly
-    // dropped a row — an inner join that lost a number whose account row was
-    // gone, say — is precisely the bug that would hide a reclaimable line.
-    for (const n of numbers) {
-      await expect(page.getByText(n.e164).first()).toBeVisible();
+    const after = new Set((await listAllPhoneNumbers(serviceDb())).map((n) => n.e164));
+    const stable = before.map((n) => n.e164).filter((e164) => after.has(e164));
+    // Without this the loop below could pass by having nothing to check.
+    expect(stable.length).toBeGreaterThan(0);
+
+    // Every stable number is on the page — still a completeness assertion,
+    // not merely "a row rendered". The inventory's one promise is that it is
+    // the WHOLE inventory, and a filter that quietly dropped a row (an inner
+    // join losing a number whose account row was gone, say) is precisely the
+    // bug that would hide a reclaimable line from the agency.
+    for (const e164 of stable) {
+      await expect(page.getByText(e164).first()).toBeVisible();
     }
   });
 });
