@@ -430,7 +430,57 @@ it("the handoff token from the TeXML SIP header reaches startCallRow", async () 
 });
 ```
 
-Fill the first body using the harness already in the file. **Assert order explicitly** — a test that only checks "a send happened and a close happened" is the ordering-shaped vacuity this repo has shipped before.
+Fill the first body using the harness already in the file. **Assert order explicitly** — a test that only checks "a send happened and a close happened" is the ordering-shaped vacuity this repo has shipped before. Two things that test must also pin, both found missing in review (2026-09-16) with the ordering assertion already in place and green:
+
+- **The CONTENT of what goes to the socket**, not just that two sends happened.
+  `sendSpy.mock.calls[1]` must parse to `{ type: "response.create", response: { instructions: handoffLine("en") } }`
+  (`calls[0]` is the `conversation.item.create` tool reply — but ONLY after
+  `sendSpy.mockClear()` next to the existing `order.length = 0`, because the
+  900ms greeting send otherwise sits at `calls[0]` and every index shifts by one).
+  This is the end-to-end half of "the handoff line reaches the model": without
+  it, `ws.send(JSON.stringify({ ...(action.payload as object), response: undefined }))`
+  — which silently drops `response.instructions` from EVERY tool reply — passed
+  the whole domain, 28 files / 434 tests.
+- **The playout BUDGET, not only the deferral.** One line before the existing
+  advance: `await vi.advanceTimersByTimeAsync(4_999); expect(closeSpy).not.toHaveBeenCalled();`
+  Without it, setting this branch's delay — or `CLOSE_AFTER_GOODBYE_MS` itself —
+  to `0` left the file fully green, and in production a 0ms close cuts the
+  sentence entirely, because `ws.send` only queues.
+
+**And the cross-account boundary the spec calls "the boundary that matters"**
+(`docs/superpowers/specs/2026-09-15-call-handoff-design.md:213-217`). Both
+handoff reads run on `serviceDb()`, so RLS protects nothing: the account id
+they are handed is the only thing between a caller and a stranger's phone.
+Assert the ORDERING too — that the account was resolved from the dialled
+number BEFORE either read fired, not merely that both happened:
+
+```ts
+it("both handoff reads are scoped to the account resolved FROM THE DIALLED NUMBER, and neither fires before that resolution", async () => {
+  let releasePhoneRow!: (row: typeof PHONE_ROW) => void;
+  getPhoneNumberByE164Mock.mockReturnValue(
+    new Promise<typeof PHONE_ROW>((resolve) => { releasePhoneRow = resolve; }),
+  );
+  unwrapMock.mockResolvedValue(callIncomingEvent());
+  const posted = POST(req());
+  await flushMicrotasks();
+  expect(getTransferPhoneMock).not.toHaveBeenCalled();
+  expect(listPhoneNumbersForAccountMock).not.toHaveBeenCalled();
+  releasePhoneRow({ ...PHONE_ROW, account_id: "acct-resolved-from-number" });
+  expect((await posted).status).toBe(200);
+  expect(getTransferPhoneMock).toHaveBeenCalledWith(expect.anything(), "acct-resolved-from-number");
+  expect(listPhoneNumbersForAccountMock).toHaveBeenCalledWith(expect.anything(), "acct-resolved-from-number");
+});
+```
+
+The account id is deliberately NOT `acct1`: it exists only on the row the
+dialled-number lookup returns, so no literal anywhere in the route can reach it.
+
+**Also add, in `src/lib/voice/session-config.test.ts`:** an OMITTED
+`handoffAvailable` withholds `transfer_to_human`. The fail-closed direction of
+that default was asserted only in prose (`session-config.ts:33`); relaxing
+`=== true` to `!== false` passed 434 tests. There is no exposure today only
+because the web demo hard-overrides `tools: []` — a different fact than the
+default being safe.
 
 - [ ] **Step 2: Run all three files and verify they fail**
 
@@ -458,7 +508,11 @@ Expected: FAIL — `Unknown tool: transfer_to_human`, and no `close` kind exists
 
 **3c.** `call-events.ts` — widen `VoiceAction` to `{ kind: "send"; payload: object } | { kind: "close" }`. In the function-call branch, append `{ kind: "close" }` **after** the two existing sends, and only when the tool was `transfer_to_human` AND its result was `{ ok: true }`. A refused transfer must leave the call running.
 
-**3d.** `incoming/route.ts` — at the single action-consumption site (`:536-540`), handle the new variant. It must close the socket **after** the queued sends have gone out; follow the cost cap's existing shape (`route.ts:340-350`) — send, then a short `setTimeout` before `ws.close()` — so the line plays out. Reuse the existing close-delay constant rather than inventing a second one.
+**3d.** `incoming/route.ts` — at the single action-consumption site (`:536-540`), handle the new variant. It must close the socket **after** the queued sends have gone out; follow the cost cap's existing shape (`route.ts:340-350`) — send, then a short `setTimeout` before `ws.close()` — so the line plays out.
+
+**The close-delay constant is `CLOSE_AFTER_GOODBYE_MS` (`route.ts:151`, 5000ms).** This plan originally said "reuse the existing close-delay constant" when there was none; it was minted during Task 3 and is now the ONE constant for all three endings — the cost cap's goodbye, the silence guard's, and the handoff line. Tasks 4–5 must reference it by name and must not mint a second literal: the cap's own tail budget (`maxSeconds`' 750s clamp) is derived from this number, so a second copy silently breaks that derivation.
+
+**Clear `closeTimer` before arming a new one.** The handoff branch clears `capTimer` and `silenceTimer`; it must clear `closeTimer` too. Assigning over the variable leaves the previous timer armed: the cap fires at `maxSeconds`, arms its own 5s close, and a `transfer_to_human` landing inside that window arms a second one while the cap's keeps its original deadline and closes the socket mid-handoff-line. Found in review 2026-09-16, and the branch's own comment claimed this was already handled.
 
 Also in this route: extract `X-BIS-Handoff` from the SIP headers (add a raw-value sibling to `sip-headers.ts` — the existing `numberFromHeader` coerces through `toE164` and would destroy a token), pass it to `startCallRow`, and put `callRowId` plus the resolved `handoffTarget` into `ToolContext`. The target is resolved from `getTransferPhone` and the account's owned numbers.
 
@@ -478,9 +532,26 @@ cd apps/web && npx vitest run src/lib/voice/tools/registry.test.ts src/lib/voice
 | the catch reports `{ok:true}` | `a database failure while marking does NOT report success …` |
 | the close action is emitted for every tool | `no other tool ever yields a close action` |
 | the close action is emitted on a refused transfer | `a REFUSED transfer yields no close action …` |
-| the close is emitted BEFORE the sends | `a close action closes the socket, and only after …` |
+| the close is emitted BEFORE the sends (`actions.unshift` in `call-events.ts`) | `call-events.test.ts > a successful transfer_to_human yields a close action after the spoken line` |
+| a SYNCHRONOUS `ws.close()` in the route's action loop, in place of the deferred one | `lifecycle.test.ts > a close action closes the socket, and only after …` |
+| `CLOSE_AFTER_GOODBYE_MS`, or the handoff branch's own delay, set to `0` | `lifecycle.test.ts > a close action closes the socket, and only after …` |
+| the handoff branch assigns `closeTimer` without `clearTimeout`ing the old one | `lifecycle.test.ts > a transfer requested inside the cost cap's own 5s playout window …` |
+| `ws.send(JSON.stringify({ ...(action.payload as object), response: undefined }))` | `lifecycle.test.ts > a close action closes the socket, and only after …` |
+| either handoff read given a literal `"acct-someone-else"` instead of `accountId` | `lifecycle.test.ts > both handoff reads are scoped to the account resolved FROM THE DIALLED NUMBER …` |
+| a handoff read fired above `getPhoneNumberByE164` (a prefetch/`Promise.all` refactor) | same test — its `not.toHaveBeenCalled()` half |
+| `input.handoffAvailable === true` relaxed to `!== false` | `session-config.test.ts > an OMITTED handoffAvailable withholds transfer_to_human …` |
 | `toolSchemas` advertises the tool with no target available | add a row if none exists — the model must not be offered it |
 | `startCallRow` is called without the token | `the handoff token from the TeXML SIP header reaches startCallRow` |
+
+**Why row 7 changed (recorded 2026-09-16).** It originally named the lifecycle
+test, and that was false: `actions.unshift({ kind: "close" })` leaves
+`lifecycle.test.ts` fully green (verified — 39 passed) while failing
+`call-events.test.ts`. The route does not consume the array's order at all; it
+defers the close by a timer, so an array position is invisible to it. The
+route-level mutation that DOES work is a synchronous `ws.close()` in the action
+loop (row 2 above), which fails the lifecycle test by name. **Generalise:** when
+one layer buffers or defers what another layer ordered, an ordering mutation in
+the producing layer can only be caught in the producing layer's own test.
 
 - [ ] **Step 6: Commit**
 
@@ -488,6 +559,19 @@ cd apps/web && npx vitest run src/lib/voice/tools/registry.test.ts src/lib/voice
 git add apps/web/src/lib/voice apps/web/src/app/api/voice/incoming
 git commit -m "feat(voice): a tool that hands the caller over, and the action that ends the AI leg"
 ```
+
+🔴 **Sequencing, for the ledger and for Task 6.** From the moment Task 3 lands,
+the PROMISE is reachable: any account whose `transfer_phone` is non-null gets
+`transfer_to_human` advertised on its next call, and a caller who asks for a
+person hears "one moment, I'll put you through" — and then the AI leg closes
+and **nothing dials anyone**, because the TeXML continuation (Task 4) and the
+result route (Task 5) do not exist yet. The caller is hung up on mid-promise.
+
+The only thing standing between a real caller and that experience today is that
+no account has a `transfer_phone` value, and the only way to set one is the
+settings field in **Task 6**. Therefore: **Task 6's settings UI must not land
+ahead of Tasks 4–5.** If Task 6 is pulled forward for any reason, the field
+must ship disabled or the tool gated off, not merely "not documented yet".
 
 ---
 
@@ -719,6 +803,13 @@ git commit -m "feat(voice): stamp a completed handoff, and say something when no
 **Interfaces:**
 - Consumes: `setTransferPhone` (Task 1), `HandoffTarget` (Task 2).
 - Produces: nothing.
+
+🔴 **Do not land this task ahead of Tasks 4–5.** See the sequencing note at the
+end of Task 3: the settings field is the only way an account gets a non-null
+`transfer_phone`, and a non-null `transfer_phone` is the only thing making
+Sofía's "one moment, I'll put you through" reachable. Between Task 3 and Task 5
+that promise is followed by a closed socket and no dial at all. This field is
+the safety interlock, not a finishing touch.
 
 - [ ] **Step 1: Write the failing tests**
 
