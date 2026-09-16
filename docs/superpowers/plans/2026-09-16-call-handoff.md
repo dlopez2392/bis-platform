@@ -52,7 +52,7 @@ Both ends are ours. Nothing is inferred about the carrier's identifier semantics
 | `packages/db/src/voice.ts` | **Modify.** `CallOutcome` gains `transferred`; `startCallRow` accepts the token; new `markHandoffRequested`, `getCallByHandoffToken`, `setCallOutcome`. | 1 |
 | `packages/db/src/accounts.ts` | **Modify.** `getTransferPhone`, `setTransferPhone`. | 1 |
 | every `CallOutcome` consumer | **Modify.** Widening the union breaks the build until each is updated — they ship in one commit with it. | 1 |
-| `apps/web/src/lib/voice/call-state.ts` | **Modify.** `ServedAction` gains `"transferred"`. **Moved into Task 1's fix wave** — widening the union is behaviour-neutral (proven: 2185 tests green, `tsc` clean), and splitting one fact across two tasks created a two-fields-one-producer hazard. | 1 |
+| `apps/web/src/lib/voice/call-state.ts` | **Modify.** `ServedAction` gains `"transferred"` in **Task 1**; `withTransferred` (its only producer) and the tests that exercise it stay in **Task 2**, with Task 3's tool as the first caller. Split that way on purpose: adding a union member no code produces or branches on is behaviour-neutral, whereas the producer needs the behaviour test that rides with it. See Task 2's interface list. | 1 |
 | `apps/web/src/lib/voice/handoff.ts` | **Create.** Pure: is a transfer possible, and to where. | 2 |
 | `apps/web/src/lib/voice/tools/schemas.ts` + `tools/registry.ts` | **Modify.** The `transfer_to_human` tool. | 3 |
 | `apps/web/src/lib/voice/call-events.ts` | **Modify.** `VoiceAction` gains `{ kind: "close" }`. | 3 |
@@ -193,9 +193,10 @@ git commit -m "feat(db): 0037 a transfer number, and an outcome for reaching a h
   - `type HandoffTarget = { available: false; reason: "not-configured" | "own-number" } | { available: true; to: string }`
   - `resolveHandoffTarget(transferPhone: string | null, ownedNumbers: string[]): HandoffTarget` — `ownedNumbers` is every `testing` or `live` number on the account, from `listPhoneNumbersForAccount` filtered in JS
   - `newHandoffToken(): string` — 🔴 **must be `crypto.randomUUID()` or 32 crypto-random bytes. NEVER `Math.random()`.** The only token generator in the tree today is a TEST fixture using `Math.random().toString(36)`; correct there, catastrophic if copied here. This token is a credential: it authorises dialling a stranger on the tenant's trunk.
-  - `handoffLine(languages: "en" | "es" | "both"): string` — what Sofía says before the socket closes
-  - `transferFailedLine(languages: "en" | "es" | "both"): string` — what the caller hears on a ring-out
-  - `ServedAction` gains `"transferred"`; `withTransferred(state): CallState`
+  - 🔴 **The two spoken lines belong to different families and are NOT interchangeable.** Getting this wrong is silent: the caller simply hears the wrong thing.
+  - `handoffLine(languages: "en" | "es" | "both"): string` — a **MODEL INSTRUCTION**, what Sofía says before the socket closes. Handed to the still-open OpenAI socket as `response.instructions` exactly like `silenceGoodbye` (`incoming/route.ts:415`), so it carries the `Say exactly this and nothing else: "…"` wrapper. `both` → English, mirroring the greeting's rule at `incoming/route.ts:764`.
+  - `transferFailedLine(languages: "en" | "es" | "both"): string` — **TeXML `<Say>` TEXT**, what the caller hears on a ring-out. Consumed by `/api/voice/texml/handoff-result` (Task 5), by which time the socket is closed and there is no model to instruct: a bare sentence, shaped like `texml/route.ts`'s `COPY`, never the wrapper. With the wrapper the caller literally hears "Say exactly this and nothing else: …". **`both` → English here too, NOT `sayXml`'s EN-then-ES pair**, for two reasons: (a) this sentence answers `handoffLine`, which the same caller heard in English seconds earlier on a `both` profile — the two bracket one moment and must match; (b) `sayXml` can offer both languages only because it emits the `<Say>` ELEMENTS and hangs `language="es-MX"` on the Spanish one, and this function returns text FOR one element, so a two-language string would be Spanish read by an English voice. The reasoning is restated in the function's own doc block.
+  - `ServedAction` gains `"transferred"` **in Task 1** (behaviour-neutral union widening, no producer yet). `withTransferred(state): CallState` is **this task**, with its behaviour test.
 
   Tasks 3, 4 and 5 consume these exact names.
 
@@ -305,9 +306,15 @@ cd apps/web && npx vitest run src/lib/voice/handoff.test.ts src/lib/voice/call-s
 | `resolveHandoffTarget` drops the owned-number check | `REFUSES a number this account owns …` |
 | it checks only `ownedNumbers[0]` | `refuses a SECOND owned number …` |
 | it returns `available: true` for a null number | `is unavailable when no number is configured …` |
-| `newHandoffToken` returns a constant | `is unguessable and unique across calls` |
-| `handoffLine`/`transferFailedLine` return the same string for `es` and `en` | `say something in both languages …` |
-| `withTransferred` returns state unchanged | `withTransferred marks the caller served …` |
+| `resolveHandoffTarget` compares only the last 4 digits, or only a prefix | `compares the WHOLE number …` (needs BOTH near-miss fixtures — one differing in the final digit, one sharing the last four; neither catches the other's mutation) |
+| `newHandoffToken` returns a constant | `is unique across calls and shaped the way every consumer's regex expects` |
+| `newHandoffToken` uses `Math.random()` or a counter | `draws from the CSPRNG — not a counter, not Math.random`. **Uniqueness and character shape are not entropy** — a counter and a `Math.random()` generator both satisfy the shape test. The checkable property is the SOURCE, so the test spies on `crypto.randomUUID`. |
+| `handoffLine` returns the same string for `es` and `en` | `says something different in Spanish, and \`both\` takes English …` |
+| `transferFailedLine` returns the same string for `es` and `en` | `says something different in Spanish — the caller was just addressed in Spanish`. **Its own row**: the two lines are separate functions and a single row here previously let `transferFailedLine` ship with no `es ≠ en` assertion at all. |
+| `transferFailedLine` is given `handoffLine`'s `Say exactly this and nothing else: "…"` wrapper | `is a BARE sentence: no model wrapper, no quote characters` — the wrapper would be read aloud to the caller by the `<Say>` |
+| `transferFailedLine`'s Spanish assumes the caller is male (`comunicarlo`) | `does not guess the caller's gender` |
+| `withTransferred` returns state unchanged | `withTransferred writes the marker …` (call-state) **and** `says the transcript stops at the handoff …` (summarize — which is why those tests build state through the wrapper, never `withServed(state, "transferred")`) |
+| `wasServed` stops counting `"transferred"` as served | `does NOT text a caller we put THROUGH TO A PERSON` (finish-call.test.ts). **This is the behaviour mutation for the marker**, and it COMPILES — the union-member-removal mutation the spec used to prescribe is a `tsc` failure and proves nothing about the text-back. |
 | `classifyOutcome` is changed to return `"transferred"` when served includes it | `a transferred call still classifies abandoned …` |
 
 - [ ] **Step 6: Commit**
@@ -678,6 +685,8 @@ it("a stamping failure still returns valid TeXML, never a 5xx", async () => {
 - [ ] **Step 3: Implement**
 
 `runtime = "nodejs"`. Read `t` from the query string and `DialCallStatus` from the form body. Look the call up by token; unknown → `<Hangup/>`. On `completed`, `setCallOutcome(..., "transferred")` and return `<Hangup/>` (the caller is already talking to a person; this document only ends our side of the flow). On anything else, speak `transferFailedLine` in the profile's language and hang up, leaving the outcome as `finishCall` recorded it. Wrap everything so a failure still returns 200 with valid TeXML.
+
+🔴 `transferFailedLine` returns **TeXML `<Say>` text — a bare sentence**, not a model instruction: the OpenAI socket closed before this route ran, so `handoffLine`'s `Say exactly this and nothing else: "…"` wrapper has no model to instruct and would be read aloud to the caller, quotes and all. Emit it as `<Say>{line}</Say>`, adding `language="es-MX"` when the profile's language is `es` (that attribute is what makes the Spanish sound Spanish). `both` resolves to English inside `transferFailedLine`, deliberately — it must match the `handoffLine` this caller heard seconds earlier, which also takes English on `both` — so this route does NOT emit `sayXml`'s EN-then-ES pair here.
 
 - [ ] **Step 4: Run and verify green**
 

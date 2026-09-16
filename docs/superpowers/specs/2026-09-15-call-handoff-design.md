@@ -221,8 +221,28 @@ fails:
 
 - A transfer to a number the account owns is refused. The loop is the failure
   mode; the test is the guard.
-- A transferred call does **not** fire the missed-call text-back. Remove
-  `"transferred"` from `ServedAction` and this test must go red.
+- A transferred call does **not** fire the missed-call text-back — the finding
+  that most shapes this design, so it gets the sharpest mutation.
+
+  **The mutation is `wasServed` ceasing to count `"transferred"` as served**
+  (e.g. `state.served.some((a) => a !== "transferred")`). That compiles, and
+  until this test existed the whole suite survived it — while a caller
+  successfully put through to a human got texted "Sorry we missed you just
+  now".
+
+  It is stated that way because the mutation this section used to prescribe —
+  removing `"transferred"` from `ServedAction` — is a **compile** failure, and
+  a red `tsc` is exactly what let an earlier wave treat type-checking as the
+  proof. A type error tells you a string is missing from a union; it tells you
+  nothing about whether the marker still suppresses a text message. The
+  behaviour-level mutation must compile, or it is not testing behaviour.
+
+  The test that must go red by name: `does NOT text a caller we put THROUGH TO
+  A PERSON` (`apps/web/src/lib/voice/finish-call.test.ts`), run through
+  `finishCall` on `withTransferred(abandonedState())` and asserting `send`,
+  `createContact` and `createMessage` were none of them called. A test that
+  only asserts `served` contains `"transferred"` restates `withTransferred`'s
+  one line and stays green through this mutation.
 - A transferred call records `transferred`, not `abandoned`.
 - `no-answer`, `busy` and `failed` each produce a spoken line, never silence.
 - With no `transfer_phone` set, the action URL answers `<Hangup/>` and the
