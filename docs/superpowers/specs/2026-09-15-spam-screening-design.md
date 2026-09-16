@@ -130,8 +130,22 @@ audio at all bills up to 240 seconds.
 
 In the Realtime lifecycle (`incoming/route.ts`, inside `ws.on("open")`), arm a
 `silenceTimer` beside the existing `capTimer`. Cancel it the first time the
-caller makes any sound. If it fires, run the **same** goodbye → `ws.close()`
-chain `capTimer` already runs (`incoming/route.ts:307-321`).
+caller makes any sound. If it fires, run the same SHAPE of goodbye →
+`ws.close()` chain `capTimer` already runs (`incoming/route.ts:307-321`) — a
+`response.create` instruction, then the socket closed 5s later so it plays out.
+
+**It is deliberately not the same chain, and must not be "restored" to one.**
+Two divergences, both load-bearing, both pinned by tests:
+
+- The instruction is its own **fixed sentence** (`silenceGoodbye`), never the
+  cap's open-ended "Politely wrap up…". Asking a model to wrap up a
+  conversation that never happened is asking it to invent one — which is
+  exactly what the 247-second call's summary recorded as fact.
+- The silence callback also **clears `capTimer`**. The cap has nothing left to
+  bound once the call is ending, and leaving it armed lets it speak its
+  open-ended wrap-up over the fixed goodbye on any configuration where the two
+  land close together. Sharing one chain between the timers would reopen that
+  path.
 
 This is not new machinery. It is a second instance of proven machinery with a
 shorter fuse and a cancel condition.

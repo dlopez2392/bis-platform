@@ -17,8 +17,18 @@ const MAX_SILENT_SECONDS = 120;
  *
  * Junk/zero/negative falls back to the default rather than disabling the
  * guard — the same rule `call-limits.ts` uses, for the same reason: a
- * mistyped env var must never silently remove a cost control. The lower
- * clamp is 5s so it can never fire before a slow greeting has even played.
+ * mistyped env var must never silently remove a cost control.
+ *
+ * The lower clamp is 5s, so a slow greeting has always played before the
+ * guard can fire. That floor is NOT what the caller actually gets, though,
+ * and this function cannot promise it: the arming site bounds this value to
+ * half the cost cap (see below), and for a while that bound sat OUTSIDE this
+ * clamp and undercut it — `PHONE_MAX_CALL_SECONDS=1` produced a 0.5s window,
+ * and the silent caller was told "I can't hear anything, goodbye" 400ms
+ * BEFORE the greeting. The floor survives the bound today only because the
+ * cap itself is floored at 10 at that site, making half the cap >= 5 for
+ * every legal cap. The effective window is `min(this 5..120 clamp, half the
+ * cap)`; both ends of that min are >= 5, so the 5s floor holds.
  *
  * The upper clamp is 120s. That is HALF of `PHONE_MAX_CALL_SECONDS`' 240
  * default — but this function does not, and cannot, guarantee that ordering:
@@ -74,7 +84,7 @@ export function readSilentSeconds(env: NodeJS.ProcessEnv = process.env): number 
  * not throw.
  */
 export function isCallerAudioEvent(type: string | undefined): boolean {
-  if (typeof type !== "string" || type === "") return false;
+  if (typeof type !== "string") return false;
   if (type.startsWith("input_audio_buffer.")) return true;
   return type === "conversation.item.input_audio_transcription.completed";
 }

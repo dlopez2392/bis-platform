@@ -307,7 +307,18 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       // the whole connect budget and this 750 must be re-derived. Nothing
       // enforces that coupling — the two knobs are independent, and this
       // comment is the only thing linking them.
-      const maxSeconds = Math.min(parsedOrDefault, 750);
+      //
+      // THE FLOOR OF 10 IS THE SILENCE WINDOW'S, NOT THE CAP'S. A 1s cost cap
+      // is absurd but harmless on its own. What it was not harmless to is the
+      // silence window below, which is bounded at HALF this number: half of
+      // anything under 10 lands beneath `readSilentSeconds`' own 5s floor, and
+      // measured off that guard's log line a cap of 8 armed a 4s window and a
+      // cap of 1 armed 0.5s — the silent caller heard "I can't hear anything,
+      // goodbye" 400ms BEFORE the 900ms greeting reached them. Flooring the
+      // CAP is what makes the half-bound incapable of undercutting the clamp
+      // it is applied to. Flooring after the min instead would let the window
+      // TIE the cap, and a tie fires the cap first (insertion order).
+      const maxSeconds = Math.min(Math.max(parsedOrDefault, 10), 750);
       capTimer = setTimeout(() => {
         log("call cap reached, sending goodbye", { callId, maxSeconds });
         try {
@@ -332,8 +343,14 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       //
       // Armed here rather than after the greeting for the same reason
       // `capTimer` is: one timer, one origin, no second lifecycle concept to
-      // keep in sync. The 5s floor in `readSilentSeconds` is what keeps a
-      // slow greeting safe.
+      // keep in sync.
+      //
+      // THE ARMED WINDOW IS `min(readSilentSeconds() clamped 5..120, half the
+      // cap)` — NOT the module's clamp alone. Both ends of that min are >= 5,
+      // so a slow greeting is safe, but only because `maxSeconds` above is
+      // floored at 10. That floor is load-bearing for this line and exists for
+      // it; the two must move together or the half-bound starts undercutting
+      // the clamp again, which is exactly what it used to do.
       //
       // THE ORDERING IS ENFORCED HERE, NOT DESCRIBED. The two knobs are
       // independent in the environment: PHONE_MAX_SILENT_SECONDS clamps to
@@ -480,10 +497,29 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
             log("caller audio detected, silence guard cleared", { callId, type: event?.type });
           }
         } catch (e) {
-          // Logged, not swallowed silently: the guard staying armed on a call
-          // where somebody IS talking ends that call early, so this line is
-          // what explains a caller who was cut off mid-sentence.
-          log("silence guard cancel check threw — guard left armed", { callId, error: String(e) });
+          // FAIL OPEN, like every other decision in this feature: the guard is
+          // DISARMED on a throw, never left armed.
+          //
+          // Leaving it armed was the one branch here that failed the other
+          // way, and a probe showed what that costs — a throwing predicate ran
+          // to the 30s mark on a caller who had produced a VAD onset AND said
+          // "hello, I need a roof repair", and the socket closed on them at
+          // 35s. A bug in a COST OPTIMISATION must never cut off a paying
+          // customer, and must never leave the product worse than it was
+          // before the optimisation existed. Losing a prospect costs more than
+          // paying for one extra robocall.
+          //
+          // `capTimer` is deliberately LEFT ALONE, so the call degrades to
+          // exactly the pre-Guard-1 behaviour: it runs to the cost cap, as
+          // every call did before this timer existed. Disarming the guard is a
+          // retreat to the old bound, not a removal of all bounds.
+          //
+          // Still logged rather than swallowed: this line is what explains a
+          // call that billed the full cap on a day the guard was supposed to
+          // be shortening silent ones.
+          clearTimeout(silenceTimer);
+          silenceTimer = undefined;
+          log("silence guard cancel check threw — guard disarmed, call runs to the cost cap", { callId, error: String(e) });
         }
         const result = await processCallEvent(state, toolCtx, event);
         state = result.state;

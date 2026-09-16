@@ -517,6 +517,35 @@ describe("runCallLifecycle — Important #5: cap-seconds clamp", () => {
     expect((ws.send as ReturnType<typeof vi.fn>).mock.calls
       .some((c) => String(c[0]).includes("brief goodbye"))).toBe(true);
   });
+
+  it("PHONE_MAX_CALL_SECONDS below 10 is floored to 10, not honoured literally", async () => {
+    // The floor is not about the cap itself — a 1s cap is absurd but its own
+    // problem. It exists because the SILENCE window is bounded at half this
+    // number (see "the window's 5s floor survives the half-cap bound" below),
+    // and half of anything under 10 lands under `readSilentSeconds`' own 5s
+    // floor. Flooring the cap is what makes that bound incapable of undercutting
+    // the clamp it is applied to; the alternative — flooring after the min —
+    // would let the window TIE the cap, and a tie fires the cap first.
+    vi.useFakeTimers();
+    process.env.PHONE_MAX_CALL_SECONDS = "1";
+    const { ws } = await startLifecycle();
+    const sendSpy = vi.fn();
+    ws.send = sendSpy;
+    ws.emit("open");
+    // One sound from the caller, so the silence guard (armed at half the
+    // floored cap) is cancelled and the timer under test is the CAP.
+    ws.emit("message", JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+    await flushMicrotasks();
+
+    // Nine seconds in: the configured 1s is long gone. Unfloored, the cap
+    // fires at 1s — before the 900ms greeting has finished playing.
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(instructionsSent(sendSpy).some((i) => i.includes(CAP_GOODBYE))).toBe(false);
+
+    // Crossing the floored 10s.
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(instructionsSent(sendSpy).some((i) => i.includes(CAP_GOODBYE))).toBe(true);
+  });
 });
 
 describe("runCallLifecycle — Minor: late frames after settle", () => {
@@ -574,6 +603,7 @@ function instructionsSent(send: ReturnType<typeof vi.fn>): string[] {
 
 const SILENCE_GOODBYE = "Say exactly this and nothing else";
 const CAP_GOODBYE = "Politely wrap up";
+const GREETING = "Greet the caller with exactly:";
 
 // Guard 1 of the spam-screening spec. The row it exists to stop: a 247-second
 // call whose only two transcript events were four minutes apart and BOTH the
@@ -830,10 +860,52 @@ describe("silence cutoff (Guard 1) — the two cost knobs cannot invert", () => 
     await vi.advanceTimersByTimeAsync(40_000);
     expect(instructionsSent(sendSpy).some((i) => i.includes(CAP_GOODBYE))).toBe(false);
   });
+
+  it("the window's 5s floor survives the half-cap bound — however low the cap is set, the greeting still plays first", async () => {
+    // The other end of the same coupling, and the one the bound used to
+    // break. `Math.min(readSilentSeconds(), maxSeconds / 2)` applies the half
+    // AFTER `readSilentSeconds`' own 5..120 clamp, so nothing floored the
+    // result: measured off the route's own log line, a cap of 8 armed a 4s
+    // window and a cap of 1 armed 0.5s — the silent caller was told "I can't
+    // hear anything, goodbye" 400ms BEFORE the 900ms greeting reached them.
+    // Two comments (route.ts and silence-guard.ts) claimed the module's 5s
+    // floor made that impossible. The floor now lives on the CAP, so both
+    // ends of the min are >= 5 and the claim is true again.
+    vi.useFakeTimers();
+    process.env.PHONE_MAX_CALL_SECONDS = "1";
+    const { ws } = await startLifecycle();
+    const sendSpy = vi.fn();
+    ws.send = sendSpy;
+    ws.emit("open");
+
+    // Nobody speaks. Just short of the 5s floor: the greeting has gone out at
+    // 900ms and the goodbye has not been sent at all.
+    await vi.advanceTimersByTimeAsync(4_900);
+    const at4900 = instructionsSent(sendSpy);
+    expect(at4900.some((i) => i.includes(GREETING))).toBe(true);
+    expect(at4900.some((i) => i.includes(SILENCE_GOODBYE))).toBe(false);
+
+    // And when it does fire it fires AFTER the greeting — which is the entire
+    // point of a floor on a guard that speaks to the caller.
+    await vi.advanceTimersByTimeAsync(200);
+    const sent = instructionsSent(sendSpy);
+    expect(sent.some((i) => i.includes(SILENCE_GOODBYE))).toBe(true);
+    expect(sent.findIndex((i) => i.includes(SILENCE_GOODBYE)))
+      .toBeGreaterThan(sent.findIndex((i) => i.includes(GREETING)));
+  });
 });
 
 describe("silence cutoff (Guard 1) — teardown and late frames", () => {
   it("the caller hanging up disarms the guard — nothing is sent into a torn-down socket", async () => {
+    // RED ONLY UNDER A PAIRED MUTATION, and unusually, nothing pins either
+    // half alone — the two are deliberately redundant. Dropping `finish()`'s
+    // `clearTimeout(silenceTimer)` leaves 42/42 green (the callback's own
+    // `if (settled) return` catches it); dropping that `if (settled) return`
+    // leaves 42/42 green (the clear catches it); dropping BOTH turns this test
+    // red with "expected vi.fn() to not be called at all, but actually been
+    // called 1 times". A cleared timer is not observable on its own, so there
+    // is no test to write for the first half — this is the only one that can
+    // fail, and it needs both edits to do it.
     vi.useFakeTimers();
     const { lifecycleDone, ws } = await startLifecycle();
     const sendSpy = vi.fn();
@@ -888,6 +960,17 @@ describe("silence cutoff (Guard 1) — teardown and late frames", () => {
   });
 
   it("a frame whose `type` is not a string does not wedge the chain — the next frame still lands", async () => {
+    // RED ONLY UNDER A PAIRED MUTATION — a single mutation cannot fail it, so
+    // do not read it as dead. Both halves have to go: `isCallerAudioEvent`'s
+    // `typeof type !== "string"` guard AND the cancel block's position inside
+    // a try (verified: with the block moved outside every try in
+    // `handleMessage` but the `typeof` guard intact, this stays green; remove
+    // the guard as well and it goes red). Each half IS pinned alone, elsewhere:
+    //   - the `typeof` guard → `silence-guard.test.ts`, "rejects a truthy
+    //     NON-STRING type without throwing — the payload is untrusted JSON".
+    //   - the block's position → "a predicate that throws on EVERY frame costs
+    //     the guard only" and "a predicate that throws fails OPEN", below.
+    //
     // Critical: the cancel block used to be the ONE statement in
     // `handleMessage` outside its try/catch, so a throw there escaped into
     // `chain = chain.then(...)` and left the chain PERMANENTLY rejected.
@@ -946,6 +1029,48 @@ describe("silence cutoff (Guard 1) — teardown and late frames", () => {
     const finalState = finishCallMock.mock.calls[0]![0];
     expect(finalState.transcript.some(
       (t: TranscriptEvent) => t.text === "there is water coming through the ceiling")).toBe(true);
+  });
+
+  it("a predicate that throws fails OPEN — the caller is not cut off, and the call still runs to the cost cap", async () => {
+    // The test above proves the throw costs no TRANSCRIPT. This one proves it
+    // costs no CALL. A probe drove a throwing predicate to the 30s mark on a
+    // caller who had produced a VAD onset and said "hello, I need a roof
+    // repair": the guard stayed armed, fired, and closed the socket at 35s on
+    // a live prospect.
+    //
+    // Fail open, everywhere in this feature — losing a prospect costs more
+    // than paying for one extra robocall. A bug in a cost OPTIMISATION must
+    // never cut off a paying customer, and must never leave the product worse
+    // than it was before the optimisation existed. So a throw degrades the
+    // call to exactly the pre-Guard-1 behaviour: `capTimer` and nothing else.
+    vi.useFakeTimers();
+    isCallerAudioEventMock.mockImplementation(() => { throw new TypeError("predicate blew up"); });
+
+    const { ws } = await startLifecycle();
+    const sendSpy = vi.fn();
+    const closeSpy = vi.fn();
+    ws.send = sendSpy;
+    ws.close = closeSpy;
+    ws.emit("open");
+
+    // A caller who is plainly there: the fast signal, then words.
+    await vi.advanceTimersByTimeAsync(2_000);
+    ws.emit("message", JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+    ws.emit("message", JSON.stringify({
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "hello, I need a roof repair",
+    }));
+    await flushMicrotasks();
+
+    // t=35s: past the 30s window AND past the 5s playout that would follow it.
+    await vi.advanceTimersByTimeAsync(33_000);
+    expect(instructionsSent(sendSpy).some((i) => i.includes(SILENCE_GOODBYE))).toBe(false);
+    expect(closeSpy).not.toHaveBeenCalled();
+
+    // ...and `capTimer` was left ALONE by the catch, so the call still ends
+    // where it always did before this guard existed: the 240s cost cap.
+    await vi.advanceTimersByTimeAsync(205_000);
+    expect(instructionsSent(sendSpy).some((i) => i.includes(CAP_GOODBYE))).toBe(true);
   });
 });
 

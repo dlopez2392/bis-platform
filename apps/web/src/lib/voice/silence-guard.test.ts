@@ -56,6 +56,30 @@ describe("isCallerAudioEvent", () => {
   it("does not accept a merely similar prefix", () => {
     expect(isCallerAudioEvent("input_audio_buffer_cleared")).toBe(false);
     expect(isCallerAudioEvent("output_audio_buffer.started")).toBe(false);
+    // The two fixtures above contain the namespace as no substring at all, so
+    // they pass under BOTH matchers and prove neither. These two are the near
+    // misses that discriminate:
+    //
+    //  - `startsWith("input_audio_buffer.")` vs `includes(...)`: the namespace
+    //    has to be at the START of the type. An event nested under
+    //    `conversation.item.` is about a conversation item, not a live input
+    //    buffer.
+    expect(isCallerAudioEvent("conversation.item.input_audio_buffer.committed")).toBe(false);
+    //  - `type === "…transcription.completed"` vs
+    //    `type.startsWith("…transcription")`: the backstop is ONE exact event,
+    //    not a namespace. See the `.failed` test below for why that matters
+    //    beyond the mutation.
+    expect(isCallerAudioEvent("conversation.item.input_audio_transcription.completed.part")).toBe(false);
+  });
+  it("rejects a FAILED transcription — the one near miss that would defeat the guard by its own cancel", () => {
+    // `conversation.item.input_audio_transcription.failed` is a real Realtime
+    // event, and only the `.completed` variant writes a `role: "caller"`
+    // transcript entry (`call-events.ts:51-57`). If this predicate ever
+    // loosened from an exact match to a prefix, a call whose caller audio
+    // FAILED to transcribe would cancel the timer while still classifying
+    // `spam` — the guard cancelled by the very event that proves it should
+    // have fired.
+    expect(isCallerAudioEvent("conversation.item.input_audio_transcription.failed")).toBe(false);
   });
 });
 
