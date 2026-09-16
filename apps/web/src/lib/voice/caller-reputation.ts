@@ -16,6 +16,15 @@ export type CallerHistory = { spamCalls: number; otherCalls: number };
 
 const DEFAULTS: ReputationConfig = { threshold: 3, windowDays: 30 };
 
+/** Byte-for-byte the same helper as `call-limits.ts:15-18`, and DELIBERATELY
+ *  a copy rather than a shared import: that twin does not export it, and a
+ *  self-contained pure module — no imports at all — is the point of this file,
+ *  the same way `call-limits.ts` is self-contained. Do not DRY the two into a
+ *  third module, and do not add a third copy either: a fourth knob belongs in
+ *  one of these two files. The rule it encodes is the house rule for every env
+ *  knob in this feature — junk, zero or negative falls back to the default, so
+ *  a mistyped value can never disable a guard (here, a `threshold` of 0 would
+ *  block every caller on their first silent call). */
 function positiveInt(raw: string | undefined, fallback: number): number {
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
@@ -63,6 +72,16 @@ export function windowStart(now: Date, windowDays: number): string {
  *
  * Non-strict `>=`, matching `decideLimit`: `threshold: 3` means three silent
  * calls are enough.
+ *
+ * THE VERDICT'S POLARITY IS A DECISION, NOT AN ACCIDENT. This returns
+ * `blocked` where `callAnswerable` returns `answerable` and `decideLimit`
+ * returns `allowed` — the two senses are now mixed across three call sites,
+ * so it is worth saying why: `blocked` is the word an operator would use for a
+ * reputation verdict, and the alternative (`allowed: false, reason:
+ * "repeat-spam"`) reads as "not allowed for reasons" rather than "we know this
+ * caller". Both routes therefore keep the two verdicts in SEPARATE fields and
+ * never combine them into one boolean — that is where an inverted sense would
+ * become a silent fail-open, and both routes' step-8 comments say so.
  */
 export function decideReputation(
   history: CallerHistory, cfg: ReputationConfig,

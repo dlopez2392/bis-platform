@@ -69,5 +69,12 @@ describe("windowStart", () => {
     const a = windowStart(new Date("2026-09-15T12:00:00.000Z"), 30);
     const b = windowStart(new Date("2026-09-16T12:00:00.000Z"), 30);
     expect(b > a).toBe(true);
+    // The pair above is a DAY apart, so a floor quantised to the UTC day
+    // satisfies it too — "rolling" would still be unproven. These two are 23
+    // hours apart INSIDE one UTC day, which only a true instant can separate:
+    // a day-quantised floor returns the same string for both.
+    const earlyInTheDay = windowStart(new Date("2026-09-15T00:30:00.000Z"), 30);
+    const lateInTheDay = windowStart(new Date("2026-09-15T23:30:00.000Z"), 30);
+    expect(lateInTheDay > earlyInTheDay).toBe(true);
   });
 });
