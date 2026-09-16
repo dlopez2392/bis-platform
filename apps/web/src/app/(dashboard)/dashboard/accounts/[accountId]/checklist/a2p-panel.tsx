@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -11,6 +12,30 @@ import { m } from "@/lib/messages";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import type { A2pRegistration, A2pStatus } from "@bis/db";
+
+/**
+ * What has to be asked of the CLIENT before anything can be submitted, in the
+ * order the Telnyx brand form asks for it. The full procedure — portal
+ * navigation, the sole-proprietor OTP flow, the fees, what gets a campaign
+ * rejected — stays in docs/runbooks/a2p-registration.md; only this list is
+ * duplicated into the UI, because it is the one part whose cost is paid by
+ * someone else's calendar. Going back to a client a second time for one more
+ * field loses a week.
+ */
+const GATHER_ITEMS: readonly string[] = [
+  m["a2p.gather.legalName"],
+  m["a2p.gather.dba"],
+  m["a2p.gather.ein"],
+  m["a2p.gather.address"],
+  m["a2p.gather.website"],
+  m["a2p.gather.vertical"],
+  m["a2p.gather.contact"],
+  m["a2p.gather.optIn"],
+];
+
+/** The first click of the procedure. Deep-linked to Brands rather than the
+ *  portal root, matching the checklist item's own href. */
+const TELNYX_BRANDS_URL = "https://portal.telnyx.com/#/messaging-10dlc/brands";
 
 /** Rendered in catalogue order, which is also the order a registration moves
  *  through. Built from a literal rather than mapped over the union so the copy
@@ -79,7 +104,36 @@ export function A2pPanel({
         <CardTitle>{m["a2p.title"]}</CardTitle>
         <CardDescription>{m["a2p.body"]}</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
+        {/* Reference, not status — so a plain nested panel (ladder step 2),
+            never a Notice: that component carries role="alert", and a list of
+            paperwork announced as an alert every time the page loads is a
+            screen reader interrupting for nothing.
+
+            Keyed on the RECORDED status, not the `status` state above: driving
+            it from the select would make the list vanish mid-edit, before the
+            operator has saved anything, and reappear if they changed their
+            mind. Hidden once the filing is with the carriers, since there is
+            nothing left to collect; shown again on `rejected`, because a
+            rejection usually means one of these was wrong. */}
+        {current.status === "not_started" || current.status === "rejected" ? (
+          <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface-2)] p-3">
+            <p className="text-xs font-medium text-card-foreground">{m["a2p.gather.title"]}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{m["a2p.gather.body"]}</p>
+            <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+              {GATHER_ITEMS.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+            <a
+              href={TELNYX_BRANDS_URL} target="_blank" rel="noreferrer"
+              className="mt-3 flex w-fit items-center gap-1 text-xs text-primary underline"
+            >
+              <ExternalLink className="size-3" aria-hidden />
+              {m["a2p.gather.link"]}
+            </a>
+          </div>
+        ) : null}
         <form
           // onSubmit via useFormSubmit, NOT the `action` prop. This is the
           // panel the defect was FOUND on — a refused save silently reverted

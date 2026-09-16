@@ -179,6 +179,14 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     // merge would ignore it, so the operator would click a box that never ticks.
     await expect(a2pItem).toBeDisabled();
 
+    // The gather list — what has to be asked of the CLIENT before anything can
+    // be submitted — shows while nothing is recorded, because that is exactly
+    // when the operator has the client on the phone. Asserted through its
+    // hardest bullet (the EIN one) rather than the heading: the heading could
+    // survive an empty list.
+    const gatherList = page.getByText(/No EIN means the sole-proprietor path/);
+    await expect(gatherList).toBeVisible();
+
     // `approved` with no identifiers is refused: it would tick an item that
     // reads "Register A2P 10DLC brand and campaign" for a company with no
     // campaign to send on, which is the exact false-true this phase exists to
@@ -223,6 +231,11 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     // registrations a year apart rendered identically.
     await expect(page.getByText(/^Recorded \w+ \d+, 20\d\d$/)).toBeVisible();
 
+    // …and once the registration is recorded as approved there is nothing left
+    // to collect, so the list is gone. It is keyed on the RECORDED status, not
+    // the select's value, which is why this is asserted after a reload.
+    await expect(gatherList).toBeHidden();
+
     // And it goes BACKWARDS — new behaviour for this list, and the reason the
     // item cannot be a manual tick: a rejected registration must not keep
     // reading as done for a client who cannot legally text.
@@ -232,6 +245,10 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     await expect(page.getByText("A2P registration updated")).toBeVisible();
     await expect(page.getByRole("button", { name: "Register A2P 10DLC brand and campaign" }))
       .toHaveAttribute("aria-pressed", "false");
+    // A rejection usually means one of those fields was wrong, so the list
+    // comes back — this is the reason it keys on the status rather than simply
+    // on "has a brand id".
+    await expect(gatherList).toBeVisible();
 
     // GAP 3: the account dashboard's compact checklist row (checklist-row.tsx)
     // — NOT the full ChecklistPanel /checklist itself renders — links back to

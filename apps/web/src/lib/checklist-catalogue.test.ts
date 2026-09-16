@@ -20,6 +20,22 @@ describe("checklist catalogue", () => {
       .toEqual(["form_notify", "invite_owner", "reply_to"]);
   });
 
+  it("links the two external items that have a single right destination", () => {
+    // A bare portal root is not a destination — neither Telnyx's nor Resend's
+    // landing page leads anywhere near the screen the item names, and an
+    // operator who has to go hunting is the reason the runbook existed before
+    // the link did. The other external items (a phone number, a Google
+    // Business Profile) have no one right URL, so they carry none.
+    const href = (key: string) => CHECKLIST_CATALOGUE.find((i) => i.key === key)!.href;
+    expect(href("a2p_registration")).toBe("https://portal.telnyx.com/#/messaging-10dlc/brands");
+    expect(href("email_domain")).toBe("https://resend.com/domains");
+    // Every href must be absolute and external — ChecklistPanel renders them
+    // with target="_blank", so a relative path would open the app in a new tab.
+    for (const item of CHECKLIST_CATALOGUE) {
+      if (item.href) expect(item.href).toMatch(/^https:\/\//);
+    }
+  });
+
   it("merges catalogue items with stored state, including untouched ones", () => {
     const entries = mergeChecklist([
       { id: "1", item_key: "phone_number", title: null, done_at: "2026-07-31T00:00:00Z",
