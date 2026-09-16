@@ -335,6 +335,8 @@ Read `apps/web/src/lib/voice/tools/registry.ts:34-43` (`ToolContext`) and `call-
 
 - [ ] **Step 1: Write the failing tests**
 
+**Harness facts, confirmed — use these, do not invent helpers.** `registry.test.ts` has ONE shared `const ctx: ToolContext` (`:28`), not a factory; build variants with `{ ...ctx, callRowId, handoffTarget }`. State comes from `emptyCallState()`. The real signature is **`runTool(state, ctx, name, args)`** — state first.
+
 In `registry.test.ts`:
 
 ```ts
@@ -343,16 +345,16 @@ it("transfer_to_human persists the intent BEFORE returning — finishCall is too
   // finishCall's database writes. If the intent were written by finishCall,
   // the action route would sometimes see no transfer and hang up on a caller
   // who had just been told they were being put through.
-  const ctx = toolCtx({ callRowId: "call-row-1", handoffTarget: { available: true, to: "+19562921696" } });
-  const { state, result } = await runTool("transfer_to_human", {}, state0, ctx);
-  expect(markHandoffRequestedMock).toHaveBeenCalledWith(expect.anything(), ctx.accountId, "call-row-1");
+  const c = { ...ctx, callRowId: "call-row-1", handoffTarget: { available: true, to: "+19562921696" } };
+  const { state, result } = await runTool(emptyCallState(), c, "transfer_to_human", {});
+  expect(markHandoffRequestedMock).toHaveBeenCalledWith(expect.anything(), c.accountId, "call-row-1");
   expect(result).toEqual({ ok: true });
   expect(state.served).toContain("transferred");
 });
 
 it("transfer_to_human refuses when no target is available, and writes nothing", async () => {
-  const ctx = toolCtx({ callRowId: "call-row-1", handoffTarget: { available: false, reason: "not-configured" } });
-  const { state, result } = await runTool("transfer_to_human", {}, state0, ctx);
+  const c = { ...ctx, callRowId: "call-row-1", handoffTarget: { available: false, reason: "not-configured" } };
+  const { state, result } = await runTool(emptyCallState(), c, "transfer_to_human", {});
   expect(result).toEqual({ ok: false, error: expect.any(String) });
   expect(markHandoffRequestedMock).not.toHaveBeenCalled();
   expect(state.served).not.toContain("transferred");
@@ -362,38 +364,43 @@ it("transfer_to_human refuses when there is no call row to mark", async () => {
   // startCallRow fails open (the route's step 10), so callRowId can be null on
   // a real call. Transferring then would be unrecoverable: the action route
   // has nothing to find.
-  const ctx = toolCtx({ callRowId: null, handoffTarget: { available: true, to: "+19562921696" } });
-  const { result } = await runTool("transfer_to_human", {}, state0, ctx);
+  const c = { ...ctx, callRowId: null, handoffTarget: { available: true, to: "+19562921696" } };
+  const { result } = await runTool(emptyCallState(), c, "transfer_to_human", {});
   expect(result).toEqual({ ok: false, error: expect.any(String) });
   expect(markHandoffRequestedMock).not.toHaveBeenCalled();
 });
 
 it("a database failure while marking does NOT report success to the model", async () => {
   markHandoffRequestedMock.mockRejectedValueOnce(new Error("boom"));
-  const ctx = toolCtx({ callRowId: "call-row-1", handoffTarget: { available: true, to: "+19562921696" } });
-  const { state, result } = await runTool("transfer_to_human", {}, state0, ctx);
+  const c = { ...ctx, callRowId: "call-row-1", handoffTarget: { available: true, to: "+19562921696" } };
+  const { state, result } = await runTool(emptyCallState(), c, "transfer_to_human", {});
   expect(result).toEqual({ ok: false, error: expect.any(String) });
   expect(state.served).not.toContain("transferred");
 });
 ```
 
+**Harness fact, confirmed and load-bearing.** `call-events.test.ts` MOCKS the registry (`vi.mock("./tools/registry")`), so `processCallEvent` never runs a real tool there. Its `ctx` is `{} as unknown as ToolContext`. That means the close decision must be derivable from what `processCallEvent` itself sees — the tool NAME and the RESULT `runTool` returned — and each test drives `runToolMock.mockResolvedValue({ state, result })`. Do NOT add a real tool context to this file.
+
 In `call-events.test.ts`:
 
 ```ts
 it("a successful transfer_to_human yields a close action after the spoken line", async () => {
-  const { actions } = await processCallEvent(state0, ctxWithTransfer, {
+  runToolMock.mockResolvedValue({ state: emptyCallState(), result: { ok: true } });
+  const { actions } = await processCallEvent(emptyCallState(), ctx, {
     type: "response.function_call_arguments.done", name: "transfer_to_human", arguments: "{}", call_id: "c1",
   });
   expect(actions.map((a) => a.kind)).toEqual(["send", "send", "close"]);
 });
 it("a REFUSED transfer yields no close action — the call continues with Sofía", async () => {
-  const { actions } = await processCallEvent(state0, ctxWithoutTransfer, {
+  runToolMock.mockResolvedValue({ state: emptyCallState(), result: { ok: false, error: "no target" } });
+  const { actions } = await processCallEvent(emptyCallState(), ctx, {
     type: "response.function_call_arguments.done", name: "transfer_to_human", arguments: "{}", call_id: "c1",
   });
   expect(actions.map((a) => a.kind)).toEqual(["send", "send"]);
 });
 it("no other tool ever yields a close action", async () => {
-  const { actions } = await processCallEvent(state0, ctxWithTransfer, {
+  runToolMock.mockResolvedValue({ state: emptyCallState(), result: { ok: true } });
+  const { actions } = await processCallEvent(emptyCallState(), ctx, {
     type: "response.function_call_arguments.done", name: "take_message",
     arguments: JSON.stringify({ body: "call me" }), call_id: "c1",
   });
@@ -707,13 +714,14 @@ git commit -m "feat(voice): stamp a completed handoff, and say something when no
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-// system-prompt.test.ts
+// system-prompt.test.ts — buildSystemPrompt(input, now) takes TWO arguments
+// (system-prompt.ts:11). Reuse the file's existing input fixture and clock.
 it("offers to put the caller through when a transfer target is available", () => {
-  const p = buildSystemPrompt({ ...input, handoffAvailable: true });
+  const p = buildSystemPrompt({ ...input, handoffAvailable: true }, now);
   expect(p).toContain("transfer_to_human");
 });
 it("keeps today's take-a-message copy when no target is configured", () => {
-  const p = buildSystemPrompt({ ...input, handoffAvailable: false });
+  const p = buildSystemPrompt({ ...input, handoffAvailable: false }, now);
   expect(p).not.toContain("transfer_to_human");
   expect(p).toContain("offer to take a message");
 });
