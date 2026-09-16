@@ -671,6 +671,16 @@ describe("call handoff accessors", () => {
       expect(found).toMatchObject({ id: call.id, account_id: accountId, phone_number_id: num.id });
       expect(typeof found!.handoff_requested_at).toBe("string");
 
+      // `outcome` rides along for the result route's precedence check, and it
+      // is here to stop that route reaching for `getCall` — which selects
+      // CALL_DETAIL_COLS and drags a whole JSONB transcript plus the summary
+      // across the wire to read ONE enum, on a call whose far end has already
+      // hung up. Written non-default first so a select that dropped the
+      // column could not pass on the row's own starting value.
+      await setCallOutcome(db, accountId, call.id, "booked");
+      const withOutcome = await getCallByHandoffToken(db, token);
+      expect(withOutcome!.outcome).toBe("booked");
+
       // A token nobody minted resolves to nothing rather than to the newest
       // call, or to an error a route would have to distinguish from a real one.
       expect(await getCallByHandoffToken(db, testHandoffToken())).toBeNull();

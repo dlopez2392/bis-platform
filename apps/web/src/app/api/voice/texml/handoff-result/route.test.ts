@@ -7,9 +7,11 @@ import { POST } from "./route";
 const getCallByHandoffTokenMock = vi.hoisted(() => vi.fn());
 const setCallOutcomeMock = vi.hoisted(() => vi.fn());
 const getVoiceProfileMock = vi.hoisted(() => vi.fn());
-// The row as it stands when this callback arrives: `finishCall` has already
-// classified it. The stamp is an UPGRADE of that value, so what the row
-// currently holds is what decides whether the upgrade is honest.
+// Registered ONLY so that "this route does not read the transcript" is an
+// assertion rather than an absence. The route used to call `getCall` to read
+// one enum, which selects CALL_DETAIL_COLS — a JSONB transcript and the
+// summary. The enum now rides the token lookup; this mock is what notices if
+// the second read ever comes back.
 const getCallMock = vi.hoisted(() => vi.fn());
 // Ordering ledger. `toHaveBeenCalledWith` is "was called at least once
 // with", so it cannot tell a route that resolved the call first from one
@@ -64,6 +66,12 @@ const REQUESTED = {
   id: "c1",
   account_id: "acct1",
   phone_number_id: "pn1",
+  // What the row says when this callback arrives: `finishCall` has already
+  // classified it, and a handed-off call reaches socket close `abandoned`.
+  // It rides the TOKEN LOOKUP now, not a second `getCall` — the stamp is an
+  // upgrade of this value, so what the row currently holds is what decides
+  // whether the upgrade is honest.
+  outcome: "abandoned",
   // Read fresh: this route has NO recency gate (it is fetched when the human
   // conversation ends, which can be an hour after the caller asked), but a
   // hardcoded date would still hide a gate someone added by mistake behind a
@@ -335,7 +343,7 @@ describe("voice texml handoff-result route", () => {
 
   it("a replayed callback does not write again — an already-transferred row is left alone", async () => {
     // The probe that found this: four POSTs produced four writes.
-    getCallMock.mockResolvedValue({ id: "c1", account_id: "acct1", outcome: "transferred" });
+    getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, outcome: "transferred" });
     await post("tok_abc", { DialCallStatus: "completed" });
     expect(setCallOutcomeMock).not.toHaveBeenCalled();
   });
@@ -345,7 +353,7 @@ describe("voice texml handoff-result route", () => {
     // outcome that records what the caller GOT outranks one that records
     // where the call went. A booking followed by a transfer is still a
     // booking, and the booking is the thing the client is paying for.
-    getCallMock.mockResolvedValue({ id: "c1", account_id: "acct1", outcome });
+    getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, outcome });
     await post("tok_abc", { DialCallStatus: "completed" });
     expect(setCallOutcomeMock).not.toHaveBeenCalled();
   });
@@ -353,14 +361,32 @@ describe("voice texml handoff-result route", () => {
   it.each(["abandoned", "spam"])("a %s call IS upgraded to transferred", async (outcome) => {
     // The other half of the same rule: `abandoned` is precisely "we cannot
     // tell that this caller got anything", and a reached transfer corrects it.
-    getCallMock.mockResolvedValue({ id: "c1", account_id: "acct1", outcome });
+    getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, outcome });
     await post("tok_abc", { DialCallStatus: "completed" });
     expect(setCallOutcomeMock).toHaveBeenCalledWith(expect.anything(), "acct1", "c1", "transferred");
   });
 
-  it("reads the outcome it is about to overwrite for the TOKEN's account", async () => {
+  it("never drops a whole transcript to read one enum", async () => {
+    // The precedence check needs ONE short string. It used to get it from
+    // `getCall`, which selects CALL_DETAIL_COLS — a JSONB transcript and the
+    // summary — on a call whose far end has already hung up and whose next
+    // document is `<Hangup/>`. The outcome now rides along on the token
+    // lookup that has to happen anyway, so this second read is gone and must
+    // stay gone: `getCall` is still exported and still one import away.
+    await post("tok_abc", { DialCallStatus: "completed" });
+    expect(setCallOutcomeMock).toHaveBeenCalledWith(expect.anything(), "acct1", "c1", "transferred");
+    expect(getCallMock).not.toHaveBeenCalled();
+    expect(events).not.toContain("call");
+  });
+
+  it("the outcome it weighs is the TOKEN's own row, not one the request named", async () => {
+    // The tenancy rule the old `getCall(db, accountId, call.id)` carried, now
+    // carried by the lookup itself: the row weighed and the row written are
+    // the one the token resolved, and a request field claiming otherwise
+    // changes nothing.
+    getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, outcome: "booked" });
     await post("tok_abc", { DialCallStatus: "completed", AccountSid: "acct-ATTACKER" });
-    expect(getCallMock).toHaveBeenCalledWith(expect.anything(), "acct1", "c1");
+    expect(setCallOutcomeMock).not.toHaveBeenCalled();
   });
 
   it("a carrier status with different case and padding still counts as a person", async () => {

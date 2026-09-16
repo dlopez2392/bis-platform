@@ -89,8 +89,10 @@ const MAX_WRITE_AGE_MS = 4 * 60 * 60_000;
  * What it leaves upgradable is `abandoned` and `spam`, and `abandoned` is
  * the case this whole feature exists for: it means "we cannot tell that this
  * caller got anything", which a dial that reached a person corrects. A value
- * outside the six (or a row that has vanished) is treated as upgradable too,
- * so an unrecognised outcome loses a true transfer to nothing.
+ * outside the six is treated as upgradable too, so an unrecognised outcome
+ * never loses a true transfer to nothing. (A row that has VANISHED is a
+ * different branch entirely: the token lookup returns null and this route
+ * hangs up before it gets here.)
  */
 const OUTRANKS_TRANSFERRED = new Set(["booked", "lead", "message", "transferred"]);
 
@@ -115,12 +117,17 @@ function xmlResponse(body: string): NextResponse {
  *
  * Three entities, not five: `"` and `'` are only special inside an ATTRIBUTE
  * VALUE, and this string is only ever character data between `<Say>` and
- * `</Say>`. The sibling at `../route.ts` (`xmlText`) escapes all five because
- * the same function there also feeds an attribute — `action="${...}"` — where
- * a quote would end the attribute early. Neither is a subset of the other by
- * accident: the rule is TEXT gets three, ANYTHING THAT CAN LAND IN AN
- * ATTRIBUTE gets five. If a third site ever needs one, promote `xmlText` into
- * a module both directories import rather than copying either again.
+ * `</Say>`. The shared `xmlText` at `../xml` escapes all five because every
+ * one of ITS callers also feeds an attribute — `action="${...}"`,
+ * `callerId="${...}"` — where a quote would end the attribute early. Neither
+ * is a subset of the other by accident: the rule is TEXT gets three, ANYTHING
+ * THAT CAN LAND IN AN ATTRIBUTE gets five.
+ *
+ * That third site did arrive (the handoff dial, 2026-09-16), and the advice
+ * this comment used to end with was taken: `xmlText` was PROMOTED out of
+ * `../route.ts` into `../xml` and is now imported by both dial-emitting
+ * routes rather than copied. This function stays separate, and stays three,
+ * because its single caller can never be anything but character data.
  */
 function escapeXmlText(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -148,7 +155,7 @@ function failedXml(languages: "en" | "es" | "both"): string {
 async function decide(token: string, status: string): Promise<string> {
   // Lazy import: a module-scope DB import breaks `next build` during
   // page-data collection (the documented trap this whole directory obeys).
-  const { serviceDb, getCallByHandoffToken, getCall, getVoiceProfile, setCallOutcome } = await import("@bis/db");
+  const { serviceDb, getCallByHandoffToken, getVoiceProfile, setCallOutcome } = await import("@bis/db");
   const db = serviceDb();
 
   // 1. The token is the credential, and this lookup is the only source of
@@ -196,24 +203,31 @@ async function decide(token: string, status: string): Promise<string> {
       return HANGUP;
     }
 
-    // Its own try/catch, around the read as well as the write. A failure here
-    // is the quietest kind this product has — the transfer WORKED, the caller
-    // was served, and only the row stays wrong — so it has to be loud in the
-    // log and must not turn into the outer catch's anonymous line. Failing
-    // closed on the READ costs exactly what a failed write costs (a row that
-    // keeps saying `abandoned`), and the alternative is overwriting an
-    // outcome we could not check.
+    // 4. What the row already says decides whether this stamp is an upgrade
+    //    or a downgrade — and it came back on the TOKEN LOOKUP above, which
+    //    is the only read here that had to happen. It used to come from
+    //    `getCall`, a second round trip selecting CALL_DETAIL_COLS: a whole
+    //    JSONB transcript and the summary, dragged across the wire to compare
+    //    one short string.
+    //
+    //    THE ONE TRADE, so nobody reads this as free: the old shape re-read
+    //    the outcome AFTER the recency gate, making it milliseconds fresher
+    //    than a value read at the top of the function. Both shapes are
+    //    equally racy against a `finishCall` landing in between — neither
+    //    takes a lock — and the precedence set makes a lost race a no-op
+    //    either way, because every outcome a late `finishCall` could write is
+    //    already in it. The worst case is a row that keeps what `finishCall`
+    //    gave it, which is what losing that race is supposed to mean.
+    if (OUTRANKS_TRANSFERRED.has(call.outcome)) {
+      console.log(`handoff-result: call ${call.id} already recorded ${call.outcome} — leaving it, accountId ${accountId}`);
+      return HANGUP;
+    }
+
+    // Its own try/catch around the write. A failure here is the quietest kind
+    // this product has — the transfer WORKED, the caller was served, and only
+    // the row stays wrong — so it has to be loud in the log and must not turn
+    // into the outer catch's anonymous line.
     try {
-      // 4. What the row already says decides whether this stamp is an upgrade
-      //    or a downgrade. Account-scoped to the account the TOKEN resolved
-      //    to, like every other read in here. It costs one extra round trip
-      //    on a call whose far end has already hung up and whose next
-      //    document is `<Hangup/>`, so nobody is listening to it.
-      const existing = await getCall(db, accountId, call.id);
-      if (existing && OUTRANKS_TRANSFERRED.has(existing.outcome)) {
-        console.log(`handoff-result: call ${call.id} already recorded ${existing.outcome} — leaving it, accountId ${accountId}`);
-        return HANGUP;
-      }
       await setCallOutcome(db, accountId, call.id, "transferred");
       console.log(`handoff-result: call ${call.id} reached a person (${status}), accountId ${accountId}`);
     } catch (e) {

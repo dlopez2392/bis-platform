@@ -210,18 +210,40 @@ export async function markHandoffRequested(
  * must see THE NUMBER THIS CALLER DIALLED on its handset, and an account that
  * owns two live numbers cannot get that from its number list — only the call
  * row knows which one rang. `not null` since 0019, so it is always a string.
+ *
+ * `outcome` comes back so the RESULT route can decide precedence — whether
+ * stamping `transferred` is an upgrade of what the row already says or a
+ * downgrade of it — without a second read. It used to call `getCall` for
+ * exactly that one enum, and `getCall` selects `CALL_DETAIL_COLS`: a whole
+ * JSONB transcript and the summary, dragged across the wire to compare one
+ * short string, on a call whose far end has already hung up.
+ *
+ * ONE TRADE, stated rather than hidden: the old shape re-read the outcome
+ * AFTER that route's recency gate, so its value was a few milliseconds
+ * fresher than this one, which is read at the top. Both are equally racy
+ * against a `finishCall` landing in between — neither takes a lock, and there
+ * is no read that a concurrent write cannot invalidate a moment later — and
+ * the precedence rule makes a lost race a no-op either way: the set of
+ * outcomes that outrank `transferred` is exactly the set a late `finishCall`
+ * could write, so the worst case is a row that keeps the value `finishCall`
+ * gave it, which is what losing the race is supposed to mean. `outcome` is
+ * `not null default 'abandoned'` (0019), so it is always a string; typed as
+ * `string` rather than `CallOutcome` on purpose, because a value outside the
+ * six must be readable here in order to be treated as upgradable.
  */
 export async function getCallByHandoffToken(
   db: SupabaseClient, token: string,
 ): Promise<{
-  id: string; account_id: string; phone_number_id: string; handoff_requested_at: string | null;
+  id: string; account_id: string; phone_number_id: string;
+  handoff_requested_at: string | null; outcome: string;
 } | null> {
   const { data, error } = await db.from("calls")
-    .select("id, account_id, phone_number_id, handoff_requested_at")
+    .select("id, account_id, phone_number_id, handoff_requested_at, outcome")
     .eq("handoff_token", token).maybeSingle();
   if (error) throw new Error(`getCallByHandoffToken failed: ${error.message}`);
   return (data as {
-    id: string; account_id: string; phone_number_id: string; handoff_requested_at: string | null;
+    id: string; account_id: string; phone_number_id: string;
+    handoff_requested_at: string | null; outcome: string;
   } | null) ?? null;
 }
 
@@ -390,9 +412,18 @@ export async function countCallerHistorySince(
  * number and not the other.
  *
  * Returns outcomes rather than counting server-side because the caller needs
- * two different tallies from one read — answered (`booked`/`lead`/`message`)
- * and leads (`lead`) — and a second round trip to count each would cost more
- * than carrying a few short strings.
+ * two different tallies from one read — answered and leads (`lead`) — and a
+ * second round trip to count each would cost more than carrying a few short
+ * strings.
+ *
+ * WHICH OUTCOMES COUNT AS ANSWERED IS NOT DECIDED HERE, and this comment
+ * named the set until 2026-09-16, when the handoff feature widened it to four
+ * (`booked`/`lead`/`message`/`transferred` — a caller who reached a person
+ * was answered by any honest reading) and left the sentence behind. The one
+ * definition lives in `ANSWERED_OUTCOMES`
+ * (apps/web/src/lib/reports/weekly-metrics.ts) with its own test; this
+ * function's job is to hand over every outcome in the window and let that set
+ * decide.
  */
 export async function listCallOutcomesBetween(
   db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
