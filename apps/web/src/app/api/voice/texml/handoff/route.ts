@@ -21,6 +21,7 @@ import { NextResponse } from "next/server";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
 import { resolveHandoffTarget } from "@/lib/voice/handoff";
 import { configuredOrigin } from "@/lib/email/origin";
+import { xmlText } from "../xml";
 
 export const runtime = "nodejs";
 
@@ -36,6 +37,54 @@ export const runtime = "nodejs";
  * evidence.
  */
 const RING_SECONDS = 20;
+
+/**
+ * The CEILING ON THE CONVERSATION. One hour, in seconds.
+ *
+ * `RING_SECONDS` above bounds the RINGING and stops there. The moment the
+ * business picks up, this leg is an ordinary outbound PSTN call on the
+ * tenant's own trunk, billed by the minute, and the AI leg's
+ * `PHONE_MAX_CALL_SECONDS` (the 240s cost guardrail on the Realtime session)
+ * is no longer anywhere in the path. Without `timeLimit` there is no ceiling
+ * ON THIS LEG ANYWHERE IN THE PRODUCT: a voicemail greeting that
+ * auto-answers, or an IVR that answers and never hangs up, plus a caller who
+ * put the phone down and walked away, bills until a carrier times it out.
+ * That is not hypothetical — "answered" is exactly what a business voicemail
+ * looks like from here (see `handoff-result`), and it is indistinguishable
+ * from a person.
+ *
+ * NOT DERIVED FROM `RING_SECONDS`, deliberately and for the same reason that
+ * constant is not derived from `CLOSE_AFTER_GOODBYE_MS`: how long a handset
+ * rings before a human gives up and how long two humans then talk are
+ * unrelated quantities that move on unrelated evidence. Writing this as a
+ * multiple of the ring timeout would mean retuning the ring — which is a UX
+ * decision about a caller listening to a ringback — silently retunes a
+ * BILLING ceiling.
+ *
+ * WHY AN HOUR. The value is chosen from what a real transferred conversation
+ * costs, from both directions:
+ *   * It must never cut a real one off mid-sentence. A caller who was handed
+ *     to the owner and is arranging a roof inspection is having the most
+ *     valuable conversation this product produces, and dropping it at a
+ *     round number would be the platform hanging up on a paying customer
+ *     with no explanation. The longest realistic transferred call for the
+ *     businesses this serves is minutes, not tens of minutes; the sibling
+ *     result route's own four-hour write window rests on the same judgement
+ *     ("under an hour"). An hour therefore sits ABOVE every conversation
+ *     that will actually happen.
+ *   * It must turn "unbounded" into a number somebody can read off an
+ *     invoice. An hour of outbound US PSTN is cents, and it is the WORST
+ *     case per stuck call rather than the typical one — the typical leg ends
+ *     when a person hangs up, long before this.
+ * Anything materially tighter starts trading a real customer conversation
+ * for a fraction of a cent; anything much looser stops being a ceiling.
+ *
+ * Telnyx documents the accepted range as 60–14400 seconds. 3600 is inside
+ * it, and a value outside it is rejected — which means no dial at all, which
+ * means dead air on a caller who was just told "one moment". `route.test.ts`
+ * pins the value and the range together for that reason.
+ */
+const MAX_TRANSFER_SECONDS = 3600;
 
 /**
  * How long after the caller asked for a person this token still opens the
@@ -185,13 +234,27 @@ async function decide(token: string, origin: string): Promise<string | null> {
   if (!callerId) {
     console.log(`handoff: dialling call ${call.id} with no owned caller id, accountId ${accountId}`);
   }
-  const cid = callerId ? ` callerId="${callerId}"` : "";
+  const cid = callerId ? ` callerId="${xmlText(callerId)}"` : "";
   // `action` again, for the same reason the bridge carried one: the caller is
   // still ours after this dial ends, whether the business answered or not.
   // Task 5 owns what that route says.
   const result = `${origin}/api/voice/texml/handoff-result?t=${encodeURIComponent(token)}`;
   console.log(`handoff: dialling a person for call ${call.id}, accountId ${accountId}`);
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Dial${cid} timeout="${RING_SECONDS}" passDiversionHeader="true" action="${result}" method="POST">${target.to}</Dial></Response>`;
+  // `xmlText` on all three interpolated values — the SHARED escaper from
+  // `../xml`, the same one the bridge uses, promoted out of `texml/route.ts`
+  // rather than copied. Its comment there made the case for the action URL
+  // already ("one appended query parameter away from the same one") and this
+  // document did not get the lesson until 2026-09-16.
+  //
+  // All three are safe TODAY and that is precisely the trap: `origin` carries
+  // one query parameter and `configuredOrigin()` strips only trailing slashes
+  // so it would pass a second through verbatim; `target.to` and `callerId`
+  // are E164 columns a CHECK constraint bounds, which bounds the COLUMN and
+  // not this function (`resolveHandoffTarget` passes its argument through
+  // untouched). An unescaped `&` or `"` here is not a wrong number — it is a
+  // document Telnyx cannot parse, which is dead air on a caller who was just
+  // told they are being put through.
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Dial${cid} timeout="${RING_SECONDS}" timeLimit="${MAX_TRANSFER_SECONDS}" passDiversionHeader="true" action="${xmlText(result)}" method="POST">${xmlText(target.to)}</Dial></Response>`;
 }
 
 export async function POST(req: Request): Promise<NextResponse> {

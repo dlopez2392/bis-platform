@@ -84,6 +84,37 @@ describe("voice texml handoff route", () => {
     expect(xml).toMatch(/action="[^"]*handoff-result\?t=tok_abc"/);
   });
 
+  it("the Dial carries a timeLimit — the conversation has a ceiling, not just the ringing", async () => {
+    // `timeout` bounds the RINGING and nothing else. Once the business
+    // answers, this leg runs on the tenant's own trunk until one side hangs
+    // up, and the AI leg's `PHONE_MAX_CALL_SECONDS` is no longer anywhere in
+    // the path. A voicemail that auto-answers, or an IVR that never hangs up,
+    // plus a caller who walked away, is an open billing leg with no ceiling
+    // anywhere in this product. The spec promised this attribute before the
+    // code had it.
+    const xml = await post("tok_abc");
+    expect(xml).toContain('timeLimit="3600"');
+  });
+
+  it("the conversation ceiling is its own quantity, inside what Telnyx accepts", async () => {
+    // Telnyx documents `timeLimit` as 60–14400 seconds. Outside that range
+    // the attribute is rejected and the failure is the worst kind this route
+    // has: the dial does not happen and the caller who was just told "one
+    // moment" hears nothing.
+    //
+    // `not.toBe(ring)` is the cheap half of a rule a test cannot fully state:
+    // how long a handset rings and how long two people talk move for
+    // unrelated reasons, so one must never be derived from the other. It
+    // catches the literal `timeLimit={RING_SECONDS}` slip; the comment on the
+    // constant is what carries the rest.
+    const xml = await post("tok_abc");
+    const limit = Number(/timeLimit="(\d+)"/.exec(xml)?.[1]);
+    const ring = Number(/timeout="(\d+)"/.exec(xml)?.[1]);
+    expect(limit).toBeGreaterThanOrEqual(60);
+    expect(limit).toBeLessThanOrEqual(14400);
+    expect(limit).not.toBe(ring);
+  });
+
   it("the outbound leg's caller id is one of the account's OWN numbers", async () => {
     // Telnyx refuses an outbound leg whose caller id is not a number this
     // account owns — the same reason forwardXml passes our number, not the

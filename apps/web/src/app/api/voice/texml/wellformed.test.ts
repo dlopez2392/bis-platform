@@ -237,6 +237,9 @@ beforeEach(() => {
   process.env.VOICE_OPENAI_PROJECT_ID = "proj_test123";
   delete process.env.TELNYX_PUBLIC_KEY;
   delete process.env.VOICE_FORWARD_TO;
+  // Set by the escaping cases below, and read by BOTH routes' action URLs —
+  // a leak would silently change the document every other case here parses.
+  delete process.env.APP_ORIGIN;
   lookupMock.mockReset().mockResolvedValue({ id: "pn1", account_id: "a1", e164: LIVE_TO, telnyx_id: null, status: "live" });
   profileMock.mockReset().mockResolvedValue(PROFILE);
   countCallsSinceMock.mockReset().mockResolvedValue(0);
@@ -330,6 +333,55 @@ describe("every emitted TeXML document parses", () => {
   });
 
   it("the handoff dial to a person", async () => {
+    const xml = await handoff("tok_abc");
+    expect(xml).toContain("<Dial");
+    parseXmlStrict(xml);
+  });
+
+  // ── The handoff dial's three interpolated values ──────────────────────
+  //
+  // The sibling that emits the FIRST action URL routes both of its values
+  // through `xmlText`, and its comment says why: "the action URL is one
+  // appended query parameter away from the same one." The second action URL
+  // did not get the lesson, and neither did the caller id or the dialled
+  // number beside it. All three are safe TODAY — one query parameter, and two
+  // columns a CHECK constraint bounds — and every one of them is one ordinary
+  // change away from emitting a document Telnyx cannot parse, which is dead
+  // air on a caller who was just told they are being put through.
+  //
+  // Each of these feeds the value an `&`, because `&` is the character that
+  // actually broke the bridge (XML 1.0 §2.4). The assertion is the parser,
+  // not a substring: a route that escaped only the one value a test named
+  // would still pass a `toContain("&amp;")`.
+
+  it("the handoff dial when the configured origin carries a query string", async () => {
+    // `configuredOrigin()` strips trailing slashes and nothing else, so an
+    // APP_ORIGIN with a query string travels into `action="…"` verbatim —
+    // and an attribute value is where an unescaped `&` also meets an
+    // unescaped quote.
+    process.env.APP_ORIGIN = 'https://x.example?a=1&b=2&c="3"';
+    const xml = await handoff("tok_abc");
+    expect(xml).toContain("<Dial");
+    parseXmlStrict(xml);
+  });
+
+  it("the handoff dial when the transfer number carries an `&`", async () => {
+    // `resolveHandoffTarget` passes `transferPhone` through untouched
+    // (lib/voice/handoff.ts:36-38) — the E164 CHECK is the only thing that
+    // bounds it, and it bounds the COLUMN, not this function.
+    getTransferPhoneMock.mockResolvedValue("+1956292&1696");
+    const xml = await handoff("tok_abc");
+    expect(xml).toContain("<Dial");
+    parseXmlStrict(xml);
+  });
+
+  it("the handoff dial when the owned number used as caller id carries an `&`", async () => {
+    // Same class, other attribute: `callerId="…"` comes from a
+    // `phone_numbers.e164` row, bounded by the same column CHECK and by
+    // nothing in this route.
+    listPhoneNumbersForAccountMock.mockResolvedValue([
+      { id: "pn1", account_id: "acct1", e164: '+1956555&0999"x', telnyx_id: null, status: "live" },
+    ]);
     const xml = await handoff("tok_abc");
     expect(xml).toContain("<Dial");
     parseXmlStrict(xml);
