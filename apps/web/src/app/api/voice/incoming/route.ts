@@ -641,19 +641,29 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // `decideReputation` reports `blocked` — so each is read on its own field
     // and never combined into one boolean.
     //
-    // EACH FLAG IS SET INSIDE THE `try`, WHERE ITS OWN READ LANDS, AND ACTED
-    // ON AFTER IT — so a throw in a later read can never discard a decline an
-    // earlier read already earned. That is also why these reads stay
-    // sequential here while TeXML batches the same three in a `Promise.all`:
-    // TeXML only owes the caller words and sits on a carrier answer deadline,
-    // whereas this is the layer that binds, and `Promise.all` rejects as a
-    // whole — one slow `countCallerHistorySince` (two counts over 30 days,
-    // against the cap's one same-day count) would fail the abuse cap open
-    // right here. Pinned by "caps exceeded AND the history read throwing".
+    // EACH FLAG IS SET INSIDE ITS OWN `try`, WHERE ITS OWN READ LANDS, AND
+    // ACTED ON AFTER BOTH — so a throw in one read can never discard a decline
+    // the other already earned. That is also why these reads stay sequential
+    // here while TeXML batches the same three in a `Promise.all`: TeXML only
+    // owes the caller words and sits on a carrier answer deadline, whereas
+    // this is the layer that binds, and `Promise.all` rejects as a whole —
+    // one slow `countCallerHistorySince` (two counts over 30 days, against the
+    // cap's one same-day count) would fail the abuse cap open right here.
+    //
+    // TWO `try` BLOCKS, NOT ONE, AND THE SECOND ONE IS WHY. With both reads
+    // sharing a single `try`, the protection ran ONE WAY only: the cap counts
+    // are awaited first, so a throw in either of them aborted the block before
+    // `countCallerHistorySince` was ever called and Guard 2 silently did not
+    // run for that call. Fail-open, so the direction was safe — but it is the
+    // inverse of what this comment advertises, it silently drops the guard
+    // that matters MORE (a cap re-allows the same robot tomorrow; a reputation
+    // block does not), and it hangs the more fragile read's fate on the less
+    // fragile one. Split, neither read can take the other down in either
+    // direction. Pinned from both sides: "caps exceeded AND the history read
+    // throwing → still declined per-number" and "a cap read throwing must
+    // still let Guard 2 block a repeat offender".
     let capsAllowed = true;
     let capsReason: "per-number" | "per-account" | undefined;
-    let blocked = false;
-    let blockReason: "repeat-spam" | undefined;
     try {
       const dayStart = utcDayStart(now);
       const forAccount = await countCallsSince(db, accountId, dayStart);
@@ -663,11 +673,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         capsAllowed = false;
         capsReason = verdict.reason;
       }
-      // A withheld caller id has no reputation to read: passing the null
-      // through would score every anonymous caller on the account as one
-      // number. `now` is the same instant `utcDayStart` above used, so the
-      // window floor and the day floor come from one clock read.
-      if (callerNumber) {
+    } catch (e) {
+      log("call-limit counts failed — failing open", { callId, accountId, error: String(e) });
+    }
+
+    let blocked = false;
+    let blockReason: "repeat-spam" | undefined;
+    // A withheld caller id has no reputation to read: passing the null
+    // through would score every anonymous caller on the account as one
+    // number. `now` is the same instant `utcDayStart` above used, so the
+    // window floor and the day floor come from one clock read.
+    if (callerNumber) {
+      try {
         const repCfg = readReputationConfig();
         const history = await countCallerHistorySince(
           db, accountId, callerNumber, windowStart(now, repCfg.windowDays),
@@ -677,13 +694,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           blocked = true;
           blockReason = reputation.reason;
         }
+      } catch (e) {
+        // Names the reputation read specifically: this is the only line an
+        // operator gets when Guard 2 silently stops firing, and a shared
+        // "call-limit" line would have pointed them at the wrong query
+        // (TeXML's own line says "cap/reputation" because its three reads
+        // genuinely do share one `Promise.all` and one catch).
+        log("caller-reputation count failed — failing open", { callId, accountId, error: String(e) });
       }
-    } catch (e) {
-      // Names BOTH reads this catch now covers: it is the only line an
-      // operator gets when Guard 2 silently stops firing, and "call-limit"
-      // alone would have pointed them at the wrong query (TeXML's own line
-      // says "cap/reputation" for the same reason).
-      log("call-limit/reputation counts failed — failing open", { callId, accountId, error: String(e) });
     }
     // Reputation before the cap: a caller already known to be a robot should
     // not be described by the day's volume, and it is the more actionable of

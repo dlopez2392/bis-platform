@@ -365,6 +365,37 @@ describe("POST /api/voice/incoming — step 8: caller reputation", () => {
     expect(startCallRowMock).not.toHaveBeenCalled();
   });
 
+  // THE MIRROR OF THE TEST ABOVE, AND THE DIRECTION THAT WAS MISSING. The two
+  // reads sat in ONE `try`, with both cap counts awaited ahead of the
+  // reputation read — so the protection ran one way only. A throw in a cap
+  // read aborted the block before `countCallerHistorySince` was ever called,
+  // and Guard 2 silently did not run for that call. Fail-open, so the
+  // direction was safe, but it is the inverse of what the block's own comment
+  // advertises, and it is the more valuable guard: the caps re-allow the same
+  // robot tomorrow, a reputation block does not, and `countCallerHistorySince`
+  // — two counts over 30 days against the cap's one same-day count — is the
+  // read most likely to fail on its own, not least likely.
+  //
+  // Each read therefore gets its OWN try/catch. Neither can take the other
+  // down, in either direction, and both keep the decide-inside / act-after
+  // shape so a throw can never discard a decline already earned.
+  it("step 8: a cap read throwing must still let Guard 2 block a repeat offender", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    // A DB blip on the caps — both same-day counts, the shape "counts THROWING
+    // fails open" above already uses.
+    countCallsSinceMock.mockRejectedValue(new Error("cap read timed out"));
+    countCallsByCallerSinceMock.mockRejectedValue(new Error("cap read timed out"));
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 3, otherCalls: 0 });
+    const res = await POST(req());
+    // The caps failed open, as they must. The reputation read still ran, and
+    // its verdict still binds.
+    expect(await res.json()).toEqual({ ok: true, declined: "repeat-spam" });
+    expect(countCallerHistorySinceMock).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(afterMock).not.toHaveBeenCalled();
+    expect(startCallRowMock).not.toHaveBeenCalled();
+  });
+
   // The account id is an ARGUMENT to the count, not an ambient fact: a read
   // that forgot it would score this caller on every tenant's history at once.
   it("step 8: the history is read for THIS account, THIS caller, over the rolling window", async () => {
