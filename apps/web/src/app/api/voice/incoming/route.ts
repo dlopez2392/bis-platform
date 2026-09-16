@@ -630,6 +630,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // The two verdicts read OPPOSITE senses — `decideLimit` reports `allowed`,
     // `decideReputation` reports `blocked` — so each is read on its own field
     // and never combined into one boolean.
+    //
+    // EACH FLAG IS SET INSIDE THE `try`, WHERE ITS OWN READ LANDS, AND ACTED
+    // ON AFTER IT — so a throw in a later read can never discard a decline an
+    // earlier read already earned. That is also why these reads stay
+    // sequential here while TeXML batches the same three in a `Promise.all`:
+    // TeXML only owes the caller words and sits on a carrier answer deadline,
+    // whereas this is the layer that binds, and `Promise.all` rejects as a
+    // whole — one slow `countCallerHistorySince` (two counts over 30 days,
+    // against the cap's one same-day count) would fail the abuse cap open
+    // right here. Pinned by "caps exceeded AND the history read throwing".
     let capsAllowed = true;
     let capsReason: "per-number" | "per-account" | undefined;
     let blocked = false;
@@ -668,7 +678,22 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // Reputation before the cap: a caller already known to be a robot should
     // not be described by the day's volume, and it is the more actionable of
     // the two log lines. Matches the TeXML route's own ordering, so the two
-    // gates describe the same call the same way.
+    // gates describe the same call the same way. The two orderings are pinned
+    // by a case at each gate arranging a caller who is over the cap AND a
+    // repeat offender; without one, the branches never contend and a swap is
+    // invisible — a robot would hear "call back tomorrow", which invites it
+    // back, and the one log line Guard 2 produces would name the wrong reason.
+    //
+    // RETURNING HERE, ABOVE `startCallRow` (step 10), IS LOAD-BEARING FOR
+    // GUARD 2 — see `caller-reputation.ts`'s `windowStart` doc comment ("a
+    // refused call writes no `calls` row at all"). A row written on a refusal
+    // carries no outcome, `calls.outcome` defaults to `abandoned`, and
+    // `countCallerHistorySince` counts anything that is not `spam` as
+    // `otherCalls` — so the act of blocking a caller would clear their block
+    // on the next call and Guard 2 would fire exactly once per number, in
+    // silence. Anything that needs to surface a decline to an operator goes
+    // through a log line, a metric or a new column, never through a `calls`
+    // row. Pinned by the `startCallRow` assertions on both decline tests.
     if (blocked) {
       log("declined: blocked caller", { callId, accountId, reason: blockReason });
       return NextResponse.json({ ok: true, declined: blockReason });

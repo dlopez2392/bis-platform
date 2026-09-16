@@ -276,6 +276,13 @@ describe("POST /api/voice/incoming — step 8: call caps", () => {
     expect(await res.json()).toEqual({ ok: true, declined: "per-number" });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(afterMock).not.toHaveBeenCalled();
+    // A declined call writes NO `calls` row — step 8 returns before step 10.
+    // Same reasoning as the reputation block below (see `caller-reputation.ts`,
+    // "a refused call writes no `calls` row at all"), and it bites here too: a
+    // row written on a refusal counts as a prior call tomorrow, and — because
+    // `startCallRow` inserts no outcome and the column defaults to `abandoned`
+    // — as a GOOD outcome forever after.
+    expect(startCallRowMock).not.toHaveBeenCalled();
   });
 
   it("counts THROWING fails open — the call proceeds through to accept", async () => {
@@ -296,7 +303,17 @@ describe("POST /api/voice/incoming — step 8: call caps", () => {
 // OpenAI's SIP endpoint is reachable by anyone who knows the project id. A
 // decline here is SILENT — 200, `acceptCall` never called, nothing billed.
 describe("POST /api/voice/incoming — step 8: caller reputation", () => {
-  it("step 8: a repeat silent caller is declined — never accepted, no lifecycle", async () => {
+  // THE INVARIANT GUARD 2 IS BUILT ON, and the reason this assertion is not a
+  // nicety: a refused call must write NO `calls` row at all. If `startCallRow`
+  // ever ran before this gate, the refusal itself would clear the block —
+  // `0019_voice_core.sql:53` defaults `outcome` to `abandoned`, `startCallRow`
+  // inserts no outcome, and `countCallerHistorySince`'s "other" half is
+  // `.neq("outcome","spam")`, so that row counts as a good outcome and
+  // `decideReputation`'s `otherCalls > 0` clause clears the caller forever.
+  // Guard 2 would then fire exactly once per number and never again, silently.
+  // A reviewer moved `startCallRow` above the gates and got a fully green
+  // suite; this line is what makes that mutation fail.
+  it("step 8: a repeat silent caller is declined — never accepted, no lifecycle, NO call row", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 3, otherCalls: 0 });
     const res = await POST(req());
@@ -304,6 +321,7 @@ describe("POST /api/voice/incoming — step 8: caller reputation", () => {
     expect(await res.json()).toEqual({ ok: true, declined: "repeat-spam" });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(afterMock).not.toHaveBeenCalled();
+    expect(startCallRowMock).not.toHaveBeenCalled();
   });
 
   it("step 8: the same caller WITH a good outcome is accepted — the two gates agree", async () => {
@@ -326,6 +344,25 @@ describe("POST /api/voice/incoming — step 8: caller reputation", () => {
     const json = await res.json();
     expect(json.declined).toBeUndefined();
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  // WHY STEP 8 DECIDES INSIDE THE `try` AND ACTS AFTER IT. The flags are set
+  // where each read lands, so a throw in a LATER read can never discard a
+  // decline an EARLIER read already earned. The inviting "improvement" is the
+  // `Promise.all` the TeXML route runs over these same three reads — but that
+  // route only speaks words, and this one is the binding gate: batch the reads
+  // and decide afterwards, and one rejected read fails the whole batch open,
+  // silently taking the per-number abuse cap down with it at the authoritative
+  // layer. `countCallerHistorySince` runs two counts over 30 days against the
+  // cap's one same-day count, so it is the read most likely to time out alone.
+  it("step 8: caps exceeded AND the history read throwing → still declined per-number", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    countCallsByCallerSinceMock.mockResolvedValue(5);
+    countCallerHistorySinceMock.mockRejectedValue(new Error("history read timed out"));
+    const res = await POST(req());
+    expect(await res.json()).toEqual({ ok: true, declined: "per-number" });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(startCallRowMock).not.toHaveBeenCalled();
   });
 
   // The account id is an ARGUMENT to the count, not an ambient fact: a read
