@@ -40,6 +40,19 @@ describe("isCallerAudioEvent", () => {
     expect(isCallerAudioEvent(undefined)).toBe(false);
     expect(isCallerAudioEvent("")).toBe(false);
   });
+  it("rejects a truthy NON-STRING type without throwing — the payload is untrusted JSON", () => {
+    // `RealtimeCallEvent.type` is DECLARED `string | undefined`, but it is
+    // `JSON.parse`d off a socket: nothing stops a frame carrying a number, an
+    // object or an array there. Before the guard below, every one of these
+    // threw out of `.startsWith`, out of `handleMessage`, and permanently
+    // rejected the lifecycle's serialization chain — dropping every later
+    // frame of that call while the caller kept talking.
+    const bad: unknown[] = [42, 0.5, true, {}, { startsWith: "not a function" }, [], ["input_audio_buffer.x"], null];
+    for (const t of bad) {
+      expect(() => isCallerAudioEvent(t as unknown as string)).not.toThrow();
+      expect(isCallerAudioEvent(t as unknown as string)).toBe(false);
+    }
+  });
   it("does not accept a merely similar prefix", () => {
     expect(isCallerAudioEvent("input_audio_buffer_cleared")).toBe(false);
     expect(isCallerAudioEvent("output_audio_buffer.started")).toBe(false);

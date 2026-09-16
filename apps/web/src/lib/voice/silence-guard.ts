@@ -17,10 +17,23 @@ const MAX_SILENT_SECONDS = 120;
  *
  * Junk/zero/negative falls back to the default rather than disabling the
  * guard — the same rule `call-limits.ts` uses, for the same reason: a
- * mistyped env var must never silently remove a cost control. The upper
- * clamp is 120s, comfortably under `PHONE_MAX_CALL_SECONDS`' 240 default, so
- * this guard always fires first on a silent call; the lower clamp is 5s so
- * it can never fire before a slow greeting has even played.
+ * mistyped env var must never silently remove a cost control. The lower
+ * clamp is 5s so it can never fire before a slow greeting has even played.
+ *
+ * The upper clamp is 120s. That is HALF of `PHONE_MAX_CALL_SECONDS`' 240
+ * default — but this function does not, and cannot, guarantee that ordering:
+ * it can only see one of the two numbers. An operator tightening the cost cap
+ * to 60s while leaving this at 120 inverts them, and on a silent call the CAP
+ * would then fire first and hand the model its open-ended "Politely wrap
+ * up…" — the exact instruction that produced a fabricated call record on a
+ * call where nobody had spoken, and the whole reason the goodbye below is a
+ * fixed sentence instead.
+ *
+ * So the ordering is enforced where BOTH numbers are known: the arming site
+ * in `incoming/route.ts` bounds this value to half the resolved cap, and the
+ * coupling test in `incoming/lifecycle.test.ts` ("the two cost knobs cannot
+ * invert") pins it. What THIS clamp guarantees on its own is only its own
+ * range, 5..120.
  */
 export function readSilentSeconds(env: NodeJS.ProcessEnv = process.env): number {
   const n = Number(env.PHONE_MAX_SILENT_SECONDS);
@@ -49,9 +62,19 @@ export function readSilentSeconds(env: NodeJS.ProcessEnv = process.env): number 
  *
  * Assistant and response events are never caller audio. Sofía talking to
  * herself for four minutes is precisely the failure being stopped.
+ *
+ * The `typeof` check is not belt-and-braces. `RealtimeCallEvent.type` is
+ * DECLARED `string | undefined`, but it is `JSON.parse`d off a socket: a
+ * frame is free to carry a number, an object or an array there, and a truthy
+ * non-string used to throw out of `.startsWith`. In the lifecycle that throw
+ * escaped `handleMessage` and permanently rejected the frame-serialization
+ * chain, dropping every remaining frame of the call — no transcript, no lead,
+ * no booking — while the caller heard a perfectly normal conversation. A
+ * boundary predicate over an untrusted payload answers the question; it does
+ * not throw.
  */
 export function isCallerAudioEvent(type: string | undefined): boolean {
-  if (!type) return false;
+  if (typeof type !== "string" || type === "") return false;
   if (type.startsWith("input_audio_buffer.")) return true;
   return type === "conversation.item.input_audio_transcription.completed";
 }

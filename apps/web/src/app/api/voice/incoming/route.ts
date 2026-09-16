@@ -334,8 +334,51 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       // `capTimer` is: one timer, one origin, no second lifecycle concept to
       // keep in sync. The 5s floor in `readSilentSeconds` is what keeps a
       // slow greeting safe.
-      const silentSeconds = readSilentSeconds();
+      //
+      // THE ORDERING IS ENFORCED HERE, NOT DESCRIBED. The two knobs are
+      // independent in the environment: PHONE_MAX_SILENT_SECONDS clamps to
+      // 5–120 and PHONE_MAX_CALL_SECONDS to <=750, so `120` and `60` is a
+      // legal pair an operator can reach by two individually sensible edits.
+      // Under it, on a call where nobody speaks, the CAP fires first and
+      // hands the model the open-ended "Politely wrap up…" below — which is
+      // precisely how the 247-second call produced a fabricated summary, and
+      // the whole reason this guard carries its own fixed sentence instead.
+      //
+      // So the window is bounded against the already-resolved `maxSeconds`
+      // rather than trusted: HALF the cap. Half, not "cap minus something",
+      // because half is strictly less than the cap for every positive
+      // `maxSeconds` and therefore can never TIE it — and a tie would fire
+      // the cap first, since `capTimer` was scheduled a few lines earlier and
+      // same-deadline timers run in insertion order. A silent call may spend
+      // at most half the cost budget.
+      //
+      // This is the enforcement PHONE_CONNECT_TIMEOUT_MS's block above still
+      // lacks and says so ("nothing enforces that coupling"). Pinned by the
+      // coupling test in `lifecycle.test.ts` — "the two cost knobs cannot
+      // invert" — in the shape `automations/cron-coupling.test.ts` uses for
+      // the cron/window pair.
+      const silentSeconds = Math.min(readSilentSeconds(), maxSeconds / 2);
       silenceTimer = setTimeout(() => {
+        // Belt to `finish()`'s own `clearTimeout(silenceTimer)`, matching the
+        // guard `ws.on("open")` and `ws.on("message")` already carry: if a
+        // future edit drops that clear, this leaks inert instead of sending a
+        // goodbye into a socket that was torn down when the caller hung up.
+        if (settled) return;
+        // Disarmed BEFORE anything else, so the cancel branch in
+        // `handleMessage` cannot log "silence guard cleared" for a guard that
+        // has already fired. That log line is the diagnostic an operator
+        // reads off a real call; a call where it appears AND the call ends
+        // five seconds later would be unreadable.
+        //
+        // Late caller audio therefore does NOT cancel the pending close, on
+        // purpose: once the fixed goodbye is playing the call is ending, and
+        // a caller speaking over it must not resurrect the session.
+        silenceTimer = undefined;
+        // The call is over — the cost cap has nothing left to bound. The
+        // bound above ORDERS the two timers; this makes the cap unreachable
+        // outright, including the degenerate configurations where the cap
+        // would land inside the 5s goodbye playout below.
+        clearTimeout(capTimer);
         log("no caller audio, ending call", { callId, silentSeconds });
         try {
           ws.send(JSON.stringify({
@@ -370,6 +413,12 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
     // itself never throws (the try/catch inside `handleMessage` swallows
     // per-frame failures and logs them), the chain can never get stuck
     // permanently rejected.
+    //
+    // That last clause is an INVARIANT `handleMessage` has to keep, not a
+    // fact about it: every statement in it that touches the parsed payload
+    // belongs inside its try. A single statement placed outside one (the
+    // silence-guard cancel, briefly) is enough to reject this chain forever
+    // and silently drop the rest of the call.
     let chain: Promise<void> = Promise.resolve();
     ws.on("message", (raw) => {
       // Post-drain frames must not mutate recorded state or attempt sends on
@@ -390,17 +439,52 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
         log("failed to parse call event", { callId });
         return;
       }
-      // Cancelled here — BEFORE `processCallEvent`, so a throw inside tool
-      // handling can never leave the guard armed on a call where the caller
-      // is plainly talking. One sound is enough and it is permanent: this
-      // guard asks "did anyone ever speak", which is exactly the question
-      // `classifyOutcome` asks to decide `spam`, so it is never re-armed.
-      if (silenceTimer && isCallerAudioEvent(event?.type)) {
-        clearTimeout(silenceTimer);
-        silenceTimer = undefined;
-        log("caller audio detected, silence guard cleared", { callId, type: event?.type });
-      }
       try {
+        // Cancelled here — INSIDE this try, and still before
+        // `processCallEvent`, so a throw inside tool handling can never leave
+        // the guard armed on a call where the caller is plainly talking. One
+        // sound is enough and it is permanent: this guard asks "did anyone
+        // ever speak", which is exactly the question `classifyOutcome` asks
+        // to decide `spam`, so it is never re-armed.
+        //
+        // INSIDE the try is load-bearing, not tidiness. This function's
+        // promise is chained onto `chain` above; anything that escapes it
+        // rejects that chain PERMANENTLY, and every later frame of the call
+        // is then dropped — no transcript, no lead, no booking, no tool call
+        // — while the caller hears a normal conversation, because the audio
+        // is OpenAI's SIP bridge and not ours. `event.type` is DECLARED a
+        // string and is in fact whatever the socket sent; the same will be
+        // true of every field the predicates added alongside this one read.
+        //
+        // It also rides the serialization chain like any other frame, so a
+        // frame still awaiting a slow tool call ahead of it delays this
+        // cancel by however long that tool takes, and the guard can fire
+        // inside that window. Accepted: reading the cancel off the raw socket
+        // ahead of the chain would reintroduce the exact ordering race the
+        // chain exists to remove, and a call with a tool call in flight is by
+        // definition a call where someone already spoke — so an earlier frame
+        // has already cancelled the guard.
+        //
+        // The INNER try is not redundant with the outer one. Sharing the
+        // outer catch would stop the chain rejecting, but a predicate that
+        // throws on one frame's payload throws on the next one too — and
+        // every throw would skip that frame's `processCallEvent`, losing the
+        // whole call's transcript, leads and bookings just as completely as
+        // the wedged chain did, only more quietly. A predicate over an
+        // untrusted field must cost AT MOST the guard it decides, never the
+        // call it was watching.
+        try {
+          if (silenceTimer && isCallerAudioEvent(event?.type)) {
+            clearTimeout(silenceTimer);
+            silenceTimer = undefined;
+            log("caller audio detected, silence guard cleared", { callId, type: event?.type });
+          }
+        } catch (e) {
+          // Logged, not swallowed silently: the guard staying armed on a call
+          // where somebody IS talking ends that call early, so this line is
+          // what explains a caller who was cut off mid-sentence.
+          log("silence guard cancel check threw — guard left armed", { callId, error: String(e) });
+        }
         const result = await processCallEvent(state, toolCtx, event);
         state = result.state;
         for (const action of result.actions) {

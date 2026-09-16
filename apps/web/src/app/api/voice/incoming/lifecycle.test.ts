@@ -89,6 +89,22 @@ vi.mock("@/lib/voice/finish-call", () => ({ finishCall: (...a: unknown[]) => fin
 const runToolMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/voice/tools/registry", () => ({ runTool: (...a: unknown[]) => runToolMock(...a) }));
 
+// --- @/lib/voice/silence-guard: the REAL module, with `isCallerAudioEvent`
+// routed through a spy that defaults to the real implementation. Only one
+// test changes that default, and it changes it to THROW: the cancel block in
+// `handleMessage` reads untrusted socket fields, Tasks 3–6 add more
+// predicates that read more of them, and a throw from any of them must be
+// caught by that function's own try/catch rather than escaping into the frame
+// serialization chain. Nothing else in the file is affected — `readSilentSeconds`
+// and `silenceGoodbye` are the genuine exports, spread through. ------------
+const isCallerAudioEventMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/voice/silence-guard", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/voice/silence-guard")>();
+  return { ...actual, isCallerAudioEvent: (t: string | undefined) => isCallerAudioEventMock(t) };
+});
+const { isCallerAudioEvent: realIsCallerAudioEvent } =
+  await vi.importActual<typeof import("@/lib/voice/silence-guard")>("@/lib/voice/silence-guard");
+
 // --- @bis/db: minimal — just enough to reach a successful accept. ----------
 const getPhoneNumberByE164Mock = vi.hoisted(() => vi.fn());
 const getVoiceProfileMock = vi.hoisted(() => vi.fn());
@@ -201,6 +217,7 @@ beforeEach(() => {
   afterMock.mockReset();
   finishCallMock.mockReset().mockResolvedValue({ stored: true, notified: false, outcome: "abandoned" });
   runToolMock.mockReset();
+  isCallerAudioEventMock.mockReset().mockImplementation(realIsCallerAudioEvent);
   getPhoneNumberByE164Mock.mockReset().mockResolvedValue(PHONE_ROW);
   getVoiceProfileMock.mockReset().mockResolvedValue(PROFILE_ROW);
   fetchMock.mockReset().mockResolvedValue({ ok: true, text: async () => "" });
@@ -477,6 +494,13 @@ describe("runCallLifecycle — Important #5: cap-seconds clamp", () => {
     const { ws } = await startLifecycle();
     ws.send = vi.fn();
     ws.emit("open");
+    // One sound from the caller, so this is a call that is going SOMEWHERE.
+    // The silence guard would otherwise end it at 30s and disarm the very
+    // timer under test — on a SILENT call the cost cap is now unreachable by
+    // construction (see "the two cost knobs cannot invert"), so a cap test
+    // has to be a call where somebody spoke.
+    ws.emit("message", JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+    await flushMicrotasks();
 
     // Just under the clamp: no goodbye yet.
     await vi.advanceTimersByTimeAsync(749_000);
@@ -501,6 +525,10 @@ describe("runCallLifecycle — Minor: late frames after settle", () => {
     const { lifecycleDone, ws } = await startLifecycle();
     ws.send = vi.fn();
     ws.emit("open");
+    // A call somebody actually spoke on, so the cap named in this test's
+    // title is what ends it rather than the silence guard at 30s.
+    ws.emit("message", JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+    await flushMicrotasks();
 
     // Cross the default 240s cap: sends the goodbye, then schedules a close
     // 5s later via `ws.close()` — a no-op on the fake socket, exactly like
@@ -533,6 +561,19 @@ describe("runCallLifecycle — Minor: late frames after settle", () => {
 function sentPayloads(send: ReturnType<typeof vi.fn>): unknown[] {
   return send.mock.calls.map((c) => JSON.parse(String(c[0])));
 }
+
+/** Just the `response.instructions` strings the lifecycle has asked the model
+ *  to say — the surface the CALLER eventually hears, and the only thing that
+ *  distinguishes the silence guard's fixed sentence from the cost cap's
+ *  open-ended wrap-up. */
+function instructionsSent(send: ReturnType<typeof vi.fn>): string[] {
+  return sentPayloads(send)
+    .map((p) => (p as { response?: { instructions?: unknown } } | null)?.response?.instructions)
+    .filter((i): i is string => typeof i === "string");
+}
+
+const SILENCE_GOODBYE = "Say exactly this and nothing else";
+const CAP_GOODBYE = "Politely wrap up";
 
 // Guard 1 of the spam-screening spec. The row it exists to stop: a 247-second
 // call whose only two transcript events were four minutes apart and BOTH the
@@ -676,6 +717,235 @@ describe("silence cutoff (Guard 1)", () => {
         instructions: expect.stringContaining("Say exactly this and nothing else"),
       }),
     }));
+  });
+});
+
+// The guard's three wirings — the env knob, the language, and the second
+// accepted cancel event. Each of these stayed green while the wiring was
+// mutated away, which is the only reason they exist as separate tests: the
+// pure module already covers the DECISIONS in silence-guard.test.ts, and a
+// decision nothing calls is a decision that does not happen.
+describe("silence cutoff (Guard 1) — the wirings", () => {
+  it("PHONE_MAX_SILENT_SECONDS is what the lifecycle actually arms — 60 means 60, not the module default", async () => {
+    // Mutation this exists to catch: `readSilentSeconds()` → `30` at the
+    // arming site. Its three sibling knobs (connect timeout, cap clamp,
+    // greeting delay) each already have a wiring test in this file.
+    vi.useFakeTimers();
+    process.env.PHONE_MAX_SILENT_SECONDS = "60";
+    const { ws } = await startLifecycle();
+    const sendSpy = vi.fn();
+    ws.send = sendSpy;
+    ws.emit("open");
+
+    // Well past the 30s default, and past the +5s close that would follow it.
+    await vi.advanceTimersByTimeAsync(35_000);
+    expect(instructionsSent(sendSpy).some((i) => i.includes(SILENCE_GOODBYE))).toBe(false);
+
+    // Past the configured 60s.
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(instructionsSent(sendSpy).some((i) => i.includes(SILENCE_GOODBYE))).toBe(true);
+  });
+
+  it("languages: es → the silent caller hears the Spanish goodbye, not the English one", async () => {
+    // Mutation this exists to catch: `silenceGoodbye(languages)` →
+    // `silenceGoodbye("en")`. The greeting has exactly this test above; four
+    // of the lifecycle's edit sites plumb `languages` and this is the second
+    // of them to be pinned.
+    vi.useFakeTimers();
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, languages: "es" });
+    const { ws } = await startLifecycle();
+    const sendSpy = vi.fn();
+    ws.send = sendSpy;
+    ws.emit("open");
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    const goodbye = instructionsSent(sendSpy).find((i) => i.includes(SILENCE_GOODBYE));
+    expect(goodbye).toBeDefined();
+    expect(goodbye!).toContain("No puedo escuchar");
+    expect(goodbye!).not.toContain("can't hear");
+  });
+
+  it("the slow backstop cancels too — a transcription completion, not only input_audio_buffer.*", async () => {
+    // The spec says "cancel on either". Only the fast signal was ever
+    // delivered to the guard by a test, so an inlined `input_audio_buffer.`
+    // prefix check at the call site passed everything — and this is the half
+    // production may depend on, since nothing guarantees `input_audio_buffer.*`
+    // ever arrives on a SIP-attached socket.
+    vi.useFakeTimers();
+    const { ws } = await startLifecycle();
+    const sendSpy = vi.fn();
+    const closeSpy = vi.fn();
+    ws.send = sendSpy;
+    ws.close = closeSpy;
+    ws.emit("open");
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    ws.emit("message", JSON.stringify({
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "hi, are you open on Saturday",
+    }));
+    await flushMicrotasks();
+
+    // 60s total: double the window and well past the +5s close behind it.
+    await vi.advanceTimersByTimeAsync(55_000);
+
+    expect(closeSpy).not.toHaveBeenCalled();
+    expect(instructionsSent(sendSpy).some((i) => i.includes(SILENCE_GOODBYE))).toBe(false);
+  });
+});
+
+// The coupling `cron-coupling.test.ts` exists for, one layer down: two knobs
+// that are independent in the environment but ordered in the code, where the
+// comment was the only thing holding the order. `PHONE_CONNECT_TIMEOUT_MS`
+// carries the same shape in route.ts and says so in its own comment; this
+// pair no longer has to.
+describe("silence cutoff (Guard 1) — the two cost knobs cannot invert", () => {
+  it("PHONE_MAX_CALL_SECONDS=60 under PHONE_MAX_SILENT_SECONDS=120: the guard still fires FIRST and the cap never speaks", async () => {
+    vi.useFakeTimers();
+    // An operator's perfectly reasonable pair of edits, in the wrong order:
+    // the cost cap tightened to a minute, the silence window left long. Both
+    // are inside their own documented clamps (cap ≤ 750, silence 5–120).
+    process.env.PHONE_MAX_CALL_SECONDS = "60";
+    process.env.PHONE_MAX_SILENT_SECONDS = "120";
+    const { ws } = await startLifecycle();
+    const sendSpy = vi.fn();
+    const closeSpy = vi.fn();
+    ws.send = sendSpy;
+    // Deliberately a no-op close, like the real `ws` package until its own
+    // "close" event comes back: this test must prove the CAP TIMER itself is
+    // disarmed, not merely that a prompt teardown outran it.
+    ws.close = closeSpy;
+    ws.emit("open");
+
+    // Half the cost cap: the guard's ceiling once it is bounded.
+    await vi.advanceTimersByTimeAsync(30_000);
+    const at30 = instructionsSent(sendSpy);
+    expect(at30.some((i) => i.includes(SILENCE_GOODBYE))).toBe(true);
+    expect(at30.some((i) => i.includes(CAP_GOODBYE))).toBe(false);
+
+    // Past the cost cap's own 60s, and past its +5s close as well. The cap's
+    // open-ended "wrap up" instruction is the one that produced a fabricated
+    // call record on a call where nobody had spoken — a silent call must
+    // never reach it, whatever the two knobs are set to.
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(instructionsSent(sendSpy).some((i) => i.includes(CAP_GOODBYE))).toBe(false);
+  });
+});
+
+describe("silence cutoff (Guard 1) — teardown and late frames", () => {
+  it("the caller hanging up disarms the guard — nothing is sent into a torn-down socket", async () => {
+    vi.useFakeTimers();
+    const { lifecycleDone, ws } = await startLifecycle();
+    const sendSpy = vi.fn();
+    ws.send = sendSpy;
+    ws.emit("open");
+
+    // A short real call: the caller hangs up at 10s, well inside the 30s
+    // window, so the guard is still armed when `finish()` runs.
+    await vi.advanceTimersByTimeAsync(10_000);
+    ws.emit("close", 1000, Buffer.from("caller hung up"));
+    await lifecycleDone;
+
+    sendSpy.mockClear();
+    // Past both the window and the close that would follow it.
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it("after the guard fires, late caller audio neither cancels the pending close nor logs that it did", async () => {
+    // The log line is the diagnostic the runbook tells the operator to read
+    // off a real call, so it must not claim a cancel that did not happen —
+    // and the DECISION it reports is deliberate: once the fixed goodbye is
+    // playing the call is ending, and a caller speaking over it does not
+    // resurrect the session.
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const { ws } = await startLifecycle();
+      const sendSpy = vi.fn();
+      const closeSpy = vi.fn();
+      ws.send = sendSpy;
+      ws.close = closeSpy;
+      ws.emit("open");
+
+      await vi.advanceTimersByTimeAsync(30_000); // the guard fires
+      expect(instructionsSent(sendSpy).some((i) => i.includes(SILENCE_GOODBYE))).toBe(true);
+      logSpy.mockClear();
+
+      await vi.advanceTimersByTimeAsync(1_000); // t=31s, inside the 5s playout
+      ws.emit("message", JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+      await flushMicrotasks();
+
+      const claimed = logSpy.mock.calls.some((c) =>
+        c.some((a) => String(a).includes("caller audio detected, silence guard cleared")));
+      expect(claimed).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(4_000); // t=35s
+      expect(closeSpy).toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("a frame whose `type` is not a string does not wedge the chain — the next frame still lands", async () => {
+    // Critical: the cancel block used to be the ONE statement in
+    // `handleMessage` outside its try/catch, so a throw there escaped into
+    // `chain = chain.then(...)` and left the chain PERMANENTLY rejected.
+    // Every later frame of that call is then silently dropped — no
+    // transcript, no lead, no booking — while the caller hears a normal
+    // conversation, because the audio is OpenAI's SIP bridge and not ours.
+    const { lifecycleDone, ws } = await startLifecycle();
+    ws.emit("open");
+
+    // Valid JSON, `type` present and truthy, but not a string.
+    ws.emit("message", JSON.stringify({ type: 42 }));
+    // Immediately behind it: the frame carrying the whole call's value.
+    ws.emit("message", JSON.stringify({
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "my roof is leaking",
+    }));
+    await flushMicrotasks();
+
+    ws.emit("close", 1000, Buffer.from("bye"));
+    await lifecycleDone;
+
+    expect(finishCallMock).toHaveBeenCalledTimes(1);
+    const finalState = finishCallMock.mock.calls[0]![0];
+    expect(finalState.transcript.some((t: TranscriptEvent) => t.text === "my roof is leaking")).toBe(true);
+  });
+
+  it("a predicate that throws on EVERY frame costs the guard only — the chain survives and the call is still recorded", async () => {
+    // The structural half of the same bug, and the half that outlives the
+    // `typeof` fix inside `isCallerAudioEvent`: the cancel block reads an
+    // untrusted field, and Tasks 3–6 add more predicates that read more of
+    // them. Two distinct losses are being ruled out here, and a throwing
+    // predicate on every frame is what separates them:
+    //
+    //  - block OUTSIDE `handleMessage`'s try → `chain` is permanently
+    //    rejected and every later frame is dropped.
+    //  - block sharing the OUTER try → the chain survives, but each throw
+    //    skips that frame's `processCallEvent`, and since the predicate
+    //    throws on the next frame too the transcript, leads and bookings are
+    //    lost just as completely, only more quietly.
+    isCallerAudioEventMock.mockImplementation(() => { throw new TypeError("predicate blew up"); });
+
+    const { lifecycleDone, ws } = await startLifecycle();
+    ws.emit("open");
+
+    ws.emit("message", JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+    ws.emit("message", JSON.stringify({
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "there is water coming through the ceiling",
+    }));
+    await flushMicrotasks();
+
+    ws.emit("close", 1000, Buffer.from("bye"));
+    await lifecycleDone;
+
+    expect(finishCallMock).toHaveBeenCalledTimes(1);
+    const finalState = finishCallMock.mock.calls[0]![0];
+    expect(finalState.transcript.some(
+      (t: TranscriptEvent) => t.text === "there is water coming through the ceiling")).toBe(true);
   });
 });
 
