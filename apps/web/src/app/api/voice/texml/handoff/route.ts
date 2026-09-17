@@ -39,6 +39,23 @@ export const runtime = "nodejs";
 const RING_SECONDS = 20;
 
 /**
+ * How long the carrier gets to decide whether a person or a machine answered.
+ *
+ * 2000ms, not the documented 3500ms default, and the reason is a risk rather
+ * than a preference: if this `<Dial>`'s detection turns out to run in
+ * Telnyx's SYNCHRONOUS mode, the bridge waits for the verdict and the caller
+ * hears that wait as silence after the business says "hello". Async is the
+ * expectation (see the `<Number>` comment below) but it is not measured, so
+ * the worst case is bounded to two seconds instead of three and a half.
+ *
+ * Raise it toward the default once a real call shows the bridge is NOT
+ * delayed — detection accuracy generally improves with more audio, and there
+ * is no reason to pay for a shorter window than the vendor recommends if it
+ * costs the caller nothing.
+ */
+const AMD_TIMEOUT_MS = 2000;
+
+/**
  * The CEILING ON THE CONVERSATION. One hour, in seconds.
  *
  * `RING_SECONDS` above bounds the RINGING and stops there. The moment the
@@ -254,7 +271,50 @@ async function decide(token: string, origin: string): Promise<string | null> {
   // untouched). An unescaped `&` or `"` here is not a wrong number — it is a
   // document Telnyx cannot parse, which is dead air on a caller who was just
   // told they are being put through.
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Dial${cid} timeout="${RING_SECONDS}" timeLimit="${MAX_TRANSFER_SECONDS}" passDiversionHeader="true" action="${xmlText(result)}" method="POST">${xmlText(target.to)}</Dial></Response>`;
+  // THE NUMBER IS A `<Number>` ELEMENT NOW, NOT A BARE TEXT CHILD, and the
+  // restructure is the price of asking the carrier what picked up.
+  // `machineDetection` is an attribute of the NOUN — Telnyx documents it on
+  // `<Number>` and `<Sip>`, not on `<Dial>` — so there is no way to enable
+  // detection without wrapping the number. Every `<Dial>` attribute above is
+  // untouched and stays exactly where it was; `handoff-dial-shape.test.ts`
+  // pins all five, because this markup cost two production failures to get
+  // right and a silent drop of `action` or `timeLimit` would undo one of them.
+  //
+  // NOTHING READS THE RESULT (0038). It is written to
+  // `calls.transfer_answered_by` and ignored by the outcome stamp, the
+  // text-back gate and the summary alike. The reason is the direction of the
+  // error: a false `machine` would record a real conversation as a failed
+  // transfer and text somebody "Sorry we missed you just now" minutes after
+  // they spoke to a person — the sharpest failure this design has. So the
+  // detection gets measured against real calls before it is allowed to decide
+  // anything.
+  //
+  // ⚠️ THE ONE THING THIS COULD CHANGE FOR A CALLER, STATED PLAINLY BECAUSE IT
+  // IS NOT SETTLED. Telnyx documents a SYNCHRONOUS AMD mode in which the
+  // TeXML "is not executed until the results of AMD process are provided",
+  // and an ASYNCHRONOUS one that runs in parallel. That distinction is
+  // documented for the REST API's `AsyncAmd` parameter; for the `<Dial>` verb
+  // the docs describe `amd` as a `statusCallbackEvent`, and an event
+  // NOTIFICATION does not block. So async is the expectation — but it is an
+  // expectation, not a measurement.
+  //   IF IT IS ACTUALLY SYNCHRONOUS, the caller hears silence after the
+  //   business picks up, for up to `machineDetectionTimeout`. That is why the
+  //   timeout below is 2000ms rather than the 3500ms default: it bounds the
+  //   worst case to something survivable while the question is open.
+  //   THE TELL IS A PAUSE BETWEEN "hello?" AND THE CALLER HEARING IT. If that
+  //   is reported, delete the three AMD attributes — the `<Number>` wrapper
+  //   is harmless on its own — and the dial goes back to exactly what shipped
+  //   in #84.
+  //
+  // `xmlText` on every interpolated value, for the reason the paragraph above
+  // gives: the status-callback URL is one appended query parameter away from
+  // the bug this file already fixed once.
+  const amd = `${origin}/api/voice/texml/handoff-amd?t=${encodeURIComponent(token)}`;
+  const number =
+    `<Number machineDetection="Enable" machineDetectionTimeout="${AMD_TIMEOUT_MS}"`
+    + ` statusCallback="${xmlText(amd)}" statusCallbackEvent="amd" statusCallbackMethod="POST">`
+    + `${xmlText(target.to)}</Number>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Dial${cid} timeout="${RING_SECONDS}" timeLimit="${MAX_TRANSFER_SECONDS}" passDiversionHeader="true" action="${xmlText(result)}" method="POST">${number}</Dial></Response>`;
 }
 
 export async function POST(req: Request): Promise<NextResponse> {

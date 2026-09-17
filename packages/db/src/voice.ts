@@ -330,6 +330,38 @@ export async function setCallOutcome(
 }
 
 /**
+ * Records what the carrier's answering-machine detection thought picked up
+ * the transferred leg (Telnyx's `AnsweredBy`).
+ *
+ * OBSERVATION ONLY as of 0038. Nothing reads this column: not the outcome
+ * stamp, not the text-back gate, not the summary. It exists so that a week of
+ * real calls can say whether the detection is trustworthy BEFORE anything is
+ * allowed to act on it — because the failure that matters is a false
+ * `machine`, which would record a real conversation as a failed transfer and
+ * text a caller "Sorry we missed you just now" minutes after they spoke to a
+ * person. That is the sharpest failure this product has, and it is not one to
+ * take on trust.
+ *
+ * STORED RAW, never normalised or mapped. The values are the carrier's to
+ * choose, the column has no CHECK for that reason (0038), and a value we did
+ * not anticipate is exactly the observation worth having.
+ *
+ * Account-scoped and LOUD on no match, the `setBranding` lesson: PostgREST
+ * reports an UPDATE that matched nothing as a success, and this write's only
+ * reader is a human comparing it against what really happened — a silently
+ * skipped row would quietly shrink the sample the decision gets made on.
+ */
+export async function setTransferAnsweredBy(
+  db: SupabaseClient, accountId: string, callRowId: string, answeredBy: string,
+): Promise<void> {
+  const { data, error } = await db.from("calls")
+    .update({ transfer_answered_by: answeredBy })
+    .eq("id", callRowId).eq("account_id", accountId).select("id");
+  if (error) throw new Error(`setTransferAnsweredBy failed: ${error.message}`);
+  if (!data || data.length === 0) throw new Error("setTransferAnsweredBy matched no row");
+}
+
+/**
  * Deletes an unfinished call row — the accept-failure cleanup path in
  * `/api/voice/incoming`: `startCallRow` fail-opens the call through even
  * when the row write fails, but the reverse (a row exists, then the OpenAI
