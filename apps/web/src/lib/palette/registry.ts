@@ -57,6 +57,7 @@ const NAV_KEYWORDS: Record<string, string[]> = {
   "/automations": ["no-show", "no show", "text reminder", "reminder", "reviews", "review requests", "google review", "follow up", "text"],
   "/dashboard/accounts": ["companies", "clients"],
   "/dashboard/blueprints": ["templates"],
+  "/dashboard/numbers": ["phone", "telnyx", "did", "line", "inventory", "reassign"],
 };
 
 function keywordsFor(href: string, base: string | null): string[] {

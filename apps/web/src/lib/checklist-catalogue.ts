@@ -14,8 +14,13 @@ export type CatalogueItem = {
 export const CHECKLIST_CATALOGUE: CatalogueItem[] = [
   { key: "phone_number", title: m["checklist.phone_number.title"],
     help: m["checklist.phone_number.help"], external: true },
+  // Deep-links to the Brands screen, not portal.telnyx.com — the same
+  // treatment email_domain gets. This is the first click of the procedure in
+  // docs/runbooks/a2p-registration.md, and the portal's own landing page does
+  // not lead anywhere near 10DLC.
   { key: "a2p_registration", title: m["checklist.a2p_registration.title"],
-    help: m["checklist.a2p_registration.help"], external: true },
+    help: m["checklist.a2p_registration.help"], external: true,
+    href: "https://portal.telnyx.com/#/messaging-10dlc/brands" },
   { key: "email_domain", title: m["checklist.email_domain.title"],
     help: m["checklist.email_domain.help"], external: true, href: "https://resend.com/domains" },
   { key: "form_notify", title: m["checklist.form_notify.title"],

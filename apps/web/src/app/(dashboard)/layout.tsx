@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Bricolage_Grotesque, Geist, Geist_Mono, Inter, Source_Serif_4 } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import { ThemeProvider } from "@/components/theme-provider";
+import { ActivateSoleOrganization } from "@/components/activate-sole-organization";
 import { Toaster } from "@/components/ui/sonner";
 import { deriveTheme } from "@/lib/branding/theme";
 import { themeStyle } from "@/lib/branding/theme-style";
@@ -135,6 +136,13 @@ export default async function RootLayout({
           {...(theme ? { style: themeStyle(theme), "data-tenant-theme": "" } : {})}
         >
           <ThemeProvider defaultTheme={providerDefault}>
+            {/* Renders nothing. Inside ClerkProvider and above every page, so
+                it covers each surface a client can reach signed-in but with no
+                active organization — /, /no-access and /sign-in — instead of
+                only whichever one someone remembered. It is a no-op for the
+                agency, who is a member of more than one organization, and for
+                anyone whose session already has one. */}
+            <ActivateSoleOrganization />
             {children}
             <Toaster richColors position="bottom-right" />
           </ThemeProvider>

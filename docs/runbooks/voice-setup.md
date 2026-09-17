@@ -154,6 +154,96 @@ as its connection, not "none" or a different app.
 
 ---
 
+## Moving a number between companies
+
+There are TWO halves to a phone number, and `/dashboard/numbers` now shows
+and fixes both.
+
+| | Where it lives | What changes it |
+|---|---|---|
+| **Who answers** | `phone_numbers.account_id` | `/dashboard/numbers` → **Move…** |
+| **Where the call goes** | the number's voice connection at Telnyx | `/dashboard/numbers` → **Point at BIS** |
+
+**Moving is only the first half.** The TeXML route resolves the tenant from
+the DIALED number, so whichever company holds the row is the company the
+receptionist greets a caller as — but only if the call arrives as that number
+in the first place. That is the carrier half, and it is what the **Routed
+here** column reports.
+
+Note what the carrier half is NOT: it is not per-company. Every client number
+points at the SAME `BIS Platform Voice` TeXML app, because the tenant comes
+from the dialed number and never from the connection. So the carrier side has
+to be right exactly **once per number** — a later move between companies needs
+no carrier change at all.
+
+### The routing column
+
+| Column reads | Means | What to do |
+|---|---|---|
+| **Routed here** | Points at our TeXML app. Calls arrive as themselves. | Nothing. |
+| **Goes elsewhere** | At Telnyx, pointed at a different connection. Calls go somewhere else — this is the 2026-09-16 failure. | **Point at BIS** |
+| **No routing** | At Telnyx with no voice connection. Calls go nowhere. | **Point at BIS** |
+| **Not in Telnyx** | Not in the account this API key can see. | Find which carrier holds it; nothing here can route it. |
+| **Not checked** | We could not ask — see below. NOT a verdict about the number. | Check the env vars. |
+
+**Not checked** appears when `TELNYX_API_KEY` or `TELNYX_VOICE_CONNECTION_ID`
+is unset, or when the Telnyx lookup failed. It never means the number is
+broken, and no repair is offered against it: writing a carrier setting on a
+line the platform never managed to inspect is how a working phone gets broken
+by a diagnostic.
+
+`TELNYX_VOICE_CONNECTION_ID` is the id of the `BIS Platform Voice` TeXML
+application from Step 3 (Telnyx portal → TeXML Applications → the app). The
+API key is the same `TELNYX_API_KEY` that already sends SMS.
+
+### Assigning a number, end to end
+
+1. Buy it at Telnyx (Step 4 above).
+2. `/dashboard/accounts/<id>/voice` → assign the E.164 to the company, or
+   `/dashboard/numbers` → **Move…** to take it from another one.
+3. `/dashboard/numbers` → if the row does not say **Routed here**, press
+   **Point at BIS**. That PATCHes the number's voice connection at Telnyx and
+   records Telnyx's own id on the row.
+4. A moved number lands as `provisioned` by design (`reassignPhoneNumber`
+   resets status) — walk the test-call and go-live steps again before it
+   answers for real.
+
+Step 3 replaces the manual portal step Step 4 describes; the portal route
+still works and the two agree, since both set the same connection.
+
+### When a number answers as the WRONG company
+
+The symptom is a caller hearing another client's greeting. It means the call
+did not arrive as the number you dialed. Diagnose it from the logs, not by
+guessing:
+
+```
+Vercel → the production deployment → Runtime Logs → "/api/voice/incoming"
+```
+
+Look at the `incoming call` line's `calledNumber`. That is the number the
+platform was told about, and the ONLY thing that picks the tenant:
+
+- **`calledNumber` is the number you dialed** → the platform chose the wrong
+  tenant. That is a bug here; check `phone_numbers` for that e164.
+- **`calledNumber` is a DIFFERENT number** → the carrier sent the call
+  somewhere else and the platform answered correctly for whatever number it
+  actually received. Check the dialed number's routing column on
+  `/dashboard/numbers`: **Goes elsewhere** or **No routing** is one press of
+  **Point at BIS** to fix. **Not in Telnyx** means another carrier holds it,
+  and a forward configured THERE is beyond anything this app can see — that
+  one is still a portal job at whoever owns the number.
+
+A worked example, 2026-09-16: `+19567055146` had just been moved to
+956 Woodworks and still answered as Bespoke Intelligent Solutions. The log
+read `calledNumber: '+19565061545'` — BIS's own number. The call never
+arrived as `+19567055146` at all, so every layer behaved correctly; the
+number simply was not pointed at the platform. Both calls were also billed
+and logged against the BIS account, which is the other reason to fix the
+routing rather than live with it.
+
+---
+
 ## Client onboarding (wizard)
 
 Every client — test or real — now onboards through one page:
@@ -426,7 +516,7 @@ their defaults). This runbook covers the three that MUST be set for voice to
 work at all (Step 2); everything else is optional and ships with a sane
 default — only touch them if a real call revealed a reason to.
 
-Two more env vars, not voice-specific but load-bearing for this milestone:
+Beyond Step 2's three, these are the ones worth knowing by name:
 
 - **`APP_ORIGIN`** — set to `https://app.bis-rgv.com`. Absolute origin used
   to build every link inside outbound email (booking confirmations, staff
@@ -447,9 +537,55 @@ Two more env vars, not voice-specific but load-bearing for this milestone:
   above. Sensitive in Vercel. Unset behavior: not an error — video
   calendars simply book without a meeting link, silently, in every
   environment.
+- **`TELNYX_API_KEY`** — sensitive. Portal →
+  https://portal.telnyx.com/#/app/api-keys → **Create API Key**; the value
+  is shown ONCE. Two features need it and neither announces its absence:
+  outbound SMS (`getSmsProvider` throws in production without it, but only
+  at send time) and the numbers inventory's carrier routing column. On
+  2026-09-16 it was found to have never been set in production at all —
+  nothing had complained because no SMS had ever been sent and no alert
+  phone was configured on any account. Unset behavior: routing reads "Not
+  checked" and the first real SMS send throws.
+- **`TELNYX_VOICE_CONNECTION_ID`** — not sensitive. The `BIS Platform
+  Voice` TeXML application's Application ID (the portal labels it
+  "Application ID (Connection ID)"), from
+  https://portal.telnyx.com/#/app/next/call-control/applications. Turns on
+  the routing column and the **Point at BIS** repair on
+  `/dashboard/numbers` — see "Moving a number between companies" above.
+  Unset behavior: routing reads "Not checked" for every number and no
+  repair is offered anywhere, which is deliberate — the app never guesses
+  at, or writes, a carrier setting it could not first verify.
+- **`PHONE_SPAM_EXEMPT_CALLERS`** — not sensitive. Comma-separated +E.164
+  caller numbers the reputation guard never blocks: the agency's own
+  handsets. Needed because that guard counts history PER ACCOUNT, so a
+  brand-new company is the one place a known-good tester has nothing on
+  record to clear them with — three silent test calls there and the tester
+  is refused, while the same number sails through on older accounts full of
+  real bookings.
+
+  Format is exact-string, unvalidated, and silent when wrong:
+  `+19562921696`, never `9562921696` or `(956) 292-1696`. A malformed value
+  exempts NOBODY — the safe direction, but it means a typo looks identical
+  to leaving it unset and you will not find out until the guard refuses
+  you. Check the string before saving.
+
+  Scope is the BLOCK only. A call where nobody speaks is still recorded as
+  `spam`, because that is what happened, and rewriting the outcome would
+  put false data in a client's call log and in the KPIs the weekly report
+  is built from. It does not lift the per-caller daily cap either
+  (`PHONE_MAX_CALLS_PER_CALLER_PER_DAY`) — different guard, different
+  purpose. Unset behavior: nobody is exempt, which is how the guard
+  shipped.
 
 ## Troubleshooting quick-reference
 
+- **Your OWN test phone gets the "can't take your call" refusal:** the
+  reputation guard, and almost certainly on a NEW client — it counts per
+  account, so three silent test calls on a company with no real calls yet
+  is enough. Add the number to `PHONE_SPAM_EXEMPT_CALLERS` (see the env
+  reference below) and redeploy. Confirm before blaming it: a refused call
+  writes NO `calls` row at all, so the tell is a call that is declined with
+  nothing new in the account's call list.
 - **Call rings then dead air, nothing in `calls`:** check Step 2's env vars
   actually redeployed (the silent-no-op trap), then check Telnyx's TeXML
   app's webhook URL and Voice Method from Step 3 — GET unless you've

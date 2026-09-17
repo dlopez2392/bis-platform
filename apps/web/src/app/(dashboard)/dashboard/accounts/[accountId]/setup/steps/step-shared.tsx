@@ -2,6 +2,7 @@ import type { PhoneNumberStatus } from "@bis/db";
 import type { SetupStepKey } from "@/lib/setup/setup-status";
 import type { SetupStepView, StateKind, AssignedNumber } from "@/lib/setup/setup-view";
 import { m } from "@/lib/messages";
+import { NUMBER_STATUS_LABEL } from "@/lib/voice/number-status";
 
 // Types, maps and tiny presentational helpers shared by more than one step
 // module (moved out of setup-panel.tsx, Design Phase 5 Task 3 — see that
@@ -41,13 +42,12 @@ export type MovableNumber = {
 /** Status shown beside every movable number, using the Voice page's own
  *  labels. Not decoration: "Live" here means some other client's callers are
  *  reaching that line right now, and one click would take it away from them.
- *  The operator has to be able to see that before they press. */
-export const NUMBER_STATUS_LABEL: Record<PhoneNumberStatus, string> = {
-  provisioned: m["voice.numbers.status.provisioned"],
-  testing: m["voice.numbers.status.testing"],
-  live: m["voice.numbers.status.live"],
-  released: m["voice.numbers.status.released"],
-};
+ *  The operator has to be able to see that before they press.
+ *
+ *  Re-exported, not redeclared: the canonical map moved to
+ *  lib/voice/number-status.ts when the agency numbers inventory would have
+ *  become its third copy. This line keeps every existing importer working. */
+export { NUMBER_STATUS_LABEL };
 
 export const STEP_COPY: Record<SetupStepKey, { title: string; help: string }> = {
   account: { title: m["setup.step.account.title"], help: m["setup.step.account.help"] },

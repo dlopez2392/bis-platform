@@ -36,6 +36,12 @@ export const m = {
   // word here in a way it stops being on the per-account screen: nothing at
   // that level is ever pooled across more than one company.
   "nav.work": "Work queue",
+  // The agency numbers inventory (/dashboard/numbers), top level beside
+  // Companies, Blueprints and the work queue. "Phone numbers" in full rather
+  // than "Numbers": at agency scope, alone in a flat list, "Numbers" reads as
+  // metrics. It is the same two words the per-account Voice page's own panel
+  // uses, which is deliberate — one vocabulary for one thing.
+  "nav.numbers": "Phone numbers",
 
   "shell.brand": "BIS",
   "shell.switchAccount": "Switch company",
@@ -62,8 +68,14 @@ export const m = {
   "landing.signIn": "Sign in",
   "landing.goToDashboard": "Go to dashboard",
   "landing.signOut": "Sign out",
+  // Reached by a signed-in user who belongs to no company at all — see the
+  // note in dashboard/layout.tsx for why a CLIENT never lands here now.
+  // "Isn't set up as an agency admin" described the one visitor this is not
+  // written for: it told someone who was invited as a client that they had
+  // failed to be staff, which is both wrong and unactionable. Say the thing
+  // that is actually true of this state and what to do about it.
   "landing.noAccess.title": "No access yet",
-  "landing.noAccess.body": "This account isn't set up as an agency admin. Sign out to try a different account, or contact your BIS administrator.",
+  "landing.noAccess.body": "This sign-in isn't connected to a company yet. If you were invited, open the invitation link from your email — it has to be accepted before you can sign in. Otherwise sign out and try the address the invitation was sent to.",
 
   // The signed-out shell's rail. This is the line that does real work on
   // /sign-in: it answers "whose software is this", which is the question
@@ -74,8 +86,17 @@ export const m = {
 
   "clientAccess.off.title": "Access has been turned off",
   "clientAccess.off.body": "Your access to this account has been turned off. Contact your account manager if you think this is a mistake.",
-  "clientAccess.none.title": "No account linked",
-  "clientAccess.none.body": "Your sign-in isn't linked to a company account yet. Contact your account manager.",
+  // Read by the person who was just invited, on their first visit, at the
+  // moment it fails. "No account linked" stated a fact about our data model
+  // and gave them nothing to do; "contact your account manager" is a title
+  // nobody at a small business has. Say what happened and who can fix it.
+  "clientAccess.none.title": "Your company isn't set up yet",
+  "clientAccess.none.body": "Your invitation worked, but this company hasn't finished being set up on our side. Let the person who invited you know — they can finish it, and your invitation stays valid.",
+
+  // The agency-side half of the same fault. See lib/accounts/orphans.ts.
+  "accounts.orphan.title": "Set up in Clerk but not here",
+  "accounts.orphan.body": "Anyone invited to these can be sent an invitation, but cannot sign in — there is no company behind them yet. Add the company here with the same name, or delete the organization in Clerk.",
+  "accounts.orphan.unavailable": "Could not reach Clerk to check for half-created companies. The list below is unaffected.",
 
   "clientAccess.title": "Client access",
   "clientAccess.body": "When on, invited users at this company can sign in and see this account only.",
@@ -478,9 +499,16 @@ export const m = {
   // reason as settings.weeklyReport above: one field, nothing to disambiguate.
   "settings.alertPhone": "Alert texts",
   "settings.alertPhoneHint": "Where a text goes the moment a booking lands or a call finishes. Leave it blank and this account gets no alert texts — that's not a bug, it's off.",
-  "settings.alertPhonePlaceholder": "(956) 292-1696",
+  // A RESERVED fictional number (NANP holds 555-0100..555-0199 for exactly
+  // this), not anyone's real line. It was danlo's own mobile until
+  // 2026-09-16: harmless while the repo was private, less so once it went
+  // public, and it renders to every client on their own Branding page. Keep
+  // the local 956 area code so the shape still reads as a Valley number to
+  // the landscaper at 7 AM, and keep it clear of the 555 numbers the seeded
+  // demo account and the test suites already use.
+  "settings.alertPhonePlaceholder": "(956) 555-0142",
   "settings.alertPhoneSaved": "Alert texts updated",
-  "settings.alertPhoneBad": "Enter a phone number, like (956) 292-1696.",
+  "settings.alertPhoneBad": "Enter a phone number, like (956) 555-0142.",
   "settings.alertPhoneOff": "No alert texts are going out yet.",
   // Agency-only help — a number is set, but nothing would actually send
   // (A2P not approved, or no live number yet). Never shown to a client:
@@ -690,8 +718,13 @@ export const m = {
   "checklist.phone_number.help":
     "Done in Telnyx. Calling and SMS arrive in M2 — until then this is a record that the number exists.",
   "checklist.a2p_registration.title": "Register A2P 10DLC brand and campaign",
+  // Names where the gather list lives rather than carrying it: this line
+  // renders inside a seven-item list, on the account dashboard as well as the
+  // checklist page, and nine bullets of carrier paperwork would bury the six
+  // other items. Worded as a destination, the way every internal item is,
+  // because ChecklistPanel is reusable and must not say "below".
   "checklist.a2p_registration.help":
-    "Done with the carriers via Telnyx. Expect days to weeks; start it early because nothing you do here speeds it up.",
+    "Done with the carriers via Telnyx. Expect days to weeks; start it early because nothing you do here speeds it up. The A2P registration panel on this company's checklist lists what to collect from them first.",
   "checklist.email_domain.title": "Add a sending subdomain, DKIM and DMARC",
   "checklist.email_domain.help":
     "Done in Resend, then the DNS records at the domain host. DKIM alone is not enough — without a DMARC record the receiving server accepts the mail and may discard it, and every system here will still say delivered. Check the domain's Insights in Resend before the client sends anything real. A subdomain keeps this client's sending reputation separate. Once the domain is verified, set it as the Sending address in this company's Settings — until you do, their mail still goes out from the platform address.",
@@ -750,6 +783,29 @@ export const m = {
   "a2p.approvedNeedsIds": "Both the brand ID and campaign ID are needed before marking this approved",
   "a2p.staleStatus": "That status isn't one of the options — reload the page and try again",
   "a2p.recorded": "Recorded",
+
+  // The gather list, in front of the operator on the checklist page rather
+  // than only in docs/runbooks/a2p-registration.md, because the moment anyone
+  // needs it is the moment they are standing on this page with an empty Brand
+  // ID field and the client on the phone. The runbook keeps the full
+  // procedure — the portal clicks, the sole-proprietor OTP flow, the fees;
+  // what is duplicated here is only the part that has to be ASKED OF THE
+  // CLIENT, because going back a second time is what loses a week.
+  //
+  // Shown only while the recorded status is not_started or rejected: once a
+  // registration is with the carriers the list is noise, and a rejection
+  // means collecting it again.
+  "a2p.gather.title": "Collect this from the client before you start",
+  "a2p.gather.body": "Every submission is charged, so a rejection costs money as well as days. Nothing goes to the carriers until all of it is in hand.",
+  "a2p.gather.legalName": "Legal company name, exactly as the EIN was issued",
+  "a2p.gather.dba": "DBA or brand name, even when it matches the legal name",
+  "a2p.gather.ein": "EIN, their federal tax ID. No EIN means the sole-proprietor path, which is slower and caps them near 1,000 texts a day",
+  "a2p.gather.address": "Business address matching the EIN. A PO box or a mailbox service is rejected",
+  "a2p.gather.website": "A live website that is clearly the same business",
+  "a2p.gather.vertical": "Industry category",
+  "a2p.gather.contact": "A contact name, email and phone for someone who will answer",
+  "a2p.gather.optIn": "A working opt-in on that website: an SMS checkbox that is optional and separate from email consent, wording on message frequency and rates, and Terms and Privacy Policy as real links, not pop-ups",
+  "a2p.gather.link": "Start the brand in Telnyx",
 
   "blueprints.title": "Blueprints",
   "blueprints.empty.title": "No blueprints yet",
@@ -930,6 +986,94 @@ export const m = {
   "voice.transfer.badE164": "Enter a real phone number, or leave it blank to keep taking messages.",
   "voice.transfer.ownNumber": "That's this client's own number, so the call would ring straight back to Sofía. Use a number that reaches a person.",
   "voice.transfer.saveFailed": "Could not save the transfer number.",
+
+  // ── The agency numbers inventory (/dashboard/numbers) ──────────────────
+  //
+  // Status words are NOT redefined here: the four labels come from
+  // `voice.numbers.status.*` via NUMBER_STATUS_LABEL, the same vocabulary the
+  // Voice page and the setup wizard already use. A fifth word for the same
+  // four states is how an operator ends up unsure whether "Released" and
+  // "Out of service" are the same thing.
+  "numbers.title": "Phone numbers",
+  "numbers.subtitle": "Every number we hold, the company on it, and where it can go next.",
+  "numbers.inventory": "In the inventory",
+  "numbers.empty.title": "No phone numbers yet",
+  "numbers.empty.body": "Buy a number at Telnyx, then assign it to a company from that company's Voice page. It shows up here with every other number you hold.",
+  "numbers.on": "On {account}",
+  // The join to `accounts` came back empty — same wording as the setup
+  // wizard's own fallback, for the same reason.
+  "numbers.unknownAccount": "an account we couldn't name",
+  "numbers.noCarrierId": "No carrier ID",
+  "numbers.move": "Move…",
+  "numbers.moveTo": "Move to",
+  // Accessible name for the destination picker. Every row has one, so without
+  // the number in the name a screen reader reads a column of identical
+  // "Move to" selects.
+  "numbers.moveToLabel": "Company to move {e164} to",
+  "numbers.moveSubmit": "Move",
+  // Accessible names for the two row buttons. Every row's visible label is
+  // the same word, so without the number in the name a screen reader reads a
+  // column of identical "Move…" and "Take out of service" controls with no
+  // way to tell which line each one touches.
+  "numbers.moveLabel": "Move {e164} to another company",
+  "numbers.releaseLabel": "Take {e164} out of service",
+  "numbers.moveNone": "Every other company already has a number of its own.",
+  "numbers.moved": "{e164} now answers as {account} — if it's pointed at BIS at the carrier",
+  "numbers.sameAccount": "That number is already on this company.",
+  "numbers.notFound": "We couldn't find that number — this page may be out of date.",
+  "numbers.destinationMissing": "We couldn't find that company — this page may be out of date.",
+  // Archived is the one account state that means "this company is over".
+  // Paused is not: pausing is what you do to a client who may come back, and
+  // giving them a number again is how they come back.
+  "numbers.destinationArchived": "That company is archived. Un-archive it before giving it a phone number.",
+  // Taking a number out of service without moving it: the churn case. The
+  // number stays on the old company's row, costing line rental and still
+  // dialable, but it stops answering — and it stops occupying that company's
+  // one active-number slot, which is what frees the company up to be reused.
+  "numbers.release": "Take out of service",
+  "numbers.releaseConfirm": "Yes, stop answering {e164}",
+  "numbers.releaseWarning": "{account} stops answering calls on this number the moment you do this.",
+  "numbers.released": "{e164} is out of service",
+  "numbers.releaseFailed": "Couldn't take that number out of service. Try again.",
+  "numbers.alreadyReleased": "That number is already out of service.",
+
+  // ── The carrier half (Telnyx voice routing) ───────────────────────────
+  //
+  // Reported per number, because the 2026-09-16 incident was invisible: a
+  // number sat in this list looking healthy while the phone company sent its
+  // calls somewhere else entirely. "Routed here" is the only state that means
+  // a caller dialling this number reaches the company on its row.
+  "numbers.routing.routed": "Routed here",
+  "numbers.routing.elsewhere": "Goes elsewhere",
+  "numbers.routing.unrouted": "No routing",
+  "numbers.routing.absent": "Not in Telnyx",
+  // NEVER an accusation — this is "we could not ask", not "it is broken".
+  "numbers.routing.unchecked": "Not checked",
+  "numbers.routing.repair": "Point at BIS",
+  "numbers.routing.repairLabel": "Point {e164} at BIS at the carrier",
+  "numbers.routing.repairing": "Pointing…",
+  "numbers.routing.repaired": "{e164} now comes to BIS",
+  "numbers.routing.repairFailed": "Couldn't change that number's routing at Telnyx. Try again.",
+  "numbers.routing.checkFailed": "Couldn't reach Telnyx to check that number.",
+  "numbers.routing.alreadyRouted": "That number already comes to BIS.",
+  "numbers.routing.notAtCarrier": "That number isn't in your Telnyx account, so we can't route it. Check which carrier holds it.",
+  "numbers.routing.notConfigured": "Routing isn't wired up yet — set TELNYX_VOICE_CONNECTION_ID to the BIS Platform Voice app's id.",
+  // Shown in place of the whole routing column when we could not ask at all,
+  // so the blank is explained rather than read as "everything is fine".
+  // Three different faults used to produce the same blank column: no API key,
+  // no connection id, and a carrier that would not answer. They need
+  // different fixes, so they say different things — naming the env var is the
+  // point on an agency-only operator screen, and a variable's NAME is not a
+  // secret.
+  "numbers.routing.missingConfig":
+    "Carrier routing isn't being checked: {vars} not set for this environment. A number still has to be pointed at BIS under Voice → Routing in Telnyx before callers reach the company on its row.",
+  "numbers.routing.lookupFailed":
+    "Couldn't reach Telnyx just now, so routing isn't shown. The numbers below and their companies are unaffected.",
+  // Replaces the standing carrier sentence once routing IS checkable: the app
+  // can now see and fix where a number points, so the remaining caveat is
+  // only about numbers held at another carrier.
+  "numbers.routing.seam":
+    "A number must say Routed here for callers to reach the company on its row. One held at another carrier can't be checked or fixed from here.",
 
   // The review request's default body. `{name}` is the house placeholder,
   // filled at send time with the customer-facing brand name (never

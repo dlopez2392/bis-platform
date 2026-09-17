@@ -738,7 +738,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         const history = await countCallerHistorySince(
           db, accountId, callerNumber, windowStart(now, repCfg.windowDays),
         );
-        const reputation = decideReputation(history, repCfg);
+        const reputation = decideReputation(history, repCfg, callerNumber);
         if (reputation.blocked) {
           blocked = true;
           blockReason = reputation.reason;

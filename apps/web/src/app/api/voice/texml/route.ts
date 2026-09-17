@@ -157,7 +157,7 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
       // reversed, a known robot hears the cap's "call back tomorrow", which
       // invites it back, and the `blocked (repeat-spam)` line — the only
       // telemetry Guard 2 produces — is never written.
-      const reputation = decideReputation(history, repCfg);
+      const reputation = decideReputation(history, repCfg, callerE164);
       if (reputation.blocked) {
         console.log(`texml declined blocked (${reputation.reason}) for ${calledE164}, caller ${callerE164 ?? "unknown"}, accountId ${row.account_id}`);
         return { kind: "blocked", languages: profile.languages };

@@ -14,6 +14,7 @@ import { SubmitButton } from "../../submit-button";
 import { m } from "@/lib/messages";
 import { segmentsFor } from "@/lib/sms/segments";
 import { defaultTextbackBody } from "@/lib/voice/textback-body";
+import { NUMBER_STATUS_LABEL } from "@/lib/voice/number-status";
 import type { ActionResult } from "./actions";
 
 // The DB-side defaults (0019_voice_core.sql) — used whenever no row exists
@@ -28,12 +29,6 @@ const DEFAULT_PROFILE: Omit<VoiceProfileRow, "id" | "account_id"> = {
   textback_enabled: false, textback_body: "",
 };
 
-const STATUS_LABEL: Record<PhoneNumberStatus, string> = {
-  provisioned: m["voice.numbers.status.provisioned"],
-  testing: m["voice.numbers.status.testing"],
-  live: m["voice.numbers.status.live"],
-  released: m["voice.numbers.status.released"],
-};
 const STATUS_VALUES: PhoneNumberStatus[] = ["provisioned", "testing", "live", "released"];
 
 function VoiceProfileForm({
@@ -287,7 +282,7 @@ function NumberStatusSelect({
       <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
       <SelectContent>
         {STATUS_VALUES.map((v) => (
-          <SelectItem key={v} value={v}>{STATUS_LABEL[v]}</SelectItem>
+          <SelectItem key={v} value={v}>{NUMBER_STATUS_LABEL[v]}</SelectItem>
         ))}
       </SelectContent>
     </Select>

@@ -59,6 +59,9 @@ describe("buildPaletteEntries", () => {
     const hrefs = entries.filter((e) => e.kind === "href").map((e) => (e as { href: string }).href);
     expect(hrefs).toContain("/dashboard/accounts");
     expect(hrefs).toContain("/dashboard/blueprints");
+    // Derived from buildNavGroups, so a nav destination cannot exist without
+    // a palette entry — this asserts the newest one actually made it through.
+    expect(hrefs).toContain("/dashboard/numbers");
     expect(hrefs.some((h) => h.includes("/contacts"))).toBe(false);
   });
 
