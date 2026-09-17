@@ -41,6 +41,43 @@ describe("processCallEvent", () => {
       { type: "conversation.item.input_audio_transcription.completed", transcript: "hola" });
     expect(state.transcript[0]).toMatchObject({ role: "caller", text: "hola" });
   });
+  // ── A recording is not a caller ──────────────────────────────────────
+  it("a recorded broadcast is marked and hung up on, not conversed with", async () => {
+    // Verbatim shape from the eight robocalls that reached 956 Woodworks on
+    // 2026-09-17. Sofía answered every one of them helpfully for another
+    // forty seconds, on the client's bill.
+    const { state, actions } = await processCallEvent(emptyCallState(), ctx,
+      { type: "conversation.item.input_audio_transcription.completed",
+        transcript: "Hello, please don't hang up the phone. This is an important message "
+    + "regarding your Google business account. Press 0 to speak with an agent "
+    + "immediately and verify your Google listings. Press 9 to opt out." });
+    expect(state.recordedCaller).toBe(true);
+    expect(actions).toEqual([{ kind: "hangup" }]);
+  });
+
+  it("keeps the recording's transcript — it is the only evidence the guard was right", async () => {
+    // Dropping the turn would make a false positive unauditable: the call row
+    // would say spam with nothing in it explaining why, which is
+    // indistinguishable from a silent call.
+    const { state } = await processCallEvent(emptyCallState(), ctx,
+      { type: "conversation.item.input_audio_transcription.completed",
+        transcript: "Hello, please don't hang up the phone. This is an important message "
+    + "regarding your Google business account. Press 0 to speak with an agent "
+    + "immediately and verify your Google listings. Press 9 to opt out." });
+    expect(state.transcript).toHaveLength(1);
+    expect(state.transcript[0]).toMatchObject({ role: "caller" });
+  });
+
+  it("an ordinary caller is neither marked nor hung up on", async () => {
+    // The negative that costs the most to get wrong, at this layer too: a
+    // hangup here leaves a real lead with no trace they ever rang.
+    const { state, actions } = await processCallEvent(emptyCallState(), ctx,
+      { type: "conversation.item.input_audio_transcription.completed",
+        transcript: "Hi, I found you on Google and wanted to ask about a dining table." });
+    expect(state.recordedCaller).toBe(false);
+    expect(actions).toEqual([]);
+  });
+
   it("empty transcript is ignored", async () => {
     const { state } = await processCallEvent(emptyCallState(), ctx,
       { type: "response.output_audio_transcript.done", transcript: "" });

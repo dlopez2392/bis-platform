@@ -69,19 +69,54 @@ export interface CallState {
   transcript: TranscriptEvent[];
   /** See ServedAction. Append-only, deduplicated, never read by classifyOutcome. */
   served: ServedAction[];
+  /**
+   * The thing on the other end was a RECORDING, not a person.
+   *
+   * Set by the lifecycle when a caller turn reads as a recorded broadcast
+   * (`recorded-message.ts`). Unlike `served`, classifyOutcome DOES read this,
+   * because it changes what the call was rather than what we did about it.
+   */
+  recordedCaller: boolean;
   summary?: string;
 }
 
 export function emptyCallState(): CallState {
-  return { contactId: null, bookings: [], leads: [], messages: [], transcript: [], served: [] };
+  return {
+    contactId: null, bookings: [], leads: [], messages: [], transcript: [],
+    served: [], recordedCaller: false,
+  };
 }
 
 export function classifyOutcome(state: CallState): CallOutcome {
   if (state.bookings.some((b) => b.status === "booked")) return "booked";
   if (state.leads.length > 0) return "lead";
   if (state.messages.length > 0) return "message";
+  // BELOW booked/lead/message and ABOVE abandoned, and both halves of that
+  // placement are deliberate.
+  //
+  // Above `abandoned` because a robot's monologue IS a caller turn with text,
+  // so without this every robocall lands there — and `abandoned` on the Calls
+  // list and in the weekly report's "calls answered" means a PERSON rang and
+  // we did not serve them. On 2026-09-17 that told the only real client on the
+  // platform he had lost eight customers in a day. He had lost none.
+  //
+  // Below the three that represent real work, because this marker comes from a
+  // CONTENT HEURISTIC and heuristics misfire. If it ever fires on a real
+  // caller, whatever that caller actually did has to survive it: an
+  // appointment on the calendar must not be re-labelled spam by a regex.
+  if (state.recordedCaller) return "spam";
   if (state.transcript.some((t) => t.role === "caller" && t.text.trim())) return "abandoned";
   return "spam";
+}
+
+/**
+ * Marks the caller as a recording. Idempotent, and it touches nothing else —
+ * the transcript is still written, because what the robot said is the evidence
+ * that the guard was right, and the only way anyone can check a false
+ * positive after the fact.
+ */
+export function withRecordedCaller(state: CallState): CallState {
+  return state.recordedCaller ? state : { ...state, recordedCaller: true };
 }
 
 export function withBooking(state: CallState, b: MirroredBooking): CallState {

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   emptyCallState, classifyOutcome, withBooking, withBookingCancelled,
   withLead, withMessage, withTranscript, withServed, wasServed, withTransferred,
+  withRecordedCaller,
 } from "./call-state";
 
 describe("classifyOutcome priority", () => {
@@ -18,6 +19,47 @@ describe("classifyOutcome priority", () => {
     expect(classifyOutcome(s)).toBe("booked");
     expect(classifyOutcome(withBookingCancelled(s, "b1"))).toBe("lead"); // cancelled booking no longer counts
   });
+  it("a RECORDING that talked is spam, not abandoned", () => {
+    // 2026-09-17: eight scam robocalls reached the only real client on the
+    // platform, and every one landed on the `abandoned` branch below —
+    // because a robot's monologue IS a caller turn with text. The owner's
+    // dashboard told him he had lost eight customers in a day.
+    //
+    // `abandoned` means a person called and we did not serve them. A
+    // recording is not a person, and the distinction is what the whole Calls
+    // list and the weekly report's "calls answered" number rest on.
+    const s = withRecordedCaller(
+      withTranscript(emptyCallState(), { role: "caller", text: "press 9 to opt out", at: "t" }),
+    );
+    expect(classifyOutcome(s)).toBe("spam");
+  });
+
+  it("but a recording that BOOKED is still booked — the marker never outranks real work", () => {
+    // Defensive, and cheap. If the guard ever misfires on a real caller, the
+    // thing that caller actually DID must survive it: an appointment on the
+    // calendar cannot be re-labelled spam by a content heuristic. The marker
+    // belongs below every branch that represents work.
+    let s = withRecordedCaller(
+      withTranscript(emptyCallState(), { role: "caller", text: "press 9 to opt out", at: "t" }),
+    );
+    s = withBooking(s, { id: "b1", contactName: "Ana", startsAt: "x", endsAt: "y" });
+    expect(classifyOutcome(s)).toBe("booked");
+    expect(classifyOutcome(withLead(withRecordedCaller(emptyCallState()), { fields: {} }))).toBe("lead");
+    expect(classifyOutcome(withMessage(withRecordedCaller(emptyCallState()), { body: "x", at: "t" }))).toBe("message");
+  });
+
+  it("withRecordedCaller is idempotent and leaves the transcript alone", () => {
+    const base = withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" });
+    const once = withRecordedCaller(base);
+    const twice = withRecordedCaller(once);
+    expect(twice.recordedCaller).toBe(true);
+    expect(twice.transcript).toEqual(base.transcript);
+  });
+
+  it("an ordinary call is not marked, so the flag cannot be read as a default", () => {
+    expect(emptyCallState().recordedCaller).toBe(false);
+  });
+
   it("assistant-only transcript is still spam (caller never spoke)", () => {
     const s = withTranscript(emptyCallState(), { role: "assistant", text: "Thanks for calling", at: "t" });
     expect(classifyOutcome(s)).toBe("spam");
