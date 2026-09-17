@@ -36,7 +36,11 @@ vi.mock("@bis/db", () => ({
     events.push("call");
     return getCallMock(...a);
   },
+  // Read only on the FAILED branch, for the customer-facing name the text is
+  // signed with. Never accounts.name.
+  getBranding: (...a: unknown[]) => getBrandingMock(...a),
 }));
+const getBrandingMock = vi.hoisted(() => vi.fn());
 
 // The spoken line is real copy, delegated to the real implementation on every
 // test EXCEPT the escaping one — which is the only way to feed this route a
@@ -54,6 +58,25 @@ vi.mock("@/lib/voice/handoff", async (importOriginal) => {
   };
 });
 
+// `after()` so the spoken apology is never held up by a carrier round trip.
+// Captured rather than executed: the tests below run the callback themselves,
+// which is also how they prove the send happens OUTSIDE the response.
+const afterMock = vi.hoisted(() => vi.fn());
+vi.mock("next/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/server")>();
+  return { ...actual, after: (cb: () => unknown) => afterMock(cb) };
+});
+
+// The text-back itself is exercised by its own module tests and by
+// finish-call.test.ts. What THIS route owns is the decision: who gets one,
+// on which branch, for which account.
+const prepareTextbackMock = vi.hoisted(() => vi.fn());
+const deliverTextbackMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/voice/textback", () => ({
+  prepareTextback: (...a: unknown[]) => prepareTextbackMock(...a),
+  deliverTextback: (...a: unknown[]) => deliverTextbackMock(...a),
+}));
+
 const PROFILE = {
   id: "vp1", account_id: "acct1", persona_name: "Sofía",
   greeting_en: "Hi", greeting_es: "Hola", facts: "-", services: "-",
@@ -62,10 +85,21 @@ const PROFILE = {
   textback_enabled: false, textback_body: "-",
 };
 
+// The text-back switch is OFF on the base PROFILE, which is the shipped
+// default. Every test below that expects a text says so with this, because a
+// text-back assertion against a profile that cannot text is vacuous — it
+// would pass just as loudly if the route had no text-back code at all.
+const TEXTING = { ...PROFILE, textback_enabled: true, textback_body: "" };
+
 const REQUESTED = {
   id: "c1",
   account_id: "acct1",
   phone_number_id: "pn1",
+  // Who to text when the dial rings out. Rides the token lookup for the same
+  // reason `outcome` does: this route has no other way to know, and a second
+  // read would drag the transcript across the wire for one string.
+  caller_e164: "+19562921696",
+  contact_id: null,
   // What the row says when this callback arrives: `finishCall` has already
   // classified it, and a handed-off call reaches socket close `abandoned`.
   // It rides the TOKEN LOOKUP now, not a second `getCall` — the stamp is an
@@ -103,6 +137,13 @@ beforeEach(() => {
   getVoiceProfileMock.mockReset().mockResolvedValue(PROFILE);
   getCallMock.mockReset().mockResolvedValue({ id: "c1", account_id: "acct1", outcome: "abandoned" });
   transferFailedLineMock.mockReset().mockImplementation((l: "en" | "es" | "both") => realLine.fn!(l));
+  afterMock.mockReset();
+  getBrandingMock.mockReset().mockResolvedValue({ brandName: "Bespoke", brandColor: null, logoPath: null });
+  prepareTextbackMock.mockReset().mockResolvedValue({
+    contactId: "ct1", conversationId: "cv1",
+    pending: { messageId: "m1", conversationId: "cv1", to: "+19562921696", from: "+19565550100", body: "b" },
+  });
+  deliverTextbackMock.mockReset().mockResolvedValue(undefined);
 });
 
 describe("voice texml handoff-result route", () => {
@@ -165,6 +206,80 @@ describe("voice texml handoff-result route", () => {
     const xml = await post("tok_abc", { DialCallStatus: "no-answer" });
     expect(xml).not.toContain("es-MX");
     expect(xml).toContain("Sorry, we weren't able to reach anyone just now.");
+  });
+
+  // ── A transfer that reached nobody must not also lose the lead ────────
+  //
+  // THE DEFECT, from a real call on 2026-09-17. The caller asked for a
+  // person, the dial rang out, they heard the apology — and got no text.
+  // Before the handoff shipped, that same caller got the missed-call
+  // text-back. Asking for a human made them WORSE off, on the one path where
+  // they had signalled the most intent.
+  //
+  // The cause is ordering. `finishCall` runs at socket close, before the dial
+  // is attempted, and suppresses the text because the caller was marked
+  // served the moment they ASKED. That suppression is correct there and
+  // cannot be otherwise — texting someone who did reach a human is the worse
+  // error, and at socket close nobody knows which happened yet. So this route
+  // is the compensation: the only place where the truth exists.
+  it("a transfer that reached nobody texts the caller back — the lead is not lost", async () => {
+    getVoiceProfileMock.mockResolvedValue(TEXTING);
+    const xml = await post("tok_abc", { DialCallStatus: "no-answer" });
+    // The apology still goes out, unchanged and undelayed.
+    expect(xml).toContain("<Say");
+
+    // The send is deferred, NOT inline: the caller is holding a silent line
+    // waiting for that <Say>, and a carrier round trip in front of it is
+    // measured in seconds.
+    expect(prepareTextbackMock).not.toHaveBeenCalled();
+    expect(afterMock).toHaveBeenCalledOnce();
+
+    await (afterMock.mock.calls[0]![0] as () => Promise<void>)();
+    expect(prepareTextbackMock).toHaveBeenCalledOnce();
+    // The account the TOKEN resolved to, and the caller from the call row —
+    // never anything out of the request body.
+    expect(prepareTextbackMock.mock.calls[0]![1]).toBe("acct1");
+    expect(prepareTextbackMock.mock.calls[0]![2]).toMatchObject({
+      callerNumber: "+19562921696",
+    });
+    expect(deliverTextbackMock).toHaveBeenCalledOnce();
+  });
+
+  it("a transfer that REACHED a person never texts — the defect the feature exists to prevent", async () => {
+    // The complement, and the one that must never regress. A caller who just
+    // finished talking to a human getting "Sorry we missed you just now" is
+    // the sharpest form of the failure this whole design is built around.
+    //
+    // A TEXTING profile on purpose: against the default this would pass with
+    // the switch doing the work, and prove nothing about the branch.
+    getVoiceProfileMock.mockResolvedValue(TEXTING);
+    await post("tok_abc", { DialCallStatus: "completed" });
+    expect(afterMock).not.toHaveBeenCalled();
+    expect(prepareTextbackMock).not.toHaveBeenCalled();
+  });
+
+  it("no text-back when the company has it switched off", async () => {
+    // The field IS the switch, here exactly as everywhere else.
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE, textback_enabled: false });
+    await post("tok_abc", { DialCallStatus: "no-answer" });
+    expect(afterMock).not.toHaveBeenCalled();
+  });
+
+  it("no caller number means no text and no crash", async () => {
+    // Texting ON, so the ONLY thing stopping it is the missing number.
+    getVoiceProfileMock.mockResolvedValue(TEXTING);
+    getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, caller_e164: null });
+    const xml = await post("tok_abc", { DialCallStatus: "busy" });
+    expect(xml).toContain("<Say");   // the apology is never conditional on this
+    expect(afterMock).not.toHaveBeenCalled();
+  });
+
+  it("a text-back that throws never breaks the TeXML the caller is waiting on", async () => {
+    getVoiceProfileMock.mockResolvedValue(TEXTING);
+    prepareTextbackMock.mockRejectedValue(new Error("db down"));
+    const xml = await post("tok_abc", { DialCallStatus: "no-answer" });
+    expect(xml).toContain("<Say");
+    await expect((afterMock.mock.calls[0]![0] as () => Promise<void>)()).resolves.toBeUndefined();
   });
 
   it("an unknown token does nothing and hangs up", async () => {

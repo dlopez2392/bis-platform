@@ -79,6 +79,25 @@ describe("layer 2 — summaryFactLine on a handed-off call", () => {
     expect(line).not.toMatch(/[{}]|\bM\d[a-z]?\b/);
   });
 
+  it("does NOT claim the caller reached a person — at summarise time nobody knows yet", () => {
+    // THE BUG, observed in production 2026-09-17. Call 3056804a rang out with
+    // nobody picking up, and its summary read "Transferred: ..." — identical
+    // to the successful call beside it. The outcome pill on the same screen
+    // said Abandoned. The summary was the half that was lying.
+    //
+    // The cause is ordering, not wording: `finishCall` writes the summary at
+    // socket close, BEFORE the dial has even been attempted, so whether the
+    // caller reached anyone is the one thing this function cannot know. The
+    // marker it reads means the caller ASKED. So that is what it may say.
+    // /handoff-result stamps the outcome once the truth exists, and the pill
+    // is where the answer belongs.
+    const line = summaryFactLine(withTransferred(emptyCallState()));
+    expect(line).not.toMatch(/transferred/i);
+    // And it still says both things it DOES know.
+    expect(line).toMatch(/asked for a person/i);
+    expect(line).toMatch(/transcript ends at the handoff/i);
+  });
+
   it("leads with it, ahead of the booking and intake facts", () => {
     // A partial record has to be the FIRST thing read, not a clause after two
     // lines of accounting the reader has already started trusting.
