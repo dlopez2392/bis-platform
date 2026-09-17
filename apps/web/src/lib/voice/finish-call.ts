@@ -98,13 +98,48 @@ const TEXTBACK_COOLDOWN_MS = TEXTBACK_COOLDOWN_HOURS * 60 * 60 * 1000;
  * conversation from the text-back leg further down, when the account has
  * opted in; that trail exists to hold the text, not to summon a human.)
  *
+ * `transferred` (0037) is deliberately NOT meaningful, and that is the
+ * spec's binding decision rather than an omission
+ * (docs/superpowers/specs/2026-09-15-call-handoff-design.md). Two reasons.
+ * Structural: this decision is made inside `finishCall`, which runs at socket
+ * close — BEFORE the result route knows whether anyone actually picked up. An
+ * alert on a transfer would therefore have to be a SECOND send path living
+ * inside a TeXML route, duplicating the email and SMS machinery this file is
+ * the only copy of. And about what an alert is for: a person at the business
+ * just spoke to this caller live, so they already know. An alert exists for
+ * work that might be MISSED; telling someone about the call they personally
+ * answered is noise. (A ring-out — nobody picked up — is the case that does
+ * go unnoticed, and it records as `abandoned`, which is the truth, and takes
+ * whatever path this product already gives an abandoned call.)
+ *
  * A type predicate (not a plain boolean) so the staff alert SMS leg below
  * can call this directly and get `outcome` narrowed to
  * `composeCallAlertSms`'s own literal union — no cast, and the two alert
- * legs (email above, SMS below) are provably gated on the identical set of
- * outcomes rather than two hand-copies of the same three strings.
+ * legs (email above, SMS below) are gated on the identical set of outcomes
+ * rather than two hand-copies of the same strings.
+ *
+ * What the compiler does and does NOT do with that, because an earlier
+ * comment here overclaimed it: TypeScript checks the CALL SITES against this
+ * signature, so nothing can hand `composeCallAlertSms` an outcome outside
+ * its union. It does not check this function's BODY against its own return
+ * type — a type predicate is an assertion the author makes, not one the
+ * compiler proves. Add `|| outcome === "transferred"` below and leave the
+ * signature alone and `tsc --noEmit` still exits 0, while the SMS composer
+ * looks up a key it has no copy for. That is why `composeCallAlertSms` has a
+ * runtime floor of its own, and why the two unions widening together is a
+ * rule for a human to follow rather than one the compiler enforces.
+ *
+ * EXPORTED, unlike its neighbours in this file, and only because of the
+ * paragraph above: `classifyOutcome` never returns `transferred` (a
+ * handed-off call still classifies `abandoned` at socket close), so no state
+ * drives `finishCall` to that outcome — which makes the NEGATIVE rule
+ * unfalsifiable through `finishCall` in exactly the way a positive one would
+ * be. The export is what makes it testable at all; finish-call.test.ts calls
+ * it directly.
  */
-function isMeaningful(outcome: CallOutcome): outcome is "booked" | "lead" | "message" {
+export function isMeaningful(
+  outcome: CallOutcome,
+): outcome is "booked" | "lead" | "message" {
   return outcome === "booked" || outcome === "lead" || outcome === "message";
 }
 

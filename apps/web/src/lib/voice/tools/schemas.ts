@@ -32,6 +32,20 @@ const CORE_TOOLS = [
     parameters: { type: "object", properties: { role: { type: "string", enum: ["caller", "assistant"] }, text: { type: "string" } }, required: ["role", "text"] } },
 ] as const;
 
+// Advertised ONLY when the account actually has somewhere to send the caller
+// (`toolSchemas`' third argument). A model offered this tool WILL offer it out
+// loud — "let me put you through" — and a caller who hears that and then does
+// not get put through is worse off than one who was never offered it, so the
+// gate is on the schema rather than on the tool's refusal alone.
+//
+// No parameters: who to dial is the business's own configured number, never
+// anything the model or the caller supplies.
+const HANDOFF_TOOL = {
+  type: "function", name: "transfer_to_human",
+  description: "Put the caller through to a person at the business. Use only when the caller asks to speak to someone.",
+  parameters: { type: "object", properties: {}, required: [] },
+} as const;
+
 // The video rewrite of book_appointment's contract. 2026-08-30, live call:
 // the caller declined email and the model invented "we can book using just
 // your phone number" — while the SYSTEM PROMPT said email-is-required
@@ -58,10 +72,14 @@ const VIDEO_BOOK_TOOL = {
 
 export function toolSchemas(
   bookingEnabled: boolean, meetingType: "in_person" | "phone" | "video",
+  handoffAvailable: boolean,
 ) {
-  if (!bookingEnabled) return [...CORE_TOOLS];
+  // Appended to CORE, not to BOOKING: asking for a person has nothing to do
+  // with whether this business takes appointments.
+  const core = handoffAvailable ? [...CORE_TOOLS, HANDOFF_TOOL] : [...CORE_TOOLS];
+  if (!bookingEnabled) return core;
   const booking = meetingType === "video"
     ? BOOKING_TOOLS.map((t) => (t.name === "book_appointment" ? VIDEO_BOOK_TOOL : t))
     : [...BOOKING_TOOLS];
-  return [...booking, ...CORE_TOOLS];
+  return [...booking, ...core];
 }

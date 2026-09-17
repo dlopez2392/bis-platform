@@ -37,9 +37,10 @@ vi.mock("./summary-service", () => ({ generateSummary: summaryMocks.generateSumm
 
 import type { serviceDb } from "@bis/db";
 import { segmentsFor } from "@/lib/sms/segments";
-import { finishCall, type FinishContext } from "./finish-call";
+import { finishCall, isMeaningful, type FinishContext } from "./finish-call";
 import {
   emptyCallState, withLead, withMessage, withTranscript, withBooking, withBookingCancelled, withServed,
+  withTransferred,
 } from "./call-state";
 import { defaultTextbackBody } from "./textback-body";
 import { withOptOut } from "@/lib/sms/opt-out";
@@ -382,6 +383,26 @@ describe("finishCall — missed-call text-back", () => {
     const s = withServed(abandonedState(), "rescheduled");
     await finishCall(s, textbackCtx, meta);
     expect(smsRefs.send).not.toHaveBeenCalled();
+  });
+
+  it("does NOT text a caller we put THROUGH TO A PERSON", async () => {
+    // The sharpest form of the failure this gate exists to prevent, and the
+    // one the design spec calls the finding that most shapes it: a caller who
+    // ASKED for a human, got one, and was then texted "Sorry we missed you
+    // just now" by the system that connected them.
+    //
+    // This is the behaviour test for the `transferred` marker. Its sibling in
+    // call-state.test.ts asserts `served` contains "transferred", which only
+    // restates `withTransferred`'s one line; nothing there fails if the
+    // marker stops SUPPRESSING anything. Mutating `wasServed` to ignore
+    // "transferred" compiles and left the whole suite green — this is the
+    // test that goes red for it.
+    const s = withTransferred(abandonedState());
+    const r = await finishCall(s, textbackCtx, meta);
+    expect(r.outcome).toBe("abandoned");   // the row is unchanged at socket close, on purpose
+    expect(smsRefs.send).not.toHaveBeenCalled();
+    expect(dbMocks.createContact).not.toHaveBeenCalled();
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
   });
 
   it("STILL texts the ordinary abandoned caller — the served gate is not a blanket off switch", async () => {
@@ -745,5 +766,47 @@ describe("finishCall — the staff alert SMS", () => {
     const r = await finishCall(leadState(), ctx, meta);
     expect(r).toMatchObject({ notified: true, stored: true });
     errSpy.mockRestore();
+  });
+});
+
+/**
+ * `isMeaningful` is the ONE definition of "an outcome worth a human seeing",
+ * shared by the staff alert email and the staff alert SMS — its type
+ * predicate narrows to `composeCallAlertSms`'s own parameter union so the two
+ * legs are provably gated on the same set rather than two hand-copies of it.
+ *
+ * It is exercised DIRECTLY here rather than through `finishCall`, and that is
+ * forced rather than preferred: `finishCall` derives its outcome from
+ * `classifyOutcome`, which deliberately never returns `transferred` (at socket
+ * close a handed-off call still classifies `abandoned` — from the socket's
+ * point of view the caller did leave — and the handoff route upgrades the row
+ * afterwards). So there is no state that drives `finishCall` to this branch.
+ * That is exactly why the predicate is exported: a NEGATIVE rule on a branch
+ * nothing reaches is unfalsifiable through `finishCall` in precisely the way a
+ * positive one would be, and the export is what makes it testable at all.
+ */
+describe("isMeaningful", () => {
+  it("does NOT count a transferred call — a completed transfer fires no staff alert", () => {
+    // Two reasons, both from the design spec
+    // (docs/superpowers/specs/2026-09-15-call-handoff-design.md). Structural:
+    // the alert decision happens inside `finishCall` at socket close, BEFORE
+    // the result route knows whether anyone actually picked up — alerting on a
+    // transfer would mean a second send path inside a TeXML route, duplicating
+    // the email and SMS machinery this repo keeps to exactly one. And about
+    // what an alert is for: a person at the business just spoke to this caller
+    // live, so they already know. An alert exists for work that might be
+    // MISSED; telling someone about the call they personally answered is noise.
+    expect(isMeaningful("transferred")).toBe(false);
+  });
+
+  it("still counts booked, lead and message, and still refuses abandoned and spam", () => {
+    for (const outcome of ["booked", "lead", "message"] as const) {
+      expect(isMeaningful(outcome), outcome).toBe(true);
+    }
+    // Nobody picked those up, so there is no one to hand off to — the whole
+    // reason the predicate exists.
+    for (const outcome of ["abandoned", "spam"] as const) {
+      expect(isMeaningful(outcome), outcome).toBe(false);
+    }
   });
 });

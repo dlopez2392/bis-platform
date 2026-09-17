@@ -125,6 +125,28 @@ describe("composeCallAlertSms", () => {
     expect(body.toLowerCase()).toContain("email");
   });
 
+  /**
+   * The compiler is NOT the floor here, and the comment that said it was is
+   * why this test exists. `isMeaningful` (lib/voice/finish-call.ts) is a type
+   * PREDICATE, and TypeScript does not verify a predicate's body against its
+   * signature: widen the body to let `transferred` through while leaving the
+   * return type at the three-member union and `tsc --noEmit` exits 0. The
+   * union here would then be missing the key, `CALL_ALERT_LEAD[outcome]` would
+   * be `undefined`, and a real text reading "undefined Check email for
+   * details." would go to the business's alert phone with no error anywhere.
+   *
+   * Throwing is the right shape rather than a silent fallback: the one caller
+   * (finishCall's staff-alert-SMS leg) already runs inside its own try/catch
+   * that logs and moves on, so the outcome is a loud log line and NO text —
+   * never a text that says nothing.
+   */
+  it("REFUSES an outcome it has no copy for instead of texting the word 'undefined'", () => {
+    for (const outcome of ["transferred", "abandoned", "spam"] as const) {
+      expect(() => composeCallAlertSms(outcome as never, true), outcome).toThrow(/composeCallAlertSms/);
+      expect(() => composeCallAlertSms(outcome as never, false), outcome).toThrow(/composeCallAlertSms/);
+    }
+  });
+
   // Minor: copy drift — the call alert and the booking fallback must agree
   // on the exact phrase once both are conditioned on hasEmailRecipients.
   it("uses the SAME email-mention phrase the booking fallback uses", () => {

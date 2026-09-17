@@ -48,7 +48,7 @@ describe("texml route", () => {
     const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999"));
     const xml = await res.text();
     expect(res.headers.get("content-type")).toContain("application/xml");
-    expect(xml).toContain("<Dial answerOnBridge=\"true\">");
+    expect(xml).toContain("<Dial answerOnBridge=\"true\"");
     expect(xml).toContain("sip:proj_test123@sip.api.openai.com;transport=tls?X-BIS-Called=%2B19565550999");
   });
   it("POST reads To from the form body", async () => {
@@ -79,7 +79,7 @@ describe("texml route", () => {
   it("a missing/garbage To still dials without the header (webhook falls back)", async () => {
     const res = await GET(new Request("https://x.example/api/voice/texml"));
     const xml = await res.text();
-    expect(xml).toContain("<Sip>sip:proj_test123@sip.api.openai.com;transport=tls</Sip>");
+    expect(xml).toContain("<Sip>sip:proj_test123@sip.api.openai.com;transport=tls?");
     expect(xml).not.toContain("X-BIS-Called");
     expect(lookupMock).not.toHaveBeenCalled();
   });
@@ -180,7 +180,7 @@ describe("texml route — daily call cap refusal (spoken, bilingual)", () => {
     countCallsByCallerSinceMock.mockResolvedValue(1);
     const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19562921696"));
     const xml = await res.text();
-    expect(xml).toContain("<Dial answerOnBridge=\"true\">");
+    expect(xml).toContain("<Dial answerOnBridge=\"true\"");
   });
   it("counts are queried from midnight UTC of today, not an unpinned Date().toISOString()", async () => {
     const expectedSince = utcDayStart(new Date());
@@ -192,13 +192,13 @@ describe("texml route — daily call cap refusal (spoken, bilingual)", () => {
     profileMock.mockRejectedValue(new Error("db down"));
     const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999"));
     const xml = await res.text();
-    expect(xml).toContain("<Dial answerOnBridge=\"true\">");
+    expect(xml).toContain("<Dial answerOnBridge=\"true\"");
   });
   it("cap-count lookup throws → Dial present (fail-open pin)", async () => {
     countCallsByCallerSinceMock.mockRejectedValue(new Error("db down"));
     const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19562921696"));
     const xml = await res.text();
-    expect(xml).toContain("<Dial answerOnBridge=\"true\">");
+    expect(xml).toContain("<Dial answerOnBridge=\"true\"");
   });
   it("POST also reads From from the form body for cap counting", async () => {
     countCallsByCallerSinceMock.mockResolvedValue(5);
@@ -294,7 +294,7 @@ describe("texml route — Telnyx signature validation (TELNYX_PUBLIC_KEY set)", 
     }));
     expect(res.status).toBe(200);
     const xml = await res.text();
-    expect(xml).toContain("<Dial answerOnBridge=\"true\">");
+    expect(xml).toContain("<Dial answerOnBridge=\"true\"");
     expect(xml).toContain("X-BIS-Called=%2B19565550999");
   });
 
@@ -348,7 +348,7 @@ describe("texml route — guarded body read (Finding B)", () => {
     vi.spyOn(req, "text").mockRejectedValue(new Error("stream error"));
     const res = await POST(req);
     const xml = await res.text();
-    expect(xml).toContain("<Dial answerOnBridge=\"true\">");
+    expect(xml).toContain("<Dial answerOnBridge=\"true\"");
     expect(xml).not.toContain("X-BIS-Called");
   });
 });
@@ -529,4 +529,66 @@ describe("texml route — a refusal and the bridge are mutually exclusive", () =
       expect(refused ? "refusal" : "bridge").toBe(expected);
     });
   }
+});
+
+describe("texml route — the handoff continuation on the bridge", () => {
+  // `<Dial action=…>` is the whole mechanism that lets the call outlive the
+  // AI leg: when the SIP bridge ends Telnyx fetches that URL and does
+  // whatever the new TeXML says, instead of hanging up on the caller. The
+  // token is what tells that second request WHICH call just ended.
+  beforeEach(() => {
+    delete process.env.APP_ORIGIN;
+  });
+
+  it("the SIP dial carries an action URL and a handoff token", async () => {
+    const xml = await texmlXml({ To: LIVE_TO, From: "+19562921696" });
+    expect(xml).toMatch(/<Dial[^>]*action="[^"]*\/api\/voice\/texml\/handoff\?t=[A-Za-z0-9_-]+"/);
+    expect(xml).toContain("X-BIS-Handoff=");
+  });
+
+  it("the token in the action URL and the token on the SIP URI are the SAME token", async () => {
+    // Two different tokens would mean the action route can never find the call.
+    const xml = await texmlXml({ To: LIVE_TO, From: "+19562921696" });
+    const inAction = /action="[^"]*\?t=([A-Za-z0-9_-]+)"/.exec(xml)![1];
+    const inUri = /X-BIS-Handoff=([A-Za-z0-9_-]+)/.exec(xml)![1];
+    expect(inAction).toBe(inUri);
+  });
+
+  it("a fresh token per call — two calls never share one", async () => {
+    const a = /X-BIS-Handoff=([A-Za-z0-9_-]+)/.exec(await texmlXml({ To: LIVE_TO, From: "+19565550301" }))![1];
+    const b = /X-BIS-Handoff=([A-Za-z0-9_-]+)/.exec(await texmlXml({ To: LIVE_TO, From: "+19565550302" }))![1];
+    expect(a).not.toBe(b);
+  });
+
+  it("the existing X-BIS-Called header is still present and unchanged", async () => {
+    const xml = await texmlXml({ To: LIVE_TO, From: "+19562921696" });
+    expect(xml).toContain("X-BIS-Called=%2B19565550999");
+  });
+
+  it("the action is fetched by POST, like every other call Telnyx makes here", async () => {
+    const xml = await texmlXml({ To: LIVE_TO, From: "+19562921696" });
+    expect(xml).toMatch(/<Dial[^>]*method="POST"/);
+  });
+
+  it("the action URL is absolute on APP_ORIGIN when it is set, not the deployment URL", async () => {
+    // Same rule as every other origin in this app (email/origin.ts): the
+    // custom domain wins over whatever host the webhook happened to hit.
+    process.env.APP_ORIGIN = "https://app.bis-rgv.com";
+    const xml = await texmlXml({ To: LIVE_TO, From: "+19562921696" });
+    expect(xml).toContain('action="https://app.bis-rgv.com/api/voice/texml/handoff?t=');
+    expect(xml).not.toContain("x.example/api/voice/texml/handoff");
+  });
+
+  it("falls back to the request's own origin when APP_ORIGIN is unset", async () => {
+    const xml = await texmlXml({ To: LIVE_TO, From: "+19562921696" });
+    expect(xml).toContain('action="https://x.example/api/voice/texml/handoff?t=');
+  });
+
+  it("a call with no To still gets a token — a transfer must work there too", async () => {
+    // The webhook can still resolve the tenant from To/Diversion, so this
+    // call can still be answered, and its caller can still ask for a person.
+    const xml = await texmlXml({});
+    expect(xml).toContain("X-BIS-Handoff=");
+    expect(xml).not.toContain("X-BIS-Called");
+  });
 });

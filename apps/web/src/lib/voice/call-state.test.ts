@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   emptyCallState, classifyOutcome, withBooking, withBookingCancelled,
-  withLead, withMessage, withTranscript, withServed, wasServed,
+  withLead, withMessage, withTranscript, withServed, wasServed, withTransferred,
 } from "./call-state";
 
 describe("classifyOutcome priority", () => {
@@ -72,5 +72,29 @@ describe("served", () => {
     expect(cancelled.bookings).toEqual([]);
     expect(classifyOutcome(cancelled)).toBe("abandoned");
     expect(wasServed(cancelled)).toBe(true);
+  });
+
+  it("withTransferred writes the marker the text-back gate and the summary both read", () => {
+    // Scope note: this asserts only that the wrapper writes the entry — it
+    // restates one line of production and cannot detect the failure the
+    // marker EXISTS to prevent. The behaviour guard is
+    // finish-call.test.ts's "does NOT text a caller we put THROUGH TO A
+    // PERSON", which goes red when `wasServed` stops counting "transferred";
+    // this one stays green through that mutation.
+    const s = withTransferred(emptyCallState());
+    expect(s.served).toContain("transferred");
+  });
+  it("withTransferred is idempotent — served is append-only and deduplicated", () => {
+    const s = withTransferred(withTransferred(emptyCallState()));
+    expect(s.served.filter((a) => a === "transferred")).toHaveLength(1);
+  });
+  it("a transferred call still classifies abandoned at socket close — nobody has reached a human YET", () => {
+    // The result route upgrades the row to `transferred` only on
+    // DialCallStatus: completed. At socket close that is not yet known, and
+    // claiming it would be a lie on a call that rings out.
+    const s = withTransferred(withTranscript(emptyCallState(), {
+      role: "caller", text: "can I speak to someone", at: new Date().toISOString(),
+    }));
+    expect(classifyOutcome(s)).toBe("abandoned");
   });
 });

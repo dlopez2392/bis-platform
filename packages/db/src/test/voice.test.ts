@@ -14,6 +14,7 @@ import {
   listPhoneNumbersForAccount, listAllPhoneNumbers, reassignPhoneNumber,
   listCalls, getCall, listCallStartsBetween, listCallOutcomesBetween,
   listContactCalls, searchCalls,
+  markHandoffRequested, getCallByHandoffToken, setCallOutcome,
   type CallOutcome,
 } from "../voice";
 
@@ -581,6 +582,130 @@ describe("listCallOutcomesBetween", () => {
       const got = await listCallOutcomesBetween(
         db, accountId, "2026-03-02T00:00:00Z", "2026-03-09T00:00:00Z");
       expect(got.slice().sort()).toEqual(["booked", "lead", "spam"]);
+    });
+  });
+});
+
+/**
+ * 0037's call-handoff accessors. Four functions, one shared fixture shape: a
+ * real `phone_numbers` row (calls.phone_number_id is NOT NULL) and a call row
+ * started through `startCallRow` itself rather than a direct insert, so the
+ * optional third field is exercised through the function the routes call.
+ *
+ * Tokens here are DRAWN, never a literal. `calls_handoff_token_unique` is
+ * PROJECT-WIDE — a token carries no account, which is the whole point of it —
+ * so a fixed string is green only while this is the only run touching the
+ * project, the exact accident `testPhoneNumber()` exists to prevent for
+ * `phone_numbers.e164`.
+ */
+const testHandoffToken = () => `test_handoff_${Math.random().toString(36).slice(2, 12)}`;
+
+describe("call handoff accessors", () => {
+  it("startCallRow stores a handoff token when given one, and leaves it null when not", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const token = testHandoffToken();
+
+      const withToken = await startCallRow(db, accountId, {
+        phoneNumberId: num.id, callerE164: "+19562921696", handoffToken: token,
+      });
+      // The field is OPTIONAL, and every caller in the tree today omits it.
+      // Both shapes are asserted because the back-compatible one is the one a
+      // regression would break silently.
+      const without = await startCallRow(db, accountId, {
+        phoneNumberId: num.id, callerE164: "+19562921696",
+      });
+
+      const { data, error } = await db.from("calls")
+        .select("id, handoff_token, handoff_requested_at")
+        .in("id", [withToken.id, without.id]);
+      expect(error, `calls select failed: ${error?.message}`).toBeNull();
+      const byId = Object.fromEntries((data ?? []).map((r: any) => [r.id, r]));
+      expect(byId[withToken.id].handoff_token).toBe(token);
+      expect(byId[without.id].handoff_token).toBeNull();
+      // A token is minted at the START of a call; the caller has not asked for
+      // a person yet, so the REQUESTED timestamp must still be empty. The two
+      // facts are separate for exactly this reason.
+      expect(byId[withToken.id].handoff_requested_at).toBeNull();
+    });
+  });
+
+  it("markHandoffRequested stamps the moment the caller asked, and refuses a call in another account", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const call = await startCallRow(db, accountId, {
+        phoneNumberId: num.id, callerE164: "+19562921696", handoffToken: testHandoffToken(),
+      });
+
+      await markHandoffRequested(db, accountId, call.id);
+      const { data } = await db.from("calls")
+        .select("handoff_requested_at").eq("id", call.id).single();
+      expect(typeof data!.handoff_requested_at).toBe("string");
+
+      // Account-scoped like every other per-account writer here, and LOUD on a
+      // zero-row match: PostgREST reports no error and no rows for an update
+      // that hit nothing, which would otherwise read as a successful stamp.
+      const ghost = "00000000-0000-0000-0000-000000000000";
+      await expect(markHandoffRequested(db, ghost, call.id)).rejects.toThrow(/matched no row/);
+    });
+  });
+
+  it("getCallByHandoffToken finds the call from the token ALONE and hands back the account to scope by", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const token = testHandoffToken();
+      const call = await startCallRow(db, accountId, {
+        phoneNumberId: num.id, callerE164: "+19562921696", handoffToken: token,
+      });
+      await markHandoffRequested(db, accountId, call.id);
+
+      // No account id is passed, and that is the assertion, not an oversight:
+      // the route that calls this has none — the token IS its credential. The
+      // account_id coming BACK is what every read after it is scoped by.
+      const found = await getCallByHandoffToken(db, token);
+      // `phone_number_id` is here for the handoff route's caller id: the
+      // business's handset must show THE NUMBER THIS CALLER DIALLED, and on an
+      // account owning two live numbers the number list cannot say which one
+      // rang — only the call row can. Dropping it from the select would send
+      // the route back to guessing.
+      expect(found).toMatchObject({ id: call.id, account_id: accountId, phone_number_id: num.id });
+      expect(typeof found!.handoff_requested_at).toBe("string");
+
+      // `outcome` rides along for the result route's precedence check, and it
+      // is here to stop that route reaching for `getCall` — which selects
+      // CALL_DETAIL_COLS and drags a whole JSONB transcript plus the summary
+      // across the wire to read ONE enum, on a call whose far end has already
+      // hung up. Written non-default first so a select that dropped the
+      // column could not pass on the row's own starting value.
+      await setCallOutcome(db, accountId, call.id, "booked");
+      const withOutcome = await getCallByHandoffToken(db, token);
+      expect(withOutcome!.outcome).toBe("booked");
+
+      // A token nobody minted resolves to nothing rather than to the newest
+      // call, or to an error a route would have to distinguish from a real one.
+      expect(await getCallByHandoffToken(db, testHandoffToken())).toBeNull();
+    });
+  });
+
+  it("setCallOutcome upgrades a finished call to transferred, and is account-scoped", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const call = await startCallRow(db, accountId, {
+        phoneNumberId: num.id, callerE164: "+19562921696",
+      });
+      // The row starts on the column default. A handed-off call reaches socket
+      // close classified `abandoned` — from the socket's point of view the
+      // caller did leave — and this is the upgrade that corrects it.
+      const before = await db.from("calls").select("outcome").eq("id", call.id).single();
+      expect(before.data!.outcome).toBe("abandoned");
+
+      const outcome: CallOutcome = "transferred";
+      await setCallOutcome(db, accountId, call.id, outcome);
+      const after = await db.from("calls").select("outcome").eq("id", call.id).single();
+      expect(after.data!.outcome).toBe("transferred");
+
+      const ghost = "00000000-0000-0000-0000-000000000000";
+      await expect(setCallOutcome(db, ghost, call.id, "booked")).rejects.toThrow(/matched no row/);
     });
   });
 });

@@ -13,7 +13,12 @@
 // (the Minors list).
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { NextRequest } from "next/server";
-import type { CallState, MirroredBooking } from "@/lib/voice/call-state";
+import { emptyCallState, type CallState, type MirroredBooking } from "@/lib/voice/call-state";
+// The REAL handoff copy — the ordering test below asserts the exact
+// instruction that reaches the socket, so importing the constant is what
+// makes "the handoff line reaches the model" an end-to-end claim rather than
+// a restatement of whatever the route happens to send.
+import { handoffLine } from "@/lib/voice/handoff";
 import type { TranscriptEvent } from "@bis/db";
 
 // --- ws: a minimal hand-rolled emitter standing in for the socket, so tests
@@ -108,6 +113,9 @@ const { isCallerAudioEvent: realIsCallerAudioEvent } =
 // --- @bis/db: minimal — just enough to reach a successful accept. ----------
 const getPhoneNumberByE164Mock = vi.hoisted(() => vi.fn());
 const getVoiceProfileMock = vi.hoisted(() => vi.fn());
+const startCallRowMock = vi.hoisted(() => vi.fn());
+const getTransferPhoneMock = vi.hoisted(() => vi.fn());
+const listPhoneNumbersForAccountMock = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({
     from: () => ({
@@ -145,7 +153,14 @@ vi.mock("@bis/db", () => ({
   // The clean history here is what makes every test in this file a call that
   // Guard 2 lets through, so Guard 1 is the only thing under test.
   countCallerHistorySince: vi.fn().mockResolvedValue({ spamCalls: 0, otherCalls: 0 }),
-  startCallRow: vi.fn().mockResolvedValue({ id: "call-row-1" }),
+  startCallRow: (...a: unknown[]) => startCallRowMock(...a),
+  // The handoff target's two reads. Absent from this factory, vitest throws
+  // "No `getTransferPhone` export is defined on the `@bis/db` mock" on every
+  // call in this file — and the route's own fail-closed catch would swallow it,
+  // leaving every test here exercising a configuration production is never in.
+  getTransferPhone: (...a: unknown[]) => getTransferPhoneMock(...a),
+  listPhoneNumbersForAccount: (...a: unknown[]) => listPhoneNumbersForAccountMock(...a),
+  markHandoffRequested: vi.fn().mockResolvedValue(undefined),
   getOrCreateCalendar: vi.fn().mockResolvedValue({
     id: "cal1", account_id: "acct1", public_id: "cal_pub1", enabled: true,
     slot_duration_minutes: 30, buffer_minutes: 0, min_notice_hours: 1, max_advance_days: 14,
@@ -164,7 +179,10 @@ const PROFILE_ROW = {
   after_hours: "hours_then_message" as const, enabled: true,
 };
 
-function callIncomingEvent(callId = "call_abc123") {
+/** `handoffToken` is the value our own TeXML route smuggles onto the SIP URI
+ *  as `X-BIS-Handoff`; `null` stands for the header simply not being there
+ *  (an older TeXML app, or a call that arrived some other way). */
+function callIncomingEvent(callId = "call_abc123", handoffToken: string | null = "tok_abc") {
   return {
     id: "evt_1", created_at: Math.floor(Date.now() / 1000), type: "realtime.call.incoming",
     data: {
@@ -172,6 +190,7 @@ function callIncomingEvent(callId = "call_abc123") {
       sip_headers: [
         { name: "From", value: "sip:+19562921696@sip.example.com" },
         { name: "X-BIS-Called", value: "+19565550999" },
+        ...(handoffToken === null ? [] : [{ name: "X-BIS-Handoff", value: handoffToken }]),
       ],
     },
   };
@@ -189,8 +208,10 @@ function req(): NextRequest {
  *  given — exactly what production's background execution does — and
  *  returns both the resulting lifecycle promise (resolves once `finish()`
  *  runs) and the fake socket the route constructed. */
-async function startLifecycle(callId = "call_abc123"): Promise<{ lifecycleDone: Promise<void>; ws: InstanceType<typeof FakeWebSocket> }> {
-  unwrapMock.mockResolvedValue(callIncomingEvent(callId));
+async function startLifecycle(
+  callId = "call_abc123", handoffToken: string | null = "tok_abc",
+): Promise<{ lifecycleDone: Promise<void>; ws: InstanceType<typeof FakeWebSocket> }> {
+  unwrapMock.mockResolvedValue(callIncomingEvent(callId, handoffToken));
   const res = await POST(req());
   expect(res.status).toBe(200);
   expect(afterMock).toHaveBeenCalledOnce();
@@ -229,6 +250,11 @@ beforeEach(() => {
   isCallerAudioEventMock.mockReset().mockImplementation(realIsCallerAudioEvent);
   getPhoneNumberByE164Mock.mockReset().mockResolvedValue(PHONE_ROW);
   getVoiceProfileMock.mockReset().mockResolvedValue(PROFILE_ROW);
+  startCallRowMock.mockReset().mockResolvedValue({ id: "call-row-1" });
+  // A configured, non-own transfer number: the ordinary shape for an account
+  // that has turned the handoff on.
+  getTransferPhoneMock.mockReset().mockResolvedValue("+19565551234");
+  listPhoneNumbersForAccountMock.mockReset().mockResolvedValue([PHONE_ROW]);
   fetchMock.mockReset().mockResolvedValue({ ok: true, text: async () => "" });
   vi.stubGlobal("fetch", fetchMock);
   fakeSockets.instances.length = 0;
@@ -1116,5 +1142,233 @@ describe("runCallLifecycle — Minor: WS URL call-id encoding", () => {
     const { ws } = await startLifecycle("call/with special?chars");
     expect(ws.url).toContain(encodeURIComponent("call/with special?chars"));
     expect(ws.url).not.toContain("call/with special?chars");
+  });
+});
+
+// Handing the caller to a person: the ONE action that ends the AI leg on
+// purpose rather than because the caller hung up, the cap fired, or nobody
+// spoke. Everything after this socket closes belongs to the carrier.
+describe("runCallLifecycle — the handoff close", () => {
+  it("a close action closes the socket, and only after the goodbye line has been sent", async () => {
+    vi.useFakeTimers();
+    const { ws } = await startLifecycle();
+    // ONE recorder for both calls, so the assertion is about ORDER and not
+    // merely about both things having happened somewhere in the test. A close
+    // that beat the sends would kill the socket before Sofía ever said "one
+    // moment" — dead air, then a ring, with nothing explaining it.
+    const order: string[] = [];
+    const sendSpy = vi.fn(() => { order.push("send"); });
+    const closeSpy = vi.fn(() => { order.push("close"); });
+    ws.send = sendSpy;
+    ws.close = closeSpy;
+    ws.emit("open");
+
+    // Past the greeting timer first, then forget it: the greeting is its own
+    // send and has nothing to do with the ordering under test.
+    await vi.advanceTimersByTimeAsync(900);
+    order.length = 0;
+    // `order` alone was reset here before; the spy's own call list was not,
+    // so the greeting stayed at `calls[0]` and the two sends under test sat
+    // at 1 and 2. Clearing both keeps the two views on the same indices —
+    // otherwise the content assertions below silently read the greeting.
+    sendSpy.mockClear();
+
+    runToolMock.mockResolvedValue({ state: emptyCallState(), result: { ok: true } });
+    ws.emit("message", JSON.stringify({
+      type: "response.function_call_arguments.done",
+      name: "transfer_to_human", call_id: "fc-transfer", arguments: "{}",
+    }));
+    await flushMicrotasks();
+
+    // The tool output and the response.create that makes the model SPEAK have
+    // both gone out, and the socket is still alive.
+    expect(order).toEqual(["send", "send"]);
+    expect(closeSpy).not.toHaveBeenCalled();
+
+    // WHAT went out, not just that two things did. The second send is the one
+    // that makes the caller hear "one moment, I'll put you through"; dropping
+    // `response.instructions` from every tool reply left this whole domain
+    // green, and on a real call it is the difference between a sentence and
+    // silence before the ring. `handoffLine("en")` because PROFILE_ROW's
+    // `languages` is `en` — the line follows the profile, not a default.
+    // Both sends are pinned, in order: the tool reply the model needs to
+    // close its own function call, THEN the instruction that produces sound.
+    expect(JSON.parse((sendSpy.mock.calls[0] as unknown as [string])[0])).toEqual({
+      type: "conversation.item.create",
+      item: { type: "function_call_output", call_id: "fc-transfer", output: JSON.stringify({ ok: true }) },
+    });
+    expect(JSON.parse((sendSpy.mock.calls[1] as unknown as [string])[0])).toEqual({
+      type: "response.create",
+      response: { instructions: handoffLine("en") },
+    });
+
+    // The PLAYOUT BUDGET itself, not only the fact that the close is
+    // deferred. Setting this branch's delay — or CLOSE_AFTER_GOODBYE_MS — to
+    // 0 still "defers" the close by one timer tick, and in production a 0ms
+    // close cuts the sentence entirely, because `ws.send` only queues.
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(closeSpy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(order).toEqual(["send", "send", "close"]);
+  });
+
+  it("a transfer requested inside the cost cap's own 5s playout window is not cut short by the cap's closeTimer", async () => {
+    // The interleaving the comment above this branch claims to handle and
+    // did not: the cap fires at `maxSeconds`, arms a 5s close, and WITHIN
+    // those 5s the model emits `transfer_to_human`. The handoff arms its own
+    // close — but the cap's timer was overwritten, never cleared, so it
+    // still fires on the cap's clock and truncates the handoff line the new
+    // timer exists to protect.
+    vi.useFakeTimers();
+    const { ws } = await startLifecycle();
+    const closeSpy = vi.fn();
+    ws.send = vi.fn();
+    ws.close = closeSpy;
+    ws.emit("open");
+
+    // Past the greeting, and one sound from the caller so the silence guard
+    // (which would otherwise fire at 30s) is out of the picture entirely.
+    await vi.advanceTimersByTimeAsync(900);
+    ws.emit("message", JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+    await flushMicrotasks();
+
+    // To the cost cap: 240s default, armed on open, 900ms of it already spent.
+    await vi.advanceTimersByTimeAsync(240_000 - 900);
+    expect(closeSpy).not.toHaveBeenCalled(); // the cap's own 5s close is pending
+
+    // 2s into that window the caller asks for a person.
+    await vi.advanceTimersByTimeAsync(2_000);
+    runToolMock.mockResolvedValue({ state: emptyCallState(), result: { ok: true } });
+    ws.emit("message", JSON.stringify({
+      type: "response.function_call_arguments.done",
+      name: "transfer_to_human", call_id: "fc-transfer", arguments: "{}",
+    }));
+    await flushMicrotasks();
+
+    // The cap's timer would fire 3s from here. The handoff line has its own
+    // full 5s, and nothing may close the socket before it.
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(closeSpy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("the handoff token from the TeXML SIP header reaches startCallRow", async () => {
+    await startLifecycle();
+    expect(startCallRowMock).toHaveBeenCalledWith(
+      expect.anything(), expect.any(String),
+      expect.objectContaining({ handoffToken: "tok_abc" }),
+    );
+  });
+
+  it("no X-BIS-Handoff header means no token — never a fabricated one", async () => {
+    // The negative fixture differs ONLY in the header this code reads. A route
+    // that hardcoded a token, or reused some other header's value, passes the
+    // test above and fails here.
+    await startLifecycle("call_abc123", null);
+    const input = startCallRowMock.mock.calls[0]![2] as { handoffToken?: string };
+    expect(input.handoffToken).toBeUndefined();
+  });
+});
+
+// The wiring between the two halves of this feature: the target resolved
+// before the accept, and the two things that must carry it — the tool list
+// the model is handed, and the context `runTool` runs in. Without these, the
+// route could resolve a target and then drop it on the floor with every other
+// test in this file still green.
+describe("the handoff target reaches the call", () => {
+  function acceptedTools(): { name: string }[] {
+    const init = fetchMock.mock.calls[0]![1] as { body: string };
+    return (JSON.parse(init.body) as { tools: { name: string }[] }).tools;
+  }
+
+  it("the accept body advertises transfer_to_human when the account has a transfer number", async () => {
+    await startLifecycle();
+    expect(acceptedTools().map((t) => t.name)).toContain("transfer_to_human");
+  });
+
+  it("...and does not when it has none — the model is never given what it cannot deliver", async () => {
+    getTransferPhoneMock.mockResolvedValue(null);
+    await startLifecycle();
+    expect(acceptedTools().map((t) => t.name)).not.toContain("transfer_to_human");
+  });
+
+  it("a transfer number that is one of this account's OWN numbers is refused — a TESTING one too", async () => {
+    // The loop guard. `testing` is in the filter, not just `live`: an account
+    // still walking the setup wizard holds exactly one testing number, and
+    // pointing its transfer field at that number would ring Sofía back.
+    getTransferPhoneMock.mockResolvedValue("+19565551234");
+    listPhoneNumbersForAccountMock.mockResolvedValue([
+      PHONE_ROW,
+      { ...PHONE_ROW, id: "pn2", e164: "+19565551234", status: "testing" as const },
+    ]);
+    await startLifecycle();
+    expect(acceptedTools().map((t) => t.name)).not.toContain("transfer_to_human");
+  });
+
+  it("the resolved target and the call row reach the tool context runTool is given", async () => {
+    const { ws } = await startLifecycle();
+    ws.emit("open");
+    runToolMock.mockResolvedValue({ state: emptyCallState(), result: { ok: false, error: "no" } });
+    ws.emit("message", JSON.stringify({
+      type: "response.function_call_arguments.done",
+      name: "transfer_to_human", call_id: "fc1", arguments: "{}",
+    }));
+    await flushMicrotasks();
+    expect(runToolMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        callRowId: "call-row-1",
+        handoffTarget: { available: true, to: "+19565551234" },
+      }),
+      "transfer_to_human", {},
+    );
+  });
+
+  it("both handoff reads are scoped to the account resolved FROM THE DIALLED NUMBER, and neither fires before that resolution", async () => {
+    // THE BOUNDARY THAT MATTERS (spec, "the boundary that matters"). Both
+    // reads run on `serviceDb()`, so RLS protects nothing here: the only
+    // thing keeping one tenant's transfer number out of another tenant's
+    // call is the account id these two calls are handed. Nothing else in
+    // this file asserts WHICH id that is — replacing either argument with a
+    // literal `"acct-someone-else"` left the suite fully green, and that
+    // route would have dialled a live caller into a stranger's phone.
+    //
+    // The account id here is deliberately NOT `acct1`: it exists only on the
+    // row the dialled-number lookup returns, so it cannot be arrived at by
+    // any means other than resolving the number first.
+    let releasePhoneRow!: (row: typeof PHONE_ROW) => void;
+    getPhoneNumberByE164Mock.mockReturnValue(
+      new Promise<typeof PHONE_ROW>((resolve) => { releasePhoneRow = resolve; }),
+    );
+
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    const posted = POST(req());
+    await flushMicrotasks();
+
+    // ORDERING, not merely "both happened": with the resolution still in
+    // flight there is no account yet, so a read that has already fired is a
+    // read scoped to nobody in particular. This half is what the spec asks
+    // for and what a `Promise.all` hoisted above step 6 would break.
+    expect(getTransferPhoneMock).not.toHaveBeenCalled();
+    expect(listPhoneNumbersForAccountMock).not.toHaveBeenCalled();
+
+    releasePhoneRow({ ...PHONE_ROW, account_id: "acct-resolved-from-number" });
+    const res = await posted;
+    expect(res.status).toBe(200);
+
+    expect(getTransferPhoneMock).toHaveBeenCalledWith(expect.anything(), "acct-resolved-from-number");
+    expect(listPhoneNumbersForAccountMock).toHaveBeenCalledWith(expect.anything(), "acct-resolved-from-number");
+  });
+
+  it("a lookup that throws leaves the call answerable, just without a transfer", async () => {
+    // Fails CLOSED, unlike the caps and startCallRow: the caller still gets
+    // Sofía, she just never offers to put them through to anyone.
+    getTransferPhoneMock.mockRejectedValue(new Error("db down"));
+    const { ws } = await startLifecycle();
+    expect(ws).toBeTruthy();
+    expect(acceptedTools().map((t) => t.name)).not.toContain("transfer_to_human");
   });
 });

@@ -4,6 +4,7 @@ import {
   findUpcomingBookingForPhone,
   createContact, fillContactBlanks, getContact,
   createBooking, SlotTakenError, setBookingStatus, getBookingById,
+  markHandoffRequested,
   type CalendarRow, type VoiceProfileRow, type Branding,
 } from "@bis/db";
 import { computeAllSlots, dayKeyInZone } from "@/lib/booking/availability";
@@ -17,13 +18,15 @@ import { isValidEmail } from "@/lib/forms/guards";
 import { formatWhen } from "@/lib/booking/time";
 import {
   type CallState, withLead, withMessage, withTranscript, withBooking, withBookingCancelled,
-  withServed,
+  withServed, withTransferred,
 } from "../call-state";
+import type { HandoffTarget } from "../handoff";
 
 export type ToolName =
   | "check_availability" | "book_appointment" | "reschedule_appointment"
   | "cancel_appointment" | "find_my_booking"
-  | "capture_lead" | "take_message" | "log_transcript";
+  | "capture_lead" | "take_message" | "log_transcript"
+  | "transfer_to_human";
 
 /**
  * DELIBERATELY ABSENT: `accountName`. `accounts.name` is the agency's internal
@@ -39,6 +42,15 @@ export interface ToolContext {
   branding: Branding; fromEmail: string | null;
   callerNumber: string | null;
   origin: string;
+  /**
+   * The `calls` row opened at accept — NULL when `startCallRow` failed open
+   * (route.ts step 10). `transfer_to_human` is the one tool that cannot work
+   * without it: the handoff route finds this call by its row, and a transfer
+   * it can never find is a caller left in silence.
+   */
+  callRowId: string | null;
+  /** Where a caller who asks for a person can go, resolved once at accept. */
+  handoffTarget: HandoffTarget;
   now?: () => Date;
 }
 
@@ -390,6 +402,47 @@ export async function runTool(
       // served flag is what survives that, and it is what stops a caller we
       // served perfectly from being texted "Sorry we missed you just now".
       return { state: withServed(withBookingCancelled(state, bookingId), "cancelled"), result: { ok: true } };
+    }
+
+    // The caller asked for a person. Everything here happens BEFORE the model
+    // is told it worked, and the order is the whole point:
+    //
+    //   1. is there anywhere to send them,
+    //   2. is there a row the handoff route can find this call by,
+    //   3. WRITE THE INTENT AND WAIT FOR IT,
+    //   4. only then say yes.
+    //
+    // Step 3 is awaited because `finishCall` and Telnyx's request to the Dial
+    // action URL run concurrently once the socket closes, and Telnyx can win.
+    // An intent held only in memory — or written without waiting — would
+    // transfer intermittently: the caller hears "one moment, I'll put you
+    // through", the socket dies, and the action route finds no transfer and
+    // hangs up on them. Intermittent is worse than never, because nobody
+    // believes the bug report.
+    //
+    // Every refusal returns state UNTOUCHED. `withTransferred` is what stops
+    // the missed-call text-back, and marking a caller transferred when they
+    // were not is how someone gets no text after a call that helped nobody.
+    case "transfer_to_human": {
+      if (!ctx.handoffTarget.available) {
+        return { state, result: { ok: false,
+          error: "There's no one available to transfer to on this line. Apologize, then offer to take a message." } };
+      }
+      if (!ctx.callRowId) {
+        return { state, result: { ok: false,
+          error: "The transfer can't be set up for this call. Apologize, then offer to take a message." } };
+      }
+      try {
+        await markHandoffRequested(ctx.db, ctx.accountId, ctx.callRowId);
+      } catch (e) {
+        // Loud: this is the one failure that would otherwise look exactly
+        // like a caller who never asked — nothing in the row, nothing in the
+        // logs, and a model that told them they were being put through.
+        console.error(`voice transfer_to_human: markHandoffRequested failed for call row ${ctx.callRowId}: ${String(e)}`);
+        return { state, result: { ok: false,
+          error: "The transfer didn't go through. Apologize, then offer to take a message." } };
+      }
+      return { state: withTransferred(state), result: { ok: true } };
     }
 
     default:

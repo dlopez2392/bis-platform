@@ -20,9 +20,14 @@ export type TakenMessage = { body: string; callbackNumber?: string; at: string }
  * Recorded separately from `bookings`/`leads`/`messages` on purpose:
  * `classifyOutcome`'s `abandoned` feeds the calls list, the outcome pill and
  * the dashboard KPIs, and re-labelling a cancellation call there would be a
- * product change, not a bug fix. This flag is read by exactly one consumer —
- * the missed-call text-back's gate — so "we served you" and "what the
- * dashboard calls this call" can differ without either lying.
+ * product change, not a bug fix. Keeping this array separate is what lets
+ * "we served you" and "what the dashboard calls this call" differ without
+ * either lying.
+ *
+ * TWO readers, not one (it was one until `transferred` arrived): the
+ * missed-call text-back's gate via `wasServed` below, and `summaryFactLine`
+ * (./summarize.ts), which reads the `transferred` entry specifically. See
+ * that case below.
  *
  * - `cancelled` — `cancel_appointment` succeeded. The caller rang in to
  *   cancel and we cancelled. For a booking made on a PREVIOUS call this
@@ -37,8 +42,24 @@ export type TakenMessage = { body: string; callbackNumber?: string; at: string }
  *   to check your own appointment time is a complete, successful call that
  *   changes nothing in the database. A `found: false` lookup is NOT served:
  *   we told that caller we had nothing for them.
+ * - `transferred` — the caller asked for a person and was handed to one
+ *   (0037's vocabulary). Written by the handoff route, which arrives later;
+ *   nothing produces it yet. It is the most served a caller can be, and the
+ *   text-back is the one thing that must not fire afterwards: a caller who
+ *   was successfully put through to a human and then gets "Sorry we missed
+ *   you just now" by text is the exact failure this array exists to prevent,
+ *   in its sharpest form. It is ALSO the one `ServedAction` with a second
+ *   reader — `summaryFactLine` (./summarize.ts) leads with it, because the
+ *   transcript stops at the handoff and a model handed that partial
+ *   transcript has no way to know it was partial. Recorded here rather than
+ *   as a boolean of its own precisely because there are two readers: one
+ *   fact in two fields is two chances to write only one of them, and the
+ *   two ways to get that wrong are the two failures this design most cares
+ *   about. `classifyOutcome` still returns `abandoned` for this call at
+ *   socket close — from the socket's point of view the caller did leave —
+ *   and the handoff route upgrades the row afterwards via `setCallOutcome`.
  */
-export type ServedAction = "cancelled" | "rescheduled" | "booking_found";
+export type ServedAction = "cancelled" | "rescheduled" | "booking_found" | "transferred";
 
 export interface CallState {
   contactId: string | null;
@@ -92,6 +113,16 @@ export function withTranscript(state: CallState, ev: TranscriptEvent): CallState
 export function withServed(state: CallState, action: ServedAction): CallState {
   if (state.served.includes(action)) return state;
   return { ...state, served: [...state.served, action] };
+}
+
+/**
+ * The caller asked for a person and was handed to one (see `ServedAction`'s
+ * `transferred` case for the full argument). Thin wrapper over `withServed`
+ * so the handoff route has one call to make and gets the same
+ * append-only/deduplicated guarantee every other served action gets.
+ */
+export function withTransferred(state: CallState): CallState {
+  return withServed(state, "transferred");
 }
 
 /**

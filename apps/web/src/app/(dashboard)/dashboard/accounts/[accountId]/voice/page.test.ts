@@ -24,7 +24,9 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 const dbFixture = vi.hoisted(() => ({ brandName: null as string | null }));
-const serviceDbMock = vi.hoisted(() => ({ getBranding: vi.fn(), getVoiceProfile: vi.fn() }));
+const serviceDbMock = vi.hoisted(() => ({
+  getBranding: vi.fn(), getVoiceProfile: vi.fn(), getTransferPhone: vi.fn(),
+}));
 
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({
@@ -44,6 +46,7 @@ vi.mock("@bis/db", () => ({
   }),
   getVoiceProfile: (...a: unknown[]) => serviceDbMock.getVoiceProfile(...a),
   getBranding: (...a: unknown[]) => serviceDbMock.getBranding(...a),
+  getTransferPhone: (...a: unknown[]) => serviceDbMock.getTransferPhone(...a),
 }));
 
 // "use server" modules cannot be imported into a vitest render.
@@ -51,9 +54,12 @@ vi.mock("./actions", () => ({
   saveVoiceProfileAction: async () => ({ ok: true }),
   assignNumberAction: async () => ({ ok: true }),
   setNumberStatusAction: async () => ({ ok: true }),
+  setTransferPhoneAction: async () => ({ ok: true }),
 }));
 
-const captured = vi.hoisted(() => ({ props: null as { brandName?: string } | null }));
+const captured = vi.hoisted(() => ({
+  props: null as { brandName?: string; transferPhone?: string | null } | null,
+}));
 vi.mock("./voice-settings", () => ({
   VoiceSettings: (props: { brandName: string }) => {
     captured.props = props;
@@ -82,6 +88,7 @@ async function render() {
 
 beforeEach(() => {
   dbFixture.brandName = null;
+  serviceDbMock.getTransferPhone.mockReset().mockResolvedValue(null);
   serviceDbMock.getVoiceProfile.mockReset().mockResolvedValue(PROFILE);
   serviceDbMock.getBranding.mockReset().mockImplementation(async () => ({
     brandName: dbFixture.brandName, brandLogoPath: null, brandColor: null, brandNeutral: null,
@@ -116,5 +123,35 @@ describe("voice settings page — text-back preview name", () => {
     // Blank is the one input defaultTextbackBody handles by dropping the
     // identifying clause rather than inventing a placeholder noun.
     expect(props.brandName).toBe("");
+  });
+});
+
+/**
+ * The transfer number is the only thing that makes "I'll put you through"
+ * reachable, so the settings screen has to show the operator the value that
+ * is actually stored — not a blank box they would read as "off".
+ */
+describe("voice settings page — the transfer number", () => {
+  it("hands the settings screen the number callers are put through to", async () => {
+    serviceDbMock.getTransferPhone.mockResolvedValue("+19565550123");
+    const props = await render();
+    expect(props.transferPhone).toBe("+19565550123");
+  });
+
+  it("no transfer number configured is a state, not a failure", async () => {
+    // Null is where every account starts, and the field being blank is what
+    // tells the operator Sofía takes a message instead.
+    const props = await render();
+    expect(props.transferPhone).toBeNull();
+  });
+
+  it("a failing transfer-phone read errors rather than painting a blank field", async () => {
+    // Deliberately NOT the branding read's degrade-to-blank treatment. The
+    // brand name only feeds a preview; this value feeds a form field whose
+    // blank state MEANS "off", and saving that blank clears the column. A
+    // silently empty box here is one Save away from turning a working
+    // transfer off without anyone deciding to.
+    serviceDbMock.getTransferPhone.mockRejectedValue(new Error("db down"));
+    await expect(render()).rejects.toThrow();
   });
 });

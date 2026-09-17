@@ -123,4 +123,34 @@ describe("buildSystemPrompt", () => {
     const p = buildSystemPrompt(baseInput({ bookingEnabled: false, meetingType: "video" }), now);
     expect(p).not.toMatch(/VIDEO CALL/);
   });
+
+  // Sofía may only offer what this account can actually deliver. A transfer
+  // target either exists (`handoffAvailable`) or it does not; when it does
+  // not, the prompt must be the one shipping today, unchanged — a
+  // present-tense promise the product cannot keep is the defect this whole
+  // feature is fenced against.
+  it("offers to put the caller through when a transfer target is available", () => {
+    const p = buildSystemPrompt(baseInput({ handoffAvailable: true }), now);
+    expect(p).toContain("transfer_to_human");
+    expect(p).toMatch(/put them through/i);
+    // The take-a-message fallback clause is REPLACED, not doubled up: telling
+    // her to offer a message AND a transfer in the same breath asks the
+    // caller the same question twice.
+    expect(p).not.toContain("offer to take a message if they would rather talk to a person");
+  });
+  it("keeps today's take-a-message copy when no target is configured", () => {
+    const p = buildSystemPrompt(baseInput({ handoffAvailable: false }), now);
+    expect(p).not.toContain("transfer_to_human");
+    expect(p).toContain("offer to take a message");
+    expect(p).toContain("offer to take a message if they would rather talk to a person");
+  });
+  it("an omitted handoffAvailable renders byte-for-byte the no-transfer prompt — the default fails closed", () => {
+    // `handoffAvailable` is optional (session-config.ts:25) and the web demo
+    // never sets it: omitted must mean exactly what false means, to the byte,
+    // or "no transfer configured" and "no phone leg at all" drift into two
+    // different Sofías.
+    expect(buildSystemPrompt(baseInput({ handoffAvailable: false }), now))
+      .toBe(buildSystemPrompt(base, now));
+    expect(buildSystemPrompt(base, now)).not.toContain("transfer_to_human");
+  });
 });

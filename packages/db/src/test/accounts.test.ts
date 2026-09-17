@@ -5,6 +5,7 @@ import { withTestAccount, testPhoneNumber } from "./fixtures";
 import {
   createAccount, listAccounts, renameAccount,
   setA2pRegistration, getA2pRegistration, getAlertPhone, setAlertPhone,
+  getTransferPhone, setTransferPhone,
 } from "../accounts";
 
 const suffix = () => Math.random().toString(36).slice(2, 10);
@@ -220,6 +221,58 @@ describe("setAlertPhone", () => {
 
     const { data } = await db.from("events").select("id")
       .eq("account_id", ghost).eq("type", "account.alert_phone_updated");
+    expect(data ?? []).toHaveLength(0);
+  });
+});
+
+/**
+ * `getTransferPhone` / `setTransferPhone` — the two sides of
+ * `accounts.transfer_phone` (0037_call_handoff.sql), shaped after
+ * `getAlertPhone`/`setAlertPhone` above because they answer the same kind of
+ * question about the same kind of value.
+ *
+ * What differs is the consequence, and it is why the write is agency-gated at
+ * the call site with nothing in the database standing behind it: 0037 grants
+ * `authenticated` no UPDATE on this column, so a client able to reach it
+ * directly could point their own callers at any handset in the world.
+ */
+describe("getTransferPhone / setTransferPhone", () => {
+  it("round-trips a drawn E.164 value, clears back to null, and emits account.transfer_phone_updated", async () => {
+    await withTestAccount(async (db, accountId) => {
+      // Starts off. NULL means this account offers no transfer, and every
+      // in-call decision treats that as "no path to a person", never an error.
+      expect(await getTransferPhone(db, accountId)).toBeNull();
+
+      const drawn = testPhoneNumber();
+      await setTransferPhone(db, accountId, drawn, "user_test");
+      expect(await getTransferPhone(db, accountId)).toBe(drawn);
+
+      const { data: ev } = await db.from("events").select("type, actor_type, actor_id, payload")
+        .eq("account_id", accountId).eq("type", "account.transfer_phone_updated").single();
+      expect(ev).toMatchObject({
+        type: "account.transfer_phone_updated", actor_type: "user", actor_id: "user_test",
+        payload: { transferPhone: drawn },
+      });
+
+      // NULL is the only "off" — 0037's CHECK refuses "" outright so the
+      // switch cannot acquire a second spelling. Clearing round-trips too.
+      await setTransferPhone(db, accountId, null, "user_test");
+      expect(await getTransferPhone(db, accountId)).toBeNull();
+    });
+  });
+
+  /** Same claim and same reason as setAlertPhone's own zero-row test above:
+   *  PostgREST reports no error for an update matching nothing, which reads as
+   *  a successful save that changed nothing. */
+  it("throws rather than reporting success for an account that does not exist, and emits nothing", async () => {
+    const db = serviceDb();
+    const ghost = "00000000-0000-0000-0000-000000000000";
+    await expect(
+      setTransferPhone(db, ghost, "+19565550001", "user_test"),
+    ).rejects.toThrow(/no account/);
+
+    const { data } = await db.from("events").select("id")
+      .eq("account_id", ghost).eq("type", "account.transfer_phone_updated");
     expect(data ?? []).toHaveLength(0);
   });
 });

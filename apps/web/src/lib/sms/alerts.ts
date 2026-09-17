@@ -65,6 +65,26 @@ export function composeBookingAlertSms(
   return hasEmailRecipients ? `${fallback}${EMAIL_HINT}` : fallback;
 }
 
+/**
+ * Three outcomes, not six. 0037's `transferred` is deliberately absent: a
+ * completed transfer fires no staff alert at all
+ * (docs/superpowers/specs/2026-09-15-call-handoff-design.md), because the
+ * person who took the call live already knows, and because the decision is
+ * made at socket close before anyone knows whether the transfer connected.
+ * `isMeaningful` (lib/voice/finish-call.ts) is the gate, and its type
+ * predicate narrows to exactly this union.
+ *
+ * The compiler enforces only ONE direction of that agreement: it stops a
+ * caller passing an outcome this union does not contain. It does NOT check
+ * that `isMeaningful` still means what it says — TypeScript takes a type
+ * predicate's BODY on trust, so widening that body to let `transferred`
+ * through while leaving its return type at three members type-checks
+ * cleanly. Nothing would then stop `CALL_ALERT_LEAD[outcome]` being
+ * `undefined` and a text reading "undefined Check email for details."
+ * reaching the business's alert phone, so `composeCallAlertSms` below has a
+ * RUNTIME floor as well. Widen this union and `isMeaningful` together; the
+ * compiler will catch only half of getting it wrong.
+ */
 const CALL_ALERT_LEAD: Record<"booked" | "lead" | "message", string> = {
   booked: "New call: booked a meeting.",
   lead: "New call: a lead came in.",
@@ -82,7 +102,14 @@ const CALL_ALERT_LEAD: Record<"booked" | "lead" | "message", string> = {
 export function composeCallAlertSms(
   outcome: "booked" | "lead" | "message", hasEmailRecipients: boolean,
 ): string {
-  const lead = CALL_ALERT_LEAD[outcome];
+  // Runtime floor, not belt-and-braces: see CALL_ALERT_LEAD's doc. The type
+  // says this lookup cannot miss; a widened type predicate upstream is enough
+  // to make it miss anyway, and the cost of missing is a carrier send that
+  // literally reads "undefined". Throwing lands in finishCall's staff-alert
+  // leg's own try/catch — a logged failure and no text, rather than a text
+  // that says nothing.
+  const lead: string | undefined = CALL_ALERT_LEAD[outcome];
+  if (!lead) throw new Error(`composeCallAlertSms: no alert copy for outcome "${outcome}"`);
   return hasEmailRecipients ? `${lead}${EMAIL_HINT}` : lead;
 }
 

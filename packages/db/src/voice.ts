@@ -15,7 +15,19 @@ export type VoiceProfileRow = {
   textback_enabled: boolean; textback_body: string;
 };
 export type VoiceProfilePatch = Partial<Omit<VoiceProfileRow, "id" | "account_id">>;
-export type CallOutcome = "booked" | "lead" | "message" | "abandoned" | "spam";
+/**
+ * The TypeScript twin of `calls_outcome_check` (0019, widened by 0037). The
+ * two must hold the same six strings: a value this union admits and the CHECK
+ * refuses is a write that fails at 2 AM, and one the CHECK admits and this
+ * union does not is a row no screen can render.
+ *
+ * `transferred` means the caller reached a PERSON. Nothing produces it yet —
+ * 0037 is vocabulary only — and `classifyOutcome` deliberately never returns
+ * it: at socket close a handed-off call still classifies `abandoned`, because
+ * from the socket's point of view the caller did leave, and the handoff route
+ * upgrades the row afterwards through `setCallOutcome` below.
+ */
+export type CallOutcome = "booked" | "lead" | "message" | "abandoned" | "spam" | "transferred";
 export type TranscriptEvent = { role: "caller" | "assistant"; text: string; at: string };
 export type FinishCallPatch = {
   outcome: CallOutcome; endedAt: Date; durationSecs: number; turnCount: number;
@@ -144,15 +156,166 @@ export async function upsertVoiceProfile(
   return data as unknown as VoiceProfileRow;
 }
 
+/**
+ * `handoffToken` is OPTIONAL and every caller in the tree today omits it —
+ * a call that never asks for a person carries none, which is every call this
+ * product has recorded so far. When present it is the credential a LATER,
+ * separate request uses to find this row again (see `getCallByHandoffToken`),
+ * and `calls_handoff_token_unique` (0037) refuses a second row claiming the
+ * same one: two calls sharing a token means transferring the wrong caller,
+ * to a real human, with no error and no symptom.
+ *
+ * Minting it here rather than at the moment the caller asks is deliberate.
+ * The ask happens mid-call, inside a socket handler where an extra round trip
+ * costs the caller silence; the token has no meaning until it is used, so
+ * writing it with the row that already has to be written is free.
+ * `handoff_requested_at` stays null until `markHandoffRequested` — the token
+ * says WHICH call, the timestamp says the caller actually asked.
+ *
+ * THE COLUMN IS NAMED ONLY WHEN THERE IS A TOKEN, rather than written as an
+ * explicit `handoff_token: null` the way `finishCallRow` writes its optional
+ * ids. That is a deployment-ordering decision, not a style one, and it is the
+ * only place in this package that needs it: a push to `main` deploys
+ * production, migrations are applied out of band, and this is the ONE function
+ * on the live call path. PostgREST rejects an insert naming a column it does
+ * not know about, outright — so naming `handoff_token` unconditionally would
+ * fail EVERY insert here in the window between the deploy and the migration.
+ *
+ * The damage is not a dropped call. `api/voice/incoming/route.ts` (step 10)
+ * fail-opens this call on purpose — a DB blip must not turn away a caller —
+ * so every one of those calls would be answered normally while recording no
+ * row at all: no transcript, no outcome, no duration, no summary, no CRM
+ * trail, and nothing for the daily caps to count. A silent hole in the
+ * record for the length of the window, which is precisely the failure this
+ * product is least able to see. Omitting the column confines that window to
+ * handoff calls, of which there are none until the route that mints tokens
+ * ships. Post-migration the two forms are identical: the column's default is
+ * NULL.
+ *
+ * This comment is the only guard on that decision — no test can express
+ * "before the migration" — so it has to be accurate.
+ */
 export async function startCallRow(
   db: SupabaseClient, accountId: string,
-  input: { phoneNumberId: string; callerE164: string | null },
+  input: { phoneNumberId: string; callerE164: string | null; handoffToken?: string },
 ): Promise<{ id: string }> {
   const { data, error } = await db.from("calls")
-    .insert({ account_id: accountId, phone_number_id: input.phoneNumberId, caller_e164: input.callerE164 })
+    .insert({
+      account_id: accountId, phone_number_id: input.phoneNumberId, caller_e164: input.callerE164,
+      ...(input.handoffToken === undefined ? {} : { handoff_token: input.handoffToken }),
+    })
     .select("id").single();
   if (error || !data) throw new Error(`startCallRow failed: ${error?.message}`);
   return { id: (data as { id: string }).id };
+}
+
+/**
+ * Stamps the moment a caller asked to speak to a person (0037's
+ * `calls.handoff_requested_at`).
+ *
+ * Separate from the token on purpose: the token is minted at the start of
+ * every call that might need one, so its presence proves nothing about what
+ * the caller wanted. This timestamp is the only durable trace that a handoff
+ * was ATTEMPTED — without it, a handoff whose dial then failed is
+ * indistinguishable from one that never happened.
+ *
+ * Account-scoped and loud on a zero-row match, the `setPhoneNumberStatus`
+ * shape: PostgREST returns no error AND no rows for an update matching
+ * nothing, so a wrong id would otherwise read as a successful stamp.
+ */
+export async function markHandoffRequested(
+  db: SupabaseClient, accountId: string, callRowId: string,
+): Promise<void> {
+  const { data, error } = await db.from("calls")
+    .update({ handoff_requested_at: new Date().toISOString() })
+    .eq("id", callRowId).eq("account_id", accountId).select("id");
+  if (error) throw new Error(`markHandoffRequested failed: ${error.message}`);
+  if (!data || data.length === 0) throw new Error("markHandoffRequested matched no row");
+}
+
+/**
+ * Finds a call by its handoff token — and is DELIBERATELY NOT ACCOUNT-SCOPED,
+ * which is the one thing about it worth reading twice.
+ *
+ * Every other reader in this file takes an `accountId` and pins it with
+ * `.eq("account_id", …)`. This one cannot: its caller is the handoff route,
+ * arriving as a separate request with no session, no signed-in user and no
+ * account id in hand. The TOKEN IS THE CREDENTIAL — it is unguessable, it is
+ * unique across the project (`calls_handoff_token_unique`, 0037), and holding
+ * it is the entire proof of authorisation.
+ *
+ * That is exactly why it RETURNS `account_id`: the caller has no tenancy until
+ * this function gives it one, and every read it makes afterwards must be
+ * scoped by the account this token resolved to. A caller that discards it and
+ * queries unscoped has thrown away the only tenancy this path has.
+ *
+ * An unknown token returns null rather than throwing — a route must be able to
+ * tell "no such handoff" (a stale link, a token from a call already cleaned
+ * up) from a database that is broken, and they need different answers.
+ *
+ * `phone_number_id` comes back for the handoff route's caller id: the business
+ * must see THE NUMBER THIS CALLER DIALLED on its handset, and an account that
+ * owns two live numbers cannot get that from its number list — only the call
+ * row knows which one rang. `not null` since 0019, so it is always a string.
+ *
+ * `outcome` comes back so the RESULT route can decide precedence — whether
+ * stamping `transferred` is an upgrade of what the row already says or a
+ * downgrade of it — without a second read. It used to call `getCall` for
+ * exactly that one enum, and `getCall` selects `CALL_DETAIL_COLS`: a whole
+ * JSONB transcript and the summary, dragged across the wire to compare one
+ * short string, on a call whose far end has already hung up.
+ *
+ * ONE TRADE, stated rather than hidden: the old shape re-read the outcome
+ * AFTER that route's recency gate, so its value was a few milliseconds
+ * fresher than this one, which is read at the top. Both are equally racy
+ * against a `finishCall` landing in between — neither takes a lock, and there
+ * is no read that a concurrent write cannot invalidate a moment later — and
+ * the precedence rule makes a lost race a no-op either way: the set of
+ * outcomes that outrank `transferred` is exactly the set a late `finishCall`
+ * could write, so the worst case is a row that keeps the value `finishCall`
+ * gave it, which is what losing the race is supposed to mean. `outcome` is
+ * `not null default 'abandoned'` (0019), so it is always a string; typed as
+ * `string` rather than `CallOutcome` on purpose, because a value outside the
+ * six must be readable here in order to be treated as upgradable.
+ */
+export async function getCallByHandoffToken(
+  db: SupabaseClient, token: string,
+): Promise<{
+  id: string; account_id: string; phone_number_id: string;
+  handoff_requested_at: string | null; outcome: string;
+} | null> {
+  const { data, error } = await db.from("calls")
+    .select("id, account_id, phone_number_id, handoff_requested_at, outcome")
+    .eq("handoff_token", token).maybeSingle();
+  if (error) throw new Error(`getCallByHandoffToken failed: ${error.message}`);
+  return (data as {
+    id: string; account_id: string; phone_number_id: string;
+    handoff_requested_at: string | null; outcome: string;
+  } | null) ?? null;
+}
+
+/**
+ * Sets a call's outcome on its own, without the rest of `FinishCallPatch`.
+ *
+ * `finishCallRow` writes the outcome ALONGSIDE the transcript, duration, turn
+ * count and summary, because at socket close all of those are known together.
+ * A handoff is the case where they are not: the row is already finished (the
+ * socket closed, classified `abandoned` — the caller did leave, as far as the
+ * socket can tell) and only the outcome turns out to have been wrong. Reusing
+ * `finishCallRow` for that would mean re-supplying a transcript and a duration
+ * this caller does not have, and overwriting the real ones with invented ones.
+ *
+ * Account-scoped and loud on a zero-row match, for the same reason as every
+ * other writer here.
+ */
+export async function setCallOutcome(
+  db: SupabaseClient, accountId: string, callRowId: string, outcome: CallOutcome,
+): Promise<void> {
+  const { data, error } = await db.from("calls")
+    .update({ outcome })
+    .eq("id", callRowId).eq("account_id", accountId).select("id");
+  if (error) throw new Error(`setCallOutcome failed: ${error.message}`);
+  if (!data || data.length === 0) throw new Error("setCallOutcome matched no row");
 }
 
 /**
@@ -296,9 +459,18 @@ export async function countCallerHistorySince(
  * number and not the other.
  *
  * Returns outcomes rather than counting server-side because the caller needs
- * two different tallies from one read — answered (`booked`/`lead`/`message`)
- * and leads (`lead`) — and a second round trip to count each would cost more
- * than carrying a few short strings.
+ * two different tallies from one read — answered and leads (`lead`) — and a
+ * second round trip to count each would cost more than carrying a few short
+ * strings.
+ *
+ * WHICH OUTCOMES COUNT AS ANSWERED IS NOT DECIDED HERE, and this comment
+ * named the set until 2026-09-16, when the handoff feature widened it to four
+ * (`booked`/`lead`/`message`/`transferred` — a caller who reached a person
+ * was answered by any honest reading) and left the sentence behind. The one
+ * definition lives in `ANSWERED_OUTCOMES`
+ * (apps/web/src/lib/reports/weekly-metrics.ts) with its own test; this
+ * function's job is to hand over every outcome in the window and let that set
+ * decide.
  */
 export async function listCallOutcomesBetween(
   db: SupabaseClient, accountId: string, fromIso: string, toIso: string,

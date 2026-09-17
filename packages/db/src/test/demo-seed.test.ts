@@ -25,6 +25,25 @@ import { listAccountsForWeeklyRollup, listAccountsDueWeeklyReport } from "../wee
  * eight tests that each seed would be eight times the wall clock for no extra
  * coverage. The timeout is raised on this test alone rather than on the
  * suite, so a genuinely hung test elsewhere still reports in 60s.
+ *
+ * 600s, not 240s, and the number is MEASURED rather than guessed. ~400
+ * sequential round trips makes this the most latency-sensitive test in the
+ * repo, so it is always the one that loses a race for the shared Supabase
+ * project — and 240s was sitting exactly on the cliff edge:
+ *
+ *   CI run #35163108842 (main, alone on the project):  94.7s
+ *   CI run #35173679953 (two verify jobs at once):     >240s, killed
+ *
+ * The whole db suite slowed 2.5x in that second run (test time 1065s ->
+ * 2678s; `checklist.test.ts` 9.5s -> 23.5s), which puts this test at ~237s —
+ * inside its own budget by three seconds. Two branches pushed a minute
+ * apart is not an unusual event, and `verify` is NOT serialized across the
+ * repo the way `e2e` is, so that contention is the normal case rather than
+ * the exceptional one. 600s is 6.3x the uncontended figure instead of 2.5x.
+ *
+ * This is headroom, not a fix. What actually costs the time is 400 round
+ * trips issued one at a time; batching them would make the test fast enough
+ * that no budget question arises.
  */
 const THROWAWAY = `org_test_demoseed_${Math.random().toString(36).slice(2, 10)}`;
 
@@ -250,7 +269,7 @@ describe("demo tenant seeder", () => {
       const stray = await findDemoAccount(db, THROWAWAY);
       if (stray) await deleteAccountCascade(db, stray.id, "demo-seed.test cleanup");
     }
-  }, 240_000);
+  }, 600_000);
 
   it("refuses an org id Clerk could actually mint", async () => {
     const db = serviceDb();

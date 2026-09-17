@@ -40,11 +40,31 @@ export function buildSummaryInput(state: CallState): string {
  * What the call actually produced, stated from stored state rather than from
  * the model. This leads the saved summary so the first line a human reads is
  * never a guess — it is what the system will act on.
+ *
+ * A HANDED-OFF CALL LEADS WITH THAT FACT, ahead of the booking and intake
+ * accounting. The transcript this summary is built from holds everything the
+ * receptionist heard and nothing the person who took over said, so every
+ * other fact on this line is true only of the first half of the call. The
+ * model cannot add that caveat — it was handed the same partial transcript
+ * and has no way to know it was partial — so this is the only place it can
+ * be said, and it has to be said FIRST, not as a clause after two lines the
+ * reader has already started trusting.
+ *
+ * The handoff is read off `served` — the same single field the missed-call
+ * text-back's gate reads — rather than a boolean of its own. One fact, one
+ * field: the two consumers have opposite failure modes (a missed `served`
+ * entry texts a perfectly-served caller "Sorry we missed you just now"; a
+ * missed fact line summarises half a call as a whole one), and two fields
+ * would be two chances to write only one of them.
  */
 export function summaryFactLine(state: CallState): string {
   const booked = bookedAppointments(state);
   const intake = capturedIntake(state);
   const parts: string[] = [];
+
+  if (state.served.includes("transferred")) {
+    parts.push("Transferred: the transcript ends at the handoff; what was said afterwards is not here");
+  }
 
   if (booked.length > 0) {
     parts.push(

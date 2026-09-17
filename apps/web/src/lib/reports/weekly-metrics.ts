@@ -31,8 +31,13 @@ export type WeeklyNumbers = {
  * A call the receptionist actually handled. Spam flatters the number, and an
  * abandoned call — the caller hung up before anything happened — overstates
  * it, so neither counts.
+ *
+ * `transferred` (0037) counts, by any honest reading: the caller reached a
+ * person. Which person, and whether the receptionist or a human did the work,
+ * is not what this number claims — it claims the phone was answered, and on a
+ * transferred call it was.
  */
-export const ANSWERED_OUTCOMES = ["booked", "lead", "message"] as const;
+export const ANSWERED_OUTCOMES = ["booked", "lead", "message", "transferred"] as const;
 
 /** The call half of "leads captured". A lead taken at 9pm is still a lead. */
 export const LEAD_OUTCOME = ["lead"] as const;

@@ -18,6 +18,18 @@ import { m } from "@/lib/messages";
  * it should be the thing the eye finds first in a column of fifty rows.
  * `abandoned` and `spam` deliberately recede: they are the rows a client
  * should NOT be drawn to.
+ *
+ * `transferred` (0037) joins the positive band, not the receding one: the
+ * caller reached a person, which is the best thing that can happen on a call
+ * the receptionist could not close itself. It shares `booked`'s success hue
+ * deliberately rather than taking a new one — the only unused hue left is
+ * `warning`, which would say something is wrong, and the two collisions
+ * available are not equally harmless: mistaking a transfer for a booking at a
+ * glance reads "the business got what it wanted", which is true of both,
+ * while mistaking it for a `lead` would imply captured contact details that
+ * nobody ever took. The fill is what separates them — `booked` keeps the
+ * sole filled chip — and the WORD is what actually distinguishes them, per
+ * DESIGN.md rule 3.
  */
 export const OUTCOMES: Record<CallOutcome, { label: string; dot: string; chip: string }> = {
   booked: {
@@ -34,6 +46,11 @@ export const OUTCOMES: Record<CallOutcome, { label: string; dot: string; chip: s
     label: m["calls.outcome.message"],
     dot: "bg-accent",
     chip: "border-accent/30 bg-accent/5 text-foreground",
+  },
+  transferred: {
+    label: m["calls.outcome.transferred"],
+    dot: "bg-success",
+    chip: "border-success/30 bg-success/5 text-foreground",
   },
   abandoned: {
     label: m["calls.outcome.abandoned"],
