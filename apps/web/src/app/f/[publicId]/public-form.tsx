@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import type { FormField, FormTheme } from "@bis/db";
+import { labelParts } from "@/lib/forms/linkify";
 import { HONEYPOT_FIELD, RENDER_TOKEN_FIELD } from "@/lib/forms/guards";
 import type { PublicStrings } from "@/lib/forms/public-strings";
 import { IDLE, type SubmitResult } from "./submit-result";
@@ -185,7 +186,24 @@ function Field({
         <input id={id} name={field.key} type="checkbox" aria-describedby={described}
                checked={value === "on"}
                onChange={(e) => onValueChange(e.target.checked ? "on" : "")} />
-        <label htmlFor={id}>{field.label}</label>
+        {/* The label is rendered in PARTS so a bare https URL inside it
+            becomes a real link. An SMS opt-in disclosure has to reach the
+            sender's privacy policy — TCR requires it and A2P campaign vetting
+            reads this very form as the evidence — and this form runs in an
+            iframe on the client's site, so the host page's own footer link is
+            not on screen next to the checkbox. Nothing is rewritten: the
+            label is stored verbatim as the consent record, and labelParts
+            only decides what is a link on screen (lib/forms/linkify.ts). */}
+        <label htmlFor={id}>
+          {labelParts(field.label).map((part, i) => (
+            part.kind === "link"
+              ? (
+                <a key={i} href={part.value} target="_blank" rel="noreferrer noopener"
+                   className="bis-form-link">{part.value}</a>
+              )
+              : <span key={i}>{part.value}</span>
+          ))}
+        </label>
         {error ? <p id={described} role="alert" className="bis-form-error">{error}</p> : null}
       </div>
     );

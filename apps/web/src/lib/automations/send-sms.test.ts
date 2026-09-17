@@ -57,9 +57,15 @@ describe("sendAutomationSms — write then send, the sendSmsAction discipline, w
     const onProviderFailure = vi.fn(async () => {});
     expect(await sendAutomationSms(ctx(), input(onProviderFailure))).toEqual({ messageId: "msg_1", providerMessageId: "s1" });
     expect(dbMocks.ensureConversation).toHaveBeenCalledWith(expect.anything(), "acct_1", "ct_1", "automation", "system");
+    // The opt-out disclosure is appended HERE, at the one choke point every
+    // scheduled text goes through, and the SAME string is stored and sent —
+    // an operator reading the thread must not see a shorter message than the
+    // customer received. Spelled out rather than wrapped in withOptOut() so
+    // this assertion still fails if that helper quietly becomes a no-op.
+    const sentBody = "hi Reply STOP to opt out.";
     expect(dbMocks.createMessage).toHaveBeenCalledWith(expect.anything(), "acct_1",
-      { conversationId: "convo_1", channel: "sms", direction: "outbound", body: "hi" }, "automation", "system");
-    expect(smsSend).toHaveBeenCalledWith({ to: "+19565550101", from: "+19565550000", body: "hi" });
+      { conversationId: "convo_1", channel: "sms", direction: "outbound", body: sentBody }, "automation", "system");
+    expect(smsSend).toHaveBeenCalledWith({ to: "+19565550101", from: "+19565550000", body: sentBody });
     expect(onProviderFailure).not.toHaveBeenCalled();
   });
 
@@ -97,5 +103,27 @@ describe("markAutomationSmsSent — best effort, after the stamp", () => {
       { providerMessageId: "s1" }, "automation", "system");
     dbMocks.updateMessageStatus.mockRejectedValue(new Error("status write failed"));
     await expect(markAutomationSmsSent(ctx(), "acct_1", { messageId: "msg_1", providerMessageId: "s1" }, "test")).resolves.toBeUndefined();
+  });
+});
+
+describe("sendAutomationSms — the opt-out disclosure", () => {
+  it("writes it in the language the caller names, for the instant reply's sake", async () => {
+    // The scheduled passes have no locale and take the English default; the
+    // form instant reply picks its body by locale and passes that same locale
+    // here. A Spanish reply ending in an English sentence would undo the
+    // point of having a bodyEs at all.
+    await sendAutomationSms(ctx(), { ...input(vi.fn(async () => {})), body: "hola", language: "es" });
+    expect(smsSend).toHaveBeenCalledWith(expect.objectContaining({
+      body: "hola Responde STOP para cancelar.",
+    }));
+  });
+
+  it("does not append a second one to a body that already says it", async () => {
+    await sendAutomationSms(ctx(), {
+      ...input(vi.fn(async () => {})), body: "See you tomorrow. Reply STOP to opt out.",
+    });
+    expect(smsSend).toHaveBeenCalledWith(expect.objectContaining({
+      body: "See you tomorrow. Reply STOP to opt out.",
+    }));
   });
 });

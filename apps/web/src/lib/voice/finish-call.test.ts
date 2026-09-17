@@ -42,6 +42,7 @@ import {
   emptyCallState, withLead, withMessage, withTranscript, withBooking, withBookingCancelled, withServed,
 } from "./call-state";
 import { defaultTextbackBody } from "./textback-body";
+import { withOptOut } from "@/lib/sms/opt-out";
 
 const ctx: FinishContext = {
   db: {} as unknown as ReturnType<typeof serviceDb>, accountId: "a1",
@@ -198,13 +199,23 @@ describe("finishCall — missed-call text-back", () => {
     expect(dbMocks.createContact).toHaveBeenCalledWith({}, "a1",
       expect.objectContaining({ firstName: "Caller", phone: "+19562921696", source: "voice" }), "voice", "ai");
     expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
+    // The stored body and the sent body are the same string, disclosure and
+    // all — an operator reading the thread must not see a shorter message
+    // than the customer received.
+    const expectedBody = withOptOut(defaultTextbackBody("Rio Roofing", "en"), "en");
     expect(dbMocks.createMessage).toHaveBeenCalledWith({}, "a1",
       expect.objectContaining({ conversationId: "cv1", channel: "sms", direction: "outbound",
-        body: defaultTextbackBody("Rio Roofing", "en") }), "voice", "ai");
+        body: expectedBody }), "voice", "ai");
     expect(smsRefs.send).toHaveBeenCalledOnce();
     expect(smsRefs.send).toHaveBeenCalledWith({
-      to: "+19562921696", from: "+19565550100", body: defaultTextbackBody("Rio Roofing", "en"),
+      to: "+19562921696", from: "+19565550100", body: expectedBody,
     });
+    // Not vacuous: assert the disclosure is literally on the wire, so
+    // wrapping every expectation in withOptOut cannot pass by matching a
+    // helper that has quietly become a no-op. CTIA requires this sentence on
+    // a programme message, and the A2P campaign's samples are checked
+    // against what actually goes out.
+    expect(expectedBody).toContain("Reply STOP to opt out.");
     // "ai", not "user": actor_id "voice" with actor_type "user" is the exact
     // mis-attribution M1b fixed for the Resend webhook, and finish-call.ts's
     // ACTOR_TYPE comment forbids it for every write this function makes.
@@ -250,7 +261,7 @@ describe("finishCall — missed-call text-back", () => {
     const body = (smsRefs.send.mock.calls[0]![0] as { body: string }).body;
     expect(body).toContain("Rio Roofing");
     expect(body).not.toContain("trial");
-    expect(body).toBe(defaultTextbackBody("Rio Roofing", "en"));
+    expect(body).toBe(withOptOut(defaultTextbackBody("Rio Roofing", "en"), "en"));
     // The message the operator is billed for, not just the one they read.
     expect(segmentsFor(body)).toMatchObject({ encoding: "gsm7", segments: 1 });
     // And the row carries the same string that went out.
@@ -268,13 +279,15 @@ describe("finishCall — missed-call text-back", () => {
     };
     await finishCall(abandonedState(), unbranded, meta);
     expect(smsRefs.send).toHaveBeenCalledWith(expect.objectContaining({
-      body: defaultTextbackBody("", "en"),
+      body: withOptOut(defaultTextbackBody("", "en"), "en"),
     }));
   });
 
   it("an operator's own body is sent verbatim; the default is only the empty-body fallback", async () => {
     await finishCall(abandonedState(), { ...textbackCtx, textbackBody: "  Call us back at 956-555-0100.  " }, meta);
-    expect(smsRefs.send).toHaveBeenCalledWith(expect.objectContaining({ body: "Call us back at 956-555-0100." }));
+    expect(smsRefs.send).toHaveBeenCalledWith(expect.objectContaining({
+      body: withOptOut("Call us back at 956-555-0100.", "en"),
+    }));
   });
 
   /** A caller who spoke Spanish to Sofía was being answered in English. */
@@ -283,7 +296,7 @@ describe("finishCall — missed-call text-back", () => {
       { role: "caller", text: "hola, necesito ayuda con el techo por favor", at: "t" });
     await finishCall(s, textbackCtx, meta);
     expect(smsRefs.send).toHaveBeenCalledWith(expect.objectContaining({
-      body: defaultTextbackBody("Rio Roofing", "es"),
+      body: withOptOut(defaultTextbackBody("Rio Roofing", "es"), "es"),
     }));
     // The same value the row records, from the same computation — a call the
     // Calls page labels Spanish must not have been texted in English.
@@ -296,7 +309,7 @@ describe("finishCall — missed-call text-back", () => {
       { role: "caller", text: "hi, I need help with the roof please", at: "t" });
     await finishCall(s, textbackCtx, meta);
     expect(smsRefs.send).toHaveBeenCalledWith(expect.objectContaining({
-      body: defaultTextbackBody("Rio Roofing", "en"),
+      body: withOptOut(defaultTextbackBody("Rio Roofing", "en"), "en"),
     }));
   });
 
@@ -305,7 +318,7 @@ describe("finishCall — missed-call text-back", () => {
     // caller who said almost nothing still gets their own language.
     await finishCall(abandonedState(), { ...textbackCtx, profileLanguage: "es" }, meta);
     expect(smsRefs.send).toHaveBeenCalledWith(expect.objectContaining({
-      body: defaultTextbackBody("Rio Roofing", "es"),
+      body: withOptOut(defaultTextbackBody("Rio Roofing", "es"), "es"),
     }));
   });
 
@@ -314,7 +327,9 @@ describe("finishCall — missed-call text-back", () => {
       { role: "caller", text: "hola, necesito ayuda con el techo por favor", at: "t" });
     await finishCall(s, { ...textbackCtx, textbackBody: "Call us back at 956-555-0100." }, meta);
     expect(smsRefs.send).toHaveBeenCalledWith(expect.objectContaining({
-      body: "Call us back at 956-555-0100.",
+      // Their words, untranslated — and the disclosure in the language the
+      // CALLER spoke, which is the one thing about their message we do change.
+      body: withOptOut("Call us back at 956-555-0100.", "es"),
     }));
   });
 
