@@ -139,6 +139,67 @@ async function acceptCall(callId: string, apiKey: string, sessionConfig: object)
 }
 
 /**
+ * ENDS THE CALL — the SIP leg, not merely our socket.
+ *
+ * `ws.close()` closes the Realtime CONTROL socket. That is not the call.
+ * Telnyx opened a separate SIP leg to sip.api.openai.com with
+ * `<Dial><Sip>`, and `<Dial>`'s `action` URL — the continuation that rings
+ * a person, and that answers `<Hangup/>` for an ordinary call — is fetched
+ * when THAT LEG ends. Closing our socket leaves it up, so the Dial never
+ * completes, the continuation is never reached, and the caller hears
+ * nothing at all.
+ *
+ * That is not a theory. Two real calls on 2026-09-17 (12:09 and 13:52, the
+ * second with a valid transfer number) both stamped `handoff_requested_at`,
+ * played the handoff line, closed the socket five seconds later, and
+ * produced ZERO requests to /api/voice/texml/handoff. The caller waited in
+ * silence. The PR that shipped the handoff asserted "Telnyx fetches that URL
+ * when the leg ends" and was right; what was wrong was assuming we had any
+ * way to make the leg end.
+ *
+ * This is the way: OpenAI's own hangup endpoint, which ends an active
+ * Realtime call however it was set up, and sends BYE toward the carrier.
+ *
+ * ⚠️ DO NOT swap this for the sibling `/refer` endpoint, which would
+ * transfer by SIP REFER and skip the continuation entirely. It is reported
+ * to 500 whenever the SIP dialog carries a `Record-Route` header — the
+ * normal case for a call proxied by a carrier — and OUR INVITE CARRIES
+ * `Record-Route` TWICE. It is in the header list of both calls above.
+ *
+ * NEVER THROWS. A call that cannot be hung up cleanly must still run its
+ * close path: the socket close below is the backstop, and a caller hearing
+ * the old behaviour is better than a lifecycle that dies with the row
+ * unwritten. Bounded at 5s for the same reason every other outbound call
+ * here is bounded — this runs inside an invocation whose remaining budget
+ * belongs to the call, and an unbounded fetch would hold the socket open.
+ */
+async function endCallLeg(callId: string): Promise<void> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    log("cannot end the SIP leg: OPENAI_API_KEY is not set", { callId });
+    return;
+  }
+  try {
+    const res = await fetch(
+      `https://api.openai.com/v1/realtime/calls/${encodeURIComponent(callId)}/hangup`,
+      { method: "POST", headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(5_000) },
+    );
+    // Logged either way, and the 200 is NOT assumed to mean the leg is gone:
+    // a 200 with no BYE reaching the carrier is a reported failure mode of
+    // this endpoint. The Telnyx-side request to the action URL is the only
+    // real proof, and it shows up as a hit on /api/voice/texml/handoff.
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      log("hangup refused — the caller may be left on a silent leg", { callId, status: res.status, detail });
+      return;
+    }
+    log("SIP leg hangup accepted", { callId });
+  } catch (e) {
+    log("hangup failed — the caller may be left on a silent leg", { callId, error: String(e) });
+  }
+}
+
+/**
  * How long a last sentence gets to reach the caller before the socket goes.
  *
  * ONE constant for all three endings — the cost cap's goodbye, the silence
@@ -357,8 +418,11 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
         } catch {
           // socket may already be closing; the closeTimer below still fires.
         }
-        closeTimer = setTimeout(() => {
+        closeTimer = setTimeout(async () => {
           log("closing call socket after cap goodbye", { callId });
+          // The leg FIRST, the socket second. Closing our socket does not end
+          // the call, and `endCallLeg` never throws, so the close below still runs.
+          await endCallLeg(callId);
           ws.close();
         }, CLOSE_AFTER_GOODBYE_MS);
       }, maxSeconds * 1000);
@@ -433,8 +497,11 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
         } catch {
           // socket may already be closing; the closeTimer below still fires.
         }
-        closeTimer = setTimeout(() => {
+        closeTimer = setTimeout(async () => {
           log("closing call socket after silence goodbye", { callId });
+          // The leg FIRST, the socket second. Closing our socket does not end
+          // the call, and `endCallLeg` never throws, so the close below still runs.
+          await endCallLeg(callId);
           ws.close();
         }, CLOSE_AFTER_GOODBYE_MS);
       }, silentSeconds * 1000);
@@ -582,8 +649,11 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
           clearTimeout(closeTimer);
           clearTimeout(silenceTimer);
           silenceTimer = undefined;
-          closeTimer = setTimeout(() => {
+          closeTimer = setTimeout(async () => {
             log("closing call socket after handoff line", { callId });
+            // The leg FIRST, the socket second. Closing our socket does not end
+            // the call, and `endCallLeg` never throws, so the close below still runs.
+            await endCallLeg(callId);
             ws.close();
           }, CLOSE_AFTER_GOODBYE_MS);
         }

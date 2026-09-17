@@ -232,6 +232,14 @@ async function flushMicrotasks(times = 20): Promise<void> {
 
 const fetchMock = vi.hoisted(() => vi.fn());
 
+/** Every fetch this lifecycle made to OpenAI's hangup endpoint. Filtered by URL
+ *  rather than by call index because `acceptCall` shares the same mock. */
+function hangupCalls(): Array<[string, RequestInit]> {
+  return fetchMock.mock.calls.filter(
+    (c) => String((c as unknown[])[0]).endsWith("/hangup"),
+  ) as Array<[string, RequestInit]>;
+}
+
 beforeEach(() => {
   process.env.OPENAI_WEBHOOK_SECRET = "whsec_test";
   process.env.OPENAI_API_KEY = "sk-test";
@@ -1137,6 +1145,75 @@ describe("silence cutoff (Guard 1) — teardown and late frames", () => {
   });
 });
 
+describe("every ending hangs up the leg, not only the handoff", () => {
+  // The handoff is what a caller reported, but it was never the only path
+  // with this bug: the cost cap and the silence guard both said their
+  // goodbye and then called ws.close(), leaving the caller on a live SIP leg
+  // with nobody on it. The continuation that answers <Hangup/> for an
+  // ordinary call is reached the same way the transfer is — when the DIAL
+  // ends — so all three endings need the same thing. Fixing only the
+  // reported one would have left two silent endings in the product.
+
+  it("the cost cap ends the leg after its goodbye", async () => {
+    vi.useFakeTimers();
+    const { ws } = await startLifecycle();
+    ws.emit("open");
+    await vi.advanceTimersByTimeAsync(900);
+    // One sound from the caller, so the SILENCE guard cannot be what fires.
+    ws.emit("message", JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+    await flushMicrotasks();
+    fetchMock.mockClear();
+
+    await vi.advanceTimersByTimeAsync(240_000 - 900); // the 240s default cap
+    expect(hangupCalls()).toHaveLength(0);            // goodbye still playing
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushMicrotasks();
+    expect(hangupCalls()).toHaveLength(1);
+    expect(hangupCalls()[0]![0]).toBe("https://api.openai.com/v1/realtime/calls/call_abc123/hangup");
+  });
+
+  it("the silence guard ends the leg after its goodbye", async () => {
+    vi.useFakeTimers();
+    const { ws } = await startLifecycle();
+    ws.emit("open");
+    await vi.advanceTimersByTimeAsync(900);
+    fetchMock.mockClear();
+
+    await vi.advanceTimersByTimeAsync(30_000); // the 30s default silence window
+    expect(hangupCalls()).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushMicrotasks();
+    expect(hangupCalls()).toHaveLength(1);
+  });
+
+  it("a hangup that fails still closes the socket — the call never hangs on our error path", async () => {
+    // endCallLeg must never throw. If it did, the close below it would never
+    // run and the lifecycle would settle through the error path with the
+    // socket still open. A refused hangup is bad; a wedged call is worse.
+    vi.useFakeTimers();
+    const { ws } = await startLifecycle();
+    const closeSpy = vi.fn();
+    ws.send = vi.fn();
+    ws.close = closeSpy;
+    ws.emit("open");
+    await vi.advanceTimersByTimeAsync(900);
+
+    fetchMock.mockRejectedValue(new Error("network down"));
+    runToolMock.mockResolvedValue({ state: emptyCallState(), result: { ok: true } });
+    ws.emit("message", JSON.stringify({
+      type: "response.function_call_arguments.done",
+      name: "transfer_to_human", call_id: "fc-transfer", arguments: "{}",
+    }));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushMicrotasks();
+
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("runCallLifecycle — Minor: WS URL call-id encoding", () => {
   it("encodeURIComponents the call id into the realtime WS URL", async () => {
     const { ws } = await startLifecycle("call/with special?chars");
@@ -1253,6 +1330,49 @@ describe("runCallLifecycle — the handoff close", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     expect(closeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("ENDS THE SIP LEG, not just our socket — otherwise the <Dial> never completes", async () => {
+    // THE TEST THAT WAS MISSING, and the reason two real calls ended in dead
+    // air on 2026-09-17. `ws` is the OpenAI Realtime CONTROL socket. The SIP
+    // leg is a separate connection Telnyx opened to sip.api.openai.com with
+    // `<Dial><Sip>`, and closing our socket does not end it. Telnyx fetches
+    // the `action` URL when the DIAL ends — so while that leg stays up there
+    // is no continuation, no ring, and no <Hangup/>: the caller hears
+    // nothing at all. Production proved it twice, with zero requests to
+    // /api/voice/texml/handoff in the window around each call.
+    //
+    // Nothing in this suite could have caught it, because every assertion
+    // here treated ws.close() AS the end of the call. This one asserts the
+    // leg, not the socket.
+    vi.useFakeTimers();
+    const { ws } = await startLifecycle();
+    ws.emit("open");
+    await vi.advanceTimersByTimeAsync(900);
+    fetchMock.mockClear(); // drop the accept call
+
+    runToolMock.mockResolvedValue({ state: emptyCallState(), result: { ok: true } });
+    ws.emit("message", JSON.stringify({
+      type: "response.function_call_arguments.done",
+      name: "transfer_to_human", call_id: "fc-transfer", arguments: "{}",
+    }));
+    await flushMicrotasks();
+
+    // Not before the handoff line has played: hanging up the leg instantly
+    // is the same dead-air-then-ring the close delay exists to prevent.
+    expect(hangupCalls()).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushMicrotasks();
+
+    const calls = hangupCalls();
+    expect(calls).toHaveLength(1);
+    // The exact endpoint and auth, not merely "a fetch happened". A POST to
+    // the wrong path returns 404 and the caller still hears silence.
+    expect(calls[0]![0]).toBe("https://api.openai.com/v1/realtime/calls/call_abc123/hangup");
+    expect(calls[0]![1]).toMatchObject({
+      method: "POST", headers: { Authorization: "Bearer sk-test" },
+    });
   });
 
   it("the handoff token from the TeXML SIP header reaches startCallRow", async () => {
