@@ -1214,6 +1214,101 @@ describe("every ending hangs up the leg, not only the handoff", () => {
   });
 });
 
+describe("a recording is hung up on, not conversed with", () => {
+  // 2026-09-17: eight of these reached 956 Woodworks — the only real client on
+  // the platform, live for one day — roughly hourly, from eight different
+  // local numbers. Sofía answered each one helpfully for another forty
+  // seconds, and every call was filed as `abandoned`, so the owner's
+  // dashboard told him he had lost eight customers.
+
+  it("ends the call IMMEDIATELY — no goodbye, no playout delay", async () => {
+    // The cap and the silence guard both wait CLOSE_AFTER_GOODBYE_MS so a
+    // PERSON hears their last sentence. There is nobody here to hear one, and
+    // the wait is five more seconds of the client paying for a broadcast.
+    vi.useFakeTimers();
+    const { ws } = await startLifecycle();
+    const closeSpy = vi.fn();
+    ws.send = vi.fn();
+    ws.close = closeSpy;
+    ws.emit("open");
+    await vi.advanceTimersByTimeAsync(900);
+    fetchMock.mockClear();
+
+    ws.emit("message", JSON.stringify({
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "Hello, please don't hang up the phone. This is an important message "
+      + "regarding your Google business account. Press 0 to speak with an agent "
+      + "immediately and verify your Google listings. Press 9 to opt out.",
+    }));
+    await flushMicrotasks();
+
+    // No timer advance between the frame and the close: that is the assertion.
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends the SIP LEG too, not just the socket", async () => {
+    // The #84 lesson applies to every ending, including this one: ws.close()
+    // leaves Telnyx bridged to a leg nobody is on. A guard that saves 40
+    // seconds of Realtime while leaving a PSTN leg up has saved nothing.
+    vi.useFakeTimers();
+    const { ws } = await startLifecycle();
+    ws.send = vi.fn();
+    ws.emit("open");
+    await vi.advanceTimersByTimeAsync(900);
+    fetchMock.mockClear();
+
+    ws.emit("message", JSON.stringify({
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "Hello, please don't hang up the phone. This is an important message "
+      + "regarding your Google business account. Press 0 to speak with an agent "
+      + "immediately and verify your Google listings. Press 9 to opt out.",
+    }));
+    await flushMicrotasks();
+
+    const calls = hangupCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]![0]).toBe("https://api.openai.com/v1/realtime/calls/call_abc123/hangup");
+  });
+
+  it("never replies to it — the model is not asked to answer a broadcast", async () => {
+    vi.useFakeTimers();
+    const { ws } = await startLifecycle();
+    ws.emit("open");
+    await vi.advanceTimersByTimeAsync(900);
+    const sendSpy = vi.fn();
+    ws.send = sendSpy;
+
+    ws.emit("message", JSON.stringify({
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "Hello, please don't hang up the phone. This is an important message "
+      + "regarding your Google business account. Press 0 to speak with an agent "
+      + "immediately and verify your Google listings. Press 9 to opt out.",
+    }));
+    await flushMicrotasks();
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it("an ordinary caller is left alone entirely", async () => {
+    // The negative, at the layer where getting it wrong hangs up on a lead.
+    vi.useFakeTimers();
+    const { ws } = await startLifecycle();
+    const closeSpy = vi.fn();
+    ws.send = vi.fn();
+    ws.close = closeSpy;
+    ws.emit("open");
+    await vi.advanceTimersByTimeAsync(900);
+    fetchMock.mockClear();
+
+    ws.emit("message", JSON.stringify({
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "Hi, I found you on Google and wanted to ask about a dining table.",
+    }));
+    await flushMicrotasks();
+    expect(closeSpy).not.toHaveBeenCalled();
+    expect(hangupCalls()).toHaveLength(0);
+  });
+});
+
 describe("runCallLifecycle — Minor: WS URL call-id encoding", () => {
   it("encodeURIComponents the call id into the realtime WS URL", async () => {
     const { ws } = await startLifecycle("call/with special?chars");

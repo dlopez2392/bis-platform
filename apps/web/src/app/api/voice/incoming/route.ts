@@ -623,6 +623,41 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
             ws.send(JSON.stringify(action.payload));
             continue;
           }
+          if (action.kind === "hangup") {
+            // A RECORDING, not a person (`recorded-message.ts`). Ends the call
+            // NOW — no goodbye, no playout delay, no reply to the broadcast.
+            //
+            // The other two endings in this function both wait
+            // `CLOSE_AFTER_GOODBYE_MS` so a PERSON hears their last sentence,
+            // and the rule they serve is that a caller must never hear the
+            // line simply go dead. Nobody is listening here: the thing on the
+            // other end is a script that stopped paying attention before
+            // Sofía finished the greeting, and every second spent being polite
+            // to it is on the client's bill. On 2026-09-17 that bill was eight
+            // calls of ~53 seconds in five hours, on the only real client on
+            // the platform.
+            //
+            // Every timer is cleared for the same reason the other two clear
+            // them: this call is ending on its own terms, and a cap or silence
+            // goodbye arriving afterwards would be a sentence spoken to a line
+            // that is already gone — or an earlier `closeTimer` still counting
+            // down, which is the bug the handoff branch below documents.
+            //
+            // LOGGED LOUDLY AND WITH THE CALLER'S NUMBER, because this is the
+            // only guard in the voice path that ends a call on a CONTENT
+            // heuristic. If it ever fires on a real customer, this line plus
+            // the transcript — which is deliberately still written — is the
+            // only way anybody finds out.
+            log("recorded message detected — ending the call without a reply",
+              { callId, caller: finishCtx.callerNumber ?? "unknown" });
+            clearTimeout(capTimer);
+            clearTimeout(closeTimer);
+            clearTimeout(silenceTimer);
+            silenceTimer = undefined;
+            await endCallLeg(callId);
+            ws.close();
+            continue;
+          }
           // `close` — the caller asked for a person and the intent is already
           // written (`transfer_to_human` awaited that before returning). The
           // send above it queued the handoff sentence; the SAME playout delay

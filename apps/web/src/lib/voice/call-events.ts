@@ -1,7 +1,8 @@
 // The pure seam between the OpenAI Realtime WS and the tool registry.
 // Everything testable about a live call funnels through here.
 import { runTool, type ToolContext, type ToolName } from "./tools/registry";
-import { withTranscript, type CallState } from "./call-state";
+import { withTranscript, withRecordedCaller, type CallState } from "./call-state";
+import { looksLikeRecordedMessage } from "./recorded-message";
 import { handoffLine } from "./handoff";
 
 /**
@@ -12,7 +13,10 @@ import { handoffLine } from "./handoff";
  */
 export type VoiceAction =
   | { kind: "send"; payload: object }
-  | { kind: "close" };
+  | { kind: "close" }
+  /** End the call NOW, with no goodbye. Only a recording gets this — see the
+   *  caller-transcript branch below for why it says nothing first. */
+  | { kind: "hangup" };
 
 // The Realtime WS event shapes this module reads from — a loose subset (only
 // the fields `processCallEvent`'s switch actually touches), not the full
@@ -91,10 +95,22 @@ export async function processCallEvent(
     }
     case "conversation.item.input_audio_transcription.completed": {
       if (!event.transcript) return { state, actions: [] };
-      return {
-        state: withTranscript(state, { role: "caller", text: String(event.transcript), at: new Date().toISOString() }),
-        actions: [],
-      };
+      const text = String(event.transcript);
+      const next = withTranscript(state, { role: "caller", text, at: new Date().toISOString() });
+      // The turn is ALWAYS recorded first, recording or not. What the robot
+      // said is the evidence the guard was right, and the only way anyone can
+      // audit a false positive afterwards — a spam row with an empty
+      // transcript is indistinguishable from a silent call.
+      if (looksLikeRecordedMessage(text)) {
+        // NO GOODBYE, unlike the cap and the silence guard. Those end a call a
+        // PERSON is on, where the repo rule is that a caller must never hear
+        // the line simply go dead. There is nobody here to hear it: the thing
+        // on the other end is a broadcast that has already stopped listening,
+        // and a five-second parting sentence is five more seconds of the
+        // client paying for it.
+        return { state: withRecordedCaller(next), actions: [{ kind: "hangup" }] };
+      }
+      return { state: next, actions: [] };
     }
     case "response.function_call_arguments.done": {
       const args = safeParse(event.arguments);
