@@ -129,6 +129,11 @@ export async function sendInstantReply(input: InstantReplyInput): Promise<Instan
   try {
     sent = await sendAutomationSms(ctx, {
       accountId, contactId: input.contactId, to, from: gate.from, body,
+      // The same locale that picked the body picks the opt-out
+      // disclosure's language. Sending a Spanish reply that ends in
+      // "Reply STOP to opt out." would undo the whole point of having a
+      // bodyEs at all.
+      language: input.locale,
       // Nothing retries an instant reply, so there is no attempt marker to write.
       onProviderFailure: async () => {},
     });

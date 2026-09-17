@@ -50,6 +50,17 @@
 }
 .bis-form-consent { flex-direction: row; align-items: flex-start; gap: 8px; }
 .bis-form-consent label { font-weight: 400; }
+/* A consent disclosure's policy link. Underlined rather than colour-only: this
+   form paints on whatever ground the client's site gives it and --form-accent
+   is the client's own brand colour, so contrast against the label text is not
+   something this stylesheet can know. The underline carries the affordance in
+   every theme; the colour is a bonus where it reads. */
+.bis-form-consent a.bis-form-link {
+  color: var(--form-accent, #6d28d9); text-decoration: underline;
+}
+.bis-form-consent a.bis-form-link:focus-visible {
+  outline: 2px solid var(--form-accent, #6d28d9); outline-offset: 2px;
+}
 .bis-form-submit {
   padding: 9px 18px; font: inherit; font-weight: 500; cursor: pointer;
   color: var(--form-accent-foreground, #ffffff);

@@ -127,7 +127,9 @@ describe("review-request pass — SMS channel, the sendSmsAction discipline", ()
   it("gate → write the message row → send → STAMP → mark sent, with the composed body everywhere", async () => {
     dbMocks.listDueReviewRequests.mockResolvedValue([sms()]);
     expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
-    const composed = `Thanks for choosing Rio Roofing! If you have a minute, we'd love a quick review: ${URL}`;
+    // Composed by the pass, then the opt-out disclosure from
+    // sendAutomationSms — the same string stored and sent.
+    const composed = `Thanks for choosing Rio Roofing! If you have a minute, we'd love a quick review: ${URL} Reply STOP to opt out.`;
     expect(senderMock.resolveSmsSender).toHaveBeenCalledWith(expect.anything(), "acct_1");
     expect(dbMocks.ensureConversation).toHaveBeenCalledWith(expect.anything(), "acct_1", "ct_1", "automation", "system");
     expect(dbMocks.createMessage).toHaveBeenCalledWith(expect.anything(), "acct_1",

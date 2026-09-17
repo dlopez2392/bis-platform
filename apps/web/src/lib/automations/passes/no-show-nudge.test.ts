@@ -123,7 +123,10 @@ describe("no-show nudge pass — SMS channel", () => {
   it("gate → message row → send → STAMP → mark sent, with the composed body (link on the end) everywhere", async () => {
     dbMocks.listDueNoShowNudges.mockResolvedValue([sms()]);
     expect(await noShowNudgePass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
-    const composed = `We missed you for your appointment with Rio Roofing. If you'd like to pick a new time, book here: ${URL}`;
+    // The pass composes the body; sendAutomationSms appends the opt-out
+    // disclosure at the one choke point every scheduled text goes through.
+    // Both halves are asserted here so a change to either is visible.
+    const composed = `We missed you for your appointment with Rio Roofing. If you'd like to pick a new time, book here: ${URL} Reply STOP to opt out.`;
     expect(senderMock.resolveSmsSender).toHaveBeenCalledWith(expect.anything(), "acct_1");
     expect(dbMocks.createMessage).toHaveBeenCalledWith(expect.anything(), "acct_1",
       { conversationId: "convo_1", channel: "sms", direction: "outbound", body: composed }, "automation", "system");

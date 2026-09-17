@@ -10,6 +10,7 @@ import { getSmsProvider } from "@/lib/sms";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { composeCallAlertSms, prepareAlertSms, deliverAlertSms, type PendingAlertSms } from "@/lib/sms/alerts";
 import { defaultTextbackBody } from "./textback-body";
+import { withOptOut } from "@/lib/sms/opt-out";
 import type { CallState } from "./call-state";
 import { classifyOutcome, wasServed } from "./call-state";
 import { detectSpokenLanguage } from "./language";
@@ -386,8 +387,20 @@ export async function finishCall(
         // answered in Spanish. Only the DEFAULT is chosen this way: an
         // operator's own body is sent exactly as they wrote it, never
         // translated — they chose those words for their own customers.
-        const body = ctx.textbackBody.trim()
-          || defaultTextbackBody(brandDisplayName(ctx.branding), spokenLanguage);
+        //
+        // withOptOut wraps BOTH branches, the operator's own body included.
+        // That is deliberate and is the one place this platform overrides an
+        // operator's exact words: the disclosure is not a style choice, it is
+        // what CTIA requires of a programme message and what the A2P campaign
+        // samples are checked against. It is idempotent, so an operator who
+        // already wrote "Reply STOP to opt out" keeps their own wording and
+        // gets nothing appended. Applied HERE, where the body is built, so
+        // the message row below records the text that actually went out.
+        const body = withOptOut(
+          ctx.textbackBody.trim()
+            || defaultTextbackBody(brandDisplayName(ctx.branding), spokenLanguage),
+          spokenLanguage,
+        );
 
         // resolveContactId, not createContact: it honours a contact the call
         // already established and backfills blanks on a dedupe hit. An
