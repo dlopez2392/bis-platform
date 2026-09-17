@@ -1,16 +1,13 @@
 import type { serviceDb, Branding, CallOutcome } from "@bis/db";
 import {
   createContact, fillContactBlanks, ensureConversation, createMessage, incrementUnreadCount,
-  updateMessageStatus, hasRecentOutboundSms, finishCallRow, emit, getAlertPhone,
+  finishCallRow, emit, getAlertPhone,
 } from "@bis/db";
 import { emailBrand, brandDisplayName } from "@/lib/email/templates/shell";
 import { getEmailProvider } from "@/lib/email";
 import { voiceCallAlertEmail } from "@/lib/email/templates/voice";
-import { getSmsProvider } from "@/lib/sms";
-import { resolveSmsSender } from "@/lib/sms/sender";
 import { composeCallAlertSms, prepareAlertSms, deliverAlertSms, type PendingAlertSms } from "@/lib/sms/alerts";
 import { prepareTextback, deliverTextback, type PendingTextback } from "./textback";
-import { withOptOut } from "@/lib/sms/opt-out";
 import type { CallState } from "./call-state";
 import { classifyOutcome, wasServed } from "./call-state";
 import { detectSpokenLanguage } from "./language";
@@ -72,24 +69,6 @@ export interface FinishResult {
 // Resend webhook.
 const ACTOR_ID = "voice";
 const ACTOR_TYPE = "ai";
-
-/**
- * How long one caller is left alone after a text-back.
- *
- * A repeat abandoned caller would otherwise get a byte-identical message on
- * every call, and repeated identical bodies to one number is exactly what
- * carrier filtering hunts for under 10DLC — with the CLIENT'S OWN A2P
- * registration as the thing that gets blocked, not ours. This is a rate limit,
- * not an opt-out: STOP is enforced upstream at the carrier level by Telnyx,
- * deliberately not reimplemented here.
- *
- * Module-private on purpose. finish-call.test.ts pins the window with its own
- * literal 24h rather than importing this — a test that reads the constant it
- * is checking proves only that multiplication works, and would stay green if
- * someone quietly dropped this to an hour.
- */
-const TEXTBACK_COOLDOWN_HOURS = 24;
-const TEXTBACK_COOLDOWN_MS = TEXTBACK_COOLDOWN_HOURS * 60 * 60 * 1000;
 
 /**
  * Outcomes worth a human seeing: a durable contact/conversation trail and a
