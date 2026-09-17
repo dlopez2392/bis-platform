@@ -6,8 +6,14 @@ name: CI
 # removed, and nobody knew until the author ran the suite by hand. The guards
 # this repo relies on protect nothing unless something runs them on every push.
 #
-# Two jobs, split on ONE criterion — whether the work touches the shared
-# Supabase project (see CLAUDE.md: e2e and production share one project):
+# Two jobs. The ORIGINAL split criterion below — "whether the work touches
+# the shared Supabase project" — IS WRONG, and it is left standing because
+# the correction is the useful part: BOTH jobs touch it. `pnpm check` runs 423
+# live tests against that project. Treating verify as though it did not is the
+# assumption behind #82's fix and behind the `needs: verify` on e2e; the real
+# difference between these two jobs is only what they each do with the project.
+#
+# (see CLAUDE.md: e2e and production share one project):
 #
 #   verify  typecheck + lint + unit tests + production build. This is exactly
 #           `pnpm check` and `pnpm --filter web build` from CLAUDE.md, no
@@ -156,6 +162,52 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # AFTER verify, not alongside it. #82 serialized verify against OTHER
+    # VERIFY RUNS and stopped there — but verify and e2e are separate
+    # concurrency groups, so on every push they started within a second of
+    # each other and raced for the one Supabase project regardless.
+    #
+    # What it cost, on b9f31dc (the merge commit for #85) — the SAME TREE that
+    # had just passed both jobs on its own branch:
+    #
+    #   run 1  auth.setup.ts:93        page.goto("/") exceeded 30s
+    #   run 2  blueprints.spec.ts:29   a 10s visibility timeout
+    #   run 3  auth.setup.ts:51        a bare 30s test timeout
+    #
+    # A DIFFERENT test each time and EVERY ONE a wall-clock timeout, never an
+    # assertion — the signature this file's own #82 comment names for
+    # contention rather than a defect. Three consecutive reds on a commit that
+    # was already serving production, which is precisely the state the
+    # no-cancel rule above exists to prevent.
+    #
+    # main is worse than a branch, and that is the tell: a push to main runs
+    # verify and e2e together AND the Vercel production deploy AND live
+    # production traffic, all against the one project. A branch run has no
+    # production deploy and no live traffic.
+    #
+    # "needs" rather than one shared concurrency group across both jobs, and
+    # the difference matters. A shared group would serialize them, but GitHub
+    # keeps only ONE PENDING run per group and cancels the older pending one —
+    # so a third push inside the window would silently drop a middle commit's
+    # gate entirely. "needs" orders the two jobs WITHIN a run, which is the
+    # thing that was actually wrong, and leaves each job's own group to handle
+    # whole runs racing each other.
+    #
+    # THE COST, stated rather than discovered later: a push goes from about
+    # twelve minutes to about eighteen, because e2e waits instead of running
+    # alongside. The gain is that "green" means something. A gate whose answer
+    # depends on who else happened to push is how everyone learns to re-run
+    # red CI without reading it — the habit the top of this file exists to
+    # prevent.
+    #
+    # A SIDE EFFECT WORTH HAVING: e2e no longer runs at all when verify is
+    # already red. It stops burning a runner on a commit that cannot merge,
+    # and stops stranding e2e fixture rows in the shared project on runs that
+    # were doomed before they started.
+    #
+    # The real fix remains a CI Supabase project separate from production's.
+    # This is the other cheap half of it.
+    needs: verify
     concurrency:
       group: e2e-shared-supabase
       cancel-in-progress: false
