@@ -21,7 +21,7 @@
 // thrown error → `<Hangup/>`. A 5xx to Telnyx mid-call is worse than a clean
 // hangup — the carrier's own error handling is what the caller would hear,
 // and it is not words.
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
 import { transferFailedLine } from "@/lib/voice/handoff";
 
@@ -236,12 +236,24 @@ async function decide(token: string, status: string): Promise<string> {
     return HANGUP;
   }
 
-  // Nobody picked up. Leave the outcome as `finishCall` recorded it and tell
-  // the caller the truth.
+  // Nobody picked up. Leave the outcome as `finishCall` recorded it, tell the
+  // caller the truth, and — the part that is not obvious — TEXT THEM.
+  //
+  // `finishCall` already decided not to, at socket close, because the caller
+  // was marked served the moment they ASKED for a person. That decision is
+  // correct where it is made and cannot be otherwise: the dial has not been
+  // attempted yet, and texting someone who DID reach a human "Sorry we missed
+  // you just now" is the sharper of the two errors. So it bets on the transfer
+  // working, and this route is where the bet is settled.
+  //
+  // Without this, asking for a human made a caller WORSE OFF than never
+  // asking: before the handoff shipped they got the text-back, and afterwards
+  // they got an apology and silence. Observed on a real call, 2026-09-17.
   console.log(`handoff-result: call ${call.id} reached nobody (${status}), accountId ${accountId}`);
   let languages: "en" | "es" | "both" = "en";
+  let profile: Awaited<ReturnType<typeof getVoiceProfile>> = null;
   try {
-    const profile = await getVoiceProfile(db, accountId);
+    profile = await getVoiceProfile(db, accountId);
     if (profile) languages = profile.languages;
   } catch (e) {
     // Its own try/catch too, and this one is load-bearing: letting it reach
@@ -249,6 +261,46 @@ async function decide(token: string, status: string): Promise<string> {
     // which is the single ending this route exists to prevent.
     console.error(`handoff-result: profile read failed for call ${call.id}, speaking English: ${String(e)}, accountId ${accountId}`);
   }
+  // AFTER the response, never in front of it. The caller is holding a silent
+  // line waiting for the <Say> above, and a carrier round trip there is
+  // measured in seconds of that silence. The whole leg is wrapped, because a
+  // text that cannot be sent must never cost the caller the words.
+  if (profile?.textback_enabled && call.caller_e164) {
+    const callerNumber = call.caller_e164;
+    const contactId = call.contact_id;
+    const textbackBody = profile.textback_body ?? "";
+    const callId = call.id;
+    after(async () => {
+      try {
+        // Lazy imports, the rule this whole directory obeys: a module-scope
+        // DB import breaks `next build` during page-data collection.
+        const { prepareTextback, deliverTextback } = await import("@/lib/voice/textback");
+        const { getBranding } = await import("@bis/db");
+        const { brandDisplayName } = await import("@/lib/email/templates/shell");
+        const branding = await getBranding(db, accountId);
+        const outcome = await prepareTextback(db, accountId, {
+          callerNumber,
+          contactId,
+          // The PROFILE language, not a detected one: the transcript died with
+          // the socket, so what the caller actually spoke is no longer
+          // knowable here. `both` takes English, which is also what the
+          // failure line they just heard was spoken in.
+          language: languages === "es" ? "es" : "en",
+          brandName: brandDisplayName(branding),
+          textbackBody,
+          label: `handoff-result ${callId}`,
+        });
+        if (outcome.pending) {
+          await deliverTextback(db, accountId, outcome.pending, `handoff-result ${callId}`);
+        }
+      } catch (e) {
+        console.error(
+          `handoff-result: text-back after a failed transfer did not send for call ${callId}: ${String(e)}, accountId ${accountId}`,
+        );
+      }
+    });
+  }
+
   return failedXml(languages);
 }
 

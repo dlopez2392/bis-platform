@@ -9,7 +9,7 @@ import { voiceCallAlertEmail } from "@/lib/email/templates/voice";
 import { getSmsProvider } from "@/lib/sms";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { composeCallAlertSms, prepareAlertSms, deliverAlertSms, type PendingAlertSms } from "@/lib/sms/alerts";
-import { defaultTextbackBody } from "./textback-body";
+import { prepareTextback, deliverTextback, type PendingTextback } from "./textback";
 import { withOptOut } from "@/lib/sms/opt-out";
 import type { CallState } from "./call-state";
 import { classifyOutcome, wasServed } from "./call-state";
@@ -399,90 +399,40 @@ export async function finishCall(
   // lose the call row entirely — the row the entire dashboard reads. So this half prepares the send, and the half below `finishCallRow`
   // performs it. Write-then-send is preserved exactly as before: the message
   // row still exists before anything leaves the building.
-  let pendingTextback: { messageId: string; to: string; from: string; body: string } | null = null;
+  let pendingTextback: PendingTextback | null = null;
   if (outcome === "abandoned" && !wasServed(state) && ctx.textbackEnabled && ctx.callerNumber) {
+    // THE GATE ABOVE IS THE OPTIMISTIC ONE. `wasServed` is true the moment a
+    // caller ASKS for a person, not when they reach one — and at socket close
+    // the dial has not even been attempted, so which happened is unknowable
+    // here. Suppressing is the correct bet (texting someone who DID reach a
+    // human is the sharper error), and /api/voice/texml/handoff-result is
+    // where the bet gets settled: it sends this same text-back when the dial
+    // rang out. Without that compensation, asking for a human left a caller
+    // worse off than never asking.
+    //
+    // Everything below the gate now lives in ./textback, because that route
+    // needs it too and the policy inside it — who may text, the disclosure,
+    // the cooldown, write-then-send — must have exactly one home.
     try {
-      // THE gate, and the only one — the same call the composer makes, never
-      // re-derived (lib/sms/sender.ts). Consulted BEFORE any row is written,
-      // so an account that is not cleared to text does not quietly accumulate
-      // contacts and conversations for callers it can never reach.
-      const gate = await resolveSmsSender(ctx.db, ctx.accountId);
-      if (gate.ok) {
-        // brandDisplayName, the ONE customer-facing name rule: this text is
-        // signed and it goes to the client's CUSTOMER. `accounts.name` is the
-        // agency's internal label for the company ("Rio Roofing — trial") —
-        // the same column that was reaching the email From line before M4d —
-        // and its em dash is outside GSM-7, so sending it also silently
-        // doubles the message to two segments. The resolver takes the
-        // branding and nothing else now, and `FinishContext` no longer
-        // carries the label at all, so neither this line nor the staff alert
-        // one leg up has anything to reach for.
-        //
-        // `spokenLanguage`, so a caller who spoke Spanish to Sofía is
-        // answered in Spanish. Only the DEFAULT is chosen this way: an
-        // operator's own body is sent exactly as they wrote it, never
-        // translated — they chose those words for their own customers.
-        //
-        // withOptOut wraps BOTH branches, the operator's own body included.
-        // That is deliberate and is the one place this platform overrides an
-        // operator's exact words: the disclosure is not a style choice, it is
-        // what CTIA requires of a programme message and what the A2P campaign
-        // samples are checked against. It is idempotent, so an operator who
-        // already wrote "Reply STOP to opt out" keeps their own wording and
-        // gets nothing appended. Applied HERE, where the body is built, so
-        // the message row below records the text that actually went out.
-        const body = withOptOut(
-          ctx.textbackBody.trim()
-            || defaultTextbackBody(brandDisplayName(ctx.branding), spokenLanguage),
-          spokenLanguage,
-        );
-
-        // resolveContactId, not createContact: it honours a contact the call
-        // already established and backfills blanks on a dedupe hit. An
-        // abandoned call has no lead and no contactId, so it lands on the
-        // caller-ID branch — exactly the minimal "Caller" + number record
-        // this leg wants, without a second copy of that logic.
-        //
-        // Assigned to the OUTER contactId/conversationId rather than shadowed:
-        // this leg runs before the row write below, so the call row ends up
-        // pointing at the contact and conversation the text lives in. Without
-        // that, an abandoned call keeps writing the nulls it always has and
-        // there is no path from the call to the text it sent — nothing for the
-        // dashboard, or for a failed text-back, to join on.
-        contactId = await resolveContactId(state, ctx);
-        if (contactId) {
-          const conversation = await ensureConversation(ctx.db, ctx.accountId, contactId, ACTOR_ID, ACTOR_TYPE);
-          conversationId = conversation.id;
-
-          // The cooldown, consulted AFTER the conversation exists (that is what
-          // "this caller" is keyed on) and BEFORE the message row is written,
-          // so a suppressed text-back writes no row and sends nothing — an
-          // outbound row nobody sent would be a lie in the operator's inbox.
-          // The contact and conversation resolved above are still handed to
-          // the call row below, so a suppressed call is not orphaned.
-          const since = new Date(Date.now() - TEXTBACK_COOLDOWN_MS);
-          if (await hasRecentOutboundSms(ctx.db, ctx.accountId, conversationId, since)) {
-            // Logged, not thrown, and at the same console.error level as every
-            // other diagnostic in this function: suppression is the feature
-            // working, not a failure, but it is also the ONLY trace a caller
-            // who expected a text and did not get one leaves anywhere.
-            console.error(
-              `finishCall ${meta.callRowId ?? "(no row)"}: text-back suppressed — ` +
-              `conversation ${conversationId} already had an outbound SMS ` +
-              `within ${TEXTBACK_COOLDOWN_HOURS}h`,
-            );
-          } else {
-            // WRITE THEN SEND, same ordering and same reason as sendSmsAction:
-            // the row exists before anything leaves the building, so a provider
-            // failure is a visible message rather than a silent gap. No unread
-            // bump — this text is OURS, and unread counts inbound.
-            const { id: messageId } = await createMessage(ctx.db, ctx.accountId, {
-              conversationId, channel: "sms", direction: "outbound", body,
-            }, ACTOR_ID, ACTOR_TYPE);
-            pendingTextback = { messageId, to: ctx.callerNumber, from: gate.from, body };
-          }
-        }
-      }
+      const callerNumber = ctx.callerNumber;
+      const result = await prepareTextback(ctx.db, ctx.accountId, {
+        callerNumber,
+        contactId: null,
+        // finishCall's own resolver: a call with a captured lead deserves the
+        // richer contact, and it runs behind the send gate.
+        resolveContact: () => resolveContactId(state, ctx),
+        language: spokenLanguage,
+        brandName: brandDisplayName(ctx.branding),
+        textbackBody: ctx.textbackBody,
+        label: `finishCall ${meta.callRowId ?? "(no row)"}`,
+      });
+      // Assigned to the OUTER ids rather than shadowed: the call row below
+      // points at the contact and conversation the text lives in, and a
+      // cooldown-suppressed call keeps them too, so it is never orphaned from
+      // its own thread.
+      if (result.contactId) contactId = result.contactId;
+      if (result.conversationId) conversationId = result.conversationId;
+      pendingTextback = result.pending;
     } catch (e) {
       console.error(`finishCall ${meta.callRowId ?? "(no row)"}: text-back failed: ${String(e)}`);
     }
@@ -545,48 +495,14 @@ export async function finishCall(
   // missing in production, and it is called here, inside the inner try, so a
   // config failure still marks the message `failed` exactly as a carrier
   // failure does.
+  // The send, on the far side of the row write above — same ordering as
+  // before, now in ./textback because the handoff-result route performs the
+  // identical send when a transfer rings out. `deliverTextback` never
+  // throws: by here the durable record is already settled, and a carrier
+  // failure must not take the return value with it.
   if (pendingTextback) {
-    const { messageId, to, from, body } = pendingTextback;
-    try {
-      // ONLY the send is guarded. Once send() has returned, the text is gone
-      // and irrevocably out the door, so a failure recording that — the `sent`
-      // write below — must never be re-labelled `failed`: that would tell the
-      // operator a delivered text never went out, and drop the provider id the
-      // delivery webhook correlates against. That failure falls through to the
-      // outer catch instead, where it is logged and the message is left
-      // exactly as written. Identical reasoning to sendSmsAction
-      // (conversations/actions.ts).
-      let providerMessageId: string;
-      try {
-        ({ providerMessageId } = await getSmsProvider().send({ to, from, body }));
-      } catch (sendError) {
-        // Nothing left the building, so `failed` is the honest label — and it
-        // is the only signal this failure has, since there is no retry and no
-        // human watching.
-        //
-        // Its own try/catch, because this write is BOOKKEEPING and `sendError`
-        // is the news. Awaited bare, a rejection here would replace the throw
-        // below entirely: the outer catch would log a database error, the
-        // genuine carrier failure would vanish, and the row would sit `queued`
-        // with nothing saying why. The original error survives its own
-        // bookkeeping either way.
-        try {
-          await updateMessageStatus(ctx.db, ctx.accountId, messageId, "failed",
-            { error: sendError instanceof Error ? sendError.message : "unknown send failure" },
-            ACTOR_ID, ACTOR_TYPE);
-        } catch (statusError) {
-          console.error(
-            `finishCall ${meta.callRowId ?? "(no row)"}: could not mark message ` +
-            `${messageId} failed: ${String(statusError)}`,
-          );
-        }
-        throw sendError;
-      }
-      await updateMessageStatus(ctx.db, ctx.accountId, messageId, "sent",
-        { providerMessageId }, ACTOR_ID, ACTOR_TYPE);
-    } catch (e) {
-      console.error(`finishCall ${meta.callRowId ?? "(no row)"}: text-back failed: ${String(e)}`);
-    }
+    await deliverTextback(ctx.db, ctx.accountId, pendingTextback,
+      `finishCall ${meta.callRowId ?? "(no row)"}`);
   }
 
   // The one failure mode with no other trace anywhere: a real booked/lead/

@@ -265,6 +265,15 @@ export async function markHandoffRequested(
  * JSONB transcript and the summary, dragged across the wire to compare one
  * short string, on a call whose far end has already hung up.
  *
+ * `caller_e164` and `contact_id` come back for the FAILED branch, which has
+ * to text a caller the transfer never reached. Two scalars, deliberately not
+ * a second `getCall`: the whole point of the paragraph above is that this
+ * route must not drag a JSONB transcript across the wire, and adding one
+ * would undo it. `contact_id` is almost always null on a handed-off call —
+ * `finishCall` resolves a contact inside the text-back branch it skipped —
+ * but when it is set, reusing it is what stops a second "Caller" record
+ * appearing beside the first.
+ *
  * ONE TRADE, stated rather than hidden: the old shape re-read the outcome
  * AFTER that route's recency gate, so its value was a few milliseconds
  * fresher than this one, which is read at the top. Both are equally racy
@@ -283,14 +292,16 @@ export async function getCallByHandoffToken(
 ): Promise<{
   id: string; account_id: string; phone_number_id: string;
   handoff_requested_at: string | null; outcome: string;
+  caller_e164: string | null; contact_id: string | null;
 } | null> {
   const { data, error } = await db.from("calls")
-    .select("id, account_id, phone_number_id, handoff_requested_at, outcome")
+    .select("id, account_id, phone_number_id, handoff_requested_at, outcome, caller_e164, contact_id")
     .eq("handoff_token", token).maybeSingle();
   if (error) throw new Error(`getCallByHandoffToken failed: ${error.message}`);
   return (data as {
     id: string; account_id: string; phone_number_id: string;
     handoff_requested_at: string | null; outcome: string;
+    caller_e164: string | null; contact_id: string | null;
   } | null) ?? null;
 }
 

@@ -63,7 +63,21 @@ export function summaryFactLine(state: CallState): string {
   const parts: string[] = [];
 
   if (state.served.includes("transferred")) {
-    parts.push("Transferred: the transcript ends at the handoff; what was said afterwards is not here");
+    // "Asked for a person", NOT "Transferred", and the distinction is the
+    // whole of a production bug from 2026-09-17: a call where the dial rang
+    // out carried the identical summary to one that connected, while the
+    // outcome pill directly above it said Abandoned.
+    //
+    // This function runs inside `finishCall`, at socket close — BEFORE the
+    // dial has been attempted at all. Whether anybody picked up is the one
+    // thing it cannot know, so it may not assert it. The marker it reads is
+    // written when the caller ASKS (tools/registry.ts), which is exactly
+    // what this says. /handoff-result stamps `transferred` on the outcome
+    // once that is true, and the pill is where the answer belongs.
+    //
+    // The caveat after the colon is unchanged and is still the load-bearing
+    // half: the transcript stops here either way.
+    parts.push("Asked for a person: the transcript ends at the handoff; what was said afterwards is not here");
   }
 
   if (booked.length > 0) {
