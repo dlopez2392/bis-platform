@@ -117,11 +117,28 @@ submission, so a rejection costs real money. Do this part first.
   pop-ups
 - It must actually work and actually record the consent
 
-### The privacy policy
+### The privacy policy AND a terms page — both, and both linked
+
+Telnyx, Twilio and Bandwidth all state the same requirement, and the campaign
+form has a field for each: a privacy policy **and** a terms & conditions page,
+reachable as real links. A site with only a privacy policy is short one
+document. (bis-rgv.com had no terms page at all until 2026-09-17.)
 
 - **Brand-specific** — the client's own, not BIS's and not a generic template
-- Must state that information **will not be sold or shared with third parties
-  for promotional or marketing purposes**
+- It must carry the CTIA sentence, close to verbatim. "We do not sell your
+  information" does NOT satisfy it: that sentence is about selling, and the
+  carriers are asking about **sharing**, of mobile information specifically.
+  The wording to use:
+
+  > Mobile information will not be shared with third parties or affiliates for
+  > marketing or promotional purposes. All text messaging originator opt-in
+  > data and consent will not be shared with any third parties.
+
+- The terms page carries the programme terms: who sends and from what number,
+  that opt-in is explicit and optional, what is sent, that frequency varies,
+  that carrier rates may apply, STOP, HELP, and that carriers are not liable
+  for undelivered messages. `bis-rgv.com/en/terms` is the worked example —
+  copy its shape for a client.
 
 ### Call-to-action disclosures
 
@@ -138,10 +155,20 @@ out", "Reply HELP for help".
 **Use case: Customer Care.** It fits what this platform actually sends —
 every message is a response to someone who already contacted the business.
 
-**Message flow:** describe the real consent path, which is unusually strong
-here and worth saying plainly. Most of it is IMPLIED consent: the customer
-phoned the business and hung up, or submitted the business's own form. Say
-that. Do not describe a marketing list you do not have.
+**Message flow — read this twice.** An earlier version of this runbook said to
+describe the consent path as IMPLIED ("the customer phoned and hung up"). That
+is wrong and would have cost a rejection and the fee. **TCR requires prior
+express consent, collected before any message is sent, specific to text
+messaging, and one-to-one.** "They called us" is not consent. Neither is a
+checkbox that also covers email, nor a checkbox that is required to submit the
+form.
+
+What to describe instead is the real opt-in: the customer ticked an optional
+SMS box on the business's own web form, at the moment they gave their number,
+under wording naming the sender, the message types, that frequency varies, that
+rates may apply, HELP and STOP, and linking the privacy policy. That is what the
+BIS form does, and what every client's form must do before their campaign goes
+in. Do not describe a marketing list you do not have.
 
 **Sample messages.** Use what the platform genuinely sends, from
 `apps/web/src/lib/messages.ts` — a sample that does not match the traffic is
@@ -153,17 +180,41 @@ and we'll help. Reply STOP to opt out.
 ```
 
 ```
-Thanks for choosing us! If you have a minute, we'd love a quick
-review: https://g.page/r/... Reply STOP to opt out.
+Thanks for choosing 956 Woodworks! If you have a minute, we'd love a
+quick review: https://g.page/r/... Reply STOP to opt out.
 ```
+
+Both are literally what `defaultTextbackBody` and the review-request pass
+produce, disclosure included.
 
 At least one sample must carry opt-out language, samples should stay under
 160 characters, and if the real messages embed a link then the samples must
-embed one too.
+embed one too. Since 2026-09-17 the platform appends "Reply STOP to opt out."
+to every programme message itself, so a sample copied from what the product
+actually sends carries it — which is the point: a sample that does not match
+the traffic is a rejection reason.
 
 **Keywords:** STOP/UNSUBSCRIBE (opt-out), HELP (help), and an opt-in
 confirmation. The help reply must name the brand and give customer care
 contact details; the opt-out reply must confirm no further messages.
+
+**Telnyx implements these, not us.** It detects STOP, STOPALL, UNSUBSCRIBE,
+CANCEL, END and QUIT on the way in, adds the number to its own opt-out list,
+auto-replies, and blocks every later send to it — at the messaging-profile
+level, before the platform sees anything. So do not add keyword handling to
+`/api/sms/inbound`: a second opt-out list would be racing the real one. What
+the platform owes is the LANGUAGE, and `lib/sms/opt-out.ts` appends it to
+every programme message (the text-back and everything through
+`sendAutomationSms`), which is also what makes the sample messages below match
+real traffic.
+
+The default auto-responses are generic. Custom ones naming the brand are worth
+setting per profile — `POST /v2/messaging_profiles/{id}/autoresp_configs` with
+`op` of `stop`, `help` or `start` — and the HELP reply in particular should
+carry the brand name and a contact, because that is what the campaign promises
+it will say. Spanish keywords (PARAR, DETENER) work only once registered that
+way, which is why the platform's Spanish disclosure still tells the customer to
+reply STOP.
 
 ---
 

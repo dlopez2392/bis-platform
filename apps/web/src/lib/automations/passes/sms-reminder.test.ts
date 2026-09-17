@@ -64,7 +64,8 @@ describe("sms reminder pass — the send", () => {
     dbMocks.listDueSmsReminders.mockResolvedValue([row()]);
     expect(await smsReminderPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
     const when = formatWhen(new Date(STARTS), "America/Los_Angeles");
-    const composed = `Reminder: your appointment with Rio Roofing is ${when}. Reply to this text if you need to make a change.`;
+    // The closing line is the pass's; the disclosure is sendAutomationSms's.
+    const composed = `Reminder: your appointment with Rio Roofing is ${when}. Reply to this text if you need to make a change. Reply STOP to opt out.`;
     expect(when).not.toBe(formatWhen(new Date(STARTS), "America/New_York"));   // guards the fixture
     expect(dbMocks.createMessage).toHaveBeenCalledWith(expect.anything(), "acct_1",
       { conversationId: "convo_1", channel: "sms", direction: "outbound", body: composed }, "automation", "system");
@@ -87,7 +88,10 @@ describe("sms reminder pass — the send", () => {
   it("uses the operator's own closing line when one is stored", async () => {
     dbMocks.listDueSmsReminders.mockResolvedValue([row({ body: "See you soon!" })]);
     await smsReminderPass.run(ctx());
-    expect((smsSend.mock.calls[0]![0] as { body: string }).body).toMatch(/PDT\. See you soon!$/);
+    // Still anchored to the END of the operator's line — the disclosure is
+    // the only thing allowed after it, and nothing is composed in between.
+    expect((smsSend.mock.calls[0]![0] as { body: string }).body)
+      .toMatch(/PDT\. See you soon! Reply STOP to opt out\.$/);
   });
 
   it("send-then-stamp: a provider failure marks the row failed, writes the attempt marker, counts failed, stamps nothing", async () => {

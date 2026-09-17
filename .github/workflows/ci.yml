@@ -12,9 +12,10 @@ name: CI
 #   verify  typecheck + lint + unit tests + production build. This is exactly
 #           `pnpm check` and `pnpm --filter web build` from CLAUDE.md, no
 #           more and no less, so CI and a contributor's terminal cannot
-#           disagree about what "green" means. A newer push to the same
-#           BRANCH cancels the older run; on main nothing is cancelled, so
-#           the commit being deployed always finishes being checked.
+#           disagree about what "green" means. Serialized ACROSS THE WHOLE
+#           REPO and never cancelled, for the same reason e2e is: `pnpm
+#           check` runs the packages/db suite, which is live network work
+#           against that one shared project.
 #
 #   e2e     the Playwright journey. Serialized ACROSS THE WHOLE REPO, never
 #           cancelled: two runs against the one shared database at the same
@@ -65,31 +66,56 @@ jobs:
     # trains everyone to re-run red CI without reading it.
     timeout-minutes: 35
     concurrency:
-      group: verify-${{ github.ref }}
-      # Cancel a superseded run on a BRANCH, never on main.
+      # ONE group for the whole repo, exactly like e2e below — not
+      # `verify-${{ github.ref }}`, which is what this was and what broke.
       #
-      # Two reasons, and the second is the one that made this worth changing.
+      # `pnpm check` runs the packages/db suite, and that suite is live
+      # network work against the one Supabase project that also serves
+      # production. Keyed on the branch, two branches ran two db suites
+      # against that project simultaneously. This job's own comments already
+      # conceded "the db suite and one web test are live against the shared
+      # Supabase project" and blamed a previous wall-clock failure on
+      # "contention" — without drawing the conclusion e2e had already drawn.
       #
-      # A cancelled run on main means the commit that is being DEPLOYED never
-      # finished being checked. Merging #62 and #64 each had their main run
-      # killed by the next merge (runs #107 and #109, both recorded as
-      # `cancelled`), so nothing ever established that either commit was green
-      # on main — and pushing to main deploys production.
+      # What it cost, on 2026-09-17: `feat/sms-opt-out` (verify 02:14:52—
+      # 02:28:37) and `feat/call-handoff` (02:15:11—02:30:48) overlapped for
+      # 13.5 minutes and BOTH failed inside `pnpm check`. A re-run of the
+      # first, which again caught the tail of the second, failed on a
+      # DIFFERENT test. Different test each time is the signature of
+      # contention, not of a defect — and the timings agree: db round trips
+      # measured 10-20s each while contended and ~2.2s once alone. Every
+      # such kill also strands fixture rows, because a suite stopped
+      # mid-test never reaches its `finally`.
       #
-      # And a killed job takes the db suite down mid-test, so the `finally` in
-      # `withTestAccount` never runs and its account is left in the Supabase
-      # project that also serves production. That happened three times on
-      # 2026-09-15 alone. `src/test/sweep-fixtures.ts` now reclaims those, but
-      # repairing a leak is worse than not causing one.
+      # cancel-in-progress: false, and this is the part that needs saying.
+      # The obvious "fix" — one group, keep cancelling — is WORSE than the
+      # race it replaces: a group is repo-wide, so a push on one branch
+      # would cancel a DIFFERENT branch's running verify, killing someone
+      # else's gate mid-db-suite and stranding its fixtures. GitHub gives
+      # one group and one cancel flag per job, so "cancel my own branch's
+      # older run, queue everyone else's" is not expressible. Correctness
+      # wins: nothing is cancelled, and a superseded run on the same branch
+      # now finishes instead of being killed. e2e has run this way since it
+      # was written.
       #
-      # On a branch, cancelling is still right: a newer push makes the older
-      # run's answer irrelevant, and any fixture it abandons gets swept.
+      # This still does not queue without bound. GitHub keeps at most one
+      # PENDING run per group and cancels the older pending one, so the
+      # worst case is one running plus one waiting — and a run cancelled
+      # before it ever starts has nothing to leak.
       #
-      # This does not queue main's runs without bound. GitHub keeps at most one
-      # PENDING run per concurrency group and cancels the older pending one —
-      # and a run cancelled before it starts has nothing to leak. So the worst
-      # case is one running plus one waiting.
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      # The original reason this job avoided cancelling on main is unchanged
+      # and now covers every ref: a cancelled run means the commit being
+      # DEPLOYED never finished being checked. Merging #62 and #64 each had
+      # their main run killed by the next merge (runs #107 and #109, both
+      # `cancelled`), so nothing established either commit was green — and
+      # pushing to main deploys production.
+      #
+      # The real fix is a CI Supabase project separate from production's.
+      # Until that exists, this is the cheap half of it, and the cost is
+      # wall clock when several branches are in flight rather than a gate
+      # whose answer depends on who else happened to push.
+      group: verify-shared-supabase
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
 

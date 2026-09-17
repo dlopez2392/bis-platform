@@ -937,6 +937,14 @@ export const m = {
   // this sentence does not fit in. "responda aquí" cost two segments for
   // every Spanish caller; "responda este mensaje" costs one and says the
   // same thing. Pinned in textback-body.test.ts.
+  // The opt-out disclosure appended to every PROGRAM message (lib/sms/opt-out.ts
+  // has the full reasoning, including why the keyword stays "STOP" in Spanish
+  // and why there is no accent in the Spanish line). Kept in the catalogue
+  // rather than inlined at the append site because it is customer-facing copy
+  // like every other string here — and because a carrier reads it.
+  "sms.optOut.en": "Reply STOP to opt out.",
+  "sms.optOut.es": "Responde STOP para cancelar.",
+
   "voice.textback.defaultBodyEn": "Hi, this is {name}. Sorry we missed you just now, reply here and we'll help.",
   "voice.textback.defaultBodyNoNameEn": "Sorry we missed you just now, reply here and we'll help.",
   "voice.textback.defaultBodyEs": "Hola, somos {name}. No pudimos contestar su llamada, responda este mensaje y le ayudamos.",

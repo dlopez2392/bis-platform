@@ -167,9 +167,13 @@ describe("sendInstantReply — the send", () => {
     // Mutation: stamp before the send, or compose a lead around the body.
     expect(await sendInstantReply(input())).toEqual({ kind: "sent", unstamped: false });
     expect(dbMocks.ensureConversation).toHaveBeenCalledWith(expect.anything(), "acct_1", "ct_1", "automation", "system");
+    // VERBATIM still means verbatim — nothing is composed AROUND the saved
+    // body. The one addition is the opt-out disclosure sendAutomationSms
+    // appends to every programme text, stored and sent as the same string.
+    const enSent = `${EN} Reply STOP to opt out.`;
     expect(dbMocks.createMessage).toHaveBeenCalledWith(expect.anything(), "acct_1",
-      { conversationId: "convo_1", channel: "sms", direction: "outbound", body: EN }, "automation", "system");
-    expect(smsSend).toHaveBeenCalledWith({ to: "+19565550101", from: "+19565550000", body: EN });
+      { conversationId: "convo_1", channel: "sms", direction: "outbound", body: enSent }, "automation", "system");
+    expect(smsSend).toHaveBeenCalledWith({ to: "+19565550101", from: "+19565550000", body: enSent });
     expect(dbMocks.stampInstantReplySent).toHaveBeenCalledWith(expect.anything(), "sub_1");
     expect(dbMocks.updateMessageStatus).toHaveBeenCalledWith(expect.anything(), "acct_1", "msg_1", "sent",
       { providerMessageId: "s1" }, "automation", "system");
@@ -185,7 +189,12 @@ describe("sendInstantReply — the send", () => {
     // Mutation: send `row.body` for every locale.
     dbMocks.getAutomation.mockResolvedValue({ ...ROW, config: { bodyEs: `  ${ES}  ` } });
     expect(await sendInstantReply(input({ locale: "es" }))).toEqual({ kind: "sent", unstamped: false });
-    expect(smsSend).toHaveBeenCalledWith({ to: "+19565550101", from: "+19565550000", body: ES });
+    // The locale picks the body AND the disclosure's language — this is the
+    // one pass that has a locale to offer, and a Spanish reply signed off
+    // with "Reply STOP to opt out." would undo the point of having a bodyEs.
+    expect(smsSend).toHaveBeenCalledWith({
+      to: "+19565550101", from: "+19565550000", body: `${ES} Responde STOP para cancelar.`,
+    });
   });
 
   it("a provider failure: the row is marked failed, NOTHING is stamped, the outcome is `failed` with the message, and it does not throw", async () => {

@@ -1,5 +1,6 @@
 import { ensureConversation, createMessage, updateMessageStatus } from "@bis/db";
 import { SMS_RETRY_COOLDOWN_MS } from "./caps";
+import { withOptOut } from "@/lib/sms/opt-out";
 import type { PassContext } from "./context";
 
 /**
@@ -24,6 +25,14 @@ export type AutomationSmsInput = {
   /** The account's live number, from resolveSmsSender. */
   from: string;
   body: string;
+  /** The language THIS message is written in, which decides the language of
+   *  the opt-out disclosure appended to it. Optional and defaulting to "en"
+   *  because most passes have no locale to offer — the scheduled recipes
+   *  (reminders, review requests, no-show nudges) compose English copy end to
+   *  end. The form instant reply is the exception and passes the submission's
+   *  own locale, so a person who filled the form in Spanish is not told how
+   *  to opt out in English. */
+  language?: "en" | "es";
   /** Runs on a PROVIDER failure, after the message row is marked failed: the
    *  recipe's own attempt marker (`*_sms_failed_at`) goes here. Best effort —
    *  its own failure is logged, never thrown, and never re-raised over the
@@ -52,13 +61,32 @@ export type SentSms = { messageId: string; providerMessageId: string };
  */
 export async function sendAutomationSms(ctx: SmsSendContext, input: AutomationSmsInput): Promise<SentSms> {
   const sms = ctx.sms();
+  // THE choke point for every unprompted text this platform sends on a
+  // schedule — reminders, review requests, no-show nudges, and the inline
+  // form instant reply, which routes through here too. Putting the opt-out
+  // disclosure at this one line is what makes "every programme message says
+  // how to stop it" a property of the system rather than a rule each pass has
+  // to remember; a new pass gets it by calling this function.
+  //
+  // Computed ONCE, above the row write, and the same string is both stored
+  // and sent. Appending it at the send call instead would leave the operator
+  // reading a shorter message in the conversation than the customer received.
+  //
+  // The language comes from the caller, defaulting to English — see the field
+  // comment on `language`. The default is for the scheduled passes, which
+  // compose English copy and have no locale to offer; the instant reply
+  // already picks a body by locale and hands that same locale over, so its
+  // Spanish reply does not end in an English sentence. When a scheduled pass
+  // learns a locale, thread it through here rather than leaving it defaulting
+  // quietly.
+  const body = withOptOut(input.body, input.language);
   const convo = await ensureConversation(
     ctx.db, input.accountId, input.contactId, AUTOMATION_ACTOR_ID, AUTOMATION_ACTOR_TYPE);
   const { id: messageId } = await createMessage(ctx.db, input.accountId, {
-    conversationId: convo.id, channel: "sms", direction: "outbound", body: input.body,
+    conversationId: convo.id, channel: "sms", direction: "outbound", body,
   }, AUTOMATION_ACTOR_ID, AUTOMATION_ACTOR_TYPE);
   try {
-    const { providerMessageId } = await sms.send({ to: input.to, from: input.from, body: input.body });
+    const { providerMessageId } = await sms.send({ to: input.to, from: input.from, body });
     return { messageId, providerMessageId };
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown send failure";
