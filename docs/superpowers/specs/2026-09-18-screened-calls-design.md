@@ -25,10 +25,10 @@ The spam-screening spec (2026-09-15) recorded the first as "a worthwhile
 follow-up" and accepted the invisibility as consistent with existing behaviour.
 This is that follow-up, and it turns out the second consequence is larger.
 
-## The five refusals, and what is recordable
+## The six refusals, and what is recordable
 
 `routability()` in `apps/web/src/app/api/voice/texml/route.ts` produces four
-refusal kinds across five distinct causes:
+refusal kinds across six distinct causes:
 
 | Cause | Log today | `account_id` known? | `phone_number_id` known? |
 |---|---|---|---|

@@ -27,13 +27,14 @@ export const ACCOUNT_OWNED_TABLES = [
 ] as const;
 
 /**
- * ⚠️ `alert_phone_verifications` (0036) is DELIBERATELY not on that list, and
- * neither is `contact_duplicate_flags` (0033).
+ * ⚠️ `alert_phone_verifications` (0036) is DELIBERATELY not on that list,
+ * neither is `contact_duplicate_flags` (0033), and neither is
+ * `screened_calls` (0039).
  *
- * Both carry `account_id … on delete cascade` rather than `restrict`, so the
- * account's own deletion below carries their rows away — they are derived or
- * scratch state, not the lead-bearing rows 0017 made restrict to protect. 0036
- * argues the case in its own comments;
+ * All three carry `account_id … on delete cascade` rather than `restrict`,
+ * so the account's own deletion below carries their rows away — they are
+ * derived or scratch state, not the lead-bearing rows 0017 made restrict to
+ * protect. 0036 argues the case in its own comments;
  * `alert-phone-verification-grants.test.ts` proves the cascade instead of
  * assuming it, by inserting a row, letting `withTestAccount` tear the account
  * down, and then asserting nothing is left.

@@ -308,8 +308,8 @@ async function respond(calledE164: string | null, callerE164: string | null, ori
   if (calledE164) {
     const result = await classify(calledE164, callerE164);
     if (result.kind !== "dial") {
-      // ONE write site for all five refusals, not one per branch — five call
-      // sites would be five chances for the next reason to forget one.
+      // ONE write site for all six refusals, not one per branch — six call
+      // sites would be six chances for the next reason to forget one.
       //
       // `after()` because this route sits on Telnyx's carrier answer
       // deadline and its own comments say wall-clock is the one thing it

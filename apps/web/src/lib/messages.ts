@@ -1690,7 +1690,11 @@ export const m = {
   // which slice is on screen; the "a genuine cold start" empty copy above is
   // FALSE for a filtered-and-empty result (a filter matching nothing is not
   // "nothing has ever been turned away"), so that gets its own pair too.
-  "screened.filter.scope.misconfigured": "Showing lines that are turning callers away.",
+  // The misconfigured line is a RECORD, not a present-tense status: this is
+  // an all-time list, so a line dead in July and fixed in August still shows
+  // up here, and "are turning callers away" would be false about it. Say
+  // what happened, not what is happening now.
+  "screened.filter.scope.misconfigured": "Showing calls refused because a line wasn't set up.",
   "screened.filter.scope.screened": "Showing calls the system screened on purpose.",
   "screened.filter.scope.unattributed": "Showing calls to numbers this platform doesn't own.",
   "screened.filter.clear": "Show every refused call",

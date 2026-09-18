@@ -5,8 +5,8 @@ import {
   countLinesTurningCallersAway, countMisconfiguredScreenedCalls,
   screenedClass, SCREENED_REASONS,
 } from "../screened-calls";
-import { countCallsSince, countCallerHistorySince } from "../voice";
-import { withTestAccount, testScreenedCalledE164 } from "./fixtures";
+import { countCallsSince, countCallerHistorySince, assignPhoneNumber } from "../voice";
+import { withTestAccount, testScreenedCalledE164, testPhoneNumber } from "./fixtures";
 
 describe("screenedClass", () => {
   it("routes OUR misconfiguration to `misconfigured` (mutation: move not-live into `screened` -> FAILS)", () => {
@@ -112,7 +112,13 @@ describe("listScreenedCalls class filter", () => {
 describe("countScreenedCalls class filter", () => {
   it("counts only rows in the given class (mutation: drop the class .in() filter -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
-      const before = await countScreenedCalls(db, { class: "misconfigured" });
+      // Scoped to THIS account: `countScreenedCalls` counts across every
+      // account by design (the page never passes `accountId`), so an
+      // unscoped before/after delta here moves under a concurrent writer
+      // elsewhere in the shared project — proven by running this file twice
+      // at once, which turned this exact assertion into "expected 98 to be
+      // 55" on an unrelated test in the same suite.
+      const before = await countScreenedCalls(db, { class: "misconfigured", accountId });
       await recordScreenedCall(db, {
         accountId, phoneNumberId: null, calledE164: testScreenedCalledE164(),
         callerE164: null, reason: "not-live",
@@ -121,7 +127,7 @@ describe("countScreenedCalls class filter", () => {
         accountId, phoneNumberId: null, calledE164: testScreenedCalledE164(),
         callerE164: null, reason: "over-cap",
       });
-      const after = await countScreenedCalls(db, { class: "misconfigured" });
+      const after = await countScreenedCalls(db, { class: "misconfigured", accountId });
       // Two rows written, ONE of them `misconfigured`.
       expect(after - before).toBe(1);
     });
@@ -131,7 +137,11 @@ describe("countScreenedCalls class filter", () => {
 describe("countLinesTurningCallersAway", () => {
   it("counts DISTINCT numbers, not refusals (mutation: count(*) instead of count(distinct) -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
-      const before = await countLinesTurningCallersAway(db, new Date(Date.now() - 3600_000).toISOString());
+      // Scoped to THIS account (see `countScreenedCalls class filter`'s own
+      // comment above for why an unscoped delta is unsafe under concurrent
+      // load) — the work-queue banner itself never passes this scope.
+      const since = new Date(Date.now() - 3600_000).toISOString();
+      const before = await countLinesTurningCallersAway(db, since, accountId);
       // Three refusals, ONE line. A dialer hammering one dead number is one
       // problem to fix, not three.
       for (let i = 0; i < 3; i++) {
@@ -140,7 +150,7 @@ describe("countLinesTurningCallersAway", () => {
           callerE164: null, reason: "not-live",
         });
       }
-      const after = await countLinesTurningCallersAway(db, new Date(Date.now() - 3600_000).toISOString());
+      const after = await countLinesTurningCallersAway(db, since, accountId);
       expect(after - before).toBe(1);
     });
   });
@@ -148,7 +158,7 @@ describe("countLinesTurningCallersAway", () => {
   it("ignores `screened` and `unattributed` reasons (mutation: drop the reason filter -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       const since = new Date(Date.now() - 3600_000).toISOString();
-      const before = await countLinesTurningCallersAway(db, since);
+      const before = await countLinesTurningCallersAway(db, since, accountId);
       await recordScreenedCall(db, {
         accountId, phoneNumberId: null, calledE164: "+19565550400",
         callerE164: null, reason: "repeat-spam",
@@ -168,7 +178,7 @@ describe("countLinesTurningCallersAway", () => {
         rowId = data.id as string;
         // A blocked robocall is the system working. It is not an outage and
         // must never raise the banner.
-        expect(await countLinesTurningCallersAway(db, since)).toBe(before);
+        expect(await countLinesTurningCallersAway(db, since, accountId)).toBe(before);
       } finally {
         if (rowId) await db.from("screened_calls").delete().eq("id", rowId);
       }
@@ -179,7 +189,10 @@ describe("countLinesTurningCallersAway", () => {
 describe("countMisconfiguredScreenedCalls", () => {
   it("counts only the misconfigured reasons, never `screened` or `unattributed` (mutation: widen the reason filter to include `over-cap` -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
-      const before = await countMisconfiguredScreenedCalls(db);
+      // Scoped to THIS account — see `countScreenedCalls class filter`'s own
+      // comment above; the list header this feeds is agency-wide and never
+      // passes this scope itself.
+      const before = await countMisconfiguredScreenedCalls(db, accountId);
       // One of each class. Only the first is `misconfigured`
       // (`screenedClass`'s own switch): `not-live` yes, `over-cap` no.
       await recordScreenedCall(db, {
@@ -203,7 +216,7 @@ describe("countMisconfiguredScreenedCalls", () => {
           .select("id").eq("called_e164", calledE164).single();
         if (error) throw new Error(`readback failed: ${error.message}`);
         rowId = data.id as string;
-        const after = await countMisconfiguredScreenedCalls(db);
+        const after = await countMisconfiguredScreenedCalls(db, accountId);
         // Three rows written, ONE of them `misconfigured`.
         expect(after - before).toBe(1);
       } finally {
@@ -214,7 +227,12 @@ describe("countMisconfiguredScreenedCalls", () => {
 
   it("is not limited to one page of results (mutation: swap the head-count for `.select(\"id\").limit(50)` + `(data ?? []).length` -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
-      const before = await countMisconfiguredScreenedCalls(db);
+      // Scoped to THIS account — see the sibling test's own comment above.
+      // Proven load-bearing, not decorative: run this file twice
+      // concurrently WITHOUT this scope and the second run's `before` reads
+      // the first run's still-in-flight 55 rows, turning this exact
+      // assertion into "expected 98 to be 55".
+      const before = await countMisconfiguredScreenedCalls(db, accountId);
       // More than the list page's PAGE_SIZE (50) — a head-count query has no
       // page to be limited to, and this is the row count that would expose
       // a stray `.limit()` copied in from `listScreenedCalls`.
@@ -236,7 +254,7 @@ describe("countMisconfiguredScreenedCalls", () => {
           callerE164: null, reason: "no-profile",
         });
       }
-      const after = await countMisconfiguredScreenedCalls(db);
+      const after = await countMisconfiguredScreenedCalls(db, accountId);
       expect(after - before).toBe(55);
     });
   });
@@ -254,26 +272,58 @@ describe("countMisconfiguredScreenedCalls", () => {
 describe("screened rows cannot contaminate the calls table", () => {
   it("leaves countCallsSince byte-identical (mutation: insert into `calls` from recordScreenedCall -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
+      // A REAL phone number, not `phoneNumberId: null`. `calls.phone_number_id`
+      // is `NOT NULL` (0019), so a null-shaped fixture can never produce a
+      // `calls` row at all — the mutation this test is named for cannot even
+      // attempt the write, and the guard proves nothing. Five of the six
+      // reasons carry a real `phone_number_id` in production; this is that
+      // shape.
+      const pn = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
       const since = new Date(Date.now() - 3600_000).toISOString();
       const before = await countCallsSince(db, accountId, since);
       for (let i = 0; i < 5; i++) {
         await recordScreenedCall(db, {
-          accountId, phoneNumberId: null, calledE164: "+19565550500",
+          accountId, phoneNumberId: pn.id, calledE164: pn.e164,
           callerE164: "+19565550511", reason: "repeat-spam",
         });
       }
-      expect(await countCallsSince(db, accountId, since)).toBe(before);
+      // The null-number shape (`unknown-number`, nobody's account) alongside
+      // the real-number writes above — kept so this file still exercises
+      // BOTH representable shapes at this guard, even though (as proven by
+      // injecting the mutation below) only the real-number shape can catch
+      // an insert into `calls`: a null `account_id` on that table fails its
+      // own `NOT NULL` constraint before the guard's assertion is ever
+      // reached, real-number or not.
+      const calledE164 = testScreenedCalledE164();
+      let rowId: string | null = null;
+      try {
+        await recordScreenedCall(db, {
+          accountId: null, phoneNumberId: null, calledE164,
+          callerE164: null, reason: "unknown-number",
+        });
+        const { data, error } = await db.from("screened_calls")
+          .select("id").eq("called_e164", calledE164).single();
+        if (error) throw new Error(`readback failed: ${error.message}`);
+        rowId = data.id as string;
+        expect(await countCallsSince(db, accountId, since)).toBe(before);
+      } finally {
+        if (rowId) await db.from("screened_calls").delete().eq("id", rowId);
+      }
     });
   });
 
   it("leaves the repeat-spam verdict's inputs byte-identical (mutation: as above -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
+      // Same reasoning as the sibling test above: a real phone number is
+      // required for the write this test guards against to even be
+      // attemptable.
+      const pn = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
       const since = new Date(Date.now() - 3600_000).toISOString();
       const caller = "+19565550611";
       const before = await countCallerHistorySince(db, accountId, caller, since);
       for (let i = 0; i < 5; i++) {
         await recordScreenedCall(db, {
-          accountId, phoneNumberId: null, calledE164: "+19565550600",
+          accountId, phoneNumberId: pn.id, calledE164: pn.e164,
           callerE164: caller, reason: "repeat-spam",
         });
       }

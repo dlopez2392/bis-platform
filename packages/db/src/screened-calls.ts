@@ -134,12 +134,20 @@ export async function listScreenedCalls(
  * so a filtered list's header can state the total that matches what is
  * actually on screen, rather than the all-time unfiltered total the banner's
  * own (differently-scoped) count must never be confused with.
+ *
+ * `opts.accountId` is OPTIONAL and exists for test isolation, not for either
+ * page: `/dashboard/screened` is deliberately agency-wide and never passes
+ * it. Without a scope, this is a GLOBAL count — a concurrent write anywhere
+ * in the shared project moves it out from under a test asserting an exact
+ * `after - before` delta, which is exactly what happened running this
+ * suite's own class-filter test two-at-once.
  */
 export async function countScreenedCalls(
-  db: SupabaseClient, opts: { class?: ScreenedClass } = {},
+  db: SupabaseClient, opts: { class?: ScreenedClass; accountId?: string } = {},
 ): Promise<number> {
   let q = db.from("screened_calls").select("id", { count: "exact", head: true });
   if (opts.class) q = q.in("reason", reasonsForClass(opts.class));
+  if (opts.accountId) q = q.eq("account_id", opts.accountId);
   const { count, error } = await q;
   if (error) throw new Error(`countScreenedCalls failed: ${error.message}`);
   return count ?? 0;
@@ -175,11 +183,20 @@ function reasonsForClass(cls: ScreenedClass): ScreenedReason[] {
  * list header is a receipt of how many refusals landed, not a queue of
  * lines to go fix — and it carries no time window and no `.limit()`: a
  * head-count query has no page to be limited to.
+ *
+ * `accountId` is OPTIONAL, for test isolation only — the list header this
+ * feeds is agency-wide by design and never passes it. See
+ * `countScreenedCalls`'s own doc comment for why an unscoped exact-delta
+ * assertion is unsafe under concurrent load without it.
  */
-export async function countMisconfiguredScreenedCalls(db: SupabaseClient): Promise<number> {
-  const { count, error } = await db.from("screened_calls")
+export async function countMisconfiguredScreenedCalls(
+  db: SupabaseClient, accountId?: string,
+): Promise<number> {
+  let q = db.from("screened_calls")
     .select("id", { count: "exact", head: true })
     .in("reason", MISCONFIGURED);
+  if (accountId) q = q.eq("account_id", accountId);
+  const { count, error } = await q;
   if (error) throw new Error(`countMisconfiguredScreenedCalls failed: ${error.message}`);
   return count ?? 0;
 }
@@ -194,15 +211,27 @@ export async function countMisconfiguredScreenedCalls(db: SupabaseClient): Promi
  *
  * Reads only the column it counts on, and de-duplicates in JS: the row count
  * in a 24-hour window is small by construction, and PostgREST has no
- * `count(distinct)`. If that ever stops being true, this becomes an RPC.
+ * `count(distinct)`. If that ever stops being true, this becomes an RPC. A
+ * defensive `.limit(5000)` bounds the read regardless: this runs as
+ * `service_role`, whose `rolconfig` carries no `statement_timeout` at all,
+ * and PostgREST's `db-max-rows` is unset, so without it the read is
+ * genuinely unbounded today.
+ *
+ * `accountId` is OPTIONAL, for test isolation only — the work-queue banner
+ * this feeds is agency-wide by design and never passes it. See
+ * `countScreenedCalls`'s own doc comment for why an unscoped exact-delta
+ * assertion is unsafe under concurrent load without it.
  */
 export async function countLinesTurningCallersAway(
-  db: SupabaseClient, sinceIso: string,
+  db: SupabaseClient, sinceIso: string, accountId?: string,
 ): Promise<number> {
-  const { data, error } = await db.from("screened_calls")
+  let q = db.from("screened_calls")
     .select("called_e164")
     .in("reason", MISCONFIGURED)
-    .gte("created_at", sinceIso);
+    .gte("created_at", sinceIso)
+    .limit(5000);
+  if (accountId) q = q.eq("account_id", accountId);
+  const { data, error } = await q;
   if (error) throw new Error(`countLinesTurningCallersAway failed: ${error.message}`);
   return new Set((data ?? []).map((r) => (r as { called_e164: string }).called_e164)).size;
 }
