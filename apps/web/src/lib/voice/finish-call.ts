@@ -9,11 +9,18 @@ import { voiceCallAlertEmail } from "@/lib/email/templates/voice";
 import { composeCallAlertSms, prepareAlertSms, deliverAlertSms, type PendingAlertSms } from "@/lib/sms/alerts";
 import { prepareTextback, deliverTextback, type PendingTextback } from "./textback";
 import type { CallState } from "./call-state";
-import { classifyOutcome, wasServed } from "./call-state";
+import { classifyOutcome, wasServed, wasTransferred } from "./call-state";
 import { detectSpokenLanguage } from "./language";
 import { generateSummary } from "./summary-service";
 import { summaryFactLine } from "./summarize";
 import { toE164 } from "./phone-number";
+// STATIC, not the lazy `await import(...)` this repo otherwise reaches for
+// near route handlers: the documented page-data trap (a module-scope DB
+// import breaking `next build`'s page-data collection) doesn't apply to a
+// plain lib-to-lib import, this file already imports `@bis/db` at module
+// scope above, and `api/voice/incoming/route.ts` imports `finishCall` itself
+// statically. Nothing here needed the indirection.
+import { generateProposals } from "@/lib/proposals/generate";
 
 /**
  * DELIBERATELY ABSENT: `accountName`. `accounts.name` is the agency's internal
@@ -442,41 +449,6 @@ export async function finishCall(
     }
   }
 
-  // PROPOSALS, AND ONLY FROM HERE. `stored` — not merely `meta.callRowId` —
-  // is the gate: the transcript this generator reads became durable in the
-  // write directly above, one line before `stored` flips to true, and a
-  // finishCallRow failure must produce nothing here either, exactly like a
-  // fail-open callRowId does. The spec said generation runs "alongside the
-  // summary" (~194 lines and four legs earlier, right after `generateSummary`
-  // above) — that would ground every proposal in `state.transcript` while it
-  // was still in-memory only, a proposal citing a call nobody can open yet.
-  //
-  // Deliberately its OWN standalone leg, not nested inside `finishCallRow`'s
-  // try/catch above: nesting would let a proposal failure surface as
-  // "finishCallRow failed" in the log, and — because that outer catch already
-  // swallows and `stored` would already be true by then — a dropped inner
-  // catch would be invisible to any test of this function's return value or
-  // its never-throws guarantee. Standing alone, a bug here can only ever cost
-  // a proposal: nothing here may change the call's outcome, its transcript,
-  // its text-back, or this function's never-throws guarantee.
-  //
-  // `contactId` is the SAME local the lead-treatment leg and `finishCallRow`
-  // itself both already used above (including any text-back-leg backfill) —
-  // never re-resolved here.
-  if (meta.callRowId && stored) {
-    try {
-      const { generateProposals } = await import("@/lib/proposals/generate");
-      const n = await generateProposals({
-        db: ctx.db, accountId: ctx.accountId, callId: meta.callRowId,
-        contactId, outcome, transcript: state.transcript,
-        handoffRequested: state.served.includes("transferred"),
-      });
-      if (n > 0) console.log(`proposals: wrote ${n} for call ${meta.callRowId}`);
-    } catch (e) {
-      console.error(`proposals: generation failed for call ${meta.callRowId}: ${String(e)}`);
-    }
-  }
-
   // The other half of the staff alert SMS leg: the actual carrier POST,
   // deliberately AFTER the durable row above — same ordering, same reason as
   // the text-back's own split just below (finding 4, alert-send-report
@@ -537,6 +509,54 @@ export async function finishCall(
     await emit(ctx.db, ctx.accountId, "call.recorded", ACTOR_ID, { callId: meta.callRowId, outcome }, ACTOR_TYPE);
   } catch (e) {
     console.error(`finishCall ${meta.callRowId ?? "(no row)"}: emit failed: ${String(e)}`);
+  }
+
+  // PROPOSALS. `stored` — not merely `meta.callRowId` — is the gate: the
+  // transcript this generator reads became durable in `finishCallRow` above,
+  // and a finishCallRow failure must produce nothing here either, exactly
+  // like a fail-open callRowId does. The spec said generation runs
+  // "alongside the summary" — that would ground every proposal in
+  // `state.transcript` while it was still in-memory only, a proposal citing
+  // a call nobody can open yet.
+  //
+  // LAST STATEMENT IN THE FUNCTION, on purpose, not merely "after the row
+  // write": this call reaches OpenAI, capped at `AbortSignal.timeout(10_000)`
+  // for the model request alone (the up-to-three insert round trips beyond
+  // it are unbounded), and a proposal is an opinion about a call that already
+  // happened. The staff alert SMS deliver, the missed-call text-back deliver,
+  // the CALL LOST alarm and the `call.recorded` emit above are how a business
+  // owner finds out they have a lead, or this function's own last-resort
+  // signal that neither the row nor the alert reached anyone — none of those
+  // may sit downstream of a network call this file does not need for any of
+  // them. (This used to delay the staff alert SMS by up to that same 10
+  // seconds on every booked/lead/message call — an opinion gating a record.)
+  //
+  // Deliberately its OWN standalone leg, not nested inside `finishCallRow`'s
+  // try/catch far above: nesting would let a proposal failure surface as
+  // "finishCallRow failed" in the log, and — because that outer catch already
+  // swallows and `stored` would already be true by then — a dropped inner
+  // catch would be invisible to any test of this function's return value or
+  // its never-throws guarantee. Standing alone, a bug here can only ever cost
+  // a proposal: nothing here may change the call's outcome, its transcript,
+  // its text-back, or this function's never-throws guarantee.
+  //
+  // `contactId` is the SAME local the lead-treatment leg and `finishCallRow`
+  // itself both already used above (including any text-back-leg backfill) —
+  // never re-resolved here. Logged under this file's own `finishCall <id>:`
+  // prefix rather than a bare `proposals:` one, so an operator grepping one
+  // call's lifecycle sees these lines too, and so they read distinctly from
+  // the generator's own `generateProposals:` lines.
+  if (meta.callRowId && stored) {
+    try {
+      const n = await generateProposals({
+        db: ctx.db, accountId: ctx.accountId, callId: meta.callRowId,
+        contactId, outcome, transcript: state.transcript,
+        handoffRequested: wasTransferred(state),
+      });
+      if (n > 0) console.log(`finishCall ${meta.callRowId}: proposals wrote ${n}`);
+    } catch (e) {
+      console.error(`finishCall ${meta.callRowId}: proposals generation failed: ${String(e)}`);
+    }
   }
 
   return { stored, notified, outcome };

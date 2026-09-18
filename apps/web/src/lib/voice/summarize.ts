@@ -1,4 +1,5 @@
 import type { CallState } from "./call-state";
+import { wasTransferred } from "./call-state";
 
 /** Rendered in place of an empty section so the model cannot read blank as "unknown". */
 const NONE = "(none)";
@@ -62,7 +63,7 @@ export function summaryFactLine(state: CallState): string {
   const intake = capturedIntake(state);
   const parts: string[] = [];
 
-  if (state.served.includes("transferred")) {
+  if (wasTransferred(state)) {
     // "Asked for a person", NOT "Transferred", and the distinction is the
     // whole of a production bug from 2026-09-17: a call where the dial rang
     // out carried the identical summary to one that connected, while the

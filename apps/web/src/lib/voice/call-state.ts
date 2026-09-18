@@ -171,3 +171,14 @@ export function withTransferred(state: CallState): CallState {
 export function wasServed(state: CallState): boolean {
   return state.served.length > 0;
 }
+
+/**
+ * Did the caller ask for a person and get handed to one? The single read
+ * both `finishCall`'s proposal leg (`handoffRequested`) and `summaryFactLine`
+ * (./summarize.ts) need — each used to hand-copy `state.served.includes
+ * ("transferred")` on its own, which made the coupling two edits instead of
+ * one. `withTransferred` is this same fact's writer; this is its reader.
+ */
+export function wasTransferred(state: CallState): boolean {
+  return state.served.includes("transferred");
+}

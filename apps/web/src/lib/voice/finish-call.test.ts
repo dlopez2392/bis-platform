@@ -790,12 +790,13 @@ describe("finishCall — proposal generation", () => {
   const leadState = () => withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
     { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
 
-  it("generates proposals only AFTER the call row is stored (mutation: move the call above finishCallRow -> FAILS)", async () => {
+  it("generates proposals only AFTER the call row is stored AND after the call.recorded emit — never upstream of the alert/text-back/CALL-LOST/emit tail (mutation: put the block back right after finishCallRow -> FAILS)", async () => {
     const order: string[] = [];
     dbMocks.finishCallRow.mockImplementation(async () => { order.push("finishCallRow"); });
+    dbMocks.emit.mockImplementation(async () => { order.push("emit"); });
     proposalsMocks.generateProposals.mockImplementation(async () => { order.push("generateProposals"); return 0; });
     await finishCall(leadState(), ctx, meta);
-    expect(order).toEqual(["finishCallRow", "generateProposals"]);
+    expect(order).toEqual(["finishCallRow", "emit", "generateProposals"]);
   });
 
   it("writes no proposals when the call row was never stored (callRowId null)", async () => {
