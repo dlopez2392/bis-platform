@@ -1,6 +1,10 @@
 import Link from "next/link";
 import type { ScreenedCallRow, ScreenedClass } from "@bis/db";
 import { screenedClass } from "@bis/db";
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
+import { ListPanel } from "@/components/ui/list-panel";
 import { m } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 // Reused, not duplicated — the same "one place, not eight tables drifting"
@@ -28,8 +32,8 @@ export const CLASS_DOT: Record<ScreenedClass, string> = {
   unattributed: "bg-muted-foreground/30",
 };
 
-const LABEL_ROLE =
-  "font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase";
+const HEAD = "px-5";
+const CELL = "px-5 py-3";
 
 export function ScreenedTable({
   rows, total, accountsById, agencyZone, olderHref,
@@ -37,7 +41,10 @@ export function ScreenedTable({
   rows: ScreenedCallRow[];
   /** The REAL total across every page — never `rows.length`. */
   total: number;
-  accountsById: Map<string, { name: string; timezone: string }>;
+  /** accountId → the account's own label and a ZONE already resolved by the
+   *  page through `resolveZone` — never the raw `accounts.timezone` column,
+   *  which is free text a pre-#89 row can hold a value `Intl` cannot format. */
+  accountsById: Map<string, { name: string; zone: string }>;
   /** The agency's own zone (lib/zone.ts, resolved ONCE by the page) — what a
    *  row with no account (`unknown-number`) renders its "When" column in,
    *  since that row has no account zone of its own to claim. Never a bare
@@ -45,57 +52,88 @@ export function ScreenedTable({
   agencyZone: string;
   olderHref?: string;
 }) {
+  // DESIGN.md rule 1 — the total never ships alone. The breakdown is the ONE
+  // class an operator must act on (see CLASS_DOT's own comment): `screened`
+  // is the system working and `unattributed` is nobody's problem, but
+  // `misconfigured` means a line is turning callers away because of
+  // something on our end. Derived from the rows already on the page — the
+  // same `screenedClass(r.reason)` each row computes for its own dot — so
+  // this is a small addition, not a second capability or a second class map.
+  const misconfiguredCount = rows.filter((r) => screenedClass(r.reason) === "misconfigured").length;
+  const totalLabel = total === 1 ? m["screened.totalOne"] : m["screened.total"].replace("{n}", String(total));
+  const misconfiguredLabel = misconfiguredCount === 1
+    ? m["screened.misconfiguredOne"]
+    : m["screened.misconfigured"].replace("{n}", String(misconfiguredCount));
+
   return (
     <section className="space-y-3">
-      <p className={LABEL_ROLE}>{m["screened.total"].replace("{n}", String(total))}</p>
+      {/* DESIGN.md's Label role: Geist Mono 500, 10px, +0.14em, uppercase. */}
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase">
+        <span>{totalLabel}</span>
+        <span aria-hidden>·</span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className={cn("size-[7px] shrink-0 rounded-full", CLASS_DOT.misconfigured)} aria-hidden />
+          {misconfiguredLabel}
+        </span>
+      </p>
 
-      <div className="overflow-hidden rounded-xl border border-border bg-card">
-        <table className="w-full text-sm">
-          <thead>
-            <tr>
-              <th className={cn(LABEL_ROLE, "px-5 py-3 text-left")}>{m["screened.col.when"]}</th>
-              <th className={cn(LABEL_ROLE, "px-5 py-3 text-left")}>{m["screened.col.account"]}</th>
-              <th className={cn(LABEL_ROLE, "px-5 py-3 text-left")}>{m["screened.col.called"]}</th>
-              <th className={cn(LABEL_ROLE, "px-5 py-3 text-left")}>{m["screened.col.caller"]}</th>
-              <th className={cn(LABEL_ROLE, "px-5 py-3 text-left")}>{m["screened.col.reason"]}</th>
-            </tr>
-          </thead>
-          <tbody>
+      <ListPanel>
+        <Table>
+          {/* No detail route exists for a screened call — there is nowhere
+              for a click to go — so the interactive hover every other table
+              carries is suppressed EXPLICITLY on every row, the same way
+              calls-table.tsx opts its own header row out. A false hover
+              affordance on a row that goes nowhere would be worse than no
+              hover at all. */}
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className={HEAD}>{m["screened.col.when"]}</TableHead>
+              <TableHead className={HEAD}>{m["screened.col.account"]}</TableHead>
+              <TableHead className={HEAD}>{m["screened.col.called"]}</TableHead>
+              <TableHead className={HEAD}>{m["screened.col.caller"]}</TableHead>
+              <TableHead className={HEAD}>{m["screened.col.reason"]}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {rows.map((r) => {
               const account = r.accountId ? accountsById.get(r.accountId) : undefined;
               const cls = screenedClass(r.reason);
               return (
-                <tr key={r.id} className="border-t border-[var(--row-line)]">
-                  <td className="px-5 py-3 tabular-nums text-muted-foreground">
-                    {/* The account's OWN zone where there is one; the
-                        agency's own, resolved once by the page, where there
-                        is not — never a bare "UTC" standing in unexplained. */}
-                    {formatCallTime(r.createdAt, account?.timezone ?? agencyZone)}
-                  </td>
-                  <td className="px-5 py-3">{account?.name ?? m["screened.noAccount"]}</td>
-                  <td className="px-5 py-3 tabular-nums">{r.calledE164}</td>
-                  <td className="px-5 py-3 tabular-nums">
+                <TableRow key={r.id} className="hover:bg-transparent">
+                  <TableCell className={cn(CELL, "tabular-nums text-muted-foreground")}>
+                    {/* The account's OWN zone where there is one, already
+                        resolved by the page; the agency's own, resolved
+                        once by the page, where there is not — never the raw
+                        `accounts.timezone` column and never a bare "UTC"
+                        standing in unexplained. */}
+                    {formatCallTime(r.createdAt, account?.zone ?? agencyZone)}
+                  </TableCell>
+                  <TableCell className={CELL}>{account?.name ?? m["screened.noAccount"]}</TableCell>
+                  <TableCell className={cn(CELL, "tabular-nums")}>{r.calledE164}</TableCell>
+                  <TableCell className={cn(CELL, "tabular-nums")}>
                     {r.callerE164 ?? m["screened.unknownCaller"]}
-                  </td>
-                  <td className="px-5 py-3">
+                  </TableCell>
+                  <TableCell className={CELL}>
                     <span className="inline-flex items-center gap-1.5">
                       <span className={cn("size-[7px] shrink-0 rounded-full", CLASS_DOT[cls])} aria-hidden />
                       {m[`screened.reason.${r.reason}` as const]}
                     </span>
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               );
             })}
-          </tbody>
-        </table>
-      </div>
+          </TableBody>
+        </Table>
 
-      {/* EXACTLY ONE pager, and only when a full page came back. */}
-      {olderHref ? (
-        <Link href={olderHref} className="text-sm underline underline-offset-2">
-          {m["screened.older"]}
-        </Link>
-      ) : null}
+        {/* EXACTLY ONE pager, and only when a full page came back. */}
+        {olderHref ? (
+          <div className="border-t border-[var(--row-line)] px-5 py-3">
+            <Link href={olderHref} className="text-sm underline underline-offset-2">
+              {m["screened.older"]}
+            </Link>
+          </div>
+        ) : null}
+      </ListPanel>
     </section>
   );
 }

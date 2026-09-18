@@ -1651,7 +1651,12 @@ export const m = {
   // not a business owner's.
   "nav.screened": "Screened calls",
   "screened.title": "Screened calls",
+  // A whole-phrase pick by count, never a plural template reused for one —
+  // see contacts.count's own comment above for the "1 people" bug this
+  // avoids, and work.linesDown.one/.many just below for the same rule
+  // applied to a second count on this same screen.
   "screened.total": "{n} refused calls",
+  "screened.totalOne": "1 refused call",
   "screened.col.when": "When",
   "screened.col.account": "Company",
   "screened.col.called": "Number dialled",
@@ -1667,6 +1672,12 @@ export const m = {
   "screened.reason.repeat-spam": "Repeat spam",
   "screened.unknownCaller": "Withheld",
   "screened.noAccount": "—",
+  // DESIGN.md rule 1 — the total never ships alone. `misconfigured` is the
+  // one class of the three (CLASS_DOT's own comment, screened-table.tsx)
+  // that is our own fault and needs a fix, so it is the breakdown worth a
+  // second number beside the total.
+  "screened.misconfigured": "{n} misconfigured",
+  "screened.misconfiguredOne": "1 misconfigured",
   "screened.empty.title": "Nothing has been turned away",
   "screened.empty.body":
     "When the receptionist refuses a call — a number that isn't live, a repeat spammer, a caller over the daily cap — it lands here with the reason. Nothing to do until then.",
