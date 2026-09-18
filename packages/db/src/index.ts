@@ -89,3 +89,4 @@ export {
   DEMO_BUSINESS_LINE, DEMO_FROM_EMAIL, DEMO_OPEN_HOURS,
   DEMO_FORWARDING_TICK_KEY,
 } from "./demo/fiction";
+export * from "./timezone";

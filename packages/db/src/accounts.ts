@@ -1,16 +1,27 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit } from "./events";
+import { assertUsableZone } from "./timezone";
 
 export async function createAccount(
   db: SupabaseClient,
   input: { clerkOrgId: string; name: string; timezone?: string; actorId: string },
 ): Promise<{ id: string }> {
+  // BEFORE the agency read, so an unusable zone costs no round trip and — more
+  // to the point — no half-made account. This is the ONLY write path for
+  // accounts.timezone in the product, so it is the only place the bad value
+  // can enter; see ./timezone for why it throws instead of falling back.
+  //
+  // An ABSENT zone still takes the default below. Absent means the operator
+  // left the field alone; a present-but-broken value means they typed
+  // something, and the two deserve different answers.
+  const timezone = input.timezone === undefined ? "America/Chicago" : assertUsableZone(input.timezone);
+
   const { data: agency, error: agErr } = await db.from("agencies").select("id").limit(1).single();
   if (agErr || !agency) throw new Error(`agency row missing: ${agErr?.message}`);
 
   const { data: account, error } = await db
     .from("accounts")
-    .insert({ agency_id: agency.id, clerk_org_id: input.clerkOrgId, name: input.name, brand_name: input.name, timezone: input.timezone ?? "America/Chicago" })
+    .insert({ agency_id: agency.id, clerk_org_id: input.clerkOrgId, name: input.name, brand_name: input.name, timezone })
     .select("id")
     .single();
   if (error || !account) throw new Error(`createAccount failed: ${error?.message}`);
