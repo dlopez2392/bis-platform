@@ -119,15 +119,21 @@ function secondaryLine(row: WorkRow, contactName: string): string | null {
 const EPOCH_MS = 0;
 
 /**
- * The row's own date, in the ACCOUNT's zone — never the server's, never the
- * browser's (the milestone's binding constraint). `formatDateInZone` throws
- * `RangeError` on an unparseable timestamp or an invalid zone; the degrade
- * requirement this screen inherits (commit 3649d41, `bucketWork`'s own
- * per-row degrade on a bad `dueAt`) means a single bad row must not take the
- * whole page down, so that throw costs at most this row's own date text —
- * narrowed the same way `bucketWork`'s own two `catch` blocks are narrowed:
- * rethrow anything that is NOT a `RangeError`, so a real bug in the format
- * path fails loudly instead of silently going blank on every row forever.
+ * A row's own date, in the account's resolved zone — never the server's,
+ * never the browser's (the milestone's binding constraint).
+ *
+ * THE ZONE CAN NO LONGER CAUSE AN OMISSION (2026-09-18). `timezone` now
+ * arrives from `renderZone`, which is total by construction and always hands
+ * back a zone `Intl` accepts, so the branch that used to swallow a bad zone
+ * and render no date is gone. That omission was the work queue's half of the
+ * timezone defect — the other four screens guessed silently, this one went
+ * quiet — and danlo's call on 2026-09-17 was explicit: "I do not want to omit
+ * the dates." The screen names the zone instead (`ZoneNote`, page.tsx).
+ *
+ * The `catch` stays, and it is NOT dead code: it now guards exactly one
+ * remaining case, an unparseable `iso`, where `formatDateInZone` throws on
+ * the INSTANT rather than on the zone. A row with a corrupt timestamp still
+ * degrades to no date rather than taking the whole queue down with it.
  */
 function rowDateText(row: WorkRow, timezone: string): string | null {
   const iso = row.dueAt ?? row.occurredAt;
@@ -135,6 +141,7 @@ function rowDateText(row: WorkRow, timezone: string): string | null {
   try {
     return formatDateInZone(iso, timezone);
   } catch (err) {
+    // A bad INSTANT only — the zone is guaranteed usable by `renderZone`.
     if (!(err instanceof RangeError)) throw err;
     return null;
   }
@@ -161,14 +168,12 @@ function WorkRowItem({
   /** Never a raw id and never "undefined" — WorkList resolves this to
    *  `m["contact.noName"]` for a contactId with no matching (or no) row. */
   contactName: string;
-  /** The account's own RAW IANA zone, exactly as page.tsx read it off the
-   *  account row — never `safeZone`-clamped to UTC (see page.tsx's own
-   *  comment on this). Every date on this row is the company's own
-   *  wall-clock day — the bucket chip beside it is computed in this same raw
-   *  zone by `bucketWork`, and a row formatted in a different zone (the
-   *  server's, via the bare `formatDate` this replaced, or a UTC clamp)
-   *  could disagree with its own chip inside a single row. `rowDateText`
-   *  above is what actually declines on an invalid zone, per-row. */
+  /** The account's RESOLVED zone (`renderZone`), exactly as page.tsx
+   *  resolved it. Every date on this row is the company's own wall-clock day
+   *  — the bucket chip beside it is computed by `bucketWork` in this SAME
+   *  zone, which is what stops a row from disagreeing with its own chip.
+   *  Always usable, so `rowDateText` above no longer declines on zone
+   *  grounds; page.tsx's `ZoneNote` names the zone once for the screen. */
   timezone: string;
   /** The four Task 4 server actions, already bound to `accountId` by
    *  `WorkList` below — passed down as props into the "use client" boundary
@@ -262,12 +267,10 @@ export function WorkList({
    *  back to `m["contact.noName"]` below — never a raw id, never
    *  "undefined". */
   contactNames: Record<string, string>;
-  /** The account's own RAW IANA zone, read straight off the account row by
-   *  page.tsx with no `safeZone` clamp — UNLIKE `calls-table.tsx`'s
-   *  identically-named prop. A bad zone must be OMITTED, never guessed at in
-   *  UTC (page.tsx's own comment), so this screen's contract differs from
-   *  Calls' on purpose. Threaded straight through to every row's own date
-   *  text, which is where the actual per-row decline happens. */
+  /** The account's RESOLVED zone (`renderZone`) — the SAME contract
+   *  `calls-table.tsx`'s identically-named prop now carries. This screen
+   *  used to differ on purpose (omit rather than guess); it no longer does,
+   *  because the guess is no longer silent. One rule, five screens. */
   timezone: string;
 }) {
   const shown = visibleBuckets(buckets);

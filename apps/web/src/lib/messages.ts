@@ -1597,6 +1597,53 @@ export const m = {
   // blank, the row's caption reads this instead of going empty or falling
   // back to the internal label.
   "work.agency.unbranded": "Unnamed account",
+
+  // ── The zone note (2026-09-18) ─────────────────────────────────────────
+  // Five screens print dates in the account's zone. Every one of them now
+  // NAMES that zone, because the defect was never that UTC appeared — it was
+  // that UTC appeared SILENTLY, so whoever read the screen took it for local
+  // time. danlo, 2026-09-17: "I do not want to omit the dates so let's find
+  // a workaround." Nothing is omitted; nothing is hidden.
+  //
+  // The zone itself is interpolated as the IANA name ("America/Chicago")
+  // rather than a friendly rendering of it. Three reasons, in order: it is
+  // stable (a "Central Daylight Time" label renames itself twice a year, so
+  // two dates six months apart would claim different zones), it is what the
+  // operator actually chose in Settings — which is where the sentence below
+  // sends them, so the screen and the field agree on the string — and
+  // deriving anything friendlier means inventing a second naming policy on
+  // top of `Intl`, which is exactly how the five readers diverged to begin
+  // with (see zone-resolution.ts).
+  "zone.note": "Times shown in {zone}",
+
+  // Shown ONLY when `guessed` — i.e. the zone printed is not the account's
+  // own. DESIGN.md rule 3: this marker is a WORD, a whole sentence of them,
+  // never a colour. The tinted ground carries no meaning by itself.
+  //
+  // Split by SOURCE, not collapsed, because "we guessed" is not actionable
+  // while "we used the agency's zone" names which setting is broken.
+  "zone.guessed.agency":
+    "This company has no timezone of its own, so times use the agency's.",
+  "zone.guessed.fallback":
+    "Neither this company nor the agency has a usable timezone, so times use UTC.",
+  // The fix, for the reader who can actually apply it. Settings is
+  // agency-only (`requireAgencyOnlyAccountAccess`), so this link is rendered
+  // for the agency and ONLY for the agency — a client following it would be
+  // redirected straight back to their dashboard, which is a worse answer
+  // than no link at all.
+  "zone.guessed.fix": "Set it in Settings",
+  // The same fact, for a client, who can see the consequence but cannot
+  // reach the setting. Says who to ask rather than offering a dead link, and
+  // says "your" rather than "this company" — on their own dashboard, they
+  // are not a third party. Does NOT name the zone: the label line above it
+  // already does, and the agency/fallback split is about which SETTING to
+  // fix, which is not a distinction a client can act on either way.
+  // "needs fixing", NOT "isn't set yet". `accounts.timezone` is NOT NULL
+  // with a default (migration 0001), so it is always set to something — the
+  // reachable failure is that it is set to a value nothing can format. The
+  // earlier wording described a state the schema makes impossible.
+  "zone.guessed.client":
+    "Your timezone needs fixing, so times are shown in another zone. Ask your account manager to sort it out.",
 } as const;
 
 export type MessageKey = keyof typeof m;

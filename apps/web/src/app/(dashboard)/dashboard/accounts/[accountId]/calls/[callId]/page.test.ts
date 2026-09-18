@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { m } from "@/lib/messages";
+import { renderedText } from "@/lib/rendered-text";
 import type { CallDetailRow } from "@bis/db";
 import { emptyCallState } from "@/lib/voice/call-state";
 import { composeSummary } from "@/lib/voice/summarize";
@@ -7,8 +9,14 @@ import { composeSummary } from "@/lib/voice/summarize";
 // Same shape as the sibling list page's test: the auth gate and the two data
 // reads this async server component actually reaches are mocked, so what is
 // under test is which branch renders — not Clerk or Supabase.
+/** Mutable, via `vi.hoisted` so the factory can close over it without a TDZ
+ *  hazard. Fixed at `true`, the client branch of the zone note went
+ *  unexercised on this screen — and hardcoding `isAgency` in page.tsx kept
+ *  the whole suite green while offering a client a link to a route
+ *  `requireAgencyOnlyAccountAccess` would bounce them from. */
+const authFixture = vi.hoisted(() => ({ isAgency: true }));
 vi.mock("@/lib/auth", () => ({
-  requireAccountAccess: async () => ({ userId: "user_1", isAgency: true }),
+  requireAccountAccess: async () => ({ userId: "user_1", isAgency: authFixture.isAgency }),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -29,6 +37,17 @@ vi.mock("@bis/db", () => ({
   getCall: (...args: unknown[]) => getCallMock(...args),
   listFailedOutboundSms: (...args: unknown[]) => listFailedOutboundSmsMock(...args),
 }));
+
+/** The screen's resolved zone (lib/zone.ts) — mutable so a test can put the
+ *  page into the "guessed" state without a second `vi.mock`. */
+let resolvedZone: {
+  zone: string; guessed: boolean; label: string;
+  source: "account" | "agency" | "fallback";
+} = { zone: "America/Chicago", guessed: false, label: "America/Chicago", source: "account" };
+vi.mock("@/lib/zone", () => ({
+  renderZone: async () => resolvedZone,
+}));
+
 
 // The resend control binds this. Mocked because a "use server" module cannot
 // be imported into a vitest render, and because what is under test here is
@@ -347,5 +366,38 @@ describe("CallDetailPage", () => {
     expect(html).not.toContain("Text-back");
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("failed-text-back read failed"));
     spy.mockRestore();
+  });
+});
+
+/**
+ * The zone note reaches the Call detail page.
+ *
+ * It has to, and with the SAME answer the list gave: a client clicks a row
+ * showing one date and must not land on a page showing another.
+ */
+describe("CallDetailPage — the zone note", () => {
+  beforeEach(() => {
+    resolvedZone = { zone: "America/Chicago", guessed: false, label: "America/Chicago", source: "account" };
+    authFixture.isAgency = true;
+  });
+
+  it("names the zone (mutation: delete the ZoneNote element from page.tsx -> FAILS)", async () => {
+    const html = await render(CALL);
+    expect(renderedText(html)).toContain(m["zone.note"].replace("{zone}", "America/Chicago"));
+  });
+
+  it("offers the fix when the zone was guessed (mutation: render the note only when NOT guessed -> FAILS)", async () => {
+    resolvedZone = { zone: "America/Chicago", guessed: true, label: "America/Chicago", source: "agency" };
+    const html = await render(CALL);
+    expect(renderedText(html)).toContain(m["zone.guessed.fix"]);
+  });
+
+  it("never hands a CLIENT the Settings link (mutation: hardcode isAgency={true} in page.tsx -> FAILS)", async () => {
+    resolvedZone = { zone: "America/Chicago", guessed: true, label: "America/Chicago", source: "agency" };
+    authFixture.isAgency = false;
+    const html = await render(CALL);
+    expect(renderedText(html)).toContain(m["zone.guessed.client"]);
+    expect(renderedText(html)).not.toContain(m["zone.guessed.fix"]);
+    expect(html).not.toContain("/settings");
   });
 });

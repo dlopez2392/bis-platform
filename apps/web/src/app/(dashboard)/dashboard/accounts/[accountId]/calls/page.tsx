@@ -5,7 +5,8 @@ import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
-import { safeZone } from "@/lib/booking/time";
+import { renderZone } from "@/lib/zone";
+import { ZoneNote } from "@/components/zone-note";
 import { readLimitConfig, utcDayStart } from "@/lib/voice/call-limits";
 import { cn } from "@/lib/utils";
 import { Meter } from "@/components/meter";
@@ -33,7 +34,7 @@ export default async function CallsPage({
   // BOTH audiences. This is the client's own business data — who rang and
   // what the receptionist did about it — the same class of surface contacts
   // and the calendar are gated with, not agency work about the client.
-  await requireAccountAccess(accountId);
+  const { isAgency } = await requireAccountAccess(accountId);
   const db = await dbForRequest();
 
   // Validated once, reused twice: as the query's own cursor below, and as
@@ -62,7 +63,13 @@ export default async function CallsPage({
   // …and the same config read, so the denominator on screen is the cap that
   // is actually enforced rather than a hard-coded 50.
   const cap = readLimitConfig().perAccountPerDay;
-  const timezone = safeZone(account.timezone, "UTC");
+  // ONE resolver for all five date-rendering screens (lib/zone.ts). The
+  // `safeZone(account.timezone, "UTC")` clamp this replaces substituted UTC
+  // SILENTLY, so a Texas evening printed as the following day and the screen
+  // said nothing about it. `zone.label` is named on screen below, and
+  // `zone.guessed` says when it is not this account's own.
+  const zone = await renderZone(account.timezone);
+  const timezone = zone.zone;
 
   // ONE read for the whole page, not one per row — fifty rows would otherwise
   // be fifty round trips to answer a question that is empty for almost all of
@@ -114,27 +121,40 @@ export default async function CallsPage({
       <PageHeader title={m["calls.title"]} />
       <div className="space-y-6 p-6">
         <UsageMeter used={todayCount} cap={cap} />
-        {rows.length === 0 && !cursor ? (
-          // The COLD-START reading of zero rows: no `?before=` cursor, so
-          // this is page one and there is nothing behind it either — a
-          // client who has genuinely never had a call. A cursored zero
-          // (below) means the opposite: real history, just none older than
-          // the cursor, and `CallsTable` with zero rows renders its headers
-          // and no pager rather than this.
-          <EmptyState
-            icon={PhoneIncoming}
-            title={m["calls.empty.title"]}
-            body={m["calls.empty.body"]}
-          />
-        ) : (
-          <CallsTable
-            rows={rows}
-            accountId={accountId}
-            timezone={timezone}
-            olderHref={olderHref}
-            textbackFailed={textbackFailed}
-          />
-        )}
+        {/* BELOW the meter and bound to the TABLE, deliberately.
+            `UsageMeter` counts today from `utcDayStart` — it has to, because
+            that is the floor the incoming-call webhook enforces the cap
+            against — so its "today" is a UTC day while every row beneath it
+            is in the account's zone. At 7pm in Texas those are different
+            days. A zone note sitting above the meter would be claiming
+            something false about the one number on this page it does not
+            describe, which is the exact defect this work exists to end.
+            Grouped with the table instead, so what it qualifies is
+            unambiguous. */}
+        <div className="space-y-3">
+          <ZoneNote zone={zone} isAgency={isAgency} accountId={accountId} />
+          {rows.length === 0 && !cursor ? (
+            // The COLD-START reading of zero rows: no `?before=` cursor, so
+            // this is page one and there is nothing behind it either — a
+            // client who has genuinely never had a call. A cursored zero
+            // (below) means the opposite: real history, just none older than
+            // the cursor, and `CallsTable` with zero rows renders its headers
+            // and no pager rather than this.
+            <EmptyState
+              icon={PhoneIncoming}
+              title={m["calls.empty.title"]}
+              body={m["calls.empty.body"]}
+            />
+          ) : (
+            <CallsTable
+              rows={rows}
+              accountId={accountId}
+              timezone={timezone}
+              olderHref={olderHref}
+              textbackFailed={textbackFailed}
+            />
+          )}
+        </div>
       </div>
     </>
   );

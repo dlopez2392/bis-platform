@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { WorkRow } from "@bis/db";
 import { m } from "@/lib/messages";
+import { renderedText } from "@/lib/rendered-text";
 
 /**
  * The regression this file exists to guard: the dashboard used to render the
@@ -78,6 +79,16 @@ const dbMocks = vi.hoisted(() => ({
 // mergeChecklist (@/lib/checklist-catalogue) is NOT mocked — the real
 // 7-item CHECKLIST_CATALOGUE is what makes "the right counts" a meaningful
 // assertion instead of a number this file made up itself.
+/** The screen's resolved zone (lib/zone.ts) — mutable so a test can put the
+ *  page into the "guessed" state without a second `vi.mock`. */
+let resolvedZone: {
+  zone: string; guessed: boolean; label: string;
+  source: "account" | "agency" | "fallback";
+} = { zone: "America/Chicago", guessed: false, label: "America/Chicago", source: "account" };
+vi.mock("@/lib/zone", () => ({
+  renderZone: async () => resolvedZone,
+}));
+
 vi.mock("@bis/db", () => ({
   listChecklistState: (...a: unknown[]) => dbMocks.listChecklistState(...a),
   getA2pRegistration: (...a: unknown[]) => dbMocks.getA2pRegistration(...a),
@@ -252,11 +263,57 @@ describe("AccountDashboardPage — the work row (unlike the checklist row, both 
     expect(workRowProps.current).toEqual({ accountId: "acct1", total: 0, overdue: 0 });
   });
 
+  it("counts overdue work in the RESOLVED zone, not the account's raw one (mutation: bucketWork(..., account.timezone) -> overdue drops to 0 -> FAILS)", async () => {
+    // The account's stored zone is unusable; `renderZone` resolves past it.
+    // Bucketed in the raw value, `bucketWork` cannot judge any row and sends
+    // every one of them to Waiting — so the dashboard's "N overdue" silently
+    // becomes 0 while the KPI periods beside it are measured in a zone that
+    // works. This page is the one that used to hold BOTH answers at once.
+    dbFixture.timezone = "Not/AZone";
+    dbMocks.listAccountWork.mockResolvedValue([workRow("task", "2020-01-01T00:00:00Z")]);
+
+    await renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    expect(workRowProps.current).toEqual({ accountId: "acct1", total: 1, overdue: 1 });
+  });
+
   it("still renders the row at an empty queue, for a client session", async () => {
     authFixture.isAgency = false;
 
     await renderToStaticMarkup(await AccountDashboardPage(route()));
 
     expect(workRowProps.current).toEqual({ accountId: "acct1", total: 0, overdue: 0 });
+  });
+});
+
+/**
+ * The zone note reaches the account dashboard.
+ *
+ * This page is the one that had TWO answers fifty lines apart — a UTC clamp
+ * for the KPI windows and the raw zone for `bucketWork` — so it is the one
+ * where naming the single resolved zone matters most. Both audiences land
+ * here at login, which is why the client case is exercised too.
+ */
+describe("AccountDashboardPage — the zone note", () => {
+  beforeEach(resetFixtures);
+
+  it("names the zone above the KPI tiles (mutation: delete the ZoneNote element from page.tsx -> FAILS)", async () => {
+    resolvedZone = { zone: "America/Chicago", guessed: false, label: "America/Chicago", source: "account" };
+    const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+    expect(renderedText(html)).toContain(m["zone.note"].replace("{zone}", "America/Chicago"));
+  });
+
+  it("gives the agency the fix and a CLIENT no link at all (mutation: drop the isAgency branch in ZoneNote -> FAILS)", async () => {
+    resolvedZone = { zone: "America/Chicago", guessed: true, label: "America/Chicago", source: "agency" };
+
+    const agencyHtml = renderToStaticMarkup(await AccountDashboardPage(route()));
+    expect(renderedText(agencyHtml)).toContain(m["zone.guessed.fix"]);
+
+    authFixture.isAgency = false;
+    const clientHtml = renderToStaticMarkup(await AccountDashboardPage(route()));
+    expect(renderedText(clientHtml)).not.toContain(m["zone.guessed.fix"]);
+    // Settings is agency-only; a client following that link is redirected
+    // straight back to this page.
+    expect(clientHtml).not.toContain("/settings");
   });
 });

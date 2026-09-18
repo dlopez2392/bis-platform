@@ -6,6 +6,7 @@ import { Meter } from "@/components/meter";
 import { DailyChart } from "../accounts/[accountId]/website/daily-chart";
 import { DeviceStrip } from "../accounts/[accountId]/website/device-strip";
 import { EmptyState } from "@/components/empty-state";
+import { ZoneNote } from "@/components/zone-note";
 import { TagChips } from "@/components/tag-chips";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -242,6 +243,49 @@ export default async function StyleguidePage() {
             />
           </div>
           <DeviceStrip devices={[{ name: "mobile", visitors: 71, share: 0.71 }, { name: "desktop", visitors: 26, share: 0.26 }, { name: "tablet", visitors: 3, share: 0.03 }]} />
+        </Section>
+
+        <Section title="Zone note" file="components/zone-note.tsx">
+          {/* All four states, because the interesting ones only appear on a
+              MISCONFIGURED account and nobody would otherwise see them.
+              DESIGN.md rule 3: every marker here is a word — strip the tint
+              and each still says exactly what it means. */}
+          <div className="w-full space-y-5">
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">Configured — the zone is simply named</p>
+              <ZoneNote
+                zone={{ zone: "America/Chicago", guessed: false, label: "America/Chicago", source: "account" }}
+                isAgency
+                accountId="demo"
+              />
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">Guessed from the agency — agency reader, gets the fix</p>
+              <ZoneNote
+                zone={{ zone: "America/Chicago", guessed: true, label: "America/Chicago", source: "agency" }}
+                isAgency
+                accountId="demo"
+              />
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">Nothing usable anywhere — agency reader</p>
+              <ZoneNote
+                zone={{ zone: "UTC", guessed: true, label: "UTC", source: "fallback" }}
+                isAgency
+                accountId="demo"
+              />
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">
+                Client reader — no Settings link, because that route is agency-only
+              </p>
+              <ZoneNote
+                zone={{ zone: "UTC", guessed: true, label: "UTC", source: "fallback" }}
+                isAgency={false}
+                accountId="demo"
+              />
+            </div>
+          </div>
         </Section>
 
         <Section title="Empty state" file="components/empty-state.tsx">
