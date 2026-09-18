@@ -45,6 +45,7 @@ Further binding facts:
 - **Gates before merge:** `pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e`. Run one at a time; read exit codes from files.
 - **Anything mutating in e2e runs on the per-run fixture account.** Never `Test Client One`, never a live account.
 - ⚠️ **`withTestAccount` yields a `serviceDb()` client, which bypasses RLS AND all grants.** Any property that depends on a grant or a policy — above all this table's column-level UPDATE grant, its declared security boundary — is INVISIBLE to a test written that way. Prove those as the `authenticated` role via `withRollback` + `actAs`, seeding real `accounts` rows with `client_access_enabled` true. A grants test that never runs as the restricted role is the shape this repo has shipped green and hollow before.
+- ⚠️ **A mutation is only unfalsifiable if the WHOLE FILE stays green — never one `-t` filter.** Judging falsifiability from a filtered run produced a wrong decision on this branch: a guard was removed as "redundant" on single-test evidence, while another test in the same file did catch the mutation, and the removal shipped a user-visible wrong message.
 - ⚠️ **The evidence window is ONE TURN, and the turn is chosen by LAST match.** When a phrase recurs across caller turns, the last one is what the caller settled on — first-match would cite an early refusal for a proposal grounded in a later acceptance. Pin the rule with a test that dies when the search is reversed. The window's limit is real and must be stated wherever the citation is rendered: a retraction in a DIFFERENT turn is invisible to any turn-selection rule.
 - ⚠️ **Evidence is now a whole caller turn: mean 57 chars, p95 473, max 483 measured live.** Every surface rendering it must clamp. The work queue is the sharp one — unlike call detail, it shows the citation with no transcript beside it.
 - ⚠️ **A compile-time guarantee must be pinned at the CALL SITE, not on a type alias.** A `@ts-expect-error` on `const bad: SomeType = {...}` pins the type's declaration; the function that consumes it can still be widened with the whole gate green. Twice on this branch a proof measured the thing changed rather than the thing wanted — put the directive where a consumer actually types.
@@ -1394,7 +1395,15 @@ export async function dismissProposal(accountId: string, callId: string, proposa
 **Binding design points:**
 1. `requireAccountAccess` — **not** the agency-only variant. Both audiences act (spec §Screens).
 2. Accept routes through the existing human write paths. **Never a bespoke insert.**
-3. **Decide FIRST, then write.** `markProposalDecided` is a compare-and-swap (`.eq("status","pending")`); if it returns false, another reviewer already answered and this action must do nothing. Doing the CRM write first would let a double-click create two tasks.
+3. **Decide FIRST, then write — AND PUT THE DECISION BACK IF THE WRITE FAILS.** `markProposalDecided` is a compare-and-swap (`.eq("status","pending")`); if it returns false, another reviewer already answered and this action must do nothing. Doing the CRM write first would let a double-click create two tasks.
+
+   ⚠️ **The second half is not optional, and omitting it was a Critical defect on this branch.** The CAS stamps `accepted` before the write, so ANY failure afterwards leaves the proposal burned — stamped accepted, no record created, and unrecoverable, because `dismissProposal`'s own CAS requires `pending`. Proved live: `addTask` throwing produced "That didn't go through. Try again", status `accepted`, zero tasks, and a retry answering "Someone already answered this one." The table that claims a human accepted is the same table the design names as what a future accuracy measurement is computed from.
+
+   The revert is `update call_proposals set status='pending', decided_at=null, decided_by=null where id=? and status='accepted' and decided_by=<this user>`.
+
+   **Distinguish `decided` from `written`.** Revert only when the CRM write did NOT land — a proposal whose write succeeded must not be clawed back because a later `revalidatePath` failed, or accepting again would create a second record.
+
+   Any shape check that can refuse a proposal (`!contactId`, a payload that disagrees with its `kind`) belongs ABOVE the CAS, or it becomes the branch that destroys what it meant to refuse.
 4. `fillContactBlanks` IS the accept-time re-check for `contact_field` — it writes only still-empty columns and returns what it wrote. An empty return means a human filled the field in between, and the action reports that.
 5. For `opportunity_stage`, re-read the opportunity's current `stage_id` and refuse if it no longer equals `fromStageId`.
 
@@ -1567,6 +1576,10 @@ export async function acceptProposal(
   }
 
   revalidatePath(callPath(accountId, callId));
+  // BOTH: `/dashboard/work` is the agency-only roll-up (`work/page.tsx`
+  // calls `requireAgency()` first), while the accepted toast promises "your
+  // to-do list" — which is the account's own screen.
+  revalidatePath(`/dashboard/accounts/${accountId}/tasks`);
   revalidatePath("/dashboard/work");
   return { ok: true };
 }
@@ -1588,6 +1601,10 @@ export async function dismissProposal(
     return { ok: false, error: m["proposals.failed"] };
   }
   revalidatePath(callPath(accountId, callId));
+  // BOTH: `/dashboard/work` is the agency-only roll-up (`work/page.tsx`
+  // calls `requireAgency()` first), while the accepted toast promises "your
+  // to-do list" — which is the account's own screen.
+  revalidatePath(`/dashboard/accounts/${accountId}/tasks`);
   revalidatePath("/dashboard/work");
   return { ok: true };
 }
