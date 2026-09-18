@@ -117,10 +117,16 @@ export default async function ScreenedPage({
         ) : undefined}
       />
       <div className="space-y-6 p-6">
-        {rows.length === 0 && filterClass ? (
+        {rows.length === 0 && filterClass && !cursor ? (
           // A filter that simply matched nothing is a DIFFERENT sentence
           // from a genuine cold start — "nothing has ever been turned away"
-          // is false when the filter is the reason the list is empty.
+          // is false when the filter is the reason the list is empty. The
+          // `!cursor` guard matters just as much here as it does two
+          // branches below: a paged-in zero (the filtered row count was an
+          // exact multiple of PAGE_SIZE) is not "nothing matches" either —
+          // rows of this class exist, the reader just paged past them — so
+          // that case falls through to `ScreenedTable` instead, same as the
+          // unfiltered cold-start guard already does.
           <EmptyState
             icon={ShieldAlert}
             title={m["screened.empty.filtered.title"]}

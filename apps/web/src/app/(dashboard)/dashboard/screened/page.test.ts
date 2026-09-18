@@ -299,6 +299,27 @@ describe("ScreenedPage", () => {
     expect(text).not.toContain(m["screened.empty.title"]);
   });
 
+  // Reviewer finding, 2026-09-18: the filtered-empty branch was missing the
+  // `!cursor` guard the cold-start branch two lines below it already has —
+  // a guard that exists in THIS file precisely to stop a paged-in zero from
+  // being read as "there has never been anything here". A filtered list
+  // whose row count is an exact multiple of PAGE_SIZE lands here: the
+  // header above still states the filter's scope, so "nothing matches this
+  // filter" would be a false claim sitting right beside a true one. Once a
+  // cursor is present, this must fall through to the real table, the same
+  // way the cold-start branch already does for the unfiltered case.
+  it("does not claim 'nothing matches' on a paged-in filtered-empty page — falls through to the real table instead (mutation: drop the !cursor guard on the filtered-empty branch -> FAILS)", async () => {
+    rows = [];
+    total = 50;
+    const html = renderToStaticMarkup(
+      await ScreenedPage(route("2026-09-18T14:30:00.000Z", "screened")),
+    );
+    const text = renderedText(html);
+    expect(text).not.toContain(m["screened.empty.filtered.title"]);
+    expect(text).not.toContain(m["screened.empty.filtered.body"]);
+    expect(text).toContain(m["screened.total"].replace("{n}", "50"));
+  });
+
   it("hides the misconfigured breakdown when a class filter is active — the filtered total already IS that number (mutation: render the breakdown row regardless of filterClass -> FAILS)", async () => {
     rows = [row({ reason: "not-live" })];
     total = 1;
