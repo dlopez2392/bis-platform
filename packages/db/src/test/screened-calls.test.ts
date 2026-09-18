@@ -164,12 +164,23 @@ describe("countMisconfiguredScreenedCalls", () => {
     });
   });
 
-  it("is not limited to one page of results (mutation: add .limit(50) -> FAILS)", async () => {
+  it("is not limited to one page of results (mutation: swap the head-count for `.select(\"id\").limit(50)` + `(data ?? []).length` -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       const before = await countMisconfiguredScreenedCalls(db);
       // More than the list page's PAGE_SIZE (50) — a head-count query has no
       // page to be limited to, and this is the row count that would expose
       // a stray `.limit()` copied in from `listScreenedCalls`.
+      //
+      // A literal `.limit(50)` appended to the real `count: "exact",
+      // head: true` request below is NOT the mutation that reproduces here —
+      // verified by applying it directly, which left this test green. This
+      // Supabase/PostgREST shape computes the exact count from a
+      // `Content-Range` header derived from the full filtered match set,
+      // independent of any `.limit()`/`.range()` on the same request, so an
+      // actual `.limit(50)` on the head-count query is a silent no-op. What
+      // DOES reproduce is replacing the head-count with the row-returning
+      // shape `.select("id").limit(50)` and counting `(data ?? []).length`
+      // instead — the mutation this test's name now names.
       for (let i = 0; i < 55; i++) {
         await recordScreenedCall(db, {
           accountId, phoneNumberId: null,

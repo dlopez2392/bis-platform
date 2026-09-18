@@ -122,7 +122,19 @@ describe("ScreenedPage", () => {
     total = 1;
     misconfiguredTotal = 1;
     const html = renderToStaticMarkup(await ScreenedPage(route()));
-    expect(renderedText(html)).toContain("1 misconfigured");
+    // Boundary-anchored, not `toContain`: `toContain("1 misconfigured")` is
+    // satisfied by a corruption that merely APPENDS characters onto the copy
+    // string — "1 misconfiguredXXX" still contains "1 misconfigured" as a
+    // substring, so that assertion shape stays green even though the copy is
+    // wrong. `\b…\b` requires a real word boundary on both sides; the "d" of
+    // "…configured" butts straight up against an appended "X" (both word
+    // characters), so no boundary exists there and the match fails, while the
+    // real copy's "d" is followed by a tag (rendered as whitespace by
+    // `renderedText`), which is a boundary. Deliberately still a hardcoded
+    // literal, not `m["screened.misconfiguredOne"]` — reading the expected
+    // value from the same catalogue the render reads would make a corrupted
+    // copy string unfalsifiable.
+    expect(renderedText(html)).toMatch(/\b1 misconfigured\b/);
   });
 
   it("uses the plural template for more than one misconfigured call (mutation: corrupt screened.misconfigured's text -> FAILS)", async () => {
@@ -130,7 +142,10 @@ describe("ScreenedPage", () => {
     total = 2;
     misconfiguredTotal = 7;
     const html = renderToStaticMarkup(await ScreenedPage(route()));
-    expect(renderedText(html)).toContain("7 misconfigured");
+    // Same boundary-anchoring as the singular test above, and for the same
+    // reason — `toContain("7 misconfigured")` cannot distinguish the real
+    // copy from "7 misconfiguredXXX".
+    expect(renderedText(html)).toMatch(/\b7 misconfigured\b/);
   });
 
   it("names the reason in WORDS (mutation: render the raw enum -> FAILS)", async () => {
