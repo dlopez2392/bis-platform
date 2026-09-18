@@ -760,7 +760,7 @@ describe("isGrounded", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `pnpm --filter web test -- grounding`
+Run: `pnpm --filter web exec vitest run src/lib/proposals/grounding.test.ts`
 Expected: FAIL — `Cannot find module './grounding'`.
 
 - [ ] **Step 3: Write grounding.ts**
@@ -809,7 +809,7 @@ export function isGrounded(evidence: string, transcript: TranscriptEvent[]): boo
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `pnpm --filter web test -- grounding`
+Run: `pnpm --filter web exec vitest run src/lib/proposals/grounding.test.ts`
 Expected: PASS, 8 tests.
 
 - [ ] **Step 5: Write the failing eligibility test**
@@ -873,7 +873,7 @@ describe("callIsEligible", () => {
 
 - [ ] **Step 6: Run to verify it fails**
 
-Run: `pnpm --filter web test -- eligibility`
+Run: `pnpm --filter web exec vitest run src/lib/proposals/eligibility.test.ts`
 Expected: FAIL — `Cannot find module './eligibility'`.
 
 - [ ] **Step 7: Write eligibility.ts**
@@ -922,7 +922,7 @@ export function callIsEligible(input: {
 
 - [ ] **Step 8: Run to verify it passes**
 
-Run: `pnpm --filter web test -- eligibility`
+Run: `pnpm --filter web exec vitest run src/lib/proposals/eligibility.test.ts`
 Expected: PASS, 7 tests.
 
 - [ ] **Step 9: Prove the mutations**
@@ -1098,7 +1098,7 @@ describe("generateProposals", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `pnpm --filter web test -- generate`
+Run: `pnpm --filter web exec vitest run src/lib/proposals/generate.test.ts`
 Expected: FAIL — `Cannot find module './generate'`.
 
 - [ ] **Step 3: Write generate.ts**
@@ -1219,7 +1219,7 @@ export async function generateProposals(input: {
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `pnpm --filter web test -- generate`
+Run: `pnpm --filter web exec vitest run src/lib/proposals/generate.test.ts`
 Expected: PASS, 8 tests.
 
 - [ ] **Step 5: Prove each mutation**
@@ -1279,7 +1279,7 @@ The implementer must fill these against the real harness already in that file �
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `pnpm --filter web test -- finish-call`
+Run: `pnpm --filter web exec vitest run src/lib/voice/finish-call.test.ts`
 Expected: FAIL — `generateProposals` is never called.
 
 - [ ] **Step 3: Add the call after the row write**
@@ -1315,7 +1315,7 @@ Note: `contactId` is the local already resolved earlier in `finishCall` for the 
 
 - [ ] **Step 4: Run to verify they pass**
 
-Run: `pnpm --filter web test -- finish-call`
+Run: `pnpm --filter web exec vitest run src/lib/voice/finish-call.test.ts`
 Expected: PASS, including the three new tests.
 
 - [ ] **Step 5: Prove the ordering mutation**
@@ -1324,7 +1324,7 @@ Move the block above the `finishCallRow` await. Confirm **"generates proposals o
 
 - [ ] **Step 6: Run the whole voice suite**
 
-Run: `pnpm --filter web test -- voice`
+Run: `pnpm --filter web exec vitest run src/lib/voice`
 Expected: PASS. The lifecycle is the most-guarded area of this codebase; a regression here is the one that costs a real call.
 
 - [ ] **Step 7: Commit**
@@ -1438,7 +1438,7 @@ describe("dismissProposal", () => {
 
 - [ ] **Step 3: Run to verify they fail**
 
-Run: `pnpm --filter web test -- calls/\\[callId\\]/actions`
+Run: `pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/accounts/[accountId]/calls/[callId]/actions.test.ts"`
 Expected: FAIL — module not found.
 
 - [ ] **Step 4: Write actions.ts**
@@ -1557,7 +1557,7 @@ export async function dismissProposal(
 
 - [ ] **Step 5: Run to verify they pass**
 
-Run: `pnpm --filter web test -- calls/\\[callId\\]/actions`
+Run: `pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/accounts/[accountId]/calls/[callId]/actions.test.ts"`
 Expected: PASS.
 
 - [ ] **Step 6: Prove every mutation**
@@ -1717,7 +1717,7 @@ it("still requires grounding for a contact field (mutation: skip isGrounded on t
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `pnpm --filter web test -- generate`
+Run: `pnpm --filter web exec vitest run src/lib/proposals/generate.test.ts`
 Expected: FAIL — `contact_field` is currently skipped by the `p.kind !== "task"` allow-list.
 
 - [ ] **Step 3: Extend generate.ts**
@@ -1772,7 +1772,7 @@ In `apps/web/src/lib/voice/finish-call.ts`, before calling `generateProposals`, 
 
 - [ ] **Step 5: Run to verify they pass, then prove every mutation**
 
-Run: `pnpm --filter web test -- generate`
+Run: `pnpm --filter web exec vitest run src/lib/proposals/generate.test.ts`
 Expected: PASS. Then apply each named mutation and confirm the named test goes red. The `blankFields` filter is the critical one — record its red output verbatim.
 
 - [ ] **Step 6: Commit**
@@ -1925,7 +1925,7 @@ In `finish-call.ts`, when `contactId` is non-null, read the contact's single ope
 
 - [ ] **Step 4: Verify, prove every mutation, commit**
 
-Run: `pnpm --filter web test -- generate`
+Run: `pnpm --filter web exec vitest run src/lib/proposals/generate.test.ts`
 Expected: PASS. Apply each named mutation, confirm red by name. The backwards-move and pipeline-membership mutations are the two that matter most.
 
 ```bash
@@ -1959,7 +1959,7 @@ Assert, each by mutation:
 
 - [ ] **Step 2: Run to verify it fails, then implement, then verify it passes**
 
-Run: `pnpm --filter web test -- work`
+Run: `pnpm --filter web exec vitest run src/app/(dashboard)/dashboard/work`
 
 - [ ] **Step 3: Prove the contamination mutation**
 
