@@ -34,6 +34,13 @@ vi.mock("@/lib/sms/sender", async (importOriginal) => ({
 }));
 const summaryMocks = vi.hoisted(() => ({ generateSummary: vi.fn() }));
 vi.mock("./summary-service", () => ({ generateSummary: summaryMocks.generateSummary }));
+// Lazily imported inside finishCall itself (`await import("@/lib/proposals/generate")`),
+// same shape as `@/lib/voice/textback` in handoff-result/route.test.ts — vi.mock
+// intercepts a dynamic import exactly like a static one. Its own 61-test suite
+// owns the real generator's behaviour; this file owns only the lifecycle
+// question of WHEN and WHETHER finishCall calls it.
+const proposalsMocks = vi.hoisted(() => ({ generateProposals: vi.fn() }));
+vi.mock("@/lib/proposals/generate", () => ({ generateProposals: proposalsMocks.generateProposals }));
 
 import type { serviceDb } from "@bis/db";
 import { segmentsFor } from "@/lib/sms/segments";
@@ -87,6 +94,9 @@ beforeEach(() => {
   // IS the switch) — the "the field is the switch" test below is the
   // regression guard for this default.
   dbMocks.getAlertPhone.mockResolvedValue(null);
+  // The ordinary case is "nothing to propose" — resolving 0 rather than
+  // rejecting, matching generateProposals's real never-throws contract.
+  proposalsMocks.generateProposals.mockReset().mockResolvedValue(0);
 });
 
 describe("finishCall", () => {
@@ -766,6 +776,81 @@ describe("finishCall — the staff alert SMS", () => {
     const r = await finishCall(leadState(), ctx, meta);
     expect(r).toMatchObject({ notified: true, stored: true });
     errSpy.mockRestore();
+  });
+});
+
+/**
+ * The proposal generator's placement in the lifecycle. The spec said
+ * generation runs "alongside the summary" — that would ground every proposal
+ * in `state.transcript` before it is durable anywhere. `generateProposals`
+ * itself (61 tests, apps/web/src/lib/proposals) owns what a proposal SAYS;
+ * this suite owns only WHEN and WHETHER `finishCall` calls it.
+ */
+describe("finishCall — proposal generation", () => {
+  const leadState = () => withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
+    { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
+
+  it("generates proposals only AFTER the call row is stored (mutation: move the call above finishCallRow -> FAILS)", async () => {
+    const order: string[] = [];
+    dbMocks.finishCallRow.mockImplementation(async () => { order.push("finishCallRow"); });
+    proposalsMocks.generateProposals.mockImplementation(async () => { order.push("generateProposals"); return 0; });
+    await finishCall(leadState(), ctx, meta);
+    expect(order).toEqual(["finishCallRow", "generateProposals"]);
+  });
+
+  it("writes no proposals when the call row was never stored (callRowId null)", async () => {
+    // startCallRow fail-opened at pickup, so meta.callRowId is null and no
+    // row was ever written — a proposal keyed on a persisted transcript must
+    // produce nothing rather than throw.
+    await finishCall(leadState(), ctx, { ...meta, callRowId: null });
+    expect(proposalsMocks.generateProposals).not.toHaveBeenCalled();
+  });
+
+  it("does not call generateProposals when finishCallRow itself fails (stored stays false)", async () => {
+    // `meta.callRowId` is non-null here, but the write failed, so `stored`
+    // never becomes true — the guard is `stored`, not merely "a row id was
+    // handed in".
+    dbMocks.finishCallRow.mockRejectedValue(new Error("db down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await finishCall(leadState(), ctx, meta);
+    expect(proposalsMocks.generateProposals).not.toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("passes the real call id, the resolved contactId, the outcome, the transcript and handoffRequested", async () => {
+    const s = withTransferred(leadState());
+    await finishCall(s, ctx, meta);
+    expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: "a1", callId: "call1", contactId: "ct1", outcome: "lead",
+      transcript: s.transcript, handoffRequested: true,
+    }));
+  });
+
+  it("a proposal failure changes nothing about the call (mutation: remove the catch -> FAILS)", async () => {
+    proposalsMocks.generateProposals.mockRejectedValue(new Error("model down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await finishCall(leadState(), ctx, meta);
+    expect(result.stored).toBe(true);
+    expect(result.outcome).toBe("lead");
+    errSpy.mockRestore();
+  });
+
+  it("logs only when a proposal was actually written — silence is the normal case", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    proposalsMocks.generateProposals.mockResolvedValue(0);
+    await finishCall(leadState(), ctx, meta);
+    expect(logSpy.mock.calls.some((c) => String(c[0]).includes("proposals"))).toBe(false);
+    errSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it("logs when a proposal was written (mutation: drop the >0 log -> FAILS)", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    proposalsMocks.generateProposals.mockResolvedValue(1);
+    await finishCall(leadState(), ctx, meta);
+    expect(logSpy.mock.calls.some((c) => String(c[0]).includes("proposals") && String(c[0]).includes("call1"))).toBe(true);
+    logSpy.mockRestore();
   });
 });
 
