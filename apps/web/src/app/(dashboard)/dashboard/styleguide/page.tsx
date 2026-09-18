@@ -7,6 +7,7 @@ import { DailyChart } from "../accounts/[accountId]/website/daily-chart";
 import { DeviceStrip } from "../accounts/[accountId]/website/device-strip";
 import { EmptyState } from "@/components/empty-state";
 import { ZoneNote } from "@/components/zone-note";
+import { LineDownBanner } from "@/components/line-down-banner";
 import { TagChips } from "@/components/tag-chips";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -308,6 +309,32 @@ export default async function StyleguidePage() {
                 isAgency={false}
                 accountId="demo"
               />
+            </div>
+          </div>
+        </Section>
+
+        <Section title="Line-down banner" file="components/line-down-banner.tsx">
+          {/* DERIVED, never stored — see the component's own doc comment.
+              The zero state renders NOTHING (a banner reading "0 numbers are
+              turning callers away" is noise on the good day, which is most
+              days), so there is no empty box to show here for it — only a
+              caption saying so. DESIGN.md rule 3: the sentence itself is the
+              marker, never the tint alone. */}
+          <div className="w-full space-y-5">
+            <p className="text-xs text-muted-foreground">
+              Zero lines down renders nothing at all — no box, no caption on
+              the real screen. The line below is the proof: it mounts
+              <code className="font-mono">{"<LineDownBanner count={0} />"}</code>
+              and nothing appears between this line and the next one.
+            </p>
+            <LineDownBanner count={0} />
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">One line down — singular phrase, not a plural template</p>
+              <LineDownBanner count={1} />
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">Several — distinct numbers in the last 24 hours, not a lifetime total</p>
+              <LineDownBanner count={3} />
             </div>
           </div>
         </Section>
