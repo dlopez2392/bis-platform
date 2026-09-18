@@ -25,6 +25,12 @@ vi.mock("@/lib/zone", () => ({
 
 let rows: ScreenedCallRow[] = [];
 let total = 0;
+// The REAL cross-page misconfigured count (`countMisconfiguredScreenedCalls`)
+// — deliberately a separate mock var from `rows`/`total`, never derived from
+// them, so a regression back to a page-local `rows.filter(...)` recompute
+// (screened-table.tsx's pre-fix shape) is a catchable mismatch rather than a
+// coincidence of the fixture rows happening to agree with it.
+let misconfiguredTotal = 0;
 let accountsList: Array<{ id: string; name: string; timezone: string }> = [
   { id: "acct1", name: "Rio Roofing", timezone: "America/Chicago" },
 ];
@@ -35,6 +41,7 @@ vi.mock("@bis/db", async (importOriginal) => {
     serviceDb: () => ({}),
     listScreenedCalls: async () => rows,
     countScreenedCalls: async () => total,
+    countMisconfiguredScreenedCalls: async () => misconfiguredTotal,
     listAccounts: async () => accountsList,
   };
 });
@@ -57,6 +64,7 @@ describe("ScreenedPage", () => {
   beforeEach(() => {
     rows = [];
     total = 0;
+    misconfiguredTotal = 0;
     accountsList = [{ id: "acct1", name: "Rio Roofing", timezone: "America/Chicago" }];
     // Re-spying an already-spied method keeps the same spy and its call
     // list; cleared here so a line logged by an earlier test cannot fail a
@@ -83,6 +91,46 @@ describe("ScreenedPage", () => {
     const text = renderedText(html);
     expect(text).toContain(m["screened.totalOne"]);
     expect(text).not.toContain("refused calls");
+  });
+
+  // Second re-review finding — the misconfigured breakdown beside the total
+  // shipped with ZERO coverage: a re-reviewer corrupted the classification
+  // predicate and separately the `screened.misconfiguredOne` copy string and
+  // the suite stayed green both times. `misconfiguredTotal` is the mocked
+  // `countMisconfiguredScreenedCalls` — the REAL cross-page count — and is
+  // set here to a number `rows` could never produce by local filtering (the
+  // fixture `rows` below hold at most 2 misconfigured reasons), so a
+  // regression back to `rows.filter((r) => screenedClass(r.reason) ===
+  // "misconfigured").length` (the page-local shape the earlier fix wave
+  // removed) renders "2 misconfigured", not "99 misconfigured", and this
+  // test catches it.
+  it("shows the REAL misconfigured total from its own cross-page count, not a recompute over the page's rows (mutation: revert to rows.filter((r) => screenedClass(r.reason) === \"misconfigured\").length -> FAILS)", async () => {
+    rows = [
+      row({ id: "s1", reason: "not-live" }), // misconfigured
+      row({ id: "s2", reason: "no-profile" }), // misconfigured
+      row({ id: "s3", reason: "over-cap" }), // screened
+      row({ id: "s4", accountId: null, reason: "unknown-number" }), // unattributed
+    ];
+    total = 530;
+    misconfiguredTotal = 99;
+    const html = renderToStaticMarkup(await ScreenedPage(route()));
+    expect(renderedText(html)).toContain("99 misconfigured");
+  });
+
+  it("uses the singular copy for exactly one misconfigured call (mutation: corrupt screened.misconfiguredOne's text -> FAILS)", async () => {
+    rows = [row({ reason: "not-live" })];
+    total = 1;
+    misconfiguredTotal = 1;
+    const html = renderToStaticMarkup(await ScreenedPage(route()));
+    expect(renderedText(html)).toContain("1 misconfigured");
+  });
+
+  it("uses the plural template for more than one misconfigured call (mutation: corrupt screened.misconfigured's text -> FAILS)", async () => {
+    rows = [row({ id: "s1", reason: "not-live" }), row({ id: "s2", reason: "no-profile" })];
+    total = 2;
+    misconfiguredTotal = 7;
+    const html = renderToStaticMarkup(await ScreenedPage(route()));
+    expect(renderedText(html)).toContain("7 misconfigured");
   });
 
   it("names the reason in WORDS (mutation: render the raw enum -> FAILS)", async () => {

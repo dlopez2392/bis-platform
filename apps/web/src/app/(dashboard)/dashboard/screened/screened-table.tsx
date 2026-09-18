@@ -36,11 +36,14 @@ const HEAD = "px-5";
 const CELL = "px-5 py-3";
 
 export function ScreenedTable({
-  rows, total, accountsById, agencyZone, olderHref,
+  rows, total, misconfiguredCount, accountsById, agencyZone, olderHref,
 }: {
   rows: ScreenedCallRow[];
   /** The REAL total across every page — never `rows.length`. */
   total: number;
+  /** The REAL misconfigured total across every page (`countMisconfiguredScreenedCalls`)
+   *  — never `rows.filter(...)`, which only ever sees the page in hand. */
+  misconfiguredCount: number;
   /** accountId → the account's own label and a ZONE already resolved by the
    *  page through `resolveZone` — never the raw `accounts.timezone` column,
    *  which is free text a pre-#89 row can hold a value `Intl` cannot format. */
@@ -56,10 +59,12 @@ export function ScreenedTable({
   // class an operator must act on (see CLASS_DOT's own comment): `screened`
   // is the system working and `unattributed` is nobody's problem, but
   // `misconfigured` means a line is turning callers away because of
-  // something on our end. Derived from the rows already on the page — the
-  // same `screenedClass(r.reason)` each row computes for its own dot — so
-  // this is a small addition, not a second capability or a second class map.
-  const misconfiguredCount = rows.filter((r) => screenedClass(r.reason) === "misconfigured").length;
+  // something on our end. `misconfiguredCount` is a PROP — the real
+  // cross-page count from `countMisconfiguredScreenedCalls` — never
+  // `rows.filter(...)`, which is scoped to the 50 rows on this page and
+  // would silently understate the breakdown on every page after the first
+  // (the exact defect a paged list's "real total, not the number on
+  // screen" rule, DESIGN.md, exists to forbid).
   const totalLabel = total === 1 ? m["screened.totalOne"] : m["screened.total"].replace("{n}", String(total));
   const misconfiguredLabel = misconfiguredCount === 1
     ? m["screened.misconfiguredOne"]

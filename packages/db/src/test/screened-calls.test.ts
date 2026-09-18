@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import { serviceDb } from "../service";
 import {
   recordScreenedCall, listScreenedCalls, countScreenedCalls,
-  countLinesTurningCallersAway, screenedClass, SCREENED_REASONS,
+  countLinesTurningCallersAway, countMisconfiguredScreenedCalls,
+  screenedClass, SCREENED_REASONS,
 } from "../screened-calls";
 import { countCallsSince, countCallerHistorySince } from "../voice";
 import { withTestAccount, testScreenedCalledE164 } from "./fixtures";
@@ -123,6 +124,61 @@ describe("countLinesTurningCallersAway", () => {
       } finally {
         if (rowId) await db.from("screened_calls").delete().eq("id", rowId);
       }
+    });
+  });
+});
+
+describe("countMisconfiguredScreenedCalls", () => {
+  it("counts only the misconfigured reasons, never `screened` or `unattributed` (mutation: widen the reason filter to include `over-cap` -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const before = await countMisconfiguredScreenedCalls(db);
+      // One of each class. Only the first is `misconfigured`
+      // (`screenedClass`'s own switch): `not-live` yes, `over-cap` no.
+      await recordScreenedCall(db, {
+        accountId, phoneNumberId: null, calledE164: "+19565550701",
+        callerE164: null, reason: "not-live",
+      });
+      await recordScreenedCall(db, {
+        accountId, phoneNumberId: null, calledE164: "+19565550702",
+        callerE164: null, reason: "over-cap",
+      });
+      // `accountId: null` — no cascade reaches this row, so it is deleted by
+      // id in the finally below (see `testScreenedCalledE164`'s own doc).
+      const calledE164 = testScreenedCalledE164();
+      let rowId: string | null = null;
+      try {
+        await recordScreenedCall(db, {
+          accountId: null, phoneNumberId: null, calledE164,
+          callerE164: null, reason: "unknown-number",
+        });
+        const { data, error } = await db.from("screened_calls")
+          .select("id").eq("called_e164", calledE164).single();
+        if (error) throw new Error(`readback failed: ${error.message}`);
+        rowId = data.id as string;
+        const after = await countMisconfiguredScreenedCalls(db);
+        // Three rows written, ONE of them `misconfigured`.
+        expect(after - before).toBe(1);
+      } finally {
+        if (rowId) await db.from("screened_calls").delete().eq("id", rowId);
+      }
+    });
+  });
+
+  it("is not limited to one page of results (mutation: add .limit(50) -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const before = await countMisconfiguredScreenedCalls(db);
+      // More than the list page's PAGE_SIZE (50) — a head-count query has no
+      // page to be limited to, and this is the row count that would expose
+      // a stray `.limit()` copied in from `listScreenedCalls`.
+      for (let i = 0; i < 55; i++) {
+        await recordScreenedCall(db, {
+          accountId, phoneNumberId: null,
+          calledE164: `+19565559${String(i).padStart(3, "0")}`,
+          callerE164: null, reason: "no-profile",
+        });
+      }
+      const after = await countMisconfiguredScreenedCalls(db);
+      expect(after - before).toBe(55);
     });
   });
 });

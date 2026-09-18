@@ -134,6 +134,27 @@ export async function countScreenedCalls(db: SupabaseClient): Promise<number> {
 const MISCONFIGURED: ScreenedReason[] = ["not-live", "no-profile", "profile-disabled"];
 
 /**
+ * The REAL misconfigured total for the list header's breakdown — across
+ * EVERY page, never `rows.filter(...).length` on the 50 rows a caller
+ * happens to be looking at.
+ *
+ * Reuses `MISCONFIGURED` (the same three reasons `countLinesTurningCallersAway`
+ * already filters to) rather than a second reason list: one place decides
+ * which reasons are ours to fix, and this and the work-queue banner both
+ * read it. Unlike that banner, this counts ROWS, not distinct numbers — the
+ * list header is a receipt of how many refusals landed, not a queue of
+ * lines to go fix — and it carries no time window and no `.limit()`: a
+ * head-count query has no page to be limited to.
+ */
+export async function countMisconfiguredScreenedCalls(db: SupabaseClient): Promise<number> {
+  const { count, error } = await db.from("screened_calls")
+    .select("id", { count: "exact", head: true })
+    .in("reason", MISCONFIGURED);
+  if (error) throw new Error(`countMisconfiguredScreenedCalls failed: ${error.message}`);
+  return count ?? 0;
+}
+
+/**
  * How many DISTINCT numbers refused callers because of our own configuration
  * since `sinceIso`.
  *

@@ -9,7 +9,10 @@
 // grant), so this route is the only way in and the gate above is the whole
 // of the access control.
 import { ShieldAlert } from "lucide-react";
-import { listScreenedCalls, countScreenedCalls, listAccounts, serviceDb, resolveZone } from "@bis/db";
+import {
+  listScreenedCalls, countScreenedCalls, countMisconfiguredScreenedCalls,
+  listAccounts, serviceDb, resolveZone,
+} from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { requireAgency } from "@/lib/auth";
@@ -34,9 +37,12 @@ export default async function ScreenedPage({
   const cursor = parseTimeCursor(before);
   const db = serviceDb();
 
-  const [rows, total, accounts] = await Promise.all([
+  const [rows, total, misconfiguredTotal, accounts] = await Promise.all([
     listScreenedCalls(db, { limit: PAGE_SIZE, before: cursor }),
     countScreenedCalls(db),
+    // The REAL cross-page count for the breakdown beside `total` — never
+    // `rows.filter(...)`, which only ever sees the 50 rows on this page.
+    countMisconfiguredScreenedCalls(db),
     listAccounts(db),
   ]);
 
@@ -85,6 +91,7 @@ export default async function ScreenedPage({
           <ScreenedTable
             rows={rows}
             total={total}
+            misconfiguredCount={misconfiguredTotal}
             accountsById={accountsById}
             agencyZone={agencyZone.zone}
             olderHref={olderHref}
