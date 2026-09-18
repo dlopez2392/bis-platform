@@ -1707,6 +1707,31 @@ export const m = {
   "work.linesDown.one": "1 number is turning callers away",
   "work.linesDown.many": "{n} numbers are turning callers away",
   "work.linesDown.action": "See which",
+
+  // Call proposals — a finished call's machine-suggested next step. Nothing
+  // in this namespace commits anything until a human accepts it (Task 6's
+  // acceptProposal/dismissProposal).
+  "proposals.heading": "Suggested next steps",
+  "proposals.subhead": "From this call. Nothing happens until you accept.",
+  "proposals.evidence": "Because the caller said",
+  "proposals.accept": "Accept",
+  "proposals.dismiss": "Dismiss",
+  "proposals.status.pending": "Suggested",
+  "proposals.status.accepted": "Accepted",
+  "proposals.status.dismissed": "Dismissed",
+  "proposals.accepted.toast": "Added to your to-do list",
+  "proposals.dismissed.toast": "Dismissed",
+  "proposals.empty.title": "Nothing to suggest from this call",
+  "proposals.empty.body":
+    "When a caller asks for something specific — a quote, a callback, a time — it shows up here as a suggestion you can accept in one click.",
+  "proposals.gone": "Someone already answered this one.",
+  "proposals.contactFilled":
+    "That detail was already filled in, so nothing was changed.",
+  "proposals.stageMoved":
+    "This opportunity has moved since the suggestion was made, so nothing was changed.",
+  "proposals.failed": "That didn't go through. Try again.",
+  "proposals.work.heading": "Suggestions",
+  "proposals.work.body": "Questions about work, not work yet.",
 } as const;
 
 export type MessageKey = keyof typeof m;
