@@ -12,29 +12,54 @@ export type OpportunityStagePayload = {
 };
 export type ProposalPayload = TaskPayload | ContactFieldPayload | OpportunityStagePayload;
 
-export type CallProposal = {
+/**
+ * `kind` tied to its matching `payload`, so a mismatch (e.g. `kind: "task"`
+ * carrying an `OpportunityStagePayload`) cannot typecheck. Before this
+ * existed, `insertProposal` took a bare `{ kind: ProposalKind; payload:
+ * ProposalPayload }` and any of the three payload shapes typechecked for
+ * any kind — `payload` is unconstrained jsonb with no CHECK of its own, so
+ * that type was the only guard, and it did not guard. A mismatch would
+ * surface as a review card with an undefined title.
+ */
+export type ProposalInput =
+  | { kind: "task"; payload: TaskPayload }
+  | { kind: "contact_field"; payload: ContactFieldPayload }
+  | { kind: "opportunity_stage"; payload: OpportunityStagePayload };
+
+type CallProposalBase = {
   id: string; accountId: string; callId: string; contactId: string | null;
-  kind: ProposalKind; payload: ProposalPayload; evidence: string;
-  status: ProposalStatus; decidedAt: string | null; decidedBy: string | null;
-  createdAt: string;
+  evidence: string; status: ProposalStatus; decidedAt: string | null;
+  decidedBy: string | null; createdAt: string;
 };
+
+/** Same discriminated shape as `ProposalInput`: a consumer narrows on
+ *  `kind` to reach the matching `payload` type instead of casting. */
+export type CallProposal =
+  | (CallProposalBase & { kind: "task"; payload: TaskPayload })
+  | (CallProposalBase & { kind: "contact_field"; payload: ContactFieldPayload })
+  | (CallProposalBase & { kind: "opportunity_stage"; payload: OpportunityStagePayload });
 
 const COLS =
   "id, account_id, call_id, contact_id, kind, payload, evidence, status, decided_at, decided_by, created_at";
 
 type Row = {
   id: string; account_id: string; call_id: string; contact_id: string | null;
-  kind: ProposalKind; payload: ProposalPayload; evidence: string;
+  kind: ProposalKind; payload: unknown; evidence: string;
   status: ProposalStatus; decided_at: string | null; decided_by: string | null;
   created_at: string;
 };
 
+// The cast is the read boundary: Postgres's `kind` CHECK constrains the
+// column to the three known strings but knows nothing about `payload`
+// (unconstrained jsonb), so nothing on the wire ties them together — the
+// pairing is trusted here, at the one place a row becomes a `CallProposal`,
+// the same way `insertProposal`'s `ProposalInput` ties them on the way in.
 function toProposal(r: Row): CallProposal {
   return {
     id: r.id, accountId: r.account_id, callId: r.call_id, contactId: r.contact_id,
     kind: r.kind, payload: r.payload, evidence: r.evidence, status: r.status,
     decidedAt: r.decided_at, decidedBy: r.decided_by, createdAt: r.created_at,
-  };
+  } as CallProposal;
 }
 
 /**
@@ -43,16 +68,23 @@ function toProposal(r: Row): CallProposal {
  * NULL, NEVER A THROW. This runs inside the voice lifecycle's best-effort
  * tail, where the contract is that nothing about the call changes if
  * proposals fail. The two expected refusals — the partial unique index
- * (a re-run proposing the same thing twice) and the non-empty evidence
- * CHECK — are both normal outcomes of a pass doing its job, not faults.
- * The caller logs the count it got; it never reacts to a null.
+ * (a re-run proposing the same thing twice, `23505`) and the non-empty
+ * evidence CHECK (`23514`) — are both normal outcomes of a pass doing its
+ * job, not faults, and both log as such. Anything else (a dead connection,
+ * a renamed column, a foreign key that no longer resolves) is a real fault
+ * masquerading as "nothing to propose" if it logs the same way — it is
+ * branched to its own, greppable log line instead. Either way the caller
+ * gets null and never reacts to it; only the log line tells the two apart.
+ *
+ * The caller MUST pass the call's OWN account. There is no composite FK
+ * tying `call_proposals.(account_id, call_id)` to `calls.(account_id, id)`,
+ * so account A's id alongside account B's `callId` writes a row RLS then
+ * shows to account A — including `evidence`, a verbatim quote from account
+ * B's call. Not reachable today: no caller exists yet.
  */
 export async function insertProposal(
   db: SupabaseClient, accountId: string,
-  input: {
-    callId: string; contactId?: string | null; kind: ProposalKind;
-    payload: ProposalPayload; evidence: string;
-  },
+  input: { callId: string; contactId?: string | null; evidence: string } & ProposalInput,
 ): Promise<{ id: string } | null> {
   const { data, error } = await db.from("call_proposals")
     .insert({
@@ -62,9 +94,17 @@ export async function insertProposal(
     })
     .select("id").single();
   if (error) {
-    console.error(
-      `insertProposal: refused for call ${input.callId} kind ${input.kind}: ${error.message}`,
-    );
+    const code = (error as { code?: string }).code;
+    if (code === "23505" || code === "23514") {
+      console.error(
+        `insertProposal: refused for call ${input.callId} kind ${input.kind}: ${error.message}`,
+      );
+    } else {
+      console.error(
+        `insertProposal: unexpected fault (code ${code ?? "none"}) for call ${input.callId} ` +
+        `kind ${input.kind}: ${error.message}`,
+      );
+    }
     return null;
   }
   return { id: data!.id as string };
@@ -75,7 +115,10 @@ export async function listProposalsForCall(
 ): Promise<CallProposal[]> {
   const { data, error } = await db.from("call_proposals").select(COLS)
     .eq("account_id", accountId).eq("call_id", callId)
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false })
+    // Same backstop as listPendingProposals: service_role has NO
+    // statement_timeout, so an unbounded read is unbounded in production.
+    .limit(500);
   if (error) throw new Error(`listProposalsForCall failed: ${error.message}`);
   return ((data ?? []) as Row[]).map(toProposal);
 }
