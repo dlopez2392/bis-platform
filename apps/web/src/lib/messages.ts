@@ -1644,6 +1644,39 @@ export const m = {
   // earlier wording described a state the schema makes impossible.
   "zone.guessed.client":
     "Your timezone needs fixing, so times are shown in another zone. Ask your account manager to sort it out.",
+
+  // ── Screened calls (2026-09-18) ────────────────────────────────────────
+  // A refused call used to leave no trace but a log line. These screens are
+  // agency-only: a client never sees them, so the voice is an operator's,
+  // not a business owner's.
+  "nav.screened": "Screened calls",
+  "screened.title": "Screened calls",
+  "screened.total": "{n} refused calls",
+  "screened.col.when": "When",
+  "screened.col.account": "Company",
+  "screened.col.called": "Number dialled",
+  "screened.col.caller": "Caller",
+  "screened.col.reason": "Reason",
+  // Dot + word, never colour alone (DESIGN.md rule 3). Each says what
+  // happened in an operator's language, not the enum's.
+  "screened.reason.unknown-number": "Not our number",
+  "screened.reason.not-live": "Number not live",
+  "screened.reason.no-profile": "No receptionist set up",
+  "screened.reason.profile-disabled": "Receptionist turned off",
+  "screened.reason.over-cap": "Over the daily cap",
+  "screened.reason.repeat-spam": "Repeat spam",
+  "screened.unknownCaller": "Withheld",
+  "screened.noAccount": "—",
+  "screened.empty.title": "Nothing has been turned away",
+  "screened.empty.body":
+    "When the receptionist refuses a call — a number that isn't live, a repeat spammer, a caller over the daily cap — it lands here with the reason. Nothing to do until then.",
+  "screened.older": "Older",
+
+  // The work-queue banner. Counts DISTINCT numbers, because a dialer
+  // hammering one dead line is one problem to fix.
+  "work.linesDown.one": "1 number is turning callers away",
+  "work.linesDown.many": "{n} numbers are turning callers away",
+  "work.linesDown.action": "See which",
 } as const;
 
 export type MessageKey = keyof typeof m;

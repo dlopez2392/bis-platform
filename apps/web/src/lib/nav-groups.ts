@@ -23,7 +23,8 @@ export type NavIconKey =
   | "blueprints"
   | "numbers"
   | "checklist"
-  | "work";
+  | "work"
+  | "screened";
 
 export type NavItemSpec = {
   href: string;
@@ -72,6 +73,10 @@ export function buildNavGroups(base: string | null, isAgency: boolean): NavGroup
           // line, never reorder", and nothing about this destination needs a
           // particular position.
           { href: "/dashboard/numbers", labelKey: "nav.numbers", iconKey: "numbers" },
+          // The screened-call log — /dashboard/screened, agency-only by
+          // construction (requireAgency, first line) and unreadable by
+          // `authenticated` at the grant level besides.
+          { href: "/dashboard/screened", labelKey: "nav.screened", iconKey: "screened" },
         ],
       },
     ];

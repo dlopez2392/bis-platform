@@ -20,6 +20,9 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { SCREENED_REASONS, screenedClass } from "@bis/db";
+import { CLASS_DOT } from "../screened/screened-table";
+import { cn } from "@/lib/utils";
 import { RailStates } from "./rail-states";
 import { SettingsFieldCards } from "./settings-field-cards";
 import { PublicBrand } from "@/components/public-brand";
@@ -217,6 +220,27 @@ export default async function StyleguidePage() {
               </TableRow>
             </TableBody>
           </Table>
+        </Section>
+
+        {/* DESIGN.md rule 3: status is never colour alone — dot + word. Read
+            straight off screened-table.tsx's own `CLASS_DOT` map and the
+            message catalogue's reason words, all six reasons across the
+            three classes, so this page cannot drift from the real table. */}
+        <Section title="Screened reasons" file="…/screened/screened-table.tsx">
+          <div className="flex w-full flex-wrap gap-2">
+            {SCREENED_REASONS.map((reason) => (
+              <span
+                key={reason}
+                className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs"
+              >
+                <span
+                  className={cn("size-[7px] shrink-0 rounded-full", CLASS_DOT[screenedClass(reason)])}
+                  aria-hidden
+                />
+                {m[`screened.reason.${reason}` as const]}
+              </span>
+            ))}
+          </div>
         </Section>
 
         <Section title="Loading skeletons" file="components/ui/skeleton.tsx">
