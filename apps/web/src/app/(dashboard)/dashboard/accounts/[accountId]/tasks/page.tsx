@@ -8,6 +8,8 @@
 import { listAccountWork } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { requireAccountAccess } from "@/lib/auth";
+import { renderZone } from "@/lib/zone";
+import { ZoneNote } from "@/components/zone-note";
 import { dbForRequest } from "@/lib/db";
 import { bucketWork } from "@/lib/work/buckets";
 import { contactDisplayName } from "@/lib/format";
@@ -25,7 +27,7 @@ export default async function TasksPage({
   // Authorization only — both audiences see this page (nav-groups.ts adds
   // it unconditionally, directly under Dashboard), so the returned role
   // isn't needed for anything this page itself renders.
-  await requireAccountAccess(accountId);
+  const { isAgency } = await requireAccountAccess(accountId);
   const db = await dbForRequest();
 
   // Only `timezone` — this page never shows the account/brand name (every
@@ -44,27 +46,26 @@ export default async function TasksPage({
 
   const rows = await listAccountWork(db, accountId);
 
-  // The RAW account timezone, unclamped by any UTC/server fallback —
-  // bucketWork's own doc comment: a silent fallback here would reintroduce
-  // the previous-day defect this repo has already shipped once. An invalid
-  // zone degrades to "every row waits", which is still visible, just not
-  // dated.
-  const buckets = bucketWork(rows, new Date(), account.timezone);
+  // The resolved zone (lib/zone.ts), shared with the other four date
+  // screens and with the account dashboard's copy of this same bucketing.
+  //
+  // This used to take the RAW `account.timezone` to avoid a SILENT UTC
+  // fallback — right about the clamp it was refusing, wrong about the
+  // remedy. Refusing to guess meant an unusable zone degraded to "every row
+  // waits" and every row lost its date: the screen stopped answering the one
+  // question it exists to answer. danlo, 2026-09-17: "I do not want to omit
+  // the dates so let's find a workaround." `resolveZone` is the workaround —
+  // it still never guesses silently, it just says so out loud instead of
+  // going quiet.
+  const zone = await renderZone(account.timezone);
+  const buckets = bucketWork(rows, new Date(), zone.zone);
 
-  // The SAME raw zone, threaded through unchanged for RENDERING every row's
-  // own date — deliberately NOT `safeZone`-clamped, unlike calls/page.tsx.
-  // That precedent doesn't hold here: `safeZone` substitutes "UTC" before a
-  // row's date text ever gets a chance to decline, so an invalid zone would
-  // print a confident date in a zone nobody chose instead of omitting it —
-  // exactly the silent fallback the bucketing comment above forbids, on the
-  // very same account in the very same render (and self-contradictory next
-  // to it: bucketWork already declined to classify this row, sending it to
-  // Waiting, while a clamped render would still stamp it with a specific
-  // day). `rowDateText` in work-list.tsx catches the `RangeError` an invalid
-  // zone makes `formatDateInZone` throw and renders no date at all for that
-  // row — the same per-row degrade `bucketWork` already applies to a bad
-  // `dueAt`.
-  const timezone = account.timezone;
+  // The SAME resolved zone the buckets above were computed in — which is the
+  // whole point of resolving it once. A row formatted in one zone beside a
+  // bucket chip computed in another can contradict itself inside a single
+  // row, and that is precisely what the old split (raw zone for buckets,
+  // nothing usable for dates) produced.
+  const timezone = zone.zone;
 
   // ONE batch read for every contact these rows reference — never one read
   // per row. Scoped by account_id so a row's contactId can never resolve a
@@ -91,6 +92,12 @@ export default async function TasksPage({
     <>
       <PageHeader title={m["work.title"]} />
       <div className="p-6">
+        <ZoneNote
+          zone={zone}
+          isAgency={isAgency}
+          accountId={accountId}
+          className="mb-4"
+        />
         <WorkList
           buckets={buckets}
           accountId={accountId}

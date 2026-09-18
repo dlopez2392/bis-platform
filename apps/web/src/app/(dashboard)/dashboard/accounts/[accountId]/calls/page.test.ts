@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { m } from "@/lib/messages";
+import { renderedText } from "@/lib/rendered-text";
 import type { CallListRow } from "@bis/db";
 
 // `CallRow` calls `useRouter()` at render time for the whole-row click
@@ -13,8 +15,14 @@ vi.mock("next/navigation", () => ({
 // Same shape as `conversations/actions.test.ts`: mock the auth gate and the
 // DB entry points this async server component actually reaches, rather than
 // exercising Clerk/Supabase for what is a pure "which branch renders" bug.
+/** Mutable, via `vi.hoisted` so the factory can close over it without a TDZ
+ *  hazard. Fixed at `true`, the client branch of the zone note went
+ *  unexercised on this screen — and hardcoding `isAgency` in page.tsx kept
+ *  the whole suite green while offering a client a link to a route
+ *  `requireAgencyOnlyAccountAccess` would bounce them from. */
+const authFixture = vi.hoisted(() => ({ isAgency: true }));
 vi.mock("@/lib/auth", () => ({
-  requireAccountAccess: async () => ({ userId: "user_1", isAgency: true }),
+  requireAccountAccess: async () => ({ userId: "user_1", isAgency: authFixture.isAgency }),
 }));
 
 // The page's own direct query — the account's timezone — projected the same
@@ -42,6 +50,17 @@ vi.mock("@bis/db", () => ({
   countCallsSince: async () => 3,
   listFailedOutboundSms: (...args: unknown[]) => listFailedOutboundSmsMock(...args),
 }));
+
+/** The screen's resolved zone (lib/zone.ts) — mutable so a test can put the
+ *  page into the "guessed" state without a second `vi.mock`. */
+let resolvedZone: {
+  zone: string; guessed: boolean; label: string;
+  source: "account" | "agency" | "fallback";
+} = { zone: "America/Chicago", guessed: false, label: "America/Chicago", source: "account" };
+vi.mock("@/lib/zone", () => ({
+  renderZone: async () => resolvedZone,
+}));
+
 
 const { default: CallsPage } = await import("./page");
 
@@ -222,5 +241,43 @@ describe("CallsPage", () => {
     // …and the swallow left a trace, the way finish-call.ts's four legs do.
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("failed-text-back read failed"));
     spy.mockRestore();
+  });
+});
+
+/**
+ * The zone note reaches the Calls list.
+ *
+ * Every row already prints a short zone name ("CDT") through
+ * `formatCallTime`; what was missing is which zone those abbreviations
+ * belong to, and whether it is this account's own. The resolution chain
+ * itself is proved against the real `resolveZone` in lib/zone.test.ts.
+ */
+describe("CallsPage — the zone note", () => {
+  beforeEach(() => {
+    listCallsMock.mockResolvedValue([ROW]);
+    listFailedOutboundSmsMock.mockResolvedValue([]);
+    resolvedZone = { zone: "America/Chicago", guessed: false, label: "America/Chicago", source: "account" };
+    authFixture.isAgency = true;
+  });
+
+  it("names the zone (mutation: delete the ZoneNote element from page.tsx -> FAILS)", async () => {
+    const html = renderToStaticMarkup(await CallsPage(route(undefined)));
+    expect(renderedText(html)).toContain(m["zone.note"].replace("{zone}", "America/Chicago"));
+  });
+
+  it("offers the fix when the zone was guessed (mutation: render the note only when NOT guessed -> FAILS)", async () => {
+    resolvedZone = { zone: "America/Chicago", guessed: true, label: "America/Chicago", source: "agency" };
+    const html = renderToStaticMarkup(await CallsPage(route(undefined)));
+    expect(renderedText(html)).toContain(m["zone.guessed.fix"]);
+  });
+
+  it("never hands a CLIENT the Settings link (mutation: hardcode isAgency={true} in page.tsx -> FAILS)", async () => {
+    // Calls is reached by BOTH audiences. Settings is not.
+    resolvedZone = { zone: "America/Chicago", guessed: true, label: "America/Chicago", source: "agency" };
+    authFixture.isAgency = false;
+    const html = renderToStaticMarkup(await CallsPage(route(undefined)));
+    expect(renderedText(html)).toContain(m["zone.guessed.client"]);
+    expect(renderedText(html)).not.toContain(m["zone.guessed.fix"]);
+    expect(html).not.toContain("/settings");
   });
 });

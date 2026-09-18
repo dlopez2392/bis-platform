@@ -13,7 +13,8 @@ import { dbForRequest } from "@/lib/db";
 import { formatCurrency } from "@/lib/format";
 import { mergeChecklist } from "@/lib/checklist-catalogue";
 import { getTenantBranding } from "@/lib/branding/tenant-theme-reader";
-import { safeZone } from "@/lib/booking/time";
+import { renderZone } from "@/lib/zone";
+import { ZoneNote } from "@/components/zone-note";
 import { normalizeOpenHours } from "@/lib/booking/slots";
 import { bucketWork } from "@/lib/work/buckets";
 import { m } from "@/lib/messages";
@@ -66,12 +67,15 @@ export default async function AccountDashboardPage({
       if (!data) throw new Error("account dashboard: account not found");
       return data as { name: string; timezone: string };
     });
-  // `accounts.timezone` is free-text at creation (no DB-level IANA
-  // validation) — an invalid value would RangeError on the first
-  // `Intl.DateTimeFormat` construction it reaches below, which is a page
-  // BOTH audiences land on at login. Same guard `calls/page.tsx` and
-  // `calls/[callId]/page.tsx` already apply to this exact column.
-  const timezone = safeZone(account.timezone, "UTC");
+  // ONE zone for this whole page. It used to have TWO, fifty lines apart —
+  // a `safeZone(…, "UTC")` clamp here for the KPI windows and the RAW
+  // `account.timezone` further down for `bucketWork` — so on an account
+  // with a broken zone the KPI periods were computed in UTC while the work
+  // counts beside them declined to bucket at all. Two answers to one
+  // question, on one screen, at the same moment. `renderZone` is now the
+  // only answer, and `ZoneNote` below names it.
+  const zone = await renderZone(account.timezone);
+  const timezone = zone.zone;
 
   // One 14-day window covers every KPI's spark AND both halves of its
   // "current 7 vs prior 7" delta — the last 7 dayKeys are the current
@@ -150,14 +154,14 @@ export default async function AccountDashboardPage({
   const checklistEntries = mergeChecklist(checklistRows, { a2pStatus: a2p?.status });
   const checklistRemaining = checklistEntries.filter((e) => !e.done).length;
 
-  // The work row's counts — bucketed with the RAW `account.timezone`, not
-  // the `safeZone`-clamped `timezone` below: bucketWork's own doc comment
-  // forbids a silent UTC fallback here (it would reintroduce the
-  // previous-day defect this repo already shipped once), same as
-  // tasks/page.tsx's own `bucketWork(rows, new Date(), account.timezone)`
-  // call. An invalid zone still degrades to "every row waits", so the total
-  // stays correct even when `overdue` cannot be judged.
-  const workBuckets = bucketWork(workRows, now, account.timezone);
+  // Bucketed in the SAME resolved zone the KPI windows above use, and the
+  // same one `tasks/page.tsx` now buckets in. This previously took the raw
+  // `account.timezone` on the reasoning that a silent UTC fallback would
+  // reintroduce the previous-day defect — which was correct about the
+  // SILENT clamp it was avoiding, and is answered properly now: the fallback
+  // is no longer silent. Sharing one zone is what stops "3 overdue" and the
+  // KPI period beside it from being measured against different midnights.
+  const workBuckets = bucketWork(workRows, now, zone.zone);
   const workTotal = workBuckets.overdue.length + workBuckets.today.length + workBuckets.waiting.length;
   const workOverdue = workBuckets.overdue.length;
 
@@ -261,6 +265,11 @@ export default async function AccountDashboardPage({
             ungated, and a row that vanished at zero would read as a broken
             feature (work-row.tsx's own doc comment, spec §4.3), so this
             renders at every count including zero. */}
+        {/* Above the KPI tiles, because it qualifies every period label in
+            them: "Last 7 days" is seven of WHOSE days. It also sits above the
+            work row that follows, which `bucketWork` measures against those
+            same midnights. */}
+        <ZoneNote zone={zone} isAgency={isAgency} accountId={accountId} />
         <WorkRowCard accountId={accountId} total={workTotal} overdue={workOverdue} />
         <div className={cn("grid gap-4 sm:grid-cols-2", hasAfterHours ? "xl:grid-cols-4" : "xl:grid-cols-3")}>
           <StatTile

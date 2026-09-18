@@ -14,7 +14,8 @@ import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
-import { safeZone } from "@/lib/booking/time";
+import { renderZone } from "@/lib/zone";
+import { ZoneNote } from "@/components/zone-note";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { callerLabel, formatCallTime, formatDuration } from "../format";
@@ -49,7 +50,7 @@ export default async function CallDetailPage({
   // BOTH audiences, exactly as the list is: this is the client's own business
   // data — what their receptionist said to their caller — not agency work
   // about the client.
-  await requireAccountAccess(accountId);
+  const { isAgency } = await requireAccountAccess(accountId);
   const db = await dbForRequest();
 
   const [call, account] = await Promise.all([
@@ -67,7 +68,12 @@ export default async function CallDetailPage({
   // is the same answer an id that never existed gets.
   if (!call) notFound();
 
-  const timezone = safeZone(account.timezone, "UTC");
+  // Same resolver as the list this page is reached from (lib/zone.ts). It
+  // has to be: a client clicks a row showing one date and must not land on a
+  // detail page showing another. The clamp this replaces could not make that
+  // promise — it was a second, independent copy of the same guess.
+  const zone = await renderZone(account.timezone);
+  const timezone = zone.zone;
   const base = `/dashboard/accounts/${accountId}`;
   const blocks = splitSummaryBlocks(call.summary ?? "");
 
@@ -184,6 +190,11 @@ export default async function CallDetailPage({
         )}
       >
         <div className="min-w-0 space-y-4">
+          {/* Names the zone the timestamp in the header above is printed in.
+              `formatCallTime` already renders its short name ("CDT") beside
+              the time; this says which zone that abbreviation belongs to,
+              and whether it is this account's own. */}
+          <ZoneNote zone={zone} isAgency={isAgency} accountId={accountId} />
           {/* Above the summary, because it is the only thing on this page that
               asks the operator to DO something. Not a `section` with a
               heading: the badge already says what this is, and an <h2>

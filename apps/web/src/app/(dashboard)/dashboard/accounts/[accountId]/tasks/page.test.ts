@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { WorkRow } from "@bis/db";
 import { bucketWork, type BucketedWork } from "@/lib/work/buckets";
 import { m } from "@/lib/messages";
+import { renderedText } from "@/lib/rendered-text";
 import { visibleBuckets, WorkList } from "./work-list";
 
 // --- Mocks for the TasksPage composition tests below (the "zone reaches the
@@ -11,8 +12,13 @@ import { visibleBuckets, WorkList } from "./work-list";
 // isolation). Same shape as calls/page.test.ts's mocks: the auth gate and the
 // DB entry points this async server component actually reaches, rather than
 // exercising Clerk/Supabase for what is a "which value reaches render" bug.
+/** Mutable so the client-vs-agency split in the zone note can be exercised
+ *  on the REAL route rather than only on the component in isolation — the
+ *  Settings link must never reach a client, and this page is one of the
+ *  three a client can actually open. */
+let isAgency = true;
 vi.mock("@/lib/auth", () => ({
-  requireAccountAccess: async () => ({ userId: "user_1", isAgency: true }),
+  requireAccountAccess: async () => ({ userId: "user_1", isAgency }),
 }));
 
 /** Mutable so each test can pick the account's own (possibly invalid) zone
@@ -36,9 +42,30 @@ vi.mock("@/lib/db", () => ({
 }));
 
 let workRows: WorkRow[] = [];
-vi.mock("@bis/db", () => ({
-  listAccountWork: async () => workRows,
-}));
+/** The agency's own zone, as `lib/zone.ts` reads it through `serviceDb`.
+ *  Only `serviceDb` and `listAccountWork` are stubbed — `resolveZone` stays
+ *  REAL, so these tests exercise the actual chain (account -> agency -> UTC)
+ *  rather than a re-implementation of it. */
+let agencyTimezone: string | null = "America/Chicago";
+vi.mock("@bis/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@bis/db")>();
+  return {
+    ...actual,
+    listAccountWork: async () => workRows,
+    serviceDb: () => ({
+      from: () => ({
+        select: () => ({
+          limit: () => ({
+            maybeSingle: async () => ({
+              data: agencyTimezone === null ? null : { timezone: agencyTimezone },
+              error: null,
+            }),
+          }),
+        }),
+      }),
+    }),
+  };
+});
 
 /** Flips `formatDateInZone` (and ONLY that export — everything else is the
  *  real module) into throwing a non-`RangeError` for exactly one test, to
@@ -268,26 +295,111 @@ describe("WorkList", () => {
   });
 });
 
-describe("TasksPage — the account's zone reaches every rendered date", () => {
+/**
+ * THIS BLOCK USED TO ASSERT THE OPPOSITE, and the inversion is the point.
+ *
+ * It previously pinned "an invalid account zone omits the row's date, never
+ * guesses it" — the work queue's half of the timezone defect. The other four
+ * screens clamped silently to UTC; this one went quiet. danlo settled it on
+ * 2026-09-17: "I do not want to omit the dates so let's find a workaround."
+ * The workaround is `resolveZone` — the date always renders, and the screen
+ * NAMES the zone it is in, so nothing is guessed silently and nothing is
+ * withheld. These tests pin the new contract at the same strength.
+ */
+describe("TasksPage — an unusable account zone is named, never silently guessed and never omitted", () => {
   beforeEach(() => {
     accountTimezone = "America/Chicago";
+    agencyTimezone = "America/Chicago";
+    isAgency = true;
     workRows = [];
   });
 
-  it("never falls back to UTC for the account's own invalid zone — the date is omitted, not guessed", async () => {
-    // The finding this pins: `safeZone(account.timezone, "UTC")` in page.tsx
-    // substituted "UTC" before the row's own date text ever got a chance to
-    // decline, printing a confident "Sep 1, 2026" in a zone nobody chose. The
-    // raw invalid zone, unclamped, makes `formatDateInZone` throw and
-    // `rowDateText` decline instead — no date text for this row at all.
+  it("renders the date AND names the agency's zone when the account's own is unusable (mutation: drop the agency step from resolveZone so it falls to UTC -> date moves to Sep 1 and the note names UTC -> FAILS)", async () => {
+    // 2026-09-01T00:00:00Z is 2026-08-31 19:00 in America/Chicago. Picking an
+    // instant that lands on a DIFFERENT CALENDAR DAY in the two candidate
+    // zones is what makes this test able to fail: if the agency step were
+    // dropped and this fell through to UTC, the rendered date would move.
+    // A fixture zone that agreed with UTC would assert nothing.
     accountTimezone = "Not/AZone";
+    agencyTimezone = "America/Chicago";
     workRows = [taskRow({ contactId: null, dueAt: "2026-09-01T00:00:00Z" })];
     const { default: TasksPage } = await import("./page");
     const html = renderToStaticMarkup(
       await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }),
     );
-    // bucketWork's own degrade: still visible, every row waits.
-    expect(html).toContain(m["work.bucket.waiting"]);
-    expect(html).not.toMatch(/Sep \d{1,2}, 2026/);
+
+    // The date is PRESENT — the omission is gone — and it is the agency
+    // zone's day, not UTC's.
+    expect(html).toContain("Aug 31, 2026");
+    expect(html).not.toContain("Sep 1, 2026");
+    // THE CHIP AGREES WITH THE DATE. `bucketWork` must run in the same
+    // resolved zone the row's date is formatted in: bucketed in the raw
+    // (unusable) zone it degrades to "every row waits", so this row would
+    // render "Aug 31, 2026" — eighteen days past due — beside a chip saying
+    // Waiting. That self-contradiction inside one row is exactly what
+    // sharing one zone exists to prevent.
+    expect(renderedText(html)).toContain(m["work.bucket.overdue"]);
+    expect(renderedText(html)).not.toContain(m["work.bucket.waiting"]);
+    // …and the screen says which zone that is.
+    expect(renderedText(html)).toContain(m["zone.note"].replace("{zone}", "America/Chicago"));
+    // DESIGN.md rule 3 — the marker is a WORD, not a colour.
+    expect(renderedText(html)).toContain(m["zone.guessed.agency"]);
+  });
+
+  it("falls to UTC and says so when the agency's zone is unusable too (mutation: label the fallback 'America/Chicago' -> FAILS)", async () => {
+    accountTimezone = "Not/AZone";
+    agencyTimezone = "Also/Broken";
+    workRows = [taskRow({ contactId: null, dueAt: "2026-09-01T00:00:00Z" })];
+    const { default: TasksPage } = await import("./page");
+    const html = renderToStaticMarkup(
+      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }),
+    );
+
+    expect(html).toContain("Sep 1, 2026");
+    expect(renderedText(html)).toContain(m["zone.note"].replace("{zone}", "UTC"));
+    // The fallback sentence names BOTH broken settings, which is the whole
+    // reason `source` is separate from `guessed`.
+    expect(renderedText(html)).toContain(m["zone.guessed.fallback"]);
+    expect(renderedText(html)).not.toContain(m["zone.guessed.agency"]);
+  });
+
+  it("a correctly-configured account is NOT labelled a guess (mutation: key guessed on 'did we end up at UTC' instead of on whose value was used -> FAILS)", async () => {
+    // The account's own zone IS UTC, and that is a configured choice, not a
+    // guess. `resolveZone` keys `guessed` on WHOSE value was used precisely
+    // so this account is not slandered.
+    accountTimezone = "UTC";
+    agencyTimezone = "America/Chicago";
+    workRows = [taskRow({ contactId: null, dueAt: "2026-09-01T00:00:00Z" })];
+    const { default: TasksPage } = await import("./page");
+    const html = renderToStaticMarkup(
+      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }),
+    );
+
+    // Named, as every screen now names its zone…
+    expect(renderedText(html)).toContain(m["zone.note"].replace("{zone}", "UTC"));
+    // …but NOT accused of guessing.
+    expect(renderedText(html)).not.toContain(m["zone.guessed.fallback"]);
+    expect(renderedText(html)).not.toContain(m["zone.guessed.agency"]);
+    expect(renderedText(html)).not.toContain(m["zone.guessed.fix"]);
+  });
+
+  it("never offers a CLIENT the Settings link — that route is agency-only (mutation: drop the isAgency branch in ZoneNote -> FAILS)", async () => {
+    // Settings is `requireAgencyOnlyAccountAccess`. A client who followed
+    // this link would be redirected straight back to their dashboard, so the
+    // sentence has to name a person to ask instead.
+    accountTimezone = "Not/AZone";
+    agencyTimezone = "America/Chicago";
+    isAgency = false;
+    workRows = [taskRow({ contactId: null, dueAt: "2026-09-01T00:00:00Z" })];
+    const { default: TasksPage } = await import("./page");
+    const html = renderToStaticMarkup(
+      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }),
+    );
+
+    expect(renderedText(html)).toContain(m["zone.guessed.client"]);
+    expect(renderedText(html)).not.toContain(m["zone.guessed.fix"]);
+    expect(html).not.toContain("/settings");
+    // The date still renders for a client — the whole point.
+    expect(html).toContain("Aug 31, 2026");
   });
 });
