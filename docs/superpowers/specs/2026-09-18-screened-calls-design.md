@@ -109,10 +109,27 @@ one, free to disagree. Classes:
 
 ### RLS and grants
 
-One policy, `app.is_agency()`, matching the single-policy shape `agencies`
-already uses. The audience decision is enforced in the database rather than in
-a query someone can forget to write. Insert is service-role only, which is what
-the TeXML route already holds.
+**As shipped in 0039, this is grants-only — no policy at all** — the shape
+`0036_alert_phone_verifications.sql` established for a table only the server
+touches, not the `app.is_agency()` policy this section originally proposed.
+RLS is enabled (so a future `grant select ... to authenticated` cannot
+silently open the table), `anon` and `authenticated` are revoked entirely,
+and only `service_role` is granted `select, insert, delete`. No in-app caller
+needs the `authenticated` grant at all: the agency list runs
+`requireAgency()` then reads through `serviceDb()`, the pattern
+`/dashboard/numbers` already uses for a cross-tenant screen.
+
+This is strictly stronger than a policy. With no grant, a client asking for
+this table gets `PERMISSION DENIED` at the ACL layer, before Postgres ever
+reaches RLS — not zero rows from a policy that evaluated `app.is_agency()`
+and came back false. A denied-by-ACL result cannot be defeated by a future
+query that forgets a filter, and there is no policy for a later migration to
+loosen. Do not add an `app.is_agency()` (or any other) policy on top of this:
+there is no role left for one to serve, and a policy appearing here would
+mean a grant to `authenticated` appeared with it — the change to stop, not to
+make. The audience decision is still enforced in the database rather than in
+a query someone can forget to write; it is just enforced one layer earlier
+than this section originally described.
 
 ## Where the write happens
 
@@ -166,9 +183,12 @@ model something that is not a task.
 Each proven by mutating the code it guards until a test named for that claim
 fails.
 
-**The boundary that matters: a client can never read `screened_calls`.** An
-RLS-layer proof, not an app-level filter — the app-level filter is not the
-control, the policy is.
+**The boundary that matters: a client can never read `screened_calls`.** A
+grants-layer proof, not an app-level filter — the app-level filter is not the
+control, the grant is: as shipped, `authenticated` holds no privilege on this
+table at all, so the assertion is that the client role gets `PERMISSION
+DENIED` (ACL refusal, before RLS is even consulted), not that a policy
+returns zero rows.
 
 **The defect this whole shape exists to avoid:** seed `screened_calls` rows,
 then assert `countCallsSince` and `decideReputation` return byte-identical
