@@ -3,7 +3,7 @@
    client's `.from().insert().select().single()` chain; this file is not
    part of the shipped module and typing the fake strictly would fight it
    for no safety gained (same rationale as embed-script.test.ts). */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { generateProposals } from "./generate";
 import type { TranscriptEvent } from "@bis/db";
 
@@ -13,6 +13,15 @@ import type { TranscriptEvent } from "@bis/db";
 // own no-op branch (`generate.ts`'s `if (!apiKey) return 0;`), not something
 // these tests are checking.
 beforeEach(() => { process.env.OPENAI_API_KEY = "sk-test"; });
+
+// Minor 5 of the fix-wave: several tests below install
+// `vi.spyOn(console, "error")` inline and restore it on their own last
+// line. `apps/web/vitest.config.ts` sets no `restoreMocks`, so a spy whose
+// OWN assertion throws never reaches that last line and leaks into every
+// test that runs after it in the same file — a single failing assertion can
+// then read as several unrelated failures. This is a backstop, not a
+// replacement for each test's own restore.
+afterEach(() => { vi.restoreAllMocks(); });
 
 const t = (role: "caller" | "assistant", text: string): TranscriptEvent =>
   ({ role, text, at: "2026-09-18T12:00:00.000Z" });
@@ -43,34 +52,46 @@ const DEFAULT_CONTACT_SENTINEL = "00000000-0000-0000-0000-000000000000";
 function fakeDb() {
   const rows: any[] = [];
   const attempts: any[] = [];
+  // Fix-wave finding 1: the spec's sharpest assertion — "generating
+  // proposals writes nothing to `tasks`, `contacts` or `opportunities`" —
+  // had NOTHING checking it, because the original `from: () => ({ … })`
+  // ignored the table-name argument entirely and could not tell
+  // `from("call_proposals")` from `from("tasks")`. `tablesTouched` records
+  // every table name the generator ever asks `db.from()` for, in call
+  // order, so a test can assert the whole list rather than trust that only
+  // the one branch it's looking at ran.
+  const tablesTouched: string[] = [];
   const seen = new Set<string>();
   const db: any = {
-    rows, attempts,
-    from: () => ({
-      insert: (row: any) => {
-        attempts.push(row);
-        const key = `${row.call_id}|${row.kind}|${row.contact_id ?? DEFAULT_CONTACT_SENTINEL}`;
-        if (seen.has(key)) {
+    rows, attempts, tablesTouched,
+    from: (table: string) => {
+      tablesTouched.push(table);
+      return {
+        insert: (row: any) => {
+          attempts.push(row);
+          const key = `${row.call_id}|${row.kind}|${row.contact_id ?? DEFAULT_CONTACT_SENTINEL}`;
+          if (seen.has(key)) {
+            return {
+              select: () => ({
+                single: async () => ({
+                  data: null,
+                  error: { code: "23505", message: "duplicate key value violates unique constraint" },
+                }),
+              }),
+            };
+          }
+          seen.add(key);
           return {
             select: () => ({
-              single: async () => ({
-                data: null,
-                error: { code: "23505", message: "duplicate key value violates unique constraint" },
-              }),
+              single: async () => {
+                rows.push(row);
+                return { data: { id: `p${rows.length}` }, error: null };
+              },
             }),
           };
-        }
-        seen.add(key);
-        return {
-          select: () => ({
-            single: async () => {
-              rows.push(row);
-              return { data: { id: `p${rows.length}` }, error: null };
-            },
-          }),
-        };
-      },
-    }),
+        },
+      };
+    },
   };
   return db;
 }
@@ -143,6 +164,26 @@ describe("generateProposals", () => {
       evidence: "I need a quote for a dining table. Call me Tuesday morning.",
       payload: { title: "Send a dining table quote", dueAt: null },
     });
+  });
+
+  // THE BOUNDARY THE DESIGN SPEC NAMES ABOVE EVERY OTHER ASSERTION: "a
+  // proposal must never become a record without a human action... generating
+  // proposals writes nothing to `tasks`, `contacts` or `opportunities`."
+  // Fix-wave finding 1 — before `tablesTouched` existed, `fakeDb()`'s
+  // `from: () => ({ … })` discarded its table-name argument, so a mutation
+  // that ALSO wrote a real row to `tasks` after every successful insert left
+  // every test in this file green, including this one's neighbors above.
+  it("touches call_proposals and NO OTHER TABLE (mutation: also insert a row into \"tasks\" after a successful proposal -> FAILS)", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, contactId: "contact-1",
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "task", title: "Send a dining table quote",
+                      dueAt: null, evidence: "Call me Tuesday morning" }],
+      }),
+    });
+    expect(n).toBe(1);
+    expect(db.tablesTouched).toEqual(["call_proposals"]);
   });
 
   // THE CENTRAL SAFETY PROPERTY. A model that invents a quote must produce
@@ -473,5 +514,83 @@ describe("generateProposals", () => {
     const fetchImpl = modelReturning({ proposals: [] });
     await generateProposals({ ...base, db, fetchImpl });
     expect(systemPromptOf(fetchImpl).toLowerCase()).toContain("plain");
+  });
+
+  // Fix-wave finding 2: `callIsEligible` ends in `eligibility.ts:58`'s
+  // `e.text.trim()`, and it used to run BEFORE this function's try block —
+  // so a hostile transcript threw straight out of `generateProposals`, past
+  // its own "NEVER THROWS" doc comment. `TranscriptEvent.text` is typed
+  // `string`, so a real caller of this function cannot construct this input
+  // through the type system — this is the boundary a future untyped read
+  // (a jsonb column cast back with `as unknown as CallDetailRow`, exactly
+  // what Task 5 does) can still hand it.
+  it("does not throw when a transcript element's text is not a string (mutation: move callIsEligible back out of the try -> throws instead of returning 0)", async () => {
+    const db = fakeDb();
+    const hostileTranscript = [
+      { role: "caller", text: 12345, at: "2026-09-18T12:00:00.000Z" },
+    ] as unknown as TranscriptEvent[];
+    await expect(generateProposals({
+      ...base, db, transcript: hostileTranscript,
+      fetchImpl: modelReturning({ proposals: [] }),
+    })).resolves.toBe(0);
+  });
+
+  it("does not throw when the transcript array contains a null element (mutation: move callIsEligible back out of the try -> throws instead of returning 0)", async () => {
+    const db = fakeDb();
+    const hostileTranscript = [null] as unknown as TranscriptEvent[];
+    await expect(generateProposals({
+      ...base, db, transcript: hostileTranscript,
+      fetchImpl: modelReturning({ proposals: [] }),
+    })).resolves.toBe(0);
+  });
+
+  // Fix-wave finding 3: the SYSTEM prompt's own example ("2026-09-23T09:00:00.000Z")
+  // is a full instant; a bare year is not, and Postgres's `timestamptz`
+  // column refuses it outright (`select '2026'::timestamptz` errors live) —
+  // so a proposal that passed this function's own `Date.parse` guard would
+  // still fail at a human's accept click, after the review screen already
+  // showed it as fine.
+  it("normalizes a dueAt Postgres would refuse into a full ISO instant instead of storing it raw (mutation: store the raw trimmed string instead of new Date(trimmed).toISOString() -> stores \"2026\")", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, contactId: "contact-bare-year",
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "task", title: "Call me back", dueAt: "2026",
+                      evidence: "Call me Tuesday morning" }],
+      }),
+    });
+    expect(n).toBe(1);
+    expect(db.rows[0].payload.dueAt).toBe("2026-01-01T00:00:00.000Z");
+    expect(db.rows[0].payload.dueAt).not.toBe("2026");
+  });
+
+  // Fix-wave finding 4: this is the branch a real OpenAI refusal takes
+  // (`message.content: null` with a `refusal` field) and the one a
+  // truncated completion takes too. Every other log path in this file is
+  // pinned by name; this one was not.
+  it("returns 0 and logs a specific message when the model returns no content, the shape of a real refusal (mutation: drop the typeof content !== \"string\" guard, or delete its console.error -> FAILS)", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = fakeDb();
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: null } }],
+    }), { status: 200 })) as unknown as typeof fetch;
+    expect(await generateProposals({ ...base, db, fetchImpl })).toBe(0);
+    expect(db.rows).toEqual([]);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(String(errorSpy.mock.calls[0]![0])).toContain("no content");
+  });
+
+  // Minor 6: nothing bounds how many elements the model's own completion can
+  // hand back before the loop's per-attempt cap even starts counting; a
+  // flood of UNGROUNDED proposals still costs a full `groundedEvidence` scan
+  // each. Bounding the completion's own token budget bounds the array that
+  // can come back at all.
+  it("bounds the model's own completion so a runaway proposals array cannot be returned (mutation: drop max_tokens from the request body -> FAILS)", async () => {
+    const db = fakeDb();
+    const fetchImpl = modelReturning({ proposals: [] });
+    await generateProposals({ ...base, db, fetchImpl });
+    const body = requestBodyOf(fetchImpl);
+    expect(typeof body.max_tokens).toBe("number");
+    expect(body.max_tokens).toBeGreaterThan(0);
   });
 });

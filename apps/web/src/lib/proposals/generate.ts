@@ -66,11 +66,22 @@ function asRawProposal(v: unknown): RawProposal | null {
  * NEVER THROWS, and that is the contract the caller depends on: this runs
  * in the voice lifecycle's best-effort tail, after the call row is already
  * durable. A proposal failure must change nothing about the call, its
- * transcript, its outcome or its text-back. The fetch, the JSON parse AND
- * the per-proposal loop all sit inside the SAME try — a malformed element
- * partway through must not throw past this function, and a failure after
- * some proposals already landed must not report 0 and hide the ones that
- * did.
+ * transcript, its outcome or its text-back. The eligibility check, the
+ * fetch, the JSON parse AND the per-proposal loop all sit inside the SAME
+ * try — a malformed element partway through must not throw past this
+ * function, and a failure after some proposals already landed must not
+ * report 0 and hide the ones that did. `callIsEligible` ends in
+ * `eligibility.ts`'s `e.text.trim()`, and `TranscriptEvent.text` is typed
+ * `string` only until something reads a transcript back through an
+ * untyped boundary (a jsonb column cast with `as unknown as
+ * CallDetailRow`) — that cast is exactly what a future caller does, so this
+ * function cannot assume the type-checker already made the input safe.
+ *
+ * `accountId` and `callId` are independent parameters with no
+ * composite-FK check tying `(account_id, call_id)` together (see
+ * `insertProposal`'s own doc in `@bis/db`'s `call-proposals.ts`) — a caller
+ * that mismatches them writes a real, RLS-visible row, carrying a verbatim
+ * caller quote, to the wrong account.
  */
 export async function generateProposals(input: {
   // Not `SupabaseClient` from `@supabase/supabase-js` directly: apps/web has
@@ -85,14 +96,6 @@ export async function generateProposals(input: {
   transcript: TranscriptEvent[]; handoffRequested: boolean;
   fetchImpl?: typeof fetch;
 }): Promise<number> {
-  // BEFORE the model call, never after. An ineligible call must not cost a
-  // request — and asserting that the model was not called is the only way
-  // a test can tell "skipped" from "called and returned nothing".
-  if (!callIsEligible({
-    outcome: input.outcome, transcript: input.transcript,
-    handoffRequested: input.handoffRequested,
-  })) return 0;
-
   // Read inside the body, not at module scope: a missing key at build time
   // must never break the import (summary-service.ts:7-10's rule).
   const apiKey = process.env.OPENAI_API_KEY;
@@ -108,6 +111,18 @@ export async function generateProposals(input: {
   let written = 0;
   let attempts = 0;
   try {
+    // BEFORE the model call, never after. An ineligible call must not cost
+    // a request — and asserting that the model was not called is the only
+    // way a test can tell "skipped" from "called and returned nothing".
+    // Inside this try, not before it (fix-wave finding 2): `callIsEligible`
+    // reads `e.text.trim()` on every transcript element, and a hostile
+    // element (non-string `text`, a null element, a null transcript) must
+    // not throw past this function's own "NEVER THROWS" contract.
+    if (!callIsEligible({
+      outcome: input.outcome, transcript: input.transcript,
+      handoffRequested: input.handoffRequested,
+    })) return 0;
+
     const r = await fetchImpl("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
@@ -123,6 +138,14 @@ export async function generateProposals(input: {
         // which would silently zero this feature forever. Forcing JSON mode
         // removes that failure instead of tolerating it.
         response_format: { type: "json_object" },
+        // Minor 6 of the fix-wave: with no bound here, nothing states a
+        // ceiling on how many elements the model's own `proposals` array
+        // can contain before the loop below even starts counting attempts
+        // — a flood of UNGROUNDED proposals still costs a full
+        // `groundedEvidence` scan per element (measured: 5,000 elements
+        // against a 120-turn transcript, 565ms). Three short task
+        // proposals fit comfortably inside this; a runaway array does not.
+        max_tokens: 2000,
         messages: [
           { role: "system", content: SYSTEM },
           { role: "user", content: transcriptForModel(input.transcript) },
@@ -185,10 +208,24 @@ export async function generateProposals(input: {
       // reach the accept path as garbage a task write cannot use. Stored as
       // null instead of dropping the whole proposal — the caller's request
       // is still real even when the model botched the timestamp format.
+      //
+      // Fix-wave finding 3: storing the RAW trimmed string (the old
+      // behavior) let `Date.parse`-valid-but-not-a-real-instant values like
+      // `"2026"` through — `tasks.due_at` is `timestamptz`, and Postgres
+      // refuses that literal outright (`select '2026'::timestamptz` errors
+      // live), so the proposal would fail at a human's accept click, after
+      // the review screen already showed it as fine. A quieter second case:
+      // a zone-less instant like `"2026-09-23T09:00"` means LOCAL time to
+      // `Date.parse` and SERVER time to Postgres, silently reinterpreting
+      // the instant at that same boundary. Parsing once and storing
+      // `.toISOString()`'s own normalised instant instead of the model's
+      // raw text kills both: it rejects nothing `Date.parse` already
+      // accepted, and what lands in the row is a full instant in the exact
+      // shape SYSTEM's own example tells the model to send.
       let dueAt: string | null = null;
       if (typeof p.dueAt === "string") {
         const trimmed = p.dueAt.trim();
-        if (trimmed && !Number.isNaN(Date.parse(trimmed))) dueAt = trimmed;
+        if (trimmed && !Number.isNaN(Date.parse(trimmed))) dueAt = new Date(trimmed).toISOString();
       }
       attempts++;
       const created = await insertProposal(input.db, input.accountId, {
