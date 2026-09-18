@@ -692,7 +692,7 @@ git commit -m "feat(db): accessors for call proposals, with a compare-and-swap d
 - Produces:
 
 ```ts
-export function isGrounded(evidence: string, transcript: TranscriptEvent[]): boolean;
+export function groundedEvidence(quote: string, transcript: TranscriptEvent[]): string | null;
 export function callIsEligible(input: {
   outcome: CallOutcome; transcript: TranscriptEvent[]; handoffRequested: boolean;
 }): boolean;
@@ -706,7 +706,7 @@ Create `apps/web/src/lib/proposals/grounding.test.ts`:
 
 ```ts
 import { describe, it, expect } from "vitest";
-import { isGrounded } from "./grounding";
+import { groundedEvidence } from "./grounding";
 import type { TranscriptEvent } from "@bis/db";
 
 const t = (role: "caller" | "assistant", text: string): TranscriptEvent =>
@@ -1203,13 +1203,25 @@ export async function generateProposals(input: {
     const title = typeof p.title === "string" ? p.title.trim() : "";
     const evidence = typeof p.evidence === "string" ? p.evidence.trim() : "";
     if (!title) continue;
-    // THE BOUNDARY. A proposal that cannot cite the caller is not made —
-    // not shown, not stored.
-    if (!isGrounded(evidence, input.transcript)) continue;
+    // THE BOUNDARY, and note WHAT IS STORED. `groundedEvidence` returns the
+    // caller's WHOLE TURN, not the model's excerpt of it, and that turn is
+    // what the reviewer sees.
+    //
+    // The excerpt cannot be trusted to carry its own meaning: substring
+    // matching cannot see a negation sitting outside the quote, so
+    // "I don't need a quote for a dining table" yields the verbatim,
+    // caller-role, within-one-turn span "need a quote for a dining table" —
+    // which reads on the review screen as assent. 12.8% of this product's
+    // real caller turns carry a negation, so this is the common case, not a
+    // corner. Storing the turn also ends a second divergence: matching
+    // normalises case and whitespace, so the model's excerpt could differ
+    // from the transcript printed directly above it.
+    const grounded = groundedEvidence(evidence, input.transcript);
+    if (grounded === null) continue;
     const dueAt = typeof p.dueAt === "string" && p.dueAt.trim() ? p.dueAt : null;
     const created = await insertProposal(input.db, input.accountId, {
       callId: input.callId, contactId: input.contactId, kind: "task",
-      payload: { title, dueAt }, evidence,
+      payload: { title, dueAt }, evidence: grounded,
     });
     if (created) written++;
   }
@@ -1221,6 +1233,12 @@ export async function generateProposals(input: {
 
 Run: `pnpm --filter web exec vitest run src/lib/proposals/generate.test.ts`
 Expected: PASS, 8 tests.
+
+- [ ] **Step 4b: The spec's fourth skip case has no owner — give it one here**
+
+The spec names four cases that must propose nothing: spam, abandoned, **a wrong number**, and any call whose transcript does not support a specific next step. `callIsEligible` covers spam and abandoned BY NAME. A wrong number is covered only transitively — such a caller usually classifies `abandoned` — but a wrong-number call in which Sofía took a message classifies `message` and is fully eligible.
+
+It cannot be a pure guard, because only the transcript says whether the caller wanted this business at all. So it belongs in the prompt, and it needs a test: a transcript where the caller says they have the wrong number and Sofía takes a message anyway must yield zero proposals.
 
 - [ ] **Step 5: Prove each mutation**
 
