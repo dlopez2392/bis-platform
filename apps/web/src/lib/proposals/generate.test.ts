@@ -470,6 +470,26 @@ describe("generateProposals", () => {
     errorSpy.mockRestore();
   });
 
+  // Task 4: on the one live account, spam and abandoned calls are the
+  // DOMINANT traffic — several robocalls a day, every one ineligible. If the
+  // OPENAI_API_KEY check ever runs before callIsEligible again, a rotated or
+  // missing key logs an error line for EACH of those, and an alert that
+  // fires on the dominant path stops being read. This pins the order: an
+  // ineligible call must cost nothing at all, not even the missing-key log.
+  it("costs nothing at all for an ineligible call when OPENAI_API_KEY is unset — no request, no log line (mutation: move the OPENAI_API_KEY check before callIsEligible -> logs the missing-key error and FAILS)", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const priorKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    const db = fakeDb();
+    const fetchImpl = modelReturning({ proposals: [] });
+    const n = await generateProposals({ ...base, db, outcome: "spam", fetchImpl });
+    expect(n).toBe(0);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    process.env.OPENAI_API_KEY = priorKey;
+    errorSpy.mockRestore();
+  });
+
   it("requests JSON output explicitly, and pins the model, url and abort signal (mutation: drop response_format -> FAILS)", async () => {
     const db = fakeDb();
     const fetchImpl = modelReturning({ proposals: [] });

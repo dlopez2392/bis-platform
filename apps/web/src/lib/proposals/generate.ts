@@ -96,32 +96,48 @@ export async function generateProposals(input: {
   transcript: TranscriptEvent[]; handoffRequested: boolean;
   fetchImpl?: typeof fetch;
 }): Promise<number> {
-  // Read inside the body, not at module scope: a missing key at build time
-  // must never break the import (summary-service.ts:7-10's rule).
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    // A rotated or missing key silently disables this feature forever —
-    // against a success criterion that MOST calls propose nothing, that
-    // failure is indistinguishable from a healthy quiet call unless it logs.
-    console.error(`generateProposals: OPENAI_API_KEY not set, skipping call ${input.callId}`);
-    return 0;
-  }
-  const fetchImpl = input.fetchImpl ?? fetch;
-
   let written = 0;
   let attempts = 0;
   try {
-    // BEFORE the model call, never after. An ineligible call must not cost
-    // a request — and asserting that the model was not called is the only
-    // way a test can tell "skipped" from "called and returned nothing".
-    // Inside this try, not before it (fix-wave finding 2): `callIsEligible`
-    // reads `e.text.trim()` on every transcript element, and a hostile
-    // element (non-string `text`, a null element, a null transcript) must
-    // not throw past this function's own "NEVER THROWS" contract.
+    // ELIGIBILITY FIRST, and inside this same try, for two independent
+    // reasons that both have to hold at once:
+    //
+    // 1. Ordering (Task 4 of the fix-wave): on the one live account, spam
+    // and abandoned calls are the DOMINANT traffic — several robocalls a
+    // day, every one ineligible. Checking `OPENAI_API_KEY` before this
+    // check ran it, and its `console.error`, on every one of them; a
+    // rotated or missing key would then log an error line per robocall,
+    // and an alert that fires on the dominant path stops being read (this
+    // branch has already applied that rule twice). Putting eligibility
+    // first means an ineligible call costs no request, no key check and no
+    // log line — the only thing distinguishing "ineligible" from "healthy
+    // and quiet" is that neither logs anything at all.
+    //
+    // 2. Safety (fix-wave finding 2): `callIsEligible` ends in
+    // `eligibility.ts`'s `e.text.trim()`, called on every transcript
+    // element, and a hostile element (non-string `text`, a null element, a
+    // null transcript) must not throw past this function's own "NEVER
+    // THROWS" contract — so the check has to sit inside the try regardless
+    // of where it sits relative to the key check.
     if (!callIsEligible({
       outcome: input.outcome, transcript: input.transcript,
       handoffRequested: input.handoffRequested,
     })) return 0;
+
+    // Read inside the body, not at module scope: a missing key at build time
+    // must never break the import (summary-service.ts:7-10's rule). Checked
+    // AFTER eligibility (see above) so a rotated or missing key is only ever
+    // logged for a call this function would otherwise have tried to propose
+    // from.
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      // A rotated or missing key silently disables this feature forever —
+      // against a success criterion that MOST calls propose nothing, that
+      // failure is indistinguishable from a healthy quiet call unless it logs.
+      console.error(`generateProposals: OPENAI_API_KEY not set, skipping call ${input.callId}`);
+      return 0;
+    }
+    const fetchImpl = input.fetchImpl ?? fetch;
 
     const r = await fetchImpl("https://api.openai.com/v1/chat/completions", {
       method: "POST",
