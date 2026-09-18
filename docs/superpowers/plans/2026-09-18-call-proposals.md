@@ -45,6 +45,8 @@ Further binding facts:
 - **Gates before merge:** `pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e`. Run one at a time; read exit codes from files.
 - **Anything mutating in e2e runs on the per-run fixture account.** Never `Test Client One`, never a live account.
 - ⚠️ **`withTestAccount` yields a `serviceDb()` client, which bypasses RLS AND all grants.** Any property that depends on a grant or a policy — above all this table's column-level UPDATE grant, its declared security boundary — is INVISIBLE to a test written that way. Prove those as the `authenticated` role via `withRollback` + `actAs`, seeding real `accounts` rows with `client_access_enabled` true. A grants test that never runs as the restricted role is the shape this repo has shipped green and hollow before.
+- ⚠️ **The evidence window is ONE TURN, and the turn is chosen by LAST match.** When a phrase recurs across caller turns, the last one is what the caller settled on — first-match would cite an early refusal for a proposal grounded in a later acceptance. Pin the rule with a test that dies when the search is reversed. The window's limit is real and must be stated wherever the citation is rendered: a retraction in a DIFFERENT turn is invisible to any turn-selection rule.
+- ⚠️ **Evidence is now a whole caller turn: mean 57 chars, p95 473, max 483 measured live.** Every surface rendering it must clamp. The work queue is the sharp one — unlike call detail, it shows the citation with no transcript beside it.
 - ⚠️ **A compile-time guarantee must be pinned at the CALL SITE, not on a type alias.** A `@ts-expect-error` on `const bad: SomeType = {...}` pins the type's declaration; the function that consumes it can still be widened with the whole gate green. Twice on this branch a proof measured the thing changed rather than the thing wanted — put the directive where a consumer actually types.
 - **Every test is proven by mutation:** break the code the test guards, watch that named test go red, restore. A test that cannot fail is a defect (see the ledger's vacuity catalogue).
 - Migration `0040_call_proposals.sql`. Filename form `NNNN_snake_name.sql`, no timestamp.
@@ -58,7 +60,7 @@ Further binding facts:
 - `packages/db/src/call-proposals.ts` — typed accessors (`insertProposal`, `listProposalsForCall`, `listPendingProposals`, `getProposal`, `markProposalDecided` in Task 2; `listPendingProposalsForAgency` added in Task 10, where the agency screen consumes it).
 - `packages/db/src/test/call-proposals-grants.test.ts` — grants + RLS proof.
 - `packages/db/src/test/call-proposals.test.ts` — accessor + constraint proof.
-- `apps/web/src/lib/proposals/grounding.ts` — `isGrounded(evidence, transcript)`; pure, no IO.
+- `apps/web/src/lib/proposals/grounding.ts` — `groundedEvidence(quote, transcript)`; pure, no IO. Returns the caller's WHOLE TURN or null.
 - `apps/web/src/lib/proposals/grounding.test.ts`
 - `apps/web/src/lib/proposals/eligibility.ts` — `callIsEligible(...)`; pure.
 - `apps/web/src/lib/proposals/eligibility.test.ts`
@@ -700,6 +702,11 @@ export function callIsEligible(input: {
 
 Pure, no IO — the same shape as `recorded-message.ts` and `silence-guard.ts`, and for the same reason.
 
+> ⚠️ **SUPERSEDED — Task 3 SHIPPED with a different design, and the code below is the pre-review draft.**
+> A review proved that substring matching cannot see a negation outside the quote: *"I don't need a quote for a dining table"* grounded the span *"need a quote for a dining table"*, which reads as assent on the review screen, and 12.8% of this product's real caller turns carry a negation.
+> What shipped: `groundedEvidence(quote, transcript): string | null` returning the caller's **whole turn** (chosen by LAST match when a phrase recurs), a **3-word** floor instead of the spelling-dependent 15-character one, and `callIsEligible` as an allow-list that fails the build when `CallOutcome` widens.
+> Read `apps/web/src/lib/proposals/grounding.ts` and `eligibility.ts` for the real thing. The draft below is kept only as the record of what changed and why.
+
 - [ ] **Step 1: Write the failing grounding test**
 
 Create `apps/web/src/lib/proposals/grounding.test.ts`:
@@ -777,7 +784,7 @@ import type { TranscriptEvent } from "@bis/db";
  * is roughly the shortest real clause a caller produces ("call me Tuesday"
  * is fifteen).
  */
-const MIN_EVIDENCE = 15;
+const MIN_EVIDENCE_WORDS = 3;
 
 /**
  * True when `evidence` is a span the CALLER actually said.
@@ -797,7 +804,7 @@ const MIN_EVIDENCE = 15;
  *   consistent about either between calls, and a proposal dropped over a
  *   capital letter is a false negative nobody can debug.
  */
-export function isGrounded(evidence: string, transcript: TranscriptEvent[]): boolean {
+export function groundedEvidence(quote: string, transcript: TranscriptEvent[]): string | null {
   const needle = evidence.trim().toLowerCase().replace(/\s+/g, " ");
   if (needle.length < MIN_EVIDENCE) return false;
   return transcript.some(
@@ -946,7 +953,7 @@ git commit -m "feat(web): a proposal must cite the caller, and most calls propos
 - Create: `apps/web/src/lib/proposals/generate.test.ts`
 
 **Interfaces:**
-- Consumes: `isGrounded` (Task 3), `callIsEligible` (Task 3), `insertProposal` (Task 2).
+- Consumes: `groundedEvidence` (Task 3), `callIsEligible` (Task 3), `insertProposal` (Task 2).
 - Produces:
 
 ```ts
@@ -1020,7 +1027,7 @@ describe("generateProposals", () => {
 
   // THE CENTRAL SAFETY PROPERTY. A model that invents a quote must produce
   // NOTHING, not a proposal a human might believe.
-  it("DROPS a proposal whose evidence is not in the transcript (mutation: skip the isGrounded call -> FAILS)", async () => {
+  it("DROPS a proposal whose evidence is not in the transcript (mutation: skip the groundedEvidence check -> FAILS)", async () => {
     const db = fakeDb();
     const n = await generateProposals({
       ...base, db,
@@ -1106,7 +1113,7 @@ Expected: FAIL — `Cannot find module './generate'`.
 ```ts
 import { insertProposal, type CallOutcome, type TranscriptEvent } from "@bis/db";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { isGrounded } from "./grounding";
+import { groundedEvidence } from "./grounding";
 import { callIsEligible } from "./eligibility";
 
 /**
@@ -1647,7 +1654,7 @@ git commit -m "feat(web): show a call's suggestions next to the words that cause
 - Modify: `apps/web/src/lib/proposals/generate.test.ts`
 
 **Interfaces:**
-- Consumes: `isGrounded` (Task 3), `insertProposal` (Task 2).
+- Consumes: `groundedEvidence` (Task 3), `insertProposal` (Task 2).
 - Produces: no new exports. `generateProposals` gains a `contact_field` branch and one new input field:
 
 ```ts
@@ -1720,7 +1727,7 @@ it("proposes no contact field when the call resolved no contact", async () => {
   expect(n).toBe(0);
 });
 
-it("still requires grounding for a contact field (mutation: skip isGrounded on this branch -> FAILS)", async () => {
+it("still requires grounding for a contact field (mutation: skip groundedEvidence on this branch -> FAILS)", async () => {
   const db = fakeDb();
   const n = await generateProposals({
     ...base, db, contactId: "c1", blankFields: ["email"],
@@ -1774,10 +1781,11 @@ Replace the allow-list line with a per-kind branch. The `contact_field` branch:
       if (!field || !CONTACT_FIELDS.includes(field)) continue;
       if (!input.blankFields.includes(field)) continue;
       if (!value || !input.contactId) continue;
-      if (!isGrounded(evidence, input.transcript)) continue;
+      const grounded = groundedEvidence(evidence, input.transcript);
+      if (grounded === null) continue;
       const created = await insertProposal(input.db, input.accountId, {
         callId: input.callId, contactId: input.contactId, kind: "contact_field",
-        payload: { field, value }, evidence,
+        payload: { field, value }, evidence: grounded,
       });
       if (created) written++;
       continue;
@@ -1924,11 +1932,12 @@ Add the branch:
       // it is almost never evidence that it went backwards, and a machine
       // that can retreat a pipeline can undo a human's read of a customer.
       if (target.position <= current.position) continue;
-      if (!isGrounded(evidence, input.transcript)) continue;
+      const grounded = groundedEvidence(evidence, input.transcript);
+      if (grounded === null) continue;
       const created = await insertProposal(input.db, input.accountId, {
         callId: input.callId, contactId: input.contactId, kind: "opportunity_stage",
         payload: { opportunityId: opp.id, fromStageId: current.id, toStageId: target.id },
-        evidence,
+        evidence: grounded,
       });
       if (created) written++;
       continue;
