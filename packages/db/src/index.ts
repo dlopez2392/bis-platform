@@ -92,3 +92,10 @@ export {
 } from "./demo/fiction";
 export * from "./timezone";
 export * from "./zone-resolution";
+export {
+  insertProposal, listProposalsForCall, listPendingProposals, getProposal,
+  markProposalDecided,
+  type CallProposal, type ProposalKind, type ProposalStatus,
+  type ProposalPayload, type TaskPayload, type ContactFieldPayload,
+  type OpportunityStagePayload,
+} from "./call-proposals";
