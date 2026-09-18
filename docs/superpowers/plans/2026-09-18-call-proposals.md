@@ -54,7 +54,7 @@ Further binding facts:
 
 **Create:**
 - `packages/db/supabase/migrations/0040_call_proposals.sql` — table, CHECKs, partial unique index, RLS, grants.
-- `packages/db/src/call-proposals.ts` — typed accessors (`insertProposal`, `listPendingProposalsForCall`, `listPendingProposalsForAccount`, `listPendingProposalsForAgency`, `getProposal`, `markProposalDecided`).
+- `packages/db/src/call-proposals.ts` — typed accessors (`insertProposal`, `listProposalsForCall`, `listPendingProposals`, `getProposal`, `markProposalDecided` in Task 2; `listPendingProposalsForAgency` added in Task 10, where the agency screen consumes it).
 - `packages/db/src/test/call-proposals-grants.test.ts` — grants + RLS proof.
 - `packages/db/src/test/call-proposals.test.ts` — accessor + constraint proof.
 - `apps/web/src/lib/proposals/grounding.ts` — `isGrounded(evidence, transcript)`; pure, no IO.
@@ -326,6 +326,15 @@ export type ContactFieldPayload = { field: "firstName" | "lastName" | "email" | 
 export type OpportunityStagePayload = {
   opportunityId: string; fromStageId: string; toStageId: string;
 };
+// DISCRIMINATED ON `kind`, never a bare union. `payload` is unconstrained
+// jsonb — only `kind`, `status` and `evidence` carry CHECKs — so this type
+// is the ONLY thing standing between a `kind: "task"` row and an
+// opportunity payload. A bare union type-checks that pairing and writes it,
+// and it surfaces as a review card with an undefined title.
+export type ProposalInput =
+  | { kind: "task"; payload: TaskPayload }
+  | { kind: "contact_field"; payload: ContactFieldPayload }
+  | { kind: "opportunity_stage"; payload: OpportunityStagePayload };
 export type ProposalPayload = TaskPayload | ContactFieldPayload | OpportunityStagePayload;
 
 export type CallProposal = {
@@ -348,10 +357,6 @@ export async function listProposalsForCall(
 export async function listPendingProposals(
   db: SupabaseClient, accountId: string,
 ): Promise<CallProposal[]>;
-
-export async function listPendingProposalsForAgency(
-  db: SupabaseClient,
-): Promise<(CallProposal & { brandName: string })[]>;
 
 export async function getProposal(
   db: SupabaseClient, accountId: string, id: string,
@@ -483,6 +488,12 @@ describe("call proposals accessors", () => {
 });
 ```
 
+⚠️ **Three tests above are load-bearing and easy to write in a form that cannot fail.** A review proved all three of these mutations leave a 6-test suite fully green:
+
+- **The compare-and-swap.** Deciding a proposal ONCE never exercises `.eq("status", "pending")`. The test must decide it twice, with a DIFFERENT `decidedBy` the second time, and assert both that the second call returns `false` AND that `getProposal(...).decidedBy` is still the first user's — without the guard, the second decide silently overwrites the record of who decided it.
+- **The account filter is the ONLY tenant barrier on reads** (no composite FK ties `call_proposals.account_id` to `calls.account_id`). Asserting `listPendingProposals(A)` is empty proves nothing while the table is globally empty — it is an emptiness assertion, not a scoping one. Seed a SECOND account with its own call and its own pending proposal, then assert `listPendingProposals(A)` returns exactly A's row by id, `listProposalsForCall(A, callB)` is empty, and `getProposal(A, proposalB)` is null.
+- **`listPendingProposals` needs a POSITIVE case.** Asserting only the post-decide zero means `return []` passes the suite.
+
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `pnpm --filter @bis/db test -- call-proposals.test`
@@ -557,8 +568,16 @@ export async function insertProposal(
     })
     .select("id").single();
   if (error) {
+    // TWO SANCTIONED REFUSALS, everything else is a FAULT. 23505 is the
+    // partial unique index (a re-run proposing the same thing twice) and
+    // 23514 is the blank-evidence CHECK; both are normal outcomes of a pass
+    // doing its job. Logging a dropped connection or a renamed column under
+    // the same word means a TOTAL OUTAGE of this feature reads, in the logs,
+    // as a quiet day with nothing to propose.
+    const expected = error.code === "23505" || error.code === "23514";
+    const label = expected ? "refused" : `FAULT (${error.code ?? "no code"})`;
     console.error(
-      `insertProposal: refused for call ${input.callId} kind ${input.kind}: ${error.message}`,
+      `insertProposal: ${label} for call ${input.callId} kind ${input.kind}: ${error.message}`,
     );
     return null;
   }
@@ -570,7 +589,11 @@ export async function listProposalsForCall(
 ): Promise<CallProposal[]> {
   const { data, error } = await db.from("call_proposals").select(COLS)
     .eq("account_id", accountId).eq("call_id", callId)
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false })
+    // Same backstop as listPendingProposals below: service_role has NO
+    // statement_timeout on this project and PostgREST's db-max-rows is unset,
+    // so an unbounded read is unbounded in production.
+    .limit(500);
   if (error) throw new Error(`listProposalsForCall failed: ${error.message}`);
   return ((data ?? []) as Row[]).map(toProposal);
 }
@@ -1920,6 +1943,8 @@ git commit -m "feat(web): propose a stage move forward, from this pipeline only"
 
 **Interfaces:**
 - Consumes: `listPendingProposals` (Task 2).
+- Produces: `listPendingProposalsForAgency(db: SupabaseClient): Promise<(CallProposal & { brandName: string })[]>` in `packages/db/src/call-proposals.ts`, exported from the barrel.
+  It lives here rather than in Task 2 because `/dashboard/work` is the AGENCY screen and `listAgencyWork(db)` takes no `accountId` — it is inherently cross-tenant. Copy `listAgencyWork`'s own accounts-join shape (`work-queue.ts:190-231`) rather than inventing one, and give it the same `.limit()` backstop the other reads carry.
 
 **Binding constraint:** `Bucket` and `BucketedWork` (`lib/work/buckets.ts:4-5`) are a pinned, tested union reused verbatim by `agency-buckets.ts`. **Do not add a fourth key.** Proposals are a separate data prop rendered as a sibling `<section>` inside the existing `flex flex-col gap-6` wrapper, above or below the buckets but visually separated and labelled `m["proposals.work.heading"]`.
 
