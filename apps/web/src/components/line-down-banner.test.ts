@@ -40,8 +40,13 @@ describe("LineDownBanner", () => {
     expect(renderedText(render(2)).trim().length).toBeGreaterThan(20);
   });
 
-  it("links to the screened list (mutation: drop the link -> FAILS)", () => {
-    expect(render(2)).toContain('href="/dashboard/screened"');
+  // Filtered to `misconfigured`, not the bare route — an agency user who
+  // clicks "See which" must land on the SAME axis the banner just quoted
+  // (24h distinct numbers turning callers away), not the screened list's own
+  // all-time, unfiltered row count, which is a different number on a
+  // different axis and can never reconcile with this one.
+  it("links to the screened list FILTERED to the misconfigured class, not the bare route (mutation: drop the ?class=misconfigured filter -> FAILS)", () => {
+    expect(render(2)).toContain('href="/dashboard/screened?class=misconfigured"');
   });
 
   it("never says '1 numbers' — the plural template does not leak onto the singular count (mutation: append a stray char to the singular check -> FAILS)", () => {

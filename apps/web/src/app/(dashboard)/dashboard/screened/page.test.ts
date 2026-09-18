@@ -34,22 +34,37 @@ let misconfiguredTotal = 0;
 let accountsList: Array<{ id: string; name: string; timezone: string }> = [
   { id: "acct1", name: "Rio Roofing", timezone: "America/Chicago" },
 ];
+// Spies, not bare functions — the return VALUES are still driven by the same
+// outer `rows`/`total`/`misconfiguredTotal`/`accountsList` every existing
+// test already sets (no behaviour change for a single pre-existing
+// assertion), but wrapping them lets the class-filter tests below assert on
+// the ARGUMENTS the page actually passed through, the same way
+// work/page.test.ts's own mocks already do for `countLinesTurningCallersAway`.
+const listScreenedCallsMock = vi.fn<(db: unknown, opts: unknown) => Promise<ScreenedCallRow[]>>(
+  async () => rows,
+);
+const countScreenedCallsMock = vi.fn<(db: unknown, opts: unknown) => Promise<number>>(
+  async () => total,
+);
+const countMisconfiguredScreenedCallsMock = vi.fn(async () => misconfiguredTotal);
+const listAccountsMock = vi.fn(async () => accountsList);
+
 vi.mock("@bis/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@bis/db")>();
   return {
     ...actual, // `screenedClass` and `resolveZone` stay REAL — both are under test.
     serviceDb: () => ({}),
-    listScreenedCalls: async () => rows,
-    countScreenedCalls: async () => total,
-    countMisconfiguredScreenedCalls: async () => misconfiguredTotal,
-    listAccounts: async () => accountsList,
+    listScreenedCalls: (db: unknown, opts: unknown) => listScreenedCallsMock(db, opts),
+    countScreenedCalls: (db: unknown, opts: unknown) => countScreenedCallsMock(db, opts),
+    countMisconfiguredScreenedCalls: () => countMisconfiguredScreenedCallsMock(),
+    listAccounts: () => listAccountsMock(),
   };
 });
 
 const { default: ScreenedPage } = await import("./page");
 
-function route(before?: string) {
-  return { searchParams: Promise.resolve({ before }) };
+function route(before?: string, cls?: string) {
+  return { searchParams: Promise.resolve({ before, class: cls }) };
 }
 
 function row(over: Partial<ScreenedCallRow> = {}): ScreenedCallRow {
@@ -70,6 +85,10 @@ describe("ScreenedPage", () => {
     // list; cleared here so a line logged by an earlier test cannot fail a
     // later one.
     vi.spyOn(console, "error").mockImplementation(() => {}).mockClear();
+    listScreenedCallsMock.mockClear();
+    countScreenedCallsMock.mockClear();
+    countMisconfiguredScreenedCallsMock.mockClear();
+    listAccountsMock.mockClear();
   });
 
   it("states the REAL total, not the number of rows on screen (mutation: render rows.length -> FAILS)", async () => {
@@ -225,5 +244,80 @@ describe("ScreenedPage", () => {
     const html = renderToStaticMarkup(await ScreenedPage(route()));
     const pagers = html.split(m["screened.older"]).length - 1;
     expect(pagers).toBe(1);
+  });
+
+  // ── The class filter (Task 5, 2026-09-18) ─────────────────────────────
+
+  it("threads a valid `?class=` filter into both the list read and the count read (mutation: drop passing `class` to listScreenedCalls/countScreenedCalls -> FAILS)", async () => {
+    rows = [row({ reason: "not-live" })];
+    total = 7;
+    await ScreenedPage(route(undefined, "misconfigured"));
+    expect(listScreenedCallsMock).toHaveBeenCalledWith(
+      expect.anything(), expect.objectContaining({ class: "misconfigured" }),
+    );
+    expect(countScreenedCallsMock).toHaveBeenCalledWith(
+      expect.anything(), expect.objectContaining({ class: "misconfigured" }),
+    );
+  });
+
+  it("states the scope in the header when filtered, so the total cannot be mistaken for the banner's own differently-scoped count (mutation: drop the scope line when filtered -> FAILS)", async () => {
+    rows = [row({ reason: "not-live" })];
+    total = 7;
+    const html = renderToStaticMarkup(await ScreenedPage(route(undefined, "misconfigured")));
+    expect(renderedText(html)).toContain(m["screened.filter.scope.misconfigured"]);
+  });
+
+  it("renders no scope line at all when unfiltered (mutation: always render the filter scope line -> FAILS)", async () => {
+    rows = [row()];
+    total = 1;
+    const html = renderToStaticMarkup(await ScreenedPage(route()));
+    const text = renderedText(html);
+    expect(text).not.toContain(m["screened.filter.scope.misconfigured"]);
+    expect(text).not.toContain(m["screened.filter.scope.screened"]);
+    expect(text).not.toContain(m["screened.filter.scope.unattributed"]);
+  });
+
+  it("falls back to unfiltered on an unknown `?class=` value — never a 500, and never a scope claim the data doesn't back (mutation: pass the raw unvalidated value straight through instead of parsing it -> FAILS)", async () => {
+    rows = [row()];
+    total = 1;
+    const html = renderToStaticMarkup(await ScreenedPage(route(undefined, "bogus")));
+    expect(listScreenedCallsMock).toHaveBeenCalledWith(
+      expect.anything(), expect.objectContaining({ class: undefined }),
+    );
+    const text = renderedText(html);
+    expect(text).not.toContain(m["screened.filter.scope.misconfigured"]);
+    expect(text).not.toContain(m["screened.filter.scope.screened"]);
+    expect(text).not.toContain(m["screened.filter.scope.unattributed"]);
+  });
+
+  it("distinguishes a filtered-and-empty result from a genuine cold start (mutation: render the cold-start empty copy for a filtered-empty result too -> FAILS)", async () => {
+    rows = [];
+    total = 0;
+    const html = renderToStaticMarkup(await ScreenedPage(route(undefined, "screened")));
+    const text = renderedText(html);
+    expect(text).toContain(m["screened.empty.filtered.title"]);
+    expect(text).not.toContain(m["screened.empty.title"]);
+  });
+
+  it("hides the misconfigured breakdown when a class filter is active — the filtered total already IS that number (mutation: render the breakdown row regardless of filterClass -> FAILS)", async () => {
+    rows = [row({ reason: "not-live" })];
+    total = 1;
+    misconfiguredTotal = 1;
+    const html = renderToStaticMarkup(await ScreenedPage(route(undefined, "misconfigured")));
+    expect(renderedText(html)).not.toContain(m["screened.misconfiguredOne"]);
+  });
+
+  // The bug this whole shape classically produces: a user pages from a
+  // filtered list into an UNfiltered one with no indication, because
+  // `olderHref` only ever carried `?before=`.
+  it("carries the class filter through the pager's olderHref (mutation: build olderHref without the class param -> FAILS)", async () => {
+    rows = Array.from({ length: 50 }, (_, i) => row({ id: `s${i}`, reason: "not-live" }));
+    total = 50;
+    const html = renderToStaticMarkup(await ScreenedPage(route(undefined, "misconfigured")));
+    // Anchored to the exact escaped href React's static renderer produces
+    // for an attribute containing `&` (`&amp;`), not a loose `toContain` on
+    // either param alone — a pager that carried `class` to some OTHER link
+    // on the page, or dropped `before`, would still pass a substring check.
+    expect(html).toMatch(/href="\/dashboard\/screened\?before=[^"]*&amp;class=misconfigured"/);
   });
 });

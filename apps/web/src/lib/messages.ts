@@ -1683,6 +1683,21 @@ export const m = {
     "When the receptionist refuses a call — a number that isn't live, a repeat spammer, a caller over the daily cap — it lands here with the reason. Nothing to do until then.",
   "screened.older": "Older",
 
+  // The `?class=` filter (2026-09-18): the work-queue banner links here
+  // scoped to `misconfigured` rather than to the unfiltered, all-time list —
+  // two different axes (24h distinct numbers vs. all-time rows) that must
+  // never be allowed to look like the same number. These three say plainly
+  // which slice is on screen; the "a genuine cold start" empty copy above is
+  // FALSE for a filtered-and-empty result (a filter matching nothing is not
+  // "nothing has ever been turned away"), so that gets its own pair too.
+  "screened.filter.scope.misconfigured": "Showing lines that are turning callers away.",
+  "screened.filter.scope.screened": "Showing calls the system screened on purpose.",
+  "screened.filter.scope.unattributed": "Showing calls to numbers this platform doesn't own.",
+  "screened.filter.clear": "Show every refused call",
+  "screened.empty.filtered.title": "Nothing matches this filter",
+  "screened.empty.filtered.body":
+    "No refusals of this kind are on record right now. Other kinds may still be — clear the filter to see everything.",
+
   // The work-queue banner. Counts DISTINCT numbers, because a dialer
   // hammering one dead line is one problem to fix.
   "work.linesDown.one": "1 number is turning callers away",

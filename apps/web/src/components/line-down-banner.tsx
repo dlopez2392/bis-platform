@@ -26,6 +26,17 @@ import { m } from "@/lib/messages";
  * spammer's persistence. The copy says "are turning callers away" (present
  * tense, ongoing) rather than a bare count, so it cannot be misread as
  * "N refused calls ever".
+ *
+ * The link carries `?class=misconfigured` — the screened list's own class
+ * filter (`screened/filter.ts`) — rather than pointing at the bare route.
+ * This count and the screened list's own all-time row total are two
+ * different axes (24h distinct numbers here; all-time rows there) that can
+ * never reconcile, and a bare link used to land an agency user on the
+ * unfiltered list right after reading THIS number, with nothing saying the
+ * two were never the same claim. Filtering to the misconfigured class alone
+ * does not fully fix that by itself — the list's own header still has to
+ * state the scope (page.tsx's `filters` slot) so the two numbers read as
+ * legibly different rather than silently contradictory.
  */
 export function LineDownBanner({ count }: { count: number }) {
   if (count <= 0) return null;
@@ -46,7 +57,7 @@ export function LineDownBanner({ count }: { count: number }) {
   return (
     <Notice tone="warn" role="note" className="text-foreground">
       {sentence}{" "}
-      <Link href="/dashboard/screened" className="underline underline-offset-2">
+      <Link href="/dashboard/screened?class=misconfigured" className="underline underline-offset-2">
         {m["work.linesDown.action"]}
       </Link>
     </Notice>

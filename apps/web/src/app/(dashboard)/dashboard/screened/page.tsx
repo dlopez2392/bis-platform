@@ -8,6 +8,7 @@
 // The table itself is unreadable by `authenticated` at all (0039 revokes the
 // grant), so this route is the only way in and the gate above is the whole
 // of the access control.
+import Link from "next/link";
 import { ShieldAlert } from "lucide-react";
 import {
   listScreenedCalls, countScreenedCalls, countMisconfiguredScreenedCalls,
@@ -20,6 +21,7 @@ import { parseTimeCursor } from "@/lib/cursor";
 import { renderZone } from "@/lib/zone";
 import { m } from "@/lib/messages";
 import { ScreenedTable } from "./screened-table";
+import { parseScreenedClass } from "./filter";
 
 export const dynamic = "force-dynamic";
 
@@ -30,18 +32,31 @@ const PAGE_SIZE = 50;
 export default async function ScreenedPage({
   searchParams,
 }: {
-  searchParams: Promise<{ before?: string }>;
+  searchParams: Promise<{ before?: string; class?: string }>;
 }) {
   await requireAgency();
-  const { before } = await searchParams;
+  const { before, class: classParam } = await searchParams;
   const cursor = parseTimeCursor(before);
+  // TOTAL, like `cursor` above: an unknown, empty, or hand-editable-into-
+  // garbage `?class=` reads as "no filter" rather than a 500 or a page that
+  // renders everything while its own header (below) claims to be scoped —
+  // see filter.ts's own doc comment.
+  const filterClass = parseScreenedClass(classParam);
   const db = serviceDb();
 
   const [rows, total, misconfiguredTotal, accounts] = await Promise.all([
-    listScreenedCalls(db, { limit: PAGE_SIZE, before: cursor }),
-    countScreenedCalls(db),
+    listScreenedCalls(db, { limit: PAGE_SIZE, before: cursor, class: filterClass }),
+    // The SAME filter as the list read, so a filtered view's header states
+    // the total that matches what is actually on screen — the banner's own
+    // count is a DIFFERENT axis (24h distinct numbers vs. this list's
+    // all-time rows) and must never be allowed to look like this number.
+    countScreenedCalls(db, { class: filterClass }),
     // The REAL cross-page count for the breakdown beside `total` — never
     // `rows.filter(...)`, which only ever sees the 50 rows on this page.
+    // Read unconditionally: when `filterClass` is set, `ScreenedTable` does
+    // not render this breakdown at all (it would be redundant with, or
+    // simply wrong beside, the now-filtered `total`), so a stale value
+    // reaching an unused prop cannot mislead anyone.
     countMisconfiguredScreenedCalls(db),
     listAccounts(db),
   ]);
@@ -72,16 +87,46 @@ export default async function ScreenedPage({
   );
 
   const last = rows[rows.length - 1];
-  const olderHref =
-    rows.length === PAGE_SIZE && last
-      ? `/dashboard/screened?before=${encodeURIComponent(last.createdAt)}`
-      : undefined;
+  // The bug this shape classically produces: a full page carries the reader
+  // from a FILTERED view into an unfiltered one with no indication, because
+  // only `before` made the trip. `URLSearchParams`, not string concatenation
+  // (`cursor.ts`'s own standing rule for every hand-built query string here).
+  const olderHref = (() => {
+    if (rows.length !== PAGE_SIZE || !last) return undefined;
+    const params = new URLSearchParams({ before: last.createdAt });
+    if (filterClass) params.set("class", filterClass);
+    return `/dashboard/screened?${params.toString()}`;
+  })();
 
   return (
     <>
-      <PageHeader title={m["screened.title"]} />
+      <PageHeader
+        title={m["screened.title"]}
+        // Rendered whenever a filter is active, in BOTH the empty and
+        // non-empty branches below — the header, not the (possibly absent)
+        // table, is what has to say what the list is scoped to, so the
+        // banner's differently-scoped number and this page's own total can
+        // never be read as the same claim.
+        filters={filterClass ? (
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+            <span>{m[`screened.filter.scope.${filterClass}` as const]}</span>
+            <Link href="/dashboard/screened" className="underline underline-offset-2">
+              {m["screened.filter.clear"]}
+            </Link>
+          </p>
+        ) : undefined}
+      />
       <div className="space-y-6 p-6">
-        {rows.length === 0 && !cursor ? (
+        {rows.length === 0 && filterClass ? (
+          // A filter that simply matched nothing is a DIFFERENT sentence
+          // from a genuine cold start — "nothing has ever been turned away"
+          // is false when the filter is the reason the list is empty.
+          <EmptyState
+            icon={ShieldAlert}
+            title={m["screened.empty.filtered.title"]}
+            body={m["screened.empty.filtered.body"]}
+          />
+        ) : rows.length === 0 && !cursor ? (
           <EmptyState
             icon={ShieldAlert}
             title={m["screened.empty.title"]}
@@ -95,6 +140,7 @@ export default async function ScreenedPage({
             accountsById={accountsById}
             agencyZone={agencyZone.zone}
             olderHref={olderHref}
+            filterClass={filterClass}
           />
         )}
       </div>

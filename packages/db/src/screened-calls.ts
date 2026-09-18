@@ -111,27 +111,57 @@ function toRow(r: Record<string, unknown>): ScreenedCallRow {
  * comparison is strictly `<`, so a row can never appear on two pages.
  */
 export async function listScreenedCalls(
-  db: SupabaseClient, opts: { limit?: number; before?: string } = {},
+  db: SupabaseClient, opts: { limit?: number; before?: string; class?: ScreenedClass } = {},
 ): Promise<ScreenedCallRow[]> {
   let q = db.from("screened_calls").select(SCREENED_COLS)
     .order("created_at", { ascending: false })
     .limit(opts.limit ?? 50);
   if (opts.before) q = q.lt("created_at", opts.before);
+  // Filters by CLASS, never by a single reason: the banner and this list's
+  // own header both think in the three classes (misconfigured / screened /
+  // unattributed), and `reasonsForClass` is the one place that expands a
+  // class into the reasons it covers.
+  if (opts.class) q = q.in("reason", reasonsForClass(opts.class));
   const { data, error } = await q;
   if (error) throw new Error(`listScreenedCalls failed: ${error.message}`);
   return (data ?? []).map((r) => toRow(r as Record<string, unknown>));
 }
 
-/** The REAL total for the list header — not the number of rows on screen. */
-export async function countScreenedCalls(db: SupabaseClient): Promise<number> {
-  const { count, error } = await db.from("screened_calls")
-    .select("id", { count: "exact", head: true });
+/**
+ * The REAL total for the list header — not the number of rows on screen.
+ *
+ * `opts.class`, when given, is the SAME filter `listScreenedCalls` applies —
+ * so a filtered list's header can state the total that matches what is
+ * actually on screen, rather than the all-time unfiltered total the banner's
+ * own (differently-scoped) count must never be confused with.
+ */
+export async function countScreenedCalls(
+  db: SupabaseClient, opts: { class?: ScreenedClass } = {},
+): Promise<number> {
+  let q = db.from("screened_calls").select("id", { count: "exact", head: true });
+  if (opts.class) q = q.in("reason", reasonsForClass(opts.class));
+  const { count, error } = await q;
   if (error) throw new Error(`countScreenedCalls failed: ${error.message}`);
   return count ?? 0;
 }
 
 /** The three reasons that mean a line is turning callers away. */
 const MISCONFIGURED: ScreenedReason[] = ["not-live", "no-profile", "profile-disabled"];
+
+/**
+ * The reasons belonging to one class — DERIVED from `screenedClass`, never a
+ * second hardcoded list that could drift from it. `misconfigured` reuses
+ * `MISCONFIGURED` directly (the exact three reasons
+ * `countMisconfiguredScreenedCalls` and the work-queue banner already filter
+ * to); the other two classes fall out of `SCREENED_REASONS` run through the
+ * same `screenedClass` switch that classifies a single reason, so a class's
+ * reason set can never disagree with what `screenedClass` says about any one
+ * of its members.
+ */
+function reasonsForClass(cls: ScreenedClass): ScreenedReason[] {
+  if (cls === "misconfigured") return MISCONFIGURED;
+  return SCREENED_REASONS.filter((r) => screenedClass(r) === cls);
+}
 
 /**
  * The REAL misconfigured total for the list header's breakdown — across

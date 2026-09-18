@@ -80,6 +80,54 @@ describe("recordScreenedCall / listScreenedCalls", () => {
   });
 });
 
+describe("listScreenedCalls class filter", () => {
+  it("filters to the given class, deriving reasons from screenedClass (mutation: drop the class .in() filter -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      // Randomized called numbers so this test can tell ITS rows apart from
+      // whatever else the shared project's table holds — same discipline
+      // `testScreenedCalledE164` already documents for the null-accountId
+      // tests above.
+      const misconfiguredCalled = testScreenedCalledE164();
+      const screenedCalled = testScreenedCalledE164();
+      await recordScreenedCall(db, {
+        accountId, phoneNumberId: null, calledE164: misconfiguredCalled,
+        callerE164: null, reason: "not-live",
+      });
+      await recordScreenedCall(db, {
+        accountId, phoneNumberId: null, calledE164: screenedCalled,
+        callerE164: null, reason: "over-cap",
+      });
+      // A generous limit — observed volume is ~8 refusals/day platform-wide
+      // (DESIGN doc, "Known properties, accepted") — so both freshly-written
+      // rows are certain to land inside it regardless of what else the
+      // shared project's table holds.
+      const rows = await listScreenedCalls(db, { limit: 500, class: "misconfigured" });
+      const called = new Set(rows.map((r) => r.calledE164));
+      expect(called.has(misconfiguredCalled)).toBe(true);
+      expect(called.has(screenedCalled)).toBe(false);
+    });
+  });
+});
+
+describe("countScreenedCalls class filter", () => {
+  it("counts only rows in the given class (mutation: drop the class .in() filter -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const before = await countScreenedCalls(db, { class: "misconfigured" });
+      await recordScreenedCall(db, {
+        accountId, phoneNumberId: null, calledE164: testScreenedCalledE164(),
+        callerE164: null, reason: "not-live",
+      });
+      await recordScreenedCall(db, {
+        accountId, phoneNumberId: null, calledE164: testScreenedCalledE164(),
+        callerE164: null, reason: "over-cap",
+      });
+      const after = await countScreenedCalls(db, { class: "misconfigured" });
+      // Two rows written, ONE of them `misconfigured`.
+      expect(after - before).toBe(1);
+    });
+  });
+});
+
 describe("countLinesTurningCallersAway", () => {
   it("counts DISTINCT numbers, not refusals (mutation: count(*) instead of count(distinct) -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {

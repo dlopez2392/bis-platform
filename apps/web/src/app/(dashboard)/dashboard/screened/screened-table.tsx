@@ -36,13 +36,18 @@ const HEAD = "px-5";
 const CELL = "px-5 py-3";
 
 export function ScreenedTable({
-  rows, total, misconfiguredCount, accountsById, agencyZone, olderHref,
+  rows, total, misconfiguredCount, accountsById, agencyZone, olderHref, filterClass,
 }: {
   rows: ScreenedCallRow[];
-  /** The REAL total across every page — never `rows.length`. */
+  /** The REAL total across every page — never `rows.length`. When
+   *  `filterClass` is set, this is already the FILTERED total
+   *  (`countScreenedCalls(db, { class: filterClass })`, page.tsx), so it can
+   *  never be mistaken for the work-queue banner's own differently-scoped
+   *  (24h, distinct-number) count. */
   total: number;
   /** The REAL misconfigured total across every page (`countMisconfiguredScreenedCalls`)
-   *  — never `rows.filter(...)`, which only ever sees the page in hand. */
+   *  — never `rows.filter(...)`, which only ever sees the page in hand.
+   *  Ignored when `filterClass` is set (see below). */
   misconfiguredCount: number;
   /** accountId → the account's own label and a ZONE already resolved by the
    *  page through `resolveZone` — never the raw `accounts.timezone` column,
@@ -54,6 +59,17 @@ export function ScreenedTable({
    *  "UTC" literal — this is the resolved answer, guessed or not. */
   agencyZone: string;
   olderHref?: string;
+  /** Set when `/dashboard/screened?class=...` scoped this page's own reads
+   *  (page.tsx, `parseScreenedClass`). The misconfigured breakdown below is
+   *  a breakdown OF THE UNFILTERED TOTAL — once a class filter is already
+   *  active, `total` above IS that number (or plainly isn't it), and
+   *  repeating it as a second "N misconfigured" line beside a filtered total
+   *  would be redundant at best and actively misleading when the filter is
+   *  `screened` or `unattributed`, where it would always read zero. The
+   *  page's own header states the scope instead (PageHeader's `filters`
+   *  slot), so this component only needs to know whether to suppress the
+   *  breakdown line, not which class is active. */
+  filterClass?: ScreenedClass;
 }) {
   // DESIGN.md rule 1 — the total never ships alone. The breakdown is the ONE
   // class an operator must act on (see CLASS_DOT's own comment): `screened`
@@ -75,11 +91,15 @@ export function ScreenedTable({
       {/* DESIGN.md's Label role: Geist Mono 500, 10px, +0.14em, uppercase. */}
       <p className="flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase">
         <span>{totalLabel}</span>
-        <span aria-hidden>·</span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className={cn("size-[7px] shrink-0 rounded-full", CLASS_DOT.misconfigured)} aria-hidden />
-          {misconfiguredLabel}
-        </span>
+        {filterClass ? null : (
+          <>
+            <span aria-hidden>·</span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className={cn("size-[7px] shrink-0 rounded-full", CLASS_DOT.misconfigured)} aria-hidden />
+              {misconfiguredLabel}
+            </span>
+          </>
+        )}
       </p>
 
       <ListPanel>
