@@ -90,3 +90,4 @@ export {
   DEMO_FORWARDING_TICK_KEY,
 } from "./demo/fiction";
 export * from "./timezone";
+export * from "./zone-resolution";
