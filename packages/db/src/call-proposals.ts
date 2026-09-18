@@ -101,7 +101,7 @@ export async function insertProposal(
       );
     } else {
       console.error(
-        `insertProposal: unexpected fault (code ${code ?? "none"}) for call ${input.callId} ` +
+        `insertProposal: unexpected fault (code ${code || "none"}) for call ${input.callId} ` +
         `kind ${input.kind}: ${error.message}`,
       );
     }
@@ -116,8 +116,10 @@ export async function listProposalsForCall(
   const { data, error } = await db.from("call_proposals").select(COLS)
     .eq("account_id", accountId).eq("call_id", callId)
     .order("created_at", { ascending: false })
-    // Same backstop as listPendingProposals: service_role has NO
-    // statement_timeout, so an unbounded read is unbounded in production.
+    // Same reasoning as countLinesTurningCallersAway (screened-calls.ts):
+    // service_role's rolconfig carries no statement_timeout and
+    // PostgREST's db-max-rows is unset, so an unbounded read is unbounded
+    // in production.
     .limit(500);
   if (error) throw new Error(`listProposalsForCall failed: ${error.message}`);
   return ((data ?? []) as Row[]).map(toProposal);
@@ -129,8 +131,10 @@ export async function listPendingProposals(
   const { data, error } = await db.from("call_proposals").select(COLS)
     .eq("account_id", accountId).eq("status", "pending")
     .order("created_at", { ascending: false })
-    // Same backstop as listScreenedCalls: service_role has NO
-    // statement_timeout, so an unbounded read is unbounded in production.
+    // Same reasoning as countLinesTurningCallersAway (screened-calls.ts):
+    // service_role's rolconfig carries no statement_timeout and
+    // PostgREST's db-max-rows is unset, so an unbounded read is unbounded
+    // in production.
     .limit(500);
   if (error) throw new Error(`listPendingProposals failed: ${error.message}`);
   return ((data ?? []) as Row[]).map(toProposal);
@@ -140,7 +144,11 @@ export async function getProposal(
   db: SupabaseClient, accountId: string, id: string,
 ): Promise<CallProposal | null> {
   const { data, error } = await db.from("call_proposals").select(COLS)
-    .eq("account_id", accountId).eq("id", id).maybeSingle();
+    .eq("account_id", accountId).eq("id", id)
+    // `id` is the PK, so this is already bounded to at most one row — the
+    // backstop the other two reads need has nothing to add here, but the
+    // `.limit(1)` says so instead of leaving it to be re-derived.
+    .limit(1).maybeSingle();
   if (error) throw new Error(`getProposal failed: ${error.message}`);
   return data ? toProposal(data as Row) : null;
 }

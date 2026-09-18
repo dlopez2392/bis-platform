@@ -12,7 +12,6 @@ import {
   insertProposal, listProposalsForCall, listPendingProposals,
   getProposal, markProposalDecided,
 } from "../call-proposals";
-import type { ProposalInput } from "../call-proposals";
 
 async function seedCall(db: SupabaseClient, accountId: string): Promise<string> {
   const num = await db.from("phone_numbers")
@@ -77,14 +76,37 @@ describe("call proposals accessors", () => {
     });
   });
 
-  it("rejects an empty evidence string (mutation: drop call_proposals_evidence_nonempty -> FAILS)", async () => {
+  // The companion test to Important 6 below: that one proves a FAULT (an
+  // unknown FK) reaches the "unexpected fault" line. Nothing previously
+  // proved a SANCTIONED REFUSAL (this CHECK violation) reaches the
+  // "refused" line and stays OFF the fault line — a rewrite that routed
+  // every error, refusal included, to "unexpected fault" left every
+  // existing assertion here green, because none of them read the log line
+  // at all.
+  //
+  // Proved live: changing `if (code === "23505" || code === "23514")` to
+  // `if (code === "99999")` (call-proposals.ts:98) leaves both assertions
+  // below failing —
+  //   expect(messages.some((m) => m.includes("refused"))).toBe(true)
+  //     Received: false
+  //   expect(messages.some((m) => m.includes("unexpected fault"))).toBe(false)
+  //     Received: true
+  it("rejects an empty evidence string and logs it as a REFUSAL, not a fault (mutation: drop call_proposals_evidence_nonempty -> FAILS; mutation: route 23514 to the fault branch -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
-      const callId = await seedCall(db, accountId);
-      const created = await insertProposal(db, accountId, {
-        callId, kind: "task", evidence: "   ",
-        payload: { title: "Ungrounded", dueAt: null },
-      });
-      expect(created).toBeNull();
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const callId = await seedCall(db, accountId);
+        const created = await insertProposal(db, accountId, {
+          callId, kind: "task", evidence: "   ",
+          payload: { title: "Ungrounded", dueAt: null },
+        });
+        expect(created).toBeNull();
+        const messages = spy.mock.calls.map((args) => String(args[0]));
+        expect(messages.some((m) => m.includes("refused"))).toBe(true);
+        expect(messages.some((m) => m.includes("unexpected fault"))).toBe(false);
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 
@@ -285,24 +307,29 @@ describe("call proposals accessors", () => {
 });
 
 // Important 5, compile-time half. `kind` and `payload` must be
-// unrepresentable when mismatched — this function is never called; its
-// only job is to fail `tsc --noEmit` if that guarantee is ever loosened.
+// unrepresentable when mismatched, AT THE CALL SITE that actually matters —
+// `insertProposal`'s own parameter type — not just on a standalone
+// `ProposalInput`-typed variable that a caller need not ever name. This
+// function is never called; its only job is to fail `tsc --noEmit` if that
+// guarantee is ever loosened.
 //
 // Proved live in the direction that matters: with `insertProposal`'s
-// parameter typed as the bare `{ kind: ProposalKind; payload: ProposalPayload }`
-// it used to carry, THIS EXACT call typechecked cleanly, so the
-// `@ts-expect-error` below was unused and `tsc --noEmit` reported
-// TS2578 ("Unused '@ts-expect-error' directive") on this line — the
-// by-name compiler red for this half of Important 5. Restoring
-// `ProposalInput` makes the mismatch a real error again, which is what
-// the directive is there to expect.
+// parameter widened back to the pre-fix bare shape
+// `{ callId; contactId?; evidence; kind: ProposalKind; payload: ProposalPayload }`,
+// THIS EXACT call typechecked cleanly (`npx tsc --noEmit` exit 0, no
+// diagnostics at all — including when the directive lived on a separate
+// `const bad: ProposalInput` instead of here), so the `@ts-expect-error`
+// below was unused and `tsc --noEmit` reports TS2578 ("Unused
+// '@ts-expect-error' directive") on this line — the by-name compiler red
+// this half of Important 5 requires. Restoring `insertProposal`'s narrowed
+// parameter makes the mismatch a real error again, which is what the
+// directive is there to expect.
 function _typeOnly_taskCannotCarryAnOpportunityStagePayload(
   db: SupabaseClient, accountId: string,
 ): void {
-  const bad: ProposalInput = {
-    kind: "task",
+  void insertProposal(db, accountId, {
+    callId: "unused", evidence: "unused", kind: "task",
     // @ts-expect-error kind "task" cannot carry an OpportunityStagePayload
     payload: { opportunityId: "x", fromStageId: "y", toStageId: "z" },
-  };
-  void insertProposal(db, accountId, { callId: "unused", evidence: "unused", ...bad });
+  });
 }
