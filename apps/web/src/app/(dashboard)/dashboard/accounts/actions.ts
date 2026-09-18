@@ -4,7 +4,7 @@ import { clerkClient } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { requireAgency } from "@/lib/auth";
-import { serviceDb, createAccount, applyBlueprint } from "@bis/db";
+import { serviceDb, createAccount, applyBlueprint, assertUsableZone } from "@bis/db";
 import { NO_BLUEPRINT_SENTINEL } from "./constants";
 
 export async function createClientAccount(formData: FormData): Promise<void> {
@@ -12,6 +12,13 @@ export async function createClientAccount(formData: FormData): Promise<void> {
   const name = String(formData.get("name") ?? "").trim();
   const timezone = String(formData.get("timezone") ?? "America/Chicago");
   if (!name) throw new Error("Account name is required");
+  // BEFORE the Clerk org is created, not after. createAccount refuses an
+  // unusable zone on its own — that is the invariant no caller can bypass —
+  // but by the time it runs this action has already made an organisation in
+  // Clerk and would have to delete it again through the compensating
+  // rollback below. A typo in a form field should not create and destroy a
+  // tenant in an external system.
+  assertUsableZone(timezone);
 
   const clerk = await clerkClient();
   const org = await clerk.organizations.createOrganization({ name, createdBy: userId });
