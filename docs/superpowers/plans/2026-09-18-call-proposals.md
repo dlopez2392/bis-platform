@@ -44,6 +44,7 @@ Further binding facts:
 - **Status is never colour alone** — dot + word (`DESIGN.md` rule 3).
 - **Gates before merge:** `pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e`. Run one at a time; read exit codes from files.
 - **Anything mutating in e2e runs on the per-run fixture account.** Never `Test Client One`, never a live account.
+- ⚠️ **`withTestAccount` yields a `serviceDb()` client, which bypasses RLS AND all grants.** Any property that depends on a grant or a policy — above all this table's column-level UPDATE grant, its declared security boundary — is INVISIBLE to a test written that way. Prove those as the `authenticated` role via `withRollback` + `actAs`, seeding real `accounts` rows with `client_access_enabled` true. A grants test that never runs as the restricted role is the shape this repo has shipped green and hollow before.
 - **Every test is proven by mutation:** break the code the test guards, watch that named test go red, restore. A test that cannot fail is a defect (see the ledger's vacuity catalogue).
 - Migration `0040_call_proposals.sql`. Filename form `NNNN_snake_name.sql`, no timestamp.
 
@@ -278,7 +279,7 @@ Expected: FAIL — the existence assertion is unsatisfied because the migration 
 - [ ] **Step 5: Re-run the test after the orchestrator applies**
 
 Run: `pnpm --filter @bis/db test -- call-proposals-grants`
-Expected: PASS — 6 tests once Step 8's cascade test lands.
+Expected: PASS. The file grows past 6 as the grants/RLS proof is completed — read vitest's own summary rather than expecting a fixed count.
 
 - [ ] **Step 6: Prove each assertion can fail**
 
