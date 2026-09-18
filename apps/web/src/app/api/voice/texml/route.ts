@@ -316,22 +316,33 @@ async function respond(calledE164: string | null, callerE164: string | null, ori
       // cannot spend. Same pattern, same reason, as incoming/route.ts's own
       // `after(() => runCallLifecycle(...))`.
       //
-      // BEST-EFFORT, and that is a contract: a failed write logs and changes
-      // nothing about the refusal, the spoken copy, or the hang-up. The
-      // console.log lines in classify() are untouched and remain the
-      // evidence if this write is itself broken.
+      // BEST-EFFORT, and that is a contract: a failed write OR A FAILED
+      // SCHEDULE logs and changes nothing about the refusal, the spoken
+      // copy, or the hang-up. The console.log lines in classify() are
+      // untouched and remain the evidence if this write is itself broken.
       const screened = result.screened;
-      after(async () => {
-        try {
-          // Lazy import: a module-scope DB import here breaks `next build`
-          // during page-data collection — same reason as `classify()`'s own
-          // lazy `@bis/db` import above.
-          const { serviceDb, recordScreenedCall } = await import("@bis/db");
-          await recordScreenedCall(serviceDb(), screened);
-        } catch (e) {
-          console.error(`texml: screened-call write failed (${screened.reason}) for ${screened.calledE164}: ${String(e)}`);
-        }
-      });
+      try {
+        // `after()` itself has synchronous throw paths distinct from the
+        // callback rejecting (no work store; `errorWaitUntilNotAvailable`).
+        // Neither is caught by the try/catch INSIDE the callback below, so
+        // scheduling gets its own — otherwise the throw escapes `respond()`
+        // (there is no enclosing catch in GET/POST) and Telnyx gets a 500
+        // instead of the refusal document: dead air instead of the sentence
+        // this whole branch exists to speak.
+        after(async () => {
+          try {
+            // Lazy import: a module-scope DB import here breaks `next build`
+            // during page-data collection — same reason as `classify()`'s own
+            // lazy `@bis/db` import above.
+            const { serviceDb, recordScreenedCall } = await import("@bis/db");
+            await recordScreenedCall(serviceDb(), screened);
+          } catch (e) {
+            console.error(`texml: screened-call write failed (${screened.reason}) for ${screened.calledE164}: ${String(e)}`);
+          }
+        });
+      } catch (e) {
+        console.error(`texml: could not schedule the screened-call write (${screened.reason}) for ${screened.calledE164}: ${String(e)}`);
+      }
     }
     if (result.kind === "refuse") return xmlResponse(sayXml(result.languages, COPY.refuse));
     // Deliberately the same sentence as `refuse`, and deliberately ABOVE the

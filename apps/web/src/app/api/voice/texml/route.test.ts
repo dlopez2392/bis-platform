@@ -33,7 +33,8 @@ vi.mock("next/server", async (importOriginal) => {
  *  second flush later in the same test only replays callbacks scheduled
  *  since the first flush. */
 async function flushAfter(): Promise<void> {
-  const calls = afterMock.mock.calls.splice(0, afterMock.mock.calls.length);
+  const calls = [...afterMock.mock.calls];
+  afterMock.mockClear();
   for (const [cb] of calls) await (cb as () => unknown)();
 }
 
@@ -646,9 +647,15 @@ describe("screened calls are recorded", () => {
     profileMock.mockResolvedValue({ ...ENABLED_PROFILE, enabled: false, languages: "en" });
     await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550100&From=%2B19565550111"));
     await flushAfter();
-    expect(recordScreenedCallMock).toHaveBeenCalledWith(
-      expect.anything(), expect.objectContaining({ reason: "profile-disabled" }),
-    );
+    // Full-object equality, not objectContaining — accountId and
+    // phoneNumberId are FKs to different tables, and a swap between them
+    // passes the FK constraint check silently only if the reviewer's swap
+    // mutation is applied (see the report for the mutation proof).
+    expect(recordScreenedCallMock).toHaveBeenCalledWith(expect.anything(), {
+      accountId: "acct1", phoneNumberId: "pn1",
+      calledE164: "+19565550100", callerE164: "+19565550111",
+      reason: "profile-disabled",
+    });
   });
 
   it("records `no-profile` when the account never set one up", async () => {
@@ -656,37 +663,49 @@ describe("screened calls are recorded", () => {
     profileMock.mockResolvedValue(null);
     await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550100&From=%2B19565550111"));
     await flushAfter();
-    expect(recordScreenedCallMock).toHaveBeenCalledWith(
-      expect.anything(), expect.objectContaining({ reason: "no-profile" }),
-    );
+    expect(recordScreenedCallMock).toHaveBeenCalledWith(expect.anything(), {
+      accountId: "acct1", phoneNumberId: "pn1",
+      calledE164: "+19565550100", callerE164: "+19565550111",
+      reason: "no-profile",
+    });
   });
 
   it("records `repeat-spam` for a blocked caller", async () => {
     countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 5, otherCalls: 0 });
     await GET(new Request(`https://x.example/api/voice/texml?To=${encodeURIComponent(LIVE_TO)}&From=${encodeURIComponent(SILENT_CALLER)}`));
     await flushAfter();
-    expect(recordScreenedCallMock).toHaveBeenCalledWith(
-      expect.anything(), expect.objectContaining({ reason: "repeat-spam" }),
-    );
+    expect(recordScreenedCallMock).toHaveBeenCalledWith(expect.anything(), {
+      accountId: "a1", phoneNumberId: "pn1",
+      calledE164: LIVE_TO, callerE164: SILENT_CALLER,
+      reason: "repeat-spam",
+    });
   });
 
   it("records `over-cap` for a caller over the daily cap", async () => {
     countCallsByCallerSinceMock.mockResolvedValue(5);
     await GET(new Request(`https://x.example/api/voice/texml?To=${encodeURIComponent(LIVE_TO)}&From=%2B19562921696`));
     await flushAfter();
-    expect(recordScreenedCallMock).toHaveBeenCalledWith(
-      expect.anything(), expect.objectContaining({ reason: "over-cap" }),
-    );
+    expect(recordScreenedCallMock).toHaveBeenCalledWith(expect.anything(), {
+      accountId: "a1", phoneNumberId: "pn1",
+      calledE164: LIVE_TO, callerE164: "+19562921696",
+      reason: "over-cap",
+    });
   });
 
   it("records NOTHING for a call that is answered (mutation: record on the dial path too -> FAILS)", async () => {
-    await GET(new Request(`https://x.example/api/voice/texml?To=${encodeURIComponent(LIVE_TO)}&From=%2B19562921696`));
+    const res = await GET(new Request(`https://x.example/api/voice/texml?To=${encodeURIComponent(LIVE_TO)}&From=%2B19562921696`));
+    const xml = await res.text();
+    expect(xml).toContain("<Dial");
     await flushAfter();
     expect(recordScreenedCallMock).not.toHaveBeenCalled();
   });
 
-  it("the caller hears EXACTLY the same thing when the write throws (mutation: await the write on the answer path -> FAILS)", async () => {
+  it("a rejected write is swallowed inside after() — the refusal document is unchanged (mutation: remove the try/catch inside the callback -> FAILS)", async () => {
     // The contract: a caller's experience never depends on our bookkeeping.
+    // Both responses are captured BEFORE flushAfter() runs the callback, so
+    // this pins the callback's own try/catch, not the timing the old name
+    // claimed — the sibling test below (`writes in after()...`) is what
+    // actually proves the write is deferred.
     lookupMock.mockResolvedValue({ id: "pn1", account_id: "acct1", e164: "+19565550100", telnyx_id: null, status: "parked" });
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
 
@@ -701,6 +720,9 @@ describe("screened calls are recorded", () => {
     await flushAfter();
     expect(brokenXml).toBe(workingXml);
     expect(broken.status).toBe(working.status);
+    // Proves the failure path was actually taken — without this, the test
+    // would pass even if the rejection were never reached at all.
+    expect(spy).toHaveBeenCalledTimes(1);
     spy.mockRestore();
   });
 
@@ -712,5 +734,25 @@ describe("screened calls are recorded", () => {
     expect(recordScreenedCallMock).not.toHaveBeenCalled(); // not yet
     await flushAfter();
     expect(recordScreenedCallMock).toHaveBeenCalledTimes(1); // now
+  });
+
+  it("a throw from after() ITSELF (scheduling, not the callback) still leaves the caller with the refusal, not a 500 (mutation: remove the try/catch around after() -> FAILS)", async () => {
+    // `after()` has synchronous throw paths of its own in Next 16.2.11 (no
+    // work store, or `errorWaitUntilNotAvailable`) — distinct from the write
+    // callback rejecting, which the try/catch INSIDE the callback already
+    // covers. A throw here happens before the callback is ever scheduled, so
+    // the response itself must survive it.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    afterMock.mockImplementationOnce(() => {
+      throw new Error("Invariant: after() ... no request context found");
+    });
+    lookupMock.mockResolvedValue(null);
+    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19560000000"));
+    expect(res.status).toBe(200);
+    const xml = await res.text();
+    expect(xml).toContain("<Say>");
+    expect(xml).toContain("<Hangup/>");
+    expect(xml).not.toContain("<Dial");
+    errSpy.mockRestore();
   });
 });

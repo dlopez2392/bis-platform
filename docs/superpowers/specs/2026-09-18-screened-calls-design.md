@@ -138,11 +138,14 @@ already establishes, with the same justification ("so it never delays the
 webhook's own 200"). This route sits on Telnyx's carrier answer deadline and
 its own comments say wall-clock is the thing it cannot spend.
 
-**Best-effort, and that is a contract, not a caveat.** A failed write logs and
-changes nothing: not the refusal, not the spoken copy, not the hang-up. A
-caller's experience must never depend on our bookkeeping. The existing log
-lines stay exactly as they are — the table is added evidence, not a
-replacement, and the logs are what remain if the write itself is broken.
+**Best-effort, and that is a contract, not a caveat.** A failed write **or a
+failed schedule** logs and changes nothing: not the refusal, not the spoken
+copy, not the hang-up. A caller's experience must never depend on our
+bookkeeping. The existing log lines stay exactly as they are — the table is
+added evidence, not a replacement, and the logs are what remain if the write
+itself is broken. (`after()` has its own synchronous throw paths, distinct
+from the write callback rejecting — a failure to SCHEDULE the write is caught
+around the `after()` call itself, not only inside its callback.)
 
 ## Screens
 
@@ -197,11 +200,21 @@ and points toward letting robocallers through.
 
 Alongside:
 
-- The refusal decision, the spoken copy and the hang-up are unchanged whether
-  the write succeeds, throws, or is never reached. Mutation: make the write
-  reject and assert the caller-facing response is identical.
 - The write happens in `after()`, not on the answer path — following
-  `lifecycle.test.ts`'s existing harness for exactly this.
+  `lifecycle.test.ts`'s existing harness for exactly this. This is the claim
+  that actually needs pinning: both responses in a same-request comparison are
+  captured before `after()`'s callback ever runs, so an equality assertion
+  there cannot distinguish "written before responding" from "written after" —
+  only an ordering assertion (recorder not yet called at response time, called
+  once after the flush) can. Mutation: await `recordScreenedCall` inline on
+  the answer path.
+- A write that REJECTS is swallowed inside the `after()` callback's own
+  try/catch — proven by asserting the console.error spy fired, not by
+  comparing two responses (see above for why that comparison can't fail).
+  Mutation: remove the try/catch inside the callback.
+- A throw from scheduling the write — `after()` itself, before its callback
+  ever runs — is also caught, so it cannot replace the refusal document with a
+  500. Mutation: remove the try/catch around the `after()` call.
 - Each of the six reasons is produced by the branch that claims it, one
   mutation per reason. The two un-collapsed pairs get particular attention:
   `not-live` vs `unknown-number`, and `no-profile` vs `profile-disabled`.
@@ -233,3 +246,10 @@ configuration; and any change to how `decideReputation` or `decideLimit` decide.
 - **This does not tell you a block was WRONG**, only that it happened. Deciding
   a refusal was a false positive still needs a human reading the caller number.
   A "this was a real customer" affordance is a follow-up, not this work.
+- **A SEVENTH refusal exists that this table cannot see.** `dialXml`
+  (`route.ts:276`) speaks a configuration-error sentence and hangs up when
+  `VOICE_OPENAI_PROJECT_ID` is missing. It is classified `kind: "dial"`,
+  writes no row, and is the only refusal that hits EVERY account at once — a
+  platform-wide outage, not a per-tenant one — so the work-queue banner (which
+  counts numbers, per account) cannot see the one outage that takes the whole
+  platform down. Recorded here; not fixed by this work.
