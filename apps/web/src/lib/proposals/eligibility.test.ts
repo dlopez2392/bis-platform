@@ -15,11 +15,11 @@ describe("callIsEligible", () => {
     expect(callIsEligible({ outcome: "lead", transcript: real, handoffRequested: false })).toBe(true);
   });
 
-  it("refuses a spam call (mutation: drop 'spam' from the skip list -> FAILS)", () => {
+  it("refuses a spam call (mutation: mark spam eligible in the outcome map -> FAILS)", () => {
     expect(callIsEligible({ outcome: "spam", transcript: real, handoffRequested: false })).toBe(false);
   });
 
-  it("refuses an abandoned call (mutation: drop 'abandoned' -> FAILS)", () => {
+  it("refuses an abandoned call (mutation: mark abandoned eligible in the outcome map -> FAILS)", () => {
     expect(callIsEligible({ outcome: "abandoned", transcript: real, handoffRequested: false })).toBe(false);
   });
 
@@ -35,9 +35,26 @@ describe("callIsEligible", () => {
     expect(callIsEligible({ outcome: "booked", transcript: real, handoffRequested: true })).toBe(false);
   });
 
+  // PROVED against production behaviour: with the old denylist,
+  // callIsEligible({ outcome: "transferred", handoffRequested: false, ... })
+  // returned true, because a denylist admits anything it has never named. An
+  // allow-list must refuse "transferred" on its own, without help from the
+  // handoff flag.
+  it("refuses a transferred outcome even when handoffRequested is false (mutation: default an unlisted outcome to eligible -> FAILS)", () => {
+    expect(callIsEligible({ outcome: "transferred", transcript: real, handoffRequested: false })).toBe(false);
+  });
+
   it("refuses a call with no caller turn at all", () => {
     expect(callIsEligible({
       outcome: "message", transcript: [t("assistant", "Thanks for calling.")], handoffRequested: false,
+    })).toBe(false);
+  });
+
+  it("refuses a call whose only caller turn is blank (mutation: check role only, ignore text -> FAILS)", () => {
+    expect(callIsEligible({
+      outcome: "lead",
+      transcript: [t("assistant", "Thanks for calling."), t("caller", "   ")],
+      handoffRequested: false,
     })).toBe(false);
   });
 
