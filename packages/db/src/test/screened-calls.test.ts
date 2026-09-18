@@ -5,7 +5,7 @@ import {
   countLinesTurningCallersAway, screenedClass, SCREENED_REASONS,
 } from "../screened-calls";
 import { countCallsSince, countCallerHistorySince } from "../voice";
-import { withTestAccount } from "./fixtures";
+import { withTestAccount, testScreenedCalledE164 } from "./fixtures";
 
 describe("screenedClass", () => {
   it("routes OUR misconfiguration to `misconfigured` (mutation: move not-live into `screened` -> FAILS)", () => {
@@ -35,15 +35,30 @@ describe("screenedClass", () => {
 describe("recordScreenedCall / listScreenedCalls", () => {
   it("records a refusal with no account at all (mutation: make accountId required -> FAILS)", async () => {
     const db = serviceDb();
-    await recordScreenedCall(db, {
-      accountId: null, phoneNumberId: null,
-      calledE164: "+19565550100", callerE164: "+19565550111",
-      reason: "unknown-number",
-    });
-    const rows = await listScreenedCalls(db, { limit: 5 });
-    const mine = rows.find((r) => r.calledE164 === "+19565550100");
-    expect(mine?.accountId).toBeNull();
-    expect(mine?.reason).toBe("unknown-number");
+    // `accountId: null` is the ownerless-call case `withTestAccount` cannot
+    // scope to, so this row has no cascade to clean it up — it is deleted by
+    // id below instead. The called number is randomized (`testScreenedCalledE164`)
+    // so this test can find its OWN row directly rather than hoping it lands
+    // in the top N of a global, unfiltered scan (see the sibling test's
+    // history: a hard-coded number here only worked while this happened to be
+    // the first DB-writing test in the file).
+    const calledE164 = testScreenedCalledE164();
+    let rowId: string | null = null;
+    try {
+      await recordScreenedCall(db, {
+        accountId: null, phoneNumberId: null,
+        calledE164, callerE164: "+19565550111",
+        reason: "unknown-number",
+      });
+      const { data: mine, error } = await db.from("screened_calls")
+        .select("id, account_id, reason").eq("called_e164", calledE164).single();
+      if (error) throw new Error(`readback failed: ${error.message}`);
+      rowId = mine.id as string;
+      expect(mine.account_id).toBeNull();
+      expect(mine.reason).toBe("unknown-number");
+    } finally {
+      if (rowId) await db.from("screened_calls").delete().eq("id", rowId);
+    }
   });
 
   it("pages by cursor, newest first, never by offset (mutation: swap .lt for .gt -> FAILS)", async () => {
@@ -89,13 +104,25 @@ describe("countLinesTurningCallersAway", () => {
         accountId, phoneNumberId: null, calledE164: "+19565550400",
         callerE164: null, reason: "repeat-spam",
       });
-      await recordScreenedCall(db, {
-        accountId: null, phoneNumberId: null, calledE164: "+19565550401",
-        callerE164: null, reason: "unknown-number",
-      });
-      // A blocked robocall is the system working. It is not an outage and
-      // must never raise the banner.
-      expect(await countLinesTurningCallersAway(db, since)).toBe(before);
+      // `accountId: null` again — no cascade reaches this row, so it is
+      // deleted by id in the finally below (see `testScreenedCalledE164`).
+      const calledE164 = testScreenedCalledE164();
+      let rowId: string | null = null;
+      try {
+        await recordScreenedCall(db, {
+          accountId: null, phoneNumberId: null, calledE164,
+          callerE164: null, reason: "unknown-number",
+        });
+        const { data, error } = await db.from("screened_calls")
+          .select("id").eq("called_e164", calledE164).single();
+        if (error) throw new Error(`readback failed: ${error.message}`);
+        rowId = data.id as string;
+        // A blocked robocall is the system working. It is not an outage and
+        // must never raise the banner.
+        expect(await countLinesTurningCallersAway(db, since)).toBe(before);
+      } finally {
+        if (rowId) await db.from("screened_calls").delete().eq("id", rowId);
+      }
     });
   });
 });
