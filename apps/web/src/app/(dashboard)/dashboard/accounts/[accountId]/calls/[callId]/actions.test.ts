@@ -333,6 +333,14 @@ describe("acceptProposal", () => {
         const { data: tasksB } = await dbB.from("tasks").select("id").eq("account_id", accountB);
         expect(tasksB).toHaveLength(0);
 
+        // Pins the READ scope on its own: dropping `.eq("account_id", ...)`
+        // from either `getProposal` alone or `markProposalDecided` alone
+        // still leaves the conjunction above green (the other one still
+        // refuses); only this direct assertion catches `getProposal` losing
+        // its own account scope.
+        const crossRead = await getProposal(dbB, accountB, proposal!.id);
+        expect(crossRead).toBeNull();
+
         // Sanity: the SAME proposal, addressed with its OWN account, works —
         // proving the refusal above is the account scope, not a broken id.
         const right = await acceptProposal(accountA, callA, proposal!.id);
@@ -340,6 +348,230 @@ describe("acceptProposal", () => {
       });
     });
   });
+
+  it(
+    "a CRM write that fails leaves the proposal PENDING and re-acceptable " +
+    "(mutation: delete the compensating update -> FAILS)",
+    async () => {
+      await withTestAccount(async (db, accountId) => {
+        const callId = await seedCall(db, accountId);
+        // No mock: `due_at` is a real `timestamptz` column and this string
+        // is not a valid timestamp, so `addTask`'s own insert genuinely
+        // throws — the same class of failure as a dropped connection or a
+        // statement timeout, produced without touching `@bis/db` at all.
+        const proposal = await insertProposal(db, accountId, {
+          callId, kind: "task", evidence: "the caller asked to be called back",
+          payload: { title: "Call back Tuesday", dueAt: "not-a-real-date" },
+        });
+        expect(proposal).not.toBeNull();
+
+        const r = await acceptProposal(accountId, callId, proposal!.id);
+        expect(r).toEqual({ ok: false, error: m["proposals.failed"] });
+
+        const { data: tasks } = await db.from("tasks").select("id")
+          .eq("account_id", accountId).eq("title", "Call back Tuesday");
+        expect(tasks).toHaveLength(0);
+
+        const after = await getProposal(db, accountId, proposal!.id);
+        expect(after!.status).toBe("pending");
+        expect(after!.decidedBy).toBeNull();
+        expect(after!.decidedAt).toBeNull();
+
+        // The row was given back, not burned: retrying the SAME proposal
+        // (the underlying bad due-date is still there, so the write fails
+        // again) reports the SAME honest "didn't go through" error, never
+        // the false "Someone already answered this one" a burned stamp
+        // would produce.
+        const retry = await acceptProposal(accountId, callId, proposal!.id);
+        expect(retry).toEqual({ ok: false, error: m["proposals.failed"] });
+
+        const afterRetry = await getProposal(db, accountId, proposal!.id);
+        expect(afterRetry!.status).toBe("pending");
+
+        // With the fault actually fixed, the SAME proposal is re-acceptable.
+        const { error: fixErr } = await db.from("call_proposals")
+          .update({ payload: { title: "Call back Tuesday", dueAt: null } })
+          .eq("id", proposal!.id);
+        expect(fixErr).toBeNull();
+
+        const fixed = await acceptProposal(accountId, callId, proposal!.id);
+        expect(fixed).toEqual({ ok: true });
+
+        const { data: tasksAfterFix } = await db.from("tasks").select("id")
+          .eq("account_id", accountId).eq("title", "Call back Tuesday");
+        expect(tasksAfterFix).toHaveLength(1);
+      });
+    },
+  );
+
+  it(
+    "returns an error instead of throwing when there is no session " +
+    "(mutation: move dbForRequest back outside the try -> FAILS)",
+    async () => {
+      await withTestAccount(async (db, accountId) => {
+        const callId = await seedCall(db, accountId);
+        const proposal = await insertProposal(db, accountId, {
+          callId, kind: "task", evidence: "the caller asked to be called back",
+          payload: { title: "Call back", dueAt: null },
+        });
+        expect(proposal).not.toBeNull();
+
+        dbForRequestMock.mockImplementationOnce(async () => {
+          throw new Error("dbForRequest: no Clerk token on this request");
+        });
+
+        // `.resolves` itself proves the no-throw contract: if the promise
+        // REJECTS instead, this assertion fails before comparing values.
+        await expect(acceptProposal(accountId, callId, proposal!.id)).resolves.toEqual(
+          { ok: false, error: m["proposals.failed"] },
+        );
+      });
+    },
+  );
+
+  it(
+    "a double-click on an already-accepted opportunity_stage proposal says someone already answered, " +
+    "not that the board moved (mutation: drop the status===pending guard -> FAILS)",
+    async () => {
+      await withTestAccount(async (db, accountId) => {
+        const callId = await seedCall(db, accountId);
+        const { id: contactId } = await createContact(db, accountId, { firstName: "Click" }, "user_test");
+        const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+        const { id: oppId } = await createOpportunity(
+          db, accountId, { contactId, pipelineId, name: "Fence 2", value: 800 }, "user_test");
+        const board = await listBoard(db, accountId, pipelineId);
+        const [stage0, stage1] = board.map((b) => b.stage.id);
+
+        const proposal = await insertProposal(db, accountId, {
+          callId, contactId, kind: "opportunity_stage",
+          evidence: "the caller agreed to move forward",
+          payload: { opportunityId: oppId, fromStageId: stage0!, toStageId: stage1! },
+        });
+        expect(proposal).not.toBeNull();
+
+        const first = await acceptProposal(accountId, callId, proposal!.id);
+        expect(first).toEqual({ ok: true });
+
+        // Double click: the stage the FIRST accept just moved it to now
+        // disagrees with `fromStageId`, but the true reason is that this
+        // proposal was already decided, not that the board moved.
+        const second = await acceptProposal(accountId, callId, proposal!.id);
+        expect(second).toEqual({ ok: false, error: m["proposals.gone"] });
+      });
+    },
+  );
+
+  it(
+    "refuses an opportunity_stage proposal whose opportunity was deleted, distinct from one that only moved " +
+    "(mutation: collapse `!data` back into the stageMoved branch -> FAILS)",
+    async () => {
+      await withTestAccount(async (db, accountId) => {
+        const callId = await seedCall(db, accountId);
+        const { id: contactId } = await createContact(db, accountId, { firstName: "Gone" }, "user_test");
+        const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+        const { id: oppId } = await createOpportunity(
+          db, accountId, { contactId, pipelineId, name: "Deleted deal", value: 500 }, "user_test");
+        const board = await listBoard(db, accountId, pipelineId);
+        const [stage0, stage1] = board.map((b) => b.stage.id);
+
+        const proposal = await insertProposal(db, accountId, {
+          callId, contactId, kind: "opportunity_stage",
+          evidence: "the caller agreed to move forward",
+          payload: { opportunityId: oppId, fromStageId: stage0!, toStageId: stage1! },
+        });
+        expect(proposal).not.toBeNull();
+
+        const { error: delErr } = await db.from("opportunities").delete().eq("id", oppId);
+        expect(delErr).toBeNull();
+
+        const r = await acceptProposal(accountId, callId, proposal!.id);
+        expect(r).toEqual({ ok: false, error: m["proposals.opportunityGone"] });
+
+        const after = await getProposal(db, accountId, proposal!.id);
+        expect(after!.status).toBe("pending");
+      });
+    },
+  );
+
+  it(
+    "refuses a lastName proposal that doesn't match the name already on file, distinct from an " +
+    "already-filled field (mutation: report contactFilled for both reasons -> FAILS)",
+    async () => {
+      await withTestAccount(async (db, accountId) => {
+        const callId = await seedCall(db, accountId);
+        const { id: contactId } = await createContact(db, accountId, { firstName: "Roberto" }, "user_test");
+        const proposal = await insertProposal(db, accountId, {
+          callId, contactId, kind: "contact_field",
+          evidence: "the caller spelled her last name",
+          payload: { field: "lastName", value: "Garcia" },
+        });
+        expect(proposal).not.toBeNull();
+
+        const r = await acceptProposal(accountId, callId, proposal!.id);
+        expect(r).toEqual({ ok: false, error: m["proposals.contactMismatch"] });
+
+        const contact = await getContact(db, accountId, contactId);
+        expect(contact!.last_name).toBeNull();
+
+        const after = await getProposal(db, accountId, proposal!.id);
+        expect(after!.status).toBe("pending");
+      });
+    },
+  );
+
+  it(
+    "refuses when the proposal doesn't belong to the given call, and does not act on it " +
+    "(mutation: drop the callId check -> FAILS)",
+    async () => {
+      await withTestAccount(async (db, accountId) => {
+        const callA = await seedCall(db, accountId);
+        const callB = await seedCall(db, accountId);
+        const proposal = await insertProposal(db, accountId, {
+          callId: callA, kind: "task", evidence: "the caller asked to be called back",
+          payload: { title: "Call back for A", dueAt: null },
+        });
+        expect(proposal).not.toBeNull();
+
+        const r = await acceptProposal(accountId, callB, proposal!.id);
+        expect(r).toEqual({ ok: false, error: m["proposals.gone"] });
+
+        const { data: tasks } = await db.from("tasks").select("id").eq("account_id", accountId);
+        expect(tasks).toHaveLength(0);
+
+        const after = await getProposal(db, accountId, proposal!.id);
+        expect(after!.status).toBe("pending");
+      });
+    },
+  );
+
+  it(
+    "does not throw to the client and does not revert the proposal when revalidatePath fails " +
+    "after a successful write (mutation: move revalidatePath back outside the try -> FAILS)",
+    async () => {
+      await withTestAccount(async (db, accountId) => {
+        const callId = await seedCall(db, accountId);
+        const proposal = await insertProposal(db, accountId, {
+          callId, kind: "task", evidence: "the caller asked to be called back",
+          payload: { title: "Revalidate boom", dueAt: null },
+        });
+        expect(proposal).not.toBeNull();
+
+        const cache = await import("next/cache");
+        vi.mocked(cache.revalidatePath).mockImplementationOnce(() => {
+          throw new Error("revalidate boom");
+        });
+
+        await expect(acceptProposal(accountId, callId, proposal!.id)).resolves.toEqual({ ok: true });
+
+        const { data: tasks } = await db.from("tasks").select("id")
+          .eq("account_id", accountId).eq("title", "Revalidate boom");
+        expect(tasks).toHaveLength(1);
+
+        const after = await getProposal(db, accountId, proposal!.id);
+        expect(after!.status).toBe("accepted");
+      });
+    },
+  );
 });
 
 describe("dismissProposal", () => {

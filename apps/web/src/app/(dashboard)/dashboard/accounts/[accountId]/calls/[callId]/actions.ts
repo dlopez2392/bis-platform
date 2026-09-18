@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import {
-  getProposal, markProposalDecided, addTask, fillContactBlanks, moveOpportunityToStage,
+  getProposal, markProposalDecided, addTask, fillContactBlanks, getContact,
+  moveOpportunityToStage, type ContactFieldPayload, type SupabaseClient,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
@@ -12,6 +13,40 @@ export type ActionResult = { ok: true } | { ok: false; error: string };
 
 function callPath(accountId: string, callId: string): string {
   return `/dashboard/accounts/${accountId}/calls/${callId}`;
+}
+
+const CONTACT_FIELD_COLUMN: Record<ContactFieldPayload["field"], "first_name" | "last_name" | "email" | "phone"> = {
+  firstName: "first_name", lastName: "last_name", email: "email", phone: "phone",
+};
+
+function isBlank(v: unknown): boolean {
+  return v == null || String(v).trim() === "";
+}
+
+/**
+ * Puts an accepted proposal back to `pending` after the CRM write that was
+ * supposed to follow the accept never landed — a thrown exception, or one
+ * of this action's own "there is nothing to write" refusals reached AFTER
+ * the compare-and-swap already ran. Scoped to THIS decision (`status =
+ * 'accepted'` AND `decided_by = decidedBy`), so it can never claw back a
+ * different, later, legitimate accept of the same proposal, and callers
+ * only invoke this when they know the write did not land. Best-effort: if
+ * the revert itself fails, the accept was already going to report failure
+ * either way — this only logs so an operator can find the stranded row.
+ */
+async function revertToPending(
+  db: SupabaseClient, accountId: string, proposalId: string, decidedBy: string,
+): Promise<void> {
+  const { error } = await db.from("call_proposals")
+    .update({ status: "pending", decided_at: null, decided_by: null })
+    .eq("account_id", accountId).eq("id", proposalId)
+    .eq("status", "accepted").eq("decided_by", decidedBy);
+  if (error) {
+    console.error(
+      `acceptProposal: failed to revert proposal ${proposalId} (account ${accountId}) back to pending: ` +
+      error.message,
+    );
+  }
 }
 
 /**
@@ -24,20 +59,47 @@ export async function acceptProposal(
   accountId: string, callId: string, proposalId: string,
 ): Promise<ActionResult> {
   const { userId } = await requireAccountAccess(accountId);
-  const db = await dbForRequest();
+
+  // `decided` is true only once the compare-and-swap below is KNOWN to have
+  // landed (set the line after it returns `true`, never before it), so an
+  // exception thrown BY the CAS call itself leaves it false and skips the
+  // revert below, which would be a no-op anyway but a wrong `decided=true`
+  // in the log would mislead whoever reads it. `written` is true only once
+  // the actual CRM mutation for this proposal's kind has landed — it
+  // exists so a failure AFTER that point (revalidatePath, for example) can
+  // never be mistaken for a failed write and claw the proposal back to
+  // pending, which would let a second accept create a duplicate record.
+  let db: SupabaseClient | undefined;
+  let decided = false;
+  let written = false;
 
   try {
-    // Existence only — deliberately NOT also gating on `status === "pending"`
-    // here. `markProposalDecided`'s compare-and-swap below already returns
-    // false for exactly that case, so a second, non-atomic status check this
-    // early could only ever duplicate that outcome; it could never be the
-    // thing that catches a real race, because a race is, by definition, a
-    // proposal that reads as "pending" HERE and stops being pending before
-    // the CAS runs a moment later. Two racing accepts must both pass this
-    // line and be decided ONLY by the CAS below, or "decide first" is a
-    // fiction that a mutation test can't actually catch (see the report).
+    db = await dbForRequest();
+
+    // Existence AND status. Two reviewers racing this line can both read
+    // "pending" and both reach the CAS below, which is what actually
+    // decides between them — this check exists to give an HONEST answer to
+    // everyone else: a proposal already decided (by this reviewer's own
+    // double click, or by someone else) must say so, not report on
+    // whatever downstream state happens to look wrong next. Restored after
+    // being dropped on the theory that it made the CAS-return-check
+    // mutation unfalsifiable — true for a single `-t` filter, false for the
+    // whole file: "decides BEFORE it writes, so a double accept creates
+    // exactly ONE task" still reds if the CAS check is dropped, because two
+    // concurrent callers both pass THIS read-then-write check before
+    // either's CAS runs. Dropping this guard also had a real user-visible
+    // cost: a double-click on an `opportunity_stage` proposal reported
+    // "This opportunity has moved since the suggestion was made" — because
+    // the re-read below ran before the CAS and saw the stage the FIRST
+    // accept had just moved it to — instead of the true "Someone already
+    // answered this one."
     const proposal = await getProposal(db, accountId, proposalId);
-    if (!proposal) {
+    if (!proposal || proposal.status !== "pending") {
+      return { ok: false, error: m["proposals.gone"] };
+    }
+    // A proposal addressed through the wrong call's page. No UI path
+    // produces this today, but nothing else checks it either.
+    if (proposal.callId !== callId) {
       return { ok: false, error: m["proposals.gone"] };
     }
 
@@ -54,7 +116,13 @@ export async function acceptProposal(
       const { data, error } = await db.from("opportunities")
         .select("stage_id").eq("account_id", accountId).eq("id", p.opportunityId).maybeSingle();
       if (error) throw new Error(error.message);
-      if (!data || data.stage_id !== p.fromStageId) {
+      // Deleted and moved are different facts and deserve different words:
+      // telling an operator their board moved when the deal is simply gone
+      // is a lie about a board they can see with their own eyes.
+      if (!data) {
+        return { ok: false, error: m["proposals.opportunityGone"] };
+      }
+      if (data.stage_id !== p.fromStageId) {
         return { ok: false, error: m["proposals.stageMoved"] };
       }
     }
@@ -66,40 +134,93 @@ export async function acceptProposal(
     if (!await markProposalDecided(db, accountId, proposalId, "accepted", userId)) {
       return { ok: false, error: m["proposals.gone"] };
     }
+    decided = true;
 
     // THE EXISTING WRITE PATHS, always. Every validation, RLS policy, dedupe
     // key and event emission applies because these are the same functions a
     // human action calls. A second write path would be a second set of rules
     // to keep in step, and the one that skipped a check would be the one the
     // machine uses.
+    //
+    // Every branch below that returns WITHOUT writing anything reverts the
+    // stamp above first: the CAS having landed must never outlive the write
+    // it was meant to gate. A branch that DOES write sets `written = true`
+    // and never reverts, even if something later (revalidatePath) fails.
     if (proposal.kind === "task") {
       const p = proposal.payload;
       await addTask(db, accountId, {
         contactId: proposal.contactId ?? undefined,
         title: p.title, dueAt: p.dueAt ?? undefined,
       }, userId);
+      written = true;
     } else if (proposal.kind === "contact_field") {
       const p = proposal.payload;
-      if (!proposal.contactId) return { ok: false, error: m["proposals.failed"] };
+      if (!proposal.contactId) {
+        await revertToPending(db, accountId, proposalId, userId);
+        return { ok: false, error: m["proposals.failed"] };
+      }
+      // Read the field's CURRENT value before the re-check below so an
+      // empty result from fillContactBlanks can be reported honestly: it
+      // returns `[]` for two different reasons (the field is genuinely
+      // already filled, or its own first-name-compatibility guard refused
+      // a mismatched name), and reporting "already filled in" for the
+      // second one is false — a real contact with `first_name` "Roberto"
+      // and a blank `last_name` refusing a `lastName` proposal is not
+      // "already filled in".
+      const before = await getContact(db, accountId, proposal.contactId);
+      const column = CONTACT_FIELD_COLUMN[p.field];
+      const alreadyFilled = !!before && !isBlank((before as Record<string, unknown>)[column]);
       // fillContactBlanks IS the re-check: it writes only columns that are
       // still empty and returns the ones it actually wrote. An empty array
-      // means a human filled it in the minutes since — which is not a
-      // failure, it is the guard working.
-      const written = await fillContactBlanks(
+      // means either a human filled it in the minutes since, or the name
+      // on file does not match closely enough to fill safely — either way,
+      // this call itself wrote nothing, so the stamp above must come back.
+      const filled = await fillContactBlanks(
         db, accountId, proposal.contactId, { [p.field]: p.value }, userId,
       );
-      if (written.length === 0) return { ok: false, error: m["proposals.contactFilled"] };
+      if (filled.length === 0) {
+        await revertToPending(db, accountId, proposalId, userId);
+        return {
+          ok: false,
+          error: alreadyFilled ? m["proposals.contactFilled"] : m["proposals.contactMismatch"],
+        };
+      }
+      written = true;
     } else {
       const p = proposal.payload;
       await moveOpportunityToStage(db, accountId, p.opportunityId, p.toStageId, userId);
+      written = true;
     }
+
+    // Best-effort bookkeeping. Built from the PROPOSAL's own call id, not
+    // the caller-supplied one — they are known equal by this point (checked
+    // above), but the proposal's is the one actually true of the record
+    // that changed. A failure here must never look like the accept itself
+    // failed (the write above already landed) and must never trigger the
+    // revert above (`written` is already true).
+    revalidatePath(callPath(accountId, proposal.callId));
+    revalidatePath("/dashboard/work");
+    // The screen `proposals.accepted.toast` actually names ("Added to your
+    // to-do list") — the agency-only roll-up above is a different screen.
+    revalidatePath(`/dashboard/accounts/${accountId}/tasks`);
   } catch (e) {
-    console.error(`acceptProposal: failed for ${proposalId} (account ${accountId}): ${String(e)}`);
+    if (decided && !written && db) {
+      await revertToPending(db, accountId, proposalId, userId);
+    }
+    // Whether the compare-and-swap already ran, and whether the write
+    // landed, are the two facts an operator needs before touching this row
+    // by hand.
+    console.error(
+      `acceptProposal: failed for ${proposalId} (account ${accountId}), ` +
+      `decided=${decided}, written=${written}: ${String(e)}`,
+    );
+    // The write landed and only bookkeeping afterward failed — reporting
+    // failure here would tell the client a task was never created when one
+    // was.
+    if (written) return { ok: true };
     return { ok: false, error: m["proposals.failed"] };
   }
 
-  revalidatePath(callPath(accountId, callId));
-  revalidatePath("/dashboard/work");
   return { ok: true };
 }
 

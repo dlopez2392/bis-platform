@@ -1727,6 +1727,10 @@ export const m = {
   "proposals.gone": "Someone already answered this one.",
   "proposals.contactFilled":
     "That detail was already filled in, so nothing was changed.",
+  "proposals.contactMismatch":
+    "That doesn't match the name already on file, so nothing was changed.",
+  "proposals.opportunityGone":
+    "This deal isn't on the board anymore, so nothing was changed.",
   "proposals.stageMoved":
     "This opportunity has moved since the suggestion was made, so nothing was changed.",
   "proposals.failed": "That didn't go through. Try again.",
