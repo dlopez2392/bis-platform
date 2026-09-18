@@ -92,4 +92,86 @@ describe("groundedEvidence", () => {
   it("matches a quote with irregular internal whitespace (mutation: drop the whitespace collapse -> FAILS)", () => {
     expect(groundedEvidence("Call   me\n Tuesday   morning", transcript)).toBe(transcript[1]!.text);
   });
+
+  // A phrase repeated across two caller turns: the caller retracted the
+  // first and settled on the second. Citing the first turn shows the
+  // reviewer the refusal, not what the caller actually decided.
+  // (mutation: search with `.find` (first match) instead of `.findLast` -> FAILS,
+  // returns the retraction turn instead of the settled one)
+  it("cites the LAST matching caller turn when a phrase recurs, not the first", () => {
+    const retracted = [
+      t("caller", "I don't need a quote for a dining table."),
+      t("assistant", "No problem, anything else?"),
+      t("caller", "Actually, yes, I need a quote for a dining table after all."),
+    ];
+    expect(groundedEvidence("need a quote for a dining table", retracted)).toBe(
+      "Actually, yes, I need a quote for a dining table after all.",
+    );
+  });
+
+  // The database's evidence CHECK uses btrim, so a padded turn is still
+  // valid stored evidence — but the doc-comment promises the citation is
+  // exactly what the transcript above it already shows. Trimming would
+  // break that promise for a padded turn, so the fix is to stop trimming.
+  // (mutation: reintroduce `.trim()` on the returned turn -> FAILS)
+  it("returns the turn's text untouched, padding and all, rather than trimming it", () => {
+    const padded = [
+      t("caller", "  I need a quote for a dining table. Call me Tuesday morning.  "),
+    ];
+    expect(groundedEvidence("Call me Tuesday morning", padded)).toBe(
+      "  I need a quote for a dining table. Call me Tuesday morning.  ",
+    );
+  });
+
+  // "word" must mean a run of letters/digits, not a whitespace token: an
+  // en/em dash is a whitespace token with no letters, so it should never
+  // clear the floor on its own.
+  // (mutation: count words via `.split(" ").filter(Boolean)` instead of an
+  // alnum-run match -> FAILS, this quote wrongly clears the floor)
+  it("refuses a quote that only clears the floor by counting a bare dash as a word", () => {
+    const dashTranscript = [t("caller", "Yes — Tuesday works for me.")];
+    expect(groundedEvidence("Yes — Tuesday", dashTranscript)).toBeNull();
+  });
+
+  // A hyphenated compound is two real words joined by punctuation, not one
+  // token — counting alnum runs (not whitespace tokens) gives it its full
+  // word count instead of undercounting it as a single word.
+  // (mutation: count words via `.split(" ").filter(Boolean)` instead of an
+  // alnum-run match -> FAILS, this quote is wrongly refused as 2 words)
+  it("accepts a quote whose word count only clears the floor once a hyphenated compound counts as two words", () => {
+    const hyphenTranscript = [t("caller", "I'd like a walk-in appointment please.")];
+    expect(groundedEvidence("walk-in appointment", hyphenTranscript)).toBe(
+      "I'd like a walk-in appointment please.",
+    );
+  });
+
+  // The model routinely wraps its own quote in quotation marks when it
+  // repeats the caller back — that should not fail closed.
+  // (mutation: drop the wrapping-quote strip -> FAILS, the literal quote
+  // marks are never in the transcript so the substring search misses)
+  it("strips a wrapping quotation mark from the model's quote", () => {
+    expect(groundedEvidence('"Call me Tuesday morning"', transcript)).toBe(
+      transcript[1]!.text,
+    );
+  });
+
+  // Same failure mode when the model prefixes its quote with an ellipsis.
+  // (mutation: drop the leading-ellipsis strip -> FAILS)
+  it("strips a leading ellipsis from the model's quote", () => {
+    expect(groundedEvidence("...call me Tuesday morning", transcript)).toBe(
+      transcript[1]!.text,
+    );
+  });
+
+  // The transcriber only ever emits a straight apostrophe; the MODEL is the
+  // side likely to emit a curly one when it repeats the caller's words back.
+  // (mutation: drop the curly-apostrophe fold -> FAILS)
+  it("folds a curly apostrophe in the model's quote to match the transcript's straight one", () => {
+    const negated = [
+      t("caller", "I don't need a quote for a dining table right now."),
+    ];
+    expect(groundedEvidence("I don’t need a quote for a dining table", negated)).toBe(
+      "I don't need a quote for a dining table right now.",
+    );
+  });
 });
