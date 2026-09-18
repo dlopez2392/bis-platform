@@ -8,6 +8,7 @@ const profileMock = vi.hoisted(() => vi.fn());
 const countCallsSinceMock = vi.hoisted(() => vi.fn());
 const countCallsByCallerSinceMock = vi.hoisted(() => vi.fn());
 const countCallerHistorySinceMock = vi.hoisted(() => vi.fn());
+const recordScreenedCallMock = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({}),
   getPhoneNumberByE164: (...a: unknown[]) => lookupMock(...a),
@@ -15,7 +16,26 @@ vi.mock("@bis/db", () => ({
   countCallsSince: (...a: unknown[]) => countCallsSinceMock(...a),
   countCallsByCallerSince: (...a: unknown[]) => countCallsByCallerSinceMock(...a),
   countCallerHistorySince: (...a: unknown[]) => countCallerHistorySinceMock(...a),
+  recordScreenedCall: (...a: unknown[]) => recordScreenedCallMock(...a),
 }));
+
+// `after()` becomes a recorder we invoke ourselves — same pattern as
+// incoming/lifecycle.test.ts:78-83. Spreading `actual` matters here too:
+// this route also returns `NextResponse` from this module.
+const afterMock = vi.hoisted(() => vi.fn());
+vi.mock("next/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/server")>();
+  return { ...actual, after: (cb: () => unknown) => afterMock(cb) };
+});
+
+/** Invokes every callback `after()` has recorded so far — exactly what
+ *  production's background execution does — and clears them out so a
+ *  second flush later in the same test only replays callbacks scheduled
+ *  since the first flush. */
+async function flushAfter(): Promise<void> {
+  const calls = afterMock.mock.calls.splice(0, afterMock.mock.calls.length);
+  for (const [cb] of calls) await (cb as () => unknown)();
+}
 
 const ENABLED_PROFILE = {
   id: "vp1", account_id: "a1", persona_name: "Sofía",
@@ -41,6 +61,8 @@ beforeEach(() => {
   // A clean caller by default, so every pre-existing test above still reaches
   // the verdict it was written for now that classify() also reads reputation.
   countCallerHistorySinceMock.mockReset().mockResolvedValue({ spamCalls: 0, otherCalls: 0 });
+  recordScreenedCallMock.mockReset().mockResolvedValue(undefined);
+  afterMock.mockReset();
 });
 
 describe("texml route", () => {
@@ -590,5 +612,105 @@ describe("texml route — the handoff continuation on the bridge", () => {
     const xml = await texmlXml({});
     expect(xml).toContain("X-BIS-Handoff=");
     expect(xml).not.toContain("X-BIS-Called");
+  });
+});
+
+describe("screened calls are recorded", () => {
+  it("records `not-live` for a number we own that is not live, NOT `unknown-number` (mutation: collapse the two back into one reason -> FAILS)", async () => {
+    // The collapse this un-does: today both cases log `refuse-unknown`, so a
+    // client's dead line is indistinguishable from a wrong number. One is an
+    // outage, the other is noise.
+    lookupMock.mockResolvedValue({ id: "pn1", account_id: "acct1", e164: "+19565550100", telnyx_id: null, status: "parked" });
+    await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550100&From=%2B19565550111"));
+    await flushAfter();
+    expect(recordScreenedCallMock).toHaveBeenCalledWith(expect.anything(), {
+      accountId: "acct1", phoneNumberId: "pn1",
+      calledE164: "+19565550100", callerE164: "+19565550111",
+      reason: "not-live",
+    });
+  });
+
+  it("records `unknown-number` with NO account when the number belongs to nobody (mutation: skip the write when there is no account -> FAILS)", async () => {
+    lookupMock.mockResolvedValue(null);
+    await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550100&From=%2B19565550111"));
+    await flushAfter();
+    expect(recordScreenedCallMock).toHaveBeenCalledWith(expect.anything(), {
+      accountId: null, phoneNumberId: null,
+      calledE164: "+19565550100", callerE164: "+19565550111",
+      reason: "unknown-number",
+    });
+  });
+
+  it("records `profile-disabled` distinctly from `no-profile` (mutation: emit one reason for both gate failures -> FAILS)", async () => {
+    lookupMock.mockResolvedValue({ id: "pn1", account_id: "acct1", e164: "+19565550100", telnyx_id: null, status: "live" });
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, enabled: false, languages: "en" });
+    await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550100&From=%2B19565550111"));
+    await flushAfter();
+    expect(recordScreenedCallMock).toHaveBeenCalledWith(
+      expect.anything(), expect.objectContaining({ reason: "profile-disabled" }),
+    );
+  });
+
+  it("records `no-profile` when the account never set one up", async () => {
+    lookupMock.mockResolvedValue({ id: "pn1", account_id: "acct1", e164: "+19565550100", telnyx_id: null, status: "live" });
+    profileMock.mockResolvedValue(null);
+    await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550100&From=%2B19565550111"));
+    await flushAfter();
+    expect(recordScreenedCallMock).toHaveBeenCalledWith(
+      expect.anything(), expect.objectContaining({ reason: "no-profile" }),
+    );
+  });
+
+  it("records `repeat-spam` for a blocked caller", async () => {
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 5, otherCalls: 0 });
+    await GET(new Request(`https://x.example/api/voice/texml?To=${encodeURIComponent(LIVE_TO)}&From=${encodeURIComponent(SILENT_CALLER)}`));
+    await flushAfter();
+    expect(recordScreenedCallMock).toHaveBeenCalledWith(
+      expect.anything(), expect.objectContaining({ reason: "repeat-spam" }),
+    );
+  });
+
+  it("records `over-cap` for a caller over the daily cap", async () => {
+    countCallsByCallerSinceMock.mockResolvedValue(5);
+    await GET(new Request(`https://x.example/api/voice/texml?To=${encodeURIComponent(LIVE_TO)}&From=%2B19562921696`));
+    await flushAfter();
+    expect(recordScreenedCallMock).toHaveBeenCalledWith(
+      expect.anything(), expect.objectContaining({ reason: "over-cap" }),
+    );
+  });
+
+  it("records NOTHING for a call that is answered (mutation: record on the dial path too -> FAILS)", async () => {
+    await GET(new Request(`https://x.example/api/voice/texml?To=${encodeURIComponent(LIVE_TO)}&From=%2B19562921696`));
+    await flushAfter();
+    expect(recordScreenedCallMock).not.toHaveBeenCalled();
+  });
+
+  it("the caller hears EXACTLY the same thing when the write throws (mutation: await the write on the answer path -> FAILS)", async () => {
+    // The contract: a caller's experience never depends on our bookkeeping.
+    lookupMock.mockResolvedValue({ id: "pn1", account_id: "acct1", e164: "+19565550100", telnyx_id: null, status: "parked" });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    recordScreenedCallMock.mockRejectedValueOnce(new Error("table gone"));
+    const broken = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550100&From=%2B19565550111"));
+    const brokenXml = await broken.text();
+
+    recordScreenedCallMock.mockResolvedValue(undefined);
+    const working = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550100&From=%2B19565550111"));
+    const workingXml = await working.text();
+
+    await flushAfter();
+    expect(brokenXml).toBe(workingXml);
+    expect(broken.status).toBe(working.status);
+    spy.mockRestore();
+  });
+
+  it("writes in after(), never before the response (mutation: await recordScreenedCall inline -> FAILS)", async () => {
+    // Telnyx holds a carrier answer deadline; this route's own comments say
+    // wall-clock is the one thing it cannot spend.
+    lookupMock.mockResolvedValue({ id: "pn1", account_id: "acct1", e164: "+19565550100", telnyx_id: null, status: "parked" });
+    await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550100&From=%2B19565550111"));
+    expect(recordScreenedCallMock).not.toHaveBeenCalled(); // not yet
+    await flushAfter();
+    expect(recordScreenedCallMock).toHaveBeenCalledTimes(1); // now
   });
 });
