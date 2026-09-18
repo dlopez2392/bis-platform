@@ -22,6 +22,7 @@ import {
   PhoneIncoming,
   PhoneForwarded,
   Zap,
+  ShieldAlert,
   type LucideIcon,
 } from "lucide-react";
 import { AccountSwitcher, type AccountOption } from "@/components/account-switcher";
@@ -69,6 +70,9 @@ const NAV_ICONS: Record<NavIconKey, LucideIcon> = {
   // selects one nav shape or the other, never both), and it is the same
   // feature at a different scope: one account's to-dos vs. every account's.
   work: ListTodo,
+  // `ShieldAlert` rather than `Shield`: this screen is not a security
+  // setting, it is a list of things that were turned away.
+  screened: ShieldAlert,
 };
 
 // Active when pathname matches href exactly, or is nested under it (href + "/…").

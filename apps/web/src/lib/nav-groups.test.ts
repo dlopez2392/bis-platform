@@ -14,6 +14,7 @@ describe("buildNavGroups", () => {
     expect(groups[0]!.label).toBeNull();
     expect(hrefs(groups)).toEqual([
       "/dashboard/accounts", "/dashboard/blueprints", "/dashboard/work", "/dashboard/numbers",
+      "/dashboard/screened",
     ]);
   });
 

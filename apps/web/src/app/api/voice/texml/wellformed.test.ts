@@ -209,6 +209,12 @@ const setCallOutcomeMock = vi.hoisted(() => vi.fn());
 // missing export here would quietly turn every document below into a hangup
 // that still parses.
 const getCallMock = vi.hoisted(() => vi.fn());
+// The refusal paths now schedule a best-effort `screened_calls` write via
+// `after()` — irrelevant to well-formedness, but a real `after()` throws
+// outside a request scope, so it's mocked to a no-op recorder like
+// route.test.ts and incoming/lifecycle.test.ts do. Nothing here inspects it.
+const recordScreenedCallMock = vi.hoisted(() => vi.fn());
+const afterMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({}),
@@ -222,7 +228,12 @@ vi.mock("@bis/db", () => ({
   listPhoneNumbersForAccount: (...a: unknown[]) => listPhoneNumbersForAccountMock(...a),
   setCallOutcome: (...a: unknown[]) => setCallOutcomeMock(...a),
   getCall: (...a: unknown[]) => getCallMock(...a),
+  recordScreenedCall: (...a: unknown[]) => recordScreenedCallMock(...a),
 }));
+vi.mock("next/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/server")>();
+  return { ...actual, after: (cb: () => unknown) => afterMock(cb) };
+});
 
 const PROFILE = {
   id: "vp1", account_id: "a1", persona_name: "Sofía",
@@ -255,6 +266,8 @@ beforeEach(() => {
   listPhoneNumbersForAccountMock.mockReset().mockResolvedValue([
     { id: "pn1", account_id: "acct1", e164: LIVE_TO, telnyx_id: null, status: "live" },
   ]);
+  recordScreenedCallMock.mockReset().mockResolvedValue(undefined);
+  afterMock.mockReset();
 });
 
 async function texml(params: Record<string, string>): Promise<string> {

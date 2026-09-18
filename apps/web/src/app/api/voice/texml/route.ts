@@ -32,27 +32,28 @@
 // bridge is emitted — a refusal costs nothing, a bridge starts billing — and
 // hears the SAME sentence as any other refusal; only the log line names the
 // reason.
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { toE164 } from "@/lib/voice/phone-number";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
 import { callAnswerable } from "@/lib/voice/accept-gate";
 import { newHandoffToken } from "@/lib/voice/handoff";
 import { configuredOrigin } from "@/lib/email/origin";
 import { xmlText } from "./xml";
+import type { ScreenedCallInput } from "@bis/db";
 
 export const runtime = "nodejs";
 
 type Languages = "en" | "es" | "both";
 type Routability =
   | { kind: "dial" }
-  | { kind: "refuse"; languages: Languages }
-  | { kind: "cap"; languages: Languages }
+  | { kind: "refuse"; languages: Languages; screened: ScreenedCallInput }
+  | { kind: "cap"; languages: Languages; screened: ScreenedCallInput }
   // A caller whose whole recent history on this account is silent calls.
   // Speaks the SAME sentence as `refuse` on purpose — a robot learns nothing
   // from a distinct message, and a human who has somehow been caught by this
   // is told to try again later, which the rolling window makes true. Only the
   // log line distinguishes the reason.
-  | { kind: "blocked"; languages: Languages };
+  | { kind: "blocked"; languages: Languages; screened: ScreenedCallInput };
 
 // COPY.refuse.en is byte-identical to the old REFUSAL constant's sentence —
 // an existing test pins it, and a caller who's heard it before should hear
@@ -99,19 +100,47 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
       // "incoming call" log already logs callerNumber) — parity, not a new
       // exposure.
       console.log(`texml declined refuse-unknown for ${calledE164}, caller ${callerE164 ?? "unknown"}`);
-      return { kind: "refuse", languages: "en" };
+      // ONE log line, TWO different facts — which is exactly the collapse
+      // the `screened_calls` record un-does. No row at all is a wrong number
+      // and nobody's outage; a number we own that is not live is turning
+      // away every caller a paying client has.
+      return {
+        kind: "refuse", languages: "en",
+        screened: {
+          accountId: row?.account_id ?? null,
+          phoneNumberId: row?.id ?? null,
+          calledE164, callerE164,
+          reason: row ? "not-live" : "unknown-number",
+        },
+      };
     }
     const profile = await getVoiceProfile(db, row.account_id);
     const gate = callAnswerable({ status: row.status, profile });
     if (!gate.answerable) {
       console.log(`texml declined refuse-disabled for ${calledE164}, caller ${callerE164 ?? "unknown"}, accountId ${row.account_id}`);
-      return { kind: "refuse", languages: profile?.languages ?? "en" };
+      // `gate.reason` has always distinguished these two and nothing has ever
+      // read it until now: "never set up" and "deliberately turned off" need
+      // different answers from an operator.
+      return {
+        kind: "refuse", languages: profile?.languages ?? "en",
+        screened: {
+          accountId: row.account_id, phoneNumberId: row.id,
+          calledE164, callerE164,
+          reason: gate.reason === "no-profile" ? "no-profile" : "profile-disabled",
+        },
+      };
     }
     // Unreachable — callAnswerable's "no-profile" reason above already
     // returned for a null profile — but TypeScript can't see across that
     // predicate call, so this narrows `profile` for everything below.
     if (!profile) {
-      return { kind: "refuse", languages: "en" };
+      return {
+        kind: "refuse", languages: "en",
+        screened: {
+          accountId: row.account_id, phoneNumberId: row.id,
+          calledE164, callerE164, reason: "no-profile",
+        },
+      };
     }
     // Cap and reputation UX only — the caller deserves words, not dead air.
     // The incoming webhook re-checks BOTH with the same shared predicates and
@@ -160,12 +189,24 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
       const reputation = decideReputation(history, repCfg, callerE164);
       if (reputation.blocked) {
         console.log(`texml declined blocked (${reputation.reason}) for ${calledE164}, caller ${callerE164 ?? "unknown"}, accountId ${row.account_id}`);
-        return { kind: "blocked", languages: profile.languages };
+        return {
+          kind: "blocked", languages: profile.languages,
+          screened: {
+            accountId: row.account_id, phoneNumberId: row.id,
+            calledE164, callerE164, reason: "repeat-spam",
+          },
+        };
       }
       const verdict = decideLimit({ forNumber, forAccount }, readLimitConfig());
       if (!verdict.allowed) {
         console.log(`texml declined cap (${verdict.reason}) for ${calledE164}, caller ${callerE164 ?? "unknown"}, accountId ${row.account_id}`);
-        return { kind: "cap", languages: profile.languages };
+        return {
+          kind: "cap", languages: profile.languages,
+          screened: {
+            accountId: row.account_id, phoneNumberId: row.id,
+            calledE164, callerE164, reason: "over-cap",
+          },
+        };
       }
     } catch (e) {
       console.error(`texml cap/reputation count failed for ${calledE164}: ${String(e)}`); // fail open
@@ -266,6 +307,43 @@ async function respond(calledE164: string | null, callerE164: string | null, ori
   }
   if (calledE164) {
     const result = await classify(calledE164, callerE164);
+    if (result.kind !== "dial") {
+      // ONE write site for all six refusals, not one per branch — six call
+      // sites would be six chances for the next reason to forget one.
+      //
+      // `after()` because this route sits on Telnyx's carrier answer
+      // deadline and its own comments say wall-clock is the one thing it
+      // cannot spend. Same pattern, same reason, as incoming/route.ts's own
+      // `after(() => runCallLifecycle(...))`.
+      //
+      // BEST-EFFORT, and that is a contract: a failed write OR A FAILED
+      // SCHEDULE logs and changes nothing about the refusal, the spoken
+      // copy, or the hang-up. The console.log lines in classify() are
+      // untouched and remain the evidence if this write is itself broken.
+      const screened = result.screened;
+      try {
+        // `after()` itself has synchronous throw paths distinct from the
+        // callback rejecting (no work store; `errorWaitUntilNotAvailable`).
+        // Neither is caught by the try/catch INSIDE the callback below, so
+        // scheduling gets its own — otherwise the throw escapes `respond()`
+        // (there is no enclosing catch in GET/POST) and Telnyx gets a 500
+        // instead of the refusal document: dead air instead of the sentence
+        // this whole branch exists to speak.
+        after(async () => {
+          try {
+            // Lazy import: a module-scope DB import here breaks `next build`
+            // during page-data collection — same reason as `classify()`'s own
+            // lazy `@bis/db` import above.
+            const { serviceDb, recordScreenedCall } = await import("@bis/db");
+            await recordScreenedCall(serviceDb(), screened);
+          } catch (e) {
+            console.error(`texml: screened-call write failed (${screened.reason}) for ${screened.calledE164}: ${String(e)}`);
+          }
+        });
+      } catch (e) {
+        console.error(`texml: could not schedule the screened-call write (${screened.reason}) for ${screened.calledE164}: ${String(e)}`);
+      }
+    }
     if (result.kind === "refuse") return xmlResponse(sayXml(result.languages, COPY.refuse));
     // Deliberately the same sentence as `refuse`, and deliberately ABOVE the
     // bridge: a refusal costs nothing, a bridge starts billing.

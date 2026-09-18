@@ -1644,6 +1644,69 @@ export const m = {
   // earlier wording described a state the schema makes impossible.
   "zone.guessed.client":
     "Your timezone needs fixing, so times are shown in another zone. Ask your account manager to sort it out.",
+
+  // ── Screened calls (2026-09-18) ────────────────────────────────────────
+  // A refused call used to leave no trace but a log line. These screens are
+  // agency-only: a client never sees them, so the voice is an operator's,
+  // not a business owner's.
+  "nav.screened": "Screened calls",
+  "screened.title": "Screened calls",
+  // A whole-phrase pick by count, never a plural template reused for one —
+  // see contacts.count's own comment above for the "1 people" bug this
+  // avoids, and work.linesDown.one/.many just below for the same rule
+  // applied to a second count on this same screen.
+  "screened.total": "{n} refused calls",
+  "screened.totalOne": "1 refused call",
+  "screened.col.when": "When",
+  "screened.col.account": "Company",
+  "screened.col.called": "Number dialled",
+  "screened.col.caller": "Caller",
+  "screened.col.reason": "Reason",
+  // Dot + word, never colour alone (DESIGN.md rule 3). Each says what
+  // happened in an operator's language, not the enum's.
+  "screened.reason.unknown-number": "Not our number",
+  "screened.reason.not-live": "Number not live",
+  "screened.reason.no-profile": "No receptionist set up",
+  "screened.reason.profile-disabled": "Receptionist turned off",
+  "screened.reason.over-cap": "Over the daily cap",
+  "screened.reason.repeat-spam": "Repeat spam",
+  "screened.unknownCaller": "Withheld",
+  "screened.noAccount": "—",
+  // DESIGN.md rule 1 — the total never ships alone. `misconfigured` is the
+  // one class of the three (CLASS_DOT's own comment, screened-table.tsx)
+  // that is our own fault and needs a fix, so it is the breakdown worth a
+  // second number beside the total.
+  "screened.misconfigured": "{n} misconfigured",
+  "screened.misconfiguredOne": "1 misconfigured",
+  "screened.empty.title": "Nothing has been turned away",
+  "screened.empty.body":
+    "When the receptionist refuses a call — a number that isn't live, a repeat spammer, a caller over the daily cap — it lands here with the reason. Nothing to do until then.",
+  "screened.older": "Older",
+
+  // The `?class=` filter (2026-09-18): the work-queue banner links here
+  // scoped to `misconfigured` rather than to the unfiltered, all-time list —
+  // two different axes (24h distinct numbers vs. all-time rows) that must
+  // never be allowed to look like the same number. These three say plainly
+  // which slice is on screen; the "a genuine cold start" empty copy above is
+  // FALSE for a filtered-and-empty result (a filter matching nothing is not
+  // "nothing has ever been turned away"), so that gets its own pair too.
+  // The misconfigured line is a RECORD, not a present-tense status: this is
+  // an all-time list, so a line dead in July and fixed in August still shows
+  // up here, and "are turning callers away" would be false about it. Say
+  // what happened, not what is happening now.
+  "screened.filter.scope.misconfigured": "Showing calls refused because a line wasn't set up.",
+  "screened.filter.scope.screened": "Showing calls the system screened on purpose.",
+  "screened.filter.scope.unattributed": "Showing calls to numbers this platform doesn't own.",
+  "screened.filter.clear": "Show every refused call",
+  "screened.empty.filtered.title": "Nothing matches this filter",
+  "screened.empty.filtered.body":
+    "No refusals of this kind are on record right now. Other kinds may still be — clear the filter to see everything.",
+
+  // The work-queue banner. Counts DISTINCT numbers, because a dialer
+  // hammering one dead line is one problem to fix.
+  "work.linesDown.one": "1 number is turning callers away",
+  "work.linesDown.many": "{n} numbers are turning callers away",
+  "work.linesDown.action": "See which",
 } as const;
 
 export type MessageKey = keyof typeof m;

@@ -49,6 +49,43 @@ export function testPhoneNumber(): string {
   throw new Error("testPhoneNumber: 16 draws in a row were already issued");
 }
 
+/** Every `screened_calls.called_e164` this process has already handed out —
+ *  the same within-a-run guard `issuedPhoneNumbers` gives the numbers. */
+const issuedScreenedCalledE164s = new Set<string>();
+
+/**
+ * A `screened_calls.called_e164` no other run in this project is holding.
+ *
+ * Unlike `phone_numbers.e164`, this column carries no unique constraint —
+ * `0039_screened_calls.sql` declares it `text not null` and nothing more, so
+ * a duplicate here cannot fail an insert the way a duplicate `e164` does.
+ * The randomization exists for a different reason: `screened-calls.test.ts`
+ * has two tests that must write `accountId: null`, which is the ownerless-
+ * call case this table exists to represent — and `withTestAccount`'s
+ * `deleteAccountCascade` (scoped to `account_id`) is structurally unable to
+ * reach a row whose `account_id` is null. Each of those tests therefore has
+ * to find and delete its OWN row by id afterward. A fixed literal makes "my
+ * own row" ambiguous — a second test, or a concurrent run, could write the
+ * same string, and a global scan for it is exactly the flakiness this
+ * project has already been burned by. A random one lets a test look its row
+ * up exactly, by that value, and lets a future sweep of the live table
+ * recognise test noise by shape, the same way `testPhoneNumber`'s `+999`
+ * block does.
+ *
+ * Same draw and guarantee as `testPhoneNumber`: a trillion draws plus the
+ * issued set, so one run never repeats itself.
+ */
+export function testScreenedCalledE164(): string {
+  for (let attempt = 0; attempt < 16; attempt++) {
+    const n = `+999${String(randomInt(0, 1_000_000_000_000)).padStart(12, "0")}`;
+    if (!issuedScreenedCalledE164s.has(n)) {
+      issuedScreenedCalledE164s.add(n);
+      return n;
+    }
+  }
+  throw new Error("testScreenedCalledE164: 16 draws in a row were already issued");
+}
+
 /** Every provider message id this process has already handed out — the same
  *  within-a-run guard `issuedPhoneNumbers` gives the numbers. */
 const issuedProviderMessageIds = new Set<string>();
