@@ -29,16 +29,26 @@ export const ACCOUNT_OWNED_TABLES = [
 /**
  * ⚠️ `alert_phone_verifications` (0036) is DELIBERATELY not on that list,
  * neither is `contact_duplicate_flags` (0033), neither is `screened_calls`
- * (0039), and neither is `call_proposals` (0040).
+ * (0039).
  *
- * All four carry `account_id … on delete cascade` rather than `restrict`,
+ * All three carry `account_id … on delete cascade` rather than `restrict`,
  * so the account's own deletion below carries their rows away — they are
  * derived or scratch state, not the lead-bearing rows 0017 made restrict to
  * protect. 0036 argues the case in its own comments;
  * `alert-phone-verification-grants.test.ts` proves the cascade instead of
  * assuming it, by inserting a row, letting `withTestAccount` tear the account
- * down, and then asserting nothing is left. `call-proposals-grants.test.ts`
- * proves the same for `call_proposals`.
+ * down, and then asserting nothing is left.
+ *
+ * `call_proposals` (0040) is ALSO not on that list, but for a different
+ * reason, and it needs no `account_id`-cascade proof of its own: `call_id`
+ * is `not null … on delete cascade`, and `calls` IS on `ACCOUNT_OWNED_TABLES`
+ * above and is deleted long before `accounts` itself. So by the time this
+ * function ever reaches the `accounts` row, every `call_proposals` row that
+ * pointed at one of this account's calls is already gone via `call_id`'s
+ * cascade — `account_id`'s own `on delete cascade` is a backstop for a direct
+ * `accounts` delete (e.g. from the Studio UI), not the mechanism this
+ * function exercises. `call-proposals-grants.test.ts` proves the row is gone
+ * after teardown without assuming which FK did it.
  *
  * A table added with the usual `restrict` and left off the list is a different
  * story and still a bug: it surfaces as "cleanup failed on accounts" here, or
