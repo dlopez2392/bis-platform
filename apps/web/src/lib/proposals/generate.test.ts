@@ -28,14 +28,70 @@ function modelReturning(content: unknown): typeof fetch {
   }), { status: 200 })) as unknown as typeof fetch;
 }
 
+const DEFAULT_CONTACT_SENTINEL = "00000000-0000-0000-0000-000000000000";
+
+/**
+ * Enforces the LIVE partial unique index
+ * (`call_proposals_one_pending_unique`, 0040_call_proposals.sql):
+ * `(call_id, kind, coalesce(contact_id, sentinel)) where status='pending'`.
+ * The original fake had no such thing and let every insert "succeed",
+ * which is exactly why `generate.test.ts:138`'s old cap test asserted a
+ * count (3) that cannot happen in production — see Task 4 fix-wave finding
+ * 2. `rows` records what actually landed; `attempts` records every call
+ * made to `.insert()`, landed or refused, so a test can tell the two apart.
+ */
 function fakeDb() {
-  const inserted: any[] = [];
+  const rows: any[] = [];
+  const attempts: any[] = [];
+  const seen = new Set<string>();
   const db: any = {
-    inserted,
+    rows, attempts,
     from: () => ({
       insert: (row: any) => {
-        inserted.push(row);
-        return { select: () => ({ single: async () => ({ data: { id: "p1" }, error: null }) }) };
+        attempts.push(row);
+        const key = `${row.call_id}|${row.kind}|${row.contact_id ?? DEFAULT_CONTACT_SENTINEL}`;
+        if (seen.has(key)) {
+          return {
+            select: () => ({
+              single: async () => ({
+                data: null,
+                error: { code: "23505", message: "duplicate key value violates unique constraint" },
+              }),
+            }),
+          };
+        }
+        seen.add(key);
+        return {
+          select: () => ({
+            single: async () => {
+              rows.push(row);
+              return { data: { id: `p${rows.length}` }, error: null };
+            },
+          }),
+        };
+      },
+    }),
+  };
+  return db;
+}
+
+/** Every insert refused, unconditionally — for proving the loop's cap is on
+ *  attempts, independent of the (also real) unique-index collision above. */
+function fakeDbAlwaysRefusing() {
+  const attempts: any[] = [];
+  const db: any = {
+    attempts, rows: [] as any[],
+    from: () => ({
+      insert: (row: any) => {
+        attempts.push(row);
+        return {
+          select: () => ({
+            single: async () => ({
+              data: null,
+              error: { code: "23505", message: "duplicate key value violates unique constraint" },
+            }),
+          }),
+        };
       },
     }),
   };
@@ -47,28 +103,46 @@ const base = {
   outcome: "lead" as const, transcript, handoffRequested: false,
 };
 
+function requestBodyOf(fetchImpl: typeof fetch): any {
+  const [, init] = (fetchImpl as any).mock.calls[0] as [string, RequestInit];
+  return JSON.parse(init.body as string);
+}
+
+function systemPromptOf(fetchImpl: typeof fetch): string {
+  const body = requestBodyOf(fetchImpl);
+  return (body.messages.find((m: { role: string }) => m.role === "system")?.content ?? "") as string;
+}
+
 describe("generateProposals", () => {
-  it("writes a grounded task proposal", async () => {
+  it("writes a grounded task proposal with the correct row shape", async () => {
     const db = fakeDb();
     const n = await generateProposals({
-      ...base, db,
+      ...base, db, contactId: "contact-1",
       fetchImpl: modelReturning({
         proposals: [{ kind: "task", title: "Send a dining table quote",
                       dueAt: null, evidence: "Call me Tuesday morning" }],
       }),
     });
     expect(n).toBe(1);
-    expect(db.inserted).toHaveLength(1);
-    expect(db.inserted[0].kind).toBe("task");
-    // NOT the model's excerpt ("Call me Tuesday morning") — groundedEvidence
-    // returns the caller's WHOLE TURN (grounding.ts's own contract, pinned
-    // by grounding.test.ts's "returns the transcript's own text, not the
-    // normalised needle"). Storing the excerpt instead of the turn is
-    // exactly the defect this task exists to prevent: a negation or
-    // qualifier outside the excerpt would be invisible to the reviewer.
-    expect(db.inserted[0].evidence).toBe(
-      "I need a quote for a dining table. Call me Tuesday morning.",
-    );
+    expect(db.rows).toHaveLength(1);
+    // THE WHOLE ROW, not one field at a time — finding 5 of the fix-wave
+    // review proved four separate account/call/contact/title mixups each
+    // left a field-by-field assertion suite green. `contact_id` is a real,
+    // non-null value here specifically so the field is exercised at all.
+    expect(db.rows[0]).toEqual({
+      account_id: "acct",
+      call_id: "call1",
+      contact_id: "contact-1",
+      kind: "task",
+      // NOT the model's excerpt ("Call me Tuesday morning") — groundedEvidence
+      // returns the caller's WHOLE TURN (grounding.ts's own contract, pinned
+      // by grounding.test.ts's "returns the transcript's own text, not the
+      // normalised needle"). Storing the excerpt instead of the turn is
+      // exactly the defect this task exists to prevent: a negation or
+      // qualifier outside the excerpt would be invisible to the reviewer.
+      evidence: "I need a quote for a dining table. Call me Tuesday morning.",
+      payload: { title: "Send a dining table quote", dueAt: null },
+    });
   });
 
   // THE CENTRAL SAFETY PROPERTY. A model that invents a quote must produce
@@ -83,7 +157,7 @@ describe("generateProposals", () => {
       }),
     });
     expect(n).toBe(0);
-    expect(db.inserted).toEqual([]);
+    expect(db.rows).toEqual([]);
   });
 
   it("proposes nothing for an ineligible call, and does NOT call the model at all (mutation: move the eligibility check after the fetch -> FAILS)", async () => {
@@ -92,7 +166,7 @@ describe("generateProposals", () => {
     const n = await generateProposals({ ...base, db, outcome: "spam", fetchImpl });
     expect(n).toBe(0);
     expect(fetchImpl).not.toHaveBeenCalled();
-    expect(db.inserted).toEqual([]);
+    expect(db.rows).toEqual([]);
   });
 
   it("returns 0 and writes nothing when the model returns unparseable content", async () => {
@@ -101,25 +175,14 @@ describe("generateProposals", () => {
       choices: [{ message: { content: "I'm afraid I can't help with that." } }],
     }), { status: 200 })) as unknown as typeof fetch;
     expect(await generateProposals({ ...base, db, fetchImpl })).toBe(0);
-    expect(db.inserted).toEqual([]);
+    expect(db.rows).toEqual([]);
   });
 
   it("returns 0 when the model call fails outright, and never throws", async () => {
     const db = fakeDb();
     const fetchImpl = vi.fn(async () => { throw new Error("network down"); }) as unknown as typeof fetch;
     await expect(generateProposals({ ...base, db, fetchImpl })).resolves.toBe(0);
-    expect(db.inserted).toEqual([]);
-  });
-
-  it("caps the number of proposals per call (mutation: raise or drop MAX_PER_CALL -> FAILS)", async () => {
-    const db = fakeDb();
-    const many = Array.from({ length: 9 }, (_, i) => ({
-      kind: "task", title: `Task ${i}`, dueAt: null,
-      evidence: "Call me Tuesday morning",
-    }));
-    const n = await generateProposals({ ...base, db, fetchImpl: modelReturning({ proposals: many }) });
-    expect(n).toBe(3);
-    expect(db.inserted).toHaveLength(3);
+    expect(db.rows).toEqual([]);
   });
 
   it("ignores a kind it does not know (mutation: drop the kind allow-list -> FAILS)", async () => {
@@ -132,7 +195,39 @@ describe("generateProposals", () => {
       }),
     });
     expect(n).toBe(0);
-    expect(db.inserted).toEqual([]);
+    expect(db.rows).toEqual([]);
+  });
+
+  // `contact_field` and `opportunity_stage` are real members of the DB's
+  // `kind` CHECK (unlike the fixture above's `delete_contact`, which no
+  // model would ever emit) — they are the two kinds whose accept path and
+  // review screen do not exist yet, so THESE two escaping is the actual
+  // containment failure the allow-list exists to prevent (fix-wave finding
+  // 6).
+  it("refuses a contact_field proposal — its accept path does not exist yet", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db,
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "contact_field", title: "Update phone number",
+                      dueAt: null, evidence: "Call me Tuesday morning" }],
+      }),
+    });
+    expect(n).toBe(0);
+    expect(db.rows).toEqual([]);
+  });
+
+  it("refuses an opportunity_stage proposal — its accept path does not exist yet", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db,
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "opportunity_stage", title: "Move to won",
+                      dueAt: null, evidence: "Call me Tuesday morning" }],
+      }),
+    });
+    expect(n).toBe(0);
+    expect(db.rows).toEqual([]);
   });
 
   it("drops a proposal with a blank title even when the evidence is real", async () => {
@@ -145,6 +240,206 @@ describe("generateProposals", () => {
       }),
     });
     expect(n).toBe(0);
+  });
+
+  it("clamps an excessively long title before it reaches a review card (mutation: remove the .slice(0, MAX_TITLE_LEN) clamp -> FAILS)", async () => {
+    const db = fakeDb();
+    const longTitle = "x".repeat(5000);
+    const n = await generateProposals({
+      ...base, db, contactId: "contact-long",
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "task", title: longTitle, dueAt: null,
+                      evidence: "Call me Tuesday morning" }],
+      }),
+    });
+    expect(n).toBe(1);
+    expect(db.rows[0].payload.title.length).toBeLessThan(5000);
+  });
+
+  it("stores dueAt as null when the model returns free text instead of an ISO instant, but keeps the proposal (mutation: drop the Date.parse guard -> stores garbage)", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, contactId: "contact-duedate",
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "task", title: "Call me back", dueAt: "next Tuesday morning",
+                      evidence: "Call me Tuesday morning" }],
+      }),
+    });
+    expect(n).toBe(1);
+    expect(db.rows[0].payload.dueAt).toBeNull();
+  });
+
+  it("keeps a valid ISO-8601 dueAt", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, contactId: "contact-duedate-2",
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "task", title: "Call me back", dueAt: "2026-09-23T09:00:00.000Z",
+                      evidence: "Call me Tuesday morning" }],
+      }),
+    });
+    expect(n).toBe(1);
+    expect(db.rows[0].payload.dueAt).toBe("2026-09-23T09:00:00.000Z");
+  });
+
+  // THE V1 TRUTH (fix-wave finding 2): every proposal from one call shares
+  // that call's id, the hard-coded `kind: "task"` and that call's one
+  // contact, so they all collide on the live unique index. Only the FIRST
+  // lands; the rest are refused by the database, not by MAX_PER_CALL.
+  it("writes only the first of several colliding task proposals from one call; the database's own unique index refuses the rest (mutation: `written++` unconditionally instead of `if (created) written++` -> FAILS)", async () => {
+    const db = fakeDb();
+    const three = Array.from({ length: 3 }, (_, i) => ({
+      kind: "task", title: `Task ${i}`, dueAt: null,
+      evidence: "Call me Tuesday morning",
+    }));
+    const n = await generateProposals({ ...base, db, fetchImpl: modelReturning({ proposals: three }) });
+    expect(n).toBe(1);
+    expect(db.rows).toHaveLength(1);
+  });
+
+  it("stops after MAX_PER_CALL attempts even when every insert is refused, not after all 20 candidates (mutation: cap the loop on `written` instead of `attempts` -> FAILS)", async () => {
+    const db = fakeDbAlwaysRefusing();
+    const many = Array.from({ length: 20 }, (_, i) => ({
+      kind: "task", title: `Task ${i}`, dueAt: null,
+      evidence: "Call me Tuesday morning",
+    }));
+    const n = await generateProposals({ ...base, db, fetchImpl: modelReturning({ proposals: many }) });
+    expect(n).toBe(0);
+    expect(db.attempts).toHaveLength(3);
+  });
+
+  // CRITICAL 1 of the fix-wave: `JSON.stringify` turns `[undefined]` into
+  // `[null]`, so both a deliberate null and a trailing-comma slip produce
+  // this exact one-character shape. Before the fix this threw
+  // `TypeError: Cannot read properties of null (reading 'kind')` straight
+  // out of generateProposals, past its own "NEVER THROWS" doc comment.
+  it("skips a null proposal element and still writes the valid one after it (mutation: remove the asRawProposal guard -> the null throws and aborts the rest of the array)", async () => {
+    // PROVED by the fix-wave review: `{"proposals":[null]}` threw
+    // `TypeError: Cannot read properties of null (reading 'kind')` before
+    // this guard existed. A single element in the array can't distinguish
+    // "guard skips it" from "the outer try/catch merely swallows the
+    // throw" — both return 0 for a lone null. Putting a VALID proposal
+    // after the null does distinguish them: without the guard, the null's
+    // throw aborts the loop entirely and the valid entry after it is never
+    // reached.
+    const db = fakeDb();
+    const fetchImpl = modelReturning({
+      proposals: [null, { kind: "task", title: "Send a dining table quote",
+                           dueAt: null, evidence: "Call me Tuesday morning" }],
+    });
+    const n = await generateProposals({ ...base, db, fetchImpl });
+    expect(n).toBe(1);
+    expect(db.rows).toHaveLength(1);
+  });
+
+  it("skips non-object proposal elements and still writes the valid one after them", async () => {
+    const db = fakeDb();
+    const fetchImpl = modelReturning({
+      proposals: ["oops", 42, true, { kind: "task", title: "Send a dining table quote",
+                                       dueAt: null, evidence: "Call me Tuesday morning" }],
+    });
+    const n = await generateProposals({ ...base, db, fetchImpl });
+    expect(n).toBe(1);
+    expect(db.rows).toHaveLength(1);
+  });
+
+  it("returns already-written count instead of 0 when a later database call throws mid-loop (mutation: `return 0` in the catch instead of `return written` -> FAILS)", async () => {
+    // A purpose-built fake, not `fakeDb()`: the first `.insert()` succeeds
+    // normally, and the SECOND throws synchronously (an unexpected fault —
+    // a dropped connection, not a normal refusal) to prove the catch
+    // preserves whatever already landed rather than reporting 0.
+    let calls = 0;
+    const db: any = {
+      from: () => ({
+        insert: () => {
+          calls++;
+          if (calls === 1) {
+            return { select: () => ({ single: async () => ({ data: { id: "p1" }, error: null }) }) };
+          }
+          throw new Error("connection reset");
+        },
+      }),
+    };
+    const two = [
+      { kind: "task", title: "First", dueAt: null, evidence: "Call me Tuesday morning" },
+      { kind: "task", title: "Second", dueAt: null, evidence: "Call me Tuesday morning" },
+    ];
+    const n = await generateProposals({ ...base, db, fetchImpl: modelReturning({ proposals: two }) });
+    expect(n).toBe(1);
+  });
+
+  it("returns 0 and logs when the model responds with a non-OK status, even though the body itself parses fine (mutation: drop the `!r.ok` check -> FAILS)", async () => {
+    // A body that would otherwise parse to a perfectly valid empty result —
+    // an empty or malformed body would throw inside `r.json()`/`JSON.parse`
+    // regardless of this check and get caught by the outer catch anyway,
+    // which would make this test pass whether or not `!r.ok` exists. Only a
+    // WELL-FORMED body on a non-2xx status isolates the check.
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = fakeDb();
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ proposals: [] }) } }],
+    }), { status: 500 })) as unknown as typeof fetch;
+    expect(await generateProposals({ ...base, db, fetchImpl })).toBe(0);
+    expect(db.rows).toEqual([]);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(String(errorSpy.mock.calls[0]![0])).toContain("HTTP 500");
+    errorSpy.mockRestore();
+  });
+
+  it("returns 0 and logs a specific message when the model's proposals field is not an array (mutation: drop the Array.isArray guard -> FAILS)", async () => {
+    // A NUMBER, not a string: `for...of` over a string iterates its
+    // characters just fine, which would make this test pass with or
+    // without the guard. A number is not iterable at all, so without the
+    // guard the `for...of` throws and is caught by the generic outer catch
+    // instead of this branch's own, more specific log line — this
+    // assertion is what tells the two apart.
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = fakeDb();
+    const fetchImpl = modelReturning({ proposals: 42 });
+    expect(await generateProposals({ ...base, db, fetchImpl })).toBe(0);
+    expect(db.rows).toEqual([]);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(String(errorSpy.mock.calls[0]![0])).toContain("no proposals array");
+    errorSpy.mockRestore();
+  });
+
+  it("logs a distinct error when the model call fails outright, and logs NOTHING when it simply returns no proposals", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = fakeDb();
+    await generateProposals({
+      ...base, db,
+      fetchImpl: vi.fn(async () => { throw new Error("network down"); }) as unknown as typeof fetch,
+    });
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(String(errorSpy.mock.calls[0]![0])).toContain("call1");
+    errorSpy.mockClear();
+
+    await generateProposals({ ...base, db, fetchImpl: modelReturning({ proposals: [] }) });
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("logs when OPENAI_API_KEY is missing (mutation: drop the console.error in the missing-key branch -> FAILS)", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    delete process.env.OPENAI_API_KEY;
+    const db = fakeDb();
+    const n = await generateProposals({ ...base, db, fetchImpl: modelReturning({ proposals: [] }) });
+    expect(n).toBe(0);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    errorSpy.mockRestore();
+  });
+
+  it("requests JSON output explicitly, and pins the model, url and abort signal (mutation: drop response_format -> FAILS)", async () => {
+    const db = fakeDb();
+    const fetchImpl = modelReturning({ proposals: [] });
+    await generateProposals({ ...base, db, fetchImpl });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [url, init] = (fetchImpl as any).mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.openai.com/v1/chat/completions");
+    const body = requestBodyOf(fetchImpl);
+    expect(body.model).toBe("gpt-4o-mini");
+    expect(body.response_format).toEqual({ type: "json_object" });
+    expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
   // Step 4b: the spec names "a wrong number" as a case that must propose
@@ -163,9 +458,20 @@ describe("generateProposals", () => {
     const fetchImpl = modelReturning({ proposals: [] });
     await generateProposals({ ...base, db, fetchImpl });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const [, init] = (fetchImpl as any).mock.calls[0] as [string, RequestInit];
-    const body = JSON.parse(init.body as string);
-    const system = body.messages.find((m: { role: string }) => m.role === "system")?.content ?? "";
-    expect(system.toLowerCase()).toContain("wrong number");
+    expect(systemPromptOf(fetchImpl).toLowerCase()).toContain("wrong number");
+  });
+
+  it("tells the model dueAt must be an ISO-8601 instant or null (mutation: delete the dueAt-format line from SYSTEM -> FAILS)", async () => {
+    const db = fakeDb();
+    const fetchImpl = modelReturning({ proposals: [] });
+    await generateProposals({ ...base, db, fetchImpl });
+    expect(systemPromptOf(fetchImpl).toLowerCase()).toContain("iso-8601");
+  });
+
+  it("tells the model to write plain, everyday titles rather than codes or template syntax (mutation: delete the plain-language line from SYSTEM -> FAILS)", async () => {
+    const db = fakeDb();
+    const fetchImpl = modelReturning({ proposals: [] });
+    await generateProposals({ ...base, db, fetchImpl });
+    expect(systemPromptOf(fetchImpl).toLowerCase()).toContain("plain");
   });
 });
