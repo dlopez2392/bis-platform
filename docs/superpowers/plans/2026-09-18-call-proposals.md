@@ -269,7 +269,7 @@ describe("call_proposals grants", () => {
 - [ ] **Step 3: Run the test to verify it fails**
 
 Run: `pnpm --filter @bis/db test -- call-proposals-grants`
-Expected: FAIL — the existence assertion returns `null`, not `"public.call_proposals"`, because the migration has not been applied.
+Expected: FAIL — the existence assertion is unsatisfied because the migration has not been applied. ⚠️ Note `to_regclass` returns the BARE name (`call_proposals`) on this project's connection, not `public.call_proposals` — strip the schema prefix as `alert-phone-verification-grants.test.ts:174-176` already does, rather than asserting the qualified form.
 
 - [ ] **Step 4: Hand the migration to the orchestrator to apply**
 
@@ -278,7 +278,7 @@ Expected: FAIL — the existence assertion returns `null`, not `"public.call_pro
 - [ ] **Step 5: Re-run the test after the orchestrator applies**
 
 Run: `pnpm --filter @bis/db test -- call-proposals-grants`
-Expected: PASS, 5 tests.
+Expected: PASS — 6 tests once Step 8's cascade test lands.
 
 - [ ] **Step 6: Prove each assertion can fail**
 
@@ -286,11 +286,13 @@ For each of the four privilege tests, apply the mutation named in its own title 
 
 - [ ] **Step 7: Extend the teardown exclusion doc-block**
 
-In `packages/db/src/account-teardown.ts`, the doc-block at lines 29-45 currently names `alert_phone_verifications`, `contact_duplicate_flags` and `screened_calls` as deliberately absent from `ACCOUNT_OWNED_TABLES`. Add `call_proposals` to that list with the same reason (`account_id … on delete cascade`). **Do not add it to `ACCOUNT_OWNED_TABLES` itself.**
+In `packages/db/src/account-teardown.ts`, the doc-block at lines 29-45 currently names `alert_phone_verifications`, `contact_duplicate_flags` and `screened_calls` as deliberately absent from `ACCOUNT_OWNED_TABLES`. Add `call_proposals` to that list. ⚠️ **The reason is NOT the one the other three carry.** For this table it is `call_id … on delete cascade` firing from `calls`, which IS already on the teardown list and is deleted before `accounts`. `account_id`'s cascade is a backstop for a direct `accounts` delete and is never exercised by `deleteAccountCascade`. Word it that way. **Do not add it to `ACCOUNT_OWNED_TABLES` itself.**
 
 - [ ] **Step 8: Prove the cascade actually removes the rows**
 
-Add to `packages/db/src/test/call-proposals-grants.test.ts` a test following the shape at `alert-phone-verification-grants.test.ts:311-328`: inside `withTestAccount`, insert a call and a proposal; let the `finally` teardown run; then through a fresh `serviceDb()` assert the proposal rows for that account are `[]`. Mutation: change the FK to `on delete restrict` and confirm teardown throws instead.
+Add to `packages/db/src/test/call-proposals-grants.test.ts` a test following the shape at `alert-phone-verification-grants.test.ts:311-328`: inside `withTestAccount`, insert a phone number, a call and a proposal; let the `finally` teardown run; then through a fresh `serviceDb()` assert the proposal rows for that account are `[]`.
+
+⚠️ **Mutate `call_proposals_call_id_fkey`, named explicitly — NOT `account_id`'s.** The table has two cascading FKs and the `account_id` one is vacuous here: `calls` is deleted before `accounts`, so `call_id`'s cascade has already removed the rows and an `account_id`-restrict mutation completes without error. Proven empirically in Task 1.
 
 - [ ] **Step 9: Commit**
 
@@ -637,7 +639,11 @@ Expected: PASS, 6 tests.
 
 - [ ] **Step 6: Prove the coalesce test is real**
 
-Drop `coalesce(...)` from `call_proposals_one_pending_unique` (leaving the bare `contact_id`), re-run, and confirm **"refuses a SECOND pending proposal … INCLUDING when contact_id is null"** goes red. Restore. Record the red output.
+⚠️ **NEVER RUN THIS AS PRODUCTION DDL.** This project's database is shared with production. Dropping and recreating `call_proposals_one_pending_unique` outside a transaction leaves the table with no pending-uniqueness guarantee in between, on a live system.
+
+Run it the Task 1 way: ONE raw `pg.Client`, `BEGIN`, drop and recreate the index without the `coalesce`, re-run **the test's own query text** on that same connection, observe the assertion fail, `ROLLBACK`.
+
+**And record the honest limitation:** a rolled-back DDL is invisible to vitest's separate connection, so on this project the proof can never show the test red *by name* — only the assertion red inside the transaction. State that in the report rather than claiming a by-name red that did not happen, and do not commit DDL to production to manufacture one.
 
 - [ ] **Step 7: Commit**
 
