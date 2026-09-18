@@ -168,9 +168,21 @@ the next pass proposes the same thing again.
 
 ## Where proposals are generated
 
-In the call lifecycle's existing `after()` work, alongside the summary — the
-pattern `incoming/route.ts:1035` already establishes. Never on a live call's
+In the call lifecycle's existing `after()` work — the pattern
+`incoming/route.ts:1035` already establishes. Never on a live call's
 critical path.
+
+**CORRECTED 2026-09-18, and the correction is load-bearing: NOT "alongside the
+summary".** The summary is produced at `finish-call.ts:233`; the transcript does
+not become durable until `finishCallRow` resolves ~194 lines and four database
+legs later. Generating alongside the summary would ground every proposal in
+UNPERSISTED state — a proposal citing a call nobody can open, which is the exact
+defect this design exists to prevent.
+
+Generation runs **after `stored = true`, and only when it is true**, as the last
+leg before `finishCall` returns — after the staff alert, the text-back, the
+`CALL LOST` alarm and the `call.recorded` emit, none of which may wait on a
+model call.
 
 **Best-effort, and that is a contract.** A failure to generate proposals logs
 and changes nothing about the call, its transcript, its outcome or its

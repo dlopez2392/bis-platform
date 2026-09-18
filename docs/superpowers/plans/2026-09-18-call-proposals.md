@@ -1309,7 +1309,20 @@ Expected: FAIL — `generateProposals` is never called.
 
 - [ ] **Step 3: Add the call after the row write**
 
-In `apps/web/src/lib/voice/finish-call.ts`, immediately after `stored = true;` (currently line 439) and before the alert-SMS carrier POST:
+In `apps/web/src/lib/voice/finish-call.ts`, as a **standalone leg, the LAST statement before `return { stored, notified, outcome };`** — matching the file's existing alert-SMS-deliver and text-back-send legs:
+
+```ts
+if (meta.callRowId && stored) {
+  try { /* … */ } catch (e) { /* log only */ }
+}
+```
+
+⚠️ **Two placements were tried and both were wrong; this is why.**
+
+- **NOT inside `finishCallRow`'s own try** (the original draft). That enclosing catch already swallows without rethrowing, and `stored` is already `true` by then — so removing this leg's own catch changes nothing observable and the "a proposal failure changes nothing" test is **unfalsifiable**. Proven: 64/64 green with the catch deleted.
+- **NOT before the alert-SMS POST** (the first correction). That put a ≤10s OpenAI call upstream of `deliverAlertSms`, `deliverTextback`, the `CALL LOST` alarm and the `call.recorded` emit. Proven: with the generator hung, `finishCall` had not resolved after 300ms, so none of those ran and `runCallLifecycle`'s `finish()` never resolved either — holding the `after()` invocation open to `maxDuration`. The staff alert is how an owner learns they have a lead; a proposal is an opinion about the call, and the opinion must not gate the record.
+
+The ordering test must assert the proposals call lands after the `call.recorded` emit, not merely after `finishCallRow` — otherwise the position drifts back with the suite green.
 
 ```ts
       // PROPOSALS, AND ONLY FROM HERE. The transcript became durable one
