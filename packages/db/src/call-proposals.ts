@@ -159,6 +159,15 @@ export async function listPendingProposals(
  * `listProposalsForCall` both carry: `service_role`'s rolconfig has no
  * `statement_timeout` on this project, so an unbounded read is unbounded in
  * production.
+ *
+ * Fairness note (task-10-brief.md fix-wave, Minor): this cap is GLOBAL —
+ * 500 rows across every account, ordered `created_at DESC` — not per-account
+ * the way `listAgencyWork`'s own three sources each cap at 200 PER account
+ * (work-queue.ts). One account with a burst of pending proposals can fill
+ * this cap and crowd every quiet account's suggestions off the screen
+ * entirely, with no trace that it happened. Worth knowing if a suggestion
+ * drought is ever reported for an account that turns out to have called in
+ * plenty.
  */
 export async function listPendingProposalsForAgency(
   db: SupabaseClient,

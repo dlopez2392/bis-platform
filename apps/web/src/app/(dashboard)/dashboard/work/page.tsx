@@ -15,6 +15,7 @@ import { bucketAgencyWork } from "@/lib/work/agency-buckets";
 import { contactDisplayName } from "@/lib/format";
 import { m } from "@/lib/messages";
 import { AgencyWorkList } from "./agency-work-list";
+import type { ResolvedStage } from "../accounts/[accountId]/calls/[callId]/proposals";
 
 export const dynamic = "force-dynamic";
 
@@ -99,12 +100,51 @@ export default async function AgencyWorkPage() {
     }
   }
 
+  // Fix-wave (task-10-brief.md, Important 1) — an opportunity_stage
+  // proposal's payload carries only fromStageId/toStageId uuids; describing
+  // it honestly means resolving those to real names. `pipeline_stages.id`
+  // is a globally unique uuid PRIMARY KEY, so this is ONE batched
+  // `.in("id", stageIds)` read across every account with a pending
+  // opportunity_stage proposal — the identical shape to the contacts lookup
+  // two lines above, with the identical reasoning (the ids came from an
+  // already-cross-tenant service-role read, `listPendingProposalsForAgency`),
+  // never a per-account join and never N queries. Best-effort, same shape
+  // as the lines-down and proposals reads above: a `pipeline_stages` hiccup
+  // must never cost the agency the rest of its queue, and degrades to no
+  // resolved names at all — `AgencyWorkList`'s own `proposalSummary` then
+  // renders an honest summary that names no stage, for exactly the rows
+  // this read could not resolve, rather than dropping them.
+  const stageIds = [...new Set(
+    proposals.flatMap((p) => (p.kind === "opportunity_stage" ? [p.payload.fromStageId, p.payload.toStageId] : [])),
+  )];
+  const stageNames: Record<string, ResolvedStage> = {};
+  if (stageIds.length > 0) {
+    try {
+      const { data, error } = await db.from("pipeline_stages")
+        .select("id, name, position")
+        .in("id", stageIds);
+      if (error) throw new Error(`pipeline stage lookup failed: ${error.message}`);
+      for (const stageRow of (data ?? []) as { id: string; name: string; position: number }[]) {
+        stageNames[stageRow.id] = { name: stageRow.name, position: stageRow.position };
+      }
+    } catch (e) {
+      console.error(
+        `work queue: pipeline stage lookup failed, opportunity_stage proposals render without stage names: ${String(e)}`,
+      );
+    }
+  }
+
   return (
     <>
       <PageHeader title={m["work.agency.title"]} subtitle={m["work.agency.subtitle"]} />
       <div className="space-y-4 p-6">
         <LineDownBanner count={linesDown} />
-        <AgencyWorkList buckets={buckets} contactNames={contactNames} proposals={proposals} />
+        <AgencyWorkList
+          buckets={buckets}
+          contactNames={contactNames}
+          proposals={proposals}
+          stageNames={stageNames}
+        />
       </div>
     </>
   );

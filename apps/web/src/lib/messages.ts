@@ -1743,7 +1743,13 @@ export const m = {
   // clean retry the way "proposals.failed" does.
   "proposals.maybeFailed": "That may not have gone through. Check before trying again.",
   "proposals.work.heading": "Suggestions",
-  "proposals.work.body": "Questions about work, not work yet.",
+  // Fix-wave (task-10-brief.md, Minor): the old copy ("Questions about
+  // work, not work yet.") restated the engineering invariant instead of
+  // telling the agency what to do — this screen has no accept/dismiss of
+  // its own, so acting means opening the account, which the old copy never
+  // said. "proposals.subhead" (the call-detail page's own sibling copy) is
+  // the concrete version this one now matches.
+  "proposals.work.body": "Open the account to accept or dismiss. Nothing changes from this screen.",
 
   // Per-kind plain-language sentences for the call-detail proposals block
   // (Task 7). "{title}"/"{value}" are the house untrusted-placeholder shape —
@@ -1763,6 +1769,14 @@ export const m = {
   // interpolating a count into a sentence that would read "1 stages".
   "proposals.stage.skip.one": "A stage is skipped in between.",
   "proposals.stage.skip.many": "{n} stages are skipped in between.",
+  // Fix-wave (task-10-brief.md, Important 1): the agency work queue's own
+  // opportunity_stage proposals resolve `fromStageId`/`toStageId` against a
+  // batched read (work/page.tsx) that can come back short for one specific
+  // pair — a real fault, or a stage since deleted. Never the raw uuid, never
+  // the destination alone (this file's own rule for the kind), but the row
+  // still shows: an honest sentence that names no stage, rather than
+  // dropping the row and leaving the queue looking clear when it is not.
+  "proposals.stage.unresolved": "This opportunity moved to a different stage.",
   // "proposals.accepted.toast" ("Added to your to-do list") is true only of
   // a `task` proposal — accepting the other two kinds doesn't add anything
   // to a to-do list, and reporting that it did would be exactly the false

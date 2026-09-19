@@ -38,14 +38,18 @@ import { formatDateInZone } from "@/lib/format";
 import { m, type MessageKey } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 // Task 7's own extracted, reusable pieces (its header comment says so) —
-// reused here rather than copied: the SAME status-treatment map (every
-// proposal `listPendingProposalsForAgency` returns is `pending` by
-// construction, so only that one entry of the map is ever read) and the
-// SAME card shell the call-detail page's own Suggested-next-steps block
-// uses, so this screen's suggestions read as visually distinct from a
-// plain bucket's `ListPanel` — the binding constraint's own "visually
-// separated" requirement — without inventing a second card language.
-import { STATUS_TREATMENT } from "../accounts/[accountId]/calls/[callId]/proposals";
+// reused here rather than copied: `ResolvedStage` (the shape page.tsx's own
+// batched `pipeline_stages` read resolves an opportunity_stage proposal's
+// uuids into) and the SAME card shell the call-detail page's own
+// Suggested-next-steps block uses, so this screen's suggestions read as
+// visually distinct from a plain bucket's `ListPanel` — the binding
+// constraint's own "visually separated" requirement — without inventing a
+// second card language. No per-row status treatment is imported any more
+// (fix-wave minor, task-10-brief.md): every row this screen ever shows is
+// `pending` by construction and the section is already titled
+// "Suggestions", so a per-row chip repeating that fact distinguished
+// nothing.
+import type { ResolvedStage } from "../accounts/[accountId]/calls/[callId]/proposals";
 import { CARD, CARD_HEAD } from "../accounts/[accountId]/calls/[callId]/card";
 
 const BUCKET_ORDER: Bucket[] = ["overdue", "today", "waiting"];
@@ -207,24 +211,32 @@ const PROPOSAL_FIELD_LABEL_KEY: Record<ContactFieldPayload["field"], MessageKey>
 };
 
 /**
- * The proposal's own plain-language sentence, or `null` for a kind this
- * screen cannot describe honestly.
+ * The proposal's own plain-language sentence — ALWAYS a string, never
+ * `null`.
  *
- * `task` and `contact_field` are fully self-contained in their own payload
- * — nothing else needs resolving. `opportunity_stage` is different: its
- * payload carries only `fromStageId`/`toStageId` uuids, and describing it
- * honestly means resolving those against the account's OWN
- * `pipeline_stages` (exactly what the call-detail page's own `buildLabel`
- * does, scoped to the one account already on that page). This screen is
- * cross-tenant by construction — doing the same resolution here means a
- * SECOND per-account table join across every account with a pending
- * proposal, to serve a kind this compact queue may show only rarely, and
- * nothing in this task's brief asks for it. Same honesty rule either way
- * (DESIGN.md: never the raw uuid, never the destination alone) — a
- * proposal this view cannot describe honestly renders nothing here rather
- * than something false. See this task's report for the finding.
+ * Fix-wave Important 1 (task-10-brief.md): this used to return `null` for
+ * EVERY `opportunity_stage` proposal, by construction, on the claim that
+ * resolving it would need "a SECOND per-account table join across every
+ * account with a pending proposal". That did not survive checking:
+ * `pipeline_stages.id` is a globally unique uuid PRIMARY KEY, so resolving
+ * every pending proposal's stage ids is ONE batched `.in("id", stageIds)`
+ * read (page.tsx) — the identical shape page.tsx's own contacts lookup
+ * already uses, with the identical reasoning (the ids came from an
+ * already-cross-tenant service-role read, `listPendingProposalsForAgency`).
+ * Returning `null` for 100% of a kind by construction dropped the row
+ * silently, and — proved live — left the empty state claiming the queue was
+ * clear while a real, pending proposal sat there with real evidence.
+ *
+ * `task` and `contact_field` are fully self-contained in their own payload.
+ * `opportunity_stage` reads `stages` (page.tsx's batch read, keyed by stage
+ * id) for the real from/to names; when a specific pair fails to resolve —
+ * the read errored, or came back short for just this one pair — this falls
+ * back to an honest summary that names no stage (never the raw uuid, never
+ * the destination alone — DESIGN.md's explicit rule for this kind) rather
+ * than dropping the row: a proposal this screen cannot name in full is
+ * still a proposal that needs a human's attention.
  */
-function proposalSummary(p: CallProposal): string | null {
+function proposalSummary(p: CallProposal, stages: Record<string, ResolvedStage>): string {
   if (p.kind === "task") {
     return m["proposals.task.label"].replace("{title}", () => p.payload.title);
   }
@@ -234,28 +246,44 @@ function proposalSummary(p: CallProposal): string | null {
       .replace("{field}", () => fieldLabel)
       .replace("{value}", () => p.payload.value);
   }
-  return null;
+  // opportunity_stage — from -> to BY NAME, the same rule the call-detail
+  // page's own `buildLabel` (proposals.tsx) applies, restated here rather
+  // than imported (this file's own header comment explains why) rather than
+  // reached into for a route this page does not share.
+  const from = stages[p.payload.fromStageId];
+  const to = stages[p.payload.toStageId];
+  if (!from || !to) return m["proposals.stage.unresolved"];
+  let label = m["proposals.stage.label"]
+    .replace("{from}", () => from.name)
+    .replace("{to}", () => to.name);
+  // "No stage is skipped silently" — same threshold `buildLabel` uses:
+  // `Math.abs`, not the signed delta, so a backward move warns exactly as
+  // loudly as the equivalent forward one.
+  const bypassed = Math.abs(to.position - from.position) - 1;
+  if (bypassed === 1) {
+    label += " " + m["proposals.stage.skip.one"];
+  } else if (bypassed > 1) {
+    label += " " + m["proposals.stage.skip.many"].replace("{n}", String(bypassed));
+  }
+  return label;
 }
 
 function AgencyProposalRow({
   proposal,
   contactName,
+  stageNames,
 }: {
   proposal: AgencyProposal;
   /** `null` when the proposal carries no contact — never rendered, unlike
    *  a bucket row's own always-present fallback, because a suggestion about
    *  a contact detail or a task is still legible without one. */
   contactName: string | null;
+  /** page.tsx's own batched `pipeline_stages` read, keyed by stage id — see
+   *  `proposalSummary`'s doc comment. Only ever consulted for an
+   *  `opportunity_stage` proposal. */
+  stageNames: Record<string, ResolvedStage>;
 }) {
-  const summary = proposalSummary(proposal);
-  // Never reached — AgencyWorkList filters these out before mapping — but
-  // typed to return null anyway so this component alone can never render a
-  // kind it cannot describe honestly.
-  if (summary === null) return null;
-  // Every row here is `pending` by construction (listPendingProposalsForAgency
-  // only ever returns pending proposals) — the one entry of Task 7's
-  // STATUS_TREATMENT this screen ever reads.
-  const treatment = STATUS_TREATMENT.pending;
+  const summary = proposalSummary(proposal, stageNames);
 
   return (
     <li>
@@ -266,13 +294,14 @@ function AgencyProposalRow({
         <span className="truncate font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase">
           {proposal.brandName || m["work.agency.unbranded"]}
         </span>
-        <span className="flex flex-wrap items-center gap-2">
-          <Badge variant="chip" className={cn("shrink-0 gap-1.5 py-1 pr-2.5 pl-2", treatment.chip)}>
-            <span className={cn("size-[7px] rounded-full", treatment.dot)} aria-hidden />
-            {m[treatment.labelKey]}
-          </Badge>
-          <span className="text-sm font-medium text-card-foreground">{summary}</span>
-        </span>
+        {/* No per-row status chip here (fix-wave minor, task-10-brief.md):
+            every row this screen ever shows is `pending` by construction
+            (`listPendingProposalsForAgency` only ever returns pending rows)
+            and the section heading above already says "Suggestions" — an
+            identical chip on every row would distinguish nothing.
+            DESIGN.md rule 3 exists to tell statuses APART; there is only
+            ever one here. */}
+        <span className="text-sm font-medium text-card-foreground">{summary}</span>
         {contactName ? <span className="text-xs text-muted-foreground">{contactName}</span> : null}
         {/* Evidence has no transcript beside it here, unlike the call-detail
             page's own Suggested-next-steps block — the row's OWN link above
@@ -292,6 +321,7 @@ export function AgencyWorkList({
   buckets,
   contactNames,
   proposals = [],
+  stageNames = {},
 }: {
   buckets: AgencyBucketedWork;
   /** contactId → display name, for every non-null contactId across every
@@ -305,14 +335,20 @@ export function AgencyWorkList({
    *  Optional (defaults to none) so every existing call site — and every
    *  existing test — is unaffected by this prop's addition. */
   proposals?: AgencyProposal[];
+  /** page.tsx's own batched `pipeline_stages` read, keyed by stage id — see
+   *  `proposalSummary`'s doc comment. Optional (defaults to none) for the
+   *  same reason `proposals` is. */
+  stageNames?: Record<string, ResolvedStage>;
 }) {
   const shown = visibleAgencyBuckets(buckets);
-  // Filtered BEFORE anything below ever sees them — a kind this screen
-  // cannot describe honestly (see `proposalSummary`) counts as nothing to
-  // show, not as an empty-looking row.
-  const visibleProposals = proposals.filter((p) => proposalSummary(p) !== null);
+  // Fix-wave Important 1's "also" (task-10-brief.md): every proposal this
+  // screen is handed now describes itself with SOMETHING honest (see
+  // `proposalSummary`, which no longer returns `null` for any kind) — so
+  // there is no longer a kind-based filter here that could quietly consume
+  // `listPendingProposalsForAgency`'s `.limit(500)` cap on rows this screen
+  // then never shows. Every fetched proposal is a shown proposal.
 
-  if (shown.length === 0 && visibleProposals.length === 0) {
+  if (shown.length === 0 && proposals.length === 0) {
     return (
       <EmptyState
         icon={ListTodo}
@@ -355,7 +391,7 @@ export function AgencyWorkList({
           </ListPanel>
         </section>
       ))}
-      {visibleProposals.length > 0 ? (
+      {proposals.length > 0 ? (
         // A sibling `<section>`, never a fourth bucket — visually separated
         // by Task 7's own CARD shell (a bordered, glass panel; a bucket's
         // own ListPanel below shares that exact styling by coincidence of
@@ -367,11 +403,12 @@ export function AgencyWorkList({
           <h2 id="agency-proposals" className={CARD_HEAD}>{m["proposals.work.heading"]}</h2>
           <p className="px-5 pt-3 text-sm text-muted-foreground">{m["proposals.work.body"]}</p>
           <ul className="divide-y divide-[var(--row-line)]">
-            {visibleProposals.map((p) => (
+            {proposals.map((p) => (
               <AgencyProposalRow
                 key={p.id}
                 proposal={p}
                 contactName={p.contactId ? (contactNames[p.contactId] ?? m["contact.noName"]) : null}
+                stageNames={stageNames}
               />
             ))}
           </ul>
