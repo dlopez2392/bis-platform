@@ -44,7 +44,7 @@ vi.mock("@/lib/proposals/generate", () => ({ generateProposals: proposalsMocks.g
 
 import type { serviceDb } from "@bis/db";
 import { segmentsFor } from "@/lib/sms/segments";
-import { finishCall, isMeaningful, type FinishContext } from "./finish-call";
+import { finishCall, isMeaningful, computeBlankFields, type FinishContext } from "./finish-call";
 import {
   emptyCallState, withLead, withMessage, withTranscript, withBooking, withBookingCancelled, withServed,
   withTransferred,
@@ -839,15 +839,120 @@ describe("finishCall — proposal generation", () => {
   // are currently empty. This is the propose-time half of the containment
   // rule — a field this array omits can never become a `contact_field`
   // proposal, no matter what the model asks for.
-  it("passes blankFields for exactly the resolved contact's own empty columns (mutation: pass [] regardless of the contact -> FAILS)", async () => {
+  // Fix-wave Important 1: `first_name: "Ana"` is a REAL, non-placeholder
+  // name here, so `lastName` must NOT be reported blank even though
+  // `last_name` is null — `fillContactBlanks` refuses to fill `last_name`
+  // alone unless the first name is blank or this app's own "Caller"
+  // placeholder, and a one-field `contact_field` proposal never carries a
+  // `firstName` alongside it to make that compatible. Before this fix,
+  // `blankFields` here was `["lastName", "email"]`, and a `lastName`
+  // proposal built from it could reach the review screen and then NEVER be
+  // accepted — the accept path reverts the stamp and the same proposal
+  // returns pending, forever, on every subsequent click. One live contact
+  // has exactly this shape.
+  it("passes blankFields for exactly the resolved contact's own empty columns, honoring fillContactBlanks's own first-name rule (mutation: pass [] regardless of the contact -> FAILS)", async () => {
     dbMocks.getContact.mockResolvedValue({
       id: "ct1", first_name: "Ana", last_name: null, email: "", phone: "+19562921696",
     });
     await finishCall(leadState(), ctx, meta);
     expect(dbMocks.getContact).toHaveBeenCalledWith(ctx.db, "a1", "ct1");
     expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
-      blankFields: ["lastName", "email"],
+      blankFields: ["email"],
     }));
+  });
+
+  // The mirror bug fixed alongside it: the "Caller" placeholder this file's
+  // own `resolveContactId` writes is exactly the ONE shape
+  // `fillContactBlanks` explicitly supports filling `firstName` for, and
+  // before this fix it was never reported blank at all.
+  it("reports firstName blank for this app's own \"Caller\" placeholder (mutation: require first_name to be nullish, not the placeholder too -> FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValue({
+      id: "ct1", first_name: "Caller", last_name: null, email: null, phone: "+19562921696",
+    });
+    await finishCall(leadState(), ctx, meta);
+    expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+      blankFields: ["firstName", "lastName", "email"],
+    }));
+  });
+
+  // THE DURABLE FORM (fix-wave Important 1's own fix note): these two rules
+  // — what THIS FILE calls blank, and what `fillContactBlanks`
+  // (`@bis/db`'s `contacts.ts`) will actually fill — live in separate files
+  // and were expressed separately, which is exactly what let them drift
+  // apart and produce the defect above. Asserting one side's arithmetic in
+  // isolation cannot catch a future re-drift; asserting AGREEMENT between
+  // the real functions can. `vi.importActual` reaches past this file's own
+  // `vi.mock("@bis/db", ...)` (line 9), which replaces `fillContactBlanks`
+  // with a bare `vi.fn()`, to run the GENUINE implementation against a
+  // hand-built client — not `dbMocks.fillContactBlanks`.
+  describe("computeBlankFields parity with the real fillContactBlanks", () => {
+    type ContactRow = { first_name: string | null; last_name: string | null; email: string | null; phone: string | null };
+    type Field = "firstName" | "lastName" | "email" | "phone";
+
+    // A minimal stand-in for the two calls `fillContactBlanks` makes: a
+    // `getContact`-shaped read (`select().eq().eq().maybeSingle()`) and its
+    // own unconditional `update().eq().eq()`, plus the `events` insert its
+    // `emit()` call makes whenever it actually writes something. Table names
+    // are checked so a stray call elsewhere in the real function surfaces as
+    // a thrown error instead of a silently-wrong result.
+    function fakeContactDb(row: ContactRow) {
+      return {
+        from: (table: string) => {
+          if (table === "contacts") {
+            return {
+              select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: row, error: null }) }) }) }),
+              update: () => ({
+                eq: () => ({ eq: () => Promise.resolve({ error: null }) }),
+              }),
+            };
+          }
+          if (table === "events") return { insert: async () => ({ error: null }) };
+          throw new Error(`fakeContactDb: unexpected table "${table}"`);
+        },
+      };
+    }
+
+    const VALUES: Record<Field, string> = {
+      firstName: "Maria", lastName: "Ruiz", email: "sam@example.com", phone: "+19565551234",
+    };
+
+    async function realFillsField(
+      realFillContactBlanks: typeof import("@bis/db").fillContactBlanks,
+      row: ContactRow, field: Field,
+    ): Promise<boolean> {
+      const db = fakeContactDb(row);
+      const patch = { [field]: VALUES[field] };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- fakeContactDb is a hand-built stand-in, not a real SupabaseClient
+      const filled = await realFillContactBlanks(db as any, "a1", "c1", patch, "voice", "ai");
+      return filled.length > 0;
+    }
+
+    // The two PROVED shapes from the fix-wave report, plus three more that
+    // exercise the same first-name rule from other angles — a wide-open
+    // contact, a fully-filled one, and a "Caller" placeholder whose
+    // last_name is ALREADY real (so the placeholder rule must NOT apply).
+    const ROWS: { name: string; row: ContactRow }[] = [
+      { name: "real first name, blank last name (the proved defect)",
+        row: { first_name: "Ana", last_name: null, email: null, phone: null } },
+      { name: "\"Caller\" placeholder, blank last name (the proved mirror case)",
+        row: { first_name: "Caller", last_name: null, email: null, phone: null } },
+      { name: "wide open",
+        row: { first_name: null, last_name: null, email: null, phone: null } },
+      { name: "everything already filled",
+        row: { first_name: "Ana", last_name: "Ruiz", email: "a@example.com", phone: "+19560000000" } },
+      { name: "\"Caller\" placeholder but a real last name already on file",
+        row: { first_name: "Caller", last_name: "Smith", email: null, phone: null } },
+    ];
+
+    it.each(ROWS)("agrees with fillContactBlanks on every field for: $name", async ({ row }) => {
+      const { fillContactBlanks: realFillContactBlanks } =
+        await vi.importActual<typeof import("@bis/db")>("@bis/db");
+      const blank = computeBlankFields(row);
+      for (const field of ["firstName", "lastName", "email", "phone"] as const) {
+        const wouldFill = await realFillsField(realFillContactBlanks, row, field);
+        expect(blank.includes(field)).toBe(wouldFill);
+      }
+    });
   });
 
   it("passes blankFields: [] when the call resolved no contact, and never reads one", async () => {
@@ -857,6 +962,24 @@ describe("finishCall — proposal generation", () => {
     expect(dbMocks.getContact).not.toHaveBeenCalled();
     expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
       contactId: null, blankFields: [],
+    }));
+  });
+
+  // Fix-wave Minor: on this account's dominant traffic — several robocalls a
+  // day, every one ineligible — this read used to run regardless, even
+  // though `generateProposals` was always going to refuse the call anyway
+  // (its own "ELIGIBILITY FIRST" doc). A transferred lead call is still
+  // MEANINGFUL (it gets its contact, its alert) but INELIGIBLE for a
+  // proposal purely because the caller asked for a person — exactly the case
+  // that used to pay a wasted `getContact` round trip. `generateProposals`
+  // itself must still be called with the real `handoffRequested: true` so
+  // IT applies the refusal — only the now-pointless READ is skipped.
+  it("skips the getContact read for blankFields when the call is ineligible, even though a contact was resolved (mutation: drop the callIsEligible gate on the read -> FAILS)", async () => {
+    const s = withTransferred(leadState());
+    await finishCall(s, ctx, meta);
+    expect(dbMocks.getContact).not.toHaveBeenCalled();
+    expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+      contactId: "ct1", handoffRequested: true, blankFields: [],
     }));
   });
 

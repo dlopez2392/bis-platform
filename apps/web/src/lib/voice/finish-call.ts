@@ -21,6 +21,13 @@ import { toE164 } from "./phone-number";
 // scope above, and `api/voice/incoming/route.ts` imports `finishCall` itself
 // statically. Nothing here needed the indirection.
 import { generateProposals } from "@/lib/proposals/generate";
+// Read-only reuse of the SAME eligibility rule `generateProposals` already
+// applies internally (fix-wave Minor) — importing it, not re-deriving it,
+// is what keeps this file's pre-check from drifting out of sync with the
+// generator's own gate. Used only to skip a `getContact` round trip that
+// would otherwise be wasted on a call already destined to be refused; the
+// generation call itself below is unconditional, per its own comment.
+import { callIsEligible } from "@/lib/proposals/eligibility";
 
 /**
  * DELIBERATELY ABSENT: `accountName`. `accounts.name` is the agency's internal
@@ -142,20 +149,55 @@ function splitFullName(fullName: string): { firstName: string; lastName?: string
 /**
  * The four contact columns `generateProposals`'s `contact_field` branch may
  * ever fill, reported in this same order. "Blank" mirrors
- * `fillContactBlanks`'s own definition (`@bis/db`'s `contacts.ts`): null, or
- * empty after trimming — never a value a human typed. This is the
- * propose-time half of the containment rule (Task 8): a column this
- * function omits can never become a proposal downstream, no matter what the
- * model asks for.
+ * `fillContactBlanks`'s own definition of FILLABLE (`@bis/db`'s
+ * `contacts.ts`) EXACTLY, not merely "empty" — the two used to disagree
+ * (fix-wave Important 1), and that gap is what let this generator propose a
+ * `lastName` for a contact with a real first name: `fillContactBlanks`
+ * refuses to fill `last_name` alone unless the first name is blank or is
+ * this app's own `"Caller"` placeholder (`firstNameCompatible`), so a
+ * one-field `contact_field` proposal (no `incomingFirst` ever rides along)
+ * for `lastName` on a contact like `{ first_name: "Ana", last_name: null }`
+ * reached the review screen and then could NEVER be accepted — the accept
+ * path reverts the stamp and the same proposal comes back pending forever.
+ * The mirror bug ran the other way: `first_name === "Caller"` (the
+ * placeholder this file itself writes at `resolveContactId`) was never
+ * reported blank, so `firstName` was never proposed for the one contact
+ * shape `fillContactBlanks` explicitly supports filling.
+ *
+ * Required, non-optional params (fix-wave Minor): `getContact` returns
+ * `any`, so a column silently dropped from `@bis/db`'s own `COLS` would
+ * otherwise pass an `undefined` through with no compile error, and
+ * `isBlank(undefined)` is `true` — reporting a column blank when it was
+ * never read at all. A required param at least turns a wrong CALLER (one
+ * that omits a field building this object) into a type error; it cannot
+ * catch a wrong `COLS` on the far side of `any`.
  */
-function computeBlankFields(row: {
-  first_name?: string | null; last_name?: string | null;
-  email?: string | null; phone?: string | null;
+// EXPORTED for the same reason `isMeaningful` is (see its own doc above): a
+// parity test between this function and the real `fillContactBlanks` is the
+// durable form of Important 1's fix — these two rules living in separate
+// files, expressed separately, is what let them drift apart in the first
+// place, so the test asserts the two AGREE rather than re-asserting one
+// side's own arithmetic.
+export function computeBlankFields(row: {
+  first_name: string | null; last_name: string | null;
+  email: string | null; phone: string | null;
 }): ("firstName" | "lastName" | "email" | "phone")[] {
   const isBlank = (v: unknown) => v == null || String(v).trim() === "";
   const blank: ("firstName" | "lastName" | "email" | "phone")[] = [];
-  if (isBlank(row.first_name)) blank.push("firstName");
-  if (isBlank(row.last_name)) blank.push("lastName");
+  // Mirrors `fillContactBlanks`'s `nameIsPlaceholder`: the placeholder only
+  // counts once `last_name` is ALSO blank — a "Caller" row that somehow
+  // already carries a real surname is not the shape this app ever creates,
+  // and `fillContactBlanks` itself would refuse to touch `first_name` there.
+  const isPlaceholder = row.first_name === "Caller" && isBlank(row.last_name);
+  if (isBlank(row.first_name) || isPlaceholder) blank.push("firstName");
+  // A standalone `lastName` proposal never carries a `firstName` alongside
+  // it (one field per proposal), so `fillContactBlanks`'s own
+  // `firstNameCompatible` reduces to exactly this: blank, or the
+  // placeholder. A real first name on file makes a bare `lastName` fill
+  // unacceptable there, so it must not be offered here either.
+  if (isBlank(row.last_name) && (isBlank(row.first_name) || row.first_name === "Caller")) {
+    blank.push("lastName");
+  }
   if (isBlank(row.email)) blank.push("email");
   if (isBlank(row.phone)) blank.push("phone");
   return blank;
@@ -580,8 +622,22 @@ export async function finishCall(
       // blank-field list, never the call its (task) proposals or this leg
       // its usual best-effort behavior — the read failing must not also
       // skip calling `generateProposals` altogether.
+      // Gated on `callIsEligible` too (fix-wave Minor), NOT just `contactId`:
+      // on this account's dominant traffic — several robocalls a day, every
+      // one `spam`/`abandoned` — `generateProposals` itself already costs
+      // nothing for an ineligible call (its own "ELIGIBILITY FIRST" doc), but
+      // this read ran regardless, and an abandoned call whose text-back leg
+      // backfilled `contactId` paid a real `getContact` round trip for a call
+      // this feature was always going to refuse. `generateProposals` is still
+      // called unconditionally below — a transferred lead call is MEANINGFUL
+      // (gets its contact, its alert) but ineligible for a proposal only
+      // because the caller asked for a person, and that call must still hand
+      // `generateProposals` its real `handoffRequested` so IT applies the
+      // refusal; only the now-pointless contact READ is skipped here.
       let blankFields: ("firstName" | "lastName" | "email" | "phone")[] = [];
-      if (contactId) {
+      if (contactId && callIsEligible({
+        outcome, transcript: state.transcript, handoffRequested: wasTransferred(state),
+      })) {
         try {
           const row = await getContact(ctx.db, ctx.accountId, contactId);
           if (row) blankFields = computeBlankFields(row);

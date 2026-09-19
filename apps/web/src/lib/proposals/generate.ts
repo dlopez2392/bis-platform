@@ -1,6 +1,8 @@
 import { insertProposal, type CallOutcome, type TranscriptEvent, type serviceDb } from "@bis/db";
 import { groundedEvidence } from "./grounding";
 import { callIsEligible } from "./eligibility";
+import { isValidEmail } from "@/lib/forms/guards";
+import { toE164 } from "@/lib/voice/phone-number";
 
 /**
  * At most three per call — a per-call BUDGET SHARED ACROSS KINDS, not three
@@ -27,6 +29,11 @@ const MAX_PER_CALL = 3;
  * against a model that runs on past a sentence — clamped, not rejected,
  * because a long-but-real title is still useful truncated, and a rejected
  * proposal here would be a silent drop of the caller's actual request.
+ *
+ * Shared with `contact_field`'s `value` for the identical reason (fix-wave
+ * Minor): that value lands on the same review card `proposals.tsx`
+ * interpolates straight into its sentence, so an unclamped 5,000-character
+ * value is the same defect as an unclamped title, not a new one.
  */
 const MAX_TITLE_LEN = 200;
 
@@ -245,16 +252,43 @@ export async function generateProposals(input: {
         // caller (finish-call.ts), and a field absent from it is refused
         // here regardless of what the model asked for. This is the
         // propose-time half of the containment rule; the accept-time half
-        // is `fillContactBlanks`, which re-checks atomically because a
-        // human may have filled the field in the minutes since.
+        // is `fillContactBlanks`, which re-reads the contact and then runs
+        // an UNCONDITIONAL update — a fresh read shortly before the write,
+        // not an atomic check-and-set, so a human who fills the same field
+        // in the gap between this generator's read and a later accept click
+        // still loses that race to whichever write lands last. ("Atomic"
+        // overstated a guarantee this pair does not have; fix-wave finding.)
         const field = typeof p.field === "string" ? (p.field as ContactField) : null;
-        const value = typeof p.value === "string" ? p.value.trim() : "";
+        // Clamped like `title` below (MAX_TITLE_LEN's own doc) — same review
+        // card, same argument.
+        const value = typeof p.value === "string" ? p.value.trim().slice(0, MAX_TITLE_LEN) : "";
         // ALLOW-LIST, never a denylist: `custom`, tags and consent flags
         // stay out of v1 by refusing anything not in CONTACT_FIELDS, not by
         // naming what to reject.
         if (!field || !CONTACT_FIELDS.includes(field)) continue;
         if (!input.blankFields.includes(field)) continue;
         if (!value || !input.contactId) continue;
+
+        // FORMAT CHECK, fix-wave Important 2. Nothing downstream validates
+        // what lands in `contacts.email`/`contacts.phone` — the live schema
+        // has no CHECK on either column, and `fillContactBlanks` writes
+        // whatever it is handed. The value here originates as a SPEECH
+        // TRANSCRIPTION ("five five five, one two three four"), so a
+        // non-E.164 phone is the likely output, not the corner case, and an
+        // unnormalised `contacts.phone` breaks phone dedupe plus every
+        // text-back/alert path that keys on it. Dropped exactly the way
+        // `dueAt` below is rejected rather than stored as garbage a human's
+        // accept click cannot fix — a proposal with an unparsable value is
+        // worth nothing to a reviewer either way.
+        let storedValue = value;
+        if (field === "phone") {
+          const normalizedPhone = toE164(value);
+          if (!normalizedPhone) continue;
+          storedValue = normalizedPhone;
+        } else if (field === "email") {
+          if (!isValidEmail(value)) continue;
+        }
+
         const grounded = groundedEvidence(evidence, input.transcript);
         if (grounded === null) continue;
         // Same budget as `task` below: this counts as an ATTEMPT the moment
@@ -263,7 +297,7 @@ export async function generateProposals(input: {
         attempts++;
         const created = await insertProposal(input.db, input.accountId, {
           callId: input.callId, contactId: input.contactId, kind: "contact_field",
-          payload: { field, value }, evidence: grounded,
+          payload: { field, value: storedValue }, evidence: grounded,
         });
         if (created) written++;
         continue;

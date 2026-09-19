@@ -258,19 +258,25 @@ describe("generateProposals", () => {
     expect(db.rows).toEqual([]);
   });
 
-  // `contact_field` and `opportunity_stage` are real members of the DB's
-  // `kind` CHECK (unlike the fixture above's `delete_contact`, which no
-  // model would ever emit) — they are the two kinds whose accept path and
-  // review screen do not exist yet, so THESE two escaping is the actual
-  // containment failure the allow-list exists to prevent (fix-wave finding
-  // 6).
-  it("refuses a contact_field proposal — its accept path does not exist yet", async () => {
+  // RENAMED (fix-wave Important 5): this used to be named "refuses a
+  // contact_field proposal — its accept path does not exist yet", which
+  // Task 8 makes false in BOTH halves — the kind is no longer refused, and
+  // its accept path exists. It passed only because its fixture omitted
+  // `field`/`value` entirely, and nothing about that fixture named the
+  // guard it was actually exercising. Retargeted at the blank-value guard
+  // specifically (fix-wave Minor: "dropping !value leaves 37/37 green" had
+  // no test of its own, unlike the `task` twin at line 381) — `blankFields`
+  // names a REAL candidate field so the earlier blankFields/allow-list
+  // guards do not mask this one, and the field chosen (`firstName`) carries
+  // no format check of its own, so this isolates `!value` alone rather than
+  // also exercising the phone/email normalisation added for Important 2.
+  it("drops a contact_field proposal that names a field but carries no value (mutation: drop the !value guard -> FAILS)", async () => {
     const db = fakeDb();
     const n = await generateProposals({
-      ...base, db,
+      ...base, db, contactId: "c1", blankFields: ["firstName"], transcript: emailTranscript,
       fetchImpl: modelReturning({
-        proposals: [{ kind: "contact_field", title: "Update phone number",
-                      dueAt: null, evidence: "Call me Tuesday morning" }],
+        proposals: [{ kind: "contact_field", field: "firstName",
+                      evidence: "my email is sam at example dot com" }],   // no `value` at all
       }),
     });
     expect(n).toBe(0);
@@ -291,11 +297,18 @@ describe("generateProposals", () => {
   });
 
   // Task 8: a contact_field proposal for a field the model correctly names
-  // as blank. `db.rows` — not a separate `db.inserted` list the brief
-  // sketched — is this file's own fixture shape (`fakeDb()` above); the row
-  // it records is the exact object `insertProposal` sent to `.insert()`, so
-  // `kind`/`payload` are read straight off it.
-  it("proposes a contact field that is currently blank", async () => {
+  // as blank. THE WHOLE ROW (fix-wave Important 4), not two fields — the
+  // `task` twin above already learned this lesson (finding 5 of the earlier
+  // fix-wave review proved four separate account/call/contact/title mixups
+  // each left a field-by-field assertion suite green); this is the same
+  // argument applied to `contact_field`, which had never gotten it. `evidence`
+  // in particular pins the THIRD of those mixups: it must be
+  // `emailTranscript`'s own CALLER TURN verbatim, not the model's shorter
+  // excerpt ("my email is sam at example dot com") — storing the excerpt is
+  // exactly the defect `generate.ts`'s own comment on the `task` branch spends
+  // twelve lines on, and until this test it was pinned for `task` and
+  // unpinned for `contact_field`.
+  it("proposes a contact field that is currently blank, with the whole row grounded in the caller's own turn", async () => {
     const db = fakeDb();
     const n = await generateProposals({
       ...base, db, contactId: "c1", blankFields: ["email"], transcript: emailTranscript,
@@ -306,8 +319,96 @@ describe("generateProposals", () => {
       }),
     });
     expect(n).toBe(1);
-    expect(db.rows[0].kind).toBe("contact_field");
-    expect(db.rows[0].payload).toEqual({ field: "email", value: "sam@example.com" });
+    expect(db.rows[0]).toEqual({
+      account_id: "acct",
+      call_id: "call1",
+      contact_id: "c1",
+      kind: "contact_field",
+      evidence: "My email is sam at example dot com.",
+      payload: { field: "email", value: "sam@example.com" },
+    });
+  });
+
+  // Fix-wave Important 2. PROVED against the real `fillContactBlanks`: a
+  // value of "not an email at all" writes to `contacts.email` verbatim,
+  // because the live schema has no CHECK on the column and nothing before
+  // this generator validated it either. Dropped here exactly like an
+  // unparsable `dueAt` is — a proposal a human cannot usefully accept is
+  // worth nothing on the review screen.
+  it("drops a contact_field email proposal whose value does not parse as an email (mutation: skip the isValidEmail check -> FAILS)", async () => {
+    const db = fakeDb();
+    const badEmailTranscript: TranscriptEvent[] = [
+      t("assistant", "Thanks for calling 956 Woodworks. How can I help?"),
+      t("caller", "My email address is not an email at all, sorry."),
+    ];
+    const n = await generateProposals({
+      ...base, db, contactId: "c1", blankFields: ["email"], transcript: badEmailTranscript,
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "contact_field", field: "email", value: "not an email at all",
+                      evidence: "not an email at all" }],
+      }),
+    });
+    expect(n).toBe(0);
+    expect(db.rows).toEqual([]);
+  });
+
+  // Fix-wave Important 2, the phone half. PROVED against the real
+  // `fillContactBlanks`: a value of "555 1234" writes verbatim too — this
+  // value is a SPEECH TRANSCRIPTION ("five five five, one two three four"),
+  // so a non-E.164 phone is the likely output, not the corner case, and an
+  // unnormalised `contacts.phone` breaks phone dedupe plus every text-back/
+  // alert path keyed on it. `toE164` refuses a 7-digit number outright
+  // (`phone-number.ts`: it accepts only 10, 11-with-leading-1, or 8..15
+  // digits generally — 7 fits none of those), so this is dropped rather than
+  // stored short.
+  it("drops a contact_field phone proposal whose value does not parse via toE164 (mutation: skip the toE164 check -> FAILS)", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, contactId: "c1", blankFields: ["phone"],
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "contact_field", field: "phone", value: "555 1234",
+                      evidence: "Call me Tuesday morning" }],
+      }),
+    });
+    expect(n).toBe(0);
+    expect(db.rows).toEqual([]);
+  });
+
+  // The positive twin: a real 10-digit number is NORMALISED to E.164 before
+  // it reaches the database, not stored as the digits the model happened to
+  // return (mutation target: storing `value` raw instead of `toE164(value)`).
+  it("normalizes a valid phone value to E.164 before it reaches the database (mutation: store the raw value instead of toE164(value) -> FAILS)", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, contactId: "c1", blankFields: ["phone"],
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "contact_field", field: "phone", value: "9562921696",
+                      evidence: "Call me Tuesday morning" }],
+      }),
+    });
+    expect(n).toBe(1);
+    expect(db.rows[0].payload).toEqual({ field: "phone", value: "+19562921696" });
+  });
+
+  // Fix-wave Minor: the `task` twin above ("clamps an excessively long
+  // title") clamps `title` with the comment "A title lands verbatim on a
+  // review card, not a document" — `contact_field`'s `value` lands on that
+  // SAME card (`proposals.tsx` interpolates it straight into the sentence),
+  // so an unclamped 5,000-character value is the identical defect. Uses
+  // `firstName` (no format check of its own) so this isolates the clamp
+  // rather than also exercising Important 2's email/phone validation.
+  it("clamps an excessively long contact_field value before it reaches a review card (mutation: remove the .slice(0, MAX_TITLE_LEN) clamp on value -> FAILS)", async () => {
+    const db = fakeDb();
+    const longValue = "x".repeat(5000);
+    const n = await generateProposals({
+      ...base, db, contactId: "c1", blankFields: ["firstName"],
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "contact_field", field: "firstName", value: longValue,
+                      evidence: "Call me Tuesday morning" }],
+      }),
+    });
+    expect(n).toBe(1);
+    expect((db.rows[0].payload as { value: string }).value.length).toBeLessThan(5000);
   });
 
   // THE CONTAINMENT BOUNDARY. A wrong fill into an empty field costs a
@@ -454,6 +555,47 @@ describe("generateProposals", () => {
     const n = await generateProposals({ ...base, db, fetchImpl: modelReturning({ proposals: many }) });
     expect(n).toBe(0);
     expect(db.attempts).toHaveLength(3);
+  });
+
+  // Fix-wave Important 6, the `contact_field` twin of the test directly
+  // above. PROVED: dropping `attempts++` from the `contact_field` branch left
+  // 37/37 green because nothing forced that branch to be tried 20 times —
+  // this is what forces it, and `db.attempts` (recorded on every real
+  // `.insert()` call regardless of outcome) is what tells 3 apart from 20.
+  it("stops after MAX_PER_CALL attempts for contact_field proposals too, even when every insert is refused (mutation: drop `attempts++` from the contact_field branch -> FAILS)", async () => {
+    const db = fakeDbAlwaysRefusing();
+    const many = Array.from({ length: 20 }, () => ({
+      kind: "contact_field", field: "email", value: "sam@example.com",
+      evidence: "my email is sam at example dot com",
+    }));
+    const n = await generateProposals({
+      ...base, db, contactId: "c1", blankFields: ["email"], transcript: emailTranscript,
+      fetchImpl: modelReturning({ proposals: many }),
+    });
+    expect(n).toBe(0);
+    expect(db.attempts).toHaveLength(3);
+  });
+
+  // MAX_PER_CALL's own doc: the budget is SHARED ACROSS KINDS, not three per
+  // kind. A call that yields one real `task` and one real `contact_field`
+  // must write both (they don't collide — different `kind` in the unique
+  // index's own key) and spend two of the three shared attempts doing it.
+  it("writes one task and one contact_field from the same call, consuming two of the three shared attempts", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, contactId: "c1", blankFields: ["email"], transcript: emailTranscript,
+      fetchImpl: modelReturning({
+        proposals: [
+          { kind: "task", title: "Send a dining table quote", dueAt: null,
+            evidence: "my email is sam at example dot com" },
+          { kind: "contact_field", field: "email", value: "sam@example.com",
+            evidence: "my email is sam at example dot com" },
+        ],
+      }),
+    });
+    expect(n).toBe(2);
+    expect(db.rows).toHaveLength(2);
+    expect(db.attempts).toHaveLength(2);
   });
 
   // CRITICAL 1 of the fix-wave: `JSON.stringify` turns `[undefined]` into
@@ -641,6 +783,42 @@ describe("generateProposals", () => {
     const fetchImpl = modelReturning({ proposals: [] });
     await generateProposals({ ...base, db, fetchImpl });
     expect(systemPromptOf(fetchImpl).toLowerCase()).toContain("plain");
+  });
+
+  // Fix-wave Important 3. PROVED: before this pair existed, making
+  // `systemFor` never add the `contact_field` sentence at all, AND making it
+  // name all four fields instead of only the blank ones, each left the whole
+  // suite green — the entire prompt half of Task 8 was unpinned. This test
+  // asserts the sentence names ONLY the actually-blank field(s); a model told
+  // to fill `firstName`/`lastName`/`phone` here (none of which are blank on
+  // this contact) would be a real containment failure the propose-time guard
+  // happens to catch downstream today, but the PROMPT should not be asking
+  // for them regardless.
+  it("names ONLY the blank fields in the contact_field instruction, never the full set (mutation: hardcode all four CONTACT_FIELDS regardless of blankFields -> FAILS)", async () => {
+    const db = fakeDb();
+    const fetchImpl = modelReturning({ proposals: [] });
+    await generateProposals({ ...base, db, blankFields: ["email"], fetchImpl });
+    const prompt = systemPromptOf(fetchImpl);
+    expect(prompt).toContain("contact_field");
+    // Extracts exactly the "<one of: ...>" list `systemFor` emits, rather
+    // than substring-searching the whole prompt for "phone" — the BASE
+    // SYSTEM sentence itself opens with "a finished phone call", so a bare
+    // `.not.toContain("phone")` would fail on that unrelated word, not on
+    // whether the allow-list was actually narrowed.
+    const allowed = prompt.match(/one of: ([^>]+)>/)?.[1];
+    expect(allowed).toBe("email");
+  });
+
+  // The other half of the same pair: with NO blank fields at all, the
+  // `contact_field` instruction must be absent entirely, not merely empty —
+  // a model that is never told it may propose a contact field cannot emit
+  // one, which is the whole point of computing `blankFields` before this
+  // call is ever made.
+  it("omits the contact_field instruction entirely when there are no blank fields (mutation: always append the contact_field sentence -> FAILS)", async () => {
+    const db = fakeDb();
+    const fetchImpl = modelReturning({ proposals: [] });
+    await generateProposals({ ...base, db, blankFields: [], fetchImpl });
+    expect(systemPromptOf(fetchImpl).toLowerCase()).not.toContain("contact_field");
   });
 
   // Fix-wave finding 2: `callIsEligible` ends in `eligibility.ts:58`'s
