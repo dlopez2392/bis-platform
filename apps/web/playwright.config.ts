@@ -1,6 +1,66 @@
 import { defineConfig, devices } from "@playwright/test";
+import { parse as parseEnv } from "dotenv";
+import { existsSync, readFileSync } from "node:fs";
 
 const AUTH_FILE = "e2e/.auth/state.json";
+
+/**
+ * The env vars WITHOUT WHICH THIS SUITE LIES, checked before a single test
+ * runs. CI already has exactly this check (.github/workflows/ci.yml, "Check
+ * that the repository secrets are configured"); a developer's terminal had
+ * none, and that asymmetry cost a day.
+ *
+ * What it cost, on 2026-09-19: `NEXT_PUBLIC_SUPABASE_ANON_KEY` was absent
+ * from apps/web/.env.local. `userDb()` throws without it, so EVERY page under
+ * [accountId]/ 500'd — while /dashboard/accounts kept rendering, because it
+ * is still on serviceDb(). contact-detail.spec.ts therefore failed locally on
+ * a contacts table that was empty for a reason nothing on screen named, on a
+ * main whose CI run for the same commit was green. The conclusion drawn was
+ * "main is red and the e2e gate is untrustworthy" — the gate was fine; the
+ * machine running it was not. .env.example's own comment predicted this
+ * failure word for word ("easy to misread as 'the CRM is broken' rather than
+ * a missing var"); a comment in a file nobody re-reads is not a guard.
+ *
+ * A var counts as present if it is in `process.env` (how CI supplies them) OR
+ * in apps/web/.env.local (how a developer does, and the file `next build`
+ * itself reads). Both spellings of that path are tried, for the reason
+ * auth.setup.ts spells out at its own `loadEnv` pair: this runs with apps/web
+ * as cwd under `pnpm --filter web test:e2e`, so `.env.local` is the one that
+ * resolves and `apps/web/.env.local` is a defensive no-op — reversed for a
+ * repo-root invocation.
+ *
+ * Deliberately NOT the same list as CI's. SUPABASE_DB_URL is on CI's because
+ * `pnpm check` runs the packages/db suite; nothing in the Playwright run
+ * touches it. Requiring it here would fail a suite that would otherwise pass
+ * — the mirror-image mistake of this file's own `APP_ORIGIN` note in ci.yml.
+ */
+const REQUIRED_ENV = [
+  "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
+  "CLERK_SECRET_KEY",
+  "NEXT_PUBLIC_SUPABASE_URL",
+  // The one that was missing. userDb() — every in-account page and all of the
+  // in-account server actions — throws "Supabase url/anon env vars missing"
+  // without it, at request time, as a 500 the browser renders as a blank
+  // table rather than as an error naming a variable.
+  "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  "SUPABASE_SERVICE_ROLE_KEY",
+] as const;
+
+const fileEnv: Record<string, string> = {};
+for (const path of [".env.local", "apps/web/.env.local"]) {
+  if (existsSync(path)) Object.assign(fileEnv, parseEnv(readFileSync(path)));
+}
+const missingEnv = REQUIRED_ENV.filter((name) => !process.env[name] && !fileEnv[name]);
+if (missingEnv.length > 0) {
+  const it = missingEnv.length === 1 ? "it" : "them";
+  throw new Error(
+    `e2e cannot run: missing ${missingEnv.join(", ")}.\n` +
+      `Add ${it} to apps/web/.env.local — see .env.example, which documents what each ` +
+      `one is for. Without ${it} the app builds and starts, signs you in, and then 500s ` +
+      `every in-account page — which reads on screen as empty tables rather than as a ` +
+      `configuration error, so the suite fails somewhere far from the cause.`,
+  );
+}
 
 // True only when the caller named the sweep project themselves, in either
 // spelling the CLI accepts. See the `sweep` project below.
