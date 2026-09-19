@@ -1730,10 +1730,15 @@ export const m = {
   "proposals.contactMismatch":
     "That doesn't match the name already on file, so nothing was changed.",
   "proposals.opportunityGone":
-    "This deal isn't on the board anymore, so nothing was changed.",
+    "This opportunity isn't on the board anymore, so nothing was changed.",
   "proposals.stageMoved":
     "This opportunity has moved since the suggestion was made, so nothing was changed.",
   "proposals.failed": "That didn't go through. Try again.",
+  // The write itself may have landed before the failure — reverting the
+  // proposal here would invite a retry that creates a SECOND record, so it
+  // is left accepted and this says so honestly instead of promising a
+  // clean retry the way "proposals.failed" does.
+  "proposals.maybeFailed": "That may not have gone through. Check before trying again.",
   "proposals.work.heading": "Suggestions",
   "proposals.work.body": "Questions about work, not work yet.",
 } as const;

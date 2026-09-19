@@ -50,8 +50,19 @@ beforeAll(() => {
   }
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   dbForRequestMock.mockImplementation(async () => serviceDb());
+  // `revalidatePath` is ONE `vi.fn()` shared by the whole file (the mock
+  // factory above runs once). Without a reset, a test that queues a
+  // `mockImplementationOnce` throw but then — because of the very mutation
+  // being tested — never actually calls it, leaks that queued throw into
+  // whichever unrelated test calls `revalidatePath` next. Proved: removing
+  // accept's `revalidatePath` calls made the accept "revalidate boom" test
+  // pass (nothing to throw from) and reddened dismiss's own revalidatePath
+  // test instead, with a confusing failure that had nothing to do with
+  // dismiss.
+  const cache = await import("next/cache");
+  vi.mocked(cache.revalidatePath).mockReset();
 });
 
 /** Throwaway account, cleaned up in `finally` — mirrors packages/db's
@@ -87,6 +98,60 @@ async function withTestAccount(fn: (db: Db, accountId: string) => Promise<void>)
  *  package-exports restriction). `+999` is assigned to no real country. */
 function testPhoneNumber(): string {
   return `+999${String(Math.floor(Math.random() * 1_000_000_000_000)).padStart(12, "0")}`;
+}
+
+/**
+ * Wraps a real client so any INSERT into `events` fails, while every other
+ * table passes straight through to the real client untouched. This forces
+ * `emit`'s own write (the SECOND of `addTask`/`fillContactBlanks`/
+ * `moveOpportunityToStage`'s two non-transactional round-trips) to fail
+ * AFTER the first one has already landed for real — no `@bis/db` mocking
+ * involved, just a client that lies about one table.
+ */
+function dbWithFailingEventsInsert(real: Db): Db {
+  return {
+    from: (table: string) => {
+      if (table === "events") {
+        return { insert: () => Promise.resolve({ error: { message: "injected: events insert failed" } }) };
+      }
+      return real.from(table as never);
+    },
+  } as unknown as Db;
+}
+
+/**
+ * Wraps a real client so `revertToPending`'s own UPDATE — identified by its
+ * distinctive `status: "pending"` payload, which `markProposalDecided`'s
+ * own CAS never sends — runs `race()` first, then performs the SAME update
+ * for real (same values, same `.eq(...)` filters) via the real client.
+ * `race()` simulates a legitimate second decision landing in the gap
+ * between this accept's own compare-and-swap and its compensating revert,
+ * a gap nothing in the source closes atomically. Reads and every other
+ * table pass straight through untouched.
+ */
+function dbWithRaceBeforeRevert(real: Db, race: () => Promise<void>): Db {
+  return {
+    from: (table: string) => {
+      if (table !== "call_proposals") return real.from(table as never);
+      return {
+        select: (cols: string) => real.from("call_proposals").select(cols),
+        update: (values: Record<string, unknown>) => {
+          if (values.status !== "pending") return real.from("call_proposals").update(values);
+          const eqs: [string, unknown][] = [];
+          const chain = {
+            eq: (col: string, val: unknown) => { eqs.push([col, val]); return chain; },
+            select: async (cols: string) => {
+              await race();
+              let q = real.from("call_proposals").update(values);
+              for (const [col, val] of eqs) q = q.eq(col, val);
+              return q.select(cols);
+            },
+          };
+          return chain;
+        },
+      };
+    },
+  } as unknown as Db;
 }
 
 async function seedCall(db: Db, accountId: string): Promise<string> {
@@ -157,8 +222,11 @@ describe("acceptProposal", () => {
   });
 
   it(
-    "refuses a proposal another reviewer already answered, and writes NOTHING " +
-    "(mutation: drop the markProposalDecided return check -> FAILS)",
+    "refuses a proposal another reviewer already decided, caught by the plain READ before any CAS " +
+    "runs, and writes NOTHING (the CAS-return-check mutation is NOT pinned here — this scenario never " +
+    "reaches markProposalDecided at all, since the status !== \"pending\" read above it already refuses; " +
+    "that mutation is pinned by \"decides BEFORE it writes\" below, whose concurrent CAS race is the only " +
+    "scenario where both callers pass the read and the CAS itself has to be the one that decides)",
     async () => {
       await withTestAccount(async (db, accountId) => {
         const callId = await seedCall(db, accountId);
@@ -291,31 +359,45 @@ describe("acceptProposal", () => {
     },
   );
 
-  it("moves the opportunity when fromStage still matches", async () => {
-    await withTestAccount(async (db, accountId) => {
-      const callId = await seedCall(db, accountId);
-      const { id: contactId } = await createContact(db, accountId, { firstName: "Move2" }, "user_test");
-      const { pipelineId } = await ensureDefaultPipeline(db, accountId);
-      const { id: oppId } = await createOpportunity(
-        db, accountId, { contactId, pipelineId, name: "Fence", value: 1200 }, "user_test");
-      const board = await listBoard(db, accountId, pipelineId);
-      const [stage0, stage1] = board.map((b) => b.stage.id);
+  it(
+    "moves the opportunity through moveOpportunityToStage, not a bespoke insert — the trusted path's own " +
+    "event proves it (mutation: replace moveOpportunityToStage with a raw opportunities.update({stage_id}) " +
+    "-> the opportunity.stage_changed event assertion FAILS)",
+    async () => {
+      await withTestAccount(async (db, accountId) => {
+        const callId = await seedCall(db, accountId);
+        const { id: contactId } = await createContact(db, accountId, { firstName: "Move2" }, "user_test");
+        const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+        const { id: oppId } = await createOpportunity(
+          db, accountId, { contactId, pipelineId, name: "Fence", value: 1200 }, "user_test");
+        const board = await listBoard(db, accountId, pipelineId);
+        const [stage0, stage1] = board.map((b) => b.stage.id);
 
-      const proposal = await insertProposal(db, accountId, {
-        callId, contactId, kind: "opportunity_stage",
-        evidence: "the caller agreed to move forward",
-        payload: { opportunityId: oppId, fromStageId: stage0!, toStageId: stage1! },
+        const proposal = await insertProposal(db, accountId, {
+          callId, contactId, kind: "opportunity_stage",
+          evidence: "the caller agreed to move forward",
+          payload: { opportunityId: oppId, fromStageId: stage0!, toStageId: stage1! },
+        });
+        expect(proposal).not.toBeNull();
+
+        const r = await acceptProposal(accountId, callId, proposal!.id);
+        expect(r).toEqual({ ok: true });
+
+        const { data: opp } = await db.from("opportunities")
+          .select("stage_id").eq("id", oppId).single();
+        expect(opp!.stage_id).toBe(stage1);
+
+        // The event is what proves the TRUSTED path ran — a bespoke update
+        // would move the stage above but never emit this, and would also
+        // skip moveOpportunityToStage's own "stage not in pipeline" check.
+        const { data: events, error: eErr } = await db.from("events")
+          .select("type, payload").eq("account_id", accountId).eq("type", "opportunity.stage_changed");
+        expect(eErr).toBeNull();
+        expect(events).toHaveLength(1);
+        expect((events![0]!.payload as Record<string, unknown>).opportunityId).toBe(oppId);
       });
-      expect(proposal).not.toBeNull();
-
-      const r = await acceptProposal(accountId, callId, proposal!.id);
-      expect(r).toEqual({ ok: true });
-
-      const { data: opp } = await db.from("opportunities")
-        .select("stage_id").eq("id", oppId).single();
-      expect(opp!.stage_id).toBe(stage1);
-    });
-  });
+    },
+  );
 
   it("refuses a proposal belonging to another account", async () => {
     await withTestAccount(async (dbA, accountA) => {
@@ -350,15 +432,26 @@ describe("acceptProposal", () => {
   });
 
   it(
-    "a CRM write that fails leaves the proposal PENDING and re-acceptable " +
-    "(mutation: delete the compensating update -> FAILS)",
+    "a CRM write whose own INSERT fails is STILL treated as ambiguous, by deliberate decision — the " +
+    "line is drawn at 'did the write helper get called', not at which of ITS OWN two round-trips " +
+    "actually failed, because telling the two apart from the caller's side is exactly the cleverness " +
+    "this design refuses in exchange for a guarantee that never varies: never duplicate " +
+    "(mutation: special-case this failure back to a safe revert -> FAILS)",
     async () => {
       await withTestAccount(async (db, accountId) => {
         const callId = await seedCall(db, accountId);
         // No mock: `due_at` is a real `timestamptz` column and this string
-        // is not a valid timestamp, so `addTask`'s own insert genuinely
-        // throws — the same class of failure as a dropped connection or a
-        // statement timeout, produced without touching `@bis/db` at all.
+        // is not a valid timestamp, so `addTask`'s own INSERT genuinely
+        // throws before any row lands — the same class of failure as a
+        // dropped connection or a statement timeout, produced without
+        // touching `@bis/db` at all. In hindsight this ONE was actually
+        // safe to revert (nothing landed) — but the decision this test
+        // pins is that the code does not try to tell hindsight-safe throws
+        // apart from the FOLLOW-UP-emit-fails test below, where something
+        // WAS written and reverting would be exactly wrong. Same code path,
+        // same real cost accepted on purpose: an accepted proposal that
+        // stays stuck even though, this one time, giving it back would
+        // have been fine.
         const proposal = await insertProposal(db, accountId, {
           callId, kind: "task", evidence: "the caller asked to be called back",
           payload: { title: "Call back Tuesday", dueAt: "not-a-real-date" },
@@ -366,40 +459,141 @@ describe("acceptProposal", () => {
         expect(proposal).not.toBeNull();
 
         const r = await acceptProposal(accountId, callId, proposal!.id);
-        expect(r).toEqual({ ok: false, error: m["proposals.failed"] });
+        expect(r).toEqual({ ok: false, error: m["proposals.maybeFailed"] });
 
         const { data: tasks } = await db.from("tasks").select("id")
           .eq("account_id", accountId).eq("title", "Call back Tuesday");
         expect(tasks).toHaveLength(0);
 
+        // Left ACCEPTED, not given back — even though, for this specific
+        // failure, giving it back would have been safe. The design does
+        // not know that from where it stands, and refuses to guess.
         const after = await getProposal(db, accountId, proposal!.id);
-        expect(after!.status).toBe("pending");
-        expect(after!.decidedBy).toBeNull();
-        expect(after!.decidedAt).toBeNull();
+        expect(after!.status).toBe("accepted");
+        expect(after!.decidedBy).toBe("user_test");
 
-        // The row was given back, not burned: retrying the SAME proposal
-        // (the underlying bad due-date is still there, so the write fails
-        // again) reports the SAME honest "didn't go through" error, never
-        // the false "Someone already answered this one" a burned stamp
-        // would produce.
-        const retry = await acceptProposal(accountId, callId, proposal!.id);
-        expect(retry).toEqual({ ok: false, error: m["proposals.failed"] });
-
-        const afterRetry = await getProposal(db, accountId, proposal!.id);
-        expect(afterRetry!.status).toBe("pending");
-
-        // With the fault actually fixed, the SAME proposal is re-acceptable.
+        // The stranded cost, made concrete: a retry — even one carrying a
+        // fixed, valid `dueAt` this time — can no longer create the task
+        // this proposal was always meant to produce, because the proposal
+        // itself is no longer `pending`.
         const { error: fixErr } = await db.from("call_proposals")
           .update({ payload: { title: "Call back Tuesday", dueAt: null } })
           .eq("id", proposal!.id);
         expect(fixErr).toBeNull();
 
-        const fixed = await acceptProposal(accountId, callId, proposal!.id);
-        expect(fixed).toEqual({ ok: true });
+        const retry = await acceptProposal(accountId, callId, proposal!.id);
+        expect(retry).toEqual({ ok: false, error: m["proposals.gone"] });
 
-        const { data: tasksAfterFix } = await db.from("tasks").select("id")
+        const { data: tasksAfterRetry } = await db.from("tasks").select("id")
           .eq("account_id", accountId).eq("title", "Call back Tuesday");
-        expect(tasksAfterFix).toHaveLength(1);
+        expect(tasksAfterRetry).toHaveLength(0);
+      });
+    },
+  );
+
+  it(
+    "a CRM write that LANDS but whose follow-up event emit throws leaves the proposal ACCEPTED, not " +
+    "reverted — so a retry cannot create a second record " +
+    "(mutation: revert on every write-helper throw, ambiguous or not -> FAILS)",
+    async () => {
+      await withTestAccount(async (db, accountId) => {
+        const callId = await seedCall(db, accountId);
+        const proposal = await insertProposal(db, accountId, {
+          callId, kind: "task", evidence: "the caller asked to be called back",
+          payload: { title: "Call back Tuesday (ambiguous)", dueAt: null },
+        });
+        expect(proposal).not.toBeNull();
+
+        // `addTask` is two round-trips (packages/db/src/activities.ts): the
+        // real `tasks` INSERT, then `emit`'s own INSERT into `events`. This
+        // makes only the SECOND one fail — for real, no `@bis/db` mocking —
+        // so the task row lands but the call reporting success does not.
+        dbForRequestMock.mockImplementationOnce(async () => dbWithFailingEventsInsert(serviceDb()));
+
+        const r = await acceptProposal(accountId, callId, proposal!.id);
+        expect(r).toEqual({ ok: false, error: m["proposals.maybeFailed"] });
+
+        const { data: tasksAfterFirst } = await db.from("tasks").select("id")
+          .eq("account_id", accountId).eq("title", "Call back Tuesday (ambiguous)");
+        expect(tasksAfterFirst).toHaveLength(1);
+
+        // Left ACCEPTED, not given back — giving it back would invite the
+        // very retry that creates a SECOND task on top of the one that
+        // already landed.
+        const after = await getProposal(db, accountId, proposal!.id);
+        expect(after!.status).toBe("accepted");
+        expect(after!.decidedBy).toBe("user_test");
+
+        const retry = await acceptProposal(accountId, callId, proposal!.id);
+        expect(retry).toEqual({ ok: false, error: m["proposals.gone"] });
+
+        const { data: tasksAfterRetry } = await db.from("tasks").select("id")
+          .eq("account_id", accountId).eq("title", "Call back Tuesday (ambiguous)");
+        expect(tasksAfterRetry).toHaveLength(1);
+      });
+    },
+  );
+
+  it(
+    "a revert scoped to THIS decision never claws back a different, later, legitimate accept of the " +
+    "same proposal (mutation: drop the decided_by predicate on the revert -> FAILS)",
+    async () => {
+      await withTestAccount(async (db, accountId) => {
+        const callId = await seedCall(db, accountId);
+        // No contactId: a pre-write refusal that must revert, giving a
+        // deterministic hook onto that exact UPDATE via the wrapper below.
+        const proposal = await insertProposal(db, accountId, {
+          callId, kind: "contact_field", evidence: "the caller spelled her email out loud",
+          payload: { field: "email", value: "lead@example.com" },
+        });
+        expect(proposal).not.toBeNull();
+
+        dbForRequestMock.mockImplementationOnce(async () => dbWithRaceBeforeRevert(serviceDb(), async () => {
+          // Simulates a legitimate second decision landing in the gap
+          // between this accept's own CAS and its compensating revert.
+          const { error } = await serviceDb().from("call_proposals")
+            .update({ decided_by: "user_other" }).eq("id", proposal!.id);
+          if (error) throw new Error(error.message);
+        }));
+
+        const r = await acceptProposal(accountId, callId, proposal!.id);
+        expect(r).toEqual({ ok: false, error: m["proposals.failed"] });
+
+        const after = await getProposal(db, accountId, proposal!.id);
+        // The revert must NOT have matched: the row still shows the OTHER
+        // decider and stays accepted, never clawed back to pending.
+        expect(after!.status).toBe("accepted");
+        expect(after!.decidedBy).toBe("user_other");
+      });
+    },
+  );
+
+  it(
+    "a revert scoped to status = 'accepted' never claws back a proposal that already moved on " +
+    "(mutation: drop the status predicate on the revert -> FAILS)",
+    async () => {
+      await withTestAccount(async (db, accountId) => {
+        const callId = await seedCall(db, accountId);
+        const proposal = await insertProposal(db, accountId, {
+          callId, kind: "contact_field", evidence: "the caller spelled her email out loud",
+          payload: { field: "email", value: "lead@example.com" },
+        });
+        expect(proposal).not.toBeNull();
+
+        dbForRequestMock.mockImplementationOnce(async () => dbWithRaceBeforeRevert(serviceDb(), async () => {
+          // Simulates the SAME decider's stamp having already moved on
+          // (dismissed through some other path) by the time the revert
+          // would run.
+          const { error } = await serviceDb().from("call_proposals")
+            .update({ status: "dismissed" }).eq("id", proposal!.id);
+          if (error) throw new Error(error.message);
+        }));
+
+        const r = await acceptProposal(accountId, callId, proposal!.id);
+        expect(r).toEqual({ ok: false, error: m["proposals.failed"] });
+
+        const after = await getProposal(db, accountId, proposal!.id);
+        expect(after!.status).toBe("dismissed");
       });
     },
   );
@@ -611,4 +805,51 @@ describe("dismissProposal", () => {
       expect(r).toEqual({ ok: false, error: m["proposals.gone"] });
     });
   });
+
+  it(
+    "refuses a proposal that doesn't belong to the given call, and does not act on it " +
+    "(mutation: drop dismiss's callId check -> FAILS)",
+    async () => {
+      await withTestAccount(async (db, accountId) => {
+        const callA = await seedCall(db, accountId);
+        const callB = await seedCall(db, accountId);
+        const proposal = await insertProposal(db, accountId, {
+          callId: callA, kind: "task", evidence: "the caller asked to be called back",
+          payload: { title: "Call back for A", dueAt: null },
+        });
+        expect(proposal).not.toBeNull();
+
+        const r = await dismissProposal(accountId, callB, proposal!.id);
+        expect(r).toEqual({ ok: false, error: m["proposals.gone"] });
+
+        const after = await getProposal(db, accountId, proposal!.id);
+        expect(after!.status).toBe("pending");
+      });
+    },
+  );
+
+  it(
+    "does not throw to the client and does not undo the dismiss when revalidatePath fails after a " +
+    "successful write (mutation: move dismiss's revalidatePath calls back outside the try -> FAILS)",
+    async () => {
+      await withTestAccount(async (db, accountId) => {
+        const callId = await seedCall(db, accountId);
+        const proposal = await insertProposal(db, accountId, {
+          callId, kind: "task", evidence: "the caller asked to be called back",
+          payload: { title: "Dismiss revalidate boom", dueAt: null },
+        });
+        expect(proposal).not.toBeNull();
+
+        const cache = await import("next/cache");
+        vi.mocked(cache.revalidatePath).mockImplementationOnce(() => {
+          throw new Error("revalidate boom");
+        });
+
+        await expect(dismissProposal(accountId, callId, proposal!.id)).resolves.toEqual({ ok: true });
+
+        const after = await getProposal(db, accountId, proposal!.id);
+        expect(after!.status).toBe("dismissed");
+      });
+    },
+  );
 });

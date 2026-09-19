@@ -37,16 +37,71 @@ function isBlank(v: unknown): boolean {
 async function revertToPending(
   db: SupabaseClient, accountId: string, proposalId: string, decidedBy: string,
 ): Promise<void> {
-  const { error } = await db.from("call_proposals")
+  // `.select("id")` is what makes a no-op revert knowable: PostgREST
+  // returns no error and no rows for an update matching nothing, which
+  // would otherwise read as success (the identical trap `markProposalDecided`,
+  // packages/db/src/call-proposals.ts, documents and this file failed to
+  // copy). A revert that matches nothing is not a bug on its own — a
+  // legitimate later decision may have already moved the row past this
+  // one's scope — but it must never pass in silence.
+  const { data, error } = await db.from("call_proposals")
     .update({ status: "pending", decided_at: null, decided_by: null })
     .eq("account_id", accountId).eq("id", proposalId)
-    .eq("status", "accepted").eq("decided_by", decidedBy);
+    .eq("status", "accepted").eq("decided_by", decidedBy)
+    .select("id");
   if (error) {
+    const code = (error as { code?: string }).code;
+    if (code === "23505") {
+      // `call_proposals_one_pending_unique` (0040) constrains at most one
+      // PENDING row per (call_id, kind, contact_id). A re-delivered hangup
+      // webhook can re-run `generateProposals` while this one sits
+      // `accepted` and insert a fresh pending row for the same trio; if
+      // that lands inside this failure window, giving THIS row back to
+      // `pending` too collides with it. The row stays `accepted` — stranded,
+      // not silently swallowed.
+      console.error(
+        `acceptProposal: revert for proposal ${proposalId} (account ${accountId}) hit the one-pending ` +
+        `unique index — a fresh pending proposal for the same call/kind/contact was likely generated ` +
+        `while this one sat accepted; this row is stranded accepted: ${error.message}`,
+      );
+    } else {
+      console.error(
+        `acceptProposal: failed to revert proposal ${proposalId} (account ${accountId}) back to pending: ` +
+        error.message,
+      );
+    }
+    return;
+  }
+  if ((data ?? []).length === 0) {
     console.error(
-      `acceptProposal: failed to revert proposal ${proposalId} (account ${accountId}) back to pending: ` +
-      error.message,
+      `acceptProposal: revert for proposal ${proposalId} (account ${accountId}, decided_by ${decidedBy}) ` +
+      `matched no row — a different, later decision likely already moved it; nothing reverted.`,
     );
   }
+}
+
+/**
+ * The write helper's own call threw AFTER the compare-and-swap already
+ * stamped the proposal `accepted` — this can only mean the write is
+ * AMBIGUOUS. `addTask`, `fillContactBlanks` and `moveOpportunityToStage`
+ * each perform their real write, THEN a separate `emit` insert into
+ * `events`, as two non-transactional round-trips (`addTask`,
+ * packages/db/src/activities.ts:23-36): a throw from the second leaves the
+ * first's row sitting in the database while the caller sees a failure.
+ * Reverting here would tell the truth about NEITHER possibility and would
+ * invite exactly the retry the failure copy suggests — which, if the first
+ * round-trip DID land, creates a SECOND record on top of it. So this never
+ * reverts: the proposal is left `accepted` (a real cost — an accepted
+ * proposal whose record may not exist, discoverable only by the log line
+ * below), and the message tells the user the truth instead of the CAS
+ * path's confident "try again".
+ */
+function stranded(proposalId: string, callId: string, accountId: string, e: unknown): ActionResult {
+  console.error(
+    `acceptProposal: STRANDED — proposal ${proposalId} (call ${callId}, account ${accountId}) ` +
+    `left accepted; its write may or may not have landed: ${String(e)}`,
+  );
+  return { ok: false, error: m["proposals.maybeFailed"] };
 }
 
 /**
@@ -146,12 +201,21 @@ export async function acceptProposal(
     // stamp above first: the CAS having landed must never outlive the write
     // it was meant to gate. A branch that DOES write sets `written = true`
     // and never reverts, even if something later (revalidatePath) fails.
+    //
+    // The write helper's own call is wrapped in its own try/catch, distinct
+    // from the outer one below: a throw from THAT specific call is the
+    // ambiguous case `stranded()` documents, and returns immediately
+    // without ever reaching the outer catch's revert.
     if (proposal.kind === "task") {
       const p = proposal.payload;
-      await addTask(db, accountId, {
-        contactId: proposal.contactId ?? undefined,
-        title: p.title, dueAt: p.dueAt ?? undefined,
-      }, userId);
+      try {
+        await addTask(db, accountId, {
+          contactId: proposal.contactId ?? undefined,
+          title: p.title, dueAt: p.dueAt ?? undefined,
+        }, userId);
+      } catch (e) {
+        return stranded(proposalId, callId, accountId, e);
+      }
       written = true;
     } else if (proposal.kind === "contact_field") {
       const p = proposal.payload;
@@ -175,9 +239,14 @@ export async function acceptProposal(
       // means either a human filled it in the minutes since, or the name
       // on file does not match closely enough to fill safely — either way,
       // this call itself wrote nothing, so the stamp above must come back.
-      const filled = await fillContactBlanks(
-        db, accountId, proposal.contactId, { [p.field]: p.value }, userId,
-      );
+      let filled: string[];
+      try {
+        filled = await fillContactBlanks(
+          db, accountId, proposal.contactId, { [p.field]: p.value }, userId,
+        );
+      } catch (e) {
+        return stranded(proposalId, callId, accountId, e);
+      }
       if (filled.length === 0) {
         await revertToPending(db, accountId, proposalId, userId);
         return {
@@ -188,7 +257,11 @@ export async function acceptProposal(
       written = true;
     } else {
       const p = proposal.payload;
-      await moveOpportunityToStage(db, accountId, p.opportunityId, p.toStageId, userId);
+      try {
+        await moveOpportunityToStage(db, accountId, p.opportunityId, p.toStageId, userId);
+      } catch (e) {
+        return stranded(proposalId, callId, accountId, e);
+      }
       written = true;
     }
 
@@ -235,15 +308,29 @@ export async function dismissProposal(
   accountId: string, callId: string, proposalId: string,
 ): Promise<ActionResult> {
   const { userId } = await requireAccountAccess(accountId);
+  // Mirrors `acceptProposal`'s own `written` flag: once the CAS below has
+  // landed, a failure in bookkeeping (`revalidatePath`) must never be
+  // reported as the dismiss itself having failed — that would tell the
+  // caller to retry a write that already happened.
+  let dismissed = false;
   try {
-    if (!await markProposalDecided(await dbForRequest(), accountId, proposalId, "dismissed", userId)) {
+    const db = await dbForRequest();
+    // Same check `acceptProposal` runs before it acts: a proposal addressed
+    // through the wrong call's page must be refused, not decided.
+    const proposal = await getProposal(db, accountId, proposalId);
+    if (!proposal || proposal.callId !== callId) {
       return { ok: false, error: m["proposals.gone"] };
     }
+    if (!await markProposalDecided(db, accountId, proposalId, "dismissed", userId)) {
+      return { ok: false, error: m["proposals.gone"] };
+    }
+    dismissed = true;
+    revalidatePath(callPath(accountId, callId));
+    revalidatePath("/dashboard/work");
   } catch (e) {
     console.error(`dismissProposal: failed for ${proposalId} (account ${accountId}): ${String(e)}`);
+    if (dismissed) return { ok: true };
     return { ok: false, error: m["proposals.failed"] };
   }
-  revalidatePath(callPath(accountId, callId));
-  revalidatePath("/dashboard/work");
   return { ok: true };
 }
