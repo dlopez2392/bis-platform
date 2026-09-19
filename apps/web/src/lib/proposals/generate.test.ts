@@ -152,12 +152,17 @@ const base = {
 };
 
 /**
- * The account's real, seeded pipeline shape (`New Lead(0) → Contacted(1) →
- * Appointment(2) → Quote Sent(3)`), matching every live account's own
- * `pipeline_stages`. The generator may only ever name a stage from THIS
- * list — never invent one — so every opportunity_stage test below hands it
- * this same object (or a `stageId`-shifted copy of it) rather than a
- * fixture the production data could never actually produce.
+ * A four-stage PREFIX of the account's real, seeded pipeline shape
+ * (`New Lead(0) → Contacted(1) → Appointment(2) → Quote Sent(3) →
+ * Closed(4)`) — every live pipeline actually has FIVE stages, and this
+ * fixture deliberately omits the fifth, `Closed`, because no test below
+ * needs a target past `Quote Sent` to prove forward-only/no-invented-stage
+ * behaviour. (Fix-wave factual-error fix: an earlier version of this
+ * comment claimed the fixture matched every live pipeline exactly, which
+ * was false.) The generator may only ever name a stage from THIS list —
+ * never invent one — so every opportunity_stage test below hands it this
+ * same object (or a `stageId`-shifted copy of it) rather than a fixture the
+ * production data could never actually produce.
  */
 const pipeline = {
   id: "o1", stageId: "s1", stageName: "New Lead",
@@ -955,10 +960,50 @@ describe("generateProposals — opportunity_stage", () => {
     });
   });
 
+  // Minor (fix-wave): `contact_field` already refuses when `input.contactId`
+  // is null (its own `!input.contactId` guard, further up this file) because
+  // every row it writes carries a `contact_id` — `opportunity_stage` writes
+  // one too, but had no matching guard. Unreachable from the one caller
+  // (finish-call.ts only ever resolves an `openOpportunity` alongside a real
+  // `contactId`), but the type permits the combination, and nothing stopped
+  // a write with a null contact before this test.
+  it("refuses an opportunity_stage proposal when no contact is known, even with a valid forward move and grounded evidence (mutation: drop the !input.contactId guard -> FAILS)", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, contactId: null, openOpportunity: pipeline,
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "opportunity_stage", toStage: "Contacted",
+                      evidence: "I need a quote for a dining table" }],
+      }),
+    });
+    expect(n).toBe(0);
+    expect(db.rows).toEqual([]);
+  });
+
+  // Fix-wave Minor: stage names are matched case/whitespace-INSENSITIVELY on
+  // both sides (`.trim().toLowerCase()`) — a transcription-derived response
+  // is not guaranteed to reproduce a stage name's exact casing or spacing,
+  // and this generator must not refuse a real match over that alone.
+  // Dropping EITHER side's `.trim().toLowerCase()` call breaks this: the
+  // needle carries both a case AND a whitespace deviation, so either half
+  // being un-normalised leaves the two strings unequal.
+  it("matches a stage name regardless of case or surrounding whitespace (mutation: drop either .trim().toLowerCase() call -> FAILS)", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, contactId: "c1", openOpportunity: pipeline,
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "opportunity_stage", toStage: "  CONTACTED  ",
+                      evidence: "I need a quote for a dining table" }],
+      }),
+    });
+    expect(n).toBe(1);
+    expect(db.rows[0].payload).toEqual({ opportunityId: "o1", fromStageId: "s1", toStageId: "s2" });
+  });
+
   it("refuses a stage that is not in this opportunity's pipeline (mutation: drop the stage lookup -> FAILS)", async () => {
     const db = fakeDb();
     const n = await generateProposals({
-      ...base, db, openOpportunity: pipeline,
+      ...base, db, contactId: "c1", openOpportunity: pipeline,
       fetchImpl: modelReturning({
         proposals: [{ kind: "opportunity_stage", toStage: "Closed Won",
                       evidence: "I need a quote for a dining table" }],
@@ -974,7 +1019,7 @@ describe("generateProposals — opportunity_stage", () => {
   it("refuses a backwards move (mutation: drop the position comparison -> FAILS)", async () => {
     const db = fakeDb();
     const n = await generateProposals({
-      ...base, db,
+      ...base, db, contactId: "c1",
       openOpportunity: { ...pipeline, stageId: "s4", stageName: "Quote Sent" },
       fetchImpl: modelReturning({
         proposals: [{ kind: "opportunity_stage", toStage: "Contacted",
@@ -999,7 +1044,7 @@ describe("generateProposals — opportunity_stage", () => {
   it("refuses a move to the stage it is already in (mutation: change <= to < in the position comparison -> FAILS)", async () => {
     const db = fakeDb();
     const n = await generateProposals({
-      ...base, db, openOpportunity: pipeline,
+      ...base, db, contactId: "c1", openOpportunity: pipeline,
       fetchImpl: modelReturning({
         proposals: [{ kind: "opportunity_stage", toStage: "New Lead",
                       evidence: "I need a quote for a dining table" }],
@@ -1041,7 +1086,7 @@ describe("generateProposals — opportunity_stage", () => {
   it("still requires grounding for a stage move (mutation: skip groundedEvidence on this branch -> FAILS)", async () => {
     const db = fakeDb();
     const n = await generateProposals({
-      ...base, db, openOpportunity: pipeline,
+      ...base, db, contactId: "c1", openOpportunity: pipeline,
       fetchImpl: modelReturning({
         proposals: [{ kind: "opportunity_stage", toStage: "Contacted",
                       evidence: "he mentioned wanting a table" }],   // not in the transcript
@@ -1065,7 +1110,7 @@ describe("generateProposals — opportunity_stage", () => {
       evidence: "I need a quote for a dining table",
     }));
     const n = await generateProposals({
-      ...base, db, openOpportunity: pipeline,
+      ...base, db, contactId: "c1", openOpportunity: pipeline,
       fetchImpl: modelReturning({ proposals: many }),
     });
     expect(n).toBe(0);

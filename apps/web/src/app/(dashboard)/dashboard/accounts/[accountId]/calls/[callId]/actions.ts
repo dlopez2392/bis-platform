@@ -168,14 +168,27 @@ export async function acceptProposal(
     // a real, if narrow, race window that nothing here closes atomically.
     if (proposal.kind === "opportunity_stage") {
       const p = proposal.payload;
+      // `status` alongside `stage_id` (fix-wave Important 4): a proposal
+      // generated while the deal was open can sit pending past the point a
+      // human marks it won or lost — which is a STATUS change, not
+      // necessarily a stage move, so the common case (closed at the very
+      // stage the proposal already named) would otherwise sail straight
+      // past the stage-equality check below and reopen a decided deal.
       const { data, error } = await db.from("opportunities")
-        .select("stage_id").eq("account_id", accountId).eq("id", p.opportunityId).maybeSingle();
+        .select("stage_id, status").eq("account_id", accountId).eq("id", p.opportunityId).maybeSingle();
       if (error) throw new Error(error.message);
       // Deleted and moved are different facts and deserve different words:
       // telling an operator their board moved when the deal is simply gone
       // is a lie about a board they can see with their own eyes.
       if (!data) {
         return { ok: false, error: m["proposals.opportunityGone"] };
+      }
+      // Checked BEFORE the stage-equality comparison, and with its OWN
+      // message: "proposals.stageMoved" would be false here — the deal did
+      // not move to another stage, it closed, which is why this is not
+      // folded into that branch.
+      if (data.status !== "open") {
+        return { ok: false, error: m["proposals.opportunityClosed"] };
       }
       if (data.stage_id !== p.fromStageId) {
         return { ok: false, error: m["proposals.stageMoved"] };

@@ -6,16 +6,15 @@ import { toE164 } from "@/lib/voice/phone-number";
 
 /**
  * At most three per call — a per-call BUDGET SHARED ACROSS KINDS, not three
- * tasks. The live partial unique index (`call_proposals_one_pending_unique`,
- * 0040_call_proposals.sql) is keyed on
+ * of one kind. The live partial unique index
+ * (`call_proposals_one_pending_unique`, 0040_call_proposals.sql) is keyed on
  * `(call_id, kind, coalesce(contact_id, sentinel))`, and every proposal this
  * generator writes for one call shares that call's id AND that call's one
- * contact — so today, with only the `task` kind implemented, at most ONE
- * proposal can ever land per call: the second and third of anything sharing
- * that triple are refused by the database's own unique index, not stopped
- * by this constant. The budget becomes real once Tasks 8/9 add
- * `contact_field` and `opportunity_stage`: one of each kind can land per
- * call, up to this ceiling.
+ * contact — so the second and third proposal OF THE SAME KIND for that
+ * contact are refused by the database's own unique index, not stopped by
+ * this constant. As of Task 9, all three kinds (`task`, `contact_field`,
+ * `opportunity_stage`) are implemented, so this budget is real: one of each
+ * kind can land per call, up to this ceiling.
  *
  * Not a cost control — a noise control. A screen that offers eight
  * questions about one phone call is a screen a client stops reading, and
@@ -98,7 +97,7 @@ function systemFor(
     const stageNames = openOpportunity.stages.map((s) => s.name).join(", ");
     system = `${system} This caller has an open deal currently at the "${
       openOpportunity.stageName
-    }" stage, in a pipeline with these stages in order: ${stageNames}. If — and ONLY if — the call is clear evidence the deal moved to a LATER stage in that list, you may propose {"kind":"opportunity_stage","toStage":"<the exact name of one LATER stage from that list>","evidence":"..."}. The stage name must be spelled EXACTLY as given above. Never propose the current stage, and never propose an EARLIER stage — a human, not you, may ever move a deal backwards.`;
+    }" stage, in a pipeline with these stages in order: ${stageNames}. If — and ONLY if — the call is clear evidence the deal moved to a LATER stage in that list, you may propose {"kind":"opportunity_stage","toStage":"<the exact name of one LATER stage from that list>","evidence":"..."}. The stage name must be spelled EXACTLY as given above. Never propose the current stage, and never propose an EARLIER stage — only a human may move a deal backwards.`;
   }
   return system;
 }
@@ -371,6 +370,15 @@ export async function generateProposals(input: {
         // pipeline can undo a human's own read of a customer — a human
         // keeps full freedom to move either way, this generator does not.
         if (target.position <= current.position) continue;
+        // THE MODEL NEVER SUPPLIES A CONTACT. `openOpportunity` is resolved
+        // by the caller (finish-call.ts) FROM a known contact, so a null
+        // `input.contactId` here means the caller handed this generator an
+        // impossible combination, not a real call state — unreachable from
+        // the one caller today, but the type permits it, and this row would
+        // otherwise be written with no contact attached. Mirrors
+        // `contact_field`'s own `!input.contactId` refusal above, this
+        // generator's other kind that writes a `contact_id`.
+        if (!input.contactId) continue;
         const grounded = groundedEvidence(evidence, input.transcript);
         if (grounded === null) continue;
         // Same budget as the other two kinds: an ATTEMPT the moment it

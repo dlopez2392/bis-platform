@@ -36,7 +36,7 @@ const summaryMocks = vi.hoisted(() => ({ generateSummary: vi.fn() }));
 vi.mock("./summary-service", () => ({ generateSummary: summaryMocks.generateSummary }));
 // Lazily imported inside finishCall itself (`await import("@/lib/proposals/generate")`),
 // same shape as `@/lib/voice/textback` in handoff-result/route.test.ts — vi.mock
-// intercepts a dynamic import exactly like a static one. Its own 61-test suite
+// intercepts a dynamic import exactly like a static one. Its own 53-test suite
 // owns the real generator's behaviour; this file owns only the lifecycle
 // question of WHEN and WHETHER finishCall calls it.
 const proposalsMocks = vi.hoisted(() => ({ generateProposals: vi.fn() }));
@@ -82,10 +82,19 @@ function fakeOppDb(opts: {
               eq: (...a2: unknown[]) => { oppFilters.push(a2); return {
                 eq: (...a3: unknown[]) => {
                   oppFilters.push(a3);
-                  if (opts.oppErrorMessage) {
-                    return Promise.resolve({ data: null, error: { message: opts.oppErrorMessage } });
-                  }
-                  return Promise.resolve({ data: opts.opportunities ?? [], error: null });
+                  // `.limit(2)` — the real read's own idiom (fix-wave
+                  // Minor) — chains off this third `.eq()`, so it must be
+                  // recorded rather than sending the resolved value straight
+                  // out from here.
+                  return {
+                    limit: (...a4: unknown[]) => {
+                      oppFilters.push(a4);
+                      if (opts.oppErrorMessage) {
+                        return Promise.resolve({ data: null, error: { message: opts.oppErrorMessage } });
+                      }
+                      return Promise.resolve({ data: opts.opportunities ?? [], error: null });
+                    },
+                  };
                 },
               }; },
             }; },
@@ -1079,44 +1088,74 @@ describe("finishCall — proposal generation", () => {
   // pipeline either — it is handed exactly this contact's one open
   // opportunity and its pipeline's own real stage names, ordered by
   // position, or `null`. This is the propose-time source of that data;
-  // `generateProposals`'s own 61-test suite (generate.test.ts) owns what it
+  // `generateProposals`'s own 53-test suite (generate.test.ts) owns what it
   // does with it once handed over.
   describe("openOpportunity", () => {
-    it("passes an openOpportunity built from the contact's single open opportunity and its pipeline's own stages", async () => {
+    // Fix-wave Important 1: the opportunity's own `stage_id` is "s2" here,
+    // NOT `rows[0]`'s id ("s1") — the earlier two-stage fixture put the
+    // opportunity at the pipeline's FIRST stage, so `stageName: current.name`
+    // and a wrong-index `rows[0]!.name` read produced the identical string.
+    // A third stage is present so "the opportunity's own stage" and "the
+    // pipeline's first stage" name two different, checkable things.
+    it("passes an openOpportunity built from the contact's single open opportunity and its pipeline's own stages, reading the OPPORTUNITY'S OWN current stage — not the pipeline's first row (mutation: report rows[0] instead of the row matching opp.stage_id -> FAILS)", async () => {
       const oppDb = fakeOppDb({
-        opportunities: [{ id: "o1", stage_id: "s1", pipeline_id: "p1" }],
+        opportunities: [{ id: "o1", stage_id: "s2", pipeline_id: "p1" }],
         stages: [
           { id: "s1", name: "New Lead", position: 0 },
           { id: "s2", name: "Contacted", position: 1 },
+          { id: "s3", name: "Appointment", position: 2 },
         ],
       });
       await finishCall(leadState(), { ...ctx, db: oppDb as unknown as ReturnType<typeof serviceDb> }, meta);
       expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
         openOpportunity: {
-          id: "o1", stageId: "s1", stageName: "New Lead",
+          id: "o1", stageId: "s2", stageName: "Contacted",
           stages: [
             { id: "s1", name: "New Lead", position: 0 },
             { id: "s2", name: "Contacted", position: 1 },
+            { id: "s3", name: "Appointment", position: 2 },
           ],
         },
       }));
-      // Filtered by THIS contact and `status = 'open'` — never every
-      // opportunity the account has ever had.
+      // Filtered by THIS contact, `status = 'open'`, AND this account
+      // (fix-wave Important 2) — never every opportunity the account has
+      // ever had, and never keyed on the wrong tenant. `fakeOppDb` returns
+      // the same fixture rows regardless of what it was filtered by, so
+      // only asserting the RECORDED filter arguments (not the returned
+      // data) catches a read keyed on the wrong column.
       expect(oppDb.oppFilters.flat()).toContain("ct1");
       expect(oppDb.oppFilters.flat()).toContain("open");
+      expect(oppDb.oppFilters.flat()).toContain("a1");
+      // The stages read must be keyed on the OPPORTUNITY'S OWN pipeline id
+      // ("p1"), never its own row id ("o1") — fix-wave Important 2's other
+      // half: a stages read keyed on the wrong pipeline hands the generator
+      // a DIFFERENT pipeline's stage names, and the generator's own
+      // membership check then validates against that wrong list.
+      expect(oppDb.stageFilters.flat()).toContain("a1");
+      expect(oppDb.stageFilters.flat()).toContain("p1");
     });
 
-    it("passes openOpportunity: null when the contact has no open opportunity", async () => {
+    it("passes openOpportunity: null when the contact has no open opportunity, refusing cleanly rather than crashing on an empty result (mutation: narrow the guard to `if (!opps)` alone -> FAILS)", async () => {
       const oppDb = fakeOppDb({ opportunities: [] });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       await finishCall(leadState(), { ...ctx, db: oppDb as unknown as ReturnType<typeof serviceDb> }, meta);
       expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
         openOpportunity: null,
       }));
+      // fix-wave Important 3: a zero-row result and a crash-then-swallow
+      // both resolve to the identical `null` return, so that return value
+      // alone cannot tell them apart. `opps[0].stage_id` on an empty
+      // array's `undefined` element throws, is caught by
+      // `resolveOpenOpportunity`'s own catch, and LOGS — a real zero-row
+      // refusal never does. This is the one observable a broken guard
+      // cannot fake.
+      expect(errSpy).not.toHaveBeenCalled();
+      errSpy.mockRestore();
     });
 
     // THE GUESS THIS FEATURE MUST NEVER MAKE: a call gives no signal about
     // WHICH of several open deals it concerns.
-    it("passes openOpportunity: null when the contact has more than one open opportunity (mutation: drop the length !== 1 check -> FAILS)", async () => {
+    it("passes openOpportunity: null when the contact has more than one open opportunity, refusing cleanly rather than crashing (mutation: drop the length !== 1 check -> FAILS)", async () => {
       // `stages` is populated (not left empty) so a dropped length check
       // would actually resolve a NON-null `openOpportunity` from `opps[0]`
       // — an empty `stages` array would ALSO resolve to `null` via the
@@ -1130,10 +1169,16 @@ describe("finishCall — proposal generation", () => {
         ],
         stages: [{ id: "s1", name: "New Lead", position: 0 }],
       });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       await finishCall(leadState(), { ...ctx, db: oppDb as unknown as ReturnType<typeof serviceDb> }, meta);
       expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
         openOpportunity: null,
       }));
+      // Same substitute as the zero-row test above: a genuine "more than
+      // one" refusal never logs; only a guard that fell through to a crash
+      // would.
+      expect(errSpy).not.toHaveBeenCalled();
+      errSpy.mockRestore();
     });
 
     // FAIL CLOSED, unlike the fail-open call-cap/startCallRow reads
@@ -1149,6 +1194,11 @@ describe("finishCall — proposal generation", () => {
       expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
         openOpportunity: null,
       }));
+      // fix-wave Important 2: pins the `if (error) throw ...` check itself —
+      // deleting it leaves `data: null` reaching the same `!opps` branch and
+      // the same `null` return, so only the log line this catch produces
+      // distinguishes "the read errored" from "the read found nothing".
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("open-opportunity read failed"));
       errSpy.mockRestore();
     });
 
@@ -1165,6 +1215,10 @@ describe("finishCall — proposal generation", () => {
       expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
         openOpportunity: null,
       }));
+      // fix-wave Important 2: pins the `if (stagesError) throw ...` check —
+      // deleting it leaves `stages: null` reaching `rows = []`, then the
+      // `!current` guard, then the same `null` return with no log at all.
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("open-opportunity read failed"));
       errSpy.mockRestore();
     });
 
@@ -1189,12 +1243,18 @@ describe("finishCall — proposal generation", () => {
         opportunities: [{ id: "o1", stage_id: "s1", pipeline_id: "p1" }],
         stages: [{ id: "s1", name: "New Lead", position: 0 }],
       });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const s = withTransferred(leadState());
       await finishCall(s, { ...ctx, db: oppDb as unknown as ReturnType<typeof serviceDb> }, meta);
       expect(oppDb.oppFilters).toEqual([]);
       expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
         openOpportunity: null,
       }));
+      // Same substitute as the zero-row/more-than-one tests above: a
+      // genuinely SKIPPED read never logs; only a guard that fell through
+      // to the real (empty-`db`) read and crashed would.
+      expect(errSpy).not.toHaveBeenCalled();
+      errSpy.mockRestore();
     });
   });
 

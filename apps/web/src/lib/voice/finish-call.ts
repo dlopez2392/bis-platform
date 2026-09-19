@@ -230,9 +230,18 @@ async function resolveOpenOpportunity(
   db: ReturnType<typeof serviceDb>, accountId: string, contactId: string,
 ): Promise<OpenOpportunity | null> {
   try {
+    // `.limit(2)` — not `.limit(1)` — because the question this read
+    // answers is "exactly one?", not "give me one": a `.limit(1)` result
+    // would silently discard evidence of a SECOND open opportunity and this
+    // function would then guess between them (fix-wave Minor). Matches
+    // `packages/db`'s own idiom (`call-proposals.ts`'s `.limit(500)`):
+    // service_role's rolconfig carries no statement_timeout and
+    // PostgREST's db-max-rows is unset, so an unbounded read is unbounded
+    // in production.
     const { data: opps, error } = await db.from("opportunities")
       .select("id, stage_id, pipeline_id")
-      .eq("account_id", accountId).eq("contact_id", contactId).eq("status", "open");
+      .eq("account_id", accountId).eq("contact_id", contactId).eq("status", "open")
+      .limit(2);
     if (error) throw new Error(error.message);
     if (!opps || opps.length !== 1) return null;
     const opp = opps[0] as { id: string; stage_id: string; pipeline_id: string };

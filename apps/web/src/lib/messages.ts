@@ -1730,6 +1730,12 @@ export const m = {
     "This opportunity isn't on the board anymore, so nothing was changed.",
   "proposals.stageMoved":
     "This opportunity has moved since the suggestion was made, so nothing was changed.",
+  // Distinct from "proposals.stageMoved" on purpose (fix-wave Important 4):
+  // a deal a human already marked won or lost did not merely move to
+  // another stage — closing it is the fact that changed, and telling the
+  // reviewer it "moved" would be false.
+  "proposals.opportunityClosed":
+    "This opportunity has been closed since the suggestion was made, so nothing was changed.",
   "proposals.failed": "That didn't go through. Try again.",
   // The write itself may have landed before the failure — reverting the
   // proposal here would invite a retry that creates a SECOND record, so it

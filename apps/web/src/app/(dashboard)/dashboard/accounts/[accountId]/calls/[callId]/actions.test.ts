@@ -31,6 +31,7 @@ import {
   serviceDb, createAccount, createContact, getContact,
   insertProposal, getProposal, markProposalDecided,
   ensureDefaultPipeline, createOpportunity, listBoard, moveOpportunityToStage,
+  setOpportunityStatus,
 } from "@bis/db";
 import { acceptProposal, dismissProposal } from "./actions";
 import { m } from "@/lib/messages";
@@ -352,6 +353,55 @@ describe("acceptProposal", () => {
         const { data: opp } = await db.from("opportunities")
           .select("stage_id").eq("id", oppId).single();
         expect(opp!.stage_id).toBe(stage2);
+
+        const after = await getProposal(db, accountId, proposal!.id);
+        expect(after!.status).toBe("pending");
+      });
+    },
+  );
+
+  // Fix-wave Important 4: a proposal generated while the deal was open can
+  // sit pending past the point a human closes it (won or lost) WITHOUT
+  // moving its stage at all — the common case, since closing a deal is a
+  // status change, not a board move. Before this fix, the re-read checked
+  // only `stage_id`, so a same-stage closed opportunity sailed straight
+  // through to `moveOpportunityToStage`, silently reopening a decided deal's
+  // stage. `proposals.stageMoved` would also be a FALSE message here — the
+  // stage never moved; the deal closed — hence its own key.
+  it(
+    "refuses an opportunity_stage accept whose opportunity has since been closed, even though its stage " +
+    "never moved, leaving the proposal pending and the stage unchanged " +
+    "(mutation: drop the re-read's status check -> FAILS)",
+    async () => {
+      await withTestAccount(async (db, accountId) => {
+        const callId = await seedCall(db, accountId);
+        const { id: contactId } = await createContact(db, accountId, { firstName: "Close" }, "user_test");
+        const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+        const { id: oppId } = await createOpportunity(
+          db, accountId, { contactId, pipelineId, name: "Roof repair", value: 900 }, "user_test");
+        const board = await listBoard(db, accountId, pipelineId);
+        const [stage0, stage1] = board.map((b) => b.stage.id);
+        expect(stage0).toBeTruthy();
+        expect(stage1).toBeTruthy();
+
+        const proposal = await insertProposal(db, accountId, {
+          callId, contactId, kind: "opportunity_stage",
+          evidence: "the caller agreed to move forward",
+          payload: { opportunityId: oppId, fromStageId: stage0!, toStageId: stage1! },
+        });
+        expect(proposal).not.toBeNull();
+
+        // A human closed the deal before anyone answered the suggestion —
+        // its `stage_id` is untouched, only `status` changed.
+        await setOpportunityStatus(db, accountId, oppId, "lost", "user_other");
+
+        const r = await acceptProposal(accountId, callId, proposal!.id);
+        expect(r).toEqual({ ok: false, error: m["proposals.opportunityClosed"] });
+
+        const { data: opp } = await db.from("opportunities")
+          .select("stage_id, status").eq("id", oppId).single();
+        expect(opp!.stage_id).toBe(stage0);
+        expect(opp!.status).toBe("lost");
 
         const after = await getProposal(db, accountId, proposal!.id);
         expect(after!.status).toBe("pending");
