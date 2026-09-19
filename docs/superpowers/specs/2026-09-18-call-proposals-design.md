@@ -161,9 +161,34 @@ Three guards:
 
 ### 4. Accept goes through the existing write path — always
 
-Accepting a proposal calls the **same** function a human action calls:
-`createTask`, the contact update action, `setOpportunityStage`. Never a bespoke
-insert.
+Accepting a proposal calls the **same** function a human action calls. Never a
+bespoke insert. The three, named as they actually exist in `packages/db`
+(corrected 2026-09-18 — this section originally named three functions, none of
+which exist):
+
+- `addTask(db, accountId, { contactId?, title, dueAt? }, actorId, actorType?)`
+  — `packages/db/src/activities.ts`. Not `createTask`.
+- **`fillContactBlanks(db, accountId, contactId, {...}, actorId, actorType?)`**
+  — `packages/db/src/contacts.ts`. **This function already IS Containment 2.**
+  It writes only columns that are still empty and returns the list of what it
+  actually wrote, `[]` if none — so the propose-time rule and the accept-time
+  re-check are one atomic call, not the check-then-write race the wording of
+  Containment 2 implies. Accepting through `updateContact` instead would have
+  no blank guard at all.
+- `moveOpportunityToStage(db, accountId, oppId, toStageId, actorId, actorType?)`
+  — `packages/db/src/opportunities.ts`. Not `setOpportunityStage`. It validates
+  that the target stage belongs to the opportunity's pipeline, but it does NOT
+  check the current stage — so the `fromStageId` guard in §3 is a read-then-write
+  at the accept layer with a real race window, and the accept path re-reads
+  `status` too, refusing a deal a human has since marked won or lost.
+
+**And the decision must be given back if the write fails.** The compare-and-swap
+stamps `accepted` BEFORE the write, so a failure afterwards would leave a
+proposal claiming a human accepted it and a record exists when none does — on
+the same table this design names as what a future accuracy measurement is
+computed from. Revert only when the write is known not to have landed: `addTask`
+is two non-transactional statements, so a helper that throws is AMBIGUOUS and
+must strand the proposal honestly rather than invite a retry that duplicates.
 
 This is what makes every existing validation, RLS policy, dedupe key and event
 emission apply automatically. A second write path would be a second set of
