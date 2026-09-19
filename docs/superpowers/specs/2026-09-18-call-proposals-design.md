@@ -85,9 +85,13 @@ should not be repeated here.
   absent: `users` is empty, so assignment would be a field nobody can fill.
 - `contact_field` — `{ field, value }`, where `field` is one of an allow-list
   (see Containment 2).
-- `opportunity_stage` — `{ opportunityId, fromStage, toStage }`. `fromStage` is
-  stored so the review screen can show the move, and so an accept can refuse a
-  proposal whose starting point has since changed.
+- `opportunity_stage` — `{ opportunityId, fromStageId, toStageId }`. **Stage ids,
+  not names**: stage is a uuid FK to `pipeline_stages`, whose `position` column
+  defines pipeline order. `fromStageId` is stored so the review screen can show
+  the move, and so an accept can refuse a proposal whose starting point has since
+  changed. The review surface resolves both ids to names — and that resolution is
+  where the raw-uuid risk lives: an id that will not resolve must drop the
+  proposal from the screen, never render as a uuid to a reader.
 
 ### RLS and grants
 
@@ -145,8 +149,15 @@ Three guards:
 - Accept **re-reads the opportunity's current stage** and refuses if it no
   longer equals `fromStage`. A stage that moved while the proposal sat is a
   proposal about a world that no longer exists.
-- No stage is skipped silently. If the proposal jumps more than one step in the
-  configured pipeline order, the UI says so in words.
+- No stage is skipped silently. **If `|toStage.position − fromStage.position| > 1`
+  — any move that leaves a stage behind — the UI says so in words.**
+
+  Stated as arithmetic because the prose form produced a real misreading: an
+  implementer read "more than one step" as "more than one stage bypassed" and
+  shipped a threshold that stayed silent for exactly half the skipping moves the
+  live pipelines can express — including `New Lead → Appointment`, the caller who
+  books on the first call, which is the most likely stage proposal this feature
+  will ever produce. The topic sentence above already ruled that reading out.
 
 ### 4. Accept goes through the existing write path — always
 
@@ -197,9 +208,20 @@ a specific next step. This is an explicit success criterion, not a fallback.
 
 ## Screens
 
-**Call detail** — proposals for that call, each with its evidence span, an
-Accept and a Dismiss. This is the primary surface: the reader has the
-transcript directly above.
+**Call detail** — proposals for that call, each with the caller's own words as
+evidence, an Accept and a Dismiss. This is the primary surface: the reader has
+the transcript directly **below** (corrected 2026-09-18 — the block sits after
+the summary and before the transcript).
+
+**Evidence is a whole caller turn, and it is NOT clipped.** Measured on calls
+that can actually produce a proposal (`booked`/`lead`/`message`): 231 turns,
+mean 33 characters, p95 85, max 95 — one line. An earlier figure of "max 483"
+was measured across ALL caller turns and was contaminated: every turn over 200
+characters in this database is the same robocall script on a `spam` or
+`abandoned` call, both of which eligibility refuses before a proposal can exist.
+A CSS clamp on the citation would re-create, at the display layer, the very
+defect whole-turn evidence exists to prevent — a negation lives at the end of a
+turn as often as anywhere else.
 
 **The work queue** — pending proposals appear as a distinct group, visually
 separated from real work and labelled as proposals, never mixed into the
