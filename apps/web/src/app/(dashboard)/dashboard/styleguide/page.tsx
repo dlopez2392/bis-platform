@@ -21,8 +21,9 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { SCREENED_REASONS, screenedClass } from "@bis/db";
+import { SCREENED_REASONS, screenedClass, type ProposalStatus } from "@bis/db";
 import { CLASS_DOT } from "../screened/screened-table";
+import { STATUS_TREATMENT } from "../accounts/[accountId]/calls/[callId]/proposals";
 import { cn } from "@/lib/utils";
 import { RailStates } from "./rail-states";
 import { SettingsFieldCards } from "./settings-field-cards";
@@ -31,6 +32,10 @@ import "@/styles/public-brand.css";
 import { m } from "@/lib/messages";
 
 export const dynamic = "force-dynamic";
+
+/** All three of `STATUS_TREATMENT`'s own keys, in the order a reader meets
+ *  them: still open, then the two decided outcomes. */
+const PROPOSAL_STATUSES: ProposalStatus[] = ["pending", "accepted", "dismissed"];
 
 /**
  * The working index DESIGN.md's definition-of-done refers to ("`/styleguide`
@@ -241,6 +246,48 @@ export default async function StyleguidePage() {
                 {m[`screened.reason.${reason}` as const]}
               </span>
             ))}
+          </div>
+        </Section>
+
+        {/* DESIGN.md rule 3 again, for the call-detail proposals block's own
+            vocabulary (Suggested / Accepted / Dismissed) — Call Proposals
+            Task 7. Read straight off `proposals.tsx`'s own `STATUS_TREATMENT`
+            map, same precedent as "Screened reasons" above, so this page
+            cannot drift from the real block. */}
+        <Section title="Proposal status" file="…/calls/[callId]/proposals.tsx">
+          <div className="flex w-full flex-wrap gap-2">
+            {PROPOSAL_STATUSES.map((status) => {
+              const treatment = STATUS_TREATMENT[status];
+              return (
+                <span
+                  key={status}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs"
+                >
+                  <span
+                    className={cn("size-[7px] shrink-0 rounded-full", treatment.dot)}
+                    aria-hidden
+                  />
+                  {m[treatment.labelKey]}
+                </span>
+              );
+            })}
+          </div>
+        </Section>
+
+        {/* Fix-wave Important 1 (task-11-brief): the due-date caption a
+            `task` proposal shows on its review card, on both the call-detail
+            page and the two work-queue screens (agency + account) — the half
+            of the fix a reader accepts on sight, alongside `generate.ts`'s
+            own forward-window rejection of a due date that could never be
+            real. */}
+        <Section title="Proposal due date" file="…/calls/[callId]/proposals.tsx">
+          <div className="flex flex-col gap-1">
+            <p className="text-sm leading-6 text-foreground">
+              {m["proposals.task.label"].replace("{title}", () => "Call back about the quote")}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {m["proposals.task.due"].replace("{date}", () => "Sep 23, 2026")}
+            </p>
           </div>
         </Section>
 

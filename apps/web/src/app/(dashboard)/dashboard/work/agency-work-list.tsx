@@ -27,7 +27,7 @@
 //     acting on it means following its own link into that account.
 import Link from "next/link";
 import { ListTodo } from "lucide-react";
-import type { AgencyWorkRow } from "@bis/db";
+import type { AgencyWorkRow, CallProposal, ContactFieldPayload } from "@bis/db";
 import type { Bucket } from "@/lib/work/buckets";
 import type { AgencyBucketedWork } from "@/lib/work/agency-buckets";
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +37,20 @@ import { ListPanel, LIST_ROW } from "@/components/ui/list-panel";
 import { formatDateInZone } from "@/lib/format";
 import { m, type MessageKey } from "@/lib/messages";
 import { cn } from "@/lib/utils";
+// Task 7's own extracted, reusable pieces (its header comment says so) —
+// reused here rather than copied: `ResolvedStage` (the shape page.tsx's own
+// batched `pipeline_stages` read resolves an opportunity_stage proposal's
+// uuids into) and the SAME card shell the call-detail page's own
+// Suggested-next-steps block uses, so this screen's suggestions read as
+// visually distinct from a plain bucket's `ListPanel` — the binding
+// constraint's own "visually separated" requirement — without inventing a
+// second card language. No per-row status treatment is imported any more
+// (fix-wave minor, task-10-brief.md): every row this screen ever shows is
+// `pending` by construction and the section is already titled
+// "Suggestions", so a per-row chip repeating that fact distinguished
+// nothing.
+import type { ResolvedStage } from "../accounts/[accountId]/calls/[callId]/proposals";
+import { CARD, CARD_HEAD } from "../accounts/[accountId]/calls/[callId]/card";
 
 const BUCKET_ORDER: Bucket[] = ["overdue", "today", "waiting"];
 
@@ -178,21 +192,193 @@ function AgencyWorkRowItem({
   );
 }
 
+// ── Work Queue Task 10 — pending suggestions ────────────────────────────
+//
+// A proposal is a QUESTION about work, not work — it is rendered as its own
+// sibling `<section>`, never folded into `buckets` (task-10-brief.md's own
+// binding constraint on `Bucket`/`BucketedWork`, `lib/work/buckets.ts`).
+// `listPendingProposalsForAgency` (packages/db/src/call-proposals.ts) is
+// this screen's cross-tenant twin of `listPendingProposals`, carrying the
+// same `brandName` field every other row on this page already does.
+export type AgencyProposal = CallProposal & { brandName: string; timezone: string };
+
+/**
+ * Fix-wave Important 1: same rule as `rowDateText` above (`AgencyWorkRow`'s
+ * own zone, never one borrowed across every row on this page) applied to a
+ * `task` proposal's own `dueAt` — a machine-chosen due date must be visible,
+ * in the account it belongs to's own zone, before a human accepts it.
+ * `null` for every non-`task` kind (they carry no due date) and for a `task`
+ * proposal whose `dueAt` is itself `null` (generate.ts's own forward-window
+ * check already rejected anything that could not be real).
+ */
+function proposalDueAtText(p: AgencyProposal): string | null {
+  if (p.kind !== "task" || !p.payload.dueAt) return null;
+  try {
+    return formatDateInZone(p.payload.dueAt, p.timezone);
+  } catch (err) {
+    if (!(err instanceof RangeError)) throw err;
+    return null;
+  }
+}
+
+/** Restated from proposals.tsx's own (unexported) `FIELD_LABEL_KEY` — same
+ *  reasoning as `BUCKET_TREATMENT` above: a four-entry map, not worth
+ *  reaching across a route boundary for. */
+const PROPOSAL_FIELD_LABEL_KEY: Record<ContactFieldPayload["field"], MessageKey> = {
+  firstName: "contacts.firstName", lastName: "contacts.lastName",
+  email: "contacts.email", phone: "contacts.phone",
+};
+
+/**
+ * The proposal's own plain-language sentence — ALWAYS a string, never
+ * `null`.
+ *
+ * Fix-wave Important 1 (task-10-brief.md): this used to return `null` for
+ * EVERY `opportunity_stage` proposal, by construction, on the claim that
+ * resolving it would need "a SECOND per-account table join across every
+ * account with a pending proposal". That did not survive checking:
+ * `pipeline_stages.id` is a globally unique uuid PRIMARY KEY, so resolving
+ * every pending proposal's stage ids is ONE batched `.in("id", stageIds)`
+ * read (page.tsx) — the identical shape page.tsx's own contacts lookup
+ * already uses, with the identical reasoning (the ids came from an
+ * already-cross-tenant service-role read, `listPendingProposalsForAgency`).
+ * Returning `null` for 100% of a kind by construction dropped the row
+ * silently, and — proved live — left the empty state claiming the queue was
+ * clear while a real, pending proposal sat there with real evidence.
+ *
+ * `task` and `contact_field` are fully self-contained in their own payload.
+ * `opportunity_stage` reads `stages` (page.tsx's batch read, keyed by stage
+ * id) for the real from/to names; when a specific pair fails to resolve —
+ * the read errored, or came back short for just this one pair — this falls
+ * back to an honest summary that names no stage (never the raw uuid, never
+ * the destination alone — DESIGN.md's explicit rule for this kind) rather
+ * than dropping the row: a proposal this screen cannot name in full is
+ * still a proposal that needs a human's attention.
+ */
+function proposalSummary(p: CallProposal, stages: Record<string, ResolvedStage>): string {
+  if (p.kind === "task") {
+    return m["proposals.task.label"].replace("{title}", () => p.payload.title);
+  }
+  if (p.kind === "contact_field") {
+    const fieldLabel = m[PROPOSAL_FIELD_LABEL_KEY[p.payload.field]].toLowerCase();
+    return m["proposals.contactField.label"]
+      .replace("{field}", () => fieldLabel)
+      .replace("{value}", () => p.payload.value);
+  }
+  // opportunity_stage — from -> to BY NAME, the same rule the call-detail
+  // page's own `buildLabel` (proposals.tsx) applies, restated here rather
+  // than imported (this file's own header comment explains why) rather than
+  // reached into for a route this page does not share.
+  const from = stages[p.payload.fromStageId];
+  const to = stages[p.payload.toStageId];
+  if (!from || !to) return m["proposals.stage.unresolved"];
+  let label = m["proposals.stage.label"]
+    .replace("{from}", () => from.name)
+    .replace("{to}", () => to.name);
+  // "No stage is skipped silently" — same threshold `buildLabel` uses:
+  // `Math.abs`, not the signed delta, so a backward move warns exactly as
+  // loudly as the equivalent forward one.
+  const bypassed = Math.abs(to.position - from.position) - 1;
+  if (bypassed === 1) {
+    label += " " + m["proposals.stage.skip.one"];
+  } else if (bypassed > 1) {
+    label += " " + m["proposals.stage.skip.many"].replace("{n}", String(bypassed));
+  }
+  return label;
+}
+
+function AgencyProposalRow({
+  proposal,
+  contactName,
+  stageNames,
+}: {
+  proposal: AgencyProposal;
+  /** `null` when the proposal carries no contact — never rendered, unlike
+   *  a bucket row's own always-present fallback, because a suggestion about
+   *  a contact detail or a task is still legible without one. */
+  contactName: string | null;
+  /** page.tsx's own batched `pipeline_stages` read, keyed by stage id — see
+   *  `proposalSummary`'s doc comment. Only ever consulted for an
+   *  `opportunity_stage` proposal. */
+  stageNames: Record<string, ResolvedStage>;
+}) {
+  const summary = proposalSummary(proposal, stageNames);
+  const dueAtText = proposalDueAtText(proposal);
+
+  return (
+    <li>
+      <Link
+        href={`/dashboard/accounts/${proposal.accountId}/calls/${proposal.callId}#call-proposals`}
+        className="flex flex-col gap-2 px-5 py-4 transition-colors hover:bg-[var(--surface-3)]"
+      >
+        <span className="truncate font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase">
+          {proposal.brandName || m["work.agency.unbranded"]}
+        </span>
+        {/* No per-row status chip here (fix-wave minor, task-10-brief.md):
+            every row this screen ever shows is `pending` by construction
+            (`listPendingProposalsForAgency` only ever returns pending rows)
+            and the section heading above already says "Suggestions" — an
+            identical chip on every row would distinguish nothing.
+            DESIGN.md rule 3 exists to tell statuses APART; there is only
+            ever one here. */}
+        <span className="text-sm font-medium text-card-foreground">{summary}</span>
+        {/* Fix-wave Important 1 (task-11-brief): a machine-chosen due date
+            must be visible before a human accepts it, in ITS OWN account's
+            zone — this screen pools rows across every account, so the zone
+            is read off the proposal's own `timezone`, never a single one
+            shared by the page. */}
+        {dueAtText ? (
+          <span className="text-xs text-muted-foreground">
+            {m["proposals.task.due"].replace("{date}", () => dueAtText)}
+          </span>
+        ) : null}
+        {contactName ? <span className="text-xs text-muted-foreground">{contactName}</span> : null}
+        {/* Evidence has no transcript beside it here, unlike the call-detail
+            page's own Suggested-next-steps block — the row's OWN link above
+            is how a reader checks the quote against the whole call it came
+            from, deep-linked to that page's own `#call-proposals` section
+            rather than its top. */}
+        <p className="text-sm leading-6 text-muted-foreground">
+          {m["proposals.evidence"]}{" "}
+          <q className="text-foreground">{proposal.evidence}</q>
+        </p>
+      </Link>
+    </li>
+  );
+}
+
 export function AgencyWorkList({
   buckets,
   contactNames,
+  proposals = [],
+  stageNames = {},
 }: {
   buckets: AgencyBucketedWork;
   /** contactId → display name, for every non-null contactId across every
    *  bucket and every account — ONE batch read (page.tsx), never one per
    *  row and never one per account. A contactId absent from this map falls
    *  back to m["contact.noName"] below — never a raw id, never
-   *  "undefined". */
+   *  "undefined". Also resolves a proposal row's own contact, from the
+   *  SAME batch read (page.tsx extends the same id collection). */
   contactNames: Record<string, string>;
+  /** Every account's pending proposals, pooled the same way `buckets` is.
+   *  Optional (defaults to none) so every existing call site — and every
+   *  existing test — is unaffected by this prop's addition. */
+  proposals?: AgencyProposal[];
+  /** page.tsx's own batched `pipeline_stages` read, keyed by stage id — see
+   *  `proposalSummary`'s doc comment. Optional (defaults to none) for the
+   *  same reason `proposals` is. */
+  stageNames?: Record<string, ResolvedStage>;
 }) {
   const shown = visibleAgencyBuckets(buckets);
+  // Fix-wave Important 1's "also" (task-10-brief.md): every proposal this
+  // screen is handed now describes itself with SOMETHING honest (see
+  // `proposalSummary`, which no longer returns `null` for any kind) — so
+  // there is no longer a kind-based filter here that could quietly consume
+  // `listPendingProposalsForAgency`'s `.limit(500)` cap on rows this screen
+  // then never shows. Every fetched proposal is a shown proposal.
 
-  if (shown.length === 0) {
+  if (shown.length === 0 && proposals.length === 0) {
     return (
       <EmptyState
         icon={ListTodo}
@@ -215,7 +401,11 @@ export function AgencyWorkList({
   return (
     <div className="flex flex-col gap-6">
       {shown.map((bucket) => (
-        <section key={bucket} className="flex flex-col gap-2">
+        // `data-bucket` is a test-only marker (no visual effect): it lets a
+        // render test isolate ONE bucket's own HTML from a sibling section's
+        // — the no-contamination proof this screen's binding constraint
+        // exists for (task-10-brief.md).
+        <section key={bucket} data-bucket={bucket} className="flex flex-col gap-2">
           <h2 className="px-1 font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase">
             {m[BUCKET_TREATMENT[bucket].labelKey]}
           </h2>
@@ -231,6 +421,29 @@ export function AgencyWorkList({
           </ListPanel>
         </section>
       ))}
+      {proposals.length > 0 ? (
+        // A sibling `<section>`, never a fourth bucket — visually separated
+        // by Task 7's own CARD shell (a bordered, glass panel; a bucket's
+        // own ListPanel below shares that exact styling by coincidence of
+        // BOTH constants being `overflow-hidden rounded-xl border
+        // border-border bg-card glass`, but this one ALSO carries a labelled
+        // heading + subhead, which no bucket section has, so "Suggestions"
+        // never reads as a fourth Overdue/Today/Waiting).
+        <section data-proposals aria-labelledby="agency-proposals" className={CARD}>
+          <h2 id="agency-proposals" className={CARD_HEAD}>{m["proposals.work.heading"]}</h2>
+          <p className="px-5 pt-3 text-sm text-muted-foreground">{m["proposals.work.body"]}</p>
+          <ul className="divide-y divide-[var(--row-line)]">
+            {proposals.map((p) => (
+              <AgencyProposalRow
+                key={p.id}
+                proposal={p}
+                contactName={p.contactId ? (contactNames[p.contactId] ?? m["contact.noName"]) : null}
+                stageNames={stageNames}
+              />
+            ))}
+          </ul>
+        </section>
+      ) : null}
     </div>
   );
 }

@@ -1707,6 +1707,103 @@ export const m = {
   "work.linesDown.one": "1 number is turning callers away",
   "work.linesDown.many": "{n} numbers are turning callers away",
   "work.linesDown.action": "See which",
+
+  // Call proposals — a finished call's machine-suggested next step. Nothing
+  // in this namespace commits anything until a human accepts it (Task 6's
+  // acceptProposal/dismissProposal).
+  "proposals.heading": "Suggested next steps",
+  "proposals.subhead": "From this call. Nothing happens until you accept.",
+  "proposals.evidence": "Because the caller said",
+  "proposals.accept": "Accept",
+  "proposals.dismiss": "Dismiss",
+  "proposals.status.pending": "Suggested",
+  "proposals.status.accepted": "Accepted",
+  "proposals.status.dismissed": "Dismissed",
+  "proposals.accepted.toast": "Added to your to-do list",
+  "proposals.dismissed.toast": "Dismissed",
+  "proposals.gone": "Someone already answered this one.",
+  "proposals.contactFilled":
+    "That detail was already filled in, so nothing was changed.",
+  "proposals.contactMismatch":
+    "That doesn't match the name already on file, so nothing was changed.",
+  "proposals.opportunityGone":
+    "This opportunity isn't on the board anymore, so nothing was changed.",
+  "proposals.stageMoved":
+    "This opportunity has moved since the suggestion was made, so nothing was changed.",
+  // Distinct from "proposals.stageMoved" on purpose (fix-wave Important 4):
+  // a deal a human already marked won or lost did not merely move to
+  // another stage — closing it is the fact that changed, and telling the
+  // reviewer it "moved" would be false.
+  "proposals.opportunityClosed":
+    "This opportunity has been closed since the suggestion was made, so nothing was changed.",
+  "proposals.failed": "That didn't go through. Try again.",
+  // The write itself may have landed before the failure — reverting the
+  // proposal here would invite a retry that creates a SECOND record, so it
+  // is left accepted and this says so honestly instead of promising a
+  // clean retry the way "proposals.failed" does.
+  "proposals.maybeFailed": "That may not have gone through. Check before trying again.",
+  "proposals.work.heading": "Suggestions",
+  // Fix-wave (task-10-brief.md, Minor): the old copy ("Questions about
+  // work, not work yet.") restated the engineering invariant instead of
+  // telling the agency what to do — this screen has no accept/dismiss of
+  // its own, so acting means opening the account, which the old copy never
+  // said. "proposals.subhead" (the call-detail page's own sibling copy) is
+  // the concrete version this one now matches.
+  "proposals.work.body": "Open the account to accept or dismiss. Nothing changes from this screen.",
+  // Fix-wave Important 3 (task-11-brief): the per-account "To do" screen's
+  // own twin of "proposals.work.body" — a reader here is already INSIDE the
+  // account, so "open the account" would be nonsense; the next step is
+  // opening the call itself, exactly where every row on this section links.
+  "proposals.account.body": "Open the call to accept or dismiss. Nothing changes from this screen.",
+
+  // Per-kind plain-language sentences for the call-detail proposals block
+  // (Task 7). "{title}"/"{value}" are the house untrusted-placeholder shape —
+  // filled with a `.replace(..., () => x)` call, never the two-argument
+  // form, because both originate in a caller's own words read back by the
+  // model. "{field}" is filled from this app's own static field labels
+  // (contacts.firstName etc.), not the caller — safe either way.
+  "proposals.task.label": "Add a task: {title}",
+  // Fix-wave Important 1: rendered only for a `task` proposal that survived
+  // `generate.ts`'s own forward-window check — a `dueAt` reaching this label
+  // is always a real, near-future moment a human can see BEFORE accepting
+  // it, in the account's own zone, never the raw UTC instant.
+  "proposals.task.due": "Due {date}",
+  "proposals.contactField.label": "Add their {field}: {value}",
+  // "{from}"/"{to}" are stage NAMES, resolved from the payload's uuids
+  // before this ever reaches copy — never the destination alone.
+  "proposals.stage.label": "Move from {from} to {to}",
+  // No stage is skipped silently: a bypass of even ONE stage speaks up, not
+  // just a bypass of two or more — a customer who books on the first call
+  // skips exactly one ("Contacted") and is the single most likely case this
+  // feature will ever produce. Split singular/plural rather than
+  // interpolating a count into a sentence that would read "1 stages".
+  "proposals.stage.skip.one": "A stage is skipped in between.",
+  "proposals.stage.skip.many": "{n} stages are skipped in between.",
+  // Fix-wave (task-10-brief.md, Important 1): the agency work queue's own
+  // opportunity_stage proposals resolve `fromStageId`/`toStageId` against a
+  // batched read (work/page.tsx) that can come back short for one specific
+  // pair — a real fault, or a stage since deleted. Never the raw uuid, never
+  // the destination alone (this file's own rule for the kind), but the row
+  // still shows: an honest sentence that names no stage, rather than
+  // dropping the row and leaving the queue looking clear when it is not.
+  // Fix-wave Minor: past tense ("moved") asserted something that had not
+  // happened — nothing moves until a human accepts, and every sibling label
+  // in this namespace ("Add a task…", "Add their…", "Move from…") is
+  // imperative. Rewritten to match, without changing what it is honestly
+  // able to say (page.tsx's own batched pipeline_stages read came back short
+  // for this one pair). No apostrophe on purpose: several call sites still
+  // compare raw `renderToStaticMarkup` output rather than decoded text, and
+  // React escapes an apostrophe to `&#x27;` in that output.
+  "proposals.stage.unresolved": "Review the stage change on this opportunity.",
+  // "proposals.accepted.toast" ("Added to your to-do list") is true only of
+  // a `task` proposal — accepting the other two kinds doesn't add anything
+  // to a to-do list, and reporting that it did would be exactly the false
+  // confirmation copy the "landscaper at 7am" read rules out.
+  // "Saved" named nothing — the sibling toast it was modelled on names its
+  // own destination. "Moved on the board" used a word this product never
+  // uses; the nav item and the screen title both say "Opportunities".
+  "proposals.accepted.contactField.toast": "Added to the contact.",
+  "proposals.accepted.stage.toast": "Moved in Opportunities",
 } as const;
 
 export type MessageKey = keyof typeof m;

@@ -4,7 +4,7 @@ const dbMocks = vi.hoisted(() => ({
   finishCallRow: vi.fn(), createContact: vi.fn(), ensureConversation: vi.fn(),
   createMessage: vi.fn(), incrementUnreadCount: vi.fn(), emit: vi.fn(),
   fillContactBlanks: vi.fn(), updateMessageStatus: vi.fn(), hasRecentOutboundSms: vi.fn(),
-  getAlertPhone: vi.fn(),
+  getAlertPhone: vi.fn(), getContact: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const emailRefs = vi.hoisted(() => ({ providerShouldThrow: false, send: vi.fn() }));
@@ -34,10 +34,18 @@ vi.mock("@/lib/sms/sender", async (importOriginal) => ({
 }));
 const summaryMocks = vi.hoisted(() => ({ generateSummary: vi.fn() }));
 vi.mock("./summary-service", () => ({ generateSummary: summaryMocks.generateSummary }));
+// A STATIC import in finish-call.ts itself (`import { generateProposals } from
+// "@/lib/proposals/generate"` at module scope) — vi.mock intercepts it the
+// same way it intercepts every other module mocked in this file. Its own
+// 59-test suite (apps/web/src/lib/proposals/generate.test.ts) owns the real
+// generator's behaviour; this file owns only the lifecycle question of WHEN
+// and WHETHER finishCall calls it, and WHAT it hands over.
+const proposalsMocks = vi.hoisted(() => ({ generateProposals: vi.fn() }));
+vi.mock("@/lib/proposals/generate", () => ({ generateProposals: proposalsMocks.generateProposals }));
 
 import type { serviceDb } from "@bis/db";
 import { segmentsFor } from "@/lib/sms/segments";
-import { finishCall, isMeaningful, type FinishContext } from "./finish-call";
+import { finishCall, isMeaningful, computeBlankFields, type FinishContext } from "./finish-call";
 import {
   emptyCallState, withLead, withMessage, withTranscript, withBooking, withBookingCancelled, withServed,
   withTransferred,
@@ -45,7 +53,93 @@ import {
 import { defaultTextbackBody } from "./textback-body";
 import { withOptOut } from "@/lib/sms/opt-out";
 
+/**
+ * The two raw-table reads `resolveOpenOpportunity` (finish-call.ts) makes —
+ * no `@bis/db` wrapper exists for "this contact's one open opportunity plus
+ * its pipeline's own stages", and this task is scoped to leave
+ * `packages/db` untouched, so finish-call.ts reads the tables directly, the
+ * same way `actions.ts` and `page.tsx` (this app's own opportunity-review
+ * code) already do. Defaults to "no open opportunity" for every table this
+ * function does not recognize as belonging to that read, so every OTHER
+ * test in this file — which knows nothing about this shape — resolves
+ * `openOpportunity: null` silently instead of throwing on `ctx.db.from` and
+ * logging noise nobody asked for.
+ */
+function fakeOppDb(opts: {
+  opportunities?: { id: string; stage_id: string; pipeline_id: string }[];
+  oppErrorMessage?: string;
+  stages?: { id: string; name: string; position: number }[];
+  stagesErrorMessage?: string;
+} = {}) {
+  const oppFilters: unknown[] = [];
+  const stageFilters: unknown[] = [];
+  return {
+    oppFilters, stageFilters,
+    from: (table: string) => {
+      if (table === "opportunities") {
+        return {
+          select: () => ({
+            eq: (...a1: unknown[]) => { oppFilters.push(a1); return {
+              eq: (...a2: unknown[]) => { oppFilters.push(a2); return {
+                eq: (...a3: unknown[]) => {
+                  oppFilters.push(a3);
+                  // `.limit(2)` — the real read's own idiom (fix-wave
+                  // Minor) — chains off this third `.eq()`, so it must be
+                  // recorded rather than sending the resolved value straight
+                  // out from here.
+                  return {
+                    limit: (...a4: unknown[]) => {
+                      oppFilters.push(a4);
+                      if (opts.oppErrorMessage) {
+                        return Promise.resolve({ data: null, error: { message: opts.oppErrorMessage } });
+                      }
+                      return Promise.resolve({ data: opts.opportunities ?? [], error: null });
+                    },
+                  };
+                },
+              }; },
+            }; },
+          }),
+        };
+      }
+      if (table === "pipeline_stages") {
+        return {
+          select: () => ({
+            eq: (...a1: unknown[]) => { stageFilters.push(a1); return {
+              eq: (...a2: unknown[]) => { stageFilters.push(a2); return {
+                order: (...a3: unknown[]) => {
+                  stageFilters.push(a3);
+                  if (opts.stagesErrorMessage) {
+                    return Promise.resolve({ data: null, error: { message: opts.stagesErrorMessage } });
+                  }
+                  return Promise.resolve({ data: opts.stages ?? [], error: null });
+                },
+              }; },
+            }; },
+          }),
+        };
+      }
+      throw new Error(`fakeOppDb: unexpected table "${table}"`);
+    },
+  };
+}
+
 const ctx: FinishContext = {
+  // Deliberately the bare `{}` this file has always used — many existing
+  // assertions below (`toHaveBeenCalledWith({}, "a1", ...)`) hardcode that
+  // literal rather than referencing `ctx.db` itself, so replacing it with a
+  // working `fakeOppDb()` here would break them on a value-equality
+  // mismatch having nothing to do with what they test. Every test in the
+  // `openOpportunity` describe block below overrides `db` with its own
+  // `fakeOppDb(...)`; every OTHER test reaches `resolveOpenOpportunity` (in
+  // finish-call.ts) with this same empty object, which fails its own
+  // `db.from(...)` call, is caught by that function's own try/catch (its
+  // FAIL-CLOSED contract), and resolves `openOpportunity: null` — the exact
+  // outcome those tests already expect of a call with no known opportunity,
+  // just reached by the read failing rather than finding zero rows. Logs an
+  // extra (unasserted) `finishCall: open-opportunity read failed` line in
+  // those tests; no assertion in this file checks console.error call
+  // counts (grep confirms), so this is inert noise, not a false pass.
   db: {} as unknown as ReturnType<typeof serviceDb>, accountId: "a1",
   // The customer-facing name, and the ONLY name this context carries — there
   // is no `accountName` on `FinishContext` any more.
@@ -87,6 +181,16 @@ beforeEach(() => {
   // IS the switch) — the "the field is the switch" test below is the
   // regression guard for this default.
   dbMocks.getAlertPhone.mockResolvedValue(null);
+  // The ordinary case: a contact with all four allow-listed columns already
+  // filled, so `blankFields` computes to `[]` unless a test deliberately
+  // leaves one of these blank to exercise the propagation.
+  dbMocks.getContact.mockReset().mockResolvedValue({
+    id: "ct1", first_name: "Ana", last_name: "Ruiz",
+    email: "ana@example.com", phone: "+19562921696",
+  });
+  // The ordinary case is "nothing to propose" — resolving 0 rather than
+  // rejecting, matching generateProposals's real never-throws contract.
+  proposalsMocks.generateProposals.mockReset().mockResolvedValue(0);
 });
 
 describe("finishCall", () => {
@@ -766,6 +870,436 @@ describe("finishCall — the staff alert SMS", () => {
     const r = await finishCall(leadState(), ctx, meta);
     expect(r).toMatchObject({ notified: true, stored: true });
     errSpy.mockRestore();
+  });
+});
+
+/**
+ * The proposal generator's placement in the lifecycle. The spec said
+ * generation runs "alongside the summary" — that would ground every proposal
+ * in `state.transcript` before it is durable anywhere. `generateProposals`
+ * itself (61 tests, apps/web/src/lib/proposals) owns what a proposal SAYS;
+ * this suite owns only WHEN and WHETHER `finishCall` calls it.
+ */
+describe("finishCall — proposal generation", () => {
+  const leadState = () => withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
+    { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
+
+  it("generates proposals only AFTER the call row is stored AND after the call.recorded emit — never upstream of the alert/text-back/CALL-LOST/emit tail (mutation: put the block back right after finishCallRow -> FAILS)", async () => {
+    const order: string[] = [];
+    dbMocks.finishCallRow.mockImplementation(async () => { order.push("finishCallRow"); });
+    dbMocks.emit.mockImplementation(async () => { order.push("emit"); });
+    proposalsMocks.generateProposals.mockImplementation(async () => { order.push("generateProposals"); return 0; });
+    await finishCall(leadState(), ctx, meta);
+    expect(order).toEqual(["finishCallRow", "emit", "generateProposals"]);
+  });
+
+  it("writes no proposals when the call row was never stored (callRowId null)", async () => {
+    // startCallRow fail-opened at pickup, so meta.callRowId is null and no
+    // row was ever written — a proposal keyed on a persisted transcript must
+    // produce nothing rather than throw.
+    await finishCall(leadState(), ctx, { ...meta, callRowId: null });
+    expect(proposalsMocks.generateProposals).not.toHaveBeenCalled();
+  });
+
+  it("does not call generateProposals when finishCallRow itself fails (stored stays false)", async () => {
+    // `meta.callRowId` is non-null here, but the write failed, so `stored`
+    // never becomes true — the guard is `stored`, not merely "a row id was
+    // handed in".
+    dbMocks.finishCallRow.mockRejectedValue(new Error("db down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await finishCall(leadState(), ctx, meta);
+    expect(proposalsMocks.generateProposals).not.toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("passes the real call id, the resolved contactId, the outcome, the transcript and handoffRequested", async () => {
+    const s = withTransferred(leadState());
+    await finishCall(s, ctx, meta);
+    expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: "a1", callId: "call1", contactId: "ct1", outcome: "lead",
+      transcript: s.transcript, handoffRequested: true,
+    }));
+  });
+
+  // Fix-wave Important 1: the model's only clock. `meta.endedAt` (this
+  // call's own instant) and `ctx.timezone` (this account's own IANA zone) —
+  // read from what finishCall already has, never a fresh `new Date()` built
+  // here (mutation: pass `new Date()` instead of `meta.endedAt` -> this
+  // assertion, pinned to the fixture's own `meta.endedAt` object identity,
+  // would fail; `toHaveBeenCalledWith` fails a `new Date()` against any other
+  // Date instance, even one for the same instant, only when they are not
+  // `.toEqual`-equal in value — here they would still be UNEQUAL in value
+  // too, since the fixture module runs well after 2027-06-01).
+  it("passes this call's own instant and the account's own zone, never a freshly-read clock (mutation: pass new Date() instead of meta.endedAt -> FAILS)", async () => {
+    await finishCall(leadState(), ctx, meta);
+    expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+      now: meta.endedAt, timezone: "America/Chicago",
+    }));
+  });
+
+  // Task 8: `generateProposals` cannot see the contact row, so finishCall
+  // reads it and hands over exactly which of the four allow-listed columns
+  // are currently empty. This is the propose-time half of the containment
+  // rule — a field this array omits can never become a `contact_field`
+  // proposal, no matter what the model asks for.
+  // Fix-wave Important 1: `first_name: "Ana"` is a REAL, non-placeholder
+  // name here, so `lastName` must NOT be reported blank even though
+  // `last_name` is null — `fillContactBlanks` refuses to fill `last_name`
+  // alone unless the first name is blank or this app's own "Caller"
+  // placeholder, and a one-field `contact_field` proposal never carries a
+  // `firstName` alongside it to make that compatible. Before this fix,
+  // `blankFields` here was `["lastName", "email"]`, and a `lastName`
+  // proposal built from it could reach the review screen and then NEVER be
+  // accepted — the accept path reverts the stamp and the same proposal
+  // returns pending, forever, on every subsequent click. One live contact
+  // has exactly this shape.
+  it("passes blankFields for exactly the resolved contact's own empty columns, honoring fillContactBlanks's own first-name rule (mutation: pass [] regardless of the contact -> FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValue({
+      id: "ct1", first_name: "Ana", last_name: null, email: "", phone: "+19562921696",
+    });
+    await finishCall(leadState(), ctx, meta);
+    expect(dbMocks.getContact).toHaveBeenCalledWith(ctx.db, "a1", "ct1");
+    expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+      blankFields: ["email"],
+    }));
+  });
+
+  // The mirror bug fixed alongside it: the "Caller" placeholder this file's
+  // own `resolveContactId` writes is exactly the ONE shape
+  // `fillContactBlanks` explicitly supports filling `firstName` for, and
+  // before this fix it was never reported blank at all.
+  it("reports firstName blank for this app's own \"Caller\" placeholder (mutation: require first_name to be nullish, not the placeholder too -> FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValue({
+      id: "ct1", first_name: "Caller", last_name: null, email: null, phone: "+19562921696",
+    });
+    await finishCall(leadState(), ctx, meta);
+    expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+      blankFields: ["firstName", "lastName", "email"],
+    }));
+  });
+
+  // THE DURABLE FORM (fix-wave Important 1's own fix note): these two rules
+  // — what THIS FILE calls blank, and what `fillContactBlanks`
+  // (`@bis/db`'s `contacts.ts`) will actually fill — live in separate files
+  // and were expressed separately, which is exactly what let them drift
+  // apart and produce the defect above. Asserting one side's arithmetic in
+  // isolation cannot catch a future re-drift; asserting AGREEMENT between
+  // the real functions can. `vi.importActual` reaches past this file's own
+  // `vi.mock("@bis/db", ...)` (line 9), which replaces `fillContactBlanks`
+  // with a bare `vi.fn()`, to run the GENUINE implementation against a
+  // hand-built client — not `dbMocks.fillContactBlanks`.
+  describe("computeBlankFields parity with the real fillContactBlanks", () => {
+    type ContactRow = { first_name: string | null; last_name: string | null; email: string | null; phone: string | null };
+    type Field = "firstName" | "lastName" | "email" | "phone";
+
+    // A minimal stand-in for the two calls `fillContactBlanks` makes: a
+    // `getContact`-shaped read (`select().eq().eq().maybeSingle()`) and its
+    // own unconditional `update().eq().eq()`, plus the `events` insert its
+    // `emit()` call makes whenever it actually writes something. Table names
+    // are checked so a stray call elsewhere in the real function surfaces as
+    // a thrown error instead of a silently-wrong result.
+    function fakeContactDb(row: ContactRow) {
+      return {
+        from: (table: string) => {
+          if (table === "contacts") {
+            return {
+              select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: row, error: null }) }) }) }),
+              update: () => ({
+                eq: () => ({ eq: () => Promise.resolve({ error: null }) }),
+              }),
+            };
+          }
+          if (table === "events") return { insert: async () => ({ error: null }) };
+          throw new Error(`fakeContactDb: unexpected table "${table}"`);
+        },
+      };
+    }
+
+    const VALUES: Record<Field, string> = {
+      firstName: "Maria", lastName: "Ruiz", email: "sam@example.com", phone: "+19565551234",
+    };
+
+    async function realFillsField(
+      realFillContactBlanks: typeof import("@bis/db").fillContactBlanks,
+      row: ContactRow, field: Field,
+    ): Promise<boolean> {
+      const db = fakeContactDb(row);
+      const patch = { [field]: VALUES[field] };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- fakeContactDb is a hand-built stand-in, not a real SupabaseClient
+      const filled = await realFillContactBlanks(db as any, "a1", "c1", patch, "voice", "ai");
+      return filled.length > 0;
+    }
+
+    // The two PROVED shapes from the fix-wave report, plus three more that
+    // exercise the same first-name rule from other angles — a wide-open
+    // contact, a fully-filled one, and a "Caller" placeholder whose
+    // last_name is ALREADY real (so the placeholder rule must NOT apply).
+    const ROWS: { name: string; row: ContactRow }[] = [
+      { name: "real first name, blank last name (the proved defect)",
+        row: { first_name: "Ana", last_name: null, email: null, phone: null } },
+      { name: "\"Caller\" placeholder, blank last name (the proved mirror case)",
+        row: { first_name: "Caller", last_name: null, email: null, phone: null } },
+      { name: "wide open",
+        row: { first_name: null, last_name: null, email: null, phone: null } },
+      { name: "everything already filled",
+        row: { first_name: "Ana", last_name: "Ruiz", email: "a@example.com", phone: "+19560000000" } },
+      { name: "\"Caller\" placeholder but a real last name already on file",
+        row: { first_name: "Caller", last_name: "Smith", email: null, phone: null } },
+    ];
+
+    it.each(ROWS)("agrees with fillContactBlanks on every field for: $name", async ({ row }) => {
+      const { fillContactBlanks: realFillContactBlanks } =
+        await vi.importActual<typeof import("@bis/db")>("@bis/db");
+      const blank = computeBlankFields(row);
+      for (const field of ["firstName", "lastName", "email", "phone"] as const) {
+        const wouldFill = await realFillsField(realFillContactBlanks, row, field);
+        expect(blank.includes(field)).toBe(wouldFill);
+      }
+    });
+  });
+
+  it("passes blankFields: [] when the call resolved no contact, and never reads one", async () => {
+    const s = withMessage(emptyCallState(), { body: "call me", at: "t" });
+    const noCallerCtx: FinishContext = { ...ctx, callerNumber: null };
+    await finishCall(s, noCallerCtx, meta);
+    expect(dbMocks.getContact).not.toHaveBeenCalled();
+    expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+      contactId: null, blankFields: [],
+    }));
+  });
+
+  // Fix-wave Minor: on this account's dominant traffic — several robocalls a
+  // day, every one ineligible — this read used to run regardless, even
+  // though `generateProposals` was always going to refuse the call anyway
+  // (its own "ELIGIBILITY FIRST" doc). A transferred lead call is still
+  // MEANINGFUL (it gets its contact, its alert) but INELIGIBLE for a
+  // proposal purely because the caller asked for a person — exactly the case
+  // that used to pay a wasted `getContact` round trip. `generateProposals`
+  // itself must still be called with the real `handoffRequested: true` so
+  // IT applies the refusal — only the now-pointless READ is skipped.
+  it("skips the getContact read for blankFields when the call is ineligible, even though a contact was resolved (mutation: drop the callIsEligible gate on the read -> FAILS)", async () => {
+    const s = withTransferred(leadState());
+    await finishCall(s, ctx, meta);
+    expect(dbMocks.getContact).not.toHaveBeenCalled();
+    expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+      contactId: "ct1", handoffRequested: true, blankFields: [],
+    }));
+  });
+
+  // FAIL-CLOSED ON THE FIELD, NEVER ON THE CALL: a DB blip reading the
+  // contact must cost this feature its blank-field list, not the call its
+  // proposals (still generated, just with no `contact_field` candidate) or
+  // finishCall its never-throws contract.
+  it("passes blankFields: [] and does not throw when reading the contact fails (mutation: remove the read's own try/catch -> FAILS)", async () => {
+    dbMocks.getContact.mockRejectedValue(new Error("db down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await finishCall(leadState(), ctx, meta);
+    expect(result.stored).toBe(true);
+    expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+      blankFields: [],
+    }));
+    errSpy.mockRestore();
+  });
+
+  // Task 9: `generateProposals`'s `opportunity_stage` branch cannot see the
+  // pipeline either — it is handed exactly this contact's one open
+  // opportunity and its pipeline's own real stage names, ordered by
+  // position, or `null`. This is the propose-time source of that data;
+  // `generateProposals`'s own 53-test suite (generate.test.ts) owns what it
+  // does with it once handed over.
+  describe("openOpportunity", () => {
+    // Fix-wave Important 1: the opportunity's own `stage_id` is "s2" here,
+    // NOT `rows[0]`'s id ("s1") — the earlier two-stage fixture put the
+    // opportunity at the pipeline's FIRST stage, so `stageName: current.name`
+    // and a wrong-index `rows[0]!.name` read produced the identical string.
+    // A third stage is present so "the opportunity's own stage" and "the
+    // pipeline's first stage" name two different, checkable things.
+    it("passes an openOpportunity built from the contact's single open opportunity and its pipeline's own stages, reading the OPPORTUNITY'S OWN current stage — not the pipeline's first row (mutation: report rows[0] instead of the row matching opp.stage_id -> FAILS)", async () => {
+      const oppDb = fakeOppDb({
+        opportunities: [{ id: "o1", stage_id: "s2", pipeline_id: "p1" }],
+        stages: [
+          { id: "s1", name: "New Lead", position: 0 },
+          { id: "s2", name: "Contacted", position: 1 },
+          { id: "s3", name: "Appointment", position: 2 },
+        ],
+      });
+      await finishCall(leadState(), { ...ctx, db: oppDb as unknown as ReturnType<typeof serviceDb> }, meta);
+      expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+        openOpportunity: {
+          id: "o1", stageId: "s2", stageName: "Contacted",
+          stages: [
+            { id: "s1", name: "New Lead", position: 0 },
+            { id: "s2", name: "Contacted", position: 1 },
+            { id: "s3", name: "Appointment", position: 2 },
+          ],
+        },
+      }));
+      // Filtered by THIS contact, `status = 'open'`, AND this account
+      // (fix-wave Important 2) — never every opportunity the account has
+      // ever had, and never keyed on the wrong tenant. `fakeOppDb` returns
+      // the same fixture rows regardless of what it was filtered by, so
+      // only asserting the RECORDED filter arguments (not the returned
+      // data) catches a read keyed on the wrong column.
+      expect(oppDb.oppFilters.flat()).toContain("ct1");
+      expect(oppDb.oppFilters.flat()).toContain("open");
+      expect(oppDb.oppFilters.flat()).toContain("a1");
+      // The stages read must be keyed on the OPPORTUNITY'S OWN pipeline id
+      // ("p1"), never its own row id ("o1") — fix-wave Important 2's other
+      // half: a stages read keyed on the wrong pipeline hands the generator
+      // a DIFFERENT pipeline's stage names, and the generator's own
+      // membership check then validates against that wrong list.
+      expect(oppDb.stageFilters.flat()).toContain("a1");
+      expect(oppDb.stageFilters.flat()).toContain("p1");
+    });
+
+    it("passes openOpportunity: null when the contact has no open opportunity, refusing cleanly rather than crashing on an empty result (mutation: narrow the guard to `if (!opps)` alone -> FAILS)", async () => {
+      const oppDb = fakeOppDb({ opportunities: [] });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      await finishCall(leadState(), { ...ctx, db: oppDb as unknown as ReturnType<typeof serviceDb> }, meta);
+      expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+        openOpportunity: null,
+      }));
+      // fix-wave Important 3: a zero-row result and a crash-then-swallow
+      // both resolve to the identical `null` return, so that return value
+      // alone cannot tell them apart. `opps[0].stage_id` on an empty
+      // array's `undefined` element throws, is caught by
+      // `resolveOpenOpportunity`'s own catch, and LOGS — a real zero-row
+      // refusal never does. This is the one observable a broken guard
+      // cannot fake.
+      expect(errSpy).not.toHaveBeenCalled();
+      errSpy.mockRestore();
+    });
+
+    // THE GUESS THIS FEATURE MUST NEVER MAKE: a call gives no signal about
+    // WHICH of several open deals it concerns.
+    it("passes openOpportunity: null when the contact has more than one open opportunity, refusing cleanly rather than crashing (mutation: drop the length !== 1 check -> FAILS)", async () => {
+      // `stages` is populated (not left empty) so a dropped length check
+      // would actually resolve a NON-null `openOpportunity` from `opps[0]`
+      // — an empty `stages` array would ALSO resolve to `null` via the
+      // separate `!current` guard just below, masking this exact mutation
+      // the same way a fixture that trips an earlier gate would (Task 8's
+      // own lesson: check the fixture reaches the guard under test).
+      const oppDb = fakeOppDb({
+        opportunities: [
+          { id: "o1", stage_id: "s1", pipeline_id: "p1" },
+          { id: "o2", stage_id: "s1", pipeline_id: "p1" },
+        ],
+        stages: [{ id: "s1", name: "New Lead", position: 0 }],
+      });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      await finishCall(leadState(), { ...ctx, db: oppDb as unknown as ReturnType<typeof serviceDb> }, meta);
+      expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+        openOpportunity: null,
+      }));
+      // Same substitute as the zero-row test above: a genuine "more than
+      // one" refusal never logs; only a guard that fell through to a crash
+      // would.
+      expect(errSpy).not.toHaveBeenCalled();
+      errSpy.mockRestore();
+    });
+
+    // FAIL CLOSED, unlike the fail-open call-cap/startCallRow reads
+    // elsewhere in this lifecycle — a missed stage-move proposal costs
+    // nothing a caller depends on, so there is no fail-open argument here.
+    it("passes openOpportunity: null and does not throw when the opportunities read fails (mutation: remove resolveOpenOpportunity's own try/catch -> throws instead of returning null)", async () => {
+      const oppDb = fakeOppDb({ oppErrorMessage: "connection reset" });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const result = await finishCall(
+        leadState(), { ...ctx, db: oppDb as unknown as ReturnType<typeof serviceDb> }, meta,
+      );
+      expect(result.stored).toBe(true);
+      expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+        openOpportunity: null,
+      }));
+      // fix-wave Important 2: pins the `if (error) throw ...` check itself —
+      // deleting it leaves `data: null` reaching the same `!opps` branch and
+      // the same `null` return, so only the log line this catch produces
+      // distinguishes "the read errored" from "the read found nothing".
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("open-opportunity read failed"));
+      errSpy.mockRestore();
+    });
+
+    it("passes openOpportunity: null and does not throw when the pipeline_stages read fails", async () => {
+      const oppDb = fakeOppDb({
+        opportunities: [{ id: "o1", stage_id: "s1", pipeline_id: "p1" }],
+        stagesErrorMessage: "connection reset",
+      });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const result = await finishCall(
+        leadState(), { ...ctx, db: oppDb as unknown as ReturnType<typeof serviceDb> }, meta,
+      );
+      expect(result.stored).toBe(true);
+      expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+        openOpportunity: null,
+      }));
+      // fix-wave Important 2: pins the `if (stagesError) throw ...` check —
+      // deleting it leaves `stages: null` reaching `rows = []`, then the
+      // `!current` guard, then the same `null` return with no log at all.
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("open-opportunity read failed"));
+      errSpy.mockRestore();
+    });
+
+    it("passes openOpportunity: null when the call resolved no contact, and never reads one", async () => {
+      const s = withMessage(emptyCallState(), { body: "call me", at: "t" });
+      const oppDb = fakeOppDb();
+      const noCallerCtx: FinishContext = { ...ctx, callerNumber: null, db: oppDb as unknown as ReturnType<typeof serviceDb> };
+      await finishCall(s, noCallerCtx, meta);
+      expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+        contactId: null, openOpportunity: null,
+      }));
+      expect(oppDb.oppFilters).toEqual([]);
+    });
+
+    // Same precedent as the blankFields read just above: `callIsEligible`
+    // already gates that one so an ineligible call costs no wasted round
+    // trip, and this read follows it — a transferred lead call is still
+    // MEANINGFUL (gets its contact, its alert) but ineligible for a
+    // proposal purely because the caller asked for a person.
+    it("skips the open-opportunity read when the call is ineligible, even though a contact was resolved (mutation: drop the callIsEligible gate on this read -> FAILS)", async () => {
+      const oppDb = fakeOppDb({
+        opportunities: [{ id: "o1", stage_id: "s1", pipeline_id: "p1" }],
+        stages: [{ id: "s1", name: "New Lead", position: 0 }],
+      });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const s = withTransferred(leadState());
+      await finishCall(s, { ...ctx, db: oppDb as unknown as ReturnType<typeof serviceDb> }, meta);
+      expect(oppDb.oppFilters).toEqual([]);
+      expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+        openOpportunity: null,
+      }));
+      // Same substitute as the zero-row/more-than-one tests above: a
+      // genuinely SKIPPED read never logs; only a guard that fell through
+      // to the real (empty-`db`) read and crashed would.
+      expect(errSpy).not.toHaveBeenCalled();
+      errSpy.mockRestore();
+    });
+  });
+
+  it("a proposal failure changes nothing about the call (mutation: remove the catch -> FAILS)", async () => {
+    proposalsMocks.generateProposals.mockRejectedValue(new Error("model down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await finishCall(leadState(), ctx, meta);
+    expect(result.stored).toBe(true);
+    expect(result.outcome).toBe("lead");
+    errSpy.mockRestore();
+  });
+
+  it("logs only when a proposal was actually written — silence is the normal case", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    proposalsMocks.generateProposals.mockResolvedValue(0);
+    await finishCall(leadState(), ctx, meta);
+    expect(logSpy.mock.calls.some((c) => String(c[0]).includes("proposals"))).toBe(false);
+    errSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it("logs when a proposal was written (mutation: drop the >0 log -> FAILS)", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    proposalsMocks.generateProposals.mockResolvedValue(1);
+    await finishCall(leadState(), ctx, meta);
+    expect(logSpy.mock.calls.some((c) => String(c[0]).includes("proposals") && String(c[0]).includes("call1"))).toBe(true);
+    logSpy.mockRestore();
   });
 });
 

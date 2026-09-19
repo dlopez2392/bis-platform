@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { WorkRow } from "@bis/db";
+import type { CallProposal, WorkRow } from "@bis/db";
 import { bucketWork, type BucketedWork } from "@/lib/work/buckets";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
@@ -25,23 +25,47 @@ vi.mock("@/lib/auth", () => ({
  *  without a fresh `vi.mock` per test — assigned in `beforeEach` before the
  *  dynamic `import("./page")` below ever resolves this factory. */
 let accountTimezone = "America/Chicago";
+// Fix-wave Important 3 (task-11-brief): the pending-proposals read added by
+// this task issues two MORE reads through this same fake — the contacts
+// lookup already existed (`in`, below) but was never exercised with a
+// non-empty result, and `pipeline_stages` is new. Table-branched, same
+// shape as work/page.test.ts's own `FAKE_DB` — the accounts read is the
+// only one that needs `maybeSingle`; the other two share `.eq().in()`.
+const contactsInMock = vi.fn<
+  (...args: unknown[]) => Promise<{ data: unknown[] | null; error: unknown }>
+>(async () => ({ data: [], error: null }));
+const pipelineStagesInMock = vi.fn<
+  (...args: unknown[]) => Promise<{ data: unknown[] | null; error: unknown }>
+>(async () => ({ data: [], error: null }));
 vi.mock("@/lib/db", () => ({
   dbForRequest: async () => ({
-    from: () => ({
-      select: () => ({
-        eq: () => ({
-          maybeSingle: async () => ({ data: { timezone: accountTimezone }, error: null }),
-          // The contacts lookup shares this same chain shape in page.tsx;
-          // unused by the tests below (they use contactId: null rows), kept
-          // here only so the shape matches if that ever changes.
-          in: async () => ({ data: [], error: null }),
+    from: (table: string) => {
+      if (table === "pipeline_stages") {
+        return { select: () => ({ eq: () => ({ in: (...args: unknown[]) => pipelineStagesInMock(...args) }) }) };
+      }
+      if (table === "contacts") {
+        return { select: () => ({ eq: () => ({ in: (...args: unknown[]) => contactsInMock(...args) }) }) };
+      }
+      return {
+        select: () => ({
+          eq: () => ({
+            maybeSingle: async () => ({ data: { timezone: accountTimezone }, error: null }),
+            in: async () => ({ data: [], error: null }),
+          }),
         }),
-      }),
-    }),
+      };
+    },
   }),
 }));
 
 let workRows: WorkRow[] = [];
+/** This account's own pending proposals (Important 3) — defaults to none so
+ *  every pre-existing test below is unaffected by this mock's addition. A
+ *  real `vi.fn()` (not a bare closure, unlike `listAccountWork` above) so
+ *  the "degrades on failure" test can override it with a rejection for
+ *  exactly one call. */
+let pendingProposals: CallProposal[] = [];
+const listPendingProposalsMock = vi.fn(async (): Promise<CallProposal[]> => pendingProposals);
 /** The agency's own zone, as `lib/zone.ts` reads it through `serviceDb`.
  *  Only `serviceDb` and `listAccountWork` are stubbed — `resolveZone` stays
  *  REAL, so these tests exercise the actual chain (account -> agency -> UTC)
@@ -52,6 +76,7 @@ vi.mock("@bis/db", async (importOriginal) => {
   return {
     ...actual,
     listAccountWork: async () => workRows,
+    listPendingProposals: () => listPendingProposalsMock(),
     serviceDb: () => ({
       from: () => ({
         select: () => ({
@@ -105,6 +130,18 @@ function bookingRow(overrides: Partial<WorkRow> = {}): WorkRow {
     title: "", dueAt: null, occurredAt: "2026-09-05T00:00:00Z",
     ...overrides,
   };
+}
+
+/** Fix-wave Important 3 — a pending proposal fixture for the composition
+ *  tests below, same shape as work/page.test.ts's own `proposal()`. */
+function proposal(overrides: Partial<CallProposal> = {}): CallProposal {
+  return {
+    id: "prop-1", accountId: "acct1", callId: "call-1", contactId: null,
+    kind: "task", payload: { title: "Call back", dueAt: null },
+    evidence: "the caller asked for a callback", status: "pending",
+    decidedAt: null, decidedBy: null, createdAt: "2026-09-01T00:00:00Z",
+    ...overrides,
+  } as CallProposal;
 }
 
 /**
@@ -312,6 +349,10 @@ describe("TasksPage — an unusable account zone is named, never silently guesse
     agencyTimezone = "America/Chicago";
     isAgency = true;
     workRows = [];
+    pendingProposals = [];
+    listPendingProposalsMock.mockReset().mockImplementation(async () => pendingProposals);
+    contactsInMock.mockReset().mockResolvedValue({ data: [], error: null });
+    pipelineStagesInMock.mockReset().mockResolvedValue({ data: [], error: null });
   });
 
   it("renders the date AND names the agency's zone when the account's own is unusable (mutation: drop the agency step from resolveZone so it falls to UTC -> date moves to Sep 1 and the note names UTC -> FAILS)", async () => {
@@ -401,5 +442,120 @@ describe("TasksPage — an unusable account zone is named, never silently guesse
     expect(html).not.toContain("/settings");
     // The date still renders for a client — the whole point.
     expect(html).toContain("Aug 31, 2026");
+  });
+});
+
+/**
+ * Fix-wave Important 3 (task-11-brief): "Both audiences see both surfaces"
+ * — the spec's own words. The agency's cross-tenant work queue already
+ * rendered pending proposals; `listPendingProposals` (packages/db's own
+ * per-account accessor, written and tested for exactly this) had no caller
+ * anywhere until this task. A client who never opens a specific call never
+ * learns a suggestion exists.
+ */
+describe("TasksPage — pending proposals (Important 3)", () => {
+  beforeEach(() => {
+    accountTimezone = "America/Chicago";
+    agencyTimezone = "America/Chicago";
+    isAgency = true;
+    workRows = [];
+    pendingProposals = [];
+    listPendingProposalsMock.mockReset().mockImplementation(async () => pendingProposals);
+    contactsInMock.mockReset().mockResolvedValue({ data: [], error: null });
+    pipelineStagesInMock.mockReset().mockResolvedValue({ data: [], error: null });
+  });
+
+  it("renders a pending proposal in its own suggestions section", async () => {
+    pendingProposals = [proposal()];
+    const { default: TasksPage } = await import("./page");
+    const html = renderToStaticMarkup(
+      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }),
+    );
+    expect(html).toContain(m["proposals.work.heading"]);
+    expect(renderedText(html)).toContain("the caller asked for a callback");
+  });
+
+  it("renders no suggestions section when there are no pending proposals", async () => {
+    const { default: TasksPage } = await import("./page");
+    const html = renderToStaticMarkup(
+      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }),
+    );
+    expect(html).not.toContain(m["proposals.work.heading"]);
+  });
+
+  // Mirrors work/page.test.ts's own identically-named test: a real bucketed
+  // task ("Call about the estimate") sits beside a genuinely distinct
+  // proposal, and the waiting section's own row COUNT — never a content
+  // grep — proves the proposal never contaminated `buckets.waiting`.
+  it("keeps the waiting section's own <li> count exactly at the real bucketed rows, even with a distinct proposal rendered alongside it (mutation: concat proposal-derived rows into the bucketed rows before rendering -> FAILS)", async () => {
+    // Well beyond any realistic "today" in America/Chicago, regardless of
+    // when this suite happens to run — a fixture close to "now" (as this
+    // test's own first draft used) can collapse to TODAY once converted
+    // from UTC midnight into a negative-offset zone, landing in the wrong
+    // bucket and asserting nothing about the section this test names.
+    workRows = [taskRow({ id: "task:1", contactId: null, dueAt: "2099-01-01T12:00:00Z" })];
+    pendingProposals = [proposal({
+      id: "prop-unique", payload: { title: "UNIQUE_TASK_TITLE_5678", dueAt: null },
+      evidence: "UNIQUE_CALLER_QUOTE_1234",
+    })];
+    const { default: TasksPage } = await import("./page");
+    const html = renderToStaticMarkup(
+      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }),
+    );
+
+    const waitingSection = html.match(/<section data-bucket="waiting"[\s\S]*?<\/section>/)?.[0] ?? "";
+    expect((waitingSection.match(/<li[ >]/g) ?? []).length).toBe(1);
+    expect(html).toContain("UNIQUE_TASK_TITLE_5678");
+    expect(html).toContain("UNIQUE_CALLER_QUOTE_1234");
+  });
+
+  it("never claims the queue is clear when a pending proposal exists, even though the real to-do queue is empty", async () => {
+    pendingProposals = [proposal()];
+    const { default: TasksPage } = await import("./page");
+    const html = renderToStaticMarkup(
+      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }),
+    );
+    expect(html).not.toContain(m["work.empty"]);
+    expect(html).toContain(m["proposals.work.heading"]);
+  });
+
+  it("degrades to no suggestions section, not a broken page, when the proposals read fails", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    workRows = [taskRow({ id: "task:1", contactId: null, dueAt: "2026-09-20T00:00:00Z" })];
+    listPendingProposalsMock.mockRejectedValueOnce(new Error("permission denied for table call_proposals"));
+    const { default: TasksPage } = await import("./page");
+    const html = renderToStaticMarkup(
+      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }),
+    );
+
+    expect(html).toContain("Call about the estimate");
+    expect(html).not.toContain(m["proposals.work.heading"]);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("proposals read failed"));
+    spy.mockRestore();
+  });
+
+  it("resolves an opportunity_stage proposal's real stage names via a scoped pipeline_stages read", async () => {
+    pendingProposals = [proposal({
+      kind: "opportunity_stage",
+      payload: { opportunityId: "opp_1", fromStageId: "stage_1", toStageId: "stage_2" },
+      evidence: "move this forward",
+    })];
+    pipelineStagesInMock.mockResolvedValueOnce({
+      data: [
+        { id: "stage_1", name: "New", position: 0 },
+        { id: "stage_2", name: "Booked", position: 3 },
+      ],
+      error: null,
+    });
+    const { default: TasksPage } = await import("./page");
+    const html = renderToStaticMarkup(
+      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }),
+    );
+
+    expect(html).toContain(
+      m["proposals.stage.label"].replace("{from}", () => "New").replace("{to}", () => "Booked"),
+    );
+    expect(pipelineStagesInMock).toHaveBeenCalledTimes(1);
+    expect(pipelineStagesInMock).toHaveBeenCalledWith("id", ["stage_1", "stage_2"]);
   });
 });

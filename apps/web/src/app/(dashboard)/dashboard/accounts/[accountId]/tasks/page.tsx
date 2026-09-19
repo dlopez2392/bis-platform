@@ -5,7 +5,7 @@
 // `WorkRowActions`). This page itself still only reads and buckets
 // `listAccountWork`'s three sources and renders them — the writes live in
 // the files below it, not here.
-import { listAccountWork } from "@bis/db";
+import { listAccountWork, listPendingProposals, type CallProposal } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { requireAccountAccess } from "@/lib/auth";
 import { renderZone } from "@/lib/zone";
@@ -15,6 +15,7 @@ import { bucketWork } from "@/lib/work/buckets";
 import { contactDisplayName } from "@/lib/format";
 import { m } from "@/lib/messages";
 import { WorkList } from "./work-list";
+import type { ResolvedStage } from "../calls/[callId]/proposals";
 
 export const dynamic = "force-dynamic";
 
@@ -67,12 +68,50 @@ export default async function TasksPage({
   // nothing usable for dates) produced.
   const timezone = zone.zone;
 
-  // ONE batch read for every contact these rows reference — never one read
-  // per row. Scoped by account_id so a row's contactId can never resolve a
-  // different account's person.
+  // Fix-wave Important 3 (task-11-brief): this account's own pending
+  // proposals — "Both audiences see both surfaces" (the spec's own words):
+  // the agency's cross-tenant work queue already rendered these; a client
+  // who never opens a specific call never learns a suggestion exists.
+  // Best-effort, exactly like the call-detail page's own proposals read: a
+  // `call_proposals`/`pipeline_stages` hiccup must never cost this screen
+  // its real to-do queue, and degrades to no suggestions section rather than
+  // a broken page.
+  let proposals: CallProposal[] = [];
+  let stageNames: Record<string, ResolvedStage> = {};
+  try {
+    proposals = await listPendingProposals(db, accountId);
+    const stageIds = new Set<string>();
+    for (const p of proposals) {
+      if (p.kind === "opportunity_stage") {
+        stageIds.add(p.payload.fromStageId);
+        stageIds.add(p.payload.toStageId);
+      }
+    }
+    if (stageIds.size > 0) {
+      const { data, error } = await db.from("pipeline_stages")
+        .select("id, name, position")
+        .eq("account_id", accountId)
+        .in("id", Array.from(stageIds));
+      if (error) throw new Error(`pipeline stage lookup failed: ${error.message}`);
+      for (const row of (data ?? []) as { id: string; name: string; position: number }[]) {
+        stageNames[row.id] = { name: row.name, position: row.position };
+      }
+    }
+  } catch (e) {
+    console.error(
+      `tasks ${accountId}: proposals read failed, rendering no suggestions: ${String(e)}`,
+    );
+    proposals = [];
+    stageNames = {};
+  }
+
+  // ONE batch read for every contact these rows (AND every pending proposal)
+  // reference — never one read per row. Scoped by account_id so a contactId
+  // can never resolve a different account's person.
   const contactIds = [...new Set(
     [...buckets.overdue, ...buckets.today, ...buckets.waiting]
       .map((r) => r.contactId)
+      .concat(proposals.map((p) => p.contactId))
       .filter((id): id is string => id !== null),
   )];
   const contactNames: Record<string, string> = {};
@@ -103,6 +142,8 @@ export default async function TasksPage({
           accountId={accountId}
           contactNames={contactNames}
           timezone={timezone}
+          proposals={proposals}
+          stageNames={stageNames}
         />
       </div>
     </>

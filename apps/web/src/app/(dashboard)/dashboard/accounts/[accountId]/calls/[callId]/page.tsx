@@ -9,7 +9,10 @@ import {
   Timer,
   UserRound,
 } from "lucide-react";
-import { getCall, listFailedOutboundSms, type FailedOutboundSms } from "@bis/db";
+import {
+  getCall, listFailedOutboundSms, listProposalsForCall,
+  type FailedOutboundSms, type CallProposal,
+} from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { requireAccountAccess } from "@/lib/auth";
@@ -26,20 +29,17 @@ import { sendSmsAction } from "../../conversations/actions";
 import { splitSummaryBlocks, type SummaryBlock } from "./summary-blocks";
 import { TranscriptView } from "./transcript-view";
 import { TextbackResend } from "./textback-resend";
-
-export const dynamic = "force-dynamic";
-
+import { CallProposals, type ResolvedStage } from "./proposals";
 // The detail page is six of these stacked and not one of them was glass, so
 // the whole route read as flat rectangles on a lit ground. `bg-card` BEFORE
 // `glass`, the order `ui/card.tsx` uses: a tenant's `--card` still wins the
 // fill and the utility adds only the sheen, the highlight and `--shadow-card`.
-const CARD = "overflow-hidden rounded-xl border border-border bg-card glass";
-// DESIGN.md's Label role — Geist Mono 500, 10px, +0.14em — the same role
-// `TableHead` now carries. This is a card header on a `<div>`, not a
-// `TableHead`, so wave 1's shared fix did not reach it. The rule under it is
-// `--row-line` (.06), not `--line` (.08), like every other row rule.
-const CARD_HEAD =
-  "border-b border-[var(--row-line)] px-5 py-3 font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase";
+// Shared with proposals.tsx via `./card` rather than duplicated — see that
+// module's own doc comment for why a third module, not a mirrored constant,
+// is the right shape here.
+import { CARD, CARD_HEAD } from "./card";
+
+export const dynamic = "force-dynamic";
 
 export default async function CallDetailPage({
   params,
@@ -97,6 +97,48 @@ export default async function CallDetailPage({
         `call detail ${callId}: failed-text-back read failed, rendering no badge: ${String(e)}`,
       );
     }
+  }
+
+  // The call's machine-suggested next steps (Task 2's read), plus — for any
+  // opportunity_stage proposal — the pipeline_stages names/positions its
+  // payload only carries as uuids. Best-effort, exactly like the text-back
+  // read above: this is one advisory block on a page whose job is the
+  // transcript, and a failure in EITHER read must degrade the WHOLE block to
+  // absent rather than take the call record down or hand `CallProposals` a
+  // stage id it cannot resolve to a name (which it has no way to render
+  // honestly — DESIGN.md rules out both the raw uuid and the destination
+  // alone).
+  let proposals: CallProposal[] = [];
+  let stageNames: Record<string, ResolvedStage> = {};
+  try {
+    proposals = await listProposalsForCall(db, accountId, callId);
+    const stageIds = new Set<string>();
+    for (const p of proposals) {
+      if (p.kind === "opportunity_stage") {
+        stageIds.add(p.payload.fromStageId);
+        stageIds.add(p.payload.toStageId);
+      }
+    }
+    if (stageIds.size > 0) {
+      // `stageIds` is bounded only TRANSITIVELY, through
+      // `listProposalsForCall`'s own `.limit(500)` (at most two ids per
+      // opportunity_stage proposal, so at most 1000 here) — there is no
+      // bound of this read's own.
+      const { data, error } = await db.from("pipeline_stages")
+        .select("id, name, position")
+        .eq("account_id", accountId)
+        .in("id", Array.from(stageIds));
+      if (error) throw new Error(`pipeline stage lookup failed: ${error.message}`);
+      for (const row of (data ?? []) as { id: string; name: string; position: number }[]) {
+        stageNames[row.id] = { name: row.name, position: row.position };
+      }
+    }
+  } catch (e) {
+    console.error(
+      `call detail ${callId}: proposals read failed, rendering no suggestions: ${String(e)}`,
+    );
+    proposals = [];
+    stageNames = {};
   }
 
   // Every link is conditional on its own id. A call that matched no contact,
@@ -267,6 +309,14 @@ export default async function CallDetailPage({
               </div>
             </section>
           ) : null}
+
+          <CallProposals
+            proposals={proposals}
+            stageNames={stageNames}
+            accountId={accountId}
+            callId={callId}
+            timezone={timezone}
+          />
 
           <section aria-labelledby="call-transcript" className={CARD}>
             <h2 id="call-transcript" className={CARD_HEAD}>

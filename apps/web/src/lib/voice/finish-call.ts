@@ -1,7 +1,7 @@
 import type { serviceDb, Branding, CallOutcome } from "@bis/db";
 import {
   createContact, fillContactBlanks, ensureConversation, createMessage, incrementUnreadCount,
-  finishCallRow, emit, getAlertPhone,
+  finishCallRow, emit, getAlertPhone, getContact,
 } from "@bis/db";
 import { emailBrand, brandDisplayName } from "@/lib/email/templates/shell";
 import { getEmailProvider } from "@/lib/email";
@@ -9,11 +9,25 @@ import { voiceCallAlertEmail } from "@/lib/email/templates/voice";
 import { composeCallAlertSms, prepareAlertSms, deliverAlertSms, type PendingAlertSms } from "@/lib/sms/alerts";
 import { prepareTextback, deliverTextback, type PendingTextback } from "./textback";
 import type { CallState } from "./call-state";
-import { classifyOutcome, wasServed } from "./call-state";
+import { classifyOutcome, wasServed, wasTransferred } from "./call-state";
 import { detectSpokenLanguage } from "./language";
 import { generateSummary } from "./summary-service";
 import { summaryFactLine } from "./summarize";
 import { toE164 } from "./phone-number";
+// STATIC, not the lazy `await import(...)` this repo otherwise reaches for
+// near route handlers: the documented page-data trap (a module-scope DB
+// import breaking `next build`'s page-data collection) doesn't apply to a
+// plain lib-to-lib import, this file already imports `@bis/db` at module
+// scope above, and `api/voice/incoming/route.ts` imports `finishCall` itself
+// statically. Nothing here needed the indirection.
+import { generateProposals, type OpenOpportunity } from "@/lib/proposals/generate";
+// Read-only reuse of the SAME eligibility rule `generateProposals` already
+// applies internally (fix-wave Minor) — importing it, not re-deriving it,
+// is what keeps this file's pre-check from drifting out of sync with the
+// generator's own gate. Used only to skip a `getContact` round trip that
+// would otherwise be wasted on a call already destined to be refused; the
+// generation call itself below is unconditional, per its own comment.
+import { callIsEligible } from "@/lib/proposals/eligibility";
 
 /**
  * DELIBERATELY ABSENT: `accountName`. `accounts.name` is the agency's internal
@@ -130,6 +144,120 @@ function splitFullName(fullName: string): { firstName: string; lastName?: string
   const idx = trimmed.lastIndexOf(" ");
   if (idx === -1) return { firstName: trimmed };
   return { firstName: trimmed.slice(0, idx).trim(), lastName: trimmed.slice(idx + 1).trim() };
+}
+
+/**
+ * The four contact columns `generateProposals`'s `contact_field` branch may
+ * ever fill, reported in this same order. "Blank" mirrors
+ * `fillContactBlanks`'s own definition of FILLABLE (`@bis/db`'s
+ * `contacts.ts`) EXACTLY, not merely "empty" — the two used to disagree
+ * (fix-wave Important 1), and that gap is what let this generator propose a
+ * `lastName` for a contact with a real first name: `fillContactBlanks`
+ * refuses to fill `last_name` alone unless the first name is blank or is
+ * this app's own `"Caller"` placeholder (`firstNameCompatible`), so a
+ * one-field `contact_field` proposal (no `incomingFirst` ever rides along)
+ * for `lastName` on a contact like `{ first_name: "Ana", last_name: null }`
+ * reached the review screen and then could NEVER be accepted — the accept
+ * path reverts the stamp and the same proposal comes back pending forever.
+ * The mirror bug ran the other way: `first_name === "Caller"` (the
+ * placeholder this file itself writes at `resolveContactId`) was never
+ * reported blank, so `firstName` was never proposed for the one contact
+ * shape `fillContactBlanks` explicitly supports filling.
+ *
+ * Required, non-optional params (fix-wave Minor): `getContact` returns
+ * `any`, so a column silently dropped from `@bis/db`'s own `COLS` would
+ * otherwise pass an `undefined` through with no compile error, and
+ * `isBlank(undefined)` is `true` — reporting a column blank when it was
+ * never read at all. A required param at least turns a wrong CALLER (one
+ * that omits a field building this object) into a type error; it cannot
+ * catch a wrong `COLS` on the far side of `any`.
+ */
+// EXPORTED for the same reason `isMeaningful` is (see its own doc above): a
+// parity test between this function and the real `fillContactBlanks` is the
+// durable form of Important 1's fix — these two rules living in separate
+// files, expressed separately, is what let them drift apart in the first
+// place, so the test asserts the two AGREE rather than re-asserting one
+// side's own arithmetic.
+export function computeBlankFields(row: {
+  first_name: string | null; last_name: string | null;
+  email: string | null; phone: string | null;
+}): ("firstName" | "lastName" | "email" | "phone")[] {
+  const isBlank = (v: unknown) => v == null || String(v).trim() === "";
+  const blank: ("firstName" | "lastName" | "email" | "phone")[] = [];
+  // Mirrors `fillContactBlanks`'s `nameIsPlaceholder`: the placeholder only
+  // counts once `last_name` is ALSO blank — a "Caller" row that somehow
+  // already carries a real surname is not the shape this app ever creates,
+  // and `fillContactBlanks` itself would refuse to touch `first_name` there.
+  const isPlaceholder = row.first_name === "Caller" && isBlank(row.last_name);
+  if (isBlank(row.first_name) || isPlaceholder) blank.push("firstName");
+  // A standalone `lastName` proposal never carries a `firstName` alongside
+  // it (one field per proposal), so `fillContactBlanks`'s own
+  // `firstNameCompatible` reduces to exactly this: blank, or the
+  // placeholder. A real first name on file makes a bare `lastName` fill
+  // unacceptable there, so it must not be offered here either.
+  if (isBlank(row.last_name) && (isBlank(row.first_name) || row.first_name === "Caller")) {
+    blank.push("lastName");
+  }
+  if (isBlank(row.email)) blank.push("email");
+  if (isBlank(row.phone)) blank.push("phone");
+  return blank;
+}
+
+/**
+ * Reads the ONE open (`status = 'open'`) opportunity for this contact, plus
+ * its own pipeline's stage names/positions ordered by `position` — the REAL
+ * pipeline `generateProposals`'s `opportunity_stage` branch is allowed to
+ * name a stage from (Task 9's own brief: the generator never invents a
+ * stage). Direct table reads, not a `@bis/db` wrapper: no such read exists
+ * there today, and this task is scoped to leave `packages/db` untouched —
+ * `actions.ts` and `page.tsx` (this app's own opportunity-review code)
+ * already read `opportunities`/`pipeline_stages` the same direct way.
+ *
+ * Resolves to `null` on every ambiguous or failed case, deliberately FAIL
+ * CLOSED — unlike the two fail-open reads elsewhere in this lifecycle (the
+ * daily call-cap count, `startCallRow`), a missed stage-move proposal costs
+ * nothing a caller or a human outcome depends on, so there is no fail-open
+ * argument to make here:
+ *   - no open opportunity at all,
+ *   - MORE THAN ONE open opportunity — the call gives no signal about WHICH
+ *     deal it concerns, and guessing is exactly the failure this feature
+ *     must not produce,
+ *   - the opportunity's own `stage_id` is not among its pipeline's rows (a
+ *     data inconsistency this function refuses to reason about further),
+ *   - or any read error at all.
+ */
+async function resolveOpenOpportunity(
+  db: ReturnType<typeof serviceDb>, accountId: string, contactId: string,
+): Promise<OpenOpportunity | null> {
+  try {
+    // `.limit(2)` — not `.limit(1)` — because the question this read
+    // answers is "exactly one?", not "give me one": a `.limit(1)` result
+    // would silently discard evidence of a SECOND open opportunity and this
+    // function would then guess between them (fix-wave Minor). Matches
+    // `packages/db`'s own idiom (`call-proposals.ts`'s `.limit(500)`):
+    // service_role's rolconfig carries no statement_timeout and
+    // PostgREST's db-max-rows is unset, so an unbounded read is unbounded
+    // in production.
+    const { data: opps, error } = await db.from("opportunities")
+      .select("id, stage_id, pipeline_id")
+      .eq("account_id", accountId).eq("contact_id", contactId).eq("status", "open")
+      .limit(2);
+    if (error) throw new Error(error.message);
+    if (!opps || opps.length !== 1) return null;
+    const opp = opps[0] as { id: string; stage_id: string; pipeline_id: string };
+    const { data: stages, error: stagesError } = await db.from("pipeline_stages")
+      .select("id, name, position")
+      .eq("account_id", accountId).eq("pipeline_id", opp.pipeline_id)
+      .order("position");
+    if (stagesError) throw new Error(stagesError.message);
+    const rows = (stages ?? []) as { id: string; name: string; position: number }[];
+    const current = rows.find((s) => s.id === opp.stage_id);
+    if (!current) return null;
+    return { id: opp.id, stageId: opp.stage_id, stageName: current.name, stages: rows };
+  } catch (e) {
+    console.error(`finishCall: open-opportunity read failed for contact ${contactId}: ${String(e)}`);
+    return null;
+  }
 }
 
 /**
@@ -502,6 +630,105 @@ export async function finishCall(
     await emit(ctx.db, ctx.accountId, "call.recorded", ACTOR_ID, { callId: meta.callRowId, outcome }, ACTOR_TYPE);
   } catch (e) {
     console.error(`finishCall ${meta.callRowId ?? "(no row)"}: emit failed: ${String(e)}`);
+  }
+
+  // PROPOSALS. `stored` — not merely `meta.callRowId` — is the gate: the
+  // transcript this generator reads became durable in `finishCallRow` above,
+  // and a finishCallRow failure must produce nothing here either, exactly
+  // like a fail-open callRowId does. The spec said generation runs
+  // "alongside the summary" — that would ground every proposal in
+  // `state.transcript` while it was still in-memory only, a proposal citing
+  // a call nobody can open yet.
+  //
+  // LAST STATEMENT IN THE FUNCTION, on purpose, not merely "after the row
+  // write": this call reaches OpenAI, capped at `AbortSignal.timeout(10_000)`
+  // for the model request alone (the up-to-three insert round trips beyond
+  // it are unbounded), and a proposal is an opinion about a call that already
+  // happened. The staff alert SMS deliver, the missed-call text-back deliver,
+  // the CALL LOST alarm and the `call.recorded` emit above are how a business
+  // owner finds out they have a lead, or this function's own last-resort
+  // signal that neither the row nor the alert reached anyone — none of those
+  // may sit downstream of a network call this file does not need for any of
+  // them. (This used to delay the staff alert SMS by up to that same 10
+  // seconds on every booked/lead/message call — an opinion gating a record.)
+  //
+  // Deliberately its OWN standalone leg, not nested inside `finishCallRow`'s
+  // try/catch far above: nesting would let a proposal failure surface as
+  // "finishCallRow failed" in the log, and — because that outer catch already
+  // swallows and `stored` would already be true by then — a dropped inner
+  // catch would be invisible to any test of this function's return value or
+  // its never-throws guarantee. Standing alone, a bug here can only ever cost
+  // a proposal: nothing here may change the call's outcome, its transcript,
+  // its text-back, or this function's never-throws guarantee.
+  //
+  // `contactId` is the SAME local the lead-treatment leg and `finishCallRow`
+  // itself both already used above (including any text-back-leg backfill) —
+  // never re-resolved here. Logged under this file's own `finishCall <id>:`
+  // prefix rather than a bare `proposals:` one, so an operator grepping one
+  // call's lifecycle sees these lines too, and so they read distinctly from
+  // the generator's own `generateProposals:` lines.
+  if (meta.callRowId && stored) {
+    try {
+      // BLANK-FIELD CONTAINMENT (Task 8): `generateProposals` cannot see the
+      // contact row, so it is handed exactly which of the four allow-listed
+      // columns are currently empty on it. Read off the SAME `contactId`
+      // this function already resolved above — never re-resolved — and
+      // gated on it being non-null, per the spec's own rule ("When
+      // contactId is null, pass []"). Its own try/catch, nested INSIDE this
+      // leg's: a DB blip reading the contact must cost this feature its
+      // blank-field list, never the call its (task) proposals or this leg
+      // its usual best-effort behavior — the read failing must not also
+      // skip calling `generateProposals` altogether.
+      // Gated on `callIsEligible` too (fix-wave Minor), NOT just `contactId`:
+      // on this account's dominant traffic — several robocalls a day, every
+      // one `spam`/`abandoned` — `generateProposals` itself already costs
+      // nothing for an ineligible call (its own "ELIGIBILITY FIRST" doc), but
+      // this read ran regardless, and an abandoned call whose text-back leg
+      // backfilled `contactId` paid a real `getContact` round trip for a call
+      // this feature was always going to refuse. `generateProposals` is still
+      // called unconditionally below — a transferred lead call is MEANINGFUL
+      // (gets its contact, its alert) but ineligible for a proposal only
+      // because the caller asked for a person, and that call must still hand
+      // `generateProposals` its real `handoffRequested` so IT applies the
+      // refusal; only the now-pointless contact READ is skipped here.
+      let blankFields: ("firstName" | "lastName" | "email" | "phone")[] = [];
+      // Task 9: the contact's one open opportunity plus its pipeline's real
+      // stage names — gated on the SAME `contactId && callIsEligible(...)`
+      // check as the blankFields read just above, and for the identical
+      // reason (fix-wave Minor on that read): an ineligible call must cost
+      // nothing at all, including this now-pointless round trip.
+      let openOpportunity: OpenOpportunity | null = null;
+      if (contactId && callIsEligible({
+        outcome, transcript: state.transcript, handoffRequested: wasTransferred(state),
+      })) {
+        try {
+          const row = await getContact(ctx.db, ctx.accountId, contactId);
+          if (row) blankFields = computeBlankFields(row);
+        } catch (e) {
+          console.error(`finishCall ${meta.callRowId}: contact read for blankFields failed: ${String(e)}`);
+        }
+        // Its own fail-closed contract (see the function's own doc) — a
+        // failure here must cost this feature its stage-move candidate,
+        // never the call's (task/contact_field) proposals or this leg's
+        // usual best-effort behavior.
+        openOpportunity = await resolveOpenOpportunity(ctx.db, ctx.accountId, contactId);
+      }
+      const n = await generateProposals({
+        db: ctx.db, accountId: ctx.accountId, callId: meta.callRowId,
+        contactId, outcome, transcript: state.transcript,
+        handoffRequested: wasTransferred(state), blankFields, openOpportunity,
+        // Fix-wave Important 1: the model's only clock. `meta.endedAt` — not
+        // a fresh `new Date()` read here — is this call's own instant, and
+        // `ctx.timezone` is this account's own IANA zone, already resolved
+        // above (`resolveOpenOpportunity`'s own call site reads the same
+        // ctx). Without these, a machine-proposed `dueAt` is a guess against
+        // the model's training-era clock (generate.ts's own doc).
+        now: meta.endedAt, timezone: ctx.timezone,
+      });
+      if (n > 0) console.log(`finishCall ${meta.callRowId}: proposals wrote ${n}`);
+    } catch (e) {
+      console.error(`finishCall ${meta.callRowId}: proposals generation failed: ${String(e)}`);
+    }
   }
 
   return { stored, notified, outcome };
