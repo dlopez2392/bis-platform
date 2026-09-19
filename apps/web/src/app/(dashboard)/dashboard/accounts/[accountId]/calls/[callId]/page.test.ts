@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
-import type { CallDetailRow } from "@bis/db";
+import type { CallDetailRow, CallProposal } from "@bis/db";
 import { emptyCallState } from "@/lib/voice/call-state";
 import { composeSummary } from "@/lib/voice/summarize";
 
@@ -19,23 +19,39 @@ vi.mock("@/lib/auth", () => ({
   requireAccountAccess: async () => ({ userId: "user_1", isAgency: authFixture.isAgency }),
 }));
 
+/** The proposals block's OWN read, `db.from("pipeline_stages")...` — a raw
+ *  chain, same as the account-timezone lookup below, because there is no
+ *  exported `@bis/db` accessor for "resolve these stage ids to names" and
+ *  page.tsx follows the account-lookup's own existing precedent rather than
+ *  reach into another agent's package for one. Bare, like
+ *  `listFailedOutboundSmsMock` below it — every `render()` call sets its
+ *  resolved value explicitly, so a test that says nothing about stages gets
+ *  no rows back rather than a stale value left over from a previous test. */
+const pipelineStagesMock = vi.fn();
 vi.mock("@/lib/db", () => ({
   dbForRequest: async () => ({
-    from: () => ({
-      select: () => ({
-        eq: () => ({
-          maybeSingle: async () => ({ data: { timezone: "America/Chicago" }, error: null }),
+    from: (table: string) => {
+      if (table === "pipeline_stages") {
+        return { select: () => ({ eq: () => ({ in: (...args: unknown[]) => pipelineStagesMock(...args) }) }) };
+      }
+      return {
+        select: () => ({
+          eq: () => ({
+            maybeSingle: async () => ({ data: { timezone: "America/Chicago" }, error: null }),
+          }),
         }),
-      }),
-    }),
+      };
+    },
   }),
 }));
 
 const getCallMock = vi.fn();
 const listFailedOutboundSmsMock = vi.fn();
+const listProposalsForCallMock = vi.fn();
 vi.mock("@bis/db", () => ({
   getCall: (...args: unknown[]) => getCallMock(...args),
   listFailedOutboundSms: (...args: unknown[]) => listFailedOutboundSmsMock(...args),
+  listProposalsForCall: (...args: unknown[]) => listProposalsForCallMock(...args),
 }));
 
 /** The screen's resolved zone (lib/zone.ts) — mutable so a test can put the
@@ -119,9 +135,18 @@ const WINDOW = {
 const TEXTBACK_STATUS_DOT =
   /<span\b[^>]*\bclass="(?=[^"]*\brounded-full\b)(?=[^"]*\bbg-destructive(?![\w/-]))[^"]*"/;
 
-function render(row: CallDetailRow | null, failed: (typeof FAILED_TEXTBACK)[] = []) {
+/** `stageRows` defaults to none — only tests exercising an
+ *  `opportunity_stage` proposal need to supply pipeline_stages fixture rows. */
+function render(
+  row: CallDetailRow | null,
+  failed: (typeof FAILED_TEXTBACK)[] = [],
+  proposals: CallProposal[] = [],
+  stageRows: { id: string; name: string; position: number }[] = [],
+) {
   getCallMock.mockResolvedValue(row);
   listFailedOutboundSmsMock.mockResolvedValue(failed);
+  listProposalsForCallMock.mockResolvedValue(proposals);
+  pipelineStagesMock.mockResolvedValue({ data: stageRows, error: null });
   return CallDetailPage({
     params: Promise.resolve({ accountId: "acct1", callId: "call1" }),
   }).then(renderToStaticMarkup);
@@ -136,6 +161,8 @@ describe("CallDetailPage", () => {
   // body had already passed.
   beforeEach(() => {
     listFailedOutboundSmsMock.mockClear();
+    listProposalsForCallMock.mockClear();
+    pipelineStagesMock.mockClear();
   });
 
   it("renders the header, the summary and both sides of the conversation", async () => {
@@ -356,6 +383,7 @@ describe("CallDetailPage", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     getCallMock.mockResolvedValue({ ...CALL, outcome: "abandoned" });
     listFailedOutboundSmsMock.mockRejectedValue(new Error("permission denied for table messages"));
+    listProposalsForCallMock.mockResolvedValue([]);
 
     const html = await CallDetailPage({
       params: Promise.resolve({ accountId: "acct1", callId: "call1" }),
@@ -399,5 +427,67 @@ describe("CallDetailPage — the zone note", () => {
     expect(renderedText(html)).toContain(m["zone.guessed.client"]);
     expect(renderedText(html)).not.toContain(m["zone.guessed.fix"]);
     expect(html).not.toContain("/settings");
+  });
+});
+
+/**
+ * Call Proposals Task 7 — the section is page.tsx's OWN responsibility to
+ * fetch, place and degrade; the per-proposal rendering itself (status chip,
+ * plain language, evidence clamp, stage names) is `proposals.test.ts`'s job.
+ */
+describe("CallDetailPage — proposals", () => {
+  const TASK_PROPOSAL: CallProposal = {
+    id: "prop1", accountId: "acct1", callId: "call1", contactId: "ct1",
+    kind: "task", payload: { title: "Call back about the quote", dueAt: null },
+    evidence: "Can you call me back about the quote tomorrow?",
+    status: "pending", decidedAt: null, decidedBy: null,
+    createdAt: "2026-08-25T19:16:00.000000+00:00",
+  };
+
+  it("renders no proposals section at all when the call has none", async () => {
+    const html = await render(CALL, [], []);
+    expect(renderedText(html)).not.toContain(m["proposals.heading"]);
+  });
+
+  it("places the proposals section between the summary and the transcript when there are pending ones", async () => {
+    const html = await render(CALL, [], [TASK_PROPOSAL]);
+    const text = renderedText(html);
+    const summaryAt = text.indexOf(m["calls.detail.summary"]);
+    const proposalsAt = text.indexOf(m["proposals.heading"]);
+    const transcriptAt = text.indexOf(m["calls.detail.transcript"]);
+    expect(summaryAt).toBeGreaterThanOrEqual(0);
+    expect(proposalsAt).toBeGreaterThan(summaryAt);
+    expect(transcriptAt).toBeGreaterThan(proposalsAt);
+    // The evidence itself, quoted, reads against the transcript a few
+    // inches below it — the whole reason this section sits where it does.
+    expect(text).toContain("Can you call me back about the quote tomorrow?");
+  });
+
+  /**
+   * The read is best-effort (page.tsx:90-100's own text-back panel is the
+   * precedent this mirrors): a blown-up proposals read must degrade this
+   * ONE block to absent, never take the call record down.
+   * Mutation: delete the try/catch around the proposals read in page.tsx ->
+   * FAILS (the whole page throws instead of rendering the Transcript).
+   */
+  it("still renders the call when the proposals read blows up", async () => {
+    // Bypasses the `render()` helper on purpose — it unconditionally sets
+    // `listProposalsForCallMock` to a RESOLVED value on every call, which
+    // would stomp the rejection this test needs. Same reason the sibling
+    // text-back-blows-up test above bypasses it too.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    getCallMock.mockResolvedValue(CALL);
+    listFailedOutboundSmsMock.mockResolvedValue([]);
+    listProposalsForCallMock.mockRejectedValue(new Error("permission denied for table call_proposals"));
+
+    const html = await CallDetailPage({
+      params: Promise.resolve({ accountId: "acct1", callId: "call1" }),
+    }).then(renderToStaticMarkup);
+
+    expect(html).toContain("Transcript");
+    expect(html).toContain("I need a roof inspection.");
+    expect(renderedText(html)).not.toContain(m["proposals.heading"]);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("proposals read failed"));
+    spy.mockRestore();
   });
 });

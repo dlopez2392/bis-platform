@@ -1741,6 +1741,25 @@ export const m = {
   "proposals.maybeFailed": "That may not have gone through. Check before trying again.",
   "proposals.work.heading": "Suggestions",
   "proposals.work.body": "Questions about work, not work yet.",
+
+  // Per-kind plain-language sentences for the call-detail proposals block
+  // (Task 7). "{title}"/"{value}" are the house untrusted-placeholder shape —
+  // filled with a `.replace(..., () => x)` call, never the two-argument
+  // form, because both originate in a caller's own words read back by the
+  // model. "{field}" is filled from this app's own static field labels
+  // (contacts.firstName etc.), not the caller — safe either way.
+  "proposals.task.label": "Add a task: {title}",
+  "proposals.contactField.label": "Add their {field}: {value}",
+  // "{from}"/"{to}" are stage NAMES, resolved from the payload's uuids
+  // before this ever reaches copy — never the destination alone.
+  "proposals.stage.label": "Move from {from} to {to}",
+  "proposals.stage.skip": "This skips {n} stages in between.",
+  // "proposals.accepted.toast" ("Added to your to-do list") is true only of
+  // a `task` proposal — accepting the other two kinds doesn't add anything
+  // to a to-do list, and reporting that it did would be exactly the false
+  // confirmation copy the "landscaper at 7am" read rules out.
+  "proposals.accepted.contactField.toast": "Saved",
+  "proposals.accepted.stage.toast": "Moved on the board",
 } as const;
 
 export type MessageKey = keyof typeof m;
