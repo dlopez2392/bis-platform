@@ -354,16 +354,22 @@ describe("wave 2 — no section still hand-rolls a flat card", () => {
 describe("wave 2 — calls", () => {
   it("the usage card and the call-detail CARD are glass", () => {
     expect(hasGlassCard(src(`${ACCT}/calls/page.tsx`))).toBe(true);
-    const detail = src(`${ACCT}/calls/[callId]/page.tsx`);
-    // One constant, six stacked sections — none of them was glass.
-    expect(detail).toContain('const CARD = "overflow-hidden rounded-xl border border-border bg-card glass"');
+    // Task 7 (dce6d69) extracted CARD/CARD_HEAD out of page.tsx into the
+    // sibling `card.ts` — proposals.tsx needed them too, and copying the
+    // strings byte-for-byte was the anti-pattern `outcome-pill.tsx` was
+    // itself extracted to stop. Grep card.ts, not page.tsx, or a future
+    // extraction stops this test from testing anything without ever failing.
+    const card = src(`${ACCT}/calls/[callId]/card.ts`);
+    // One constant, shared by every stacked section — none of them was glass.
+    expect(card).toContain('export const CARD = "overflow-hidden rounded-xl border border-border bg-card glass"');
   });
   it("CARD_HEAD is the Label role, not 12px sans at tracking-wider", () => {
-    const detail = src(`${ACCT}/calls/[callId]/page.tsx`);
-    expect(detail).toMatch(/const CARD_HEAD =\s*\n?\s*"[^"]*font-mono[^"]*text-\[10px\][^"]*tracking-\[0\.14em\][^"]*uppercase"/);
-    expect(detail).not.toContain("text-xs font-medium tracking-wider text-muted-foreground uppercase");
+    // Same move as above: CARD_HEAD lives in card.ts now, not page.tsx.
+    const card = src(`${ACCT}/calls/[callId]/card.ts`);
+    expect(card).toMatch(/const CARD_HEAD =\s*\n?\s*"[^"]*font-mono[^"]*text-\[10px\][^"]*tracking-\[0\.14em\][^"]*uppercase"/);
+    expect(card).not.toContain("text-xs font-medium tracking-wider text-muted-foreground uppercase");
     // The rule under a card header is --row-line like every other row rule.
-    expect(detail).toContain("border-b border-[var(--row-line)]");
+    expect(card).toContain("border-b border-[var(--row-line)]");
   });
   it("the transcript facts block takes ladder step 2 and NEVER glass (it is nested in CARD)", () => {
     const detail = src(`${ACCT}/calls/[callId]/page.tsx`);
