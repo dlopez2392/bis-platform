@@ -4,7 +4,7 @@ const dbMocks = vi.hoisted(() => ({
   finishCallRow: vi.fn(), createContact: vi.fn(), ensureConversation: vi.fn(),
   createMessage: vi.fn(), incrementUnreadCount: vi.fn(), emit: vi.fn(),
   fillContactBlanks: vi.fn(), updateMessageStatus: vi.fn(), hasRecentOutboundSms: vi.fn(),
-  getAlertPhone: vi.fn(),
+  getAlertPhone: vi.fn(), getContact: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const emailRefs = vi.hoisted(() => ({ providerShouldThrow: false, send: vi.fn() }));
@@ -94,6 +94,13 @@ beforeEach(() => {
   // IS the switch) — the "the field is the switch" test below is the
   // regression guard for this default.
   dbMocks.getAlertPhone.mockResolvedValue(null);
+  // The ordinary case: a contact with all four allow-listed columns already
+  // filled, so `blankFields` computes to `[]` unless a test deliberately
+  // leaves one of these blank to exercise the propagation.
+  dbMocks.getContact.mockReset().mockResolvedValue({
+    id: "ct1", first_name: "Ana", last_name: "Ruiz",
+    email: "ana@example.com", phone: "+19562921696",
+  });
   // The ordinary case is "nothing to propose" — resolving 0 rather than
   // rejecting, matching generateProposals's real never-throws contract.
   proposalsMocks.generateProposals.mockReset().mockResolvedValue(0);
@@ -825,6 +832,47 @@ describe("finishCall — proposal generation", () => {
       accountId: "a1", callId: "call1", contactId: "ct1", outcome: "lead",
       transcript: s.transcript, handoffRequested: true,
     }));
+  });
+
+  // Task 8: `generateProposals` cannot see the contact row, so finishCall
+  // reads it and hands over exactly which of the four allow-listed columns
+  // are currently empty. This is the propose-time half of the containment
+  // rule — a field this array omits can never become a `contact_field`
+  // proposal, no matter what the model asks for.
+  it("passes blankFields for exactly the resolved contact's own empty columns (mutation: pass [] regardless of the contact -> FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValue({
+      id: "ct1", first_name: "Ana", last_name: null, email: "", phone: "+19562921696",
+    });
+    await finishCall(leadState(), ctx, meta);
+    expect(dbMocks.getContact).toHaveBeenCalledWith(ctx.db, "a1", "ct1");
+    expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+      blankFields: ["lastName", "email"],
+    }));
+  });
+
+  it("passes blankFields: [] when the call resolved no contact, and never reads one", async () => {
+    const s = withMessage(emptyCallState(), { body: "call me", at: "t" });
+    const noCallerCtx: FinishContext = { ...ctx, callerNumber: null };
+    await finishCall(s, noCallerCtx, meta);
+    expect(dbMocks.getContact).not.toHaveBeenCalled();
+    expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+      contactId: null, blankFields: [],
+    }));
+  });
+
+  // FAIL-CLOSED ON THE FIELD, NEVER ON THE CALL: a DB blip reading the
+  // contact must cost this feature its blank-field list, not the call its
+  // proposals (still generated, just with no `contact_field` candidate) or
+  // finishCall its never-throws contract.
+  it("passes blankFields: [] and does not throw when reading the contact fails (mutation: remove the read's own try/catch -> FAILS)", async () => {
+    dbMocks.getContact.mockRejectedValue(new Error("db down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await finishCall(leadState(), ctx, meta);
+    expect(result.stored).toBe(true);
+    expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+      blankFields: [],
+    }));
+    errSpy.mockRestore();
   });
 
   it("a proposal failure changes nothing about the call (mutation: remove the catch -> FAILS)", async () => {

@@ -42,7 +42,33 @@ const SYSTEM = [
   'If there is nothing to propose, reply {"proposals":[]}.',
 ].join(" ");
 
-type RawProposal = { kind?: unknown; title?: unknown; dueAt?: unknown; evidence?: unknown };
+/**
+ * The four contact columns a `contact_field` proposal may ever target. Never
+ * a denylist, and never grown to include `custom`, tags or a consent flag —
+ * consent in particular is a legal record, not a convenience this generator
+ * gets to touch.
+ */
+const CONTACT_FIELDS = ["firstName", "lastName", "email", "phone"] as const;
+type ContactField = (typeof CONTACT_FIELDS)[number];
+
+/**
+ * Builds the system prompt for one call, naming ONLY the fields this
+ * particular contact currently has blank. The model is told which fields it
+ * MAY propose, but it is never trusted to have checked that list itself —
+ * `blankFields.includes(field)` below re-checks unconditionally, regardless
+ * of what this sentence said or whether the model even read it.
+ */
+function systemFor(blankFields: readonly ContactField[]): string {
+  if (blankFields.length === 0) return SYSTEM;
+  return `${SYSTEM} You may also propose {"kind":"contact_field","field":"<one of: ${
+    blankFields.join(", ")
+  }>","value":"...","evidence":"..."} — but ONLY for those fields, and only when the caller stated the value out loud.`;
+}
+
+type RawProposal = {
+  kind?: unknown; title?: unknown; dueAt?: unknown; evidence?: unknown;
+  field?: unknown; value?: unknown;
+};
 
 function transcriptForModel(transcript: TranscriptEvent[]): string {
   return transcript.map((e) => `${e.role}: ${e.text}`).join("\n");
@@ -94,6 +120,16 @@ export async function generateProposals(input: {
   db: ReturnType<typeof serviceDb>; accountId: string; callId: string;
   contactId: string | null; outcome: CallOutcome;
   transcript: TranscriptEvent[]; handoffRequested: boolean;
+  /**
+   * Which of the four allow-listed contact columns are CURRENTLY EMPTY on
+   * the resolved contact. Computed by the caller from the stored row — this
+   * function cannot see it — and is the containment boundary for
+   * `contact_field` proposals: a field absent from this list is refused
+   * below regardless of what the model asked for. `[]` when there is no
+   * resolved contact at all, or when the caller's own read of the contact
+   * failed (fail-closed on the FIELD, never on the call).
+   */
+  blankFields: readonly ContactField[];
   fetchImpl?: typeof fetch;
 }): Promise<number> {
   let written = 0;
@@ -163,7 +199,7 @@ export async function generateProposals(input: {
         // proposals fit comfortably inside this; a runaway array does not.
         max_tokens: 2000,
         messages: [
-          { role: "system", content: SYSTEM },
+          { role: "system", content: systemFor(input.blankFields) },
           { role: "user", content: transcriptForModel(input.transcript) },
         ],
       }),
@@ -198,12 +234,47 @@ export async function generateProposals(input: {
       if (attempts >= MAX_PER_CALL) break;
       const p = asRawProposal(item);
       if (!p) continue;
-      // ALLOW-LIST, never a denylist. v1 emits `task` only; the other two
-      // kinds exist in the schema but have no generator yet, and a model
-      // naming one must not smuggle it past this loop.
+      // Shared by every kind below: both `task` and `contact_field` require
+      // a verbatim caller quote, so it is read once here rather than
+      // duplicated per branch.
+      const evidence = typeof p.evidence === "string" ? p.evidence.trim() : "";
+
+      if (p.kind === "contact_field") {
+        // THE MODEL IS NOT TRUSTED TO CHECK — it cannot see the contact
+        // row. `blankFields` is computed from the stored contact by the
+        // caller (finish-call.ts), and a field absent from it is refused
+        // here regardless of what the model asked for. This is the
+        // propose-time half of the containment rule; the accept-time half
+        // is `fillContactBlanks`, which re-checks atomically because a
+        // human may have filled the field in the minutes since.
+        const field = typeof p.field === "string" ? (p.field as ContactField) : null;
+        const value = typeof p.value === "string" ? p.value.trim() : "";
+        // ALLOW-LIST, never a denylist: `custom`, tags and consent flags
+        // stay out of v1 by refusing anything not in CONTACT_FIELDS, not by
+        // naming what to reject.
+        if (!field || !CONTACT_FIELDS.includes(field)) continue;
+        if (!input.blankFields.includes(field)) continue;
+        if (!value || !input.contactId) continue;
+        const grounded = groundedEvidence(evidence, input.transcript);
+        if (grounded === null) continue;
+        // Same budget as `task` below: this counts as an ATTEMPT the moment
+        // it reaches the database, win or lose (MAX_PER_CALL's own doc — the
+        // cap is on attempts considered, shared across kinds, not per kind).
+        attempts++;
+        const created = await insertProposal(input.db, input.accountId, {
+          callId: input.callId, contactId: input.contactId, kind: "contact_field",
+          payload: { field, value }, evidence: grounded,
+        });
+        if (created) written++;
+        continue;
+      }
+
+      // ALLOW-LIST, never a denylist. v1 emits `task` and `contact_field`
+      // only; `opportunity_stage` exists in the schema but has no generator
+      // yet, and a model naming it (or anything else) must not smuggle it
+      // past this loop.
       if (p.kind !== "task") continue;
       const title = typeof p.title === "string" ? p.title.trim().slice(0, MAX_TITLE_LEN) : "";
-      const evidence = typeof p.evidence === "string" ? p.evidence.trim() : "";
       if (!title) continue;
       // THE BOUNDARY, and note WHAT IS STORED. `groundedEvidence` returns the
       // caller's WHOLE TURN, not the model's excerpt of it, and that turn is

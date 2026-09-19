@@ -31,6 +31,21 @@ const transcript: TranscriptEvent[] = [
   t("caller", "I need a quote for a dining table. Call me Tuesday morning."),
 ];
 
+// SOURCE DEVIATION (source wins over the brief, per this task's own rule):
+// the brief's contact_field test block reused `transcript` above with the
+// evidence "my email is sam at example dot com" — a phrase that transcript
+// never contains. `groundedEvidence` (grounding.ts) requires the quote to
+// appear in an actual CALLER turn, so every one of those tests would return
+// 0 regardless of the blankFields/allow-list logic under test — not
+// unfalsifiable in the sense of always passing, but wrong for the reason:
+// a mutation to the guard under test would be MASKED by the unrelated
+// grounding failure. This transcript actually carries the quote, so the
+// tests below isolate the guard they name.
+const emailTranscript: TranscriptEvent[] = [
+  t("assistant", "Thanks for calling 956 Woodworks. How can I help?"),
+  t("caller", "My email is sam at example dot com."),
+];
+
 function modelReturning(content: unknown): typeof fetch {
   return vi.fn(async () => new Response(JSON.stringify({
     choices: [{ message: { content: JSON.stringify(content) } }],
@@ -122,6 +137,10 @@ function fakeDbAlwaysRefusing() {
 const base = {
   accountId: "acct", callId: "call1", contactId: null,
   outcome: "lead" as const, transcript, handoffRequested: false,
+  // Default is "nothing is blank" — matching `contactId: null` above, no
+  // test below is exercising the contact_field boundary unless it opts in
+  // by overriding this.
+  blankFields: [] as ("firstName" | "lastName" | "email" | "phone")[],
 };
 
 function requestBodyOf(fetchImpl: typeof fetch): any {
@@ -269,6 +288,94 @@ describe("generateProposals", () => {
     });
     expect(n).toBe(0);
     expect(db.rows).toEqual([]);
+  });
+
+  // Task 8: a contact_field proposal for a field the model correctly names
+  // as blank. `db.rows` — not a separate `db.inserted` list the brief
+  // sketched — is this file's own fixture shape (`fakeDb()` above); the row
+  // it records is the exact object `insertProposal` sent to `.insert()`, so
+  // `kind`/`payload` are read straight off it.
+  it("proposes a contact field that is currently blank", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, contactId: "c1", blankFields: ["email"], transcript: emailTranscript,
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "contact_field", field: "email",
+                      value: "sam@example.com",
+                      evidence: "my email is sam at example dot com" }],
+      }),
+    });
+    expect(n).toBe(1);
+    expect(db.rows[0].kind).toBe("contact_field");
+    expect(db.rows[0].payload).toEqual({ field: "email", value: "sam@example.com" });
+  });
+
+  // THE CONTAINMENT BOUNDARY. A wrong fill into an empty field costs a
+  // correction; a wrong OVERWRITE destroys something a person typed and is
+  // unrecoverable from the UI. Uses `emailTranscript` (not the file's
+  // default `transcript`) so the quote actually grounds — otherwise a
+  // dropped `blankFields` filter would still return 0 via the UNRELATED
+  // grounding check, masking the exact mutation this test names.
+  it("NEVER proposes a field that is not blank, even when the model asks (mutation: drop the blankFields filter -> FAILS)", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, contactId: "c1", blankFields: [], transcript: emailTranscript,   // nothing is blank
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "contact_field", field: "email",
+                      value: "attacker@example.com",
+                      evidence: "my email is sam at example dot com" }],
+      }),
+    });
+    expect(n).toBe(0);
+    expect(db.rows).toEqual([]);
+  });
+
+  // `blankFields` carries a value ("consent") outside the real
+  // firstName/lastName/email/phone union — a deliberate, cast-forced hostile
+  // input, exactly like the transcript's own `as unknown as
+  // TranscriptEvent[]` casts elsewhere in this file. Without it, "consent"
+  // would ALSO be rejected by the blankFields check (it can't be blank if
+  // it isn't a real field), so dropping the CONTACT_FIELDS allow-list alone
+  // would not be observable — the blankFields gate would still return 0 and
+  // silently hide the mutation this test names.
+  it("refuses a field outside the allow-list (mutation: drop the field allow-list -> FAILS)", async () => {
+    const db = fakeDb();
+    // `custom`, tags and consent flags are out of scope by design — consent
+    // in particular is a legal record, not a convenience.
+    const n = await generateProposals({
+      ...base, db, contactId: "c1",
+      blankFields: ["consent"] as unknown as readonly ("firstName" | "lastName" | "email" | "phone")[],
+      transcript: emailTranscript,
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "contact_field", field: "consent", value: "true",
+                      evidence: "my email is sam at example dot com" }],
+      }),
+    });
+    expect(n).toBe(0);
+  });
+
+  it("proposes no contact field when the call resolved no contact", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, contactId: null, blankFields: ["email"], transcript: emailTranscript,
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "contact_field", field: "email", value: "sam@example.com",
+                      evidence: "my email is sam at example dot com" }],
+      }),
+    });
+    expect(n).toBe(0);
+  });
+
+  it("still requires grounding for a contact field (mutation: skip groundedEvidence on this branch -> FAILS)", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, contactId: "c1", blankFields: ["email"],
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "contact_field", field: "email", value: "sam@example.com",
+                      evidence: "he gave me his email" }],   // not in the transcript
+      }),
+    });
+    expect(n).toBe(0);
   });
 
   it("drops a proposal with a blank title even when the evidence is real", async () => {

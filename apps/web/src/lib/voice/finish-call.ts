@@ -1,7 +1,7 @@
 import type { serviceDb, Branding, CallOutcome } from "@bis/db";
 import {
   createContact, fillContactBlanks, ensureConversation, createMessage, incrementUnreadCount,
-  finishCallRow, emit, getAlertPhone,
+  finishCallRow, emit, getAlertPhone, getContact,
 } from "@bis/db";
 import { emailBrand, brandDisplayName } from "@/lib/email/templates/shell";
 import { getEmailProvider } from "@/lib/email";
@@ -137,6 +137,28 @@ function splitFullName(fullName: string): { firstName: string; lastName?: string
   const idx = trimmed.lastIndexOf(" ");
   if (idx === -1) return { firstName: trimmed };
   return { firstName: trimmed.slice(0, idx).trim(), lastName: trimmed.slice(idx + 1).trim() };
+}
+
+/**
+ * The four contact columns `generateProposals`'s `contact_field` branch may
+ * ever fill, reported in this same order. "Blank" mirrors
+ * `fillContactBlanks`'s own definition (`@bis/db`'s `contacts.ts`): null, or
+ * empty after trimming — never a value a human typed. This is the
+ * propose-time half of the containment rule (Task 8): a column this
+ * function omits can never become a proposal downstream, no matter what the
+ * model asks for.
+ */
+function computeBlankFields(row: {
+  first_name?: string | null; last_name?: string | null;
+  email?: string | null; phone?: string | null;
+}): ("firstName" | "lastName" | "email" | "phone")[] {
+  const isBlank = (v: unknown) => v == null || String(v).trim() === "";
+  const blank: ("firstName" | "lastName" | "email" | "phone")[] = [];
+  if (isBlank(row.first_name)) blank.push("firstName");
+  if (isBlank(row.last_name)) blank.push("lastName");
+  if (isBlank(row.email)) blank.push("email");
+  if (isBlank(row.phone)) blank.push("phone");
+  return blank;
 }
 
 /**
@@ -548,10 +570,29 @@ export async function finishCall(
   // the generator's own `generateProposals:` lines.
   if (meta.callRowId && stored) {
     try {
+      // BLANK-FIELD CONTAINMENT (Task 8): `generateProposals` cannot see the
+      // contact row, so it is handed exactly which of the four allow-listed
+      // columns are currently empty on it. Read off the SAME `contactId`
+      // this function already resolved above — never re-resolved — and
+      // gated on it being non-null, per the spec's own rule ("When
+      // contactId is null, pass []"). Its own try/catch, nested INSIDE this
+      // leg's: a DB blip reading the contact must cost this feature its
+      // blank-field list, never the call its (task) proposals or this leg
+      // its usual best-effort behavior — the read failing must not also
+      // skip calling `generateProposals` altogether.
+      let blankFields: ("firstName" | "lastName" | "email" | "phone")[] = [];
+      if (contactId) {
+        try {
+          const row = await getContact(ctx.db, ctx.accountId, contactId);
+          if (row) blankFields = computeBlankFields(row);
+        } catch (e) {
+          console.error(`finishCall ${meta.callRowId}: contact read for blankFields failed: ${String(e)}`);
+        }
+      }
       const n = await generateProposals({
         db: ctx.db, accountId: ctx.accountId, callId: meta.callRowId,
         contactId, outcome, transcript: state.transcript,
-        handoffRequested: wasTransferred(state),
+        handoffRequested: wasTransferred(state), blankFields,
       });
       if (n > 0) console.log(`finishCall ${meta.callRowId}: proposals wrote ${n}`);
     } catch (e) {
