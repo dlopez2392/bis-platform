@@ -52,7 +52,84 @@ import {
 import { defaultTextbackBody } from "./textback-body";
 import { withOptOut } from "@/lib/sms/opt-out";
 
+/**
+ * The two raw-table reads `resolveOpenOpportunity` (finish-call.ts) makes —
+ * no `@bis/db` wrapper exists for "this contact's one open opportunity plus
+ * its pipeline's own stages", and this task is scoped to leave
+ * `packages/db` untouched, so finish-call.ts reads the tables directly, the
+ * same way `actions.ts` and `page.tsx` (this app's own opportunity-review
+ * code) already do. Defaults to "no open opportunity" for every table this
+ * function does not recognize as belonging to that read, so every OTHER
+ * test in this file — which knows nothing about this shape — resolves
+ * `openOpportunity: null` silently instead of throwing on `ctx.db.from` and
+ * logging noise nobody asked for.
+ */
+function fakeOppDb(opts: {
+  opportunities?: { id: string; stage_id: string; pipeline_id: string }[];
+  oppErrorMessage?: string;
+  stages?: { id: string; name: string; position: number }[];
+  stagesErrorMessage?: string;
+} = {}) {
+  const oppFilters: unknown[] = [];
+  const stageFilters: unknown[] = [];
+  return {
+    oppFilters, stageFilters,
+    from: (table: string) => {
+      if (table === "opportunities") {
+        return {
+          select: () => ({
+            eq: (...a1: unknown[]) => { oppFilters.push(a1); return {
+              eq: (...a2: unknown[]) => { oppFilters.push(a2); return {
+                eq: (...a3: unknown[]) => {
+                  oppFilters.push(a3);
+                  if (opts.oppErrorMessage) {
+                    return Promise.resolve({ data: null, error: { message: opts.oppErrorMessage } });
+                  }
+                  return Promise.resolve({ data: opts.opportunities ?? [], error: null });
+                },
+              }; },
+            }; },
+          }),
+        };
+      }
+      if (table === "pipeline_stages") {
+        return {
+          select: () => ({
+            eq: (...a1: unknown[]) => { stageFilters.push(a1); return {
+              eq: (...a2: unknown[]) => { stageFilters.push(a2); return {
+                order: (...a3: unknown[]) => {
+                  stageFilters.push(a3);
+                  if (opts.stagesErrorMessage) {
+                    return Promise.resolve({ data: null, error: { message: opts.stagesErrorMessage } });
+                  }
+                  return Promise.resolve({ data: opts.stages ?? [], error: null });
+                },
+              }; },
+            }; },
+          }),
+        };
+      }
+      throw new Error(`fakeOppDb: unexpected table "${table}"`);
+    },
+  };
+}
+
 const ctx: FinishContext = {
+  // Deliberately the bare `{}` this file has always used — many existing
+  // assertions below (`toHaveBeenCalledWith({}, "a1", ...)`) hardcode that
+  // literal rather than referencing `ctx.db` itself, so replacing it with a
+  // working `fakeOppDb()` here would break them on a value-equality
+  // mismatch having nothing to do with what they test. Every test in the
+  // `openOpportunity` describe block below overrides `db` with its own
+  // `fakeOppDb(...)`; every OTHER test reaches `resolveOpenOpportunity` (in
+  // finish-call.ts) with this same empty object, which fails its own
+  // `db.from(...)` call, is caught by that function's own try/catch (its
+  // FAIL-CLOSED contract), and resolves `openOpportunity: null` — the exact
+  // outcome those tests already expect of a call with no known opportunity,
+  // just reached by the read failing rather than finding zero rows. Logs an
+  // extra (unasserted) `finishCall: open-opportunity read failed` line in
+  // those tests; no assertion in this file checks console.error call
+  // counts (grep confirms), so this is inert noise, not a false pass.
   db: {} as unknown as ReturnType<typeof serviceDb>, accountId: "a1",
   // The customer-facing name, and the ONLY name this context carries — there
   // is no `accountName` on `FinishContext` any more.
@@ -996,6 +1073,129 @@ describe("finishCall — proposal generation", () => {
       blankFields: [],
     }));
     errSpy.mockRestore();
+  });
+
+  // Task 9: `generateProposals`'s `opportunity_stage` branch cannot see the
+  // pipeline either — it is handed exactly this contact's one open
+  // opportunity and its pipeline's own real stage names, ordered by
+  // position, or `null`. This is the propose-time source of that data;
+  // `generateProposals`'s own 61-test suite (generate.test.ts) owns what it
+  // does with it once handed over.
+  describe("openOpportunity", () => {
+    it("passes an openOpportunity built from the contact's single open opportunity and its pipeline's own stages", async () => {
+      const oppDb = fakeOppDb({
+        opportunities: [{ id: "o1", stage_id: "s1", pipeline_id: "p1" }],
+        stages: [
+          { id: "s1", name: "New Lead", position: 0 },
+          { id: "s2", name: "Contacted", position: 1 },
+        ],
+      });
+      await finishCall(leadState(), { ...ctx, db: oppDb as unknown as ReturnType<typeof serviceDb> }, meta);
+      expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+        openOpportunity: {
+          id: "o1", stageId: "s1", stageName: "New Lead",
+          stages: [
+            { id: "s1", name: "New Lead", position: 0 },
+            { id: "s2", name: "Contacted", position: 1 },
+          ],
+        },
+      }));
+      // Filtered by THIS contact and `status = 'open'` — never every
+      // opportunity the account has ever had.
+      expect(oppDb.oppFilters.flat()).toContain("ct1");
+      expect(oppDb.oppFilters.flat()).toContain("open");
+    });
+
+    it("passes openOpportunity: null when the contact has no open opportunity", async () => {
+      const oppDb = fakeOppDb({ opportunities: [] });
+      await finishCall(leadState(), { ...ctx, db: oppDb as unknown as ReturnType<typeof serviceDb> }, meta);
+      expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+        openOpportunity: null,
+      }));
+    });
+
+    // THE GUESS THIS FEATURE MUST NEVER MAKE: a call gives no signal about
+    // WHICH of several open deals it concerns.
+    it("passes openOpportunity: null when the contact has more than one open opportunity (mutation: drop the length !== 1 check -> FAILS)", async () => {
+      // `stages` is populated (not left empty) so a dropped length check
+      // would actually resolve a NON-null `openOpportunity` from `opps[0]`
+      // — an empty `stages` array would ALSO resolve to `null` via the
+      // separate `!current` guard just below, masking this exact mutation
+      // the same way a fixture that trips an earlier gate would (Task 8's
+      // own lesson: check the fixture reaches the guard under test).
+      const oppDb = fakeOppDb({
+        opportunities: [
+          { id: "o1", stage_id: "s1", pipeline_id: "p1" },
+          { id: "o2", stage_id: "s1", pipeline_id: "p1" },
+        ],
+        stages: [{ id: "s1", name: "New Lead", position: 0 }],
+      });
+      await finishCall(leadState(), { ...ctx, db: oppDb as unknown as ReturnType<typeof serviceDb> }, meta);
+      expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+        openOpportunity: null,
+      }));
+    });
+
+    // FAIL CLOSED, unlike the fail-open call-cap/startCallRow reads
+    // elsewhere in this lifecycle — a missed stage-move proposal costs
+    // nothing a caller depends on, so there is no fail-open argument here.
+    it("passes openOpportunity: null and does not throw when the opportunities read fails (mutation: remove resolveOpenOpportunity's own try/catch -> throws instead of returning null)", async () => {
+      const oppDb = fakeOppDb({ oppErrorMessage: "connection reset" });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const result = await finishCall(
+        leadState(), { ...ctx, db: oppDb as unknown as ReturnType<typeof serviceDb> }, meta,
+      );
+      expect(result.stored).toBe(true);
+      expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+        openOpportunity: null,
+      }));
+      errSpy.mockRestore();
+    });
+
+    it("passes openOpportunity: null and does not throw when the pipeline_stages read fails", async () => {
+      const oppDb = fakeOppDb({
+        opportunities: [{ id: "o1", stage_id: "s1", pipeline_id: "p1" }],
+        stagesErrorMessage: "connection reset",
+      });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const result = await finishCall(
+        leadState(), { ...ctx, db: oppDb as unknown as ReturnType<typeof serviceDb> }, meta,
+      );
+      expect(result.stored).toBe(true);
+      expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+        openOpportunity: null,
+      }));
+      errSpy.mockRestore();
+    });
+
+    it("passes openOpportunity: null when the call resolved no contact, and never reads one", async () => {
+      const s = withMessage(emptyCallState(), { body: "call me", at: "t" });
+      const oppDb = fakeOppDb();
+      const noCallerCtx: FinishContext = { ...ctx, callerNumber: null, db: oppDb as unknown as ReturnType<typeof serviceDb> };
+      await finishCall(s, noCallerCtx, meta);
+      expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+        contactId: null, openOpportunity: null,
+      }));
+      expect(oppDb.oppFilters).toEqual([]);
+    });
+
+    // Same precedent as the blankFields read just above: `callIsEligible`
+    // already gates that one so an ineligible call costs no wasted round
+    // trip, and this read follows it — a transferred lead call is still
+    // MEANINGFUL (gets its contact, its alert) but ineligible for a
+    // proposal purely because the caller asked for a person.
+    it("skips the open-opportunity read when the call is ineligible, even though a contact was resolved (mutation: drop the callIsEligible gate on this read -> FAILS)", async () => {
+      const oppDb = fakeOppDb({
+        opportunities: [{ id: "o1", stage_id: "s1", pipeline_id: "p1" }],
+        stages: [{ id: "s1", name: "New Lead", position: 0 }],
+      });
+      const s = withTransferred(leadState());
+      await finishCall(s, { ...ctx, db: oppDb as unknown as ReturnType<typeof serviceDb> }, meta);
+      expect(oppDb.oppFilters).toEqual([]);
+      expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+        openOpportunity: null,
+      }));
+    });
   });
 
   it("a proposal failure changes nothing about the call (mutation: remove the catch -> FAILS)", async () => {

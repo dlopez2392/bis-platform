@@ -20,7 +20,7 @@ import { toE164 } from "./phone-number";
 // plain lib-to-lib import, this file already imports `@bis/db` at module
 // scope above, and `api/voice/incoming/route.ts` imports `finishCall` itself
 // statically. Nothing here needed the indirection.
-import { generateProposals } from "@/lib/proposals/generate";
+import { generateProposals, type OpenOpportunity } from "@/lib/proposals/generate";
 // Read-only reuse of the SAME eligibility rule `generateProposals` already
 // applies internally (fix-wave Minor) — importing it, not re-deriving it,
 // is what keeps this file's pre-check from drifting out of sync with the
@@ -201,6 +201,54 @@ export function computeBlankFields(row: {
   if (isBlank(row.email)) blank.push("email");
   if (isBlank(row.phone)) blank.push("phone");
   return blank;
+}
+
+/**
+ * Reads the ONE open (`status = 'open'`) opportunity for this contact, plus
+ * its own pipeline's stage names/positions ordered by `position` — the REAL
+ * pipeline `generateProposals`'s `opportunity_stage` branch is allowed to
+ * name a stage from (Task 9's own brief: the generator never invents a
+ * stage). Direct table reads, not a `@bis/db` wrapper: no such read exists
+ * there today, and this task is scoped to leave `packages/db` untouched —
+ * `actions.ts` and `page.tsx` (this app's own opportunity-review code)
+ * already read `opportunities`/`pipeline_stages` the same direct way.
+ *
+ * Resolves to `null` on every ambiguous or failed case, deliberately FAIL
+ * CLOSED — unlike the two fail-open reads elsewhere in this lifecycle (the
+ * daily call-cap count, `startCallRow`), a missed stage-move proposal costs
+ * nothing a caller or a human outcome depends on, so there is no fail-open
+ * argument to make here:
+ *   - no open opportunity at all,
+ *   - MORE THAN ONE open opportunity — the call gives no signal about WHICH
+ *     deal it concerns, and guessing is exactly the failure this feature
+ *     must not produce,
+ *   - the opportunity's own `stage_id` is not among its pipeline's rows (a
+ *     data inconsistency this function refuses to reason about further),
+ *   - or any read error at all.
+ */
+async function resolveOpenOpportunity(
+  db: ReturnType<typeof serviceDb>, accountId: string, contactId: string,
+): Promise<OpenOpportunity | null> {
+  try {
+    const { data: opps, error } = await db.from("opportunities")
+      .select("id, stage_id, pipeline_id")
+      .eq("account_id", accountId).eq("contact_id", contactId).eq("status", "open");
+    if (error) throw new Error(error.message);
+    if (!opps || opps.length !== 1) return null;
+    const opp = opps[0] as { id: string; stage_id: string; pipeline_id: string };
+    const { data: stages, error: stagesError } = await db.from("pipeline_stages")
+      .select("id, name, position")
+      .eq("account_id", accountId).eq("pipeline_id", opp.pipeline_id)
+      .order("position");
+    if (stagesError) throw new Error(stagesError.message);
+    const rows = (stages ?? []) as { id: string; name: string; position: number }[];
+    const current = rows.find((s) => s.id === opp.stage_id);
+    if (!current) return null;
+    return { id: opp.id, stageId: opp.stage_id, stageName: current.name, stages: rows };
+  } catch (e) {
+    console.error(`finishCall: open-opportunity read failed for contact ${contactId}: ${String(e)}`);
+    return null;
+  }
 }
 
 /**
@@ -635,6 +683,12 @@ export async function finishCall(
       // `generateProposals` its real `handoffRequested` so IT applies the
       // refusal; only the now-pointless contact READ is skipped here.
       let blankFields: ("firstName" | "lastName" | "email" | "phone")[] = [];
+      // Task 9: the contact's one open opportunity plus its pipeline's real
+      // stage names — gated on the SAME `contactId && callIsEligible(...)`
+      // check as the blankFields read just above, and for the identical
+      // reason (fix-wave Minor on that read): an ineligible call must cost
+      // nothing at all, including this now-pointless round trip.
+      let openOpportunity: OpenOpportunity | null = null;
       if (contactId && callIsEligible({
         outcome, transcript: state.transcript, handoffRequested: wasTransferred(state),
       })) {
@@ -644,11 +698,16 @@ export async function finishCall(
         } catch (e) {
           console.error(`finishCall ${meta.callRowId}: contact read for blankFields failed: ${String(e)}`);
         }
+        // Its own fail-closed contract (see the function's own doc) — a
+        // failure here must cost this feature its stage-move candidate,
+        // never the call's (task/contact_field) proposals or this leg's
+        // usual best-effort behavior.
+        openOpportunity = await resolveOpenOpportunity(ctx.db, ctx.accountId, contactId);
       }
       const n = await generateProposals({
         db: ctx.db, accountId: ctx.accountId, callId: meta.callRowId,
         contactId, outcome, transcript: state.transcript,
-        handoffRequested: wasTransferred(state), blankFields,
+        handoffRequested: wasTransferred(state), blankFields, openOpportunity,
       });
       if (n > 0) console.log(`finishCall ${meta.callRowId}: proposals wrote ${n}`);
     } catch (e) {

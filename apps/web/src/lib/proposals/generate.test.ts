@@ -141,6 +141,32 @@ const base = {
   // test below is exercising the contact_field boundary unless it opts in
   // by overriding this.
   blankFields: [] as ("firstName" | "lastName" | "email" | "phone")[],
+  // Default is "no known open opportunity" — matching `contactId: null`
+  // above (finish-call.ts only ever resolves one when a contact is known),
+  // so no test below is exercising the opportunity_stage boundary unless it
+  // opts in by overriding this.
+  openOpportunity: null as {
+    id: string; stageId: string; stageName: string;
+    stages: readonly { id: string; name: string; position: number }[];
+  } | null,
+};
+
+/**
+ * The account's real, seeded pipeline shape (`New Lead(0) → Contacted(1) →
+ * Appointment(2) → Quote Sent(3)`), matching every live account's own
+ * `pipeline_stages`. The generator may only ever name a stage from THIS
+ * list — never invent one — so every opportunity_stage test below hands it
+ * this same object (or a `stageId`-shifted copy of it) rather than a
+ * fixture the production data could never actually produce.
+ */
+const pipeline = {
+  id: "o1", stageId: "s1", stageName: "New Lead",
+  stages: [
+    { id: "s1", name: "New Lead", position: 0 },
+    { id: "s2", name: "Contacted", position: 1 },
+    { id: "s3", name: "Appointment", position: 2 },
+    { id: "s4", name: "Quote Sent", position: 3 },
+  ],
 };
 
 function requestBodyOf(fetchImpl: typeof fetch): any {
@@ -283,18 +309,13 @@ describe("generateProposals", () => {
     expect(db.rows).toEqual([]);
   });
 
-  it("refuses an opportunity_stage proposal — its accept path does not exist yet", async () => {
-    const db = fakeDb();
-    const n = await generateProposals({
-      ...base, db,
-      fetchImpl: modelReturning({
-        proposals: [{ kind: "opportunity_stage", title: "Move to won",
-                      dueAt: null, evidence: "Call me Tuesday morning" }],
-      }),
-    });
-    expect(n).toBe(0);
-    expect(db.rows).toEqual([]);
-  });
+  // REMOVED (Task 9, source-vs-brief note): this test used to assert
+  // "opportunity_stage has no branch at all", which Task 9 makes false — the
+  // kind is implemented below, in its own `describe` block, including the
+  // equivalent "no known open opportunity" guard against this exact same
+  // `base` default (`openOpportunity: null`). Keeping both would have
+  // asserted the identical fixture/behavior twice under two different
+  // names; see the `opportunity_stage` block near the end of this file.
 
   // Task 8: a contact_field proposal for a field the model correctly names
   // as blank. THE WHOLE ROW (fix-wave Important 4), not two fields — the
@@ -897,5 +918,180 @@ describe("generateProposals", () => {
     const body = requestBodyOf(fetchImpl);
     expect(typeof body.max_tokens).toBe("number");
     expect(body.max_tokens).toBeGreaterThan(0);
+  });
+});
+
+// Task 9: `opportunity_stage`. THE LARGEST BLAST RADIUS ON THE BOARD — one
+// live account has sixteen real opportunities, and a wrong stage move
+// rewrites a sales pipeline on the account with the most to lose. Every
+// fixture below hands the generator `pipeline`, the account's own REAL
+// stage names/ids — the generator may only ever pick a name from that list,
+// never invent one, and these tests exist to prove it cannot.
+describe("generateProposals — opportunity_stage", () => {
+  it("proposes a stage move, recording where it came FROM as well as to, grounded in the caller's WHOLE turn", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, contactId: "c1", openOpportunity: pipeline,
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "opportunity_stage", toStage: "Contacted",
+                      evidence: "I need a quote for a dining table" }],
+      }),
+    });
+    expect(n).toBe(1);
+    // THE WHOLE ROW (fix-wave lesson from Task 8, finding 5): a partial
+    // assertion here would have left an account/contact/evidence mixup
+    // green, including storing the model's own excerpt ("I need a quote
+    // for a dining table") instead of the caller's WHOLE turn.
+    // `fromStageId` is stored so the review screen can show the MOVE, and
+    // so the accept path (actions.ts) can refuse a proposal whose starting
+    // point has since changed.
+    expect(db.rows[0]).toEqual({
+      account_id: "acct",
+      call_id: "call1",
+      contact_id: "c1",
+      kind: "opportunity_stage",
+      evidence: "I need a quote for a dining table. Call me Tuesday morning.",
+      payload: { opportunityId: "o1", fromStageId: "s1", toStageId: "s2" },
+    });
+  });
+
+  it("refuses a stage that is not in this opportunity's pipeline (mutation: drop the stage lookup -> FAILS)", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, openOpportunity: pipeline,
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "opportunity_stage", toStage: "Closed Won",
+                      evidence: "I need a quote for a dining table" }],
+      }),
+    });
+    expect(n).toBe(0);
+    expect(db.rows).toEqual([]);
+  });
+
+  // A machine must not walk an opportunity BACKWARDS through a pipeline. A
+  // human can; this feature may not, because the evidence for a regression
+  // is almost never in one phone call.
+  it("refuses a backwards move (mutation: drop the position comparison -> FAILS)", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db,
+      openOpportunity: { ...pipeline, stageId: "s4", stageName: "Quote Sent" },
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "opportunity_stage", toStage: "Contacted",
+                      evidence: "I need a quote for a dining table" }],
+      }),
+    });
+    expect(n).toBe(0);
+    expect(db.rows).toEqual([]);
+  });
+
+  // PARITY WITH THE ACCEPT PATH (Task 8's lesson): `actions.ts`'s accept
+  // path treats `fromStageId === toStageId` as a no-op it silently allows
+  // (`moveOpportunityToStage`'s own `if (opp.stage_id === toStageId)
+  // return;`) — so a proposal that named the CURRENT stage would be
+  // "acceptable" there but useless, a review card offering nothing. The
+  // `<=` comparison below is what keeps such a payload from ever being
+  // WRITTEN in the first place; a `<` in its place would let this exact
+  // case through (0 < 0 is false, so a `<`-only guard would NOT continue,
+  // and the proposal would be written) while still refusing genuinely
+  // backwards moves, which is exactly the mutation that would go unnoticed
+  // without this test.
+  it("refuses a move to the stage it is already in (mutation: change <= to < in the position comparison -> FAILS)", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, openOpportunity: pipeline,
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "opportunity_stage", toStage: "New Lead",
+                      evidence: "I need a quote for a dining table" }],
+      }),
+    });
+    expect(n).toBe(0);
+    expect(db.rows).toEqual([]);
+  });
+
+  // NOTE ON THE MUTATION (source-vs-brief): literally deleting `if (!opp)
+  // continue;` does not compile — `tsc --noEmit` reports `'opp' is possibly
+  // 'null'` at every later `opp.stages`/`opp.stageId` use (TS18047), a
+  // stronger guarantee than a runtime test. At the RUNTIME level a dropped
+  // guard still returns `n === 0` (the subsequent `opp.stages.find(...)`
+  // throws on the null, the loop's own outer try/catch swallows it, and 0
+  // proposals had landed yet) — so `n`/`db.rows` alone cannot distinguish
+  // "refused cleanly" from "crashed and got swallowed". The real, falsifiable
+  // difference is that a crash LOGS a fault for what is this account's most
+  // common case (a call with no open opportunity at all): the assertion
+  // below is the substitute this task's own rules call for.
+  it("proposes no stage move when the call resolved no open opportunity, and does so WITHOUT logging a fault (mutation: drop the `!opp` guard -> FAILS)", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, openOpportunity: null,
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "opportunity_stage", toStage: "Contacted",
+                      evidence: "I need a quote for a dining table" }],
+      }),
+    });
+    expect(n).toBe(0);
+    expect(db.rows).toEqual([]);
+    // A call with no known opportunity is the ORDINARY case, not a fault —
+    // it must be refused silently, not by throwing into the outer catch.
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("still requires grounding for a stage move (mutation: skip groundedEvidence on this branch -> FAILS)", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, openOpportunity: pipeline,
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "opportunity_stage", toStage: "Contacted",
+                      evidence: "he mentioned wanting a table" }],   // not in the transcript
+      }),
+    });
+    expect(n).toBe(0);
+    expect(db.rows).toEqual([]);
+  });
+
+  // Important 6's twin (contact_field already has this; opportunity_stage
+  // needs its own, because the loop's shared `attempts` cap is only real if
+  // EVERY kind's branch increments it, win or lose (`MAX_PER_CALL`'s own
+  // doc). PROVED against the brief's own illustrative code, which omitted
+  // `attempts++` from this branch entirely — without it, 20 colliding
+  // opportunity_stage candidates would all be attempted rather than
+  // stopping at the shared budget of 3.
+  it("stops after MAX_PER_CALL attempts for opportunity_stage proposals too, even when every insert is refused (mutation: drop `attempts++` from the opportunity_stage branch -> FAILS)", async () => {
+    const db = fakeDbAlwaysRefusing();
+    const many = Array.from({ length: 20 }, () => ({
+      kind: "opportunity_stage", toStage: "Contacted",
+      evidence: "I need a quote for a dining table",
+    }));
+    const n = await generateProposals({
+      ...base, db, openOpportunity: pipeline,
+      fetchImpl: modelReturning({ proposals: many }),
+    });
+    expect(n).toBe(0);
+    expect(db.attempts).toHaveLength(3);
+  });
+
+  // PIN THE PROMPT HALF (Task 8's lesson: neutering the prompt builder left
+  // the whole suite green while production would emit nothing). The model
+  // is told ONLY this account's real stage names, not a made-up one.
+  it("names the account's own stage names in the opportunity_stage instruction (mutation: hardcode a literal stage name instead of listing openOpportunity.stages -> FAILS)", async () => {
+    const db = fakeDb();
+    const fetchImpl = modelReturning({ proposals: [] });
+    await generateProposals({ ...base, db, openOpportunity: pipeline, fetchImpl });
+    const prompt = systemPromptOf(fetchImpl);
+    expect(prompt).toContain("opportunity_stage");
+    expect(prompt).toContain("Contacted");
+    expect(prompt).toContain("Appointment");
+    expect(prompt).toContain("Quote Sent");
+  });
+
+  // The other half of the same pair: with no known open opportunity, the
+  // model is never told the kind exists at all, so it cannot invent one.
+  it("omits the opportunity_stage instruction entirely when there is no open opportunity (mutation: always append the opportunity_stage sentence -> FAILS)", async () => {
+    const db = fakeDb();
+    const fetchImpl = modelReturning({ proposals: [] });
+    await generateProposals({ ...base, db, fetchImpl });   // openOpportunity: null via base
+    expect(systemPromptOf(fetchImpl).toLowerCase()).not.toContain("opportunity_stage");
   });
 });

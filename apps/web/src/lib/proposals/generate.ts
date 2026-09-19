@@ -59,22 +59,53 @@ const CONTACT_FIELDS = ["firstName", "lastName", "email", "phone"] as const;
 type ContactField = (typeof CONTACT_FIELDS)[number];
 
 /**
+ * The one opportunity this call may be about, and the REAL pipeline it
+ * lives in — never invented, never the model's own idea of a stage name.
+ * `stages` is ordered by `position` (the caller's job, per
+ * `resolveOpenOpportunity` in finish-call.ts); this generator trusts that
+ * order to decide forward-vs-backward and never re-sorts it.
+ *
+ * Exported so finish-call.ts (the one caller that resolves this) shares the
+ * exact same shape instead of a hand-copied duplicate that could drift.
+ */
+export type OpenOpportunity = {
+  id: string; stageId: string; stageName: string;
+  stages: readonly { id: string; name: string; position: number }[];
+};
+
+/**
  * Builds the system prompt for one call, naming ONLY the fields this
- * particular contact currently has blank. The model is told which fields it
- * MAY propose, but it is never trusted to have checked that list itself —
- * `blankFields.includes(field)` below re-checks unconditionally, regardless
+ * particular contact currently has blank, and — separately — ONLY this
+ * account's own real pipeline stage names when an open opportunity is
+ * known. The model is told which fields/stages it MAY propose, but it is
+ * never trusted to have checked that list itself — `blankFields.includes`
+ * and the stage-name lookup below both re-check unconditionally, regardless
  * of what this sentence said or whether the model even read it.
  */
-function systemFor(blankFields: readonly ContactField[]): string {
-  if (blankFields.length === 0) return SYSTEM;
-  return `${SYSTEM} You may also propose {"kind":"contact_field","field":"<one of: ${
-    blankFields.join(", ")
-  }>","value":"...","evidence":"..."} — but ONLY for those fields, and only when the caller stated the value out loud.`;
+function systemFor(
+  blankFields: readonly ContactField[],
+  openOpportunity: OpenOpportunity | null,
+): string {
+  let system = SYSTEM;
+  if (blankFields.length > 0) {
+    system = `${system} You may also propose {"kind":"contact_field","field":"<one of: ${
+      blankFields.join(", ")
+    }>","value":"...","evidence":"..."} — but ONLY for those fields, and only when the caller stated the value out loud.`;
+  }
+  if (openOpportunity) {
+    // NAMED FROM THE REAL PIPELINE, never invented — this account's own
+    // stage names, in order, are the entire allow-list the model is handed.
+    const stageNames = openOpportunity.stages.map((s) => s.name).join(", ");
+    system = `${system} This caller has an open deal currently at the "${
+      openOpportunity.stageName
+    }" stage, in a pipeline with these stages in order: ${stageNames}. If — and ONLY if — the call is clear evidence the deal moved to a LATER stage in that list, you may propose {"kind":"opportunity_stage","toStage":"<the exact name of one LATER stage from that list>","evidence":"..."}. The stage name must be spelled EXACTLY as given above. Never propose the current stage, and never propose an EARLIER stage — a human, not you, may ever move a deal backwards.`;
+  }
+  return system;
 }
 
 type RawProposal = {
   kind?: unknown; title?: unknown; dueAt?: unknown; evidence?: unknown;
-  field?: unknown; value?: unknown;
+  field?: unknown; value?: unknown; toStage?: unknown;
 };
 
 function transcriptForModel(transcript: TranscriptEvent[]): string {
@@ -137,6 +168,17 @@ export async function generateProposals(input: {
    * failed (fail-closed on the FIELD, never on the call).
    */
   blankFields: readonly ContactField[];
+  /**
+   * The contact's single OPEN opportunity, plus its pipeline's real stage
+   * names/positions — or `null`. Computed by the caller (finish-call.ts)
+   * from the stored data; this function cannot see it and never invents a
+   * stage of its own. `null` covers three cases the caller collapses on
+   * purpose, because none of them give this generator anything safe to act
+   * on: no contact, no open opportunity, or MORE THAN ONE open opportunity
+   * — a call gives no signal about which deal it concerns, and guessing
+   * which one is exactly the failure this feature must not produce.
+   */
+  openOpportunity: OpenOpportunity | null;
   fetchImpl?: typeof fetch;
 }): Promise<number> {
   let written = 0;
@@ -206,7 +248,7 @@ export async function generateProposals(input: {
         // proposals fit comfortably inside this; a runaway array does not.
         max_tokens: 2000,
         messages: [
-          { role: "system", content: systemFor(input.blankFields) },
+          { role: "system", content: systemFor(input.blankFields, input.openOpportunity) },
           { role: "user", content: transcriptForModel(input.transcript) },
         ],
       }),
@@ -303,10 +345,53 @@ export async function generateProposals(input: {
         continue;
       }
 
-      // ALLOW-LIST, never a denylist. v1 emits `task` and `contact_field`
-      // only; `opportunity_stage` exists in the schema but has no generator
-      // yet, and a model naming it (or anything else) must not smuggle it
-      // past this loop.
+      if (p.kind === "opportunity_stage") {
+        // THE MODEL IS NOT TRUSTED TO CHECK — it cannot see the pipeline.
+        // `openOpportunity` is resolved by the caller (finish-call.ts) from
+        // the contact's own stored data, and this generator refuses
+        // anything that does not survive every one of the checks below
+        // regardless of what the model asked for.
+        const opp = input.openOpportunity;
+        // No open opportunity, or the caller found more than one and
+        // collapsed that to `null` (this function's own doc above) — either
+        // way, nothing here says which deal the call is about.
+        if (!opp) continue;
+        const toName = typeof p.toStage === "string" ? p.toStage.trim().toLowerCase() : "";
+        // NAMED FROM THE REAL PIPELINE, never invented. The model was given
+        // this account's own stage names and may only pick one of them;
+        // anything else — a synonym, a stage from a DIFFERENT pipeline, a
+        // stage the model made up — is dropped rather than fuzzy-matched.
+        const target = opp.stages.find((s) => s.name.trim().toLowerCase() === toName);
+        const current = opp.stages.find((s) => s.id === opp.stageId);
+        if (!target || !current) continue;
+        // FORWARD ONLY, and this same comparison is what refuses a move to
+        // the CURRENT stage too (equal positions are `<=`). A single phone
+        // call is evidence that a deal advanced; it is almost never
+        // evidence that it went backwards, and a machine that can retreat a
+        // pipeline can undo a human's own read of a customer — a human
+        // keeps full freedom to move either way, this generator does not.
+        if (target.position <= current.position) continue;
+        const grounded = groundedEvidence(evidence, input.transcript);
+        if (grounded === null) continue;
+        // Same budget as the other two kinds: an ATTEMPT the moment it
+        // reaches the database, win or lose (MAX_PER_CALL's own doc — the
+        // cap is on attempts considered, shared across kinds).
+        attempts++;
+        const created = await insertProposal(input.db, input.accountId, {
+          callId: input.callId, contactId: input.contactId, kind: "opportunity_stage",
+          // `fromStageId` is stored so the review screen can show the MOVE,
+          // and so the accept path (actions.ts) can refuse a proposal whose
+          // starting point has since changed underneath it.
+          payload: { opportunityId: opp.id, fromStageId: current.id, toStageId: target.id },
+          evidence: grounded,
+        });
+        if (created) written++;
+        continue;
+      }
+
+      // ALLOW-LIST, never a denylist. v1 emits `task`, `contact_field` and
+      // `opportunity_stage` only; a model naming anything else must not
+      // smuggle it past this loop.
       if (p.kind !== "task") continue;
       const title = typeof p.title === "string" ? p.title.trim().slice(0, MAX_TITLE_LEN) : "";
       if (!title) continue;
