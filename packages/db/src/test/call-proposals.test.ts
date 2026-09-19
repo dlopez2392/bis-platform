@@ -355,6 +355,36 @@ describe("listPendingProposalsForAgency", () => {
     });
   });
 
+  // Fix-wave Important 1 (task-11-brief): a task proposal's own dueAt has to
+  // render in ITS account's own zone on the agency work queue, the same rule
+  // `listAgencyWork`'s own rows already follow — never one zone borrowed
+  // across every row on the page.
+  it("carries each account's own timezone, across two different accounts (mutation: drop the timezone field, or always fall back to UTC -> FAILS)", async () => {
+    await withTestAccount(async (dbA, accountA) => {
+      await withTestAccount(async (dbB, accountB) => {
+        await dbA.from("accounts").update({ timezone: "America/Chicago" }).eq("id", accountA);
+        await dbB.from("accounts").update({ timezone: "America/Los_Angeles" }).eq("id", accountB);
+
+        const callA = await seedCall(dbA, accountA);
+        const pendingA = await insertProposal(dbA, accountA, {
+          callId: callA, kind: "task", evidence: "A's caller asked for a callback",
+          payload: { title: "Call A back", dueAt: null },
+        });
+        const callB = await seedCall(dbB, accountB);
+        const pendingB = await insertProposal(dbB, accountB, {
+          callId: callB, kind: "task", evidence: "B's caller asked for a callback",
+          payload: { title: "Call B back", dueAt: null },
+        });
+
+        const rows = await listPendingProposalsForAgency(dbA);
+        const byId = new Map(rows.map((r) => [r.id, r]));
+
+        expect(byId.get(pendingA!.id)?.timezone).toBe("America/Chicago");
+        expect(byId.get(pendingB!.id)?.timezone).toBe("America/Los_Angeles");
+      });
+    });
+  });
+
   it("returns a blank brand name, never the account's internal label, when brand_name is null (mutation: fall back to accounts.name -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       await db.from("accounts").update({ brand_name: null, name: "Fixture Co — internal" }).eq("id", accountId);

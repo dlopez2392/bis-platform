@@ -315,6 +315,7 @@ export default async function CallDetailPage({
             stageNames={stageNames}
             accountId={accountId}
             callId={callId}
+            timezone={timezone}
           />
 
           <section aria-labelledby="call-transcript" className={CARD}>

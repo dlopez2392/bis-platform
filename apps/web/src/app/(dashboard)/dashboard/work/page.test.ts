@@ -88,11 +88,21 @@ describe("AgencyWorkPage", () => {
     pipelineStagesInMock.mockReset().mockResolvedValue({ data: [], error: null });
   });
 
-  it("guards before any read — a rejected agency check never reaches listAgencyWork", async () => {
+  // Fix-wave Important 2 (task-11-brief): this page issues THREE serviceDb
+  // reads, not one — `listAgencyWork`, `listPendingProposalsForAgency` (every
+  // account's pending proposals, `evidence` and all — a verbatim quote from a
+  // caller on someone else's line) and the `pipeline_stages` lookup. The
+  // original version of this test named only `listAgencyWork`, so hoisting
+  // the proposals read above `await requireAgency()` (preserving its own
+  // `.catch` and concurrency) left this test, and all 45 of its neighbours,
+  // green — PROVED live, see this task's own report.
+  it("guards before any read — a rejected agency check never reaches listAgencyWork, listPendingProposalsForAgency or the pipeline_stages read", async () => {
     requireAgencyMock.mockRejectedValueOnce(new Error("NEXT_REDIRECT"));
     const { default: AgencyWorkPage } = await import("./page");
     await expect(AgencyWorkPage()).rejects.toThrow("NEXT_REDIRECT");
     expect(listAgencyWorkMock).not.toHaveBeenCalled();
+    expect(listPendingProposalsForAgencyMock).not.toHaveBeenCalled();
+    expect(pipelineStagesInMock).not.toHaveBeenCalled();
   });
 
   it("renders the chosen heading once the agency check passes", async () => {

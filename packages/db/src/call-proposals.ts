@@ -171,7 +171,7 @@ export async function listPendingProposals(
  */
 export async function listPendingProposalsForAgency(
   db: SupabaseClient,
-): Promise<(CallProposal & { brandName: string })[]> {
+): Promise<(CallProposal & { brandName: string; timezone: string })[]> {
   const { data, error } = await db.from("call_proposals").select(COLS)
     .eq("status", "pending")
     .order("created_at", { ascending: false })
@@ -181,22 +181,34 @@ export async function listPendingProposalsForAgency(
   if (rows.length === 0) return [];
 
   const accountIds = [...new Set(rows.map((r) => r.account_id))];
+  // `timezone` alongside `brand_name` — fix-wave Important 1 (task-11-brief):
+  // a task proposal's own dueAt has to render in ITS account's own zone, the
+  // same rule `listAgencyWork`'s own rows already follow (work-queue.ts) —
+  // never a zone borrowed from whichever account happens to render first.
   const { data: accounts, error: aErr } = await db.from("accounts")
-    .select("id, brand_name")
+    .select("id, brand_name, timezone")
     .in("id", accountIds);
   if (aErr) throw new Error(`listPendingProposalsForAgency accounts read failed: ${aErr.message}`);
 
   const brandNameByAccount = new Map<string, string>();
-  for (const a of (accounts ?? []) as { id: string; brand_name: string | null }[]) {
+  const timezoneByAccount = new Map<string, string>();
+  for (const a of (accounts ?? []) as { id: string; brand_name: string | null; timezone: string }[]) {
     brandNameByAccount.set(a.id, brandDisplayName({
       brandName: a.brand_name, brandLogoPath: null, brandColor: null,
       brandNeutral: null, brandCorners: null, brandType: null,
       brandMode: null, replyToEmail: null,
     }));
+    timezoneByAccount.set(a.id, a.timezone);
   }
   return rows.map((r) => ({
     ...toProposal(r),
     brandName: brandNameByAccount.get(r.account_id) ?? "",
+    // Falls back to UTC only when the account row itself could not be
+    // read (never reachable in practice — every `call_proposals.account_id`
+    // that got this far came off a real, already-read `accounts` row a
+    // moment ago) rather than throwing this whole best-effort screen away
+    // over one row's missing zone.
+    timezone: timezoneByAccount.get(r.account_id) ?? "UTC",
   }));
 }
 

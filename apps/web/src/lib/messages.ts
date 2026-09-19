@@ -1750,6 +1750,11 @@ export const m = {
   // said. "proposals.subhead" (the call-detail page's own sibling copy) is
   // the concrete version this one now matches.
   "proposals.work.body": "Open the account to accept or dismiss. Nothing changes from this screen.",
+  // Fix-wave Important 3 (task-11-brief): the per-account "To do" screen's
+  // own twin of "proposals.work.body" — a reader here is already INSIDE the
+  // account, so "open the account" would be nonsense; the next step is
+  // opening the call itself, exactly where every row on this section links.
+  "proposals.account.body": "Open the call to accept or dismiss. Nothing changes from this screen.",
 
   // Per-kind plain-language sentences for the call-detail proposals block
   // (Task 7). "{title}"/"{value}" are the house untrusted-placeholder shape —
@@ -1758,6 +1763,11 @@ export const m = {
   // model. "{field}" is filled from this app's own static field labels
   // (contacts.firstName etc.), not the caller — safe either way.
   "proposals.task.label": "Add a task: {title}",
+  // Fix-wave Important 1: rendered only for a `task` proposal that survived
+  // `generate.ts`'s own forward-window check — a `dueAt` reaching this label
+  // is always a real, near-future moment a human can see BEFORE accepting
+  // it, in the account's own zone, never the raw UTC instant.
+  "proposals.task.due": "Due {date}",
   "proposals.contactField.label": "Add their {field}: {value}",
   // "{from}"/"{to}" are stage NAMES, resolved from the payload's uuids
   // before this ever reaches copy — never the destination alone.
@@ -1776,7 +1786,15 @@ export const m = {
   // the destination alone (this file's own rule for the kind), but the row
   // still shows: an honest sentence that names no stage, rather than
   // dropping the row and leaving the queue looking clear when it is not.
-  "proposals.stage.unresolved": "This opportunity moved to a different stage.",
+  // Fix-wave Minor: past tense ("moved") asserted something that had not
+  // happened — nothing moves until a human accepts, and every sibling label
+  // in this namespace ("Add a task…", "Add their…", "Move from…") is
+  // imperative. Rewritten to match, without changing what it is honestly
+  // able to say (page.tsx's own batched pipeline_stages read came back short
+  // for this one pair). No apostrophe on purpose: several call sites still
+  // compare raw `renderToStaticMarkup` output rather than decoded text, and
+  // React escapes an apostrophe to `&#x27;` in that output.
+  "proposals.stage.unresolved": "Review the stage change on this opportunity.",
   // "proposals.accepted.toast" ("Added to your to-do list") is true only of
   // a `task` proposal — accepting the other two kinds doesn't add anything
   // to a to-do list, and reporting that it did would be exactly the false

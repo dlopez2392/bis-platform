@@ -12,6 +12,7 @@
 import type { CallProposal, ContactFieldPayload, ProposalKind, ProposalStatus } from "@bis/db";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { formatDateInZone } from "@/lib/format";
 import { m, type MessageKey } from "@/lib/messages";
 import { acceptProposal, dismissProposal } from "./actions";
 import { ProposalActions } from "./proposal-actions";
@@ -74,7 +75,37 @@ export function acceptedToastFor(kind: ProposalKind): string {
   return m["proposals.accepted.stage.toast"];
 }
 
-type Entry = { id: string; status: ProposalStatus; label: string; evidence: string; kind: ProposalKind };
+type Entry = {
+  id: string; status: ProposalStatus; label: string; evidence: string; kind: ProposalKind;
+  /** A `task` proposal's own `dueAt`, already formatted in the account's
+   *  zone — `null` for every other kind (they carry no due date) and for a
+   *  `task` proposal whose `dueAt` is itself `null` (`generate.ts`'s own
+   *  forward-window check already rejected anything a human should not see
+   *  as a real date, so nothing here re-validates it — see this file's own
+   *  doc on that rejection). */
+  dueAtText: string | null;
+};
+
+/**
+ * Fix-wave Important 1: a machine-chosen due date must be VISIBLE on the
+ * review card BEFORE a human accepts it — the half of the fix a reader can
+ * check with their own eyes, alongside `generate.ts`'s own forward-window
+ * rejection of a due date that could never be real. Degrades to no date text
+ * (never a crash, never a raw UTC guess) on an unparseable instant, the same
+ * `RangeError`-only catch every other date-in-zone render in this app uses
+ * (`work-list.tsx`'s own `rowDateText`) — `dueAt` already passed
+ * `generate.ts`'s own `Date.parse` guard before it was ever stored, so this
+ * is defense in depth, not a path expected to trigger.
+ */
+function dueAtText(dueAt: string | null, timezone: string): string | null {
+  if (!dueAt) return null;
+  try {
+    return formatDateInZone(dueAt, timezone);
+  } catch (err) {
+    if (!(err instanceof RangeError)) throw err;
+    return null;
+  }
+}
 
 /**
  * The proposal's own plain-language sentence, or `null` for an
@@ -128,14 +159,17 @@ function buildLabel(p: CallProposal, stages: Record<string, ResolvedStage>): str
   return label;
 }
 
-function buildEntry(p: CallProposal, stages: Record<string, ResolvedStage>): Entry | null {
+function buildEntry(p: CallProposal, stages: Record<string, ResolvedStage>, timezone: string): Entry | null {
   const label = buildLabel(p, stages);
   if (label === null) return null;
-  return { id: p.id, status: p.status, label, evidence: p.evidence, kind: p.kind };
+  return {
+    id: p.id, status: p.status, label, evidence: p.evidence, kind: p.kind,
+    dueAtText: p.kind === "task" ? dueAtText(p.payload.dueAt, timezone) : null,
+  };
 }
 
 export function CallProposals({
-  proposals, accountId, callId, stageNames,
+  proposals, accountId, callId, stageNames, timezone,
 }: {
   proposals: CallProposal[];
   accountId: string;
@@ -144,9 +178,14 @@ export function CallProposals({
    *  pipeline_stages read. Only ever non-empty when at least one proposal is
    *  `opportunity_stage`. */
   stageNames: Record<string, ResolvedStage>;
+  /** The account's own resolved zone (page.tsx's `renderZone`), the same
+   *  value the transcript timestamps just below this section are formatted
+   *  in — a machine-chosen due date must read in the SAME zone as everything
+   *  else on this page, never the raw UTC instant `tasks.due_at` stores. */
+  timezone: string;
 }) {
   const entries = proposals
-    .map((p) => buildEntry(p, stageNames))
+    .map((p) => buildEntry(p, stageNames, timezone))
     .filter((e): e is Entry => e !== null);
 
   // `listProposalsForCall` orders by created_at DESC — insert order, since
@@ -180,6 +219,15 @@ export function CallProposals({
                 {m[treatment.labelKey]}
               </Badge>
               <p className="text-sm leading-6 text-foreground">{entry.label}</p>
+              {/* Fix-wave Important 1: rendered only when generate.ts's own
+                  forward-window check left a real dueAt on this proposal —
+                  the human accepting it must be able to SEE what they are
+                  accepting, in the account's own zone, before they click. */}
+              {entry.dueAtText ? (
+                <p className="text-xs text-muted-foreground">
+                  {m["proposals.task.due"].replace("{date}", () => entry.dueAtText!)}
+                </p>
+              ) : null}
               {/* NEVER CLAMPED. Measured against calls that can actually
                   produce a proposal (booked/lead/message — the only outcomes
                   `eligibility.ts` allows through): 231 eligible turns, mean

@@ -200,7 +200,26 @@ function AgencyWorkRowItem({
 // `listPendingProposalsForAgency` (packages/db/src/call-proposals.ts) is
 // this screen's cross-tenant twin of `listPendingProposals`, carrying the
 // same `brandName` field every other row on this page already does.
-export type AgencyProposal = CallProposal & { brandName: string };
+export type AgencyProposal = CallProposal & { brandName: string; timezone: string };
+
+/**
+ * Fix-wave Important 1: same rule as `rowDateText` above (`AgencyWorkRow`'s
+ * own zone, never one borrowed across every row on this page) applied to a
+ * `task` proposal's own `dueAt` — a machine-chosen due date must be visible,
+ * in the account it belongs to's own zone, before a human accepts it.
+ * `null` for every non-`task` kind (they carry no due date) and for a `task`
+ * proposal whose `dueAt` is itself `null` (generate.ts's own forward-window
+ * check already rejected anything that could not be real).
+ */
+function proposalDueAtText(p: AgencyProposal): string | null {
+  if (p.kind !== "task" || !p.payload.dueAt) return null;
+  try {
+    return formatDateInZone(p.payload.dueAt, p.timezone);
+  } catch (err) {
+    if (!(err instanceof RangeError)) throw err;
+    return null;
+  }
+}
 
 /** Restated from proposals.tsx's own (unexported) `FIELD_LABEL_KEY` — same
  *  reasoning as `BUCKET_TREATMENT` above: a four-entry map, not worth
@@ -284,6 +303,7 @@ function AgencyProposalRow({
   stageNames: Record<string, ResolvedStage>;
 }) {
   const summary = proposalSummary(proposal, stageNames);
+  const dueAtText = proposalDueAtText(proposal);
 
   return (
     <li>
@@ -302,6 +322,16 @@ function AgencyProposalRow({
             DESIGN.md rule 3 exists to tell statuses APART; there is only
             ever one here. */}
         <span className="text-sm font-medium text-card-foreground">{summary}</span>
+        {/* Fix-wave Important 1 (task-11-brief): a machine-chosen due date
+            must be visible before a human accepts it, in ITS OWN account's
+            zone — this screen pools rows across every account, so the zone
+            is read off the proposal's own `timezone`, never a single one
+            shared by the page. */}
+        {dueAtText ? (
+          <span className="text-xs text-muted-foreground">
+            {m["proposals.task.due"].replace("{date}", () => dueAtText)}
+          </span>
+        ) : null}
         {contactName ? <span className="text-xs text-muted-foreground">{contactName}</span> : null}
         {/* Evidence has no transcript beside it here, unlike the call-detail
             page's own Suggested-next-steps block — the row's OWN link above

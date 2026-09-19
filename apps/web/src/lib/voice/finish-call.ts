@@ -717,6 +717,13 @@ export async function finishCall(
         db: ctx.db, accountId: ctx.accountId, callId: meta.callRowId,
         contactId, outcome, transcript: state.transcript,
         handoffRequested: wasTransferred(state), blankFields, openOpportunity,
+        // Fix-wave Important 1: the model's only clock. `meta.endedAt` — not
+        // a fresh `new Date()` read here — is this call's own instant, and
+        // `ctx.timezone` is this account's own IANA zone, already resolved
+        // above (`resolveOpenOpportunity`'s own call site reads the same
+        // ctx). Without these, a machine-proposed `dueAt` is a guess against
+        // the model's training-era clock (generate.ts's own doc).
+        now: meta.endedAt, timezone: ctx.timezone,
       });
       if (n > 0) console.log(`finishCall ${meta.callRowId}: proposals wrote ${n}`);
     } catch (e) {

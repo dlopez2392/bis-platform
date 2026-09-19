@@ -41,7 +41,7 @@ function proposal(overrides: Partial<AgencyProposal> = {}): AgencyProposal {
     kind: "task", payload: { title: "Call back", dueAt: null },
     evidence: "the caller asked for a callback", status: "pending",
     decidedAt: null, decidedBy: null, createdAt: "2026-09-01T00:00:00Z",
-    brandName: "Rio Roofing",
+    brandName: "Rio Roofing", timezone: "America/Chicago",
     ...overrides,
   } as AgencyProposal;
 }
@@ -326,6 +326,42 @@ describe("AgencyWorkList — pending suggestions (Task 10)", () => {
       kind: "task", payload: { title: "Call back Tuesday", dueAt: null },
     })]);
     expect(html).toContain(m["proposals.task.label"].replace("{title}", () => "Call back Tuesday"));
+  });
+
+  // Fix-wave Important 1 (task-11-brief): the agency work queue is the
+  // SECOND place a task proposal's own dueAt must be visible before a human
+  // accepts it — same rule as the call-detail card, in THIS proposal's own
+  // account zone since this screen pools rows across every account.
+  it("shows a task proposal's due date, formatted in ITS OWN account's zone (mutation: drop the due-date line -> FAILS)", () => {
+    const html = renderList(buckets(), {}, [proposal({
+      kind: "task", payload: { title: "Call back Tuesday", dueAt: "2026-09-23T01:00:00.000Z" },
+      timezone: "America/Chicago",
+    })]);
+    expect(html).toContain(m["proposals.task.due"].replace("{date}", () => "Sep 22, 2026"));
+  });
+
+  it("uses a DIFFERENT proposal's OWN account zone, never one zone shared by the whole list (mutation: read a single shared timezone instead of proposal.timezone -> FAILS)", () => {
+    const html = renderList(buckets(), {}, [
+      proposal({
+        id: "prop-chi", kind: "task",
+        payload: { title: "Call back Tuesday", dueAt: "2026-09-23T01:00:00.000Z" },
+        timezone: "America/Chicago",
+      }),
+      proposal({
+        id: "prop-utc", kind: "task",
+        payload: { title: "Call back Wednesday", dueAt: "2026-09-23T01:00:00.000Z" },
+        timezone: "UTC",
+      }),
+    ]);
+    expect(html).toContain(m["proposals.task.due"].replace("{date}", () => "Sep 22, 2026"));
+    expect(html).toContain(m["proposals.task.due"].replace("{date}", () => "Sep 23, 2026"));
+  });
+
+  it("shows no due date for a task proposal whose dueAt is null (mutation: render a due-date line unconditionally -> FAILS)", () => {
+    const html = renderList(buckets(), {}, [proposal({
+      kind: "task", payload: { title: "Call back Tuesday", dueAt: null },
+    })]);
+    expect(html).not.toContain("Due");
   });
 
   it("shows a contact_field proposal's own plain-language label", () => {

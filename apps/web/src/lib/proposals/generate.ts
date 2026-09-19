@@ -36,6 +36,37 @@ const MAX_PER_CALL = 3;
  */
 const MAX_TITLE_LEN = 200;
 
+/**
+ * The forward span a machine-proposed `dueAt` is allowed to fall inside,
+ * measured from the call's own instant (`generateProposals`'s `now`
+ * parameter — `finishCall` passes `meta.endedAt`, never `new Date()` read
+ * fresh inside this module, so a slow invocation cannot shift the window
+ * out from under the very call it is scoped to). Fix-wave Important 1: the
+ * model is never given today's date, the account's zone, or any turn
+ * timestamp (`transcriptForModel` drops `TranscriptEvent.at` entirely), so
+ * an otherwise well-formed ISO instant is a guess against the model's
+ * training-era clock, not a real read of "when this call happened." A bare
+ * year like `"2026"` parses to that year's January 1st — for a call placed
+ * in September, eight and a half months in the PAST — and `bucketWork`
+ * files any past `due_at` straight into Overdue, the exact queue this
+ * feature exists to fill. One year is generous for a phone-call follow-up
+ * (most are days out, not months) while still admitting a genuinely
+ * seasonal ask ("call me back in the spring").
+ */
+const MAX_DUE_AT_FORWARD_MS = 365 * 24 * 60 * 60 * 1000;
+
+/**
+ * True when `candidate` is a real, useful due date relative to the call's
+ * own instant: not before it (a "reminder" for a moment already past is not
+ * a reminder) and not implausibly far beyond it (the ceiling above). Shared
+ * by every dueAt the model returns, however it parsed — a bare year and a
+ * fully-qualified instant both go through the identical check once parsed.
+ */
+function isSaneDueAt(candidate: Date, now: Date): boolean {
+  const ms = candidate.getTime();
+  return ms >= now.getTime() && ms <= now.getTime() + MAX_DUE_AT_FORWARD_MS;
+}
+
 const SYSTEM = [
   "You read a finished phone call and propose at most three concrete next steps.",
   "Propose nothing at all unless the caller stated something specific that needs doing.",
@@ -84,8 +115,21 @@ export type OpenOpportunity = {
 function systemFor(
   blankFields: readonly ContactField[],
   openOpportunity: OpenOpportunity | null,
+  now: Date,
+  timezone: string,
 ): string {
-  let system = SYSTEM;
+  // THE MODEL'S ONLY CLOCK. Fix-wave Important 1: without this sentence the
+  // model has no current date, no account zone, and no turn timestamps
+  // (`transcriptForModel` drops `TranscriptEvent.at`), so any `dueAt` it
+  // emits is a guess against its training-era clock rather than a read of
+  // when this call actually happened. `now` is THIS call's own instant
+  // (finishCall passes `meta.endedAt`), never a fresh `new Date()` read
+  // inside this module. Always present, unconditionally — unlike the two
+  // sentences below, which only apply when this call has a blank field or an
+  // open opportunity to name.
+  let system = `${SYSTEM} This call happened at ${now.toISOString()}, in the account's own time zone (${
+    timezone
+  }). Any "dueAt" you propose must be a real moment after this instant — never in the past relative to it, and never more than about a year beyond it.`;
   if (blankFields.length > 0) {
     system = `${system} You may also propose {"kind":"contact_field","field":"<one of: ${
       blankFields.join(", ")
@@ -178,6 +222,20 @@ export async function generateProposals(input: {
    * which one is exactly the failure this feature must not produce.
    */
   openOpportunity: OpenOpportunity | null;
+  /**
+   * This call's own instant — `finishCall` passes `meta.endedAt`, never a
+   * fresh `new Date()` read inside this module (a module-scope "now" would
+   * drift from the call it is scoped to on a slow invocation, and would make
+   * this function's behaviour depend on when it happens to run rather than
+   * on the call it is generating proposals FROM). The model's only reference
+   * clock (`systemFor`) and the anchor `isSaneDueAt` measures every parsed
+   * `dueAt` against.
+   */
+  now: Date;
+  /** The account's own IANA zone (`finishCall`'s `ctx.timezone`) — told to
+   *  the model alongside `now` so "the account's own time zone" in the
+   *  prompt names something real, not a placeholder. */
+  timezone: string;
   fetchImpl?: typeof fetch;
 }): Promise<number> {
   let written = 0;
@@ -247,7 +305,7 @@ export async function generateProposals(input: {
         // proposals fit comfortably inside this; a runaway array does not.
         max_tokens: 2000,
         messages: [
-          { role: "system", content: systemFor(input.blankFields, input.openOpportunity) },
+          { role: "system", content: systemFor(input.blankFields, input.openOpportunity, input.now, input.timezone) },
           { role: "user", content: transcriptForModel(input.transcript) },
         ],
       }),
@@ -328,6 +386,14 @@ export async function generateProposals(input: {
           storedValue = normalizedPhone;
         } else if (field === "email") {
           if (!isValidEmail(value)) continue;
+          // Fix-wave Minor: `fillContactBlanks` (the accept-time write,
+          // @bis/db's contacts.ts) lowercases every email on write —
+          // storing the model's own case here left the review card reading
+          // "Sam@Example.com" while the contact it fills quietly becomes
+          // "sam@example.com", the same value spelled two ways in front of
+          // the one human comparing them. Normalised at propose time so the
+          // card and the eventual write agree from the start.
+          storedValue = value.toLowerCase();
         }
 
         const grounded = groundedEvidence(evidence, input.transcript);
@@ -436,10 +502,21 @@ export async function generateProposals(input: {
       // raw text kills both: it rejects nothing `Date.parse` already
       // accepted, and what lands in the row is a full instant in the exact
       // shape SYSTEM's own example tells the model to send.
+      // Fix-wave Important 1: parsing cleanly is not enough — the model has
+      // no real clock (`systemFor`'s own doc), so a well-formed instant can
+      // still be a guess that lands nowhere near this call. `isSaneDueAt`
+      // (this file's own doc on `MAX_DUE_AT_FORWARD_MS`) is the second,
+      // independent gate: PAST relative to this call's own `now`, or
+      // implausibly far beyond it, is rejected to null exactly like
+      // unparseable free text already was — the proposal survives, only the
+      // date does not.
       let dueAt: string | null = null;
       if (typeof p.dueAt === "string") {
         const trimmed = p.dueAt.trim();
-        if (trimmed && !Number.isNaN(Date.parse(trimmed))) dueAt = new Date(trimmed).toISOString();
+        if (trimmed && !Number.isNaN(Date.parse(trimmed))) {
+          const candidate = new Date(trimmed);
+          if (isSaneDueAt(candidate, input.now)) dueAt = candidate.toISOString();
+        }
       }
       attempts++;
       const created = await insertProposal(input.db, input.accountId, {

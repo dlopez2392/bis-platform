@@ -134,9 +134,16 @@ function fakeDbAlwaysRefusing() {
   return db;
 }
 
+// Fix-wave Important 1: the call's own instant and the account's zone, now
+// required inputs — one hour after the transcript's own last turn
+// (t()'s "2026-09-18T12:00:00.000Z"), the same relationship `finishCall`'s
+// real caller has (meta.endedAt happens after the transcript it summarizes).
+const NOW = new Date("2026-09-18T13:00:00.000Z");
+
 const base = {
   accountId: "acct", callId: "call1", contactId: null,
   outcome: "lead" as const, transcript, handoffRequested: false,
+  now: NOW, timezone: "America/Chicago",
   // Default is "nothing is blank" — matching `contactId: null` above, no
   // test below is exercising the contact_field boundary unless it opts in
   // by overriding this.
@@ -414,6 +421,24 @@ describe("generateProposals", () => {
     });
     expect(n).toBe(1);
     expect(db.rows[0].payload).toEqual({ field: "phone", value: "+19562921696" });
+  });
+
+  // Fix-wave Minor: `fillContactBlanks` (the accept-time write) lowercases
+  // every email on write (@bis/db's contacts.ts) — storing the model's own
+  // case here left the review card reading "Sam@Example.com" while the
+  // contact it later fills reads "sam@example.com", the same value spelled
+  // two ways in front of the one human comparing them.
+  it("normalizes a proposed email's case at propose time, so the review card and the eventual contact write agree (mutation: drop the storedValue = value.toLowerCase() line -> FAILS)", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, contactId: "c1", blankFields: ["email"], transcript: emailTranscript,
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "contact_field", field: "email", value: "Sam@Example.com",
+                      evidence: "my email is sam at example dot com" }],
+      }),
+    });
+    expect(n).toBe(1);
+    expect(db.rows[0].payload).toEqual({ field: "email", value: "sam@example.com" });
   });
 
   // Fix-wave Minor: the `task` twin above ("clamps an excessively long
@@ -881,18 +906,76 @@ describe("generateProposals", () => {
   // so a proposal that passed this function's own `Date.parse` guard would
   // still fail at a human's accept click, after the review screen already
   // showed it as fine.
-  it("normalizes a dueAt Postgres would refuse into a full ISO instant instead of storing it raw (mutation: store the raw trimmed string instead of new Date(trimmed).toISOString() -> stores \"2026\")", async () => {
+  // Bare year is "2027" here (base.now is 2026-09-18), not the brief's own
+  // "2026" — 2027-01-01 is ~3.5 months FORWARD of base.now, so this fixture
+  // isolates the ISO-normalization guard on its own, without also tripping
+  // the forward-window check the very next test below exists to pin (a bare
+  // year can only test normalization in isolation when it happens to land
+  // forward of "now" — see that test's own doc for the case where it does not).
+  it("normalizes a dueAt Postgres would refuse into a full ISO instant instead of storing it raw (mutation: store the raw trimmed string instead of new Date(trimmed).toISOString() -> stores \"2027\")", async () => {
     const db = fakeDb();
     const n = await generateProposals({
       ...base, db, contactId: "contact-bare-year",
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "task", title: "Call me back", dueAt: "2027",
+                      evidence: "Call me Tuesday morning" }],
+      }),
+    });
+    expect(n).toBe(1);
+    expect(db.rows[0].payload.dueAt).toBe("2027-01-01T00:00:00.000Z");
+    expect(db.rows[0].payload.dueAt).not.toBe("2027");
+  });
+
+  // THE BUG THIS TASK EXISTS TO FIX (fix-wave Important 1), reproduced
+  // exactly: base.now is 2026-09-18, and a bare year of "2026" parses to
+  // 2026-01-01 — eight and a half months in the PAST relative to this call's
+  // own instant. Before the forward-window check existed this was parsed,
+  // normalized and stored verbatim, then landed in Overdue the moment a
+  // human opened the work queue — the exact queue this feature exists to
+  // fill, for a date no human ever chose. The proposal itself still lands
+  // (a stale date is not a reason to drop the caller's real request) — only
+  // the date is nulled, same as unparseable free text already was.
+  it("rejects a dueAt that lands in the past relative to the call's own instant, even though it parses cleanly (mutation: drop the isSaneDueAt check -> stores \"2026-01-01T00:00:00.000Z\" instead of null)", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, contactId: "contact-past-year",
       fetchImpl: modelReturning({
         proposals: [{ kind: "task", title: "Call me back", dueAt: "2026",
                       evidence: "Call me Tuesday morning" }],
       }),
     });
     expect(n).toBe(1);
-    expect(db.rows[0].payload.dueAt).toBe("2026-01-01T00:00:00.000Z");
-    expect(db.rows[0].payload.dueAt).not.toBe("2026");
+    expect(db.rows[0].payload.dueAt).toBeNull();
+  });
+
+  // The other edge of the same window: a real ISO instant, far beyond any
+  // plausible phone-call follow-up, still parses cleanly under Date.parse —
+  // MAX_DUE_AT_FORWARD_MS is what refuses it.
+  it("rejects a dueAt implausibly far beyond the call's own instant (mutation: drop the upper half of isSaneDueAt -> stores the far-future instant instead of null)", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, contactId: "contact-far-future",
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "task", title: "Call me back", dueAt: "2030-01-01T00:00:00.000Z",
+                      evidence: "Call me Tuesday morning" }],
+      }),
+    });
+    expect(n).toBe(1);
+    expect(db.rows[0].payload.dueAt).toBeNull();
+  });
+
+  // Fix-wave Important 1, the prompt half. Without this the model has no
+  // current date, no account zone, and no turn timestamps at all
+  // (transcriptForModel drops TranscriptEvent.at) — any dueAt it returns is a
+  // guess against its training-era clock. Pinned against the system prompt
+  // itself, the same way the wrong-number and ISO-8601 instructions above are.
+  it("tells the model the call's own instant and the account's zone (mutation: delete the reference-instant sentence from systemFor -> FAILS)", async () => {
+    const db = fakeDb();
+    const fetchImpl = modelReturning({ proposals: [] });
+    await generateProposals({ ...base, db, fetchImpl });
+    const prompt = systemPromptOf(fetchImpl);
+    expect(prompt).toContain(base.now.toISOString());
+    expect(prompt).toContain(base.timezone);
   });
 
   // Fix-wave finding 4: this is the branch a real OpenAI refusal takes

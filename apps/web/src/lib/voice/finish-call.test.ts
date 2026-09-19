@@ -34,11 +34,12 @@ vi.mock("@/lib/sms/sender", async (importOriginal) => ({
 }));
 const summaryMocks = vi.hoisted(() => ({ generateSummary: vi.fn() }));
 vi.mock("./summary-service", () => ({ generateSummary: summaryMocks.generateSummary }));
-// Lazily imported inside finishCall itself (`await import("@/lib/proposals/generate")`),
-// same shape as `@/lib/voice/textback` in handoff-result/route.test.ts — vi.mock
-// intercepts a dynamic import exactly like a static one. Its own 53-test suite
-// owns the real generator's behaviour; this file owns only the lifecycle
-// question of WHEN and WHETHER finishCall calls it.
+// A STATIC import in finish-call.ts itself (`import { generateProposals } from
+// "@/lib/proposals/generate"` at module scope) — vi.mock intercepts it the
+// same way it intercepts every other module mocked in this file. Its own
+// 59-test suite (apps/web/src/lib/proposals/generate.test.ts) owns the real
+// generator's behaviour; this file owns only the lifecycle question of WHEN
+// and WHETHER finishCall calls it, and WHAT it hands over.
 const proposalsMocks = vi.hoisted(() => ({ generateProposals: vi.fn() }));
 vi.mock("@/lib/proposals/generate", () => ({ generateProposals: proposalsMocks.generateProposals }));
 
@@ -917,6 +918,22 @@ describe("finishCall — proposal generation", () => {
     expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
       accountId: "a1", callId: "call1", contactId: "ct1", outcome: "lead",
       transcript: s.transcript, handoffRequested: true,
+    }));
+  });
+
+  // Fix-wave Important 1: the model's only clock. `meta.endedAt` (this
+  // call's own instant) and `ctx.timezone` (this account's own IANA zone) —
+  // read from what finishCall already has, never a fresh `new Date()` built
+  // here (mutation: pass `new Date()` instead of `meta.endedAt` -> this
+  // assertion, pinned to the fixture's own `meta.endedAt` object identity,
+  // would fail; `toHaveBeenCalledWith` fails a `new Date()` against any other
+  // Date instance, even one for the same instant, only when they are not
+  // `.toEqual`-equal in value — here they would still be UNEQUAL in value
+  // too, since the fixture module runs well after 2027-06-01).
+  it("passes this call's own instant and the account's own zone, never a freshly-read clock (mutation: pass new Date() instead of meta.endedAt -> FAILS)", async () => {
+    await finishCall(leadState(), ctx, meta);
+    expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
+      now: meta.endedAt, timezone: "America/Chicago",
     }));
   });
 

@@ -274,6 +274,23 @@ export default async function StyleguidePage() {
           </div>
         </Section>
 
+        {/* Fix-wave Important 1 (task-11-brief): the due-date caption a
+            `task` proposal shows on its review card, on both the call-detail
+            page and the two work-queue screens (agency + account) — the half
+            of the fix a reader accepts on sight, alongside `generate.ts`'s
+            own forward-window rejection of a due date that could never be
+            real. */}
+        <Section title="Proposal due date" file="…/calls/[callId]/proposals.tsx">
+          <div className="flex flex-col gap-1">
+            <p className="text-sm leading-6 text-foreground">
+              {m["proposals.task.label"].replace("{title}", () => "Call back about the quote")}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {m["proposals.task.due"].replace("{date}", () => "Sep 23, 2026")}
+            </p>
+          </div>
+        </Section>
+
         <Section title="Loading skeletons" file="components/ui/skeleton.tsx">
           <div className="flex w-full max-w-sm flex-col gap-2">
             <Skeleton className="h-4 w-40" />

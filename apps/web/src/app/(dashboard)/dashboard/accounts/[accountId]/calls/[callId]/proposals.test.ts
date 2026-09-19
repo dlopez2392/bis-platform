@@ -43,9 +43,13 @@ function stageProposal(
   };
 }
 
-function render(proposals: CallProposal[], stageNames: Record<string, ResolvedStage> = {}): string {
+function render(
+  proposals: CallProposal[],
+  stageNames: Record<string, ResolvedStage> = {},
+  timezone = "America/Chicago",
+): string {
   return renderToStaticMarkup(
-    CallProposals({ proposals, accountId: "acct1", callId: "call1", stageNames }),
+    CallProposals({ proposals, accountId: "acct1", callId: "call1", stageNames, timezone }),
   );
 }
 
@@ -140,6 +144,48 @@ describe("CallProposals", () => {
   it("renders a task proposal in plain language, not the raw payload (mutation: interpolate the payload object directly -> FAILS)", () => {
     const html = render([taskProposal({ title: "Call back about the quote" })]);
     expect(renderedText(html)).toContain("Add a task: Call back about the quote");
+  });
+
+  // Fix-wave Important 1: a machine-chosen due date must be VISIBLE before a
+  // human accepts it — a review card that hid it was exactly how a due date
+  // eight and a half months in the past reached `tasks.due_at` unseen.
+  it("shows a task proposal's due date, formatted in the account's own zone (mutation: drop the due-date line -> FAILS)", () => {
+    // 01:00 UTC is still the previous day in Chicago — the same boundary
+    // format.test.ts and work-list.test.ts both use, so a fixture zone that
+    // happened to agree with UTC could not tell "formatted in the given
+    // zone" apart from "formatted in whatever zone the process is in".
+    const html = render(
+      [taskProposal({ title: "Call back Tuesday", dueAt: "2026-09-23T01:00:00.000Z" })],
+      {},
+      "America/Chicago",
+    );
+    expect(renderedText(html)).toContain(m["proposals.task.due"].replace("{date}", () => "Sep 22, 2026"));
+  });
+
+  it("renders a due date in a DIFFERENT zone as a different calendar day, proving it uses the given zone and not a fixed one (mutation: hardcode the zone instead of using the timezone prop -> FAILS)", () => {
+    const html = render(
+      [taskProposal({ title: "Call back Tuesday", dueAt: "2026-09-23T01:00:00.000Z" })],
+      {},
+      "UTC",
+    );
+    expect(renderedText(html)).toContain(m["proposals.task.due"].replace("{date}", () => "Sep 23, 2026"));
+  });
+
+  it("shows no due date at all for a task proposal whose dueAt is null (mutation: render a due-date line unconditionally -> FAILS)", () => {
+    const html = render([taskProposal({ title: "Call back Tuesday", dueAt: null })]);
+    expect(renderedText(html)).not.toContain(m["proposals.task.due"].replace("{date}", () => "").trim());
+    expect(renderedText(html)).not.toContain("Due");
+  });
+
+  it("shows no due date for a contact_field or opportunity_stage proposal, even though neither carries one (mutation: render 'Due' for every entry -> FAILS)", () => {
+    const html = render([
+      contactFieldProposal("firstName", "Roberto"),
+      stageProposal("stage-contacted", "stage-won", { id: "prop2" }),
+    ], {
+      "stage-contacted": { name: "Contacted", position: 1 },
+      "stage-won": { name: "Won", position: 2 },
+    });
+    expect(renderedText(html)).not.toContain("Due");
   });
 
   it("renders a contact_field proposal naming the field in plain language (mutation: interpolate the raw field key instead of its label -> FAILS)", () => {
