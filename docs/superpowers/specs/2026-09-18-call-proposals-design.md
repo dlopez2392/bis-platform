@@ -149,6 +149,29 @@ Three guards:
 - Accept **re-reads the opportunity's current stage** and refuses if it no
   longer equals `fromStage`. A stage that moved while the proposal sat is a
   proposal about a world that no longer exists.
+- **A move into the pipeline's LAST stage is never proposed** (settled
+  2026-09-19). A stage move changes only `stage_id`; it never touches
+  `opportunities.status`, which is a separate `open`/`won`/`lost` field. In the
+  live data EVERY opportunity sitting in the last stage is `won` — four of them
+  across three accounts, none `open` — because a human who drags a deal to the
+  end also records how it ended. So a machine proposal into that stage can only
+  ever produce a deal AT THE FINISH LINE WITH ITS OUTCOME STILL OPEN, a
+  combination that exists nowhere in this database. Nothing errors; anything
+  counting open deals counts a finished one, and anything reporting
+  won-versus-lost has a deal in neither bucket.
+
+  On the merits too: closing a deal is a judgement about money and outcome, one
+  phone call is weak evidence for it, and the machine cannot set the outcome
+  anyway. The guard is keyed on the LAST `position` in the opportunity's own
+  pipeline, not on the name "Closed" — the name is seeded and could differ;
+  "the end of the board" is the structural property. A one-stage pipeline is
+  therefore also refused, correctly: there is nowhere forward to go.
+
+- **A multi-stage jump IS allowed** (settled 2026-09-19), because it is real: a
+  caller who rings and says "just send me a price" genuinely has skipped two
+  steps. It is not silent — see the next rule, which is what makes allowing it
+  safe.
+
 - No stage is skipped silently. **If `|toStage.position − fromStage.position| > 1`
   — any move that leaves a stage behind — the UI says so in words.**
 
