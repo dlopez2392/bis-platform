@@ -1,12 +1,19 @@
 {
   "name": "bis-platform",
   "private": true,
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "packageManager": "pnpm@10.13.1",
   "scripts": {
     "typecheck": "pnpm -r --if-present typecheck",
     "lint": "pnpm -r --if-present lint",
     "test": "pnpm -r --if-present test",
-    "check": "pnpm typecheck && pnpm lint && pnpm test"
+    "check": "pnpm typecheck && pnpm lint && pnpm test",
+    "higgsfield": "tsx --env-file=apps/web/.env.local index.ts"
+  },
+  "dependencies": {
+    "@higgsfield/client": "^0.2.6",
+    "tsx": "^4.23.13"
   }
 }
