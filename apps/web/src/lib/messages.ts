@@ -1721,9 +1721,6 @@ export const m = {
   "proposals.status.dismissed": "Dismissed",
   "proposals.accepted.toast": "Added to your to-do list",
   "proposals.dismissed.toast": "Dismissed",
-  "proposals.empty.title": "Nothing to suggest from this call",
-  "proposals.empty.body":
-    "When a caller asks for something specific — a quote, a callback, a time — it shows up here as a suggestion you can accept in one click.",
   "proposals.gone": "Someone already answered this one.",
   "proposals.contactFilled":
     "That detail was already filled in, so nothing was changed.",
@@ -1753,13 +1750,22 @@ export const m = {
   // "{from}"/"{to}" are stage NAMES, resolved from the payload's uuids
   // before this ever reaches copy — never the destination alone.
   "proposals.stage.label": "Move from {from} to {to}",
-  "proposals.stage.skip": "This skips {n} stages in between.",
+  // No stage is skipped silently: a bypass of even ONE stage speaks up, not
+  // just a bypass of two or more — a customer who books on the first call
+  // skips exactly one ("Contacted") and is the single most likely case this
+  // feature will ever produce. Split singular/plural rather than
+  // interpolating a count into a sentence that would read "1 stages".
+  "proposals.stage.skip.one": "A stage is skipped in between.",
+  "proposals.stage.skip.many": "{n} stages are skipped in between.",
   // "proposals.accepted.toast" ("Added to your to-do list") is true only of
   // a `task` proposal — accepting the other two kinds doesn't add anything
   // to a to-do list, and reporting that it did would be exactly the false
   // confirmation copy the "landscaper at 7am" read rules out.
-  "proposals.accepted.contactField.toast": "Saved",
-  "proposals.accepted.stage.toast": "Moved on the board",
+  // "Saved" named nothing — the sibling toast it was modelled on names its
+  // own destination. "Moved on the board" used a word this product never
+  // uses; the nav item and the screen title both say "Opportunities".
+  "proposals.accepted.contactField.toast": "Added to the contact.",
+  "proposals.accepted.stage.toast": "Moved in Opportunities",
 } as const;
 
 export type MessageKey = keyof typeof m;

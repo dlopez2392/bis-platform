@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { CallProposal, ProposalStatus } from "@bis/db";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
-import { CallProposals, type ResolvedStage } from "./proposals";
+import { CallProposals, acceptedToastFor, type ResolvedStage } from "./proposals";
 
 /** `acceptProposal`/`dismissProposal` (imported by proposals.tsx from
  *  "./actions", a "use server" file) are never invoked by any test below —
@@ -67,6 +67,25 @@ describe("CallProposals", () => {
     expect(renderedText(html)).toContain(m["proposals.status.pending"]);
   });
 
+  it("renders the accepted status chip as dot + word too, never colour alone (mutation: render the dot only when status is pending -> FAILS)", () => {
+    const html = render(
+      [taskProposal({ status: "accepted", decidedAt: "2026-08-25T20:00:00Z", decidedBy: "user_1" })],
+    );
+    // Same trap as the pending case: the chip's own alpha fill is
+    // `bg-success/10`, which a bare `bg-success` substring match (even
+    // `\b`-bounded) would also satisfy.
+    expect(html).toMatch(/<span\b[^>]*\bclass="(?=[^"]*\brounded-full\b)(?=[^"]*\bbg-success(?![\w/-]))[^"]*"/);
+    expect(renderedText(html)).toContain(m["proposals.status.accepted"]);
+  });
+
+  it("renders the dismissed status chip as dot + word too, never colour alone (mutation: render the dot only when status is pending -> FAILS)", () => {
+    const html = render(
+      [taskProposal({ status: "dismissed", decidedAt: "2026-08-25T20:00:00Z", decidedBy: "user_1" })],
+    );
+    expect(html).toMatch(/<span\b[^>]*\bclass="(?=[^"]*\brounded-full\b)(?=[^"]*\bbg-muted-foreground\/60\b)[^"]*"/);
+    expect(renderedText(html)).toContain(m["proposals.status.dismissed"]);
+  });
+
   it("prefixes and visually quotes the evidence (mutation: drop the m[\"proposals.evidence\"] prefix -> FAILS)", () => {
     const html = render([taskProposal({ evidence: "Call me back Tuesday please" })]);
     const text = renderedText(html);
@@ -77,13 +96,28 @@ describe("CallProposals", () => {
     expect(html).toMatch(/<q\b[^>]*>Call me back Tuesday please<\/q>/);
   });
 
-  it("clamps a long evidence turn instead of letting it blow out the card (mutation: remove line-clamp-4 -> FAILS)", () => {
-    // 483 characters — the measured MAX for a whole caller turn, a real case
-    // per the brief, not a hypothetical.
-    const longEvidence = "We need someone to come look at the roof because ".repeat(10).slice(0, 483);
-    expect(longEvidence).toHaveLength(483);
+  it("shows a caller's whole turn as evidence, never clipped (mutation: reintroduce line-clamp-4 -> FAILS)", () => {
+    // 95 characters — the real measured MAX across turns that can actually
+    // produce a proposal (booked/lead/message calls: 231 eligible turns,
+    // mean 33, p95 85, max 95, none over 150). The much larger "mean 57, p95
+    // 473, max 483" figure this test used to cite was measured across ALL
+    // caller turns, but every turn over 200 characters in this database is
+    // the same robocall script on a spam/abandoned call, and
+    // `eligibility.ts` refuses both outcomes before a proposal can exist —
+    // that shape can never reach this component. A clamp with no expand
+    // affordance would silently hide exactly the tail where a late
+    // qualifier ("…but not on Tuesday") lives, so evidence is never clipped
+    // here at any length.
+    const longEvidence = "We need someone to come look at the roof because ".repeat(2).slice(0, 95);
+    expect(longEvidence).toHaveLength(95);
     const html = render([taskProposal({ evidence: longEvidence })]);
-    expect(html).toMatch(/<q\b[^>]*\bclass="[^"]*\bline-clamp-4\b[^"]*"/);
+    expect(html).not.toMatch(/line-clamp/);
+    expect(renderedText(html)).toContain(longEvidence);
+    // Structural: the FULL string sits inside one <q>, not truncated by a
+    // CSS clamp that (per the finding) would also have broken the
+    // `{" "}`-separated prefix by forcing `display:-webkit-box` on an
+    // inline <q>.
+    expect(html).toMatch(new RegExp(`<q\\b[^>]*>${longEvidence}</q>`));
   });
 
   it("renders a task proposal in plain language, not the raw payload (mutation: interpolate the payload object directly -> FAILS)", () => {
@@ -111,28 +145,68 @@ describe("CallProposals", () => {
     expect(text).toContain("Move from Contacted to Won");
   });
 
-  it("says so in words when a stage move skips more than one position (mutation: delete the skip note -> FAILS)", () => {
-    const html = render(
-      [stageProposal("s0", "s3")],
-      {
-        s0: { name: "New", position: 0 },
-        // Bypasses positions 1 and 2 — two stages, which is "more than one".
-        s3: { name: "Won", position: 3 },
-      },
-    );
-    expect(renderedText(html)).toContain("This skips 2 stages in between.");
-  });
-
-  it("says nothing extra for a move that bypasses only ONE stage (mutation: lower the skip threshold to >0 -> FAILS)", () => {
+  it("warns when a move skips exactly one stage in between — no stage is skipped silently (mutation: raise the skip threshold to bypassed >= 2 -> FAILS)", () => {
     const html = render(
       [stageProposal("s0", "s2")],
       {
         s0: { name: "New", position: 0 },
-        // Bypasses only position 1 — one stage, not "more than one".
+        // Bypasses only position 1 — one stage — which must still speak up:
+        // this is New(0) -> Appointment(2), the caller who books on the
+        // first call, the single most likely stage proposal this feature
+        // will ever produce.
         s2: { name: "Won", position: 2 },
       },
     );
-    expect(renderedText(html)).not.toContain("skips");
+    // Anchored to the resolved message, not a bare literal — a reword of
+    // the copy must not silently void this assertion.
+    expect(renderedText(html)).toContain(m["proposals.stage.skip.one"]);
+  });
+
+  it("says so with a count when a move skips more than one stage (mutation: delete the skip note -> FAILS)", () => {
+    const html = render(
+      [stageProposal("s0", "s3")],
+      {
+        s0: { name: "New", position: 0 },
+        // Bypasses positions 1 and 2 — two stages.
+        s3: { name: "Won", position: 3 },
+      },
+    );
+    expect(renderedText(html)).toContain(
+      m["proposals.stage.skip.many"].replace("{n}", "2"),
+    );
+  });
+
+  it("says nothing extra for a move to the immediately next stage (mutation: warn even when bypassed is 0 -> FAILS)", () => {
+    const html = render(
+      [stageProposal("s0", "s1")],
+      {
+        s0: { name: "New", position: 0 },
+        // Adjacent — bypasses nothing.
+        s1: { name: "Contacted", position: 1 },
+      },
+    );
+    const text = renderedText(html);
+    // Anchored to the resolved messages, not the literal "skips" — a reword
+    // must not silently void this the way the previous bare-literal
+    // assertion did.
+    expect(text).not.toContain(m["proposals.stage.skip.one"]);
+    expect(text).not.toContain(m["proposals.stage.skip.many"].replace("{n}", "0"));
+  });
+
+  it("warns the same way for a move BACKWARD across a bypassed stage (mutation: drop Math.abs from the bypass calculation -> FAILS)", () => {
+    const html = render(
+      [stageProposal("s3", "s1")],
+      {
+        // Quote Sent(3) back to Contacted(1) — bypasses position 2, same as
+        // the forward one-stage-bypass case above. Without Math.abs, the
+        // raw delta (1 - 3 = -2) computes a negative "bypassed" count that
+        // never clears the threshold, and the warning silently disappears
+        // for every backward move.
+        s3: { name: "Quote Sent", position: 3 },
+        s1: { name: "Contacted", position: 1 },
+      },
+    );
+    expect(renderedText(html)).toContain(m["proposals.stage.skip.one"]);
   });
 
   it("skips a stage proposal whose stage names failed to resolve, rather than showing the raw id or the destination alone (mutation: fall back to the raw uuid -> FAILS)", () => {
@@ -141,6 +215,26 @@ describe("CallProposals", () => {
     // must be absent, not a heading over a proposal it cannot describe.
     const html = render([stageProposal("stage-a", "stage-b")], {});
     expect(html).toBe("");
+  });
+
+  it("sorts a pending proposal ahead of one already decided, regardless of insert order (mutation: render proposals in the given order without sorting -> FAILS)", () => {
+    // `listProposalsForCall` orders by created_at DESC — insert order for a
+    // batch generated all at once — so a row that still needs a decision
+    // can otherwise sit under ones that need nothing. The dismissed one is
+    // FIRST in the array on purpose.
+    const html = render([
+      taskProposal({
+        id: "p-dismissed", title: "Dismissed one", status: "dismissed",
+        decidedAt: "2026-08-25T20:00:00Z", decidedBy: "user_1",
+      }),
+      taskProposal({ id: "p-pending", title: "Pending one" }),
+    ]);
+    const text = renderedText(html);
+    const pendingAt = text.indexOf("Pending one");
+    const dismissedAt = text.indexOf("Dismissed one");
+    expect(pendingAt).toBeGreaterThanOrEqual(0);
+    expect(dismissedAt).toBeGreaterThanOrEqual(0);
+    expect(pendingAt).toBeLessThan(dismissedAt);
   });
 
   it("renders Accept and Dismiss for a pending proposal (mutation: never render ProposalActions -> FAILS)", () => {
@@ -159,5 +253,26 @@ describe("CallProposals", () => {
     // by the status chip alone and could never catch a real regression.
     // No `<button>` at all is what "no actions" actually means.
     expect(html).not.toContain("<button");
+  });
+});
+
+describe("acceptedToastFor", () => {
+  // One test per kind: collapsing the function to always
+  // `return m["proposals.accepted.toast"]` leaves 35/35 green if the suite
+  // only ever exercises it through a hardcoded prop (as
+  // proposal-actions.test.ts does) — these call the real mapping function
+  // directly, so each kind's own branch is what is under test.
+  it("maps a task proposal to the to-do-list toast", () => {
+    expect(acceptedToastFor("task")).toBe(m["proposals.accepted.toast"]);
+  });
+
+  it("maps a contact_field proposal to its OWN toast, not the task one (mutation: collapse acceptedToastFor to always return proposals.accepted.toast -> FAILS)", () => {
+    expect(acceptedToastFor("contact_field")).toBe(m["proposals.accepted.contactField.toast"]);
+    expect(acceptedToastFor("contact_field")).not.toBe(m["proposals.accepted.toast"]);
+  });
+
+  it("maps an opportunity_stage proposal to its OWN toast, not the task one (mutation: collapse acceptedToastFor to always return proposals.accepted.toast -> FAILS)", () => {
+    expect(acceptedToastFor("opportunity_stage")).toBe(m["proposals.accepted.stage.toast"]);
+    expect(acceptedToastFor("opportunity_stage")).not.toBe(m["proposals.accepted.toast"]);
   });
 });

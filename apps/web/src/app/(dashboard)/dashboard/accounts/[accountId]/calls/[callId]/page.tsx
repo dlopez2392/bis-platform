@@ -30,20 +30,16 @@ import { splitSummaryBlocks, type SummaryBlock } from "./summary-blocks";
 import { TranscriptView } from "./transcript-view";
 import { TextbackResend } from "./textback-resend";
 import { CallProposals, type ResolvedStage } from "./proposals";
-
-export const dynamic = "force-dynamic";
-
 // The detail page is six of these stacked and not one of them was glass, so
 // the whole route read as flat rectangles on a lit ground. `bg-card` BEFORE
 // `glass`, the order `ui/card.tsx` uses: a tenant's `--card` still wins the
 // fill and the utility adds only the sheen, the highlight and `--shadow-card`.
-const CARD = "overflow-hidden rounded-xl border border-border bg-card glass";
-// DESIGN.md's Label role — Geist Mono 500, 10px, +0.14em — the same role
-// `TableHead` now carries. This is a card header on a `<div>`, not a
-// `TableHead`, so wave 1's shared fix did not reach it. The rule under it is
-// `--row-line` (.06), not `--line` (.08), like every other row rule.
-const CARD_HEAD =
-  "border-b border-[var(--row-line)] px-5 py-3 font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase";
+// Shared with proposals.tsx via `./card` rather than duplicated — see that
+// module's own doc comment for why a third module, not a mirrored constant,
+// is the right shape here.
+import { CARD, CARD_HEAD } from "./card";
+
+export const dynamic = "force-dynamic";
 
 export default async function CallDetailPage({
   params,
@@ -124,6 +120,10 @@ export default async function CallDetailPage({
       }
     }
     if (stageIds.size > 0) {
+      // `stageIds` is bounded only TRANSITIVELY, through
+      // `listProposalsForCall`'s own `.limit(500)` (at most two ids per
+      // opportunity_stage proposal, so at most 1000 here) — there is no
+      // bound of this read's own.
       const { data, error } = await db.from("pipeline_stages")
         .select("id, name, position")
         .eq("account_id", accountId)

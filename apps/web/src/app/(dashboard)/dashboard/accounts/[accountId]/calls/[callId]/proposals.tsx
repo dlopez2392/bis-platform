@@ -15,17 +15,7 @@ import { cn } from "@/lib/utils";
 import { m, type MessageKey } from "@/lib/messages";
 import { acceptProposal, dismissProposal } from "./actions";
 import { ProposalActions } from "./proposal-actions";
-
-// Mirrors page.tsx's own CARD/CARD_HEAD (`page.tsx:36`, `:41-42`) rather than
-// importing them: page.tsx already imports THIS module for `CallProposals`,
-// and importing the two constants back would make the pair a circular
-// module dependency with no precedent anywhere else in this route tree. Same
-// shape, same reason `neutral-ramps.ts`'s `SIDEBAR_FOREGROUND` mirrors
-// globals.css's sidebar island instead of importing it — change one, change
-// the other.
-const CARD = "overflow-hidden rounded-xl border border-border bg-card glass";
-const CARD_HEAD =
-  "border-b border-[var(--row-line)] px-5 py-3 font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase";
+import { CARD, CARD_HEAD } from "./card";
 
 /** What page.tsx resolves `fromStageId`/`toStageId` to before this component
  *  ever sees them — the payload only carries uuid FKs into `pipeline_stages`,
@@ -46,8 +36,13 @@ const FIELD_LABEL_KEY: Record<ContactFieldPayload["field"], MessageKey> = {
  * `OUTCOMES.booked`'s success treatment; `dismissed` borrows
  * `OUTCOMES.abandoned`'s receded, inactive one — a decided proposal has
  * nothing further to do, same as an abandoned call.
+ *
+ * Exported so the styleguide's "Proposal status" section reads the three
+ * treatments straight off this map — the same precedent
+ * `../screened/screened-table.tsx`'s `CLASS_DOT` sets — rather than a second
+ * copy that could drift from the real block.
  */
-const STATUS_TREATMENT: Record<ProposalStatus, { dot: string; chip: string; labelKey: MessageKey }> = {
+export const STATUS_TREATMENT: Record<ProposalStatus, { dot: string; chip: string; labelKey: MessageKey }> = {
   pending: {
     dot: "bg-primary",
     chip: "border-primary/30 bg-primary/5 text-foreground",
@@ -73,7 +68,7 @@ const STATUS_TREATMENT: Record<ProposalStatus, { dot: string; chip: string; labe
  * Reporting the wrong one is exactly the false confirmation copy DESIGN.md's
  * "landscaper at 7am" read rules out.
  */
-function acceptedToastFor(kind: ProposalKind): string {
+export function acceptedToastFor(kind: ProposalKind): string {
   if (kind === "task") return m["proposals.accepted.toast"];
   if (kind === "contact_field") return m["proposals.accepted.contactField.toast"];
   return m["proposals.accepted.stage.toast"];
@@ -114,15 +109,21 @@ function buildLabel(p: CallProposal, stages: Record<string, ResolvedStage>): str
   let label = m["proposals.stage.label"]
     .replace("{from}", () => from.name)
     .replace("{to}", () => to.name);
-  // "Skips MORE than one position" (the brief's own wording): the count of
-  // stages the move bypasses is `|delta| - 1` — a move to the very next or
-  // previous stage bypasses zero, a move that jumps one stage over bypasses
-  // exactly one, and only a bypass of two or more says so out loud. A single
-  // bypassed stage is common enough on its own (a customer who books
-  // directly skips "Contacted") not to warrant a note every time.
+  // "No stage is skipped silently" (DESIGN's own topic sentence for this
+  // feature): the count of stages the move bypasses is `|delta| - 1` — a
+  // move to the very next or previous stage bypasses zero and says nothing
+  // extra, but ANY bypass of one or more stages speaks up, forward or
+  // backward (`Math.abs`, not the raw signed delta — a backward move must
+  // warn exactly as loudly as the equivalent forward one). New(0) ->
+  // Appointment(2) bypasses exactly one stage ("Contacted") and is the
+  // single most likely proposal this feature will ever produce, so a
+  // threshold that stayed silent for it would defeat the rule it exists to
+  // serve.
   const bypassed = Math.abs(to.position - from.position) - 1;
-  if (bypassed > 1) {
-    label += " " + m["proposals.stage.skip"].replace("{n}", String(bypassed));
+  if (bypassed === 1) {
+    label += " " + m["proposals.stage.skip.one"];
+  } else if (bypassed > 1) {
+    label += " " + m["proposals.stage.skip.many"].replace("{n}", String(bypassed));
   }
   return label;
 }
@@ -148,6 +149,14 @@ export function CallProposals({
     .map((p) => buildEntry(p, stageNames))
     .filter((e): e is Entry => e !== null);
 
+  // `listProposalsForCall` orders by created_at DESC — insert order, since
+  // every proposal for a call is generated in one batch — so without this a
+  // row that still needs a decision could sit under ones that need
+  // nothing. This block exists to obtain a decision, so pending goes first;
+  // `Array.prototype.sort` is stable, so relative order is otherwise
+  // preserved.
+  entries.sort((a, b) => Number(a.status !== "pending") - Number(b.status !== "pending"));
+
   // "A heading over nothing reads as a summary that said nothing" — page.tsx's
   // own words for the Summary section above this one, applied here: a call
   // with zero proposals (or whose only proposals are stage moves this render
@@ -163,21 +172,38 @@ export function CallProposals({
           const treatment = STATUS_TREATMENT[entry.status];
           return (
             <div key={entry.id} className="flex flex-col gap-2.5 p-5">
-              <Badge variant="chip" className={cn("w-fit gap-1.5 py-1 pr-2.5 pl-2", treatment.chip)}>
+              {/* No `w-fit` here — `badgeVariants`'s own base classes already
+                  carry it (components/ui/badge.tsx); repeating it was a
+                  no-op. */}
+              <Badge variant="chip" className={cn("gap-1.5 py-1 pr-2.5 pl-2", treatment.chip)}>
                 <span className={cn("size-[7px] rounded-full", treatment.dot)} aria-hidden />
                 {m[treatment.labelKey]}
               </Badge>
               <p className="text-sm leading-6 text-foreground">{entry.label}</p>
-              {/* Measured live at a mean of 57 characters, p95 473, max 483 —
-                  a whole caller turn, not a snippet, so a paragraph in this
-                  card is the ordinary case to design for, not a hypothetical
-                  one. `line-clamp-4` keeps a long one from taking over the
-                  card; the full turn is always readable in the transcript
-                  directly below (page.tsx places this section right before
-                  it). */}
+              {/* NEVER CLAMPED. Measured against calls that can actually
+                  produce a proposal (booked/lead/message — the only outcomes
+                  `eligibility.ts` allows through): 231 eligible turns, mean
+                  33 characters, p95 85, max 95 — one line at any card width
+                  today. The much larger figure once cited here ("mean 57,
+                  p95 473, max 483") was measured across ALL caller turns,
+                  but every turn over 200 characters in this database is the
+                  same robocall script on a spam/abandoned call, a shape this
+                  component never receives. If real turns ever lengthen past
+                  one line, add an expand affordance rather than a silent
+                  clip — evidence is a whole caller turn precisely so a
+                  reader can see a negation or a late qualifier ("…but not on
+                  Tuesday") that a substring match further up the pipeline
+                  cannot see, and a CSS clamp with no `title` would recreate
+                  that same blind spot at the display layer. (A clamp would
+                  also be broken on its own terms here: `line-clamp-*` forces
+                  `display:-webkit-box`, which turns the inline `<q>` into a
+                  block, breaks the `{" "}` separator between the prefix and
+                  the quote, and clips the closing curly quote the UA draws
+                  for `<q>` — the truncated case rendered an opening quote
+                  with no closing one.) */}
               <p className="text-sm leading-6 text-muted-foreground">
                 {m["proposals.evidence"]}{" "}
-                <q className="line-clamp-4 text-foreground italic">{entry.evidence}</q>
+                <q className="text-foreground">{entry.evidence}</q>
               </p>
               {/* Already-decided proposals (accepted/dismissed) show their
                   status chip and nothing else — acting on one again would
