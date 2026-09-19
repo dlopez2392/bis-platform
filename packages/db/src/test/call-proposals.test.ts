@@ -10,8 +10,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount, testPhoneNumber } from "./fixtures";
 import {
   insertProposal, listProposalsForCall, listPendingProposals,
-  getProposal, markProposalDecided,
+  getProposal, markProposalDecided, listPendingProposalsForAgency,
 } from "../call-proposals";
+import { listAccountWork, listAgencyWork } from "../work-queue";
+import { addTask } from "../activities";
 
 async function seedCall(db: SupabaseClient, accountId: string): Promise<string> {
   const num = await db.from("phone_numbers")
@@ -302,6 +304,130 @@ describe("call proposals accessors", () => {
       } finally {
         spy.mockRestore();
       }
+    });
+  });
+});
+
+// Work Queue Task 10 — the agency-wide screen (`/dashboard/work`) reads
+// EVERY account's pending proposals in one pass, the same way
+// `listAgencyWork` reads every account's tasks/conversations/bookings.
+// Copies `listAgencyWork`'s own accounts-join shape (work-queue.ts:190-231):
+// read the rows, collect the distinct account ids they carry, read only
+// THOSE accounts' `brand_name`, resolve each through `brandDisplayName`
+// (never a fallback to `accounts.name`), and attach the result per row.
+describe("listPendingProposalsForAgency", () => {
+  it("carries each account's own brand name, across two different accounts, and excludes a decided proposal", async () => {
+    await withTestAccount(async (dbA, accountA) => {
+      await withTestAccount(async (dbB, accountB) => {
+        await dbA.from("accounts").update({ brand_name: "Acme HVAC" }).eq("id", accountA);
+        await dbB.from("accounts").update({ brand_name: "Rio Roofing" }).eq("id", accountB);
+
+        const callA = await seedCall(dbA, accountA);
+        const pendingA = await insertProposal(dbA, accountA, {
+          callId: callA, kind: "task", evidence: "A's caller asked for a callback",
+          payload: { title: "Call A back", dueAt: null },
+        });
+        const callB = await seedCall(dbB, accountB);
+        const pendingB = await insertProposal(dbB, accountB, {
+          callId: callB, kind: "task", evidence: "B's caller asked for a callback",
+          payload: { title: "Call B back", dueAt: null },
+        });
+        // A second proposal on B's own call, already decided — must be
+        // excluded by `status = "pending"` the same way `listPendingProposals`
+        // excludes it per-account.
+        const decidedB = await insertProposal(dbB, accountB, {
+          callId: callB, kind: "contact_field", evidence: "B's caller spelled her email",
+          payload: { field: "email", value: "b@example.com" },
+        });
+        expect(await markProposalDecided(dbB, accountB, decidedB!.id, "accepted", "user_x")).toBe(true);
+
+        // This screen is deliberately cross-tenant (like `listAgencyWork`),
+        // and this suite shares ONE Supabase project with production — never
+        // assert on the full result set, only on these fixtures' own rows,
+        // by id.
+        const rows = await listPendingProposalsForAgency(dbA);
+        const byId = new Map(rows.map((r) => [r.id, r]));
+
+        expect(byId.get(pendingA!.id)?.brandName).toBe("Acme HVAC");
+        expect(byId.get(pendingB!.id)?.brandName).toBe("Rio Roofing");
+        expect(byId.has(decidedB!.id)).toBe(false);
+      });
+    });
+  });
+
+  it("returns a blank brand name, never the account's internal label, when brand_name is null (mutation: fall back to accounts.name -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await db.from("accounts").update({ brand_name: null, name: "Fixture Co — internal" }).eq("id", accountId);
+      const callId = await seedCall(db, accountId);
+      const created = await insertProposal(db, accountId, {
+        callId, kind: "task", evidence: "call me Tuesday",
+        payload: { title: "Call back Tuesday", dueAt: null },
+      });
+      const rows = await listPendingProposalsForAgency(db);
+      const mine = rows.find((r) => r.id === created!.id);
+      expect(mine?.brandName).toBe("");
+      expect(mine?.brandName).not.toContain("Fixture Co");
+    });
+  });
+});
+
+/**
+ * THE PROOF THE WHOLE FEATURE'S SEPARATION EXISTS FOR (task-10-brief.md).
+ *
+ * A proposal is a QUESTION about work, not work — `bucketWork`,
+ * `listAccountWork`'s own dashboard consumer (the account dashboard's work
+ * row) and `listAgencyWork` must never learn to filter `call_proposals` out,
+ * because that is only safe if nothing ever puts one in. Realistic fixtures
+ * on purpose (same lesson `screened-calls.test.ts`'s own header comment
+ * states): a real `account_id`, a real `call_id` (a genuine `calls` row via
+ * `seedCall`, not a fixture the writer could not have produced), and a real
+ * `contact_id` on one of the two — so a mutation that actually tried to fold
+ * `call_proposals` into `listAccountWork`'s read could produce a row this
+ * test would catch, not one it could never construct in the first place.
+ *
+ * Proved live (this task's report): temporarily editing `listAccountWork`
+ * (work-queue.ts) to also map pending `call_proposals` rows into `WorkRow[]`
+ * turns this test red by name; reverting turns it back green. Not left in
+ * the file as an executable mutation (there is no dependency-injection seam
+ * to swap `listAccountWork`'s own query from a test), the same shape
+ * `screened-calls.test.ts`'s own "proved live" comments already use for a
+ * mutation that has to be applied to the source and reverted, not run in CI.
+ */
+describe("call_proposals cannot contaminate the work queue", () => {
+  it("leaves listAccountWork's and listAgencyWork's rows byte-identical, by id, before and after realistic pending proposals are seeded", async () => {
+    await withTestAccount(async (db, accountId) => {
+      // Real work already on the account, so "unchanged" is a real claim
+      // about a nonzero baseline, not a trivial 0-equals-0.
+      await addTask(db, accountId, { title: "Call Maria back" }, "user_test");
+      const { data: contact, error: cErr } = await db.from("contacts")
+        .insert({ account_id: accountId, first_name: "Sam", last_name: "Rivera" })
+        .select("id").single();
+      expect(cErr, `contacts insert failed: ${cErr?.message}`).toBeNull();
+
+      const before = await listAccountWork(db, accountId);
+      const agencyBefore = (await listAgencyWork(db)).filter((r) => r.accountId === accountId);
+      expect(before.length).toBeGreaterThan(0);
+
+      // Realistic proposals: a real call (seedCall — a genuine phone_numbers
+      // + calls row, not phoneNumberId: null), a real account_id, and a real
+      // contact_id on one of the two, per the task-10 brief's own warning.
+      const callId = await seedCall(db, accountId);
+      await insertProposal(db, accountId, {
+        callId, contactId: contact!.id as string, kind: "task",
+        evidence: "the caller asked to be called back Tuesday",
+        payload: { title: "Call back Tuesday", dueAt: null },
+      });
+      await insertProposal(db, accountId, {
+        callId, kind: "contact_field",
+        evidence: "the caller spelled her email out loud",
+        payload: { field: "email", value: "sam@example.com" },
+      });
+
+      const after = await listAccountWork(db, accountId);
+      const agencyAfter = (await listAgencyWork(db)).filter((r) => r.accountId === accountId);
+
+      expect(after.map((r) => r.id).sort()).toEqual(before.map((r) => r.id).sort());
+      expect(agencyAfter.map((r) => r.id).sort()).toEqual(agencyBefore.map((r) => r.id).sort());
     });
   });
 });

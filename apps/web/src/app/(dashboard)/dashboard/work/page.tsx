@@ -7,7 +7,7 @@
 // unanswered conversations and un-closed-out bookings in one pass, and that
 // read must never even be ISSUED on a client's behalf, boundary test first
 // (apps/web/e2e/work-queue.spec.ts, Task 6 Step 1).
-import { countLinesTurningCallersAway, listAgencyWork, serviceDb } from "@bis/db";
+import { countLinesTurningCallersAway, listAgencyWork, listPendingProposalsForAgency, serviceDb } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { LineDownBanner } from "@/components/line-down-banner";
 import { requireAgency } from "@/lib/auth";
@@ -47,28 +47,44 @@ export default async function AgencyWorkPage() {
   // INSIDE the array element (not around the whole `Promise.all`) so a
   // rejection here resolves to 0 rather than failing the concurrent
   // `listAgencyWork` read too.
-  const [rows, linesDown] = await Promise.all([
+  // The proposals read runs CONCURRENTLY with the other two, not chained
+  // after — same reasoning as the lines-down banner's own comment above.
+  // Task 10's own binding constraint: a proposal is a QUESTION about work,
+  // never work itself, so its rows travel in their OWN array all the way to
+  // `AgencyWorkList` and are NEVER concatenated into `rows` below — doing so
+  // would hand `bucketAgencyWork` a proposal-derived row indistinguishable
+  // from a real task. Swallowed the same best-effort way: a `call_proposals`
+  // hiccup must never cost the agency their real work list, so this degrades
+  // to no suggestions section rather than a broken page.
+  const [rows, linesDown, proposals] = await Promise.all([
     listAgencyWork(db),
     countLinesTurningCallersAway(db, since).catch((e: unknown) => {
       console.error(`work queue: lines-down read failed, rendering no banner: ${String(e)}`);
       return 0;
     }),
+    listPendingProposalsForAgency(db).catch((e: unknown) => {
+      console.error(`work queue: proposals read failed, rendering no suggestions: ${String(e)}`);
+      return [];
+    }),
   ]);
 
   // Each account's rows are bucketed in THAT account's own zone, never one
   // zone borrowed across every row — see agency-buckets.ts's own doc
-  // comment.
+  // comment. `proposals` never reaches this call — see the comment above.
   const buckets = bucketAgencyWork(rows, now);
 
   // ONE batch read for every contact referenced across every account's rows
-  // — never one read per row and never one per account. Not account-scoped
-  // (unlike the per-account screen's own contacts lookup): the ids here come
-  // from `listAgencyWork`'s own already-cross-tenant read via `serviceDb`,
-  // not from user input, so there is nothing for an account filter to guard
-  // against — a contact id can only ever resolve to the row that produced it.
+  // AND every pending proposal — never one read per row and never one per
+  // account. Not account-scoped (unlike the per-account screen's own
+  // contacts lookup): the ids here come from `listAgencyWork`'s and
+  // `listPendingProposalsForAgency`'s own already-cross-tenant reads via
+  // `serviceDb`, not from user input, so there is nothing for an account
+  // filter to guard against — a contact id can only ever resolve to the row
+  // that produced it.
   const contactIds = [...new Set(
     [...buckets.overdue, ...buckets.today, ...buckets.waiting]
       .map((r) => r.contactId)
+      .concat(proposals.map((p) => p.contactId))
       .filter((id): id is string => id !== null),
   )];
   const contactNames: Record<string, string> = {};
@@ -88,7 +104,7 @@ export default async function AgencyWorkPage() {
       <PageHeader title={m["work.agency.title"]} subtitle={m["work.agency.subtitle"]} />
       <div className="space-y-4 p-6">
         <LineDownBanner count={linesDown} />
-        <AgencyWorkList buckets={buckets} contactNames={contactNames} />
+        <AgencyWorkList buckets={buckets} contactNames={contactNames} proposals={proposals} />
       </div>
     </>
   );

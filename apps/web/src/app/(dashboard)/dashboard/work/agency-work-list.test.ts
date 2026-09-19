@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { AgencyWorkRow } from "@bis/db";
 import type { AgencyBucketedWork } from "@/lib/work/agency-buckets";
 import { m } from "@/lib/messages";
-import { visibleAgencyBuckets, AgencyWorkList } from "./agency-work-list";
+import { visibleAgencyBuckets, AgencyWorkList, type AgencyProposal } from "./agency-work-list";
 
 /** Flips `formatDateInZone` (and ONLY that export) into throwing a
  *  non-`RangeError` for exactly one test, matching tasks/work-list's own
@@ -34,8 +34,23 @@ function buckets(overrides: Partial<AgencyBucketedWork> = {}): AgencyBucketedWor
   return { overdue: [], today: [], waiting: [], ...overrides };
 }
 
-function renderList(b: AgencyBucketedWork, contactNames: Record<string, string> = {}) {
-  return renderToStaticMarkup(createElement(AgencyWorkList, { buckets: b, contactNames }));
+function proposal(overrides: Partial<AgencyProposal> = {}): AgencyProposal {
+  return {
+    id: "prop-1", accountId: "acct-a", callId: "call-1", contactId: null,
+    kind: "task", payload: { title: "Call back", dueAt: null },
+    evidence: "the caller asked for a callback", status: "pending",
+    decidedAt: null, decidedBy: null, createdAt: "2026-09-01T00:00:00Z",
+    brandName: "Rio Roofing",
+    ...overrides,
+  } as AgencyProposal;
+}
+
+function renderList(
+  b: AgencyBucketedWork,
+  contactNames: Record<string, string> = {},
+  proposals: AgencyProposal[] = [],
+) {
+  return renderToStaticMarkup(createElement(AgencyWorkList, { buckets: b, contactNames, proposals }));
 }
 
 describe("visibleAgencyBuckets", () => {
@@ -218,5 +233,104 @@ describe("AgencyWorkList", () => {
     const html = renderList(buckets());
     expect(html).toContain(m["work.agency.empty.action"]);
     expect(html).toContain('href="/dashboard/accounts"');
+  });
+});
+
+// Work Queue Task 10 — a proposal is a QUESTION about work, not work, and
+// must render beside the real queue, never inside it (task-10-brief.md's own
+// binding constraint on Bucket/BucketedWork). Rendered as a separate `<section
+// data-proposals>`, distinguishable from a bucket's own `<section
+// data-bucket="…">` by that marker alone, so a test can isolate one section's
+// own HTML from the other's.
+describe("AgencyWorkList — pending suggestions (Task 10)", () => {
+  it("renders a pending proposal in its own section, labelled as suggestions", () => {
+    const html = renderList(buckets(), {}, [proposal()]);
+    expect(html).toMatch(/<section data-proposals[^>]*>[\s\S]*?<\/section>/);
+    expect(html).toContain(m["proposals.work.heading"]);
+    expect(html).toContain(m["proposals.work.body"]);
+  });
+
+  it("renders no suggestions section at all when there are none", () => {
+    const html = renderList(buckets({ waiting: [row()] }), {}, []);
+    expect(html).not.toContain(m["proposals.work.heading"]);
+    expect(html).not.toMatch(/data-proposals/);
+  });
+
+  it("shows the suggestions section even when the real queue is otherwise empty, instead of the 'nothing needs you' empty state", () => {
+    const html = renderList(buckets(), {}, [proposal()]);
+    expect(html).not.toContain(m["work.empty"]);
+    expect(html).toContain(m["proposals.work.heading"]);
+  });
+
+  // THE PROOF THE WHOLE FEATURE'S SEPARATION EXISTS FOR. Real work ("Call
+  // back") sits in Waiting alongside a genuinely distinct proposal — the
+  // proposal's own content must render, but ONLY inside its own section,
+  // never inside the bucket section it sits beside.
+  it("keeps a proposal's own content out of Overdue/Today/Waiting, even with real work rendered alongside it (mutation: fold `proposals` into `buckets.waiting` before rendering -> FAILS)", () => {
+    const html = renderList(
+      buckets({ waiting: [row({ id: "task:1", title: "Call back" })] }),
+      {},
+      [proposal({
+        id: "prop-unique", payload: { title: "UNIQUE_TASK_TITLE_5678", dueAt: null },
+        evidence: "UNIQUE_CALLER_QUOTE_1234",
+      })],
+    );
+    const waitingSection = html.match(/<section data-bucket="waiting"[\s\S]*?<\/section>/)?.[0] ?? "";
+    expect(waitingSection).not.toContain("UNIQUE_TASK_TITLE_5678");
+    expect(waitingSection).not.toContain("UNIQUE_CALLER_QUOTE_1234");
+    // Proves the assertions above are testing separation, not merely that
+    // nothing rendered at all — the content IS on the page, in its own
+    // section.
+    expect(html).toContain("UNIQUE_TASK_TITLE_5678");
+    expect(html).toContain("UNIQUE_CALLER_QUOTE_1234");
+  });
+
+  it("shows the account's own brand name on a proposal row, the caller's own words as evidence, and links to the call it came from", () => {
+    const html = renderList(buckets(), {}, [proposal({
+      accountId: "acct-z", callId: "call-z", brandName: "Acme HVAC",
+      evidence: "call me back Tuesday morning",
+    })]);
+    expect(html).toContain("Acme HVAC");
+    expect(html).toContain("call me back Tuesday morning");
+    // Evidence has no transcript beside it here (unlike the call-detail
+    // page) — the row's own link is how a reader checks it against the
+    // whole call, deep-linked to the call-detail page's own proposals
+    // section rather than the page's top.
+    expect(html).toContain('href="/dashboard/accounts/acct-z/calls/call-z#call-proposals"');
+  });
+
+  it("names the contact on a proposal row when one is on file", () => {
+    const html = renderList(buckets(), { c1: "Maria Garcia" }, [proposal({ contactId: "c1" })]);
+    expect(html).toContain("Maria Garcia");
+  });
+
+  it("shows a task proposal's own plain-language label", () => {
+    const html = renderList(buckets(), {}, [proposal({
+      kind: "task", payload: { title: "Call back Tuesday", dueAt: null },
+    })]);
+    expect(html).toContain(m["proposals.task.label"].replace("{title}", () => "Call back Tuesday"));
+  });
+
+  it("shows a contact_field proposal's own plain-language label", () => {
+    const html = renderList(buckets(), {}, [{
+      ...proposal(), kind: "contact_field", payload: { field: "email", value: "sam@example.com" },
+    } as AgencyProposal]);
+    expect(html).toContain("email");
+    expect(html).toContain("sam@example.com");
+  });
+
+  // Same honesty rule the call-detail page's own buildLabel enforces: an
+  // opportunity_stage proposal's payload carries only uuids, and this
+  // cross-tenant screen has no per-account pipeline_stages lookup to resolve
+  // them to names — never the raw id, never the destination alone, so this
+  // kind renders nothing here rather than something false.
+  it("drops an opportunity_stage proposal this screen cannot describe honestly, rather than showing a raw id", () => {
+    const html = renderList(buckets(), {}, [{
+      ...proposal(), kind: "opportunity_stage",
+      payload: { opportunityId: "opp_1", fromStageId: "stage_1", toStageId: "stage_2" },
+    } as AgencyProposal]);
+    expect(html).not.toContain(m["proposals.work.heading"]);
+    expect(html).not.toContain("opp_1");
+    expect(html).not.toContain("stage_1");
   });
 });

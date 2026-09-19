@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { brandDisplayName } from "./branding";
 
 export type ProposalKind = "task" | "contact_field" | "opportunity_stage";
 export type ProposalStatus = "pending" | "accepted" | "dismissed";
@@ -138,6 +139,56 @@ export async function listPendingProposals(
     .limit(500);
   if (error) throw new Error(`listPendingProposals failed: ${error.message}`);
   return ((data ?? []) as Row[]).map(toProposal);
+}
+
+/**
+ * `listPendingProposals`'s cross-tenant twin, for `/dashboard/work` (Task
+ * 10) — that screen is agency-wide by construction the same way
+ * `listAgencyWork` is (`work-queue.ts`), so this reads every account's
+ * pending proposals in one pass rather than one account's.
+ *
+ * Copies `listAgencyWork`'s own accounts-join shape (work-queue.ts:190-231)
+ * rather than inventing one: read the rows first, collect the distinct
+ * account ids they actually carry, read only THOSE accounts' `brand_name`,
+ * and resolve each through `brandDisplayName` — which takes no fallback
+ * argument, so a blank `brand_name` comes through as `""` here, never
+ * `accounts.name` (the agency's internal label that has already reached a
+ * customer three times through a resolver that still accepted it).
+ *
+ * Same `.limit(500)` backstop `listPendingProposals` and
+ * `listProposalsForCall` both carry: `service_role`'s rolconfig has no
+ * `statement_timeout` on this project, so an unbounded read is unbounded in
+ * production.
+ */
+export async function listPendingProposalsForAgency(
+  db: SupabaseClient,
+): Promise<(CallProposal & { brandName: string })[]> {
+  const { data, error } = await db.from("call_proposals").select(COLS)
+    .eq("status", "pending")
+    .order("created_at", { ascending: false })
+    .limit(500);
+  if (error) throw new Error(`listPendingProposalsForAgency failed: ${error.message}`);
+  const rows = (data ?? []) as Row[];
+  if (rows.length === 0) return [];
+
+  const accountIds = [...new Set(rows.map((r) => r.account_id))];
+  const { data: accounts, error: aErr } = await db.from("accounts")
+    .select("id, brand_name")
+    .in("id", accountIds);
+  if (aErr) throw new Error(`listPendingProposalsForAgency accounts read failed: ${aErr.message}`);
+
+  const brandNameByAccount = new Map<string, string>();
+  for (const a of (accounts ?? []) as { id: string; brand_name: string | null }[]) {
+    brandNameByAccount.set(a.id, brandDisplayName({
+      brandName: a.brand_name, brandLogoPath: null, brandColor: null,
+      brandNeutral: null, brandCorners: null, brandType: null,
+      brandMode: null, replyToEmail: null,
+    }));
+  }
+  return rows.map((r) => ({
+    ...toProposal(r),
+    brandName: brandNameByAccount.get(r.account_id) ?? "",
+  }));
 }
 
 export async function getProposal(

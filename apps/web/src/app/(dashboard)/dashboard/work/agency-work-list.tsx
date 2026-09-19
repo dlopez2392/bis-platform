@@ -27,7 +27,7 @@
 //     acting on it means following its own link into that account.
 import Link from "next/link";
 import { ListTodo } from "lucide-react";
-import type { AgencyWorkRow } from "@bis/db";
+import type { AgencyWorkRow, CallProposal, ContactFieldPayload } from "@bis/db";
 import type { Bucket } from "@/lib/work/buckets";
 import type { AgencyBucketedWork } from "@/lib/work/agency-buckets";
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +37,16 @@ import { ListPanel, LIST_ROW } from "@/components/ui/list-panel";
 import { formatDateInZone } from "@/lib/format";
 import { m, type MessageKey } from "@/lib/messages";
 import { cn } from "@/lib/utils";
+// Task 7's own extracted, reusable pieces (its header comment says so) —
+// reused here rather than copied: the SAME status-treatment map (every
+// proposal `listPendingProposalsForAgency` returns is `pending` by
+// construction, so only that one entry of the map is ever read) and the
+// SAME card shell the call-detail page's own Suggested-next-steps block
+// uses, so this screen's suggestions read as visually distinct from a
+// plain bucket's `ListPanel` — the binding constraint's own "visually
+// separated" requirement — without inventing a second card language.
+import { STATUS_TREATMENT } from "../accounts/[accountId]/calls/[callId]/proposals";
+import { CARD, CARD_HEAD } from "../accounts/[accountId]/calls/[callId]/card";
 
 const BUCKET_ORDER: Bucket[] = ["overdue", "today", "waiting"];
 
@@ -178,21 +188,131 @@ function AgencyWorkRowItem({
   );
 }
 
+// ── Work Queue Task 10 — pending suggestions ────────────────────────────
+//
+// A proposal is a QUESTION about work, not work — it is rendered as its own
+// sibling `<section>`, never folded into `buckets` (task-10-brief.md's own
+// binding constraint on `Bucket`/`BucketedWork`, `lib/work/buckets.ts`).
+// `listPendingProposalsForAgency` (packages/db/src/call-proposals.ts) is
+// this screen's cross-tenant twin of `listPendingProposals`, carrying the
+// same `brandName` field every other row on this page already does.
+export type AgencyProposal = CallProposal & { brandName: string };
+
+/** Restated from proposals.tsx's own (unexported) `FIELD_LABEL_KEY` — same
+ *  reasoning as `BUCKET_TREATMENT` above: a four-entry map, not worth
+ *  reaching across a route boundary for. */
+const PROPOSAL_FIELD_LABEL_KEY: Record<ContactFieldPayload["field"], MessageKey> = {
+  firstName: "contacts.firstName", lastName: "contacts.lastName",
+  email: "contacts.email", phone: "contacts.phone",
+};
+
+/**
+ * The proposal's own plain-language sentence, or `null` for a kind this
+ * screen cannot describe honestly.
+ *
+ * `task` and `contact_field` are fully self-contained in their own payload
+ * — nothing else needs resolving. `opportunity_stage` is different: its
+ * payload carries only `fromStageId`/`toStageId` uuids, and describing it
+ * honestly means resolving those against the account's OWN
+ * `pipeline_stages` (exactly what the call-detail page's own `buildLabel`
+ * does, scoped to the one account already on that page). This screen is
+ * cross-tenant by construction — doing the same resolution here means a
+ * SECOND per-account table join across every account with a pending
+ * proposal, to serve a kind this compact queue may show only rarely, and
+ * nothing in this task's brief asks for it. Same honesty rule either way
+ * (DESIGN.md: never the raw uuid, never the destination alone) — a
+ * proposal this view cannot describe honestly renders nothing here rather
+ * than something false. See this task's report for the finding.
+ */
+function proposalSummary(p: CallProposal): string | null {
+  if (p.kind === "task") {
+    return m["proposals.task.label"].replace("{title}", () => p.payload.title);
+  }
+  if (p.kind === "contact_field") {
+    const fieldLabel = m[PROPOSAL_FIELD_LABEL_KEY[p.payload.field]].toLowerCase();
+    return m["proposals.contactField.label"]
+      .replace("{field}", () => fieldLabel)
+      .replace("{value}", () => p.payload.value);
+  }
+  return null;
+}
+
+function AgencyProposalRow({
+  proposal,
+  contactName,
+}: {
+  proposal: AgencyProposal;
+  /** `null` when the proposal carries no contact — never rendered, unlike
+   *  a bucket row's own always-present fallback, because a suggestion about
+   *  a contact detail or a task is still legible without one. */
+  contactName: string | null;
+}) {
+  const summary = proposalSummary(proposal);
+  // Never reached — AgencyWorkList filters these out before mapping — but
+  // typed to return null anyway so this component alone can never render a
+  // kind it cannot describe honestly.
+  if (summary === null) return null;
+  // Every row here is `pending` by construction (listPendingProposalsForAgency
+  // only ever returns pending proposals) — the one entry of Task 7's
+  // STATUS_TREATMENT this screen ever reads.
+  const treatment = STATUS_TREATMENT.pending;
+
+  return (
+    <li>
+      <Link
+        href={`/dashboard/accounts/${proposal.accountId}/calls/${proposal.callId}#call-proposals`}
+        className="flex flex-col gap-2 px-5 py-4 transition-colors hover:bg-[var(--surface-3)]"
+      >
+        <span className="truncate font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase">
+          {proposal.brandName || m["work.agency.unbranded"]}
+        </span>
+        <span className="flex flex-wrap items-center gap-2">
+          <Badge variant="chip" className={cn("shrink-0 gap-1.5 py-1 pr-2.5 pl-2", treatment.chip)}>
+            <span className={cn("size-[7px] rounded-full", treatment.dot)} aria-hidden />
+            {m[treatment.labelKey]}
+          </Badge>
+          <span className="text-sm font-medium text-card-foreground">{summary}</span>
+        </span>
+        {contactName ? <span className="text-xs text-muted-foreground">{contactName}</span> : null}
+        {/* Evidence has no transcript beside it here, unlike the call-detail
+            page's own Suggested-next-steps block — the row's OWN link above
+            is how a reader checks the quote against the whole call it came
+            from, deep-linked to that page's own `#call-proposals` section
+            rather than its top. */}
+        <p className="text-sm leading-6 text-muted-foreground">
+          {m["proposals.evidence"]}{" "}
+          <q className="text-foreground">{proposal.evidence}</q>
+        </p>
+      </Link>
+    </li>
+  );
+}
+
 export function AgencyWorkList({
   buckets,
   contactNames,
+  proposals = [],
 }: {
   buckets: AgencyBucketedWork;
   /** contactId → display name, for every non-null contactId across every
    *  bucket and every account — ONE batch read (page.tsx), never one per
    *  row and never one per account. A contactId absent from this map falls
    *  back to m["contact.noName"] below — never a raw id, never
-   *  "undefined". */
+   *  "undefined". Also resolves a proposal row's own contact, from the
+   *  SAME batch read (page.tsx extends the same id collection). */
   contactNames: Record<string, string>;
+  /** Every account's pending proposals, pooled the same way `buckets` is.
+   *  Optional (defaults to none) so every existing call site — and every
+   *  existing test — is unaffected by this prop's addition. */
+  proposals?: AgencyProposal[];
 }) {
   const shown = visibleAgencyBuckets(buckets);
+  // Filtered BEFORE anything below ever sees them — a kind this screen
+  // cannot describe honestly (see `proposalSummary`) counts as nothing to
+  // show, not as an empty-looking row.
+  const visibleProposals = proposals.filter((p) => proposalSummary(p) !== null);
 
-  if (shown.length === 0) {
+  if (shown.length === 0 && visibleProposals.length === 0) {
     return (
       <EmptyState
         icon={ListTodo}
@@ -215,7 +335,11 @@ export function AgencyWorkList({
   return (
     <div className="flex flex-col gap-6">
       {shown.map((bucket) => (
-        <section key={bucket} className="flex flex-col gap-2">
+        // `data-bucket` is a test-only marker (no visual effect): it lets a
+        // render test isolate ONE bucket's own HTML from a sibling section's
+        // — the no-contamination proof this screen's binding constraint
+        // exists for (task-10-brief.md).
+        <section key={bucket} data-bucket={bucket} className="flex flex-col gap-2">
           <h2 className="px-1 font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase">
             {m[BUCKET_TREATMENT[bucket].labelKey]}
           </h2>
@@ -231,6 +355,28 @@ export function AgencyWorkList({
           </ListPanel>
         </section>
       ))}
+      {visibleProposals.length > 0 ? (
+        // A sibling `<section>`, never a fourth bucket — visually separated
+        // by Task 7's own CARD shell (a bordered, glass panel; a bucket's
+        // own ListPanel below shares that exact styling by coincidence of
+        // BOTH constants being `overflow-hidden rounded-xl border
+        // border-border bg-card glass`, but this one ALSO carries a labelled
+        // heading + subhead, which no bucket section has, so "Suggestions"
+        // never reads as a fourth Overdue/Today/Waiting).
+        <section data-proposals aria-labelledby="agency-proposals" className={CARD}>
+          <h2 id="agency-proposals" className={CARD_HEAD}>{m["proposals.work.heading"]}</h2>
+          <p className="px-5 pt-3 text-sm text-muted-foreground">{m["proposals.work.body"]}</p>
+          <ul className="divide-y divide-[var(--row-line)]">
+            {visibleProposals.map((p) => (
+              <AgencyProposalRow
+                key={p.id}
+                proposal={p}
+                contactName={p.contactId ? (contactNames[p.contactId] ?? m["contact.noName"]) : null}
+              />
+            ))}
+          </ul>
+        </section>
+      ) : null}
     </div>
   );
 }

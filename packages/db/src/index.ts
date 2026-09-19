@@ -94,7 +94,7 @@ export * from "./timezone";
 export * from "./zone-resolution";
 export {
   insertProposal, listProposalsForCall, listPendingProposals, getProposal,
-  markProposalDecided,
+  markProposalDecided, listPendingProposalsForAgency,
   type CallProposal, type ProposalKind, type ProposalStatus,
   type ProposalPayload, type ProposalInput, type TaskPayload,
   type ContactFieldPayload, type OpportunityStagePayload,

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { bucketWork } from "./buckets";
-import type { WorkRow } from "@bis/db";
+import { bucketWork, type BucketedWork } from "./buckets";
+import type { WorkRow, CallProposal } from "@bis/db";
 
 const task = (id: string, dueAt: string | null, occurredAt = "2026-09-01T00:00:00Z"): WorkRow => ({
   id: `task:${id}`, source: "task", accountId: "a", contactId: null,
@@ -89,3 +89,26 @@ describe("bucketWork", () => {
     expect(b.overdue.map((r) => r.id)).toEqual(["task:good"]);
   });
 });
+
+// Work Queue Task 10's own binding constraint: "Bucket and BucketedWork are
+// a pinned, tested union reused verbatim by agency-buckets.ts. Do NOT add a
+// fourth key." A proposal is a QUESTION about work, not work — it must never
+// be capable of landing in Overdue/Today/Waiting, not merely by convention
+// but by the type system, the same way Important 5 in
+// call-proposals.test.ts pins a kind/payload mismatch as unrepresentable at
+// `insertProposal`'s own call site rather than only on a standalone type.
+// Never called; only `tsc --noEmit` exercises it.
+//
+// Proved live (this task's report): widening `BucketedWork`'s array element
+// type to `(WorkRow | CallProposal)[]` makes the `@ts-expect-error` below
+// unused — `tsc --noEmit` then reports TS2578 on this exact line — turning
+// this compile-time guard red BY NAME. Restoring `BucketedWork`'s real type
+// (WorkRow[] on every key) makes the mismatch a real error again, which is
+// what the directive is there to expect.
+export function _typeOnly_bucketedWorkCannotHoldAProposal(b: BucketedWork, p: CallProposal): void {
+  // @ts-expect-error a CallProposal is not a WorkRow (no `source`, `title`,
+  // `dueAt` or `occurredAt`) — pushing one into a bucket's own array cannot
+  // typecheck, which is what keeps a proposal out of Overdue/Today/Waiting
+  // structurally, not just by convention.
+  b.waiting.push(p);
+}

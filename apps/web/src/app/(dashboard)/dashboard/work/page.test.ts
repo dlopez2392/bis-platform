@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { AgencyWorkRow } from "@bis/db";
+import type { AgencyWorkRow, CallProposal } from "@bis/db";
 import { m } from "@/lib/messages";
 
 // This is the first screen whose whole purpose is to span every account
@@ -20,6 +20,12 @@ const listAgencyWorkMock = vi.fn(async (): Promise<AgencyWorkRow[]> => []);
 const countLinesTurningCallersAwayMock = vi.fn<
   (db: unknown, sinceIso: string) => Promise<number>
 >(async () => 0);
+// Work Queue Task 10's own read — defaults to [] (no suggestions section)
+// so every pre-existing case below is unaffected by its addition. Real
+// signature read from packages/db/src/call-proposals.ts.
+const listPendingProposalsForAgencyMock = vi.fn(
+  async (): Promise<(CallProposal & { brandName: string })[]> => [],
+);
 // The contacts batch read (page.tsx's own second query, for the
 // contactNames map) — same minimal chain shape tasks/page.test.ts's own
 // dbForRequest mock uses, scoped to `.in()` since that is the only method
@@ -36,6 +42,7 @@ vi.mock("@bis/db", () => ({
   listAgencyWork: () => listAgencyWorkMock(),
   countLinesTurningCallersAway: (db: unknown, sinceIso: string) =>
     countLinesTurningCallersAwayMock(db, sinceIso),
+  listPendingProposalsForAgency: () => listPendingProposalsForAgencyMock(),
 }));
 
 function row(overrides: Partial<AgencyWorkRow> = {}): AgencyWorkRow {
@@ -47,11 +54,23 @@ function row(overrides: Partial<AgencyWorkRow> = {}): AgencyWorkRow {
   };
 }
 
+function proposal(overrides: Partial<CallProposal & { brandName: string }> = {}): CallProposal & { brandName: string } {
+  return {
+    id: "prop-1", accountId: "acct-a", callId: "call-1", contactId: null,
+    kind: "task", payload: { title: "Call back", dueAt: null },
+    evidence: "the caller asked for a callback", status: "pending",
+    decidedAt: null, decidedBy: null, createdAt: "2026-09-01T00:00:00Z",
+    brandName: "Rio Roofing",
+    ...overrides,
+  } as CallProposal & { brandName: string };
+}
+
 describe("AgencyWorkPage", () => {
   beforeEach(() => {
     requireAgencyMock.mockReset().mockImplementation(async () => ({ userId: "user_1" }));
     listAgencyWorkMock.mockReset().mockResolvedValue([]);
     countLinesTurningCallersAwayMock.mockReset().mockResolvedValue(0);
+    listPendingProposalsForAgencyMock.mockReset().mockResolvedValue([]);
   });
 
   it("guards before any read — a rejected agency check never reaches listAgencyWork", async () => {
@@ -154,4 +173,77 @@ describe("AgencyWorkPage", () => {
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("lines-down read failed"));
     spy.mockRestore();
   });
+
+  // Work Queue Task 10 — pending suggestions, rendered beside the real
+  // queue, never inside it.
+  it("renders pending proposals in their own suggestions section", async () => {
+    listPendingProposalsForAgencyMock.mockResolvedValueOnce([proposal()]);
+    const { default: AgencyWorkPage } = await import("./page");
+    const html = renderToStaticMarkup(await AgencyWorkPage());
+    expect(html).toContain(m["proposals.work.heading"]);
+  });
+
+  it("renders no suggestions section when there are no pending proposals", async () => {
+    const { default: AgencyWorkPage } = await import("./page");
+    const html = renderToStaticMarkup(await AgencyWorkPage());
+    expect(html).not.toContain(m["proposals.work.heading"]);
+  });
+
+  // THE PROOF THE WIRING ITSELF NEVER CONTAMINATES bucketAgencyWork's INPUT
+  // — the exact integration point named in the task-10 brief. Real work
+  // ("Call back") is bucketed alongside a genuinely distinct proposal; the
+  // proposal's own content must render, but never inside the bucket section
+  // it sits beside.
+  it("never folds proposals into the rows passed to bucketAgencyWork (mutation: concat proposal-derived rows into `rows` before bucketing -> FAILS)", async () => {
+    listAgencyWorkMock.mockResolvedValueOnce([row({ id: "task:1", title: "Call back" })]);
+    listPendingProposalsForAgencyMock.mockResolvedValueOnce([proposal({
+      id: "prop-unique", payload: { title: "UNIQUE_TASK_TITLE_5678", dueAt: null },
+      evidence: "UNIQUE_CALLER_QUOTE_1234",
+    })]);
+    const { default: AgencyWorkPage } = await import("./page");
+    const html = renderToStaticMarkup(await AgencyWorkPage());
+
+    const waitingSection = html.match(/<section data-bucket="waiting"[\s\S]*?<\/section>/)?.[0] ?? "";
+    expect(waitingSection).not.toContain("UNIQUE_TASK_TITLE_5678");
+    expect(waitingSection).not.toContain("UNIQUE_CALLER_QUOTE_1234");
+    // Proves the assertions above test separation, not that nothing
+    // rendered at all — the content IS on the page, in its own section.
+    expect(html).toContain("UNIQUE_TASK_TITLE_5678");
+    expect(html).toContain("UNIQUE_CALLER_QUOTE_1234");
+  });
+
+  it("degrades to no suggestions section, not a broken page, when the proposals read fails", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    listAgencyWorkMock.mockResolvedValueOnce([row()]);
+    listPendingProposalsForAgencyMock.mockRejectedValueOnce(new Error("permission denied for table call_proposals"));
+
+    const { default: AgencyWorkPage } = await import("./page");
+    const html = renderToStaticMarkup(await AgencyWorkPage());
+
+    // The queue itself is still there…
+    expect(html).toContain("Call back");
+    // …only the suggestions section is missing…
+    expect(html).not.toContain(m["proposals.work.heading"]);
+    // …and the swallow left a trace.
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("proposals read failed"));
+    spy.mockRestore();
+  });
+
+  it("runs the proposals read CONCURRENTLY with listAgencyWork, not chained after it (mutation: await listAgencyWork before starting the proposals read -> FAILS)", async () => {
+    let listCalled = false;
+    let proposalsCalled = false;
+    listAgencyWorkMock.mockReset().mockImplementation(async () => {
+      listCalled = true;
+      while (!proposalsCalled) await new Promise((r) => setTimeout(r, 1));
+      return [];
+    });
+    listPendingProposalsForAgencyMock.mockReset().mockImplementation(async () => {
+      proposalsCalled = true;
+      while (!listCalled) await new Promise((r) => setTimeout(r, 1));
+      return [];
+    });
+
+    const { default: AgencyWorkPage } = await import("./page");
+    await expect(AgencyWorkPage()).resolves.toBeTruthy();
+  }, 2000);
 });
