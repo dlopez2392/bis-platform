@@ -181,6 +181,27 @@ const pipeline = {
   ],
 };
 
+/**
+ * A pipeline whose FIRST, MIDDLE and LAST stages are all distinct positions,
+ * built specifically for the terminal-stage guard below. The last stage is
+ * deliberately named "Signed" rather than "Closed" — the guard this fixture
+ * exercises is defined on STRUCTURE (the highest `position` in the
+ * opportunity's own pipeline), never on the seeded name, and a fixture named
+ * "Closed" could not tell the two apart. The current stage ("Estimate") is
+ * neither the first nor the last stage, so a target of "Signed" is
+ * unambiguously forward AND unambiguously terminal — distinct from both the
+ * already-covered "backward" and "same stage" refusals above.
+ */
+const pipelineWithTerminalStage = {
+  id: "o2", stageId: "s2", stageName: "Estimate",
+  stages: [
+    { id: "s1", name: "New Lead", position: 0 },
+    { id: "s2", name: "Estimate", position: 1 },
+    { id: "s3", name: "Scheduled", position: 2 },
+    { id: "s4", name: "Signed", position: 3 },
+  ],
+};
+
 function requestBodyOf(fetchImpl: typeof fetch): any {
   const [, init] = (fetchImpl as any).mock.calls[0] as [string, RequestInit];
   return JSON.parse(init.body as string);
@@ -1221,5 +1242,60 @@ describe("generateProposals — opportunity_stage", () => {
     const fetchImpl = modelReturning({ proposals: [] });
     await generateProposals({ ...base, db, fetchImpl });   // openOpportunity: null via base
     expect(systemPromptOf(fetchImpl).toLowerCase()).not.toContain("opportunity_stage");
+  });
+
+  // THE NEW GUARD. Every opportunity actually sitting in the last stage of a
+  // live pipeline carries `status = 'won'` (checked against production
+  // directly, 2026-09-19: 4 of 4, zero `open`) — a stage move only ever
+  // touches `stage_id`, never `status`, so a machine proposal into the last
+  // stage could only ever produce a deal at the finish line with its outcome
+  // still `open`, a combination that exists nowhere in this data. The target
+  // here ("Signed") is both forward of the current stage AND the pipeline's
+  // real last stage by `position` — `pipelineWithTerminalStage`'s own doc
+  // above explains why it is named something other than "Closed": this must
+  // refuse on STRUCTURE, not on spotting a familiar name.
+  it("refuses a proposal into the pipeline's last stage, even though the move is forward and grounded (mutation: drop the terminal-stage guard -> FAILS)", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, contactId: "c1", openOpportunity: pipelineWithTerminalStage,
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "opportunity_stage", toStage: "Signed",
+                      evidence: "I need a quote for a dining table" }],
+      }),
+    });
+    expect(n).toBe(0);
+    expect(db.rows).toEqual([]);
+  });
+
+  // THE GUARD'S OWN BOUNDARY: a multi-stage forward jump is real (a caller
+  // who says "just send me a price" has genuinely skipped steps) and stays
+  // allowed — only the pipeline's OWN last stage is refused, not "any stage
+  // that isn't adjacent" and not "any stage past the first". Target here
+  // ("Scheduled") is two stages ahead of the current one AND still short of
+  // "Signed", the actual last stage — a guard that mistakenly refused on
+  // distance-from-current or distance-from-first, rather than on being the
+  // pipeline's own terminal position, would wrongly refuse this one too.
+  it("still allows a multi-stage forward jump when the target is not the pipeline's last stage", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({
+      ...base, db, contactId: "c1", openOpportunity: pipelineWithTerminalStage,
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "opportunity_stage", toStage: "Scheduled",
+                      evidence: "I need a quote for a dining table" }],
+      }),
+    });
+    expect(n).toBe(1);
+    expect(db.rows[0].payload).toEqual({ opportunityId: "o2", fromStageId: "s2", toStageId: "s3" });
+  });
+
+  // PIN THE PROMPT HALF, same pairing as the two tests directly above this
+  // one: the code guard is the enforcement, but the model is also told not
+  // to bother, so it wastes fewer attempts on a proposal this generator will
+  // always throw away.
+  it("tells the model never to propose the pipeline's last stage (mutation: delete the final-stage line from systemFor -> FAILS)", async () => {
+    const db = fakeDb();
+    const fetchImpl = modelReturning({ proposals: [] });
+    await generateProposals({ ...base, db, openOpportunity: pipeline, fetchImpl });
+    expect(systemPromptOf(fetchImpl).toLowerCase()).toContain("last stage");
   });
 });

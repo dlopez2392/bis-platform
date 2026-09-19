@@ -141,7 +141,7 @@ function systemFor(
     const stageNames = openOpportunity.stages.map((s) => s.name).join(", ");
     system = `${system} This caller has an open deal currently at the "${
       openOpportunity.stageName
-    }" stage, in a pipeline with these stages in order: ${stageNames}. If — and ONLY if — the call is clear evidence the deal moved to a LATER stage in that list, you may propose {"kind":"opportunity_stage","toStage":"<the exact name of one LATER stage from that list>","evidence":"..."}. The stage name must be spelled EXACTLY as given above. Never propose the current stage, and never propose an EARLIER stage — only a human may move a deal backwards.`;
+    }" stage, in a pipeline with these stages in order: ${stageNames}. If — and ONLY if — the call is clear evidence the deal moved to a LATER stage in that list, you may propose {"kind":"opportunity_stage","toStage":"<the exact name of one LATER stage from that list>","evidence":"..."}. The stage name must be spelled EXACTLY as given above. Never propose the current stage, and never propose an EARLIER stage — only a human may move a deal backwards. Never propose the LAST stage in that list — closing a deal is a judgement about money and outcome that one phone call cannot make, and only a human can record how it ended; this always gets refused, so do not waste a proposal on it.`;
   }
   return system;
 }
@@ -436,6 +436,29 @@ export async function generateProposals(input: {
         // pipeline can undo a human's own read of a customer — a human
         // keeps full freedom to move either way, this generator does not.
         if (target.position <= current.position) continue;
+        // THE END OF THE BOARD, STRUCTURAL NOT NOMINAL. Every opportunity
+        // actually sitting in the last stage of a live pipeline already
+        // carries `status = 'won'` (checked directly against production,
+        // 2026-09-19: 4 of 4 opportunities in a last stage, zero `open`) —
+        // the human habit of dragging a deal to the end and recording its
+        // outcome in the same motion. A stage move only ever writes
+        // `stage_id`; it never touches `status`, so a machine proposal into
+        // the last stage could only ever produce a row at the finish line
+        // with its outcome still `open` — a combination that exists nowhere
+        // in this data, and one that anything counting open deals or
+        // reporting won-vs-lost would misread. Closing a deal is also a
+        // judgement about money and an outcome this generator has no way to
+        // record either way; one phone call is weak evidence for it, and
+        // the model is never trusted to have honored `systemFor`'s own
+        // sentence asking it not to try. Checked by POSITION, never by the
+        // seeded name "Closed" — that name is only ever a default and a
+        // real account's pipeline could rename or reorder it. A one-stage
+        // pipeline has no stage that is not this one, so every proposal
+        // against it is refused too (by the `<=` check above, since the
+        // only stage is always both current and last) — there is nowhere
+        // forward to go.
+        const lastPosition = Math.max(...opp.stages.map((s) => s.position));
+        if (target.position === lastPosition) continue;
         // THE MODEL NEVER SUPPLIES A CONTACT. `openOpportunity` is resolved
         // by the caller (finish-call.ts) FROM a known contact, so a null
         // `input.contactId` here means the caller handed this generator an
