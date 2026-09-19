@@ -54,6 +54,23 @@ describe("CallProposals", () => {
     expect(render([])).toBe("");
   });
 
+  /**
+   * PINS THE ANCHOR ID. Nothing else in this file — or anywhere else —
+   * checks it: the agency work queue's own proposal row deep-links to
+   * `#call-proposals` (`agency-work-list.tsx`, pinned by string in
+   * `agency-work-list.test.ts:316`, "the row's own link is how a reader
+   * checks it against the whole call"), but that test only pins the HREF
+   * it emits, never the id it targets. A rename of the id on THIS end
+   * breaks that link with no test failure anywhere and no runtime error —
+   * `<a href="#call-proposals">` against a page with no matching id is
+   * valid HTML, so the browser just silently lands at the top of the page
+   * instead of at the evidence a reader followed the link to check.
+   */
+  it("keeps the section's heading id \"call-proposals\" — the work queue's evidence link targets this exact id (mutation: rename the id -> FAILS)", () => {
+    const html = render([taskProposal()]);
+    expect(html).toMatch(/<h2\b[^>]*\bid="call-proposals"[^>]*>/);
+  });
+
   it("renders the status chip as dot + word, never colour alone (mutation: delete the dot span -> FAILS)", () => {
     const html = render([taskProposal()]);
     // The DOT's own SOLID class, not the chip's alpha background: the
