@@ -1,11 +1,10 @@
 import { test, expect } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import {
   serviceDb, setClientAccess, createContact, ensureDefaultPipeline, createOpportunity,
   assignPhoneNumber, startCallRow, finishCallRow, addTagToContact, addNote,
 } from "@bis/db";
-import { readClientFixture } from "./support";
 import { m } from "../src/lib/messages";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
@@ -57,14 +56,31 @@ loadEnv({ path: ".env.local" });
  */
 test.describe.configure({ timeout: 180_000 });
 
-const fixture = readClientFixture();
-test.skip(!fixture, "client fixture missing — auth.setup did not run");
-
-const base = () => `/dashboard/accounts/${fixture!.accountId}`;
+// `accountId` is populated by `beforeAll` below (via `fullFixture()`), so
+// `base()` only ever runs after that — every call site is inside a test body.
+const base = () => `/dashboard/accounts/${accountId}`;
 
 type ClientFixtureFull = { accountId: string; clerkUserId: string };
+const CLIENT_FIXTURE_FILE = "e2e/.auth/client-fixture.json";
+
+/**
+ * Read at RUN TIME (called from `beforeAll` below), never at module scope:
+ * Playwright evaluates module scope during COLLECTION, before the "setup"
+ * project has written this file, so a module-scope read skipped every test
+ * in this file on every fresh CI checkout (measured: 21 skipped, `git log`
+ * 197b1b9/7413ff1/0740e6c). Missing at run time is a FAILURE, not a skip —
+ * it means the "setup" project's dependency was bypassed (a filtered
+ * invocation, or a bare `playwright test <file>`).
+ */
 function fullFixture(): ClientFixtureFull {
-  return JSON.parse(readFileSync("e2e/.auth/client-fixture.json", "utf-8")) as ClientFixtureFull;
+  if (!existsSync(CLIENT_FIXTURE_FILE)) {
+    throw new Error(
+      `client fixture missing at ${CLIENT_FIXTURE_FILE} — the "setup" project did not run ` +
+      `(a filtered invocation, or a bare "playwright test <file>", skips its dependency). ` +
+      `Run the full suite: pnpm --filter web test:e2e.`,
+    );
+  }
+  return JSON.parse(readFileSync(CLIENT_FIXTURE_FILE, "utf-8")) as ClientFixtureFull;
 }
 
 const stamp = Date.now();

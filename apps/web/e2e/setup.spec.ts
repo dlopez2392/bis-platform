@@ -1,12 +1,11 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import {
   serviceDb, setClientAccess, getOrCreateCalendar, updateCalendarSettings,
   listChecklistState,
 } from "@bis/db";
 import { SETUP_TICK_KEYS } from "../src/lib/setup/setup-status";
-import { readClientFixture } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process rather than through a Next request.
@@ -63,12 +62,28 @@ loadEnv({ path: ".env.local" });
  */
 test.describe.configure({ timeout: 120_000 });
 
-const fixtureFile = readClientFixture();
-test.skip(!fixtureFile, "client fixture missing — auth.setup did not run");
-
 type ClientFixture = { accountId: string; clerkUserId: string; companyName: string };
-const fixture = (): ClientFixture =>
-  JSON.parse(readFileSync("e2e/.auth/client-fixture.json", "utf-8")) as ClientFixture;
+const CLIENT_FIXTURE_FILE = "e2e/.auth/client-fixture.json";
+
+/**
+ * Read at RUN TIME (called from inside `beforeAll`/test bodies below), never
+ * at module scope: Playwright evaluates module scope during COLLECTION,
+ * before the "setup" project has written this file, so a module-scope read
+ * skipped every test in this file on every fresh CI checkout (measured: 21
+ * skipped, `git log` 197b1b9/7413ff1/0740e6c). Missing at run time is a
+ * FAILURE, not a skip — it means the "setup" project's dependency was
+ * bypassed (a filtered invocation, or a bare `playwright test <file>`).
+ */
+const fixture = (): ClientFixture => {
+  if (!existsSync(CLIENT_FIXTURE_FILE)) {
+    throw new Error(
+      `client fixture missing at ${CLIENT_FIXTURE_FILE} — the "setup" project did not run ` +
+      `(a filtered invocation, or a bare "playwright test <file>", skips its dependency). ` +
+      `Run the full suite: pnpm --filter web test:e2e.`,
+    );
+  }
+  return JSON.parse(readFileSync(CLIENT_FIXTURE_FILE, "utf-8")) as ClientFixture;
+};
 
 /**
  * The nine steps, in the order the rail walks them — keys AND titles, both
