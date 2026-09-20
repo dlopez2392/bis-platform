@@ -29,6 +29,8 @@ import { RailStates } from "./rail-states";
 import { SettingsFieldCards } from "./settings-field-cards";
 import { PublicBrand } from "@/components/public-brand";
 import "@/styles/public-brand.css";
+import { EmbedSnippet } from "@/components/embed-snippet";
+import "@/app/c/[publicId]/concierge.css";
 import { m } from "@/lib/messages";
 
 export const dynamic = "force-dynamic";
@@ -185,6 +187,63 @@ export default async function StyleguidePage() {
         <Section title="Public brand header" file="components/public-brand.tsx">
           <div className="w-full">
             <PublicBrand name="Rio Roofing" logoUrl={null} />
+          </div>
+        </Section>
+
+        <Section
+          title="Website assistant — launcher & message bubbles"
+          file="app/embed.js/route.ts (loader) · app/c/[publicId]/concierge-chat.tsx · concierge.css"
+        >
+          <div className="flex w-full flex-wrap items-start gap-8">
+            {/* The launcher `embed.js` draws on the HOST page — inline-styled
+                there on purpose (a snippet running on someone else's site
+                cannot reach this app's CSS custom properties), so this is a
+                tokened re-creation for reference, not the literal element. */}
+            <div className="flex flex-col items-center gap-2">
+              <div
+                className="flex size-14 items-center justify-center rounded-full bg-[var(--accent)] text-2xl text-primary-foreground shadow-[var(--shadow-glow)]"
+                aria-hidden
+              >
+                💬
+              </div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Launcher</p>
+            </div>
+            <ol className="bis-concierge-log w-full max-w-xs list-none" aria-hidden>
+              <li className="bis-msg bis-msg-assistant">Hi! Ask me anything about our services.</li>
+              <li className="bis-msg bis-msg-visitor">Do you serve the 78041 zip code?</li>
+              <li className="bis-msg bis-msg-assistant bis-msg-skeleton" aria-label="Thinking">
+                <span /><span /><span />
+              </li>
+            </ol>
+          </div>
+        </Section>
+
+        <Section title="Shared embed snippet card" file="components/embed-snippet.tsx">
+          <div className="grid w-full max-w-sm gap-4">
+            <EmbedSnippet
+              attribute="data-concierge"
+              publicId="pub_demo123"
+              origin="https://app.example.com"
+              title={m["voice.assistant.snippetTitle"]}
+              hint={m["voice.assistant.snippetHint"]}
+              disabledHint={m["voice.assistant.noFormBody"]}
+              enabled
+              copyLabel={m["voice.assistant.copy"]}
+              copiedLabel={m["voice.assistant.copied"]}
+              publicLinkLabel={m["voice.assistant.publicLink"]}
+            />
+            <EmbedSnippet
+              attribute="data-concierge"
+              publicId="pub_demo123"
+              origin="https://app.example.com"
+              title={m["voice.assistant.snippetTitle"]}
+              hint={m["voice.assistant.snippetHint"]}
+              disabledHint={m["voice.assistant.noFormBody"]}
+              enabled={false}
+              copyLabel={m["voice.assistant.copy"]}
+              copiedLabel={m["voice.assistant.copied"]}
+              publicLinkLabel={m["voice.assistant.publicLink"]}
+            />
           </div>
         </Section>
 
