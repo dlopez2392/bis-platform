@@ -616,9 +616,10 @@ unconfirmed the carrier surfaces one; a "find out", not a fix.
 
 **What this does not do.** It does not stop the call being answered, and it
 does not stop the campaign. It makes each robocall cost roughly the seconds
-up to its first "press 0" instead of the whole script (estimate: ~270 of
-~470 characters in, plus Sofía's reply saved outright — the real number
-comes from the next live call, not from this document).
+up to its first "press 0 to" instead of the whole script (estimate: ~240 of
+~470 characters in — word 40 of 80, where the predicate's `press <digit>
+(to|for|and|if)` shape completes — plus Sofía's reply saved outright; the
+real number comes from the next live call, not from this document).
 
 **The rule that still binds.** Never keyed on "Google". Both conditions,
 never either. A real caller is never cut: proven word by word in
