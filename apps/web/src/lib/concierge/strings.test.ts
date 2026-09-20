@@ -27,6 +27,23 @@ describe("the copy shown when a conversation has ended", () => {
   });
 });
 
+describe("the copy shown when a render token has expired (Minor, review of commit 129b43f)", () => {
+  /**
+   * A visitor who opens the page and comes back to type more than
+   * MAX_TOKEN_AGE_MS (30 minutes) later is not a spammer and never opened a
+   * conversation — `strings.ended` ("This chat is closed…") describes a chat
+   * that ran and reached a limit, which is a different situation and the
+   * wrong instruction (there is no "someone will follow up" to promise, and
+   * no recovery but a reload).
+   */
+  it("tells the visitor to refresh, distinct from the closed-chat copy", () => {
+    expect(EN.expired.toLowerCase()).toContain("refresh");
+    expect(EN.expired).not.toBe(EN.ended);
+    expect(ES.expired).not.toBe(ES.ended);
+    expect(ES.expired).toBeTruthy();
+  });
+});
+
 describe("the copy shown when a turn produced a lead and no words", () => {
   /**
    * A chat-completions turn that calls a tool routinely comes back with

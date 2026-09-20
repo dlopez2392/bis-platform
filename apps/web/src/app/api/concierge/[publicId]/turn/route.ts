@@ -47,7 +47,7 @@ import {
   CONCIERGE_ACCOUNT_WINDOW_MS, CONCIERGE_MAX_MESSAGE_CHARS,
 } from "@/lib/concierge/guards";
 import {
-  CAPTURE_LEAD_TOOL, parseCaptureLead, budgetNotice, splitName, WEB_TOOL_NOTICE,
+  CAPTURE_LEAD_TOOL, parseCaptureLead, budgetNotice, splitName,
 } from "@/lib/concierge/prompt";
 import { conciergeStrings } from "@/lib/concierge/strings";
 
@@ -120,8 +120,63 @@ export async function POST(
     // accessor makes those three indistinguishable on purpose.
     if (!profile) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
+    // The business name, timezone and OpenAI key, resolved together and
+    // ALWAYS before anything that spends a visitor's budget or inflates a
+    // counter. Minor (review of commit 129b43f): on turn 1 this used to run
+    // AFTER `createConciergeConversation`, so a misconfigured deployment (a
+    // flaky account read, or no OPENAI_API_KEY) burned a visitor's 3-per-10-
+    // minute IP budget and inflated the per-account daily counter on a turn
+    // that never reached the model. Called from both branches below, at the
+    // position that is actually before their own row write — turn 2+ already
+    // had this right (`claimConciergeTurn` is the thing that spends there,
+    // and it already ran after this).
+    // `accountId` is taken as a PARAMETER rather than closing over `profile`:
+    // TypeScript's narrowing of `if (!profile) return 404` above does not
+    // reach a nested function body, so a closure over `profile` re-widens to
+    // `VoiceProfileRow | null` here.
+    async function resolveAccountContext(accountId: string): Promise<
+      | { ok: true; businessName: string; timezone: string; apiKey: string }
+      | { ok: false; response: Response }
+    > {
+      // The name the visitor is told, and the zone "are you open now" is
+      // answered in. The BRAND columns, never `accounts.name`, which is the
+      // agency's internal label for the company ("Rio Roofing — trial") and
+      // has reached customers three times. Same resolver as the phone path
+      // and the web demo, so one company cannot be two names depending on
+      // which door someone came through.
+      const { data: account, error: accountError } = await db
+        .from("accounts").select("timezone, brand_name")
+        .eq("id", accountId).single();
+      if (accountError || !account) {
+        log("refused: account lookup failed", {
+          accountId, error: accountError?.message,
+        });
+        return { ok: false, response: NextResponse.json({ error: "unavailable" }, { status: 503 }) };
+      }
+      const acct = account as unknown as { timezone: string; brand_name: string | null };
+      // Only `brandName` is read (`brandDisplayName` reads nothing else), so
+      // only the two columns above are selected — which is also what makes
+      // the "never the internal label" assertion in the tests meaningful.
+      const businessName = brandDisplayName({
+        brandName: acct.brand_name, brandLogoPath: null, brandColor: null,
+        brandNeutral: null, brandCorners: null, brandType: null,
+        brandMode: null, replyToEmail: null,
+      } as Branding);
+      // The key is checked BEFORE the claim: a turn claimed against an
+      // unconfigured deployment would spend a visitor's budget on nothing.
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey) {
+        log("refused: no OPENAI_API_KEY");
+        return { ok: false, response: NextResponse.json({ error: "unavailable" }, { status: 503 }) };
+      }
+      return { ok: true, businessName, timezone: acct.timezone, apiKey };
+    }
+
     let conversationId: string;
     let conversation: ConciergeConversationRow;
+    let businessName: string;
+    let timezone: string;
+    let apiKey: string;
 
     if (!priorId) {
       // ── TURN 1 ──────────────────────────────────────────────────────────
@@ -141,6 +196,15 @@ export async function POST(
           publicId, honeypot: !!honeypot,
           token: verdict.ok ? "ok" : verdict.reason,
         });
+        // A token past MAX_TOKEN_AGE_MS is not a spammer — it is a visitor
+        // who opened the page and came back later than the window allows.
+        // `strings.ended` describes a chat that RAN and reached a limit;
+        // this one never opened, and "refresh" is the only real recovery.
+        // Naming this one case costs the anti-oracle nothing: a spammer can
+        // only mint an EARLIER token, never trigger `expired` on purpose.
+        if (!honeypot && !verdict.ok && verdict.reason === "expired") {
+          return quiet("", strings.expired, true);
+        }
         // `ended`, not an error: the composer closes and the copy is a close.
         return quiet("", strings.ended, true);
       }
@@ -172,6 +236,12 @@ export async function POST(
         log("refused: counter failed", { error: String(e) });
         return NextResponse.json({ error: "unavailable" }, { status: 503 });
       }
+
+      // MOVED here, above `createConciergeConversation` — see the comment on
+      // `resolveAccountContext` above.
+      const ctx1 = await resolveAccountContext(profile.account_id);
+      if (!ctx1.ok) return ctx1.response;
+      businessName = ctx1.businessName; timezone = ctx1.timezone; apiKey = ctx1.apiKey;
 
       // Re-parsed here rather than trusted: the page sends `parseAttribution`
       // output, but this is a public POST and anything can send anything.
@@ -208,39 +278,12 @@ export async function POST(
         return NextResponse.json({ error: "forbidden" }, { status: 403 });
       }
       conversation = existing;
-    }
 
-    // The name the visitor is told, and the zone "are you open now" is
-    // answered in. The BRAND columns, never `accounts.name`, which is the
-    // agency's internal label for the company ("Rio Roofing — trial") and has
-    // reached customers three times. Same resolver as the phone path and the
-    // web demo, so one company cannot be two names depending on which door
-    // someone came through.
-    const { data: account, error: accountError } = await db
-      .from("accounts").select("timezone, brand_name")
-      .eq("id", profile.account_id).single();
-    if (accountError || !account) {
-      log("refused: account lookup failed", {
-        accountId: profile.account_id, error: accountError?.message,
-      });
-      return NextResponse.json({ error: "unavailable" }, { status: 503 });
-    }
-    const acct = account as unknown as { timezone: string; brand_name: string | null };
-    // Only `brandName` is read (`brandDisplayName` reads nothing else), so
-    // only the two columns above are selected — which is also what makes the
-    // "never the internal label" assertion in the tests meaningful.
-    const businessName = brandDisplayName({
-      brandName: acct.brand_name, brandLogoPath: null, brandColor: null,
-      brandNeutral: null, brandCorners: null, brandType: null,
-      brandMode: null, replyToEmail: null,
-    } as Branding);
-
-    // The key is checked BEFORE the claim: a turn claimed against an
-    // unconfigured deployment would spend a visitor's budget on nothing.
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      log("refused: no OPENAI_API_KEY");
-      return NextResponse.json({ error: "unavailable" }, { status: 503 });
+      // Unchanged position: already ran before `claimConciergeTurn`, the
+      // thing that spends on this branch.
+      const ctx2 = await resolveAccountContext(profile.account_id);
+      if (!ctx2.ok) return ctx2.response;
+      businessName = ctx2.businessName; timezone = ctx2.timezone; apiKey = ctx2.apiKey;
     }
 
     // THE TURN CAP. Atomic, so two turns posted together cannot both pass.
@@ -250,7 +293,11 @@ export async function POST(
     const claimed = await claimConciergeTurn(db, conversationId, CONCIERGE_MAX_TURNS);
     if (claimed === null) {
       log("ended: turn cap", { conversationId });
-      return quiet(conversationId, strings.ended, true);
+      // EMPTY, not `strings.ended` (Minor, review of commit 129b43f): the
+      // chat component already renders a fixed `.bis-concierge-ended`
+      // paragraph carrying that exact sentence, so the old value printed it
+      // twice — once as a reply bubble, once as the paragraph below it.
+      return quiet(conversationId, "", true);
     }
 
     const system = buildSystemPrompt({
@@ -262,7 +309,7 @@ export async function POST(
       // forces it: no booking tool reaches this session, and a prompt that
       // promised booking would promise something that cannot happen here.
       bookingEnabled: false,
-      timezone: acct.timezone, slotDurationMinutes: 30,
+      timezone, slotDurationMinutes: 30,
       afterHours: profile.after_hours, callerNumber: null,
       // Inert while `bookingEnabled` is false — `meetingType` and
       // `slotDurationMinutes` are read only inside that branch of
@@ -271,15 +318,25 @@ export async function POST(
       // anonymous request to answer a question the prompt never asks.
       meetingType: "in_person",
       medium: "web",
+      // `buildSystemPrompt` itself resolves the one tool this surface has,
+      // and never advertises take_message/log_transcript on the web — see
+      // its `onWeb` branches. No append needed here (review of commit
+      // 129b43f, Important 2: the old `WEB_TOOL_NOTICE` append recreated the
+      // exact contradiction it existed to forbid, because it ran AFTER a
+      // base prompt that still told the model to take a message).
     }, new Date())
-      // The one tool this surface actually has. `buildSystemPrompt` names two
-      // more (take_message, log_transcript) that only the phone session is
-      // given, and a model that believes it has them will say it used them.
-      + WEB_TOOL_NOTICE
+      // `remaining` counts the reply being WRITTEN (Important 3): `claimed`
+      // is the POST-increment count, 1…CONCIERGE_MAX_TURNS, so on the final
+      // permitted turn `claimed === CONCIERGE_MAX_TURNS` and this reply IS
+      // the last one — `+ 1` is what makes `remaining` include it rather
+      // than only the replies after it. Without it, `budgetNotice` reads
+      // "1 more reply" on the very reply that is the last one, telling the
+      // model the close comes next turn on the turn it must close now.
+      //
       // The ask for a name and a number has to happen while the visitor can
       // still type: the composer disables itself the moment this route
       // answers `ended: true`.
-      + budgetNotice(CONCIERGE_MAX_TURNS - claimed);
+      + budgetNotice(CONCIERGE_MAX_TURNS - claimed + 1);
 
     const messages = [
       { role: "system", content: system },
@@ -318,15 +375,42 @@ export async function POST(
       return NextResponse.json({ error: "unavailable" }, { status: 503 });
     }
 
+    // Lead capture, at most once per conversation, and BEFORE `spoken` is
+    // decided (Important 1, review of commit 129b43f). The old code decided
+    // `spoken` from `toolArgs` alone, before this ran — so a model that
+    // called capture_lead with no name, or whose lead reached an unpublished
+    // form, a lost race, or a throw inside `fileLead`, still produced
+    // "Thanks. I have passed your details to the team…", and THAT sentence
+    // was stored as Sofía's own words in the transcript below. `filed`
+    // starts from the row's own `submission_id`: a lead already on file from
+    // an earlier turn is genuinely captured, even on a turn that does not
+    // call the tool again.
+    let filed = !!conversation.submission_id;
+    if (toolArgs && !conversation.submission_id) {
+      const lead = parseCaptureLead(toolArgs);
+      if (lead) {
+        filed = await fileLead({
+          db, accountId: profile.account_id, formId: profile.concierge_form_id,
+          conversationId, attribution: conversation.attribution, locale, ipHash,
+          origin, lead,
+        });
+      } else {
+        log("capture_lead ignored: unusable arguments", { conversationId });
+      }
+    }
+
     // A turn that calls a tool routinely comes back with `content: null`, so
-    // the fallback depends on WHICH kind of empty this is — "something went
-    // wrong" is the last thing to show someone who just handed over their
-    // details.
-    const spoken = reply || (toolArgs ? strings.captured : strings.unavailable);
+    // the fallback depends on whether a lead was actually filed — `captured`
+    // only when `fileLead` (or an earlier turn) really did; a line that
+    // promises nothing otherwise, never a claim about the details this
+    // visitor just handed over.
+    const spoken = reply || (filed ? strings.captured : strings.unavailable);
 
     const now = new Date().toISOString();
     try {
-      // What the visitor read is what the transcript stores.
+      // What the visitor read is what the transcript stores — recorded
+      // AFTER `spoken` is decided, so a lie about what was filed can never
+      // be written down as Sofía's own words.
       await appendConciergeTurns(db, conversationId, [
         { role: "visitor", text, at: now },
         { role: "assistant", text: spoken, at: now },
@@ -335,22 +419,6 @@ export async function POST(
       // The answer is already paid for and already useful. Losing it because
       // the record of it could not be written would be the worse trade.
       log("transcript append failed", { conversationId, error: String(e) });
-    }
-
-    // Lead capture, at most once per conversation. The row's own
-    // `submission_id` settles the sequential case cheaply; the boolean from
-    // `setConciergeSubmission` settles the concurrent one.
-    if (toolArgs && !conversation.submission_id) {
-      const lead = parseCaptureLead(toolArgs);
-      if (lead) {
-        await fileLead({
-          db, accountId: profile.account_id, formId: profile.concierge_form_id,
-          conversationId, attribution: conversation.attribution, locale, ipHash,
-          origin, lead,
-        });
-      } else {
-        log("capture_lead ignored: unusable arguments", { conversationId });
-      }
     }
 
     return quiet(conversationId, spoken, false);
@@ -374,12 +442,16 @@ export async function POST(
  * will ever act on, and it would inflate the form's submission count on the
  * Forms screen. `enrich` runs only on the winner, so one visitor can never
  * become two contacts, two threads and two alerts.
+ *
+ * Returns whether a submission was actually created and enriched — the
+ * route's own `spoken` line depends on this (Important 1, review of commit
+ * 129b43f): it must never thank a visitor for details that were not stored.
  */
 async function fileLead(ctx: {
   db: Db; accountId: string; formId: string; conversationId: string;
   attribution: Record<string, string>; locale: "en" | "es"; ipHash: string;
   origin: string | null; lead: Lead;
-}): Promise<void> {
+}): Promise<boolean> {
   const { db, lead } = ctx;
   try {
     // Lazy for the same reason as the handler's own import, and cached — the
@@ -394,7 +466,7 @@ async function fileLead(ctx: {
     const form = await getForm(db, ctx.accountId, ctx.formId);
     if (!form || form.status !== "published") {
       log("lead not filed: form unavailable", { formId: ctx.formId, status: form?.status });
-      return;
+      return false;
     }
 
     // Mapped by KIND, not by position: kinds this form does not carry are
@@ -418,7 +490,7 @@ async function fileLead(ctx: {
       .filter((a) => a.value !== "");
     if (!answers.length) {
       log("lead not filed: nothing the form can carry", { formId: form.id });
-      return;
+      return false;
     }
 
     // SubmissionInput's optional fields are `?: string`, NOT `| null`
@@ -438,7 +510,7 @@ async function fileLead(ctx: {
       log("lead not filed: already claimed", {
         conversationId: ctx.conversationId, cleanup: error?.message ?? "ok",
       });
-      return;
+      return false;
     }
 
     await enrich(
@@ -453,9 +525,11 @@ async function fileLead(ctx: {
       true,
     );
     log("lead filed", { conversationId: ctx.conversationId, submissionId: submission.id });
+    return true;
   } catch (e) {
     // A failed lead must not cost the visitor their answer — they are
     // mid-conversation and the transcript is already stored.
     log("lead capture failed", { conversationId: ctx.conversationId, error: String(e) });
+    return false;
   }
 }

@@ -69,27 +69,6 @@ export function splitName(fullName: string): { first: string; last: string } {
   return { first, last: parts.join(" ") };
 }
 
-/**
- * What the model may claim to have DONE on this surface.
- *
- * `buildSystemPrompt`'s TOOLS block names `take_message` and `log_transcript`
- * on every medium — they are the phone path's floor, and the phone session
- * really is given them. The web session is given exactly one tool, so a model
- * reading that block will offer to "take a message", call nothing (there is
- * nothing to call), and tell the visitor it is done — which is the prompt's
- * own "never claim something is recorded without a successful tool result"
- * rule broken by the prompt itself, and a lead that exists only in a
- * transcript nobody reads.
- *
- * Appended by the route rather than added to `system-prompt.ts` because the
- * ROUTE is what decides the tool array. One place decides both.
- */
-export const WEB_TOOL_NOTICE = [
-  "",
-  "",
-  "TOOLS ON THIS SURFACE — capture_lead is the ONLY tool you have here. take_message and log_transcript do not exist on the website: do not mention them, and never say you have taken a message, logged, sent, or passed anything on unless capture_lead came back successful. If you cannot answer something, say the team will follow up and use capture_lead to get their name and either an email address or a phone number.",
-].join("\n");
-
 /** How close to the cap Sofía is told her budget. Three exchanges is enough
  *  to ask for a name and a way to reach them and still hear an answer. */
 export const CONCIERGE_BUDGET_WARN_TURNS = 3;
@@ -103,19 +82,32 @@ export const CONCIERGE_BUDGET_WARN_TURNS = 3;
  * The ask has to happen while the visitor can still type, which is here —
  * and the last reply is then a close rather than a request.
  *
+ * `remaining` counts the reply being WRITTEN, not the ones after it (Important
+ * 3, review of commit 129b43f). The caller passes
+ * `CONCIERGE_MAX_TURNS - claimed + 1`, so `remaining === 1` means THIS reply
+ * — the one this notice is attached to — is the last one the visitor will
+ * ever read a response to; there is no "one more" coming. The old wording
+ * said "1 more reply" at that exact point, which told the model the close
+ * comes next turn on the turn it had to close NOW — the incoherence the
+ * turn-cap `ended` response was built to avoid, displaced by one turn.
+ *
  * Model-facing text, not customer copy: what the visitor reads is whatever
  * Sofía writes from it.
  */
 export function budgetNotice(remaining: number): string {
   if (remaining > CONCIERGE_BUDGET_WARN_TURNS) return "";
-  const count = remaining <= 1
-    ? "1 more reply"
-    : `${remaining} more replies`;
+  if (remaining <= 1) {
+    return [
+      "",
+      "",
+      "THIS CHAT IS ALMOST OVER — THIS IS YOUR LAST REPLY. The visitor cannot write again after this one.",
+      "Do not ask a question. Close warmly: thank them, and if you already have their name and either an email address or a phone number, say the team will follow up. If you do not have a way to reach them, say so plainly rather than promising a follow-up you cannot deliver.",
+    ].join("\n");
+  }
   return [
     "",
     "",
-    `THIS CHAT IS ALMOST OVER — you have ${count} and then the visitor cannot write again.`,
+    `THIS CHAT IS ALMOST OVER — you have ${remaining} replies left, including this one, before the visitor cannot write again.`,
     "If you do not already have their name and either an email address or a phone number, ask for them NOW, in this reply, before anything else, and call capture_lead the moment you have them.",
-    "On your last reply do not ask a question: thank them and say the team will follow up.",
   ].join("\n");
 }

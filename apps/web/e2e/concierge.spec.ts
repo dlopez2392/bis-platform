@@ -57,6 +57,25 @@ let widget: {
 let skipReason = "";
 
 /**
+ * State captured incrementally through `beforeAll`, so `afterAll` can restore
+ * exactly what was actually mutated even if a LATER step throws.
+ *
+ * IMPORTANT (review of commit 129b43f): `afterAll` used to guard its whole
+ * body on `if (!widget) return`, and `widget` is assigned only after
+ * `enableConcierge` — the LAST call in `beforeAll`. If `enableConcierge`
+ * threw, `upsertVoiceProfile` had already overwritten the fixture account's
+ * real voice profile, `widget` stayed null, and `afterAll` returned without
+ * restoring it — the exact state that turned `setup.spec.ts:537` red once
+ * before, on a string diff that pointed nowhere near this file (see the note
+ * on `priorProfile` below). The restore must be guarded on what was actually
+ * READ and WRITTEN, not on whether the LAST step succeeded.
+ * `public-form-theme.spec.ts` (capture, then restore in a real `finally`) is
+ * the precedent.
+ */
+let fixtureRef: ClientFixture | null = null;
+let createdFormId: string | null = null;
+
+/**
  * The fixture account's voice profile EXACTLY as this file found it, restored
  * in afterAll.
  *
@@ -71,8 +90,13 @@ let skipReason = "";
  * `concierge` lands before `setup` and the leak was guaranteed, not likely.
  * public-form-theme.spec.ts restores the fixture's branding in a `finally`
  * for exactly this reason.
+ *
+ * `priorProfileCaptured` is the actual restore guard — TRUE the moment the
+ * read above succeeds, whether or not a row existed (`priorProfile` staying
+ * null IS a captured state: "there was none before").
  */
 let priorProfile: VoiceProfileRow | null = null;
+let priorProfileCaptured = false;
 
 test.beforeAll(async () => {
   const fixture = readFixture();
@@ -80,6 +104,7 @@ test.beforeAll(async () => {
     skipReason = "No client fixture — the setup project creates it; run the full suite.";
     return;
   }
+  fixtureRef = fixture;
   const db = serviceDb();
   const stamp = Date.now();
   const { id: formId } = await createForm(db, fixture.accountId, {
@@ -90,10 +115,12 @@ test.beforeAll(async () => {
       { key: "message", kind: "message", label: "What do you need?", required: false },
     ],
   }, fixture.clerkUserId);
+  createdFormId = formId;
   // Published, not draft: the lead the widget files lands through the same
   // pipeline the public form uses, and that refuses anything else.
   await updateForm(db, fixture.accountId, formId, { status: "published" }, fixture.clerkUserId);
   priorProfile = await getVoiceProfile(db, fixture.accountId);
+  priorProfileCaptured = true;
   await upsertVoiceProfile(db, fixture.accountId, {
     persona_name: "Sofía", greeting_en: GREETING, greeting_es: GREETING,
     facts: "The workshop builds custom tables and benches. Open weekdays 8am-5pm.",
@@ -110,36 +137,46 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  if (!widget) return;
+  // Guarded on what `beforeAll` actually READ, not on `widget` — see the note
+  // above. `fixtureRef` is set before anything else runs; if `readFixture()`
+  // itself found nothing, there is truly nothing to restore.
+  if (!fixtureRef) return;
+  const fixture = fixtureRef;
   const db = serviceDb();
+
   // Best effort, in the order the foreign keys allow. The fixture account is
   // deleted wholesale by auth.teardown, but a run killed before that leaves
   // these behind, and a stray enabled concierge on a stray account is exactly
-  // the kind of leftover the sweep exists to stop accumulating.
-  await db.from("concierge_conversations").delete().eq("account_id", widget.accountId);
-  await db.from("form_submissions").delete().eq("form_id", widget.formId);
-  await db.from("forms").delete().eq("id", widget.formId);
+  // the kind of leftover the sweep exists to stop accumulating. Guarded on
+  // `createdFormId` rather than `widget`: `createForm` can succeed even when
+  // a LATER step (`enableConcierge`) throws.
+  if (createdFormId) {
+    await db.from("concierge_conversations").delete().eq("account_id", fixture.accountId);
+    await db.from("form_submissions").delete().eq("form_id", createdFormId);
+    await db.from("forms").delete().eq("id", createdFormId);
+  }
 
+  if (!priorProfileCaptured) return;
   if (priorProfile) {
     // Every column of the row, named rather than spread, so a column added to
     // `VoiceProfileRow` later shows up here as a typecheck-visible omission
     // instead of silently not being restored. The concierge flags are part of
     // it, which is why `disableConcierge` is not also called.
     const p = priorProfile;
-    await upsertVoiceProfile(db, widget.accountId, {
+    await upsertVoiceProfile(db, fixture.accountId, {
       persona_name: p.persona_name, greeting_en: p.greeting_en, greeting_es: p.greeting_es,
       facts: p.facts, services: p.services, languages: p.languages,
       booking_enabled: p.booking_enabled, after_hours: p.after_hours, enabled: p.enabled,
       textback_enabled: p.textback_enabled, textback_body: p.textback_body,
       public_id: p.public_id, concierge_enabled: p.concierge_enabled,
       concierge_form_id: p.concierge_form_id,
-    }, widget.actorId);
+    }, fixture.clerkUserId);
   } else {
     // There was no profile before this file ran, so the only faithful restore
     // is for there to be none after. `disableConcierge` is deliberately NOT
     // called first: it throws when it matches no row, and there is about to
     // be no row.
-    await db.from("voice_profiles").delete().eq("account_id", widget.accountId);
+    await db.from("voice_profiles").delete().eq("account_id", fixture.accountId);
   }
 });
 

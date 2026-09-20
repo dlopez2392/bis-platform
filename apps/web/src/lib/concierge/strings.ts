@@ -13,6 +13,11 @@ const STRINGS = {
     // no longer resolves — `claimConciergeTurn` returns null for both — so it
     // promises nothing it cannot know.
     ended: "This chat is closed. If you shared your name and a way to reach you, someone from the team will follow up.",
+    // A different situation from `ended`, and the wrong copy for it: this is
+    // a visitor who opened the page and came back to type more than 30
+    // minutes later, not a chat that ran and reached its limit. There is
+    // nothing to follow up on yet, and no recovery but a reload.
+    expired: "This page has been open a while — refresh to start a conversation.",
     // The turn that files a lead usually comes back with no words at all — a
     // chat-completions reply that calls a tool routinely has `content: null`
     // — and "Something went wrong" is the last thing a visitor who has just
@@ -28,6 +33,7 @@ const STRINGS = {
     thinking: "Escribiendo…",
     unavailable: "Algo salió mal. Vuelve a intentarlo.",
     ended: "Esta conversación está cerrada. Si nos diste tu nombre y una forma de contactarte, alguien del equipo te responderá.",
+    expired: "Esta página ha estado abierta un buen rato — actualiza la página para iniciar una conversación.",
     captured: "Gracias. Ya le pasé tus datos al equipo y alguien te contactará.",
     poweredBy: "Con tecnología de BIS",
     title: "Chat",

@@ -63,7 +63,11 @@ export function ConciergeChat({
       if (!res.ok) throw new Error(String(res.status));
       const data = await res.json() as { conversationId: string; reply: string; ended: boolean };
       conversationId.current = data.conversationId;
-      setMessages((m) => [...m, { role: "assistant", text: data.reply }]);
+      // EMPTY on purpose at the turn cap (route.ts): the fixed
+      // `.bis-concierge-ended` paragraph below already carries that close,
+      // so pushing an empty bubble would print nothing useful and leave a
+      // blank line in the log.
+      if (data.reply) setMessages((m) => [...m, { role: "assistant", text: data.reply }]);
       if (data.ended) setEnded(true);
     } catch {
       // One sentence, and the composer stays usable — a visitor mid-question

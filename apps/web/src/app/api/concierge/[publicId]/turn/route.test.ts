@@ -359,7 +359,12 @@ describe("POST /api/concierge/[publicId]/turn — what a refusal costs", () => {
     expect(dbFns.createConciergeConversation).not.toHaveBeenCalled();
   });
 
-  it("refuses a filled honeypot with the SAME body a good turn gets", async () => {
+  // Minor (review of commit 129b43f): renamed from "…SAME body a good turn
+  // gets" — the assertion below only ever compared `Object.keys(...).sort()`,
+  // so it proves the response SHAPE matches, not the body. The anti-oracle
+  // intent (a widget that answers differently tells a spammer which guard it
+  // tripped) is unchanged; only the name now says what is actually checked.
+  it("refuses a filled honeypot with the SAME response SHAPE a good turn gets", async () => {
     const good = await (await firstTurn()).json();
     fetchMock.mockClear();
     dbFns.createConciergeConversation.mockClear();
@@ -379,6 +384,26 @@ describe("POST /api/concierge/[publicId]/turn — what a refusal costs", () => {
   it("refuses a first turn whose token was minted for another widget", async () => {
     await firstTurn({ [RENDER_TOKEN_FIELD]: signRenderToken(Date.now() - 3_000, "someoneelse") });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // Minor (review of commit 129b43f): a visitor who opened the page and came
+  // back to type more than MAX_TOKEN_AGE_MS (30 minutes) later never opened
+  // a conversation — `strings.ended` ("This chat is closed…") describes a
+  // chat that ran and reached a limit, and gives no path back but a reload.
+  it("answers a first message typed too long after the page rendered with a distinct 'refresh' line, same shape", async () => {
+    const res = await firstTurn({
+      [RENDER_TOKEN_FIELD]: signRenderToken(Date.now() - 31 * 60_000, PUBLIC_ID),
+    });
+    expect(res.status).toBe(200);
+    // MUTATION: drop the `verdict.reason === "expired"` branch — this FAILS,
+    // and an expired page reads "This chat is closed" for a chat that never
+    // opened.
+    expect(await res.json()).toEqual({
+      conversationId: "", reply: conciergeStrings("en").expired, ended: true,
+    });
+    expect(conciergeStrings("en").expired).not.toBe(conciergeStrings("en").ended);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(dbFns.createConciergeConversation).not.toHaveBeenCalled();
   });
 
   it("does NOT re-check the render token on turn 2, even hours later", async () => {
@@ -419,9 +444,12 @@ describe("POST /api/concierge/[publicId]/turn — what a refusal costs", () => {
     dbFns.claimConciergeTurn.mockResolvedValue(null);
     const res = await laterTurn();
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({
-      conversationId: "c1", reply: conciergeStrings("en").ended, ended: true,
-    });
+    // Minor (review of commit 129b43f): `reply` is now EMPTY here, not
+    // `strings.ended` — the chat component already renders a fixed
+    // `.bis-concierge-ended` paragraph carrying that exact sentence, so the
+    // old value printed it twice. MUTATION: pass `strings.ended` back as
+    // `reply` — this FAILS.
+    expect(await res.json()).toEqual({ conversationId: "c1", reply: "", ended: true });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -437,6 +465,11 @@ describe("POST /api/concierge/[publicId]/turn — what a refusal costs", () => {
     const res = await firstTurn();
     expect(res.status).toBe(503);
     expect(fetchMock).not.toHaveBeenCalled();
+    // Minor (review of commit 129b43f): this is turn 1. MUTATION: move the
+    // account read back below `createConciergeConversation` — this FAILS,
+    // and a misconfigured deployment burns a visitor's conversation budget
+    // on a turn that never reaches the model.
+    expect(dbFns.createConciergeConversation).not.toHaveBeenCalled();
   });
 
   it("refuses when no OpenAI key is configured, and claims no turn for it", async () => {
@@ -445,6 +478,20 @@ describe("POST /api/concierge/[publicId]/turn — what a refusal costs", () => {
     expect(res.status).toBe(503);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(dbFns.claimConciergeTurn).not.toHaveBeenCalled();
+  });
+
+  // Minor (review of commit 129b43f): the case above runs on turn 2, where
+  // the key check already sat above `claimConciergeTurn`. Turn 1 is the bug —
+  // the key check sat BELOW `createConciergeConversation`.
+  it("refuses when no OpenAI key is configured on turn 1, without creating a conversation row", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
+    const res = await firstTurn();
+    expect(res.status).toBe(503);
+    expect(fetchMock).not.toHaveBeenCalled();
+    // MUTATION: move the key check back below `createConciergeConversation`
+    // — this FAILS, and a deployment with no key inflates the per-IP and
+    // per-account conversation counters on every visitor who ever tries it.
+    expect(dbFns.createConciergeConversation).not.toHaveBeenCalled();
   });
 });
 
@@ -459,11 +506,47 @@ describe("POST /api/concierge/[publicId]/turn — the budget Sofía is told abou
     dbFns.claimConciergeTurn.mockResolvedValue(CONCIERGE_MAX_TURNS - 2);
     await laterTurn();
     const system = sentToModel().messages[0]!.content;
+    // `remaining` counts the reply being written (Important 3): claimed is
+    // 2 short of the cap, so 3 replies — this one plus 2 more — remain.
     // MUTATION: drop the budgetNotice append — this FAILS, and the cap
     // arrives with no name and no number, on a composer that has just
     // disabled itself.
-    expect(system).toContain("2 more replies");
+    expect(system).toContain("3 replies left");
     expect(system).toContain("ALMOST OVER");
+  });
+
+  // Important 3 (review of commit 129b43f): `claimConciergeTurn` returns
+  // the POST-increment count, so `claimed === CONCIERGE_MAX_TURNS` on the
+  // FINAL permitted turn — the reply being written right now IS the last
+  // one, not one of two more to come.
+  it("tells her THIS is her last reply on the final permitted turn, not one more to come", async () => {
+    dbFns.claimConciergeTurn.mockResolvedValue(CONCIERGE_MAX_TURNS);
+    await laterTurn();
+    const system = sentToModel().messages[0]!.content;
+    // A correctness pin, not a mutation-isolating test on its own: reverting
+    // the route's `+ 1` formula in isolation does NOT turn this red, because
+    // `budgetNotice`'s `remaining <= 1` branch renders identically for
+    // `remaining === 0` and `remaining === 1` — verified by running exactly
+    // that mutation (see the report). The test below is the one that
+    // isolates it.
+    expect(system.toLowerCase()).toContain("last reply");
+    expect(system).not.toContain("1 more reply");
+  });
+
+  // The formula fix is only OBSERVABLE, on its own, at the exact turn where
+  // `remaining` crosses from the ">= 2" branch into the "<= 1" branch — one
+  // turn EARLIER than the true cap under the old formula. This is the
+  // mutation-isolating test: reverting `CONCIERGE_MAX_TURNS - claimed + 1`
+  // to `CONCIERGE_MAX_TURNS - claimed` moves this exact turn's text from
+  // "2 replies left" to "THIS IS YOUR LAST REPLY", one turn too soon.
+  it("does not tell her to close one reply early — the second-to-last permitted turn still has two", async () => {
+    dbFns.claimConciergeTurn.mockResolvedValue(CONCIERGE_MAX_TURNS - 1);
+    await laterTurn();
+    const system = sentToModel().messages[0]!.content;
+    // MUTATION: revert to `CONCIERGE_MAX_TURNS - claimed` — this FAILS, and
+    // the model is told to close a reply before the actual last one.
+    expect(system).toContain("2 replies left");
+    expect(system.toLowerCase()).not.toContain("last reply");
   });
 });
 
@@ -521,12 +604,25 @@ describe("POST /api/concierge/[publicId]/turn — filing the lead", () => {
       .toEqual(["n", "m"]);
   });
 
-  it("files nothing when the model called the tool with no name", async () => {
+  it("files nothing when the model called the tool with no name, and does not thank them for details it never stored", async () => {
     fetchMock.mockResolvedValue(modelCallsCaptureLead({ email: "ana@x.co", need: "a table" }));
     const res = await laterTurn();
     expect(res.status).toBe(200);
     expect(dbFns.createSubmission).not.toHaveBeenCalled();
     expect(enrichMock).not.toHaveBeenCalled();
+    // Important 1 (review of commit 129b43f): `reply` used to be computed
+    // from `toolArgs` alone, BEFORE `fileLead` ran — so a visitor who gave
+    // an email and a need but no name read "Thanks. I have passed your
+    // details to the team…" while nothing was written, and that exact
+    // sentence was stored as Sofía's own words in the transcript.
+    // MUTATION: choose `strings.captured` before `fileLead` runs (revert to
+    // `reply || (toolArgs ? strings.captured : strings.unavailable)`) — this
+    // FAILS.
+    const body = await res.json() as { reply: string };
+    expect(body.reply).not.toBe(conciergeStrings("en").captured);
+    expect(body.reply).toBe(conciergeStrings("en").unavailable);
+    const [, , turns] = dbFns.appendConciergeTurns.mock.calls[0]!;
+    expect((turns as { text: string }[])[1]!.text).toBe(body.reply);
   });
 
   it("files at most one submission per conversation", async () => {
@@ -561,11 +657,15 @@ describe("POST /api/concierge/[publicId]/turn — filing the lead", () => {
     expect((await res.json() as { reply: string }).reply).toBe("Got it.");
   });
 
-  it("files nothing when the destination form is no longer published", async () => {
+  it("files nothing when the destination form is no longer published, and does not claim it filed anyway", async () => {
     dbFns.getForm.mockResolvedValue({ ...LEAD_FORM, status: "draft" as const });
     fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", need: "a table" }));
-    await laterTurn();
+    const res = await laterTurn();
     expect(dbFns.createSubmission).not.toHaveBeenCalled();
     expect(enrichMock).not.toHaveBeenCalled();
+    // Important 1: the reply used to be decided BEFORE `fileLead` ran, so an
+    // unpublished form still produced "Thanks. I have passed your details…".
+    const body = await res.json() as { reply: string };
+    expect(body.reply).not.toBe(conciergeStrings("en").captured);
   });
 });

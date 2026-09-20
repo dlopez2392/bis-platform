@@ -14,23 +14,36 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     month: "long", day: "numeric", hour: "numeric", minute: "2-digit",
   }).format(now);
 
+  // The two sentences that were phone-shaped. Everything else in this prompt
+  // — identity, language, the business facts, the HARD LIMITS block — is the
+  // tenant's own and is identical on both surfaces. There is ONE Sofía; this
+  // is not a second prompt. Declared before `wouldRatherTalkToAPerson` below,
+  // which needs it.
+  const onWeb = input.medium === "web";
+
+  // Every place this prompt would otherwise tell Sofía to "take a message" —
+  // a tool that does not exist on the web — resolves to this instead. Review
+  // finding (commit 129b43f): the old `WEB_TOOL_NOTICE` was appended AFTER a
+  // base prompt carrying six such sentences, so the notice forbade CLAIMING a
+  // message was taken without stopping the model from OFFERING one in the
+  // first place. Fixed at the source, not with an appendix.
+  const CAPTURE_LEAD_FOLLOWUP =
+    "use capture_lead to get their name and a way to reach them, and say the team will follow up";
+
   // What Sofía may OFFER someone who would rather talk to a human, and the
   // reason this is conditional rather than a constant: the offer is a
   // present-tense promise, and it is only true for an account that has given
   // us a number to dial. `handoffAvailable` is resolved per call
   // (`api/voice/incoming/route.ts` step 9b) and defaults to false, so a
-  // profile with no transfer number — and the web demo, which has no phone
-  // leg at all — gets the take-a-message sentence this prompt has always
-  // carried, byte for byte.
-  const wouldRatherTalkToAPerson = input.handoffAvailable
-    ? "offer to put them through to someone on the team"
-    : "offer to take a message";
+  // profile with no transfer number gets the take-a-message sentence this
+  // prompt has always carried, byte for byte — ON THE PHONE. The web has no
+  // take_message tool at all, so it never reaches that fallback either way.
+  const wouldRatherTalkToAPerson = onWeb
+    ? CAPTURE_LEAD_FOLLOWUP
+    : input.handoffAvailable
+      ? "offer to put them through to someone on the team"
+      : "offer to take a message";
 
-  // The two sentences that were phone-shaped. Everything else in this prompt
-  // — identity, language, the business facts, the HARD LIMITS block — is the
-  // tenant's own and is identical on both surfaces. There is ONE Sofía; this
-  // is not a second prompt.
-  const onWeb = input.medium === "web";
   const role = onWeb
     ? `the assistant on the website for ${input.businessName}`
     : `the phone receptionist for ${input.businessName}`;
@@ -60,7 +73,9 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     `The current date and time is ${currentDateTime} (${input.timezone}).`,
     input.callerNumber
       ? `The caller is calling from ${input.callerNumber}. Treat that as their callback number unless they give a different one.`
-      : `The caller's number is not visible. Ask for a callback number when you need one.`,
+      : onWeb
+        ? "You do not have a way to reach them yet. Ask for an email address or a phone number when you need one, and use capture_lead to record it."
+        : "The caller's number is not visible. Ask for a callback number when you need one.",
     "",
     `WHAT YOU KNOW ABOUT ${input.businessName.toUpperCase()} (answer from this and nothing else):`,
     input.facts,
@@ -69,14 +84,29 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     "HARD LIMITS:",
     `- Never invent facts about ${input.businessName} — no capabilities, client names, statistics, or timelines that are not stated above.`,
     `- Never quote a price, rate, or estimate unless one is stated above. If asked, say the business will confirm pricing and offer to take their details.`,
-    "- If you do not know something, say so and take a message rather than guessing.",
+    onWeb
+      ? "- If you do not know something, say so, and use capture_lead to get their name and a way to reach them so the team can follow up."
+      : "- If you do not know something, say so and take a message rather than guessing.",
     "- Never give legal, medical, or compliance advice.",
     "",
     "TOOLS — you MUST use tools for anything that reads or changes real state. Never claim something is recorded or booked without a successful tool result:",
     "- capture_lead(fields) — record who the caller is and what they need. Required fields: fullName, need. Also capture when offered: email, businessName.",
-    "- take_message(body, callbackNumber) — when you cannot help, when a human must call back, or when a request cannot be completed.",
-    "- log_transcript is called automatically; never mention it.",
   );
+
+  // take_message and log_transcript are given to the phone session only
+  // (`session-config.ts`'s tool array). A model told it has them on the web
+  // will SAY it took a message that nothing recorded — the exact defect this
+  // review found in `WEB_TOOL_NOTICE`'s old append-only placement.
+  if (onWeb) {
+    lines.push(
+      "- capture_lead is the ONLY tool you have here. take_message and log_transcript do not exist on the website: do not mention them, and never say you have taken a message, logged, sent, or passed anything on unless capture_lead came back successful. If you cannot answer something, say the team will follow up and use capture_lead to get their name and either an email address or a phone number.",
+    );
+  } else {
+    lines.push(
+      "- take_message(body, callbackNumber) — when you cannot help, when a human must call back, or when a request cannot be completed.",
+      "- log_transcript is called automatically; never mention it.",
+    );
+  }
 
   if (onWeb) {
     lines.push(
@@ -142,14 +172,18 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   } else {
     lines.push(
       "",
-      "This business does not take bookings by phone. If a caller asks to schedule something, take a message with their details and say someone will call them back to arrange it.",
+      onWeb
+        ? "This business does not take bookings through this chat. If a visitor asks to schedule something, use capture_lead to get their name and a way to reach them, and say the team will follow up to set it up."
+        : "This business does not take bookings by phone. If a caller asks to schedule something, take a message with their details and say someone will call them back to arrange it.",
     );
   }
 
   if (input.afterHours === "message_only") {
     lines.push(
       "",
-      "AFTER HOURS — If the business is closed right now, say so briefly and take a message; do not attempt anything else.",
+      onWeb
+        ? "AFTER HOURS — If the business is closed right now, say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up."
+        : "AFTER HOURS — If the business is closed right now, say so briefly and take a message; do not attempt anything else.",
     );
   }
 

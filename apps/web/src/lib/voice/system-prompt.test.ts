@@ -186,4 +186,72 @@ describe("buildSystemPrompt medium", () => {
       expect(p).toContain("capture_lead");
     }
   });
+
+  // IMPORTANT 2 (review of commit 129b43f): the old web demo appended a
+  // notice AFTER a base prompt that still told the model to take a message,
+  // log a transcript, and ask for a callback number — tools that do not
+  // exist on the web. `WEB_TOOL_NOTICE` recreated exactly that contradiction
+  // one layer up. The fix is source-conditional, not an appendix: every
+  // place the phone prompt would say "take a message" resolves to
+  // capture_lead on the web instead.
+  describe("the web prompt never promises a tool it was not given", () => {
+    it("names capture_lead as the ONLY tool, and never offers take_message or log_transcript as things it can call", () => {
+      const p = buildSystemPrompt(baseInput({ medium: "web", bookingEnabled: false }), now);
+      expect(p).toContain("capture_lead is the ONLY tool you have here");
+      // The notice is ALLOWED to name take_message and log_transcript to say
+      // they do not exist — what must never appear is the PHONE bullet that
+      // offers them as callable tools.
+      // MUTATION: leave the phone TOOLS bullets unconditional — this FAILS,
+      // and a web visitor is told Sofía can take a message that nothing
+      // records.
+      expect(p).not.toContain("take_message(body, callbackNumber)");
+      expect(p).not.toContain("log_transcript is called automatically");
+    });
+
+    it("never offers to take a message or asks for a callback number, anywhere in the prompt", () => {
+      const p = buildSystemPrompt(baseInput({
+        medium: "web", bookingEnabled: false, afterHours: "message_only", callerNumber: null,
+      }), now);
+      // MUTATION: revert the IDENTITY line's `wouldRatherTalkToAPerson` to
+      // its old unconditional ternary — this FAILS, and the AFTER HOURS,
+      // HARD LIMITS and no-phone-booking lines below still contain the
+      // phrase too, so any one of them left unguarded also turns this red.
+      expect(p).not.toMatch(/take a message/i);
+      expect(p).not.toMatch(/callback number/i);
+    });
+
+    it("resolves 'would rather talk to a person' to capture_lead in the IDENTITY line", () => {
+      const p = buildSystemPrompt(baseInput({ medium: "web", bookingEnabled: false }), now);
+      expect(p).toContain(
+        "use capture_lead to get their name and a way to reach them, and say the "
+        + "team will follow up if they would rather talk to a person",
+      );
+    });
+
+    it("gives the no-phone-booking fallback web wording, and the phone gets its own unchanged", () => {
+      const web = buildSystemPrompt(baseInput({ medium: "web", bookingEnabled: false }), now);
+      expect(web).toContain("This business does not take bookings through this chat");
+      const phone = buildSystemPrompt(baseInput({ bookingEnabled: false }), now);
+      // The phone branch is BYTE-UNCHANGED — this is the live line, and a
+      // medium-conditional edit must not move it.
+      expect(phone).toContain(
+        "This business does not take bookings by phone. If a caller asks to "
+        + "schedule something, take a message with their details and say "
+        + "someone will call them back to arrange it.",
+      );
+    });
+
+    it("gives the AFTER HOURS notice web wording, and the phone gets its own unchanged", () => {
+      const web = buildSystemPrompt(baseInput({
+        medium: "web", bookingEnabled: false, afterHours: "message_only",
+      }), now);
+      expect(web).toContain("AFTER HOURS");
+      expect(web).not.toMatch(/take a message/i);
+      const phone = buildSystemPrompt(baseInput({ afterHours: "message_only" }), now);
+      expect(phone).toContain(
+        "AFTER HOURS — If the business is closed right now, say so briefly "
+        + "and take a message; do not attempt anything else.",
+      );
+    });
+  });
 });
