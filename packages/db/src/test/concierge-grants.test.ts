@@ -96,13 +96,43 @@ describe("concierge_conversations grants", () => {
       }));
   }
 
-  it("concierge_claim_turn is not executable by anon or authenticated", () =>
+  // SECOND REVIEW, IMPORTANT 2: this used to check ONLY `concierge_claim_turn`.
+  // `concierge_append_turns` and `concierge_enable` shipped in 0044/0045 --
+  // one of them writes `voice_profiles` -- with no grants assertion anywhere.
+  // That matters because DROP FUNCTION + CREATE resets a function's ACL to
+  // this project's defaults, which grant EXECUTE to `anon` and
+  // `authenticated` BY NAME -- this feature already shipped exactly that
+  // defect once (0043_concierge_function_grants.sql exists because
+  // `revoke ... from public` does not revoke a named-role grant).
+  //
+  // A single loop, not `it.each`, and the routine names are collected into
+  // `results` as the loop runs rather than asserted one at a time -- so an
+  // EMPTY or MISTYPED list (a typo'd name, or the same name twice) cannot
+  // pass vacuously: `Object.keys(results)` is asserted against the exact
+  // three-name set BEFORE any grantee is checked, which fails on its own if
+  // the loop never reached all three, and a mistyped/nonexistent routine
+  // name still fails the grantee check below (querying a name nothing owns
+  // returns zero rows, not `["postgres","service_role"]`).
+  it("concierge_claim_turn, concierge_append_turns, and concierge_enable are each locked to postgres/service_role only", () =>
     withRollback(async (c) => {
-      const { rows } = await c.query<{ grantee: string }>(
-        `select distinct grantee from information_schema.role_routine_grants
-          where routine_schema = 'public' and routine_name = 'concierge_claim_turn'`,
+      const routineNames = ["concierge_claim_turn", "concierge_append_turns", "concierge_enable"];
+      const results: Record<string, string[]> = {};
+      for (const name of routineNames) {
+        const { rows } = await c.query<{ grantee: string }>(
+          `select distinct grantee from information_schema.role_routine_grants
+            where routine_schema = 'public' and routine_name = $1`,
+          [name],
+        );
+        results[name] = rows.map((r) => r.grantee).sort();
+      }
+      expect(Object.keys(results).sort()).toEqual(
+        ["concierge_append_turns", "concierge_claim_turn", "concierge_enable"],
       );
-      expect(rows.map((r) => r.grantee).sort()).toEqual(["postgres", "service_role"]);
+      expect(results).toEqual({
+        concierge_claim_turn: ["postgres", "service_role"],
+        concierge_append_turns: ["postgres", "service_role"],
+        concierge_enable: ["postgres", "service_role"],
+      });
     }));
 
   it("the three voice_profiles columns exist with the intended nullability", () =>

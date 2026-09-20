@@ -103,6 +103,29 @@ describe("concierge accessors", () => {
       await expect(disableConcierge(db, accountId)).rejects.toThrow(/matched no row/);
     }));
 
+  // SECOND REVIEW, IMPORTANT 1: 0045 makes `concierge_enable` RAISE (42501,
+  // `using errcode`) when the form EXISTS but belongs to a DIFFERENT account
+  // -- that's the SQL half, already applied. This is the accessor half: the
+  // raised message must surface as a clean, CATCHABLE error a caller can
+  // tell apart from "no voice profile for this account" (a different,
+  // non-error state -- the test two above this one).
+  //
+  // ANCHORED, not a substring match, and that is load-bearing. 0045's own
+  // raised text is "concierge_enable: form does not belong to this
+  // account" -- a loose `.toThrow(/form does not belong to this account/)`
+  // matches that raw, prefixed RPC message too, so it would ALSO pass
+  // against an accessor that just passed `error.message` straight through
+  // with no branch of its own, proving nothing about this task's half of
+  // the fix. The anchors force the exact, clean message this package owns.
+  it("enableConcierge rejects a form belonging to a different account, distinctly from a missing profile", () =>
+    withTestAccount(async (db, accountId) =>
+      withTestAccount(async (otherDb, otherAccountId) => {
+        await seedVoiceProfile(db, accountId);
+        const otherForm = await createForm(otherDb, otherAccountId, { name: "Other" }, otherAccountId);
+        await expect(enableConcierge(db, accountId, otherForm.id))
+          .rejects.toThrow(/^enableConcierge failed: form does not belong to this account$/);
+      })));
+
   it("getVoiceProfileByPublicId returns null when the concierge is OFF", () =>
     withTestAccount(async (db, accountId) => {
       await seedVoiceProfile(db, accountId);

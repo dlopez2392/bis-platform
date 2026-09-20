@@ -59,6 +59,15 @@ export async function getVoiceProfileByPublicId(
  * real state — an account that has never saved voice settings has no
  * profile to attach a concierge to — so that is reported as a named error,
  * not a success that quietly wrote nothing.
+ *
+ * `concierge_enable` (0045) RAISEs with SQLSTATE 42501 when `formId` exists
+ * but belongs to a DIFFERENT account -- the cross-tenant case. That is kept
+ * DISTINCT from the null-data case above (a real, non-error state) and from
+ * every other RPC failure, by code rather than by string-matching the raised
+ * text: the `createBooking`/23P01 precedent (`booking.ts`) notes some
+ * proxies drop `error.code`, so the raised message is checked too. A caller
+ * can therefore tell "set up your persona first" (the null case) from "that
+ * form is not yours" (this one) from any other failure.
  */
 export async function enableConcierge(
   db: SupabaseClient, accountId: string, formId: string,
@@ -66,7 +75,12 @@ export async function enableConcierge(
   const { data, error } = await db.rpc("concierge_enable", {
     p_account_id: accountId, p_form_id: formId, p_new_public_id: newPublicId(),
   });
-  if (error) throw new Error(`enableConcierge failed: ${error.message}`);
+  if (error) {
+    if (error.code === "42501" || error.message?.includes("does not belong to this account")) {
+      throw new Error("enableConcierge failed: form does not belong to this account");
+    }
+    throw new Error(`enableConcierge failed: ${error.message}`);
+  }
   if (!data) throw new Error("enableConcierge failed: no voice profile for this account");
   return { publicId: data as string };
 }
@@ -191,6 +205,14 @@ export async function appendConciergeTurns(
  * conversation itself does not exist. A bare `.error` check could not tell
  * "already claimed" from "no such row" from "it worked" — all three looked
  * like success.
+ *
+ * The `false` path RE-READS to tell "already claimed" from "no such row" —
+ * which means a conversation deleted in the window between the update and
+ * that re-read reports "not found" (throws) for what was really "already
+ * claimed" (would have returned `false`). Both outcomes are now contractually
+ * distinct, so a caller relying on that distinction should know this narrow
+ * race exists; nothing in this codebase deletes a `concierge_conversations`
+ * row outside account teardown, which this call never races.
  */
 export async function setConciergeSubmission(
   db: SupabaseClient, conversationId: string, submissionId: string,
