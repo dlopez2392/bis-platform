@@ -192,7 +192,7 @@ export default async function StyleguidePage() {
 
         <Section
           title="Website assistant — launcher & message bubbles"
-          file="app/embed.js/route.ts (loader) · app/c/[publicId]/concierge-chat.tsx · concierge.css"
+          file="lib/forms/embed-script.ts (loader, served at app/embed.js/route.ts) · app/c/[publicId]/concierge-chat.tsx · concierge.css"
         >
           <div
             className="flex w-full flex-wrap items-start gap-8"

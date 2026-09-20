@@ -331,6 +331,48 @@ export function conciergeToggleLocked(
 }
 
 /**
+ * The ONE gate every path that calls `enableAction` shares — `turnOn`, the
+ * disable toast's Undo (`conciergeAttemptReenable` below), and the
+ * checkbox's own `disabled` (`conciergeToggleLocked` above, which this reuses
+ * directly with `enabled: false` rather than a parallel formula that could
+ * drift from it).
+ *
+ * Whole-branch review, I2: `turnOn` used to guard only `!selectedFormId ||
+ * pending`, and the Undo inside `turnOff` called `enableAction` with no guard
+ * at all — so a click that meant "undo turning it off" could re-enable onto
+ * a destination the checkbox itself refuses to turn on for. Decided in the
+ * card (item 19 of the review), not in SQL: publication is mutable
+ * operational state, and a CHECK constraint proves nothing that survives the
+ * next unpublish.
+ */
+export function conciergeCanTurnOn(
+  lockReason: ConciergeLockReason | null, selectedFormId: string, formUnpublished: boolean,
+): boolean {
+  return !conciergeToggleLocked(false, lockReason, selectedFormId, formUnpublished);
+}
+
+/**
+ * The disable toast's Undo, extracted to a standalone function (not inlined
+ * in the toast's `onClick`) so a test can call it directly with a stub
+ * `enableAction` and prove the gate actually runs — `renderToStaticMarkup`
+ * never fires a handler, so nothing short of calling this directly shows the
+ * Undo path shares `conciergeCanTurnOn` with `turnOn` rather than bypassing
+ * it. Refuses with the SAME sentence the OFF face already shows for an
+ * unpublished shown destination — the reason Undo is refused here in
+ * practice, since `turnOff` never changes `lockReason` or the profile's own
+ * readiness, only the toggle.
+ */
+export async function conciergeAttemptReenable(
+  lockReason: ConciergeLockReason | null, selectedFormId: string, formUnpublished: boolean,
+  enableAction: (formId: string) => Promise<EnableConciergeResult>,
+): Promise<EnableConciergeResult> {
+  if (!conciergeCanTurnOn(lockReason, selectedFormId, formUnpublished)) {
+    return { ok: false, error: m["voice.assistant.formUnpublishedOff"] };
+  }
+  return enableAction(selectedFormId);
+}
+
+/**
  * The id the pasteable snippet renders from, or null to hide it.
  *
  * Prefers the server-confirmed `profile.public_id` once `enabled` reads
@@ -394,7 +436,11 @@ export function ConciergeCard({
   const [optimisticPublicId, setOptimisticPublicId] = useState<string | null>(null);
 
   function turnOn() {
-    if (!selectedFormId || pending) return;
+    // Same gate the checkbox's own `disabled` and the disable toast's Undo
+    // share (`conciergeCanTurnOn`, I2) — `!selectedFormId` used to be the
+    // only check here, which let a click through on an unpublished shown
+    // destination the checkbox itself would refuse.
+    if (pending || !conciergeCanTurnOn(lockReason, selectedFormId, formUnpublished)) return;
     startTransition(async () => {
       const result = await enableAction(selectedFormId);
       if (!result.ok) { toast.error(result.error); return; }
@@ -422,7 +468,9 @@ export function ConciergeCard({
         action: {
           label: m["common.undo"],
           onClick: () => startTransition(async () => {
-            const r = await enableAction(selectedFormId);
+            // Shares `turnOn`'s own gate (`conciergeAttemptReenable`, I2) —
+            // Undo is "re-enable", not a bypass of the same rule.
+            const r = await conciergeAttemptReenable(lockReason, selectedFormId, formUnpublished, enableAction);
             if (!r.ok) { toast.error(r.error); return; }
             setOptimisticPublicId(r.publicId);
           }),
@@ -449,13 +497,28 @@ export function ConciergeCard({
   // itself resolves (turn it off, then pick another); OFF names it as a lock,
   // exactly like `!selectedFormId` — the operator cannot go live on it
   // silently, and must publish it again or choose a different one first.
+  //
+  // I3 (whole-branch review): an assistant switched ON whose greeting is
+  // LATER blanked (`saveVoiceProfileAction` accepts one — no server check,
+  // no `required` on the textarea) greets every visitor with an empty first
+  // bubble, silently — `reasonText`'s ON branch used to handle only
+  // `formUnpublished`, computing `lockReason` and then ignoring it entirely.
+  // Checked first — order is a choice, not a coincidence: an assistant can
+  // be blank-greeting AND unpublished at once, and the greeting is the one
+  // that reads as broken rather than merely stale. The toggle itself stays
+  // live either way (it is the off switch); this only ever adds a sentence
+  // beside it.
   const reasonText = !enabled ? (
     lockReason === "no_profile" ? m["voice.assistant.lockedNoProfile"]
     : lockReason === "blank_greeting" ? m["voice.assistant.lockedBlankGreeting"]
     : !selectedFormId ? m["voice.assistant.lockedNoSelection"]
     : formUnpublished ? m["voice.assistant.formUnpublishedOff"]
     : null
-  ) : (formUnpublished ? m["voice.assistant.formUnpublished"] : null);
+  ) : (
+    lockReason === "blank_greeting" ? m["voice.assistant.greetingBlankOn"]
+    : formUnpublished ? m["voice.assistant.formUnpublished"]
+    : null
+  );
   const reasonId = "concierge-toggle-reason";
 
   const toggleDisabled = pending || conciergeToggleLocked(enabled, lockReason, selectedFormId, formUnpublished);

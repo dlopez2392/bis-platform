@@ -3,8 +3,9 @@
  * build step, and the unit test evaluates this exact value rather than a
  * parallel copy that could drift from what ships.
  *
- * `window`, `document`, `URL` and `URLSearchParams` are read as free variables
- * so the test can supply fakes; in the browser they resolve to the globals.
+ * `window`, `document`, `URL`, `URLSearchParams` and `Date` are read as free
+ * variables so the test can supply fakes; in the browser they resolve to the
+ * globals.
  */
 export const EMBED_SCRIPT = `(function () {
   var script = document.currentScript;
@@ -68,8 +69,13 @@ export const EMBED_SCRIPT = `(function () {
   // load, regardless of whether the launcher is ever clicked — so the
   // render token's MIN_FILL_MS floor has long passed before anyone can
   // click. Moving this into the click handler would make a fast visitor's
-  // first message bounce with "please send it again".
+  // first message bounce with "please send it again". This is also the
+  // instant the chat page's own render token starts its 30-minute clock
+  // (MAX_TOKEN_AGE_MS) — a visitor who opens the bubble long after the host
+  // page loaded must not dead-end on their first message; setOpen below
+  // refreshes the frame before that clock runs out.
   iframe.src = origin + path + encodeURIComponent(publicId) + "?" + params.toString();
+  var mountedAt = Date.now();
   iframe.style.width = "100%";
   iframe.style.border = "0";
   iframe.style.display = "block";
@@ -102,7 +108,13 @@ export const EMBED_SCRIPT = `(function () {
     // corner of a 360px phone screen. Applied at load AND kept live on
     // resize/rotate, not read once: a phone opened landscape-then-rotated
     // must not get stuck on the wrong geometry.
-    function applyGeometry(mobile) {
+    // Tracked here, not just read once, because setOpen (below) and a
+    // breakpoint change both need the CURRENT answer — a phone's launcher
+    // must hide while open, and un-hide the moment either the panel closes
+    // or the viewport crosses back over 480px.
+    var mobile = false;
+    function applyGeometry(isMobile) {
+      mobile = isMobile;
       if (mobile) {
         panel.style.inset = "0";
         panel.style.right = "";
@@ -119,6 +131,17 @@ export const EMBED_SCRIPT = `(function () {
         panel.style.maxWidth = "calc(100vw - 32px)";
         panel.style.height = "min(620px, calc(100vh - 120px))";
         panel.style.borderRadius = "12px";
+      }
+      // I1: on a phone the launcher sits directly over the sheet's Send
+      // button, so a tap meant for Send lands on the launcher instead and
+      // CLOSES the chat. Hide it while the panel is open on the mobile
+      // branch only, and re-apply on every breakpoint change — a phone
+      // rotated to a wide viewport while open gets the card geometry AND
+      // its launcher back. launcher does not exist yet on the very first
+      // call (created below, and the panel is never open that early), so
+      // there is nothing to reapply.
+      if (launcher) {
+        launcher.style.display = (panel.style.display === "block" && mobile) ? "none" : "";
       }
     }
     var mq = window.matchMedia ? window.matchMedia("(max-width: 480px)") : null;
@@ -155,7 +178,21 @@ export const EMBED_SCRIPT = `(function () {
     launcher.textContent = "\\uD83D\\uDCAC";
 
     setOpen = function (open) {
+      // I4: the render token minted for this iframe started its 30-minute
+      // clock the instant the page preloaded it, not when the visitor
+      // actually opens the chat. Refresh a stale frame BEFORE showing the
+      // panel, a little ahead of the real expiry, so a fresh token is
+      // always waiting — the conversation id survives the reload in
+      // sessionStorage, and composing a message takes longer than
+      // MIN_FILL_MS anyway.
+      if (open && Date.now() - mountedAt > 25 * 60 * 1000) {
+        iframe.src = iframe.src;
+        mountedAt = Date.now();
+      }
       panel.style.display = open ? "block" : "none";
+      // I1: see applyGeometry's own comment — hidden only while open AND on
+      // the mobile branch, restored the instant either stops being true.
+      launcher.style.display = (open && mobile) ? "none" : "";
       launcher.setAttribute("aria-expanded", open ? "true" : "false");
       // Focus follows the visitor's action: opening hands the conversation
       // to the iframe, so a keyboard user lands where they can type rather
@@ -248,8 +285,12 @@ export const EMBED_SCRIPT = `(function () {
     }
 
     // A redirect fired inside the iframe would navigate the iframe. The point
-    // of a redirect success mode is to move the visitor's page.
-    if (data.type === "bis-form-redirect" && typeof data.url === "string" && isHttpUrl(data.url)) {
+    // of a redirect success mode is to move the visitor's page. Gated on
+    // !concierge, symmetric with the height branch above (Minor 1,
+    // whole-branch review): the chat page's conversation lives entirely in
+    // its own iframe and never navigates the host page — a redirect is a
+    // forms concept this branch has no producer for.
+    if (!concierge && data.type === "bis-form-redirect" && typeof data.url === "string" && isHttpUrl(data.url)) {
       try { window.top.location.href = data.url; }
       catch (e) { window.location.href = data.url; }
     }

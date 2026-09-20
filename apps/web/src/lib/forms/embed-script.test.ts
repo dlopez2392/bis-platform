@@ -29,7 +29,22 @@ function makeElement(tag: string) {
     },
     focus() { el.focused = true; },
   };
-  if (tag === "iframe") el.contentWindow = { id: "iframe-window" };
+  if (tag === "iframe") {
+    el.contentWindow = { id: "iframe-window" };
+    // I4: `iframe.src = iframe.src` is a same-value reassignment, done on
+    // purpose to force a reload with a fresh render token. A plain property
+    // can't tell that apart from "never touched again" — reading `.src`
+    // back afterward shows the identical string either way — so the iframe
+    // fake gets a real backing property with its own setter, and every
+    // assignment (the initial one included) increments a counter a test can
+    // read.
+    let _src = "";
+    el.srcAssignments = 0;
+    Object.defineProperty(el, "src", {
+      get() { return _src; },
+      set(v: string) { _src = v; el.srcAssignments++; },
+    });
+  }
   return el;
 }
 
@@ -44,10 +59,15 @@ function makeElement(tag: string) {
  * `opts.mobile` seeds `matchMedia("(max-width: 480px)")`'s initial
  * `.matches`; `fireMediaChange` drives its `change` listener afterwards, so
  * a test can prove the geometry updates live, not just at load.
+ *
+ * `opts.date` stands in for the fifth free identifier the script reads,
+ * `Date` (I4) — real `Date` by default, so every existing test is
+ * unaffected; a fake with a settable `.now()` lets the two new render-token
+ * tests move the clock without a real 25-minute wait.
  */
 function run(
   attrs: Record<string, string>, hostUrl: string, referrer = "",
-  opts: { mobile?: boolean; nullBody?: boolean } = {},
+  opts: { mobile?: boolean; nullBody?: boolean; date?: { now(): number } } = {},
 ) {
   const created: any[] = [];
   const bodyAppended: any[] = [];
@@ -87,8 +107,8 @@ function run(
   };
   win.parent = win;
 
-  new Function("window", "document", "URL", "URLSearchParams", EMBED_SCRIPT)(
-    win, document, URL, URLSearchParams);
+  new Function("window", "document", "URL", "URLSearchParams", "Date", EMBED_SCRIPT)(
+    win, document, URL, URLSearchParams, opts.date ?? Date);
 
   const iframe = created.find((el) => el.tag === "iframe");
   return {
@@ -516,6 +536,59 @@ describe("embed script", () => {
       });
     });
 
+    // Whole-branch review, I1: on a 360x640 phone the sheet's composer puts
+    // Send at roughly x∈[274,344], y∈[584,624], and the launcher — fixed at
+    // right:16px/bottom:16px, 56x56, painted on top (appended after the
+    // panel) — sits at x∈[288,344], y∈[568,624]. It covers Send, and its own
+    // click handler reads `display === "none"` to decide whether to open,
+    // so a tap meant for Send instead CLOSES the chat. The sheet already has
+    // its own × and Esc producers, so the launcher has nothing left to do
+    // while open on a phone.
+    describe("hides the launcher while open on mobile, so it can no longer cover Send (I1)", () => {
+      it("hides the launcher once the panel opens on the mobile branch, and restores it on close", () => {
+        const { created } = run({ "data-concierge": "abc123" }, "https://client.example/", "", { mobile: true });
+        const launcher = launcherOf(created);
+        // Untouched at load — applyGeometry's very first call runs before
+        // the launcher exists, and the panel is never open that early, so
+        // there is nothing to reapply yet; "not none" is the meaningful
+        // half of this assertion, not the exact starting value.
+        expect(launcher.style.display).not.toBe("none");
+
+        launcher.listeners.click[0]({});
+        // MUTATION: drop the launcher line from setOpen — this FAILS, and a
+        // phone visitor's tap on Send lands on the launcher and closes the
+        // chat instead of sending the message.
+        expect(launcher.style.display).toBe("none");
+
+        launcher.listeners.click[0]({});
+        expect(launcher.style.display).toBe("");
+      });
+
+      it("leaves the launcher visible while open on desktop — there is no Send button underneath it there", () => {
+        const { created } = run({ "data-concierge": "abc123" }, "https://client.example/", "", { mobile: false });
+        const launcher = launcherOf(created);
+        launcher.listeners.click[0]({});
+        expect(launcher.style.display).not.toBe("none");
+      });
+
+      it("brings the launcher back the moment a mobile viewport crosses back over the breakpoint while still open", () => {
+        const { created, fireMediaChange } = run(
+          { "data-concierge": "abc123" }, "https://client.example/", "", { mobile: true },
+        );
+        const launcher = launcherOf(created);
+        launcher.listeners.click[0]({});
+        expect(launcher.style.display).toBe("none");
+
+        fireMediaChange(false);
+        // MUTATION: never re-apply the launcher's visibility from
+        // applyGeometry — this FAILS, and a phone rotated to landscape (or a
+        // window widened past 480px) while the chat is open leaves the
+        // launcher hidden with the panel still covering the screen and
+        // nothing left on the host page to close it with.
+        expect(launcher.style.display).toBe("");
+      });
+    });
+
     it("moves focus into the iframe when the panel opens", () => {
       const { created, iframe } = run({ "data-concierge": "abc123" }, "https://client.example/");
       const launcher = launcherOf(created);
@@ -527,6 +600,50 @@ describe("embed script", () => {
       expect(iframe.focused).toBe(true);
     });
 
+    // Whole-branch review, I4: the render token minted for this iframe
+    // starts its 30-minute clock the instant the frame is preloaded at
+    // page load, not when the visitor actually opens the chat — a visitor
+    // who opens the bubble 31 minutes after the host page loaded would
+    // dead-end on their first message. `setOpen(true)` refreshes a stale
+    // frame before showing the panel.
+    describe("refreshes the preloaded frame before its render token can expire (I4)", () => {
+      it("re-assigns the iframe's src (a fresh render token) when opened past 25 minutes", () => {
+        let now = 0;
+        const fakeDate = { now: () => now };
+        const { created } = run(
+          { "data-concierge": "abc123" }, "https://client.example/", "", { date: fakeDate },
+        );
+        const launcher = launcherOf(created);
+        const iframe = created.find((el) => el.tag === "iframe");
+        expect(iframe.srcAssignments).toBe(1);
+
+        now = 26 * 60 * 1000;
+        launcher.listeners.click[0]({});
+        // MUTATION: drop the re-assignment (`iframe.src = iframe.src`) —
+        // this FAILS, and a visitor who opens the bubble past the 30-minute
+        // mark sends their first message against an already-expired token.
+        expect(iframe.srcAssignments).toBe(2);
+        expect(iframe.src).toContain("/c/abc123");
+      });
+
+      it("does not re-assign the iframe's src when opened well within 25 minutes", () => {
+        let now = 0;
+        const fakeDate = { now: () => now };
+        const { created } = run(
+          { "data-concierge": "abc123" }, "https://client.example/", "", { date: fakeDate },
+        );
+        const launcher = launcherOf(created);
+        const iframe = created.find((el) => el.tag === "iframe");
+
+        now = 5 * 60 * 1000;
+        launcher.listeners.click[0]({});
+        // MUTATION: invert the comparison (`<` instead of `>`) — this
+        // FAILS, and every open before 25 minutes would needlessly reload
+        // the frame, losing the visitor's typed-but-unsent draft.
+        expect(iframe.srcAssignments).toBe(1);
+      });
+    });
+
     it("ignores a bis-form-height message on the concierge branch — the iframe fills the panel by CSS, not by message (Adopted Minor: !concierge gate)", () => {
       const { iframe, send } = run({ "data-concierge": "abc123" }, "https://client.example/");
       expect(iframe.style.height).toBe("100%");
@@ -535,6 +652,38 @@ describe("embed script", () => {
       // this FAILS, and the iframe's 100%-fill height is overwritten to a
       // fixed pixel value the first time a stray height message arrives.
       expect(iframe.style.height).toBe("100%");
+    });
+
+    it("ignores a redirect message on the concierge branch — the conversation lives entirely in this iframe and never navigates the host page (Minor 1, whole-branch review)", () => {
+      const { iframe, send, win } = run({ "data-concierge": "abc123" }, "https://client.example/");
+      const before = win.top.location.href;
+      send({
+        source: iframe.contentWindow, origin: ORIGIN,
+        data: { type: "bis-form-redirect", url: "https://client.example/thanks" },
+      });
+      // MUTATION: drop the `!concierge` gate on the bis-form-redirect
+      // branch — this FAILS, and a compromised or buggy sender inside the
+      // chat iframe could navigate the host page's own top window, a
+      // capability the chat surface has no legitimate use for.
+      expect(win.top.location.href).toBe(before);
+    });
+
+    // Whole-branch review, I5 (second half): Step 3b's own correction warns
+    // that "a lazy iframe inside a display:none container is exactly what
+    // browsers may defer" — `loading="lazy"` must never reach the concierge
+    // branch, only the inline form/booking one. Nothing in this file pinned
+    // that before now (`grep -c loading embed-script.test.ts` → 0).
+    it("never sets loading on the concierge iframe — a hidden, preloaded frame must fetch for real, not defer", () => {
+      const { iframe } = run({ "data-concierge": "abc123" }, "https://client.example/");
+      // MUTATION: add `iframe.setAttribute("loading", "lazy")` on the
+      // concierge branch (the "consistency edit" Step 3b's correction warns
+      // about) — this FAILS.
+      expect(iframe.getAttribute("loading")).toBeNull();
+    });
+
+    it("sets loading=lazy on the inline form iframe, unaffected by the concierge branch's own rule", () => {
+      const { iframe } = run({ "data-form": "abc123def456" }, "https://client.example/");
+      expect(iframe.getAttribute("loading")).toBe("lazy");
     });
 
     describe("does not stack a second launcher when the snippet is included twice (idempotence)", () => {

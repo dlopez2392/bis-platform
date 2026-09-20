@@ -2662,6 +2662,22 @@ pre-click assertion FAILS.
 - The tests must assert `bodyAppended` holds the panel and launcher and that
   `inserted` is EMPTY on the concierge branch — the suite was green with
   both appends deleted.
+- **CORRECTED (whole-branch review, 2026-09-20, finding I4): this step's cost
+  analysis was incomplete on two counts.** First, preloading the frame at
+  page load does not just cost one extra request — it ALSO starts the render
+  token's own 30-minute clock (`MAX_TOKEN_AGE_MS`) at that instant, not when
+  the visitor actually opens the chat. A visitor who opens the bubble more
+  than 30 minutes after the host page loaded would dead-end on their first
+  message against an already-expired token. Fixed by having `setOpen(true)`
+  refresh the frame (`iframe.src = iframe.src`, a fresh render token) once
+  `Date.now() - mountedAt` passes 25 minutes, before showing the panel — the
+  conversation id survives the reload in `sessionStorage`, and composing a
+  message takes longer than `MIN_FILL_MS` anyway. Second, the request itself
+  has a cost beyond bandwidth: it is one hit to BIS, carrying the page URL and
+  referrer, from EVERY pageview of every client site with the widget
+  installed, whether or not the visitor ever opens the chat — accepted for
+  the same reason as the rest of this step (a bounced first message is worse),
+  but worth naming rather than leaving implicit.
 
 - [ ] **Step 4: Run the loader tests to verify they pass**
 
@@ -2895,9 +2911,27 @@ In `voice-settings.tsx`, add the card, beside the `booking_enabled` and
   `publishedForms` with one other form present → the Select names the stored
   form, not blank, in EITHER state; and OFF with the stored id absent from
   `publishedForms` → toggle locked, OFF sentence present.
-  ⚠️ `dashboard/page.test.ts` hard-codes the catalogue total — any change to
-  `CHECKLIST_CATALOGUE`'s size must update it and its all-done fixture in the
-  same commit, and the scoped test command must include it.
+  **CORRECTED (whole-branch review, 2026-09-20, finding I3): add a fourth ON
+  face.** `saveVoiceProfileAction` accepts a blank greeting (no server check,
+  the textarea is not `required`), and the public page renders that blank
+  string as the visitor's first bubble — reachable on an assistant that was
+  already ON when the greeting was cleared, since `lockReason` is computed
+  here regardless of `enabled` but the ON branch used to read only
+  `formUnpublished`. Test: `enabled: true`, `greeting_en: ""`, a published
+  stored destination → the ON sentence warns about the empty first message
+  ("The greeting is blank, so visitors see an empty first message. Write one
+  in the assistant's profile above."), and the toggle still renders enabled
+  and checked — it is the off switch, and this is a warning beside it, not a
+  second lock.
+  ⚠️ CORRECTED (whole-branch review, 2026-09-20): `dashboard/page.test.ts` no
+  longer hard-codes the catalogue total — it now DERIVES it from
+  `CHECKLIST_CATALOGUE.length`, and so does `e2e/blueprints.spec.ts`'s own
+  assertion on the dashboard's checklist row. A new catalogue item therefore
+  needs no edit to either test. What still needs care: the row's own total is
+  `mergeChecklist(...).length`, so the e2e fixture account must carry no
+  `custom:` checklist rows, or the derived total silently drifts from
+  `CHECKLIST_CATALOGUE.length` and the two specs disagree on what "done"
+  means. The scoped test command should still include both.
   And the action's two failure modes render as **two different sentences**:
   the cross-tenant 42501 ("That form belongs to a different company") and
   the missing-profile null (the first lock above). They are distinct at the

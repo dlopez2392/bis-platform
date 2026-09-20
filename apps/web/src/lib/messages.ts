@@ -1014,6 +1014,7 @@ export const m = {
   "voice.assistant.toggleLabel": "Turn on the website assistant",
   "voice.assistant.lockedNoProfile": "Set up the assistant's name and greeting first.",
   "voice.assistant.lockedBlankGreeting": "Write the greeting visitors will see first.",
+  "voice.assistant.greetingBlankOn": "The greeting is blank, so visitors see an empty first message. Write one in the assistant's profile above.",
   "voice.assistant.lockedNoSelection": "Choose a form for its leads first.",
   "voice.assistant.noFormTitle": "No published form yet",
   "voice.assistant.noFormBody": "The website assistant needs a form to send its leads to. Publish one, then come back here to turn it on.",

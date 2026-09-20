@@ -497,4 +497,43 @@ test.describe("embedded on a client's page", () => {
       ).toBe(sendColor);
     },
   );
+
+  // Whole-branch review, I1: on a 360x640 phone the sheet's composer puts
+  // Send roughly under the launcher's own fixed position, and the
+  // launcher's click handler reads the panel's own `display` to decide
+  // whether to open — so a tap meant for Send instead closes the chat. The
+  // Playwright project here is Desktop Chrome; a viewport resize is enough
+  // to trip the loader's own `matchMedia("(max-width: 480px)")` query.
+  test(
+    "on a phone-sized viewport, the launcher hides itself while the chat is open so it cannot cover Send, and comes back when the sheet closes (I1)",
+    async ({ page }) => {
+      test.skip(!widget, skipReason);
+      const strings = conciergeStrings("en");
+
+      await page.setViewportSize({ width: 360, height: 640 });
+      const body = `<!doctype html><html><head><title>Host</title></head><body>
+        <h1>A client's own website</h1>
+        <script src="${BASE}/embed.js" data-concierge="${widget!.publicId}"></script>
+      </body></html>`;
+      await page.setContent(body);
+
+      const launcher = page.getByRole("button", { name: "Chat" });
+      const iframeEl = page.locator('iframe[title="Chat"]');
+      const frame = page.frameLocator('iframe[title="Chat"]');
+
+      await expect(launcher).toBeVisible();
+      await launcher.click();
+      await expect(iframeEl).toBeVisible();
+      // MUTATION: drop the launcher line from setOpen (embed-script.ts) —
+      // this FAILS, and the launcher stays on top of the full-viewport
+      // sheet, covering the composer's own Send button.
+      await expect(launcher).toBeHidden();
+
+      const closeBtn = frame.getByRole("button", { name: strings.close });
+      await expect(closeBtn).toBeVisible();
+      await closeBtn.click();
+      await expect(iframeEl).toBeHidden();
+      await expect(launcher).toBeVisible();
+    },
+  );
 });

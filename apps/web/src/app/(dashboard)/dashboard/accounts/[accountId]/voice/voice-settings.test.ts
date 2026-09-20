@@ -5,6 +5,7 @@ import type { VoiceProfileRow } from "@bis/db";
 import {
   conciergeLockReason, shouldShowConciergeEmptyState, conciergeDestinationOptions,
   conciergeFormUnpublished, conciergeSnippetPublicId, conciergeToggleLocked, ConciergeCard,
+  conciergeCanTurnOn, conciergeAttemptReenable,
 } from "./voice-settings";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
@@ -208,6 +209,60 @@ describe("conciergeToggleLocked — the toggle's own disabled state", () => {
   });
 });
 
+/**
+ * Whole-branch review, I2: `turnOn` used to guard only `!selectedFormId ||
+ * pending`, and the disable toast's Undo called `enableAction` directly with
+ * no guard at all — so Undo could re-enable onto a destination the checkbox
+ * itself refuses to turn on for. The review decided (item 19) the guard
+ * belongs HERE, in the card, on every path that calls `enableAction` — not in
+ * SQL, because publication is mutable operational state a CHECK constraint
+ * cannot prove anything durable about. `conciergeCanTurnOn` is that one
+ * shared gate, built directly from `conciergeToggleLocked` with `enabled:
+ * false` — not a parallel formula that could drift from it.
+ */
+describe("conciergeCanTurnOn — the one gate turnOn, the Undo and the checkbox's disabled all read from", () => {
+  it("refuses when the shown destination is unpublished", () => {
+    expect(conciergeCanTurnOn(null, "f1", true)).toBe(false);
+  });
+
+  it("refuses on every pre-existing lock reason too", () => {
+    expect(conciergeCanTurnOn("no_profile", "", false)).toBe(false);
+    expect(conciergeCanTurnOn("blank_greeting", "", false)).toBe(false);
+    expect(conciergeCanTurnOn(null, "", false)).toBe(false);
+  });
+
+  // MUTATION: return `true` unconditionally (drop the
+  // `!conciergeToggleLocked(...)` body) — this FAILS.
+  it("allows once every gate is clear", () => {
+    expect(conciergeCanTurnOn(null, "f1", false)).toBe(true);
+  });
+});
+
+/**
+ * The disable toast's Undo, extracted to a standalone function so a test can
+ * call it directly with a stub `enableAction` and prove the gate —
+ * `renderToStaticMarkup` never fires a handler, so a render-only test cannot
+ * show the Undo path actually shares `conciergeCanTurnOn` with `turnOn`.
+ */
+describe("conciergeAttemptReenable — the disable toast's Undo, sharing turnOn's own gate", () => {
+  it("refuses WITHOUT calling enableAction when the shown destination is unpublished, and names the reason", async () => {
+    const enableAction = vi.fn(async () => ({ ok: true as const, publicId: "pub_x" }));
+    const result = await conciergeAttemptReenable(null, "f1", true, enableAction);
+    // MUTATION: remove the gate from the Undo path (call `enableAction`
+    // unconditionally) — this FAILS, and Undo re-enables onto a form the
+    // checkbox itself would refuse to turn on for.
+    expect(enableAction).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: false, error: m["voice.assistant.formUnpublishedOff"] });
+  });
+
+  it("calls enableAction, and returns its result, once the gate is clear", async () => {
+    const enableAction = vi.fn(async () => ({ ok: true as const, publicId: "pub_x" }));
+    const result = await conciergeAttemptReenable(null, "f1", false, enableAction);
+    expect(enableAction).toHaveBeenCalledWith("f1");
+    expect(result).toEqual({ ok: true, publicId: "pub_x" });
+  });
+});
+
 describe("conciergeSnippetPublicId — what the pasteable snippet renders from", () => {
   it("prefers the server-confirmed id once the assistant reads as ON", () => {
     expect(conciergeSnippetPublicId(true, "real-id", null)).toBe("real-id");
@@ -257,9 +312,15 @@ describe("ConciergeCard — the render proof", () => {
     enabled: boolean;
     storedFormId: string | null;
     publishedForms: { id: string; name: string }[];
+    /** I3: blank when omitted matches every other face's real greeting. */
+    greetingEn?: string;
+    /** I5: the server-confirmed public id, once a save has landed. */
+    publicId?: string | null;
   }) {
     const profile: VoiceProfileRow = {
       ...BASE_PROFILE, concierge_enabled: opts.enabled, concierge_form_id: opts.storedFormId,
+      greeting_en: opts.greetingEn ?? BASE_PROFILE.greeting_en,
+      public_id: opts.publicId ?? null,
     };
     const enableAction = vi.fn(async () => ({ ok: true as const, publicId: "pub_x" }));
     const disableAction = vi.fn(async () => ({ ok: true as const }));
@@ -315,5 +376,55 @@ describe("ConciergeCard — the render proof", () => {
     expect(html).not.toMatch(DISABLED_CHECKBOX);
     expect(text).not.toContain(m["voice.assistant.formUnpublishedOff"]);
     expect(text).not.toContain(m["voice.assistant.formUnpublished"]);
+  });
+
+  // Whole-branch review, I3: `reasonText`'s ON branch used to handle only
+  // `formUnpublished`, ignoring `lockReason` entirely — reachable because
+  // `saveVoiceProfileAction` accepts a blank greeting and the textarea is not
+  // `required`, so a live assistant's greeting can go blank without the
+  // toggle ever turning off. The public page renders that blank string as
+  // the FIRST bubble a visitor sees. The toggle must stay live regardless —
+  // it is the off switch — so this is a warning beside it, not a lock.
+  it("ON with a blank greeting: the ON sentence warns about the empty first message, and the toggle stays enabled and checked", () => {
+    const html = renderCard({
+      enabled: true, storedFormId: "A", publishedForms: [{ id: "A", name: "Contact us" }],
+      greetingEn: "",
+    });
+    const text = renderedText(html);
+    // MUTATION: drop the `lockReason === "blank_greeting"` branch from
+    // `reasonText`'s ON case — this FAILS, and a live assistant with an
+    // empty greeting shows no warning at all.
+    expect(text).toContain(m["voice.assistant.greetingBlankOn"]);
+    expect(html).toMatch(CHECKED_CHECKBOX);
+    expect(html).not.toMatch(DISABLED_CHECKBOX);
+  });
+
+  // Whole-branch review, I5: nothing in this file bound the snippet card
+  // (the actual product output) to the JSX — every face above renders
+  // `public_id: null`, so `snippetPublicId` was always the optimistic-id
+  // fallback (`null`), never the branch that reads the stored id. A fourth
+  // face, with a real stored `public_id`, is the one that would catch the
+  // ternary silently rendering `null` regardless of what it is handed.
+  it("ON with a stored public id and its destination published: the snippet card binds to the real id and this page's own /embed.js origin", () => {
+    const html = renderCard({
+      enabled: true, storedFormId: "A", publishedForms: [{ id: "A", name: "Contact us" }],
+      publicId: "pub_x",
+    });
+    // The pasteable snippet is text content inside a <pre><code>, so React
+    // renders its quotes as `&quot;` — `renderedText` decodes the same
+    // entities every copy assertion in this repo already accounts for.
+    const text = renderedText(html);
+    // MUTATION: pass `snippetPublicId` as `null` in the JSX (instead of the
+    // computed value) — this FAILS.
+    expect(text).toContain('data-concierge="pub_x"');
+    expect(text).toContain("https://app.example.com/embed.js");
+  });
+
+  it("OFF: no snippet at all — no data-concierge= anywhere in the markup", () => {
+    const html = renderCard({
+      enabled: false, storedFormId: "A",
+      publishedForms: [{ id: "A", name: "Contact us" }, { id: "B", name: "Other" }],
+    });
+    expect(renderedText(html)).not.toContain("data-concierge=");
   });
 });
