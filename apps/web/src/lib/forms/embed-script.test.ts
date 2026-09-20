@@ -27,18 +27,35 @@ function makeElement(tag: string) {
     addEventListener(type: string, fn: Listener) {
       (el.listeners[type] ??= []).push(fn);
     },
+    focus() { el.focused = true; },
   };
   if (tag === "iframe") el.contentWindow = { id: "iframe-window" };
   return el;
 }
 
-/** Minimal DOM good enough for the embed script, so the real string can run. */
-function run(attrs: Record<string, string>, hostUrl: string, referrer = "") {
+/**
+ * Minimal DOM good enough for the embed script, so the real string can run.
+ *
+ * `opts.nullBody` simulates a `<script>` pasted in `<head>`, where
+ * `document.body` is still null at execution time (no `async`/`defer` on the
+ * tag) — `document.documentElement` is the only element guaranteed to exist
+ * at that point, which is what the head-placement fix falls back to.
+ *
+ * `opts.mobile` seeds `matchMedia("(max-width: 480px)")`'s initial
+ * `.matches`; `fireMediaChange` drives its `change` listener afterwards, so
+ * a test can prove the geometry updates live, not just at load.
+ */
+function run(
+  attrs: Record<string, string>, hostUrl: string, referrer = "",
+  opts: { mobile?: boolean; nullBody?: boolean } = {},
+) {
   const created: any[] = [];
   const bodyAppended: any[] = [];
+  const docElAppended: any[] = [];
   let messageListener: Listener | undefined;
   const keydownListeners: Listener[] = [];
   const inserted: any[] = [];
+  let mqChangeListener: Listener | undefined;
 
   const script = {
     src: "https://platform.example.com/embed.js",
@@ -47,11 +64,17 @@ function run(attrs: Record<string, string>, hostUrl: string, referrer = "") {
     nextSibling: null,
   };
 
-  const document = {
+  const document: any = {
     currentScript: script,
     referrer,
-    body: { appendChild: (el: any) => bodyAppended.push(el) },
+    body: opts.nullBody ? null : { appendChild: (el: any) => bodyAppended.push(el) },
+    documentElement: { appendChild: (el: any) => docElAppended.push(el) },
     createElement: (tag: string) => { const el = makeElement(tag); created.push(el); return el; },
+  };
+  const mq = {
+    matches: opts.mobile ?? false,
+    addEventListener: (type: string, fn: Listener) => { if (type === "change") mqChangeListener = fn; },
+    removeEventListener: () => {},
   };
   const win: any = {
     location: { search: new URL(hostUrl).search, href: hostUrl },
@@ -59,6 +82,7 @@ function run(attrs: Record<string, string>, hostUrl: string, referrer = "") {
       if (type === "message") messageListener = fn;
       if (type === "keydown") keydownListeners.push(fn);
     },
+    matchMedia: () => mq,
     top: { location: { href: "" } },
   };
   win.parent = win;
@@ -68,9 +92,10 @@ function run(attrs: Record<string, string>, hostUrl: string, referrer = "") {
 
   const iframe = created.find((el) => el.tag === "iframe");
   return {
-    iframe, inserted, win, created, bodyAppended,
+    iframe, inserted, win, created, bodyAppended, docElAppended,
     send: (event: any) => messageListener?.(event),
     keydown: (event: any) => keydownListeners.forEach((fn) => fn(event)),
+    fireMediaChange: (matches: boolean) => mqChangeListener?.({ matches } as any),
   };
 }
 
@@ -110,6 +135,46 @@ function runTwoEmbeds(hostUrl: string) {
   const iframeB = install("form-b");
 
   return { iframeA, iframeB, send: (event: any) => { for (const fn of listeners) fn(event); } };
+}
+
+/**
+ * Two `<script data-concierge>` tags on ONE host page — a mistake, not a
+ * legitimate use — sharing a single real `window`, the same way two humans
+ * pasting the same snippet twice would. Unlike `data-form`/`data-booking`,
+ * which legitimately embed a second, different iframe inline, the bubble is
+ * page-level chrome: only one may ever exist, which is exactly what the
+ * idempotence guard on `window` protects.
+ */
+function runConciergeTwice() {
+  const win: any = {
+    location: { search: "", href: "https://client.example/" },
+    addEventListener: () => {},
+    top: { location: { href: "" } },
+  };
+  win.parent = win;
+
+  function once() {
+    const bodyAppended: any[] = [];
+    const created: any[] = [];
+    const script = {
+      src: "https://platform.example.com/embed.js",
+      getAttribute: (name: string) => (name === "data-concierge" ? "abc123" : null),
+      parentNode: { insertBefore: () => {} },
+      nextSibling: null,
+    };
+    const document: any = {
+      currentScript: script,
+      referrer: "",
+      body: { appendChild: (el: any) => bodyAppended.push(el) },
+      documentElement: { appendChild: () => {} },
+      createElement: (tag: string) => { const el = makeElement(tag); created.push(el); return el; },
+    };
+    new Function("window", "document", "URL", "URLSearchParams", EMBED_SCRIPT)(
+      win, document, URL, URLSearchParams);
+    return { bodyAppended, created };
+  }
+
+  return { first: once(), second: once() };
 }
 
 const ORIGIN = "https://platform.example.com";
@@ -348,6 +413,178 @@ describe("embed script", () => {
       // Right source AND origin — closes.
       send({ source: iframe.contentWindow, origin: ORIGIN, data: { type: "bis-concierge-close" } });
       expect(panel.style.display).toBe("none");
+    });
+
+    // Important I-3 of the review: the OLD tests above ("builds a launcher
+    // and a panel...") asserted only on `created`, which every
+    // `document.createElement` call populates whether or not the element
+    // ever reaches the page. Deleting BOTH `document.body.appendChild` calls
+    // left every test in this file green — a widget that never mounts.
+    it("mounts the panel and launcher into the document — not inserted inline like the form/booking iframes", () => {
+      const { created, bodyAppended, inserted } = run({ "data-concierge": "abc123" }, "https://client.example/");
+      const panel = panelOf(created);
+      const launcher = launcherOf(created);
+      // MUTATION: delete BOTH `document.body.appendChild(panel)` and
+      // `document.body.appendChild(launcher)` — this FAILS, `bodyAppended`
+      // stays empty.
+      expect(bodyAppended).toContain(panel);
+      expect(bodyAppended).toContain(launcher);
+      // MUTATION: add an inline `script.parentNode.insertBefore(iframe, …)`
+      // alongside the panel/launcher mount on the concierge path — this
+      // FAILS, and the bubble would ALSO leave a bare iframe sitting inline
+      // wherever the script tag was pasted.
+      expect(inserted).toHaveLength(0);
+    });
+
+    // Important I-1 of the review: no `async`/`defer` on the snippet means a
+    // tag pasted in `<head>` runs before `<body>` exists at all —
+    // `document.body` is null, and the old unconditional
+    // `document.body.appendChild(panel)` threw a TypeError that killed the
+    // whole IIFE, the message listener included.
+    it("falls back to document.documentElement when document.body is null (a script pasted in <head>), and still registers the message listener", () => {
+      const { created, docElAppended, iframe, send } = run(
+        { "data-concierge": "abc123" }, "https://client.example/", "", { nullBody: true },
+      );
+      const panel = panelOf(created);
+      const launcher = launcherOf(created);
+      expect(docElAppended).toContain(panel);
+      expect(docElAppended).toContain(launcher);
+
+      launcher.listeners.click[0]({});
+      expect(panel.style.display).toBe("block");
+      // The message listener is registered AFTER the mount in source order —
+      // if the mount had thrown, this send() would find no listener at all
+      // and the panel would never close.
+      send({ source: iframe.contentWindow, origin: ORIGIN, data: { type: "bis-concierge-close" } });
+      expect(panel.style.display).toBe("none");
+    });
+
+    describe("mobile: the panel becomes a full-viewport sheet under 480px", () => {
+      it("uses the floating card geometry by default, when matchMedia does not match", () => {
+        const { created } = run({ "data-concierge": "abc123" }, "https://client.example/", "", { mobile: false });
+        const panel = panelOf(created);
+        expect(panel.style.width).toBe("380px");
+        expect(panel.style.borderRadius).toBe("12px");
+        expect(panel.style.inset).toBeFalsy();
+      });
+
+      it("becomes a full-viewport sheet — inset:0, no radius — when matchMedia already matches at load", () => {
+        const { created } = run({ "data-concierge": "abc123" }, "https://client.example/", "", { mobile: true });
+        const panel = panelOf(created);
+        // MUTATION: never call applyGeometry(mq.matches) at load, only on the
+        // change listener — this FAILS for a phone open from a cold load.
+        expect(panel.style.inset).toBe("0");
+        expect(panel.style.borderRadius).toBe("0");
+        expect(panel.style.width).toBe("100%");
+      });
+
+      it("switches geometry live when the viewport crosses the breakpoint after load", () => {
+        const { created, fireMediaChange } = run(
+          { "data-concierge": "abc123" }, "https://client.example/", "", { mobile: false },
+        );
+        const panel = panelOf(created);
+        expect(panel.style.inset).toBeFalsy();
+        fireMediaChange(true);
+        // MUTATION: read `mq.matches` once at load and never register a
+        // change listener — this FAILS, and a phone rotated or resized keeps
+        // the desktop card, half off-screen.
+        expect(panel.style.inset).toBe("0");
+        expect(panel.style.borderRadius).toBe("0");
+      });
+    });
+
+    it("moves focus into the iframe when the panel opens", () => {
+      const { created, iframe } = run({ "data-concierge": "abc123" }, "https://client.example/");
+      const launcher = launcherOf(created);
+      expect(iframe.focused).toBeFalsy();
+      launcher.listeners.click[0]({});
+      // MUTATION: drop the focus() call from setOpen's open branch — this
+      // FAILS, and a keyboard user who opens the bubble is left focused on
+      // the launcher button with no indication the conversation is reachable.
+      expect(iframe.focused).toBe(true);
+    });
+
+    it("ignores a bis-form-height message on the concierge branch — the iframe fills the panel by CSS, not by message (Adopted Minor: !concierge gate)", () => {
+      const { iframe, send } = run({ "data-concierge": "abc123" }, "https://client.example/");
+      expect(iframe.style.height).toBe("100%");
+      send({ source: iframe.contentWindow, origin: ORIGIN, data: { type: "bis-form-height", height: 900 } });
+      // MUTATION: drop the `!concierge` gate on the bis-form-height branch —
+      // this FAILS, and the iframe's 100%-fill height is overwritten to a
+      // fixed pixel value the first time a stray height message arrives.
+      expect(iframe.style.height).toBe("100%");
+    });
+
+    describe("does not stack a second launcher when the snippet is included twice (idempotence)", () => {
+      it("mounts exactly one launcher on the first inclusion and none on the second", () => {
+        const { first, second } = runConciergeTwice();
+        expect(first.bodyAppended.filter((el: any) => el.tag === "button")).toHaveLength(1);
+        // MUTATION: drop the `window.__bisConciergeMounted` guard — this
+        // FAILS, and a page that (by mistake, or via two integrations) pastes
+        // the snippet twice gets two launchers, two preloaded iframes and two
+        // keydown listeners.
+        expect(second.bodyAppended).toHaveLength(0);
+        expect(second.created).toHaveLength(0);
+      });
+    });
+
+    describe("brand colour by message (Adopted Minor)", () => {
+      it("paints the launcher from a bis-concierge-brand message sent by the chat page", () => {
+        const { created, send, iframe } = run({ "data-concierge": "abc123" }, "https://client.example/");
+        const launcher = launcherOf(created);
+        send({
+          source: iframe.contentWindow, origin: ORIGIN,
+          data: { type: "bis-concierge-brand", accent: "#112233", accentForeground: "#ffffff" },
+        });
+        expect(launcher.style.background).toBe("#112233");
+        expect(launcher.style.color).toBe("#ffffff");
+      });
+
+      // Named directly in the review's adopted minor: a brand message from
+      // the wrong source or the wrong origin must NOT repaint the launcher —
+      // same trust boundary as the close message.
+      it("does NOT repaint on a brand message from the wrong source or the wrong origin", () => {
+        const { created, send, iframe } = run({ "data-concierge": "abc123" }, "https://client.example/");
+        const launcher = launcherOf(created);
+        const before = launcher.style.background;
+
+        send({
+          source: {}, origin: ORIGIN,
+          data: { type: "bis-concierge-brand", accent: "#112233", accentForeground: "#ffffff" },
+        });
+        expect(launcher.style.background).toBe(before);
+
+        send({
+          source: iframe.contentWindow, origin: "https://evil.example",
+          data: { type: "bis-concierge-brand", accent: "#112233", accentForeground: "#ffffff" },
+        });
+        expect(launcher.style.background).toBe(before);
+      });
+
+      it("keeps data-color as an operator override, even after a brand message arrives", () => {
+        const { created, send, iframe } = run(
+          { "data-concierge": "abc123", "data-color": "#ff0000" }, "https://client.example/",
+        );
+        const launcher = launcherOf(created);
+        expect(launcher.style.background).toBe("#ff0000");
+        send({
+          source: iframe.contentWindow, origin: ORIGIN,
+          data: { type: "bis-concierge-brand", accent: "#112233", accentForeground: "#ffffff" },
+        });
+        // MUTATION: repaint unconditionally, without checking
+        // `script.getAttribute("data-color")` — this FAILS, and an operator
+        // who set a deliberate override sees it silently reverted the moment
+        // the chat page loads.
+        expect(launcher.style.background).toBe("#ff0000");
+      });
+    });
+
+    it("uses an ES5 surrogate-pair escape for the emoji, not the ES6 \\u{...} codepoint syntax (the file's own ES5-ish claim)", () => {
+      // The SOURCE text below ships verbatim to arbitrary browsers, some of
+      // which never got ES6: `\u{1F4AC}` is codepoint-escape syntax and is a
+      // SyntaxError under an ES5 parser, before the IIFE ever runs.
+      expect(EMBED_SCRIPT).not.toMatch(/\\u\{/);
+      const { created } = run({ "data-concierge": "abc123" }, "https://client.example/");
+      expect(launcherOf(created).textContent).toBe(String.fromCodePoint(0x1f4ac));
     });
   });
 });

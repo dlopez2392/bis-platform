@@ -122,7 +122,12 @@ export default async function ConciergePage({
   // concierge has no form/embed transparency in scope, so `transparent` is
   // always false — this is a standalone widget page, not a form dropped into
   // a host page's own background.
-  const { style, darkCss, themed } = publicFormTheme(
+  // `formAccent` is the CTA pair (`{ accent, accentForeground }`) this same
+  // call already resolves for the composer's send button — forwarded to
+  // ConciergeChat so the loader's launcher can match it via a
+  // `bis-concierge-brand` message rather than a second, independent colour
+  // decision baked into the cached snippet (Task 5 review, Adopted Minor).
+  const { style, darkCss, themed, formAccent } = publicFormTheme(
     branding, false,
     parseHostMode(typeof sp.theme === "string" ? sp.theme : undefined),
   );
@@ -147,6 +152,8 @@ export default async function ConciergePage({
         strings={strings}
         renderToken={issueRenderToken(publicId)}
         attribution={parseAttribution(query)}
+        brandAccent={formAccent.accent}
+        brandAccentForeground={formAccent.accentForeground}
       />
       <p className="bis-concierge-footer">{strings.poweredBy}</p>
     </main>

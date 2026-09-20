@@ -29,6 +29,16 @@ export const EMBED_SCRIPT = `(function () {
   }
   if (!publicId) return;
 
+  // Idempotence: the bubble is page-level chrome — only ONE ever, even if
+  // the snippet is pasted twice on one page by mistake. data-form and
+  // data-booking are deliberately NOT guarded here: a page can legitimately
+  // embed two different forms inline, each its own iframe beside its own
+  // <script> tag, and a global flag would break that.
+  if (concierge) {
+    if (window.__bisConciergeMounted) return;
+    window.__bisConciergeMounted = true;
+  }
+
   var origin = new URL(script.src).origin;
   var params = new URLSearchParams();
 
@@ -81,17 +91,47 @@ export const EMBED_SCRIPT = `(function () {
 
     panel = document.createElement("div");
     panel.style.position = "fixed";
-    panel.style.right = "16px";
-    panel.style.bottom = "88px";
-    panel.style.width = "380px";
-    panel.style.maxWidth = "calc(100vw - 32px)";
-    panel.style.height = "min(620px, calc(100vh - 120px))";
     panel.style.zIndex = z;
     panel.style.display = "none";
-    panel.style.borderRadius = "12px";
     panel.style.overflow = "hidden";
     panel.style.boxShadow = "0 12px 40px rgba(24, 16, 48, .28)";
     panel.appendChild(iframe);
+
+    // Mobile: under 480px the floating card becomes a full-viewport sheet —
+    // inset:0, no radius — because a 380px card makes no sense pinned to the
+    // corner of a 360px phone screen. Applied at load AND kept live on
+    // resize/rotate, not read once: a phone opened landscape-then-rotated
+    // must not get stuck on the wrong geometry.
+    function applyGeometry(mobile) {
+      if (mobile) {
+        panel.style.inset = "0";
+        panel.style.right = "";
+        panel.style.bottom = "";
+        panel.style.width = "100%";
+        panel.style.maxWidth = "100%";
+        panel.style.height = "100%";
+        panel.style.borderRadius = "0";
+      } else {
+        panel.style.inset = "";
+        panel.style.right = "16px";
+        panel.style.bottom = "88px";
+        panel.style.width = "380px";
+        panel.style.maxWidth = "calc(100vw - 32px)";
+        panel.style.height = "min(620px, calc(100vh - 120px))";
+        panel.style.borderRadius = "12px";
+      }
+    }
+    var mq = window.matchMedia ? window.matchMedia("(max-width: 480px)") : null;
+    applyGeometry(mq ? mq.matches : false);
+    if (mq) {
+      if (mq.addEventListener) {
+        mq.addEventListener("change", function (e) { applyGeometry(e.matches); });
+      } else if (mq.addListener) {
+        // Legacy Safari/older browsers never got addEventListener on
+        // MediaQueryList.
+        mq.addListener(function (e) { applyGeometry(e.matches); });
+      }
+    }
 
     launcher = document.createElement("button");
     launcher.type = "button";
@@ -109,23 +149,40 @@ export const EMBED_SCRIPT = `(function () {
     launcher.style.background = script.getAttribute("data-color") || "#6D28D9";
     launcher.style.color = "#fff";
     launcher.style.fontSize = "22px";
-    launcher.textContent = "\\u{1F4AC}";
+    // ES5 surrogate-pair escape, not the ES6 \u{1F4AC} codepoint-escape
+    // syntax — this string ships verbatim to browsers this file's own
+    // header comment claims to still run on.
+    launcher.textContent = "\\uD83D\\uDCAC";
 
     setOpen = function (open) {
       panel.style.display = open ? "block" : "none";
       launcher.setAttribute("aria-expanded", open ? "true" : "false");
+      // Focus follows the visitor's action: opening hands the conversation
+      // to the iframe, so a keyboard user lands where they can type rather
+      // than stranded on the launcher button.
+      if (open && iframe.focus) iframe.focus();
     };
     launcher.addEventListener("click", function () {
       setOpen(panel.style.display === "none");
     });
     // Esc closes the overlay, on the HOST page too — the panel sits over
-    // someone else's content and must behave like one.
+    // someone else's content and must behave like one. (Once the visitor is
+    // typing INSIDE the iframe, this keydown listener is dead — a keydown
+    // fired inside a cross-origin iframe never reaches the host window at
+    // all. The chat page's own Esc handler and close button cover that case
+    // by posting bis-concierge-close instead, handled below.)
     window.addEventListener("keydown", function (e) {
       if (e.key === "Escape") setOpen(false);
     });
 
-    document.body.appendChild(panel);
-    document.body.appendChild(launcher);
+    // document.body is null when this script is pasted in <head> with no
+    // async/defer — falling straight through to document.body.appendChild
+    // threw a TypeError there and killed the whole IIFE, the message
+    // listener included. document.documentElement always exists by the time
+    // any <script> can run.
+    var mountTarget = document.body || document.documentElement;
+    mountTarget.appendChild(panel);
+    mountTarget.appendChild(launcher);
   } else {
     iframe.style.height = (script.getAttribute("data-min-height") || minHeight) + "px";
     iframe.setAttribute("loading", "lazy");
@@ -162,7 +219,23 @@ export const EMBED_SCRIPT = `(function () {
       return;
     }
 
-    if (data.type === "bis-form-height" && typeof data.height === "number" && data.height > 0) {
+    // Sent once by the chat page at load, from the same theme values it
+    // paints with — self-healing on a rebrand, and per-tenant colour never
+    // bakes into this cached, shared script. data-color is an explicit
+    // operator override and always wins, even after this message arrives.
+    if (concierge && data.type === "bis-concierge-brand"
+        && typeof data.accent === "string" && data.accent
+        && typeof data.accentForeground === "string" && data.accentForeground) {
+      if (!script.getAttribute("data-color")) {
+        launcher.style.background = data.accent;
+        launcher.style.color = data.accentForeground;
+      }
+      return;
+    }
+
+    // The concierge iframe fills its panel by CSS (height: 100%), not by a
+    // message — a stray or malicious bis-form-height must not resize it.
+    if (!concierge && data.type === "bis-form-height" && typeof data.height === "number" && data.height > 0) {
       iframe.style.height = Math.ceil(data.height) + "px";
       return;
     }

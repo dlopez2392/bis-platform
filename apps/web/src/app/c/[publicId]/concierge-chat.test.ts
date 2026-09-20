@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { pickTurnUpdate, pickErrorUpdate, conversationStore, type TurnResult } from "./concierge-chat";
+import {
+  pickTurnUpdate, pickErrorUpdate, conversationStore, type TurnResult,
+  CLOSE_MESSAGE, brandMessage, shouldCloseOnKey,
+} from "./concierge-chat";
 import { conciergeStrings } from "@/lib/concierge/strings";
 
 /**
@@ -181,5 +184,54 @@ describe("conversationStore", () => {
     conversationStore("pub2", () => storage).write("conv-B");
     expect(conversationStore("pub1", () => storage).read()).toBe("conv-A");
     expect(conversationStore("pub2", () => storage).read()).toBe("conv-B");
+  });
+});
+
+/**
+ * The close producer (review corrections): the loader's own
+ * `bis-concierge-close` handling was already tested and correct — what was
+ * missing was anyone inside the iframe ever SENDING it. Esc, once focus is
+ * inside the iframe, never reaches the host window's own keydown listener
+ * (a cross-origin iframe's keydown does not bubble out), so the chat page
+ * posts this message itself, from Esc and from a header close button.
+ * `CLOSE_MESSAGE` is the wire contract both sides share — embed-script.ts
+ * hardcodes the same string independently, so a typo on either side is
+ * exactly the kind of defect a shared literal test catches.
+ */
+describe("CLOSE_MESSAGE", () => {
+  it("matches the loader's message-listener contract for bis-concierge-close", () => {
+    // MUTATION: typo the type string (e.g. "bis-concierge-closed") — this
+    // FAILS, and the loader's `data.type === "bis-concierge-close"` check in
+    // embed-script.ts would never match a real close from this page again.
+    expect(CLOSE_MESSAGE).toEqual({ type: "bis-concierge-close" });
+  });
+});
+
+describe("shouldCloseOnKey", () => {
+  it("is true only for Escape", () => {
+    // MUTATION: invert the comparison (`!== "Escape"`) — this FAILS on both
+    // assertions at once.
+    expect(shouldCloseOnKey({ key: "Escape" })).toBe(true);
+    expect(shouldCloseOnKey({ key: "Enter" })).toBe(false);
+  });
+});
+
+/**
+ * Brand colour by message (Adopted Minor): the chat page posts this once at
+ * load, built from the SAME `--form-accent`/`--form-accent-foreground`
+ * values `publicFormTheme` already paints the page with (`page.tsx`'s
+ * `formAccent`) — never a second, independent colour decision. The loader
+ * paints the launcher from it, `data-color` still winning as an operator
+ * override. Not baked into the cached snippet at copy time, so it does not
+ * rot on a rebrand.
+ */
+describe("brandMessage", () => {
+  it("carries the accent pair in the exact shape the loader's postMessage listener expects", () => {
+    // MUTATION: drop `accentForeground` from the returned object — this
+    // FAILS, and the loader's `typeof data.accentForeground === "string"`
+    // guard in embed-script.ts would then always refuse to repaint.
+    expect(brandMessage("#112233", "#ffffff")).toEqual({
+      type: "bis-concierge-brand", accent: "#112233", accentForeground: "#ffffff",
+    });
   });
 });

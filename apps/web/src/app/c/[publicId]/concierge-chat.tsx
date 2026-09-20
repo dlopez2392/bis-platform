@@ -102,6 +102,44 @@ export function pickErrorUpdate(
 }
 
 /**
+ * The close producer (Task 5 review, "Esc and the close producer"): the
+ * loader's own `bis-concierge-close` handling in embed-script.ts was already
+ * correct and tested — what had NO producer anywhere was this side sending
+ * it. Once focus moves into the iframe (which it does on open — see the
+ * loader), a keydown fired inside a cross-origin iframe never reaches the
+ * HOST window's own Esc listener at all, so that listener alone is dead the
+ * moment a visitor starts typing. This page posts the close itself, from
+ * Esc and from a header close button, to `window.parent` — same
+ * `postMessage(..., "*")` shape `bis-form-redirect`/`bis-form-submitted`
+ * already use on `/f`: the payload carries nothing, and the host's own
+ * listener is the side that stays strict about source and origin.
+ *
+ * The literal is a wire contract shared with embed-script.ts, which
+ * hardcodes the same string independently — a typo on either side breaks
+ * the close silently, which is exactly what `concierge-chat.test.ts` pins.
+ */
+export const CLOSE_MESSAGE = { type: "bis-concierge-close" } as const;
+
+/** Pure so `window.addEventListener("keydown", …)`'s handler is one line and
+ *  the actual decision is testable without a DOM. */
+export function shouldCloseOnKey(event: Pick<KeyboardEvent, "key">): boolean {
+  return event.key === "Escape";
+}
+
+/**
+ * Brand colour by message (Adopted Minor, Task 5 review): posted ONCE at
+ * load, built from the exact `--form-accent`/`--form-accent-foreground`
+ * values `publicFormTheme` already paints this page with (`page.tsx`'s
+ * `formAccent`) — the loader's launcher matches without the colour ever
+ * baking into the cached, shared snippet, where it would rot on a rebrand.
+ * `data-color` on the `<script>` tag stays an operator override and always
+ * wins — decided entirely on the loader side, this page just informs it.
+ */
+export function brandMessage(accent: string, accentForeground: string) {
+  return { type: "bis-concierge-brand" as const, accent, accentForeground };
+}
+
+/**
  * The four DESIGN.md states all live here: the greeting IS the empty state
  * (rule 5 — one sentence of what appears here, and here it is the tenant's
  * own copy, so there is nothing to invent), a message-shaped skeleton is the
@@ -115,10 +153,15 @@ export function pickErrorUpdate(
  */
 export function ConciergeChat({
   publicId, greeting, locale, strings, renderToken, attribution,
+  brandAccent, brandAccentForeground,
 }: {
   publicId: string; greeting: string; locale: "en" | "es";
   strings: ConciergeStrings; renderToken: string;
   attribution: Record<string, string>;
+  /** `publicFormTheme`'s own CTA pair (`formAccent`) — the same colours this
+   *  page is already painting the composer's send button with, forwarded to
+   *  the host page's launcher via `bis-concierge-brand`. */
+  brandAccent: string; brandAccentForeground: string;
 }) {
   // The greeting IS the empty state. It is the tenant's own copy, from their
   // own profile row — there is nothing to invent here.
@@ -144,6 +187,34 @@ export function ConciergeChat({
   const bottom = useRef<HTMLDivElement>(null);
 
   useEffect(() => { bottom.current?.scrollIntoView({ block: "end" }); }, [messages, pending]);
+
+  // Posted once, at load: the loader's launcher paints from these exact
+  // values (`window.parent === window` is the standalone-page case — this
+  // route is also reachable by a direct link, not only embedded, and there
+  // is no host chrome to inform then).
+  useEffect(() => {
+    if (window.parent === window) return;
+    window.parent.postMessage(brandMessage(brandAccent, brandAccentForeground), "*");
+  }, [brandAccent, brandAccentForeground]);
+
+  // The close producer: Esc, for as long as it still reaches this window
+  // (before focus moves into any nested element the iframe's own future
+  // content might add) and — the case that actually matters once a visitor
+  // is typing — the header close button below, which needs no keyboard
+  // bubbling at all because it is a click inside this same document.
+  useEffect(() => {
+    if (window.parent === window) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (shouldCloseOnKey(e)) window.parent.postMessage(CLOSE_MESSAGE, "*");
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  function closeChat() {
+    if (window.parent === window) return;
+    window.parent.postMessage(CLOSE_MESSAGE, "*");
+  }
 
   async function send(e: React.FormEvent) {
     e.preventDefault();
@@ -207,6 +278,31 @@ export function ConciergeChat({
 
   return (
     <div className="bis-concierge-panel">
+      {/* A small header close button (ghost, tokens only) — the panel's own
+          producer for bis-concierge-close. Not in concierge.css: inline
+          `var(--token, fallback)` values, the same technique `page.tsx`
+          already uses for the whole token set on <main>. No outline is set
+          here on purpose — the browser's own default :focus-visible ring
+          stays, which is what DESIGN.md's "visible focus ring" asks for. */}
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <button
+          type="button"
+          onClick={closeChat}
+          aria-label={locale === "es" ? "Cerrar" : "Close"}
+          style={{
+            background: "transparent",
+            border: 0,
+            cursor: "pointer",
+            color: "var(--muted-foreground, #71717a)",
+            padding: 4,
+            borderRadius: "var(--radius-ctl, 8px)",
+            fontSize: 18,
+            lineHeight: 1,
+          }}
+        >
+          ×
+        </button>
+      </div>
       <ol className="bis-concierge-log" aria-live="polite">
         {messages.map((msg, i) => (
           <li key={i} className={`bis-msg bis-msg-${msg.role}`}>{msg.text}</li>
