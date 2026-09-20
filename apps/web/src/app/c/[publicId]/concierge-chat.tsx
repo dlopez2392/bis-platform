@@ -11,6 +11,45 @@ type Msg = { role: "visitor" | "assistant"; text: string };
  *  always present, empty when the turn did not end (route.ts's `quiet()`). */
 export type TurnResult = { conversationId: string; reply: string; ended: boolean; closing: string };
 
+type ConciergeStorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+
+/**
+ * `conversationId` persistence (Item 1, Branch 2 hardening): a bare `useRef`
+ * started a new conversation on every iframe load, and the bubble re-renders
+ * on every host-page navigation — a visitor who asks a question on three
+ * pages of a client's site got the fourth refused, reading "Something went
+ * wrong," forever (`CONCIERGE_MAX_CONVERSATIONS_PER_IP` is 3 per 10
+ * minutes). Keyed by `publicId` in `sessionStorage`: a page reload mid-
+ * conversation continues it, a new tab after the close starts fresh.
+ *
+ * `getStorage` is a THUNK, never `window.sessionStorage` read eagerly — a
+ * private window throws on the PROPERTY ACCESS itself, not only on a method
+ * called against it — so every operation below wraps the accessor CALL in
+ * its own try/catch, not just `getItem`/`setItem`/`removeItem`. That is also
+ * what makes this pure and testable without a DOM (this repo has no
+ * jsdom/`.tsx` infra): a fake or a throwing thunk stands in for
+ * `window.sessionStorage` with no browser involved at all.
+ */
+export function conversationStore(
+  publicId: string,
+  getStorage: () => ConciergeStorageLike = () => window.sessionStorage,
+) {
+  const key = `bis-concierge:${publicId}`;
+  return {
+    read(): string | null {
+      try { return getStorage().getItem(key); } catch { return null; }
+    },
+    write(id: string): void {
+      try { getStorage().setItem(key, id); }
+      catch { /* private window, cleared site data, or blocked storage */ }
+    },
+    clear(): void {
+      try { getStorage().removeItem(key); }
+      catch { /* as above */ }
+    },
+  };
+}
+
 /**
  * The ONE place that decides what a turn response renders (Important B,
  * second-round review of 108b822): a chat bubble from `reply`, or the fixed
@@ -24,6 +63,27 @@ export function pickTurnUpdate(data: TurnResult): { bubble: string | null; closi
     bubble: data.ended ? null : (data.reply || null),
     closing: data.ended ? (data.closing || null) : null,
   };
+}
+
+/**
+ * The pure decision behind `send()`'s `!res.ok` branch (Item 1, Branch 2
+ * hardening). A 429 from the turn route is a real cap
+ * (`CONCIERGE_MAX_CONVERSATIONS_PER_IP`/`_ACCOUNT_PER_DAY`), not a
+ * permanent refusal, so it gets `strings.rateLimited` rather than the
+ * generic `strings.unavailable`, and `ended` stays false — the composer
+ * stays open and the conversation id already in `sessionStorage` is left
+ * alone, so the visitor can try again on the same conversation. This is the
+ * spec's own stated reason for choosing 429 over the anti-oracle body: "a
+ * real visitor who hits one needs to know to come back later." Every other
+ * non-OK status keeps the existing `unavailable` sentence.
+ */
+export function pickErrorUpdate(
+  data: { status: number },
+  strings: Pick<ConciergeStrings, "rateLimited" | "unavailable">,
+): { closing: string; ended: boolean } {
+  return data.status === 429
+    ? { closing: strings.rateLimited, ended: false }
+    : { closing: strings.unavailable, ended: false };
 }
 
 /**
@@ -58,7 +118,13 @@ export function ConciergeChat({
   // collide into a hardcoded paragraph that contradicts whichever bubble (or
   // absence of one) the visitor already read.
   const [endedMessage, setEndedMessage] = useState<string | null>(null);
-  const conversationId = useRef<string | null>(null);
+  // Read once, on mount, from `sessionStorage` — a page reload mid-
+  // conversation continues it (Item 1, Branch 2 hardening). `useRef`'s
+  // initializer argument runs every render but React only keeps the FIRST
+  // result, so this is the standard React shape for a cheap one-time read;
+  // `conversationStore(publicId).read()` is already wrapped in its own
+  // try/catch and costs nothing when storage is blocked.
+  const conversationId = useRef<string | null>(conversationStore(publicId).read());
   const honeypot = useRef<HTMLInputElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
 
@@ -85,9 +151,24 @@ export function ConciergeChat({
           [HONEYPOT_FIELD]: honeypot.current?.value ?? "",
         }),
       });
-      if (!res.ok) throw new Error(String(res.status));
+      if (!res.ok) {
+        // `pickErrorUpdate` is the pure decision: 429 is a real cap, not a
+        // permanent refusal, and gets its own sentence without touching
+        // `ended` (Item 1, Branch 2 hardening) — everything else keeps the
+        // existing `unavailable` path, same visual treatment either way.
+        const outcome = pickErrorUpdate({ status: res.status }, strings);
+        setError(outcome.closing);
+        if (outcome.ended) setEnded(true);
+        return;
+      }
       const data = await res.json() as TurnResult;
       conversationId.current = data.conversationId;
+      // Persisted whenever the route hands back a real id, and cleared the
+      // moment the conversation ends — a new tab after the close starts
+      // fresh (Item 1, Branch 2 hardening).
+      const store = conversationStore(publicId);
+      if (data.ended) store.clear();
+      else if (data.conversationId) store.write(data.conversationId);
       // ONE decision, ONE sentence: `pickTurnUpdate` never returns both a
       // bubble and a closing line for the same turn (see its own doc).
       const update = pickTurnUpdate(data);
@@ -121,10 +202,12 @@ export function ConciergeChat({
       {error && <p className="bis-concierge-error" role="status">{error}</p>}
       {/* Not an error state: a conversation that reached its cap still wants
           to become a lead, so the copy asks for one. The sentence itself is
-          the server's `closing` value (Important B) — `strings.ended` is
-          only a defensive fallback for a response that broke the contract,
-          never the primary source now. */}
-      {ended && <p className="bis-concierge-ended" role="status">{endedMessage ?? strings.ended}</p>}
+          the server's `closing` value (Important B) — the `?? strings.ended`
+          fallback is DROPPED (Item 5, Branch 2 hardening): a wiring
+          regression that leaves `endedMessage` unset now renders NOTHING
+          rather than a fixed sentence that might contradict whichever
+          bubble (or absence of one) the visitor already read. */}
+      {ended && endedMessage && <p className="bis-concierge-ended" role="status">{endedMessage}</p>}
 
       <form className="bis-concierge-composer" onSubmit={send}>
         {/* Off-screen, not display:none — some bots skip hidden inputs but

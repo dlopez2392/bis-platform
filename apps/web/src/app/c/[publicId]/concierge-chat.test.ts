@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { pickTurnUpdate, type TurnResult } from "./concierge-chat";
+import { pickTurnUpdate, pickErrorUpdate, conversationStore, type TurnResult } from "./concierge-chat";
+import { conciergeStrings } from "@/lib/concierge/strings";
 
 /**
  * IMPORTANT B (second-round review of 108b822): the turn route used to send
@@ -47,7 +48,15 @@ describe("pickTurnUpdate", () => {
     expect(pickTurnUpdate(data)).toEqual({ bubble: null, closing: "Bye." });
   });
 
-  it("renders each of the three real ended-path shapes as exactly one closing sentence", () => {
+  it("renders each of the three real ended-path shapes as exactly one, NON-EMPTY closing sentence", () => {
+    // Item 5, Branch 2 hardening: the page dropped `?? strings.ended` from
+    // its JSX (`{ended && endedMessage && <p>…</p>}`), so a wiring
+    // regression that leaves `closing` empty now renders NOTHING rather
+    // than a fallback sentence that might contradict what the visitor
+    // already read. That only stays safe if every ended shape the route can
+    // really produce carries a non-empty `closing` — asserted here directly,
+    // not just implied by `toBe(data.closing)` against fixtures that happen
+    // to be non-empty.
     const turnCap: TurnResult = { conversationId: "c1", reply: "", ended: true, closing: "This chat is closed. If you shared your name and a way to reach you, someone from the team will follow up." };
     const startGuard: TurnResult = { conversationId: "", reply: "", ended: true, closing: "This chat is closed. If you shared your name and a way to reach you, someone from the team will follow up." };
     const expired: TurnResult = { conversationId: "", reply: "", ended: true, closing: "This page has been open a while — refresh to start a conversation." };
@@ -55,6 +64,96 @@ describe("pickTurnUpdate", () => {
       const update = pickTurnUpdate(data);
       expect(update.bubble).toBeNull();
       expect(update.closing).toBe(data.closing);
+      expect(update.closing).toBeTruthy();
     }
+  });
+});
+
+/**
+ * The pure decision behind `send()`'s `!res.ok` branch (Item 1, Branch 2
+ * hardening). A 429 from `POST /turn` is a real cap, not a permanent
+ * refusal — `CONCIERGE_MAX_CONVERSATIONS_PER_IP`/`_ACCOUNT_PER_DAY` — so it
+ * gets `strings.rateLimited` rather than the generic `strings.unavailable`,
+ * and `ended` stays false: the composer stays open and the conversation id
+ * already in `sessionStorage` is untouched, so the visitor can try again on
+ * the same conversation. Every other non-OK status keeps the existing
+ * `unavailable` sentence — this is the ONE place that decides which sentence
+ * a non-OK response gets, so "429 is not a dead end" is a property this file
+ * can check without a DOM.
+ */
+describe("pickErrorUpdate", () => {
+  const strings = conciergeStrings(undefined);
+
+  it("shows the rate-limited sentence, not `unavailable`, on 429", () => {
+    // MUTATION: treat 429 the same as every other status (always return
+    // `{ closing: strings.unavailable, ended: false }`) — this FAILS, and
+    // the spec's own stated reason for choosing 429 over the anti-oracle
+    // body ("a real visitor who hits one needs to know to come back later")
+    // is never actually delivered.
+    expect(pickErrorUpdate({ status: 429 }, strings)).toEqual({ closing: strings.rateLimited, ended: false });
+  });
+
+  it("falls back to the existing `unavailable` sentence for every other non-OK status", () => {
+    expect(pickErrorUpdate({ status: 503 }, strings)).toEqual({ closing: strings.unavailable, ended: false });
+    expect(pickErrorUpdate({ status: 403 }, strings)).toEqual({ closing: strings.unavailable, ended: false });
+  });
+
+  it("never ends the conversation on 429 — the visitor may try later on the same one", () => {
+    expect(pickErrorUpdate({ status: 429 }, strings).ended).toBe(false);
+  });
+});
+
+/**
+ * `conversationStore` is the persistence Item 1 (page half) adds:
+ * `conversationId` moves out of a bare `useRef` into `sessionStorage` keyed
+ * by `publicId`, so a page reload mid-conversation continues it instead of
+ * starting a fresh one and burning another slot of
+ * `CONCIERGE_MAX_CONVERSATIONS_PER_IP`. `getStorage` is a THUNK, never
+ * `window.sessionStorage` read eagerly — Safari private mode throws on the
+ * PROPERTY ACCESS itself, not only on a method call — which is also what
+ * makes this testable under plain node (this repo has no jsdom/`.tsx`
+ * infra): a throwing thunk stands in for a blocked or private-mode
+ * `sessionStorage` with no DOM involved at all.
+ */
+describe("conversationStore", () => {
+  function fakeStorage() {
+    const backing = new Map<string, string>();
+    return {
+      getItem: (k: string) => backing.get(k) ?? null,
+      setItem: (k: string, v: string) => { backing.set(k, v); },
+      removeItem: (k: string) => { backing.delete(k); },
+    };
+  }
+
+  it("returns null when storage throws on access, rather than throwing itself", () => {
+    // MUTATION: drop the `try/catch` around the storage access — this
+    // FAILS, because `getStorage()` throwing (the private-window case)
+    // propagates out of `read()` instead of the page just starting fresh.
+    const store = conversationStore("pub1", () => { throw new Error("SecurityError"); });
+    expect(store.read()).toBeNull();
+  });
+
+  it("round-trips an id", () => {
+    const storage = fakeStorage();
+    const store = conversationStore("pub1", () => storage);
+    expect(store.read()).toBeNull();
+    store.write("conv-123");
+    expect(store.read()).toBe("conv-123");
+  });
+
+  it("clears on ended", () => {
+    const storage = fakeStorage();
+    const store = conversationStore("pub1", () => storage);
+    store.write("conv-123");
+    store.clear();
+    expect(store.read()).toBeNull();
+  });
+
+  it("keys by publicId, so two widgets on one host page never collide", () => {
+    const storage = fakeStorage();
+    conversationStore("pub1", () => storage).write("conv-A");
+    conversationStore("pub2", () => storage).write("conv-B");
+    expect(conversationStore("pub1", () => storage).read()).toBe("conv-A");
+    expect(conversationStore("pub2", () => storage).read()).toBe("conv-B");
   });
 });
