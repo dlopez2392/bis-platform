@@ -23,6 +23,16 @@ export type VoicePromptInput = {
    * worse off than one who was never offered it.
    */
   handoffAvailable?: boolean;
+  /**
+   * Which surface this conversation is happening on. OPTIONAL and defaulting
+   * to "phone" so every existing caller's prompt is byte-identical — a
+   * prompt change is a behaviour change on a live phone line.
+   *
+   * The web demo (`api/voice/web/session`) deliberately does NOT pass this:
+   * it is voice, over WebRTC, and it keeps the `webDemoNotice` it has always
+   * appended. Only the text concierge passes "web".
+   */
+  medium?: "phone" | "web";
 };
 
 export function buildRealtimeSessionConfig(input: VoicePromptInput, now: Date) {

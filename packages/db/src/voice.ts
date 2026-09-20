@@ -13,6 +13,8 @@ export type VoiceProfileRow = {
   languages: "en" | "es" | "both"; booking_enabled: boolean;
   after_hours: "hours_then_message" | "message_only"; enabled: boolean;
   textback_enabled: boolean; textback_body: string;
+  public_id: string | null; concierge_enabled: boolean;
+  concierge_form_id: string | null;
 };
 export type VoiceProfilePatch = Partial<Omit<VoiceProfileRow, "id" | "account_id">>;
 /**
@@ -36,9 +38,19 @@ export type FinishCallPatch = {
 };
 
 const PHONE_COLS = "id, account_id, e164, telnyx_id, status";
-const PROFILE_COLS =
+/**
+ * Exported so `concierge.ts`'s `getVoiceProfileByPublicId` can build its own
+ * select list FROM this one instead of holding a character-identical copy.
+ * The copy (`PROFILE_CONCIERGE_COLS`, removed in the Task 1 review fix) was
+ * indistinguishable from this string until the day the two drifted — the `as
+ * ConciergeProfile` cast at the concierge call site hides exactly that drift,
+ * so a column added here and forgotten there returns a row missing it, typed
+ * as present, with no type error and no failing test.
+ */
+export const PROFILE_COLS =
   "id, account_id, persona_name, greeting_en, greeting_es, facts, services, " +
-  "languages, booking_enabled, after_hours, enabled, textback_enabled, textback_body";
+  "languages, booking_enabled, after_hours, enabled, textback_enabled, textback_body, " +
+  "public_id, concierge_enabled, concierge_form_id";
 
 export async function getPhoneNumberByE164(
   db: SupabaseClient, e164: string,

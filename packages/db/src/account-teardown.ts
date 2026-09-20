@@ -18,7 +18,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  */
 export const ACCOUNT_OWNED_TABLES = [
   "site_traffic_breakdown", "site_traffic_daily", "sites",
-  "calls", "bookings", "calendars", "events", "form_submissions", "forms",
+  "calls", "bookings", "calendars", "events",
+  "concierge_conversations", "form_submissions", "forms",
   "messages", "conversations",
   "checklist_items", "contact_tags", "notes", "tasks",
   "opportunities", "pipeline_stages", "pipelines", "custom_fields",

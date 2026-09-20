@@ -76,7 +76,16 @@ export async function deleteAccountCascade(
   // 0029: traffic restricts on sites, sites on accounts — these three first.
   for (const table of ["site_traffic_breakdown", "site_traffic_daily", "sites",
                        "calls", "bookings", "messages", "conversations", "calendars",
-                       "checklist_items", "form_submissions",
+                       "checklist_items",
+                       // `concierge_conversations_form_id_fkey` is ON DELETE
+                       // RESTRICT to `forms` (migration 0042), same as
+                       // `form_submissions.form_id` (0006) — both have to go
+                       // before `forms` or its delete below fails and the
+                       // account becomes the "permanently undeletable" case
+                       // this sweep exists to prevent. account-teardown.ts's
+                       // ACCOUNT_OWNED_TABLES carries it in the same relative
+                       // position; the two lists must agree on this.
+                       "concierge_conversations", "form_submissions",
                        "forms", "contacts", "events", "voice_profiles", "phone_numbers",
                        "automations"]) {
     const { error } = await db.from(table).delete().eq("account_id", accountId);
