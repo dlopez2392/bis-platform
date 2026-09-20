@@ -819,6 +819,92 @@ EOF
 )"
 ```
 
+### Task 1 — revisions after review (these GOVERN over the code blocks above)
+
+The review of `f62605d` found one Critical and six Important issues. Two were
+plan-mandated — that is, my plan text was wrong, not a deliberate choice — and
+the corrections below serve the spec's own constraints rather than contradicting
+them. Migration **`0044_concierge_atomic_writes.sql` is already written and
+applied by the orchestrator**; no implementer writes or applies a migration.
+
+1. **`VoiceProfileRow` is a cross-package type and only one side was changed.**
+   Widening it breaks `apps/web`'s typecheck, so `pnpm check` — which CI's
+   `verify` job runs and the `main` ruleset requires — is RED at `f62605d`.
+   `DEFAULT_PROFILE` in `.../voice/voice-settings.tsx` and `PROFILE` in
+   `.../voice/page.test.ts` must gain `public_id: null`,
+   `concierge_enabled: false`, `concierge_form_id: null`, in the same commit
+   that widens the type. **Whenever a task widens a shared type, its own commit
+   fixes every consumer** — leaving it to a later task means the gate is red in
+   between.
+
+2. **`appendConciergeTurns` becomes `db.rpc("concierge_append_turns", …)`.**
+   My comment claimed `claimConciergeTurn` serialises turns within a
+   conversation. **That is false at every cap above 1.** The claim refuses only
+   at `turn_count >= p_max`; below the cap two concurrent POSTs both succeed
+   (the second blocks on the row lock, re-reads `1 < 24`, returns 2), both read
+   the same transcript, and the later write replaces the earlier — an exchange
+   vanishes with no error. The 0042 test passed only because it used `max = 1`,
+   the one value at which the claim holds. 0044's function does
+   `transcript = transcript || p_turns` in one statement and returns the new
+   length, so a test can tell an append from a replace. Delete the false
+   comment; do not soften it.
+
+3. **`enableConcierge` becomes `db.rpc("concierge_enable", …)`.** The old shape
+   read, minted in JS, wrote, and returned **its own mint rather than what the
+   row holds**. Two concurrent enables each get a different id while the row
+   keeps one, so the losing snippet points at a `/c/<publicId>` that resolves to
+   nothing forever. The unique index cannot catch it — both statements target
+   the same row. 0044's `coalesce(public_id, p_new_public_id)` mints only when
+   there is nothing to keep and `returning` hands back the stored value. It
+   returns **null when the account has no `voice_profiles` row**, which is a
+   real state, not an error — see revision 7.
+
+4. **`setConciergeSubmission` returns `Promise<boolean>`** — true when it
+   claimed the slot — and throws when zero rows matched but the conversation
+   exists. A zero-row update was indistinguishable from success, and this repo
+   already has the precedent three functions away: `setPhoneNumberTelnyxId`
+   (`packages/db/src/voice.ts:125-129`) does `.select("id")` and throws
+   `"matched no row"`. **`disableConcierge` gets the same treatment** — today it
+   reports success for an account with no profile row.
+
+5. **`PROFILE_COLS` is exported from `voice.ts` and reused.**
+   `PROFILE_CONCIERGE_COLS` was a character-identical copy, and the `as
+   ConciergeProfile` cast hides the drift: add a fourth column — exactly what
+   this task just did — and the concierge query silently returns a row missing
+   it, typed as present, with no type error and no failing test.
+
+6. **The counters test seeds a SECOND account** (a nested `withTestAccount`,
+   never a bare `createAccount` outside a try) and asserts the by-account count
+   ignores it. Every row belonged to one account, so dropping
+   `.eq("account_id", …)` left the test green — the live table is empty outside
+   a run, so the mutant returns the same number. That filter is the per-tenant
+   cost ceiling: counting globally would let one account's traffic throttle
+   every other client's widget, cross-tenant, with no error anywhere.
+   The `ip_hash` literals also take the grants test's per-process `RUN` suffix
+   — `countConciergeConversationsByIp` is deliberately not account-scoped, so
+   `toBe(1)` is an assertion about the whole table on the project shared with
+   production, and two overlapping runs each see 2.
+   ⚠️ The mutation "swap `ip_hash` for `account_id`" is **not constructible** —
+   the column is `uuid` and the swap throws a cast error first. The prescribed
+   mutation is **drop `.eq("ip_hash", ipHash)`**.
+
+7. **For Tasks 5 and 6:** an account that has never saved voice settings has NO
+   `voice_profiles` row (`voice-settings.tsx:20-23` documents this), so
+   `concierge_enable` returns null. The Website-assistant card must render that
+   as a stated reason — "set up the assistant's persona first" — not an
+   unhandled throw. This is correct behaviour, not a gap: there is no persona to
+   embed yet.
+
+8. **Test commands in this plan were wrong where they said
+   `pnpm --filter web test --` followed by a pattern.** That does not scope; it
+   runs all 213 files, because the `--` reaches vitest as a passthrough
+   separator rather than a filter. The scoping form is
+   **`pnpm --filter web exec vitest run <pattern>`**
+   (measured: 1 file, 22 tests, 396ms). Use `exec` everywhere below.
+
+9. Step 7's `git add` list omits `account-teardown.ts`, which Step 4 mandates,
+   and the two `apps/web` files from revision 1. Add all three.
+
 ---
 
 ### Task 2: One Sofía, two mediums
@@ -891,7 +977,7 @@ describe("buildSystemPrompt medium", () => {
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `pnpm --filter web test -- system-prompt`
+Run: `pnpm --filter web exec vitest run system-prompt`
 Expected: FAIL — `medium` is not a property of `VoicePromptInput` (typecheck),
 and the web assertions fail on the phone wording.
 
@@ -945,7 +1031,7 @@ Add, in the web branch only, after the TOOLS block:
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `pnpm --filter web test -- system-prompt`
+Run: `pnpm --filter web exec vitest run system-prompt`
 Expected: PASS, including the byte-identity test.
 
 Then the mutation: delete `input.medium === "web"`'s `=== "web"` so `onWeb` is
@@ -1128,7 +1214,7 @@ describe("/c/[publicId] metadata", () => {
 
 - [ ] **Step 3: Run it to verify it fails**
 
-Run: `pnpm --filter web test -- c/\\[publicId\\]`
+Run: `pnpm --filter web exec vitest run c/\\[publicId\\]`
 Expected: FAIL — `./page` does not exist.
 
 - [ ] **Step 4: Write the page**
@@ -1365,7 +1451,7 @@ off-screen rule copied from the public form's own stylesheet.
 
 - [ ] **Step 6: Run the page test and the typecheck**
 
-Run: `pnpm --filter web test -- c/\\[publicId\\]`
+Run: `pnpm --filter web exec vitest run c/\\[publicId\\]`
 Expected: PASS.
 
 Run: `pnpm --filter web exec tsc --noEmit`
@@ -1723,7 +1809,7 @@ describe("POST /api/concierge/[publicId]/turn", () => {
 
 - [ ] **Step 3: Run them to verify they fail**
 
-Run: `pnpm --filter web test -- concierge`
+Run: `pnpm --filter web exec vitest run concierge`
 Expected: FAIL — `./route` does not exist.
 
 - [ ] **Step 4: Write the route**
@@ -1978,7 +2064,7 @@ export async function POST(
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `pnpm --filter web test -- concierge`
+Run: `pnpm --filter web exec vitest run concierge`
 Expected: PASS, all files.
 
 - [ ] **Step 6: Mutation proof**
@@ -2125,7 +2211,7 @@ variables, which is why the assertions above read `doc.created`.)
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `pnpm --filter web test -- embed-script`
+Run: `pnpm --filter web exec vitest run embed-script`
 Expected: FAIL — `data-concierge` is not read, so the script returns early.
 
 - [ ] **Step 3: Add the concierge branch**
@@ -2226,7 +2312,7 @@ checks that are already there — they are not moved or weakened:
 
 - [ ] **Step 4: Run the loader tests to verify they pass**
 
-Run: `pnpm --filter web test -- embed-script`
+Run: `pnpm --filter web exec vitest run embed-script`
 Expected: PASS, including the two "unchanged" assertions for `data-form` and
 `data-booking`.
 
@@ -2368,7 +2454,7 @@ it("finds the website assistant by the words an operator would type", () => {
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `pnpm --filter web test -- "checklist-catalogue|palette"`
+Run: `pnpm --filter web exec vitest run "checklist-catalogue|palette"`
 Expected: FAIL on both.
 
 - [ ] **Step 3: Add the catalogue item and the keywords**
@@ -2440,7 +2526,7 @@ through the app's `.dark` class — **not** `data-theme` — and with
 `@supports not (backdrop-filter)`. Confirm the aurora reads THROUGH the card in
 light, since `--surface-1` is translucent there too.
 
-Run: `pnpm --filter web test -- branding/theme`
+Run: `pnpm --filter web exec vitest run branding/theme`
 Expected: PASS — the composite contrast sweep in both themes.
 
 - [ ] **Step 7: Run the gates, one at a time**
