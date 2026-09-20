@@ -2334,11 +2334,11 @@ alongside 5a's review because they touch disjoint files.
 
 **Interfaces:**
 - Consumes: everything Branch 1 shipped, at `main` `35cee85`.
-- Produces, for Task 5b: two new `ConciergeStrings` keys — `rateLimited` ("You've started a few conversations recently — please try again in a little while." / es) and `tooFast` ("That came through before the page finished loading — please send it again." / es) — and the route contract that a `429` body is `{ error: "rate_limited" }` (unchanged) so the page can map it to `strings.rateLimited`.
+- Produces, for Task 5b: two new `ConciergeStrings` keys — `rateLimited` ("You've started a few conversations recently — please try again in a little while." / es) and `tooFast` ("That came through before the page finished loading — please send it again." / es) — the route contract that a `429` body is `{ error: "rate_limited" }` (unchanged) so the page can map it to `strings.rateLimited`, **and a contract change the page MUST consume: a `200` turn response may now carry a non-empty `closing` with `ended: false`** (the too-fast turn: `{ conversationId: "", reply: "", ended: false, closing: strings.tooFast }`). Before 5a, `closing` was non-empty only when `ended` was true, and the page's `pickTurnUpdate` gates on exactly that — so without 5b's Step 2b below, the sentence never renders and the fast typist gets silence. (Found by both 5a's reviewer and 5b's implementer, from opposite sides.)
 
 - [ ] **Step 1: Write the failing `lead.test.ts`**
 
-Extract nothing yet. Write `apps/web/src/lib/concierge/lead.test.ts` against the signature the route's inner `fileLead` already has — read `route.ts` for its exact `ctx` shape and return type before writing. Fixtures MUST use distinct literals: `accountId: "acct-A"`, `formId: "form-then"`, a `PROFILE`-shaped object whose `concierge_form_id` is `"form-now"` if the function takes one, `origin: "https://app.example"`. Mock `@bis/db` with `vi.hoisted`. Tests, each naming its mutation:
+Extract nothing yet. Write `apps/web/src/lib/concierge/lead.test.ts` against the signature the route's inner `fileLead` already has — read `route.ts` for its exact `ctx` shape and return type before writing. Fixtures MUST use distinct literals: `accountId: "acct-A"`, `formId: "form-then"`, `origin: "https://app.example"`. (**Corrected after 5a:** `fileLead`'s `ctx` carries no profile, so there is no `"form-now"` to seed here; the profile-vs-conversation distinctness is proven in `route.test.ts:108-122`, where both ids are in scope. The unit test proves the narrower property: `fileLead` uses the `formId` it was HANDED and nothing else.) Mock `@bis/db` with `vi.hoisted`. Tests, each naming its mutation:
 
 ```ts
 it("files against the form id it was GIVEN, never the profile's current one", …)
@@ -2370,7 +2370,7 @@ Add `rateLimited` and `tooFast` to `strings.ts` (en/es). In the route, the too-f
 
 - [ ] **Step 5: Item 9 — the 42501 branch**
 
-`packages/db/src/concierge.ts:79`: make the MESSAGE the discriminator (`error.message?.includes("does not belong to this account")`) and keep the code as corroborator; when the code is 42501 but the message is NOT ours, rethrow with the true text — "permission denied for function concierge_enable" must reach a log, not be rewritten as "not yours". Test: a mocked 42501 with a foreign message rejects with that message verbatim. MUTATION: revert to the OR → FAILS.
+`packages/db/src/concierge.ts:79`: make the MESSAGE alone the discriminator (`error.message?.includes("does not belong to this account")`) — as implemented, `error.code` is no longer consulted, which is defensible and this text now says so rather than implying a corroboration the code does not perform; when a 42501 arrives whose message is NOT ours, rethrow with the true text — "permission denied for function concierge_enable" must reach a log, not be rewritten as "not yours". Test: a mocked 42501 with a foreign message rejects with that message verbatim. MUTATION: revert to the OR → FAILS.
 
 - [ ] **Step 6: Item 5 (e2e half) — the one render assertion the repo lacked**
 
@@ -2399,6 +2399,24 @@ In `concierge.spec.ts`'s page-renders test (the half that runs without a key): m
 - [ ] **Step 2: Item 1 — the 429 sentence**
 
 `if (!res.ok) throw` becomes: on `429`, show `strings.rateLimited` as the closing line WITHOUT disabling the composer and without `ended` (the visitor may try later on the same conversation); on anything else, the existing `unavailable` path. Extend `pickTurnUpdate` (or add a sibling) so the decision is a pure function with a test: `{ status: 429 }` → `{ closing: rateLimited, ended: false }`. MUTATION: treat 429 as unavailable → FAILS.
+
+- [ ] **Step 2b: Render a `closing` that arrives with `ended: false`**
+
+Task 5a's too-fast turn answers `{ conversationId: "", reply: "", ended:
+false, closing: strings.tooFast }`. `pickTurnUpdate` as written returns
+`closing: data.ended ? … : null`, so that sentence is dropped, no bubble
+renders (`reply` is empty), and the visitor's own message sits there as if
+sent — silence, which is worse than the wrong sentence item 4 replaced.
+
+Fix: `pickTurnUpdate` returns `closing: data.closing || null` **regardless of
+`ended`**; `ended` gates only the composer and the bubble. The paragraph
+renders on `endedMessage` being set, not on `ended`. Choose the class: a
+non-ended closing is a transient notice and belongs on the same element the
+429 sentence uses (`.bis-concierge-error`, `role="status"`), NOT on
+`.bis-concierge-ended`, which Task 5a's Playwright read asserts carries the
+close. Test on the exact too-fast body above: `bubble: null`, `closing:
+strings.tooFast`, and the composer stays enabled. MUTATION: restore the
+`ended` gate → FAILS.
 
 - [ ] **Step 3: Item 5 (page half) — drop the fallback**
 
