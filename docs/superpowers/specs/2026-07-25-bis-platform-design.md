@@ -153,6 +153,40 @@ Each module ships to a real client before the next starts. **Each module gets it
 implementation-plan cycle; the first plan covers M0 + M1 together** (foundation alone
 has no client-visible value).
 
+### 8a. Roadmap status (as of 2026-09-19, main `00d851a`)
+
+Nothing else in this repo tracks the table above against what shipped, so this
+block does. Read against the 40 specs in `docs/superpowers/specs/` and the code —
+each row was checked in the tree, not inferred from a spec's existence.
+
+| # | Status | What exists | What the roadmap row still owes |
+|---|---|---|---|
+| M0 | ✅ shipped | tenancy/RLS, agency shell, events log | — |
+| M1 | ✅ shipped | contacts (paging, drawer, CSV import/export, dedupe), pipeline, forms + embeds, unified inbox (SMS + email), missed-call text-back, custom fields/values, blueprints, activation checklist | — |
+| M2 | ✅ shipped | calendars, booking page + embed, SMS/email reminders; plus video meetings and follow-ups the row never asked for | — |
+| M3 | ⚠️ partial | a **pass registry** — eight fixed passes on one cron (reminders, follow-ups, review request, no-show nudge, SMS reminder, site traffic, weekly client and agency reports). `2026-09-06-automations-design.md` names it "a HARNESS, not a shared algorithm" on purpose. | the engine itself: user-defined **triggers → conditions → actions**, quiet hours as a rule rather than a per-pass gate, metering |
+| M4 | ⚠️ partial | the voice receptionist, live on a real client — answer route, realtime lifecycle, tools, summaries, spam screening, handoff, call proposals; a "Talk to Sofía" web demo | the **web concierge widget** and the **pgvector knowledge base** — the voice spec defers both to its "sub-project 3", never started; no pgvector migration exists |
+| M5 | ⚠️ partial | post-job review-request messages (one automation pass) | **GBP monitoring** and **AI-drafted replies**. The checklist's `gbp_connect` item is a "done outside BIS" manual step, not a feature. |
+| M6 | ❌ not started | — | Puck landing pages inside blueprints; Puck is not a dependency |
+| M7 | ❌ not started | — | Stripe plans, agency-layer UI, the "sell to other agencies" switch; no Stripe anywhere |
+
+**Read across the rows:** M0–M2 done, M3–M5 half-done, M6–M7 untouched. Most of
+the work since M2 went to things the table never listed and the first client
+needed first — white-labeling and per-tenant theming, A2P 10DLC registration, spam
+screening, call handoff, the work queue, call proposals, the weekly report. The
+roadmap said "each module ships to a real client before the next starts"; in
+practice the first real client's traffic (robocalls, mostly) set the order.
+
+**What the GHL inventory (`docs/research/ghl-domain-model.md` §B) has that this
+roadmap never adopted, by decision (§2), not by omission:** funnels/websites
+builder, social planner, ad manager, memberships/courses/communities,
+payments/invoicing/store, documents & e-sign, affiliate manager, marketplace/apps,
+online listings. Not gaps. The one worth revisiting is **SaaS mode / white-label
+billing**, because that is what M7 is.
+
+**Update this block when a row changes status** — a status table that is not
+maintained is worse than none, because it reads as current.
+
 ## 9. Repo & Conventions
 
 `C:\Users\danlo\bis-platform` — pnpm monorepo, carecompanion conventions:
