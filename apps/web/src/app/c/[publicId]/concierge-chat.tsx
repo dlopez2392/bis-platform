@@ -57,11 +57,26 @@ export function conversationStore(
  * gates the bubble off entirely rather than trusting `reply` to be empty on
  * every ended path — the route's contract guarantees that today, but the
  * render decision does not lean on the server keeping the promise.
+ *
+ * `notice` (5a/5b seam, Step 2b, reviewer-specified fix): the too-fast first
+ * message answers `{ reply: "", ended: false, closing: strings.tooFast }` at
+ * 200 — a real sentence with `ended: false`. `closing` stays gated on
+ * `ended` on purpose (it is the ONE fixed paragraph an ended conversation
+ * gets, and a non-ended sentence is a different, transient thing — the same
+ * distinction the 429 path already draws with `strings.rateLimited`), so
+ * without a third field that sentence had nowhere to render: not a bubble
+ * (`reply` is empty), not the closing paragraph (`ended` is false) — the
+ * visitor's own message just sat there, unexplained. `notice` is the
+ * un-ended-gated carrier for exactly this shape; `send()` renders it on the
+ * same `.bis-concierge-error` element the 429 sentence already uses.
  */
-export function pickTurnUpdate(data: TurnResult): { bubble: string | null; closing: string | null } {
+export function pickTurnUpdate(
+  data: TurnResult,
+): { bubble: string | null; closing: string | null; notice: string | null } {
   return {
     bubble: data.ended ? null : (data.reply || null),
     closing: data.ended ? (data.closing || null) : null,
+    notice: !data.ended && data.closing ? data.closing : null,
   };
 }
 
@@ -174,6 +189,12 @@ export function ConciergeChat({
       const update = pickTurnUpdate(data);
       if (update.bubble) setMessages((m) => [...m, { role: "assistant", text: update.bubble as string }]);
       if (update.closing) setEndedMessage(update.closing);
+      // A transient notice (the too-fast sentence), not a close — same
+      // element the 429 path already renders through (`.bis-concierge-error`,
+      // `role="status"`). The composer stays enabled and `ended`/the store
+      // are untouched: this is not `.bis-concierge-ended`, which Playwright
+      // reads as carrying the actual close.
+      if (update.notice) setError(update.notice);
       if (data.ended) setEnded(true);
     } catch {
       // One sentence, and the composer stays usable — a visitor mid-question

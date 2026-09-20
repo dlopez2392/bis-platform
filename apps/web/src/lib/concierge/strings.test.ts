@@ -87,6 +87,11 @@ describe("the copy shown when this IP or account is over its conversation cap (B
     expect(EN.rateLimited).toBeTruthy();
     expect(ES.rateLimited).toBeTruthy();
     expect(EN.rateLimited.toLowerCase()).toMatch(/later|little while/);
+    // Previously truthiness only — ES.rateLimited is "…inténtalo de nuevo
+    // más tarde." (Item 3): pin the same "come back later" property in
+    // Spanish rather than trusting a truthy check that any non-empty string
+    // satisfies.
+    expect(ES.rateLimited.toLowerCase()).toMatch(/más tarde|un rato|más adelante/);
   });
 });
 

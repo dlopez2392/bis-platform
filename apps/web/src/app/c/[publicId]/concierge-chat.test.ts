@@ -19,6 +19,8 @@ import { conciergeStrings } from "@/lib/concierge/strings";
  * for the close.
  */
 describe("pickTurnUpdate", () => {
+  const strings = conciergeStrings(undefined);
+
   it("shows the closing sentence and no bubble on the route's real ended shape", () => {
     // This is exactly what route.ts now sends on all three ended paths:
     // `reply: ""`, `closing` carrying the sentence.
@@ -28,12 +30,12 @@ describe("pickTurnUpdate", () => {
     // `reply`-carries-the-close shape) — this FAILS, because it would still
     // treat a non-empty `reply` on an ended turn as the closing text AND
     // leave the door open for a bubble to render it too.
-    expect(pickTurnUpdate(data)).toEqual({ bubble: null, closing: "This chat is closed." });
+    expect(pickTurnUpdate(data)).toEqual({ bubble: null, closing: "This chat is closed.", notice: null });
   });
 
   it("pushes a bubble and sets no closing on an ordinary, unended reply", () => {
     const data: TurnResult = { conversationId: "c1", reply: "Yes, we do.", ended: false, closing: "" };
-    expect(pickTurnUpdate(data)).toEqual({ bubble: "Yes, we do.", closing: null });
+    expect(pickTurnUpdate(data)).toEqual({ bubble: "Yes, we do.", closing: null, notice: null });
   });
 
   it("never renders a bubble on an ended turn, even if `reply` were non-empty", () => {
@@ -45,7 +47,31 @@ describe("pickTurnUpdate", () => {
     // FAILS, and a visitor would read the closing paragraph AND a bubble
     // carrying whatever `reply` held.
     const data: TurnResult = { conversationId: "c1", reply: "stray", ended: true, closing: "Bye." };
-    expect(pickTurnUpdate(data)).toEqual({ bubble: null, closing: "Bye." });
+    expect(pickTurnUpdate(data)).toEqual({ bubble: null, closing: "Bye.", notice: null });
+  });
+
+  /**
+   * The 5a/5b seam (Step 2b, reviewer-specified fix): the too-fast turn
+   * answers `{ reply: "", ended: false, closing: strings.tooFast }` at 200 —
+   * `ended` is false, so `closing` stays null (it is gated on `ended`, on
+   * purpose: a non-ended `closing` is a transient notice, not the one fixed
+   * paragraph an ended conversation gets), and `reply` is empty so no bubble
+   * renders either. Without a third field, that sentence had nowhere to go —
+   * the visitor's message sat there unexplained. `notice` is that third
+   * field: the un-ended-gated carrier for exactly this shape.
+   */
+  it("carries the too-fast sentence as a notice, not a bubble or the closing paragraph", () => {
+    const data: TurnResult = { conversationId: "", reply: "", ended: false, closing: strings.tooFast };
+    // MUTATION: restore the `ended` gate on `notice`
+    // (`notice: data.ended && data.closing ? data.closing : null`) — this
+    // FAILS, because `ended` is false on this exact route shape and the gate
+    // would suppress the one sentence this test exists to surface.
+    expect(pickTurnUpdate(data)).toEqual({ bubble: null, closing: null, notice: strings.tooFast });
+  });
+
+  it("carries no notice on an ordinary, in-progress reply", () => {
+    const data: TurnResult = { conversationId: "c1", reply: "Yes, we do.", ended: false, closing: "" };
+    expect(pickTurnUpdate(data).notice).toBeNull();
   });
 
   it("renders each of the three real ended-path shapes as exactly one, NON-EMPTY closing sentence", () => {

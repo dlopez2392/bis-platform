@@ -159,6 +159,22 @@ describe("fileLead", () => {
     expect(enrichMock).not.toHaveBeenCalled();
   });
 
+  it("writes consent NULL, not [], when the form carries no consent field at all", async () => {
+    // Item 10's other half — previously unasserted: every other test in this
+    // file runs against LEAD_FORM (no consent field) but none checked what
+    // `consent` actually carries, so `lead.ts` collapsing to `[]` unconditionally
+    // would have passed every test here.
+    const { db } = fakeDb();
+    await fileLead({ db, ...CTX });
+    const [, , , input] = dbFns.createSubmission.mock.calls[0]! as [
+      unknown, unknown, unknown, { consent: unknown },
+    ];
+    // MUTATION: replace `null` with `[]` in lead.ts's `consent` fallback —
+    // this FAILS, and an operator reading the row can no longer tell "this
+    // form has no consent field" from "the visitor never ticked it".
+    expect(input.consent).toBeNull();
+  });
+
   it("writes consent in #99's shape — every consent field given:false — not []", async () => {
     dbFns.getForm.mockResolvedValue(CONSENT_FORM);
     const { db } = fakeDb();

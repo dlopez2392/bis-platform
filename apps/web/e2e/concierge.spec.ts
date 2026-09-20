@@ -236,6 +236,47 @@ test("an expired render token renders the route's OWN closing sentence, not a ha
   expect(await page.locator(".bis-msg-assistant").count()).toBe(assistantBefore);
 });
 
+// The 5a/5b seam (Step 2b) — the ONE test that catches a future JSX
+// regression here. `pickTurnUpdate`'s unit tests prove the pure decision;
+// nothing short of reading the actual painted DOM proves `send()` actually
+// wires `update.notice` into `.bis-concierge-error`. Same interception
+// pattern as the expired-token test above, but the swapped-in token is
+// signed NOW rather than 31 minutes ago, so `verifyRenderToken` reports
+// `elapsedMs` under `MIN_FILL_MS` (2s) — the first-message-too-fast branch,
+// not the expired one — and the route answers 200 with
+// `{ reply: "", ended: false, closing: strings.tooFast }`. Needs no
+// OPENAI_API_KEY: this branch refuses before any model call.
+test("a first message that arrives before the page could truly have been read gets the tooFast notice, not silence", async ({ page }) => {
+  test.skip(!widget, skipReason);
+  const strings = conciergeStrings("en");
+
+  await page.goto(`/c/${widget!.publicId}`);
+  await expect(page.getByText(GREETING)).toBeVisible();
+  const assistantBefore = await page.locator(".bis-msg-assistant").count();
+
+  await page.route(`**/api/concierge/${widget!.publicId}/turn`, async (route) => {
+    const original = route.request().postDataJSON() as Record<string, unknown>;
+    const response = await page.request.post(route.request().url(), {
+      data: {
+        ...original,
+        [RENDER_TOKEN_FIELD]: signRenderToken(Date.now(), widget!.publicId),
+      },
+    });
+    await route.fulfill({ response });
+  });
+
+  await page.locator("#bis-concierge-input").fill("hello");
+  await page.getByRole("button", { name: strings.send }).click();
+
+  // Rendered as a transient notice, NOT the fixed closing paragraph — this
+  // is the exact element the 429 path also renders through.
+  await expect(page.locator(".bis-concierge-error")).toHaveText(strings.tooFast);
+  // Not ended: the composer stays open and the visitor can just send again.
+  await expect(page.locator("#bis-concierge-input")).toBeEnabled();
+  await expect(page.locator(".bis-concierge-ended")).toHaveCount(0);
+  expect(await page.locator(".bis-msg-assistant").count()).toBe(assistantBefore);
+});
+
 test("a visitor's message comes back with a reply", async ({ page }) => {
   test.skip(!widget, skipReason);
   test.skip(

@@ -224,10 +224,18 @@ export async function POST(
         // on its own — a fast typist, not a bot. NOT `ended: true` — the
         // composer stays open and the visitor can just send again a moment
         // later. Distinct from the honeypot and bad/expired-signature
-        // branches, which end the chat outright: naming this one case costs
-        // the anti-oracle nothing, since a spammer cannot force a FRESH,
-        // validly-signed token to also arrive too fast without controlling
-        // the page that minted it.
+        // branches, which end the chat outright.
+        //
+        // The anti-oracle claim above does NOT hold for this branch, and it
+        // would be dishonest to reuse it: a bot that GETs /c/<publicId>,
+        // lifts `bis_rt` straight out of the HTML, and POSTs within two
+        // seconds is the archetypal case this guard exists to catch, and
+        // naming `tooFast` distinctly from `ended` now tells it exactly
+        // which guard tripped. Accepted anyway — the fill floor is defeated
+        // by simply waiting two seconds and resubmitting the same token, so
+        // this leak buys a bot nothing it could not already get for free,
+        // while a real fast typist told the vaguer `ended` sentence (and its
+        // composer-closing consequence) is the worse cost of the two.
         if (!honeypot && verdict.ok && verdict.elapsedMs < MIN_FILL_MS) {
           return quiet("", "", false, strings.tooFast);
         }
