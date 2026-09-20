@@ -256,9 +256,20 @@ where every visitor can read it.
 | Honeypot field | ✅ `guards.ts:4` | turn 1 only |
 | Fill-time floor, `MIN_FILL_MS` 2000 | ✅ `guards.ts:9` | turn 1 only |
 | Keyed IP hashing, never raw | ✅ `guards.ts:128` | every turn |
-| Same response body on accept and reject | ✅ precedent | every turn |
+| Same response body on accept and reject | ✅ precedent | **turn-1 start guards only** |
 | Per-IP **conversation** cap | ➖ re-keyed | turn 1 only |
 | Per-conversation **turn cap** | ❌ **new** | every turn |
+
+**The anti-oracle body is narrower than the draft said, and deliberately
+(amended 2026-09-20 in Task 4's review).** The honeypot, the render token and
+the fill-time floor answer with the same body a good turn gets, because a
+spammer probing for which guard tripped can reshape the request to dodge it.
+The two caps answer `429` instead. A cap is not a guard a request can be
+reshaped to dodge, and a real visitor who hits one — three conversations in
+ten minutes is rare but possible — needs to know to come back later, not to
+be handed a fake reply. A chat cannot fake success the way a form's
+"thanks, we'll be in touch" can; the only convincing fake would be a real
+model call, which is the cost the cap exists to refuse.
 
 **Why the first three gate turn 1 only, and this is load-bearing.**
 `MAX_TOKEN_AGE_MS` is 30 minutes (`guards.ts:19`). A chat panel left open past

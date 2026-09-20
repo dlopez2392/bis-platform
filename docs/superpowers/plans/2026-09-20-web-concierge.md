@@ -1544,9 +1544,18 @@ idempotency keys for v1.
 `api/voice/web/session/route.ts` for the right ones.** `businessName` is NOT
 `profile.persona_name`; it is the customer-facing brand name resolved through
 `brandDisplayName` from the account's brand columns, never `accounts.name`
-(the agency's internal label). And `timezone` is NOT the literal `"UTC"`; the
-web session route resolves it through `getOrCreateCalendar`, and a visitor
-asking "are you open now" needs the business's zone. Match that route.
+(the agency's internal label). And `timezone` is NOT the literal `"UTC"`; it
+is **`accounts.timezone`** — `text NOT NULL`, and exactly what the phone path
+(`api/voice/incoming/route.ts:972`) and the web session route
+(`api/voice/web/session/route.ts:162,198`) both pass, so one company cannot be
+two zones depending on which door the caller used. ⚠️ This plan originally
+said "resolve it through `getOrCreateCalendar`, as the web session route
+does". That was wrong at source: that route uses `getOrCreateCalendar` only
+for `slot_duration_minutes` and `meeting_type`, which a `bookingEnabled: false`
+prompt never reads — and **`getOrCreateCalendar` INSERTS a calendar row**
+(`packages/db/src/booking.ts:125`). Calling it on an anonymous request would
+let any visitor create database rows by loading a page. The Task 4 implementer
+caught this and declined; the reviewer verified both halves.
 
 **E. `setConciergeSubmission` now returns a boolean**, true only when THIS call
 claimed the slot. Call `enrich()` only on true. The submission row is created
