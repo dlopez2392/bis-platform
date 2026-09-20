@@ -2582,6 +2582,32 @@ checks that are already there — they are not moved or weakened:
     }
 ```
 
+- [ ] **Step 3b: The iframe's timing against the fill floor — decide, then test it**
+
+Branch 1's whole-branch review named this and it belongs here, because there
+is no iframe until this task creates one. `MIN_FILL_MS` is 2 seconds from the
+render token's mint, which happens when `/c/<publicId>` renders. **If the
+frame is created on the launcher click, a visitor who clicks and types fast
+sends turn 1 inside the floor**, the route answers `strings.tooFast` (Task 5a
+made that recoverable — `ended: false`, the composer stays), and the visitor's
+first experience is being told to send it again. Not fatal now, but wrong.
+
+Decision for this task: **preload the frame at page load, hidden** — the
+`panel` is created and the iframe's `src` set immediately, with
+`display: none` until opened. By the time anyone can click, the floor has
+long passed. Cost: one extra request per host-page load for every visitor,
+whether or not they open the chat; `loading="lazy"` does NOT apply to a hidden
+iframe reliably, so this is a real fetch. Accept it — it is one small
+server-rendered page, and the alternative (a first message that bounces) is
+a product defect on the surface's first impression. Do NOT exempt turn 1
+from the floor on the server: the floor is a bot guard, and weakening it for
+the widget weakens it for everyone.
+
+Test, in `embed-script.test.ts`: the concierge branch sets `iframe.src` before
+the launcher is clicked (assert on `doc.created` right after `run(...)`, no
+click), and the panel is hidden. MUTATION: set `src` on first click → the
+pre-click assertion FAILS.
+
 - [ ] **Step 4: Run the loader tests to verify they pass**
 
 Run: `pnpm --filter web exec vitest run embed-script`
@@ -2775,6 +2801,27 @@ In `voice-settings.tsx`, add the card, beside the `booking_enabled` and
 - The toggle. **Disabled, with the reason stated in words, until a destination
   form is chosen** — the setup wizard's "locked, with a reason" shape. A
   control that can be clicked and does nothing is a control that lies.
+  **Three more locked states, each with its own sentence** (from Branch 1's
+  reviews; all are real production states):
+  - **No voice profile row at all** — an account that has never saved voice
+    settings has none (`voice-settings.tsx:20-23`), and `enableConcierge`
+    throws its "no voice profile" error. Lock with: "Set up the assistant's
+    name and greeting first." Do not catch-and-swallow; the card decides from
+    the loaded profile being null, before any action fires.
+  - **A blank greeting** — `greeting_en`'s DB default is `''`, and a profile
+    row can exist with it empty. The public page renders the greeting as the
+    first bubble, so an empty greeting is an empty bubble. Lock with: "Write
+    the greeting visitors will see first." Gate on `greeting_en`, and on
+    `greeting_es` too when `languages` is `es` or `both`.
+  - **No published form** — the empty state below.
+  And the action's two failure modes render as **two different sentences**:
+  the cross-tenant 42501 ("That form belongs to a different company") and
+  the missing-profile null (the first lock above). They are distinct at the
+  accessor (`concierge.ts`, post-5a: message as discriminator, code as
+  corroborator); the card must not collapse them. Note 0045 fires on `not
+  exists`, so a form deleted between the picker rendering and the submit
+  also reads as the cross-tenant case — the sentence should allow for that
+  ("…or was just deleted — pick again").
 - The destination-form select: published forms only, pre-selected when the
   account has exactly one. If the account has NO published form, the card says
   so in one sentence and links to Forms — that is the empty state, and it
