@@ -22,7 +22,7 @@ import {
 import { toE164 } from "@/lib/voice/phone-number";
 // The SAME helper the sibling public-form action uses, not a re-implementation
 // (I3) — see its docstring in that file for why it is exported.
-import { setAttribution } from "@/app/f/[publicId]/actions";
+import { setAttribution } from "@/lib/forms/enrich";
 import { normalizeLocale } from "@/lib/forms/public-strings";
 import { bookingStrings } from "@/lib/booking/public-strings";
 import { bookingConfirmationSubject } from "@/lib/email/templates/booking";
