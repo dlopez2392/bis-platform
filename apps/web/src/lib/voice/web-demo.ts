@@ -48,6 +48,8 @@ export const WEB_SESSION_WINDOW_MS = 600_000;
 /** Per hashed IP, per window. Matches forms' RATE_LIMIT_MAX: a visitor with
  *  a real question does not need a sixth session in ten minutes. */
 export const WEB_SESSION_MAX_PER_IP = 5;
+/** The rolling 24h the per-account cap below counts over. */
+export const WEB_SESSION_ACCOUNT_WINDOW_MS = 86_400_000;
 /** Per account, per rolling 24h. The per-tenant ceiling: one client's public
  *  page must not be able to exhaust a shared budget on its own. */
 export const WEB_SESSION_MAX_PER_ACCOUNT_PER_DAY = 200;

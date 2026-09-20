@@ -209,6 +209,7 @@ describe("POST /api/voice/web/session — how many sessions this route will mint
     const res = await POST(requestWithValidTicket());
     expect(res.status).toBe(429);
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(recordWebSessionMock).not.toHaveBeenCalled();
   });
 
   it("records the session BEFORE minting — a mint that is never recorded cannot be counted", async () => {

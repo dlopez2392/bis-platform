@@ -21,7 +21,8 @@ import type { Branding } from "@bis/db";
 import { buildRealtimeSessionConfig, type VoicePromptInput } from "@/lib/voice/session-config";
 import {
   WEB_DEMO_MAX_SECONDS, webDemoNotice, parseAllowedOrigins, originAllowed, verifyTicket,
-  WEB_SESSION_WINDOW_MS, WEB_SESSION_MAX_PER_IP, WEB_SESSION_MAX_PER_ACCOUNT_PER_DAY,
+  WEB_SESSION_WINDOW_MS, WEB_SESSION_MAX_PER_IP,
+  WEB_SESSION_ACCOUNT_WINDOW_MS, WEB_SESSION_MAX_PER_ACCOUNT_PER_DAY,
 } from "@/lib/voice/web-demo";
 import { clientIp, hashIp } from "@/lib/forms/guards";
 
@@ -126,7 +127,7 @@ export async function POST(req: Request) {
     // number of them.
     const ipHash = hashIp(clientIp(req.headers));
     const windowStart = new Date(Date.now() - WEB_SESSION_WINDOW_MS).toISOString();
-    const dayStart = new Date(Date.now() - 86_400_000).toISOString();
+    const dayStart = new Date(Date.now() - WEB_SESSION_ACCOUNT_WINDOW_MS).toISOString();
     const [byIp, byAccount] = await Promise.all([
       countWebSessionsByIp(db, ipHash, windowStart),
       countWebSessionsForAccount(db, accountId, dayStart),
