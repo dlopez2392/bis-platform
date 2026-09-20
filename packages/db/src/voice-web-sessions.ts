@@ -1,9 +1,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
- * One minted browser session. `ticketNonce` is the website ticket's own
- * nonce (web-demo.ts's `<issuedAtMs>.<nonce>.<hmac>`), which the unique
- * index turns into single-use.
+ * One minted browser session. `ticketNonce` is the NONCE SEGMENT ALONE of
+ * the website ticket (web-demo.ts's `<issuedAtMs>.<nonce>.<hmac>`) — the
+ * middle part `verifyTicket` returns as `verdict.nonce`, not the whole
+ * dot-joined string. The unique index is what turns that segment
+ * single-use; passing the full `<issuedAtMs>.<nonce>.<hmac>` string here
+ * instead would defeat it silently, because `issuedAtMs` changes on every
+ * mint and a replayed ticket would therefore always look like a fresh key.
  */
 export type WebSessionRecord = {
   accountId: string; ticketNonce: string; ipHash: string; origin: string | null;
