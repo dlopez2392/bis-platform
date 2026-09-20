@@ -19,6 +19,14 @@
 // fresh local numbers, so every call is a first offence. Neither is wrong —
 // this is a third shape.
 //
+// WHAT #88 DID AND DID NOT DO. It fixed the LABEL — spam, not abandoned —
+// and it did not shorten the call, because the predicate below was only
+// ever handed the COMPLETED turn, and for a robot that means the moment the
+// script ends. Calls before and after it both cost 38–56 seconds. The
+// `.delta` case in call-events.ts is what fixes the bill: the same
+// predicate, run on the transcript as far as it has got, so the hangup
+// lands at the first "press 0" rather than at "thank you".
+//
 // ❌ AND WHY IT IS NOT KEYED ON THE MODEL'S OWN OPINION, which was the obvious
 // idea and is in the transcripts: Sofía sometimes names them ("It sounds like
 // this might be an automated marketing message"). Across the nine calls she

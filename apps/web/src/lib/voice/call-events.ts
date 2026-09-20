@@ -1,7 +1,9 @@
 // The pure seam between the OpenAI Realtime WS and the tool registry.
 // Everything testable about a live call funnels through here.
 import { runTool, type ToolContext, type ToolName } from "./tools/registry";
-import { withTranscript, withRecordedCaller, type CallState } from "./call-state";
+import {
+  withTranscript, withRecordedCaller, withCallerDelta, clearPendingCallerTurn, type CallState,
+} from "./call-state";
 import { looksLikeRecordedMessage } from "./recorded-message";
 import { handoffLine } from "./handoff";
 
@@ -30,6 +32,9 @@ export interface RealtimeCallEvent {
   arguments?: string;
   name?: string;
   call_id?: string;
+  /** `conversation.item.input_audio_transcription.delta` only — see that case. */
+  item_id?: string;
+  delta?: string;
 }
 
 function safeParse(raw: unknown): Record<string, unknown> {
@@ -93,14 +98,47 @@ export async function processCallEvent(
         actions: [],
       };
     }
+    case "conversation.item.input_audio_transcription.delta": {
+      // THE PREFIX IS JUDGED, NOT THE FINISHED TURN. The `.completed` case
+      // below is where this guard lived first (#88), and it was correct —
+      // and it fired at the moment the robot would have hung up anyway,
+      // because semantic_vad lands a 470-character script as ONE turn and
+      // `.completed` arrives only when that turn is over. Calls with and
+      // without the guard both cost 38–56 seconds; #88 fixed the label, not
+      // the bill. This case runs the SAME predicate against the transcript
+      // as far as it has got, so the hangup lands at the first "press 0 to
+      // speak with an agent" instead of at "thank you".
+      //
+      // Same predicate, same two conditions, same negatives — see
+      // recorded-message.ts for why it is never keyed on "Google". Nothing
+      // here widens what counts as a recording; it only moves WHEN the same
+      // judgement is made.
+      if (!event.item_id || !event.delta) return { state, actions: [] };
+      const next = withCallerDelta(state, event.item_id, event.delta);
+      const prefix = next.pendingCallerTurn!.text;
+      if (!looksLikeRecordedMessage(prefix)) return { state: next, actions: [] };
+      // Recorded FIRST, as the prefix — the same evidence rule as below: the
+      // words that tripped the guard are the only way a false positive can
+      // ever be audited. The buffer is cleared because the turn is over; the
+      // socket closes before any `.completed` could arrive for it.
+      const recorded = withRecordedCaller(
+        withTranscript(clearPendingCallerTurn(next),
+          { role: "caller", text: prefix, at: new Date().toISOString() }));
+      return { state: recorded, actions: [{ kind: "hangup" }] };
+    }
     case "conversation.item.input_audio_transcription.completed": {
-      if (!event.transcript) return { state, actions: [] };
+      if (!event.transcript) return { state: clearPendingCallerTurn(state), actions: [] };
       const text = String(event.transcript);
-      const next = withTranscript(state, { role: "caller", text, at: new Date().toISOString() });
+      const next = withTranscript(clearPendingCallerTurn(state),
+        { role: "caller", text, at: new Date().toISOString() });
       // The turn is ALWAYS recorded first, recording or not. What the robot
       // said is the evidence the guard was right, and the only way anyone can
       // audit a false positive afterwards — a spam row with an empty
       // transcript is indistinguishable from a silent call.
+      //
+      // Still here, not only in the `.delta` case above: a transcriber that
+      // sends no deltas (or a turn whose prefix crossed the floor only on
+      // its final word) must still be caught on the finished text.
       if (looksLikeRecordedMessage(text)) {
         // NO GOODBYE, unlike the cap and the silence guard. Those end a call a
         // PERSON is on, where the repo rule is that a caller must never hear
