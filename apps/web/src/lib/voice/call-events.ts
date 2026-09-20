@@ -126,8 +126,9 @@ export async function processCallEvent(
       if (!looksLikeRecordedMessage(prefix)) return { state: next, actions: [] };
       // Recorded FIRST, as the prefix — the same evidence rule as below: the
       // words that tripped the guard are the only way a false positive can
-      // ever be audited. The buffer is cleared because the turn is over; the
-      // socket closes before any `.completed` could arrive for it.
+      // ever be audited. The buffer is cleared because the turn is over — and
+      // if a `.completed` still lands while the lifecycle awaits endCallLeg,
+      // the guard at the top of this case (and of `.completed`) drops it.
       const recorded = withRecordedCaller(
         withTranscript(clearPendingCallerTurn(next),
           { role: "caller", text: prefix, at: new Date().toISOString() }));
