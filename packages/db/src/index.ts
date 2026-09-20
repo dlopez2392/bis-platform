@@ -99,3 +99,4 @@ export {
   type ProposalPayload, type ProposalInput, type TaskPayload,
   type ContactFieldPayload, type OpportunityStagePayload,
 } from "./call-proposals";
+export * from "./voice-web-sessions";
