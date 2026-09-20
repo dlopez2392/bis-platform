@@ -27,6 +27,7 @@ const DEFAULT_PROFILE: Omit<VoiceProfileRow, "id" | "account_id"> = {
   languages: "both", booking_enabled: true,
   after_hours: "hours_then_message", enabled: false,
   textback_enabled: false, textback_body: "",
+  public_id: null, concierge_enabled: false, concierge_form_id: null,
 };
 
 const STATUS_VALUES: PhoneNumberStatus[] = ["provisioned", "testing", "live", "released"];

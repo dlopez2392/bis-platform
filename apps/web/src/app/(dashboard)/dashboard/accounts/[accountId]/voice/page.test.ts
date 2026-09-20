@@ -74,6 +74,7 @@ const PROFILE: VoiceProfileRow = {
   greeting_en: "", greeting_es: "", facts: "", services: "",
   languages: "both", booking_enabled: true, after_hours: "hours_then_message",
   enabled: true, textback_enabled: true, textback_body: "",
+  public_id: null, concierge_enabled: false, concierge_form_id: null,
 };
 
 async function render() {
