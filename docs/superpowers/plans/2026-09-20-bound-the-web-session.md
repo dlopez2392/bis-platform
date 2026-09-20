@@ -134,7 +134,18 @@ grant select, insert, update, delete on public.voice_web_sessions to service_rol
 
 - [ ] **Step 2: Write the failing grants test**
 
-Create `packages/db/src/test/voice-web-sessions-grants.test.ts`, modelled on `packages/db/src/test/call-proposals-grants.test.ts` — read that file first and follow its fixture shape (`withRollback` / `actAs` / `actAsOwner`, and the random per-process `clerk_org_id` suffix, which exists because this suite shares production's one Supabase project):
+Create `packages/db/src/test/voice-web-sessions-grants.test.ts`.
+
+**Read `packages/db/src/test/db.ts` FIRST and take the real signatures from it — the sketch below is illustrative, not authoritative, and its earlier version had two bugs worth knowing about:**
+
+1. It invented `withRollback(async (db, fixture) => …)`. Read what `withRollback` actually passes.
+2. Worse, it simulated the agency with **`actAsOwner`, which does `reset role`** — making the connection the TABLE OWNER, which bypasses grants entirely, so a "an agency admin cannot read this" test would have passed while proving nothing. Use `actAs(c, { app_role: "agency_admin" })`. `screened-calls-grants.test.ts` warns about this exact mistake in its own comment; read it.
+
+**And assert the SHAPE of each denial, not merely that one occurred.** A missing table (`42P01`), a PostgREST schema-cache miss, and a real privilege denial (`42501`) all satisfy `expect(error).not.toBeNull()`. Only `42501` proves a grant. Pin the code.
+
+Model the file on `packages/db/src/test/call-proposals-grants.test.ts`, including the random per-process `clerk_org_id` suffix, which exists because this suite shares production's one Supabase project. A guard that the table EXISTS belongs at the top: without it every "cannot" assertion below is vacuously true before the migration is applied.
+
+Illustrative sketch — signatures to be corrected against `db.ts`:
 
 ```ts
 import { describe, it, expect } from "vitest";
