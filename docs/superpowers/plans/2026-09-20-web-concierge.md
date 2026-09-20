@@ -2235,6 +2235,82 @@ earlier run, and merge only on green.
 
 Cut `feat/web-concierge-embed` from `main` after Branch 1 merges.
 
+## Branch 2 — what Branch 1's whole-branch review handed it (2026-09-20)
+
+These are not optional and they come FIRST, before Task 5's chrome, because
+every one of them is latent only while nothing embeds. The whole-branch
+review judged Branch 1 mergeable *because* no `/c/<publicId>` resolves in
+production; the day the toggle ships, each of these is live.
+
+**First commits, before the bubble:**
+
+1. **Persist the conversation.** `concierge-chat.tsx` holds `conversationId`
+   in a `useRef`, so every iframe load starts a new conversation on the first
+   message. The bubble re-renders on every host-page navigation, and
+   `CONCIERGE_MAX_CONVERSATIONS_PER_IP` is 3 per 10 minutes — a visitor who
+   asks a question on three pages of a client's site gets the fourth refused,
+   reading "Something went wrong", forever. Persist in `sessionStorage` keyed
+   by `publicId`, and give 429 its own sentence in `strings` so the spec's
+   stated reason for choosing 429 over the anti-oracle body ("a real visitor
+   who hits one needs to know to come back later") is actually delivered.
+2. **Extract `fileLead` to `lib/concierge/lead.ts`** under direct unit tests
+   whose fixtures use DISTINCT ids for the profile's form and the
+   conversation's form, and a non-null origin — the two whole-branch
+   Importants that lived inside it were invisible precisely because every
+   fixture value was equal. (Task 4's deferred Minor 4, priority raised.)
+3. **The iframe's timing against `MIN_FILL_MS`.** If the frame is created on
+   click, a fast typist's first message lands inside the 2-second fill floor
+   and the widget closes permanently. Preload the frame at page load, or
+   exempt turn 1 from the floor when the token is fresh. Decide, test it.
+4. **The too-fast refusal's copy.** It answers `strings.ended` — "if you
+   shared your name … someone will follow up" — to a visitor who shared
+   nothing, then disables the composer. Give it its own honest sentence, as
+   `expired` has.
+5. **Drop the `?? strings.ended` fallback in `concierge-chat.tsx`** and add
+   the ONE render assertion the repo lacked: a Playwright read of
+   `.bis-concierge-ended`'s text on the expired path. Two JSX mutations pass
+   every test in the repo today and would render the wrong sentence quietly.
+6. `system-prompt.ts`'s Spanish-only LANGUAGE branch still says "caller" on
+   web — one `${audienceWord}` and one assertion. An `es`-only tenant is a
+   real configuration in this market.
+
+**In Task 6's card, as requirements:**
+
+7. **Gate the toggle on a non-empty `greeting_en`** (and `greeting_es` when
+   `languages` is `es` or `both`). The DB default is `''`, and
+   `enableConcierge` requires only that a profile row exist — today the empty
+   state can be an empty bubble.
+8. **Render `enableConcierge`'s two failure modes as two sentences.** They are
+   distinct at the accessor (42501 raise vs null return) but distinguishable
+   only by matching English error text (`concierge.ts:79,82`); prefer a typed
+   result or an error code over a regex on a message. Also: `0045` fires on
+   `not exists`, so a form deleted between picker and submit reads "not
+   yours" — the copy should allow for that.
+9. The 42501 branch in `concierge.ts` is an OR that discards the true message
+   on a grant regression; make the message the discriminator, the code the
+   corroborator, in the same change.
+10. `consent: []` on the submission where #99's intake writes every consent
+    field as `given: false`. No behavioural effect (`consentWithheld: true` is
+    explicit and tested), but an operator reading the row cannot tell "no
+    consent field" from "withheld". Match #99's shape.
+
+**Carried from the parallel branch `claude/bis-rgv-website-x0ltkw`, as
+backlog, not Branch 2 scope** — danlo chose this implementation on
+2026-09-20; these are the three things theirs had that this one does not:
+a per-turn **token cost ledger** (one row per model call, so spend is
+measurable per tenant, not only capped); **client-readable transcripts** for
+a dashboard screen (their `assistant_sessions` granted `authenticated` SELECT
+on the account's own rows); and **no coupling to `voice_profiles`** (a
+separate `assistants` table, one per account). Also worth a look when the
+bubble is built: their `/assistant.js` was a fixed iframe that is a launcher
+when closed, a panel when open, and a full-screen sheet on a phone.
+
+**Before the toggle ships — danlo's call, recorded, not decided here:** the
+reply path has no end-to-end machine proof (the e2e model-call test skips
+without `OPENAI_API_KEY`, locally and in CI). Either the key goes into CI
+secrets, or the first conversation after Branch 2's deploy is a deliberate,
+watched one — never a client's customer.
+
 ### Task 5: The floating bubble, and one snippet component instead of three
 
 **Files:**
