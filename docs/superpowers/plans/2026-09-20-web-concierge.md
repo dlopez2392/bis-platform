@@ -2635,6 +2635,34 @@ the launcher is clicked (assert on `doc.created` right after `run(...)`, no
 click), and the panel is hidden. MUTATION: set `src` on first click → the
 pre-click assertion FAILS.
 
+**Corrections after Task 5's review (2026-09-20), which govern:**
+- **`loading="lazy"` must NOT be set on the concierge iframe.** Setting `src`
+  early is not sufficient — a lazy iframe inside a `display:none` container
+  is exactly what browsers may defer. The implementer confined `lazy` to the
+  inline branch; a future "consistency" edit would undo the preload silently.
+- **Head placement:** the snippet carries no `async`/`defer`, and pasted in
+  `<head>` `document.body` is null — append to `document.body ||
+  document.documentElement`, or defer the two appends to `DOMContentLoaded`.
+  Test it; it threw a `TypeError` into the client's page and killed the
+  message listener with it.
+- **Mobile:** breakpoint `(max-width: 480px)` via `matchMedia`, panel becomes
+  a full-viewport sheet (`inset: 0`, no radius); fake `matchMedia` in `run()`
+  and assert both geometries.
+- **The close message has a producer:** the chat page posts
+  `{ type: "bis-concierge-close" }` on Esc and from a header close button —
+  keydown inside an iframe never reaches the host window, so the host-side
+  Esc listener alone is dead once the visitor is typing. Open moves focus
+  into the iframe. **Idempotence:** a second inclusion must not stack a
+  second launcher — guard on a flag.
+- **Brand colour, decided:** NOT baked into the snippet (it would freeze at
+  copy time and rot on a rebrand). The chat page posts
+  `{ type: "bis-concierge-brand", accent, accentForeground }` once at load
+  from the same theme it paints with; the loader paints the launcher from
+  inside BOTH postMessage checks. `data-color` stays as an operator override.
+- The tests must assert `bodyAppended` holds the panel and launcher and that
+  `inserted` is EMPTY on the concierge branch — the suite was green with
+  both appends deleted.
+
 - [ ] **Step 4: Run the loader tests to verify they pass**
 
 Run: `pnpm --filter web exec vitest run embed-script`
