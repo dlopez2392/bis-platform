@@ -7,10 +7,37 @@ import { EMBED_SCRIPT } from "./embed-script";
 
 type Listener = (event: any) => void;
 
+/**
+ * A tag-aware element fake. The original single-iframe stand-in
+ * (`createElement: () => iframe`) can't represent the concierge branch,
+ * which creates a button and a panel div alongside the iframe — so every
+ * element `document.createElement` hands out now tracks its own tag,
+ * style, attributes and listeners, and `run()` exposes the full list as
+ * `created` (plus `iframe`, kept as the first `<iframe>` for every existing
+ * test that destructures it directly).
+ */
+function makeElement(tag: string) {
+  const el: any = {
+    tag,
+    style: {},
+    listeners: {} as Record<string, Listener[]>,
+    setAttribute(k: string, v: string) { el[k] = v; },
+    getAttribute(k: string) { return el[k] ?? null; },
+    appendChild() { /* not asserted on; presence is enough */ },
+    addEventListener(type: string, fn: Listener) {
+      (el.listeners[type] ??= []).push(fn);
+    },
+  };
+  if (tag === "iframe") el.contentWindow = { id: "iframe-window" };
+  return el;
+}
+
 /** Minimal DOM good enough for the embed script, so the real string can run. */
 function run(attrs: Record<string, string>, hostUrl: string, referrer = "") {
-  const iframe: any = { style: {}, setAttribute: (k: string, v: string) => { iframe[k] = v; }, contentWindow: { id: "iframe-window" } };
-  let listener: Listener | undefined;
+  const created: any[] = [];
+  const bodyAppended: any[] = [];
+  let messageListener: Listener | undefined;
+  const keydownListeners: Listener[] = [];
   const inserted: any[] = [];
 
   const script = {
@@ -20,10 +47,18 @@ function run(attrs: Record<string, string>, hostUrl: string, referrer = "") {
     nextSibling: null,
   };
 
-  const document = { currentScript: script, referrer, createElement: () => iframe };
+  const document = {
+    currentScript: script,
+    referrer,
+    body: { appendChild: (el: any) => bodyAppended.push(el) },
+    createElement: (tag: string) => { const el = makeElement(tag); created.push(el); return el; },
+  };
   const win: any = {
     location: { search: new URL(hostUrl).search, href: hostUrl },
-    addEventListener: (type: string, fn: Listener) => { if (type === "message") listener = fn; },
+    addEventListener: (type: string, fn: Listener) => {
+      if (type === "message") messageListener = fn;
+      if (type === "keydown") keydownListeners.push(fn);
+    },
     top: { location: { href: "" } },
   };
   win.parent = win;
@@ -31,7 +66,12 @@ function run(attrs: Record<string, string>, hostUrl: string, referrer = "") {
   new Function("window", "document", "URL", "URLSearchParams", EMBED_SCRIPT)(
     win, document, URL, URLSearchParams);
 
-  return { iframe, inserted, win, send: (event: any) => listener?.(event) };
+  const iframe = created.find((el) => el.tag === "iframe");
+  return {
+    iframe, inserted, win, created, bodyAppended,
+    send: (event: any) => messageListener?.(event),
+    keydown: (event: any) => keydownListeners.forEach((fn) => fn(event)),
+  };
 }
 
 /**
@@ -213,6 +253,101 @@ describe("embed script", () => {
     it("defaults the booking iframe's title to \"Booking\", not the shared \"Form\" default (M1)", () => {
       const { iframe } = run({ "data-booking": "resource-42" }, "https://client.example/book");
       expect(iframe.title).toBe("Booking");
+    });
+  });
+
+  describe("data-concierge (the floating bubble)", () => {
+    function panelOf(created: any[]) {
+      return created.find((el) => el.tag === "div" && el.style.position === "fixed");
+    }
+    function launcherOf(created: any[]) {
+      return created.find((el) => el.tag === "button");
+    }
+
+    it("builds a launcher and a panel instead of an inline iframe, pointing the iframe at /c/", () => {
+      const { created, iframe } = run({ "data-concierge": "abc123" }, "https://client.example/");
+      expect(launcherOf(created)).toBeTruthy();
+      expect(panelOf(created)).toBeTruthy();
+      expect(iframe.src).toContain(`${ORIGIN}/c/abc123`);
+    });
+
+    it("starts closed", () => {
+      const { created } = run({ "data-concierge": "abc123" }, "https://client.example/");
+      const panel = panelOf(created);
+      // MUTATION: render the panel open — this FAILS, and every visitor to
+      // every client's site gets a chat shoved in front of them.
+      expect(panel.style.display).toBe("none");
+    });
+
+    it("sets the iframe's src at load, before any click — the fill floor has time to pass", () => {
+      // No click happens anywhere in this test. If src were assigned inside
+      // the launcher's click handler instead of up front, this iframe would
+      // have no src at all yet.
+      const { created, iframe } = run({ "data-concierge": "abc123" }, "https://client.example/");
+      expect(panelOf(created).style.display).toBe("none");
+      expect(iframe.src).toContain("/c/abc123");
+    });
+
+    it("still passes attribution through, as the form branch does", () => {
+      const { iframe } = run({ "data-concierge": "abc123" }, "https://client.example/?utm_source=google");
+      expect(iframe.src).toContain("utm_source=google");
+    });
+
+    it("leaves data-form and data-booking behaviour byte-identical", () => {
+      // MUTATION: route data-form down the concierge branch — this FAILS.
+      expect(run({ "data-form": "f1" }, "https://client.example/").iframe.src).toContain("/f/f1");
+      expect(run({ "data-booking": "b1" }, "https://client.example/").iframe.src).toContain("/b/b1");
+    });
+
+    it("toggles the panel open and closed on launcher click, tracking aria-expanded", () => {
+      const { created } = run({ "data-concierge": "abc123" }, "https://client.example/");
+      const panel = panelOf(created);
+      const launcher = launcherOf(created);
+      expect(launcher.getAttribute("aria-expanded")).toBe("false");
+
+      launcher.listeners.click[0]({});
+      expect(panel.style.display).toBe("block");
+      expect(launcher.getAttribute("aria-expanded")).toBe("true");
+
+      launcher.listeners.click[0]({});
+      expect(panel.style.display).toBe("none");
+      expect(launcher.getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("gives the launcher an aria-label", () => {
+      const { created } = run({ "data-concierge": "abc123" }, "https://client.example/");
+      expect(launcherOf(created).getAttribute("aria-label")).toBeTruthy();
+    });
+
+    it("closes the panel on Escape, even though the panel is the host page's overlay", () => {
+      const { created, keydown } = run({ "data-concierge": "abc123" }, "https://client.example/");
+      const panel = panelOf(created);
+      const launcher = launcherOf(created);
+      launcher.listeners.click[0]({});
+      expect(panel.style.display).toBe("block");
+
+      keydown({ key: "Escape" });
+      expect(panel.style.display).toBe("none");
+    });
+
+    it("keeps BOTH postMessage checks on the concierge close message", () => {
+      const { created, send, iframe } = run({ "data-concierge": "abc123" }, "https://client.example/");
+      const panel = panelOf(created);
+      const launcher = launcherOf(created);
+      launcher.listeners.click[0]({});
+      expect(panel.style.display).toBe("block");
+
+      // Right source, wrong origin — must NOT close.
+      send({ source: iframe.contentWindow, origin: "https://evil.example", data: { type: "bis-concierge-close" } });
+      expect(panel.style.display).toBe("block");
+
+      // Wrong source, right origin — must NOT close.
+      send({ source: {}, origin: ORIGIN, data: { type: "bis-concierge-close" } });
+      expect(panel.style.display).toBe("block");
+
+      // Right source AND origin — closes.
+      send({ source: iframe.contentWindow, origin: ORIGIN, data: { type: "bis-concierge-close" } });
+      expect(panel.style.display).toBe("none");
     });
   });
 });
