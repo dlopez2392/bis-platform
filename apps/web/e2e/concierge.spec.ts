@@ -6,6 +6,7 @@ import {
   enableConcierge, type VoiceProfileRow,
 } from "@bis/db";
 import { conciergeStrings } from "../src/lib/concierge/strings";
+import { signRenderToken, RENDER_TOKEN_FIELD } from "../src/lib/forms/guards";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process directly: this file calls serviceDb() itself,
@@ -188,6 +189,51 @@ test("the address the snippet points at renders this client's own greeting", asy
   // The composer is open for business: `ended` has not been set by anything.
   await expect(page.locator("#bis-concierge-input")).toBeEnabled();
   await expect(page.getByRole("button", { name: conciergeStrings("en").send })).toBeVisible();
+});
+
+// Item 5 (Branch 2 hardening) — the one render assertion the repo lacked.
+// Two JSX mutations in concierge-chat.tsx pass every unit and route test in
+// the repo today and would render the wrong sentence quietly: nothing short
+// of reading the actual painted DOM catches them. Needs no OPENAI_API_KEY —
+// the expired-token path refuses before any model call — so this runs
+// wherever the first test above does.
+test("an expired render token renders the route's OWN closing sentence, not a hand-typed fixture", async ({ page }) => {
+  test.skip(!widget, skipReason);
+  const strings = conciergeStrings("en");
+
+  await page.goto(`/c/${widget!.publicId}`);
+  await expect(page.getByText(GREETING)).toBeVisible();
+  const assistantBefore = await page.locator(".bis-msg-assistant").count();
+
+  // A render token older than MAX_TOKEN_AGE_MS (30 minutes) cannot be minted
+  // by the page itself — it always embeds a fresh one at render time
+  // (page.tsx's issueRenderToken). Instead, intercept the browser's OWN
+  // turn-1 request and swap its token for one signed 31 minutes ago
+  // (signRenderToken(nowMs, publicId) — nowMs FIRST), then send the request
+  // for REAL through page.request rather than the browser's own fetch, and
+  // hand the actual server response back to the intercepted call. That
+  // exercises the real route's refusal AND the actual JSX render path
+  // together — not a hand-typed fixture that could drift from either.
+  await page.route(`**/api/concierge/${widget!.publicId}/turn`, async (route) => {
+    const original = route.request().postDataJSON() as Record<string, unknown>;
+    const response = await page.request.post(route.request().url(), {
+      data: {
+        ...original,
+        [RENDER_TOKEN_FIELD]: signRenderToken(Date.now() - 31 * 60_000, widget!.publicId),
+      },
+    });
+    await route.fulfill({ response });
+  });
+
+  await page.locator("#bis-concierge-input").fill("hello");
+  await page.getByRole("button", { name: strings.send }).click();
+
+  // This is the assertion that would have caught the two JSX mutations the
+  // round-3 review named: one that always rendered `strings.ended` regardless
+  // of the server's own `closing` sentence, and one that dropped the
+  // paragraph's text entirely.
+  await expect(page.locator(".bis-concierge-ended")).toHaveText(strings.expired);
+  expect(await page.locator(".bis-msg-assistant").count()).toBe(assistantBefore);
 });
 
 test("a visitor's message comes back with a reply", async ({ page }) => {

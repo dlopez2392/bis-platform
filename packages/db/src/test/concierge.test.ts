@@ -126,6 +126,33 @@ describe("concierge accessors", () => {
           .rejects.toThrow(/^enableConcierge failed: form does not belong to this account$/);
       })));
 
+  // Item 9 (Branch 2 hardening): the OLD branch was `error.code === "42501"
+  // || error.message?.includes(...)` -- an OR that let ANY 42501 collapse
+  // into the routine "not yours" sentence, even one raised by a grant
+  // regression on `concierge_enable` itself (e.g. Postgres's own "permission
+  // denied for function concierge_enable"). That text needs to reach a log
+  // as itself, not be rewritten as the ordinary cross-tenant case. There is
+  // no way to provoke a REAL 42501-with-a-different-message from this test
+  // account's own privileges without weakening a grant on the shared
+  // project, so this is a fake `db.rpc`, matching the
+  // `Parameters<typeof fn>[0]` typing precedent this file already uses for
+  // `seedVoiceProfile`.
+  it("enableConcierge surfaces the TRUE message when the code is 42501 but the text is not ours (a grant regression, not a cross-tenant form)", async () => {
+    const fakeDb = {
+      rpc: async () => ({
+        data: null,
+        error: { code: "42501", message: "permission denied for function concierge_enable" },
+      }),
+    } as unknown as Parameters<typeof enableConcierge>[0];
+    // MUTATION: revert to `error.code === "42501" ||
+    // error.message?.includes("does not belong to this account")` -- this
+    // FAILS: the OR matches on the code alone and rewrites the real grant-
+    // denial text as "form does not belong to this account", and a security
+    // regression never reaches a log as itself.
+    await expect(enableConcierge(fakeDb, "acct-1", "form-1"))
+      .rejects.toThrow(/^enableConcierge failed: permission denied for function concierge_enable$/);
+  });
+
   it("getVoiceProfileByPublicId returns null when the concierge is OFF", () =>
     withTestAccount(async (db, accountId) => {
       await seedVoiceProfile(db, accountId);

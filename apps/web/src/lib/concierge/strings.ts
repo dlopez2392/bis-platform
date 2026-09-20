@@ -23,6 +23,17 @@ const STRINGS = {
     // — and "Something went wrong" is the last thing a visitor who has just
     // handed over their details should read.
     captured: "Thanks. I have passed your details to the team and someone will get back to you.",
+    // 429: a real cap, not a permanent refusal. Item 1, Branch 2 hardening —
+    // the spec's own stated reason for choosing 429 over the anti-oracle
+    // body was that a real visitor who hits one needs to know to come back
+    // later; without this sentence that reason was never actually delivered.
+    rateLimited: "You've started a few conversations recently — please try again in a little while.",
+    // Distinct from `ended` on purpose: a message that arrived faster than a
+    // person could have typed it, on a token this same widget minted
+    // moments ago, is not a spam signal on its own — a fast typist, not a
+    // bot. The composer stays open and the visitor can just send again
+    // (item 4, Branch 2 hardening).
+    tooFast: "That came through before the page finished loading — please send it again.",
     poweredBy: "Powered by BIS",
     title: "Chat",
   },
@@ -35,6 +46,8 @@ const STRINGS = {
     ended: "Esta conversación está cerrada. Si nos diste tu nombre y una forma de contactarte, alguien del equipo te responderá.",
     expired: "Esta página ha estado abierta un buen rato — actualiza la página para iniciar una conversación.",
     captured: "Gracias. Ya le pasé tus datos al equipo y alguien te contactará.",
+    rateLimited: "Has iniciado varias conversaciones hace poco — inténtalo de nuevo más tarde.",
+    tooFast: "Eso llegó antes de que la página terminara de cargar — vuelve a enviarlo.",
     poweredBy: "Con tecnología de BIS",
     title: "Chat",
   },

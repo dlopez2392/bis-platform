@@ -76,7 +76,17 @@ export async function enableConcierge(
     p_account_id: accountId, p_form_id: formId, p_new_public_id: newPublicId(),
   });
   if (error) {
-    if (error.code === "42501" || error.message?.includes("does not belong to this account")) {
+    // Item 9 (Branch 2 hardening): the MESSAGE is the discriminator, not the
+    // SQLSTATE — the OLD `code === "42501" || message.includes(...)` OR let
+    // ANY 42501, including a grant regression on `concierge_enable` itself
+    // (e.g. Postgres's own "permission denied for function
+    // concierge_enable"), collapse into the routine "not yours" sentence,
+    // discarding the true text a security regression needs a log to carry.
+    // 0045's own RAISE text corroborates the SQLSTATE — both fire together
+    // on the real cross-tenant case — but the message alone decides: a
+    // 42501 with any OTHER message rethrows with what Postgres actually
+    // said.
+    if (error.message?.includes("does not belong to this account")) {
       throw new Error("enableConcierge failed: form does not belong to this account");
     }
     throw new Error(`enableConcierge failed: ${error.message}`);
