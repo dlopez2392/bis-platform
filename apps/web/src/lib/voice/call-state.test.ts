@@ -175,4 +175,14 @@ describe("pendingCallerTurn — the growing prefix of the caller's in-flight tur
     expect(s0.pendingCallerTurn).toBeNull();
     expect(s1).not.toBe(s0);
   });
+
+  it("clearing is pure — the input keeps its pending turn and the result is a new object", () => {
+    const before = withCallerDelta(emptyCallState(), "item_1", "abc");
+    const pendingBefore = before.pendingCallerTurn;
+    const after = clearPendingCallerTurn(before);
+    expect(after).not.toBe(before);
+    expect(before.pendingCallerTurn).toBe(pendingBefore);
+    expect(before.pendingCallerTurn).toEqual({ itemId: "item_1", text: "abc" });
+    expect(after.pendingCallerTurn).toBeNull();
+  });
 });
