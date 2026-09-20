@@ -113,6 +113,13 @@ export async function processCallEvent(
       // recorded-message.ts for why it is never keyed on "Google". Nothing
       // here widens what counts as a recording; it only moves WHEN the same
       // judgement is made.
+      //
+      // Already ending — a delta hung this call up and the socket is still
+      // draining while the lifecycle awaits endCallLeg. Whatever arrives in
+      // that window is not a turn to judge or record: the transcript already
+      // holds the words that ended the call, and a second hangup would end
+      // the SIP leg twice. Same idempotence idiom as withServed.
+      if (state.recordedCaller) return { state: clearPendingCallerTurn(state), actions: [] };
       if (!event.item_id || !event.delta) return { state, actions: [] };
       const next = withCallerDelta(state, event.item_id, event.delta);
       const prefix = next.pendingCallerTurn!.text;
@@ -127,6 +134,12 @@ export async function processCallEvent(
       return { state: recorded, actions: [{ kind: "hangup" }] };
     }
     case "conversation.item.input_audio_transcription.completed": {
+      // Already ending — a delta hung this call up and the socket is still
+      // draining while the lifecycle awaits endCallLeg. Whatever arrives in
+      // that window is not a turn to judge or record: the transcript already
+      // holds the words that ended the call, and a second hangup would end
+      // the SIP leg twice. Same idempotence idiom as withServed.
+      if (state.recordedCaller) return { state: clearPendingCallerTurn(state), actions: [] };
       if (!event.transcript) return { state: clearPendingCallerTurn(state), actions: [] };
       const text = String(event.transcript);
       const next = withTranscript(clearPendingCallerTurn(state),

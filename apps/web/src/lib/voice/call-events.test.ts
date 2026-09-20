@@ -261,6 +261,7 @@ describe("processCallEvent", () => {
 
   it(".completed after a clean run of deltas appends the full turn once and clears the buffer", async () => {
     const { state: afterDeltas } = await feedWordByWord("Hi, I found you on Google and wanted to ask about a dining table.");
+    expect(afterDeltas.pendingCallerTurn).not.toBeNull();
     const { state, actions } = await processCallEvent(afterDeltas, ctx,
       { type: "conversation.item.input_audio_transcription.completed",
         item_id: "item_1",
@@ -294,5 +295,27 @@ describe("processCallEvent", () => {
       { type: "conversation.item.input_audio_transcription.delta", item_id: "item_2", delta: "press 9 to opt out" });
     expect(r.actions).toEqual([]);
     expect(r.state.pendingCallerTurn).toEqual({ itemId: "item_2", text: "press 9 to opt out" });
+  });
+
+  it("after a delta hung up, a late .completed for the same item is ignored — no second turn, no second hangup", async () => {
+    // route.ts awaits endCallLeg before ws.close(), and its message gate
+    // flips only on the socket's own close event: a .completed can land in
+    // that window. It must not end the SIP leg twice or double the evidence.
+    const { state: hungUp, words, hungUpAt } = await feedWordByWord(ROBOCALL);
+    const r = await processCallEvent(hungUp, ctx,
+      { type: "conversation.item.input_audio_transcription.completed", item_id: "item_1", transcript: ROBOCALL });
+    expect(r.actions).toEqual([]);
+    expect(r.state.transcript).toHaveLength(1);
+    expect(r.state.transcript[0]).toMatchObject({ role: "caller", text: words.slice(0, hungUpAt + 1).join(" ") });
+    expect(r.state.pendingCallerTurn).toBeNull();
+  });
+
+  it("after a delta hung up, a late .delta is ignored too", async () => {
+    const { state: hungUp } = await feedWordByWord(ROBOCALL);
+    const r = await processCallEvent(hungUp, ctx,
+      { type: "conversation.item.input_audio_transcription.delta", item_id: "item_1", delta: " Thank you." });
+    expect(r.actions).toEqual([]);
+    expect(r.state.transcript).toHaveLength(1);
+    expect(r.state.pendingCallerTurn).toBeNull();
   });
 });
