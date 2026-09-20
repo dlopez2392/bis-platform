@@ -428,3 +428,39 @@ The first real tuning signal will be a genuine `spam` row with a duration at or
 near `PHONE_MAX_SILENT_SECONDS` — that is a robot that stayed on the line and
 was cut. The first sign of a false positive would be a `texml declined` log line
 for a caller who then calls back and books.
+
+## Addendum 2026-09-19 — hang up at the first IVR phrase (Option B)
+
+**What #88 did and did not do.** It fixed the label — a talking robot is
+`spam`, not `abandoned` — and it did not shorten the call. The predicate ran
+only on `conversation.item.input_audio_transcription.completed`, and
+`semantic_vad` lands a robot's whole ~470-character script as one turn, so
+the hangup fired at the moment the robot would have hung up anyway. Measured
+on 956 Woodworks: calls on 09-17 (no guard) and 09-18 (guard) both cost
+38–56 seconds.
+
+**What changed.** `call-events.ts` now also handles the API's incremental
+`…input_audio_transcription.delta` frames, keeps the growing prefix per item
+in `CallState.pendingCallerTurn`, and runs the SAME predicate on it. The
+first delta whose prefix passes produces the existing `hangup`. The prefix
+is written as the caller turn first — the audit trail. No change to the
+predicate, the lifecycle, or the session config.
+
+**What was considered and set aside.** (A) A per-account campaign signature —
+the reputation rule's own safety condition ("refuse only when the caller's
+ENTIRE history is spam") is disarmed by a single real call, and it can do
+nothing for a campaign's first call. (C) STIR/SHAKEN attestation before
+answering — nothing in the TeXML route reads an attestation field and it is
+unconfirmed the carrier surfaces one; a "find out", not a fix.
+
+**What this does not do.** It does not stop the call being answered, and it
+does not stop the campaign. It makes each robocall cost roughly the seconds
+up to its first "press 0 to" instead of the whole script (estimate: ~240 of
+~470 characters in — word 40 of 80, where the predicate's `press <digit>
+(to|for|and|if)` shape completes — plus Sofía's reply saved outright; the
+real number comes from the next live call, not from this document).
+
+**The rule that still binds.** Never keyed on "Google". Both conditions,
+never either. A real caller is never cut: proven word by word in
+`call-events.test.ts` and at the socket in `lifecycle.test.ts`, and the
+negatives go red when the phrase clause is deleted.
