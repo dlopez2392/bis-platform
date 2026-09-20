@@ -1302,20 +1302,38 @@ export default async function ConciergePage({
     if (typeof v === "string") query.set(k, v);
   }
 
+  // THREE SIGNATURES THIS PLAN ORIGINALLY GOT WRONG — these are the real ones,
+  // read from `f/[publicId]/page.tsx:72,83,126-128,140`:
+  //   publicFormTheme(branding, transparent, hostMode) returns
+  //     { style, darkCss, themed } — it is NOT a style object on its own.
+  //   signRenderToken(nowMs, publicId) — nowMs FIRST.
+  //   brandLogoUrl(path) takes the PATH string, not the Branding object.
+  // `darkCss` is not optional decoration: it is how a `follow` tenant renders
+  // dark at all, which no server-rendered style attribute can decide. Dropping
+  // it fails DESIGN.md's "renders correctly in dark AND light".
+  // The concierge has no form in scope, so `transparent` is false.
+  const { style, darkCss, themed } = publicFormTheme(
+    branding, false,
+    parseHostMode(typeof sp.theme === "string" ? sp.theme : undefined),
+  );
+
   return (
-    <main
-      className="bis-concierge"
-      style={publicFormTheme(branding, parseHostMode(
-        typeof sp.theme === "string" ? sp.theme : undefined,
-      ))}
-    >
-      <PublicBrand name={branding.brandName} logoUrl={brandLogoUrl(branding)} />
+    // The tokens ride on <main>, the one element on this route that paints a
+    // surface; `data-tenant-theme` is both the dark rule's selector and the
+    // e2e hook, exactly as the public form does it.
+    <main className="bis-concierge" style={style}
+          {...(themed ? { "data-tenant-theme": "" } : {})}>
+      {darkCss ? <style>{darkCss}</style> : null}
+      <PublicBrand
+        name={branding.brandName}
+        logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
+      />
       <ConciergeChat
         publicId={publicId}
         greeting={greeting}
         locale={locale}
         strings={strings}
-        renderToken={signRenderToken(publicId, Date.now())}
+        renderToken={signRenderToken(Date.now(), publicId)}
         attribution={parseAttribution(query)}
       />
       <p className="bis-concierge-footer">{strings.poweredBy}</p>
