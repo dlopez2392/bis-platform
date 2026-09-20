@@ -21,7 +21,10 @@ import type { Branding } from "@bis/db";
 import { buildRealtimeSessionConfig, type VoicePromptInput } from "@/lib/voice/session-config";
 import {
   WEB_DEMO_MAX_SECONDS, webDemoNotice, parseAllowedOrigins, originAllowed, verifyTicket,
+  WEB_SESSION_WINDOW_MS, WEB_SESSION_MAX_PER_IP,
+  WEB_SESSION_ACCOUNT_WINDOW_MS, WEB_SESSION_MAX_PER_ACCOUNT_PER_DAY,
 } from "@/lib/voice/web-demo";
+import { clientIp, hashIp } from "@/lib/forms/guards";
 
 export const runtime = "nodejs";
 
@@ -97,6 +100,7 @@ export async function POST(req: Request) {
   // by brand-name-parity.test.ts, so this is the same rule either way.
   const {
     serviceDb, getPhoneNumberByE164, getVoiceProfile, getOrCreateCalendar, brandDisplayName,
+    recordWebSession, countWebSessionsByIp, countWebSessionsForAccount,
   } = await import("@bis/db");
 
   let sessionConfig: ReturnType<typeof buildRealtimeSessionConfig>;
@@ -113,6 +117,41 @@ export async function POST(req: Request) {
       log("refused: profile disabled", { accountId });
       return refuse(503, "unavailable", origin);
     }
+
+    // EVERY COST CHECK HAPPENS HERE, BEFORE THE MINT. A refused request must
+    // cost nothing — no OpenAI call, and none of the work below it either.
+    //
+    // FAIL CLOSED, unlike the silence guard, which disarms itself when its
+    // own predicate throws. The asymmetry is the point: that guard failing
+    // open costs one extra call, this one failing open costs an unbounded
+    // number of them.
+    const ipHash = hashIp(clientIp(req.headers));
+    const windowStart = new Date(Date.now() - WEB_SESSION_WINDOW_MS).toISOString();
+    const dayStart = new Date(Date.now() - WEB_SESSION_ACCOUNT_WINDOW_MS).toISOString();
+    const [byIp, byAccount] = await Promise.all([
+      countWebSessionsByIp(db, ipHash, windowStart),
+      countWebSessionsForAccount(db, accountId, dayStart),
+    ]);
+    if (byIp >= WEB_SESSION_MAX_PER_IP) {
+      log("refused: ip cap", { byIp });
+      return refuse(429, "rate_limited", origin);
+    }
+    if (byAccount >= WEB_SESSION_MAX_PER_ACCOUNT_PER_DAY) {
+      log("refused: account cap", { accountId, byAccount });
+      return refuse(429, "rate_limited", origin);
+    }
+    // The record IS the replay guard: a nonce already spent hits 0041's
+    // unique index and comes back false. Written BEFORE the mint, because a
+    // session that is minted but never recorded is one the next request
+    // cannot count.
+    const fresh = await recordWebSession(db, {
+      accountId, ticketNonce: verdict.nonce, ipHash, origin,
+    });
+    if (!fresh) {
+      log("refused: ticket replayed", { accountId });
+      return refuse(403, "forbidden", origin);
+    }
+
     // The brand columns, not `name`: what the visitor hears Sofía call this
     // company is customer-facing, and `accounts.name` is the agency's own
     // internal label for it ("Rio Roofing — trial"). Same shape and same

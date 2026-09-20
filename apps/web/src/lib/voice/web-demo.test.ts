@@ -97,8 +97,15 @@ describe("verifyTicket", () => {
   const SECRET = "shared-secret-value";
   const NOW = 1_760_000_000_000;
 
+  it("a verified ticket returns its nonce — the replay store keys on it", () => {
+    const secret = "s3cret";
+    const signed = signTicket(secret, 1_000_000, "nonce-abc");
+    const verdict = verifyTicket(secret, signed, 1_000_000);
+    expect(verdict).toEqual({ ok: true, nonce: "nonce-abc" });
+  });
+
   it("accepts a ticket this secret just minted", () => {
-    expect(verifyTicket(SECRET, signTicket(SECRET, NOW), NOW)).toEqual({ ok: true });
+    expect(verifyTicket(SECRET, signTicket(SECRET, NOW), NOW)).toEqual({ ok: true, nonce: expect.any(String) });
   });
 
   it("refuses a ticket signed with a different secret", () => {
@@ -121,7 +128,7 @@ describe("verifyTicket", () => {
 
   it("accepts one right on the age boundary", () => {
     const t = signTicket(SECRET, NOW);
-    expect(verifyTicket(SECRET, t, NOW + TICKET_MAX_AGE_MS)).toEqual({ ok: true });
+    expect(verifyTicket(SECRET, t, NOW + TICKET_MAX_AGE_MS)).toEqual({ ok: true, nonce: expect.any(String) });
   });
 
   it("refuses a ticket dated far in the future", () => {
@@ -164,6 +171,6 @@ describe("ticket wire format (cross-repo)", () => {
   });
 
   it("verifies the pinned vector", () => {
-    expect(verifyTicket("fixture-secret", VECTOR, 1_760_000_000_000)).toEqual({ ok: true });
+    expect(verifyTicket("fixture-secret", VECTOR, 1_760_000_000_000)).toEqual({ ok: true, nonce: "fixed-nonce" });
   });
 });

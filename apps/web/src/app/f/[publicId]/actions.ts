@@ -11,36 +11,13 @@ import { originFrom } from "@/lib/email/origin";
 import { enrich } from "@/lib/forms/enrich";
 import {
   HONEYPOT_FIELD, RENDER_TOKEN_FIELD, MIN_FILL_MS, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS,
-  DUPLICATE_WINDOW_MS, verifyRenderToken, hashIp, hashAnswers, parseAttribution,
+  DUPLICATE_WINDOW_MS, verifyRenderToken, clientIp, hashIp, hashAnswers, parseAttribution,
   isValidEmail, isValidPhone,
 } from "@/lib/forms/guards";
 import { publicStrings, normalizeLocale } from "@/lib/forms/public-strings";
 import type { SubmitResult } from "./submit-result";
 
 const CONSENT_KIND = "consent";
-
-/**
- * Client IP for rate limiting and duplicate detection.
- *
- * TRUST ASSUMPTION, stated explicitly: this only works because the hosting
- * platform (Vercel) *overwrites* `x-vercel-forwarded-for`/`x-forwarded-for`
- * on every request rather than appending to whatever the client sent —
- * `x-vercel-forwarded-for` is Vercel's own platform-set header and is
- * preferred for that reason. If this app is ever placed behind a different
- * proxy that appends to `x-forwarded-for` instead of replacing it, the first
- * hop stops being trustworthy: a client could prepend any address it likes,
- * making rate limiting and duplicate detection both keyed on a value the
- * requester controls — rotatable by a bot, and usable against a real visitor
- * by sending their IP to exhaust their limit. Revisit this the day a non-
- * Vercel proxy enters the path.
- */
-function clientIp(h: Headers): string {
-  const vercelForwarded = h.get("x-vercel-forwarded-for");
-  if (vercelForwarded) return vercelForwarded.split(",")[0]!.trim();
-  const forwarded = h.get("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0]!.trim();
-  return h.get("x-real-ip") ?? "unknown";
-}
 
 function collect(fields: FormField[], formData: FormData) {
   return fields
