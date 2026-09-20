@@ -615,7 +615,6 @@ columns and every grants test still passes. Create
 
 ```ts
 import { describe, it, expect } from "vitest";
-import { serviceDb } from "../service";
 import { withTestAccount } from "./fixtures";
 import { createForm } from "../forms";
 import {
@@ -627,8 +626,7 @@ import {
 
 describe("concierge accessors", () => {
   it("enableConcierge mints a public id, and re-enabling keeps the SAME one", () =>
-    withTestAccount(async (accountId) => {
-      const db = serviceDb();
+    withTestAccount(async (db, accountId) => {
       const form = await createForm(db, accountId, { name: "Leads" }, accountId);
       const first = await enableConcierge(db, accountId, form.id);
       expect(first.publicId).toMatch(/^[A-Za-z0-9]{12}$/);
@@ -641,8 +639,7 @@ describe("concierge accessors", () => {
     }));
 
   it("getVoiceProfileByPublicId returns null when the concierge is OFF", () =>
-    withTestAccount(async (accountId) => {
-      const db = serviceDb();
+    withTestAccount(async (db, accountId) => {
       const form = await createForm(db, accountId, { name: "Leads" }, accountId);
       const { publicId } = await enableConcierge(db, accountId, form.id);
       expect(await getVoiceProfileByPublicId(db, publicId)).not.toBeNull();
@@ -652,8 +649,7 @@ describe("concierge accessors", () => {
     }));
 
   it("getVoiceProfileByPublicId returns null when no destination form is set", () =>
-    withTestAccount(async (accountId) => {
-      const db = serviceDb();
+    withTestAccount(async (db, accountId) => {
       const form = await createForm(db, accountId, { name: "Leads" }, accountId);
       const { publicId } = await enableConcierge(db, accountId, form.id);
       await db.from("voice_profiles")
@@ -663,8 +659,7 @@ describe("concierge accessors", () => {
     }));
 
   it("claimConciergeTurn counts up and returns null at the cap", () =>
-    withTestAccount(async (accountId) => {
-      const db = serviceDb();
+    withTestAccount(async (db, accountId) => {
       const form = await createForm(db, accountId, { name: "Leads" }, accountId);
       const { id } = await createConciergeConversation(db, {
         accountId, formId: form.id, ipHash: "aaa", locale: "en",
@@ -677,8 +672,7 @@ describe("concierge accessors", () => {
     }));
 
   it("two concurrent claims at the boundary yield exactly one success", () =>
-    withTestAccount(async (accountId) => {
-      const db = serviceDb();
+    withTestAccount(async (db, accountId) => {
       const form = await createForm(db, accountId, { name: "Leads" }, accountId);
       const { id } = await createConciergeConversation(db, {
         accountId, formId: form.id, ipHash: "bbb", locale: "en",
@@ -694,8 +688,7 @@ describe("concierge accessors", () => {
     }));
 
   it("appendConciergeTurns appends rather than replacing", () =>
-    withTestAccount(async (accountId) => {
-      const db = serviceDb();
+    withTestAccount(async (db, accountId) => {
       const form = await createForm(db, accountId, { name: "Leads" }, accountId);
       const { id } = await createConciergeConversation(db, {
         accountId, formId: form.id, ipHash: "ccc", locale: "en",
@@ -713,8 +706,7 @@ describe("concierge accessors", () => {
     }));
 
   it("setConciergeSubmission writes once and ignores a second capture", () =>
-    withTestAccount(async (accountId) => {
-      const db = serviceDb();
+    withTestAccount(async (db, accountId) => {
       const form = await createForm(db, accountId, { name: "Leads" }, accountId);
       const { id } = await createConciergeConversation(db, {
         accountId, formId: form.id, ipHash: "ddd", locale: "en",
@@ -734,8 +726,7 @@ describe("concierge accessors", () => {
   // BOTH SIDES OF BOTH FILTERS. A counter tested against a table holding
   // only its own rows cannot fail a swapped filter column.
   it("the counters filter on the right column and the right window", () =>
-    withTestAccount(async (accountId) => {
-      const db = serviceDb();
+    withTestAccount(async (db, accountId) => {
       const form = await createForm(db, accountId, { name: "Leads" }, accountId);
       const mine = { accountId, formId: form.id, locale: "en",
                      attribution: {}, origin: null };
@@ -1913,9 +1904,12 @@ export async function POST(
         .filter((a) => a.value !== "");
       if (!answers.length) return;
 
+      // SubmissionInput's optional fields are `?: string`, NOT `| null`
+      // (packages/db/src/forms.ts:147-155) — omit what you do not have
+      // rather than passing null, which does not typecheck.
       const submission = await createSubmission(db, form.account_id, form.id, {
         answers, attribution: conversation!.attribution, consent: [],
-        locale, ipHash, answersHash: null, userAgent: null,
+        locale, ipHash,
       });
       await setConciergeSubmission(db, conversationId, submission.id);
       await enrich(
@@ -2474,3 +2468,14 @@ signatures of `withRollback` / `actAs` / `withTestAccount` in
 `packages/db/src/test/db.ts` and `fixtures.ts`, and the real fakes in
 `embed-script.test.ts`. The last two tasks in this repo each lost a review
 round to a brief that invented one of these.
+
+**Three signatures corrected in this plan after it was first written**, by
+reading the tree rather than trusting the draft — recorded so a reviewer can
+see they were caught rather than missed:
+`withTestAccount(fn: (db, accountId) => …)` takes TWO arguments and supplies
+the client (`fixtures.ts:139`), so the tests above do not call `serviceDb()`;
+`withRollback` takes ONE (`db.ts:4`) and `actAs(c, claims)` mutates the pg
+session in place (`db.ts:22`); and `SubmissionInput`'s optional fields are
+`?: string`, not `| null` (`forms.ts:147-155`). If anything else in this
+plan's code disagrees with the tree, **the tree wins** — use the real
+signature and record the deviation in the task report.
