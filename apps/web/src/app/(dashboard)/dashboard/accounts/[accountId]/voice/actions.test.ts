@@ -434,6 +434,23 @@ describe("enableConciergeAction", () => {
     expect(m["voice.assistant.wrongForm"]).not.toBe(m["voice.assistant.lockedNoProfile"]);
   });
 
+  /**
+   * Task 6 review, Minor: this branch returned without a `console.error` at
+   * all — a real cross-tenant attempt (or a race against a just-deleted
+   * form) left no trace naming WHICH account and WHICH form, unlike the
+   * generic-failure branch just below, which already logs.
+   */
+  it("logs the account and form id on the cross-tenant/deleted-form branch, not just the sentence", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.enableConcierge.mockRejectedValue(
+      new Error("enableConcierge failed: form does not belong to this account"),
+    );
+    await enableConciergeAction("a1", "form1");
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("a1"));
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("form1"));
+    errSpy.mockRestore();
+  });
+
   it("any other failure gets the generic sentence, logged rather than swallowed", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     dbMocks.enableConcierge.mockRejectedValue(new Error("enableConcierge failed: db down"));

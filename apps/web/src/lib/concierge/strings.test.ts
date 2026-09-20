@@ -95,6 +95,20 @@ describe("the copy shown when this IP or account is over its conversation cap (B
   });
 });
 
+describe("the header close button's label (Task 6 review fold-in)", () => {
+  /**
+   * `concierge-chat.tsx`'s close button carried its own inline
+   * `locale === "es" ? "Cerrar" : "Close"` ternary — an en/es literal this
+   * catalogue exists precisely to hold, the same way `thinking`/`send`
+   * already do. MUTATION: read `STRINGS.en.close` for both locales — this
+   * FAILS, because a Spanish visitor would get an English label again.
+   */
+  it("is Close in English and Cerrar in Spanish, from the catalogue, not a literal", () => {
+    expect(EN.close).toBe("Close");
+    expect(ES.close).toBe("Cerrar");
+  });
+});
+
 describe("every concierge string", () => {
   it("carries no milestone codes, template syntax, or vendor jargon", () => {
     for (const strings of [EN, ES]) {

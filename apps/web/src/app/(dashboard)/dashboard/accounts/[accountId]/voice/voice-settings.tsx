@@ -239,6 +239,82 @@ export function conciergeLockReason(
   return null;
 }
 
+export type ConciergeDestinationOption = { id: string; name: string };
+
+/**
+ * Whether the card's whole body should be replaced by the empty state
+ * (DESIGN.md rule 5) that sells "publish a form first."
+ *
+ * `!enabled` is load-bearing, not decoration (Task 6's review, "an ON
+ * assistant with no off switch"): `conciergeLockReason` correctly reads
+ * `no_published_form` the moment an operator unpublishes the form an ALREADY
+ * ON assistant sends to — deciding to show the empty state from that reason
+ * alone would then hide the toggle itself, and a hidden toggle cannot be
+ * switched off. The empty state is for an account that has never had
+ * anywhere to send a lead; an account that is live and lost its destination
+ * gets `conciergeFormUnpublished`'s sentence instead, beside a toggle it can
+ * still click.
+ */
+export function shouldShowConciergeEmptyState(
+  enabled: boolean, lockReason: ConciergeLockReason | null,
+): boolean {
+  return !enabled && lockReason === "no_published_form";
+}
+
+/**
+ * True when the assistant is ON and its stored destination is not among the
+ * currently published forms — unpublished out from under it, most likely.
+ * Off by construction while the assistant is off: an account that has never
+ * turned it on has no live destination to warn about yet, whatever
+ * `concierge_form_id` happens to hold from a prior, since-disabled run.
+ */
+export function conciergeFormUnpublished(
+  enabled: boolean, storedFormId: string | null, publishedForms: ConciergeDestinationOption[],
+): boolean {
+  return enabled && Boolean(storedFormId) && !publishedForms.some((f) => f.id === storedFormId);
+}
+
+/**
+ * The destination Select's own option list. Ordinarily just the published
+ * forms — the only things a NEW selection may point at. But once the
+ * assistant is on and its stored destination has fallen out of that list
+ * (unpublished), the Select's `value` still equals that stored id, and
+ * `SelectValue` renders blank for a value matching no `SelectItem` — a
+ * destination that is very much still live, reading as if nothing were
+ * chosen at all. This component never receives an unpublished form's real
+ * title (page.tsx narrows `listForms` to published on purpose — "a draft has
+ * no /f/<publicId> a lead could land on" — so there is no name to recover
+ * here, only to invent), so the added option carries the explanatory label
+ * `voice.assistant.unpublishedFormOption` instead of a fabricated title.
+ */
+export function conciergeDestinationOptions(
+  enabled: boolean, storedFormId: string | null, publishedForms: ConciergeDestinationOption[],
+): ConciergeDestinationOption[] {
+  if (!enabled || !storedFormId) return publishedForms;
+  if (publishedForms.some((f) => f.id === storedFormId)) return publishedForms;
+  return [...publishedForms, { id: storedFormId, name: m["voice.assistant.unpublishedFormOption"] }];
+}
+
+/**
+ * The id the pasteable snippet renders from, or null to hide it.
+ *
+ * Prefers the server-confirmed `profile.public_id` once `enabled` reads
+ * true. Falls back to `optimisticPublicId` — the id `enableConciergeAction`
+ * just minted or kept (Task 1's contract: enabling always returns the
+ * stored id, new or old) — for the moment between that action resolving and
+ * `revalidatePath`'s refresh landing, so the snippet an operator's very
+ * next move is "copy" appears the instant the toggle succeeds rather than
+ * after a second round trip. A stale optimistic id left over from an
+ * earlier click never wins once the real data catches up: the first branch
+ * always takes priority.
+ */
+export function conciergeSnippetPublicId(
+  enabled: boolean, storedPublicId: string | null, optimisticPublicId: string | null,
+): string | null {
+  if (enabled && storedPublicId) return storedPublicId;
+  return optimisticPublicId;
+}
+
 /**
  * The website assistant — the same receptionist, answering on the client's
  * site instead of the phone. A sibling card to `VoiceProfileForm` above (its
@@ -276,18 +352,25 @@ function ConciergeCard({
     profile?.concierge_form_id ?? (publishedForms.length === 1 ? publishedForms[0]!.id : ""),
   );
   const [pending, startTransition] = useTransition();
+  // The id `enableAction` just minted or kept, held only for the gap between
+  // that promise resolving and `revalidatePath`'s refresh landing — see
+  // `conciergeSnippetPublicId`'s own doc. Cleared on a successful disable so
+  // a stale id never outlives the toggle that produced it.
+  const [optimisticPublicId, setOptimisticPublicId] = useState<string | null>(null);
 
   function turnOn() {
     if (!selectedFormId || pending) return;
     startTransition(async () => {
       const result = await enableAction(selectedFormId);
       if (!result.ok) { toast.error(result.error); return; }
+      setOptimisticPublicId(result.publicId);
       toast.success(m["voice.assistant.enabledToast"], {
         action: {
           label: m["common.undo"],
           onClick: () => startTransition(async () => {
             const r = await disableAction();
-            if (!r.ok) toast.error(r.error);
+            if (!r.ok) { toast.error(r.error); return; }
+            setOptimisticPublicId(null);
           }),
         },
       });
@@ -299,23 +382,38 @@ function ConciergeCard({
     startTransition(async () => {
       const result = await disableAction();
       if (!result.ok) { toast.error(result.error); return; }
+      setOptimisticPublicId(null);
       toast.success(m["voice.assistant.disabledToast"], {
         action: {
           label: m["common.undo"],
           onClick: () => startTransition(async () => {
             const r = await enableAction(selectedFormId);
-            if (!r.ok) toast.error(r.error);
+            if (!r.ok) { toast.error(r.error); return; }
+            setOptimisticPublicId(r.publicId);
           }),
         },
       });
     });
   }
 
-  const lockText =
+  const showEmptyState = shouldShowConciergeEmptyState(enabled, lockReason);
+  const storedFormId = profile?.concierge_form_id ?? null;
+  const destinationOptions = conciergeDestinationOptions(enabled, storedFormId, publishedForms);
+  const formUnpublished = conciergeFormUnpublished(enabled, storedFormId, publishedForms);
+  const snippetPublicId = conciergeSnippetPublicId(enabled, profile?.public_id ?? null, optimisticPublicId);
+
+  // Which sentence, if any, sits under the toggle — tied to it with
+  // `aria-describedby` (checklist-panel.tsx:65's precedent) so a screen
+  // reader hears WHY a locked toggle refuses a click, or why an ON toggle
+  // still needs attention. Mutually exclusive: `formUnpublished` only fires
+  // while ON, `lockText` only renders while OFF.
+  const reasonText = !enabled ? (
     lockReason === "no_profile" ? m["voice.assistant.lockedNoProfile"]
     : lockReason === "blank_greeting" ? m["voice.assistant.lockedBlankGreeting"]
-    : !enabled && !selectedFormId ? m["voice.assistant.lockedNoSelection"]
-    : null;
+    : !selectedFormId ? m["voice.assistant.lockedNoSelection"]
+    : null
+  ) : (formUnpublished ? m["voice.assistant.formUnpublished"] : null);
+  const reasonId = "concierge-toggle-reason";
 
   const toggleDisabled =
     pending || (!enabled && (lockReason === "no_profile" || lockReason === "blank_greeting" || !selectedFormId));
@@ -328,10 +426,12 @@ function ConciergeCard({
           <CardDescription>{m["voice.assistant.body"]}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {lockReason === "no_published_form" ? (
+          {showEmptyState ? (
             // The empty state (DESIGN.md rule 5): sells the next step rather
             // than reporting a failure — there is nothing broken here, the
-            // account simply has not published a form yet.
+            // account simply has not published a form yet. Gated on `!enabled`
+            // inside `shouldShowConciergeEmptyState` — an assistant that is ON
+            // never disappears behind this, because it contains no toggle.
             <EmptyState
               icon={MessageCircle}
               title={m["voice.assistant.noFormTitle"]}
@@ -355,7 +455,7 @@ function ConciergeCard({
                     <SelectValue placeholder={m["voice.assistant.destinationPlaceholder"]} />
                   </SelectTrigger>
                   <SelectContent>
-                    {publishedForms.map((f) => (
+                    {destinationOptions.map((f) => (
                       <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
                     ))}
                   </SelectContent>
@@ -367,20 +467,21 @@ function ConciergeCard({
                   checked={enabled}
                   disabled={toggleDisabled}
                   onCheckedChange={(v) => (v === true ? turnOn() : turnOff())}
+                  aria-describedby={reasonText ? reasonId : undefined}
                 />
                 <Label htmlFor="concierge_enabled">{m["voice.assistant.toggleLabel"]}</Label>
               </div>
-              {!enabled && lockText ? (
-                <p className="text-xs text-muted-foreground">{lockText}</p>
+              {reasonText ? (
+                <p id={reasonId} className="text-xs text-muted-foreground">{reasonText}</p>
               ) : null}
             </>
           )}
         </CardContent>
       </Card>
-      {enabled && profile?.public_id ? (
+      {snippetPublicId ? (
         <EmbedSnippet
           attribute="data-concierge"
-          publicId={profile.public_id}
+          publicId={snippetPublicId}
           origin={origin}
           title={m["voice.assistant.snippetTitle"]}
           hint={m["voice.assistant.snippetHint"]}

@@ -36,6 +36,7 @@ const STRINGS = {
     tooFast: "That came through before the page finished loading — please send it again.",
     poweredBy: "Powered by BIS",
     title: "Chat",
+    close: "Close",
   },
   es: {
     placeholder: "Escribe tu mensaje…",
@@ -50,6 +51,7 @@ const STRINGS = {
     tooFast: "Eso llegó antes de que la página terminara de cargar — vuelve a enviarlo.",
     poweredBy: "Con tecnología de BIS",
     title: "Chat",
+    close: "Cerrar",
   },
 } as const;
 

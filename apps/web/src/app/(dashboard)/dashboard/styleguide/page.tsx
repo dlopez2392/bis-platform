@@ -194,7 +194,22 @@ export default async function StyleguidePage() {
           title="Website assistant — launcher & message bubbles"
           file="app/embed.js/route.ts (loader) · app/c/[publicId]/concierge-chat.tsx · concierge.css"
         >
-          <div className="flex w-full flex-wrap items-start gap-8">
+          <div
+            className="flex w-full flex-wrap items-start gap-8"
+            // concierge.css's `.bis-msg-*` rules paint from `--form-accent`/
+            // `--form-accent-foreground` — `publicFormTheme`'s own CTA pair,
+            // set on the real `/c/[publicId]` page but never on a dashboard
+            // route. Undefined here, `var(--form-accent, #6D28D9)` always
+            // took its literal fallback — the mockup's violet, unmoved by
+            // `.dark` — so the bubbles below looked identical in both
+            // themes. Bridged to this dashboard's own accent pair instead
+            // of inventing a third color, so the demo actually shows what a
+            // themed tenant's visitor sees, in both modes.
+            style={{
+              "--form-accent": "var(--accent)",
+              "--form-accent-foreground": "var(--primary-foreground)",
+            } as React.CSSProperties}
+          >
             {/* The launcher `embed.js` draws on the HOST page — inline-styled
                 there on purpose (a snippet running on someone else's site
                 cannot reach this app's CSS custom properties), so this is a

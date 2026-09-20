@@ -323,6 +323,9 @@ export async function enableConciergeAction(
       return { ok: false, error: m["voice.assistant.lockedNoProfile"] };
     }
     if (message.includes("form does not belong to this account")) {
+      console.error(
+        `enableConciergeAction: cross-tenant or deleted form for account ${accountId}, form ${formId}: ${message}`,
+      );
       return { ok: false, error: m["voice.assistant.wrongForm"] };
     }
     console.error(`enableConciergeAction: failed for account ${accountId}: ${message}`);

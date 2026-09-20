@@ -288,7 +288,7 @@ export function ConciergeChat({
         <button
           type="button"
           onClick={closeChat}
-          aria-label={locale === "es" ? "Cerrar" : "Close"}
+          aria-label={strings.close}
           style={{
             background: "transparent",
             border: 0,
