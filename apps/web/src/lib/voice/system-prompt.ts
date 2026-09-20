@@ -26,8 +26,20 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     ? "offer to put them through to someone on the team"
     : "offer to take a message";
 
+  // The two sentences that were phone-shaped. Everything else in this prompt
+  // — identity, language, the business facts, the HARD LIMITS block — is the
+  // tenant's own and is identical on both surfaces. There is ONE Sofía; this
+  // is not a second prompt.
+  const onWeb = input.medium === "web";
+  const role = onWeb
+    ? `the assistant on the website for ${input.businessName}`
+    : `the phone receptionist for ${input.businessName}`;
+  const toneMedium = onWeb
+    ? "This is a text chat: short messages, one question at a time, no long lists."
+    : "This is a phone call: short sentences, one question at a time, no bulleted lists read aloud.";
+
   const lines: string[] = [
-    `You are ${input.personaName}, the phone receptionist for ${input.businessName}.`,
+    `You are ${input.personaName}, ${role}.`,
     "",
     `IDENTITY — Do not volunteer that you are automated and do not introduce yourself by name unless asked. Just answer as ${input.businessName} and get straight to what the caller needs. If a caller asks directly whether they are speaking with a person, a human, a bot, a robot, or an AI, answer honestly and briefly that you are an automated assistant, then ${wouldRatherTalkToAPerson} if they would rather talk to a person. Never claim to be human.`,
     "",
@@ -43,7 +55,7 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   }
 
   lines.push(
-    `TONE — Warm, brief, and competent. This is a phone call: short sentences, one question at a time, no bulleted lists read aloud. Never read the business facts verbatim; answer conversationally in your own words.`,
+    `TONE — Warm, brief, and competent. ${toneMedium} Never read the business facts verbatim; answer conversationally in your own words.`,
     "",
     `The current date and time is ${currentDateTime} (${input.timezone}).`,
     input.callerNumber
@@ -65,6 +77,13 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     "- take_message(body, callbackNumber) — when you cannot help, when a human must call back, or when a request cannot be completed.",
     "- log_transcript is called automatically; never mention it.",
   );
+
+  if (onWeb) {
+    lines.push(
+      "",
+      "YOU CANNOT BOOK FROM HERE — you have no calendar on this surface. If someone wants an appointment, say the team will set it up, and use capture_lead to get their name and either an email or a phone number so they can be reached.",
+    );
+  }
 
   // Named in the TOOLS list only when the tool is actually on the session
   // (`toolSchemas`' third argument, session-config.ts:33) — the same

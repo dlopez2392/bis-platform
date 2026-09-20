@@ -154,3 +154,36 @@ describe("buildSystemPrompt", () => {
     expect(buildSystemPrompt(base, now)).not.toContain("transfer_to_human");
   });
 });
+
+describe("buildSystemPrompt medium", () => {
+  // THE PROPERTY THAT MATTERS MOST: every existing caller passes no `medium`
+  // at all, and their prompt must not move by one byte. A prompt change is a
+  // behaviour change on a live phone line.
+  it("is byte-identical when no medium is given and when medium is phone", () => {
+    expect(buildSystemPrompt(baseInput({ medium: "phone" }), now))
+      .toBe(buildSystemPrompt(base, now));
+  });
+
+  it("says phone receptionist and phone call by default", () => {
+    const p = buildSystemPrompt(base, now);
+    expect(p).toContain("the phone receptionist for Rio Roofing");
+    expect(p).toContain("This is a phone call");
+  });
+
+  it("says neither of those on the web", () => {
+    const p = buildSystemPrompt(baseInput({ medium: "web" }), now);
+    expect(p).not.toContain("phone receptionist");
+    expect(p).not.toContain("This is a phone call");
+    expect(p).toContain("the assistant on the website for Rio Roofing");
+    expect(p).toContain("This is a text chat");
+  });
+
+  it("keeps the tenant's own facts, limits and tools on both mediums", () => {
+    for (const medium of ["phone", "web"] as const) {
+      const p = buildSystemPrompt(baseInput({ medium }), now);
+      expect(p).toContain(base.facts);
+      expect(p).toContain("Never quote a price");
+      expect(p).toContain("capture_lead");
+    }
+  });
+});
