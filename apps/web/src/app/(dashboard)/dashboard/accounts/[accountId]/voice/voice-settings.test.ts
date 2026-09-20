@@ -261,6 +261,21 @@ describe("conciergeAttemptReenable — the disable toast's Undo, sharing turnOn'
     expect(enableAction).toHaveBeenCalledWith("f1");
     expect(result).toEqual({ ok: true, publicId: "pub_x" });
   });
+
+  // Re-review finding NEW-2: the refusal used to name
+  // `formUnpublishedOff` for ANY refusal reason, regardless of which gate
+  // actually fired. An assistant switched ON with a blank greeting (I3's
+  // own state) is reachable: turn it off, click Undo, and — with a
+  // perfectly published destination — the operator was told "This form is
+  // no longer published" about a form that is published.
+  it("names the blank greeting, not the form, when that is the actual reason Undo is refused (NEW-2)", async () => {
+    const enableAction = vi.fn(async () => ({ ok: true as const, publicId: "pub_x" }));
+    const result = await conciergeAttemptReenable("blank_greeting", "f1", false, enableAction);
+    expect(enableAction).not.toHaveBeenCalled();
+    // MUTATION: hard-code the unpublished sentence regardless of the real
+    // reason — this FAILS.
+    expect(result).toEqual({ ok: false, error: m["voice.assistant.lockedBlankGreeting"] });
+  });
 });
 
 describe("conciergeSnippetPublicId — what the pasteable snippet renders from", () => {

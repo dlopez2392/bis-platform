@@ -545,8 +545,18 @@ describe("embed script", () => {
     // its own × and Esc producers, so the launcher has nothing left to do
     // while open on a phone.
     describe("hides the launcher while open on mobile, so it can no longer cover Send (I1)", () => {
-      it("hides the launcher once the panel opens on the mobile branch, and restores it on close", () => {
-        const { created } = run({ "data-concierge": "abc123" }, "https://client.example/", "", { mobile: true });
+      /** A valid `bis-concierge-brand` message — sent once by the REAL chat
+       *  page at load, and the proof (re-review finding NEW-1) that the
+       *  frame is actually the chat page and not a 404/500/`notFound()`. */
+      function sendBrand(send: (event: any) => void, iframe: any) {
+        send({
+          source: iframe.contentWindow, origin: ORIGIN,
+          data: { type: "bis-concierge-brand", accent: "#112233", accentForeground: "#ffffff" },
+        });
+      }
+
+      it("hides the launcher once the panel opens on the mobile branch (after the frame has proven itself the chat page), and restores it on close", () => {
+        const { created, send, iframe } = run({ "data-concierge": "abc123" }, "https://client.example/", "", { mobile: true });
         const launcher = launcherOf(created);
         // Untouched at load — applyGeometry's very first call runs before
         // the launcher exists, and the panel is never open that early, so
@@ -554,6 +564,7 @@ describe("embed script", () => {
         // half of this assertion, not the exact starting value.
         expect(launcher.style.display).not.toBe("none");
 
+        sendBrand(send, iframe);
         launcher.listeners.click[0]({});
         // MUTATION: drop the launcher line from setOpen — this FAILS, and a
         // phone visitor's tap on Send lands on the launcher and closes the
@@ -572,10 +583,11 @@ describe("embed script", () => {
       });
 
       it("brings the launcher back the moment a mobile viewport crosses back over the breakpoint while still open", () => {
-        const { created, fireMediaChange } = run(
+        const { created, fireMediaChange, send, iframe } = run(
           { "data-concierge": "abc123" }, "https://client.example/", "", { mobile: true },
         );
         const launcher = launcherOf(created);
+        sendBrand(send, iframe);
         launcher.listeners.click[0]({});
         expect(launcher.style.display).toBe("none");
 
@@ -586,6 +598,71 @@ describe("embed script", () => {
         // launcher hidden with the panel still covering the screen and
         // nothing left on the host page to close it with.
         expect(launcher.style.display).toBe("");
+      });
+
+      // Re-review finding NEW-1: the launcher used to hide on `open &&
+      // mobile` alone. The chat page's own × and Esc producers are the
+      // ONLY other way to dismiss the panel, and they live INSIDE the
+      // iframe's document — reachable only once that document has actually
+      // rendered the chat page. When the frame is something else instead —
+      // the operator switched the assistant off after the snippet was
+      // pasted (`disableConcierge` keeps `public_id`, so `/c/<publicId>`
+      // 404s), or any failed load — a phone visitor who taps the bubble got
+      // a full-viewport error page with nothing to dismiss it: no ×, no
+      // launcher, Esc needs a keyboard a phone visitor doesn't have. The
+      // `bis-concierge-brand` message is sent once by the REAL chat page at
+      // load (already inside both trust-boundary checks above), so it is
+      // the loader's only proof the frame is what it expects.
+      describe("only hides once the frame has proven it is the real chat page (frameReady, NEW-1)", () => {
+        it("(a) mobile, open BEFORE any brand message: the launcher stays visible", () => {
+          const { created } = run({ "data-concierge": "abc123" }, "https://client.example/", "", { mobile: true });
+          const launcher = launcherOf(created);
+          launcher.listeners.click[0]({});
+          // MUTATION: drop the `frameReady` condition (hide on `open &&
+          // mobile` alone) — this FAILS, and a visitor whose frame never
+          // painted (an off assistant, a 404, a 500) gets a hidden launcher
+          // over a full-viewport error page with nothing to dismiss it.
+          expect(launcher.style.display).not.toBe("none");
+        });
+
+        it("(b) mobile, brand message received, THEN opened: the launcher hides", () => {
+          const { created, send, iframe } = run({ "data-concierge": "abc123" }, "https://client.example/", "", { mobile: true });
+          const launcher = launcherOf(created);
+          sendBrand(send, iframe);
+          launcher.listeners.click[0]({});
+          expect(launcher.style.display).toBe("none");
+        });
+
+        it("(c) mobile, opened BEFORE the brand message, which then arrives: the launcher hides on arrival", () => {
+          const { created, send, iframe } = run({ "data-concierge": "abc123" }, "https://client.example/", "", { mobile: true });
+          const launcher = launcherOf(created);
+          launcher.listeners.click[0]({});
+          expect(launcher.style.display).not.toBe("none");
+
+          sendBrand(send, iframe);
+          // MUTATION: drop the re-apply call from the brand handler — this
+          // FAILS, and a visitor who opened the bubble a beat before the
+          // chat page's own postMessage arrived keeps the launcher visible
+          // for the rest of the conversation, order becoming load-bearing
+          // for a race nothing on screen hints at.
+          expect(launcher.style.display).toBe("none");
+        });
+
+        it("(d) a brand message from the wrong source or the wrong origin does NOT set frameReady — the launcher stays visible on open", () => {
+          const { created, send, iframe } = run({ "data-concierge": "abc123" }, "https://client.example/", "", { mobile: true });
+          const launcher = launcherOf(created);
+
+          send({
+            source: {}, origin: ORIGIN,
+            data: { type: "bis-concierge-brand", accent: "#112233", accentForeground: "#ffffff" },
+          });
+          send({
+            source: iframe.contentWindow, origin: "https://evil.example",
+            data: { type: "bis-concierge-brand", accent: "#112233", accentForeground: "#ffffff" },
+          });
+          launcher.listeners.click[0]({});
+          expect(launcher.style.display).not.toBe("none");
+        });
       });
     });
 

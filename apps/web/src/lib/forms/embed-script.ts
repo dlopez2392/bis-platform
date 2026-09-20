@@ -113,6 +113,29 @@ export const EMBED_SCRIPT = `(function () {
     // must hide while open, and un-hide the moment either the panel closes
     // or the viewport crosses back over 480px.
     var mobile = false;
+    // Re-review finding NEW-1: hiding the launcher on open && mobile alone
+    // assumed the frame was always showing the chat page, which has its own
+    // × and Esc producers to take the launcher's place. Not true — an
+    // operator can switch the assistant off after the snippet is already
+    // pasted (disableConcierge keeps public_id, so /c/<publicId> 404s), or
+    // the load can simply fail — and a phone visitor who taps the bubble on
+    // THAT frame got a full-viewport error page with nothing to dismiss it:
+    // no ×, launcher hidden, Esc needs a keyboard. frameReady is proof the
+    // frame is the real chat page: the chat page posts bis-concierge-brand
+    // exactly once, at load, from inside this script's own two
+    // trust-boundary checks (source + origin) — nothing else in this file
+    // sets it.
+    var frameReady = false;
+    // The one place that decides whether the launcher is visible, called
+    // from every place that can change any of the three inputs
+    // (applyGeometry, setOpen, the brand handler) so none of them can drift
+    // from the other two. Guarded on launcher existing: it does not yet on
+    // applyGeometry's very first call (below), and the panel is never open
+    // that early either way.
+    function applyLauncherVisibility() {
+      if (!launcher) return;
+      launcher.style.display = (panel.style.display === "block" && mobile && frameReady) ? "none" : "";
+    }
     function applyGeometry(isMobile) {
       mobile = isMobile;
       if (mobile) {
@@ -135,14 +158,10 @@ export const EMBED_SCRIPT = `(function () {
       // I1: on a phone the launcher sits directly over the sheet's Send
       // button, so a tap meant for Send lands on the launcher instead and
       // CLOSES the chat. Hide it while the panel is open on the mobile
-      // branch only, and re-apply on every breakpoint change — a phone
-      // rotated to a wide viewport while open gets the card geometry AND
-      // its launcher back. launcher does not exist yet on the very first
-      // call (created below, and the panel is never open that early), so
-      // there is nothing to reapply.
-      if (launcher) {
-        launcher.style.display = (panel.style.display === "block" && mobile) ? "none" : "";
-      }
+      // branch (and the frame has proven itself ready) only, and re-apply
+      // on every breakpoint change — a phone rotated to a wide viewport
+      // while open gets the card geometry AND its launcher back.
+      applyLauncherVisibility();
     }
     var mq = window.matchMedia ? window.matchMedia("(max-width: 480px)") : null;
     applyGeometry(mq ? mq.matches : false);
@@ -186,13 +205,19 @@ export const EMBED_SCRIPT = `(function () {
       // sessionStorage, and composing a message takes longer than
       // MIN_FILL_MS anyway.
       if (open && Date.now() - mountedAt > 25 * 60 * 1000) {
+        // NEW-3: this is an iframe navigation, and most browsers append a
+        // session-history entry for it on the HOST page — so a visitor's
+        // first Back press after a >25-minute refresh may rewind the iframe
+        // rather than leave the page. location.replace is unavailable here
+        // (cross-origin), so this is accepted rather than fixed.
         iframe.src = iframe.src;
         mountedAt = Date.now();
       }
       panel.style.display = open ? "block" : "none";
-      // I1: see applyGeometry's own comment — hidden only while open AND on
-      // the mobile branch, restored the instant either stops being true.
-      launcher.style.display = (open && mobile) ? "none" : "";
+      // I1: see applyLauncherVisibility's own comment — hidden only while
+      // open AND on the mobile branch AND the frame has proven itself
+      // ready, restored the instant any of the three stops being true.
+      applyLauncherVisibility();
       launcher.setAttribute("aria-expanded", open ? "true" : "false");
       // Focus follows the visitor's action: opening hands the conversation
       // to the iframe, so a keyboard user lands where they can type rather
@@ -270,10 +295,20 @@ export const EMBED_SCRIPT = `(function () {
     if (concierge && data.type === "bis-concierge-brand"
         && typeof data.accent === "string" && hexColor.test(data.accent)
         && typeof data.accentForeground === "string" && hexColor.test(data.accentForeground)) {
+      // NEW-1: this message is the loader's only proof the frame is the
+      // real chat page (see frameReady's own comment above applyGeometry)
+      // — set regardless of the data-color override below, which only ever
+      // gates the repaint, never what the frame actually is.
+      frameReady = true;
       if (!script.getAttribute("data-color")) {
         launcher.style.background = data.accent;
         launcher.style.color = data.accentForeground;
       }
+      // Re-applied on arrival so the order of "visitor opens the panel" vs
+      // "brand message arrives" never matters — a visitor who opened a beat
+      // before this posted must not be stuck with a visible launcher for
+      // the rest of the conversation.
+      applyLauncherVisibility();
       return;
     }
 

@@ -524,6 +524,15 @@ test.describe("embedded on a client's page", () => {
       await expect(launcher).toBeVisible();
       await launcher.click();
       await expect(iframeEl).toBeVisible();
+      // The launcher only hides once the frame has posted its
+      // bis-concierge-brand message (NEW-1 of the re-review — proof the
+      // frame is the real chat page, not a 404/500 with nothing to dismiss
+      // it) — a real, if small, race against this click. Chosen over a
+      // manual `expect.poll`: `toBeHidden()` is itself a Playwright
+      // web-first assertion that retries on its own (up to this project's
+      // 10s `expect.timeout`) until the condition holds, so it cannot flake
+      // on the brand message arriving a beat after the click — no separate
+      // wait is needed for that race specifically.
       // MUTATION: drop the launcher line from setOpen (embed-script.ts) —
       // this FAILS, and the launcher stays on top of the full-viewport
       // sheet, covering the composer's own Send button.

@@ -352,22 +352,52 @@ export function conciergeCanTurnOn(
 }
 
 /**
+ * The OFF face's own reason sentence, extracted from `reasonText`'s OFF
+ * branch below so `conciergeAttemptReenable` can reuse the SAME decision
+ * instead of a second, independent one.
+ *
+ * Re-review finding NEW-2: `conciergeAttemptReenable` used to return
+ * `formUnpublishedOff` for every refusal, regardless of which gate actually
+ * fired — reachable because an assistant can be ON with a blank greeting
+ * (I3's own state): turn it off, click Undo, and — even with a perfectly
+ * published destination — the operator was told "This form is no longer
+ * published" about a form that is published. The four conditions here are
+ * the exact same four `conciergeToggleLocked`/`conciergeCanTurnOn` check
+ * (same order, same booleans), so whenever the gate refuses, exactly one of
+ * these is non-null — never a second parallel formula that could drift from
+ * the gate it explains.
+ */
+export function conciergeOffReason(
+  lockReason: ConciergeLockReason | null, selectedFormId: string, formUnpublished: boolean,
+): string | null {
+  return lockReason === "no_profile" ? m["voice.assistant.lockedNoProfile"]
+    : lockReason === "blank_greeting" ? m["voice.assistant.lockedBlankGreeting"]
+    : !selectedFormId ? m["voice.assistant.lockedNoSelection"]
+    : formUnpublished ? m["voice.assistant.formUnpublishedOff"]
+    : null;
+}
+
+/**
  * The disable toast's Undo, extracted to a standalone function (not inlined
  * in the toast's `onClick`) so a test can call it directly with a stub
  * `enableAction` and prove the gate actually runs — `renderToStaticMarkup`
  * never fires a handler, so nothing short of calling this directly shows the
  * Undo path shares `conciergeCanTurnOn` with `turnOn` rather than bypassing
- * it. Refuses with the SAME sentence the OFF face already shows for an
- * unpublished shown destination — the reason Undo is refused here in
- * practice, since `turnOff` never changes `lockReason` or the profile's own
- * readiness, only the toggle.
+ * it. Refuses with `conciergeOffReason`'s own sentence for whichever gate
+ * actually fired — the `?? m["voice.assistant.formUnpublishedOff"]` fallback
+ * is unreachable by construction (see that function's own note) and exists
+ * only so this always returns a string, never `null`.
  */
 export async function conciergeAttemptReenable(
   lockReason: ConciergeLockReason | null, selectedFormId: string, formUnpublished: boolean,
   enableAction: (formId: string) => Promise<EnableConciergeResult>,
 ): Promise<EnableConciergeResult> {
   if (!conciergeCanTurnOn(lockReason, selectedFormId, formUnpublished)) {
-    return { ok: false, error: m["voice.assistant.formUnpublishedOff"] };
+    return {
+      ok: false,
+      error: conciergeOffReason(lockReason, selectedFormId, formUnpublished)
+        ?? m["voice.assistant.formUnpublishedOff"],
+    };
   }
   return enableAction(selectedFormId);
 }
@@ -509,11 +539,7 @@ export function ConciergeCard({
   // live either way (it is the off switch); this only ever adds a sentence
   // beside it.
   const reasonText = !enabled ? (
-    lockReason === "no_profile" ? m["voice.assistant.lockedNoProfile"]
-    : lockReason === "blank_greeting" ? m["voice.assistant.lockedBlankGreeting"]
-    : !selectedFormId ? m["voice.assistant.lockedNoSelection"]
-    : formUnpublished ? m["voice.assistant.formUnpublishedOff"]
-    : null
+    conciergeOffReason(lockReason, selectedFormId, formUnpublished)
   ) : (
     lockReason === "blank_greeting" ? m["voice.assistant.greetingBlankOn"]
     : formUnpublished ? m["voice.assistant.formUnpublished"]
