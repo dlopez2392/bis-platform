@@ -95,7 +95,7 @@ import { POST } from "./route";
 import { signRenderToken, RENDER_TOKEN_FIELD, HONEYPOT_FIELD } from "@/lib/forms/guards";
 import {
   CONCIERGE_MAX_CONVERSATIONS_PER_IP, CONCIERGE_MAX_CONVERSATIONS_PER_ACCOUNT_PER_DAY,
-  CONCIERGE_MAX_TURNS, CONCIERGE_MAX_MESSAGE_CHARS,
+  CONCIERGE_MAX_TURNS, CONCIERGE_MAX_MESSAGE_CHARS, CONCIERGE_MAX_REPLY_TOKENS,
 } from "@/lib/concierge/guards";
 import { conciergeStrings } from "@/lib/concierge/strings";
 
@@ -105,17 +105,25 @@ const PROFILE = {
   greeting_en: "Hi", greeting_es: "Hola", facts: "We build tables.", services: "tables",
   languages: "both" as const, booking_enabled: true, after_hours: "message_only" as const,
   enabled: true, textback_enabled: false, textback_body: "",
-  public_id: PUBLIC_ID, concierge_enabled: true, concierge_form_id: "form1",
+  // Deliberately DIFFERENT from CONVERSATION.form_id below (I1, whole-branch
+  // review): a lead must file against the form the CONVERSATION carries, not
+  // whatever the profile points at NOW — an operator can change the
+  // destination between turns (migration 0042's own comment on
+  // `concierge_conversations.form_id`), and this profile column can go NULL
+  // (FK `set null`) without stranding an in-flight chat, unlike the
+  // conversation's own `restrict` column. Same literal on both would leave
+  // every assertion below blind to which one the route actually read.
+  public_id: PUBLIC_ID, concierge_enabled: true, concierge_form_id: "form-now",
 };
 
 const CONVERSATION = {
-  id: "c1", account_id: "a1", form_id: "form1", ip_hash: "h",
+  id: "c1", account_id: "a1", form_id: "form-then", ip_hash: "h",
   turn_count: 1, transcript: [], submission_id: null, locale: "en",
   attribution: {}, origin: null,
 };
 
 const LEAD_FORM = {
-  id: "form1", account_id: "a1", public_id: "f", name: "Leads",
+  id: "form-then", account_id: "a1", public_id: "f", name: "Leads",
   status: "published" as const,
   // NO consent field. That is the point of the consent test below.
   fields: [
@@ -152,11 +160,14 @@ function modelCallsCaptureLead(args: Record<string, unknown>, content: string | 
   };
 }
 
-function post(body: Record<string, unknown>) {
+function post(body: Record<string, unknown>, extraHeaders: Record<string, string> = {}) {
   return POST(
     new Request("https://app.test/api/concierge/x/turn", {
       method: "POST",
-      headers: { "content-type": "application/json", "x-vercel-forwarded-for": "1.2.3.4" },
+      headers: {
+        "content-type": "application/json", "x-vercel-forwarded-for": "1.2.3.4",
+        ...extraHeaders,
+      },
       body: JSON.stringify(body),
     }),
     { params: Promise.resolve({ publicId: PUBLIC_ID }) },
@@ -164,23 +175,23 @@ function post(body: Record<string, unknown>) {
 }
 
 /** The body Task 3's composer actually sends (`c/[publicId]/concierge-chat.tsx`). */
-function firstTurn(extra: Record<string, unknown> = {}) {
+function firstTurn(extra: Record<string, unknown> = {}, headers: Record<string, string> = {}) {
   return post({
     conversationId: null, text: "do you build tables?", locale: "en", attribution: {},
     // signRenderToken(nowMs, publicId) — nowMs FIRST (lib/forms/guards.ts:54).
     [RENDER_TOKEN_FIELD]: signRenderToken(Date.now() - 3_000, PUBLIC_ID),
     [HONEYPOT_FIELD]: "",
     ...extra,
-  });
+  }, headers);
 }
 
-function laterTurn(extra: Record<string, unknown> = {}) {
+function laterTurn(extra: Record<string, unknown> = {}, headers: Record<string, string> = {}) {
   return post({
     conversationId: "c1", text: "and a bench?", locale: "en",
     [RENDER_TOKEN_FIELD]: signRenderToken(Date.now() - 3_000, PUBLIC_ID),
     [HONEYPOT_FIELD]: "",
     ...extra,
-  });
+  }, headers);
 }
 
 /** The model call's parsed request body — what we actually sent OpenAI. */
@@ -191,6 +202,7 @@ function sentToModel(call = 0) {
     model: string;
     messages: { role: string; content: string }[];
     tools: { function: { name: string } }[];
+    max_tokens?: number;
   };
 }
 
@@ -298,9 +310,15 @@ describe("POST /api/concierge/[publicId]/turn — answering", () => {
     await firstTurn();
     const system = sentToModel().messages[0]!.content;
     // `buildSystemPrompt` advertises take_message and log_transcript on every
-    // medium; this route hands over exactly one tool. MUTATION: drop the
-    // WEB_TOOL_NOTICE append — this FAILS, and Sofía tells a visitor she has
-    // taken a message that nothing recorded.
+    // OTHER medium; this route hands over exactly one tool, by passing
+    // `medium: "web"` into the call below, which drives system-prompt.ts's
+    // own `onWeb` branch (its comment there names the exact defect this
+    // guards against: "a model told it has them on the web will SAY it took
+    // a message that nothing recorded"). Stale-comment fix (I3, whole-branch
+    // review): this used to name a mutation on a `WEB_TOOL_NOTICE` append
+    // that no longer exists. MUTATION: change `medium: "web"` to anything
+    // else in the route's own buildSystemPrompt call — this FAILS, and Sofía
+    // tells a visitor she has taken a message that nothing recorded.
     expect(system).toContain("capture_lead is the ONLY tool you have here");
   });
 
@@ -341,6 +359,32 @@ describe("POST /api/concierge/[publicId]/turn — answering", () => {
     expect(res.status).toBe(200);
     const last = sentToModel().messages.at(-1)!;
     expect(last.content).toHaveLength(CONCIERGE_MAX_MESSAGE_CHARS);
+  });
+
+  // I2 (whole-branch review): nothing bounded the model's OWN completion.
+  // gpt-4o-mini can emit up to 16,384 output tokens, and every reply is
+  // replayed into every later turn's transcript — `proposals/generate.ts`
+  // already answered this exact question for its own OpenAI call
+  // (`max_tokens: 2000`; see its test titled "bounds the model's own
+  // completion so a runaway proposals array cannot be returned").
+  it("bounds the model's own completion so a runaway reply cannot be returned (mutation: drop max_tokens from the request body -> FAILS)", async () => {
+    await firstTurn();
+    const body = sentToModel();
+    expect(body.max_tokens).toBe(CONCIERGE_MAX_REPLY_TOKENS);
+  });
+
+  // I2, second half: max_tokens bounds the completion's TOKEN count, but 500
+  // tokens of English can still print more than CONCIERGE_MAX_MESSAGE_CHARS
+  // (2000) characters — the same bound already applied to the visitor's own
+  // message must apply to what gets WRITTEN DOWN as Sofía's reply too, or the
+  // stored side stays unbounded even after the model-side cap above.
+  it("bounds the stored transcript entry so a long completion cannot bloat every later turn's payload (mutation: store `spoken` unsliced -> FAILS)", async () => {
+    const long = "y".repeat(CONCIERGE_MAX_MESSAGE_CHARS + 500);
+    fetchMock.mockResolvedValue(modelReplies(long));
+    await firstTurn();
+    const [, , turns] = dbFns.appendConciergeTurns.mock.calls[0]!;
+    expect((turns as { role: string; text: string }[])[1]!.text)
+      .toHaveLength(CONCIERGE_MAX_MESSAGE_CHARS);
   });
 });
 
@@ -617,13 +661,50 @@ describe("POST /api/concierge/[publicId]/turn — filing the lead", () => {
     expect(call[6]).toBe("en");
   });
 
+  // I3 (whole-branch review): the raw `Origin` header is spoofable and, from
+  // inside a sandboxed iframe, is the literal string "null" — that used to
+  // flow straight into the lead-alert email's dashboard link, producing
+  // "null/dashboard/accounts/…". `lib/email/origin.ts`'s `originFrom` checks
+  // APP_ORIGIN FIRST, same as the enrich route's other two callers
+  // (api/intake/[publicId]/route.ts, f/[publicId]/actions.ts).
+  it("builds the lead-alert link through originFrom(), never the raw (spoofable) Origin header", async () => {
+    vi.stubEnv("APP_ORIGIN", "https://app.example");
+    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", need: "a table" }));
+    await laterTurn({}, { origin: "null" }); // what a sandboxed iframe actually sends
+    expect(enrichMock).toHaveBeenCalledTimes(1);
+    const call = enrichMock.mock.calls[0]!;
+    // enrich(db, form, submissionId, answers, attribution, origin, locale, consentWithheld)
+    // MUTATION: pass the raw `Origin` header instead of `originFrom(req.headers)`
+    // — this FAILS: call[5] reads the literal string "null", not the
+    // configured origin.
+    expect(call[5]).toBe("https://app.example");
+  });
+
   it("reads the destination form through the tenant boundary", async () => {
     fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", need: "a table" }));
     await laterTurn();
     // getForm(db, accountId, formId) — the account id IS the boundary
     // (packages/db/src/forms.ts:97).
     const [, accountId, formId] = dbFns.getForm.mock.calls[0]!;
-    expect([accountId, formId]).toEqual(["a1", "form1"]);
+    expect([accountId, formId]).toEqual(["a1", "form-then"]);
+  });
+
+  // I1 (whole-branch review): the lead must file against the CONVERSATION's
+  // own form_id, captured at conversation start, not the profile's CURRENT
+  // concierge_form_id — an operator switching the destination form
+  // mid-conversation must not strand a lead halfway (migration 0042's own
+  // comment on the column). PROFILE.concierge_form_id is "form-now";
+  // CONVERSATION.form_id is "form-then" — different literals on purpose.
+  it("files against the conversation's OWN form, not whatever the profile points at now", async () => {
+    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", need: "a table" }));
+    await laterTurn();
+    // MUTATION: revert to `profile.concierge_form_id` — this FAILS, and a
+    // form switched mid-conversation reads/files against the wrong one.
+    const [, , formId] = dbFns.getForm.mock.calls[0]!;
+    expect(formId).toBe("form-then");
+    expect(formId).not.toBe("form-now");
+    const [, , submittedFormId] = dbFns.createSubmission.mock.calls[0]!;
+    expect(submittedFormId).toBe("form-then");
   });
 
   it("maps the lead onto the form's own fields, by kind", async () => {

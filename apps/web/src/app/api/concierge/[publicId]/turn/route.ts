@@ -37,6 +37,7 @@ import { NextResponse } from "next/server";
 // module scope (see the lazy imports in the handler below).
 import type { serviceDb as serviceDbType, Branding, ConciergeConversationRow } from "@bis/db";
 import { buildSystemPrompt } from "@/lib/voice/system-prompt";
+import { originFrom } from "@/lib/email/origin";
 import {
   clientIp, hashIp, verifyRenderToken, parseAttribution, MIN_FILL_MS,
   HONEYPOT_FIELD, RENDER_TOKEN_FIELD, isValidEmail, isValidPhone,
@@ -45,6 +46,7 @@ import {
   CONCIERGE_MAX_TURNS, CONCIERGE_MAX_CONVERSATIONS_PER_IP,
   CONCIERGE_IP_WINDOW_MS, CONCIERGE_MAX_CONVERSATIONS_PER_ACCOUNT_PER_DAY,
   CONCIERGE_ACCOUNT_WINDOW_MS, CONCIERGE_MAX_MESSAGE_CHARS,
+  CONCIERGE_MAX_REPLY_TOKENS,
 } from "@/lib/concierge/guards";
 import {
   CAPTURE_LEAD_TOOL, parseCaptureLead, budgetNotice, splitName,
@@ -364,7 +366,17 @@ export async function POST(
       const r = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ model: MODEL, messages, tools: [CAPTURE_LEAD_TOOL] }),
+        body: JSON.stringify({
+          model: MODEL, messages, tools: [CAPTURE_LEAD_TOOL],
+          // I2 (whole-branch review): with no bound here, gpt-4o-mini can
+          // emit up to 16,384 output tokens, and every reply is replayed
+          // into every LATER turn's transcript — unbounded, a single
+          // runaway completion multiplies across the rest of the
+          // conversation's calls. `concierge/guards.ts` states the
+          // arithmetic; `proposals/generate.ts` already answered this same
+          // question for its own OpenAI call.
+          max_tokens: CONCIERGE_MAX_REPLY_TOKENS,
+        }),
         // A hung connection never rejects and never resolves; without this the
         // invocation stalls until Vercel kills it and the visitor sees
         // nothing. Same defence `summary-service.ts` already runs in
@@ -402,9 +414,27 @@ export async function POST(
       const lead = parseCaptureLead(toolArgs);
       if (lead) {
         filed = await fileLead({
-          db, accountId: profile.account_id, formId: profile.concierge_form_id,
+          db, accountId: profile.account_id,
+          // conversation.form_id, NOT profile.concierge_form_id (I1,
+          // whole-branch review). The conversation's own column is captured
+          // at conversation START — migration 0042's comment on it: "an
+          // operator changing the destination form mid-conversation must not
+          // strand a lead halfway." profile.concierge_form_id can also go
+          // NULL (FK `set null`) without 404ing an in-flight chat; the
+          // conversation's column is `restrict` and always resolves.
+          formId: conversation.form_id,
           conversationId, attribution: conversation.attribution, locale, ipHash,
-          origin, lead,
+          // originFrom(req.headers), NOT the raw `origin` above (I3,
+          // whole-branch review): the raw header is what
+          // `concierge_conversations.origin` stores, but it is spoofable
+          // and, from inside a sandboxed iframe, is the literal string
+          // "null" — which flowed straight into `enrich`'s dashboard link
+          // in the lead-alert email as "null/dashboard/accounts/…".
+          // `lib/email/origin.ts` checks APP_ORIGIN FIRST for exactly this
+          // reason, and the other two `enrich` callers
+          // (api/intake/[publicId]/route.ts, f/[publicId]/actions.ts)
+          // already use this helper.
+          origin: originFrom(req.headers), lead,
         });
       } else {
         log("capture_lead ignored: unusable arguments", { conversationId });
@@ -423,6 +453,15 @@ export async function POST(
     // must not read as a fresh "we've got your details" about a question it
     // never addressed.
     const spoken = reply || ((toolArgs && filed) ? strings.captured : strings.unavailable);
+    // I2, second half: `max_tokens` above bounds the completion's TOKEN
+    // count, not its character count — 500 tokens of English can still print
+    // past CONCIERGE_MAX_MESSAGE_CHARS. The visitor's own message is already
+    // bounded to that same limit (line ~105); the stored side of the
+    // transcript gets the identical bound here, or a long completion still
+    // bloats every later turn's replayed payload. `spoken` itself (and the
+    // response below) stays the full text — only what gets WRITTEN DOWN is
+    // sliced.
+    const storedSpoken = spoken.slice(0, CONCIERGE_MAX_MESSAGE_CHARS);
 
     const now = new Date().toISOString();
     try {
@@ -431,7 +470,7 @@ export async function POST(
       // be written down as Sofía's own words.
       await appendConciergeTurns(db, conversationId, [
         { role: "visitor", text, at: now },
-        { role: "assistant", text: spoken, at: now },
+        { role: "assistant", text: storedSpoken, at: now },
       ]);
     } catch (e) {
       // The answer is already paid for and already useful. Losing it because
