@@ -149,9 +149,9 @@ export const EMBED_SCRIPT = `(function () {
     launcher.style.background = script.getAttribute("data-color") || "#6D28D9";
     launcher.style.color = "#fff";
     launcher.style.fontSize = "22px";
-    // ES5 surrogate-pair escape, not the ES6 \u{1F4AC} codepoint-escape
-    // syntax — this string ships verbatim to browsers this file's own
-    // header comment claims to still run on.
+    // An ES5 surrogate-pair escape for the emoji, not the ES6 codepoint-escape
+    // form — a u followed by a braced hex value — this string ships verbatim
+    // to browsers this file's own header comment claims to still run on.
     launcher.textContent = "\\uD83D\\uDCAC";
 
     setOpen = function (open) {
@@ -223,9 +223,16 @@ export const EMBED_SCRIPT = `(function () {
     // paints with — self-healing on a rebrand, and per-tenant colour never
     // bakes into this cached, shared script. data-color is an explicit
     // operator override and always wins, even after this message arrives.
+    //
+    // A hex check, the same boundary discipline isHttpUrl already keeps for
+    // the redirect message below: this crosses from an iframe into a CLIENT's
+    // page, and a compromised or buggy sender is not this script's problem to
+    // inherit. Only #rrggbb(-aa) ever reaches CSS, never url(...), a
+    // gradient, or anything else the two properties would otherwise accept.
+    var hexColor = /^#[0-9a-fA-F]{3,8}$/;
     if (concierge && data.type === "bis-concierge-brand"
-        && typeof data.accent === "string" && data.accent
-        && typeof data.accentForeground === "string" && data.accentForeground) {
+        && typeof data.accent === "string" && hexColor.test(data.accent)
+        && typeof data.accentForeground === "string" && hexColor.test(data.accentForeground)) {
       if (!script.getAttribute("data-color")) {
         launcher.style.background = data.accent;
         launcher.style.color = data.accentForeground;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { HONEYPOT_FIELD, RENDER_TOKEN_FIELD } from "@/lib/forms/guards";
 import { CONCIERGE_MAX_MESSAGE_CHARS } from "@/lib/concierge/guards";
 import type { ConciergeStrings } from "@/lib/concierge/strings";
@@ -139,6 +139,24 @@ export function brandMessage(accent: string, accentForeground: string) {
   return { type: "bis-concierge-brand" as const, accent, accentForeground };
 }
 
+// `useSyncExternalStore`, not `useEffect` + `useState` (IMPORTANT 1, fix
+// round 2): `window.parent !== window` has no server-side answer and nothing
+// ever changes it within a session — the same "resolve on mount, without a
+// mismatch" shape `booking-page.tsx`'s device-timezone read uses (I6).
+// `getServerSnapshot` returning `false` keeps SSR and the first client paint
+// identical (no × either way, on both the direct-link page and inside a
+// frame); React re-renders with the real value right after mount, with no
+// manual effect to trip `react-hooks/set-state-in-effect`.
+function subscribeToNothing(): () => void {
+  return () => {};
+}
+function getFramed(): boolean {
+  return window.parent !== window;
+}
+function getServerFramed(): false {
+  return false;
+}
+
 /**
  * The four DESIGN.md states all live here: the greeting IS the empty state
  * (rule 5 — one sentence of what appears here, and here it is the tenant's
@@ -185,6 +203,12 @@ export function ConciergeChat({
   const conversationId = useRef<string | null>(conversationStore(publicId).read());
   const honeypot = useRef<HTMLInputElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
+  // IMPORTANT 1 (fix round 2): this route is ALSO reached by a direct link —
+  // the snippet card hands that link out — and there a × that posts to
+  // `window.parent` does nothing. The header row renders only once React
+  // knows this page is actually framed; `closeChat` and the two effects
+  // below keep their own `window.parent === window` guards untouched.
+  const framed = useSyncExternalStore(subscribeToNothing, getFramed, getServerFramed);
 
   useEffect(() => { bottom.current?.scrollIntoView({ block: "end" }); }, [messages, pending]);
 
@@ -283,26 +307,32 @@ export function ConciergeChat({
           `var(--token, fallback)` values, the same technique `page.tsx`
           already uses for the whole token set on <main>. No outline is set
           here on purpose — the browser's own default :focus-visible ring
-          stays, which is what DESIGN.md's "visible focus ring" asks for. */}
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <button
-          type="button"
-          onClick={closeChat}
-          aria-label={strings.close}
-          style={{
-            background: "transparent",
-            border: 0,
-            cursor: "pointer",
-            color: "var(--muted-foreground, #71717a)",
-            padding: 4,
-            borderRadius: "var(--radius-ctl, 8px)",
-            fontSize: 18,
-            lineHeight: 1,
-          }}
-        >
-          ×
-        </button>
-      </div>
+          stays, which is what DESIGN.md's "visible focus ring" asks for.
+
+          Rendered only when `framed` — the whole row, not just the button,
+          so a direct visit to this route never shows an empty flex row
+          where a control that does nothing used to sit. */}
+      {framed && (
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            onClick={closeChat}
+            aria-label={strings.close}
+            style={{
+              background: "transparent",
+              border: 0,
+              cursor: "pointer",
+              color: "var(--muted-foreground, #71717a)",
+              padding: 4,
+              borderRadius: "var(--radius-ctl, 8px)",
+              fontSize: 18,
+              lineHeight: 1,
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
       <ol className="bis-concierge-log" aria-live="polite">
         {messages.map((msg, i) => (
           <li key={i} className={`bis-msg bis-msg-${msg.role}`}>{msg.text}</li>

@@ -3,10 +3,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import {
   serviceDb, createForm, updateForm, getVoiceProfile, upsertVoiceProfile,
-  enableConcierge, type VoiceProfileRow,
+  enableConcierge, getBranding, setBranding, type VoiceProfileRow, type Branding,
 } from "@bis/db";
 import { conciergeStrings } from "../src/lib/concierge/strings";
 import { signRenderToken, RENDER_TOKEN_FIELD } from "../src/lib/forms/guards";
+import { hexOf } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process directly: this file calls serviceDb() itself,
@@ -99,6 +100,22 @@ let createdFormId: string | null = null;
 let priorProfile: VoiceProfileRow | null = null;
 let priorProfileCaptured = false;
 
+/**
+ * The fixture account's branding EXACTLY as this file found it, restored in
+ * `afterAll` — same discipline and the same reason as `priorProfile` above.
+ * IMPORTANT 2's assertion 6 needs a brand colour the loader's own default
+ * (`#6D28D9`) cannot produce, so `beforeAll` overwrites `brandColor` for the
+ * fixture account; `priorBrandingCaptured` is the actual restore guard (TRUE
+ * the moment the read succeeds), the same shape `priorProfileCaptured` is —
+ * a `setBranding` that never ran must not be "restored".
+ * `client-branding.spec.ts` and `public-form-theme.spec.ts` are the
+ * precedents for the import, the signature, and the restore-in-`finally`
+ * shape (mirrored here as an `afterAll` guard instead, matching this file's
+ * own convention).
+ */
+let priorBranding: Branding | null = null;
+let priorBrandingCaptured = false;
+
 test.beforeAll(async () => {
   const fixture = readFixture();
   if (!fixture) {
@@ -135,6 +152,13 @@ test.beforeAll(async () => {
   widget = {
     publicId, accountId: fixture.accountId, formId, actorId: fixture.clerkUserId,
   };
+
+  // A brand colour the loader could never produce on its own (its shipped
+  // default is #6D28D9) — see the "embedded on a client's page" describe
+  // block below, assertion 6.
+  priorBranding = await getBranding(db, fixture.accountId);
+  priorBrandingCaptured = true;
+  await setBranding(db, fixture.accountId, { brandColor: "#0f766e" }, fixture.clerkUserId);
 });
 
 test.afterAll(async () => {
@@ -179,6 +203,9 @@ test.afterAll(async () => {
     // be no row.
     await db.from("voice_profiles").delete().eq("account_id", fixture.accountId);
   }
+
+  if (!priorBrandingCaptured) return;
+  await setBranding(db, fixture.accountId, { brandColor: priorBranding!.brandColor }, fixture.clerkUserId);
 });
 
 test("the address the snippet points at renders this client's own greeting", async ({ page }) => {
@@ -309,4 +336,140 @@ test("a visitor's message comes back with a reply", async ({ page }) => {
   expect(answer).not.toBe(strings.unavailable);
   expect(answer).not.toBe(strings.ended);
   await expect(page.locator(".bis-concierge-error")).toHaveCount(0);
+});
+
+/**
+ * IMPORTANT 2 of the fix-round-2 review: `no_brand_post`, `close_btn_noop`,
+ * `no_keydown_effect` and `esc_wrong_key` all ship green today at the unit
+ * level — the pure helpers (`shouldCloseOnKey`, `brandMessage`, the loader's
+ * own hand-built-fake tests) are tested, but nobody proves the PRODUCER side
+ * actually calls them from a real browser against the real `/embed.js`. This
+ * block is that proof: a fixture host page serves the real script via
+ * `data-concierge`, and every control a visitor would actually touch —
+ * launcher, ×, Esc, a stray keystroke, the brand colour — is driven for real.
+ *
+ * Same fixture, same `beforeAll`/`afterAll` above (including the branding
+ * capture/restore) and the same `test.skip(!widget, skipReason)` on every
+ * test, rather than a second file that duplicates that 80-line setup/restore
+ * discipline. None of these steps sends a turn, so none needs
+ * OPENAI_API_KEY.
+ */
+test.describe("embedded on a client's page", () => {
+  const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
+
+  test("a direct link to the chat page renders no close button (IMPORTANT 1)", async ({ page }) => {
+    test.skip(!widget, skipReason);
+    const strings = conciergeStrings("en");
+
+    await page.goto(`/c/${widget!.publicId}`);
+    await expect(page.getByText(GREETING)).toBeVisible();
+    // MUTATION (a): remove the `framed` gate around the header row — this
+    // FAILS, and a visitor who followed the direct link the snippet card
+    // hands out sees a × that posts to a `window.parent` that is itself.
+    await expect(page.getByRole("button", { name: strings.close })).toHaveCount(0);
+  });
+
+  test(
+    "opens from the launcher, resists a stray key, closes on Esc and on its own ×, "
+      + "and paints the tenant's own brand colour",
+    async ({ page }) => {
+      test.skip(!widget, skipReason);
+      const strings = conciergeStrings("en");
+
+      // The loader's `event.origin !== origin` check and the chat page's
+      // `window.parent !== window` gate both key off the IFRAME's origin
+      // (`http://localhost:3000`, from `script.src`), which is real and
+      // cross-origin from this host document either way — so what matters is
+      // that this page is never itself that origin, not which exact address
+      // it sits at.
+      //
+      // DEVIATION from the brief's first choice: `page.route("http://host.
+      // test/**", …)` + `page.goto` puts the host document at a real
+      // (unresolvable) address, but this Playwright's Chromium then refuses
+      // the embed.js fetch — Private Network Access blocks a "public"
+      // address space (host.test, unresolvable) from fetching a script off
+      // a "loopback" one (localhost:3000): "the request client is not a
+      // secure context and the resource is in more-private address space
+      // `loopback`". That is a byproduct of this dev/build server living on
+      // localhost, not a real client's, so `page.setContent` is the
+      // documented fallback — same fixture markup, no navigation, and the
+      // real script tag still runs a real fetch against the real server.
+      const body = `<!doctype html><html><head><title>Host</title></head><body>
+        <h1>A client's own website</h1>
+        <script src="${BASE}/embed.js" data-concierge="${widget!.publicId}"></script>
+      </body></html>`;
+      await page.setContent(body);
+
+      const launcher = page.getByRole("button", { name: "Chat" });
+      const iframeEl = page.locator('iframe[title="Chat"]');
+      const frame = page.frameLocator('iframe[title="Chat"]');
+
+      // Step 2: framed, × present.
+      await expect(launcher).toBeVisible();
+      // Preloaded, hidden — Step 3b of the loader, must stay true before the
+      // first click.
+      await expect(iframeEl).toBeHidden();
+      await launcher.click();
+      await expect(iframeEl).toBeVisible();
+      await expect(launcher).toHaveAttribute("aria-expanded", "true");
+      const closeBtn = frame.getByRole("button", { name: strings.close });
+      await expect(closeBtn).toBeVisible();
+
+      // Step 3: a character does not close it. Opening moved focus into the
+      // iframe (the loader's own `iframe.focus()`), so this keydown lands in
+      // the chat page's own document, where its window listener runs.
+      await page.keyboard.type("a");
+      // MUTATION (e): `shouldCloseOnKey` → `!== "Escape"` — this FAILS, and
+      // any keystroke while the visitor is typing closes the conversation
+      // on them.
+      await expect(iframeEl).toBeVisible();
+
+      // Step 4: Esc closes.
+      await page.keyboard.press("Escape");
+      // MUTATION (d): remove the keydown effect in concierge-chat.tsx — this
+      // FAILS, and Esc does nothing once focus has moved into the iframe
+      // (the host page's OWN Esc listener is dead the moment that happens —
+      // see embed-script.ts's own comment on this).
+      await expect(iframeEl).toBeHidden();
+      await expect(launcher).toHaveAttribute("aria-expanded", "false");
+
+      // Step 5: × closes.
+      await launcher.click();
+      await expect(iframeEl).toBeVisible();
+      await frame.getByRole("button", { name: strings.close }).click();
+      // MUTATION (c): make `closeChat` a no-op — this FAILS, and the header
+      // close button IMPORTANT 1 just made conditional does nothing once it
+      // is actually visible.
+      await expect(iframeEl).toBeHidden();
+
+      // Step 6: launcher = tenant accent. The composer's own send button
+      // paints from the same `--form-accent` the chat page posts
+      // (`bis-concierge-brand`), so it is the ground truth to poll against
+      // rather than a literal this fixture's derived colour would have to
+      // duplicate (a fixture-equal assertion is this repo's catalogued
+      // vacuous shape). Reopen first — the panel was just closed by step 5.
+      await launcher.click();
+      await expect(iframeEl).toBeVisible();
+      const sendBtn = frame.locator(".bis-concierge-composer button[type='submit']");
+      const sendBg = hexOf(await sendBtn.evaluate((el) => getComputedStyle(el).backgroundColor));
+      const sendColor = hexOf(await sendBtn.evaluate((el) => getComputedStyle(el).color));
+      // The fixture's own brand colour (#0f766e, set in beforeAll) must not
+      // equal the loader's shipped default — otherwise "equals the send
+      // button" would prove nothing.
+      expect(sendBg, "the fixture's brand colour must not be the loader's own default")
+        .not.toBe("#6d28d9");
+
+      // MUTATION (b): remove the `bis-concierge-brand` postMessage effect in
+      // concierge-chat.tsx — this FAILS (times out), and the launcher never
+      // moves off #6D28D9/#fff no matter how long the poll waits.
+      await expect.poll(
+        async () => hexOf(await launcher.evaluate((el) => getComputedStyle(el).backgroundColor)),
+        { message: "launcher background never picked up the tenant's brand colour" },
+      ).toBe(sendBg);
+      await expect.poll(
+        async () => hexOf(await launcher.evaluate((el) => getComputedStyle(el).color)),
+        { message: "launcher label colour never picked up the tenant's brand colour" },
+      ).toBe(sendColor);
+    },
+  );
 });

@@ -491,6 +491,29 @@ describe("embed script", () => {
         expect(panel.style.inset).toBe("0");
         expect(panel.style.borderRadius).toBe("0");
       });
+
+      // MINOR 2 of the fix-round-2 review: the test above only proves
+      // desktop→mobile on `change`. The reverse direction — a phone rotated
+      // back to landscape, or a window un-narrowed past the breakpoint —
+      // exercises `applyGeometry`'s OTHER branch, which nothing here read.
+      it("switches back to the floating-card geometry when the viewport re-crosses the breakpoint the other way", () => {
+        const { created, fireMediaChange } = run(
+          { "data-concierge": "abc123" }, "https://client.example/", "", { mobile: true },
+        );
+        const panel = panelOf(created);
+        expect(panel.style.inset).toBe("0");
+        fireMediaChange(false);
+        // MUTATION: delete `panel.style.inset = ""` in applyGeometry's
+        // desktop branch — this FAILS, and a phone un-rotated back to
+        // desktop width keeps the full-viewport sheet's `inset: 0`, which
+        // this branch's own `right`/`bottom`/`width` values then fight for
+        // no visible effect.
+        expect(panel.style.inset).toBe("");
+        expect(panel.style.borderRadius).toBe("12px");
+        expect(panel.style.width).toBe("380px");
+        expect(panel.style.right).toBe("16px");
+        expect(panel.style.bottom).toBe("88px");
+      });
     });
 
     it("moves focus into the iframe when the panel opens", () => {
@@ -575,6 +598,33 @@ describe("embed script", () => {
         // who set a deliberate override sees it silently reverted the moment
         // the chat page loads.
         expect(launcher.style.background).toBe("#ff0000");
+      });
+
+      // MINOR 1 of the fix-round-2 review: `data` crosses a trust boundary
+      // exactly like the redirect message does (isHttpUrl guards that one) —
+      // a compromised or buggy sender on the OTHER end of this postMessage is
+      // not this script's problem to inherit, and painting `background`/
+      // `color` from an unchecked string hands whoever sends it a CSS
+      // injection on a page this script does not own. `resolveCta`
+      // (public-form-theme.ts) only ever produces `#rrggbb` — confirmed
+      // before this test was written — so refusing anything else costs
+      // nothing on the real path.
+      it("refuses a brand message whose accent is not a hex colour, leaving the launcher at its shipped default", () => {
+        const { created, send, iframe } = run({ "data-concierge": "abc123" }, "https://client.example/");
+        const launcher = launcherOf(created);
+        send({
+          source: iframe.contentWindow, origin: ORIGIN,
+          data: {
+            type: "bis-concierge-brand",
+            accent: "url(https://evil.example/x.png)",
+            accentForeground: "#ffffff",
+          },
+        });
+        // MUTATION: drop the hex-format check on the brand branch — this
+        // FAILS, and the launcher paints from whatever a message claims,
+        // `url(...)`, a gradient, anything CSS accepts.
+        expect(launcher.style.background).toBe("#6D28D9");
+        expect(launcher.style.color).toBe("#fff");
       });
     });
 
