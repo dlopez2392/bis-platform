@@ -1214,7 +1214,7 @@ describe("/c/[publicId] metadata", () => {
 
 - [ ] **Step 3: Run it to verify it fails**
 
-Run: `pnpm --filter web exec vitest run c/\\[publicId\\]`
+Run: `pnpm --filter web exec vitest run app/c/`
 Expected: FAIL — `./page` does not exist.
 
 - [ ] **Step 4: Write the page**
@@ -1458,18 +1458,30 @@ export function ConciergeChat({
 ```
 
 Create `apps/web/src/app/c/[publicId]/concierge.css`. **Tokens only** — read
-`apps/web/src/app/f/[publicId]/form.css` first and take its approach. Every
-colour is `var(--surface-*)`, `var(--text-*)`, `var(--line*)` or
-`var(--accent*)`; radii are `var(--radius-ctl)` (8px) and `var(--radius-card)`
-(12px) and nothing else; spacing on the 4px grid; a visible `:focus-visible`
-ring on the input and the button; `@media (prefers-reduced-motion: reduce)`
-disables the skeleton's pulse. The visitor's bubble sits on `--accent-dim`,
-the assistant's on `--surface-2`, and `.bis-hp` is the honeypot's
-off-screen rule copied from the public form's own stylesheet.
+`apps/web/src/app/f/[publicId]/form.css` first and take its approach.
+
+⚠️ **CORRECTED — this plan originally named the wrong token family, and
+DESIGN.md's own tenant seam says why.** On this route the palette comes from
+`publicFormTheme`, which emits `--background`, `--foreground`, `--card`,
+`--border`, `--muted-foreground`, `--radius`, `--font-sans`, `--form-accent`
+and `--form-accent-foreground` — and **never** `--surface-*`, `--text-*`,
+`--line*` or `--accent*`. Those chrome neutrals are MODE-keyed, not
+tenant-keyed; DESIGN.md states that "a component that paints from a chrome
+neutral is choosing the mode-keyed side of the seam on purpose", and this
+route has no `.dark` class to key them, so painting from them would pin the
+page to light for every tenant, permanently. Use the semantic family, exactly
+as `form.css` does — including `--form-accent`, not `--accent` (`form.css:40`
+explains that one in its own comment).
+
+Radii come from `var(--radius)`, which the theme emits per tenant; spacing on
+the 4px grid; a visible `:focus-visible` ring on the input and the button;
+`@media (prefers-reduced-motion: reduce)` disables the skeleton's pulse.
+`.bis-hp` is the honeypot's off-screen rule, copied from the public form's own
+stylesheet.
 
 - [ ] **Step 6: Run the page test and the typecheck**
 
-Run: `pnpm --filter web exec vitest run c/\\[publicId\\]`
+Run: `pnpm --filter web exec vitest run app/c/`
 Expected: PASS.
 
 Run: `pnpm --filter web exec tsc --noEmit`
@@ -1492,6 +1504,41 @@ Claude-Session: https://claude.ai/code/session_01UuVS5XfWB6aZdX9b83RePF
 EOF
 )"
 ```
+
+---
+
+### Task 4 — three things Tasks 1 and 3 surfaced before it started
+
+**A. The turn cap's end state is currently incoherent, and Task 4 owns the fix.**
+Task 3's composer disables itself when the route answers `ended: true`, while
+the ended copy asks the visitor to leave a name and a number. **They cannot —
+the composer is disabled.** Copy that asks for something the UI refuses to
+accept is worse than no copy.
+
+The fix belongs here, not in the page: **tell the model its remaining budget as
+the cap approaches**, so Sofía asks for contact details while the visitor can
+still answer, and let the final reply be a close rather than a request. Append
+one line to the system prompt when `CONCIERGE_MAX_TURNS - claimed <= 3`, naming
+how many exchanges are left and instructing her to ask for a name and either an
+email or a phone number now if she does not have them. Then the ended copy
+states the conversation is closed and what happens next — it does not ask for
+input.
+
+**B. The append is atomic but not ORDERED, and `turn_count` can diverge from
+the transcript.** 0044 guarantees no turn is LOST. It does not guarantee order:
+a caller reads the transcript, spends seconds in `fetch`, then appends, so two
+turns in flight store their pairs in completion order — `[v2,a2,v1,a1]` is
+reachable, and the model answers turn 2 from a transcript that does not contain
+turn 1. Separately, a claimed turn whose model call throws increments
+`turn_count` and appends nothing, so the counter legitimately runs ahead.
+Neither is a defect to fix here; both are **properties to state in code
+comments** so the next reader does not treat the transcript as a strict
+sequence or the counter as a transcript length. If you find a cheap way to make
+ordering deterministic, say so in the report rather than building it.
+
+**C. A retried POST after a successful RPC appends the same exchange twice** —
+there is no stamp and the claim is already consumed. Name it; do not build
+idempotency keys for v1.
 
 ---
 
@@ -1603,21 +1650,28 @@ assertion this file repeats.
 ```ts
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const db = {
-  getVoiceProfileByPublicId: vi.fn(),
-  createConciergeConversation: vi.fn(),
-  getConciergeConversation: vi.fn(),
-  claimConciergeTurn: vi.fn(),
-  appendConciergeTurns: vi.fn(),
-  setConciergeSubmission: vi.fn(),
-  countConciergeConversationsByIp: vi.fn(),
-  countConciergeConversationsForAccount: vi.fn(),
-  getForm: vi.fn(),
-  createSubmission: vi.fn(),
-  getBranding: vi.fn(),
-};
+// `vi.mock` is HOISTED above every `const` in this file, so a bare
+// `const db = {...}` referenced inside a mock factory throws a TDZ
+// ReferenceError before a single test runs. `vi.hoisted` is the fix, and it
+// is already the pattern in `b/[publicId]/actions.test.ts` — read that file.
+// Task 3 lost time to exactly this in the plan's other test block.
+const { db, enrichMock } = vi.hoisted(() => ({
+  db: {
+    getVoiceProfileByPublicId: vi.fn(),
+    createConciergeConversation: vi.fn(),
+    getConciergeConversation: vi.fn(),
+    claimConciergeTurn: vi.fn(),
+    appendConciergeTurns: vi.fn(),
+    setConciergeSubmission: vi.fn(),
+    countConciergeConversationsByIp: vi.fn(),
+    countConciergeConversationsForAccount: vi.fn(),
+    getForm: vi.fn(),
+    createSubmission: vi.fn(),
+    getBranding: vi.fn(),
+  },
+  enrichMock: vi.fn(),
+}));
 vi.mock("@bis/db", () => ({ serviceDb: () => ({}), ...db }));
-const enrichMock = vi.fn();
 vi.mock("@/lib/forms/enrich", () => ({ enrich: enrichMock }));
 
 import { POST } from "./route";
