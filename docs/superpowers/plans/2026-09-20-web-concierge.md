@@ -73,10 +73,12 @@
 
 **Files:**
 - Create: `packages/db/supabase/migrations/0042_web_concierge.sql`
+- Create: `packages/db/supabase/migrations/0043_concierge_function_grants.sql` — **written and applied by the orchestrator**, not the implementer. 0042's `revoke all on function … from public` is not enough: this project's default privileges grant EXECUTE to `anon` and `authenticated` BY NAME on every new function, and a grant to a named role is not inherited from PUBLIC. Verified after applying 0042: the ACL still read `{postgres, anon, authenticated, service_role}`. Both files are already applied; the implementer neither writes nor applies either.
 - Create: `packages/db/src/concierge.ts`
 - Create: `packages/db/src/test/concierge-grants.test.ts`
 - Create: `packages/db/src/test/concierge.test.ts`
 - Modify: `packages/db/src/voice.ts:10-16` (`VoiceProfileRow`), `:38-41` (`PROFILE_COLS`)
+- Modify: `packages/db/src/account-teardown.ts:19-27` (`ACCOUNT_OWNED_TABLES`)
 - Modify: `packages/db/src/index.ts`
 
 **Interfaces:**
@@ -606,6 +608,31 @@ Add to `packages/db/src/index.ts`, beside the `voice-web-sessions` line:
 export * from "./concierge";
 ```
 
+**And add the table to `ACCOUNT_OWNED_TABLES`** (`packages/db/src/account-teardown.ts:19-27`), immediately before `"form_submissions"`:
+
+```ts
+export const ACCOUNT_OWNED_TABLES = [
+  "site_traffic_breakdown", "site_traffic_daily", "sites",
+  "calls", "bookings", "calendars", "events",
+  "concierge_conversations", "form_submissions", "forms",
+  ...
+```
+
+This is NOT optional and it is not the same case as `voice_web_sessions`,
+which was deliberately left off. That table's only FK to owned data is
+`account_id … on delete cascade`, which puts it in the documented exempt class
+alongside `screened_calls`. `concierge_conversations` has a second FK —
+`form_id … on delete restrict` — and `forms` IS on this list and is deleted by
+the loop long before `accounts` itself. Left off, teardown fails with "cleanup
+failed on forms", which that file's own comment predicts: *"A table added with
+the usual `restrict` and left off the list is a different story and still a
+bug."* It surfaces as a teardown error in `withTestAccount`, i.e. in Step 5's
+own fixtures rather than in an assertion, which is the confusing way to find it.
+
+`submission_id … on delete set null` needs no ordering of its own — nulling is
+not blocked — so before `"form_submissions"` is a tidy position, not a required
+one. `"forms"` is the constraint.
+
 - [ ] **Step 5: Write the accessors' own test**
 
 A grants test is not an accessors' test. Proving the ROW is protected says
@@ -616,6 +643,7 @@ columns and every grants test still passes. Create
 ```ts
 import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
+import { ACCOUNT_OWNED_TABLES } from "../account-teardown";
 import { createForm } from "../forms";
 import {
   enableConcierge, disableConcierge, getVoiceProfileByPublicId,
@@ -629,7 +657,11 @@ describe("concierge accessors", () => {
     withTestAccount(async (db, accountId) => {
       const form = await createForm(db, accountId, { name: "Leads" }, accountId);
       const first = await enableConcierge(db, accountId, form.id);
-      expect(first.publicId).toMatch(/^[A-Za-z0-9]{12}$/);
+      // `newPublicId`'s ALPHABET is "abcdefghijkmnpqrstuvwxyz23456789"
+      // (forms.ts:52) — lowercase only, no `l`, no `o`, digits 2-9. A looser
+      // /^[A-Za-z0-9]{12}$/ is a superset that would pass for an id this
+      // function cannot produce.
+      expect(first.publicId).toMatch(/^[a-km-z2-9]{12}$/);
       await disableConcierge(db, accountId);
       const second = await enableConcierge(db, accountId, form.id);
       // MUTATION: drop the `?? newPublicId()` guard and always mint —
@@ -722,6 +754,17 @@ describe("concierge accessors", () => {
       // visitor becomes two leads.
       expect((await getConciergeConversation(db, id))!.submission_id).toBe(s1!.id);
     }));
+
+  // The ordering proof, as a pure assertion with no DB in it so it cannot be
+  // flaky or vacuous. The other tests in this file prove it a second way,
+  // implicitly: each creates a conversation and lets withTestAccount tear the
+  // account down, which throws "cleanup failed on forms" if the ordering is
+  // wrong. MUTATION: move the entry after "forms" — this FAILS.
+  it("is torn down before forms, which its restrict FK points at", () => {
+    const i = ACCOUNT_OWNED_TABLES.indexOf("concierge_conversations");
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(i).toBeLessThan(ACCOUNT_OWNED_TABLES.indexOf("forms"));
+  });
 
   // BOTH SIDES OF BOTH FILTERS. A counter tested against a table holding
   // only its own rows cannot fail a swapped filter column.
