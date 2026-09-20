@@ -1540,6 +1540,20 @@ ordering deterministic, say so in the report rather than building it.
 there is no stamp and the claim is already consumed. Name it; do not build
 idempotency keys for v1.
 
+**D. Two values the route code below gets wrong — read
+`api/voice/web/session/route.ts` for the right ones.** `businessName` is NOT
+`profile.persona_name`; it is the customer-facing brand name resolved through
+`brandDisplayName` from the account's brand columns, never `accounts.name`
+(the agency's internal label). And `timezone` is NOT the literal `"UTC"`; the
+web session route resolves it through `getOrCreateCalendar`, and a visitor
+asking "are you open now" needs the business's zone. Match that route.
+
+**E. `setConciergeSubmission` now returns a boolean**, true only when THIS call
+claimed the slot. Call `enrich()` only on true. The submission row is created
+before the claim, so a losing racer has already written an orphan
+`form_submissions` row — delete it in that branch rather than leave a
+lead-shaped row nobody will act on, and comment why the order is what it is.
+
 ---
 
 ### Task 4: The turn endpoint
