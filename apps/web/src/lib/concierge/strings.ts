@@ -5,7 +5,19 @@ const STRINGS = {
     sending: "Sending…",
     thinking: "Typing…",
     unavailable: "Something went wrong. Please try again.",
-    ended: "Thanks for chatting. Leave your name and a number or email and the team will pick this up.",
+    // A CLOSE, not a request. The composer disables itself the moment the
+    // route answers `ended: true`, so copy that asks for a name and a number
+    // asks for something the UI refuses to accept. The ask happens earlier
+    // now, in the prompt's budget notice (`concierge/prompt.ts`), while the
+    // visitor can still type. This line also answers a conversation id that
+    // no longer resolves — `claimConciergeTurn` returns null for both — so it
+    // promises nothing it cannot know.
+    ended: "This chat is closed. If you shared your name and a way to reach you, someone from the team will follow up.",
+    // The turn that files a lead usually comes back with no words at all — a
+    // chat-completions reply that calls a tool routinely has `content: null`
+    // — and "Something went wrong" is the last thing a visitor who has just
+    // handed over their details should read.
+    captured: "Thanks. I have passed your details to the team and someone will get back to you.",
     poweredBy: "Powered by BIS",
     title: "Chat",
   },
@@ -15,7 +27,8 @@ const STRINGS = {
     sending: "Enviando…",
     thinking: "Escribiendo…",
     unavailable: "Algo salió mal. Vuelve a intentarlo.",
-    ended: "Gracias por escribir. Déjanos tu nombre y un teléfono o correo y el equipo te contactará.",
+    ended: "Esta conversación está cerrada. Si nos diste tu nombre y una forma de contactarte, alguien del equipo te responderá.",
+    captured: "Gracias. Ya le pasé tus datos al equipo y alguien te contactará.",
     poweredBy: "Con tecnología de BIS",
     title: "Chat",
   },
