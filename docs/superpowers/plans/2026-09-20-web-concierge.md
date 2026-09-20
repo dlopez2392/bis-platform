@@ -2869,6 +2869,24 @@ In `voice-settings.tsx`, add the card, beside the `booking_enabled` and
     the greeting visitors will see first." Gate on `greeting_en`, and on
     `greeting_es` too when `languages` is `es` or `both`.
   - **No published form** — the empty state below.
+  **And the ON state, which the first draft of this step omitted (found in
+  Task 6's review):** the empty state renders ONLY when the assistant is off.
+  When it is on, the toggle ALWAYS renders enabled — it is the off switch —
+  and the destination is named from the stored `concierge_form_id` even when
+  that form is no longer published, with one sentence saying so ("The form
+  this sends to is no longer published — leads have nowhere good to land.
+  Publish it again or pick another."). An operator can draft a published form
+  at any time (`forms/actions.ts:54`, no guard), and
+  `getVoiceProfileByPublicId` does not check publication, so the assistant
+  keeps answering. Computing the empty state from the lock alone leaves an ON
+  assistant with no off switch and a snippet under copy that says it is off.
+  Test both faces: `enabled: true, publishedForms: []` → toggle present,
+  checked, sentence present, no empty state; and the stored id absent from
+  `publishedForms` with one other form present → the Select names the stored
+  form, not blank.
+  ⚠️ `dashboard/page.test.ts` hard-codes the catalogue total — any change to
+  `CHECKLIST_CATALOGUE`'s size must update it and its all-done fixture in the
+  same commit, and the scoped test command must include it.
   And the action's two failure modes render as **two different sentences**:
   the cross-tenant 42501 ("That form belongs to a different company") and
   the missing-profile null (the first lock above). They are distinct at the

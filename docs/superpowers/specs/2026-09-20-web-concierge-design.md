@@ -417,7 +417,10 @@ The architecture already assumed this; what "standard" adds is surface.
    and `textback_enabled` checkboxes it is a sibling of (`:169,180`). Not under
    `/settings` — the persona it configures lives here, and splitting them puts
    the switch on a different page from the thing it switches.
-   - the toggle, disabled with a stated reason until a form is chosen
+   - the toggle, disabled with a stated reason until a form is chosen — and
+     when the assistant is ON, always rendered enabled (it is the off
+     switch), naming the stored destination even if that form has since
+     been unpublished, with a sentence saying so (amended 2026-09-20)
    - the destination-form select (published forms only; the single form
      pre-selected when the account has exactly one)
    - the copy-the-snippet card
