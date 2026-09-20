@@ -26,12 +26,16 @@ test.describe("the style guide", () => {
         const btn = [...document.querySelectorAll('[data-slot="button"]')]
           .find((b) => b.textContent?.trim() === "Primary action")!;
         const launcher = document.querySelector('[data-slot="concierge-launcher-demo"]')!;
+        const bubble = document.querySelector('[data-slot="concierge-bubble-demo"]')!;
+        const bubbleCs = getComputedStyle(bubble);
         return {
           filter: cs.backdropFilter || (cs as unknown as { webkitBackdropFilter?: string }).webkitBackdropFilter || "",
           bg: cs.backgroundColor,
           aside: getComputedStyle(document.querySelector("aside")!).backdropFilter,
           btn: getComputedStyle(btn).backgroundImage,
           launcherBg: getComputedStyle(launcher).backgroundColor,
+          bubbleBg: bubbleCs.backgroundColor,
+          bubbleBorder: bubbleCs.borderTopColor,
         };
       }, dark);
     const d = await probe(true);
@@ -74,6 +78,38 @@ test.describe("the style guide", () => {
     expect(d.launcherBg, "dark launcher must not equal light's value / the css fallback").not.toBe(
       "rgb(109, 40, 217)",
     );
+    // The launcher proves `--accent` itself follows `.dark`, but it paints
+    // `bg-[var(--accent)]` directly and never reads `--form-accent` — so it
+    // cannot prove the BRIDGE at `page.tsx`'s wrapping div (`--form-accent:
+    // var(--accent)`), which is what round-1 MINOR 2 was actually about.
+    // The one demo element that DOES read `--form-accent` is the visitor
+    // bubble (`.bis-msg-visitor`, concierge.css:132-136): `background` and
+    // `border` are `color-mix(in srgb, var(--form-accent, #6D28D9) 9%/18%,
+    // transparent)`. A color-mix against the `transparent` keyword resolves
+    // to `color(srgb r g b / a)` in this Chromium, not `rgb()` — a fractional
+    // 0-1 triple `hexOf` (built for integer `rgb()`/`rgba()`) cannot parse,
+    // so this is a literal-string match, the same shape this file's own
+    // dark-button-gradient assertion above already uses for a color-mix
+    // result. (`.bis-msg-visitor`'s `color` is `var(--foreground, ...)`, NOT
+    // `--form-accent-foreground` — nothing in this demo reads
+    // `--form-accent-foreground` at all, since the one rule that does,
+    // `.bis-concierge-composer button` at concierge.css:207, has no composer
+    // in the demo markup — so there is no `--primary-foreground` proof point
+    // to add here; see the report for how this was confirmed against the
+    // source rather than assumed.)
+    // The DARK values are what can fail: with the bridge (page.tsx:209-210)
+    // removed, `--form-accent` falls back to its own literal `#6D28D9` in
+    // EVERY mode, so dark's bubble would compute the exact string light's
+    // does below (measured directly, not guessed).
+    expect(d.bubbleBg, "dark bubble background reads --accent dark via the --form-accent bridge").toBe(
+      "color(srgb 0.545098 0.486274 0.968627 / 0.09)",
+    );
+    expect(d.bubbleBorder, "dark bubble border reads --accent dark via the --form-accent bridge").toBe(
+      "color(srgb 0.545098 0.486275 0.968627 / 0.18)",
+    );
+    expect(d.bubbleBg, "dark bubble must not equal light's value / the css fallback").not.toBe(
+      "color(srgb 0.427451 0.156863 0.85098 / 0.09)",
+    );
     const l = await probe(false);
     // Light cards are glass now: 72% white, so the lit ground tints them.
     expect(l.bg).toBe("rgba(255, 255, 255, 0.72)");
@@ -85,6 +121,12 @@ test.describe("the style guide", () => {
       "linear-gradient(rgb(109, 40, 217), rgb(91, 33, 184))",
     );
     expect(l.launcherBg, "light launcher paints --accent light").toBe("rgb(109, 40, 217)");
+    expect(l.bubbleBg, "light bubble background reads --accent light via the --form-accent bridge").toBe(
+      "color(srgb 0.427451 0.156863 0.85098 / 0.09)",
+    );
+    expect(l.bubbleBorder, "light bubble border reads --accent light via the --form-accent bridge").toBe(
+      "color(srgb 0.427451 0.156863 0.85098 / 0.18)",
+    );
     // The lit ground actually paints: relative-colour glows resolved, behind
     // everything, fixed to the viewport.
     const g = await page.evaluate(() => {

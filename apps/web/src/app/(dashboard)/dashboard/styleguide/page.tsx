@@ -226,7 +226,7 @@ export default async function StyleguidePage() {
             </div>
             <ol className="bis-concierge-log w-full max-w-xs list-none" aria-hidden>
               <li className="bis-msg bis-msg-assistant">Hi! Ask me anything about our services.</li>
-              <li className="bis-msg bis-msg-visitor">Do you serve the 78041 zip code?</li>
+              <li data-slot="concierge-bubble-demo" className="bis-msg bis-msg-visitor">Do you serve the 78041 zip code?</li>
               <li className="bis-msg bis-msg-assistant bis-msg-skeleton" aria-label="Thinking">
                 <span /><span /><span />
               </li>
