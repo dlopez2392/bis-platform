@@ -11,16 +11,21 @@
   `pnpm --filter web build`, `pnpm --filter web test:e2e`. CI runs all three
   on every push (`.github/workflows/ci.yml`, jobs `verify` and `e2e`).
   Push to `main` deploys production.
-- **Nothing server-side enforces those checks.** This repo is private on a
-  plan without protected branches, so GitHub shows a red X and lets the
-  merge happen anyway. Therefore: never merge a PR unless BOTH `verify` and
-  `e2e` are green ON ITS CURRENT HEAD COMMIT — read the check runs, do not
-  infer it from an earlier run — and never push to `main` directly. Work
-  goes on a branch and lands through a PR. The `.githooks/pre-push` hook
-  (installed with `git config core.hooksPath .githooks`) stops the direct
-  push from a developer's own machine; it is a guard against a slip, not a
-  control, and it does not exist at all in a fresh clone until that command
-  is run.
+- **The server enforces those checks on `main` (since 2026-09-19).** The
+  repo is PUBLIC, and a ruleset on `main` (id 23712687, no bypass actors —
+  the owner is bound too) requires `verify` and `e2e` to be green on a PR's
+  head commit, allows only squash-merge through a PR, and refuses direct
+  pushes, force-pushes and deletion. What it does NOT do: the policy is
+  non-strict, so a branch that is behind `main` can still merge on its own
+  green checks. Therefore the reading discipline stands — before merging,
+  read the check runs FOR THE HEAD SHA (`gh api .../commits/<sha>/check-runs`),
+  never infer from an earlier run or a re-run's exit code — and if a
+  stale-branch merge ever bites, tighten the ruleset to strict rather than
+  adding a rule here. The `.githooks/pre-push` hook (installed with
+  `git config core.hooksPath .githooks`) still stops a direct push from a
+  developer's own machine before the server has to; it is a courtesy, not
+  the control, and it does not exist in a fresh clone until that command is
+  run.
 - The e2e suite shares the ONE Supabase project with production. Booking and
   calendar-settings specs run on the per-run fixture account — never point
   mutating specs at `Test Client One` or any live account.
