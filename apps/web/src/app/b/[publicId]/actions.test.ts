@@ -116,7 +116,7 @@ vi.mock("@bis/db", () => ({
 // — mocked here rather than let the real one reach `db.from("contacts")`,
 // which the generic `@bis/db` mock above only shapes for the `accounts`
 // read/write pair every other test in this file needs.
-vi.mock("@/app/f/[publicId]/actions", () => ({
+vi.mock("@/lib/forms/enrich", () => ({
   setAttribution: (...a: unknown[]) => setAttributionMock(...a),
 }));
 
