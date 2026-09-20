@@ -2408,15 +2408,24 @@ false, closing: strings.tooFast }`. `pickTurnUpdate` as written returns
 renders (`reply` is empty), and the visitor's own message sits there as if
 sent — silence, which is worse than the wrong sentence item 4 replaced.
 
-Fix: `pickTurnUpdate` returns `closing: data.closing || null` **regardless of
-`ended`**; `ended` gates only the composer and the bubble. The paragraph
-renders on `endedMessage` being set, not on `ended`. Choose the class: a
-non-ended closing is a transient notice and belongs on the same element the
-429 sentence uses (`.bis-concierge-error`, `role="status"`), NOT on
+Fix — **as shipped in `74b100e`, which supersedes this step's first draft**:
+`pickTurnUpdate` gains a THIRD field, `notice: !data.ended && data.closing ?
+data.closing : null`. `closing` stays ended-gated and `bubble` is unchanged,
+so `notice` and `closing` are mutually exclusive by construction and the
+"never both a bubble and a closing line" invariant the function's own doc
+comment protects survives. (The first draft here un-gated `closing` itself;
+that reintroduces a double-render risk and is NOT what shipped — do not
+reimplement it.) A non-ended closing is a transient notice and renders via
+`setError` on the same element the 429 sentence uses (`.bis-concierge-error`,
+`role="status"`), composer enabled, `ended` and the store untouched — NOT on
 `.bis-concierge-ended`, which Task 5a's Playwright read asserts carries the
-close. Test on the exact too-fast body above: `bubble: null`, `closing:
-strings.tooFast`, and the composer stays enabled. MUTATION: restore the
-`ended` gate → FAILS.
+close. Two unit tests: the exact too-fast body → `{ bubble: null, closing:
+null, notice: strings.tooFast }`; an ordinary in-progress reply → `notice:
+null`. MUTATION: restore the `ended` gate on `notice` → the first FAILS. Plus
+a Playwright companion mirroring the expired-path test with a fresh token.
+⚠️ Its disclosed risk: the intercepted round trip must land inside
+`MIN_FILL_MS` (2s) or the floor branch is skipped and the test fails for an
+environmental reason — watch it on CI before trusting a red.
 
 - [ ] **Step 3: Item 5 (page half) — drop the fallback**
 
