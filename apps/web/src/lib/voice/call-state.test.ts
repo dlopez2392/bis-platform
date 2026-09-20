@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   emptyCallState, classifyOutcome, withBooking, withBookingCancelled,
   withLead, withMessage, withTranscript, withServed, wasServed, withTransferred,
-  withRecordedCaller,
+  withRecordedCaller, withCallerDelta, clearPendingCallerTurn,
 } from "./call-state";
 
 describe("classifyOutcome priority", () => {
@@ -138,5 +138,51 @@ describe("served", () => {
       role: "caller", text: "can I speak to someone", at: new Date().toISOString(),
     }));
     expect(classifyOutcome(s)).toBe("abandoned");
+  });
+});
+
+describe("pendingCallerTurn — the growing prefix of the caller's in-flight turn", () => {
+  it("starts empty", () => {
+    expect(emptyCallState().pendingCallerTurn).toBeNull();
+  });
+
+  it("appends deltas for the same item in order", () => {
+    let s = withCallerDelta(emptyCallState(), "item_1", "Hello, ");
+    s = withCallerDelta(s, "item_1", "please ");
+    s = withCallerDelta(s, "item_1", "don't hang up.");
+    expect(s.pendingCallerTurn).toEqual({ itemId: "item_1", text: "Hello, please don't hang up." });
+  });
+
+  it("a delta for a different item starts over — the previous item's prefix is not carried", () => {
+    // Two caller turns never interleave on one socket, but the buffer must
+    // be keyed anyway: a stale prefix from turn 1 glued onto turn 2 could
+    // cross the length floor on words the caller never said together.
+    let s = withCallerDelta(emptyCallState(), "item_1", "first turn text");
+    s = withCallerDelta(s, "item_2", "second");
+    expect(s.pendingCallerTurn).toEqual({ itemId: "item_2", text: "second" });
+  });
+
+  it("clearing leaves every other field alone", () => {
+    const before = withCallerDelta(emptyCallState(), "item_1", "abc");
+    const after = clearPendingCallerTurn(before);
+    expect(after.pendingCallerTurn).toBeNull();
+    expect({ ...after, pendingCallerTurn: before.pendingCallerTurn }).toEqual(before);
+  });
+
+  it("is pure — the input state is not mutated", () => {
+    const s0 = emptyCallState();
+    const s1 = withCallerDelta(s0, "item_1", "abc");
+    expect(s0.pendingCallerTurn).toBeNull();
+    expect(s1).not.toBe(s0);
+  });
+
+  it("clearing is pure — the input keeps its pending turn and the result is a new object", () => {
+    const before = withCallerDelta(emptyCallState(), "item_1", "abc");
+    const pendingBefore = before.pendingCallerTurn;
+    const after = clearPendingCallerTurn(before);
+    expect(after).not.toBe(before);
+    expect(before.pendingCallerTurn).toBe(pendingBefore);
+    expect(before.pendingCallerTurn).toEqual({ itemId: "item_1", text: "abc" });
+    expect(after.pendingCallerTurn).toBeNull();
   });
 });

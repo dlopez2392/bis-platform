@@ -1307,6 +1307,88 @@ describe("a recording is hung up on, not conversed with", () => {
     expect(closeSpy).not.toHaveBeenCalled();
     expect(hangupCalls()).toHaveLength(0);
   });
+
+  const ROBOCALL_WORDS = (
+    "Hello, please don't hang up the phone. This is an important message "
+    + "regarding your Google business account. Our system shows a new search for "
+    + "your business via Google, and Google Voice clients are currently having "
+    + "trouble finding you. Press 0 to speak with an agent immediately and verify "
+    + "your Google listing. Again, your business is not showing correctly on Google "
+    + "and Google Voice search. Press 0 to speak to an agent, press 9 to opt out, "
+    + "or call 877-556-9255. Thank you."
+  ).split(" ");
+
+  it("ends the call on a DELTA — before the recording finishes and before any .completed frame", async () => {
+    vi.useFakeTimers();
+    const { ws } = await startLifecycle();
+    const closeSpy = vi.fn();
+    ws.send = vi.fn();
+    ws.close = closeSpy;
+    ws.emit("open");
+    await vi.advanceTimersByTimeAsync(900);
+    fetchMock.mockClear();
+    // The greeting itself ("Hi, thanks for calling…") fires unconditionally
+    // at this 900ms mark, via this same `ws.send` spy — before the robocall
+    // has said a word. It is not a reply TO the robocall, so it is cleared
+    // here (the file's own idiom, `runCallLifecycle — Important #4 ①` at
+    // line 613) so the assertion below is about a reply the delta frames
+    // provoke, not about the greeting that would have fired regardless.
+    (ws.send as ReturnType<typeof vi.fn>).mockClear();
+
+    let framesSent = 0;
+    for (let i = 0; i < ROBOCALL_WORDS.length; i++) {
+      ws.emit("message", JSON.stringify({
+        type: "conversation.item.input_audio_transcription.delta",
+        item_id: "item_1",
+        delta: (i === 0 ? "" : " ") + ROBOCALL_WORDS[i],
+      }));
+      framesSent++;
+      await flushMicrotasks();
+      if (closeSpy.mock.calls.length > 0) break;
+    }
+    // Closed strictly before the script's last word was ever delivered.
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect(framesSent).toBeLessThan(ROBOCALL_WORDS.length);
+    // And the SIP leg ended, exactly as the .completed path does (#84).
+    const calls = hangupCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]![0]).toBe("https://api.openai.com/v1/realtime/calls/call_abc123/hangup");
+    // No reply was ever queued to the broadcast.
+    expect(ws.send).not.toHaveBeenCalled();
+  });
+
+  it("a real caller's deltas never end the call, and their .completed turn is answered normally", async () => {
+    vi.useFakeTimers();
+    const { ws } = await startLifecycle();
+    const closeSpy = vi.fn();
+    ws.send = vi.fn();
+    ws.close = closeSpy;
+    ws.emit("open");
+    await vi.advanceTimersByTimeAsync(900);
+    fetchMock.mockClear();
+
+    const sentence = "Hi there, I found you on Google when I was searching for custom furniture "
+      + "makers around McAllen, and your photos looked great. I wanted to ask about "
+      + "getting a dining table made for eight people, in oak if you have it.";
+    const words = sentence.split(" ");
+    for (let i = 0; i < words.length; i++) {
+      ws.emit("message", JSON.stringify({
+        type: "conversation.item.input_audio_transcription.delta",
+        item_id: "item_1",
+        delta: (i === 0 ? "" : " ") + words[i],
+      }));
+      await flushMicrotasks();
+    }
+    ws.emit("message", JSON.stringify({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "item_1",
+      transcript: sentence,
+    }));
+    await flushMicrotasks();
+
+    expect(closeSpy).not.toHaveBeenCalled();
+    expect(hangupCalls()).toHaveLength(0);
+  });
 });
 
 describe("runCallLifecycle — Minor: WS URL call-id encoding", () => {

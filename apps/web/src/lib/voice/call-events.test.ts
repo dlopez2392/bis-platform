@@ -180,4 +180,142 @@ describe("processCallEvent", () => {
     expect(actions).toEqual([]);
     expect(state.transcript).toHaveLength(0);
   });
+
+  // ── The prefix is judged while the robot is still talking ─────────────
+  const ROBOCALL =
+    "Hello, please don't hang up the phone. This is an important message "
+    + "regarding your Google business account. Our system shows a new search for "
+    + "your business via Google, and Google Voice clients are currently having "
+    + "trouble finding you. Press 0 to speak with an agent immediately and verify "
+    + "your Google listing. Again, your business is not showing correctly on Google "
+    + "and Google Voice search. Press 0 to speak to an agent, press 9 to opt out, "
+    + "or call 877-556-9255. Thank you.";
+
+  /** Feeds `text` one word at a time as delta frames for `itemId`, returning
+   *  the index of the FIRST delta that produced a hangup (or -1), the state
+   *  after the last frame processed, and the number of frames processed. */
+  async function feedWordByWord(text: string, itemId = "item_1") {
+    const words = text.split(" ");
+    let state = emptyCallState();
+    for (let i = 0; i < words.length; i++) {
+      const delta = (i === 0 ? "" : " ") + words[i];
+      const r = await processCallEvent(state, ctx,
+        { type: "conversation.item.input_audio_transcription.delta", item_id: itemId, delta });
+      state = r.state;
+      if (r.actions.some((a) => a.kind === "hangup")) {
+        expect(r.actions).toEqual([{ kind: "hangup" }]);
+        return { hungUpAt: i, state, frames: i + 1, words };
+      }
+    }
+    return { hungUpAt: -1, state, frames: words.length, words };
+  }
+
+  it("hangs up on the delta where the prefix first reads as a recording — not after the script ends", async () => {
+    const { hungUpAt, state, words } = await feedWordByWord(ROBOCALL);
+    expect(hungUpAt).toBeGreaterThan(-1);
+    // Strictly before the last word: the whole point is not waiting for
+    // the recording to finish.
+    expect(hungUpAt).toBeLessThan(words.length - 1);
+    // And exactly where the FIRST IVR instruction's SHAPE completes. The
+    // predicate is `press <digit> (to|for|and|if)` — it needs "Press 0 to",
+    // not the verb after it — so the hangup lands on "to", before "speak
+    // with an agent" has even been said. (The plan first assumed the longer
+    // phrase; the implementer's RED run corrected it: word 40 of 80.)
+    const prefix = words.slice(0, hungUpAt + 1).join(" ");
+    expect(prefix).toMatch(/Press 0 to$/i);
+    expect(prefix).not.toMatch(/agent/i);
+    expect(state.recordedCaller).toBe(true);
+  });
+
+  it("records the prefix that tripped it as the caller turn — the evidence, same rule as .completed", async () => {
+    const { state, words, hungUpAt } = await feedWordByWord(ROBOCALL);
+    expect(state.transcript).toHaveLength(1);
+    expect(state.transcript[0]).toMatchObject({
+      role: "caller", text: words.slice(0, hungUpAt + 1).join(" "),
+    });
+    expect(state.pendingCallerTurn).toBeNull();
+  });
+
+  it("a customer who found them on Google is never cut, at any prefix length", async () => {
+    // The negative that matters most, now at every word boundary. The
+    // sentence is past MIN_LENGTH by the end, so only the ABSENCE of a
+    // Google rule and the PRESENCE of the phrase rule keep it false.
+    const { hungUpAt, state } = await feedWordByWord(
+      "Hi there, I found you on Google when I was searching for custom furniture "
+      + "makers around McAllen, and your photos looked great. I wanted to ask about "
+      + "getting a dining table made for eight people, in oak if you have it.");
+    expect(hungUpAt).toBe(-1);
+    expect(state.recordedCaller).toBe(false);
+    expect(state.transcript).toEqual([]);      // nothing appended until .completed
+  });
+
+  it("a long rambling customer is never cut, at any prefix length", async () => {
+    const { hungUpAt } = await feedWordByWord(
+      "Hi there, so my wife and I have been talking about redoing the kitchen for "
+      + "about two years now and we finally decided to go ahead with it, and someone "
+      + "at church mentioned that you all do custom cabinets, so I wanted to call and "
+      + "see whether you could come out and take a look and give us some idea of what "
+      + "something like that would run, because we have no idea what to expect really.");
+    expect(hungUpAt).toBe(-1);
+  });
+
+  it(".completed after a clean run of deltas appends the full turn once and clears the buffer", async () => {
+    const { state: afterDeltas } = await feedWordByWord("Hi, I found you on Google and wanted to ask about a dining table.");
+    expect(afterDeltas.pendingCallerTurn).not.toBeNull();
+    const { state, actions } = await processCallEvent(afterDeltas, ctx,
+      { type: "conversation.item.input_audio_transcription.completed",
+        item_id: "item_1",
+        transcript: "Hi, I found you on Google and wanted to ask about a dining table." });
+    expect(actions).toEqual([]);
+    expect(state.transcript).toHaveLength(1);
+    expect(state.transcript[0]).toMatchObject({ role: "caller",
+      text: "Hi, I found you on Google and wanted to ask about a dining table." });
+    expect(state.pendingCallerTurn).toBeNull();
+  });
+
+  it("a delta with no item_id or no text is ignored", async () => {
+    const s0 = emptyCallState();
+    const a = await processCallEvent(s0, ctx,
+      { type: "conversation.item.input_audio_transcription.delta", delta: "hello" });
+    const b = await processCallEvent(s0, ctx,
+      { type: "conversation.item.input_audio_transcription.delta", item_id: "item_1", delta: "" });
+    expect(a).toEqual({ state: s0, actions: [] });
+    expect(b).toEqual({ state: s0, actions: [] });
+  });
+
+  it("deltas for a new item never inherit the previous item's prefix", async () => {
+    // Turn 1 is a long, harmless customer sentence; turn 2's first delta
+    // alone is far under the floor. If the buffer leaked across items, turn
+    // 2 would be judged on ~250 characters it never said.
+    const { state: afterTurn1 } = await feedWordByWord(
+      "Hi there, I found you on Google when I was searching for custom furniture "
+      + "makers around McAllen, and your photos looked great. I wanted to ask about "
+      + "getting a dining table made for eight people, in oak if you have it.", "item_1");
+    const r = await processCallEvent(afterTurn1, ctx,
+      { type: "conversation.item.input_audio_transcription.delta", item_id: "item_2", delta: "press 9 to opt out" });
+    expect(r.actions).toEqual([]);
+    expect(r.state.pendingCallerTurn).toEqual({ itemId: "item_2", text: "press 9 to opt out" });
+  });
+
+  it("after a delta hung up, a late .completed for the same item is ignored — no second turn, no second hangup", async () => {
+    // route.ts awaits endCallLeg before ws.close(), and its message gate
+    // flips only on the socket's own close event: a .completed can land in
+    // that window. It must not end the SIP leg twice or double the evidence.
+    const { state: hungUp, words, hungUpAt } = await feedWordByWord(ROBOCALL);
+    const r = await processCallEvent(hungUp, ctx,
+      { type: "conversation.item.input_audio_transcription.completed", item_id: "item_1", transcript: ROBOCALL });
+    expect(r.actions).toEqual([]);
+    expect(r.state.transcript).toHaveLength(1);
+    expect(r.state.transcript[0]).toMatchObject({ role: "caller", text: words.slice(0, hungUpAt + 1).join(" ") });
+    expect(r.state.pendingCallerTurn).toBeNull();
+  });
+
+  it("after a delta hung up, a late .delta is ignored too", async () => {
+    const { state: hungUp } = await feedWordByWord(ROBOCALL);
+    const r = await processCallEvent(hungUp, ctx,
+      { type: "conversation.item.input_audio_transcription.delta", item_id: "item_1", delta: " Thank you." });
+    expect(r.actions).toEqual([]);
+    expect(r.state.transcript).toHaveLength(1);
+    expect(r.state.pendingCallerTurn).toBeNull();
+  });
 });
