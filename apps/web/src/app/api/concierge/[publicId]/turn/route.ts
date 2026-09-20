@@ -453,21 +453,29 @@ export async function POST(
     // must not read as a fresh "we've got your details" about a question it
     // never addressed.
     const spoken = reply || ((toolArgs && filed) ? strings.captured : strings.unavailable);
-    // I2, second half: `max_tokens` above bounds the completion's TOKEN
-    // count, not its character count — 500 tokens of English can still print
-    // past CONCIERGE_MAX_MESSAGE_CHARS. The visitor's own message is already
-    // bounded to that same limit (line ~105); the stored side of the
-    // transcript gets the identical bound here, or a long completion still
-    // bloats every later turn's replayed payload. `spoken` itself (and the
-    // response below) stays the full text — only what gets WRITTEN DOWN is
-    // sliced.
+    // I2, second half: `max_tokens: CONCIERGE_MAX_REPLY_TOKENS` (500) above
+    // already bounds a completion to roughly 2,000-2,500 characters of
+    // English, so this slice does not CREATE the bound — it TIGHTENS it,
+    // from that ~2,500 ceiling down to the exact CONCIERGE_MAX_MESSAGE_CHARS
+    // (2,000) the visitor's own message is held to (line ~105). Belt and
+    // braces: for the day `CONCIERGE_MAX_REPLY_TOKENS` is raised, or the API
+    // simply ignores it and returns more, the stored side of the transcript
+    // still cannot bloat every later turn's replayed payload past this
+    // limit. `spoken` itself (and the response below) stays the full text —
+    // only what gets WRITTEN DOWN is sliced.
     const storedSpoken = spoken.slice(0, CONCIERGE_MAX_MESSAGE_CHARS);
 
     const now = new Date().toISOString();
     try {
-      // What the visitor read is what the transcript stores — recorded
-      // AFTER `spoken` is decided, so a lie about what was filed can never
-      // be written down as Sofía's own words.
+      // Recorded AFTER `spoken` is decided, so a lie about what was filed can
+      // never be written down as Sofía's own words. But NOT what the visitor
+      // read, in normal operation, not only adversarial: a legitimate
+      // ~500-token reply can print past CONCIERGE_MAX_MESSAGE_CHARS, so the
+      // visitor sees `spoken` in full while `storedSpoken` clips it, and the
+      // operator's transcript can end mid-sentence. Accepted on purpose —
+      // only the stored copy is ever replayed back into the model, so only
+      // it drives cost, and clipping what a reader sees mid-sentence would be
+      // a visible defect, not a cost saving.
       await appendConciergeTurns(db, conversationId, [
         { role: "visitor", text, at: now },
         { role: "assistant", text: storedSpoken, at: now },

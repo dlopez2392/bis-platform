@@ -226,7 +226,7 @@ beforeEach(() => {
   dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION });
   dbFns.claimConciergeTurn.mockResolvedValue(1);
   dbFns.appendConciergeTurns.mockResolvedValue(2);
-  dbFns.getForm.mockResolvedValue(LEAD_FORM);
+  dbFns.getForm.mockImplementation(async (_db, _acct, id) => ({ ...LEAD_FORM, id }));
   dbFns.createSubmission.mockResolvedValue({ id: "s1" });
   dbFns.setConciergeSubmission.mockResolvedValue(true);
 });
