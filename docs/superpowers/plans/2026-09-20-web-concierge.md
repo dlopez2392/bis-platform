@@ -24,7 +24,7 @@
 - **Anything mutating in e2e runs on the per-run fixture account.** Never `Test Client One`, never a live account.
 - **The orchestrator applies the migration, exactly once. An implementer never applies one.** Task 1 Step 3 halts deliberately and reports.
 - Commit per task; do not push. Commit trailer, verbatim, on every commit:
-  `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`
+  `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`
   `Claude-Session: https://claude.ai/code/session_01UuVS5XfWB6aZdX9b83RePF`
 
 ---
@@ -813,7 +813,7 @@ concierge_conversations table that holds the transcript and the turn counter
 server-side. The turn claim is one SQL statement because read-then-write
 leaks the cap under concurrency.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01UuVS5XfWB6aZdX9b83RePF
 EOF
 )"
@@ -1049,7 +1049,7 @@ buildSystemPrompt takes a medium, defaulting to phone so every existing
 caller's prompt is byte-identical. Only two sentences move; the persona,
 the facts and the hard limits are the tenant's own on both surfaces.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01UuVS5XfWB6aZdX9b83RePF
 EOF
 )"
@@ -1499,7 +1499,7 @@ their brand, and carries all four states — the greeting is the empty state,
 the loading state is a message-shaped skeleton, an error keeps the composer
 usable, and reaching the turn cap asks for a name instead of apologising.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01UuVS5XfWB6aZdX9b83RePF
 EOF
 )"
@@ -2196,7 +2196,7 @@ capture_lead files through the same enrich() the public form uses, with
 consentWithheld always true — a conversation cannot tick a box under its
 exact wording, so a widget lead never triggers an automatic text.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01UuVS5XfWB6aZdX9b83RePF
 EOF
 )"
@@ -2470,7 +2470,7 @@ the panel run in the host page's DOM, and both postMessage checks stay.
 The snippet card is extracted at the third copy, as the calendar one's own
 comment invited.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01UuVS5XfWB6aZdX9b83RePF
 EOF
 )"
@@ -2626,7 +2626,7 @@ over the line to paste. A checklist item puts it in front of every new
 client instead of depending on the agency remembering, and ⌘K finds it by
 the words an operator would actually type.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01UuVS5XfWB6aZdX9b83RePF
 EOF
 )"
