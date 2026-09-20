@@ -216,6 +216,7 @@ export default async function StyleguidePage() {
                 tokened re-creation for reference, not the literal element. */}
             <div className="flex flex-col items-center gap-2">
               <div
+                data-slot="concierge-launcher-demo"
                 className="flex size-14 items-center justify-center rounded-full bg-[var(--accent)] text-2xl text-primary-foreground shadow-[var(--shadow-glow)]"
                 aria-hidden
               >

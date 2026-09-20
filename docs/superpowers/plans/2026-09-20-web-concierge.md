@@ -2870,20 +2870,31 @@ In `voice-settings.tsx`, add the card, beside the `booking_enabled` and
     `greeting_es` too when `languages` is `es` or `both`.
   - **No published form** — the empty state below.
   **And the ON state, which the first draft of this step omitted (found in
-  Task 6's review):** the empty state renders ONLY when the assistant is off.
-  When it is on, the toggle ALWAYS renders enabled — it is the off switch —
-  and the destination is named from the stored `concierge_form_id` even when
-  that form is no longer published, with one sentence saying so ("The form
-  this sends to is no longer published — leads have nowhere good to land.
-  Publish it again or pick another."). An operator can draft a published form
-  at any time (`forms/actions.ts:54`, no guard), and
+  Task 6's review), amended again by the re-review's IMPORTANT B (fix round
+  2, 2026-09-20):** the empty state renders ONLY when the assistant is off.
+  The destination Select stays DISABLED the whole time the assistant is ON —
+  re-pointing a live assistant is a separate feature nobody has asked for —
+  and when it is on, the toggle ALWAYS renders enabled (it is the off
+  switch), naming the stored `concierge_form_id` even when that form is no
+  longer published, with one sentence saying so ("The form this sends to is
+  no longer published — leads have nowhere good to land. Publish it again, or
+  turn the assistant off to pick another."). An operator can draft a
+  published form at any time (`forms/actions.ts:54`, no guard), and
   `getVoiceProfileByPublicId` does not check publication, so the assistant
   keeps answering. Computing the empty state from the lock alone leaves an ON
   assistant with no off switch and a snippet under copy that says it is off.
+  **The OFF face is the same rule, not a separate one:** a stored destination
+  that is no longer published is named in the Select in BOTH states (the
+  Select renders whatever id it is actually SHOWING, never blank for a live
+  or stored destination), locks the toggle while OFF with its own sentence
+  ("This form is no longer published. Publish it again or pick another one
+  first."), and is never silently re-enabled onto — one click cannot call
+  `enableAction` on a form the operator was never shown a warning about.
   Test both faces: `enabled: true, publishedForms: []` → toggle present,
-  checked, sentence present, no empty state; and the stored id absent from
+  checked, ON sentence present, no empty state; the stored id absent from
   `publishedForms` with one other form present → the Select names the stored
-  form, not blank.
+  form, not blank, in EITHER state; and OFF with the stored id absent from
+  `publishedForms` → toggle locked, OFF sentence present.
   ⚠️ `dashboard/page.test.ts` hard-codes the catalogue total — any change to
   `CHECKLIST_CATALOGUE`'s size must update it and its all-done fixture in the
   same commit, and the scoped test command must include it.

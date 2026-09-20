@@ -213,8 +213,13 @@ export type ConciergeLockReason = "no_profile" | "blank_greeting" | "no_publishe
 
 /**
  * The pure decision behind the website-assistant toggle's disabled state —
- * extracted so it is testable without a DOM (this repo has no jsdom/.tsx
- * infra; concierge-chat.tsx's `pickTurnUpdate` is the precedent).
+ * extracted so it is a plain unit test rather than a rendered assertion, not
+ * because this repo lacks a render harness for `.tsx` (it has one:
+ * `renderToStaticMarkup` + `createElement`, the shape `calls-table.test.ts`
+ * already uses on a client component, and `ConciergeCard`'s own card-level
+ * tests below use on this file — round 1's report claimed otherwise, which
+ * was wrong). concierge-chat.tsx's `pickTurnUpdate` is the sibling precedent
+ * for pulling a decision out of JSX.
  *
  * Order is load-bearing: a profile that does not exist has no greeting to
  * check, so `no_profile` comes first. `no_published_form` comes last because
@@ -262,37 +267,67 @@ export function shouldShowConciergeEmptyState(
 }
 
 /**
- * True when the assistant is ON and its stored destination is not among the
+ * True when the id the Select is currently SHOWING is not among the
  * currently published forms — unpublished out from under it, most likely.
- * Off by construction while the assistant is off: an account that has never
- * turned it on has no live destination to warn about yet, whatever
- * `concierge_form_id` happens to hold from a prior, since-disabled run.
+ *
+ * Fix round 2 (Task 6 re-review, IMPORTANT B): this used to take `enabled`
+ * and gate on it, on the theory that an OFF assistant has "no live
+ * destination to warn about yet." Wrong: `disableConcierge` clears neither
+ * `concierge_enabled` nor `concierge_form_id`, and `selectedFormId` (what the
+ * Select renders) is seeded from the stored id regardless of the toggle's own
+ * state — so the blank-trigger, no-lock-reason symptom lived on BOTH faces,
+ * not just the ON one this function used to guard. There is no `enabled`
+ * axis any more: whatever id the caller is showing is the only input, in
+ * either state.
  */
 export function conciergeFormUnpublished(
-  enabled: boolean, storedFormId: string | null, publishedForms: ConciergeDestinationOption[],
+  shownFormId: string, publishedForms: ConciergeDestinationOption[],
 ): boolean {
-  return enabled && Boolean(storedFormId) && !publishedForms.some((f) => f.id === storedFormId);
+  return Boolean(shownFormId) && !publishedForms.some((f) => f.id === shownFormId);
 }
 
 /**
  * The destination Select's own option list. Ordinarily just the published
- * forms — the only things a NEW selection may point at. But once the
- * assistant is on and its stored destination has fallen out of that list
- * (unpublished), the Select's `value` still equals that stored id, and
- * `SelectValue` renders blank for a value matching no `SelectItem` — a
- * destination that is very much still live, reading as if nothing were
- * chosen at all. This component never receives an unpublished form's real
- * title (page.tsx narrows `listForms` to published on purpose — "a draft has
- * no /f/<publicId> a lead could land on" — so there is no name to recover
- * here, only to invent), so the added option carries the explanatory label
+ * forms — the only things a NEW selection may point at. But once the shown
+ * id has fallen out of that list (unpublished), the Select's `value` still
+ * equals it, and `SelectValue` renders blank for a value matching no
+ * `SelectItem` — a destination that is very much still live (while ON) or
+ * still stored (while OFF), reading as if nothing were chosen at all. This
+ * component never receives an unpublished form's real title (page.tsx
+ * narrows `listForms` to published on purpose — "a draft has no
+ * /f/<publicId> a lead could land on" — so there is no name to recover here,
+ * only to invent), so the added option carries the explanatory label
  * `voice.assistant.unpublishedFormOption` instead of a fabricated title.
+ *
+ * Fix round 2: dropped `enabled`, same reasoning as `conciergeFormUnpublished`
+ * above — the caller passes whatever id the Select is showing, in either
+ * state.
  */
 export function conciergeDestinationOptions(
-  enabled: boolean, storedFormId: string | null, publishedForms: ConciergeDestinationOption[],
+  shownFormId: string, publishedForms: ConciergeDestinationOption[],
 ): ConciergeDestinationOption[] {
-  if (!enabled || !storedFormId) return publishedForms;
-  if (publishedForms.some((f) => f.id === storedFormId)) return publishedForms;
-  return [...publishedForms, { id: storedFormId, name: m["voice.assistant.unpublishedFormOption"] }];
+  if (!shownFormId) return publishedForms;
+  if (publishedForms.some((f) => f.id === shownFormId)) return publishedForms;
+  return [...publishedForms, { id: shownFormId, name: m["voice.assistant.unpublishedFormOption"] }];
+}
+
+/**
+ * The toggle's own disabled state, extracted so the OFF-face lock added in
+ * fix round 2 is unit-testable like its siblings rather than provable only
+ * by rendering the checkbox. ON is never locked (it is the off switch).
+ * OFF locks on every pre-existing reason (`lockReason`, `!selectedFormId`)
+ * plus the new one: the shown destination exists but is no longer published,
+ * which would otherwise let one click call `enableAction` on a form the
+ * operator was never shown a warning about.
+ */
+export function conciergeToggleLocked(
+  enabled: boolean, lockReason: ConciergeLockReason | null,
+  selectedFormId: string, formUnpublished: boolean,
+): boolean {
+  return !enabled && (
+    lockReason === "no_profile" || lockReason === "blank_greeting"
+    || !selectedFormId || formUnpublished
+  );
 }
 
 /**
@@ -332,7 +367,7 @@ export function conciergeSnippetPublicId(
  * Ghost actions throughout (DESIGN.md rule 8) — `VoiceProfileForm`'s Save
  * button above is this page's one primary button.
  */
-function ConciergeCard({
+export function ConciergeCard({
   accountId, profile, publishedForms, origin,
   enableAction, disableAction,
 }: {
@@ -397,26 +432,33 @@ function ConciergeCard({
   }
 
   const showEmptyState = shouldShowConciergeEmptyState(enabled, lockReason);
-  const storedFormId = profile?.concierge_form_id ?? null;
-  const destinationOptions = conciergeDestinationOptions(enabled, storedFormId, publishedForms);
-  const formUnpublished = conciergeFormUnpublished(enabled, storedFormId, publishedForms);
+  // Both helpers below are driven off the id the Select is actually SHOWING
+  // (`selectedFormId`), never the stored id directly and never `enabled` —
+  // fix round 2, IMPORTANT B. While ON the Select is disabled so the two
+  // read identically; while OFF an operator who picks a different published
+  // form clears the condition immediately, with no reload.
+  const destinationOptions = conciergeDestinationOptions(selectedFormId, publishedForms);
+  const formUnpublished = conciergeFormUnpublished(selectedFormId, publishedForms);
   const snippetPublicId = conciergeSnippetPublicId(enabled, profile?.public_id ?? null, optimisticPublicId);
 
   // Which sentence, if any, sits under the toggle — tied to it with
   // `aria-describedby` (checklist-panel.tsx:65's precedent) so a screen
   // reader hears WHY a locked toggle refuses a click, or why an ON toggle
-  // still needs attention. Mutually exclusive: `formUnpublished` only fires
-  // while ON, `lockText` only renders while OFF.
+  // still needs attention. `formUnpublished` now fires on BOTH faces, with a
+  // different sentence each time: ON keeps naming the dead path the toggle
+  // itself resolves (turn it off, then pick another); OFF names it as a lock,
+  // exactly like `!selectedFormId` — the operator cannot go live on it
+  // silently, and must publish it again or choose a different one first.
   const reasonText = !enabled ? (
     lockReason === "no_profile" ? m["voice.assistant.lockedNoProfile"]
     : lockReason === "blank_greeting" ? m["voice.assistant.lockedBlankGreeting"]
     : !selectedFormId ? m["voice.assistant.lockedNoSelection"]
+    : formUnpublished ? m["voice.assistant.formUnpublishedOff"]
     : null
   ) : (formUnpublished ? m["voice.assistant.formUnpublished"] : null);
   const reasonId = "concierge-toggle-reason";
 
-  const toggleDisabled =
-    pending || (!enabled && (lockReason === "no_profile" || lockReason === "blank_greeting" || !selectedFormId));
+  const toggleDisabled = pending || conciergeToggleLocked(enabled, lockReason, selectedFormId, formUnpublished);
 
   return (
     <>

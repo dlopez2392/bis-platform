@@ -25,11 +25,13 @@ test.describe("the style guide", () => {
         const cs = getComputedStyle(card);
         const btn = [...document.querySelectorAll('[data-slot="button"]')]
           .find((b) => b.textContent?.trim() === "Primary action")!;
+        const launcher = document.querySelector('[data-slot="concierge-launcher-demo"]')!;
         return {
           filter: cs.backdropFilter || (cs as unknown as { webkitBackdropFilter?: string }).webkitBackdropFilter || "",
           bg: cs.backgroundColor,
           aside: getComputedStyle(document.querySelector("aside")!).backdropFilter,
           btn: getComputedStyle(btn).backgroundImage,
+          launcherBg: getComputedStyle(launcher).backgroundColor,
         };
       }, dark);
     const d = await probe(true);
@@ -52,6 +54,26 @@ test.describe("the style guide", () => {
     expect(d.btn, "dark primary button paints the BIS dark gradient").toBe(
       "linear-gradient(color(srgb 0.772549 0.743137 0.984314), rgb(139, 124, 247))",
     );
+    // Round-1 MINOR 2 (fix round 2): the website-assistant demo's launcher
+    // paints `bg-[var(--accent)]` directly — DESIGN.md's `--accent` per mode,
+    // #8B7CF7 dark / #6D28D9 light — proving the demo actually moves with the
+    // theme rather than sitting frozen on concierge.css's own literal
+    // fallback (`var(--form-accent, #6D28D9)`, which the wrapping div's
+    // inline `--form-accent: var(--accent)` bridges for the MESSAGE BUBBLES
+    // beside it; the launcher itself never reads `--form-accent`, so this is
+    // a proof of `--accent`'s own per-mode resolution, not of that bridge).
+    // The DARK assertion is the one that can fail — light's token happens to
+    // equal the fallback, #6D28D9, so a broken bridge would still read
+    // "correct" in light alone.
+    expect(d.launcherBg, "dark launcher paints --accent dark, not the light/fallback value").toBe(
+      "rgb(139, 124, 247)",
+    );
+    // Named explicitly, though already implied by the equality above: light's
+    // own token happens to equal concierge.css's fallback, so this is the
+    // half of the pair that would still read "fine" if the mode never moved.
+    expect(d.launcherBg, "dark launcher must not equal light's value / the css fallback").not.toBe(
+      "rgb(109, 40, 217)",
+    );
     const l = await probe(false);
     // Light cards are glass now: 72% white, so the lit ground tints them.
     expect(l.bg).toBe("rgba(255, 255, 255, 0.72)");
@@ -62,6 +84,7 @@ test.describe("the style guide", () => {
     expect(l.btn, "light primary button paints the BIS light gradient").toBe(
       "linear-gradient(rgb(109, 40, 217), rgb(91, 33, 184))",
     );
+    expect(l.launcherBg, "light launcher paints --accent light").toBe("rgb(109, 40, 217)");
     // The lit ground actually paints: relative-colour glows resolved, behind
     // everything, fixed to the viewport.
     const g = await page.evaluate(() => {

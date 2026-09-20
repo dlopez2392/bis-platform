@@ -147,12 +147,17 @@ function row(itemKey: string): { id: string; item_key: string; title: string | n
   return { id: itemKey, item_key: itemKey, title: null, done_at: "2026-01-01T00:00:00Z", done_by: "user_1", note: null, position: 0 };
 }
 
-// The full CHECKLIST_CATALOGUE (checklist-catalogue.ts), so a test can drive
-// "everything done" without hard-coding a key list that drifts from it.
-const ALL_CATALOGUE_KEYS = [
-  "phone_number", "email_domain", "form_notify", "reply_to", "gbp_connect", "invite_owner",
-  "concierge_embed",
-];
+// Every catalogue key (checklist-catalogue.ts) EXCEPT `a2p_registration`,
+// derived rather than hand-listed so a new catalogue item is covered by
+// construction instead of silently under-counted here. `a2p_registration` is
+// excluded on purpose, not forgotten: this fixture always sets
+// `getA2pRegistration` too, which makes that one key DERIVED
+// (`mergeChecklist`, checklist-catalogue.ts:83) rather than a stored tick —
+// mapping it through `row()` would create a stored row whose `done_at` the
+// merge never even reads for that key.
+const ALL_CATALOGUE_KEYS = CHECKLIST_CATALOGUE
+  .map((item) => item.key)
+  .filter((key) => key !== "a2p_registration");
 
 // Shared by both describe blocks below (checklist row + work row) — the same
 // reset either page-level row needs, factored out rather than duplicated
@@ -172,8 +177,8 @@ function resetFixtures() {
   dbMocks.listBookingCreationsBetween.mockResolvedValue([]);
   dbMocks.listOpportunityValuesCreatedBetween.mockResolvedValue([]);
   dbMocks.listAccountWork.mockResolvedValue([]);
-  // Default: 1 of CHECKLIST_CATALOGUE.length catalogue items done, A2P not approved — mirrors
-  // blueprints.spec.ts's own GAP 3 fixture shape (1 ticked, A2P rejected).
+  // Default: one item ticked, A2P not approved — mirrors blueprints.spec.ts's
+  // own GAP 3 fixture shape (1 ticked, A2P rejected).
   dbMocks.listChecklistState.mockResolvedValue([row("phone_number")]);
   dbMocks.getA2pRegistration.mockResolvedValue({ status: "rejected", updatedAt: null });
 }

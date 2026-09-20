@@ -420,7 +420,11 @@ The architecture already assumed this; what "standard" adds is surface.
    - the toggle, disabled with a stated reason until a form is chosen — and
      when the assistant is ON, always rendered enabled (it is the off
      switch), naming the stored destination even if that form has since
-     been unpublished, with a sentence saying so (amended 2026-09-20)
+     been unpublished, with a sentence saying so (amended 2026-09-20). A
+     stored destination no longer published is named in the Select in BOTH
+     states (never blank), and while OFF it locks the toggle with its own
+     sentence rather than ever being silently re-enabled onto (fix round 2,
+     2026-09-20)
    - the destination-form select (published forms only; the single form
      pre-selected when the account has exactly one)
    - the copy-the-snippet card
