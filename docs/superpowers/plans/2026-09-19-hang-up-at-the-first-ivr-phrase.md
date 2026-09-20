@@ -204,7 +204,7 @@ MSG
 **Behaviour, exactly:**
 1. On `conversation.item.input_audio_transcription.delta` with a non-empty `delta` string and an `item_id`: `next = withCallerDelta(state, item_id, delta)`. If `looksLikeRecordedMessage(next.pendingCallerTurn.text)` is true: append the PREFIX to the transcript as a caller turn, mark `recordedCaller`, clear the pending buffer, return `[{ kind: "hangup" }]`. Otherwise return `next` with no actions. A delta with no `item_id` or an empty `delta` is ignored (return `state`, no actions).
 2. On `conversation.item.input_audio_transcription.completed`: behaviour is exactly today's (`:96-114`), plus `clearPendingCallerTurn` on whichever state is returned. The completed text supersedes the prefix; nothing from the buffer is appended here.
-3. `recordedCaller` already true (a prior delta hung up) — no further frame can arrive, because the lifecycle closes the socket synchronously on `hangup`. No special case; do not add one.
+3. `recordedCaller` already true (a prior delta hung up): BOTH cases return `{ state: clearPendingCallerTurn(state), actions: [] }` before doing anything else. (The plan first said "no special case — the socket closes synchronously". Review traced `route.ts`: the hangup branch `await`s `endCallLeg` BEFORE `ws.close()`, and the `settled` gate on incoming messages flips only in `finish()` on the socket's own close/error event — so a `.completed` or another `.delta` CAN reach `processCallEvent` in that window, and without the guard it appended a second caller turn and returned a second hangup, ending the SIP leg twice.)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -291,6 +291,9 @@ Append to `apps/web/src/lib/voice/call-events.test.ts`, inside the top-level `de
 
   it(".completed after a clean run of deltas appends the full turn once and clears the buffer", async () => {
     const { state: afterDeltas } = await feedWordByWord("Hi, I found you on Google and wanted to ask about a dining table.");
+    // Without this line the test passes even if the `.delta` case is absent
+    // (the buffer would never have been built, so "clears it" is vacuous).
+    expect(afterDeltas.pendingCallerTurn).not.toBeNull();
     const { state, actions } = await processCallEvent(afterDeltas, ctx,
       { type: "conversation.item.input_audio_transcription.completed",
         item_id: "item_1",
@@ -324,6 +327,28 @@ Append to `apps/web/src/lib/voice/call-events.test.ts`, inside the top-level `de
       { type: "conversation.item.input_audio_transcription.delta", item_id: "item_2", delta: "press 9 to opt out" });
     expect(r.actions).toEqual([]);
     expect(r.state.pendingCallerTurn).toEqual({ itemId: "item_2", text: "press 9 to opt out" });
+  });
+
+  it("after a delta hung up, a late .completed for the same item is ignored — no second turn, no second hangup", async () => {
+    // route.ts awaits endCallLeg before ws.close(), and its message gate
+    // flips only on the socket's own close event: a .completed can land in
+    // that window. It must not end the SIP leg twice or double the evidence.
+    const { state: hungUp, words, hungUpAt } = await feedWordByWord(ROBOCALL);
+    const r = await processCallEvent(hungUp, ctx,
+      { type: "conversation.item.input_audio_transcription.completed", item_id: "item_1", transcript: ROBOCALL });
+    expect(r.actions).toEqual([]);
+    expect(r.state.transcript).toHaveLength(1);
+    expect(r.state.transcript[0]).toMatchObject({ role: "caller", text: words.slice(0, hungUpAt + 1).join(" ") });
+    expect(r.state.pendingCallerTurn).toBeNull();
+  });
+
+  it("after a delta hung up, a late .delta is ignored too", async () => {
+    const { state: hungUp } = await feedWordByWord(ROBOCALL);
+    const r = await processCallEvent(hungUp, ctx,
+      { type: "conversation.item.input_audio_transcription.delta", item_id: "item_1", delta: " Thank you." });
+    expect(r.actions).toEqual([]);
+    expect(r.state.transcript).toHaveLength(1);
+    expect(r.state.pendingCallerTurn).toBeNull();
   });
 ```
 
@@ -375,6 +400,13 @@ Add the new case IMMEDIATELY BEFORE the `.completed` case (`:96`):
       // recorded-message.ts for why it is never keyed on "Google". Nothing
       // here widens what counts as a recording; it only moves WHEN the same
       // judgement is made.
+      //
+      // Already ending — a delta hung this call up and the socket is still
+      // draining while the lifecycle awaits endCallLeg. Whatever arrives in
+      // that window is not a turn to judge or record: the transcript already
+      // holds the words that ended the call, and a second hangup would end
+      // the SIP leg twice. Same idempotence idiom as withServed.
+      if (state.recordedCaller) return { state: clearPendingCallerTurn(state), actions: [] };
       if (!event.item_id || !event.delta) return { state, actions: [] };
       const next = withCallerDelta(state, event.item_id, event.delta);
       const prefix = next.pendingCallerTurn!.text;
@@ -394,6 +426,8 @@ Change the `.completed` case so every return clears the buffer — the completed
 
 ```ts
     case "conversation.item.input_audio_transcription.completed": {
+      // Same guard as the `.delta` case, for the same window — see there.
+      if (state.recordedCaller) return { state: clearPendingCallerTurn(state), actions: [] };
       if (!event.transcript) return { state: clearPendingCallerTurn(state), actions: [] };
       const text = String(event.transcript);
       const next = withTranscript(clearPendingCallerTurn(state),
