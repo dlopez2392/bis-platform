@@ -50,6 +50,18 @@ export const ACCOUNT_OWNED_TABLES = [
  * function exercises. `call-proposals-grants.test.ts` proves the row is gone
  * after teardown without assuming which FK did it.
  *
+ * `assistants`, `assistant_sessions` and `assistant_turns` (0042) are the
+ * newest three off that list, for the same reason: every one of them carries
+ * `account_id … on delete cascade`, so the `accounts` delete below carries
+ * them away. Their two nullable legs matter here and were chosen with this
+ * loop in mind — `assistants.form_id` and `assistant_sessions.submission_id`
+ * / `contact_id` are all `on delete set null`, so deleting `forms`,
+ * `form_submissions` and `contacts` (all three ON the list above, all three
+ * deleted before `accounts`) can never turn into a foreign-key violation
+ * reported as "cleanup failed on forms". `assistants-grants.test.ts` proves
+ * the rows are gone after a real `withTestAccount` teardown rather than
+ * assuming it.
+ *
  * A table added with the usual `restrict` and left off the list is a different
  * story and still a bug: it surfaces as "cleanup failed on accounts" here, or
  * much later as a unique-constraint failure in an unrelated suite.

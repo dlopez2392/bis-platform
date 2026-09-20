@@ -1,0 +1,282 @@
+/* Every themeable value is `var(--token, <fallback>)`, the same convention
+   `f/[publicId]/form.css` and `b/[publicId]/booking-page.tsx`'s embedded
+   stylesheet both use: an unthemed assistant renders the fallbacks below,
+   a themed one inherits the tokens `publicFormTheme` already put on
+   `<main>` in page.tsx. public-form-theme.test.ts pins the fallback SET
+   `publicFormTheme` can emit; the literals here are this file's own copies
+   of them, same two-languages-of-one-value shape `form.css`'s own comment
+   documents. */
+
+.bis-assistant-page {
+  background: var(--background, transparent);
+  min-height: 100vh;
+  font: 400 15px/1.5 var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+  color: var(--foreground, #18181b);
+  display: flex;
+}
+/* Embedded: this document IS the iframe's whole viewport — the launcher or
+   the panel fills it, sized from the OUTSIDE by assistant.js. Direct visit:
+   a full page the assistant paints itself, with its own centred card — the
+   same "themed tenant gets a full backdrop, embed gets none" split
+   `publicFormTheme`'s `transparent` argument already encodes. */
+.bis-assistant-page[data-embedded] {
+  align-items: stretch;
+  justify-content: stretch;
+}
+.bis-assistant-page:not([data-embedded]) {
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.bis-assistant-page[data-embedded] .bis-assistant-panel {
+  width: 100%;
+  height: 100vh;
+}
+.bis-assistant-page:not([data-embedded]) .bis-assistant-panel {
+  width: 100%;
+  max-width: 420px;
+  max-height: min(720px, calc(100vh - 32px));
+}
+
+/* --- The launcher (embedded, closed) -------------------------------------
+   assistant.js sizes the iframe itself to 72x72; this button is the 56px
+   circle the Northern Lights spec draws inside it, leaving room for the
+   drop shadow rather than filling the frame edge to edge. */
+.bis-assistant-launcher {
+  margin: auto;
+  width: 56px;
+  height: 56px;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--form-accent, #6d28d9);
+  color: var(--form-accent-foreground, #ffffff);
+  box-shadow: 0 8px 24px color-mix(in oklab, var(--form-accent, #6d28d9) 45%, transparent);
+  transition: transform 150ms ease;
+}
+.bis-assistant-launcher:hover { transform: scale(1.05); }
+
+/* --- The panel ------------------------------------------------------------ */
+.bis-assistant-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border, #d4d4d8);
+  border-radius: var(--radius, 0.5rem);
+  background: var(--card, #ffffff);
+  color: var(--foreground, #18181b);
+}
+.bis-assistant-page[data-embedded] .bis-assistant-panel { border-radius: 0; border-width: 0; }
+/* At the wide embedded size (assistant.js's min(400px, …) card, not the
+   narrow full-bleed one) the frame itself already carries the rounded
+   corner; matching it here keeps the panel's own corner from doubling up
+   against a straight iframe edge. Scoped with a min-width rather than a
+   media query keyed to assistant.js's own breakpoint, so the two stay in
+   step without either file naming the other's constant. */
+@media (min-width: 640px) {
+  .bis-assistant-page[data-embedded] .bis-assistant-panel { border-radius: 16px; }
+}
+
+.bis-assistant-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px 12px 16px;
+  border-bottom: 1px solid var(--border, #d4d4d8);
+  flex: 0 0 auto;
+}
+.bis-assistant-logo { width: 24px; height: 24px; border-radius: 6px; object-fit: contain; }
+.bis-assistant-title {
+  flex: 1 1 auto;
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bis-assistant-iconbtn {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted-foreground, #71717a);
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+.bis-assistant-iconbtn:hover { background: var(--border, #d4d4d8); }
+
+.bis-assistant-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  overflow-y: auto;
+}
+
+/* --- The transcript --------------------------------------------------------
+   aria-live="polite" on the scrolling list itself (not a wrapper around it):
+   a screen reader announces each new bubble as it lands, without re-reading
+   the whole history it has already spoken. */
+.bis-assistant-messages { display: flex; flex-direction: column; gap: 8px; }
+.bis-assistant-row { display: flex; }
+.bis-assistant-row.is-user { justify-content: flex-end; }
+.bis-assistant-row.is-assistant { justify-content: flex-start; }
+.bis-assistant-bubble {
+  max-width: 85%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+.bis-assistant-bubble-assistant {
+  background: var(--card, #ffffff);
+  border: 1px solid var(--border, #d4d4d8);
+  color: var(--foreground, #18181b);
+}
+.bis-assistant-bubble-user {
+  background: var(--form-accent, #6d28d9);
+  color: var(--form-accent-foreground, #ffffff);
+}
+.bis-assistant-link { color: inherit; text-decoration: underline; }
+
+/* --- Thinking, shaped like a reply about to land, not a spinner ----------- */
+.bis-assistant-thinking { display: inline-flex; gap: 4px; padding: 12px; }
+.bis-assistant-thinking span {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--muted-foreground, #71717a);
+  animation: bis-assistant-pulse 1.2s ease-in-out infinite;
+}
+.bis-assistant-thinking span:nth-child(2) { animation-delay: 0.15s; }
+.bis-assistant-thinking span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes bis-assistant-pulse { 0%, 80%, 100% { opacity: 0.3; } 40% { opacity: 1; } }
+.bis-assistant-sr {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+/* --- Suggestion chips ------------------------------------------------------ */
+.bis-assistant-suggestions { display: flex; flex-wrap: wrap; gap: 6px; }
+.bis-assistant-chip {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
+  border: 1px solid var(--border, #d4d4d8);
+  border-radius: 999px;
+  background: var(--card, #ffffff);
+  color: inherit;
+  cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+.bis-assistant-chip:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--form-accent, #6d28d9) 10%, transparent);
+  border-color: var(--form-accent, #6d28d9);
+}
+.bis-assistant-chip:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* --- Error, with a way back — never a dead end ---------------------------- */
+.bis-assistant-error {
+  margin: 0 16px 12px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--form-error, #b91c1c);
+  background: color-mix(in oklab, var(--form-error, #b91c1c) 8%, transparent);
+}
+.bis-assistant-error-heading { margin: 0 0 2px; font-weight: 600; font-size: 14px; color: var(--form-error, #b91c1c); }
+.bis-assistant-error-body { margin: 0 0 10px; font-size: 13px; color: var(--foreground, #18181b); }
+.bis-assistant-retry {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 14px;
+  border: 1px solid var(--form-error, #b91c1c);
+  border-radius: 8px;
+  background: var(--card, #ffffff);
+  color: var(--form-error, #b91c1c);
+  cursor: pointer;
+}
+
+/* --- The composer ----------------------------------------------------------- */
+.bis-assistant-form {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border, #d4d4d8);
+}
+.bis-assistant-input {
+  flex: 1 1 auto;
+  resize: none;
+  max-height: 96px;
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #d4d4d8);
+  border-radius: var(--radius, 0.5rem);
+  background: var(--card, #ffffff);
+  color: inherit;
+}
+.bis-assistant-input:disabled { opacity: 0.7; }
+.bis-assistant-send {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: var(--form-accent, #6d28d9);
+  color: var(--form-accent-foreground, #ffffff);
+  cursor: pointer;
+}
+.bis-assistant-send:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.bis-assistant-poweredby {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 6px 0 10px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted-foreground, #71717a);
+}
+.bis-assistant-poweredby a { color: inherit; }
+
+/* One focus treatment for every control in the widget, so nothing is ever
+   focused without being obviously focused — the same rule
+   `booking-page.tsx`'s embedded stylesheet closes on. */
+.bis-assistant-launcher:focus-visible,
+.bis-assistant-iconbtn:focus-visible,
+.bis-assistant-chip:focus-visible,
+.bis-assistant-retry:focus-visible,
+.bis-assistant-input:focus-visible,
+.bis-assistant-send:focus-visible,
+.bis-assistant-link:focus-visible {
+  outline: 2px solid var(--form-accent, #6d28d9);
+  outline-offset: 2px;
+}
+.bis-assistant-input:focus { border-color: var(--form-accent, #6d28d9); }
+
+@media (prefers-reduced-motion: reduce) {
+  .bis-assistant-launcher,
+  .bis-assistant-iconbtn,
+  .bis-assistant-chip,
+  .bis-assistant-thinking span {
+    transition: none !important;
+    animation: none !important;
+  }
+}

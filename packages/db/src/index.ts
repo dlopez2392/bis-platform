@@ -100,3 +100,9 @@ export {
   type ContactFieldPayload, type OpportunityStagePayload,
 } from "./call-proposals";
 export * from "./voice-web-sessions";
+export { getAssistantByPublicId, getAssistantForAccount, createAssistant, updateAssistant,
+         createAssistantSession, getAssistantSession, appendAssistantTurn, linkSessionLead,
+         countAssistantTurnsForIpSince, countAssistantTurnsForAccountSince,
+         type AssistantLocale, type AssistantRow, type AssistantPatch,
+         type TranscriptEntry, type AssistantSessionRow,
+         type NewAssistantSession, type AssistantTurnInput } from "./assistants";
