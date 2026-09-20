@@ -7,6 +7,25 @@ import type { ConciergeStrings } from "@/lib/concierge/strings";
 
 type Msg = { role: "visitor" | "assistant"; text: string };
 
+/** The shape `POST /api/concierge/<publicId>/turn` answers with — `closing`
+ *  always present, empty when the turn did not end (route.ts's `quiet()`). */
+export type TurnResult = { conversationId: string; reply: string; ended: boolean; closing: string };
+
+/**
+ * The ONE place that decides what a turn response renders (Important B,
+ * second-round review of 108b822): a chat bubble from `reply`, or the fixed
+ * closing paragraph from `closing` — never both for the same turn. `ended`
+ * gates the bubble off entirely rather than trusting `reply` to be empty on
+ * every ended path — the route's contract guarantees that today, but the
+ * render decision does not lean on the server keeping the promise.
+ */
+export function pickTurnUpdate(data: TurnResult): { bubble: string | null; closing: string | null } {
+  return {
+    bubble: data.ended ? null : (data.reply || null),
+    closing: data.ended ? (data.closing || null) : null,
+  };
+}
+
 /**
  * The four DESIGN.md states all live here: the greeting IS the empty state
  * (rule 5 — one sentence of what appears here, and here it is the tenant's
@@ -33,6 +52,12 @@ export function ConciergeChat({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ended, setEnded] = useState(false);
+  // The ONE closing sentence the server chose for this conversation (Important
+  // B, second-round review of 108b822) — read from `closing`, never a fixed
+  // client-side string, so an expired-page close and a turn-cap close never
+  // collide into a hardcoded paragraph that contradicts whichever bubble (or
+  // absence of one) the visitor already read.
+  const [endedMessage, setEndedMessage] = useState<string | null>(null);
   const conversationId = useRef<string | null>(null);
   const honeypot = useRef<HTMLInputElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
@@ -61,13 +86,13 @@ export function ConciergeChat({
         }),
       });
       if (!res.ok) throw new Error(String(res.status));
-      const data = await res.json() as { conversationId: string; reply: string; ended: boolean };
+      const data = await res.json() as TurnResult;
       conversationId.current = data.conversationId;
-      // EMPTY on purpose at the turn cap (route.ts): the fixed
-      // `.bis-concierge-ended` paragraph below already carries that close,
-      // so pushing an empty bubble would print nothing useful and leave a
-      // blank line in the log.
-      if (data.reply) setMessages((m) => [...m, { role: "assistant", text: data.reply }]);
+      // ONE decision, ONE sentence: `pickTurnUpdate` never returns both a
+      // bubble and a closing line for the same turn (see its own doc).
+      const update = pickTurnUpdate(data);
+      if (update.bubble) setMessages((m) => [...m, { role: "assistant", text: update.bubble as string }]);
+      if (update.closing) setEndedMessage(update.closing);
       if (data.ended) setEnded(true);
     } catch {
       // One sentence, and the composer stays usable — a visitor mid-question
@@ -95,8 +120,11 @@ export function ConciergeChat({
 
       {error && <p className="bis-concierge-error" role="status">{error}</p>}
       {/* Not an error state: a conversation that reached its cap still wants
-          to become a lead, so the copy asks for one. */}
-      {ended && <p className="bis-concierge-ended" role="status">{strings.ended}</p>}
+          to become a lead, so the copy asks for one. The sentence itself is
+          the server's `closing` value (Important B) — `strings.ended` is
+          only a defensive fallback for a response that broke the contract,
+          never the primary source now. */}
+      {ended && <p className="bis-concierge-ended" role="status">{endedMessage ?? strings.ended}</p>}
 
       <form className="bis-concierge-composer" onSubmit={send}>
         {/* Off-screen, not display:none — some bots skip hidden inputs but

@@ -21,6 +21,12 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   // which needs it.
   const onWeb = input.medium === "web";
 
+  // The word for who is on the other end. The phone line is BYTE-UNCHANGED
+  // ("caller") — this fixes only the web copy, which was still saying
+  // "caller" in the IDENTITY and LANGUAGE lines and the capture_lead bullet
+  // (second-round review of 108b822).
+  const audienceWord = onWeb ? "visitor" : "caller";
+
   // Every place this prompt would otherwise tell Sofía to "take a message" —
   // a tool that does not exist on the web — resolves to this instead. Review
   // finding (commit 129b43f): the old `WEB_TOOL_NOTICE` was appended AFTER a
@@ -54,13 +60,13 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   const lines: string[] = [
     `You are ${input.personaName}, ${role}.`,
     "",
-    `IDENTITY — Do not volunteer that you are automated and do not introduce yourself by name unless asked. Just answer as ${input.businessName} and get straight to what the caller needs. If a caller asks directly whether they are speaking with a person, a human, a bot, a robot, or an AI, answer honestly and briefly that you are an automated assistant, then ${wouldRatherTalkToAPerson} if they would rather talk to a person. Never claim to be human.`,
+    `IDENTITY — Do not volunteer that you are automated and do not introduce yourself by name unless asked. Just answer as ${input.businessName} and get straight to what the ${audienceWord} needs. If a ${audienceWord} asks directly whether they are speaking with a person, a human, a bot, a robot, or an AI, answer honestly and briefly that you are an automated assistant, then ${wouldRatherTalkToAPerson} if they would rather talk to a person. Never claim to be human.`,
     "",
   ];
 
   if (input.languages === "both") {
     lines.push(
-      `LANGUAGE — You are fully bilingual. ALWAYS reply in the same language the caller uses (English or Spanish) and switch fluidly if they switch.`,
+      `LANGUAGE — You are fully bilingual. ALWAYS reply in the same language the ${audienceWord} uses (English or Spanish) and switch fluidly if they switch.`,
       "",
     );
   } else if (input.languages === "es") {
@@ -90,7 +96,16 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     "- Never give legal, medical, or compliance advice.",
     "",
     "TOOLS — you MUST use tools for anything that reads or changes real state. Never claim something is recorded or booked without a successful tool result:",
-    "- capture_lead(fields) — record who the caller is and what they need. Required fields: fullName, need. Also capture when offered: email, businessName.",
+    // The WEB tool (CAPTURE_LEAD_TOOL, lib/concierge/prompt.ts) is FLAT —
+    // fullName/email/phone/need at the top level, no `fields` wrapper, and no
+    // slot for a business name — a different shape from the phone tool
+    // (lib/voice/tools/schemas.ts), which takes a free-form `fields` object.
+    // A model told the phone shape on the web emits `{"fields":{...}}`,
+    // which `parseCaptureLead` cannot read a name out of, and the lead is
+    // silently dropped. The phone line below is BYTE-UNCHANGED.
+    onWeb
+      ? "- capture_lead(fullName, email, phone, need) — record who the visitor is and what they need. Call it as soon as you have their name AND either an email address or a phone number."
+      : "- capture_lead(fields) — record who the caller is and what they need. Required fields: fullName, need. Also capture when offered: email, businessName.",
   );
 
   // take_message and log_transcript are given to the phone session only

@@ -228,8 +228,12 @@ describe("POST /api/concierge/[publicId]/turn — answering", () => {
   it("answers a first turn and returns the conversation id", async () => {
     const res = await firstTurn();
     expect(res.status).toBe(200);
+    // `closing` rides on every response now (Important B, second-round
+    // review of 108b822) so the anti-oracle key-set stays constant across
+    // good and refused turns alike — empty here because this turn did not
+    // end.
     expect(await res.json()).toEqual({
-      conversationId: "c1", reply: "Yes, we do.", ended: false,
+      conversationId: "c1", reply: "Yes, we do.", ended: false, closing: "",
     });
     expect(dbFns.appendConciergeTurns).toHaveBeenCalledTimes(1);
     const [, , turns] = dbFns.appendConciergeTurns.mock.calls[0]!;
@@ -311,6 +315,24 @@ describe("POST /api/concierge/[publicId]/turn — answering", () => {
     // What they read is what the transcript stores.
     const [, , turns] = dbFns.appendConciergeTurns.mock.calls[0]!;
     expect((turns as { text: string }[])[1]!.text).toBe(conciergeStrings("en").captured);
+  });
+
+  // Minor 1 (second-round review of 108b822): `filed` used to seed from
+  // `!!conversation.submission_id` alone, so an empty reply with NO tool
+  // call this turn (`toolArgs === null`) on a conversation that already
+  // filed a lead earlier still fell through to `strings.captured` — a
+  // question the model failed to answer read as a fresh "we've got your
+  // details."
+  it("does not read an empty reply as a fresh capture on a conversation that already filed one", async () => {
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, submission_id: "already" });
+    fetchMock.mockResolvedValue(modelReplies(""));
+    const res = await laterTurn();
+    const body = await res.json() as { reply: string };
+    // MUTATION: revert to `reply || (filed ? strings.captured :
+    // strings.unavailable)` — this FAILS, and a turn with no tool call at
+    // all reads as "Thanks, I have passed your details…" a second time.
+    expect(body.reply).toBe(conciergeStrings("en").unavailable);
+    expect(body.reply).not.toBe(conciergeStrings("en").captured);
   });
 
   it("truncates a very long message instead of rejecting it", async () => {
@@ -398,12 +420,32 @@ describe("POST /api/concierge/[publicId]/turn — what a refusal costs", () => {
     // MUTATION: drop the `verdict.reason === "expired"` branch — this FAILS,
     // and an expired page reads "This chat is closed" for a chat that never
     // opened.
+    //
+    // Important B (second-round review of 108b822): `reply` is EMPTY on
+    // every ended path now — the closing sentence rides in `closing` only,
+    // so the page never renders a bubble AND a fixed paragraph carrying two
+    // different (and here contradictory) sentences.
     expect(await res.json()).toEqual({
-      conversationId: "", reply: conciergeStrings("en").expired, ended: true,
+      conversationId: "", reply: "", ended: true, closing: conciergeStrings("en").expired,
     });
     expect(conciergeStrings("en").expired).not.toBe(conciergeStrings("en").ended);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(dbFns.createConciergeConversation).not.toHaveBeenCalled();
+  });
+
+  // Important B: the start-guard refusal (honeypot, too-fast fill, or a
+  // token minted for another widget) is a DIFFERENT ended path from the
+  // expired-token one above — same `ended: true`, but the closing sentence
+  // is `strings.ended`, not `strings.expired`, and `reply` is empty here
+  // too so the fixed paragraph is the only place the sentence appears.
+  it("a filled honeypot on turn 1 answers with an empty reply and 'ended' as the closing sentence", async () => {
+    const res = await firstTurn({ [HONEYPOT_FIELD]: "bot" });
+    // MUTATION: keep sending `strings.ended` back as `reply` (today's code)
+    // — this FAILS, and the page's fixed `.bis-concierge-ended` paragraph
+    // prints the same sentence a second time as a chat bubble.
+    expect(await res.json()).toEqual({
+      conversationId: "", reply: "", ended: true, closing: conciergeStrings("en").ended,
+    });
   });
 
   it("does NOT re-check the render token on turn 2, even hours later", async () => {
@@ -417,7 +459,7 @@ describe("POST /api/concierge/[publicId]/turn — what a refusal costs", () => {
     // which is also a 200. The answer itself is the evidence.
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      conversationId: "c1", reply: "Yes, we do.", ended: false,
+      conversationId: "c1", reply: "Yes, we do.", ended: false, closing: "",
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -444,12 +486,18 @@ describe("POST /api/concierge/[publicId]/turn — what a refusal costs", () => {
     dbFns.claimConciergeTurn.mockResolvedValue(null);
     const res = await laterTurn();
     expect(res.status).toBe(200);
-    // Minor (review of commit 129b43f): `reply` is now EMPTY here, not
-    // `strings.ended` — the chat component already renders a fixed
-    // `.bis-concierge-ended` paragraph carrying that exact sentence, so the
-    // old value printed it twice. MUTATION: pass `strings.ended` back as
-    // `reply` — this FAILS.
-    expect(await res.json()).toEqual({ conversationId: "c1", reply: "", ended: true });
+    // Minor (review of commit 129b43f): `reply` is EMPTY here, not
+    // `strings.ended` — the chat component renders the closing sentence from
+    // `closing` alone, so this stays the only place it appears. MUTATION:
+    // pass `strings.ended` back as `reply` — this FAILS.
+    //
+    // Important B (second-round review of 108b822): `closing` now carries
+    // the sentence explicitly, on this path and the other two ended paths
+    // alike — MUTATION: send `closing: ""` here — this FAILS, and the cap
+    // arrives with no words at all for the visitor to read.
+    expect(await res.json()).toEqual({
+      conversationId: "c1", reply: "", ended: true, closing: conciergeStrings("en").ended,
+    });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

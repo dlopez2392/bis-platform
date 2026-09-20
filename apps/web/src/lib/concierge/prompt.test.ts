@@ -57,6 +57,20 @@ describe("budgetNotice", () => {
    * `CONCIERGE_MAX_TURNS - claimed + 1`, so `remaining === 1` means THIS
    * reply is the last one, not that one more is coming.
    */
+  // Minor 2 (second-round review of 108b822): with `remaining` counting the
+  // reply being written, the OLD constant (3) opened the window at
+  // remaining=3 — this reply plus two more, i.e. only TWO visitor answers
+  // after the notice first appears, where the docstring above promises
+  // three exchanges. The constant must be 4 so the first warned reply
+  // (remaining=4) is followed by three more (3, 2, 1) before the cap.
+  it("pins the first warned turn at 4 replies remaining, and stays silent one turn earlier — the docstring's promise of three answers after the warning", () => {
+    // MUTATION: leave CONCIERGE_BUDGET_WARN_TURNS at 3 — this FAILS, because
+    // budgetNotice(4) would still be silent (4 > 3), and the warning would
+    // fire one reply later than the docstring promises.
+    expect(budgetNotice(4)).toContain("ALMOST OVER");
+    expect(budgetNotice(5)).toBe("");
+  });
+
   it("says nothing while the conversation still has room", () => {
     // MUTATION: drop the `remaining > CONCIERGE_BUDGET_WARN_TURNS` early
     // return — this FAILS, and every turn of every conversation carries a

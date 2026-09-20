@@ -69,11 +69,23 @@ function log(msg: string, extra: Record<string, unknown> = {}) {
   console.log(JSON.stringify({ at: "concierge/turn", msg, ...extra }));
 }
 
-/** Every refusal that is not a hard error answers with the SAME shape a good
- *  turn does, so the widget is never an oracle telling a spammer which guard
- *  they tripped. */
-function quiet(conversationId: string, reply: string, ended = false) {
-  return NextResponse.json({ conversationId, reply, ended });
+/**
+ * Every refusal that is not a hard error answers with the SAME shape a good
+ * turn does, so the widget is never an oracle telling a spammer which guard
+ * they tripped — `closing` rides on every response, defaulted to "", so the
+ * key set never differs between a good turn and a refused one.
+ *
+ * `closing` carries the ONE sentence an ended conversation gets (Important B,
+ * second-round review of 108b822). `reply` stays "" on every ended path —
+ * turn cap, start-guard refusal, and expired token alike — so the page never
+ * pushes a chat bubble on top of the fixed closing paragraph; before this,
+ * two of those three paths sent the sentence back as `reply` too, and a
+ * visitor read it twice (or, on the expired path, read two DIFFERENT and
+ * contradictory sentences — a bubble promising review of a chat and a
+ * paragraph promising a follow-up that was never captured).
+ */
+function quiet(conversationId: string, reply: string, ended = false, closing = "") {
+  return NextResponse.json({ conversationId, reply, ended, closing });
 }
 
 export async function POST(
@@ -203,10 +215,10 @@ export async function POST(
         // Naming this one case costs the anti-oracle nothing: a spammer can
         // only mint an EARLIER token, never trigger `expired` on purpose.
         if (!honeypot && !verdict.ok && verdict.reason === "expired") {
-          return quiet("", strings.expired, true);
+          return quiet("", "", true, strings.expired);
         }
         // `ended`, not an error: the composer closes and the copy is a close.
-        return quiet("", strings.ended, true);
+        return quiet("", "", true, strings.ended);
       }
 
       // EVERY COST CHECK HAPPENS HERE, BEFORE THE MODEL CALL. A refused
@@ -293,11 +305,11 @@ export async function POST(
     const claimed = await claimConciergeTurn(db, conversationId, CONCIERGE_MAX_TURNS);
     if (claimed === null) {
       log("ended: turn cap", { conversationId });
-      // EMPTY, not `strings.ended` (Minor, review of commit 129b43f): the
-      // chat component already renders a fixed `.bis-concierge-ended`
-      // paragraph carrying that exact sentence, so the old value printed it
-      // twice — once as a reply bubble, once as the paragraph below it.
-      return quiet(conversationId, "", true);
+      // `reply` stays EMPTY (Minor, review of commit 129b43f) and the close
+      // now rides in `closing` (Important B, second-round review of
+      // 108b822), the same contract every ended path uses — the page reads
+      // it once, for exactly one rendered sentence.
+      return quiet(conversationId, "", true, strings.ended);
     }
 
     const system = buildSystemPrompt({
@@ -404,7 +416,13 @@ export async function POST(
     // only when `fileLead` (or an earlier turn) really did; a line that
     // promises nothing otherwise, never a claim about the details this
     // visitor just handed over.
-    const spoken = reply || (filed ? strings.captured : strings.unavailable);
+    //
+    // `toolArgs` is required too (Minor 1, second-round review of 108b822):
+    // `filed` alone can be true from a PRIOR turn's submission, so an empty
+    // reply with NO tool call THIS turn (the model simply failed to answer)
+    // must not read as a fresh "we've got your details" about a question it
+    // never addressed.
+    const spoken = reply || ((toolArgs && filed) ? strings.captured : strings.unavailable);
 
     const now = new Date().toISOString();
     try {

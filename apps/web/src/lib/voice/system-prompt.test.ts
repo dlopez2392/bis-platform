@@ -218,6 +218,53 @@ describe("buildSystemPrompt medium", () => {
       // phrase too, so any one of them left unguarded also turns this red.
       expect(p).not.toMatch(/take a message/i);
       expect(p).not.toMatch(/callback number/i);
+      // IMPORTANT A (second-round review of 108b822): the phone capture_lead
+      // bullet names a `fields` wrapper and a `businessName` capture that the
+      // web tool (`CAPTURE_LEAD_TOOL`, lib/concierge/prompt.ts) does not have
+      // — flat properties, no wrapper, no businessName. A model following the
+      // phone bullet emits `{"fields":{...}}`, `parseCaptureLead` finds no
+      // top-level `fullName`, and the lead is silently dropped.
+      // MUTATION: leave the capture_lead TOOLS bullet unconditional — this
+      // FAILS, and the web prompt still tells the model to wrap its call in
+      // a `fields` object and capture a `businessName` it was never given a
+      // slot for.
+      expect(p).not.toContain("businessName");
+      expect(p).not.toContain("capture_lead(fields)");
+    });
+
+    it("describes capture_lead's real flat web shape, not the phone's fields wrapper", () => {
+      // IMPORTANT A: the web tool's real schema (CAPTURE_LEAD_TOOL) is FLAT —
+      // fullName/email/phone/need at the top level, additionalProperties:
+      // false, no `fields` wrapper, no `businessName`. The web prompt must
+      // describe THAT shape, not the phone tool's.
+      const web = buildSystemPrompt(baseInput({ medium: "web", bookingEnabled: false }), now);
+      expect(web).toContain("capture_lead(fullName, email, phone, need)");
+      expect(web).not.toContain("capture_lead(fields)");
+      // The phone bullet is BYTE-UNCHANGED — this is the live line.
+      const phone = buildSystemPrompt(baseInput({ bookingEnabled: false }), now);
+      expect(phone).toContain(
+        "- capture_lead(fields) — record who the caller is and what they need. "
+        + "Required fields: fullName, need. Also capture when offered: email, businessName.",
+      );
+    });
+
+    it("says visitor, not caller, in the IDENTITY line on the web; the phone line is unchanged", () => {
+      const web = buildSystemPrompt(baseInput({ medium: "web" }), now);
+      expect(web).toContain("get straight to what the visitor needs");
+      expect(web).toContain("If a visitor asks directly whether");
+      expect(web).not.toContain("what the caller needs");
+      expect(web).not.toContain("If a caller asks directly");
+      const phone = buildSystemPrompt(base, now);
+      expect(phone).toContain("get straight to what the caller needs");
+      expect(phone).toContain("If a caller asks directly whether");
+    });
+
+    it("says visitor, not caller, in the bilingual LANGUAGE line on the web; the phone line is unchanged", () => {
+      const web = buildSystemPrompt(baseInput({ medium: "web" }), now);
+      expect(web).toContain("the visitor uses");
+      expect(web).not.toContain("the caller uses");
+      const phone = buildSystemPrompt(base, now);
+      expect(phone).toContain("the caller uses");
     });
 
     it("resolves 'would rather talk to a person' to capture_lead in the IDENTITY line", () => {

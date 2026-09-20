@@ -71,7 +71,7 @@ export function splitName(fullName: string): { first: string; last: string } {
 
 /** How close to the cap Sofía is told her budget. Three exchanges is enough
  *  to ask for a name and a way to reach them and still hear an answer. */
-export const CONCIERGE_BUDGET_WARN_TURNS = 3;
+export const CONCIERGE_BUDGET_WARN_TURNS = 4;
 
 /**
  * The line appended to the system prompt as the turn cap approaches.
