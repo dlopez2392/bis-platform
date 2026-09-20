@@ -103,9 +103,10 @@ let priorProfileCaptured = false;
 /**
  * The fixture account's branding EXACTLY as this file found it, restored in
  * `afterAll` — same discipline and the same reason as `priorProfile` above.
- * IMPORTANT 2's assertion 6 needs a brand colour the loader's own default
- * (`#6D28D9`) cannot produce, so `beforeAll` overwrites `brandColor` for the
- * fixture account; `priorBrandingCaptured` is the actual restore guard (TRUE
+ * IMPORTANT 2's assertion 6 needs a brand colour neither half of which the
+ * loader's own default (background `#6D28D9`, label `#fff`) can produce, so
+ * `beforeAll` overwrites `brandColor` for the fixture account;
+ * `priorBrandingCaptured` is the actual restore guard (TRUE
  * the moment the read succeeds), the same shape `priorProfileCaptured` is —
  * a `setBranding` that never ran must not be "restored".
  * `client-branding.spec.ts` and `public-form-theme.spec.ts` are the
@@ -153,12 +154,16 @@ test.beforeAll(async () => {
     publicId, accountId: fixture.accountId, formId, actorId: fixture.clerkUserId,
   };
 
-  // A brand colour the loader could never produce on its own (its shipped
-  // default is #6D28D9) — see the "embedded on a client's page" describe
-  // block below, assertion 6.
+  // A brand colour whose BOTH halves the loader could never produce on its
+  // own: #facc15 resolves through `publicFormTheme`, on this fixture's real
+  // (warm / round / serif / dark) branding, to
+  // `{ accent: "#facc15", accentForeground: "#111111" }` — verified with a
+  // throwaway script against the resolver directly — and neither value is
+  // the loader's shipped default (background #6D28D9, label #fff). See the
+  // "embedded on a client's page" describe block below, assertion 6.
   priorBranding = await getBranding(db, fixture.accountId);
   priorBrandingCaptured = true;
-  await setBranding(db, fixture.accountId, { brandColor: "#0f766e" }, fixture.clerkUserId);
+  await setBranding(db, fixture.accountId, { brandColor: "#facc15" }, fixture.clerkUserId);
 });
 
 test.afterAll(async () => {
@@ -179,6 +184,14 @@ test.afterAll(async () => {
     await db.from("concierge_conversations").delete().eq("account_id", fixture.accountId);
     await db.from("form_submissions").delete().eq("form_id", createdFormId);
     await db.from("forms").delete().eq("id", createdFormId);
+  }
+
+  // Branding restore FIRST, on its OWN flag rather than an early return —
+  // fix-round-3 review (Minor 1): the profile restore below can throw, and
+  // this restore must not sit behind that other state's guard just because
+  // ordering happened to make it safe today.
+  if (priorBrandingCaptured) {
+    await setBranding(db, fixture.accountId, { brandColor: priorBranding!.brandColor }, fixture.clerkUserId);
   }
 
   if (!priorProfileCaptured) return;
@@ -203,9 +216,6 @@ test.afterAll(async () => {
     // be no row.
     await db.from("voice_profiles").delete().eq("account_id", fixture.accountId);
   }
-
-  if (!priorBrandingCaptured) return;
-  await setBranding(db, fixture.accountId, { brandColor: priorBranding!.brandColor }, fixture.clerkUserId);
 });
 
 test("the address the snippet points at renders this client's own greeting", async ({ page }) => {
@@ -419,12 +429,22 @@ test.describe("embedded on a client's page", () => {
       // iframe (the loader's own `iframe.focus()`), so this keydown lands in
       // the chat page's own document, where its window listener runs.
       await page.keyboard.type("a");
+      // Sink the race before asserting: a fresh `toBeVisible()` retries and
+      // can pass on its FIRST poll, before the frame's keydown handler and
+      // the host's message handler have necessarily run at all.
+      await frame.locator("body").evaluate(() => 0);
+      await page.evaluate(() => 0);
       // MUTATION (e): `shouldCloseOnKey` → `!== "Escape"` — this FAILS, and
       // any keystroke while the visitor is typing closes the conversation
       // on them.
       await expect(iframeEl).toBeVisible();
+      await expect(launcher).toHaveAttribute("aria-expanded", "true");
 
-      // Step 4: Esc closes.
+      // Step 4: Esc closes. Precondition made explicit: the loader has its
+      // OWN host-window Esc listener (embed-script.ts:174-176), so Esc alone
+      // would prove that producer rather than the chat page's — asserting
+      // focus is inside the iframe first pins which listener is on trial.
+      expect(await page.evaluate(() => document.activeElement?.tagName)).toBe("IFRAME");
       await page.keyboard.press("Escape");
       // MUTATION (d): remove the keydown effect in concierge-chat.tsx — this
       // FAILS, and Esc does nothing once focus has moved into the iframe
@@ -453,11 +473,16 @@ test.describe("embedded on a client's page", () => {
       const sendBtn = frame.locator(".bis-concierge-composer button[type='submit']");
       const sendBg = hexOf(await sendBtn.evaluate((el) => getComputedStyle(el).backgroundColor));
       const sendColor = hexOf(await sendBtn.evaluate((el) => getComputedStyle(el).color));
-      // The fixture's own brand colour (#0f766e, set in beforeAll) must not
-      // equal the loader's shipped default — otherwise "equals the send
-      // button" would prove nothing.
+      // The fixture's own brand colour (#facc15, set in beforeAll) resolves
+      // to a background AND a foreground that both differ from the loader's
+      // shipped default (#6D28D9 / #fff) — every "painted value equals
+      // measured ground truth" assertion needs a not-the-default guard on
+      // EVERY property it compares, not just the first, or the mutation this
+      // block exists for can stay invisible on that one property.
       expect(sendBg, "the fixture's brand colour must not be the loader's own default")
         .not.toBe("#6d28d9");
+      expect(sendColor, "the fixture's brand label colour must not be the loader's own default label colour")
+        .not.toBe("#ffffff");
 
       // MUTATION (b): remove the `bis-concierge-brand` postMessage effect in
       // concierge-chat.tsx — this FAILS (times out), and the launcher never
