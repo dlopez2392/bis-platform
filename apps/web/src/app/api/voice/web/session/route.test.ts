@@ -9,6 +9,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const getPhoneNumberByE164Mock = vi.hoisted(() => vi.fn());
 const getVoiceProfileMock = vi.hoisted(() => vi.fn());
 const getOrCreateCalendarMock = vi.hoisted(() => vi.fn());
+const recordWebSessionMock = vi.hoisted(() => vi.fn());
+const countWebSessionsByIpMock = vi.hoisted(() => vi.fn());
+const countWebSessionsForAccountMock = vi.hoisted(() => vi.fn());
 const dbQuerySpy = vi.hoisted(() => ({ fromCalls: [] as string[], eqCalls: [] as [string, unknown][] }));
 
 /** The agency's INTERNAL label deliberately differs from `brand_name` and
@@ -50,17 +53,21 @@ vi.mock("@bis/db", async (importOriginal) => {
     getPhoneNumberByE164: (...a: unknown[]) => getPhoneNumberByE164Mock(...a),
     getVoiceProfile: (...a: unknown[]) => getVoiceProfileMock(...a),
     getOrCreateCalendar: (...a: unknown[]) => getOrCreateCalendarMock(...a),
+    recordWebSession: (...a: unknown[]) => recordWebSessionMock(...a),
+    countWebSessionsByIp: (...a: unknown[]) => countWebSessionsByIpMock(...a),
+    countWebSessionsForAccount: (...a: unknown[]) => countWebSessionsForAccountMock(...a),
   };
 });
 
 // --- web-demo: the ticket check is the website's signed token; everything
-// else (origin allowlist, the appended notice) stays real. ------------------
+// else (origin allowlist, the appended notice, the caps) stays real. -------
 vi.mock("@/lib/voice/web-demo", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/voice/web-demo")>();
-  return { ...actual, verifyTicket: () => ({ ok: true as const }) };
+  return { ...actual, verifyTicket: () => ({ ok: true as const, nonce: "test-nonce" }) };
 });
 
 import { POST } from "./route";
+import { WEB_SESSION_MAX_PER_IP, WEB_SESSION_MAX_PER_ACCOUNT_PER_DAY } from "@/lib/voice/web-demo";
 
 const ORIGIN = "https://bis-rgv.com";
 const PHONE_ROW = { id: "pn1", account_id: "acct1", e164: "+19565550999", telnyx_id: null, status: "live" as const };
@@ -89,17 +96,33 @@ function req(): Request {
   });
 }
 
+/** Same request `req()` builds — the ticket is meaningless here since
+ *  `verifyTicket` is mocked above, but the name is what the cap tests read. */
+const requestWithValidTicket = req;
+
+function okClientSecretResponse() {
+  return { ok: true, status: 200, json: async () => ({ value: "ek_test", expires_at: 1 }) };
+}
+
 beforeEach(() => {
   vi.stubEnv("SOFIA_WEB_ORIGINS", ORIGIN);
   vi.stubEnv("SOFIA_WEB_SECRET", "s3cret");
   vi.stubEnv("SOFIA_WEB_NUMBER", "+19565550999");
   vi.stubEnv("OPENAI_API_KEY", "sk-test");
+  // `clientIp`+`hashIp` (forms/guards.ts) need a signing key for the IP hash
+  // the caps are keyed on — same var `f/[publicId]/actions.test.ts` stubs.
+  vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "test-service-key");
   vi.stubGlobal("fetch", fetchMock);
   fetchMock.mockReset();
-  fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ value: "ek_test", expires_at: 1 }) });
+  fetchMock.mockResolvedValue(okClientSecretResponse());
   getPhoneNumberByE164Mock.mockReset().mockResolvedValue(PHONE_ROW);
   getVoiceProfileMock.mockReset().mockResolvedValue(PROFILE_ROW);
   getOrCreateCalendarMock.mockReset().mockResolvedValue(CALENDAR_ROW);
+  // Under both caps and a fresh nonce by default, so the pre-existing tests
+  // below (written before Task 2) still mint without change.
+  recordWebSessionMock.mockReset().mockResolvedValue(true);
+  countWebSessionsByIpMock.mockReset().mockResolvedValue(0);
+  countWebSessionsForAccountMock.mockReset().mockResolvedValue(0);
   dbQuerySpy.fromCalls.length = 0;
   dbQuerySpy.eqCalls.length = 0;
 });
@@ -161,5 +184,48 @@ describe("POST /api/voice/web/session — the name a website visitor hears", () 
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe("POST /api/voice/web/session — how many sessions this route will mint", () => {
+  it("refuses a replayed ticket without calling OpenAI", async () => {
+    // recordWebSession returns false when the nonce is already spent.
+    recordWebSessionMock.mockResolvedValue(false);
+    const res = await POST(requestWithValidTicket());
+    expect(res.status).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses once this IP is over its window cap, without calling OpenAI", async () => {
+    countWebSessionsByIpMock.mockResolvedValue(WEB_SESSION_MAX_PER_IP);
+    const res = await POST(requestWithValidTicket());
+    expect(res.status).toBe(429);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(recordWebSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses once this ACCOUNT is over its daily cap, without calling OpenAI", async () => {
+    countWebSessionsForAccountMock.mockResolvedValue(WEB_SESSION_MAX_PER_ACCOUNT_PER_DAY);
+    const res = await POST(requestWithValidTicket());
+    expect(res.status).toBe(429);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("records the session BEFORE minting — a mint that is never recorded cannot be counted", async () => {
+    const order: string[] = [];
+    recordWebSessionMock.mockImplementation(async () => { order.push("record"); return true; });
+    fetchMock.mockImplementation(async () => { order.push("mint"); return okClientSecretResponse(); });
+    await POST(requestWithValidTicket());
+    expect(order).toEqual(["record", "mint"]);
+  });
+
+  it("a counter that throws refuses the session rather than minting an uncounted one", async () => {
+    // Fail CLOSED. This route spends money; a broken counter must not become
+    // an open tap. Contrast the silence guard, which fails open because the
+    // cost of its failure is one extra call, not an unbounded one.
+    countWebSessionsByIpMock.mockRejectedValue(new Error("db down"));
+    const res = await POST(requestWithValidTicket());
+    expect(res.status).toBe(503);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

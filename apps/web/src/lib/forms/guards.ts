@@ -94,6 +94,29 @@ export function verifyRenderToken(token: string, nowMs: number, publicId: string
 }
 
 /**
+ * Client IP for rate limiting and duplicate detection.
+ *
+ * TRUST ASSUMPTION, stated explicitly: this only works because the hosting
+ * platform (Vercel) *overwrites* `x-vercel-forwarded-for`/`x-forwarded-for`
+ * on every request rather than appending to whatever the client sent —
+ * `x-vercel-forwarded-for` is Vercel's own platform-set header and is
+ * preferred for that reason. If this app is ever placed behind a different
+ * proxy that appends to `x-forwarded-for` instead of replacing it, the first
+ * hop stops being trustworthy: a client could prepend any address it likes,
+ * making rate limiting and duplicate detection both keyed on a value the
+ * requester controls — rotatable by a bot, and usable against a real visitor
+ * by sending their IP to exhaust their limit. Revisit this the day a non-
+ * Vercel proxy enters the path.
+ */
+export function clientIp(h: Headers): string {
+  const vercelForwarded = h.get("x-vercel-forwarded-for");
+  if (vercelForwarded) return vercelForwarded.split(",")[0]!.trim();
+  const forwarded = h.get("x-forwarded-for");
+  if (forwarded) return forwarded.split(",")[0]!.trim();
+  return h.get("x-real-ip") ?? "unknown";
+}
+
+/**
  * Rate limiting needs equality only, so the raw address is never stored.
  *
  * Keyed with the same secret as the render token (HMAC, not a plain hash) so

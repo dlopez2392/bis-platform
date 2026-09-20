@@ -10,19 +10,47 @@
 //     stranger on the public internet; giving that a path into a tenant's
 //     calendar and contacts is a much larger decision than a demo needs, so
 //     the web session is conversation only and says so out loud.
-//   - A hard length. A phone call has a natural end and a per-number daily
-//     cap counted from the `calls` table. A browser tab does not hang up, so
-//     the session carries its own ceiling, told to Sofía AND enforced by the
-//     client.
+//   - A length the model is TOLD but nobody can enforce. A phone call runs
+//     on a socket this server holds, so PHONE_MAX_CALL_SECONDS is a real
+//     ceiling. A browser session does not: this server mints an ephemeral
+//     secret and the browser talks to OpenAI directly, so it is never in
+//     the media loop again — and OpenAI exposes no server-side session
+//     lifetime (verified 2026-09-20). WEB_DEMO_MAX_SECONDS is therefore
+//     ADVISORY: told to Sofía so she paces herself, returned to the client
+//     so a well-behaved page can end the session. A page that does not, or
+//     a client that skips the JS entirely, runs as long as it likes.
+//     What IS enforced — server-side, before a secret is ever minted — is
+//     HOW MANY sessions this route will agree to: see the three caps below
+//     and `voice_web_sessions` (migration 0041).
 //
 // Everything in this file is pure so the wording and the arithmetic are
 // unit-testable without a database, a network, or a browser.
 
 /** How long one web session may run before the client ends it. Three minutes
- *  is long enough to ask a real question and hear a real answer, short
- *  enough that an abandoned tab cannot run up a bill. Sofía is told this
- *  number so she paces the conversation instead of being cut off mid-sentence. */
+ *  is long enough to ask a real question and hear a real answer. Sofía is
+ *  told this number so she paces the conversation instead of being cut off
+ *  mid-sentence — see the file header for why this is advisory, not a cap. */
 export const WEB_DEMO_MAX_SECONDS = 180;
+
+/**
+ * The caps that ARE enforced, all counted in the database before a secret is
+ * minted (`voice_web_sessions`, 0041). They bound the NUMBER of sessions,
+ * which is the only thing this server still controls once the browser is
+ * talking to OpenAI directly.
+ *
+ * Deliberately not env-tunable, unlike the phone path's knobs: those were
+ * tuned against real calls, and there is no comparable traffic here yet.
+ * The day a real number justifies a change, that is a code change with a
+ * reason in its commit message rather than a value someone set in a
+ * dashboard and nobody can explain.
+ */
+export const WEB_SESSION_WINDOW_MS = 600_000;
+/** Per hashed IP, per window. Matches forms' RATE_LIMIT_MAX: a visitor with
+ *  a real question does not need a sixth session in ten minutes. */
+export const WEB_SESSION_MAX_PER_IP = 5;
+/** Per account, per rolling 24h. The per-tenant ceiling: one client's public
+ *  page must not be able to exhaust a shared budget on its own. */
+export const WEB_SESSION_MAX_PER_ACCOUNT_PER_DAY = 200;
 
 /** Wall-clock ceiling in whole minutes, for prose. */
 export function webDemoMinutes(seconds: number = WEB_DEMO_MAX_SECONDS): number {
@@ -80,10 +108,10 @@ export function originAllowed(origin: string | null, allowed: string[]): boolean
 // it. CORS narrows who can ask from a browser; the ticket is what actually
 // authorizes, because CORS is a browser courtesy and curl ignores it.
 //
-// Same shape and the same reasoning as `forms/guards.ts`'s render token: not
-// single-use, because there is no shared replay store in this deployment,
-// but very short-lived — which bounds a stolen ticket to the couple of
-// minutes it takes a real visitor to click.
+// Same shape and the same reasoning as `forms/guards.ts`'s render token, and
+// single-use since 0041: the nonce returned by `verifyTicket` is inserted
+// into `voice_web_sessions`, whose unique index refuses the second use. The
+// short life is still the first line of defence; the store is the second.
 
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 
@@ -102,7 +130,7 @@ export function signTicket(secret: string, nowMs: number, nonce: string = random
 }
 
 export type TicketResult =
-  | { ok: true }
+  | { ok: true; nonce: string }
   | { ok: false; reason: "malformed" | "bad_signature" | "expired" };
 
 export function verifyTicket(
@@ -126,5 +154,9 @@ export function verifyTicket(
   // timestamp, and either way is not something to honour for two minutes.
   const age = nowMs - issued;
   if (age > maxAgeMs || age < -maxAgeMs) return { ok: false, reason: "expired" };
-  return { ok: true };
+  // The nonce rides back out because it is the replay key: the caller
+  // inserts it into voice_web_sessions, whose unique index is what finally
+  // makes this ticket single-use. Until 0041 there was no store to do that
+  // with, which is what the comment at the top of this file used to say.
+  return { ok: true, nonce };
 }
