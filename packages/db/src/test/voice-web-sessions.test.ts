@@ -74,9 +74,26 @@ describe("countWebSessionsByIp / countWebSessionsForAccount", () => {
     const db = serviceDb();
     const orgA = `org_WS_TWOKEY_A_${Math.random().toString(36).slice(2, 10)}`;
     const orgB = `org_WS_TWOKEY_B_${Math.random().toString(36).slice(2, 10)}`;
-    const { id: accountIdA } = await createAccount(db, { clerkOrgId: orgA, name: "Fixture WS Two A", actorId: "user_test" });
-    const { id: accountIdB } = await createAccount(db, { clerkOrgId: orgB, name: "Fixture WS Two B", actorId: "user_test" });
+    // Every id lands here THE MOMENT it is created, and `finally` tears down
+    // everything on this list — not just "the two accounts this test meant
+    // to make". `createAccount` is three round trips (an agency select, the
+    // insert, an emit), any of which can throw for a reason that has
+    // nothing to do with this test (a network blip is enough); if the
+    // SECOND call throws, the FIRST account's row is already committed, and
+    // without this list it would never reach `deleteAccountCascade` —
+    // permanently stranded in the Supabase project this suite shares with
+    // production. `withTestAccount` never has this problem because it
+    // creates exactly one account before its own `try`; this fixture has
+    // two, so it needs its own list.
+    const created: string[] = [];
     try {
+      const a = await createAccount(db, { clerkOrgId: orgA, name: "Fixture WS Two A", actorId: "user_test" });
+      created.push(a.id);
+      const b = await createAccount(db, { clerkOrgId: orgB, name: "Fixture WS Two B", actorId: "user_test" });
+      created.push(b.id);
+      const accountIdA = a.id;
+      const accountIdB = b.id;
+
       const ipHashX = randomIpHash();
       const ipHashY = randomIpHash();
       const since = new Date(Date.now() - 3600_000).toISOString();
@@ -100,8 +117,19 @@ describe("countWebSessionsByIp / countWebSessionsForAccount", () => {
       // ipHashY: 1 row (A only).
       expect(await countWebSessionsByIp(db, ipHashY, since)).toBe(1);
     } finally {
-      await deleteAccountCascade(db, accountIdA, "voice-web-sessions.test.ts");
-      await deleteAccountCascade(db, accountIdB, "voice-web-sessions.test.ts");
+      // Each delete wrapped independently: one account's teardown failing
+      // must not skip the rest, the same reasoning
+      // `account-teardown.ts`'s own comment gives for throwing PER TABLE
+      // (the M1c lesson) rather than swallowing — applied here per ACCOUNT,
+      // since this fixture, unlike `withTestAccount`, manages more than
+      // one.
+      for (const id of created) {
+        try {
+          await deleteAccountCascade(db, id, "voice-web-sessions.test.ts");
+        } catch (e) {
+          console.error(`voice-web-sessions.test.ts cleanup failed for account ${id}: ${String(e)}`);
+        }
+      }
     }
   });
 
