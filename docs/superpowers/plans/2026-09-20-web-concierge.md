@@ -2311,6 +2311,107 @@ without `OPENAI_API_KEY`, locally and in CI). Either the key goes into CI
 secrets, or the first conversation after Branch 2's deploy is a deliberate,
 watched one — never a client's customer.
 
+**How the ten items above become tasks.** Items 1–2, 4–6, 9–10 are the chat
+hardening itself and split by ownership into **Task 5a** (route, accessor,
+e2e) and **Task 5b** (page). Item 3 (iframe timing) belongs to Task 5's
+bubble, because there is no iframe until it exists. Items 7–8 (the toggle's
+gates) belong to Task 6's card. Tasks 5a and 5b run FIRST, and 5b can run
+alongside 5a's review because they touch disjoint files.
+
+---
+
+### Task 5a: Harden the chat before it embeds — route, accessor, e2e
+
+**Files:**
+- Create: `apps/web/src/lib/concierge/lead.ts` — `fileLead` extracted from the route, unchanged in behaviour.
+- Create: `apps/web/src/lib/concierge/lead.test.ts` — direct unit tests with DISTINCT ids and a non-null origin.
+- Modify: `apps/web/src/app/api/concierge/[publicId]/turn/route.ts` — import `fileLead`; the 429 and too-fast bodies.
+- Modify: `apps/web/src/app/api/concierge/[publicId]/turn/route.test.ts`.
+- Modify: `apps/web/src/lib/concierge/strings.ts` + `strings.test.ts` — two new keys, en/es.
+- Modify: `apps/web/src/lib/voice/system-prompt.ts:73` + `system-prompt.test.ts` — the Spanish-only "caller".
+- Modify: `packages/db/src/concierge.ts:79-82` + `packages/db/src/test/concierge.test.ts` — the 42501 branch.
+- Modify: `apps/web/e2e/concierge.spec.ts` — one read of `.bis-concierge-ended`'s text on the expired path.
+
+**Interfaces:**
+- Consumes: everything Branch 1 shipped, at `main` `35cee85`.
+- Produces, for Task 5b: two new `ConciergeStrings` keys — `rateLimited` ("You've started a few conversations recently — please try again in a little while." / es) and `tooFast` ("That came through before the page finished loading — please send it again." / es) — and the route contract that a `429` body is `{ error: "rate_limited" }` (unchanged) so the page can map it to `strings.rateLimited`.
+
+- [ ] **Step 1: Write the failing `lead.test.ts`**
+
+Extract nothing yet. Write `apps/web/src/lib/concierge/lead.test.ts` against the signature the route's inner `fileLead` already has — read `route.ts` for its exact `ctx` shape and return type before writing. Fixtures MUST use distinct literals: `accountId: "acct-A"`, `formId: "form-then"`, a `PROFILE`-shaped object whose `concierge_form_id` is `"form-now"` if the function takes one, `origin: "https://app.example"`. Mock `@bis/db` with `vi.hoisted`. Tests, each naming its mutation:
+
+```ts
+it("files against the form id it was GIVEN, never the profile's current one", …)
+  // MUTATION: read the profile's form → expected 'form-then', got 'form-now' → FAILS
+it("passes the caller's origin to enrich as the sixth argument, verbatim", …)
+  // MUTATION: pass null → FAILS
+it("passes consentWithheld TRUE regardless of the form's fields", …)
+  // MUTATION: derive it from fields → FAILS
+it("returns false and deletes the orphan when the slot was already claimed", …)
+  // MUTATION: skip the delete → FAILS on dbFns.delete not called
+it("returns false without touching enrich when the form is not published", …)
+it("writes consent in #99's shape — every consent field given:false — not []", …)
+  // Item 10. Read api/intake/[publicId]/route.ts:117-121 for the exact shape.
+```
+
+Run: `pnpm --filter web exec vitest run lib/concierge/lead` — FAIL, module not found.
+
+- [ ] **Step 2: Extract `fileLead` and make the tests pass**
+
+Move the function body from `route.ts` into `lead.ts` with NO behavioural change except item 10 (consent shape). Export it. The route imports it. `route.test.ts` keeps passing — run it to prove the extraction is behaviour-preserving before touching anything else. Then run the six mutations above, one at a time, revert each.
+
+- [ ] **Step 3: The two sentences — items 1 (route half) and 4**
+
+Add `rateLimited` and `tooFast` to `strings.ts` (en/es). In the route, the too-fast branch (`verdict.ok && elapsed < MIN_FILL_MS`) answers `closing: strings.tooFast` with `ended: false` — the visitor keeps the composer and simply sends again; this is NOT a spam signal on its own and must not close the chat. The honeypot and bad-signature branches stay as they are. Tests: the too-fast case asserts the exact body and `ended: false`; the honeypot case still asserts `ended: true` — the two must differ, and the mutation that collapses them goes RED. `strings.test.ts`'s jargon scan covers the new keys.
+
+- [ ] **Step 4: Item 6 — the Spanish-only branch**
+
+`system-prompt.ts:73`: `${audienceWord}` in place of "caller". Test with `languages: "es", medium: "web"` asserting `not.toContain("caller")` and `toContain("visitor")`; and with `languages: "es"` and no medium asserting the phone line is byte-identical to before (the existing identity test covers the bilingual input only — add the `es` input to it).
+
+- [ ] **Step 5: Item 9 — the 42501 branch**
+
+`packages/db/src/concierge.ts:79`: make the MESSAGE the discriminator (`error.message?.includes("does not belong to this account")`) and keep the code as corroborator; when the code is 42501 but the message is NOT ours, rethrow with the true text — "permission denied for function concierge_enable" must reach a log, not be rewritten as "not yours". Test: a mocked 42501 with a foreign message rejects with that message verbatim. MUTATION: revert to the OR → FAILS.
+
+- [ ] **Step 6: Item 5 (e2e half) — the one render assertion the repo lacked**
+
+In `concierge.spec.ts`'s page-renders test (the half that runs without a key): mint a render token older than `MAX_TOKEN_AGE_MS` is not possible from the browser — instead, drive the expired path by posting turn 1 through `page.request` with a token signed at `Date.now() - 31 * 60_000` (import `signRenderToken` in the spec; it is server code but pure), then assert `page.locator(".bis-concierge-ended")` has text equal to `conciergeStrings("en").expired` and that `.bis-msg-assistant` count did not grow. This is the assertion that would have caught the two JSX mutations the round-3 review named. Per-run fixture account, as before.
+
+- [ ] **Step 7: Gates, one at a time, exit codes from files** — `pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e`, after `gh run list --limit 3` shows nothing in progress. Report counts and whether a "skipped" line appeared.
+
+- [ ] **Step 8: Commit** (trailer verbatim; `git add` explicit paths).
+
+---
+
+### Task 5b: Harden the chat before it embeds — the page
+
+**Files:**
+- Modify: `apps/web/src/app/c/[publicId]/concierge-chat.tsx`
+- Modify: `apps/web/src/app/c/[publicId]/concierge-chat.test.ts`
+
+**Interfaces:**
+- Consumes from Task 5a: `strings.rateLimited`. If 5a has not landed when this starts, add the key yourself with the same text — the two land on one branch and the second to merge reconciles.
+- Produces: nothing later depends on it.
+
+- [ ] **Step 1: Item 1 (page half) — persist the conversation**
+
+`conversationId` moves from a `useRef` to `sessionStorage` under the key `bis-concierge:<publicId>`, read on mount inside `try/catch` (a private window throws on access), written whenever the route returns one, and CLEARED when the route returns `ended: true`. A page reload mid-conversation continues it; a new tab after the close starts fresh. Extract the read/write/clear into a pure `conversationStore(publicId)` helper in the same file so it is testable without DOM: tests for "returns null when storage throws", "round-trips an id", "clears on ended". MUTATION: drop the `try/catch` → the throwing-storage test FAILS.
+
+- [ ] **Step 2: Item 1 — the 429 sentence**
+
+`if (!res.ok) throw` becomes: on `429`, show `strings.rateLimited` as the closing line WITHOUT disabling the composer and without `ended` (the visitor may try later on the same conversation); on anything else, the existing `unavailable` path. Extend `pickTurnUpdate` (or add a sibling) so the decision is a pure function with a test: `{ status: 429 }` → `{ closing: rateLimited, ended: false }`. MUTATION: treat 429 as unavailable → FAILS.
+
+- [ ] **Step 3: Item 5 (page half) — drop the fallback**
+
+`{ended && <p className="bis-concierge-ended">{endedMessage ?? strings.ended}</p>}` becomes `{ended && endedMessage && <p …>{endedMessage}</p>}`. A wiring regression now renders NOTHING rather than the wrong sentence, and Task 5a's Playwright read is what catches it. Update the `pickTurnUpdate` test that asserts the ended shape so it asserts `closing` is non-empty on every ended input.
+
+- [ ] **Step 4: Verify** — `pnpm --filter web exec vitest run app/c/` green; `pnpm -r typecheck` exit 0. Both themes and the blur fallback unchanged (no style change here — say so). No gates beyond typecheck; Task 5a's Step 7 covers the branch.
+
+- [ ] **Step 5: Commit** (trailer verbatim; explicit paths).
+
+---
+
+Then **Task 5** (the bubble — now including the iframe-timing item: preload the frame at page load, or exempt turn 1 from the fill floor when the token is fresh; decide and test) and **Task 6** (the card — now including the non-empty-greeting gate and the two-sentence rendering of `enableConcierge`'s failures), as written below.
+
 ### Task 5: The floating bubble, and one snippet component instead of three
 
 **Files:**
