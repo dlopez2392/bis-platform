@@ -77,13 +77,28 @@ export interface CallState {
    * because it changes what the call was rather than what we did about it.
    */
   recordedCaller: boolean;
+  /**
+   * The caller's IN-FLIGHT turn, as far as the transcriber has got.
+   *
+   * The Realtime API streams `conversation.item.input_audio_transcription.delta`
+   * frames while the caller is still speaking and one `.completed` frame when
+   * they stop. Until this existed the recording guard (`recorded-message.ts`)
+   * could only judge the `.completed` text — which, for a robot delivering a
+   * 470-character script as one turn, arrives at the moment the robot would
+   * have hung up anyway. #88 fixed the label, not the bill. This buffer is
+   * what lets `call-events.ts` judge the prefix instead.
+   *
+   * Keyed by `itemId` so a stale prefix from one turn is never glued onto the
+   * next. `null` between turns. Never read by classifyOutcome.
+   */
+  pendingCallerTurn: { itemId: string; text: string } | null;
   summary?: string;
 }
 
 export function emptyCallState(): CallState {
   return {
     contactId: null, bookings: [], leads: [], messages: [], transcript: [],
-    served: [], recordedCaller: false,
+    served: [], recordedCaller: false, pendingCallerTurn: null,
   };
 }
 
@@ -142,6 +157,22 @@ export function withMessage(state: CallState, msg: TakenMessage): CallState {
 
 export function withTranscript(state: CallState, ev: TranscriptEvent): CallState {
   return { ...state, transcript: [...state.transcript, ev] };
+}
+
+/**
+ * Appends one transcription delta to the in-flight caller turn. A delta for a
+ * DIFFERENT item starts a fresh buffer — the previous turn's text is not
+ * carried, because it was never part of this utterance.
+ */
+export function withCallerDelta(state: CallState, itemId: string, delta: string): CallState {
+  const pending = state.pendingCallerTurn;
+  const text = pending && pending.itemId === itemId ? pending.text + delta : delta;
+  return { ...state, pendingCallerTurn: { itemId, text } };
+}
+
+/** The turn has been completed (or the call ended) — nothing is in flight. */
+export function clearPendingCallerTurn(state: CallState): CallState {
+  return { ...state, pendingCallerTurn: null };
 }
 
 /** Deduplicated: two lookups in one call are still one served caller. */
