@@ -33,6 +33,7 @@ describe("inQuietWindow — the default window, crossing midnight, on Chicago's 
 
   it("a window that does NOT cross midnight (13:00–15:00) is quiet only between those hours", () => {
     const s = { enabled: true, start: "13:00", end: "15:00" };
+    expect(inQuietWindow(at("2026-09-21T18:00:00Z"), CHI, s)).toBe(true);    // 13:00 CDT exactly — the start edge is inside on this branch too
     expect(inQuietWindow(at("2026-09-21T19:00:00Z"), CHI, s)).toBe(true);    // 14:00 CDT
     expect(inQuietWindow(at("2026-09-21T17:59:00Z"), CHI, s)).toBe(false);   // 12:59 CDT
     expect(inQuietWindow(at("2026-09-21T20:00:00Z"), CHI, s)).toBe(false);   // 15:00 CDT
@@ -88,6 +89,29 @@ describe("quietWindowEnd — the next 08:00 on the wall clock, as a UTC instant"
     expect(formatInstantClock(end, CHI)).toBe("8:00 AM");
   });
 
+  it("the requested end falls IN the spring-forward gap (Chicago 02:00→03:00): the answer is the gap's end, not a pre-gap instant an hour early", () => {
+    // measured: the naive two-iteration fixed point for 2026-03-08 02:30 (Chicago) converges
+    // to 2026-03-08T07:30:00Z, which READS 01:30 local — an hour BEFORE the requested 02:30,
+    // because 02:30 never happens that day (01:59:59 CST jumps straight to 03:00:00 CDT).
+    const end = quietWindowEnd(at("2026-03-08T07:30:00Z"), CHI, { enabled: true, start: "21:00", end: "02:30" })!;
+    expect(end.toISOString()).toBe("2026-03-08T08:00:00.000Z");   // the gap's end: 03:00 CDT
+    expect(formatInstantClock(end, CHI)).toBe("3:00 AM");
+  });
+
+  it("the requested end falls IN Havana's own midnight gap (00:00→01:00): the answer is never in the past relative to now", () => {
+    // Havana springs forward at local midnight on 2026-03-08 (23:59:59 CST on the 7th jumps
+    // straight to 01:00:00 CDT on the 8th), so a window ending at "00:00" asked for that date
+    // requests a wall time that never happens. Measured: 2026-03-08T04:30:00Z reads 23:30 on
+    // 2026-03-07 in America/Havana (this is the corrected instant for "23:30 local the night
+    // Havana springs forward" — 2026-03-08T03:30:00Z, as originally suggested, actually reads
+    // 22:30 local, still inside the window but not the instant described).
+    const now = at("2026-03-08T04:30:00Z");
+    const end = quietWindowEnd(now, "America/Havana", { enabled: true, start: "21:00", end: "00:00" })!;
+    expect(end.getTime()).toBeGreaterThanOrEqual(now.getTime());   // never in the past relative to now
+    expect(end.toISOString()).toBe("2026-03-08T05:00:00.000Z");    // the gap's end: 01:00 CDT
+    expect(formatInstantClock(end, "America/Havana")).toBe("1:00 AM");
+  });
+
   it("east and west of UTC: the end lands on the wall clock's 08:00 in each zone", () => {
     expect(quietWindowEnd(at("2026-09-21T14:00:00Z"), "Asia/Tokyo", DEFAULT)?.toISOString()).toBe("2026-09-21T23:00:00.000Z");     // 08:00 JST Sept 22
     expect(quietWindowEnd(at("2026-09-21T09:00:00Z"), "Pacific/Honolulu", DEFAULT)?.toISOString()).toBe("2026-09-21T18:00:00.000Z"); // 08:00 HST Sept 21
@@ -101,5 +125,8 @@ describe("formatting", () => {
     expect(formatClock("00:30")).toBe("12:30 AM");
     expect(formatClock("junk")).toBe("junk");   // never throws; the raw value is better than a crash on a settings page
     expect(formatInstantClock(at("2026-09-22T13:00:00Z"), CHI)).toBe("8:00 AM");
+    expect(formatInstantClock(at("2026-09-22T13:00:00Z"), "Asia/Tokyo")).toBe("10:00 PM");
+    expect(formatInstantClock(at("2026-09-22T13:00:00Z"), "Mars/Olympus")).toBe("1:00 PM");   // unresolvable zone → UTC fallback
+    expect(formatInstantClock(new Date(NaN), CHI)).toBe("?");   // never throws; matches formatClock's own contract
   });
 });
