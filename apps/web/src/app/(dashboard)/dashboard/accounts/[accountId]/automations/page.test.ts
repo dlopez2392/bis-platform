@@ -18,7 +18,9 @@ vi.mock("@/lib/email/origin", () => ({ originFrom: () => "https://app.example.co
 const dbFixture = vi.hoisted(() => ({
   name: "Rio Roofing — trial", timezone: "America/Chicago", brandName: null as string | null,
 }));
-const dbMock = vi.hoisted(() => ({ getAutomation: vi.fn(), getBranding: vi.fn(), getCalendarForAccount: vi.fn() }));
+const dbMock = vi.hoisted(() => ({
+  getAutomation: vi.fn(), getBranding: vi.fn(), getCalendarForAccount: vi.fn(), readQuietSettings: vi.fn(),
+}));
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({
     from: () => ({
@@ -30,6 +32,8 @@ vi.mock("@bis/db", () => ({
   getAutomation: (...a: unknown[]) => dbMock.getAutomation(...a),
   getBranding: (...a: unknown[]) => dbMock.getBranding(...a),
   getCalendarForAccount: (...a: unknown[]) => dbMock.getCalendarForAccount(...a),
+  readQuietSettings: (...a: unknown[]) => dbMock.readQuietSettings(...a),
+  DEFAULT_QUIET_SETTINGS: { enabled: true, start: "21:00", end: "08:00" },
 }));
 vi.mock("@/lib/sms/sender", () => ({
   resolveSmsSender: async () => ({ ok: false, reason: "a2p_not_approved" }),
@@ -39,11 +43,13 @@ vi.mock("./actions", () => ({
   saveNoShowNudgeAction: async () => ({ ok: true }),
   saveSmsReminderAction: async () => ({ ok: true }),
   saveInstantReplyAction: async () => ({ ok: true }),
+  saveQuietHoursAction: async () => ({ ok: true }),
 }));
 
 type Props = Record<string, unknown>;
 const captured = vi.hoisted(() => ({
   review: null as Props | null, noShow: null as Props | null, sms: null as Props | null, instant: null as Props | null,
+  quiet: null as Props | null,
 }));
 vi.mock("./automations-settings", () => ({
   AutomationsSettings: (props: Props) => { captured.review = props; return null; },
@@ -57,6 +63,9 @@ vi.mock("./sms-reminder-card", () => ({
 vi.mock("./instant-reply-card", () => ({
   InstantReplyCard: (props: Props) => { captured.instant = props; return null; },
 }));
+vi.mock("./quiet-hours-card", () => ({
+  QuietHoursCard: (props: Props) => { captured.quiet = props; return null; },
+}));
 
 const { default: AutomationsPage } = await import("./page");
 
@@ -69,7 +78,7 @@ const ROWS: Record<string, AutomationRow> = {
 };
 
 async function render() {
-  captured.review = captured.noShow = captured.sms = captured.instant = null;
+  captured.review = captured.noShow = captured.sms = captured.instant = captured.quiet = null;
   renderToStaticMarkup(await AutomationsPage({ params: Promise.resolve({ accountId: "a1" }) }));
   return captured;
 }
@@ -84,6 +93,7 @@ beforeEach(() => {
     brandCorners: null, brandType: null, brandMode: null, replyToEmail: null,
   }));
   dbMock.getCalendarForAccount.mockReset().mockResolvedValue({ id: "cal_1", public_id: "cal_pub_1", enabled: true });
+  dbMock.readQuietSettings.mockReset().mockResolvedValue({ enabled: true, start: "22:30", end: "06:15" });
 });
 
 describe("automations page", () => {
@@ -150,5 +160,27 @@ describe("automations page — no calendar yet", () => {
     dbMock.getCalendarForAccount.mockResolvedValue(null);
     const c = await render();
     expect(c.instant).not.toBeNull();
+  });
+});
+
+describe("the Quiet hours card", () => {
+  it("receives the STORED window (not the defaults) and the account's zone, and links to Activity (mutation: pass DEFAULT_QUIET_SETTINGS → FAILS)", async () => {
+    const { quiet } = await render();
+    expect(quiet).toMatchObject({ settings: { enabled: true, start: "22:30", end: "06:15" }, zoneLabel: "America/Chicago" });
+    expect(dbMock.readQuietSettings).toHaveBeenCalledWith(expect.anything(), "a1");
+  });
+  it("the page links to What went out", async () => {
+    // `render()` captures props only; render the page's markup once for the link.
+    const html = renderToStaticMarkup(await AutomationsPage({ params: Promise.resolve({ accountId: "a1" }) }));
+    expect(html).toContain('href="/dashboard/accounts/a1/activity"');
+    expect(html).toContain("See what went out");
+  });
+  it("a failed settings read degrades to the defaults and says so in the log, never a blank page", async () => {
+    dbMock.readQuietSettings.mockRejectedValue(new Error("down"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { quiet } = await render();
+    expect(quiet).toMatchObject({ settings: { enabled: true, start: "21:00", end: "08:00" } });
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
+    spy.mockRestore();
   });
 });
