@@ -3889,7 +3889,7 @@ export function QuietHoursCard({
 
 - [ ] **Step 3: The page — tests first**
 
-In `page.test.ts`: `dbMock` gains `readQuietSettings: vi.fn()` (resolving `{ enabled: true, start: "22:30", end: "06:15" }` in `beforeEach` — NOT the defaults, so a page that dropped the read and rendered the defaults cannot pass); the `@bis/db` factory mock gains `readQuietSettings: (...a) => dbMock.readQuietSettings(...a)`; `./actions` mock gains `saveQuietHoursAction: async () => ({ ok: true })`; add `vi.mock("./quiet-hours-card", () => ({ QuietHoursCard: (props: Props) => { captured.quiet = props; return null; } }));` and `quiet: null as Props | null` to `captured` (reset in `render()`). Append:
+In `page.test.ts`: `dbMock` gains `readQuietSettings: vi.fn()` (resolving `{ enabled: true, start: "22:30", end: "06:15" }` in `beforeEach` — NOT the defaults, so a page that dropped the read and rendered the defaults cannot pass); the `@bis/db` factory mock gains `readQuietSettings: (...a) => dbMock.readQuietSettings(...a)` AND `DEFAULT_QUIET_SETTINGS: { enabled: true, start: "21:00", end: "08:00" }` (a bare factory returns `undefined` for any export it omits, and the page imports that VALUE for its degrade path); `./actions` mock gains `saveQuietHoursAction: async () => ({ ok: true })`; add `vi.mock("./quiet-hours-card", () => ({ QuietHoursCard: (props: Props) => { captured.quiet = props; return null; } }));` and `quiet: null as Props | null` to `captured` (reset in `render()`). Append:
 
 ```ts
 describe("the Quiet hours card", () => {
