@@ -418,6 +418,13 @@ test("the Voice page's checkbox turns the assistant off and back on, through the
     async () => (await getVoiceProfile(db, widget!.accountId))?.concierge_form_id,
     { message: "concierge_form_id never matched the fixture's form" },
   ).toBe(widget!.formId);
+  // The UI check above reads the action's own return value echoed back —
+  // it would still pass if `enableConcierge` returned one id but persisted
+  // another. This reads the ROW itself, so that divergence cannot hide.
+  await expect.poll(
+    async () => (await getVoiceProfile(db, widget!.accountId))?.public_id,
+    { message: "public_id in the database never matched the fixture's public id" },
+  ).toBe(widget!.publicId);
 
   // Leave it ON: `afterAll` restores the profile regardless, but the
   // "embedded" describe below runs after this test in the same file and
