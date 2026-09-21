@@ -5,7 +5,8 @@ import { serviceDb } from "../service";
 import {
   recordAutomationLog, listReleasableHolds, bumpHeldForAccount, listAutomationLog, countAutomationUsage,
 } from "../automation-log";
-import { readQuietSettings, saveQuietSettings, DEFAULT_QUIET_SETTINGS } from "../automation-settings";
+import { readQuietSettings, saveQuietSettings } from "../automation-settings";
+import { createContact } from "../contacts";
 
 /**
  * 0046 at the level that can see it. Unit tests that mock the db are blind
@@ -86,6 +87,19 @@ describe("0046 grants", () => {
           { grantee: "service_role", privilege_type: "TRUNCATE" },
           { grantee: "service_role", privilege_type: "UPDATE" },
         ]);
+      }));
+
+    // information_schema.role_table_grants does not report MAINTAIN at all
+    // (it is not one of the privilege_type values that view enumerates), so
+    // the "holds EXACTLY select" test above is blind to it — this is the
+    // only assertion in the file that can see PG17's default ACL handing
+    // authenticated the `m` bit alongside `arwdDxt`. has_table_privilege
+    // reads the real ACL directly, bypassing that view's blind spot.
+    it(`${table}: authenticated does not hold MAINTAIN (invisible to role_table_grants; mutation: enumerate the revoke like 0025 → FAILS)`, () =>
+      withRollback(async (c) => {
+        const { rows } = await c.query<{ m: boolean }>(
+          `select has_table_privilege('authenticated', 'public.${table}', 'MAINTAIN') as m`);
+        expect(rows[0]!.m).toBe(false);
       }));
   }
 });
@@ -221,9 +235,14 @@ describe("0046 accessors, live (serviceDb under withTestAccount)", () => {
 
   it("listAutomationLog pages newest-first on (occurred_at, id) with no overlap and no skip, and carries the contact's name", async () => {
     await withTestAccount(async (db, accountId) => {
-      for (const k of ["1", "2", "3"]) {
-        await recordAutomationLog(db, { accountId, source: "voice", channel: "ai", contactId: null, subjectKey: `call:${k}`, status: "sent" });
-      }
+      // Real contacts, so the `contacts(first_name, last_name)` embed in
+      // listAutomationLog is actually exercised (not just written with
+      // contactId: null every time, which would leave the join dark).
+      const maria = await createContact(db, accountId, { firstName: "Maria", lastName: "Garcia" }, "user_test");
+      const solo = await createContact(db, accountId, { firstName: "Solo" }, "user_test");
+      await recordAutomationLog(db, { accountId, source: "voice", channel: "ai", contactId: maria.id, subjectKey: "call:1", status: "sent" });
+      await recordAutomationLog(db, { accountId, source: "voice", channel: "ai", contactId: solo.id, subjectKey: "call:2", status: "sent" });
+      await recordAutomationLog(db, { accountId, source: "voice", channel: "ai", contactId: null, subjectKey: "call:3", status: "sent" });
       const page1 = await listAutomationLog(db, accountId, { limit: 2 });
       expect(page1).toHaveLength(2);
       const last = page1[1]!;
@@ -231,7 +250,11 @@ describe("0046 accessors, live (serviceDb under withTestAccount)", () => {
       const seen = [...page1, ...page2].map((r) => r.subject_key);
       expect(new Set(seen).size).toBe(3);
       expect(page2).toHaveLength(1);
+      // Newest first: call:3 (no contact) → call:2 (Solo, no last name) →
+      // call:1 (Maria Garcia).
       expect(page1[0]!.contact_name).toBeNull();
+      expect(page1[1]!.contact_name).toBe("Solo");
+      expect(page2[0]!.contact_name).toBe("Maria Garcia");
     });
   });
 
@@ -261,10 +284,18 @@ describe("0046 accessors, live (serviceDb under withTestAccount)", () => {
 
   it("readQuietSettings returns the defaults for an account with no row, and the saved window after a save", async () => {
     await withTestAccount(async (db, accountId) => {
-      expect(await readQuietSettings(db, accountId)).toEqual(DEFAULT_QUIET_SETTINGS);
+      // The literal, not DEFAULT_QUIET_SETTINGS: comparing the accessor's
+      // output to the same constant it reads internally would pass even if
+      // both drifted from the migration's actual column defaults together.
+      expect(await readQuietSettings(db, accountId)).toEqual({ enabled: true, start: "21:00", end: "08:00" });
+      // "WITHOUT writing one" — asserted, not assumed: no row exists yet.
+      const before = await db.from("automation_settings").select("account_id").eq("account_id", accountId);
+      expect(before.error).toBeNull();
+      expect(before.data).toEqual([]);
       await saveQuietSettings(db, accountId, { enabled: true, start: "22:30", end: "06:15" }, "user_test");
       expect(await readQuietSettings(db, accountId)).toEqual({ enabled: true, start: "22:30", end: "06:15" });
-      const { data: ev } = await db.from("events").select("type").eq("account_id", accountId).eq("type", "automation_settings.updated");
+      const { data: ev, error: evErr } = await db.from("events").select("type").eq("account_id", accountId).eq("type", "automation_settings.updated");
+      expect(evErr).toBeNull();
       expect(ev).toHaveLength(1);
     });
   });

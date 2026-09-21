@@ -63,16 +63,20 @@ create index automation_log_account_occurred_idx
 create index automation_log_held_idx
   on public.automation_log (held_until) where status = 'held';
 
--- Grants copy 0025 (automations): authenticated SELECT under RLS, nothing
--- else; anon nothing. Supabase's default ACL hands ALL to every role on a
--- new table (the 0020 lesson), so the revokes live HERE.
+-- Grants copy 0040 (call_proposals): revoke all, then grant select — the
+-- enumerated revoke 0025 used leaves PG17's MAINTAIN behind. Supabase's
+-- default ACL hands ALL to every role on a new table (the 0020 lesson), and
+-- on this project (PostgreSQL 17.6) that default is `arwdDxtm` — the `m` is
+-- MAINTAIN, which `information_schema.role_table_grants` does not report at
+-- all, so an enumerated revoke that lists every OTHER privilege (0025's
+-- shape) silently leaves it granted. `revoke all` closes every privilege at
+-- once, MAINTAIN included, and `grant select` reopens only what authenticated
+-- needs.
 alter table public.automation_log enable row level security;
 create policy automation_log_tenant on public.automation_log for select to authenticated
   using (app.is_agency() or account_id = app.current_account_id());
+revoke all on public.automation_log from anon, authenticated;
 grant select on public.automation_log to authenticated;
-revoke insert, update, delete, truncate, references, trigger
-  on public.automation_log from authenticated;
-revoke all on public.automation_log from anon;
 
 
 -- automation_settings: the quiet-hours window. One row per account, and a
@@ -94,10 +98,11 @@ create table public.automation_settings (
 comment on table public.automation_settings is
   'Per-account automation settings: the quiet-hours window every customer-facing automated send obeys (held, never skipped). Missing row = defaults. Agency-edited through serviceDb(); authenticated reads its own under RLS.';
 
+-- Grants copy 0040 (call_proposals): revoke all, then grant select — see
+-- the identical comment above automation_log for why the enumerated shape
+-- 0025 used is wrong on PG17.
 alter table public.automation_settings enable row level security;
 create policy automation_settings_tenant on public.automation_settings for select to authenticated
   using (app.is_agency() or account_id = app.current_account_id());
+revoke all on public.automation_settings from anon, authenticated;
 grant select on public.automation_settings to authenticated;
-revoke insert, update, delete, truncate, references, trigger
-  on public.automation_settings from authenticated;
-revoke all on public.automation_settings from anon;

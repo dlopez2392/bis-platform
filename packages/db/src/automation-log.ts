@@ -40,9 +40,14 @@ export type AutomationLogWrite = {
 
 /**
  * UPSERT on the subject key: the same subject written again REPLACES its
- * row (status, reason, held_until, payload, occurred_at). That is the whole
- * "one line per subject" contract, so a caller never has to know whether a
- * row exists. `occurred_at` is the moment of the latest transition.
+ * row — channel, contact_id, status, reason, held_until, payload, and
+ * occurred_at all take the NEW write's values, none of the old row's. That
+ * is the whole "one line per subject" contract, so a caller never has to
+ * know whether a row exists. `occurred_at` is the moment of the latest
+ * transition. Because contact_id is replaced too, a release that already
+ * knows the contact must pass it again on every write for the same
+ * subject — omit it on the second write and the history line loses its
+ * name, even though the first write had it.
  */
 export async function recordAutomationLog(db: SupabaseClient, w: AutomationLogWrite): Promise<void> {
   if ((w.status === "held") !== Boolean(w.heldUntil)) {
@@ -88,13 +93,28 @@ export type AutomationLogCursor = { occurredAt: string; id: string };
 export type AutomationLogListRow = AutomationLogRow & { contact_name: string | null };
 
 /**
+ * Escapes a value for embedding inside a PostgREST `.or()` filter string —
+ * the same rule contacts.ts's private `quoteFilterValue` uses (double-quote
+ * the value, backslash-escape a literal `\` or `"` inside it, backslash
+ * first so an input holding both round-trips either way). Not exported from
+ * there — inlined here so this accessor is safe standing alone, not merely
+ * safe because of what currently calls it.
+ */
+function quoteFilterValue(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+/**
  * The history page, newest first, keyset on (occurred_at desc, id desc) so
  * two rows in one instant cannot skip across a page edge. Runs under the
  * CALLER's client (RLS) — never serviceDb() on the in-account surface.
  *
- * `before.occurredAt` is interpolated into a PostgREST `.or()` inside double
- * quotes; the page validates it as a timestamp (parseTimeCursor) and the id
- * as a uuid (parseCursor) BEFORE it reaches here — the contacts list's rule.
+ * `before.occurredAt` is escaped with `quoteFilterValue` before it is
+ * interpolated into a PostgREST `.or()` string — belt AND suspenders: the
+ * page also validates it as a timestamp (parseTimeCursor) and the id as a
+ * uuid (parseCursor) BEFORE it reaches here, but that is defence in depth,
+ * not the only defence, since this function has no way to know its caller
+ * did so.
  */
 export async function listAutomationLog(
   db: SupabaseClient, accountId: string, opts: { limit: number; before?: AutomationLogCursor },
@@ -103,9 +123,10 @@ export async function listAutomationLog(
     .select(`${LOG_COLS}, contacts(first_name, last_name)`)
     .eq("account_id", accountId);
   if (opts.before) {
+    const at = quoteFilterValue(opts.before.occurredAt);
     q = q.or(
-      `occurred_at.lt."${opts.before.occurredAt}",`
-      + `and(occurred_at.eq."${opts.before.occurredAt}",id.lt.${opts.before.id})`,
+      `occurred_at.lt.${at},`
+      + `and(occurred_at.eq.${at},id.lt.${opts.before.id})`,
     );
   }
   const { data, error } = await q
