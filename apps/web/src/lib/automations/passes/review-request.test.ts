@@ -399,6 +399,17 @@ describe("review request — quiet hours and release", () => {
     ].sort());
   });
 
+  it("release: a still-cooling-down SMS review request leaves the queue as a real skip rather than staying silently held (mutation: drop the guarded logSkipped call in the cooldown branch → FAILS)", async () => {
+    dbMocks.getDueReviewRequestById.mockResolvedValue({
+      due: row({ config: { channel: "sms", reviewUrl: URL }, smsFailedAt: new Date(TICK.getTime() - 60 * 60 * 1000).toISOString() }),
+    });
+    expect(await releaseReviewRequest(ctx(), heldRow("sms"))).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      subjectKey: "booking:bk_r1", status: "skipped", reason: "Waiting before trying this text again",
+    }));
+  });
+
   it("release: the recipe was turned off → 'This automation was turned off'", async () => {
     dbMocks.getDueReviewRequestById.mockResolvedValue({ due: null, why: "off" });
     expect(await releaseReviewRequest(ctx(), heldRow("email"))).toBe("skipped");

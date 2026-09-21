@@ -1,12 +1,15 @@
 import { headers } from "next/headers";
 import Link from "next/link";
-import { serviceDb, getAutomation, getBranding, getCalendarForAccount, readQuietSettings, type QuietSettings } from "@bis/db";
+import {
+  serviceDb, getAutomation, getBranding, getCalendarForAccount, readQuietSettings,
+  type AutomationRow, type CalendarRow, type QuietSettings,
+} from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { brandDisplayName } from "@/lib/email/templates/shell";
 import { originFrom } from "@/lib/email/origin";
-import { resolveSmsSender } from "@/lib/sms/sender";
+import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
 import { m } from "@/lib/messages";
 import { AutomationsSettings } from "./automations-settings";
 import { NoShowNudgeCard } from "./no-show-nudge-card";
@@ -36,11 +39,29 @@ export default async function AutomationsPage({
   await requireAgencyOnlyAccountAccess(accountId);
 
   const db = serviceDb();
+  // Every read below degrades to the value its own card already renders as
+  // "nothing configured" — a null AutomationRow, a refused SmsGate, a null
+  // calendar, an empty origin — so one transient Supabase hiccup on ANY of
+  // these can no longer 500 the whole agency page; only the one card that
+  // lost its read shows the degraded state, and the log line carries the
+  // account id so the hiccup is still visible.
   const [review, noShow, smsReminder, instantReply, account, smsGate, calendar, origin, quiet] = await Promise.all([
-    getAutomation(db, accountId, "review_request"),
-    getAutomation(db, accountId, "no_show_nudge"),
-    getAutomation(db, accountId, "sms_reminder"),
-    getAutomation(db, accountId, "instant_reply"),
+    getAutomation(db, accountId, "review_request").catch((e): AutomationRow | null => {
+      console.error(`automations: review_request read failed for ${accountId}: ${String(e)}`);
+      return null;
+    }),
+    getAutomation(db, accountId, "no_show_nudge").catch((e): AutomationRow | null => {
+      console.error(`automations: no_show_nudge read failed for ${accountId}: ${String(e)}`);
+      return null;
+    }),
+    getAutomation(db, accountId, "sms_reminder").catch((e): AutomationRow | null => {
+      console.error(`automations: sms_reminder read failed for ${accountId}: ${String(e)}`);
+      return null;
+    }),
+    getAutomation(db, accountId, "instant_reply").catch((e): AutomationRow | null => {
+      console.error(`automations: instant_reply read failed for ${accountId}: ${String(e)}`);
+      return null;
+    }),
     // The default bodies name the company. Resolved through brandDisplayName
     // exactly as the passes' due-rows are (packages/db) — the brand name and
     // nothing else, so the preview cannot show what the send cannot, and a
@@ -63,17 +84,27 @@ export default async function AutomationsPage({
       }
     })(),
     // The same gate the passes consult, so the page can say up front why a
-    // text would be skipped.
-    resolveSmsSender(db, accountId),
+    // text would be skipped. Degrades to the same refusal `resolveSmsSender`
+    // itself returns for a missing/unreadable row (fail closed).
+    resolveSmsSender(db, accountId).catch((e): SmsGate => {
+      console.error(`automations: sms sender read failed for ${accountId}: ${String(e)}`);
+      return { ok: false, reason: "a2p_not_approved" };
+    }),
     // READ-ONLY: a settings page must not create the calendar row on a GET.
     // A company that has never opened Calendar has no row yet; the nudge
     // card then shows its "booking page is off" state and the other two
     // cards render regardless.
-    getCalendarForAccount(db, accountId),
+    getCalendarForAccount(db, accountId).catch((e): CalendarRow | null => {
+      console.error(`automations: calendar read failed for ${accountId}: ${String(e)}`);
+      return null;
+    }),
     // APP_ORIGIN first, then the request's host — the same origin every
     // customer link carries (origin.ts). The pass builds the sent link from
     // ctx.origin the same way, so the preview shows the link that goes out.
-    headers().then((h) => originFrom(h)),
+    headers().then((h) => originFrom(h)).catch((e): string => {
+      console.error(`automations: origin lookup failed for ${accountId}: ${String(e)}`);
+      return "";
+    }),
     // Part C. UNLIKE the account read beside it, this degrade must not show a
     // plausible-but-wrong window: rendering `DEFAULT_QUIET_SETTINGS` as if it
     // were the saved one and letting Save fire would silently overwrite the

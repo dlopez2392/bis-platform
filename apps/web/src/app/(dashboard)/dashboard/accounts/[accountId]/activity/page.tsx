@@ -1,8 +1,10 @@
 import { Activity } from "lucide-react";
+import Link from "next/link";
 import { listAutomationLog, countAutomationUsage, type AutomationLogListRow } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { Notice } from "@/components/ui/notice";
+import { buttonVariants } from "@/components/ui/button";
 import { ZoneNote } from "@/components/zone-note";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
@@ -75,7 +77,17 @@ export default async function ActivityPage({
         <div className="space-y-3">
           <ZoneNote zone={zone} isAgency={isAgency} accountId={accountId} />
           {!history.ok ? (
-            <Notice tone="crit" role="alert">{m["activity.error"]}</Notice>
+            // A cursored page's error must not take the pager down with it —
+            // without this, a client two pages deep who hits a transient
+            // read failure has no way back to page one but editing the URL.
+            <div className="space-y-3">
+              <Notice tone="crit" role="alert">{m["activity.error"]}</Notice>
+              {newerHref ? (
+                <nav className="flex justify-end" aria-label="Pages">
+                  <Link href={newerHref} className={buttonVariants({ variant: "ghost", size: "sm" })}>{m["activity.newer"]}</Link>
+                </nav>
+              ) : null}
+            </div>
           ) : history.rows.length === 0 && !cursor ? (
             // Cold start: page one and nothing behind it. A cursored zero
             // (older than everything) renders the headers and a Newer link.

@@ -49,7 +49,10 @@ const NAV_KEYWORDS: Record<string, string[]> = {
   "/pipeline": ["deals", "opportunities", "sales"],
   "/conversations": ["messages", "inbox", "sms", "email"],
   "/calls": ["phone", "receptionist", "sofia"],
-  "/activity": ["history", "what went out", "sent", "waiting", "held", "skipped", "quiet hours", "usage", "log"],
+  // "activity" added 2026-09-21 (cleanup item 2): the nav label changed to
+  // "What went out" to stop colliding with the dashboard's own Activity
+  // card, but the old word should still find this page.
+  "/activity": ["history", "activity", "what went out", "sent", "waiting", "held", "skipped", "quiet hours", "usage", "log"],
   "/forms": ["lead form", "intake"],
   "/calendar": ["booking", "availability", "hours"],
   "/tasks": ["task", "tasks", "to-do", "todo"],

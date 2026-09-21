@@ -76,6 +76,16 @@ export const REASONS = {
   timezone: "The company's time zone isn't set",
   calendarOff: "The booking page is switched off",
   recentText: "A text already went to this person today",
+  /** A RELEASED row's own SMS-cooldown branch (a failed attempt less than 24h
+   *  ago). Deliberately distinct from `recentText`, which reads oddly for a
+   *  retry after a FAILURE rather than an already-sent text today. Used only
+   *  on release (item 3, part-C cleanup): a normal tick leaves this branch
+   *  silent, unlogged, because the row is simply due again next tick — but a
+   *  row released from the HELD queue has nowhere to go back to except the
+   *  same past `held_until`, and would otherwise be re-examined, re-found
+   *  "skipped" and re-left `held` forever, parking it at the head of the
+   *  queue and starving every newer hold behind it. */
+  smsCooldown: "Waiting before trying this text again",
   outsideRegion: "Number is outside the US, Canada or Mexico",
   consentWithheld: "They didn't agree to texts",
   robocall: "Screened as a robocall",

@@ -1233,7 +1233,13 @@ export const m = {
   // Part C — the Activity page, /dashboard/accounts/<id>/activity. BOTH
   // audiences: this is the record of what the system did on the client's
   // behalf, the first place to look when an automation misfires.
-  "nav.activity": "Activity",
+  // The nav label reads "What went out", matching the page's own title
+  // (`activity.title` below) rather than "Activity" — that word already
+  // names the account dashboard's Activity card (bookings, leads, call
+  // outcomes), a different, client-visible surface (cleanup item 2,
+  // 2026-09-21). `dashboard.activity.*` and `contact.activity` are that
+  // card's own keys and are untouched.
+  "nav.activity": "What went out",
   "activity.title": "What went out",
   "activity.usage.title": "This month",
   "activity.usage.texts": "Texts sent",
