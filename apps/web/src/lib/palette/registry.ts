@@ -49,6 +49,7 @@ const NAV_KEYWORDS: Record<string, string[]> = {
   "/pipeline": ["deals", "opportunities", "sales"],
   "/conversations": ["messages", "inbox", "sms", "email"],
   "/calls": ["phone", "receptionist", "sofia"],
+  "/activity": ["history", "what went out", "sent", "waiting", "held", "skipped", "quiet hours", "usage", "log"],
   "/forms": ["lead form", "intake"],
   "/calendar": ["booking", "availability", "hours"],
   "/tasks": ["task", "tasks", "to-do", "todo"],

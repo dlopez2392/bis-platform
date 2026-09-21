@@ -23,6 +23,7 @@ import {
   PhoneForwarded,
   Zap,
   ShieldAlert,
+  Activity,
   type LucideIcon,
 } from "lucide-react";
 import { AccountSwitcher, type AccountOption } from "@/components/account-switcher";
@@ -53,6 +54,7 @@ const NAV_ICONS: Record<NavIconKey, LucideIcon> = {
   // `PhoneIncoming` rather than `Phone` so Calls stays distinguishable from
   // Voice in the agency's sidebar, where both appear.
   calls: PhoneIncoming,
+  activity: Activity,
   forms: FileText,
   calendar: Calendar,
   branding: Palette,

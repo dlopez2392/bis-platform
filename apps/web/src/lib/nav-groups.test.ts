@@ -47,7 +47,7 @@ describe("buildNavGroups", () => {
     // Tasks joined directly under Dashboard on 2026-09-14 (Work Queue Task 3).
     expect(overview!.items.map((i) => i.labelKey)).toEqual(["nav.dashboard", "nav.tasks", "nav.website", "nav.checklist"]);
     expect(crm!.items.map((i) => i.labelKey)).toEqual(["nav.contacts", "nav.opportunities"]);
-    expect(comms!.items.map((i) => i.labelKey)).toEqual(["nav.conversations", "nav.calls", "nav.voice"]);
+    expect(comms!.items.map((i) => i.labelKey)).toEqual(["nav.conversations", "nav.calls", "nav.activity", "nav.voice"]);
     expect(growth!.items.map((i) => i.labelKey)).toEqual(["nav.forms", "nav.calendar", "nav.automations"]);
   });
 
@@ -56,6 +56,13 @@ describe("buildNavGroups", () => {
     for (const isAgency of [true, false]) {
       const [overview] = buildNavGroups(BASE, isAgency);
       expect(overview!.items.slice(0, 3).map((i) => i.labelKey)).toEqual(["nav.dashboard", "nav.tasks", "nav.website"]);
+    }
+  });
+
+  it("shows Activity to both audiences, directly after Calls (mutation: gate it on isAgency → the client case FAILS)", () => {
+    for (const isAgency of [true, false]) {
+      const comms = buildNavGroups(BASE, isAgency)[2]!.items.map((i) => i.labelKey);
+      expect(comms.indexOf("nav.activity")).toBe(comms.indexOf("nav.calls") + 1);
     }
   });
 

@@ -14,6 +14,7 @@ export type NavIconKey =
   | "opportunities"
   | "conversations"
   | "calls"
+  | "activity"
   | "forms"
   | "calendar"
   | "branding"
@@ -130,6 +131,10 @@ export function buildNavGroups(base: string | null, isAgency: boolean): NavGroup
         // data, and one of the screens where they see what they are paying
         // for, same class of surface as Calls right after it.
         { href: `${base}/calls`, labelKey: "nav.calls", iconKey: "calls" },
+        // BOTH audiences, like Calls beside it: the record of what the
+        // system sent, held and skipped on the client's behalf — the first
+        // place to look when an automation misfires (part C, A9).
+        { href: `${base}/activity`, labelKey: "nav.activity", iconKey: "activity" },
         // Agency only. The route itself is still gated independently by
         // requireAgencyOnlyAccountAccess and by the isAgency check inside
         // every action in ./voice/actions.ts — hiding the link here is
