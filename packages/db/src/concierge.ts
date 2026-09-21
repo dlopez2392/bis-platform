@@ -260,3 +260,33 @@ export async function countConciergeConversationsForAccount(
   if (error) throw new Error(`countConciergeConversationsForAccount failed: ${error.message}`);
   return count ?? 0;
 }
+
+/**
+ * The setup wizard's row 4 proof: has a real visitor opened the assistant
+ * FROM the client's own site, ever — not merely "does a conversation exist"
+ * (a direct `/c/<publicId>` link visit is a real conversation too, but it is
+ * not evidence the embedded snippet is actually on a page).
+ *
+ * `page` is set ONLY by the embed loader, which passes
+ * `window.location.href` on the iframe URL (`embed-script.ts`); `parseAttribution`
+ * keeps it (`guards.ts`). A direct-link visit's `attribution` has no `page`
+ * key at all, or carries it as `""` — never a stored flag, so this reads live
+ * rows on every call, same discipline as every other setup-wizard derivation.
+ *
+ * Row-returning `.select("id")` + `.length`, NOT `{ count: "exact", head:
+ * true }` — the catalogued no-op combined with a `.not()`/`.neq()` pair on a
+ * jsonb `->>` operator column (some PostgREST/postgrest-js combinations do
+ * not report an exact count on this shape, so `.length` on the real rows is
+ * the one form this file trusts here).
+ */
+export async function countConciergeSiteConversations(
+  db: SupabaseClient, accountId: string,
+): Promise<number> {
+  const { data, error } = await db.from("concierge_conversations")
+    .select("id")
+    .eq("account_id", accountId)
+    .not("attribution->>page", "is", null)
+    .neq("attribution->>page", "");
+  if (error) throw new Error(`countConciergeSiteConversations failed: ${error.message}`);
+  return (data ?? []).length;
+}

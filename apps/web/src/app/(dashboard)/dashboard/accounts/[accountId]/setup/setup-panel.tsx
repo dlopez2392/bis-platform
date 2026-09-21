@@ -1,5 +1,6 @@
 import { Fragment } from "react";
 import { Rocket } from "lucide-react";
+import type { VoiceProfileRow } from "@bis/db";
 import type { SetupStepKey } from "@/lib/setup/setup-status";
 import { GO_LIVE_PREREQ_KEYS, kindOf, type SetupStepView, type AssignedNumber } from "@/lib/setup/setup-view";
 import { nextStepKey } from "@/lib/setup/setup-rail";
@@ -15,6 +16,7 @@ import { AccountStep } from "./steps/account";
 import { BrandingStep } from "./steps/branding";
 import { HoursStep } from "./steps/hours";
 import { VoiceProfileStep } from "./steps/voice-profile";
+import { WebsiteAssistantStep } from "./steps/website-assistant";
 import { NumberStep } from "./steps/number";
 import { EmailStep } from "./steps/email";
 import { ForwardingStep } from "./steps/forwarding";
@@ -37,7 +39,7 @@ import { SetupShell } from "./setup-shell";
  *
  * What stays server-side, unchanged from before: everything here is still
  * computed once, from props already in hand, with no client round trip.
- * Only WHICH of the nine pre-rendered nodes gets placed into the DOM is a
+ * Only WHICH of the ten pre-rendered nodes gets placed into the DOM is a
  * client decision now (./setup-shell.tsx) — the nodes themselves, and every
  * write action bound to them, are exactly what this file already built.
  */
@@ -59,6 +61,7 @@ const STEP_DETAIL: Record<SetupStepKey, (p: StepDetailProps) => React.ReactNode>
   branding: BrandingStep,
   hours: HoursStep,
   voice_profile: VoiceProfileStep,
+  website_assistant: WebsiteAssistantStep,
   number: NumberStep,
   email: EmailStep,
   forwarding: ForwardingStep,
@@ -69,6 +72,7 @@ const STEP_DETAIL: Record<SetupStepKey, (p: StepDetailProps) => React.ReactNode>
 export function SetupPanel({
   accountId, steps, prereqsMet, assignedNumber, movableNumbers, hasVoiceProfile, accountName,
   tickAction, goLiveAction, moveNumberAction, enableTestCallsAction, renameAction,
+  conciergeProfile, publishedFormCount, conciergeSiteConversations, origin,
 }: {
   accountId: string;
   steps: SetupStepView[];
@@ -107,6 +111,15 @@ export function SetupPanel({
   moveNumberAction: SetupMoveNumberAction;
   enableTestCallsAction: SetNumberStatusAction;
   renameAction: SetupRenameAction;
+  /** The website-assistant step's own inputs — read by
+   *  `./steps/website-assistant.tsx` alone, every other module ignores
+   *  them, same as `assignedNumber`/`movableNumbers` above. See
+   *  `StepDetailProps`'s own doc comments (steps/step-shared.tsx) for what
+   *  each carries and why. */
+  conciergeProfile: Pick<VoiceProfileRow, "concierge_enabled" | "concierge_form_id" | "public_id"> | null;
+  publishedFormCount: number | "unknown";
+  conciergeSiteConversations: number | "unknown";
+  origin: string;
 }) {
   const base = `/dashboard/accounts/${accountId}`;
 
@@ -169,8 +182,8 @@ export function SetupPanel({
 
   // One pre-rendered node per step, from props already in hand — same
   // props every module always received (StepDetailProps), computed for all
-  // nine regardless of which one ends up selected. setup-shell.tsx places
-  // only the selected key's node into the tree; the other eight are real
+  // ten regardless of which one ends up selected. setup-shell.tsx places
+  // only the selected key's node into the tree; the other nine are real
   // React elements that are simply never mounted.
   const details = {} as Record<SetupStepKey, React.ReactNode>;
   for (const step of steps) {
@@ -195,6 +208,11 @@ export function SetupPanel({
         blockedReason={blockedReason}
         accountName={accountName}
         renameAction={renameAction}
+        views={steps}
+        conciergeProfile={conciergeProfile}
+        publishedFormCount={publishedFormCount}
+        conciergeSiteConversations={conciergeSiteConversations}
+        origin={origin}
       />
     );
   }

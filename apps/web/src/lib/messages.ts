@@ -1351,6 +1351,20 @@ export const m = {
   "setup.step.voice_profile.title": "Voice profile",
   "setup.step.voice_profile.help":
     "Greeting, business facts, and persona for Sofía.",
+  "setup.step.website_assistant.title": "Website assistant",
+  "setup.step.website_assistant.help":
+    "Put the same receptionist on the website. It answers questions and takes names around the clock, and files them into a form you choose. The last row turns green the first time a visitor uses it from your site.",
+  "setup.step.website_assistant.row1.title": "Write the greeting and facts",
+  "setup.step.website_assistant.row2.title": "Publish a form for its leads",
+  "setup.step.website_assistant.row2.body":
+    "It fills in a name, an email or phone, and a message.",
+  "setup.step.website_assistant.row3.title": "Turn it on and pick the form",
+  "setup.step.website_assistant.row4.title": "Paste the code into the website",
+  "setup.step.website_assistant.row4.off": "The line to paste appears here once it is on.",
+  "setup.step.website_assistant.row4.pasteHint":
+    "Paste it just before </body>. In WordPress, Wix or Squarespace that is the site's footer or custom-code setting.",
+  "setup.step.website_assistant.row4.seen": "A visitor has opened it from your site",
+  "setup.step.website_assistant.row4.notSeen": "Not seen on your site yet",
   "setup.step.number.title": "Phone number",
   "setup.step.number.help":
     "Assign a BIS number to this client. Buy numbers in the Telnyx dashboard, then assign here.",

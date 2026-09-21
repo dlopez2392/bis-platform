@@ -551,7 +551,11 @@ export function ConciergeCard({
 
   return (
     <>
-      <Card>
+      {/* id targeted by the setup wizard's website_assistant step, row 3's
+          link (`/voice?from=setup#website-assistant`) — the only edit this
+          file needs for that step (setup/steps/website-assistant.tsx owns
+          the rest). */}
+      <Card id="website-assistant">
         <CardHeader>
           <CardTitle>{m["voice.assistant.title"]}</CardTitle>
           <CardDescription>{m["voice.assistant.body"]}</CardDescription>

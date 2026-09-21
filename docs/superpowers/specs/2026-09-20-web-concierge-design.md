@@ -452,6 +452,50 @@ The architecture already assumed this; what "standard" adds is surface.
    activation flow instead of depending on the agency remembering. A new
    catalogue item needs no backfill: an item with no row reads as undone
    (`checklist-catalogue.ts`, `mergeChecklist`'s own docstring).
+5. **The Setup step** (added 2026-09-20, "The Setup step" task) — a tick is
+   not a walkthrough: the checklist item above marks the feature done, but an
+   operator new to the product still had no path from "a form must be
+   published first" to "paste this line into the site". `website_assistant`
+   is a new key in `SetupStepKey`, positioned between `voice_profile` and
+   `number` (both `deriveSetupStatus`'s array and `SETUP_STEP_KEYS`), locked
+   on `voice_profile` alone (the assistant answers from the same greeting and
+   facts the phone does) — the wizard's third lockable step, after
+   `test_call` and `go_live`. Its pane (`setup/steps/website-assistant.tsx`)
+   is a four-row walkthrough, each row's state DERIVED, never stored, same
+   discipline as every other step:
+   1. Write the greeting and facts — done when the `voice_profile` step
+      itself is done; links to `/voice?from=setup`.
+   2. Publish a form for its leads — done when the account has a published
+      form (`listForms`, narrowed the same way the Voice page's own card
+      narrows it); links to `/forms?from=setup`.
+   3. Turn it on and pick the form — done when `concierge_enabled`; links to
+      `/voice?from=setup#website-assistant` (the Voice page's
+      `ConciergeCard` gained `id="website-assistant"` for this one anchor).
+   4. Paste the code into the website — renders the shared `EmbedSnippet`
+      once the assistant is on, otherwise a single sentence saying the line
+      appears once it is. This row is PROOF, never a gate: its own state is
+      whether `countConciergeSiteConversations` (new `packages/db/src/concierge.ts`
+      accessor — conversations whose `attribution->>'page'` is non-empty,
+      i.e. opened from the embedded snippet rather than the direct
+      `/c/[publicId]` link) is greater than zero, and it never blocks the
+      step's own `done` (row 3's condition) or the rail's tick — a client
+      can be fully configured with no visitor having opened it yet, which is
+      an honest waiting state ("Not seen on your site yet"), not a failure.
+   `SetupInputs` gained `publishedFormCount`/`conciergeSiteConversations`
+   (both plain numbers, degrading to 0 on a failed read) and the `profile`
+   pick widened to include `concierge_enabled`/`concierge_form_id`/
+   `public_id`; `ReadKey` gained `forms`/`conversations`, each its own
+   `Promise.allSettled` leg in `gatherSetupInputs`, so a failed read marks
+   ONLY `website_assistant` unknown — never `voice_profile`, which reads
+   `profile` alone. Found by the e2e run, not a unit test (`setup.spec.ts`
+   reads the wizard as the signed-in agency user on purpose, exactly so a
+   grants problem shows up as a broken step — this file's own §"THE GRANTS
+   ARE THE SECURITY BOUNDARY" above): `concierge_conversations` is
+   `service_role` only, no `authenticated` grant at all, by design — so
+   `gatherSetupInputs`'s `countConciergeSiteConversations` leg calls
+   `serviceDb()` directly for that ONE read, regardless of which client
+   (`dbForRequest()` on the wizard page; `serviceDb()` on the sidebar meter
+   and `goLiveAction`'s re-check) the caller passed in for the other seven.
 
 **Free per tenant, because the seam is the public id:** the client's persona
 (`persona_name`, `greeting_en`/`greeting_es`, `facts`, `services`, `languages`,

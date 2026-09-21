@@ -1,7 +1,8 @@
 // apps/web/src/lib/setup/setup-inputs.ts
 import {
   getCalendarForAccount, getVoiceProfile, listPhoneNumbersForAccount,
-  countCallsSince, listChecklistState, type SupabaseClient, type PhoneNumberRow,
+  countCallsSince, listChecklistState, listForms, countConciergeSiteConversations,
+  serviceDb, type SupabaseClient, type PhoneNumberRow,
 } from "@bis/db";
 import { SETUP_TICK_KEYS, type SetupInputs } from "./setup-status";
 import type { ReadKey } from "./setup-view";
@@ -26,9 +27,10 @@ export type GatheredSetupInputs = {
 };
 
 /**
- * The six reads `deriveSetupStatus` needs to answer all nine step
- * questions — the account's own `brand_name`/`from_email` plus five
- * `@bis/db` reads. This exact read set used to live duplicated three times:
+ * The eight reads `deriveSetupStatus` needs to answer all ten step
+ * questions — the account's own `brand_name`/`from_email` plus seven
+ * `@bis/db` reads (five original, plus the website-assistant step's own
+ * `forms`/`conversations` pair). This exact read set used to live duplicated three times:
  * the sidebar's setup meter (formerly `setup-actions.ts`'s `getSetupProgress`,
  * now folded into `shell-actions.ts`'s `getShellSnapshot`), the setup
  * wizard's own render (`setup/page.tsx`), and `goLiveAction`'s prerequisite
@@ -86,8 +88,31 @@ export async function gatherSetupInputs(
     // question the test-call step asks on the setup page itself.
     countCallsSince(db, accountId, "1970-01-01T00:00:00.000Z"),
     listChecklistState(db, accountId),
+    // The website-assistant step's own two legs (Setup step task): published
+    // forms (row 2) and site conversations (row 4's proof). Own legs, not
+    // folded into the profile read above, so a failure in either degrades
+    // ONLY website_assistant (READS_BEHIND in setup-view.ts) — never
+    // voice_profile, which never touches forms or conversations.
+    listForms(db, accountId),
+    // `serviceDb()`, NOT the caller's own `db` — found by the e2e run
+    // (setup.spec.ts), which reads this page as the signed-in agency user
+    // on purpose so a grants problem shows up as a broken step (see this
+    // file's own doc comment, and page.tsx's). `concierge_conversations` is
+    // service_role only BY DESIGN (0042_web_concierge.sql's own grant
+    // block: "Nothing but the concierge route reads or writes this, and the
+    // route uses serviceDb() … service_role only, no `authenticated` grant
+    // at all") — `authenticated` (what `dbForRequest()` runs as) can never
+    // read it, on the wizard page or anywhere else, so this ONE leg uses
+    // `serviceDb()` unconditionally regardless of which client the caller
+    // passed in for the other seven. This is not a workaround: it is the
+    // exact shape every other `concierge.ts` consumer already uses
+    // (voice/page.tsx's own doc comment: "Both reads below go through
+    // serviceDb(), matching the writes"), and it must NOT be "fixed" by
+    // widening the table's grant to `authenticated` — that reopens the
+    // exact leak 0042 closed.
+    countConciergeSiteConversations(serviceDb(), accountId),
   ]);
-  const [accountR, calendarR, profileR, numbersR, callsR, ticksR] = settled;
+  const [accountR, calendarR, profileR, numbersR, callsR, ticksR, formsR, conversationsR] = settled;
 
   // Otherwise a failing read is visible only as a warning chip on screen (or
   // a silently degraded section, for the two callers that fold `failed` to
@@ -105,11 +130,19 @@ export async function gatherSetupInputs(
     numbers: numbersR.status === "rejected",
     calls: callsR.status === "rejected",
     ticks: ticksR.status === "rejected",
+    forms: formsR.status === "rejected",
+    conversations: conversationsR.status === "rejected",
   };
 
   const account = accountR.status === "fulfilled" ? accountR.value : null;
   const numbers = numbersR.status === "fulfilled" ? numbersR.value : [];
   const checklistRows = ticksR.status === "fulfilled" ? ticksR.value : [];
+  // Narrowed to PUBLISHED, same as the Voice page's own website-assistant
+  // card (voice/page.tsx) — a draft form has no `/f/<publicId>` a lead could
+  // land on, so it is not "ready" for row 2's purposes.
+  const publishedFormCount = formsR.status === "fulfilled"
+    ? formsR.value.filter((f) => f.status === "published").length
+    : 0;
 
   const ticked = (key: string) =>
     checklistRows.some((row) => row.item_key === key && row.done_at !== null);
@@ -125,6 +158,8 @@ export async function gatherSetupInputs(
       emailSkipped: ticked(SETUP_TICK_KEYS.emailSkipped),
       forwardingDone: ticked(SETUP_TICK_KEYS.forwardingDone),
     },
+    publishedFormCount,
+    conciergeSiteConversations: conversationsR.status === "fulfilled" ? conversationsR.value : 0,
   };
 
   return { inputs, numbers, failed };

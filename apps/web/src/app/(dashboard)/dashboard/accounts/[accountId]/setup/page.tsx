@@ -1,3 +1,4 @@
+import { headers } from "next/headers";
 import { listAllPhoneNumbers } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
@@ -91,6 +92,20 @@ export default async function SetupPage({
   // can tell those apart (setup-panel.tsx).
   const assignedNumber = resolveAssignedNumber(numbers, failed.numbers);
 
+  // The website-assistant step's own two counts, same three-state shape as
+  // `assignedNumber` above (never a plain 0 on a failed read, which would
+  // read as "nothing published/seen yet" rather than "couldn't check").
+  const publishedFormCount = failed.forms ? "unknown" : inputs.publishedFormCount;
+  const conciergeSiteConversations = failed.conversations ? "unknown" : inputs.conciergeSiteConversations;
+
+  // Same computation as voice/page.tsx's own `origin` — the request's own
+  // host, not an env var, so the setup pane's embed snippet matches
+  // whatever host the operator is actually on (localhost, a preview deploy,
+  // production).
+  const h = await headers();
+  const proto = h.get("x-forwarded-proto") ?? "http";
+  const origin = `${proto}://${h.get("host") ?? "localhost:3000"}`;
+
   // Only when the numbers read actually answered "this account has none".
   // Never on `"unknown"`: offering to move a number into an account that may
   // already have one is how another tenant's live line gets taken to fix a
@@ -144,6 +159,10 @@ export default async function SetupPage({
           movableNumbers={movableNumbers}
           hasVoiceProfile={profile !== null}
           accountName={accountName}
+          conciergeProfile={profile}
+          publishedFormCount={publishedFormCount}
+          conciergeSiteConversations={conciergeSiteConversations}
+          origin={origin}
           // accountId bound server-side on all four — it must never travel
           // as a form field. For moveNumberAction that binding is what makes
           // the account the DESTINATION rather than something the browser

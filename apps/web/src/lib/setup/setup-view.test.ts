@@ -21,10 +21,13 @@ function fullInputs(overrides: Partial<SetupInputs> = {}): SetupInputs {
       facts: "Open Monday through Friday, 9 to 5.",
       enabled: true,
       languages: "en",
+      concierge_enabled: true, concierge_form_id: "form_full", public_id: "pub_full",
     },
     numbers: [{ status: "live" }],
     callCount: 3,
     ticks: { emailSkipped: false, forwardingDone: true },
+    publishedFormCount: 1,
+    conciergeSiteConversations: 1,
     ...overrides,
   };
 }
@@ -32,6 +35,7 @@ function fullInputs(overrides: Partial<SetupInputs> = {}): SetupInputs {
 const noFailures: Record<ReadKey, boolean> = {
   account: false, calendar: false, profile: false,
   numbers: false, ticks: false, calls: false,
+  forms: false, conversations: false,
 };
 
 function unknownKeys(views: SetupStepView[]): SetupStepKey[] {
@@ -81,6 +85,10 @@ describe("GO_LIVE_PREREQ_KEYS — the mirror of goLivePrereqsMet, pinned in lock
     branding: { brandName: null },
     hours: { calendar: { enabled: true, open_hours: {} } },
     voice_profile: { profile: null },
+    // Undoes ONLY website_assistant — voice_profile stays done, so this
+    // fixture also proves website_assistant is not one of GO_LIVE_PREREQ_KEYS
+    // (goLivePrereqsMet never looks at it either way).
+    website_assistant: { profile: { ...fullInputs().profile!, concierge_enabled: false, concierge_form_id: null } },
     number: { numbers: [] },
     email: { fromEmail: null },
     forwarding: { ticks: { emailSkipped: false, forwardingDone: false } },
@@ -131,12 +139,23 @@ describe("kindOf", () => {
 });
 
 describe("READS_BEHIND", () => {
-  it("covers all nine step keys", () => {
+  it("covers all ten step keys", () => {
     const keys = Object.keys(READS_BEHIND).sort();
     expect(keys).toEqual([
       "account", "branding", "email", "forwarding", "go_live",
-      "hours", "number", "test_call", "voice_profile",
+      "hours", "number", "test_call", "voice_profile", "website_assistant",
     ]);
+  });
+
+  // A failed forms OR conversations read must degrade ONLY website_assistant
+  // — the step this pane's rows 2 and 4 belong to — never voice_profile
+  // (which reads `profile` alone) or any other step.
+  it("website_assistant degrades on profile, forms, or conversations, and nothing else does", () => {
+    const steps = deriveSetupStatus(fullInputs());
+    const failedForms = { ...noFailures, forms: true };
+    const failedConversations = { ...noFailures, conversations: true };
+    expect(unknownKeys(buildSetupViews(steps, failedForms).views)).toEqual(["website_assistant"]);
+    expect(unknownKeys(buildSetupViews(steps, failedConversations).views)).toEqual(["website_assistant"]);
   });
 });
 

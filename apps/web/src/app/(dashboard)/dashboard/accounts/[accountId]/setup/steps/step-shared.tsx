@@ -1,4 +1,4 @@
-import type { PhoneNumberStatus } from "@bis/db";
+import type { PhoneNumberStatus, VoiceProfileRow } from "@bis/db";
 import type { SetupStepKey } from "@/lib/setup/setup-status";
 import type { SetupStepView, StateKind, AssignedNumber } from "@/lib/setup/setup-view";
 import { m } from "@/lib/messages";
@@ -55,6 +55,9 @@ export const STEP_COPY: Record<SetupStepKey, { title: string; help: string }> = 
   hours: { title: m["setup.step.hours.title"], help: m["setup.step.hours.help"] },
   voice_profile: {
     title: m["setup.step.voice_profile.title"], help: m["setup.step.voice_profile.help"],
+  },
+  website_assistant: {
+    title: m["setup.step.website_assistant.title"], help: m["setup.step.website_assistant.help"],
   },
   number: { title: m["setup.step.number.title"], help: m["setup.step.number.help"] },
   email: { title: m["setup.step.email.title"], help: m["setup.step.email.help"] },
@@ -160,4 +163,32 @@ export type StepDetailProps = {
    *  other field in this bag it doesn't need. */
   accountName: string | null;
   renameAction: SetupRenameAction;
+  /** Every step's own view, unfiltered — `./website-assistant.tsx` alone
+   *  reads it, to find `voice_profile`'s `done`/`unknown` for row 1 without
+   *  re-deriving a second copy of a question `buildSetupViews` already
+   *  answered (setup-status.ts:3-7's whole promise: computed once, from
+   *  live rows, never restated). Every other module ignores it, same as
+   *  every other field in this bag it doesn't need. */
+  views: SetupStepView[];
+  /** The three website-assistant columns off the SAME `voice_profiles` row
+   *  `hasVoiceProfile` above already reads existence from — `null` exactly
+   *  when `hasVoiceProfile` is `false` (no row, or the profile read itself
+   *  failed; `./website-assistant.tsx` tells the two apart via `views`'
+   *  own `voice_profile.unknown`, since READS_BEHIND.voice_profile is
+   *  `["profile"]` alone). `./website-assistant.tsx` alone reads it. */
+  conciergeProfile: Pick<VoiceProfileRow, "concierge_enabled" | "concierge_form_id" | "public_id"> | null;
+  /** Row 2's count, published forms only — `"unknown"` when the forms read
+   *  itself failed, the same three-state shape `assignedNumber` above uses
+   *  for the numbers read, so a failed read can never be mistaken for "zero
+   *  published forms, go publish one". `./website-assistant.tsx` alone
+   *  reads it. */
+  publishedFormCount: number | "unknown";
+  /** Row 4's proof, never a gate — real conversations attributed to a site
+   *  visit. Same three-state shape as `publishedFormCount` above.
+   *  `./website-assistant.tsx` alone reads it. */
+  conciergeSiteConversations: number | "unknown";
+  /** This request's own origin (`voice/page.tsx`'s own computation,
+   *  mirrored) — what `EmbedSnippet` needs to build the script tag and the
+   *  direct link. `./website-assistant.tsx` alone reads it. */
+  origin: string;
 };

@@ -9,6 +9,7 @@ import {
   createConciergeConversation, getConciergeConversation, claimConciergeTurn,
   appendConciergeTurns, setConciergeSubmission,
   countConciergeConversationsByIp, countConciergeConversationsForAccount,
+  countConciergeSiteConversations,
 } from "../concierge";
 
 // Per-process suffix, same hazard and same fix as concierge-grants.test.ts:12-13:
@@ -388,4 +389,49 @@ describe("concierge accessors", () => {
       // query (e.g. drop "textback_body") -- this FAILS.
       expect(Object.keys(concierge!).sort()).toEqual(Object.keys(full!).sort());
     }));
+
+  /**
+   * The setup wizard's row 4 (Task: website-assistant setup step) reads this
+   * for its proof-not-gate state: "has a REAL site visitor ever opened it",
+   * not "has any conversation ever existed" (a direct `/c/<publicId>` link
+   * visit is real traffic too, but it is not evidence the SNIPPET is on a
+   * page — `page` is set only by the embed loader passing
+   * `window.location.href`, guards.ts:21-24,146-153).
+   *
+   * `{}` and `{ utm_source: "x" }` (no `page` key at all) are both the
+   * negative shape a direct-link visit produces in production (the brief's
+   * own fixture, matching row `ecd3a9e6-…` on Test Client One) — neither
+   * counts.
+   */
+  it("countConciergeSiteConversations counts only conversations whose attribution carries a non-empty page, for THIS account", () =>
+    withTestAccount(async (db, accountId) =>
+      withTestAccount(async (otherDb, otherAccountId) => {
+        const form = await createForm(db, accountId, { name: "Leads" }, accountId);
+        const otherForm = await createForm(otherDb, otherAccountId, { name: "Leads" }, otherAccountId);
+
+        await createConciergeConversation(db, {
+          accountId, formId: form.id, ipHash: `page-${RUN}`, locale: "en",
+          attribution: { page: "https://client.example/pricing" }, origin: null,
+        });
+        await createConciergeConversation(db, {
+          accountId, formId: form.id, ipHash: `empty-${RUN}`, locale: "en",
+          attribution: {}, origin: null,
+        });
+        await createConciergeConversation(db, {
+          accountId, formId: form.id, ipHash: `nopage-${RUN}`, locale: "en",
+          attribution: { utm_source: "x" }, origin: null,
+        });
+        // A second account's row with a page — must not be counted for the
+        // first (distinct account ids, the branch-1 lesson).
+        await createConciergeConversation(otherDb, {
+          accountId: otherAccountId, formId: otherForm.id, ipHash: `other-${RUN}`,
+          locale: "en", attribution: { page: "https://other.example/" }, origin: null,
+        });
+
+        // MUTATION: drop the page filter — this FAILS, returning 3 (every
+        // row on this account) instead of 1.
+        // MUTATION: drop the account filter — this FAILS, counting the other
+        // account's page-carrying row too.
+        expect(await countConciergeSiteConversations(db, accountId)).toBe(1);
+      })));
 });

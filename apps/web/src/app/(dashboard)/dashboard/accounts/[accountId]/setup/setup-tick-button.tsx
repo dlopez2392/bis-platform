@@ -9,7 +9,7 @@ import { m } from "@/lib/messages";
 import type { SetupTickAction, SetupTick } from "./setup-panel";
 
 /**
- * The only interactive island on the setup page. Everything else — nine
+ * The only interactive island on the setup page. Everything else — ten
  * cards, their derived states, every link — is server-rendered, so this is
  * the whole client bundle the page pays for.
  *
@@ -18,7 +18,7 @@ import type { SetupTickAction, SetupTick } from "./setup-panel";
  * action and reports failure through a toast), it gives `useFormStatus` a
  * pending state to disable against, and it keeps the button working as a
  * plain submit. The explicit `router.refresh()` is what re-derives the other
- * eight cards — the tick action deliberately does not `revalidatePath`,
+ * nine cards — the tick action deliberately does not `revalidatePath`,
  * because the page is `force-dynamic` and the refresh is a client concern.
  */
 export function SetupTickButton({

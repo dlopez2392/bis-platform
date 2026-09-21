@@ -15,16 +15,16 @@ function views(over: Partial<Record<SetupStepView["key"], Partial<SetupStepView>
 }
 
 describe("SETUP_STEP_KEYS", () => {
-  it("is the canonical nine in wizard order", () => {
+  it("is the canonical ten in wizard order — website_assistant sits between voice_profile and number", () => {
     expect(SETUP_STEP_KEYS).toEqual([
-      "account", "branding", "hours", "voice_profile", "number",
+      "account", "branding", "hours", "voice_profile", "website_assistant", "number",
       "email", "forwarding", "test_call", "go_live",
     ]);
   });
 });
 
 describe("isLockedStep", () => {
-  it("locks ONLY test_call and go_live, and only when their prerequisites are unmet", () => {
+  it("locks ONLY test_call, go_live and website_assistant, and only when their prerequisites are unmet", () => {
     const unmet = views(); // nothing done
     const met = SETUP_STEP_KEYS.reduce(
       (a, k) => ({ ...a, [k]: { done: true } }),
@@ -33,8 +33,10 @@ describe("isLockedStep", () => {
     const metViews = views(met);
     expect(isLockedStep("test_call", unmet)).toBe(true);
     expect(isLockedStep("go_live", unmet)).toBe(true);
+    expect(isLockedStep("website_assistant", unmet)).toBe(true);
     expect(isLockedStep("test_call", metViews)).toBe(false);
     expect(isLockedStep("go_live", metViews)).toBe(false);
+    expect(isLockedStep("website_assistant", metViews)).toBe(false);
     for (const k of ["account", "branding", "hours", "voice_profile", "number", "email", "forwarding"] as const) {
       expect(isLockedStep(k, unmet)).toBe(false);
     }
@@ -82,6 +84,28 @@ describe("lockedPrereqKeys", () => {
   });
   it("is empty for a step that does not lock", () => {
     expect(lockedPrereqKeys("branding", views())).toEqual([]);
+  });
+
+  // The website assistant answers from the same greeting and facts the phone
+  // does — it has exactly one prerequisite, voice_profile, unlike test_call
+  // and go_live's several.
+  it("names voice_profile as website_assistant's one prerequisite when it is undone", () => {
+    expect(lockedPrereqKeys("website_assistant", views())).toEqual(["voice_profile"]);
+  });
+
+  it("is empty for website_assistant once voice_profile is done, and unlocks it", () => {
+    const v = views({ voice_profile: { done: true } });
+    expect(lockedPrereqKeys("website_assistant", v)).toEqual([]);
+    expect(isLockedStep("website_assistant", v)).toBe(false);
+  });
+
+  // MUTATION: use `!v.done` alone (drop `|| v.unknown`) — this FAILS, because
+  // an unverifiable voice_profile read would stop naming itself as a blocker
+  // while website_assistant stays practically un-usable (its own `profile`
+  // read failed too, per READS_BEHIND).
+  it("still names voice_profile when it is done:true but unknown (a failed read)", () => {
+    const v = views({ voice_profile: { done: true, unknown: true } });
+    expect(lockedPrereqKeys("website_assistant", v)).toEqual(["voice_profile"]);
   });
 });
 
@@ -147,8 +171,8 @@ describe("nextStepKey", () => {
   it("steps over a SKIPPED step — the operator already answered it", () => {
     const v = views({
       account: { done: true }, branding: { done: true }, hours: { done: true },
-      voice_profile: { done: true }, number: { done: true },
-      email: { skipped: true },
+      voice_profile: { done: true }, website_assistant: { done: true },
+      number: { done: true }, email: { skipped: true },
     });
     expect(nextStepKey(v)).toBe("forwarding");
   });
@@ -187,8 +211,8 @@ describe("defaultStepKey", () => {
   it("agrees with nextStepKey over a skipped step", () => {
     const v = views({
       account: { done: true }, branding: { done: true }, hours: { done: true },
-      voice_profile: { done: true }, number: { done: true },
-      email: { skipped: true },
+      voice_profile: { done: true }, website_assistant: { done: true },
+      number: { done: true }, email: { skipped: true },
     });
     expect(defaultStepKey(v)).toBe("forwarding");
     expect(defaultStepKey(v)).toBe(nextStepKey(v));
