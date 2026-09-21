@@ -7,6 +7,7 @@ import {
 } from "@bis/db";
 import { FOLLOWUP_MAX_AGE_MS } from "@/lib/booking/followup-timing";
 import { SMS_RETRY_COOLDOWN_MS } from "./caps";
+import { RELEASE_BUDGET_MS } from "./passes/release-held";
 
 /**
  * The three-way coupling (schedule ↔ reminder window ↔ follow-up window) was
@@ -19,6 +20,9 @@ const MINUTE = 60 * 1000;
 const vercel = JSON.parse(
   readFileSync(new URL("../../../vercel.json", import.meta.url), "utf-8"),
 ) as { crons: { path: string; schedule: string }[] };
+const routeSource = readFileSync(
+  new URL("../../app/api/cron/reminders/route.ts", import.meta.url), "utf-8",
+);
 
 function tickIntervalMs(schedule: string): number {
   const m = /^\*\/(\d+) \* \* \* \*$/.exec(schedule);
@@ -74,5 +78,12 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
     // three the count every real run sees.
     const tick = tickIntervalMs(entry!.schedule);
     expect((SMS_REMINDER_WINDOW_END_MS - SMS_REMINDER_WINDOW_START_MS) / tick).toBe(3);
+  });
+
+  it("the route declares a maxDuration longer than the release pass's own wall-clock budget, so the FIRST pass's guard cannot outlive the invocation running it (mutation: drop the export → FAILS)", () => {
+    const m = /export const maxDuration = (\d+);/.exec(routeSource);
+    expect(m).not.toBeNull();
+    const maxDuration = Number(m![1]);
+    expect(maxDuration).toBeGreaterThan(RELEASE_BUDGET_MS / 1000);
   });
 });

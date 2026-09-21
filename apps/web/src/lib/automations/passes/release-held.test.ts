@@ -58,6 +58,10 @@ describe("releaseHeldPass", () => {
     expect(RELEASE_BATCH).toBe(200);
   });
 
+  it("RELEASE_BUDGET_MS is pinned at 60 seconds", () => {
+    expect(RELEASE_BUDGET_MS).toBe(60_000);
+  });
+
   it("a releaser that throws is counted errored and the next row still runs (mutation: drop the per-row try/catch → FAILS)", async () => {
     dbMocks.listReleasableHolds.mockResolvedValue([row("reminders", "booking:1"), row("sms_reminder", "booking:2")]);
     releasers.reminders.mockRejectedValue(new Error("db exploded"));
