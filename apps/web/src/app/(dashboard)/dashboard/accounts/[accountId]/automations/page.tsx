@@ -1,6 +1,8 @@
 import { headers } from "next/headers";
-import { serviceDb, getAutomation, getBranding, getCalendarForAccount } from "@bis/db";
+import Link from "next/link";
+import { serviceDb, getAutomation, getBranding, getCalendarForAccount, readQuietSettings, type QuietSettings } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
+import { buttonVariants } from "@/components/ui/button";
 import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { brandDisplayName } from "@/lib/email/templates/shell";
 import { originFrom } from "@/lib/email/origin";
@@ -10,7 +12,11 @@ import { AutomationsSettings } from "./automations-settings";
 import { NoShowNudgeCard } from "./no-show-nudge-card";
 import { SmsReminderCard } from "./sms-reminder-card";
 import { InstantReplyCard } from "./instant-reply-card";
-import { saveReviewRequestAction, saveNoShowNudgeAction, saveSmsReminderAction, saveInstantReplyAction } from "./actions";
+import { QuietHoursCard } from "./quiet-hours-card";
+import {
+  saveReviewRequestAction, saveNoShowNudgeAction, saveSmsReminderAction, saveInstantReplyAction,
+  saveQuietHoursAction,
+} from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +36,7 @@ export default async function AutomationsPage({
   await requireAgencyOnlyAccountAccess(accountId);
 
   const db = serviceDb();
-  const [review, noShow, smsReminder, instantReply, account, smsGate, calendar, origin] = await Promise.all([
+  const [review, noShow, smsReminder, instantReply, account, smsGate, calendar, origin, quiet] = await Promise.all([
     getAutomation(db, accountId, "review_request"),
     getAutomation(db, accountId, "no_show_nudge"),
     getAutomation(db, accountId, "sms_reminder"),
@@ -68,14 +74,29 @@ export default async function AutomationsPage({
     // customer link carries (origin.ts). The pass builds the sent link from
     // ctx.origin the same way, so the preview shows the link that goes out.
     headers().then((h) => originFrom(h)),
+    // Part C. UNLIKE the account read beside it, this degrade must not show a
+    // plausible-but-wrong window: rendering `DEFAULT_QUIET_SETTINGS` as if it
+    // were the saved one and letting Save fire would silently overwrite the
+    // client's real hours with the platform default. So a failed read
+    // degrades to `null` — the card renders a Notice and a disabled form
+    // (the agency reloads to fix it, rather than pressing Save on a guess) —
+    // and one log line.
+    readQuietSettings(db, accountId).catch((e): QuietSettings | null => {
+      console.error(`automations: quiet-hours read failed for ${accountId}: ${String(e)}`);
+      return null;
+    }),
   ]);
 
   const bookingUrl = origin && calendar ? `${origin}/b/${calendar.public_id}` : "";
 
   return (
     <>
-      <PageHeader title={m["automations.title"]} />
+      <PageHeader
+        title={m["automations.title"]}
+        actions={<Link href={`/dashboard/accounts/${accountId}/activity`} className={buttonVariants({ variant: "ghost", size: "sm" })}>{m["automations.activityLink"]}</Link>}
+      />
       <div className="max-w-2xl space-y-6 p-6">
+        <QuietHoursCard settings={quiet} zoneLabel={account.timezone} saveAction={saveQuietHoursAction.bind(null, accountId)} />
         <AutomationsSettings
           automation={review}
           brandName={account.brandName}

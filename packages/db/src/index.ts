@@ -58,9 +58,10 @@ export { getOrCreateCalendar, getCalendarForAccount, getCalendarByPublicId, upda
          listUpcomingBookings, countRecentBookings, listDueReminders, stampReminderSent,
          listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
          newCancelToken, SlotTakenError,
+         getDueReminderById, getDueFollowupById,
          REMINDER_WINDOW_START_MS, REMINDER_WINDOW_END_MS, FOLLOWUP_QUERY_WINDOW_MS,
          type CalendarRow, type BookingRow, type BookingStatus, type CalendarSettingsPatch,
-         type CreateBookingInput, type DueReminder, type DueFollowup } from "./booking";
+         type CreateBookingInput, type DueReminder, type DueFollowup, type DueLookup } from "./booking";
 export { getAutomation, upsertAutomation, parseReviewRequestConfig,
          listDueReviewRequests, stampReviewRequested, stampReviewRequestSmsFailed, countReviewRequestsSince,
          REVIEW_REQUEST_MAX_AGE_MS,
@@ -69,6 +70,7 @@ export { getAutomation, upsertAutomation, parseReviewRequestConfig,
          listDueSmsReminders, stampSmsReminderSent, stampSmsReminderFailed,
          SMS_REMINDER_WINDOW_START_MS, SMS_REMINDER_WINDOW_END_MS,
          parseInstantReplyConfig, stampInstantReplySent, countInstantRepliesSince,
+         getDueReviewRequestById, getDueNoShowNudgeById, getDueSmsReminderById,
          type RecipeKey, type AutomationRow, type ReviewRequestChannel,
          type ReviewRequestConfig, type DueReviewRequest,
          type NoShowNudgeChannel, type NoShowNudgeConfig, type DueNoShowNudge,
@@ -79,6 +81,8 @@ export { getSiteForAccount, upsertSite, listSitesToSync, writeTrafficDay, stampS
          listTrafficDays, listTrafficBreakdown, countTrafficDays, unlinkSite,
          type SiteRow, type TrafficDay, type TrafficDimension, type TrafficBreakdownRow } from "./sites";
 export * from "./weekly-report";
+export * from "./automation-log";
+export * from "./automation-settings";
 
 // The demo tenant's fiction — data only, no seeder. `seed.ts` deliberately
 // stays out of the package's public surface: it DELETES the account it finds,

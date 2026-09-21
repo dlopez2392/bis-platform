@@ -119,7 +119,7 @@ export async function POST(
     serviceDb, getVoiceProfileByPublicId, createConciergeConversation,
     getConciergeConversation, claimConciergeTurn, appendConciergeTurns,
     countConciergeConversationsByIp, countConciergeConversationsForAccount,
-    brandDisplayName,
+    brandDisplayName, recordAutomationLog,
   } = await import("@bis/db");
 
   const ipHash = hashIp(clientIp(req.headers));
@@ -290,6 +290,16 @@ export async function POST(
         ipHash, locale, attribution, origin,
       });
       conversationId = created.id;
+      // Part C: one `ai` row per conversation START — "website chats" on
+      // the client's Activity page is the count of these. Isolated leg.
+      try {
+        await recordAutomationLog(db, {
+          accountId: profile.account_id, source: "concierge", channel: "ai", contactId: null,
+          subjectKey: `conversation:${created.id}`, status: "sent",
+        });
+      } catch (e) {
+        log("automation log write failed", { conversationId: created.id, error: String(e) });
+      }
       // Built here rather than read back: the row was just inserted, so its
       // contents are known, and a second round trip would only add a way for
       // this to fail.

@@ -4,7 +4,7 @@ const dbMocks = vi.hoisted(() => ({
   finishCallRow: vi.fn(), createContact: vi.fn(), ensureConversation: vi.fn(),
   createMessage: vi.fn(), incrementUnreadCount: vi.fn(), emit: vi.fn(),
   fillContactBlanks: vi.fn(), updateMessageStatus: vi.fn(), hasRecentOutboundSms: vi.fn(),
-  getAlertPhone: vi.fn(), getContact: vi.fn(),
+  getAlertPhone: vi.fn(), getContact: vi.fn(), recordAutomationLog: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const emailRefs = vi.hoisted(() => ({ providerShouldThrow: false, send: vi.fn() }));
@@ -181,6 +181,7 @@ beforeEach(() => {
   // IS the switch) — the "the field is the switch" test below is the
   // regression guard for this default.
   dbMocks.getAlertPhone.mockResolvedValue(null);
+  dbMocks.recordAutomationLog.mockResolvedValue(undefined);
   // The ordinary case: a contact with all four allow-listed columns already
   // filled, so `blankFields` computes to `[]` unless a test deliberately
   // leaves one of these blank to exercise the propagation.
@@ -1342,5 +1343,34 @@ describe("isMeaningful", () => {
     for (const outcome of ["abandoned", "spam"] as const) {
       expect(isMeaningful(outcome), outcome).toBe(false);
     }
+  });
+});
+
+describe("finishCall — the automation log row", () => {
+  it("a handled call writes a sent row keyed by the call id with the resolved contact", async () => {
+    const bookedState = withBooking(emptyCallState(), { id: "bk1", contactName: "Ana", startsAt: "x", endsAt: "y" });
+    await finishCall(bookedState, ctx, meta);
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      source: "voice", channel: "ai", subjectKey: `call:${meta.callRowId}`, status: "sent", reason: "",
+      contactId: "ct1",
+    }));
+  });
+
+  it("a spam call writes a skipped row that says 'Screened as a robocall' (mutation: log every outcome as sent → FAILS)", async () => {
+    const r = await finishCall(emptyCallState(), ctx, meta);
+    expect(r.outcome).toBe("spam");
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      status: "skipped", reason: "Screened as a robocall",
+    }));
+  });
+
+  it("no call row id → no log row; a log write that throws changes nothing about the result", async () => {
+    const bookedState = withBooking(emptyCallState(), { id: "bk1", contactName: "Ana", startsAt: "x", endsAt: "y" });
+    await finishCall(bookedState, ctx, { ...meta, callRowId: null });
+    expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
+
+    dbMocks.recordAutomationLog.mockRejectedValue(new Error("down"));
+    const r = await finishCall(bookedState, ctx, meta);
+    expect(r).toEqual(expect.objectContaining({ stored: true }));
   });
 });

@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { brandDisplayName, type Branding } from "./branding";
-import { loadSendableRows } from "./booking";
+import { loadSendableRows, type AccountBrandInfo, type DueLookup } from "./booking";
 
 /**
  * The automations spine. Config is GENERIC — one row per (account, recipe)
@@ -202,6 +202,30 @@ export type DueReviewRequest = {
  * query only says "enabled, completed, unstamped, inside 61h by either
  * anchor".
  */
+const REVIEW_REQUEST_SELECT =
+  "id, account_id, contact_id, ends_at, completed_at, followup_sent_at, review_request_sms_failed_at, contacts(email, phone)";
+
+function toDueReviewRequest(r: any, info: AccountBrandInfo, auto: EnabledRecipe): DueReviewRequest {
+  return {
+    bookingId: r.id,
+    accountId: r.account_id,
+    endsAt: r.ends_at,
+    completedAt: r.completed_at ?? null,
+    followupSentAt: r.followup_sent_at ?? null,
+    smsFailedAt: r.review_request_sms_failed_at ?? null,
+    contactId: r.contact_id,
+    contactEmail: r.contacts?.email ?? null,
+    contactPhone: r.contacts?.phone ?? null,
+    brandName: brandDisplayName(info.branding),
+    branding: info.branding,
+    accountTimezone: info.accountTimezone,
+    fromEmail: info.fromEmail,
+    replyToEmail: info.replyToEmail,
+    body: auto.body,
+    config: parseReviewRequestConfig(auto.config),
+  };
+}
+
 export async function listDueReviewRequests(
   db: SupabaseClient, nowIso: string,
 ): Promise<DueReviewRequest[]> {
@@ -213,7 +237,7 @@ export async function listDueReviewRequests(
   const windowEnd = new Date(now).toISOString();
 
   const { data, error } = await db.from("bookings")
-    .select("id, account_id, contact_id, ends_at, completed_at, followup_sent_at, review_request_sms_failed_at, contacts(email, phone)")
+    .select(REVIEW_REQUEST_SELECT)
     .in("account_id", [...enabled.keys()])
     .eq("status", "completed").is("review_requested_at", null)
     .or(eitherAnchorSince("completed_at", windowStart))
@@ -227,28 +251,26 @@ export async function listDueReviewRequests(
   const { sendable, accountInfo } = await loadSendableRows(
     db, rows as { account_id: string }[], "listDueReviewRequests");
 
-  return sendable.map((r: any) => {
-    const info = accountInfo.get(r.account_id as string)!;
-    const auto = enabled.get(r.account_id as string)!;
-    return {
-      bookingId: r.id,
-      accountId: r.account_id,
-      endsAt: r.ends_at,
-      completedAt: r.completed_at ?? null,
-      followupSentAt: r.followup_sent_at ?? null,
-      smsFailedAt: r.review_request_sms_failed_at ?? null,
-      contactId: r.contact_id,
-      contactEmail: r.contacts?.email ?? null,
-      contactPhone: r.contacts?.phone ?? null,
-      brandName: brandDisplayName(info.branding),
-      branding: info.branding,
-      accountTimezone: info.accountTimezone,
-      fromEmail: info.fromEmail,
-      replyToEmail: info.replyToEmail,
-      body: auto.body,
-      config: parseReviewRequestConfig(auto.config),
-    };
-  });
+  return sendable.map((r: any) =>
+    toDueReviewRequest(r, accountInfo.get(r.account_id as string)!, enabled.get(r.account_id as string)!));
+}
+
+async function enabledRecipeFor(db: SupabaseClient, accountId: string, recipeKey: RecipeKey): Promise<EnabledRecipe | null> {
+  const row = await getAutomation(db, accountId, recipeKey);
+  return row && row.enabled ? { body: row.body ?? "", config: row.config } : null;
+}
+
+export async function getDueReviewRequestById(db: SupabaseClient, bookingId: string): Promise<DueLookup<DueReviewRequest>> {
+  const { data, error } = await db.from("bookings")
+    .select(REVIEW_REQUEST_SELECT)
+    .eq("id", bookingId).eq("status", "completed").is("review_requested_at", null).maybeSingle();
+  if (error) throw new Error(`getDueReviewRequestById failed: ${error.message}`);
+  if (!data) return { due: null, why: "gone" };
+  const auto = await enabledRecipeFor(db, (data as any).account_id, "review_request");
+  if (!auto) return { due: null, why: "off" };
+  const { sendable, accountInfo } = await loadSendableRows(db, [data as { account_id: string }], "getDueReviewRequestById");
+  if (sendable.length === 0) return { due: null, why: "off" };
+  return { due: toDueReviewRequest(data, accountInfo.get((data as any).account_id)!, auto) };
 }
 
 /** Send-then-stamp, same reasoning as stampReminderSent: only after a confirmed send. */
@@ -335,6 +357,31 @@ export type DueNoShowNudge = {
 
 /** Candidates, not decisions — `shouldSendNoShowNudgeNow` in the pass picks
  *  the moment. "Enabled, no_show, unstamped, inside 37h by either anchor". */
+const NO_SHOW_NUDGE_SELECT =
+  "id, account_id, contact_id, ends_at, no_show_at, no_show_nudge_sms_failed_at, calendars(public_id, enabled), contacts(email, phone)";
+
+function toDueNoShowNudge(r: any, info: AccountBrandInfo, auto: EnabledRecipe): DueNoShowNudge {
+  return {
+    bookingId: r.id,
+    accountId: r.account_id,
+    endsAt: r.ends_at,
+    noShowAt: r.no_show_at ?? null,
+    smsFailedAt: r.no_show_nudge_sms_failed_at ?? null,
+    contactId: r.contact_id,
+    contactEmail: r.contacts?.email ?? null,
+    contactPhone: r.contacts?.phone ?? null,
+    calendarPublicId: r.calendars?.public_id,
+    calendarEnabled: r.calendars?.enabled === true,
+    brandName: brandDisplayName(info.branding),
+    branding: info.branding,
+    accountTimezone: info.accountTimezone,
+    fromEmail: info.fromEmail,
+    replyToEmail: info.replyToEmail,
+    body: auto.body,
+    config: parseNoShowNudgeConfig(auto.config),
+  };
+}
+
 export async function listDueNoShowNudges(
   db: SupabaseClient, nowIso: string,
 ): Promise<DueNoShowNudge[]> {
@@ -346,7 +393,7 @@ export async function listDueNoShowNudges(
   const windowEnd = new Date(now).toISOString();
 
   const { data, error } = await db.from("bookings")
-    .select("id, account_id, contact_id, ends_at, no_show_at, no_show_nudge_sms_failed_at, calendars(public_id, enabled), contacts(email, phone)")
+    .select(NO_SHOW_NUDGE_SELECT)
     .in("account_id", [...enabled.keys()])
     .eq("status", "no_show").is("no_show_nudged_at", null)
     .or(eitherAnchorSince("no_show_at", windowStart))
@@ -360,29 +407,21 @@ export async function listDueNoShowNudges(
   const { sendable, accountInfo } = await loadSendableRows(
     db, rows as { account_id: string }[], "listDueNoShowNudges");
 
-  return sendable.map((r: any) => {
-    const info = accountInfo.get(r.account_id as string)!;
-    const auto = enabled.get(r.account_id as string)!;
-    return {
-      bookingId: r.id,
-      accountId: r.account_id,
-      endsAt: r.ends_at,
-      noShowAt: r.no_show_at ?? null,
-      smsFailedAt: r.no_show_nudge_sms_failed_at ?? null,
-      contactId: r.contact_id,
-      contactEmail: r.contacts?.email ?? null,
-      contactPhone: r.contacts?.phone ?? null,
-      calendarPublicId: r.calendars?.public_id,
-      calendarEnabled: r.calendars?.enabled === true,
-      brandName: brandDisplayName(info.branding),
-      branding: info.branding,
-      accountTimezone: info.accountTimezone,
-      fromEmail: info.fromEmail,
-      replyToEmail: info.replyToEmail,
-      body: auto.body,
-      config: parseNoShowNudgeConfig(auto.config),
-    };
-  });
+  return sendable.map((r: any) =>
+    toDueNoShowNudge(r, accountInfo.get(r.account_id as string)!, enabled.get(r.account_id as string)!));
+}
+
+export async function getDueNoShowNudgeById(db: SupabaseClient, bookingId: string): Promise<DueLookup<DueNoShowNudge>> {
+  const { data, error } = await db.from("bookings")
+    .select(NO_SHOW_NUDGE_SELECT)
+    .eq("id", bookingId).eq("status", "no_show").is("no_show_nudged_at", null).maybeSingle();
+  if (error) throw new Error(`getDueNoShowNudgeById failed: ${error.message}`);
+  if (!data) return { due: null, why: "gone" };
+  const auto = await enabledRecipeFor(db, (data as any).account_id, "no_show_nudge");
+  if (!auto) return { due: null, why: "off" };
+  const { sendable, accountInfo } = await loadSendableRows(db, [data as { account_id: string }], "getDueNoShowNudgeById");
+  if (sendable.length === 0) return { due: null, why: "off" };
+  return { due: toDueNoShowNudge(data, accountInfo.get((data as any).account_id)!, auto) };
 }
 
 export async function stampNoShowNudged(db: SupabaseClient, bookingId: string): Promise<void> {
@@ -444,6 +483,24 @@ export type DueSmsReminder = {
 
 /** No gate follows this list: a text reminder is tied to the appointment,
  *  not to a morning, so the window IS the moment. */
+const SMS_REMINDER_SELECT =
+  "id, account_id, contact_id, starts_at, booker_timezone, sms_reminder_failed_at, contacts(phone)";
+
+function toDueSmsReminder(r: any, info: AccountBrandInfo, auto: EnabledRecipe): DueSmsReminder {
+  return {
+    bookingId: r.id,
+    accountId: r.account_id,
+    startsAt: r.starts_at,
+    bookerTimezone: r.booker_timezone ?? null,
+    smsFailedAt: r.sms_reminder_failed_at ?? null,
+    contactId: r.contact_id,
+    contactPhone: r.contacts?.phone ?? null,
+    brandName: brandDisplayName(info.branding),
+    accountTimezone: info.accountTimezone,
+    body: auto.body,
+  };
+}
+
 export async function listDueSmsReminders(
   db: SupabaseClient, nowIso: string,
 ): Promise<DueSmsReminder[]> {
@@ -455,7 +512,7 @@ export async function listDueSmsReminders(
   const windowEnd = new Date(now + SMS_REMINDER_WINDOW_END_MS).toISOString();
 
   const { data, error } = await db.from("bookings")
-    .select("id, account_id, contact_id, starts_at, booker_timezone, sms_reminder_failed_at, contacts(phone)")
+    .select(SMS_REMINDER_SELECT)
     .in("account_id", [...enabled.keys()])
     .eq("status", "booked").is("sms_reminder_sent_at", null)
     .gte("starts_at", windowStart).lte("starts_at", windowEnd)
@@ -468,22 +525,21 @@ export async function listDueSmsReminders(
   const { sendable, accountInfo } = await loadSendableRows(
     db, rows as { account_id: string }[], "listDueSmsReminders");
 
-  return sendable.map((r: any) => {
-    const info = accountInfo.get(r.account_id as string)!;
-    const auto = enabled.get(r.account_id as string)!;
-    return {
-      bookingId: r.id,
-      accountId: r.account_id,
-      startsAt: r.starts_at,
-      bookerTimezone: r.booker_timezone ?? null,
-      smsFailedAt: r.sms_reminder_failed_at ?? null,
-      contactId: r.contact_id,
-      contactPhone: r.contacts?.phone ?? null,
-      brandName: brandDisplayName(info.branding),
-      accountTimezone: info.accountTimezone,
-      body: auto.body,
-    };
-  });
+  return sendable.map((r: any) =>
+    toDueSmsReminder(r, accountInfo.get(r.account_id as string)!, enabled.get(r.account_id as string)!));
+}
+
+export async function getDueSmsReminderById(db: SupabaseClient, bookingId: string): Promise<DueLookup<DueSmsReminder>> {
+  const { data, error } = await db.from("bookings")
+    .select(SMS_REMINDER_SELECT)
+    .eq("id", bookingId).eq("status", "booked").is("sms_reminder_sent_at", null).maybeSingle();
+  if (error) throw new Error(`getDueSmsReminderById failed: ${error.message}`);
+  if (!data) return { due: null, why: "gone" };
+  const auto = await enabledRecipeFor(db, (data as any).account_id, "sms_reminder");
+  if (!auto) return { due: null, why: "off" };
+  const { sendable, accountInfo } = await loadSendableRows(db, [data as { account_id: string }], "getDueSmsReminderById");
+  if (sendable.length === 0) return { due: null, why: "off" };
+  return { due: toDueSmsReminder(data, accountInfo.get((data as any).account_id)!, auto) };
 }
 
 export async function stampSmsReminderSent(db: SupabaseClient, bookingId: string): Promise<void> {

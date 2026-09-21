@@ -16,6 +16,7 @@ const dbFns = vi.hoisted(() => ({
   countConciergeConversationsForAccount: vi.fn(),
   getForm: vi.fn(),
   createSubmission: vi.fn(),
+  recordAutomationLog: vi.fn(async () => undefined),
 }));
 const enrichMock = vi.hoisted(() => vi.fn());
 
@@ -229,6 +230,7 @@ beforeEach(() => {
   dbFns.getForm.mockImplementation(async (_db, _acct, id) => ({ ...LEAD_FORM, id }));
   dbFns.createSubmission.mockResolvedValue({ id: "s1" });
   dbFns.setConciergeSubmission.mockResolvedValue(true);
+  dbFns.recordAutomationLog.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -253,6 +255,11 @@ describe("POST /api/concierge/[publicId]/turn — answering", () => {
       ["visitor", "do you build tables?"],
       ["assistant", "Yes, we do."],
     ]);
+    // Part C: one `ai` automation-log row per conversation START — "website
+    // chats" on the client's Activity page is the count of these.
+    expect(dbFns.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      source: "concierge", channel: "ai", subjectKey: "conversation:c1", status: "sent",
+    }));
   });
 
   it("replays the stored transcript, so turn two knows what turn one said", async () => {
@@ -273,6 +280,8 @@ describe("POST /api/concierge/[publicId]/turn — answering", () => {
       ["user", "and a bench?"],
     ]);
     expect(body.tools.map((t) => t.function.name)).toEqual(["capture_lead"]);
+    // A continued conversation is not a new one — no second automation-log row.
+    expect(dbFns.recordAutomationLog).not.toHaveBeenCalled();
   });
 
   it("calls the business by its BRAND name and never the agency's label", async () => {

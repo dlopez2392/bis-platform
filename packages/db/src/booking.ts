@@ -53,7 +53,7 @@ export type CreateBookingInput = {
 };
 
 export type DueReminder = {
-  bookingId: string; accountId: string; startsAt: string;
+  bookingId: string; accountId: string; contactId: string; startsAt: string;
   bookerTimezone: string | null; cancelToken: string; calendarPublicId: string;
   contactEmail: string | null; contactName: string;
   accountTimezone: string;
@@ -71,7 +71,7 @@ export type DueReminder = {
 };
 
 export type DueFollowup = {
-  bookingId: string; accountId: string; startsAt: string;
+  bookingId: string; accountId: string; contactId: string; startsAt: string;
   /** The meeting's `ends_at`. Previously the query FILTERED on this column
    *  without selecting it; the send-time gate in the cron route
    *  (`shouldSendFollowupNow`) needs the actual instant, because "the next
@@ -520,6 +520,25 @@ export async function loadSendableRows<T extends { account_id: string }>(
   };
 }
 
+/** A subject looked up by id for RELEASE: the row, or why there is none —
+ *  `gone` (cancelled, already sent, deleted) or `off` (the recipe, the
+ *  calendar's feature, or the account's outbound is switched off). */
+export type DueLookup<T> = { due: T; why?: undefined } | { due: null; why: "gone" | "off" };
+
+const REMINDER_SELECT = `id, account_id, contact_id, starts_at, booker_timezone, cancel_token, meeting_url,
+             calendars(public_id), contacts(first_name, last_name, email)`;
+
+function toDueReminder(r: any, info: AccountBrandInfo): DueReminder {
+  const contactName = [r.contacts?.first_name, r.contacts?.last_name].filter(Boolean).join(" ").trim();
+  return {
+    bookingId: r.id, accountId: r.account_id, contactId: r.contact_id, startsAt: r.starts_at,
+    bookerTimezone: r.booker_timezone ?? null, cancelToken: r.cancel_token,
+    calendarPublicId: r.calendars?.public_id, contactEmail: r.contacts?.email ?? null,
+    contactName: contactName || "Unknown", accountTimezone: info.accountTimezone,
+    branding: info.branding, fromEmail: info.fromEmail, meetingUrl: r.meeting_url ?? null,
+  };
+}
+
 export async function listDueReminders(
   db: SupabaseClient, nowIso: string,
 ): Promise<DueReminder[]> {
@@ -528,8 +547,7 @@ export async function listDueReminders(
   const windowEnd = new Date(now + REMINDER_WINDOW_END_MS).toISOString();
 
   const { data, error } = await db.from("bookings")
-    .select(`id, account_id, starts_at, booker_timezone, cancel_token, meeting_url,
-             calendars(public_id), contacts(first_name, last_name, email)`)
+    .select(REMINDER_SELECT)
     .eq("status", "booked").is("reminder_sent_at", null)
     .gte("starts_at", windowStart).lte("starts_at", windowEnd)
     .order("starts_at", { ascending: true });
@@ -543,25 +561,19 @@ export async function listDueReminders(
   const { sendable, accountInfo } = await loadSendableRows(
     db, rows as { account_id: string }[], "listDueReminders");
 
-  return sendable.map((r: any) => {
-    const info = accountInfo.get(r.account_id as string)!;
-    const contactName = [r.contacts?.first_name, r.contacts?.last_name]
-      .filter(Boolean).join(" ").trim();
-    return {
-      bookingId: r.id,
-      accountId: r.account_id,
-      startsAt: r.starts_at,
-      bookerTimezone: r.booker_timezone ?? null,
-      cancelToken: r.cancel_token,
-      calendarPublicId: r.calendars?.public_id,
-      contactEmail: r.contacts?.email ?? null,
-      contactName: contactName || "Unknown",
-      accountTimezone: info.accountTimezone,
-      branding: info.branding,
-      fromEmail: info.fromEmail,
-      meetingUrl: r.meeting_url ?? null,
-    };
-  });
+  return sendable.map((r: any) => toDueReminder(r, accountInfo.get(r.account_id as string)!));
+}
+
+/** The same predicates as the due-list MINUS the time window: the release
+ *  step decides "when", this answers "is it still a reminder to send". */
+export async function getDueReminderById(db: SupabaseClient, bookingId: string): Promise<DueLookup<DueReminder>> {
+  const { data, error } = await db.from("bookings").select(REMINDER_SELECT)
+    .eq("id", bookingId).eq("status", "booked").is("reminder_sent_at", null).maybeSingle();
+  if (error) throw new Error(`getDueReminderById failed: ${error.message}`);
+  if (!data) return { due: null, why: "gone" };
+  const { sendable, accountInfo } = await loadSendableRows(db, [data as { account_id: string }], "getDueReminderById");
+  if (sendable.length === 0) return { due: null, why: "off" };
+  return { due: toDueReminder(data, accountInfo.get((data as any).account_id)!) };
 }
 
 /**
@@ -623,6 +635,18 @@ export async function stampReminderSent(db: SupabaseClient, bookingId: string): 
  * memory, so without that column the ~12 ticks inside one morning band would
  * each send.
  */
+const FOLLOWUP_SELECT = `id, account_id, contact_id, starts_at, ends_at, calendars!inner(followup_body, followup_enabled), contacts(first_name, last_name, email)`;
+
+function toDueFollowup(r: any, info: AccountBrandInfo): DueFollowup {
+  const contactName = [r.contacts?.first_name, r.contacts?.last_name].filter(Boolean).join(" ").trim();
+  return {
+    bookingId: r.id, accountId: r.account_id, contactId: r.contact_id, startsAt: r.starts_at, endsAt: r.ends_at,
+    contactEmail: r.contacts?.email ?? null, contactName: contactName || "Unknown",
+    accountTimezone: info.accountTimezone, branding: info.branding,
+    fromEmail: info.fromEmail, replyToEmail: info.replyToEmail, followupBody: r.calendars?.followup_body ?? "",
+  };
+}
+
 export async function listDueFollowups(
   db: SupabaseClient, nowIso: string,
 ): Promise<DueFollowup[]> {
@@ -631,9 +655,7 @@ export async function listDueFollowups(
   const windowEnd = new Date(now).toISOString();
 
   const { data, error } = await db.from("bookings")
-    .select(`id, account_id, starts_at, ends_at,
-             calendars!inner(followup_body),
-             contacts(first_name, last_name, email)`)
+    .select(FOLLOWUP_SELECT)
     // Widened past "booked": an operator's "Mark completed" on the list
     // must not silence the follow-up this feature exists to send.
     // no_show stays excluded -- deliberately deferred, not an oversight.
@@ -653,24 +675,18 @@ export async function listDueFollowups(
   const { sendable, accountInfo } = await loadSendableRows(
     db, rows as { account_id: string }[], "listDueFollowups");
 
-  return sendable.map((r: any) => {
-    const info = accountInfo.get(r.account_id as string)!;
-    const contactName = [r.contacts?.first_name, r.contacts?.last_name]
-      .filter(Boolean).join(" ").trim();
-    return {
-      bookingId: r.id,
-      accountId: r.account_id,
-      startsAt: r.starts_at,
-      endsAt: r.ends_at,
-      contactEmail: r.contacts?.email ?? null,
-      contactName: contactName || "Unknown",
-      accountTimezone: info.accountTimezone,
-      branding: info.branding,
-      fromEmail: info.fromEmail,
-      replyToEmail: info.replyToEmail,
-      followupBody: r.calendars?.followup_body ?? "",
-    };
-  });
+  return sendable.map((r: any) => toDueFollowup(r, accountInfo.get(r.account_id as string)!));
+}
+
+export async function getDueFollowupById(db: SupabaseClient, bookingId: string): Promise<DueLookup<DueFollowup>> {
+  const { data, error } = await db.from("bookings").select(FOLLOWUP_SELECT)
+    .eq("id", bookingId).in("status", ["booked", "completed"]).is("followup_sent_at", null).maybeSingle();
+  if (error) throw new Error(`getDueFollowupById failed: ${error.message}`);
+  if (!data) return { due: null, why: "gone" };
+  if ((data as any).calendars?.followup_enabled !== true) return { due: null, why: "off" };
+  const { sendable, accountInfo } = await loadSendableRows(db, [data as { account_id: string }], "getDueFollowupById");
+  if (sendable.length === 0) return { due: null, why: "off" };
+  return { due: toDueFollowup(data, accountInfo.get((data as any).account_id)!) };
 }
 
 /** Send-then-stamp, same reasoning as stampReminderSent: stamp only after a confirmed send. */

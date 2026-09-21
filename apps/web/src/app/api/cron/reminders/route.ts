@@ -6,6 +6,13 @@ import { PASSES } from "@/lib/automations/registry";
 
 export const dynamic = "force-dynamic";
 
+// The tick's own ceiling. RELEASE_BUDGET_MS (60s, release-held.ts) bounds the
+// FIRST pass so it cannot starve the eight after it; this is that budget plus
+// headroom for them — the two numbers are one coupling, so changing either
+// without the other is the bug. 300 is Vercel's current per-function default;
+// declaring it here makes the assumption explicit rather than inherited.
+export const maxDuration = 300;
+
 /**
  * The platform's scheduled job: Vercel hits this every 15 minutes
  * (`vercel.json`'s `crons` entry — the literal cron string is deliberately

@@ -692,4 +692,30 @@ describe("submitFormAction — the instant reply to the person who wrote in (Mil
     expect(instantReplyMock).not.toHaveBeenCalled();
     quiet.mockRestore();
   });
+
+  // Branch-fix wave item 1: the five cron passes get a next tick to retry an
+  // unstamped row; this inline call does not — it fires once, from this
+  // submission, and never runs again. A `{ kind: "failed" }` outcome is the
+  // one trace of a lead that could not be texted, so `enrich` must record it
+  // as the operator's "somebody was not told about this lead" signal.
+  it("a failed instant reply is recorded as processing_error — it has no next tick to retry it", async () => {
+    // Mutation: discard the outcome instead of checking its kind → FAILS
+    // (setSubmissionProcessingError never called).
+    getPublishedFormByPublicIdMock.mockResolvedValue(withPhone());
+    instantReplyMock.mockResolvedValue({ kind: "failed", error: "provider rejected the number" });
+    const result = await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token(), locale: "en", phone: PHONE }));
+    expect(result.status).toBe("success");
+    expect(setSubmissionProcessingErrorMock).toHaveBeenCalledWith(
+      expect.anything(), "acct_1", "sub_1", expect.stringContaining("provider rejected the number"));
+  });
+
+  it("a held instant reply outcome is normal and records nothing on the submission", async () => {
+    // Mutation: treat `held` the same as `failed` (e.g. `kind !== "skipped"`)
+    // → FAILS (setSubmissionProcessingError gets called for a routine hold).
+    getPublishedFormByPublicIdMock.mockResolvedValue(withPhone());
+    instantReplyMock.mockResolvedValue({ kind: "held" });
+    const result = await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token(), locale: "en", phone: PHONE }));
+    expect(result.status).toBe("success");
+    expect(setSubmissionProcessingErrorMock).not.toHaveBeenCalled();
+  });
 });

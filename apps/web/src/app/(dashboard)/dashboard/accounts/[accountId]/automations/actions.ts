@@ -11,6 +11,7 @@
 import { revalidatePath } from "next/cache";
 import {
   serviceDb, upsertAutomation, parseReviewRequestConfig, parseNoShowNudgeConfig, parseInstantReplyConfig,
+  saveQuietSettings, bumpHeldForAccount, isClock,
   type ReviewRequestChannel,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
@@ -142,6 +143,48 @@ export async function saveInstantReplyAction(
   } catch (e) {
     console.error(`saveInstantReplyAction: save failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.instantReply.saveFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/automations`);
+  return { ok: true };
+}
+
+/**
+ * The quiet-hours window (part C). Same guard, same Result shape as the
+ * recipe actions above. After the save, every held row of the account is
+ * made due now (`bumpHeldForAccount`), so the release pass re-reads tonight's
+ * queue under the NEW window on the next tick — turning quiet hours off at
+ * 23:00 releases the texts at 23:15, not at 08:00; lengthening the window
+ * re-holds them. The bump is best effort: a save that landed is a success.
+ */
+export async function saveQuietHoursAction(
+  accountId: string, formData: FormData,
+): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["automations.agencyOnly"] };
+
+  const enabled = formData.get("quiet_enabled") === "on";
+  const start = String(formData.get("quiet_start") ?? "").trim();
+  const end = String(formData.get("quiet_end") ?? "").trim();
+  if (!isClock(start) || !isClock(end)) return { ok: false, error: m["automations.quiet.invalidTime"] };
+  // quiet-hours.ts's evaluateWindow treats start === end as DISABLED (no
+  // window at all), so an enabled row with equal times would show ON in the
+  // UI while never actually going quiet. Refused only while turning it on;
+  // a stored OFF row with equal times is a legal (if pointless) rest state.
+  if (enabled && start === end) return { ok: false, error: m["automations.quiet.invalidTime"] };
+
+  const db = serviceDb();
+  try {
+    await saveQuietSettings(db, accountId, { enabled, start, end }, userId);
+  } catch (e) {
+    console.error(`saveQuietHoursAction: save failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.quiet.saveFailed"] };
+  }
+  try {
+    const bumped = await bumpHeldForAccount(db, accountId);
+    if (bumped > 0) console.log(`saveQuietHoursAction: ${bumped} held send(s) for account ${accountId} re-queued under the new window`);
+  } catch (e) {
+    console.error(`saveQuietHoursAction: could not re-queue held sends for account ${accountId}: ${String(e)}`);
   }
 
   revalidatePath(`/dashboard/accounts/${accountId}/automations`);

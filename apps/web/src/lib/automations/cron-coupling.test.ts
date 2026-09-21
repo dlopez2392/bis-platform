@@ -7,6 +7,7 @@ import {
 } from "@bis/db";
 import { FOLLOWUP_MAX_AGE_MS } from "@/lib/booking/followup-timing";
 import { SMS_RETRY_COOLDOWN_MS } from "./caps";
+import { RELEASE_BUDGET_MS } from "./passes/release-held";
 
 /**
  * The three-way coupling (schedule ↔ reminder window ↔ follow-up window) was
@@ -19,6 +20,9 @@ const MINUTE = 60 * 1000;
 const vercel = JSON.parse(
   readFileSync(new URL("../../../vercel.json", import.meta.url), "utf-8"),
 ) as { crons: { path: string; schedule: string }[] };
+const routeSource = readFileSync(
+  new URL("../../app/api/cron/reminders/route.ts", import.meta.url), "utf-8",
+);
 
 function tickIntervalMs(schedule: string): number {
   const m = /^\*\/(\d+) \* \* \* \*$/.exec(schedule);
@@ -74,5 +78,20 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
     // three the count every real run sees.
     const tick = tickIntervalMs(entry!.schedule);
     expect((SMS_REMINDER_WINDOW_END_MS - SMS_REMINDER_WINDOW_START_MS) / tick).toBe(3);
+  });
+
+  it("the route declares a LIVE maxDuration at least double the release pass's own wall-clock budget — the budget bounds the FIRST pass, and the rest of the tick belongs to the other eight (mutation: comment the export out, or delete it, or set it to 61 → each FAILS)", () => {
+    // Anchored to a whole line (^…$, multiline) so a COMMENTED-OUT export
+    // ("// export const maxDuration = 300;") cannot match — the regex used
+    // to be bare `export const maxDuration = (\d+);`, which `.exec` finds
+    // anywhere in the file including inside a `//` comment, so Vercel could
+    // silently fall back to its inherited default while this test stayed green.
+    const m = /^export const maxDuration = (\d+);$/m.exec(routeSource);
+    expect(m).not.toBeNull();
+    const maxDuration = Number(m![1]);
+    // At LEAST double: 61s (one second of headroom) would still pass a
+    // ">" check but leaves nothing for the eight passes that run after the
+    // release pass in the same tick.
+    expect(maxDuration).toBeGreaterThanOrEqual((RELEASE_BUDGET_MS / 1000) * 2);
   });
 });

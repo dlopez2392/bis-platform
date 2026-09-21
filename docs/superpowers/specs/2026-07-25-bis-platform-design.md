@@ -153,7 +153,7 @@ Each module ships to a real client before the next starts. **Each module gets it
 implementation-plan cycle; the first plan covers M0 + M1 together** (foundation alone
 has no client-visible value).
 
-### 8a. Roadmap status (as of 2026-09-20, the web concierge's second PR, #103)
+### 8a. Roadmap status (as of 2026-09-21, automation engine part C, #TBD)
 
 Nothing else in this repo tracks the table above against what shipped, so this
 block does. Read against the 40 specs in `docs/superpowers/specs/` and the code —
@@ -164,7 +164,7 @@ each row was checked in the tree, not inferred from a spec's existence.
 | M0 | ✅ shipped | tenancy/RLS, agency shell, events log | — |
 | M1 | ✅ shipped | contacts (paging, drawer, CSV import/export, dedupe), pipeline, forms + embeds, unified inbox (SMS + email), missed-call text-back, custom fields/values, blueprints, activation checklist | — |
 | M2 | ✅ shipped | calendars, booking page + embed, SMS/email reminders; plus video meetings and follow-ups the row never asked for | — |
-| M3 | ⚠️ partial | a **pass registry** — eight fixed passes on one cron (reminders, follow-ups, review request, no-show nudge, SMS reminder, site traffic, weekly client and agency reports). `2026-09-06-automations-design.md` names it "a HARNESS, not a shared algorithm" on purpose. | the engine itself: user-defined **triggers → conditions → actions**, quiet hours as a rule rather than a per-pass gate, metering |
+| M3 | ⚠️ partial | the engine's shared pieces shipped 2026-09-21 (part C, #TBD): one `automation_log`, one quiet-hours window per account (deferred, never skipped, released by a queue), usage in units and a client-visible history at /activity. | more recipes (part B, its own spec) and a rule builder, deferred until a second client's needs diverge from the catalogue. |
 | M4 | ⚠️ partial | the voice receptionist, live on a real client — answer route, realtime lifecycle, tools, summaries, spam screening, handoff, call proposals; a "Talk to Sofía" web demo; **the web concierge** (#102 the chat, #103 the switch and the bubble) — a text assistant every client can turn on from the Voice page and paste onto their own website as one script tag, filing leads through the form they chose. Standard for every client, not a favour to one. | the **pgvector knowledge base** — deliberately not in v1: the live account's facts are 2,510 characters and a prompt holds them (`2026-09-20-web-concierge-design.md`); no pgvector migration exists. And one proof, not a feature: the concierge's reply path has never been exercised end to end by a machine (the model-call test skips without `OPENAI_API_KEY` in CI), so the first client to switch it on gets a deliberately watched first conversation. |
 | M5 | ⚠️ partial | post-job review-request messages (one automation pass) | **GBP monitoring** and **AI-drafted replies**. The checklist's `gbp_connect` item is a "done outside BIS" manual step, not a feature. |
 | M6 | ❌ not started | — | Puck landing pages inside blueprints; Puck is not a dependency |
