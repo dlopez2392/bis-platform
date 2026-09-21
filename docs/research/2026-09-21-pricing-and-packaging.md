@@ -21,8 +21,8 @@ local cost of a front-desk employee rather than against national list prices.
 | Full automation suite | — | partial | ✓ | ✓ |
 | White-label + staff logins | — | — | ✓ | ✓ |
 | Website built + hosted | — | — | — | ✓ |
-| Est. cost to serve | ~$17 | ~$44 | ~$91 | ~$187 |
-| **Gross margin** | **82%** | **85%** | **82%** | **81%** |
+| Est. cost to serve | ~$16 | ~$45 | ~$95 | ~$186 |
+| **Gross margin** | **83%** | **85%** | **81%** | **81%** |
 
 Annual prepay: **two months free**. Every tier month-to-month, no term contract — a
 term contract is the fastest way to lose a Valley small business's trust, and the
@@ -136,8 +136,8 @@ at $0.069/min on full. Across a corpus of 1,446,980 analyzed business calls, **m
 | SMS | $1.40 | $2.10 | $4.20 | $7.00 |
 | Email + shared infra | $4.00 | $4.00 | $5.00 | $6.00 |
 | Website hosting | — | — | — | $12.00 |
-| **Total** | **~$17** | **~$44** | **~$91** | **~$187** |
-| **Margin at list** | **82%** | **85%** | **82%** | **81%** |
+| **Total** | **~$16** | **~$45** | **~$95** | **~$186** |
+| **Margin at list** | **83%** | **85%** | **81%** | **81%** |
 
 Two lines deserve attention. **Telephony is economically irrelevant** at about $2 a
 month; optimize it last. **The 10DLC standard campaign fee is $10/month and is more
@@ -253,7 +253,7 @@ inbox, reminders and follow-ups, weekly report, one client login. No AI receptio
 **Why it exists:** it is the land-and-expand tier and the answer to "I can't do $297
 yet." It competes with Jobber Connect at $139 and undercuts Housecall Pro Essentials at
 $189. Its job is to get a business's contacts into our database, where the upgrade
-conversation happens by itself the first month they miss twenty calls. Margin 82%.
+conversation happens by itself the first month they miss twenty calls. Margin 83%.
 
 ### Recibe — $297/month · setup $997 — **the flagship**
 *"Sofía answers, in English and Spanish, and books the job."*
@@ -278,7 +278,7 @@ logins.
 
 **Why $497:** it matches GoHighLevel's SaaS Pro, undercuts Podium Pro at $599 and
 Housecall Pro Max with voice at $479–579, and roughly matches Jobber Plus at $499 while
-adding Spanish. Margin 82%. This is the tier for a multi-truck home service company or
+adding Spanish. Margin 81%. This is the tier for a multi-truck home service company or
 a clinic with real call volume.
 
 ### Crece — $997/month · setup $1,997
@@ -289,7 +289,7 @@ by us with traffic reporting, A2P 10DLC registration handled end to end, a named
 contact, and a quarterly strategy review.
 
 **Why $997:** the website alone is $1,500–$5,000 locally as a one-time project.
-Infrastructure costs about $187, but the real cost is our hours. Price Crece on time,
+Infrastructure costs about $186, but the real cost is our hours. Price Crece on time,
 not tokens: it assumes roughly two hours of service a month, and a client who needs six
 is a client who needs a project quote instead.
 
