@@ -73,7 +73,7 @@ teardown("delete the client-access e2e fixture", async () => {
     // that would have made the accounts delete start failing SILENTLY the
     // day those specs moved; one exported list, two callers.
     const report: SweepReport = {
-      accounts: [], clerkUsers: [], clerkOrgs: [], orphanObjects: [], errors: [],
+      accounts: [], clerkUsers: [], clerkOrgs: [], strandedForms: [], orphanObjects: [], errors: [],
     };
     await deleteAccountCascade(db, fixture.accountId, report);
     for (const err of report.errors) {

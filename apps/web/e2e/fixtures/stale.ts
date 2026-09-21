@@ -29,6 +29,20 @@ export const FIXTURE_ACCOUNT_RE = /^E2E Client Co (\d{13})$/;
 export const FIXTURE_EMAIL_RE = /^e2e-client-(\d{13})@example\.com$/;
 
 /**
+ * `E2E Form 1789613520660` or `E2E Spam 1789613520660` — the two names
+ * `forms.spec.ts` mints, always on the SEEDED account (`Test Client One`),
+ * never on a per-run fixture account. That account also carries real forms
+ * ("Quote request" among them), so this is anchored just as tightly as
+ * `FIXTURE_ACCOUNT_RE`: exact word, exact 13 digits, exact case, nothing
+ * before or after. The `Form|Spam` alternation is non-capturing so the stamp
+ * stays capture group 1 — the same shape `fixtureStamp`/`isStaleFixture`
+ * already read for every other fixture pattern, which is what lets
+ * `isStaleFixtureForm` below be built on those instead of re-deriving the
+ * staleness math a second time.
+ */
+export const FIXTURE_FORM_RE = /^E2E (?:Form|Spam) (\d{13})$/;
+
+/**
  * How long a fixture is left alone before it is considered abandoned.
  *
  * This is a concurrency guard, not a tidiness preference: a suite that is
@@ -74,6 +88,15 @@ export function isStaleFixture(
   if (stamp === null) return false;
   const age = now - stamp;
   return age >= maxAgeMs;
+}
+
+/**
+ * True only for a form name `forms.spec.ts` minted, at least `STALE_AFTER_MS`
+ * ago — the same 30-minute window every other fixture uses, so a suite
+ * running right now never has its own in-progress form read as abandoned.
+ */
+export function isStaleFixtureForm(name: string, now: number): boolean {
+  return isStaleFixture(name, FIXTURE_FORM_RE, now);
 }
 
 /**
