@@ -474,14 +474,14 @@ The architecture already assumed this; what "standard" adds is surface.
    4. Paste the code into the website — renders the shared `EmbedSnippet`
       once the assistant is on, otherwise a single sentence saying the line
       appears once it is. This row is PROOF, never a gate: its own state is
-      whether `countConciergeSiteConversations` (new `packages/db/src/concierge.ts`
+      whether `hasConciergeSiteConversation` (new `packages/db/src/concierge.ts`
       accessor — conversations whose `attribution->>'page'` is non-empty,
       i.e. opened from the embedded snippet rather than the direct
       `/c/[publicId]` link) is greater than zero, and it never blocks the
       step's own `done` (row 3's condition) or the rail's tick — a client
       can be fully configured with no visitor having opened it yet, which is
       an honest waiting state ("Not seen on your site yet"), not a failure.
-   `SetupInputs` gained `publishedFormCount`/`conciergeSiteConversations`
+   `SetupInputs` gained `publishedFormCount`/`conciergeSiteConversation`
    (both plain numbers, degrading to 0 on a failed read) and the `profile`
    pick widened to include `concierge_enabled`/`concierge_form_id`/
    `public_id`; `ReadKey` gained `forms`/`conversations`, each its own
@@ -492,7 +492,7 @@ The architecture already assumed this; what "standard" adds is surface.
    grants problem shows up as a broken step — this file's own §"THE GRANTS
    ARE THE SECURITY BOUNDARY" above): `concierge_conversations` is
    `service_role` only, no `authenticated` grant at all, by design — so
-   `gatherSetupInputs`'s `countConciergeSiteConversations` leg calls
+   `gatherSetupInputs`'s `hasConciergeSiteConversation` leg calls
    `serviceDb()` directly for that ONE read, regardless of which client
    (`dbForRequest()` on the wizard page; `serviceDb()` on the sidebar meter
    and `goLiveAction`'s re-check) the caller passed in for the other seven.
