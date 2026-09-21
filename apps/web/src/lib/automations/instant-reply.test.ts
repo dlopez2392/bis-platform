@@ -245,10 +245,14 @@ describe("instant reply — quiet hours", () => {
     });
   });
 
-  it("the window is read for the SUBMISSION's account, in that account's zone (mutation: hardcode either → FAILS)", async () => {
+  it("the window is read for the SUBMISSION's account, in that account's zone, not the sender's default (mutation: hardcode either → FAILS)", async () => {
+    // Same instant NIGHT holds under Chicago (23:00, inside 21:00–08:00): here
+    // it must NOT hold, because Tokyo reads it as 13:00 the next day — well
+    // outside the window. A test that also sends "sent" under Chicago could
+    // not tell a real zone read from a hardcoded one; this one can.
     dbMocks.readQuietSettings.mockResolvedValue(ON);
-    dbMocks.readAccountTimezone.mockResolvedValue("Asia/Tokyo");   // 23:00Z Sept 21 = 08:00 JST Sept 22 — the window just ENDED there
-    expect((await sendInstantReply(input({ now: new Date("2026-09-21T23:00:00Z") }))).kind).toBe("sent");
+    dbMocks.readAccountTimezone.mockResolvedValue("Asia/Tokyo");   // NIGHT (23:00 Chicago) is 13:00 JST Sept 22
+    expect((await sendInstantReply(input({ now: NIGHT }))).kind).toBe("sent");
     expect(dbMocks.readQuietSettings).toHaveBeenCalledWith(expect.anything(), "acct_1");
     expect(dbMocks.readAccountTimezone).toHaveBeenCalledWith(expect.anything(), "acct_1");
   });
@@ -257,6 +261,7 @@ describe("instant reply — quiet hours", () => {
     dbMocks.getAutomation.mockResolvedValue({ ...ROW, enabled: false });
     expect(await sendInstantReply(input())).toEqual({ kind: "skipped", reason: "disabled" });
     expect(dbMocks.readQuietSettings).not.toHaveBeenCalled();
+    expect(dbMocks.readAccountTimezone).not.toHaveBeenCalled();
     expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
   });
 
@@ -297,10 +302,22 @@ describe("releaseInstantReply — from the held row's payload", () => {
     expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: "skipped", reason: "No longer due" }));
   });
 
-  it("a skip at release (the thread got a text meanwhile) writes the plain reason", async () => {
-    dbMocks.hasRecentOutboundSms.mockResolvedValue(true);
+  it("a skip at release (the recipe was turned off meanwhile) writes a reason only the release path can produce (mutation: delete the releaser's logSkipped branch → FAILS)", async () => {
+    // Not `recentText`: the inline path writes that identical string on its
+    // OWN skip, so a test built on it stays green even with the releaser's
+    // logSkipped branch deleted. `recipeOff` is unreachable from the inline
+    // send (it returns before `logSubject` exists), so this string can only
+    // have come from releaseInstantReply's own skip-logging.
+    dbMocks.getAutomation.mockResolvedValue({ ...ROW, enabled: false });
     expect(await releaseInstantReply(ctx, heldRow(PAYLOAD))).toBe("skipped");
-    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ reason: "A text already went to this person today" }));
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ reason: "This automation was turned off" }));
+  });
+
+  it("a row keyed for something other than a submission is skipped as 'No longer due', never texted", async () => {
+    const row: AutomationLogRow = { ...heldRow(PAYLOAD), subject_key: "booking:x" };
+    expect(await releaseInstantReply(ctx, row)).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: "skipped", reason: "No longer due" }));
   });
 
   it("parseInstantReplyPayload accepts exactly the shape the hold wrote", () => {

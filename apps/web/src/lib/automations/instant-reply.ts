@@ -122,7 +122,10 @@ export async function sendInstantReply(input: InstantReplyInput): Promise<Instan
   // From here on the recipe is ON, so a refusal is something the client
   // wants to see on the Activity page. Nothing above this line is logged:
   // `disabled` would write a row per lead for every company without the
-  // recipe, and `noPhone`/`consentWithheld` are only meaningful once it is on.
+  // recipe, and `noPhone`/`outsideRegion`/`consentWithheld` are decided
+  // BEFORE the recipe is even read, so they are never logged for anyone —
+  // SKIP_REASONS' entries for them are reachable only through a
+  // hand-edited payload reaching releaseInstantReply directly.
   const logSubject: LogSubject = {
     accountId, source: "instant_reply", channel: "sms", subjectKey: `submission:${submissionId}`, contactId: input.contactId,
   };
@@ -210,6 +213,17 @@ const SKIP_REASONS: Record<InstantReplySkip, string> = {
  *  function again — every check re-applies, and the held row flips to
  *  whatever this run decides. */
 export const releaseInstantReply: Releaser = async (ctx, row) => {
+  // `subject_key` is always `submission:<id>` for this source (built above);
+  // anything else means the row was never this function's to release. A
+  // silent `.replace` no-op would re-run with the WRONG submission id and,
+  // worse, write the release's log under a DIFFERENT subject key than the
+  // one the pass holds — leaving the original held row to be picked up and
+  // re-released on every subsequent tick forever.
+  const match = /^submission:(.+)$/.exec(row.subject_key);
+  if (!match) {
+    await logSkipped(ctx, subjectOf(row), REASONS.noLongerDue);
+    return "skipped";
+  }
   const payload = parseInstantReplyPayload(row.payload);
   if (!payload) {
     await logSkipped(ctx, subjectOf(row), REASONS.noLongerDue);
@@ -217,7 +231,7 @@ export const releaseInstantReply: Releaser = async (ctx, row) => {
   }
   const outcome = await sendInstantReply({
     db: ctx.db, now: ctx.now, accountId: row.account_id,
-    submissionId: row.subject_key.replace(/^submission:/, ""), ...payload,
+    submissionId: match[1]!, ...payload,
   });
   if (outcome.kind === "skipped") {
     await logSkipped(ctx, subjectOf(row), SKIP_REASONS[outcome.reason]);
