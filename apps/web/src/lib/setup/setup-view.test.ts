@@ -27,7 +27,7 @@ function fullInputs(overrides: Partial<SetupInputs> = {}): SetupInputs {
     callCount: 3,
     ticks: { emailSkipped: false, forwardingDone: true },
     publishedFormCount: 1,
-    conciergeSiteConversations: 1,
+    conciergeSiteConversation: true,
     ...overrides,
   };
 }
@@ -156,6 +156,20 @@ describe("READS_BEHIND", () => {
     const failedConversations = { ...noFailures, conversations: true };
     expect(unknownKeys(buildSetupViews(steps, failedForms).views)).toEqual(["website_assistant"]);
     expect(unknownKeys(buildSetupViews(steps, failedConversations).views)).toEqual(["website_assistant"]);
+  });
+
+  // Fix-round review, IMPORTANT 2: `READS_BEHIND.website_assistant`'s
+  // `"profile"` leg was unpinned — dropping it left the suite green while a
+  // failed profile read rendered the step "To do" instead of "Couldn't
+  // check". `profile` also backs `voice_profile` (alone) and `go_live`
+  // (alongside `numbers`), so a failed profile read degrades all three.
+  it("a failed profile read degrades website_assistant too, alongside voice_profile and go_live", () => {
+    const steps = deriveSetupStatus(fullInputs());
+    const failedProfile = { ...noFailures, profile: true };
+    // MUTATION: drop "profile" from READS_BEHIND.website_assistant — this
+    // FAILS, since website_assistant would then be absent from this list.
+    expect(unknownKeys(buildSetupViews(steps, failedProfile).views).sort())
+      .toEqual(["go_live", "voice_profile", "website_assistant"]);
   });
 });
 

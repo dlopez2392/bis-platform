@@ -1,7 +1,7 @@
 // apps/web/src/lib/setup/setup-inputs.ts
 import {
   getCalendarForAccount, getVoiceProfile, listPhoneNumbersForAccount,
-  countCallsSince, listChecklistState, listForms, countConciergeSiteConversations,
+  countCallsSince, listChecklistState, listForms, hasConciergeSiteConversation,
   serviceDb, type SupabaseClient, type PhoneNumberRow,
 } from "@bis/db";
 import { SETUP_TICK_KEYS, type SetupInputs } from "./setup-status";
@@ -75,6 +75,13 @@ export type GatheredSetupInputs = {
 export async function gatherSetupInputs(
   db: SupabaseClient, accountId: string,
 ): Promise<GatheredSetupInputs> {
+  // Hoisted OUT of the array literal below (fix-round review, MINOR 10):
+  // `serviceDb()` throws synchronously (a missing service-role env var), and
+  // a synchronous throw while BUILDING the array `Promise.allSettled` takes
+  // happens before `allSettled` ever gets to wrap anything — it would escape
+  // as a rejected `gatherSetupInputs` promise, which page.tsx's own doc
+  // comment (and every other caller's) relies on this function never doing.
+  const privileged = serviceDb();
   const settled = await Promise.allSettled([
     db.from("accounts").select("brand_name, from_email").eq("id", accountId).maybeSingle()
       .then(({ data, error }) => {
@@ -110,7 +117,7 @@ export async function gatherSetupInputs(
     // serviceDb(), matching the writes"), and it must NOT be "fixed" by
     // widening the table's grant to `authenticated` — that reopens the
     // exact leak 0042 closed.
-    countConciergeSiteConversations(serviceDb(), accountId),
+    hasConciergeSiteConversation(privileged, accountId),
   ]);
   const [accountR, calendarR, profileR, numbersR, callsR, ticksR, formsR, conversationsR] = settled;
 
@@ -159,7 +166,7 @@ export async function gatherSetupInputs(
       forwardingDone: ticked(SETUP_TICK_KEYS.forwardingDone),
     },
     publishedFormCount,
-    conciergeSiteConversations: conversationsR.status === "fulfilled" ? conversationsR.value : 0,
+    conciergeSiteConversation: conversationsR.status === "fulfilled" ? conversationsR.value : false,
   };
 
   return { inputs, numbers, failed };

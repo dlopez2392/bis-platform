@@ -72,7 +72,7 @@ const STEP_DETAIL: Record<SetupStepKey, (p: StepDetailProps) => React.ReactNode>
 export function SetupPanel({
   accountId, steps, prereqsMet, assignedNumber, movableNumbers, hasVoiceProfile, accountName,
   tickAction, goLiveAction, moveNumberAction, enableTestCallsAction, renameAction,
-  conciergeProfile, publishedFormCount, conciergeSiteConversations, origin,
+  conciergeProfile, publishedFormCount, conciergeSiteConversation, origin,
 }: {
   accountId: string;
   steps: SetupStepView[];
@@ -118,7 +118,7 @@ export function SetupPanel({
    *  each carries and why. */
   conciergeProfile: Pick<VoiceProfileRow, "concierge_enabled" | "concierge_form_id" | "public_id"> | null;
   publishedFormCount: number | "unknown";
-  conciergeSiteConversations: number | "unknown";
+  conciergeSiteConversation: boolean | "unknown";
   origin: string;
 }) {
   const base = `/dashboard/accounts/${accountId}`;
@@ -211,7 +211,7 @@ export function SetupPanel({
         views={steps}
         conciergeProfile={conciergeProfile}
         publishedFormCount={publishedFormCount}
-        conciergeSiteConversations={conciergeSiteConversations}
+        conciergeSiteConversation={conciergeSiteConversation}
         origin={origin}
       />
     );

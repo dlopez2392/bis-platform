@@ -74,8 +74,13 @@ function Row({
         </div>
         {children}
         {href ? (
+          // `aria-label`, not the bare visible "Open" (fix-round review,
+          // MINOR 9): all four rows' links share that one visible word, so
+          // a screen reader landing on any of them heard "Open" four times
+          // with nothing to tell them apart. The row's own title disambiguates.
           <Link
             href={href}
+            aria-label={title}
             className={cn(buttonVariants({ variant: kind === "done" ? "ghost" : "outline", size: "sm" }))}
           >
             {m["setup.openStep"]}
@@ -88,7 +93,7 @@ function Row({
 }
 
 export function WebsiteAssistantStep({
-  base, views, conciergeProfile, publishedFormCount, conciergeSiteConversations, origin,
+  base, views, conciergeProfile, publishedFormCount, conciergeSiteConversation, origin,
 }: StepDetailProps): React.ReactNode {
   // Read voice_profile's OWN done/unknown off the views this render already
   // computed — never re-derived here (setup-status.ts:3-7's whole promise:
@@ -115,8 +120,8 @@ export function WebsiteAssistantStep({
   // "unknown" when either the profile read failed (we cannot even tell
   // on/off) or the conversations read failed; "to do" while off; "seen"/
   // "not seen yet" while on, per the real count.
-  const conversationsUnknown = conciergeSiteConversations === "unknown";
-  const seen = typeof conciergeSiteConversations === "number" && conciergeSiteConversations > 0;
+  const conversationsUnknown = conciergeSiteConversation === "unknown";
+  const seen = conciergeSiteConversation === true;
   const row4Kind: StateKind =
     profileUnknown || conversationsUnknown ? "unknown" : !conciergeEnabled ? "open" : seen ? "done" : "open";
   const row4Word =
@@ -140,21 +145,25 @@ export function WebsiteAssistantStep({
       <Row n={3} kind={row3Kind} word={genericWord(row3Kind)} title={m["setup.step.website_assistant.row3.title"]} href={`${voiceProfileHref}#website-assistant`} />
       <Row n={4} kind={row4Kind} word={row4Word} title={m["setup.step.website_assistant.row4.title"]}>
         {showSnippet ? (
-          <>
-            <EmbedSnippet
-              attribute="data-concierge"
-              publicId={publicId!}
-              origin={origin}
-              title={m["voice.assistant.snippetTitle"]}
-              hint={m["voice.assistant.snippetHint"]}
-              disabledHint={m["voice.assistant.snippetHint"]}
-              enabled
-              copyLabel={m["voice.assistant.copy"]}
-              copiedLabel={m["voice.assistant.copied"]}
-              publicLinkLabel={m["voice.assistant.publicLink"]}
-            />
-            <p className="text-xs text-muted-foreground">{m["setup.step.website_assistant.row4.pasteHint"]}</p>
-          </>
+          // The pane's own paste-hint IS EmbedSnippet's `hint` here (fix-round
+          // review, MINOR 8) — it used to ALSO render as a separate paragraph
+          // below the card, stacking the same instruction twice. `surface="2"`
+          // (MINOR 7): this card sits nested inside the pane's own card
+          // (--surface-1), so it paints from the ladder's next step rather
+          // than the same one nested on itself.
+          <EmbedSnippet
+            attribute="data-concierge"
+            publicId={publicId!}
+            origin={origin}
+            title={m["voice.assistant.snippetTitle"]}
+            hint={m["setup.step.website_assistant.row4.pasteHint"]}
+            disabledHint={m["setup.step.website_assistant.row4.pasteHint"]}
+            enabled
+            copyLabel={m["voice.assistant.copy"]}
+            copiedLabel={m["voice.assistant.copied"]}
+            publicLinkLabel={m["voice.assistant.publicLink"]}
+            surface="2"
+          />
         ) : !profileUnknown && !conciergeEnabled ? (
           <p className="text-xs text-muted-foreground">{m["setup.step.website_assistant.row4.off"]}</p>
         ) : null}

@@ -30,7 +30,7 @@ function fullInputs(overrides: Partial<SetupInputs> = {}): SetupInputs {
     callCount: 3,
     ticks: { emailSkipped: false, forwardingDone: true },
     publishedFormCount: 1,
-    conciergeSiteConversations: 1,
+    conciergeSiteConversation: true,
     ...overrides,
   };
 }
@@ -46,7 +46,7 @@ const emptyInputs: SetupInputs = {
   callCount: 0,
   ticks: { emailSkipped: false, forwardingDone: false },
   publishedFormCount: 0,
-  conciergeSiteConversations: 0,
+  conciergeSiteConversation: false,
 };
 
 function stepFor(steps: SetupStepState[], key: SetupStepKey): SetupStepState {

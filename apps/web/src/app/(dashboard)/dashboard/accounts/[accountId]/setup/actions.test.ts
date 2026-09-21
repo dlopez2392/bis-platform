@@ -141,7 +141,7 @@ function readyGathered(overrides: {
     callCount: 2,
     ticks: { emailSkipped: false, forwardingDone: false },
     publishedFormCount: 0,
-    conciergeSiteConversations: 0,
+    conciergeSiteConversation: false,
     ...overrides.inputs,
   };
   return { inputs, numbers, failed: { ...noFailures, ...overrides.failed } };

@@ -410,7 +410,7 @@ test.describe("the setup wizard, as the agency", () => {
   /**
    * THE ARCHITECTURAL CLAIM OF DESIGN PHASE 5.
    *
-   * setup-panel.tsx renders all nine step details server-side, once, and
+   * setup-panel.tsx renders all ten step details server-side, once, and
    * setup-shell.tsx places exactly one of them into the tree — so a rail
    * click must be a pure client-side swap plus a `history.pushState`, NOT a
    * navigation. `useSetupStep` uses `pushState` rather than `router.push`

@@ -183,10 +183,11 @@ export type StepDetailProps = {
    *  published forms, go publish one". `./website-assistant.tsx` alone
    *  reads it. */
   publishedFormCount: number | "unknown";
-  /** Row 4's proof, never a gate — real conversations attributed to a site
-   *  visit. Same three-state shape as `publishedFormCount` above.
-   *  `./website-assistant.tsx` alone reads it. */
-  conciergeSiteConversations: number | "unknown";
+  /** Row 4's proof, never a gate — whether at least one conversation is
+   *  attributed to a site visit. Boolean, not a count (MINOR 4) — same
+   *  three-state shape as `publishedFormCount` above, just over a boolean
+   *  instead of a number. `./website-assistant.tsx` alone reads it. */
+  conciergeSiteConversation: boolean | "unknown";
   /** This request's own origin (`voice/page.tsx`'s own computation,
    *  mirrored) — what `EmbedSnippet` needs to build the script tag and the
    *  direct link. `./website-assistant.tsx` alone reads it. */

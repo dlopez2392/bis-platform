@@ -97,8 +97,9 @@ export async function setSetupTickAction(
  * reads in — an exception escaping unhandled would reject this action
  * outright, which the client island's Result-typed rendering can never see
  * (same reasoning `setSetupTickAction`'s own doc comment gives for its
- * write). This action reads all SIX legs go-live's own prerequisites can
- * depend on, including `accounts`: branding gates go-live (spec
+ * write). Of those eight, `reReadFailed` below folds in the SIX that
+ * go-live's own prerequisites can actually depend on, including `accounts`:
+ * branding gates go-live (spec
  * 2026-09-07-brand-name-resolver, `goLivePrereqsMet` in setup-status.ts),
  * and branding is read off the `accounts` row's `brand_name` — the leg this
  * action used to hardcode to `null` and ignore entirely because neither

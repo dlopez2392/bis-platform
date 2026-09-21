@@ -1353,7 +1353,7 @@ export const m = {
     "Greeting, business facts, and persona for Sofía.",
   "setup.step.website_assistant.title": "Website assistant",
   "setup.step.website_assistant.help":
-    "Put the same receptionist on the website. It answers questions and takes names around the clock, and files them into a form you choose. The last row turns green the first time a visitor uses it from your site.",
+    "Put the same receptionist on the website. It answers questions and takes names around the clock, and files them into a form you choose. The last row turns done the first time a visitor uses it from your site.",
   "setup.step.website_assistant.row1.title": "Write the greeting and facts",
   "setup.step.website_assistant.row2.title": "Publish a form for its leads",
   "setup.step.website_assistant.row2.body":

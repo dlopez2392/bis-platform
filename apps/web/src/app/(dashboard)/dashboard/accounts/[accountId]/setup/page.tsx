@@ -96,7 +96,7 @@ export default async function SetupPage({
   // `assignedNumber` above (never a plain 0 on a failed read, which would
   // read as "nothing published/seen yet" rather than "couldn't check").
   const publishedFormCount = failed.forms ? "unknown" : inputs.publishedFormCount;
-  const conciergeSiteConversations = failed.conversations ? "unknown" : inputs.conciergeSiteConversations;
+  const conciergeSiteConversation = failed.conversations ? "unknown" : inputs.conciergeSiteConversation;
 
   // Same computation as voice/page.tsx's own `origin` — the request's own
   // host, not an env var, so the setup pane's embed snippet matches
@@ -161,7 +161,7 @@ export default async function SetupPage({
           accountName={accountName}
           conciergeProfile={profile}
           publishedFormCount={publishedFormCount}
-          conciergeSiteConversations={conciergeSiteConversations}
+          conciergeSiteConversation={conciergeSiteConversation}
           origin={origin}
           // accountId bound server-side on all four — it must never travel
           // as a form field. For moveNumberAction that binding is what makes

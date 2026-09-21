@@ -46,7 +46,7 @@ function baseProps(overrides: Partial<StepDetailProps> = {}): StepDetailProps {
     views: views(),
     conciergeProfile: null,
     publishedFormCount: 0,
-    conciergeSiteConversations: 0,
+    conciergeSiteConversation: false,
     origin: "https://app.example.com",
     ...overrides,
   };
@@ -75,12 +75,12 @@ describe("WebsiteAssistantStep", () => {
     expect(html).not.toContain("data-concierge=");
   });
 
-  it("(b) ON with a public id, one published form, zero site conversations — rows 1-3 done, row 4 'not seen yet', the embed attribute carries the public id", () => {
+  it("(b) ON with a public id, one published form, no site conversation yet — rows 1-3 done, row 4 'not seen yet', the embed attribute carries the public id", () => {
     const html = render({
       views: views({ done: true }),
       conciergeProfile: { concierge_enabled: true, concierge_form_id: "form_1", public_id: "pub_x" },
       publishedFormCount: 1,
-      conciergeSiteConversations: 0,
+      conciergeSiteConversation: false,
     });
     const text = renderedText(html);
 
@@ -96,12 +96,12 @@ describe("WebsiteAssistantStep", () => {
     expect(text).toContain('data-concierge="pub_x"');
   });
 
-  it("(c) ON, real site conversations — row 4 reads done", () => {
+  it("(c) ON, a real site conversation exists — row 4 reads done", () => {
     const html = render({
       views: views({ done: true }),
       conciergeProfile: { concierge_enabled: true, concierge_form_id: "form_1", public_id: "pub_x" },
       publishedFormCount: 1,
-      conciergeSiteConversations: 2,
+      conciergeSiteConversation: true,
     });
     const text = renderedText(html);
 
@@ -114,7 +114,7 @@ describe("WebsiteAssistantStep", () => {
       views: views({ done: true }),
       conciergeProfile: { concierge_enabled: true, concierge_form_id: "form_1", public_id: "pub_x" },
       publishedFormCount: 1,
-      conciergeSiteConversations: "unknown",
+      conciergeSiteConversation: "unknown",
     });
     const text = renderedText(html);
 
@@ -122,20 +122,39 @@ describe("WebsiteAssistantStep", () => {
     expect(text).not.toContain("Not seen on your site yet");
   });
 
+  // Fix-round review, IMPORTANT 3: row 2's own unknown branch had no pinning
+  // test — collapsing it to `publishedFormCount > 0 ? "done" : "open"` left
+  // the suite green while a failed forms read rendered "To do" under a rail
+  // that says "Couldn't check". The mirror of case (d), for row 2.
+  it("(e) the forms read failed — row 2 renders unknown, never the not-done word", () => {
+    const html = render({ publishedFormCount: "unknown" });
+    // MUTATION: collapse row 2's condition to `publishedFormCount > 0 ?
+    // "done" : "open"` — this FAILS, reading "open" here instead.
+    expect(html).toMatch(/data-row="2" data-row-state="unknown"/);
+    // Scoped to row 2 alone — rows 1/3/4 are legitimately "To do" in this
+    // OFF fixture, so the negative assertion has to isolate row 2's own
+    // status chip rather than the whole page's text.
+    const row2 = /<div data-row="2"[\s\S]*?<\/div><\/div>/.exec(html)?.[0] ?? "";
+    expect(renderedText(row2)).toContain("Couldn't check");
+    expect(renderedText(row2)).not.toContain("To do");
+  });
+
   it("a failed voice_profile read marks row 1 unknown, never 'not done'", () => {
     const html = render({ views: views({ done: false, unknown: true }) });
     expect(html).toMatch(/data-row="1" data-row-state="unknown"/);
   });
 
-  // MUTATION: swap row 4's condition to `conciergeSiteConversations >= 0` —
-  // this FAILS test (b): 0 satisfies `>= 0`, so row 4 would read "done" with
-  // zero real visitors, and the assertion above (row 4 stays "open") breaks.
-  it("row 4 does not read done on a count of exactly zero", () => {
+  // Fix-round review, MINOR 7: the embed card is nested INSIDE this pane's
+  // own card (--surface-1), so it must paint from the ladder's next step.
+  it("the nested embed card paints from --surface-2, not --surface-1 on --surface-1", () => {
     const html = render({
       views: views({ done: true }),
       conciergeProfile: { concierge_enabled: true, concierge_form_id: "form_1", public_id: "pub_x" },
-      conciergeSiteConversations: 0,
+      publishedFormCount: 1,
+      conciergeSiteConversation: false,
     });
-    expect(html).toMatch(/data-row="4" data-row-state="open"/);
+    // MUTATION: force `surface="1"` (or drop the prop) at the call site —
+    // this FAILS, since the class would then be absent.
+    expect(html).toMatch(/class="[^"]*bg-\[var\(--surface-2\)\][^"]*"/);
   });
 });

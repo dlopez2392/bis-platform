@@ -9,7 +9,7 @@ import {
   createConciergeConversation, getConciergeConversation, claimConciergeTurn,
   appendConciergeTurns, setConciergeSubmission,
   countConciergeConversationsByIp, countConciergeConversationsForAccount,
-  countConciergeSiteConversations,
+  hasConciergeSiteConversation,
 } from "../concierge";
 
 // Per-process suffix, same hazard and same fix as concierge-grants.test.ts:12-13:
@@ -403,35 +403,48 @@ describe("concierge accessors", () => {
    * own fixture, matching row `ecd3a9e6-…` on Test Client One) — neither
    * counts.
    */
-  it("countConciergeSiteConversations counts only conversations whose attribution carries a non-empty page, for THIS account", () =>
+  it("hasConciergeSiteConversation is true once ONE conversation carries a non-empty page, for THIS account", () =>
+    withTestAccount(async (db, accountId) => {
+      const form = await createForm(db, accountId, { name: "Leads" }, accountId);
+      await createConciergeConversation(db, {
+        accountId, formId: form.id, ipHash: `page-${RUN}`, locale: "en",
+        attribution: { page: "https://client.example/pricing" }, origin: null,
+      });
+      // MUTATION: drop the page filter — this still passes here (there IS a
+      // page-carrying row), but see the negative tests below for where it bites.
+      expect(await hasConciergeSiteConversation(db, accountId)).toBe(true);
+    }));
+
+  it("hasConciergeSiteConversation is false when every conversation's attribution has no non-empty page", () =>
+    withTestAccount(async (db, accountId) => {
+      const form = await createForm(db, accountId, { name: "Leads" }, accountId);
+      await createConciergeConversation(db, {
+        accountId, formId: form.id, ipHash: `empty-${RUN}`, locale: "en",
+        attribution: {}, origin: null,
+      });
+      await createConciergeConversation(db, {
+        accountId, formId: form.id, ipHash: `nopage-${RUN}`, locale: "en",
+        attribution: { utm_source: "x" }, origin: null,
+      });
+      // MUTATION: drop the page filter — this FAILS, reading true off these
+      // two page-less rows.
+      expect(await hasConciergeSiteConversation(db, accountId)).toBe(false);
+    }));
+
+  it("hasConciergeSiteConversation ignores a page-carrying row on a DIFFERENT account", () =>
     withTestAccount(async (db, accountId) =>
       withTestAccount(async (otherDb, otherAccountId) => {
-        const form = await createForm(db, accountId, { name: "Leads" }, accountId);
         const otherForm = await createForm(otherDb, otherAccountId, { name: "Leads" }, otherAccountId);
-
-        await createConciergeConversation(db, {
-          accountId, formId: form.id, ipHash: `page-${RUN}`, locale: "en",
-          attribution: { page: "https://client.example/pricing" }, origin: null,
-        });
-        await createConciergeConversation(db, {
-          accountId, formId: form.id, ipHash: `empty-${RUN}`, locale: "en",
-          attribution: {}, origin: null,
-        });
-        await createConciergeConversation(db, {
-          accountId, formId: form.id, ipHash: `nopage-${RUN}`, locale: "en",
-          attribution: { utm_source: "x" }, origin: null,
-        });
         // A second account's row with a page — must not be counted for the
-        // first (distinct account ids, the branch-1 lesson).
+        // first (distinct account ids, the branch-1 lesson). No conversation
+        // at all on `accountId` here — proves the account filter, not merely
+        // the page filter.
         await createConciergeConversation(otherDb, {
           accountId: otherAccountId, formId: otherForm.id, ipHash: `other-${RUN}`,
           locale: "en", attribution: { page: "https://other.example/" }, origin: null,
         });
-
-        // MUTATION: drop the page filter — this FAILS, returning 3 (every
-        // row on this account) instead of 1.
-        // MUTATION: drop the account filter — this FAILS, counting the other
-        // account's page-carrying row too.
-        expect(await countConciergeSiteConversations(db, accountId)).toBe(1);
+        // MUTATION: drop the account filter — this FAILS, reading true off
+        // the other account's page-carrying row.
+        expect(await hasConciergeSiteConversation(db, accountId)).toBe(false);
       })));
 });

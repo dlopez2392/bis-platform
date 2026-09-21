@@ -41,10 +41,12 @@ export type SetupInputs = {
    *  for every reader downstream, the same reason `profile` sits here for
    *  callers that only want `hasVoiceProfile`. */
   publishedFormCount: number;
-  /** Conversations attributed to a real site visit (row 4's proof, not a
-   *  gate) — same "carried for downstream readers" reasoning as the field
-   *  above. */
-  conciergeSiteConversations: number;
+  /** Whether AT LEAST ONE conversation is attributed to a real site visit
+   *  (row 4's proof, not a gate) — boolean, not a count (fix-round review,
+   *  MINOR 4: the pane only ever asks yes/no, so the accessor itself is
+   *  bounded with `.limit(1)`) — same "carried for downstream readers"
+   *  reasoning as the field above. */
+  conciergeSiteConversation: boolean;
 };
 
 // localStorage-style keys the wizard persists the two ticks under. Named
