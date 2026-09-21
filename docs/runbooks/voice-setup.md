@@ -251,7 +251,7 @@ Every client — test or real — now onboards through one page:
 the dashboard redirects straight there. The wizard is agency-only — a
 client-side login never sees the "Setup" nav item or this route.
 
-The wizard shows nine steps, each a **live read of that account's actual
+The wizard shows ten steps, each a **live read of that account's actual
 rows** — nothing here is a separate "I did this" checkbox that can drift
 from reality, except the two genuinely unobservable ones (email,
 forwarding):
@@ -268,14 +268,23 @@ forwarding):
    greeting; everything else checks the English one — this mirrors the
    incoming-call route's own greeting pick exactly, so the wizard can never
    call a profile "done" that the live route would still leave silent).
-5. **Number** — at least one phone number assigned to the account in any
+5. **Website assistant** — the same receptionist, answering on the client's
+   own site. Done once the widget is switched on AND a destination form is
+   chosen (`concierge_enabled` AND `concierge_form_id`) — a numbered
+   four-row walkthrough (write the greeting/facts, publish a form, turn it
+   on and pick the form, paste the line into the site), locked until step 4
+   above is done (it answers from the same greeting and facts the phone
+   does). The last row is proof a real visitor has used it, never a gate —
+   a fully configured client with no visitor yet reads "Not seen on your
+   site yet", not a failure.
+6. **Number** — at least one phone number assigned to the account in any
    non-released status.
-6. **Email** *(skippable)* — a sending-from address set, or manually
+7. **Email** *(skippable)* — a sending-from address set, or manually
    ticked "skip" if this client will send with the platform default.
-7. **Forwarding** *(manual tick)* — there's no live signal for "did the
+8. **Forwarding** *(manual tick)* — there's no live signal for "did the
    client forward their old number to this one"; check it off once
    confirmed with the client.
-8. **Test call** *(read from real rows, not fakeable)* — done once at
+9. **Test call** *(read from real rows, not fakeable)* — done once at
    least one row exists in `calls` for this account. An actual phone call
    is still required to reach this state, which means the assigned number
    has to actually be answering first: this card carries its own **Enable
@@ -284,11 +293,12 @@ forwarding):
    dependency on the Receptionist-enabled toggle** — but it does require a
    saved voice profile (step 4 above), so the button renders **disabled**
    with a "needs profile" note until that step is done.
-9. **Go live** — one server action that flips the number to `live` and the
-   voice profile to enabled together, but only once hours, voice profile,
-   number, and test call (steps 3/4/5/8 above — deliberately **not**
-   email/forwarding) are all done. Re-derived server-side at click time,
-   not trusted from whatever the page happened to render.
+10. **Go live** — one server action that flips the number to `live` and the
+    voice profile to enabled together, but only once hours, voice profile,
+    number, and test call (steps 3/4/6/9 above — deliberately **not**
+    email/forwarding, and not the website assistant either) are all done.
+    Re-derived server-side at click time, not trusted from whatever the
+    page happened to render.
 
 **Buying a number stays a Telnyx-dashboard step** (Step 4 above) — there is
 no in-app "buy" button.

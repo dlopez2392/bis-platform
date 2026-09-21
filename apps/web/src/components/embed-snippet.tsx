@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 /**
  * The one copy-the-snippet card.
@@ -29,6 +30,7 @@ export function EmbedSnippet({
   copiedLabel,
   publicLinkLabel,
   extraAttrs,
+  surface = "1",
 }: {
   attribute: "data-form" | "data-booking" | "data-concierge";
   publicId: string;
@@ -42,6 +44,15 @@ export function EmbedSnippet({
   publicLinkLabel: string;
   /** An extra `key="value"` pair the snippet needs beyond `${attribute}="${publicId}"`. */
   extraAttrs?: string;
+  /** Which surface-ladder step this card paints from (fix-round review,
+   *  MINOR 7). Default `"1"` — every existing call site (forms, calendar,
+   *  the Voice page's own `ConciergeCard`) already sits directly on
+   *  `--surface-0`/the page, so `bg-card` (`--surface-1`) is correct there
+   *  unchanged. `"2"` is for a caller that nests this INSIDE another card
+   *  (the setup wizard's pane, itself `--surface-1`) — DESIGN.md's ladder
+   *  puts a nested panel one step up, `--surface-2`, never surface-1 on
+   *  surface-1. */
+  surface?: "1" | "2";
 }) {
   const [copied, setCopied] = useState(false);
   const path = attribute === "data-form" ? "f" : attribute === "data-booking" ? "b" : "c";
@@ -50,7 +61,7 @@ export function EmbedSnippet({
   const link = `${origin}/${path}/${publicId}`;
 
   return (
-    <Card>
+    <Card className={cn(surface === "2" && "bg-[var(--surface-2)]")}>
       <CardHeader><CardTitle className="text-sm">{title}</CardTitle></CardHeader>
       <CardContent className="space-y-3">
         {enabled ? (

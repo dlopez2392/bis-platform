@@ -6,6 +6,7 @@ import {
   listChecklistState,
 } from "@bis/db";
 import { SETUP_TICK_KEYS } from "../src/lib/setup/setup-status";
+import { m } from "../src/lib/messages";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process rather than through a Next request.
@@ -86,7 +87,7 @@ const fixture = (): ClientFixture => {
 };
 
 /**
- * The nine steps, in the order the rail walks them — keys AND titles, both
+ * The ten steps, in the order the rail walks them — keys AND titles, both
  * spelled out here rather than imported from `lib/setup/setup-rail.ts` and
  * `lib/messages.ts`. That duplication is the point: importing the order from
  * the implementation would make the "canonical order" assertion below agree
@@ -97,6 +98,7 @@ const STEPS = [
   { key: "branding", title: "Branding" },
   { key: "hours", title: "Business hours" },
   { key: "voice_profile", title: "Voice profile" },
+  { key: "website_assistant", title: "Website assistant" },
   { key: "number", title: "Phone number" },
   { key: "email", title: "Email identity" },
   { key: "forwarding", title: "Call forwarding" },
@@ -345,16 +347,16 @@ test.describe("the setup wizard, as the agency", () => {
    * guard for that entire class of defect.
    *
    * The structural assertions ride along in the same page load: the rail is
-   * exactly nine buttons in the canonical order, exactly one of them is
+   * exactly ten buttons in the canonical order, exactly one of them is
    * `aria-current="true"`, and exactly ONE `<h2>` exists in the document.
    */
-  test("the page renders, and the rail is nine steps with exactly one current", async ({ page }) => {
+  test("the page renders, and the rail is ten steps with exactly one current", async ({ page }) => {
     await page.goto(setupUrl());
 
     // The RSC-boundary regression guard. Everything below assumes a 200.
     await expect(page.getByRole("heading", { name: "Client setup", level: 1 })).toBeVisible();
 
-    await expect(railButtons(page)).toHaveCount(9);
+    await expect(railButtons(page)).toHaveCount(10);
     // An exact, ORDERED set, not a count: the wizard's whole argument is that
     // it reads as one path from "nothing" to "live", so a step in the wrong
     // place is as wrong as a missing one — and two opposite errors cancelling
@@ -409,7 +411,7 @@ test.describe("the setup wizard, as the agency", () => {
   /**
    * THE ARCHITECTURAL CLAIM OF DESIGN PHASE 5.
    *
-   * setup-panel.tsx renders all nine step details server-side, once, and
+   * setup-panel.tsx renders all ten step details server-side, once, and
    * setup-shell.tsx places exactly one of them into the tree — so a rail
    * click must be a pure client-side swap plus a `history.pushState`, NOT a
    * navigation. `useSetupStep` uses `pushState` rather than `router.push`
@@ -620,6 +622,71 @@ test.describe("the setup wizard, as the agency", () => {
   });
 
   /**
+   * The website-assistant step: the numbered walkthrough for putting the
+   * text assistant on a client's site (Setup step task — #103 shipped the
+   * feature as a Voice-page card plus a checklist tick, which is not a
+   * walkthrough).
+   *
+   * Runs in the SAME pre-change window as the locked-step test just above,
+   * on purpose — that test's own go-live blocked list just named
+   * "Voice profile" among the fixture's undone steps, which is exactly the
+   * fact this test needs too. So the face this file can assert here is the
+   * LOCKED one (setup-rail.ts's `lockedPrereqKeys("website_assistant")`
+   * names voice_profile alone, unlike test_call's two) — a locked step is
+   * reachable, never a dead end, so the pane's four-row walkthrough renders
+   * right alongside the lock banner, same as the test_call/go_live case
+   * above.
+   */
+  test("the website-assistant step's pane renders its four-row walkthrough, locked on the undone voice profile", async ({ page }) => {
+    await page.goto(setupUrl());
+
+    const websiteAssistant = railEntry(page, "website_assistant");
+    await expectRailState(websiteAssistant, "Locked");
+    // Never a dead click (the spec decision the test above this one already
+    // pins) — locked still means enabled.
+    await expect(websiteAssistant).toBeEnabled();
+
+    await websiteAssistant.click();
+    await expect(page).toHaveURL(/[?&]step=website_assistant(&|$)/);
+    await expect(paneHeading(page)).toHaveText(stepTitle("website_assistant"));
+
+    // Website assistant has exactly ONE prerequisite — voice_profile —
+    // unlike test_call's two, so the note names it alone.
+    const note = pane(page).getByRole("note");
+    await expect(note).toContainText(BLOCKED_LEAD);
+    await expect(note.getByRole("button")).toHaveText([stepTitle("voice_profile")]);
+
+    // Four rows, still rendered underneath the lock banner.
+    await expect(pane(page).locator('[data-row="1"]')).toContainText("Write the greeting and facts");
+    await expect(pane(page).locator('[data-row="2"]')).toContainText("Publish a form for its leads");
+    await expect(pane(page).locator('[data-row="3"]')).toContainText("Turn it on and pick the form");
+    await expect(pane(page).locator('[data-row="4"]')).toContainText("Paste the code into the website");
+
+    // Row 3 reads the not-done word — the account has no voice profile at
+    // all yet, so concierge_enabled reads false regardless of anything else.
+    await expect(pane(page).locator('[data-row="3"]')).toHaveAttribute("data-row-state", "open");
+    await expect(pane(page).locator('[data-row="3"]')).toContainText("To do");
+
+    // Row 4 while off: the line-to-paste sentence, never the embed script
+    // itself (row 4 gates on nothing — it renders regardless of the lock —
+    // but it is genuinely off here, since concierge_enabled is false).
+    await expect(pane(page).locator('[data-row="4"]')).toContainText(
+      "The line to paste appears here once it is on.",
+    );
+
+    // Row 3's link is the Voice page, anchored at the card this row turns on
+    // and picks the form (voice-settings.tsx's `id="website-assistant"`).
+    // Named by its accessible name, not the visible "Open" text: fix-round
+    // MINOR 9 gave every row's link an `aria-label` of the row's own title
+    // (website-assistant.tsx:78) so a screen reader can tell the four apart —
+    // which means each link's accessible name is now that title, not "Open".
+    await expect(
+      pane(page).locator('[data-row="3"]')
+        .getByRole("link", { name: m["setup.step.website_assistant.row3.title"] }),
+    ).toHaveAttribute("href", `/dashboard/accounts/${accountId}/voice?from=setup#website-assistant`);
+  });
+
+  /**
    * The derived half: a step's state tracks the ROWS behind it, in both
    * directions, and the one manual tick this wizard has actually lands in the
    * database.
@@ -713,9 +780,10 @@ test.describe("the setup wizard, as the agency", () => {
 
     // Skipping leaves the denominator rather than sitting in it forever —
     // the meter must be able to reach the end for an account that never
-    // configures a sending identity.
+    // configures a sending identity. Ten steps total, one skipped, leaves
+    // "of 9" (was "of 8" before website_assistant made it ten).
     await expect(page.getByRole("progressbar", { name: "Setup progress" }))
-      .toHaveAttribute("aria-valuetext", /of 8 steps done$/);
+      .toHaveAttribute("aria-valuetext", /of 9 steps done$/);
   });
 
   /**

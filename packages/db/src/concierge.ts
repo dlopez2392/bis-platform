@@ -260,3 +260,38 @@ export async function countConciergeConversationsForAccount(
   if (error) throw new Error(`countConciergeConversationsForAccount failed: ${error.message}`);
   return count ?? 0;
 }
+
+/**
+ * The setup wizard's row 4 proof: has a real visitor opened the assistant
+ * FROM the client's own site, ever — not merely "does a conversation exist"
+ * (a direct `/c/<publicId>` link visit is a real conversation too, but it is
+ * not evidence the embedded snippet is actually on a page).
+ *
+ * `page` is set ONLY by the embed loader, which passes
+ * `window.location.href` on the iframe URL (`embed-script.ts`); `parseAttribution`
+ * keeps it (`guards.ts`). A direct-link visit's `attribution` has no `page`
+ * key at all, or carries it as `""` — never a stored flag, so this reads live
+ * rows on every call, same discipline as every other setup-wizard derivation.
+ *
+ * Boolean, with `.limit(1)` — fix-round review, MINOR 4: the consumer only
+ * ever asks "> 0", so returning every matching id was unbounded work for a
+ * yes/no question; PostgREST's own `max_rows` (config.toml) is 1000, and a
+ * busy client's site traffic reaches that in days, not months. Row-returning
+ * `.select("id").limit(1)` + `.length > 0`, NOT `{ count: "exact", head:
+ * true }` — the catalogued no-op combined with a `.not()`/`.neq()` pair on a
+ * jsonb `->>` operator column (some PostgREST/postgrest-js combinations do
+ * not report an exact count on this shape, so a bounded row read is the one
+ * form this file trusts here).
+ */
+export async function hasConciergeSiteConversation(
+  db: SupabaseClient, accountId: string,
+): Promise<boolean> {
+  const { data, error } = await db.from("concierge_conversations")
+    .select("id")
+    .eq("account_id", accountId)
+    .not("attribution->>page", "is", null)
+    .neq("attribution->>page", "")
+    .limit(1);
+  if (error) throw new Error(`hasConciergeSiteConversation failed: ${error.message}`);
+  return (data ?? []).length > 0;
+}
