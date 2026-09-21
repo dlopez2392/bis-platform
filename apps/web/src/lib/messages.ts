@@ -1246,7 +1246,7 @@ export const m = {
   "activity.usage.topReason": "most often: {reason}",
   "activity.usage.error": "Couldn't load this month's numbers. Reload the page to try again.",
   "activity.empty.title": "Nothing has gone out yet",
-  "activity.empty.body": "Every text, email and conversation the system handles for this company shows up here, the moment it happens.",
+  "activity.empty.body": "Every text, email and conversation the system handles for this company shows up here the moment a reminder, a review request or the website or phone assistant sends something.",
   "activity.error": "Couldn't load the history. Reload the page to try again.",
   "activity.col.when": "When",
   "activity.col.what": "What",

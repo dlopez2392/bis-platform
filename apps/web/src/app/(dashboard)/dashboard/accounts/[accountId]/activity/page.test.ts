@@ -83,5 +83,14 @@ describe("the Activity page", () => {
     // Chicago's month edges are 05:00Z or 06:00Z, never 00:00Z.
     expect(String(fromIso)).toMatch(/T0[56]:00:00\.000Z$/);
     expect(String(toIso)).toMatch(/T0[56]:00:00\.000Z$/);
+
+    // `fromIso` is the CURRENT month's first day in Chicago, computed here
+    // from `new Date()` at test-run time — not the page's own literal —
+    // so a mutation that reads a stale/fixed epoch instead of `now` reds
+    // this even in a month where the 05:00/06:00Z check above still holds.
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", year: "numeric", month: "2-digit" }).formatToParts(new Date());
+    const year = parts.find((p) => p.type === "year")!.value;
+    const month = parts.find((p) => p.type === "month")!.value;
+    expect(String(fromIso).startsWith(`${year}-${month}-01T`)).toBe(true);
   });
 });

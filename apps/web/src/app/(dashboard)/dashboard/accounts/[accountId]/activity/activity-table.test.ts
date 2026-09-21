@@ -36,10 +36,11 @@ describe("ActivityTable", () => {
     expect(sent).not.toContain("data-log-reason");
   });
 
-  it("a row with no contact shows a dash; an assistant row says Assistant", () => {
+  it("a row with no contact shows a dash; an assistant row says Assistant (mutation: drop the ?? \"—\" fallback → FAILS)", () => {
     const text = renderedText(render([row({ contact_name: null, source: "voice", channel: "ai" })]));
     expect(text).toContain("Phone assistant");
     expect(text).toContain("Assistant");
+    expect(text).toContain("—");
   });
 
   it("the pager renders exactly the links it is given, and none when it is given none", () => {
