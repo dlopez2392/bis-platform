@@ -4,7 +4,7 @@ import type { DueSmsReminder } from "@bis/db";
 const dbMocks = vi.hoisted(() => ({
   listDueSmsReminders: vi.fn(), stampSmsReminderSent: vi.fn(), stampSmsReminderFailed: vi.fn(),
   ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(),
-  getDueSmsReminderById: vi.fn(), recordAutomationLog: vi.fn(),
+  getDueSmsReminderById: vi.fn(), recordAutomationLog: vi.fn(), getAutomationLogEntry: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const senderMock = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
@@ -55,6 +55,7 @@ beforeEach(() => {
   dbMocks.stampSmsReminderSent.mockResolvedValue(undefined);
   dbMocks.stampSmsReminderFailed.mockResolvedValue(undefined);
   dbMocks.recordAutomationLog.mockResolvedValue(undefined);
+  dbMocks.getAutomationLogEntry.mockResolvedValue(null);   // Task 3: the held path reads the existing row before re-holding
   dbMocks.ensureConversation.mockResolvedValue({ id: "convo_1", created: false });
   dbMocks.createMessage.mockResolvedValue({ id: "msg_1" });
   dbMocks.updateMessageStatus.mockResolvedValue(undefined);

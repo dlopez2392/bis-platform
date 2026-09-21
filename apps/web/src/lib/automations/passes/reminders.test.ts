@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { DueReminder, AutomationLogRow } from "@bis/db";
 
 const dbMocks = vi.hoisted(() => ({
-  listDueReminders: vi.fn(), stampReminderSent: vi.fn(), getDueReminderById: vi.fn(), recordAutomationLog: vi.fn(),
+  listDueReminders: vi.fn(), stampReminderSent: vi.fn(), getDueReminderById: vi.fn(), recordAutomationLog: vi.fn(), getAutomationLogEntry: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 
@@ -47,6 +47,7 @@ beforeEach(() => {
   dbMocks.listDueReminders.mockResolvedValue([]);
   dbMocks.stampReminderSent.mockResolvedValue(undefined);
   dbMocks.recordAutomationLog.mockResolvedValue(undefined);
+  dbMocks.getAutomationLogEntry.mockResolvedValue(null);   // Task 3: the held path reads the existing row before re-holding
   emailSend.mockReset().mockResolvedValue({ providerMessageId: "e1" });
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
