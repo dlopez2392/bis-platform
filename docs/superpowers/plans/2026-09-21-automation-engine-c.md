@@ -189,10 +189,8 @@ create index automation_log_held_idx
 alter table public.automation_log enable row level security;
 create policy automation_log_tenant on public.automation_log for select to authenticated
   using (app.is_agency() or account_id = app.current_account_id());
+revoke all on public.automation_log from anon, authenticated;   -- 0040's shape: the enumerated revoke leaves PG17's MAINTAIN behind
 grant select on public.automation_log to authenticated;
-revoke insert, update, delete, truncate, references, trigger
-  on public.automation_log from authenticated;
-revoke all on public.automation_log from anon;
 
 
 -- automation_settings: the quiet-hours window. One row per account, and a
@@ -217,10 +215,8 @@ comment on table public.automation_settings is
 alter table public.automation_settings enable row level security;
 create policy automation_settings_tenant on public.automation_settings for select to authenticated
   using (app.is_agency() or account_id = app.current_account_id());
+revoke all on public.automation_settings from anon, authenticated;
 grant select on public.automation_settings to authenticated;
-revoke insert, update, delete, truncate, references, trigger
-  on public.automation_settings from authenticated;
-revoke all on public.automation_settings from anon;
 ```
 
 - [ ] **Step 2: Write the log accessors**
@@ -1052,7 +1048,7 @@ export function formatInstantClock(instant: Date, zone: string): string {
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `pnpm --filter web exec vitest run src/lib/automations/quiet-hours.test.ts`
-Expected: PASS, every test. Then the prescribed mutations, each run against the WHOLE file and reverted: (a) `wall.minutes >= start` → `> start` → the edge test reds; (b) delete `start === end` → the disabled test reds; (c) in `quietWindowEnd` replace `r.wall.minutes < r.end ? r.wall : nextDay(r.wall)` with `r.wall` → the 23:00 case reds; (d) replace the fixed-point loop with `return new Date(target)` → both DST tests red (13:00Z becomes 14:00Z / 14:00Z becomes 13:00Z is NOT what happens — the blind UTC construction ignores the offset entirely, and both `toISOString` assertions fail).
+Expected: PASS, every test. Then the prescribed mutations, each run against the WHOLE file and reverted: (a) `wall.minutes >= start` → `> start` on EACH branch separately (the crossing branch reds the edge test; the non-crossing branch reds the 13:00-exactly assertion); (b) delete `start === end` → the disabled test reds; (c) in `quietWindowEnd` replace `r.wall.minutes < r.end ? r.wall : nextDay(r.wall)` with `r.wall` → the 23:00 case reds; (d) replace the fixed-point loop with `return new Date(target)` → both DST tests red (13:00Z becomes 14:00Z / 14:00Z becomes 13:00Z is NOT what happens — the blind UTC construction ignores the offset entirely, and both `toISOString` assertions fail).
 
 - [ ] **Step 5: Commit**
 

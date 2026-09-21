@@ -39,12 +39,13 @@ automation_log
   source        text not null      -- recipe key ('review_request', 'no_show_nudge', 'sms_reminder', …), or 'concierge', or 'voice'
   channel       text not null check (channel in ('sms','email','ai'))
   contact_id    uuid null references contacts(id) on delete set null
-  subject_key   text not null      -- what this action was about: 'booking:<id>', 'submission:<id>', 'conversation:<id>', 'call:<id>'
+  subject_key   text not null      -- what this action was about: 'booking:<id>', 'submission:<id>', 'conversation:<id>', 'call:<id>', 'week:<YYYY-MM-DD>'
   status        text not null check (status in ('sent','held','skipped','failed'))
   reason        text not null default ''   -- plain language, client-readable ("Held until 8:00 — quiet hours", "No email on file")
   held_until    timestamptz null   -- set when status = 'held'
   occurred_at   timestamptz not null default now()
-  unique (account_id, source, subject_key, status) where status = 'held'   -- one held row per subject, not one per tick
+  payload       jsonb not null default '{}'   -- what a release needs that the subject row cannot re-derive (the instant reply's input); never rendered
+  unique (account_id, source, subject_key)   -- ONE row per subject; status moves IN PLACE (held → sent), so the key carries no status. A partial unique index cannot be an ON CONFLICT target through PostgREST (amendment 11).
   index (account_id, occurred_at desc)
 ```
 
@@ -56,12 +57,12 @@ automation_log
 
 ## Section 2 — Quiet hours, one rule
 
-**Storage:** `automation_settings` (migration `0046` as well): `account_id uuid pk`, `quiet_enabled bool not null default true`, `quiet_start time not null default '21:00'`, `quiet_end time not null default '08:00'`, timestamps. Grants as `automations`. Missing row = defaults (the pure function takes the defaults; no row is written until the agency edits).
+**Storage:** `automation_settings` (migration `0046` as well): `account_id uuid pk`, `quiet_enabled bool not null default true`, `quiet_start time not null default '21:00'`, `quiet_end time not null default '08:00'`, timestamps. Grants as `call_proposals` (0040): `revoke all … from anon, authenticated`, then `grant select` — 0025's enumerated revoke leaves PostgreSQL 17's MAINTAIN behind (found in Task 1's review). Missing row = defaults (the pure function takes the defaults; no row is written until the agency edits).
 
 **The rule** lives in one pure module, `apps/web/src/lib/automations/quiet-hours.ts`:
 
 - `inQuietWindow(now: Date, zone: string, s: QuietSettings): boolean` — evaluated on the account's wall clock; windows that cross midnight (the default) are the normal case; `quiet_start === quiet_end` means disabled.
-- `quietWindowEnd(now, zone, s): Date` — the next instant the window ends, in UTC; correct across a daylight-saving change (a 08:00 end is 08:00 on the wall clock on both sides of the change).
+- `quietWindowEnd(now, zone, s): Date | null` — the end of the CURRENT window, in UTC, or null outside one; correct across a daylight-saving change (a 08:00 end is 08:00 on the wall clock on both sides of the change).
 - No `Date.now()` inside; `now` is always an argument, as `setup-status.ts` does.
 
 **Every pass** calls one helper before its send: `holdOrSend(ctx, { source, subjectKey, contactId, channel }, sendFn)`. Inside the window it writes (or leaves) the held row with `held_until = quietWindowEnd(...)` and returns `held`; the pass does NOT stamp its domain row, so the same subject is still due on the next tick after the window, when the helper sends, stamps, and flips the row to `sent`. Outside the window it sends, writes `sent`, and the pass stamps as today.
