@@ -79,6 +79,8 @@ export { getSiteForAccount, upsertSite, listSitesToSync, writeTrafficDay, stampS
          listTrafficDays, listTrafficBreakdown, countTrafficDays, unlinkSite,
          type SiteRow, type TrafficDay, type TrafficDimension, type TrafficBreakdownRow } from "./sites";
 export * from "./weekly-report";
+export * from "./automation-log";
+export * from "./automation-settings";
 
 // The demo tenant's fiction — data only, no seeder. `seed.ts` deliberately
 // stays out of the package's public surface: it DELETES the account it finds,
