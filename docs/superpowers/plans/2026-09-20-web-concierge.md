@@ -2311,6 +2311,134 @@ without `OPENAI_API_KEY`, locally and in CI). Either the key goes into CI
 secrets, or the first conversation after Branch 2's deploy is a deliberate,
 watched one — never a client's customer.
 
+**How the ten items above become tasks.** Items 1–2, 4–6, 9–10 are the chat
+hardening itself and split by ownership into **Task 5a** (route, accessor,
+e2e) and **Task 5b** (page). Item 3 (iframe timing) belongs to Task 5's
+bubble, because there is no iframe until it exists. Items 7–8 (the toggle's
+gates) belong to Task 6's card. Tasks 5a and 5b run FIRST, and 5b can run
+alongside 5a's review because they touch disjoint files.
+
+---
+
+### Task 5a: Harden the chat before it embeds — route, accessor, e2e
+
+**Files:**
+- Create: `apps/web/src/lib/concierge/lead.ts` — `fileLead` extracted from the route, unchanged in behaviour.
+- Create: `apps/web/src/lib/concierge/lead.test.ts` — direct unit tests with DISTINCT ids and a non-null origin.
+- Modify: `apps/web/src/app/api/concierge/[publicId]/turn/route.ts` — import `fileLead`; the 429 and too-fast bodies.
+- Modify: `apps/web/src/app/api/concierge/[publicId]/turn/route.test.ts`.
+- Modify: `apps/web/src/lib/concierge/strings.ts` + `strings.test.ts` — two new keys, en/es.
+- Modify: `apps/web/src/lib/voice/system-prompt.ts:73` + `system-prompt.test.ts` — the Spanish-only "caller".
+- Modify: `packages/db/src/concierge.ts:79-82` + `packages/db/src/test/concierge.test.ts` — the 42501 branch.
+- Modify: `apps/web/e2e/concierge.spec.ts` — one read of `.bis-concierge-ended`'s text on the expired path.
+
+**Interfaces:**
+- Consumes: everything Branch 1 shipped, at `main` `35cee85`.
+- Produces, for Task 5b: two new `ConciergeStrings` keys — `rateLimited` ("You've started a few conversations recently — please try again in a little while." / es) and `tooFast` ("That came through before the page finished loading — please send it again." / es) — the route contract that a `429` body is `{ error: "rate_limited" }` (unchanged) so the page can map it to `strings.rateLimited`, **and a contract change the page MUST consume: a `200` turn response may now carry a non-empty `closing` with `ended: false`** (the too-fast turn: `{ conversationId: "", reply: "", ended: false, closing: strings.tooFast }`). Before 5a, `closing` was non-empty only when `ended` was true, and the page's `pickTurnUpdate` gates on exactly that — so without 5b's Step 2b below, the sentence never renders and the fast typist gets silence. (Found by both 5a's reviewer and 5b's implementer, from opposite sides.)
+
+- [ ] **Step 1: Write the failing `lead.test.ts`**
+
+Extract nothing yet. Write `apps/web/src/lib/concierge/lead.test.ts` against the signature the route's inner `fileLead` already has — read `route.ts` for its exact `ctx` shape and return type before writing. Fixtures MUST use distinct literals: `accountId: "acct-A"`, `formId: "form-then"`, `origin: "https://app.example"`. (**Corrected after 5a:** `fileLead`'s `ctx` carries no profile, so there is no `"form-now"` to seed here; the profile-vs-conversation distinctness is proven in `route.test.ts:108-122`, where both ids are in scope. The unit test proves the narrower property: `fileLead` uses the `formId` it was HANDED and nothing else.) Mock `@bis/db` with `vi.hoisted`. Tests, each naming its mutation:
+
+```ts
+it("files against the form id it was GIVEN, never the profile's current one", …)
+  // MUTATION: read the profile's form → expected 'form-then', got 'form-now' → FAILS
+it("passes the caller's origin to enrich as the sixth argument, verbatim", …)
+  // MUTATION: pass null → FAILS
+it("passes consentWithheld TRUE regardless of the form's fields", …)
+  // MUTATION: derive it from fields → FAILS
+it("returns false and deletes the orphan when the slot was already claimed", …)
+  // MUTATION: skip the delete → FAILS on dbFns.delete not called
+it("returns false without touching enrich when the form is not published", …)
+it("writes consent in #99's shape — every consent field given:false — not []", …)
+  // Item 10. Read api/intake/[publicId]/route.ts:117-121 for the exact shape.
+```
+
+Run: `pnpm --filter web exec vitest run lib/concierge/lead` — FAIL, module not found.
+
+- [ ] **Step 2: Extract `fileLead` and make the tests pass**
+
+Move the function body from `route.ts` into `lead.ts` with NO behavioural change except item 10 (consent shape). Export it. The route imports it. `route.test.ts` keeps passing — run it to prove the extraction is behaviour-preserving before touching anything else. Then run the six mutations above, one at a time, revert each.
+
+- [ ] **Step 3: The two sentences — items 1 (route half) and 4**
+
+Add `rateLimited` and `tooFast` to `strings.ts` (en/es). In the route, the too-fast branch (`verdict.ok && elapsed < MIN_FILL_MS`) answers `closing: strings.tooFast` with `ended: false` — the visitor keeps the composer and simply sends again; this is NOT a spam signal on its own and must not close the chat. The honeypot and bad-signature branches stay as they are. Tests: the too-fast case asserts the exact body and `ended: false`; the honeypot case still asserts `ended: true` — the two must differ, and the mutation that collapses them goes RED. `strings.test.ts`'s jargon scan covers the new keys.
+
+- [ ] **Step 4: Item 6 — the Spanish-only branch**
+
+`system-prompt.ts:73`: `${audienceWord}` in place of "caller". Test with `languages: "es", medium: "web"` asserting `not.toContain("caller")` and `toContain("visitor")`; and with `languages: "es"` and no medium asserting the phone line is byte-identical to before (the existing identity test covers the bilingual input only — add the `es` input to it).
+
+- [ ] **Step 5: Item 9 — the 42501 branch**
+
+`packages/db/src/concierge.ts:79`: make the MESSAGE alone the discriminator (`error.message?.includes("does not belong to this account")`) — as implemented, `error.code` is no longer consulted, which is defensible and this text now says so rather than implying a corroboration the code does not perform; when a 42501 arrives whose message is NOT ours, rethrow with the true text — "permission denied for function concierge_enable" must reach a log, not be rewritten as "not yours". Test: a mocked 42501 with a foreign message rejects with that message verbatim. MUTATION: revert to the OR → FAILS.
+
+- [ ] **Step 6: Item 5 (e2e half) — the one render assertion the repo lacked**
+
+In `concierge.spec.ts`'s page-renders test (the half that runs without a key): mint a render token older than `MAX_TOKEN_AGE_MS` is not possible from the browser — instead, drive the expired path by posting turn 1 through `page.request` with a token signed at `Date.now() - 31 * 60_000` (import `signRenderToken` in the spec; it is server code but pure), then assert `page.locator(".bis-concierge-ended")` has text equal to `conciergeStrings("en").expired` and that `.bis-msg-assistant` count did not grow. This is the assertion that would have caught the two JSX mutations the round-3 review named. Per-run fixture account, as before.
+
+- [ ] **Step 7: Gates, one at a time, exit codes from files** — `pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e`, after `gh run list --limit 3` shows nothing in progress. Report counts and whether a "skipped" line appeared.
+
+- [ ] **Step 8: Commit** (trailer verbatim; `git add` explicit paths).
+
+---
+
+### Task 5b: Harden the chat before it embeds — the page
+
+**Files:**
+- Modify: `apps/web/src/app/c/[publicId]/concierge-chat.tsx`
+- Modify: `apps/web/src/app/c/[publicId]/concierge-chat.test.ts`
+
+**Interfaces:**
+- Consumes from Task 5a: `strings.rateLimited`. If 5a has not landed when this starts, add the key yourself with the same text — the two land on one branch and the second to merge reconciles.
+- Produces: nothing later depends on it.
+
+- [ ] **Step 1: Item 1 (page half) — persist the conversation**
+
+`conversationId` moves from a `useRef` to `sessionStorage` under the key `bis-concierge:<publicId>`, read on mount inside `try/catch` (a private window throws on access), written whenever the route returns one, and CLEARED when the route returns `ended: true`. A page reload mid-conversation continues it; a new tab after the close starts fresh. Extract the read/write/clear into a pure `conversationStore(publicId)` helper in the same file so it is testable without DOM: tests for "returns null when storage throws", "round-trips an id", "clears on ended". MUTATION: drop the `try/catch` → the throwing-storage test FAILS.
+
+- [ ] **Step 2: Item 1 — the 429 sentence**
+
+`if (!res.ok) throw` becomes: on `429`, show `strings.rateLimited` as the closing line WITHOUT disabling the composer and without `ended` (the visitor may try later on the same conversation); on anything else, the existing `unavailable` path. Extend `pickTurnUpdate` (or add a sibling) so the decision is a pure function with a test: `{ status: 429 }` → `{ closing: rateLimited, ended: false }`. MUTATION: treat 429 as unavailable → FAILS.
+
+- [ ] **Step 2b: Render a `closing` that arrives with `ended: false`**
+
+Task 5a's too-fast turn answers `{ conversationId: "", reply: "", ended:
+false, closing: strings.tooFast }`. `pickTurnUpdate` as written returns
+`closing: data.ended ? … : null`, so that sentence is dropped, no bubble
+renders (`reply` is empty), and the visitor's own message sits there as if
+sent — silence, which is worse than the wrong sentence item 4 replaced.
+
+Fix — **as shipped in `74b100e`, which supersedes this step's first draft**:
+`pickTurnUpdate` gains a THIRD field, `notice: !data.ended && data.closing ?
+data.closing : null`. `closing` stays ended-gated and `bubble` is unchanged,
+so `notice` and `closing` are mutually exclusive by construction and the
+"never both a bubble and a closing line" invariant the function's own doc
+comment protects survives. (The first draft here un-gated `closing` itself;
+that reintroduces a double-render risk and is NOT what shipped — do not
+reimplement it.) A non-ended closing is a transient notice and renders via
+`setError` on the same element the 429 sentence uses (`.bis-concierge-error`,
+`role="status"`), composer enabled, `ended` and the store untouched — NOT on
+`.bis-concierge-ended`, which Task 5a's Playwright read asserts carries the
+close. Two unit tests: the exact too-fast body → `{ bubble: null, closing:
+null, notice: strings.tooFast }`; an ordinary in-progress reply → `notice:
+null`. MUTATION: restore the `ended` gate on `notice` → the first FAILS. Plus
+a Playwright companion mirroring the expired-path test with a fresh token.
+⚠️ Its disclosed risk: the intercepted round trip must land inside
+`MIN_FILL_MS` (2s) or the floor branch is skipped and the test fails for an
+environmental reason — watch it on CI before trusting a red.
+
+- [ ] **Step 3: Item 5 (page half) — drop the fallback**
+
+`{ended && <p className="bis-concierge-ended">{endedMessage ?? strings.ended}</p>}` becomes `{ended && endedMessage && <p …>{endedMessage}</p>}`. A wiring regression now renders NOTHING rather than the wrong sentence, and Task 5a's Playwright read is what catches it. Update the `pickTurnUpdate` test that asserts the ended shape so it asserts `closing` is non-empty on every ended input.
+
+- [ ] **Step 4: Verify** — `pnpm --filter web exec vitest run app/c/` green; `pnpm -r typecheck` exit 0. Both themes and the blur fallback unchanged (no style change here — say so). No gates beyond typecheck; Task 5a's Step 7 covers the branch.
+
+- [ ] **Step 5: Commit** (trailer verbatim; explicit paths).
+
+---
+
+Then **Task 5** (the bubble — now including the iframe-timing item: preload the frame at page load, or exempt turn 1 from the fill floor when the token is fresh; decide and test) and **Task 6** (the card — now including the non-empty-greeting gate and the two-sentence rendering of `enableConcierge`'s failures), as written below.
+
 ### Task 5: The floating bubble, and one snippet component instead of three
 
 **Files:**
@@ -2480,6 +2608,76 @@ checks that are already there — they are not moved or weakened:
       return;
     }
 ```
+
+- [ ] **Step 3b: The iframe's timing against the fill floor — decide, then test it**
+
+Branch 1's whole-branch review named this and it belongs here, because there
+is no iframe until this task creates one. `MIN_FILL_MS` is 2 seconds from the
+render token's mint, which happens when `/c/<publicId>` renders. **If the
+frame is created on the launcher click, a visitor who clicks and types fast
+sends turn 1 inside the floor**, the route answers `strings.tooFast` (Task 5a
+made that recoverable — `ended: false`, the composer stays), and the visitor's
+first experience is being told to send it again. Not fatal now, but wrong.
+
+Decision for this task: **preload the frame at page load, hidden** — the
+`panel` is created and the iframe's `src` set immediately, with
+`display: none` until opened. By the time anyone can click, the floor has
+long passed. Cost: one extra request per host-page load for every visitor,
+whether or not they open the chat; `loading="lazy"` does NOT apply to a hidden
+iframe reliably, so this is a real fetch. Accept it — it is one small
+server-rendered page, and the alternative (a first message that bounces) is
+a product defect on the surface's first impression. Do NOT exempt turn 1
+from the floor on the server: the floor is a bot guard, and weakening it for
+the widget weakens it for everyone.
+
+Test, in `embed-script.test.ts`: the concierge branch sets `iframe.src` before
+the launcher is clicked (assert on `doc.created` right after `run(...)`, no
+click), and the panel is hidden. MUTATION: set `src` on first click → the
+pre-click assertion FAILS.
+
+**Corrections after Task 5's review (2026-09-20), which govern:**
+- **`loading="lazy"` must NOT be set on the concierge iframe.** Setting `src`
+  early is not sufficient — a lazy iframe inside a `display:none` container
+  is exactly what browsers may defer. The implementer confined `lazy` to the
+  inline branch; a future "consistency" edit would undo the preload silently.
+- **Head placement:** the snippet carries no `async`/`defer`, and pasted in
+  `<head>` `document.body` is null — append to `document.body ||
+  document.documentElement`, or defer the two appends to `DOMContentLoaded`.
+  Test it; it threw a `TypeError` into the client's page and killed the
+  message listener with it.
+- **Mobile:** breakpoint `(max-width: 480px)` via `matchMedia`, panel becomes
+  a full-viewport sheet (`inset: 0`, no radius); fake `matchMedia` in `run()`
+  and assert both geometries.
+- **The close message has a producer:** the chat page posts
+  `{ type: "bis-concierge-close" }` on Esc and from a header close button —
+  keydown inside an iframe never reaches the host window, so the host-side
+  Esc listener alone is dead once the visitor is typing. Open moves focus
+  into the iframe. **Idempotence:** a second inclusion must not stack a
+  second launcher — guard on a flag.
+- **Brand colour, decided:** NOT baked into the snippet (it would freeze at
+  copy time and rot on a rebrand). The chat page posts
+  `{ type: "bis-concierge-brand", accent, accentForeground }` once at load
+  from the same theme it paints with; the loader paints the launcher from
+  inside BOTH postMessage checks. `data-color` stays as an operator override.
+- The tests must assert `bodyAppended` holds the panel and launcher and that
+  `inserted` is EMPTY on the concierge branch — the suite was green with
+  both appends deleted.
+- **CORRECTED (whole-branch review, 2026-09-20, finding I4): this step's cost
+  analysis was incomplete on two counts.** First, preloading the frame at
+  page load does not just cost one extra request — it ALSO starts the render
+  token's own 30-minute clock (`MAX_TOKEN_AGE_MS`) at that instant, not when
+  the visitor actually opens the chat. A visitor who opens the bubble more
+  than 30 minutes after the host page loaded would dead-end on their first
+  message against an already-expired token. Fixed by having `setOpen(true)`
+  refresh the frame (`iframe.src = iframe.src`, a fresh render token) once
+  `Date.now() - mountedAt` passes 25 minutes, before showing the panel — the
+  conversation id survives the reload in `sessionStorage`, and composing a
+  message takes longer than `MIN_FILL_MS` anyway. Second, the request itself
+  has a cost beyond bandwidth: it is one hit to BIS, carrying the page URL and
+  referrer, from EVERY pageview of every client site with the widget
+  installed, whether or not the visitor ever opens the chat — accepted for
+  the same reason as the rest of this step (a bounced first message is worse),
+  but worth naming rather than leaving implicit.
 
 - [ ] **Step 4: Run the loader tests to verify they pass**
 
@@ -2674,6 +2872,74 @@ In `voice-settings.tsx`, add the card, beside the `booking_enabled` and
 - The toggle. **Disabled, with the reason stated in words, until a destination
   form is chosen** — the setup wizard's "locked, with a reason" shape. A
   control that can be clicked and does nothing is a control that lies.
+  **Three more locked states, each with its own sentence** (from Branch 1's
+  reviews; all are real production states):
+  - **No voice profile row at all** — an account that has never saved voice
+    settings has none (`voice-settings.tsx:20-23`), and `enableConcierge`
+    throws its "no voice profile" error. Lock with: "Set up the assistant's
+    name and greeting first." Do not catch-and-swallow; the card decides from
+    the loaded profile being null, before any action fires.
+  - **A blank greeting** — `greeting_en`'s DB default is `''`, and a profile
+    row can exist with it empty. The public page renders the greeting as the
+    first bubble, so an empty greeting is an empty bubble. Lock with: "Write
+    the greeting visitors will see first." Gate on `greeting_en`, and on
+    `greeting_es` too when `languages` is `es` or `both`.
+  - **No published form** — the empty state below.
+  **And the ON state, which the first draft of this step omitted (found in
+  Task 6's review), amended again by the re-review's IMPORTANT B (fix round
+  2, 2026-09-20):** the empty state renders ONLY when the assistant is off.
+  The destination Select stays DISABLED the whole time the assistant is ON —
+  re-pointing a live assistant is a separate feature nobody has asked for —
+  and when it is on, the toggle ALWAYS renders enabled (it is the off
+  switch), naming the stored `concierge_form_id` even when that form is no
+  longer published, with one sentence saying so ("The form this sends to is
+  no longer published — leads have nowhere good to land. Publish it again, or
+  turn the assistant off to pick another."). An operator can draft a
+  published form at any time (`forms/actions.ts:54`, no guard), and
+  `getVoiceProfileByPublicId` does not check publication, so the assistant
+  keeps answering. Computing the empty state from the lock alone leaves an ON
+  assistant with no off switch and a snippet under copy that says it is off.
+  **The OFF face is the same rule, not a separate one:** a stored destination
+  that is no longer published is named in the Select in BOTH states (the
+  Select renders whatever id it is actually SHOWING, never blank for a live
+  or stored destination), locks the toggle while OFF with its own sentence
+  ("This form is no longer published. Publish it again or pick another one
+  first."), and is never silently re-enabled onto — one click cannot call
+  `enableAction` on a form the operator was never shown a warning about.
+  Test both faces: `enabled: true, publishedForms: []` → toggle present,
+  checked, ON sentence present, no empty state; the stored id absent from
+  `publishedForms` with one other form present → the Select names the stored
+  form, not blank, in EITHER state; and OFF with the stored id absent from
+  `publishedForms` → toggle locked, OFF sentence present.
+  **CORRECTED (whole-branch review, 2026-09-20, finding I3): add a fourth ON
+  face.** `saveVoiceProfileAction` accepts a blank greeting (no server check,
+  the textarea is not `required`), and the public page renders that blank
+  string as the visitor's first bubble — reachable on an assistant that was
+  already ON when the greeting was cleared, since `lockReason` is computed
+  here regardless of `enabled` but the ON branch used to read only
+  `formUnpublished`. Test: `enabled: true`, `greeting_en: ""`, a published
+  stored destination → the ON sentence warns about the empty first message
+  ("The greeting is blank, so visitors see an empty first message. Write one
+  in the assistant's profile above."), and the toggle still renders enabled
+  and checked — it is the off switch, and this is a warning beside it, not a
+  second lock.
+  ⚠️ CORRECTED (whole-branch review, 2026-09-20): `dashboard/page.test.ts` no
+  longer hard-codes the catalogue total — it now DERIVES it from
+  `CHECKLIST_CATALOGUE.length`, and so does `e2e/blueprints.spec.ts`'s own
+  assertion on the dashboard's checklist row. A new catalogue item therefore
+  needs no edit to either test. What still needs care: the row's own total is
+  `mergeChecklist(...).length`, so the e2e fixture account must carry no
+  `custom:` checklist rows, or the derived total silently drifts from
+  `CHECKLIST_CATALOGUE.length` and the two specs disagree on what "done"
+  means. The scoped test command should still include both.
+  And the action's two failure modes render as **two different sentences**:
+  the cross-tenant 42501 ("That form belongs to a different company") and
+  the missing-profile null (the first lock above). They are distinct at the
+  accessor (`concierge.ts`, post-5a: message as discriminator, code as
+  corroborator); the card must not collapse them. Note 0045 fires on `not
+  exists`, so a form deleted between the picker rendering and the submit
+  also reads as the cross-tenant case — the sentence should allow for that
+  ("…or was just deleted — pick again").
 - The destination-form select: published forms only, pre-selected when the
   account has exactly one. If the account has NO published form, the card says
   so in one sentence and links to Forms — that is the empty state, and it

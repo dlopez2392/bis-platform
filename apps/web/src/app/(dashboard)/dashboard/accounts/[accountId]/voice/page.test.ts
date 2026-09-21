@@ -23,9 +23,15 @@ vi.mock("@/lib/auth", () => ({
   requireAgencyOnlyAccountAccess: async () => ({ userId: "user_1", isAgency: true }),
 }));
 
+// The paste-able snippet's origin has to match whatever host the operator is
+// actually on — the forms/calendar embed cards' own precedent.
+vi.mock("next/headers", () => ({
+  headers: async () => new Headers({ host: "app.example.com", "x-forwarded-proto": "https" }),
+}));
+
 const dbFixture = vi.hoisted(() => ({ brandName: null as string | null }));
 const serviceDbMock = vi.hoisted(() => ({
-  getBranding: vi.fn(), getVoiceProfile: vi.fn(), getTransferPhone: vi.fn(),
+  getBranding: vi.fn(), getVoiceProfile: vi.fn(), getTransferPhone: vi.fn(), listForms: vi.fn(),
 }));
 
 vi.mock("@bis/db", () => ({
@@ -47,6 +53,7 @@ vi.mock("@bis/db", () => ({
   getVoiceProfile: (...a: unknown[]) => serviceDbMock.getVoiceProfile(...a),
   getBranding: (...a: unknown[]) => serviceDbMock.getBranding(...a),
   getTransferPhone: (...a: unknown[]) => serviceDbMock.getTransferPhone(...a),
+  listForms: (...a: unknown[]) => serviceDbMock.listForms(...a),
 }));
 
 // "use server" modules cannot be imported into a vitest render.
@@ -55,10 +62,15 @@ vi.mock("./actions", () => ({
   assignNumberAction: async () => ({ ok: true }),
   setNumberStatusAction: async () => ({ ok: true }),
   setTransferPhoneAction: async () => ({ ok: true }),
+  enableConciergeAction: async () => ({ ok: true, publicId: "pub_x" }),
+  disableConciergeAction: async () => ({ ok: true }),
 }));
 
 const captured = vi.hoisted(() => ({
-  props: null as { brandName?: string; transferPhone?: string | null } | null,
+  props: null as {
+    accountId?: string; brandName?: string; transferPhone?: string | null;
+    publishedForms?: { id: string; name: string }[]; origin?: string;
+  } | null,
 }));
 vi.mock("./voice-settings", () => ({
   VoiceSettings: (props: { brandName: string }) => {
@@ -95,6 +107,35 @@ beforeEach(() => {
     brandName: dbFixture.brandName, brandLogoPath: null, brandColor: null, brandNeutral: null,
     brandCorners: null, brandType: null, brandMode: null, replyToEmail: null,
   }));
+  serviceDbMock.listForms.mockReset().mockResolvedValue([]);
+});
+
+/**
+ * The website assistant's destination picker only ever offers a PUBLISHED
+ * form — a draft has no `/f/<publicId>` a lead could land on. `listForms`
+ * returns every form on the account regardless of status; this page is the
+ * one that narrows it, the same way the setup wizard narrows its own reads
+ * rather than trusting the caller.
+ */
+describe("voice settings page — the website assistant's inputs", () => {
+  it("hands the card only published forms, mapped to id and name", async () => {
+    serviceDbMock.listForms.mockResolvedValue([
+      { id: "f1", public_id: "pub1", name: "Contact us", status: "published", created_at: "", submissionCount: 0 },
+      { id: "f2", public_id: "pub2", name: "Draft form", status: "draft", created_at: "", submissionCount: 0 },
+    ]);
+    const props = await render();
+    expect(props.publishedForms).toEqual([{ id: "f1", name: "Contact us" }]);
+  });
+
+  it("computes the pasteable origin from the request's own host", async () => {
+    const props = await render();
+    expect(props.origin).toBe("https://app.example.com");
+  });
+
+  it("passes the account id through, for the empty state's link to Forms", async () => {
+    const props = await render();
+    expect(props.accountId).toBe("a1");
+  });
 });
 
 describe("voice settings page — text-back preview name", () => {

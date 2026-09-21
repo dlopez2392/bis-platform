@@ -735,6 +735,12 @@ export const m = {
   "checklist.gbp_connect.help": "Done in Google. Review management arrives in M5.",
   "checklist.invite_owner.title": "Invite the business owner",
   "checklist.invite_owner.help": "Done in this company's Settings, under Client access. Turn access on, then invite them by email.",
+  // Not external: this is done in this app, on the Voice page. No href — the
+  // catalogue is a static module with no account id in scope, so the help
+  // text names the destination, as every internal item does.
+  "checklist.concierge_embed.title": "Put the assistant on your website",
+  "checklist.concierge_embed.help":
+    "Turn on the website assistant from the Voice page, pick where its leads should land, then paste one line of code into your site. It answers questions and takes names around the clock.",
 
   "checklist.title": "Activation checklist",
   "checklist.body": "What's left before this company is live.",
@@ -994,6 +1000,38 @@ export const m = {
   "voice.transfer.badE164": "Enter a real phone number, or leave it blank to keep taking messages.",
   "voice.transfer.ownNumber": "That's this client's own number, so the call would ring straight back to Sofía. Use a number that reaches a person.",
   "voice.transfer.saveFailed": "Could not save the transfer number.",
+
+  // ── Website assistant — the same receptionist, answering on the website
+  // instead of the phone. Copy here avoids the internal words for this
+  // feature ("concierge", "widget", "embed", "public id") on purpose — this
+  // card is read by the agency operator setting it up for a real business,
+  // and the checklist item that points here is the same plain sentence a
+  // landscaper reads at 7 AM.
+  "voice.assistant.title": "Website assistant",
+  "voice.assistant.body": "Answers questions on your website and takes names, day and night.",
+  "voice.assistant.destinationLabel": "Where should its leads go?",
+  "voice.assistant.destinationPlaceholder": "Choose a form",
+  "voice.assistant.toggleLabel": "Turn on the website assistant",
+  "voice.assistant.lockedNoProfile": "Set up the assistant's name and greeting first.",
+  "voice.assistant.lockedBlankGreeting": "Write the greeting visitors will see first.",
+  "voice.assistant.greetingBlankOn": "The greeting is blank, so visitors see an empty first message. Write one in the assistant's profile above.",
+  "voice.assistant.lockedNoSelection": "Choose a form for its leads first.",
+  "voice.assistant.noFormTitle": "No published form yet",
+  "voice.assistant.noFormBody": "The website assistant needs a form to send its leads to. Publish one, then come back here to turn it on.",
+  "voice.assistant.goToForms": "Go to Forms",
+  "voice.assistant.enabledToast": "Website assistant turned on",
+  "voice.assistant.disabledToast": "Website assistant turned off",
+  "voice.assistant.enableFailed": "Could not turn on the website assistant.",
+  "voice.assistant.disableFailed": "Could not turn off the website assistant.",
+  "voice.assistant.wrongForm": "That form belongs to a different company, or was just deleted. Pick another one.",
+  "voice.assistant.formUnpublished": "The form this sends to is no longer published — leads have nowhere good to land. Publish it again, or turn the assistant off to pick another.",
+  "voice.assistant.formUnpublishedOff": "This form is no longer published. Publish it again or pick another one first.",
+  "voice.assistant.unpublishedFormOption": "This form (no longer published)",
+  "voice.assistant.snippetTitle": "Add it to your website",
+  "voice.assistant.snippetHint": "Paste this line into your site, right before </body>.",
+  "voice.assistant.copy": "Copy the code",
+  "voice.assistant.copied": "Copied",
+  "voice.assistant.publicLink": "Direct link",
 
   // ── The agency numbers inventory (/dashboard/numbers) ──────────────────
   //

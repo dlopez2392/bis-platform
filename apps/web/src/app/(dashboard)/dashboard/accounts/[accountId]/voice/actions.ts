@@ -28,6 +28,7 @@ import { revalidatePath } from "next/cache";
 import {
   serviceDb, upsertVoiceProfile, assignPhoneNumber, setPhoneNumberStatus, getVoiceProfile,
   reassignPhoneNumber, listPhoneNumbersForAccount, setTransferPhone,
+  enableConcierge, disableConcierge,
   type PhoneNumberStatus, type VoiceProfilePatch,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
@@ -281,6 +282,72 @@ export async function setTransferPhoneAction(
   } catch (e) {
     console.error(`setTransferPhoneAction: save failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["voice.transfer.saveFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/voice`);
+  return { ok: true };
+}
+
+export type EnableConciergeResult = { ok: true; publicId: string } | { ok: false; error: string };
+
+/**
+ * The website assistant's on switch — the first caller of `enableConcierge`
+ * (packages/db/src/concierge.ts) in the product. Same guard, same
+ * `serviceDb()` bypass, same reason as every write in this file:
+ * `voice_profiles` grants `authenticated` SELECT only, so `isAgency` is the
+ * only thing standing behind this.
+ *
+ * The two failure modes the accessor distinguishes by MESSAGE render as two
+ * different sentences here, not caught-and-collapsed into one generic
+ * refusal: a missing profile row reuses the same sentence the card's locked
+ * toggle already shows for that state (the card is supposed to prevent this
+ * action from firing at all while the profile is missing — this is the
+ * defense-in-depth path for a caller that bypasses the UI), and a
+ * cross-tenant or since-deleted form gets its own, distinct wording that
+ * allows for both — see concierge.ts's own note on 0045 firing on `not
+ * exists` too.
+ */
+export async function enableConciergeAction(
+  accountId: string, formId: string,
+): Promise<EnableConciergeResult> {
+  const { isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["voice.agencyOnly"] };
+
+  try {
+    const { publicId } = await enableConcierge(serviceDb(), accountId, formId);
+    revalidatePath(`/dashboard/accounts/${accountId}/voice`);
+    return { ok: true, publicId };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (message.includes("no voice profile for this account")) {
+      return { ok: false, error: m["voice.assistant.lockedNoProfile"] };
+    }
+    if (message.includes("form does not belong to this account")) {
+      console.error(
+        `enableConciergeAction: cross-tenant or deleted form for account ${accountId}, form ${formId}: ${message}`,
+      );
+      return { ok: false, error: m["voice.assistant.wrongForm"] };
+    }
+    console.error(`enableConciergeAction: failed for account ${accountId}: ${message}`);
+    return { ok: false, error: m["voice.assistant.enableFailed"] };
+  }
+}
+
+/**
+ * The off switch. Deliberately does NOT clear `public_id` (see
+ * `disableConcierge`'s own doc) — a snippet already pasted on a client's
+ * website keeps pointing at the same address, it just stops answering until
+ * re-enabled.
+ */
+export async function disableConciergeAction(accountId: string): Promise<ActionResult> {
+  const { isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["voice.agencyOnly"] };
+
+  try {
+    await disableConcierge(serviceDb(), accountId);
+  } catch (e) {
+    console.error(`disableConciergeAction: failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["voice.assistant.disableFailed"] };
   }
 
   revalidatePath(`/dashboard/accounts/${accountId}/voice`);

@@ -36,6 +36,16 @@ import {
 import { acceptProposal, dismissProposal } from "./actions";
 import { m } from "@/lib/messages";
 
+// This suite runs against the LIVE shared Supabase project and each test
+// makes three or more round trips. On vitest's 5s default it went red FOUR
+// times on 2026-09-20 — twice on main, twice on a branch — every time with
+// "Test timed out in 5000ms" on tests that pass alone, whenever CI's db
+// suite, a local gate run or the e2e suite touched the same project at once.
+// A 30s ceiling still fails a genuine hang; it stops a slow-but-correct test
+// failing under load. The real fix is a CI project separate from
+// production's — recorded in the ledger as the owner's call.
+vi.setConfig({ testTimeout: 30_000 });
+
 // Not `SupabaseClient` from `@supabase/supabase-js` directly: apps/web has no
 // dependency on that package (only `@bis/db` does), so naming it here fails
 // `tsc` with "Cannot find module" even though it happens to resolve at

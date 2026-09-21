@@ -38,6 +38,11 @@ export const CHECKLIST_CATALOGUE: CatalogueItem[] = [
   // platform now performs itself.
   { key: "invite_owner", title: m["checklist.invite_owner.title"],
     help: m["checklist.invite_owner.help"], external: false },
+  // Not external: this is done in this app, on the Voice page. No href — the
+  // catalogue is a static module with no account id in scope, so the help
+  // text names the destination, as every internal item does.
+  { key: "concierge_embed", title: m["checklist.concierge_embed.title"],
+    help: m["checklist.concierge_embed.help"], external: false },
 ];
 
 export type ChecklistEntry = {

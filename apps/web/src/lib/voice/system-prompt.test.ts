@@ -162,6 +162,11 @@ describe("buildSystemPrompt medium", () => {
   it("is byte-identical when no medium is given and when medium is phone", () => {
     expect(buildSystemPrompt(baseInput({ medium: "phone" }), now))
       .toBe(buildSystemPrompt(base, now));
+    // The Spanish-only LANGUAGE branch is the one line item 6 (Branch 2
+    // hardening) touches — its own byte-identity proof, not covered by the
+    // bilingual case above, since "both" and "es" take different branches.
+    expect(buildSystemPrompt(baseInput({ languages: "es", medium: "phone" }), now))
+      .toBe(buildSystemPrompt(baseInput({ languages: "es" }), now));
   });
 
   it("says phone receptionist and phone call by default", () => {
@@ -265,6 +270,25 @@ describe("buildSystemPrompt medium", () => {
       expect(web).not.toContain("the caller uses");
       const phone = buildSystemPrompt(base, now);
       expect(phone).toContain("the caller uses");
+    });
+
+    // Item 6 (Branch 2 hardening): the Spanish-only LANGUAGE branch still
+    // said "caller" on the web — an es-only tenant is a real configuration
+    // in this market, and it never went through the "both" branch above.
+    it("says visitor, not caller, in the Spanish-only LANGUAGE line on the web; the phone line is unchanged", () => {
+      // callerNumber: null — the real value the concierge route always
+      // passes (route.ts's own buildSystemPrompt call), since text has no
+      // caller ID. `base.callerNumber` is a PHONE fixture value and would
+      // otherwise leak an unrelated, pre-existing "The caller is calling
+      // from…" line into this assertion — out of this item's scope, which is
+      // the LANGUAGE branch's own word only.
+      const web = buildSystemPrompt(baseInput({ languages: "es", medium: "web", callerNumber: null }), now);
+      expect(web).toContain("LANGUAGE — Speak Spanish. If a visitor uses English");
+      // MUTATION: revert `${audienceWord}` to the literal "caller" — this
+      // FAILS.
+      expect(web).not.toContain("If a caller uses English");
+      const phone = buildSystemPrompt(baseInput({ languages: "es" }), now);
+      expect(phone).toContain("If a caller uses English");
     });
 
     it("resolves 'would rather talk to a person' to capture_lead in the IDENTITY line", () => {

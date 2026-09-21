@@ -442,9 +442,23 @@ describe("POST /api/concierge/[publicId]/turn — what a refusal costs", () => {
     expect(dbFns.createConciergeConversation).not.toHaveBeenCalled();
   });
 
-  it("refuses a first turn that arrived too fast to have been typed", async () => {
-    await firstTurn({ [RENDER_TOKEN_FIELD]: signRenderToken(Date.now(), PUBLIC_ID) });
+  // Item 4 (Branch 2 hardening): a too-fast first message on a valid, FRESH
+  // token is not a spam signal on its own — a fast typist, not a bot — so
+  // this is a DIFFERENT ended path from the honeypot/bad-signature one below:
+  // `ended: false`, and its own sentence, never `strings.ended`. The
+  // honeypot test below still asserts `ended: true` — the two must differ.
+  it("answers a first turn that arrived too fast with its own sentence, and keeps the composer open", async () => {
+    const res = await firstTurn({ [RENDER_TOKEN_FIELD]: signRenderToken(Date.now(), PUBLIC_ID) });
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(dbFns.createConciergeConversation).not.toHaveBeenCalled();
+    // MUTATION: fall through to the honeypot/bad-signature branch's
+    // `ended: true, closing: strings.ended` — this FAILS, and a fast typist
+    // reads the SAME dead end a bot gets, on a token the widget itself
+    // minted moments ago.
+    expect(await res.json()).toEqual({
+      conversationId: "", reply: "", ended: false, closing: conciergeStrings("en").tooFast,
+    });
+    expect(conciergeStrings("en").tooFast).not.toBe(conciergeStrings("en").ended);
   });
 
   it("refuses a first turn whose token was minted for another widget", async () => {

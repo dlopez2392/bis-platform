@@ -46,6 +46,16 @@ describe("buildPaletteEntries", () => {
     expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#alert-phone`);
   });
 
+  it("finds the website assistant by the words an operator would type", () => {
+    const entries = buildPaletteEntries(BASE, true);
+    const voice = entries.find((e) => e.id === `nav:${BASE}/voice`)!;
+    // MUTATION: remove the NAV_KEYWORDS entry — this FAILS, and an operator
+    // typing "widget" finds nothing.
+    for (const word of ["website", "widget", "chat", "concierge"]) {
+      expect(voice.keywords).toContain(word);
+    }
+  });
+
   it("has no duplicate ids and no entry without a label", () => {
     for (const isAgency of [true, false]) {
       const entries = buildPaletteEntries(BASE, isAgency);

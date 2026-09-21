@@ -70,7 +70,11 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
       "",
     );
   } else if (input.languages === "es") {
-    lines.push(`LANGUAGE — Speak Spanish. If a caller uses English, you may answer in English, but default to Spanish.`, "");
+    // Item 6 (Branch 2 hardening): this hard-coded "caller" was the one spot
+    // the second-round review's `${audienceWord}` fix missed — an es-only
+    // tenant is a real configuration in this market, and it never goes
+    // through the bilingual branch above.
+    lines.push(`LANGUAGE — Speak Spanish. If a ${audienceWord} uses English, you may answer in English, but default to Spanish.`, "");
   }
 
   lines.push(
