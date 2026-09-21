@@ -1,4 +1,5 @@
 import type { Pass } from "./context";
+import { releaseHeldPass } from "./passes/release-held";
 import { remindersPass } from "./passes/reminders";
 import { followupsPass } from "./passes/followups";
 import { reviewRequestPass } from "./passes/review-request";
@@ -10,7 +11,9 @@ import { weeklyAgencyReportPass } from "./passes/weekly-agency-report";
 
 /**
  * Every pass the cron tick runs, IN ORDER. Order is part of the contract:
- * the follow-up pass stamps `followup_sent_at` and the review-request pass
+ * the release pass runs first: a held subject is sent (and stamped) before
+ * its own pass's due-list runs, so the same tick cannot send it twice. The
+ * follow-up pass stamps `followup_sent_at` and the review-request pass
  * reads it in the same tick, which is what guarantees "how did it go?" on
  * day one and "would you leave a review?" on day two even when both become
  * eligible on the same morning.
@@ -24,4 +27,4 @@ import { weeklyAgencyReportPass } from "./passes/weekly-agency-report";
  * same `weeklyMetrics` the client pass just used.
  * Adding a recipe = one line here plus its pass file. Nothing else.
  */
-export const PASSES: readonly Pass[] = [remindersPass, followupsPass, reviewRequestPass, noShowNudgePass, smsReminderPass, siteTrafficPass, weeklyClientReportPass, weeklyAgencyReportPass];
+export const PASSES: readonly Pass[] = [releaseHeldPass, remindersPass, followupsPass, reviewRequestPass, noShowNudgePass, smsReminderPass, siteTrafficPass, weeklyClientReportPass, weeklyAgencyReportPass];

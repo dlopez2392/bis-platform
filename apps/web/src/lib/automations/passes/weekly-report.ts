@@ -1,4 +1,4 @@
-import { listAccountsDueWeeklyReport, stampWeeklyReportSent, getVoiceProfile } from "@bis/db";
+import { listAccountsDueWeeklyReport, stampWeeklyReportSent, getVoiceProfile, recordAutomationLog } from "@bis/db";
 import { emailBrandNamed } from "@/lib/email/templates/shell";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { weeklyReportEmail, weeklyReportSubject } from "@/lib/email/templates/weekly-report";
@@ -139,6 +139,18 @@ export const weeklyClientReportPass: Pass = {
               `weekly report sent but NOT stamped for account ${row.accountId} after `
               + `${stamp.attempts} attempts — expect a duplicate next tick inside the band: ${String(stamp.lastError)}`,
             );
+          }
+
+          // Part C: the client's own history shows the report went out —
+          // one row per account-week, exempt from quiet hours (it goes to
+          // the OWNER, Monday morning). An isolated leg, like the stamp.
+          try {
+            await recordAutomationLog(ctx.db, {
+              accountId: row.accountId, source: "weekly_report", channel: "email", contactId: null,
+              subjectKey: `week:${monday}`, status: "sent",
+            });
+          } catch (e) {
+            console.error(`weekly report: log write failed for account ${row.accountId}: ${String(e)}`);
           }
         }
       } catch (e) {

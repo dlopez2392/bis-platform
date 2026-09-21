@@ -3,6 +3,7 @@ import type { AccountDueWeeklyReport } from "@bis/db";
 
 const dbMocks = vi.hoisted(() => ({
   listAccountsDueWeeklyReport: vi.fn(), stampWeeklyReportSent: vi.fn(), getVoiceProfile: vi.fn(),
+  recordAutomationLog: vi.fn(),
 }));
 // importOriginal keeps every other @bis/db export (and the types) real.
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
@@ -63,6 +64,7 @@ beforeEach(() => {
   dbMocks.listAccountsDueWeeklyReport.mockResolvedValue([]);
   dbMocks.stampWeeklyReportSent.mockResolvedValue(undefined);
   dbMocks.getVoiceProfile.mockResolvedValue(null);
+  dbMocks.recordAutomationLog.mockResolvedValue(undefined);
   metricsMock.weeklyMetrics.mockReset().mockResolvedValue(WEEK);
   emailSend.mockReset().mockResolvedValue({ providerMessageId: "e1" });
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -111,6 +113,20 @@ describe("weeklyClientReportPass", () => {
     // All-fail must NOT stamp, so it retries inside the same morning band.
     expect(await weeklyClientReportPass.run(ctx())).toEqual({ ...EMPTY, failed: 2 });
     expect(dbMocks.stampWeeklyReportSent).not.toHaveBeenCalled();
+  });
+
+  it("writes ONE sent row keyed by the week once at least one recipient got it, and none when every send failed (mutation: log before the loop → FAILS)", async () => {
+    dbMocks.listAccountsDueWeeklyReport.mockResolvedValue([row({ reportEmails: ["a@x.com", "b@x.com"] })]);
+    metricsMock.weeklyMetrics.mockResolvedValue(WEEK);
+    await weeklyClientReportPass.run(ctx());
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledTimes(1);
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), {
+      accountId: "acct_1", source: "weekly_report", channel: "email", contactId: null, subjectKey: `week:${MONDAY}`, status: "sent",
+    });
+    dbMocks.recordAutomationLog.mockClear();
+    emailSend.mockRejectedValue(new Error("bounce"));
+    await weeklyClientReportPass.run(ctx());
+    expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
   });
 
   it("skips an account already stamped for this week", async () => {

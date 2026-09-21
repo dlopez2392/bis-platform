@@ -1,8 +1,9 @@
 import type { serviceDb, Branding, CallOutcome } from "@bis/db";
 import {
   createContact, fillContactBlanks, ensureConversation, createMessage, incrementUnreadCount,
-  finishCallRow, emit, getAlertPhone, getContact,
+  finishCallRow, emit, getAlertPhone, getContact, recordAutomationLog,
 } from "@bis/db";
+import { REASONS } from "@/lib/automations/hold-or-send";
 import { emailBrand, brandDisplayName } from "@/lib/email/templates/shell";
 import { getEmailProvider } from "@/lib/email";
 import { voiceCallAlertEmail } from "@/lib/email/templates/voice";
@@ -567,6 +568,24 @@ export async function finishCall(
       stored = true;
     } catch (e) {
       console.error(`finishCall ${meta.callRowId}: finishCallRow failed: ${String(e)}`);
+    }
+  }
+
+  // Part C: one `ai` row per answered call, AFTER the durable row. A spam
+  // outcome is `skipped` with its reason — "8 skipped · Screened as a
+  // robocall" is the visibility the robocall week asked for — and "calls
+  // handled" on the Activity page counts the sent rows. Its own try/catch,
+  // like every other leg.
+  if (meta.callRowId) {
+    try {
+      await recordAutomationLog(ctx.db, {
+        accountId: ctx.accountId, source: "voice", channel: "ai", contactId,
+        subjectKey: `call:${meta.callRowId}`,
+        status: outcome === "spam" ? "skipped" : "sent",
+        reason: outcome === "spam" ? REASONS.robocall : "",
+      });
+    } catch (e) {
+      console.error(`finishCall ${meta.callRowId}: automation log write failed: ${String(e)}`);
     }
   }
 

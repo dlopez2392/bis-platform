@@ -28,6 +28,8 @@ const dbMocks = vi.hoisted(() => ({
   recordAutomationLog: vi.fn(),
   // Part C: the inline instant reply reads the window and the zone; the held path reads the existing row.
   readQuietSettings: vi.fn(), readAccountTimezone: vi.fn(), getAutomationLogEntry: vi.fn(),
+  // The release pass's own queue read — first in the registry, every tick.
+  listReleasableHolds: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: async () => ({ ok: true, from: "+19565550000" }) }));
@@ -102,6 +104,7 @@ beforeEach(() => {
   dbMocks.readQuietSettings.mockResolvedValue({ enabled: false, start: "21:00", end: "08:00" });
   dbMocks.readAccountTimezone.mockResolvedValue("America/Chicago");
   dbMocks.getAutomationLogEntry.mockResolvedValue(null);
+  dbMocks.listReleasableHolds.mockResolvedValue([]);
   // Same treatment for the weekly report: TICK is a Wednesday in every zone
   // (no IANA offset shifts a calendar day back two full days), so it can
   // never be in the Monday band here regardless of account timezone. Empty
@@ -141,6 +144,7 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(results.weeklyClientReport).not.toHaveProperty("errored");
     expect(results.weeklyAgencyReport).toEqual(expect.objectContaining({ sent: 0, failed: 0 }));
     expect(results.weeklyAgencyReport).not.toHaveProperty("errored");
+    expect(results.releaseHeld).toEqual({ examined: 0, sent: 0, held: 0, skipped: 0, failed: 0, errored: 0 });
 
     const everything = [...emailSend.mock.calls, ...smsSend.mock.calls, ...dbMocks.createMessage.mock.calls]
       .map((args) => JSON.stringify(args)).join("\n");
@@ -149,8 +153,8 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(everything).toContain(BRAND);   // and the brand name DID go out, in its place
   });
 
-  it("the registry runs reminders, follow-ups, review requests, no-show nudges, text reminders, site traffic, then the two weekly reports — the first three's order is the collision's contract", () => {
-    expect(PASSES.map((p) => p.key)).toEqual(["reminders", "followups", "reviewRequests", "noShowNudges", "smsReminders", "siteTraffic", "weeklyClientReport", "weeklyAgencyReport"]);
+  it("the registry runs the release pass, then reminders, follow-ups, review requests, no-show nudges, text reminders, site traffic, then the two weekly reports — the first three's order is the collision's contract", () => {
+    expect(PASSES.map((p) => p.key)).toEqual(["releaseHeld", "reminders", "followups", "reviewRequests", "noShowNudges", "smsReminders", "siteTraffic", "weeklyClientReport", "weeklyAgencyReport"]);
   });
 
   /**
