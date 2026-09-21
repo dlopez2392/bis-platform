@@ -6,6 +6,7 @@ import {
   listChecklistState,
 } from "@bis/db";
 import { SETUP_TICK_KEYS } from "../src/lib/setup/setup-status";
+import { m } from "../src/lib/messages";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process rather than through a Next request.
@@ -675,8 +676,13 @@ test.describe("the setup wizard, as the agency", () => {
 
     // Row 3's link is the Voice page, anchored at the card this row turns on
     // and picks the form (voice-settings.tsx's `id="website-assistant"`).
+    // Named by its accessible name, not the visible "Open" text: fix-round
+    // MINOR 9 gave every row's link an `aria-label` of the row's own title
+    // (website-assistant.tsx:78) so a screen reader can tell the four apart —
+    // which means each link's accessible name is now that title, not "Open".
     await expect(
-      pane(page).locator('[data-row="3"]').getByRole("link", { name: "Open" }),
+      pane(page).locator('[data-row="3"]')
+        .getByRole("link", { name: m["setup.step.website_assistant.row3.title"] }),
     ).toHaveAttribute("href", `/dashboard/accounts/${accountId}/voice?from=setup#website-assistant`);
   });
 
