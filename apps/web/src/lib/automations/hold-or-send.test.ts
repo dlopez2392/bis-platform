@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const dbMocks = vi.hoisted(() => ({ recordAutomationLog: vi.fn() }));
+const dbMocks = vi.hoisted(() => ({ recordAutomationLog: vi.fn(), getAutomationLogEntry: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 
 import { holdOrSend, logSkipped, REASONS, subjectOf, verdict, type HoldSubject } from "./hold-or-send";
@@ -22,6 +22,7 @@ const ctx = (now: Date, settings = ON, db: unknown = {}) =>
 
 beforeEach(() => {
   dbMocks.recordAutomationLog.mockReset().mockResolvedValue(undefined);
+  dbMocks.getAutomationLogEntry.mockReset().mockResolvedValue(null);
   vi.spyOn(console, "error").mockImplementation(() => {}).mockClear();
 });
 
@@ -68,6 +69,33 @@ describe("holdOrSend", () => {
     expect(vi.mocked(console.error).mock.calls.map((c) => String(c[0]))).toEqual([expect.stringContaining("automation log write failed")]);
   });
 
+  it("a held write that fails REJECTS the call — nothing sent, the pass will count it (mutation: swallow it → FAILS)", async () => {
+    dbMocks.recordAutomationLog.mockRejectedValue(new Error("log down"));
+    const send = vi.fn(async () => {});
+    await expect(holdOrSend(ctx(NIGHT), subject(), send)).rejects.toThrow(/log down/);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("re-holding with an UNCHANGED held_until does not re-write the row, so `occurred_at` does not bump (mutation: drop the getAutomationLogEntry check → FAILS)", async () => {
+    dbMocks.getAutomationLogEntry.mockResolvedValue({
+      id: "l1", account_id: "acct_1", source: "sms_reminder", channel: "sms", contact_id: "ct_1",
+      subject_key: "booking:bk_1", status: "held", reason: "x", held_until: END, payload: {}, occurred_at: "2026-09-22T03:00:00.000Z",
+    });
+    const send = vi.fn(async () => {});
+    expect(await holdOrSend(ctx(NIGHT), subject(), send)).toBe("held");
+    expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
+  });
+
+  it("re-holding with a CHANGED held_until still writes (the window lengthened)", async () => {
+    dbMocks.getAutomationLogEntry.mockResolvedValue({
+      id: "l1", account_id: "acct_1", source: "sms_reminder", channel: "sms", contact_id: "ct_1",
+      subject_key: "booking:bk_1", status: "held", reason: "x", held_until: "2026-09-22T12:00:00.000Z", payload: {}, occurred_at: "2026-09-22T03:00:00.000Z",
+    });
+    const send = vi.fn(async () => {});
+    expect(await holdOrSend(ctx(NIGHT), subject(), send)).toBe("held");
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledTimes(1);
+  });
+
   it("quiet hours OFF: sends at night", async () => {
     const send = vi.fn(async () => {});
     expect(await holdOrSend(ctx(NIGHT, OFF), subject(), send)).toBe("sent");
@@ -111,10 +139,19 @@ describe("logSkipped, subjectOf, verdict", () => {
     })).toEqual({ accountId: "acct_1", source: "instant_reply", channel: "sms", subjectKey: "submission:s1", contactId: "ct_9", payload: { locale: "es" } });
   });
 
-  it("verdict reads a pass's counters: sent beats held beats failed beats skipped", () => {
+  it("subjectOf preserves an `ai` channel rather than coercing it to sms (mutation: coerce → FAILS)", () => {
+    expect(subjectOf({
+      id: "l2", account_id: "acct_1", source: "voice", channel: "ai", contact_id: "ct_9",
+      subject_key: "call:c1", status: "sent", reason: "", held_until: null, payload: {}, occurred_at: END,
+    }).channel).toBe("ai");
+  });
+
+  it("verdict reads a pass's counters: sent beats held beats failed beats skipped (mutation: reverse the branch order → FAILS)", () => {
     expect(verdict({ sent: 1, held: 0, failed: 0 })).toBe("sent");
     expect(verdict({ sent: 0, held: 1, failed: 0 })).toBe("held");
     expect(verdict({ sent: 0, held: 0, failed: 1 })).toBe("failed");
     expect(verdict({ sent: 0, held: 0, failed: 0 })).toBe("skipped");
+    expect(verdict({ sent: 1, held: 1, failed: 1 })).toBe("sent");
+    expect(verdict({ sent: 0, held: 1, failed: 1 })).toBe("held");
   });
 });

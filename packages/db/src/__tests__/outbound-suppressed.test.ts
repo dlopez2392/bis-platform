@@ -44,11 +44,14 @@ const bodies = (file: string) =>
     .filter((f): f is { name: string; body: string } => f.name !== undefined);
 
 describe("outbound suppression", () => {
-  it("routes every due-list through loadSendableRows", () => {
+  it("routes every due-list, and every by-id release lookup, through loadSendableRows", () => {
     const offenders: string[] = [];
     for (const file of FILES) {
       for (const { name, body } of bodies(file)) {
-        if (!/^listDue/.test(name)) continue;
+        // `getDue*ById` (Task 3, part C): the release pass re-reads a SINGLE
+        // subject the same way the cron's due-lists read many — a surface
+        // the cron now reaches through, so it is inside the same guard.
+        if (!/^(listDue|getDue)/.test(name)) continue;
         if (PREDICATE_GATED[file]?.includes(name)) continue;
         if (!body.includes("loadSendableRows")) offenders.push(`${file}: ${name}`);
       }

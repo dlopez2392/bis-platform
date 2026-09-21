@@ -4,6 +4,7 @@ import { withTestAccount } from "./fixtures";
 import { serviceDb } from "../service";
 import {
   recordAutomationLog, listReleasableHolds, bumpHeldForAccount, listAutomationLog, countAutomationUsage,
+  getAutomationLogEntry,
 } from "../automation-log";
 import { readQuietSettings, saveQuietSettings } from "../automation-settings";
 import { createContact } from "../contacts";
@@ -197,6 +198,8 @@ describe("0046 accessors, live (serviceDb under withTestAccount)", () => {
       await recordAutomationLog(db, { ...base, status: "sent" });
       const rows = await listAutomationLog(db, accountId, { limit: 10 });
       expect(rows.map((r) => [r.subject_key, r.status, r.reason, r.held_until])).toEqual([[`booking:${RUN}`, "sent", "", null]]);
+      const entry = await getAutomationLogEntry(db, accountId, "sms_reminder", `booking:${RUN}`);
+      expect(entry?.status).toBe("sent");
     });
   });
 

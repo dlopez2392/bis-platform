@@ -63,6 +63,23 @@ export async function recordAutomationLog(db: SupabaseClient, w: AutomationLogWr
   if (error) throw new Error(`recordAutomationLog failed: ${error.message}`);
 }
 
+/**
+ * One row by its unique key (account, source, subject) — the read
+ * `holdOrSend` (apps/web's hold-or-send.ts) makes before re-writing a held
+ * row, so a subject re-encountered on every tick while still held under the
+ * SAME window does not bump `occurred_at` and re-sort to the top of the
+ * Activity page's history on every 15-minute tick. Null when no row exists
+ * yet for this subject.
+ */
+export async function getAutomationLogEntry(
+  db: SupabaseClient, accountId: string, source: AutomationLogSource, subjectKey: string,
+): Promise<AutomationLogRow | null> {
+  const { data, error } = await db.from("automation_log").select(LOG_COLS)
+    .eq("account_id", accountId).eq("source", source).eq("subject_key", subjectKey).maybeSingle();
+  if (error) throw new Error(`getAutomationLogEntry failed: ${error.message}`);
+  return (data as AutomationLogRow | null) ?? null;
+}
+
 /** The release pass's queue: held rows whose time has come, oldest first. */
 export async function listReleasableHolds(
   db: SupabaseClient, nowIso: string, limit = 200,

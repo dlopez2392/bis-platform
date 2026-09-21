@@ -1,5 +1,6 @@
 import {
-  recordAutomationLog, type AutomationLogRow, type AutomationLogSource, type AutomationLogWrite,
+  recordAutomationLog, getAutomationLogEntry,
+  type AutomationLogRow, type AutomationLogSource, type AutomationLogChannel, type AutomationLogWrite,
 } from "@bis/db";
 import { resolveAccountZone } from "@/lib/booking/followup-timing";
 import { inQuietWindow, quietWindowEnd, formatInstantClock } from "./quiet-hours";
@@ -19,17 +20,28 @@ import type { PassContext } from "./context";
  *                         the window's end sends now: the 6:45 text for the
  *                         7:30 job.
  *
- * The log write is an isolated leg (`record`): it never fails a send, and a
- * failure is one console.error. The settings READ is not: a rejected read
- * rejects the call, the pass counts `failed`, and the row is due again next
- * tick — fail-closed for one tick rather than guessing the window.
+ * The `sent`/`failed`/`skipped` log writes are an isolated leg (`record`):
+ * losing one loses a history line, not a send, so a failure is one
+ * console.error and nothing more. The `held` write is NOT isolated — it is
+ * the enqueue. If it is lost, `holdOrSend` still returns "held", the pass
+ * does not stamp, and the row simply vanishes: no error, no retry, and if
+ * the appointment's own 75-minute reminder band closes while the account is
+ * still in its quiet window, nothing ever sends it. So the held write is
+ * made DIRECTLY (not through `record`) and a failure REJECTS the call, so
+ * the pass counts `failed` and the tick's own retry-next-time behaviour
+ * (the row is still unstamped) is what saves it. The settings READ has the
+ * same shape for the same reason: a rejected read rejects the call.
  */
 export type HoldContext = Pick<PassContext, "db" | "now" | "quiet">;
 
 export type LogSubject = {
   accountId: string;
   source: AutomationLogSource;
-  channel: "sms" | "email";
+  /** Widened to the db's own channel set (not just "sms" | "email") so
+   *  `subjectOf` can round-trip an `ai` row (voice) without coercing it —
+   *  every PASS still only ever sends sms or email, but a release reads
+   *  whatever channel the original send recorded. */
+  channel: AutomationLogChannel;
   subjectKey: string;
   contactId: string | null;
   /** What a release needs that the subject row cannot re-derive. */
@@ -65,7 +77,7 @@ async function record(db: PassContext["db"], w: AutomationLogWrite): Promise<voi
   try {
     await recordAutomationLog(db, w);
   } catch (e) {
-    console.error(`automation log write failed for ${w.source} ${w.subjectKey}: ${String(e)}`);
+    console.error(`automation log write failed (${w.status}) for ${w.source} ${w.subjectKey}: ${String(e)}`);
   }
 }
 
@@ -76,7 +88,7 @@ async function record(db: PassContext["db"], w: AutomationLogWrite): Promise<voi
  * keys `recordAutomationLog` was never asked to write.
  */
 function writeOf(s: LogSubject): {
-  accountId: string; source: AutomationLogSource; channel: "sms" | "email";
+  accountId: string; source: AutomationLogSource; channel: AutomationLogChannel;
   subjectKey: string; contactId: string | null; payload?: Record<string, unknown>;
 } {
   return {
@@ -106,9 +118,27 @@ export async function holdOrSend(
   }
 
   if (quietEnd !== null && !(s.deadline && s.deadline.getTime() <= quietEnd.getTime())) {
-    await record(ctx.db, {
-      ...writeOf(s), status: "held", heldUntil: quietEnd.toISOString(), reason: REASONS.quietHours(quietEnd, zone!),
-    });
+    // Re-holding under the SAME window must not re-stamp `occurred_at` (a
+    // subject seen on every 15-minute tick while quiet hours stay in
+    // effect would otherwise re-sort to the top of the history every time).
+    // A DIFFERENT held_until — the window changed — still writes.
+    const existing = await getAutomationLogEntry(ctx.db, s.accountId, s.source, s.subjectKey);
+    const unchanged = existing?.status === "held"
+      && existing.held_until !== null
+      && new Date(existing.held_until).getTime() === quietEnd.getTime();
+    if (!unchanged) {
+      try {
+        await recordAutomationLog(ctx.db, {
+          ...writeOf(s), status: "held", heldUntil: quietEnd.toISOString(), reason: REASONS.quietHours(quietEnd, zone!),
+        });
+      } catch (e) {
+        console.error(
+          `quiet hours: could not enqueue ${s.source} ${s.subjectKey} for account ${s.accountId} — `
+          + `the row stays unstamped and is due again next tick: ${String(e)}`,
+        );
+        throw e;
+      }
+    }
     return "held";
   }
 
@@ -128,7 +158,7 @@ export type Releaser = (ctx: PassContext, row: AutomationLogRow) => Promise<Rele
 /** A held row, back into the shape the pass writes with — so the release re-writes the SAME row. */
 export function subjectOf(row: AutomationLogRow): LogSubject {
   return {
-    accountId: row.account_id, source: row.source, channel: row.channel === "ai" ? "sms" : row.channel,
+    accountId: row.account_id, source: row.source, channel: row.channel,
     subjectKey: row.subject_key, contactId: row.contact_id, payload: row.payload,
   };
 }
