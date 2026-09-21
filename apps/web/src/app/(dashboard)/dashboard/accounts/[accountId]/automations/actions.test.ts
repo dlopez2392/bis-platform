@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
-const dbMocks = vi.hoisted(() => ({ upsertAutomation: vi.fn() }));
+const dbMocks = vi.hoisted(() => ({
+  upsertAutomation: vi.fn(), saveQuietSettings: vi.fn(), bumpHeldForAccount: vi.fn(),
+}));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({}),
 }));
@@ -14,7 +16,10 @@ vi.mock("@/lib/auth", () => ({
 
 import { m } from "@/lib/messages";
 import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
-import { saveReviewRequestAction, saveNoShowNudgeAction, saveSmsReminderAction, saveInstantReplyAction } from "./actions";
+import {
+  saveReviewRequestAction, saveNoShowNudgeAction, saveSmsReminderAction, saveInstantReplyAction,
+  saveQuietHoursAction,
+} from "./actions";
 
 const fd = (o: Record<string, string>) => {
   const f = new FormData();
@@ -26,6 +31,8 @@ const URL = "https://g.page/r/x/review";
 beforeEach(() => {
   guardFixture.isAgency = true;
   dbMocks.upsertAutomation.mockReset().mockResolvedValue({});
+  dbMocks.saveQuietSettings.mockReset().mockResolvedValue(undefined);
+  dbMocks.bumpHeldForAccount.mockReset().mockResolvedValue(0);
 });
 
 describe("saveReviewRequestAction", () => {
@@ -209,5 +216,47 @@ describe("saveInstantReplyAction", () => {
     expect(await saveInstantReplyAction("acct_1", fd({ body_en: "Hi", body_es: "Hola" })))
       .toEqual({ ok: false, error: m["automations.instantReply.saveFailed"] });
     quiet.mockRestore();
+  });
+});
+
+describe("saveQuietHoursAction", () => {
+  it("refuses a non-agency caller before touching the database", async () => {
+    guardFixture.isAgency = false;
+    expect(await saveQuietHoursAction("acct_1", fd({ quiet_enabled: "on", quiet_start: "22:00", quiet_end: "07:00" })))
+      .toEqual({ ok: false, error: m["automations.agencyOnly"] });
+    expect(dbMocks.saveQuietSettings).not.toHaveBeenCalled();
+  });
+
+  it("saves the window through serviceDb, then bumps every held row so tonight's queue is re-read under the new window (mutation: drop the bump → FAILS)", async () => {
+    dbMocks.bumpHeldForAccount.mockResolvedValue(3);
+    expect(await saveQuietHoursAction("acct_1", fd({ quiet_enabled: "on", quiet_start: "22:30", quiet_end: "06:15" }))).toEqual({ ok: true });
+    expect(dbMocks.saveQuietSettings).toHaveBeenCalledWith(expect.anything(), "acct_1", { enabled: true, start: "22:30", end: "06:15" }, "user_1");
+    expect(dbMocks.bumpHeldForAccount).toHaveBeenCalledWith(expect.anything(), "acct_1");
+    expect(dbMocks.saveQuietSettings.mock.invocationCallOrder[0]!).toBeLessThan(dbMocks.bumpHeldForAccount.mock.invocationCallOrder[0]!);
+  });
+
+  it("an unticked box saves enabled:false with the times kept", async () => {
+    expect(await saveQuietHoursAction("acct_1", fd({ quiet_start: "21:00", quiet_end: "08:00" }))).toEqual({ ok: true });
+    expect(dbMocks.saveQuietSettings).toHaveBeenCalledWith(expect.anything(), "acct_1", { enabled: false, start: "21:00", end: "08:00" }, "user_1");
+  });
+
+  it("a time that is not HH:MM is refused with the copy, and nothing is written (mutation: skip isClock → FAILS)", async () => {
+    for (const bad of [{ quiet_start: "9pm", quiet_end: "08:00" }, { quiet_start: "21:00", quiet_end: "" }, { quiet_start: "24:00", quiet_end: "08:00" }]) {
+      expect(await saveQuietHoursAction("acct_1", fd({ quiet_enabled: "on", ...bad })), JSON.stringify(bad))
+        .toEqual({ ok: false, error: m["automations.quiet.invalidTime"] });
+    }
+    expect(dbMocks.saveQuietSettings).not.toHaveBeenCalled();
+  });
+
+  it("a failed write is a Result, not a throw, and the bump never runs", async () => {
+    dbMocks.saveQuietSettings.mockRejectedValue(new Error("down"));
+    expect(await saveQuietHoursAction("acct_1", fd({ quiet_enabled: "on", quiet_start: "21:00", quiet_end: "08:00" })))
+      .toEqual({ ok: false, error: m["automations.quiet.saveFailed"] });
+    expect(dbMocks.bumpHeldForAccount).not.toHaveBeenCalled();
+  });
+
+  it("a failed bump still reports success — the save landed; the queue catches up at each row's own held_until", async () => {
+    dbMocks.bumpHeldForAccount.mockRejectedValue(new Error("down"));
+    expect(await saveQuietHoursAction("acct_1", fd({ quiet_enabled: "on", quiet_start: "21:00", quiet_end: "08:00" }))).toEqual({ ok: true });
   });
 });
