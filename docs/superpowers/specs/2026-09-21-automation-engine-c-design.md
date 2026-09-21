@@ -75,7 +75,7 @@ automation_log
 
 **The weekly reports are exempt from the window** (they go to the owner and the agency on Monday morning in the account's zone) but write `email` rows with source `weekly_report` / `weekly_agency_report` so "what went out" is complete.
 
-**The page:** a "Quiet hours" card on the Automations page above the recipes: on/off, start, end, the account's zone shown beside them ("9:00 PM to 8:00 AM, America/Chicago"), saved by an agency-gated action on `serviceDb()`, with the same immediate-save-plus-undo pattern the recipes use. **Amended copy:** "No automated texts or emails go to your customers between these hours. Anything due overnight waits and goes at the end. Your phone and website assistant still answer."
+**The page:** a "Quiet hours" card on the Automations page above the recipes: on/off, start, end, the account's zone shown beside them ("9:00 PM to 8:00 AM, America/Chicago"), saved by an agency-gated action on `serviceDb()`, as a form with a Save button, the pattern every recipe card on that page uses (`sms-reminder-card.tsx`: `useFormSubmit` + `notifyActionResult` + `SubmitButton`) — a time field that saved on every keystroke would write "21:0" on its way to "21:00". **Amended copy:** "No automated texts or emails go to your customers between these hours. Anything due overnight waits and goes at the end. Your phone and website assistant still answer."
 
 ## Section 3 — Usage, in units
 
