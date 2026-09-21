@@ -273,7 +273,7 @@ describe("caps — recipe passes only", () => {
         brandCorners: null, brandType: null, brandMode: null, replyToEmail: null },
       fromEmail: null, meetingUrl: null,
     })));
-    expect(await remindersPass.run(ctx())).toEqual({ sent: 30, failed: 0, unstamped: 0 });
+    expect(await remindersPass.run(ctx())).toEqual({ sent: 30, failed: 0, unstamped: 0, held: 0 });
   });
 });
 
