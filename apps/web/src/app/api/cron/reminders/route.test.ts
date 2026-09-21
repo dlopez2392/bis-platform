@@ -160,7 +160,7 @@ function bookerZoneWhen(startsAt: string, timeZone: string): string {
   }).format(new Date(startsAt));
 }
 
-const EMPTY_RELEASE = { examined: 0, sent: 0, held: 0, skipped: 0, failed: 0, errored: 0 };
+const EMPTY_RELEASE = { examined: 0, sent: 0, held: 0, skipped: 0, failed: 0, errored: 0, deferred: 0 };
 const EMPTY_FOLLOWUPS = {
   sent: 0, failed: 0, unstamped: 0, held: 0,
   skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,

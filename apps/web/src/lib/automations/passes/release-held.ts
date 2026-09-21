@@ -35,8 +35,31 @@ import { releaseInstantReply } from "../instant-reply";
  * `skipped`. That mismatch is between the releaser's return value and its
  * OWN pass's counter convention, not something this pass introduces — the
  * counters below are not renamed to paper over it.
+ *
+ * The per-tick BURST CAP other recipe passes enforce (`AUTOMATION_TICK_CAP`,
+ * caps.ts) is deliberately NOT re-applied here: each release calls its
+ * source's `processX` with a single-row array, so that pass's own
+ * `attemptsThisTick` starts fresh at 0 for every row released this tick.
+ * `AUTOMATION_DAILY_CAP` — the per-account, per-day ceiling — is what bounds
+ * a bulk release; the tick cap exists to spread a NORMAL day's sends across
+ * ticks, not to limit how many already-decided releases one tick can drain.
  */
 export const RELEASE_BATCH = 200;
+
+/**
+ * Wall-clock budget for one tick's worth of releasing, in milliseconds —
+ * real elapsed time this invocation has spent, NOT `ctx.now` (the tick's
+ * own instant every pass reads its "now" from). A shared window end (say,
+ * quiet hours ending 08:00 for a whole account list) can make every held
+ * row releasable in the same tick; each row costs a re-read, a settings
+ * read, a provider send and two writes, and this pass is FIRST in the
+ * registry, so an unbounded drain here would starve reminders, follow-ups,
+ * review requests and the weekly reports that run after it. The queue is
+ * ordered by `held_until` ascending (`listReleasableHolds`), so stopping
+ * partway through is safe: the untouched rows keep their past `held_until`
+ * and are the first examined again on the next tick, 15 minutes later.
+ */
+export const RELEASE_BUDGET_MS = 60_000;
 
 export const RELEASERS: Record<AutomationLogSource, Releaser | null> = {
   reminders: releaseReminder,
@@ -53,9 +76,15 @@ export const RELEASERS: Record<AutomationLogSource, Releaser | null> = {
 export const releaseHeldPass: Pass = {
   key: "releaseHeld",
   async run(ctx) {
-    const c = { examined: 0, sent: 0, held: 0, skipped: 0, failed: 0, errored: 0 };
+    const c = { examined: 0, sent: 0, held: 0, skipped: 0, failed: 0, errored: 0, deferred: 0 };
     const rows = await listReleasableHolds(ctx.db, ctx.now.toISOString(), RELEASE_BATCH);
+    const startedAt = Date.now();
     for (const row of rows) {
+      if (Date.now() - startedAt >= RELEASE_BUDGET_MS) {
+        c.deferred = rows.length - c.examined;
+        console.error(`release: budget spent after ${c.examined} row(s), ${c.deferred} deferred to the next tick`);
+        break;
+      }
       c.examined++;
       try {
         const releaser = RELEASERS[row.source];

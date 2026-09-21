@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { AutomationLogRow } from "@bis/db";
 
 const dbMocks = vi.hoisted(() => ({ listReleasableHolds: vi.fn(), recordAutomationLog: vi.fn() }));
@@ -14,7 +14,7 @@ vi.mock("./sms-reminder", () => ({ releaseSmsReminder: (...a: unknown[]) => rele
 vi.mock("../instant-reply", () => ({ releaseInstantReply: (...a: unknown[]) => releasers.instant(...a) }));
 
 import type { PassContext } from "../context";
-import { releaseHeldPass, RELEASE_BATCH } from "./release-held";
+import { releaseHeldPass, RELEASE_BATCH, RELEASE_BUDGET_MS } from "./release-held";
 
 const NOW = new Date("2026-09-22T13:00:00Z");
 const row = (source: AutomationLogRow["source"], key: string): AutomationLogRow => ({
@@ -44,7 +44,7 @@ describe("releaseHeldPass", () => {
     releasers.review.mockResolvedValue("skipped"); releasers.noShow.mockResolvedValue("failed");
     releasers.sms.mockResolvedValue("sent"); releasers.instant.mockResolvedValue("sent");
 
-    expect(await releaseHeldPass.run(ctx)).toEqual({ examined: 6, sent: 3, held: 1, skipped: 1, failed: 1, errored: 0 });
+    expect(await releaseHeldPass.run(ctx)).toEqual({ examined: 6, sent: 3, held: 1, skipped: 1, failed: 1, errored: 0, deferred: 0 });
     expect(dbMocks.listReleasableHolds).toHaveBeenCalledWith(expect.anything(), NOW.toISOString(), RELEASE_BATCH);
     expect(releasers.reminders).toHaveBeenCalledWith(ctx, expect.objectContaining({ subject_key: "booking:1" }));
     expect(releasers.followups).toHaveBeenCalledWith(ctx, expect.objectContaining({ subject_key: "booking:2" }));
@@ -54,22 +54,74 @@ describe("releaseHeldPass", () => {
     expect(releasers.instant).toHaveBeenCalledWith(ctx, expect.objectContaining({ subject_key: "submission:6" }));
   });
 
+  it("RELEASE_BATCH is pinned at 200", () => {
+    expect(RELEASE_BATCH).toBe(200);
+  });
+
   it("a releaser that throws is counted errored and the next row still runs (mutation: drop the per-row try/catch → FAILS)", async () => {
     dbMocks.listReleasableHolds.mockResolvedValue([row("reminders", "booking:1"), row("sms_reminder", "booking:2")]);
     releasers.reminders.mockRejectedValue(new Error("db exploded"));
     releasers.sms.mockResolvedValue("sent");
-    expect(await releaseHeldPass.run(ctx)).toEqual({ examined: 2, sent: 1, held: 0, skipped: 0, failed: 0, errored: 1 });
+    expect(await releaseHeldPass.run(ctx)).toEqual({ examined: 2, sent: 1, held: 0, skipped: 0, failed: 0, errored: 1, deferred: 0 });
     expect(releasers.sms).toHaveBeenCalledTimes(1);
   });
 
-  it("a held row from a source that cannot be held (voice, concierge, the weekly report) is skipped as 'No longer due' so it leaves the queue", async () => {
-    dbMocks.listReleasableHolds.mockResolvedValue([row("voice", "call:9")]);
-    expect(await releaseHeldPass.run(ctx)).toEqual({ examined: 1, sent: 0, held: 0, skipped: 1, failed: 0, errored: 0 });
-    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ source: "voice", subjectKey: "call:9", status: "skipped", reason: "No longer due" }));
+  it("a held row from a source that cannot be held (voice, concierge, the weekly report) is skipped as 'No longer due' so it leaves the queue (mutation: point weekly_report/concierge at a real releaser → reds)", async () => {
+    dbMocks.listReleasableHolds.mockResolvedValue([
+      row("voice", "call:9"), row("concierge", "conversation:8"), row("weekly_report", "week:2026-09-14"),
+    ]);
+    expect(await releaseHeldPass.run(ctx)).toEqual({ examined: 3, sent: 0, held: 0, skipped: 3, failed: 0, errored: 0, deferred: 0 });
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledTimes(3);
+    for (const [source, key] of [
+      ["voice", "call:9"], ["concierge", "conversation:8"], ["weekly_report", "week:2026-09-14"],
+    ] as const) {
+      expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        source, subjectKey: key, status: "skipped", reason: "No longer due",
+      }));
+    }
   });
 
   it("an empty queue is one read and no writes", async () => {
-    expect(await releaseHeldPass.run(ctx)).toEqual({ examined: 0, sent: 0, held: 0, skipped: 0, failed: 0, errored: 0 });
+    expect(await releaseHeldPass.run(ctx)).toEqual({ examined: 0, sent: 0, held: 0, skipped: 0, failed: 0, errored: 0, deferred: 0 });
     expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
+  });
+});
+
+describe("releaseHeldPass — the wall-clock budget", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("stops early once the budget is spent, deferring the remainder to the next tick without calling their releasers (mutation: delete the guard → FAILS)", async () => {
+    dbMocks.listReleasableHolds.mockResolvedValue([
+      row("reminders", "booking:1"), row("followups", "booking:2"), row("sms_reminder", "booking:3"),
+    ]);
+    releasers.reminders.mockResolvedValue("sent");
+    releasers.followups.mockResolvedValue("sent");
+    releasers.sms.mockResolvedValue("sent");
+
+    // Three calls the pass makes to Date.now(): once for `startedAt`, then
+    // once per row BEFORE that row is processed. Row 1's check reads "no
+    // time has passed" (still 0); row 2's check reads past the budget, so
+    // the loop stops there — row 2 and row 3's releasers never run.
+    vi.spyOn(Date, "now")
+      .mockReturnValueOnce(0)                          // startedAt
+      .mockReturnValueOnce(0)                          // check before row 1 — inside budget
+      .mockReturnValueOnce(RELEASE_BUDGET_MS + 1);      // check before row 2 — budget spent
+
+    expect(await releaseHeldPass.run(ctx)).toEqual({
+      examined: 1, sent: 1, held: 0, skipped: 0, failed: 0, errored: 0, deferred: 2,
+    });
+    expect(releasers.reminders).toHaveBeenCalledTimes(1);
+    expect(releasers.followups).not.toHaveBeenCalled();
+    expect(releasers.sms).not.toHaveBeenCalled();
+  });
+
+  it("with the real clock, a comfortably-sized batch defers nothing", async () => {
+    dbMocks.listReleasableHolds.mockResolvedValue([row("reminders", "booking:1"), row("followups", "booking:2")]);
+    releasers.reminders.mockResolvedValue("sent");
+    releasers.followups.mockResolvedValue("sent");
+
+    expect(await releaseHeldPass.run(ctx)).toEqual({ examined: 2, sent: 2, held: 0, skipped: 0, failed: 0, errored: 0, deferred: 0 });
   });
 });
