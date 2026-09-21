@@ -2181,7 +2181,7 @@ Run: `pnpm --filter web exec vitest run src/lib/automations/passes/sms-reminder.
 
 - [ ] **Step 5: `route.test.ts` — this task's share**
 
-In `apps/web/src/app/api/cron/reminders/route.test.ts`: every expected body's TOP-LEVEL `unstamped: N,` gains `held: 0,` after it (the reminder pass's counters are spread top-level: `route.ts:59-66`); `EMPTY_SMS_REMINDERS` gains `held: 0`. Do NOT touch `EMPTY_FOLLOWUPS`, `EMPTY_REVIEW_REQUESTS`, `EMPTY_NO_SHOW_NUDGES` (Task 4b). Run the file and confirm the only failures are those three constants' shapes (each error names one of them); paste one such failure into the report as the proof it is the expected red.
+In `apps/web/src/app/api/cron/reminders/route.test.ts`: every expected body's TOP-LEVEL `unstamped: N,` gains `held: 0,` after it (the reminder pass's counters are spread top-level: `route.ts:59-66`); `EMPTY_SMS_REMINDERS` gains `held: 0`. Do NOT touch `EMPTY_FOLLOWUPS`, `EMPTY_REVIEW_REQUESTS`, `EMPTY_NO_SHOW_NUDGES` (Task 4b), nor `EMPTY_WEEKLY_CLIENT` / `EMPTY_WEEKLY_AGENCY` (their `unstamped:` keys never gain `held`), nor the NESTED `followups: {…}` objects inside the two multi-line bodies at ~:412 and ~:447. Exactly SEVEN top-level `unstamped: N,` lines gain `held: 0,`: the five single-line bodies at ~:242/265/288/304/397 and the two multi-line ones (their top-level `unstamped: 0,` is the line one level shallower than the nested `followups` object's). Count them before and after. Run the file and confirm the only failures are those three constants' shapes (each error names one of them); paste one such failure into the report as the proof it is the expected red.
 
 - [ ] **Step 6: Gate and commit**
 
@@ -2384,11 +2384,11 @@ describe("review request — quiet hours and release", () => {
   const NOON = new Date("2026-09-22T17:00:00Z");
   const heldRow = (channel: "sms" | "email"): AutomationLogRow => ({
     id: "log_r", account_id: "acct_1", source: "review_request", channel, contact_id: "ct_1",
-    subject_key: "booking:bk_1", status: "held", reason: "Held until 12:00 PM — quiet hours", held_until: NOON.toISOString(), payload: {}, occurred_at: TICK.toISOString(),
+    subject_key: "booking:bk_r1", status: "held", reason: "Held until 12:00 PM — quiet hours", held_until: NOON.toISOString(), payload: {}, occurred_at: TICK.toISOString(),
   });
 
   it("in the band, inside a window ending at noon: held, not sent, not stamped, no message row (mutation: bypass holdOrSend → FAILS)", async () => {
-    dbMocks.listDueReviewRequests.mockResolvedValue([row()]);   // the file's SMS-channel default row, due this morning
+    dbMocks.listDueReviewRequests.mockResolvedValue([row({ config: { channel: "sms", reviewUrl: URL } })]);   // the file's default row is EMAIL and its id is bk_r1; this test needs the SMS channel
     const result = await reviewRequestPass.run(ctx(TICK, UNTIL_NOON));
     expect(result.held).toBe(1);
     expect(result.sent).toBe(0);
@@ -2396,25 +2396,25 @@ describe("review request — quiet hours and release", () => {
     expect(dbMocks.createMessage).not.toHaveBeenCalled();
     expect(dbMocks.stampReviewRequested).not.toHaveBeenCalled();
     expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      source: "review_request", channel: "sms", subjectKey: "booking:bk_1", status: "held", heldUntil: NOON.toISOString(),
+      source: "review_request", channel: "sms", subjectKey: "booking:bk_r1", status: "held", heldUntil: NOON.toISOString(),
     }));
   });
 
   it("release at noon skips the band and sends through the same path — stamp included (mutation: gate on release → FAILS)", async () => {
-    dbMocks.getDueReviewRequestById.mockResolvedValue({ due: row() });
+    dbMocks.getDueReviewRequestById.mockResolvedValue({ due: row({ config: { channel: "sms", reviewUrl: URL } }) });
     expect(await releaseReviewRequest(ctx(NOON, UNTIL_NOON), heldRow("sms"))).toBe("sent");
     expect(smsSend).toHaveBeenCalledTimes(1);
-    expect(dbMocks.stampReviewRequested).toHaveBeenCalledWith(expect.anything(), "bk_1");
+    expect(dbMocks.stampReviewRequested).toHaveBeenCalledWith(expect.anything(), "bk_r1");
     expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ status: "sent" }));
   });
 
   it("the daily cap and a missing address write skipped rows with plain reasons; the tick cap does not", async () => {
     dbMocks.countReviewRequestsSince.mockResolvedValue(AUTOMATION_DAILY_CAP);
-    dbMocks.listDueReviewRequests.mockResolvedValue([row(), row({ bookingId: "bk_2", contactPhone: null })]);
+    dbMocks.listDueReviewRequests.mockResolvedValue([row({ config: { channel: "sms", reviewUrl: URL } }), row({ bookingId: "bk_2", contactPhone: null, config: { channel: "sms", reviewUrl: URL } })]);
     await reviewRequestPass.run(ctx());
     expect(dbMocks.recordAutomationLog.mock.calls.map((c) => [c[1].subjectKey, c[1].reason])).toEqual([
       ["booking:bk_2", "No phone number we can text"],
-      ["booking:bk_1", "Daily limit reached"],
+      ["booking:bk_r1", "Daily limit reached"],
     ].sort());   // order is the loop's; sort both sides if the file's rows come back the other way
   });
 
@@ -2426,7 +2426,7 @@ describe("review request — quiet hours and release", () => {
 });
 ```
 
-`TICK` in that file must be a morning inside the band on the day after the fixture's `endsAt` — read the file's constants; if `TICK` is not in the band, the held test's `waitingForMorning` will fire instead and `result.held` will be 0: pick the file's own "sends" instant. The same four tests, with `noShowNudgePass`/`releaseNoShowNudge`/`getDueNoShowNudgeById`/`stampNoShowNudged`/`countNoShowNudgesSince` and one extra:
+`TICK` in that file is 2026-09-09T14:00Z = 10:00 America/New_York, inside the band on the day after the fixture's end (verified). The file's default `row()` is `bookingId: "bk_r1"` with `config: { channel: "email", reviewUrl: URL }` — hence the explicit SMS override above and the `bk_r1` literals. The same four tests for the no-show nudge, whose default `row()` is `bookingId: "bk_n1"` with `config: { channel: "email" }` (override `config: { channel: "sms" }` and use `booking:bk_n1` / `"bk_n1"`), with `noShowNudgePass`/`releaseNoShowNudge`/`getDueNoShowNudgeById`/`stampNoShowNudged`/`countNoShowNudgesSince` and one extra:
 
 ```ts
   it("the booking page switched off: a skipped row 'The booking page is switched off'", async () => {
