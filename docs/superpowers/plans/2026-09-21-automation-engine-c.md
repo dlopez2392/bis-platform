@@ -1363,6 +1363,14 @@ export const REASONS = {
   robocall: "Screened as a robocall",
 } as const;
 
+/** The write, from the LogSubject fields ONLY — never `{ ...s }`: a HoldSubject carries `accountTimezone` and a `deadline` Date that must not land in the row. */
+function writeOf(s: LogSubject) {
+  return {
+    accountId: s.accountId, source: s.source, channel: s.channel, subjectKey: s.subjectKey, contactId: s.contactId,
+    ...(s.payload ? { payload: s.payload } : {}),
+  };
+}
+
 async function record(db: PassContext["db"], w: AutomationLogWrite): Promise<void> {
   try {
     await recordAutomationLog(db, w);
@@ -1372,7 +1380,7 @@ async function record(db: PassContext["db"], w: AutomationLogWrite): Promise<voi
 }
 
 export async function logSkipped(ctx: Pick<PassContext, "db">, s: LogSubject, reason: string): Promise<void> {
-  await record(ctx.db, { ...s, status: "skipped", reason });
+  await record(ctx.db, { ...writeOf(s), status: "skipped", reason });
 }
 
 export async function holdOrSend(
@@ -1392,7 +1400,7 @@ export async function holdOrSend(
 
   if (quietEnd !== null && !(s.deadline && s.deadline.getTime() <= quietEnd.getTime())) {
     await record(ctx.db, {
-      ...s, status: "held", heldUntil: quietEnd.toISOString(), reason: REASONS.quietHours(quietEnd, zone!),
+      ...writeOf(s), status: "held", heldUntil: quietEnd.toISOString(), reason: REASONS.quietHours(quietEnd, zone!),
     });
     return "held";
   }
@@ -1400,10 +1408,10 @@ export async function holdOrSend(
   try {
     await send();
   } catch (e) {
-    await record(ctx.db, { ...s, status: "failed", reason: REASONS.failed });
+    await record(ctx.db, { ...writeOf(s), status: "failed", reason: REASONS.failed });
     throw e;
   }
-  await record(ctx.db, { ...s, status: "sent", reason: "" });
+  await record(ctx.db, { ...writeOf(s), status: "sent", reason: "" });
   return "sent";
 }
 
