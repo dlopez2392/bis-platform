@@ -2931,7 +2931,7 @@ Run: `pnpm --filter web exec vitest run src/lib/automations src/app/api/cron` �
       }
 ```
 
-`route.test.ts` beside it (`vi.mock("@bis/db", async (importOriginal) => { const actual = …; return { ...actual, … } })`): add `recordAutomationLog: dbMocks.recordAutomationLog` (or the file's own override style) resolving `undefined`; add two assertions to an existing new-conversation test and an existing continued-conversation test:
+`route.test.ts` beside it spreads a hoisted `dbFns` object into its `@bis/db` mock (`:47-90`): add `recordAutomationLog: vi.fn(async () => undefined)` to `dbFns`. Its `createConciergeConversation` resolves `{ id: "c1" }`, so `createdId` is `"c1"`. Add the two assertions to the existing tests "answers a first turn and returns the conversation id" (~:240, the new-conversation path) and "replays the stored transcript, so turn two knows what turn one said" (~:258, the continued path):
 
 ```ts
     expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ source: "concierge", channel: "ai", subjectKey: `conversation:${createdId}`, status: "sent" }));
@@ -2939,7 +2939,7 @@ Run: `pnpm --filter web exec vitest run src/lib/automations src/app/api/cron` �
     expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
 ```
 
-where `createdId` is whatever id the file's `createConciergeConversation` mock returns.
+(`createdId = "c1"`).
 
 - [ ] **Step 5: The phone assistant writes its row**
 
@@ -2986,11 +2986,11 @@ describe("finishCall — the automation log row", () => {
 });
 ```
 
-Read the file's existing builders (`makeState`/`ctx()`/`meta()` or whatever they are named — the file is ~1000 lines and has them) and use them; do not invent a second fixture.
+The file's builders: a booked call is `withBooking(emptyCallState(), {…})` (the `:765` pattern), a spam call is `emptyCallState()` alone (classifyOutcome's fallthrough), `meta` (`:159`) carries `callRowId: "call1"`, and "no call row" is `{ ...meta, callRowId: null }` (the `:900` pattern). Use them; do not invent a second fixture.
 
 - [ ] **Step 6: The whole web suite, the factory sweep, commit**
 
-Run: `pnpm --filter web test` — Expected: green. If any test fails with `[vitest] No "recordAutomationLog" export is defined on the mock` (or `listReleasableHolds`, `readQuietSettings`, `readAccountTimezone`), that file's `vi.mock("@bis/db", () => ({…}))` factory needs the export added as a no-op (`async () => undefined` / `async () => []` / `async () => ({ enabled: false, start: "21:00", end: "08:00" })` / `async () => "America/Chicago"`). The likely files: `apps/web/src/app/api/voice/incoming/lifecycle.test.ts`, `…/voice/incoming/route.test.ts`, `…/voice/texml/handoff-result/route.test.ts`, `apps/web/src/app/f/[publicId]/actions.test.ts`, `apps/web/src/app/api/intake/[publicId]/route.test.ts`. List every one you touched in the report.
+Run: `pnpm --filter web test` — Expected: green. If any test fails with `[vitest] No "recordAutomationLog" export is defined on the mock` (or `listReleasableHolds`, `readQuietSettings`, `readAccountTimezone`), that file's `vi.mock("@bis/db", () => ({…}))` factory needs the export added as a no-op (`async () => undefined` / `async () => []` / `async () => ({ enabled: false, start: "21:00", end: "08:00" })` / `async () => "America/Chicago"`). Verified against the tree (brief review): the ONE file that needs it is `apps/web/src/app/api/voice/incoming/route.test.ts` (its route calls the real `finishCall`); add `recordAutomationLog: async () => undefined` to its `@bis/db` factory. `lifecycle.test.ts` mocks `@/lib/voice/finish-call` itself, `handoff-result/route.ts` never imports finish-call, `f/[publicId]/actions.test.ts` mocks `@/lib/automations/instant-reply`, and `api/intake/[publicId]/route.test.ts` mocks `@/lib/forms/enrich` — none of those need a change. The cron `route.test.ts` needs `listReleasableHolds` (Step 2) but not `recordAutomationLog` (its weekly due-list is `[]`). List every file you touched in the report.
 
 Run: `pnpm --filter web typecheck && pnpm --filter web lint` — Expected: clean.
 
