@@ -177,7 +177,10 @@ describe("the Quiet hours card", () => {
   });
   it("a failed settings read degrades to the defaults and says so in the log, never a blank page", async () => {
     dbMock.readQuietSettings.mockRejectedValue(new Error("down"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const { quiet } = await render();
     expect(quiet).toMatchObject({ settings: { enabled: true, start: "21:00", end: "08:00" } });
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
+    spy.mockRestore();
   });
 });

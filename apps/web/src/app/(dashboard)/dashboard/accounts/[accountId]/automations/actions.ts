@@ -167,6 +167,11 @@ export async function saveQuietHoursAction(
   const start = String(formData.get("quiet_start") ?? "").trim();
   const end = String(formData.get("quiet_end") ?? "").trim();
   if (!isClock(start) || !isClock(end)) return { ok: false, error: m["automations.quiet.invalidTime"] };
+  // quiet-hours.ts's evaluateWindow treats start === end as DISABLED (no
+  // window at all), so an enabled row with equal times would show ON in the
+  // UI while never actually going quiet. Refused only while turning it on;
+  // a stored OFF row with equal times is a legal (if pointless) rest state.
+  if (enabled && start === end) return { ok: false, error: m["automations.quiet.invalidTime"] };
 
   const db = serviceDb();
   try {
@@ -177,7 +182,7 @@ export async function saveQuietHoursAction(
   }
   try {
     const bumped = await bumpHeldForAccount(db, accountId);
-    if (bumped > 0) console.error(`saveQuietHoursAction: ${bumped} held send(s) for account ${accountId} re-queued under the new window`);
+    if (bumped > 0) console.log(`saveQuietHoursAction: ${bumped} held send(s) for account ${accountId} re-queued under the new window`);
   } catch (e) {
     console.error(`saveQuietHoursAction: could not re-queue held sends for account ${accountId}: ${String(e)}`);
   }

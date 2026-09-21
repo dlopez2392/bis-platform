@@ -240,6 +240,17 @@ describe("saveQuietHoursAction", () => {
     expect(dbMocks.saveQuietSettings).toHaveBeenCalledWith(expect.anything(), "acct_1", { enabled: false, start: "21:00", end: "08:00" }, "user_1");
   });
 
+  it("equal start and end while ON is refused — quiet-hours.ts treats start === end as disabled, so an enabled row with equal times would silently never be quiet (mutation: delete the guard → FAILS)", async () => {
+    expect(await saveQuietHoursAction("acct_1", fd({ quiet_enabled: "on", quiet_start: "21:00", quiet_end: "21:00" })))
+      .toEqual({ ok: false, error: m["automations.quiet.invalidTime"] });
+    expect(dbMocks.saveQuietSettings).not.toHaveBeenCalled();
+  });
+
+  it("equal start and end while OFF still saves — a stored disabled window with equal times is legal", async () => {
+    expect(await saveQuietHoursAction("acct_1", fd({ quiet_start: "21:00", quiet_end: "21:00" }))).toEqual({ ok: true });
+    expect(dbMocks.saveQuietSettings).toHaveBeenCalledWith(expect.anything(), "acct_1", { enabled: false, start: "21:00", end: "21:00" }, "user_1");
+  });
+
   it("a time that is not HH:MM is refused with the copy, and nothing is written (mutation: skip isClock → FAILS)", async () => {
     for (const bad of [{ quiet_start: "9pm", quiet_end: "08:00" }, { quiet_start: "21:00", quiet_end: "" }, { quiet_start: "24:00", quiet_end: "08:00" }]) {
       expect(await saveQuietHoursAction("acct_1", fd({ quiet_enabled: "on", ...bad })), JSON.stringify(bad))
