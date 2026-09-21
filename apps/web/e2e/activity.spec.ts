@@ -64,10 +64,10 @@ test.describe("quiet hours (agency)", () => {
 test.describe("what went out (client)", () => {
   test.use({ storageState: "e2e/.auth/client-state.json" });
 
-  test("the nav offers Activity; the empty state and this month's card render through RLS", async ({ page }) => {
+  test("the nav offers What went out; the empty state and this month's card render through RLS", async ({ page }) => {
     const { accountId } = fixture();
     await page.goto(`/dashboard/accounts/${accountId}/dashboard`);
-    await page.getByRole("link", { name: "Activity" }).click();
+    await page.getByRole("link", { name: "What went out" }).click();
     await expect(page).toHaveURL(new RegExp(`/dashboard/accounts/${accountId}/activity$`));
     await expect(page.getByText("Nothing has gone out yet")).toBeVisible();
     const month = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "America/Chicago" }).format(new Date());
