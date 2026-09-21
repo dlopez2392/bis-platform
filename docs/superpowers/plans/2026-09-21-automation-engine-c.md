@@ -3471,10 +3471,13 @@ export default async function ActivityPage({
 
 ```ts
 import { describe, it, expect, vi } from "vitest";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { AutomationLogListRow } from "@bis/db";
 import { renderedText } from "@/lib/rendered-text";
 import { ActivityTable, PAGE_SIZE } from "./activity-table";
+
+// `.test.ts`, not `.tsx`: vitest.config.ts includes only `src/**/*.test.ts`, so JSX does not parse here — createElement, as calls-table.test.ts does.
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {} }) }));
 
@@ -3483,8 +3486,8 @@ const row = (o: Partial<AutomationLogListRow>): AutomationLogListRow => ({
   id: "00000000-0000-4000-8000-000000000001", account_id: "acct_1", source: "sms_reminder", channel: "sms", contact_id: "ct_1",
   subject_key: "booking:1", status: "sent", reason: "", held_until: null, payload: {}, occurred_at: AT, contact_name: "Maria Garcia", ...o,
 });
-const render = (rows: AutomationLogListRow[], extra = {}) =>
-  renderToStaticMarkup(<ActivityTable rows={rows} timezone="America/Chicago" {...extra} />);
+const render = (rows: AutomationLogListRow[], extra: { olderHref?: string; newerHref?: string } = {}) =>
+  renderToStaticMarkup(createElement(ActivityTable, { rows, timezone: "America/Chicago", ...extra }));
 
 describe("ActivityTable", () => {
   it("a row shows the TITLE (never the key), the contact, the channel word, the status word, and the time in the account's zone", () => {
@@ -3528,15 +3531,18 @@ describe("ActivityTable", () => {
 
 ```ts
 import { describe, it, expect } from "vitest";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { renderedText } from "@/lib/rendered-text";
 import { UsageCard } from "./usage-card";
+
+const render = (props: Parameters<typeof UsageCard>[0]) => renderedText(renderToStaticMarkup(createElement(UsageCard, props)));
 
 const usage = { textsSent: 12, emailsSent: 3, conversations: 7, callsHandled: 41, held: 2, skipped: 8, topHeldReason: "Held until 8:00 AM — quiet hours", topSkippedReason: "Screened as a robocall" };
 
 describe("UsageCard", () => {
   it("four numbers, the month label, and the cap beside each (rule 1: never a count alone)", () => {
-    const text = renderedText(renderToStaticMarkup(<UsageCard state={{ ok: true, usage }} monthLabel="September 2026" callCap={50} />));
+    const text = render({ state: { ok: true, usage }, monthLabel: "September 2026", callCap: 50 });
     expect(text).toContain("September 2026");
     for (const n of ["12", "3", "7", "41"]) expect(text).toContain(n);
     expect(text).toContain("Up to 25 a day per automation");
@@ -3546,13 +3552,13 @@ describe("UsageCard", () => {
     expect(text).toContain("8 skipped · most often: Screened as a robocall");
   });
   it("zero is a number, not a blank; no reason line when there is no reason", () => {
-    const text = renderedText(renderToStaticMarkup(<UsageCard state={{ ok: true, usage: { ...usage, held: 0, skipped: 0, topHeldReason: null, topSkippedReason: null } }} monthLabel="September 2026" callCap={50} />));
+    const text = render({ state: { ok: true, usage: { ...usage, held: 0, skipped: 0, topHeldReason: null, topSkippedReason: null } }, monthLabel: "September 2026", callCap: 50 });
     expect(text).toContain("0 waiting");
     expect(text).toContain("0 skipped");
     expect(text).not.toContain("most often");
   });
   it("the error state names the fix and still shows the month", () => {
-    const text = renderedText(renderToStaticMarkup(<UsageCard state={{ ok: false }} monthLabel="September 2026" callCap={50} />));
+    const text = render({ state: { ok: false }, monthLabel: "September 2026", callCap: 50 });
     expect(text).toContain("Couldn't load this month's numbers");
     expect(text).toContain("September 2026");
   });
@@ -3681,7 +3687,7 @@ Run: `pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/accounts/
 
 `apps/web/e2e/client-access.spec.ts:92`: the `CLIENT_NAV` literal gains `"Activity"` right after `"Calls"` (the comment above it explains the list; add one line saying Activity joined 2026-09-21, part C).
 
-`styleguide/page.tsx`: find the section that renders `OutcomePill` (grep). Directly after it add:
+`styleguide/page.tsx`: there is no OutcomePill section; badges render inside `<Section title="Badges" file="components/ui/badge.tsx">` (~:116-133, with a chip+dot example at ~:129). Directly after that Section add:
 
 ```tsx
       <section aria-labelledby="sg-activity-status" data-testid="styleguide-activity-status" className="space-y-3">
@@ -3692,7 +3698,7 @@ Run: `pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/accounts/
       </section>
 ```
 
-with `import { LogStatusPill } from "../accounts/[accountId]/activity/log-status-pill";`. If the styleguide has no OutcomePill section, put it after its badges section.
+with `import { LogStatusPill } from "../accounts/[accountId]/activity/log-status-pill";` (check the file's existing relative imports for the exact prefix).
 
 Run: `pnpm --filter web exec vitest run src/lib/nav-groups.test.ts src/lib/palette src/lib/messages.test.ts` — Expected: PASS (`registry.test.ts` derives palette entries from the nav, so Activity is registered by construction).
 
