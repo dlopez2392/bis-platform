@@ -182,16 +182,22 @@ export async function enrich(
       });
       if (outcome.kind === "failed") errors.push(`instant reply: ${outcome.error}`);
     } catch (e) {
-      console.error(`form ${form.id} submission ${submissionId} instant reply crashed: ${String(e)}`);
+      // A genuine throw is the same "somebody was not told about this lead"
+      // signal as a `{ kind: "failed" }` outcome — console-only would make a
+      // crash LESS visible than a refusal, backwards from what matters more.
+      const message = e instanceof Error ? e.message : String(e);
+      console.error(`form ${form.id} submission ${submissionId} instant reply crashed: ${message}`);
+      errors.push(`instant reply: ${message}`);
     }
   }
 
   if (errors.length > 0) {
     // Truncated per-component, not after joining: `setSubmissionProcessingError`
-    // caps the final string at 500 chars, and the notify error — the one that
-    // means nobody was told about the lead, more operationally urgent than a
-    // CRM-write failure — is appended last, so a single post-join truncation
-    // is exactly what cuts it away.
+    // caps the final string at 500 chars (keeping the FRONT, `message.slice(0, 500)`),
+    // and the instant-reply error — appended last — is the one that cap trims
+    // first when all three components are present (3 × 240 chars plus "; "
+    // separators can exceed 500). Per-component slicing still bounds each
+    // piece so a single very long error cannot itself blow the budget.
     await setSubmissionProcessingError(db, accountId, submissionId,
       errors.map((e) => e.slice(0, 240)).join("; "));
   }

@@ -13,8 +13,9 @@ import type { AutomationRow } from "@bis/db";
 vi.mock("@/lib/auth", () => ({
   requireAgencyOnlyAccountAccess: async () => ({ userId: "user_1" }),
 }));
-vi.mock("next/headers", () => ({ headers: async () => new Headers({ host: "app.example.com" }) }));
-vi.mock("@/lib/email/origin", () => ({ originFrom: () => "https://app.example.com" }));
+const originMock = vi.hoisted(() => ({ headers: vi.fn(), originFrom: vi.fn() }));
+vi.mock("next/headers", () => ({ headers: (...a: unknown[]) => originMock.headers(...a) }));
+vi.mock("@/lib/email/origin", () => ({ originFrom: (...a: unknown[]) => originMock.originFrom(...a) }));
 const dbFixture = vi.hoisted(() => ({
   name: "Rio Roofing — trial", timezone: "America/Chicago", brandName: null as string | null,
 }));
@@ -35,8 +36,9 @@ vi.mock("@bis/db", () => ({
   readQuietSettings: (...a: unknown[]) => dbMock.readQuietSettings(...a),
   DEFAULT_QUIET_SETTINGS: { enabled: true, start: "21:00", end: "08:00" },
 }));
+const smsMock = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
 vi.mock("@/lib/sms/sender", () => ({
-  resolveSmsSender: async () => ({ ok: false, reason: "a2p_not_approved" }),
+  resolveSmsSender: (...a: unknown[]) => smsMock.resolveSmsSender(...a),
 }));
 vi.mock("./actions", () => ({
   saveReviewRequestAction: async () => ({ ok: true }),
@@ -94,6 +96,9 @@ beforeEach(() => {
   }));
   dbMock.getCalendarForAccount.mockReset().mockResolvedValue({ id: "cal_1", public_id: "cal_pub_1", enabled: true });
   dbMock.readQuietSettings.mockReset().mockResolvedValue({ enabled: true, start: "22:30", end: "06:15" });
+  smsMock.resolveSmsSender.mockReset().mockResolvedValue({ ok: false, reason: "a2p_not_approved" });
+  originMock.headers.mockReset().mockResolvedValue(new Headers({ host: "app.example.com" }));
+  originMock.originFrom.mockReset().mockReturnValue("https://app.example.com");
 });
 
 describe("automations page", () => {
@@ -184,6 +189,105 @@ describe("the Quiet hours card", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const { quiet } = await render();
     expect(quiet).toMatchObject({ settings: null });
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
+    spy.mockRestore();
+  });
+});
+
+/**
+ * Part C cleanup item 1: every remaining unguarded read on this page (the
+ * four `getAutomation` calls, `resolveSmsSender`, `getCalendarForAccount`,
+ * and the `headers()`/origin lookup) degrades to the value its own card
+ * already treats as "nothing configured" — a transient Supabase hiccup on
+ * ANY one of these must not 500 the whole agency page. Each card already
+ * renders its own empty/blocked state from that value, so the assertion is
+ * always: the page still renders every card, and the ONE card whose read
+ * failed got the degraded value.
+ */
+describe("guarded reads — one failed read degrades only its own card, never the page", () => {
+  it("a failed review_request automation read degrades to null; the rest of the page still renders", async () => {
+    dbMock.getAutomation.mockImplementation(async (_db: unknown, _a: unknown, key: string) => {
+      if (key === "review_request") throw new Error("down");
+      return ROWS[key] ?? null;
+    });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const c = await render();
+    expect(c.review!.automation).toBeNull();
+    expect(c.noShow!.automation).toEqual(ROWS.no_show_nudge);
+    expect(c.instant!.automation).toEqual(ROWS.instant_reply);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
+    spy.mockRestore();
+  });
+
+  it("a failed no_show_nudge automation read degrades to null; the rest of the page still renders", async () => {
+    dbMock.getAutomation.mockImplementation(async (_db: unknown, _a: unknown, key: string) => {
+      if (key === "no_show_nudge") throw new Error("down");
+      return ROWS[key] ?? null;
+    });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const c = await render();
+    expect(c.noShow!.automation).toBeNull();
+    expect(c.review!.automation).toEqual(ROWS.review_request);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
+    spy.mockRestore();
+  });
+
+  it("a failed sms_reminder automation read degrades to null; the rest of the page still renders", async () => {
+    dbMock.getAutomation.mockImplementation(async (_db: unknown, _a: unknown, key: string) => {
+      if (key === "sms_reminder") throw new Error("down");
+      return ROWS[key] ?? null;
+    });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const c = await render();
+    expect(c.sms!.automation).toBeNull();
+    expect(c.review!.automation).toEqual(ROWS.review_request);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
+    spy.mockRestore();
+  });
+
+  it("a failed instant_reply automation read degrades to null; the rest of the page still renders", async () => {
+    dbMock.getAutomation.mockImplementation(async (_db: unknown, _a: unknown, key: string) => {
+      if (key === "instant_reply") throw new Error("down");
+      return ROWS[key] ?? null;
+    });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const c = await render();
+    expect(c.instant!.automation).toBeNull();
+    expect(c.review!.automation).toEqual(ROWS.review_request);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
+    spy.mockRestore();
+  });
+
+  it("a failed SMS-sender gate read degrades to the SAME refusal resolveSmsSender itself returns for a missing row", async () => {
+    smsMock.resolveSmsSender.mockRejectedValue(new Error("down"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const c = await render();
+    const refused = { ok: false, reason: "a2p_not_approved" };
+    expect(c.review!.smsGate).toEqual(refused);
+    expect(c.noShow!.smsGate).toEqual(refused);
+    expect(c.sms!.smsGate).toEqual(refused);
+    expect(c.instant!.smsGate).toEqual(refused);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
+    spy.mockRestore();
+  });
+
+  it("a failed calendar read degrades to null; the nudge card shows its own off state, not a 500", async () => {
+    dbMock.getCalendarForAccount.mockRejectedValue(new Error("down"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const c = await render();
+    expect(c.noShow!.bookingUrl).toBe("");
+    expect(c.noShow!.calendarEnabled).toBe(false);
+    expect(c.review).not.toBeNull();
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
+    spy.mockRestore();
+  });
+
+  it("a failed origin lookup degrades to an empty string; the booking link goes blank instead of 500ing the page", async () => {
+    originMock.headers.mockRejectedValue(new Error("down"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const c = await render();
+    expect(c.noShow!.bookingUrl).toBe("");
+    expect(c.review).not.toBeNull();
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
     spy.mockRestore();
   });

@@ -158,10 +158,16 @@ export async function processReviewRequests(
       // ONE ATTEMPT PER DAY: a text that failed less than 24h ago is not
       // retried this tick (caps.ts, SMS_RETRY_COOLDOWN_MS). Held rows never
       // reach the caps and are simply due again when the marker ages out.
-      // NOT logged, same as waitingForMorning: this row was never going to
-      // send this tick.
+      // NOT logged on a normal tick, same as waitingForMorning: this row was
+      // never going to send this tick and is simply examined again next one.
+      // A RELEASED row is different: it came off the `held` queue, and if
+      // this `continue` left it untouched it would keep its past
+      // `held_until` and be re-examined, re-found "skipped" and re-left
+      // `held` forever — the parked-row bug (cleanup item 3). So a release
+      // writes the real skip here and leaves the queue.
       if (smsCooldownActive(row.smsFailedAt, ctx.now)) {
         c.skippedRecentFailure++;
+        if (opts.released) await logSkipped(ctx, subject, REASONS.smsCooldown);
         continue;
       }
       target = { channel: "sms", to, from: gate.from };

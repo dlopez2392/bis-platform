@@ -311,6 +311,17 @@ describe("no-show nudge — quiet hours and release", () => {
     ].sort());
   });
 
+  it("release: a still-cooling-down SMS no-show nudge leaves the queue as a real skip rather than staying silently held (mutation: drop the guarded logSkipped call in the cooldown branch → FAILS)", async () => {
+    dbMocks.getDueNoShowNudgeById.mockResolvedValue({
+      due: sms({ smsFailedAt: new Date(TICK.getTime() - 60 * 60 * 1000).toISOString() }),
+    });
+    expect(await releaseNoShowNudge(ctx(), heldRow("sms"))).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      subjectKey: "booking:bk_n1", status: "skipped", reason: "Waiting before trying this text again",
+    }));
+  });
+
   it("release: the recipe was turned off → 'This automation was turned off'", async () => {
     dbMocks.getDueNoShowNudgeById.mockResolvedValue({ due: null, why: "off" });
     expect(await releaseNoShowNudge(ctx(), heldRow("email"))).toBe("skipped");

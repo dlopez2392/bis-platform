@@ -654,14 +654,19 @@ describe("submitFormAction — the instant reply to the person who wrote in (Mil
     expect(instantReplyMock).toHaveBeenCalledTimes(1);
   });
 
-  it("a THROWING instant reply never fails the submission and never writes processing_error", async () => {
-    // Mutation: drop the try/catch around the call.
+  it("a THROWING instant reply never fails the submission, but IS recorded as processing_error — a crash must be as visible as a refusal (mutation: drop the errors.push in the catch → FAILS)", async () => {
+    // The submission itself must still succeed (the try/catch keeps it from
+    // propagating), but a lost text from a CRASH is exactly the same
+    // "somebody was not told about this lead" signal as a `{ kind: "failed" }`
+    // outcome — silently logging it to the console only, as before, left an
+    // operator with no way to see it on the submission.
     getPublishedFormByPublicIdMock.mockResolvedValue(withPhone());
     instantReplyMock.mockRejectedValue(new Error("module exploded"));
     const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
     const result = await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token(), locale: "en", phone: PHONE }));
     expect(result.status).toBe("success");
-    expect(setSubmissionProcessingErrorMock).not.toHaveBeenCalled();
+    expect(setSubmissionProcessingErrorMock).toHaveBeenCalledWith(
+      expect.anything(), "acct_1", "sub_1", expect.stringContaining("module exploded"));
     quiet.mockRestore();
   });
 

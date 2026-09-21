@@ -106,7 +106,19 @@ function firstWallReadingAtOrAfter(requestedKey: number, near: number, zone: str
  * moment does not exist and the next one the clock can show is where the
  * window has to end instead.
  */
-function wallInstant(year: number, month: number, day: number, minutes: number, zone: string): Date {
+/**
+ * Exported for `lib/reports/month-window.ts` (part-C cleanup item 4):
+ * `weekly-window.ts`'s `localMidnightInstant` reconciles HOURS only, so a
+ * month boundary lands 30/45 minutes wrong in a minute-offset zone (Asia/
+ * Kolkata, Australia/Adelaide, America/St_Johns) and can converge on the
+ * wrong side of a spring-forward gap entirely where local midnight itself
+ * does not exist. This is the one correct wall-time fixed point in the repo
+ * (minute precision, gap-checked) — a month window is a wall-clock boundary
+ * exactly like a quiet-hours window's end, so it reuses this rather than
+ * duplicating the fix. `weekly-window.ts`'s own callers (the weekly report)
+ * are untouched; only the month card moved.
+ */
+export function wallInstant(year: number, month: number, day: number, minutes: number, zone: string): Date {
   const target = Date.UTC(year, month - 1, day, Math.floor(minutes / 60), minutes % 60, 0);
   let ts = target;
   for (let i = 0; i < 2; i++) {

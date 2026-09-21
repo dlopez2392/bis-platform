@@ -77,6 +77,18 @@ describe("the Activity page", () => {
     expect(text).toContain("This month");
   });
 
+  it("a history read failure on a CURSORED page still offers a way back to page one — the Notice must not take the pager with it (mutation: drop the Newer link beside the Notice → FAILS)", async () => {
+    dbMocks.listAutomationLog.mockRejectedValue(new Error("down"));
+    const cursored = renderedText(await render(encodeCursor({ v: "2026-09-22T13:00:00.000Z", id: ROW.id })));
+    expect(cursored).toContain("Couldn't load the history");
+    expect(cursored).toContain("Newer");
+
+    // Page one has no "newer" to go back to — the link only appears with a cursor.
+    const pageOne = renderedText(await render());
+    expect(pageOne).toContain("Couldn't load the history");
+    expect(pageOne).not.toContain("Newer");
+  });
+
   it("reads this month in the ACCOUNT's zone, not the machine's (mutation: monthWindow(now, 'UTC') → FAILS in any zone but UTC)", async () => {
     await render();
     const [, , fromIso, toIso] = dbMocks.countAutomationUsage.mock.calls[0]!;
