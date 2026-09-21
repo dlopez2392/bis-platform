@@ -175,11 +175,15 @@ describe("the Quiet hours card", () => {
     expect(html).toContain('href="/dashboard/accounts/a1/activity"');
     expect(html).toContain("See what went out");
   });
-  it("a failed settings read degrades to the defaults and says so in the log, never a blank page", async () => {
+  it("a failed settings read degrades to null — never the defaults, which would look like a saved window — and says so in the log, never a blank page", async () => {
+    // Mutation: fall back to DEFAULT_QUIET_SETTINGS instead of null → FAILS.
+    // Rendering the defaults as though they were the client's stored window
+    // would let an agency press Save and silently overwrite a real
+    // 22:30–06:15 with the platform default.
     dbMock.readQuietSettings.mockRejectedValue(new Error("down"));
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const { quiet } = await render();
-    expect(quiet).toMatchObject({ settings: { enabled: true, start: "21:00", end: "08:00" } });
+    expect(quiet).toMatchObject({ settings: null });
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
     spy.mockRestore();
   });

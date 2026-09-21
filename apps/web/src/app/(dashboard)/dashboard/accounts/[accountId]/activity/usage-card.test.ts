@@ -31,7 +31,7 @@ describe("UsageCard", () => {
     expect(tileText(html, "emails")).toContain("3");
     expect(tileText(html, "conversations")).toContain("7");
     expect(tileText(html, "calls")).toContain("41");
-    expect(text).toContain("Up to 25 a day per automation");
+    expect(text).toContain("Most automations: up to 25 a day");
     expect(text).toContain("Up to 300 a day");
     expect(text).toContain("Up to 50 a day");
     expect(text).toContain("2 waiting · most often: Held until 8:00 AM — quiet hours");

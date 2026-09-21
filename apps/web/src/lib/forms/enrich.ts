@@ -162,16 +162,25 @@ export async function enrich(
   // independent of them. The module decides (recipe on, phone parsed, consent
   // not withheld, the A2P gate, the 24h per-thread hold, the daily cap),
   // sends write-then-send so a provider failure is a visible failed text in
-  // the inbox, and logs every outcome worth seeing. Like the receipt: never
-  // `processing_error` (that means "nobody was told about this lead"), never
-  // the submitter's result. Skipped outright when the contact work above
-  // failed — no thread, nothing to reply into.
+  // the inbox, and logs every outcome worth seeing. UNLIKE the receipt: a
+  // `failed` outcome IS captured into `errors` below. The five cron passes
+  // can rely on the next tick to retry an unstamped row; this inline call has
+  // no next tick — it fires once, from a form submission, and never runs
+  // again for this submission (see hold-or-send.ts's doc comment for the
+  // enqueue-failure case this covers). Without recording it, a lost text
+  // would be invisible past one console line, and that is exactly the
+  // "somebody was not told about this lead" signal `processing_error` exists
+  // for. A `held` outcome (queued for the quiet-hours release pass to pick up
+  // later) or a `skipped` one (recipe off, no phone, consent withheld,
+  // gated, capped) is normal and records nothing. Skipped outright when the
+  // contact work above failed — no thread, nothing to reply into.
   if (contactId && conversationId) {
     try {
-      await sendInstantReply({
+      const outcome = await sendInstantReply({
         db, now: new Date(), accountId, submissionId, contactId, conversationId,
         phoneE164, locale, consentWithheld,
       });
+      if (outcome.kind === "failed") errors.push(`instant reply: ${outcome.error}`);
     } catch (e) {
       console.error(`form ${form.id} submission ${submissionId} instant reply crashed: ${String(e)}`);
     }

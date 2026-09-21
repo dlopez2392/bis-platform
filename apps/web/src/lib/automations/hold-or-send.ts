@@ -29,8 +29,16 @@ import type { PassContext } from "./context";
  * still in its quiet window, nothing ever sends it. So the held write is
  * made DIRECTLY (not through `record`) and a failure REJECTS the call, so
  * the pass counts `failed` and the tick's own retry-next-time behaviour
- * (the row is still unstamped) is what saves it. The settings READ has the
- * same shape for the same reason: a rejected read rejects the call.
+ * (the row is still unstamped) is what saves it — true of the five CRON
+ * passes. The one exception: the inline instant reply (`instant-reply.ts`,
+ * fired once per form submission — no due-list, no tick) has no next tick to
+ * retry it. There, the enqueue failure surfaces as this call's own rejection,
+ * which `sendInstantReply` turns into a `{ kind: "failed" }` outcome, and its
+ * caller (`enrich.ts`) records that into the submission's `processing_error`
+ * instead — the operator's "somebody was not told about this lead" signal,
+ * since a lost text would otherwise be invisible past one console line. The
+ * settings READ has the same shape for the same reason: a rejected read
+ * rejects the call.
  */
 export type HoldContext = Pick<PassContext, "db" | "now" | "quiet">;
 

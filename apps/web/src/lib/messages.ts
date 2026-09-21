@@ -1227,6 +1227,7 @@ export const m = {
   "automations.quiet.saved": "Quiet hours saved",
   "automations.quiet.saveFailed": "Could not save quiet hours.",
   "automations.quiet.invalidTime": "Enter both times as hours and minutes, like 9:00 PM.",
+  "automations.quiet.readFailed": "Couldn't load the current quiet hours. Reload the page before changing them.",
   "automations.activityLink": "See what went out",
 
   // Part C — the Activity page, /dashboard/accounts/<id>/activity. BOTH
@@ -1239,7 +1240,7 @@ export const m = {
   "activity.usage.emails": "Emails sent",
   "activity.usage.conversations": "Website chats",
   "activity.usage.calls": "Calls handled",
-  "activity.usage.capRecipe": "Up to {cap} a day per automation",
+  "activity.usage.capRecipe": "Most automations: up to {cap} a day",
   "activity.usage.capDay": "Up to {cap} a day",
   "activity.usage.held": "{n} waiting",
   "activity.usage.skipped": "{n} skipped",

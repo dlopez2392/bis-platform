@@ -1,6 +1,6 @@
 import { headers } from "next/headers";
 import Link from "next/link";
-import { serviceDb, getAutomation, getBranding, getCalendarForAccount, readQuietSettings, DEFAULT_QUIET_SETTINGS } from "@bis/db";
+import { serviceDb, getAutomation, getBranding, getCalendarForAccount, readQuietSettings, type QuietSettings } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
@@ -74,12 +74,16 @@ export default async function AutomationsPage({
     // customer link carries (origin.ts). The pass builds the sent link from
     // ctx.origin the same way, so the preview shows the link that goes out.
     headers().then((h) => originFrom(h)),
-    // Part C. Cosmetic-degrade like the account read beside it: the card
-    // must render (the agency may be here to FIX it), so a failed read shows
-    // the defaults and one log line.
-    readQuietSettings(db, accountId).catch((e) => {
+    // Part C. UNLIKE the account read beside it, this degrade must not show a
+    // plausible-but-wrong window: rendering `DEFAULT_QUIET_SETTINGS` as if it
+    // were the saved one and letting Save fire would silently overwrite the
+    // client's real hours with the platform default. So a failed read
+    // degrades to `null` — the card renders a Notice and a disabled form
+    // (the agency reloads to fix it, rather than pressing Save on a guess) —
+    // and one log line.
+    readQuietSettings(db, accountId).catch((e): QuietSettings | null => {
       console.error(`automations: quiet-hours read failed for ${accountId}: ${String(e)}`);
-      return DEFAULT_QUIET_SETTINGS;
+      return null;
     }),
   ]);
 
