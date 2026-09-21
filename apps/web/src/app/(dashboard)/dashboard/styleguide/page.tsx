@@ -24,6 +24,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SCREENED_REASONS, screenedClass, type ProposalStatus } from "@bis/db";
 import { CLASS_DOT } from "../screened/screened-table";
 import { STATUS_TREATMENT } from "../accounts/[accountId]/calls/[callId]/proposals";
+import { LogStatusPill } from "../accounts/[accountId]/activity/log-status-pill";
 import { cn } from "@/lib/utils";
 import { RailStates } from "./rail-states";
 import { SettingsFieldCards } from "./settings-field-cards";
@@ -131,6 +132,13 @@ export default async function StyleguidePage() {
             chip + dot
           </Badge>
         </Section>
+
+        <section aria-labelledby="sg-activity-status" data-testid="styleguide-activity-status" className="space-y-3">
+          <h2 id="sg-activity-status" className="text-sm font-medium">Activity status</h2>
+          <div className="flex flex-wrap gap-2">
+            {(["sent", "held", "skipped", "failed"] as const).map((s) => <LogStatusPill key={s} status={s} />)}
+          </div>
+        </section>
 
         <Section title="Meter" file="components/meter.tsx">
           {/* The mockup's `.meter` (northern-lights.html:56): a 5px track on
