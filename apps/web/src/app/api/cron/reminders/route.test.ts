@@ -158,16 +158,16 @@ function bookerZoneWhen(startsAt: string, timeZone: string): string {
 }
 
 const EMPTY_FOLLOWUPS = {
-  sent: 0, failed: 0, unstamped: 0,
+  sent: 0, failed: 0, unstamped: 0, held: 0,
   skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
 };
 const EMPTY_REVIEW_REQUESTS = {
-  sent: 0, failed: 0, unstamped: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
+  sent: 0, failed: 0, unstamped: 0, held: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
   skippedSmsGate: 0, skippedCap: 0, waitingForMorning: 0, unresolvableTimezone: 0,
   skippedRecentFailure: 0,
 };
 const EMPTY_NO_SHOW_NUDGES = {
-  sent: 0, failed: 0, unstamped: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
+  sent: 0, failed: 0, unstamped: 0, held: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
   skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0, skippedCalendarOff: 0,
   waitingForMorning: 0, unresolvableTimezone: 0,
 };
@@ -419,7 +419,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
     expect(body).toEqual({
       sent: 0, failed: 0, unstamped: 0, held: 0,
       followups: {
-        sent: 1, failed: 0, unstamped: 0,
+        sent: 1, failed: 0, unstamped: 0, held: 0,
         skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
       },
       reviewRequests: EMPTY_REVIEW_REQUESTS,
@@ -454,7 +454,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
     expect(body).toEqual({
       sent: 1, failed: 0, unstamped: 0, held: 0,
       followups: {
-        sent: 1, failed: 0, unstamped: 0,
+        sent: 1, failed: 0, unstamped: 0, held: 0,
         skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
       },
       reviewRequests: EMPTY_REVIEW_REQUESTS,
@@ -481,7 +481,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
     const body = await res.json();
 
     expect(body.followups).toEqual({
-      sent: 0, failed: 1, unstamped: 0,
+      sent: 0, failed: 1, unstamped: 0, held: 0,
       skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
     });
     expect(stampFollowupSentMock).not.toHaveBeenCalled();
@@ -500,7 +500,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
     // 37h backward window ages it out, so it is never a "failure" to report.
     // (It was 25h under the daily cron; the Pro cadence re-derived it.)
     expect(body.followups).toEqual({
-      sent: 0, failed: 0, unstamped: 0,
+      sent: 0, failed: 0, unstamped: 0, held: 0,
       skippedNoEmail: 1, waitingForMorning: 0, unresolvableTimezone: 0,
     });
     expect(sendMock).not.toHaveBeenCalled();
@@ -522,7 +522,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
     const body = await res.json();
 
     expect(body.followups).toEqual({
-      sent: 1, failed: 0, unstamped: 0,
+      sent: 1, failed: 0, unstamped: 0, held: 0,
       skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
     });
     expect(stampFollowupSentMock).toHaveBeenCalledTimes(2);
@@ -538,7 +538,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
     const body = await res.json();
 
     expect(body.followups).toEqual({
-      sent: 1, failed: 0, unstamped: 1,
+      sent: 1, failed: 0, unstamped: 1, held: 0,
       skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
     });
     expect(stampFollowupSentMock).toHaveBeenCalledTimes(STAMP_ATTEMPTS);
@@ -601,7 +601,7 @@ describe("GET /api/cron/reminders — follow-ups wait for the next morning", () 
     const body = await res.json();
 
     expect(body.followups).toEqual({
-      sent: 0, failed: 0, unstamped: 0,
+      sent: 0, failed: 0, unstamped: 0, held: 0,
       skippedNoEmail: 0, waitingForMorning: 1, unresolvableTimezone: 0,
     });
     expect(sendMock).not.toHaveBeenCalled();
@@ -628,7 +628,7 @@ describe("GET /api/cron/reminders — follow-ups wait for the next morning", () 
     const body = await res.json();
 
     expect(body.followups).toEqual({
-      sent: 1, failed: 0, unstamped: 0,
+      sent: 1, failed: 0, unstamped: 0, held: 0,
       skippedNoEmail: 0, waitingForMorning: 1, unresolvableTimezone: 0,
     });
     expect(sendMock).toHaveBeenCalledTimes(1);
@@ -687,7 +687,7 @@ describe("GET /api/cron/reminders — follow-ups wait for the next morning", () 
     const body = await res.json();
 
     expect(body.followups).toEqual({
-      sent: 0, failed: 0, unstamped: 0,
+      sent: 0, failed: 0, unstamped: 0, held: 0,
       skippedNoEmail: 0, waitingForMorning: 1, unresolvableTimezone: 0,
     });
   });
@@ -735,7 +735,7 @@ describe("GET /api/cron/reminders — follow-ups wait for the next morning", () 
     const body = await res.json();
 
     expect(body.followups).toEqual({
-      sent: 1, failed: 0, unstamped: 0, skippedNoEmail: 0,
+      sent: 1, failed: 0, unstamped: 0, held: 0, skippedNoEmail: 0,
       waitingForMorning: 0, unresolvableTimezone: 1,
     });
     expect(sendMock).toHaveBeenCalledTimes(1);
