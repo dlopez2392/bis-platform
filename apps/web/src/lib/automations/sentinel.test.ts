@@ -25,6 +25,7 @@ const dbMocks = vi.hoisted(() => ({
   listSitesToSync: vi.fn(),
   listAccountsDueWeeklyReport: vi.fn(),
   getAgencyReportTarget: vi.fn(), stampAgencyReportSent: vi.fn(), listAccountsForWeeklyRollup: vi.fn(),
+  recordAutomationLog: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: async () => ({ ok: true, from: "+19565550000" }) }));
@@ -50,12 +51,12 @@ const branding = {
 
 /** The two cron due-rows, named so the absence pin below can extend them. */
 const REMINDER_ROW: DueReminder = {
-  bookingId: "bk_rem", accountId: "acct_1", startsAt: "2026-09-10T14:00:00.000Z", bookerTimezone: null,
+  bookingId: "bk_rem", accountId: "acct_1", contactId: "ct_1", startsAt: "2026-09-10T14:00:00.000Z", bookerTimezone: null,
   cancelToken: "tok", calendarPublicId: "cal", contactEmail: "a@example.com", contactName: "A",
   accountTimezone: "America/New_York", branding, fromEmail: null, meetingUrl: null,
 };
 const FOLLOWUP_ROW: DueFollowup = {
-  bookingId: "bk_fu", accountId: "acct_1", startsAt: "2026-09-08T21:00:00.000Z", endsAt: "2026-09-08T22:00:00.000Z",
+  bookingId: "bk_fu", accountId: "acct_1", contactId: "ct_1", startsAt: "2026-09-08T21:00:00.000Z", endsAt: "2026-09-08T22:00:00.000Z",
   contactEmail: "b@example.com", contactName: "B",
   accountTimezone: "America/New_York", branding, fromEmail: null, replyToEmail: null, followupBody: "",
 };
@@ -116,6 +117,7 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     const ctx: PassContext = {
       db: {} as never, now: TICK, origin: "https://app.example.com",
       email: { isFake: true, send: emailSend }, sms: () => ({ isFake: true, send: smsSend }),
+      quiet: async () => ({ enabled: false, start: "21:00", end: "08:00" }),
     };
 
     const results = await runPasses(PASSES, ctx);

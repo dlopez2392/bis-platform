@@ -49,6 +49,7 @@ function ctx(now: Date = TICK): PassContext {
     db: {} as never, now, origin: ORIGIN,
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
     sms: () => ({ isFake: true, send: (...a: unknown[]) => smsSend(...a) }),
+    quiet: async () => ({ enabled: false, start: "21:00", end: "08:00" }),
   };
 }
 

@@ -51,6 +51,7 @@ function ctx(): PassContext {
     db: {} as never, now: TICK, origin: "https://app.example.com",
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
     sms: () => ({ isFake: true, send: (...a: unknown[]) => smsSend(...a) }),
+    quiet: async () => ({ enabled: false, start: "21:00", end: "08:00" }),
   };
 }
 const EMPTY = {

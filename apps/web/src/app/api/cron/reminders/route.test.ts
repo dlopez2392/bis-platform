@@ -58,6 +58,11 @@ vi.mock("@bis/db", () => ({
   createMessage: async () => ({ id: "msg" }),
   updateMessageStatus: async () => undefined,
   REVIEW_REQUEST_MAX_AGE_MS: 61 * 60 * 60 * 1000,
+  // Task 3 (part C): the reminder and follow-up passes now read the account's
+  // quiet window on every send and write the automation log. Off here so
+  // the 30 route tests keep their exact bodies; the log write is a no-op.
+  readQuietSettings: async () => ({ enabled: false, start: "21:00", end: "08:00" }),
+  recordAutomationLog: async () => undefined,
 }));
 
 const sendMock = vi.fn();
@@ -84,6 +89,7 @@ function reminder(overrides: Record<string, unknown> = {}) {
   return {
     bookingId: "bk_1",
     accountId: "acct_1",
+    contactId: "ct_1",
     startsAt: "2026-08-20T20:00:00.000Z",
     bookerTimezone: "America/Los_Angeles",
     cancelToken: "tok_abc123",
@@ -126,6 +132,7 @@ function followup(overrides: Record<string, unknown> = {}) {
   return {
     bookingId: "bk_f1",
     accountId: "acct_1",
+    contactId: "ct_1",
     startsAt: "2026-09-08T21:00:00.000Z",
     endsAt: "2026-09-08T22:00:00.000Z",     // America/New_York: Tue 18:00, the previous local day
     contactEmail: "booker@example.com",

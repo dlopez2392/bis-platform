@@ -37,6 +37,7 @@ function ctx(): PassContext {
     db: {} as never, now: NOW, origin: "https://app.example.com",
     email: { isFake: true, send: async () => ({ providerMessageId: "e" }) },
     sms: () => ({ isFake: true, send: (...a: unknown[]) => smsSend(...a) }),
+    quiet: async () => ({ enabled: false, start: "21:00", end: "08:00" }),
   };
 }
 const input = (onProviderFailure = vi.fn(async () => {})) => ({
