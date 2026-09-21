@@ -26,6 +26,8 @@ const dbMocks = vi.hoisted(() => ({
   listAccountsDueWeeklyReport: vi.fn(),
   getAgencyReportTarget: vi.fn(), stampAgencyReportSent: vi.fn(), listAccountsForWeeklyRollup: vi.fn(),
   recordAutomationLog: vi.fn(),
+  // Part C: the inline instant reply reads the window and the zone; the held path reads the existing row.
+  readQuietSettings: vi.fn(), readAccountTimezone: vi.fn(), getAutomationLogEntry: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: async () => ({ ok: true, from: "+19565550000" }) }));
@@ -97,6 +99,9 @@ beforeEach(() => {
   // RUN under the sentinel, not error out of the harness: a pass that quietly
   // fails is a pass the scan never looked at (the withBookingCancelled lesson).
   dbMocks.listSitesToSync.mockResolvedValue([]);
+  dbMocks.readQuietSettings.mockResolvedValue({ enabled: false, start: "21:00", end: "08:00" });
+  dbMocks.readAccountTimezone.mockResolvedValue("America/Chicago");
+  dbMocks.getAutomationLogEntry.mockResolvedValue(null);
   // Same treatment for the weekly report: TICK is a Wednesday in every zone
   // (no IANA offset shifts a calendar day back two full days), so it can
   // never be in the Monday band here regardless of account timezone. Empty
