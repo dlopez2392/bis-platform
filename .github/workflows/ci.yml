@@ -208,6 +208,18 @@ jobs:
     # The real fix remains a CI Supabase project separate from production's.
     # This is the other cheap half of it.
     needs: verify
+    # The one e2e test that calls the model (concierge.spec.ts, "a visitor's
+    # message comes back with a reply") skips itself when this is unset — so
+    # until 2026-09-21 no machine had ever proved a real answer comes back
+    # (the first proof was a person, in a browser, on Test Client One).
+    # Scoped to THIS job on purpose: the unit suites under `verify` stub or
+    # clear the key themselves, and a job that never talks to OpenAI should
+    # not carry the credential. The secret is a separate CI key (`bis-ci`),
+    # revocable on its own; the cost is one short model call per run. When
+    # the secret is absent the expression is an empty string, which the
+    # test treats as unset, so this line is safe to merge ahead of the key.
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     concurrency:
       group: e2e-shared-supabase
       cancel-in-progress: false
