@@ -28,13 +28,20 @@ import type { Pass, PassContext } from "../context";
  * single carrier blip cost the customer their reminder. A failed send still
  * writes `sms_reminder_failed_at` (an attempt marker the operator can see)
  * but this pass never reads it back; the window bounds a bad afternoon to
- * three attempts and three failed rows (cron-coupling.test.ts pins the 3).
+ * three attempts and three failed rows (cron-coupling.test.ts pins the 3 —
+ * three quarter-hour grid points inside a closed 45-minute window; a fourth
+ * needs a tick to land on the bound to the second, which the cron's jitter
+ * never does).
  * The customer-visible worst case is the flip side: a provider failure that
  * was actually accepted (a timeout after delivery) is retried next tick, so
  * up to three copies of the reminder can land. Inherent to retrying, and
  * the right trade for a reminder.
  *
- * UNCAPPED, by the spec's own reasoning for the email reminder.
+ * UNCAPPED, by the spec's own reasoning for the email reminder: a reminder
+ * is one-to-one with a booking the customer made, and a cap on a busy
+ * client would drop reminders — the row leaves its 45-minute window before
+ * a rolling day clears — turning a burst guard into no-shows. No bulk
+ * status change can create a burst here.
  *
  * QUIET HOURS (part C): this is the recipe the reminder EXEMPTION exists
  * for. Due ~2h before the appointment, a text for a 07:30 job is due at
@@ -144,6 +151,13 @@ export const releaseSmsReminder: Releaser = async (ctx, row) => {
   const found = await getDueSmsReminderById(ctx.db, bookingId);
   if (!found.due) {
     await logSkipped(ctx, subjectOf(row), found.why === "off" ? REASONS.recipeOff : REASONS.noLongerDue);
+    return "skipped";
+  }
+  // The held row's key is not trusted across tenants: getDueSmsReminderById
+  // takes no account argument and runs service-role, so a mismatch never
+  // sends and leaves the queue.
+  if (found.due.accountId !== row.account_id) {
+    await logSkipped(ctx, subjectOf(row), REASONS.noLongerDue);
     return "skipped";
   }
   if (new Date(found.due.startsAt).getTime() <= ctx.now.getTime()) {

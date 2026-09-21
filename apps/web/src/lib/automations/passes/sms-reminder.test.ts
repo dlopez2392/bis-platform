@@ -214,18 +214,33 @@ describe("sms reminder pass — quiet hours", () => {
   });
 
   it("release: an appointment that started during the hold is skipped, never texted (mutation: drop the check → FAILS)", async () => {
-    dbMocks.getDueSmsReminderById.mockResolvedValue({ due: row({ startsAt: "2026-09-22T12:45:00.000Z" }) });   // 07:45, before an 08:00 release
+    dbMocks.getDueSmsReminderById.mockResolvedValue({ due: row({ startsAt: "2026-09-22T12:45:00.000Z", accountTimezone: "America/Chicago" }) });   // 07:45, before an 08:00 release
     expect(await releaseSmsReminder(ctx(new Date("2026-09-22T13:00:00Z")), heldRow())).toBe("skipped");
     expect(smsSend).not.toHaveBeenCalled();
     expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: "skipped", reason: "Appointment already started" }));
   });
 
   it("release: still due → texts through the same path and the row flips to sent", async () => {
-    dbMocks.getDueSmsReminderById.mockResolvedValue({ due: row({ startsAt: APPT_0830 }) });
+    dbMocks.getDueSmsReminderById.mockResolvedValue({ due: row({ startsAt: APPT_0830, accountTimezone: "America/Chicago" }) });
     expect(await releaseSmsReminder(ctx(new Date("2026-09-22T13:00:00Z")), heldRow())).toBe("sent");
     expect(smsSend).toHaveBeenCalledTimes(1);
     expect(dbMocks.stampSmsReminderSent).toHaveBeenCalledWith(expect.anything(), "bk_s1");
     expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ status: "sent" }));
+  });
+
+  it("release: the booking is no longer due → 'No longer due'", async () => {
+    dbMocks.getDueSmsReminderById.mockResolvedValue({ due: null, why: "gone" });
+    expect(await releaseSmsReminder(ctx(), heldRow())).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ reason: "No longer due" }));
+  });
+
+  it("release: a held row's subject_key is not trusted across accounts: acct_2's held row whose lookup returns acct_1's booking is skipped, never texted (mutation: delete the check → FAILS)", async () => {
+    dbMocks.getDueSmsReminderById.mockResolvedValue({ due: row({ startsAt: APPT_0830, accountTimezone: "America/Chicago" }) });   // row()'s accountId is "acct_1"
+    const otherAccountHeld = { ...heldRow(), account_id: "acct_2" };
+    expect(await releaseSmsReminder(ctx(new Date("2026-09-22T13:00:00Z")), otherAccountHeld)).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ accountId: "acct_2", status: "skipped", reason: "No longer due" }));
   });
 
   it("release: the recipe was turned off meanwhile → 'This automation was turned off'", async () => {

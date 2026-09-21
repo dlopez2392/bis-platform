@@ -59,7 +59,8 @@ export async function processReminders(ctx: PassContext, reminders: DueReminder[
     // `failed` and logged, and the row stays unstamped so
     // `listDueReminders` returns it again next tick.
     try {
-      if (!reminder.contactEmail) {
+      const to = reminder.contactEmail;
+      if (!to) {
         await logSkipped(ctx, subject, REASONS.noEmail);
         throw new Error("no contact email on file");
       }
@@ -77,7 +78,7 @@ export async function processReminders(ctx: PassContext, reminders: DueReminder[
         // fromAddress carries the account's sending address: a reminder is
         // customer-facing outbound, same shape as the booking confirmation.
         await ctx.email.send({
-          to: reminder.contactEmail!,
+          to,
           fromName: brand.name,
           fromAddress: reminder.fromEmail ?? undefined,
           replyTo: normalizeReplyTo(reminder.branding.replyToEmail),
@@ -121,6 +122,13 @@ export const releaseReminder: Releaser = async (ctx, row) => {
   const found = await getDueReminderById(ctx.db, bookingId);
   if (!found.due) {
     await logSkipped(ctx, subjectOf(row), found.why === "off" ? REASONS.recipeOff : REASONS.noLongerDue);
+    return "skipped";
+  }
+  // The held row's key is not trusted across tenants: getDueReminderById
+  // takes no account argument and runs service-role, so a mismatch never
+  // sends and leaves the queue.
+  if (found.due.accountId !== row.account_id) {
+    await logSkipped(ctx, subjectOf(row), REASONS.noLongerDue);
     return "skipped";
   }
   if (new Date(found.due.startsAt).getTime() <= ctx.now.getTime()) {

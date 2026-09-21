@@ -116,4 +116,12 @@ describe("releaseReminder — the held row is the queue", () => {
     expect(emailSend).not.toHaveBeenCalled();
     expect(logCalls()).toEqual([expect.objectContaining({ status: "held" })]);
   });
+
+  it("a held row's subject_key is not trusted across accounts: acct_2's held row whose lookup returns acct_1's booking is skipped, never sent (mutation: delete the check → FAILS)", async () => {
+    dbMocks.getDueReminderById.mockResolvedValue({ due: row() });   // row()'s accountId is "acct_1"
+    const otherAccountHeld = { ...held(), account_id: "acct_2" };
+    expect(await releaseReminder(ctx(NOON), otherAccountHeld)).toBe("skipped");
+    expect(emailSend).not.toHaveBeenCalled();
+    expect(logCalls()).toEqual([expect.objectContaining({ accountId: "acct_2", status: "skipped", reason: "No longer due" })]);
+  });
 });
