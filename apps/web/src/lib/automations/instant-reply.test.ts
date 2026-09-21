@@ -4,7 +4,7 @@ const dbMocks = vi.hoisted(() => ({
   getAutomation: vi.fn(), hasRecentOutboundSms: vi.fn(), countInstantRepliesSince: vi.fn(),
   stampInstantReplySent: vi.fn(),
   ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(),
-  readQuietSettings: vi.fn(), readAccountTimezone: vi.fn(), recordAutomationLog: vi.fn(),
+  readQuietSettings: vi.fn(), readAccountTimezone: vi.fn(), recordAutomationLog: vi.fn(), getAutomationLogEntry: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const senderMock = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
@@ -60,6 +60,7 @@ beforeEach(() => {
   dbMocks.readQuietSettings.mockResolvedValue({ enabled: false, start: "21:00", end: "08:00" });
   dbMocks.readAccountTimezone.mockResolvedValue("America/Chicago");
   dbMocks.recordAutomationLog.mockResolvedValue(undefined);
+  dbMocks.getAutomationLogEntry.mockResolvedValue(null);   // Task 3: the held path reads the existing row before re-holding
   // Re-spying an already-spied method keeps the same spy and its call list;
   // cleared here so a line logged by an earlier test cannot fail a later one.
   vi.spyOn(console, "error").mockImplementation(() => {}).mockClear();
