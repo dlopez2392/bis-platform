@@ -108,7 +108,7 @@ setup("authenticate as client user (no app_role)", async ({ page }) => {
   try {
     const report = await sweepStaleFixtures({ dryRun: false });
     const swept = report.accounts.length + report.clerkUsers.length
-      + report.clerkOrgs.length + report.orphanObjects.length;
+      + report.clerkOrgs.length + report.orphanObjects.length + report.strandedForms.length;
     if (swept > 0) console.log(formatSweepReport(report, false));
   } catch (e) {
     console.error(`e2e setup: fixture sweep failed (continuing): ${String(e)}`);

@@ -23,7 +23,7 @@ import { clerkClient } from "@clerk/nextjs/server";
 import { serviceDb } from "@bis/db";
 import {
   FIXTURE_ACCOUNT_RE, FIXTURE_EMAIL_RE, STALE_AFTER_MS,
-  isStaleFixture, isUuid,
+  isStaleFixture, isStaleFixtureForm, isUuid,
 } from "./stale";
 
 const BUCKET = "brand-logos";
@@ -37,12 +37,13 @@ export type SweepReport = {
   accounts: Array<{ id: string; name: string }>;
   clerkUsers: Array<{ id: string; email: string }>;
   clerkOrgs: Array<{ id: string; name: string }>;
+  strandedForms: Array<{ id: string; name: string; accountId: string }>;
   orphanObjects: string[];
   errors: string[];
 };
 
 const empty = (): SweepReport =>
-  ({ accounts: [], clerkUsers: [], clerkOrgs: [], orphanObjects: [], errors: [] });
+  ({ accounts: [], clerkUsers: [], clerkOrgs: [], strandedForms: [], orphanObjects: [], errors: [] });
 
 /**
  * Child tables first, in the order teardown already proves works: `contacts`
@@ -200,6 +201,43 @@ export async function sweepStaleFixtures({
     report.orphanObjects.push(...objects);
   }
 
+  // 4. Forms a killed `forms.spec.ts` run left behind. Unlike every leg
+  // above, these live on the SEEDED account (`Test Client One`), not a
+  // per-run fixture account — `forms.spec.ts` mints `E2E Form <stamp>` /
+  // `E2E Spam <stamp>` there and deletes them in a `finally` that a killed
+  // run (Ctrl-C, a crashed dev server, a memory kill) never reaches.
+  //
+  // The `like` is a prefilter for the network, never the decision, exactly
+  // as the accounts leg above: without it every real client's every form
+  // would be fetched on every run, forever. `isStaleFixtureForm` is what
+  // actually admits a row.
+  const { data: forms, error: formsError } = await db
+    .from("forms").select("id, name, account_id").like("name", "E2E %");
+  if (formsError) {
+    report.errors.push(`forms select: ${formsError.message}`);
+  }
+  const staleForms = (forms ?? []).filter(
+    (f: { name: string }) => isStaleFixtureForm(f.name, now),
+  ) as Array<{ id: string; name: string; account_id: string }>;
+
+  for (const form of staleForms) {
+    report.strandedForms.push({ id: form.id, name: form.name, accountId: form.account_id });
+    if (!dryRun) {
+      // Child-first — the same order forms.spec.ts's own `finally` uses
+      // (form_submissions before forms). Contacts and conversations are
+      // deliberately left alone: a stranded form's contact cannot be told
+      // apart from a real one on the seeded account by name alone, and the
+      // forms this leg has found so far all have zero submissions anyway.
+      const { error: subsError } = await db
+        .from("form_submissions").delete().eq("form_id", form.id);
+      if (subsError) {
+        report.errors.push(`form_submissions delete for ${form.id}: ${subsError.message}`);
+      }
+      const { error: formError } = await db.from("forms").delete().eq("id", form.id);
+      if (formError) report.errors.push(`forms delete for ${form.id}: ${formError.message}`);
+    }
+  }
+
   return report;
 }
 
@@ -213,6 +251,8 @@ export function formatSweepReport(report: SweepReport, dryRun: boolean): string 
     ...report.clerkUsers.map((u) => `    ${u.email} (${u.id})`),
     `  clerk orgs:      ${report.clerkOrgs.length}`,
     ...report.clerkOrgs.map((o) => `    ${o.name} (${o.id})`),
+    `  stranded forms:  ${report.strandedForms.length}`,
+    ...report.strandedForms.map((f) => `    ${f.name} (${f.id}, account ${f.accountId})`),
     `  storage objects: ${report.orphanObjects.length}`,
     ...report.orphanObjects.map((p) => `    ${p}`),
   ];
