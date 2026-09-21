@@ -1543,7 +1543,7 @@ export async function getDueSmsReminderById(db: SupabaseClient, bookingId: strin
 
 `packages/db/src/index.ts`: add `getDueReminderById, getDueFollowupById, type DueLookup` to the `./booking` export list and `getDueReviewRequestById, getDueNoShowNudgeById, getDueSmsReminderById` to the `./automations` list.
 
-Run: `pnpm --filter @bis/db typecheck && pnpm --filter web typecheck` — Expected: web reports every `DueReminder`/`DueFollowup` fixture missing `contactId`: `route.test.ts` (grep `cancelToken:` and `followupBody:` there) and `sentinel.test.ts`. Add `contactId: "ct_1"` to each such fixture. Re-run — Expected: clean.
+Run: `pnpm --filter @bis/db typecheck && pnpm --filter web typecheck` — Expected: web reports `sentinel.test.ts`'s typed `REMINDER_ROW: DueReminder` / `FOLLOWUP_ROW: DueFollowup` (lines ~52/57) missing `contactId`. Add `contactId: "ct_1"` there. Then ALSO add `contactId: "ct_1"` to `route.test.ts`'s `reminder()` and `followup()` helpers (lines ~83 and ~125) — those fixtures are UNTYPED (`Record<string, unknown>` into a bare `vi.fn()`), so typecheck will never flag them, and Task 4a's subject needs the field at runtime. Re-run typecheck — Expected: clean.
 
 - [ ] **Step 7: The live proof of the lookups**
 
