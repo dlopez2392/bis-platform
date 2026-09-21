@@ -1,6 +1,6 @@
 # Automation engine, part C — one record, one quiet-hours rule, visible usage
 
-**Date:** 2026-09-21 · **Status:** reviewed by danlo 2026-09-21; seven amendments taken (marked **Amended**), all from checking the tree
+**Date:** 2026-09-21 · **Status:** reviewed by danlo 2026-09-21; amendments 1–7 from his read, 8–11 from the plan
 **Owner agents:** bis-automations (passes, page), bis-db-schema (tables, grants, tests), bis-comms (the send seams), bis-voice (the AI seams)
 **Supersedes nothing.** Extends `2026-09-06-automations-design.md` (the harness) and `2026-09-07-automations-milestone-c-design.md`.
 
@@ -108,6 +108,10 @@ Empty state (rule 5): "Every text, email and conversation the system handles for
 5. The instant reply obeys the window and is released by the queue.
 6. Spam calls are `skipped` rows with the reason "Screened as a robocall"; weekly reports log `email` rows and are exempt from the window.
 7. The card's copy says the assistants still answer.
+8. (plan) The usage and history cards live on a NEW page, `/activity` ("What went out", nav "Activity"), both audiences, because the Automations page is agency-only by construction; the Quiet hours card stays on Automations, which links to Activity.
+9. (plan) The agency roll-up does not log (no account); sources are exactly nine.
+10. (plan) The Quiet hours card is a form with a Save button, like the recipe cards on its page.
+11. (plan) The held row carries a `payload` (the instant reply's release input) and the unique key is `(account_id, source, subject_key)` with status moving IN PLACE — one line per subject, and `skipped`/`failed` rows also collapse to one per subject.
 
 ## Out of scope, recorded
 
