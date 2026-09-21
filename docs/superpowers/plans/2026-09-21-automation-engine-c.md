@@ -855,14 +855,13 @@ describe("inQuietWindow — the default window, crossing midnight, on Chicago's 
     expect(inQuietWindow(at("2026-09-22T04:00:00Z"), CHI, { ...DEFAULT, enabled: false })).toBe(false);
   });
 
-  it("the SAME instant is quiet in Tokyo and not in Honolulu — the account's zone decides, never the machine's", () => {
-    const instant = at("2026-09-21T14:00:00Z");   // 23:00 JST · 04:00 HST
-    expect(inQuietWindow(instant, "Asia/Tokyo", DEFAULT)).toBe(true);
-    expect(inQuietWindow(instant, "Pacific/Honolulu", DEFAULT)).toBe(true);   // 04:00 is quiet too — pick a discriminating pair below
-    const noon = at("2026-09-21T03:00:00Z");      // 12:00 JST · 17:00 HST (previous day)
+  it("the account's zone decides, never the machine's: one instant, two zones, two answers", () => {
+    const instant = at("2026-09-21T09:00:00Z");   // 23:00 HST (Sept 20) · 18:00 JST (Sept 21)
+    expect(inQuietWindow(instant, "Pacific/Honolulu", DEFAULT)).toBe(true);
+    expect(inQuietWindow(instant, "Asia/Tokyo", DEFAULT)).toBe(false);
+    const noon = at("2026-09-21T03:00:00Z");      // 12:00 JST · 17:00 HST (the previous day)
     expect(inQuietWindow(noon, "Asia/Tokyo", DEFAULT)).toBe(false);
-    expect(inQuietWindow(at("2026-09-21T09:00:00Z"), "Pacific/Honolulu", DEFAULT)).toBe(true);   // 23:00 HST
-    expect(inQuietWindow(at("2026-09-21T09:00:00Z"), "Asia/Tokyo", DEFAULT)).toBe(false);        // 18:00 JST
+    expect(inQuietWindow(noon, "Pacific/Honolulu", DEFAULT)).toBe(false);
   });
 
   it("fails CLOSED (not quiet) on a zone Intl cannot resolve or an invalid instant — never throws inside a tick", () => {
