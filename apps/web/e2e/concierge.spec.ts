@@ -8,6 +8,7 @@ import {
 import { conciergeStrings } from "../src/lib/concierge/strings";
 import { signRenderToken, RENDER_TOKEN_FIELD } from "../src/lib/forms/guards";
 import { hexOf } from "./support";
+import { m } from "../src/lib/messages";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process directly: this file calls serviceDb() itself,
@@ -346,6 +347,88 @@ test("a visitor's message comes back with a reply", async ({ page }) => {
   expect(answer).not.toBe(strings.unavailable);
   expect(answer).not.toBe(strings.ended);
   await expect(page.locator(".bis-concierge-error")).toHaveCount(0);
+});
+
+/**
+ * 2026-09-21: the operator's click on the Voice page's checkbox did nothing —
+ * no toast, no snippet, no server call, no database change — and every test
+ * in this file that "enables the concierge" does it through `enableConcierge`
+ * called directly against `serviceDb()` in `beforeAll` above, never through
+ * the checkbox in a real browser. A `ConciergeCard` that lost its
+ * `onCheckedChange` wiring, or a `turnOn`/`turnOff` that returned before
+ * calling its action, would ship green under every test above this one. This
+ * is the one test that clicks the real checkbox and reads the real database
+ * afterwards.
+ *
+ * Placed LAST among the flat tests, immediately before the "embedded"
+ * describe: if this test's own turn-on step fails for real, it leaves the
+ * assistant OFF, and `getVoiceProfileByPublicId` 404s the "embedded" block's
+ * every `/c/` visit. Putting it last means that failure cannot cascade into
+ * tests that pass today; the "embedded" block still needs the assistant ON,
+ * which is exactly the state step 4 below restores.
+ */
+test("the Voice page's checkbox turns the assistant off and back on, through the real server action", async ({ page }) => {
+  test.skip(!widget, skipReason);
+  const db = serviceDb();
+
+  await page.goto(`/dashboard/accounts/${widget!.accountId}/voice`);
+  // `CardTitle` renders a plain `<div>` (no heading role in this component),
+  // so the card is identified by its own text, not `getByRole("heading")`.
+  // `exact: true`: a substring match on "Website assistant" also resolves to
+  // the checkbox's own label, "Turn on the website assistant" — a strict-mode
+  // violation caught by this test's own first mutation run.
+  await expect(page.getByText(m["voice.assistant.title"], { exact: true })).toBeVisible();
+  const checkbox = page.getByRole("checkbox", { name: m["voice.assistant.toggleLabel"] });
+
+  // Precondition: the fixture's `beforeAll` already enabled the assistant
+  // through `enableConcierge` directly, so the page must show it ON before
+  // this test touches anything.
+  await expect(checkbox).toBeChecked();
+  await expect(page.getByText(`data-concierge="${widget!.publicId}"`)).toBeVisible();
+
+  // Off, through the UI.
+  await checkbox.click();
+  await expect(page.getByText(m["voice.assistant.disabledToast"])).toBeVisible();
+  await expect(checkbox).not.toBeChecked();
+  // The snippet card disappears entirely (`conciergeSnippetPublicId` returns
+  // null once `enabled` reads false and the optimistic id has been cleared) —
+  // not just the one public id, so this locator is deliberately broader than
+  // the precondition's.
+  await expect(page.getByText("data-concierge=")).toHaveCount(0);
+  // `revalidatePath` and the write itself race this read, so `expect.poll`
+  // rather than a single `getVoiceProfile` call.
+  await expect.poll(
+    async () => (await getVoiceProfile(db, widget!.accountId))?.concierge_enabled,
+    { message: "concierge_enabled never reached false in the database" },
+  ).toBe(false);
+
+  // On, through the UI.
+  await checkbox.click();
+  await expect(page.getByText(m["voice.assistant.enabledToast"])).toBeVisible();
+  await expect(checkbox).toBeChecked();
+  // Same public id, not a new one — `enableConcierge`'s own contract
+  // (`concierge_enable`'s `coalesce(public_id, p_new_public_id)`): a snippet
+  // already pasted on a client's website must not silently break.
+  await expect(page.getByText(`data-concierge="${widget!.publicId}"`)).toBeVisible();
+  await expect.poll(
+    async () => (await getVoiceProfile(db, widget!.accountId))?.concierge_enabled,
+    { message: "concierge_enabled never reached true in the database" },
+  ).toBe(true);
+  await expect.poll(
+    async () => (await getVoiceProfile(db, widget!.accountId))?.concierge_form_id,
+    { message: "concierge_form_id never matched the fixture's form" },
+  ).toBe(widget!.formId);
+  // The UI check above reads the action's own return value echoed back —
+  // it would still pass if `enableConcierge` returned one id but persisted
+  // another. This reads the ROW itself, so that divergence cannot hide.
+  await expect.poll(
+    async () => (await getVoiceProfile(db, widget!.accountId))?.public_id,
+    { message: "public_id in the database never matched the fixture's public id" },
+  ).toBe(widget!.publicId);
+
+  // Leave it ON: `afterAll` restores the profile regardless, but the
+  // "embedded" describe below runs after this test in the same file and
+  // needs the assistant ON to resolve `/c/${widget.publicId}`.
 });
 
 /**
