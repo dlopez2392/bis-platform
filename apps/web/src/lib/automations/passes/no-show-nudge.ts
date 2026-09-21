@@ -248,6 +248,11 @@ export const releaseNoShowNudge: Releaser = async (ctx, row) => {
     await logSkipped(ctx, subjectOf(row), found.why === "off" ? REASONS.recipeOff : REASONS.noLongerDue);
     return "skipped";
   }
+  // the held row's key is not trusted across tenants; a mismatch never sends and leaves the queue
+  if (found.due.accountId !== row.account_id) {
+    await logSkipped(ctx, subjectOf(row), REASONS.noLongerDue);
+    return "skipped";
+  }
   return verdict(await processNoShowNudges(ctx, [found.due], { released: true }));
 };
 

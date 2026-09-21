@@ -4,6 +4,7 @@ import type { DueReviewRequest, AutomationLogRow, QuietSettings } from "@bis/db"
 const dbMocks = vi.hoisted(() => ({
   listDueReviewRequests: vi.fn(), stampReviewRequested: vi.fn(), countReviewRequestsSince: vi.fn(),
   stampReviewRequestSmsFailed: vi.fn(), getDueReviewRequestById: vi.fn(), recordAutomationLog: vi.fn(),
+  getAutomationLogEntry: vi.fn(),
   ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(),
   listDueReminders: vi.fn(), stampReminderSent: vi.fn(),
 }));
@@ -67,6 +68,8 @@ beforeEach(() => {
   dbMocks.countReviewRequestsSince.mockResolvedValue(0);
   dbMocks.stampReviewRequestSmsFailed.mockResolvedValue(undefined);
   dbMocks.recordAutomationLog.mockResolvedValue(undefined);
+  // Task 3: the held path reads the existing row before re-holding.
+  dbMocks.getAutomationLogEntry.mockResolvedValue(null);
   dbMocks.ensureConversation.mockResolvedValue({ id: "convo_1", created: false });
   dbMocks.createMessage.mockResolvedValue({ id: "msg_1" });
   dbMocks.updateMessageStatus.mockResolvedValue(undefined);
@@ -243,6 +246,9 @@ describe("caps — recipe passes only", () => {
     expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, sent: AUTOMATION_TICK_CAP, skippedCap: 1 });
     expect(dbMocks.stampReviewRequested).toHaveBeenCalledTimes(AUTOMATION_TICK_CAP);
     expect(dbMocks.stampReviewRequested).not.toHaveBeenCalledWith(expect.anything(), `bk_${AUTOMATION_TICK_CAP}`);
+    // The TICK cap is a per-tick queue, not a refusal — logging it would be
+    // noise on every busy tick a client ever has.
+    expect(dbMocks.recordAutomationLog.mock.calls.filter((c) => c[1].status === "skipped")).toEqual([]);
   });
 
   it("per account per day: 24 already sent in the last 24h leaves room for exactly one", async () => {
@@ -380,7 +386,7 @@ describe("review request — quiet hours and release", () => {
     expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ status: "sent" }));
   });
 
-  it("the daily cap and a missing address write skipped rows with plain reasons; the tick cap does not", async () => {
+  it("the daily cap and a missing address write skipped rows with plain reasons", async () => {
     dbMocks.countReviewRequestsSince.mockResolvedValue(AUTOMATION_DAILY_CAP);
     dbMocks.listDueReviewRequests.mockResolvedValue([row({ config: { channel: "sms", reviewUrl: URL } }), row({ bookingId: "bk_2", contactPhone: null, config: { channel: "sms", reviewUrl: URL } })]);
     await reviewRequestPass.run(ctx());
@@ -397,5 +403,16 @@ describe("review request — quiet hours and release", () => {
     dbMocks.getDueReviewRequestById.mockResolvedValue({ due: null, why: "off" });
     expect(await releaseReviewRequest(ctx(), heldRow("email"))).toBe("skipped");
     expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ reason: "This automation was turned off" }));
+  });
+
+  it("release: a held row's account is not trusted across tenants — a mismatch never sends (mutation: delete the check → FAILS)", async () => {
+    dbMocks.getDueReviewRequestById.mockResolvedValue({ due: row({ config: { channel: "sms", reviewUrl: URL } }) });   // due.accountId is "acct_1"
+    const crossTenant: AutomationLogRow = { ...heldRow("sms"), account_id: "acct_2" };
+    expect(await releaseReviewRequest(ctx(), crossTenant)).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampReviewRequested).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
+      accountId: "acct_2", status: "skipped", reason: "No longer due",
+    }));
   });
 });

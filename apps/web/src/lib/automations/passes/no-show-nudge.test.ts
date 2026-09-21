@@ -4,6 +4,7 @@ import type { DueNoShowNudge, AutomationLogRow, QuietSettings } from "@bis/db";
 const dbMocks = vi.hoisted(() => ({
   listDueNoShowNudges: vi.fn(), stampNoShowNudged: vi.fn(), stampNoShowNudgeSmsFailed: vi.fn(),
   countNoShowNudgesSince: vi.fn(), getDueNoShowNudgeById: vi.fn(), recordAutomationLog: vi.fn(),
+  getAutomationLogEntry: vi.fn(),
   ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(),
 }));
 // importOriginal keeps NO_SHOW_NUDGE_MAX_AGE_MS and the types real.
@@ -68,6 +69,8 @@ beforeEach(() => {
   dbMocks.stampNoShowNudgeSmsFailed.mockResolvedValue(undefined);
   dbMocks.countNoShowNudgesSince.mockResolvedValue(0);
   dbMocks.recordAutomationLog.mockResolvedValue(undefined);
+  // Task 3: the held path reads the existing row before re-holding.
+  dbMocks.getAutomationLogEntry.mockResolvedValue(null);
   dbMocks.ensureConversation.mockResolvedValue({ id: "convo_1", created: false });
   dbMocks.createMessage.mockResolvedValue({ id: "msg_1" });
   dbMocks.updateMessageStatus.mockResolvedValue(undefined);
@@ -245,6 +248,9 @@ describe("no-show nudge pass — capped, like every recipe pass that a bulk stat
     dbMocks.listDueNoShowNudges.mockResolvedValue(many(AUTOMATION_TICK_CAP + 1));
     expect(await noShowNudgePass.run(ctx())).toEqual({ ...EMPTY, sent: AUTOMATION_TICK_CAP, skippedCap: 1 });
     expect(dbMocks.stampNoShowNudged).not.toHaveBeenCalledWith(expect.anything(), `bk_${AUTOMATION_TICK_CAP}`);
+    // The TICK cap is a per-tick queue, not a refusal — logging it would be
+    // noise on every busy tick a client ever has.
+    expect(dbMocks.recordAutomationLog.mock.calls.filter((c) => c[1].status === "skipped")).toEqual([]);
   });
 
   it("per account per day: 24 already sent in the last 24h leaves room for exactly one, counted off no_show_nudged_at", async () => {
@@ -292,7 +298,7 @@ describe("no-show nudge — quiet hours and release", () => {
     expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ status: "sent" }));
   });
 
-  it("the daily cap and a missing address write skipped rows with plain reasons; the tick cap does not", async () => {
+  it("the daily cap and a missing address write skipped rows with plain reasons", async () => {
     dbMocks.countNoShowNudgesSince.mockResolvedValue(AUTOMATION_DAILY_CAP);
     dbMocks.listDueNoShowNudges.mockResolvedValue([sms(), sms({ bookingId: "bk_2", contactId: "ct_2", contactPhone: null })]);
     await noShowNudgePass.run(ctx());
@@ -309,6 +315,17 @@ describe("no-show nudge — quiet hours and release", () => {
     dbMocks.getDueNoShowNudgeById.mockResolvedValue({ due: null, why: "off" });
     expect(await releaseNoShowNudge(ctx(), heldRow("email"))).toBe("skipped");
     expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ reason: "This automation was turned off" }));
+  });
+
+  it("release: a held row's account is not trusted across tenants — a mismatch never sends (mutation: delete the check → FAILS)", async () => {
+    dbMocks.getDueNoShowNudgeById.mockResolvedValue({ due: sms() });   // due.accountId is "acct_1"
+    const crossTenant: AutomationLogRow = { ...heldRow("sms"), account_id: "acct_2" };
+    expect(await releaseNoShowNudge(ctx(), crossTenant)).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampNoShowNudged).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
+      accountId: "acct_2", status: "skipped", reason: "No longer due",
+    }));
   });
 
   it("the booking page switched off: a skipped row 'The booking page is switched off'", async () => {

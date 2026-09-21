@@ -3,6 +3,7 @@ import type { DueFollowup, AutomationLogRow } from "@bis/db";
 
 const dbMocks = vi.hoisted(() => ({
   listDueFollowups: vi.fn(), stampFollowupSent: vi.fn(), getDueFollowupById: vi.fn(), recordAutomationLog: vi.fn(),
+  getAutomationLogEntry: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 
@@ -49,6 +50,8 @@ beforeEach(() => {
   dbMocks.listDueFollowups.mockResolvedValue([]);
   dbMocks.stampFollowupSent.mockResolvedValue(undefined);
   dbMocks.recordAutomationLog.mockResolvedValue(undefined);
+  // Task 3: the held path reads the existing row before re-holding.
+  dbMocks.getAutomationLogEntry.mockResolvedValue(null);
   emailSend.mockReset().mockResolvedValue({ providerMessageId: "e" });
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -99,5 +102,14 @@ describe("follow-ups: the band decides WHEN IT IS DUE, the window decides WHEN I
     expect(await releaseFollowup(ctx(NOON), heldRow())).toBe("skipped");
     expect(await releaseFollowup(ctx(NOON), heldRow())).toBe("skipped");
     expect(logCalls().map((w) => w.reason)).toEqual(["No longer due", "This automation was turned off"]);
+  });
+
+  it("release: a held row's account is not trusted across tenants — a mismatch never sends (mutation: delete the check → FAILS)", async () => {
+    dbMocks.getDueFollowupById.mockResolvedValue({ due: row() });   // due.accountId is "acct_1"
+    const crossTenant: AutomationLogRow = { ...heldRow(), account_id: "acct_2" };
+    expect(await releaseFollowup(ctx(NOON), crossTenant)).toBe("skipped");
+    expect(emailSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampFollowupSent).not.toHaveBeenCalled();
+    expect(logCalls()).toEqual([expect.objectContaining({ accountId: "acct_2", status: "skipped", reason: "No longer due" })]);
   });
 });
