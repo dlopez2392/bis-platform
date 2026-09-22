@@ -25,7 +25,11 @@ import {
   parseReferralAskConfig, listDueReferralAsks, getDueReferralAskById,
   stampReferralAsked, stampReferralAskSmsFailed, countReferralAsksSince,
   REFERRAL_ASK_MAX_AGE_MS,
+  parseReactivationConfig, reactivationCutoff, listDueReactivations, getDueReactivationById,
+  conversationQuietSince, stampReactivationSent, countReactivationsSince,
+  REACTIVATION_MIN_MONTHS, REACTIVATION_MAX_MONTHS,
 } from "../automations";
+import { ensureConversation, createMessage } from "../messaging";
 
 const HOUR = 60 * 60 * 1000;
 
@@ -952,6 +956,333 @@ describe("referral ask — data layer", () => {
       expect(new Date(marked.referral_ask_sms_failed_at!).getTime()).toBeGreaterThanOrEqual(before.getTime());
       expect(await countReferralAsksSince(db, accountId, new Date(before.getTime() - 1000).toISOString())).toBe(1);
       expect(await countReferralAsksSince(db, accountId, new Date(Date.now() + 60_000).toISOString())).toBe(0);
+    });
+  });
+});
+
+describe("reactivation — the cutoff is calendar months, clamped", () => {
+  it("subtracts whole months", () => {
+    expect(reactivationCutoff(new Date("2027-09-21T12:00:00Z"), 9).toISOString())
+      .toBe("2026-12-21T12:00:00.000Z");
+    expect(reactivationCutoff(new Date("2027-09-21T12:00:00Z"), 6).toISOString())
+      .toBe("2027-03-21T12:00:00.000Z");
+  });
+
+  it("clamps a day the target month does not have, instead of rolling forward", () => {
+    // 31 August minus six months is February. Mutation: drop the clamp and
+    // `setUTCMonth` silently produces 3 March — this goes red BY NAME.
+    expect(reactivationCutoff(new Date("2027-08-31T12:00:00Z"), 6).toISOString())
+      .toBe("2027-02-28T12:00:00.000Z");
+    expect(reactivationCutoff(new Date("2028-08-31T12:00:00Z"), 6).toISOString())
+      .toBe("2028-02-29T12:00:00.000Z");   // a leap year, and the clamp still holds
+  });
+
+  it("parseReactivationConfig takes a whole number in range and refuses everything else", () => {
+    expect(parseReactivationConfig({ months: 9 })).toEqual({ months: 9 });
+    expect(parseReactivationConfig({ months: REACTIVATION_MIN_MONTHS })).toEqual({ months: 6 });
+    expect(parseReactivationConfig({ months: REACTIVATION_MAX_MONTHS })).toEqual({ months: 18 });
+    // ONE outside each bound, never 99: a fixture far past the bound passes
+    // against any range.
+    for (const bad of [null, undefined, {}, { months: "9" }, { months: 9.5 },
+                       { months: REACTIVATION_MIN_MONTHS - 1 }, { months: REACTIVATION_MAX_MONTHS + 1 }]) {
+      expect(parseReactivationConfig(bad), JSON.stringify(bad)).toBeNull();
+    }
+    // Mutation: clamp instead of refusing → the two boundary-adjacent rows red.
+  });
+});
+
+describe("reactivation — data layer", () => {
+  it("a quiet past CUSTOMER with an email is due; a quiet contact with no completed booking is NOT", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await setBranding(db, accountId, { brandName: "Fixture Brand" }, "user_test");
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      await upsertAutomation(db, accountId, "reactivation",
+        { enabled: true, body: "", config: { months: 9 } }, "user_test");
+      const now = new Date("2027-09-21T12:00:00Z");
+      const longAgo = new Date("2026-10-01T12:00:00Z");    // ~11.7 months, well inside 9
+
+      const mkPerson = async (name: string, completed: boolean) => {
+        const { id } = await createContact(db, accountId,
+          { firstName: name, email: `${name.toLowerCase()}@example.com` }, "user_test");
+        const convo = await ensureConversation(db, accountId, id, "user_test");
+        await createMessage(db, accountId,
+          { conversationId: convo.id, channel: "sms", direction: "inbound", body: "hi" }, "user_test");
+        await db.from("messages").update({ created_at: longAgo.toISOString() }).eq("conversation_id", convo.id);
+        await db.from("conversations").update({ last_message_at: longAgo.toISOString() }).eq("id", convo.id);
+        if (completed) {
+          const b = await createBooking(db, accountId,
+            { calendarId: cal.id, contactId: id, startsAt: new Date(longAgo.getTime() - HOUR), endsAt: longAgo }, "user_test");
+          await setBookingStatus(db, accountId, b.id, "completed", "user_test");
+        }
+        return id;
+      };
+
+      const customer = await mkPerson("Customer", true);
+      const stranger = await mkPerson("Stranger", false);
+
+      const ids = (await listDueReactivations(db, now.toISOString())).map((r) => r.contactId);
+      expect(ids).toContain(customer);
+      // THE ANTI-BLAST RULE. Mutation: drop the completed-booking read → this
+      // goes red, and the recipe becomes a mailing list.
+      expect(ids).not.toContain(stranger);
+
+      const row = (await listDueReactivations(db, now.toISOString())).find((r) => r.contactId === customer)!;
+      expect(row.brandName).toBe("Fixture Brand");
+      expect(row).not.toHaveProperty("accountName");
+      expect(row).not.toHaveProperty("contactPhone");     // email only: no address it must not use
+      expect(row.contactEmail).toBe("customer@example.com");
+      expect(row.quietMonths).toBe(9);
+      // The embed's shape, asserted BY VALUE and not by `not.toBeNull()`:
+      // `contacts!inner(...)` from `conversations` has no precedent in this
+      // repo, and if PostgREST ever answered with an ARRAY instead of an
+      // object these two would read `undefined` rather than the person's
+      // own name and address.
+      expect(row.contactName).toBe("Customer");
+      expect(row.lastMessageAt.startsWith("2026-10-01T12:00:00")).toBe(true);
+    });
+  });
+
+  it("a contact already reactivated is never due again, and the quiet period is respected at the boundary", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      await upsertAutomation(db, accountId, "reactivation",
+        { enabled: true, body: "", config: { months: 9 } }, "user_test");
+      const now = new Date("2027-09-21T12:00:00Z");
+      const cutoff = reactivationCutoff(now, 9);
+
+      const mk = async (name: string, lastMessageAt: Date) => {
+        const { id } = await createContact(db, accountId,
+          { firstName: name, email: `${name.toLowerCase()}@example.com` }, "user_test");
+        const convo = await ensureConversation(db, accountId, id, "user_test");
+        await createMessage(db, accountId,
+          { conversationId: convo.id, channel: "sms", direction: "inbound", body: "hi" }, "user_test");
+        await db.from("messages").update({ created_at: lastMessageAt.toISOString() }).eq("conversation_id", convo.id);
+        await db.from("conversations").update({ last_message_at: lastMessageAt.toISOString() }).eq("id", convo.id);
+        const b = await createBooking(db, accountId,
+          { calendarId: cal.id, contactId: id, startsAt: new Date(lastMessageAt.getTime() - HOUR), endsAt: lastMessageAt }, "user_test");
+        await setBookingStatus(db, accountId, b.id, "completed", "user_test");
+        return id;
+      };
+
+      // ONE MILLISECOND either side of the cutoff, never "a year ago".
+      const atCutoff = await mk("Atcut", cutoff);
+      const insideCutoff = await mk("Inside", new Date(cutoff.getTime() + 1));
+      const already = await mk("Already", new Date(cutoff.getTime() - 1000));
+      await stampReactivationSent(db, already);
+
+      const ids = (await listDueReactivations(db, now.toISOString())).map((r) => r.contactId);
+      expect(ids).toContain(atCutoff);
+      expect(ids).not.toContain(insideCutoff);   // Mutation: change lte to lt / widen months
+      expect(ids).not.toContain(already);        // Mutation: drop the reactivation_sent_at filter
+    });
+  });
+
+  it("the lagging-touch guard drops a contact whose conversation actually has a newer message", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      await upsertAutomation(db, accountId, "reactivation",
+        { enabled: true, body: "", config: { months: 9 } }, "user_test");
+      const now = new Date("2027-09-21T12:00:00Z");
+      const longAgo = new Date("2026-10-01T12:00:00Z");
+      const { id: contactId } = await createContact(db, accountId,
+        { firstName: "Lagged", email: "lagged@example.com" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      const { id: oldMsg } = await createMessage(db, accountId,
+        { conversationId: convo.id, channel: "sms", direction: "inbound", body: "old" }, "user_test");
+      await db.from("messages").update({ created_at: longAgo.toISOString() }).eq("id", oldMsg);
+      const b = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date(longAgo.getTime() - HOUR), endsAt: longAgo }, "user_test");
+      await setBookingStatus(db, accountId, b.id, "completed", "user_test");
+      // The column says quiet; the messages table says otherwise. This is the
+      // exact shape messaging.ts's best-effort touch admits is possible.
+      await db.from("conversations").update({ last_message_at: longAgo.toISOString() }).eq("id", convo.id);
+      const { id: newMsg } = await createMessage(db, accountId,
+        { conversationId: convo.id, channel: "sms", direction: "inbound", body: "actually I wrote in last week" }, "user_test");
+      // REWRITE THE NEWER MESSAGE'S CLOCK TOO. `createMessage` inserts no
+      // `created_at`, so the column takes `now()` — REAL time, which is
+      // months BEFORE the faked 2027 `now` and therefore before the 2026-12
+      // cutoff as well. Left alone, the "newer" message is older than the
+      // cutoff, the contact stays due, and every assertion below inverts.
+      // This is the trap this file's own fixtures record, and every other
+      // fixture in this task rewrites the clock; the one that IS the test
+      // must too.
+      await db.from("messages").update({ created_at: new Date(now.getTime() - 7 * 24 * HOUR).toISOString() })
+        .eq("id", newMsg);
+      await db.from("conversations").update({ last_message_at: longAgo.toISOString() }).eq("id", convo.id);
+
+      expect((await listDueReactivations(db, now.toISOString())).map((r) => r.contactId)).not.toContain(contactId);
+      // Mutation: delete the messages read from listDueReactivations → this
+      // goes red, and someone who wrote in last week is told "it's been a
+      // while".
+      expect(await conversationQuietSince(db, accountId, contactId, longAgo.toISOString())).toBe(false);
+      // The floor is the FAKED now, not `new Date()`: nothing in this fixture
+      // is on the real clock, and a real-clock floor would answer `true` for
+      // the wrong reason.
+      expect(await conversationQuietSince(db, accountId, contactId, now.toISOString())).toBe(true);
+    });
+  });
+
+  it("the guard compares each account to ITS OWN cutoff, not the widest across accounts", async () => {
+    // TWO ACCOUNTS, one set to 18 months and one to 6. The widest (latest,
+    // most permissive) cutoff is the 6-month account's, so a bulk message
+    // read written against `widest` cannot see a message that is newer than
+    // the 18-month account's cutoff but older than the 6-month one's — and
+    // that account's customer is then told "it's been a while since we were
+    // out at your place" ten months after writing in.
+    await withTestAccount(async (db, longAccountId) => {
+      await withTestAccount(async (db2, shortAccountId) => {
+        void db2;
+        const now = new Date("2027-09-21T12:00:00Z");
+        await upsertAutomation(db, longAccountId, "reactivation",
+          { enabled: true, body: "", config: { months: 18 } }, "user_test");
+        await upsertAutomation(db, shortAccountId, "reactivation",
+          { enabled: true, body: "", config: { months: 6 } }, "user_test");
+
+        const cal = await getOrCreateCalendar(db, longAccountId, "user_test");
+        const { id: contactId } = await createContact(db, longAccountId,
+          { firstName: "Tenmonths", email: "ten@example.com" }, "user_test");
+        const convo = await ensureConversation(db, longAccountId, contactId, "user_test");
+        // The column LAGS at 20 months; the real newest message is 10 months
+        // old — inside 18 months, outside 6.
+        const lagged = new Date("2026-01-21T12:00:00Z");     // 20 months
+        const real = new Date("2026-11-21T12:00:00Z");       // 10 months
+        const { id: msg } = await createMessage(db, longAccountId,
+          { conversationId: convo.id, channel: "sms", direction: "inbound", body: "hi" }, "user_test");
+        await db.from("messages").update({ created_at: real.toISOString() }).eq("id", msg);
+        await db.from("conversations").update({ last_message_at: lagged.toISOString() }).eq("id", convo.id);
+        const b = await createBooking(db, longAccountId,
+          { calendarId: cal.id, contactId, startsAt: new Date(lagged.getTime() - HOUR), endsAt: lagged }, "user_test");
+        await setBookingStatus(db, longAccountId, b.id, "completed", "user_test");
+
+        // Mutation: query the message read on `widest` instead of `earliest`,
+        // or compare every row to `widest` instead of its own account's
+        // cutoff → this reds, and only this.
+        expect((await listDueReactivations(db, now.toISOString())).map((r) => r.contactId))
+          .not.toContain(contactId);
+      });
+    });
+  });
+
+  it("walks past a page of contacts that can never qualify — the oldest-first window is not parked by leads", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      await upsertAutomation(db, accountId, "reactivation",
+        { enabled: true, body: "", config: { months: 9 } }, "user_test");
+      const now = new Date("2027-09-21T12:00:00Z");
+
+      // Three quiet, unstamped, emailable contacts, OLDEST FIRST. The two
+      // oldest are leads — a contact who wrote in, never booked, and never
+      // will — so they survive the candidate query and fail the
+      // completed-booking read on every tick, for ever.
+      const mk = async (name: string, at: Date, completed: boolean) => {
+        const { id } = await createContact(db, accountId,
+          { firstName: name, email: `${name.toLowerCase()}@example.com` }, "user_test");
+        const convo = await ensureConversation(db, accountId, id, "user_test");
+        const { id: msg } = await createMessage(db, accountId,
+          { conversationId: convo.id, channel: "sms", direction: "inbound", body: "hi" }, "user_test");
+        await db.from("messages").update({ created_at: at.toISOString() }).eq("id", msg);
+        await db.from("conversations").update({ last_message_at: at.toISOString() }).eq("id", convo.id);
+        if (completed) {
+          const b = await createBooking(db, accountId,
+            { calendarId: cal.id, contactId: id, startsAt: new Date(at.getTime() - HOUR), endsAt: at }, "user_test");
+          await setBookingStatus(db, accountId, b.id, "completed", "user_test");
+        }
+        return id;
+      };
+      // Deliberately ancient, and that is what makes the page numbers
+      // reliable: the candidate read is platform-wide (`.in("account_id",
+      // <every enabled account>)`), so a conversation left by a concurrent
+      // run could otherwise land between these three and push the customer
+      // past page 3. Nothing else in this project carries a 2020 timestamp,
+      // so these three are the first three rows of an oldest-first walk.
+      // (The db suite also runs ONE AT A TIME across implementers — the
+      // slot — which is the backstop, not the guarantee.)
+      await mk("Leadone", new Date("2020-01-01T12:00:00Z"), false);
+      await mk("Leadtwo", new Date("2020-02-01T12:00:00Z"), false);
+      const customer = await mk("Customer", new Date("2020-03-01T12:00:00Z"), true);
+
+      // ONE conversation per page, so the customer is only reachable on the
+      // third. Mutation: read one page and return (the shape this plan
+      // started with) → this reds, and an account whose oldest conversations
+      // are all leads gets an empty due-list on every tick, for ever, with no
+      // error and no counter.
+      expect((await listDueReactivations(db, now.toISOString(), { pageSize: 1, maxPages: 3 }))
+        .map((r) => r.contactId)).toContain(customer);
+      // And the page size is real, not decorative: one page reaches only the
+      // oldest lead. Without this half the assertion above would pass against
+      // an implementation that ignored `pageSize` entirely.
+      expect((await listDueReactivations(db, now.toISOString(), { pageSize: 1, maxPages: 1 }))
+        .map((r) => r.contactId)).not.toContain(customer);
+    });
+  });
+
+  it("an account whose stored config does not parse is skipped, never defaulted to nine months", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      await upsertAutomation(db, accountId, "reactivation",
+        { enabled: true, body: "", config: { months: 9 } }, "user_test");
+      const now = new Date("2027-09-21T12:00:00Z");
+      const longAgo = new Date("2026-10-01T12:00:00Z");
+      const { id: contactId } = await createContact(db, accountId,
+        { firstName: "Bad", email: "bad@example.com" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      const { id: msg } = await createMessage(db, accountId,
+        { conversationId: convo.id, channel: "sms", direction: "inbound", body: "hi" }, "user_test");
+      await db.from("messages").update({ created_at: longAgo.toISOString() }).eq("id", msg);
+      await db.from("conversations").update({ last_message_at: longAgo.toISOString() }).eq("id", convo.id);
+      const b = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date(longAgo.getTime() - HOUR), endsAt: longAgo }, "user_test");
+      await setBookingStatus(db, accountId, b.id, "completed", "user_test");
+      expect((await listDueReactivations(db, now.toISOString())).map((r) => r.contactId)).toContain(contactId);
+      expect((await getDueReactivationById(db, contactId)).due?.contactId).toBe(contactId);
+
+      // Straight to the column: `upsertAutomation` validates on write, and
+      // the case being proved is a row that went bad UNDER the app.
+      await db.from("automations").update({ config: { months: 99 } })
+        .eq("account_id", accountId).eq("recipe_key", "reactivation");
+      // Mutation: restore `?? { months: REACTIVATION_DEFAULT_MONTHS }` in
+      // either place → both of these red, and the one recipe with spam teeth
+      // sends on a number the operator never chose.
+      expect((await listDueReactivations(db, now.toISOString())).map((r) => r.contactId)).not.toContain(contactId);
+      expect(await getDueReactivationById(db, contactId)).toEqual({ due: null, why: "off" });
+    });
+  });
+
+  it("a suppressed account's customer is never due, by list or by id; and the cap counts stamps", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      await upsertAutomation(db, accountId, "reactivation",
+        { enabled: true, body: "", config: { months: 9 } }, "user_test");
+      const now = new Date("2027-09-21T12:00:00Z");
+      const longAgo = new Date("2026-10-01T12:00:00Z");
+      const { id: contactId } = await createContact(db, accountId,
+        { firstName: "Hushed", email: "hushed@example.com" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      const { id: msg } = await createMessage(db, accountId,
+        { conversationId: convo.id, channel: "sms", direction: "inbound", body: "hi" }, "user_test");
+      await db.from("messages").update({ created_at: longAgo.toISOString() }).eq("id", msg);
+      await db.from("conversations").update({ last_message_at: longAgo.toISOString() }).eq("id", convo.id);
+      const b = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date(longAgo.getTime() - HOUR), endsAt: longAgo }, "user_test");
+      await setBookingStatus(db, accountId, b.id, "completed", "user_test");
+
+      expect((await listDueReactivations(db, now.toISOString())).map((r) => r.contactId)).toContain(contactId);
+      expect((await getDueReactivationById(db, contactId)).due?.contactId).toBe(contactId);
+
+      await db.from("accounts").update({ outbound_suppressed: true }).eq("id", accountId);
+      expect((await listDueReactivations(db, now.toISOString())).map((r) => r.contactId)).not.toContain(contactId);
+      // The WHOLE answer, not `.due` alone: suppression must read `off` (the
+      // releaser's "This automation was turned off") and not `gone` ("No
+      // longer due"), and `.due` cannot tell those two apart.
+      expect(await getDueReactivationById(db, contactId)).toEqual({ due: null, why: "off" });
+      await db.from("accounts").update({ outbound_suppressed: false }).eq("id", accountId);
+
+      const before = new Date();
+      await stampReactivationSent(db, contactId);
+      await stampReactivationSent(db, contactId);   // idempotent
+      expect(await countReactivationsSince(db, accountId, new Date(before.getTime() - 1000).toISOString())).toBe(1);
+      expect(await countReactivationsSince(db, accountId, new Date(Date.now() + 60_000).toISOString())).toBe(0);
+      expect(await getDueReactivationById(db, contactId)).toEqual({ due: null, why: "gone" });
     });
   });
 });

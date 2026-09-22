@@ -4,7 +4,9 @@ import { createContact } from "../contacts";
 import { getOrCreateCalendar, createBooking, setBookingStatus, getDueReminderById, getDueFollowupById, stampReminderSent } from "../booking";
 import { upsertAutomation, getDueSmsReminderById, getDueReviewRequestById, getDueNoShowNudgeById,
   getDueAppointmentConfirmById, stampAppointmentConfirmAsked,
-  getDueReferralAskById, stampReferralAsked } from "../automations";
+  getDueReferralAskById, stampReferralAsked,
+  getDueReactivationById, stampReactivationSent } from "../automations";
+import { ensureConversation, createMessage } from "../messaging";
 
 /**
  * Each lookup answers "is this still a thing to send" WITHOUT a time window
@@ -156,6 +158,57 @@ describe("the recipe lookups: `off` until the recipe is on, `gone` in the wrong 
       // due and the customer gets a second referral text.
       await stampReferralAsked(db, bookingId);
       expect(await getDueReferralAskById(db, bookingId)).toEqual({ due: null, why: "gone" });
+    });
+  });
+
+  it("reactivation: off until the recipe is on, gone without a completed job or a conversation, gone once stamped", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { contactId, bookingId } = await seed(db, accountId);
+
+      // "off", not "gone" — the releaser writes a DIFFERENT sentence for each
+      // ("This automation was turned off" vs "No longer due"), so a lookup
+      // that collapsed them would put the wrong sentence on a client's
+      // screen. Mutation: return `why: "gone"` from the `!auto` branch of
+      // getDueReactivationById → this case reds by name.
+      expect(await getDueReactivationById(db, contactId)).toEqual({ due: null, why: "off" });
+
+      await upsertAutomation(db, accountId, "reactivation",
+        // TWELVE, not the default nine: `quietMonths` below then pins that
+        // the row carries THIS ACCOUNT'S configured period, and a hard-coded
+        // `REACTIVATION_DEFAULT_MONTHS` in the lookup reds it.
+        { enabled: true, body: "", config: { months: 12 } }, "user_test");
+
+      // THE ANTI-BLAST RULE ON THE RELEASE PATH. `seed`'s booking is still
+      // `booked`, so this contact is a lead and not a past customer.
+      // Mutation: drop the completed-booking read from
+      // getDueReactivationById → this reds, and a held row for someone this
+      // company never worked for is released and mailed.
+      expect(await getDueReactivationById(db, contactId)).toEqual({ due: null, why: "gone" });
+      await setBookingStatus(db, accountId, bookingId, "completed", "user_test");
+
+      // Still `gone`: no conversation exists yet, so there is no
+      // `last_message_at` to put in the row and nothing for the releaser's
+      // own quiet re-check to read.
+      expect(await getDueReactivationById(db, contactId)).toEqual({ due: null, why: "gone" });
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      await createMessage(db, accountId,
+        { conversationId: convo.id, channel: "sms", direction: "inbound", body: "hi" }, "user_test");
+
+      // No quiet check on the by-id path, on purpose: the releaser applies it
+      // separately through `conversationQuietSince`, so "they wrote in during
+      // the hold" earns its own sentence instead of a flat "No longer due".
+      const found = await getDueReactivationById(db, contactId);
+      expect(found.due?.contactId).toBe(contactId);
+      expect(found.due?.contactEmail).toBe("due@example.com");
+      expect(found.due?.quietMonths).toBe(12);
+
+      // THE ONLY DOUBLE-SEND GUARD ON THE RELEASE PATH. `releaseReactivation`
+      // (Task 8) calls this and then sends; nothing else re-checks the stamp.
+      // Mutation: drop `.is("reactivation_sent_at", null)` → this reds, and a
+      // held row whose contact was stamped during the hold is handed back as
+      // due and the customer gets a second email.
+      await stampReactivationSent(db, contactId);
+      expect(await getDueReactivationById(db, contactId)).toEqual({ due: null, why: "gone" });
     });
   });
 });

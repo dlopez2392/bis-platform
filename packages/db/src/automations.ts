@@ -14,7 +14,7 @@ import { loadSendableRows, type AccountBrandInfo, type DueLookup } from "./booki
  */
 export type RecipeKey =
   | "review_request" | "no_show_nudge" | "sms_reminder" | "instant_reply"
-  | "appointment_confirm" | "referral_ask";
+  | "appointment_confirm" | "referral_ask" | "reactivation";
 
 export type AutomationRow = {
   id: string; account_id: string; recipe_key: RecipeKey;
@@ -1016,6 +1016,426 @@ export async function countReferralAsksSince(
     .eq("account_id", accountId)
     .gte("referral_asked_at", sinceIso);
   if (error) throw new Error(`countReferralAsksSince failed: ${error.message}`);
+  return count ?? 0;
+}
+
+// ---------------------------------------------------------------------------
+// Recipe: reactivation — a past customer who has gone quiet (part B)
+// ---------------------------------------------------------------------------
+
+/**
+ * Six to eighteen months, defaulting to nine (danlo, 2026-09-21). Roofing and
+ * landscaping are seasonal: nine months reaches someone whose last job was
+ * last spring, while the relationship is still warm enough that the message
+ * reads as a business they know. Twelve is a full cycle, by which point it
+ * reads as a blast from a stranger — which is precisely the risk this recipe
+ * carries. The range is narrow for the same reason: three months is too soon
+ * to call someone lapsed, two years is a cold list.
+ */
+export const REACTIVATION_MIN_MONTHS = 6;
+export const REACTIVATION_MAX_MONTHS = 18;
+export const REACTIVATION_DEFAULT_MONTHS = 9;
+
+/**
+ * ONE PAGE of the candidate read. The per-account daily cap is five, so this
+ * is not a throughput limit — it is the bound that keeps the follow-up reads
+ * (bookings, messages) narrow `.in(...)` queries rather than table scans.
+ */
+export const REACTIVATION_CANDIDATE_LIMIT = 200;
+
+/**
+ * HOW MANY PAGES ONE TICK WILL WALK, and why there is a walk at all.
+ *
+ * A single page plus client-side eligibility STARVES. The candidate read can
+ * only express "this account, quiet since the cutoff, unstamped, has an
+ * email" — the completed-booking rule cannot be a predicate on the same
+ * query. So a page whose rows are all LEADS (a contact who wrote in, never
+ * booked, and never will) survives the query, fails the booking read, and —
+ * because the order is deterministic and oldest-first, and nothing ever
+ * stamps a row that did not send — occupies the head of the window on EVERY
+ * subsequent tick. An account with 200+ old lead conversations would get an
+ * empty due-list for ever, with no error and no counter: the same class of
+ * bug `release-held.ts` guards against.
+ *
+ * So the read walks pages until enough rows survive ALL the filters, or the
+ * budget is spent. The residual bound is honest and worth stating: an
+ * account with more than `LIMIT × PAGES` quiet, unstamped, emailable
+ * conversations that have NEVER had a completed booking still starves, and
+ * so does one whose pages are filled by a SUPPRESSED account's rows
+ * (suppression is applied by `loadSendableRows`, after the page is read). At
+ * 200 × 5 that is a thousand, which is far past any trades business this
+ * product serves; if a real account reaches it, the counter to raise is
+ * PAGES, and the fix after that is a `contacts.last_completed_booking_at`
+ * column the candidate query can filter on directly.
+ */
+export const REACTIVATION_CANDIDATE_PAGES = 5;
+
+/** Enough survivors to fill a tick, so the walk stops early in the normal
+ *  case: `AUTOMATION_TICK_CAP` is 10 and the per-account daily cap is 5, so
+ *  fifty covers ten accounts' worth of sends before the walk is pointless. */
+export const REACTIVATION_SURVIVOR_TARGET = 50;
+
+export type ReactivationConfig = { months: number };
+
+/** jsonb is untrusted on read AND write. A whole number inside the range or
+ *  null; no clamping, because silently turning a typo'd 99 into 18 would show
+ *  the operator one number and send on another. */
+export function parseReactivationConfig(raw: unknown): ReactivationConfig | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const { months } = raw as Record<string, unknown>;
+  if (typeof months !== "number" || !Number.isInteger(months)) return null;
+  if (months < REACTIVATION_MIN_MONTHS || months > REACTIVATION_MAX_MONTHS) return null;
+  return { months };
+}
+
+/**
+ * `now` minus whole CALENDAR months, clamped to the end of the target month.
+ * Calendar months, not 30-day blocks, because "nine months" is what the
+ * operator typed and what the card says. The clamp is what stops 31 August
+ * minus six months becoming 3 March: `setUTCMonth` rolls a day that does not
+ * exist in the target month forward, silently.
+ *
+ * UTC throughout: this produces a CUTOFF for a `timestamptz` comparison, not
+ * a wall clock a person reads, so there is no zone to be wrong about.
+ */
+export function reactivationCutoff(now: Date, months: number): Date {
+  const d = new Date(now.getTime());
+  const day = d.getUTCDate();
+  d.setUTCDate(1);
+  d.setUTCMonth(d.getUTCMonth() - months);
+  const lastDayOfTarget = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(day, lastDayOfTarget));
+  return d;
+}
+
+/** Email only in v1 (spec decision 4): there is no per-contact SMS consent in
+ *  this schema — `contacts.dnd` is dead and the opt-out mechanism is Telnyx's
+ *  carrier-side STOP list — and "we haven't seen you in a while" is marketing,
+ *  not customer care, against an A2P campaign that does not exist yet. The
+ *  row therefore carries no phone number at all. */
+export type DueReactivation = {
+  contactId: string; accountId: string;
+  /** What `conversations.last_message_at` CLAIMED at the moment this row was
+   *  built. Carried for the pass's console line on the heard-back skip: when
+   *  the exact re-check disagrees with this column, that line is the only
+   *  place the lag is visible. There is deliberately NO `conversationId` —
+   *  nothing downstream takes one (`conversationQuietSince` looks the
+   *  conversation up from the contact), and a field nobody reads is a field
+   *  that drifts. */
+  lastMessageAt: string;
+  /** This account's configured quiet period, carried so the release can
+   *  re-derive the same cutoff without re-reading the config. */
+  quietMonths: number;
+  contactEmail: string;
+  /** For the greeting. Never `accounts.name`. */
+  contactName: string;
+  brandName: string; branding: Branding; accountTimezone: string;
+  fromEmail: string | null; replyToEmail: string | null;
+  body: string;
+};
+
+/** One page's worth of candidate conversation, contact already joined. */
+type ReactivationCandidate = {
+  id: string; account_id: string; contact_id: string; last_message_at: string;
+  contacts: { id: string; first_name: string | null; last_name: string | null; email: string };
+};
+
+/**
+ * ONE read up front, then THREE PER PAGE, and every predicate that CAN be
+ * server-side is.
+ *
+ *   1. (once) which accounts have the recipe on, and with what config;
+ *   2. conversations quiet since the WIDEST cutoff, oldest first, one page at
+ *      a time, with `contacts!inner(...)` carrying the two contact
+ *      predicates — unstamped and has an email — INTO the same query
+ *      (`calendars!inner` + `.eq("calendars.followup_enabled", true)` in
+ *      `booking.ts`'s `listDueFollowups` is the precedent for the shape);
+ *   3. bookings: at least one COMPLETED — the rule that stops this being a
+ *      blast, and it is a query predicate, not a hope. It cannot join onto
+ *      read 2 (there is no path from `conversations` to `bookings`), so it is
+ *      the one eligibility test that stays client-side, and it is the reason
+ *      the candidate read WALKS PAGES instead of taking one;
+ *   4. messages: the lagging-touch PRE-FILTER. `createMessage` touches
+ *      `conversations.last_message_at` best-effort and non-fatally
+ *      (messaging.ts), so the column can LAG reality.
+ *
+ * WHY `months` STAYS CLIENT-SIDE (amendment B5's real argument): it is
+ * PER-ACCOUNT config, and one query cannot carry four different cutoffs. So
+ * the widest (latest, most permissive) cutoff goes to Postgres and each row
+ * is then narrowed to its OWN account's. Pushing the contact predicates into
+ * the query does not touch that split.
+ *
+ * WHY THE MESSAGE READ QUERIES THE EARLIEST CUTOFF, NOT THE WIDEST: the
+ * question is "does this conversation have a message newer than THIS
+ * account's cutoff", and an account with a LONGER quiet period has an
+ * EARLIER cutoff, so `> widest` would miss exactly the messages that matter
+ * to it. Concrete: account A is set to 18 months, account B to 6; `widest` is
+ * B's cutoff; a contact of A who last wrote ten months ago is newer than A's
+ * cutoff but older than B's, and a `> widest` read would not see the message
+ * at all — A's customer would then be told "it's been a while since we were
+ * out at your place" ten months after writing in. So the read is
+ * `> earliest` (a superset for every account) and each row is compared to
+ * its OWN account's cutoff.
+ *
+ * AND THE READ IS A PRE-FILTER, NOT THE GUARD. Its `.limit()` bounds MESSAGE
+ * ROWS, not conversations, so one chatty conversation can consume the whole
+ * page's budget and leave the others unchecked. That is survivable — and only
+ * survivable — because `processReactivations` calls `conversationQuietSince`
+ * EXACTLY, per row, immediately before sending. A miss here can only let a
+ * not-quiet row through to that check; it can never drop a quiet one.
+ */
+export async function listDueReactivations(
+  db: SupabaseClient, nowIso: string,
+  opts: { pageSize?: number; maxPages?: number } = {},
+): Promise<DueReactivation[]> {
+  const enabled = await listEnabled(db, "reactivation", "listDueReactivations");
+  if (enabled.size === 0) return [];
+
+  const now = new Date(nowIso);
+  // Per-account cutoffs. A config that does not parse SKIPS THE ACCOUNT —
+  // `null` means "treat as missing and send nothing", the contract every
+  // other recipe keeps (`parseReviewRequestConfig`'s doc above).
+  // Defaulting to nine months here would send on a number the operator never
+  // chose, for the one recipe with spam teeth.
+  const cutoffs = new Map<string, { cutoff: Date; months: number; body: string }>();
+  for (const [accountId, auto] of enabled) {
+    const config = parseReactivationConfig(auto.config);
+    if (config === null) {
+      console.error(
+        `listDueReactivations: account ${accountId}'s reactivation config is missing or invalid `
+        + `— skipping the account rather than sending on a default nobody chose`,
+      );
+      continue;
+    }
+    cutoffs.set(accountId, {
+      cutoff: reactivationCutoff(now, config.months), months: config.months, body: auto.body,
+    });
+  }
+  if (cutoffs.size === 0) return [];
+
+  const accountIds = [...cutoffs.keys()];
+  const cutoffTimes = [...cutoffs.values()].map((c) => c.cutoff.getTime());
+  const widest = new Date(Math.max(...cutoffTimes));     // latest — the query's superset
+  const earliest = new Date(Math.min(...cutoffTimes));   // earliest — the message read's superset
+
+  const pageSize = opts.pageSize ?? REACTIVATION_CANDIDATE_LIMIT;
+  const maxPages = opts.maxPages ?? REACTIVATION_CANDIDATE_PAGES;
+  const out: DueReactivation[] = [];
+
+  for (let page = 0; page < maxPages && out.length < REACTIVATION_SURVIVOR_TARGET; page++) {
+    const from = page * pageSize;
+    // `conversations_account_recent (account_id, last_message_at desc nulls
+    // last)` (0005) serves the account + range + order; a DESC index scans
+    // backward for an ASC order at no cost. `id` is the tiebreaker, without
+    // which two conversations sharing a `last_message_at` could swap places
+    // between pages and one of them would never be read.
+    const { data: convos, error: cErr } = await db.from("conversations")
+      .select("id, account_id, contact_id, last_message_at, contacts!inner(id, first_name, last_name, email)")
+      .in("account_id", accountIds)
+      .lte("last_message_at", widest.toISOString())
+      .is("contacts.reactivation_sent_at", null)
+      .not("contacts.email", "is", null)
+      .order("last_message_at", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (cErr) throw new Error(`listDueReactivations conversations read failed: ${cErr.message}`);
+
+    const rows = (convos ?? []) as unknown as ReactivationCandidate[];
+    if (rows.length === 0) break;
+
+    // Narrow each candidate to ITS OWN account's cutoff. A null
+    // `last_message_at` never reaches here (`lte` excludes nulls), which is
+    // right: a conversation with no messages says nothing about how long it
+    // has been.
+    const candidates = rows.filter(
+      (c) => new Date(c.last_message_at).getTime() <= cutoffs.get(c.account_id)!.cutoff.getTime());
+
+    if (candidates.length > 0) {
+      // THE ANTI-BLAST RULE. Not "a contact", not "a lead" — someone whose
+      // job this company actually completed. Served by 0047's
+      // `bookings_completed_by_contact` on `(contact_id) where status =
+      // 'completed'`; before it there was no index on `bookings.contact_id`
+      // at all and this was a sequential scan every tick.
+      const { data: done, error: bErr } = await db.from("bookings")
+        .select("contact_id")
+        .in("contact_id", candidates.map((c) => c.contact_id))
+        .eq("status", "completed");
+      if (bErr) throw new Error(`listDueReactivations bookings read failed: ${bErr.message}`);
+      const customers = new Set(((done ?? []) as { contact_id: string }[]).map((b) => b.contact_id));
+
+      // `account_id` is in the filter so `messages_thread (account_id,
+      // conversation_id, created_at)` (0005) can be used — without a
+      // constraint on the leading column it cannot be.
+      const { data: recent, error: mErr } = await db.from("messages")
+        .select("conversation_id, created_at")
+        .in("account_id", accountIds)
+        .in("conversation_id", candidates.map((c) => c.id))
+        .gt("created_at", earliest.toISOString())
+        .limit(REACTIVATION_CANDIDATE_LIMIT);
+      if (mErr) throw new Error(`listDueReactivations messages read failed: ${mErr.message}`);
+      const newestByConversation = new Map<string, number>();
+      for (const r of (recent ?? []) as { conversation_id: string; created_at: string }[]) {
+        const t = new Date(r.created_at).getTime();
+        const seen = newestByConversation.get(r.conversation_id);
+        if (seen === undefined || t > seen) newestByConversation.set(r.conversation_id, t);
+      }
+
+      const surviving = candidates.filter((c) => {
+        if (!customers.has(c.contact_id)) return false;
+        const newest = newestByConversation.get(c.id);
+        // Compared to THIS account's cutoff, never to `earliest`.
+        return newest === undefined || newest <= cutoffs.get(c.account_id)!.cutoff.getTime();
+      });
+
+      if (surviving.length > 0) {
+        // NO CAST on `surviving`. The loader below is generic over
+        // `T extends { account_id: string }` (`booking.ts`), so casting the
+        // argument to `{ account_id: string }[]` pins `T` to exactly that
+        // and erases `contact_id`, `id` and `last_message_at` from
+        // `sendable`. (The loader is deliberately not NAMED in this comment:
+        // `outbound-suppressed.test.ts` walks this file per function and
+        // asks whether the body mentions it, so a comment carrying the name
+        // would satisfy that walk with the call itself deleted.)
+        const { sendable, accountInfo } = await loadSendableRows(
+          db, surviving, "listDueReactivations");
+
+        for (const c of sendable) {
+          const info = accountInfo.get(c.account_id)!;
+          const conf = cutoffs.get(c.account_id)!;
+          out.push({
+            contactId: c.contact_id, accountId: c.account_id,
+            lastMessageAt: c.last_message_at, quietMonths: conf.months,
+            contactEmail: c.contacts.email,
+            contactName: [c.contacts.first_name, c.contacts.last_name].filter(Boolean).join(" ").trim(),
+            brandName: brandDisplayName(info.branding), branding: info.branding,
+            accountTimezone: info.accountTimezone, fromEmail: info.fromEmail, replyToEmail: info.replyToEmail,
+            body: conf.body,
+          });
+        }
+      }
+    }
+
+    if (rows.length < pageSize) break;   // the end of the data, not the budget
+  }
+
+  return out;
+}
+
+/**
+ * The release's re-read. It does NOT apply the quiet test: the releaser
+ * applies it separately, through `conversationQuietSince`, so that "they
+ * wrote in during the hold" gets its own client-readable reason instead of a
+ * flat "No longer due".
+ */
+export async function getDueReactivationById(
+  db: SupabaseClient, contactId: string,
+): Promise<DueLookup<DueReactivation>> {
+  const { data: contact, error } = await db.from("contacts")
+    .select("id, account_id, first_name, last_name, email, reactivation_sent_at")
+    .eq("id", contactId).is("reactivation_sent_at", null).not("email", "is", null).maybeSingle();
+  if (error) throw new Error(`getDueReactivationById failed: ${error.message}`);
+  if (!contact) return { due: null, why: "gone" };
+  const accountId = (contact as { account_id: string }).account_id;
+
+  const auto = await enabledRecipeFor(db, accountId, "reactivation");
+  if (!auto) return { due: null, why: "off" };
+  // A config that does not parse is `off`, never a default: `null` means
+  // "treat as missing and send nothing", and a release that fell back to
+  // nine months would send on a number the operator never chose. Answering
+  // `off` also keeps the released row from parking — `releaseReactivation`
+  // writes `REASONS.recipeOff` and the hold leaves the queue.
+  const config = parseReactivationConfig(auto.config);
+  if (config === null) return { due: null, why: "off" };
+
+  const { data: done, error: bErr } = await db.from("bookings")
+    .select("id").eq("contact_id", contactId).eq("status", "completed").limit(1).maybeSingle();
+  if (bErr) throw new Error(`getDueReactivationById bookings read failed: ${bErr.message}`);
+  if (!done) return { due: null, why: "gone" };
+
+  const { data: convo, error: cErr } = await db.from("conversations")
+    .select("id, last_message_at").eq("account_id", accountId).eq("contact_id", contactId).maybeSingle();
+  if (cErr) throw new Error(`getDueReactivationById conversation read failed: ${cErr.message}`);
+  if (!convo || !(convo as { last_message_at: string | null }).last_message_at) return { due: null, why: "gone" };
+
+  const { sendable, accountInfo } = await loadSendableRows(
+    db, [{ account_id: accountId }], "getDueReactivationById");
+  if (sendable.length === 0) return { due: null, why: "off" };
+
+  const c = contact as { first_name: string | null; last_name: string | null; email: string };
+  const info = accountInfo.get(accountId)!;
+  return {
+    due: {
+      contactId, accountId,
+      lastMessageAt: (convo as { last_message_at: string }).last_message_at,
+      quietMonths: config.months,
+      contactEmail: c.email,
+      contactName: [c.first_name, c.last_name].filter(Boolean).join(" ").trim(),
+      brandName: brandDisplayName(info.branding), branding: info.branding,
+      accountTimezone: info.accountTimezone, fromEmail: info.fromEmail, replyToEmail: info.replyToEmail,
+      body: auto.body,
+    },
+  };
+}
+
+/**
+ * True when this contact's conversation carries NO message — in either
+ * direction — newer than `sinceIso`. THE EXACT CHECK, and it runs twice:
+ * once per row in `processReactivations` immediately before the send, and
+ * again in `releaseReactivation`. Somebody who wrote in (or was written to)
+ * must never then receive "it's been a while since we were out at your
+ * place".
+ *
+ * It is exact where the due-list's bulk message read is only a PRE-FILTER:
+ * that read is bounded by a row limit and answers for a page of
+ * conversations at once, so a chatty conversation can crowd the others out
+ * of its results. This one is scoped to a single conversation and takes no
+ * limit, and `messages_thread (account_id, conversation_id, created_at)`
+ * (0005) answers it from the index alone.
+ *
+ * Reads `messages`, not `conversations.last_message_at`, because that
+ * column's touch is best-effort and can lag (messaging.ts). Both directions
+ * count, because an operator who texted them last night has a live
+ * relationship this recipe must not talk over.
+ */
+export async function conversationQuietSince(
+  db: SupabaseClient, accountId: string, contactId: string, sinceIso: string,
+): Promise<boolean> {
+  const { data: convo, error } = await db.from("conversations")
+    .select("id").eq("account_id", accountId).eq("contact_id", contactId).maybeSingle();
+  if (error) throw new Error(`conversationQuietSince failed: ${error.message}`);
+  if (!convo) return true;   // no conversation at all is as quiet as it gets
+  const { count, error: mErr } = await db.from("messages")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId)
+    .eq("conversation_id", (convo as { id: string }).id)
+    .gt("created_at", sinceIso);
+  if (mErr) throw new Error(`conversationQuietSince messages read failed: ${mErr.message}`);
+  return (count ?? 0) === 0;
+}
+
+/** Send-then-stamp. ONE reactivation per contact, EVER — and this column is
+ *  the off switch that outlives the toggle: turning the recipe off mid-drain
+ *  strands nothing, because the stamp is permanent. */
+export async function stampReactivationSent(db: SupabaseClient, contactId: string): Promise<void> {
+  const { error } = await db.from("contacts")
+    .update({ reactivation_sent_at: new Date().toISOString() })
+    .eq("id", contactId);
+  if (error) throw new Error(`stampReactivationSent failed: ${error.message}`);
+}
+
+/** The input to REACTIVATION_DAILY_CAP — five per account per rolling day,
+ *  its own cap and not the platform's 25 (25 a day is 750 people a month who
+ *  did not just interact with the business, which is a blast). Served by
+ *  0047's `contacts_reactivation_count` on
+ *  `(account_id, reactivation_sent_at) where reactivation_sent_at is not null`. */
+export async function countReactivationsSince(
+  db: SupabaseClient, accountId: string, sinceIso: string,
+): Promise<number> {
+  const { count, error } = await db.from("contacts")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId)
+    .gte("reactivation_sent_at", sinceIso);
+  if (error) throw new Error(`countReactivationsSince failed: ${error.message}`);
   return count ?? 0;
 }
 
