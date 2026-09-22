@@ -221,8 +221,8 @@ describe("0047 - the catalogue, read directly", () => {
     });
   });
 
-  it("ships EIGHT indexes, under those exact names, every one of them PARTIAL", async () => {
-    // AN INDEX NAME IS PERMANENT. Tasks 5, 7 and 9 cite six of these eight by
+  it("ships NINE indexes, under those exact names, every one of them PARTIAL", async () => {
+    // AN INDEX NAME IS PERMANENT. Tasks 5, 7 and 9 cite six of these nine by
     // name in their due-lists' own comments, so a typo here is a comment that
     // points at nothing for as long as the schema lives. The predicates are
     // pinned too: a partial index is chosen only when its predicate is
@@ -253,6 +253,15 @@ describe("0047 - the catalogue, read directly", () => {
       bookings_completed_by_contact: [
         "ON public.bookings USING btree (contact_id)",
         "WHERE (status = 'completed'::text)"],
+      // The ninth, added by the pre-apply review: applyConfirmationReply's
+      // lookup runs on every inbound text from a known contact, and NEITHER
+      // of the two candidates above can serve it — bookings_confirm_due's
+      // `confirm_asked_at IS NULL` is this query's exact contradiction, and
+      // bookings_completed_by_contact's `status = 'completed'` is not implied
+      // by a query carrying no status filter.
+      bookings_confirm_reply_pending: [
+        "ON public.bookings USING btree (account_id, contact_id, starts_at)",
+        "confirm_asked_at IS NOT NULL", "confirm_reply IS NULL"],
     };
 
     await withRollback(async (c) => {
@@ -307,6 +316,18 @@ describe("0047 - the catalogue, read directly", () => {
       const FOUR = ["INSERT", "REFERENCES", "SELECT", "UPDATE"];
       expect(await privs("contacts", "first_name"), "contacts.first_name (the control)").toEqual(FOUR);
       expect(await privs("opportunities", "name"), "opportunities.name (the control)").toEqual(FOUR);
+
+      // THE POSITIVE CONTROL FOR THE EMPTY SET ABOVE (pre-apply review).
+      // `expect(bookingUpdates).toEqual([])` carries two literals nothing else
+      // in this case exercises — `table_name = 'bookings'` and
+      // `privilege_type = 'UPDATE'`. Misspell either and the query returns []
+      // for the wrong reason and the assertion is green FOR EVER. The two
+      // controls above do not close it: they use a different filter shape and
+      // a different table. This does — bookings.id really does carry three
+      // privileges, so the table name resolves, and UPDATE really is the one
+      // that is absent rather than the query matching nothing at all.
+      expect(await privs("bookings", "id"), "bookings.id (the control for the empty set)")
+        .toEqual(["INSERT", "REFERENCES", "SELECT"]);
     });
   });
 
@@ -324,7 +345,8 @@ describe("0047 - the catalogue, read directly", () => {
   //   `information_schema.column_privileges` returns no rows for a column that
   //   does not exist yet, so [] !== FOUR until 0047 lands.
   //
-  // Pre-apply this file is therefore 8 red / 4 green, and the plan's Step 2
+  // Pre-apply this file is therefore 8 red / 5 green over 13 cases (the split
+  // ADDED a red; it did not turn a green into one), and the plan’s Step 2
   // postscript says so.
   it("the three new client-writable columns inherit their table's four privileges", async () => {
     await withRollback(async (c) => {

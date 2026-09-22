@@ -83,7 +83,8 @@ alter table public.opportunities add column quote_followup_sms_failed_at timesta
 -- 5. contacts: the reactivation stamp.
 alter table public.contacts add column reactivation_sent_at timestamptz;
 
--- 6. Indexes - EIGHT, and the count is a decision (plan amendment B10).
+-- 6. Indexes - NINE, and the count is a decision (plan amendment B10, plus the
+--    ninth added by the pre-apply review; see the note above it).
 --    NAMING: a bare table prefix, no `idx_`. Zero of the 113 indexes in
 --    `public` carry that prefix today, and `opportunities` is abbreviated
 --    `opps_` by its own two existing indexes (opps_account_pipeline,
@@ -145,3 +146,21 @@ create index bookings_referral_due_completed
 create index bookings_completed_by_contact
   on public.bookings (contact_id)
   where status = 'completed';
+--        And one more the pre-apply review caught, on the hot path of every
+--        inbound text: applyConfirmationReply (part B Task 4) looks up the
+--        booking a YES or NO answers with
+--          account_id = ? and contact_id = ?
+--          and confirm_asked_at is not null and confirm_reply is null
+--          and starts_at > now()  order by starts_at  limit 1
+--        NEITHER of the two candidates above can serve it, and for the same
+--        implication rule: bookings_confirm_due's predicate is
+--        `confirm_asked_at IS NULL`, the exact CONTRADICTION of this query's
+--        `IS NOT NULL`, so it is never chosen; and bookings_completed_by_contact
+--        carries `status = 'completed'`, which a query with no status filter
+--        does not imply. Without this index the read is a sequential scan plus
+--        a sort on EVERY inbound SMS from a known contact - and the `limit 1`
+--        does not bound it, because `order by starts_at` must find every
+--        matching row before it can return the first.
+create index bookings_confirm_reply_pending
+  on public.bookings (account_id, contact_id, starts_at)
+  where confirm_asked_at is not null and confirm_reply is null;
