@@ -6,6 +6,7 @@ import { releaseFollowup } from "./followups";
 import { releaseReviewRequest } from "./review-request";
 import { releaseNoShowNudge } from "./no-show-nudge";
 import { releaseSmsReminder } from "./sms-reminder";
+import { releaseAppointmentConfirm } from "./appointment-confirm";
 import { releaseInstantReply } from "../instant-reply";
 
 /**
@@ -71,6 +72,7 @@ export const RELEASERS: Record<AutomationLogSource, Releaser | null> = {
   no_show_nudge: releaseNoShowNudge,
   sms_reminder: releaseSmsReminder,
   instant_reply: releaseInstantReply,
+  appointment_confirm: releaseAppointmentConfirm,
   weekly_report: null,
   concierge: null,
   voice: null,

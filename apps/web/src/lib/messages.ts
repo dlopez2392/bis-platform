@@ -1215,6 +1215,31 @@ export const m = {
   "automations.instantReply.saved": "Instant reply saved",
   "automations.instantReply.saveFailed": "Could not save the instant reply.",
   "automations.instantReply.bodiesRequired": "Write both the English and the Spanish message before turning this on.",
+  // Part B — the appointment confirmation, two days out. The LEAD is fixed
+  // copy the operator cannot rearrange: "either way we'll see it" is the
+  // whole reason a YES gets no text back (spec decision 6), so it cannot sit
+  // in an editable field anyone can delete. `{name}` is the customer-facing
+  // brand name, `{when}` is formatWhen's output in the BOOKER's zone; the
+  // NoName variant drops the opening clause rather than invent a noun.
+  // GSM-7 THROUGHOUT, and the sentence break is a PERIOD, not an em dash:
+  // one em dash drops the whole text to UCS-2 at 70 characters a segment
+  // (segments.ts), which measured 3 segments against the period's 2 on every
+  // confirmation this recipe ever sends. appointment-confirm-copy.test.ts
+  // pins the encoding.
+  "automations.appointmentConfirm.lead": "Hi, it's {name}. You're booked for {when}. Reply YES to confirm or NO if you need a different time. Either way we'll see it.",
+  "automations.appointmentConfirm.leadNoName": "You're booked for {when}. Reply YES to confirm or NO if you need a different time. Either way we'll see it.",
+  "automations.appointmentConfirm.title": "Appointment confirmations",
+  "automations.appointmentConfirm.body": "Two days before an appointment, text the customer to confirm. They reply YES or NO and you see the answer on the booking. Nothing is cancelled automatically. Text only. Off until you turn it on.",
+  "automations.appointmentConfirm.enabled": "Ask customers to confirm",
+  "automations.appointmentConfirm.message": "Closing line",
+  "automations.appointmentConfirm.messageHint": "Optional. Comes after the confirmation question. Leave blank to send just the question.",
+  "automations.appointmentConfirm.preview": "Preview",
+  "automations.appointmentConfirm.save": "Save appointment confirmations",
+  "automations.appointmentConfirm.saved": "Appointment confirmations saved",
+  "automations.appointmentConfirm.saveFailed": "Could not save appointment confirmations.",
+  // The answer, on the calendar's bookings list (Task 4's badge reads these).
+  "calendar.bookings.confirmed": "Confirmed by text",
+  "calendar.bookings.confirmDeclined": "Asked for a different time",
 
   // Part C — the Quiet hours card (agency, on the Automations page).
   "automations.quiet.title": "Quiet hours",

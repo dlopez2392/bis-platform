@@ -14,11 +14,12 @@ import { m } from "@/lib/messages";
 import { AutomationsSettings } from "./automations-settings";
 import { NoShowNudgeCard } from "./no-show-nudge-card";
 import { SmsReminderCard } from "./sms-reminder-card";
+import { AppointmentConfirmCard } from "./appointment-confirm-card";
 import { InstantReplyCard } from "./instant-reply-card";
 import { QuietHoursCard } from "./quiet-hours-card";
 import {
-  saveReviewRequestAction, saveNoShowNudgeAction, saveSmsReminderAction, saveInstantReplyAction,
-  saveQuietHoursAction,
+  saveReviewRequestAction, saveNoShowNudgeAction, saveSmsReminderAction, saveAppointmentConfirmAction,
+  saveInstantReplyAction, saveQuietHoursAction,
 } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -45,7 +46,7 @@ export default async function AutomationsPage({
   // these can no longer 500 the whole agency page; only the one card that
   // lost its read shows the degraded state, and the log line carries the
   // account id so the hiccup is still visible.
-  const [review, noShow, smsReminder, instantReply, account, smsGate, calendar, origin, quiet] = await Promise.all([
+  const [review, noShow, smsReminder, appointmentConfirm, instantReply, account, smsGate, calendar, origin, quiet] = await Promise.all([
     getAutomation(db, accountId, "review_request").catch((e): AutomationRow | null => {
       console.error(`automations: review_request read failed for ${accountId}: ${String(e)}`);
       return null;
@@ -56,6 +57,10 @@ export default async function AutomationsPage({
     }),
     getAutomation(db, accountId, "sms_reminder").catch((e): AutomationRow | null => {
       console.error(`automations: sms_reminder read failed for ${accountId}: ${String(e)}`);
+      return null;
+    }),
+    getAutomation(db, accountId, "appointment_confirm").catch((e): AutomationRow | null => {
+      console.error(`automations: appointment_confirm read failed for ${accountId}: ${String(e)}`);
       return null;
     }),
     getAutomation(db, accountId, "instant_reply").catch((e): AutomationRow | null => {
@@ -148,6 +153,13 @@ export default async function AutomationsPage({
           accountTimezone={account.timezone}
           smsGate={smsGate}
           saveAction={saveSmsReminderAction.bind(null, accountId)}
+        />
+        <AppointmentConfirmCard
+          automation={appointmentConfirm}
+          brandName={account.brandName}
+          accountTimezone={account.timezone}
+          smsGate={smsGate}
+          saveAction={saveAppointmentConfirmAction.bind(null, accountId)}
         />
         <InstantReplyCard
           automation={instantReply}

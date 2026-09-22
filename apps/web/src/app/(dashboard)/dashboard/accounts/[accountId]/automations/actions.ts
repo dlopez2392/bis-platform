@@ -112,6 +112,29 @@ export async function saveSmsReminderAction(
   return { ok: true };
 }
 
+export async function saveAppointmentConfirmAction(
+  accountId: string, formData: FormData,
+): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["automations.agencyOnly"] };
+
+  const enabled = formData.get("enabled") === "on";
+  const body = String(formData.get("body") ?? "").trim();
+  if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
+
+  try {
+    // Nothing to configure: the channel IS the recipe (a "Reply YES" email
+    // points at a no-reply address), and the time is the booking's.
+    await upsertAutomation(serviceDb(), accountId, "appointment_confirm", { enabled, body, config: {} }, userId);
+  } catch (e) {
+    console.error(`saveAppointmentConfirmAction: save failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.appointmentConfirm.saveFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/automations`);
+  return { ok: true };
+}
+
 export async function saveInstantReplyAction(
   accountId: string, formData: FormData,
 ): Promise<ActionResult> {

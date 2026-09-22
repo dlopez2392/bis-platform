@@ -10,6 +10,15 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 export const AUTOMATION_LOG_SOURCES = [
   "reminders", "followups", "review_request", "no_show_nudge", "sms_reminder",
   "instant_reply", "weekly_report", "concierge", "voice",
+  // Part B, ONE per recipe task (plan amendment B1) — never all four at once.
+  // The moment a source is added, RELEASERS (passes/release-held.ts) and
+  // SOURCE_TITLES (log-titles.ts) stop compiling, and that red IS the
+  // registry's bookkeeping: it arrives in the same commit as the releaser and
+  // the title that answer it. Four at once would be four errors an
+  // implementer can silence with three `null`s. The SQL CHECK (0047) already
+  // carries all thirteen; a TS constant NARROWER than the database's CHECK is
+  // safe in the only direction that matters.
+  "appointment_confirm",
 ] as const;
 export type AutomationLogSource = (typeof AUTOMATION_LOG_SOURCES)[number];
 export type AutomationLogChannel = "sms" | "email" | "ai";

@@ -14,7 +14,7 @@ vi.mock("./sms-reminder", () => ({ releaseSmsReminder: (...a: unknown[]) => rele
 vi.mock("../instant-reply", () => ({ releaseInstantReply: (...a: unknown[]) => releasers.instant(...a) }));
 
 import type { PassContext } from "../context";
-import { releaseHeldPass, RELEASE_BATCH, RELEASE_BUDGET_MS } from "./release-held";
+import { releaseHeldPass, RELEASERS, RELEASE_BATCH, RELEASE_BUDGET_MS } from "./release-held";
 
 const NOW = new Date("2026-09-22T13:00:00Z");
 const row = (source: AutomationLogRow["source"], key: string): AutomationLogRow => ({
@@ -52,6 +52,16 @@ describe("releaseHeldPass", () => {
     expect(releasers.noShow).toHaveBeenCalledWith(ctx, expect.objectContaining({ subject_key: "booking:4" }));
     expect(releasers.sms).toHaveBeenCalledWith(ctx, expect.objectContaining({ subject_key: "booking:5" }));
     expect(releasers.instant).toHaveBeenCalledWith(ctx, expect.objectContaining({ subject_key: "submission:6" }));
+  });
+
+  it("only the three non-releasable sources map to null — every recipe source has a real releaser", () => {
+    // Written as the list of NULLS, not the list of functions, so it never
+    // needs to grow again: each of part B's four recipes is caught by this
+    // case the moment its source is registered, whether or not anyone
+    // remembers to come back here. A releaser left `null` type-checks and
+    // then drops every held row of that source as "No longer due".
+    const nulls = Object.entries(RELEASERS).filter(([, r]) => r === null).map(([k]) => k).sort();
+    expect(nulls).toEqual(["concierge", "voice", "weekly_report"]);
   });
 
   it("RELEASE_BATCH is pinned at 200", () => {

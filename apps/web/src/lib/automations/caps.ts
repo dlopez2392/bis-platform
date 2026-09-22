@@ -2,7 +2,11 @@
  * FIXED platform constants (danlo, 2026-09-06), and they apply to RECIPE
  * passes only — the reminder and follow-up passes are uncapped (see their doc
  * comments: a reminder is one-to-one with a booking the customer made, and a
- * daily cap would drop reminders for a busy client).
+ * daily cap would drop reminders for a busy client), and since part B so is
+ * `appointment_confirm`, the THIRD uncapped pass and the first RECIPE to be
+ * one (spec decision 2): it is keyed on `starts_at` inside a 75-minute
+ * window, so no status change and no import can burst it, and a fully-booked
+ * Saturday would otherwise leave five customers unasked.
  *
  * The cap's job is a burst guard against a bug or a bulk status change, not
  * a plan feature: the morning band is twelve ticks wide, so an uncapped pass
@@ -37,6 +41,10 @@ export const DAILY_CAP_WINDOW_MS = 24 * 60 * 60 * 1000;
  * customer their reminder. That pass still writes its attempt marker but
  * never reads it back; the window itself bounds it to three attempts and
  * three failed rows, which is the pile-up this hold exists to prevent.
+ * THE CONFIRMATION ASK IS EXEMPT TOO (part B), for the identical reason at a
+ * different width: its window is 75 minutes — five ticks — so the same 24h
+ * hold would again mean one attempt ever. It writes `confirm_sms_failed_at`
+ * and never reads it back.
  */
 export const SMS_RETRY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 

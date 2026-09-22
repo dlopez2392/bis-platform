@@ -86,6 +86,12 @@ export const REASONS = {
    *  "skipped" and re-left `held` forever, parking it at the head of the
    *  queue and starving every newer hold behind it. */
   smsCooldown: "Waiting before trying this text again",
+  /** The confirmation ask, released after a long hold into the window in
+   *  which the email reminder is already eligible (24h15m out,
+   *  REMINDER_WINDOW_END_MS). Sending "can you confirm?" in the same quarter
+   *  hour as "here's your reminder" is ONE TEXT AND ONE EMAIL landing
+   *  together, asking the customer for the same thing twice. */
+  tooCloseToAppointment: "Too close to the appointment to ask",
   outsideRegion: "Number is outside the US, Canada or Mexico",
   consentWithheld: "They didn't agree to texts",
   robocall: "Screened as a robocall",

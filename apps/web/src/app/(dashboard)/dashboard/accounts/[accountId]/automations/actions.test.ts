@@ -17,8 +17,8 @@ vi.mock("@/lib/auth", () => ({
 import { m } from "@/lib/messages";
 import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 import {
-  saveReviewRequestAction, saveNoShowNudgeAction, saveSmsReminderAction, saveInstantReplyAction,
-  saveQuietHoursAction,
+  saveReviewRequestAction, saveNoShowNudgeAction, saveSmsReminderAction, saveAppointmentConfirmAction,
+  saveInstantReplyAction, saveQuietHoursAction,
 } from "./actions";
 
 const fd = (o: Record<string, string>) => {
@@ -146,6 +146,30 @@ describe("saveSmsReminderAction", () => {
   });
 });
 
+describe("saveAppointmentConfirmAction", () => {
+  it("refuses a non-agency caller before touching the database", async () => {
+    guardFixture.isAgency = false;
+    expect(await saveAppointmentConfirmAction("acct_1", fd({ enabled: "on" })))
+      .toEqual({ ok: false, error: m["automations.agencyOnly"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+  });
+
+  it("saves enabled + trimmed closing line with an empty config — the channel IS the recipe", async () => {
+    expect(await saveAppointmentConfirmAction("acct_1", fd({ enabled: "on", body: " Parking is out front. " }))).toEqual({ ok: true });
+    expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "appointment_confirm",
+      { enabled: true, body: "Parking is out front.", config: {} }, "user_1");
+  });
+
+  it("saves an OFF row with an empty body, and reports a database failure as a toastable failure", async () => {
+    expect(await saveAppointmentConfirmAction("acct_1", fd({}))).toEqual({ ok: true });
+    expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "appointment_confirm",
+      { enabled: false, body: "", config: {} }, "user_1");
+    dbMocks.upsertAutomation.mockRejectedValue(new Error("db down"));
+    expect(await saveAppointmentConfirmAction("acct_1", fd({ enabled: "on" })))
+      .toEqual({ ok: false, error: m["automations.appointmentConfirm.saveFailed"] });
+  });
+});
+
 describe("the body cap — every recipe refuses a message longer than AUTOMATION_BODY_MAX_LENGTH", () => {
   const tooLong = "x".repeat(AUTOMATION_BODY_MAX_LENGTH + 1);
   const atCap = "x".repeat(AUTOMATION_BODY_MAX_LENGTH);
@@ -167,6 +191,13 @@ describe("the body cap — every recipe refuses a message longer than AUTOMATION
     expect(await saveSmsReminderAction("acct_1", fd({ body: tooLong })))
       .toEqual({ ok: false, error: m["automations.bodyTooLong"] });
     expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+  });
+
+  it("appointment confirmation", async () => {
+    expect(await saveAppointmentConfirmAction("acct_1", fd({ body: tooLong })))
+      .toEqual({ ok: false, error: m["automations.bodyTooLong"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+    expect(await saveAppointmentConfirmAction("acct_1", fd({ body: atCap }))).toEqual({ ok: true });
   });
 });
 

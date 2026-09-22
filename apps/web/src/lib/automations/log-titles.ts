@@ -14,6 +14,7 @@ export const SOURCE_TITLES: Record<AutomationLogSource, string> = {
   weekly_report: m["activity.source.weekly_report"],
   concierge: m["activity.source.concierge"],
   voice: m["activity.source.voice"],
+  appointment_confirm: m["automations.appointmentConfirm.title"],
 };
 
 export const CHANNEL_WORDS: Record<AutomationLogChannel, string> = {

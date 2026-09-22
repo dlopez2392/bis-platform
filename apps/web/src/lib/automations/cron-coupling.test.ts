@@ -4,6 +4,8 @@ import {
   REMINDER_WINDOW_START_MS, REMINDER_WINDOW_END_MS, FOLLOWUP_QUERY_WINDOW_MS,
   REVIEW_REQUEST_MAX_AGE_MS, NO_SHOW_NUDGE_MAX_AGE_MS,
   SMS_REMINDER_WINDOW_START_MS, SMS_REMINDER_WINDOW_END_MS,
+  APPOINTMENT_CONFIRM_WINDOW_START_MS, APPOINTMENT_CONFIRM_WINDOW_END_MS,
+  APPOINTMENT_CONFIRM_MIN_LEAD_MS,
 } from "@bis/db";
 import { FOLLOWUP_MAX_AGE_MS } from "@/lib/booking/followup-timing";
 import { SMS_RETRY_COOLDOWN_MS } from "./caps";
@@ -58,6 +60,30 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
     expect(SMS_REMINDER_WINDOW_END_MS - SMS_REMINDER_WINDOW_START_MS).toBeGreaterThan(tick);
     expect(SMS_REMINDER_WINDOW_END_MS).toBe(135 * MINUTE);
     expect(SMS_REMINDER_WINDOW_START_MS).toBe(90 * MINUTE);
+  });
+
+  it("the appointment-confirm window is wider than one tick, and asks two days out", () => {
+    const tick = tickIntervalMs(entry!.schedule);
+    expect(APPOINTMENT_CONFIRM_WINDOW_END_MS - APPOINTMENT_CONFIRM_WINDOW_START_MS).toBeGreaterThan(tick);
+    expect(APPOINTMENT_CONFIRM_WINDOW_START_MS).toBe(47 * 60 * MINUTE);
+    expect(APPOINTMENT_CONFIRM_WINDOW_END_MS).toBe(48 * 60 * MINUTE + 15 * MINUTE);
+    // Mutation: move the window start to 46h without touching vercel.json → red.
+  });
+
+  it("the confirmation ask stops at the instant the email reminder becomes eligible", () => {
+    // ONE TEXT AND ONE EMAIL in the same quarter hour — "can you confirm?" and
+    // "here's your reminder" — is the collision this bound exists to prevent.
+    // NOT two texts: the SMS reminder's window is 90–135 minutes and can never
+    // meet a lead measured in days.
+    //
+    // `>= REMINDER_WINDOW_END_MS`, never `>= REMINDER_WINDOW_START_MS`. The
+    // email reminder's due window is [now+23h, now+24h15m] and a booking first
+    // MATCHES it when its lead is 24h15m — the window's CLOSE is where the
+    // reminder OPENS. Comparing against the START would have passed with a
+    // flat 24h lead and left a fifteen-minute band where both are due; that is
+    // the bug this case was rewritten to catch.
+    expect(APPOINTMENT_CONFIRM_MIN_LEAD_MS).toBe(24 * 60 * MINUTE + 15 * MINUTE);
+    expect(APPOINTMENT_CONFIRM_MIN_LEAD_MS).toBeGreaterThanOrEqual(REMINDER_WINDOW_END_MS);
   });
 
   it("the no-show nudge cap is the follow-up cap: same derivation, nothing to defer to", () => {
