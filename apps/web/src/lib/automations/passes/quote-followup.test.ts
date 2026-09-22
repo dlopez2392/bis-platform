@@ -300,6 +300,34 @@ describe("releasing a held quote follow-up", () => {
     expect(skippedReasons()).toEqual(["The stage this automation watches is gone"]);
   });
 
+  it("THE DEAL WAS RE-PARKED during the hold: quietDays is re-applied on the release, and the row says so", async () => {
+    // AUDIT B's I3. The operator dragged the card to "Won", reconsidered, and
+    // dragged it back into the watched stage while the row was held - and
+    // both `moveOpportunityStage` and `moveOpportunityToStage` rewrite
+    // `stage_changed_at`. The stage still matches, the stamp is still null,
+    // nothing inbound is newer than the brand-new stage change, so every
+    // other release guard passes. `quietDays` lives ONLY in
+    // `shouldSendQuoteFollowupNow`, so `released` must skip the morning BAND
+    // and nothing else or the operator's own "three days with no reply" is
+    // ignored.
+    //
+    // Mutation: put the gate call back inside `if (!opts.released)` -> this
+    // reds with "sent".
+    dbMocks.getDueQuoteFollowupById.mockResolvedValue({
+      due: row({ stageChangedAt: "2027-10-19T14:00:00.000Z" }),   // one day ago, against quietDays 3
+    });
+    // Released at 12:00 CDT, the end of a 21:00 -> 12:00 window: outside the
+    // band, which is the whole point of `released`.
+    const noon = new Date("2027-10-20T17:00:00.000Z");
+    expect(await releaseQuoteFollowup(
+      ctx(noon, { enabled: true, start: "21:00", end: "12:00" }), heldRow())).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampQuoteFollowupSent).not.toHaveBeenCalled();
+    // A REAL row, never left untouched: an untouched released row keeps its
+    // past `held_until` and parks the head of the queue for ever.
+    expect(skippedReasons()).toEqual(["No longer due"]);
+  });
+
   it("THE QUIET RE-CHECK: a customer who replied during the hold is not chased at 8 AM", async () => {
     // Mutation: remove the `latestInboundByContact` call from the releaser ->
     // this reds, and a customer who answered the quote during the hold gets

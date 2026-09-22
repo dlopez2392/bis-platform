@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { REACTIVATION_MIN_MONTHS, REACTIVATION_MAX_MONTHS } from "@bis/db";
+import { REACTIVATION_MIN_MONTHS, REACTIVATION_MAX_MONTHS, REACTIVATION_DEFAULT_MONTHS } from "@bis/db";
 import { m } from "@/lib/messages";
 import { REACTIVATION_DAILY_CAP } from "./caps";
 import { defaultReactivationBody, reactivationSubject } from "./reactivation-copy";
@@ -75,6 +75,19 @@ describe("the reactivation check-in's copy", () => {
     }
     // Mutation: set REACTIVATION_MAX_MONTHS to 12 → both keys still read
     // "between 6 and 18" and this reds.
+
+    // AND THE DEFAULT, restated in the same sentence in WORDS ("Nine is a
+    // good default…") and pinned by nothing until now. Change the constant
+    // and the card's number box shows one number while its own hint directly
+    // below recommends another, with a green suite (audit C). The pin is a
+    // literal on the constant, standing beside the string it has to agree
+    // with — the shape `the copy names the daily limit the cap actually
+    // enforces` below already uses, and the only shape available while the
+    // catalogue is static and cannot interpolate.
+    // Mutation: set REACTIVATION_DEFAULT_MONTHS to 6 → this reds, and the key
+    // that has to change is named in the failure.
+    expect(REACTIVATION_DEFAULT_MONTHS).toBe(9);
+    expect(m["automations.reactivation.monthsHint"].toLowerCase()).toContain("nine is a good default");
   });
 
   it("the copy names the daily limit the cap actually enforces", () => {

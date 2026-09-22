@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Notice } from "@/components/ui/notice";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { SubmitButton } from "../../submit-button";
@@ -110,10 +111,20 @@ export function QuoteFollowupCard({
 
           <div className="space-y-1.5">
             <Label htmlFor="quote-followup-stage">{m["automations.quoteFollowup.stage"]}</Label>
+            {/* AN ERROR STATE, not a tip. The recipe is ON and pointed at a
+                stage that no longer exists, so it is sending nothing and the
+                operator has to act. It used to render in the same
+                `text-xs text-muted-foreground` as the three ordinary hints
+                below, with no `role="alert"` — indistinguishable from advice
+                (design review I2). `Notice` is the app's one status banner:
+                `role="alert"`, the `--warn-bg` ground, tokens only.
+                The testid stays on it; `automations-b.spec.ts:243` reads it.
+                `noStages` below deliberately stays muted — an account with no
+                pipeline at all is a true EMPTY state, not a broken one. */}
             {stageMissing ? (
-              <p className="text-xs text-muted-foreground" data-testid="quote-followup-stage-missing">
+              <Notice tone="warn" data-testid="quote-followup-stage-missing">
                 {m["automations.quoteFollowup.stageMissing"]}
-              </p>
+              </Notice>
             ) : null}
             {hasStages ? (
               <Select name="stage_id" defaultValue={storedStageExists ? stored.stageId : undefined}>
@@ -180,11 +191,21 @@ export function QuoteFollowupCard({
             />
             <p className="text-xs text-muted-foreground">{m["automations.quoteFollowup.messageHint"]}</p>
             {channel === "sms" ? (
-              <p className="text-xs text-muted-foreground" data-testid="quote-followup-sms-count">
-                {m["compose.smsSegments"]
-                  .replace("{chars}", String(preview.chars))
-                  .replace("{segments}", String(preview.segments))}
-              </p>
+              <>
+                <p className="text-xs text-muted-foreground" data-testid="quote-followup-sms-count">
+                  {m["compose.smsSegments"]
+                    .replace("{chars}", String(preview.chars))
+                    .replace("{segments}", String(preview.segments))}
+                </p>
+                {/* The count above is of the DISCLOSED body, and those 23
+                    characters appear nowhere else on this page — the message
+                    box shows the undisclosed default (design review I3). Its
+                    own paragraph rather than more text inside the counter's,
+                    so the counter's testid still reads as one clean string.
+                    Inside the `sms` branch on purpose: an emailed quote
+                    follow-up has no opt-out sentence and no count. */}
+                <p className="text-xs text-muted-foreground">{m["automations.optOutCounted"]}</p>
+              </>
             ) : null}
           </div>
 

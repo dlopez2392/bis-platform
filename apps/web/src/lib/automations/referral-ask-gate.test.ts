@@ -19,9 +19,12 @@ const REVIEWED = new Date("2027-09-23T14:05:00.000Z");
 
 const send = (over: Partial<{
   now: Date; anchor: Date; followup: Date | null; reviewed: Date | null; reviewOn: boolean; zone: string;
+  skipBand: boolean;
 }> = {}) => {
   const a = { now: NOW, anchor: ANCHOR, followup: FOLLOWUP, reviewed: REVIEWED, reviewOn: true, zone: ZONE, ...over };
-  return shouldSendReferralAskNow(a.now, a.anchor, a.followup, a.reviewed, a.reviewOn, a.zone);
+  return shouldSendReferralAskNow(
+    a.now, a.anchor, a.followup, a.reviewed, a.reviewOn, a.zone,
+    a.skipBand === undefined ? undefined : { skipBand: a.skipBand });
 };
 
 describe("the referral ask is the ladder's third rung", () => {
@@ -78,6 +81,37 @@ describe("the referral ask is the ladder's third rung", () => {
     // Mutation: change REFERRAL_ASK_MAX_AGE_MS to 86h → `past` (85h + 1ms)
     // is no longer stale and the second line reds; change it to 84h and the
     // first reds. Either way this test names the drift.
+  });
+
+  /**
+   * THE RELEASE PATH (audit B's I1). `skipBand` skips the morning BAND and
+   * NOTHING ELSE — the spec's release contract, restated at line 16 and in
+   * amendment B16. A held row passed the band once already; the staleness cap
+   * and the never-two-rungs-on-one-morning rules have to be re-applied, or a
+   * row held overnight goes out at noon on the same morning as the review
+   * request it is supposed to follow.
+   */
+  it("with the band skipped, the same-morning review rule and the 85h cap still refuse", () => {
+    const NOON = new Date("2027-09-24T17:00:00.000Z");    // 12:00 CDT — outside the band
+    // The control: the band is the ONLY thing standing between this row and a
+    // send, so skipping it sends. Without this line the three refusals below
+    // would all be satisfied by a gate that always returned false.
+    expect(send({ now: NOON })).toBe(false);
+    expect(send({ now: NOON, skipBand: true })).toBe(true);
+
+    // Rule 4 re-applied: the review request went out at 08:05 CDT THIS
+    // morning. Mutation: have `skipBand` return early / skip the whole
+    // composite (the shipped `if (!opts.released)` shape) → this reds.
+    expect(send({ now: NOON, reviewed: new Date("2027-09-24T13:05:00.000Z"), skipBand: true })).toBe(false);
+
+    // Rule 1 re-applied: one millisecond past 85 hours, measured from NOON.
+    const MAX = 85 * 60 * 60 * 1000;
+    const at = new Date(NOON.getTime() - MAX);
+    const past = new Date(NOON.getTime() - MAX - 1);
+    expect(send({ now: NOON, anchor: at, followup: null,
+                  reviewed: new Date(at.getTime() + 60_000), skipBand: true })).toBe(true);
+    expect(send({ now: NOON, anchor: past, followup: null,
+                  reviewed: new Date(past.getTime() + 60_000), skipBand: true })).toBe(false);
   });
 
   it("is outside the morning band at 07:59 and inside at 08:00", () => {

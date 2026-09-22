@@ -178,13 +178,19 @@ export function isStrictlyEarlierLocalDay(instant: Date, now: Date, zone: string
 /**
  * @param now         the instant the cron tick is running at
  * @param meetingEnd  the booking's `ends_at`
- * @param timezone    the account's `accounts.timezone` — FREE TEXT at
- *                    creation (a recorded, still-open follow-up). Never
- *                    handed to `Intl` raw: a RangeError here would take down
- *                    a whole cron tick, including the reminder pass that
- *                    already ran. But unlike every RENDER path, which
- *                    substitutes a fallback zone and carries on, an
- *                    unresolvable zone here means DO NOT SEND — see below.
+ * @param timezone    the account's `accounts.timezone` — VALIDATED at
+ *                    creation, not free text: `createAccount` is the only
+ *                    write path in the product and runs the value through
+ *                    `assertUsableZone` before the insert
+ *                    (`packages/db/src/accounts.ts:10-17`), and no update
+ *                    path writes the column at all. What is left is a direct
+ *                    database edit, a restore, or a future writer that
+ *                    forgets — so the value is still never handed to `Intl`
+ *                    raw: a RangeError here would take down a whole cron
+ *                    tick, including the reminder pass that already ran. And
+ *                    unlike every RENDER path, which substitutes a fallback
+ *                    zone and carries on, an unresolvable zone here means DO
+ *                    NOT SEND — see below.
  *
  * FAIL CLOSED ON AN UNRESOLVABLE ZONE, and this is a deliberate divergence
  * from the `safeZone(tz, "UTC")` habit the rest of the repo follows. A render

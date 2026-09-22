@@ -88,6 +88,30 @@ describe("the quote follow-up card", () => {
     });
     expect(missing).toContain(m["automations.quoteFollowup.stageMissing"]);
     expect(render()).not.toContain(m["automations.quoteFollowup.stageMissing"]);
+
+    // AND IT IS DRESSED AS AN ERROR, not as a tip (the design review's I2).
+    // The recipe is on, pointed at a stage that no longer exists, and sending
+    // nothing — so it is an error state, and DESIGN.md rule 5 and the DoD's
+    // "loaded, empty, and error states" both want the app's one status
+    // banner. It rendered in `text-xs text-muted-foreground`, the identical
+    // class string as the three ordinary hints in this same card, with no
+    // `role="alert"`, so nothing but the words told an operator or a screen
+    // reader apart. `Notice` carries `role="alert"` and the `--warn-bg`
+    // ground.
+    //
+    // The `noStages` line below stays muted on purpose: an account that has
+    // never built a pipeline is a true EMPTY state, not a broken one.
+    // Mutation: put the `<p className="text-xs text-muted-foreground">` back
+    // → both assertions here red, and the testid the e2e reads goes with it.
+    expect(missing).toContain('data-testid="quote-followup-stage-missing"');
+    expect(missing).toMatch(/role="alert"[^>]*data-testid="quote-followup-stage-missing"|data-testid="quote-followup-stage-missing"[^>]*role="alert"/);
+    // The empty state, with NO stored stage at all so the missing-stage branch
+    // is off and `noStages` is the only prose on screen: no banner, no alert.
+    const empty = render({
+      stages: [], automation: { ...ROW, config: { stageId: "", quietDays: 4, channel: "sms" } },
+    });
+    expect(empty).toContain('data-testid="quote-followup-no-stages"');
+    expect(empty).not.toContain('role="alert"');
   });
 
   it("with no pipeline stages at all it says so and the save button is disabled", () => {
@@ -130,10 +154,24 @@ describe("the quote follow-up card", () => {
     expect(html).not.toContain(line(undisclosed));
   });
 
-  it("shows no segment counter at all on the email channel", () => {
+  it("says out loud that the count includes the opt-out sentence, and only on the text channel", () => {
+    // DESIGN REVIEW I3. The counter counts `withOptOut(previewBody)` — right,
+    // because `sendAutomationSms` appends it unconditionally — but the 23
+    // septets it counts appear NOWHERE on the page: the Textarea's
+    // placeholder shows the undisclosed default. The operator read a number
+    // 23 higher than any string on screen and nothing explained it.
+    //
+    // SMS-ONLY, and that is the reason it does not live on the message hint
+    // beside it: the hint renders for both channels, and an emailed quote
+    // follow-up has no opt-out sentence appended and no segment count at all,
+    // so the same clause on the hint would be false half the time.
+    // Mutation: delete the note → this reds; move it out of the
+    // `channel === "sms"` branch → the email half reds.
+    expect(render()).toContain(m["automations.optOutCounted"]);
     const html = render({
       automation: { ...ROW, config: { stageId: STAGE_ID, quietDays: 4, channel: "email" } },
     });
     expect(html).not.toContain('data-testid="quote-followup-sms-count"');
+    expect(html).not.toContain(m["automations.optOutCounted"]);
   });
 });

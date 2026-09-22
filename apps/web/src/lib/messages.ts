@@ -1263,12 +1263,25 @@ export const m = {
   // accent is UCS-2 and three parts whatever this says, which is why
   // referral-ask-copy.test.ts measures "García Roofing" too and the card
   // renders the real count.
+  // Shared by the two part-B cards that count a TEXT (referral ask, quote
+  // follow-up). The count they show is of the DISCLOSED body — `withOptOut`,
+  // appended by `sendAutomationSms` on every send — and those 23 characters
+  // appear nowhere else on the page, because the message box's placeholder
+  // shows the undisclosed default. Rendered only beside the segment counter,
+  // never on the message hint: the hint shows for the email channel too, and
+  // an email has no opt-out sentence appended and no count at all.
+  //
+  // No quotation marks around the sentence: React escapes `"` to `&quot;` in
+  // the rendered markup, so a key carrying one cannot be asserted literally
+  // against the HTML, and the guard would end up written around the escaping
+  // instead of around the copy.
+  "automations.optOutCounted": "Every text ends with Reply STOP to opt out. That sentence is included in the count above.",
   "automations.referral.defaultBody": "Thanks again from {name}. Know anyone who needs the same done? Send their name and number and we'll look after them.",
   "automations.referral.defaultBodyNoName": "Thanks again. Know anyone who needs the same done? Send their name and number and we'll look after them.",
   "automations.referral.emailSubject": "One favor, from {name}",
   "automations.referral.emailSubjectNoName": "One favor",
   "automations.referral.title": "Referral asks",
-  "automations.referral.body": "The morning after the review request, ask the customer whether they know someone else who needs the same work. Never lands on the same morning as the review request. Off until you turn it on.",
+  "automations.referral.body": "Ask the customer whether they know someone else who needs the same work. It goes the morning after the last message this job sent, and never on the same morning as one. If review requests are on, that one goes first. Off until you turn it on.",
   "automations.referral.enabled": "Ask for referrals",
   "automations.referral.channel": "Send by",
   "automations.referral.message": "Message",

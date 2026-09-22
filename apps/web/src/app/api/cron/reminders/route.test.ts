@@ -245,6 +245,7 @@ const EMPTY_SMS_REMINDERS = {
 };
 const EMPTY_APPOINTMENT_CONFIRMS = {
   sent: 0, failed: 0, unstamped: 0, held: 0, skippedNoAddress: 0, skippedSmsGate: 0,
+  unresolvableTimezone: 0,
 };
 const EMPTY_REACTIVATIONS = {
   sent: 0, failed: 0, unstamped: 0, held: 0,

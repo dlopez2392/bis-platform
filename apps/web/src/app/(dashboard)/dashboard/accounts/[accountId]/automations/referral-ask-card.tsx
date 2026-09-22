@@ -107,11 +107,21 @@ export function ReferralAskCard({
             />
             <p className="text-xs text-muted-foreground">{m["automations.referral.messageHint"]}</p>
             {channel === "sms" ? (
-              <p className="text-xs text-muted-foreground" data-testid="referral-ask-sms-count">
-                {m["compose.smsSegments"]
-                  .replace("{chars}", String(preview.chars))
-                  .replace("{segments}", String(preview.segments))}
-              </p>
+              <>
+                <p className="text-xs text-muted-foreground" data-testid="referral-ask-sms-count">
+                  {m["compose.smsSegments"]
+                    .replace("{chars}", String(preview.chars))
+                    .replace("{segments}", String(preview.segments))}
+                </p>
+                {/* The count above is of the DISCLOSED body, and those 23
+                    characters appear nowhere else on this page — the message
+                    box shows the undisclosed default (design review I3). Its
+                    own paragraph rather than more text inside the counter's,
+                    so the counter's testid still reads as one clean string.
+                    Inside the `sms` branch on purpose: an emailed referral
+                    ask has no opt-out sentence and no count. */}
+                <p className="text-xs text-muted-foreground">{m["automations.optOutCounted"]}</p>
+              </>
             ) : null}
           </div>
 

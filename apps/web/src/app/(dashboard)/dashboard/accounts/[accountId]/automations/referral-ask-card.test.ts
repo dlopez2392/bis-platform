@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { AutomationRow } from "@bis/db";
+import { m } from "@/lib/messages";
 
 // Imported at module scope by the card; never called during a server render.
 vi.mock("sonner", () => ({ toast: {} }));
@@ -79,6 +80,25 @@ describe("the referral-ask card's segment counter", () => {
     expect(html).not.toContain("href=");
     expect(html).not.toContain("Added to the end");
     expect(html).toContain('data-testid="referral-ask-card"');
+  });
+
+  it("says out loud that the count includes the opt-out sentence, and only on the text channel", () => {
+    // DESIGN REVIEW I3. The counter counts `withOptOut(previewBody)` — right,
+    // because `sendAutomationSms` appends it unconditionally — but the 23
+    // septets it counts appear NOWHERE on the page: the Textarea's
+    // placeholder shows the undisclosed default. The operator read a number
+    // 23 higher than any string on screen and nothing explained it.
+    //
+    // SMS-ONLY, and that is the reason it does not live on the message hint
+    // beside it: the hint renders for both channels, and an emailed referral
+    // ask has no opt-out sentence appended and no segment count at all, so
+    // the same clause on the hint would be false half the time.
+    // Mutation: delete the note → this reds; move it out of the
+    // `channel === "sms"` branch → the email half reds.
+    expect(render()).toContain(m["automations.optOutCounted"]);
+    const email = render({ automation: { ...ROW, config: { channel: "email" } } });
+    expect(email).not.toContain('data-testid="referral-ask-sms-count"');
+    expect(email).not.toContain(m["automations.optOutCounted"]);
   });
 
   it("says why a text would be skipped when the company cannot text, and only for the text channel", () => {

@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { QUOTE_FOLLOWUP_MIN_QUIET_DAYS, QUOTE_FOLLOWUP_MAX_QUIET_DAYS } from "@bis/db";
+import {
+  QUOTE_FOLLOWUP_MIN_QUIET_DAYS, QUOTE_FOLLOWUP_MAX_QUIET_DAYS, QUOTE_FOLLOWUP_DEFAULT_QUIET_DAYS,
+} from "@bis/db";
 import { m } from "@/lib/messages";
 import { segmentsFor } from "@/lib/sms/segments";
 import { withOptOut } from "@/lib/sms/opt-out";
@@ -116,5 +118,15 @@ describe("the quote follow-up's copy", () => {
     // Mutation: set QUOTE_FOLLOWUP_MAX_QUIET_DAYS to 21 -> both keys still read
     // "between 1 and 30" and this reds. It is the only guard against that
     // drift: copy is a static catalogue and cannot interpolate a constant.
+
+    // AND THE DEFAULT, restated in the same sentence in WORDS ("Three is a
+    // good default") and pinned by nothing until now. Change the constant and
+    // the card's number box shows one number while its own hint directly
+    // below recommends another, with a green suite (audit C). Same shape as
+    // the range pin above, for the same reason.
+    // Mutation: set QUOTE_FOLLOWUP_DEFAULT_QUIET_DAYS to 5 -> this reds, and
+    // the key that has to change is named in the failure.
+    expect(QUOTE_FOLLOWUP_DEFAULT_QUIET_DAYS).toBe(3);
+    expect(m["automations.quoteFollowup.quietDaysHint"].toLowerCase()).toContain("three is a good default");
   });
 });

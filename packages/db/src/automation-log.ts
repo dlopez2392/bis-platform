@@ -92,13 +92,26 @@ export async function getAutomationLogEntry(
   return (data as AutomationLogRow | null) ?? null;
 }
 
-/** The release pass's queue: held rows whose time has come, oldest first. */
+/**
+ * The release pass's queue: held rows whose time has come, oldest first.
+ *
+ * `occurred_at` ASCENDING is the tiebreak, and it is not decoration. Two rows
+ * held inside the SAME quiet window for the same account carry the IDENTICAL
+ * `held_until` — both are `quietWindowEnd` for that one window — so ordering
+ * by `held_until` alone leaves them in whatever order the sort happens to
+ * emit. The completed-job ladder depends on the answer: the review request is
+ * held first and must release first, so that the referral ask's re-applied
+ * same-local-day rule can see the stamp the review just wrote and refuse.
+ * `occurred_at` is the order the two rows were held in, which is exactly the
+ * order they should come back in (audit B's I1).
+ */
 export async function listReleasableHolds(
   db: SupabaseClient, nowIso: string, limit = 200,
 ): Promise<AutomationLogRow[]> {
   const { data, error } = await db.from("automation_log").select(LOG_COLS)
     .eq("status", "held").lte("held_until", nowIso)
-    .order("held_until", { ascending: true }).limit(limit);
+    .order("held_until", { ascending: true })
+    .order("occurred_at", { ascending: true }).limit(limit);
   if (error) throw new Error(`listReleasableHolds failed: ${error.message}`);
   return (data ?? []) as AutomationLogRow[];
 }

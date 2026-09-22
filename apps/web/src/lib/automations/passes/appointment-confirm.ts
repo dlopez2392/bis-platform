@@ -6,6 +6,7 @@ import {
 import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
 import { toE164 } from "@/lib/voice/phone-number";
 import { safeZone, formatWhen } from "@/lib/booking/time";
+import { resolveAccountZone } from "@/lib/booking/followup-timing";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
 import { appointmentConfirmDeadline, tooCloseToAsk } from "../appointment-confirm-gate";
 import { composeAppointmentConfirm } from "../appointment-confirm-copy";
@@ -61,7 +62,7 @@ export const appointmentConfirmPass: Pass = {
 
 export type AppointmentConfirmCounters = {
   sent: number; failed: number; unstamped: number; held: number;
-  skippedNoAddress: number; skippedSmsGate: number;
+  skippedNoAddress: number; skippedSmsGate: number; unresolvableTimezone: number;
 };
 
 /** No `ProcessOptions`: this recipe has no morning band, so a release has
@@ -79,12 +80,40 @@ export async function processAppointmentConfirms(
   ctx: PassContext, due: DueAppointmentConfirm[],
 ): Promise<AppointmentConfirmCounters> {
   const c: AppointmentConfirmCounters = {
-    sent: 0, failed: 0, unstamped: 0, held: 0, skippedNoAddress: 0, skippedSmsGate: 0,
+    sent: 0, failed: 0, unstamped: 0, held: 0,
+    skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 0,
   };
   const smsGates = new Map<string, SmsGate>();
 
   for (const row of due) {
     const subject = subjectFor(row);
+
+    // THE UNRESOLVABLE-ZONE GUARD its three siblings open with
+    // (`referral-ask.ts`, `reactivation.ts`, `quote-followup.ts`), and the
+    // one this pass shipped without (audit B's M1). `safeZone` does not
+    // validate its FALLBACK (`lib/booking/time.ts:20-30`), so junk in both
+    // the booker's zone and the account's came back as junk, `formatWhen`
+    // threw inside the per-row try, and the row was counted `failed` with NO
+    // log row at all — nothing on the Activity page saying why the texts
+    // stopped, and a RELEASED row left untouched, keeping its past
+    // `held_until` and parking the head of the release queue for ever.
+    //
+    // The ACCOUNT's zone, not the composed one, and a valid BOOKER zone does
+    // not rescue it: `holdOrSend` needs the account's zone to know whether
+    // this account is in its quiet window at all, and sends with no window
+    // when it cannot resolve one. An account whose zone is junk has a
+    // configuration problem an operator can fix, and this is the row that
+    // tells them so.
+    if (resolveAccountZone(row.accountTimezone) === null) {
+      c.unresolvableTimezone++;
+      console.error(
+        `appointment confirm skipped for booking ${row.bookingId}: account ${row.accountId}'s timezone `
+        + `${JSON.stringify(row.accountTimezone)} is not a zone we can resolve`,
+      );
+      await logSkipped(ctx, subject, REASONS.timezone);
+      continue;
+    }
+
     const to = toE164(row.contactPhone);
     if (!to) {
       c.skippedNoAddress++;
@@ -116,8 +145,11 @@ export async function processAppointmentConfirms(
     const from = gate.from;
 
     try {
-      // Inside the per-row try: a junk ACCOUNT zone makes formatWhen throw,
-      // and that is this row's failure, not the pass's.
+      // Still inside the per-row try, though the guard above now takes the
+      // only input that could make `formatWhen` throw: an unresolvable
+      // ACCOUNT zone. What is left is the composition itself — the BOOKER's
+      // zone when the booking carries one (amendment B13), the account's
+      // otherwise, and never UTC.
       const zone = safeZone(row.bookerTimezone ?? undefined, row.accountTimezone);
       const body = composeAppointmentConfirm(
         row.brandName, formatWhen(new Date(row.startsAt), zone), row.body);

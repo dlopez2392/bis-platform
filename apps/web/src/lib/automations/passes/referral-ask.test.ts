@@ -276,6 +276,34 @@ describe("releasing a held referral ask", () => {
     }));
   });
 
+  it("THE LADDER ON THE RELEASE PATH: the review went out THIS morning, so the release skips and says so", async () => {
+    // AUDIT B's I1. Both rows were held inside the same quiet window — the
+    // review request's first, the referral's on a later tick — and both come
+    // back on the release tick. The review sends and stamps
+    // `review_requested_at = this morning`; the referral's releaser then runs
+    // `reviewRequestStillOwed`, which answers "not owed" the moment the stamp
+    // is non-null, and hands the row to the pass. `released` must therefore
+    // skip the morning BAND and nothing else, or the never-two-rungs-on-one-
+    // morning rule is bypassed entirely and the customer gets both texts one
+    // minute apart.
+    //
+    // Mutation: put the gate call back inside `if (!opts.released)` → this
+    // reds with "sent".
+    dbMocks.getDueReferralAskById.mockResolvedValue({
+      due: row({ reviewRequestedAt: "2027-09-24T13:05:00.000Z" }),   // 08:05 CDT, the same local day
+    });
+    // Released at 12:00 CDT, the end of a 21:00 → 12:00 window: outside the
+    // band, which is the whole point of `released`.
+    const noon = new Date("2027-09-24T17:00:00.000Z");
+    expect(await releaseReferralAsk(
+      ctx(noon, { enabled: true, start: "21:00", end: "12:00" }), heldRow())).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampReferralAsked).not.toHaveBeenCalled();
+    // A REAL row, never left untouched: an untouched released row keeps its
+    // past `held_until` and parks the head of the queue for ever.
+    expect(skippedReasons()).toEqual(["No longer due"]);
+  });
+
   it("a released row whose booking is GONE says so — the other arm of the same ternary", async () => {
     dbMocks.getDueReferralAskById.mockResolvedValue({ due: null, why: "gone" });
     expect(await releaseReferralAsk(ctx(), heldRow())).toBe("skipped");

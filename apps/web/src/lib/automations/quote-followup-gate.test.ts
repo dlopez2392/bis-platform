@@ -40,6 +40,34 @@ describe("when a quote follow-up may go", () => {
     expect(shouldSendQuoteFollowupNow(NOW, ago(QUOTE_FOLLOWUP_MAX_AGE_MS + 1), 3, ZONE)).toBe(false);
   });
 
+  /**
+   * THE RELEASE PATH (audit B's I3). `skipBand` skips the morning BAND and
+   * NOTHING ELSE - the spec's release contract, restated at line 16 and in
+   * amendment B16. The operator's own `quietDays` and the 30-day staleness
+   * cap live ONLY in this function, so a release that skipped the whole
+   * composite would chase a deal the operator re-parked during the hold.
+   */
+  it("with the band skipped, the operator's quiet days and the 30-day cap still refuse", () => {
+    const NOON = new Date("2027-10-20T17:00:00.000Z");   // 12:00 CDT - outside the band
+    // The control: the band is the ONLY refusal left, so skipping it sends.
+    // Without this line a gate that always returned false would satisfy the
+    // three refusals below.
+    expect(shouldSendQuoteFollowupNow(NOON, ago(5 * DAY), 3, ZONE)).toBe(false);
+    expect(shouldSendQuoteFollowupNow(NOON, ago(5 * DAY), 3, ZONE, { skipBand: true })).toBe(true);
+
+    // The operator dragged the card back into the watched stage during the
+    // hold: two days quiet against a setting of three. Mutation: have
+    // `skipBand` skip the whole composite (the shipped `if (!opts.released)`
+    // shape) -> this reds.
+    expect(shouldSendQuoteFollowupNow(NOON, ago(2 * DAY), 3, ZONE, { skipBand: true })).toBe(false);
+
+    // And the 30-day cap, at the bound and one millisecond past it.
+    expect(shouldSendQuoteFollowupNow(
+      NOON, new Date(NOON.getTime() - QUOTE_FOLLOWUP_MAX_AGE_MS), 3, ZONE, { skipBand: true })).toBe(true);
+    expect(shouldSendQuoteFollowupNow(
+      NOON, new Date(NOON.getTime() - QUOTE_FOLLOWUP_MAX_AGE_MS - 1), 3, ZONE, { skipBand: true })).toBe(false);
+  });
+
   it("respects the morning band at both edges", () => {
     expect(shouldSendQuoteFollowupNow(new Date("2027-10-20T12:59:00Z"), ago(5 * DAY), 3, ZONE)).toBe(false);
     expect(shouldSendQuoteFollowupNow(new Date("2027-10-20T13:00:00Z"), ago(5 * DAY), 3, ZONE)).toBe(true);

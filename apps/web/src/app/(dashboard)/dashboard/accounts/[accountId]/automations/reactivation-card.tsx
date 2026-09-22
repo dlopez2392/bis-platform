@@ -92,7 +92,10 @@ export function ReactivationCard({
                 min={REACTIVATION_MIN_MONTHS} max={REACTIVATION_MAX_MONTHS} step={1}
                 defaultValue={stored.months}
               />
-              <span className="text-[13px] text-muted-foreground">
+              {/* text-xs, matching the hint directly beneath it and every
+                  other secondary string on all nine cards. It was 13px, a
+                  size nothing else on this page uses (design review M3). */}
+              <span className="text-xs text-muted-foreground">
                 {m["automations.reactivation.monthsUnit"]}
               </span>
             </div>

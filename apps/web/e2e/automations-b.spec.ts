@@ -279,8 +279,19 @@ test.describe("part B on the Activity page (client)", () => {
       // Mutation: render `row.source` instead of SOURCE_TITLES[row.source] →
       // both the positive and the negative assertion red.
     } finally {
-      await serviceDb().from("automation_log")
+      const { error } = await serviceDb().from("automation_log")
         .delete().eq("account_id", accountId).eq("subject_key", subjectKey);
+      // READ, not ignored: this is the shared production project, and a
+      // silently failed delete leaves a stamped `automation_log` row on the
+      // fixture account for ever. LOGGED and not thrown, matching `afterAll`
+      // above and for the same reason — a throw in a `finally` replaces
+      // whatever the test actually reported with the cleanup's own failure.
+      // (`forgetRecipe` does throw, and that difference is deliberate: a
+      // surviving `automations` row would TEXT somebody on the next real
+      // cron tick, where a surviving log row is only litter.)
+      if (error) {
+        console.error(`automations-b e2e: automation_log cleanup failed for ${subjectKey}: ${error.message}`);
+      }
     }
   });
 });

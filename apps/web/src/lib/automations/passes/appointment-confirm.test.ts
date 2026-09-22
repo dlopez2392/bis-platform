@@ -18,6 +18,7 @@ vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => gate
 
 import type { PassContext } from "../context";
 import { STAMP_RETRY_DELAYS_MS } from "@/lib/booking/stamp-retry";
+import { formatWhen } from "@/lib/booking/time";
 import { appointmentConfirmPass, releaseAppointmentConfirm } from "./appointment-confirm";
 
 const TICK = new Date("2027-04-12T12:00:00.000Z");
@@ -41,11 +42,19 @@ function ctx(over: Partial<PassContext> = {}): PassContext {
   };
 }
 
+const STARTS = new Date(TICK.getTime() + 47 * 3600_000).toISOString();   // 04:00 PDT · 06:00 CDT, Apr 14
+
+/** Distinctive, complete fixture. Booker in Los Angeles, account in Chicago
+ *  (spec amendment B13, and the `sms-reminder.test.ts:23-35` model): the two
+ *  zones render DIFFERENT strings for the same instant, so a pass that used
+ *  the wrong one cannot pass by coincidence. The account zone stays
+ *  America/Chicago because the quiet-hours case below reads the window's end
+ *  off it. */
 function row(over: Partial<DueAppointmentConfirm> = {}): DueAppointmentConfirm {
   return {
     bookingId: "bk_1", accountId: "acct_1",
-    startsAt: new Date(TICK.getTime() + 47 * 3600_000).toISOString(),
-    bookerTimezone: "America/Chicago", contactId: "ct_1", contactPhone: "(956) 555-0107",
+    startsAt: STARTS,
+    bookerTimezone: "America/Los_Angeles", contactId: "ct_1", contactPhone: "(956) 555-0107",
     brandName: "Rio Roofing", accountTimezone: "America/Chicago", body: "",
     ...over,
   };
@@ -75,12 +84,20 @@ describe("the confirmation ask sends", () => {
   it("texts, stamps, and writes ONE sent log row", async () => {
     dbMocks.listDueAppointmentConfirms.mockResolvedValue([row()]);
     const c = await appointmentConfirmPass.run(ctx());
-    expect(c).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, skippedNoAddress: 0, skippedSmsGate: 0 });
+    expect(c).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 0 });
     expect(send).toHaveBeenCalledTimes(1);
     expect(dbMocks.stampAppointmentConfirmAsked).toHaveBeenCalledWith(expect.anything(), "bk_1");
     const body = send.mock.calls[0]![0].body as string;
     expect(body).toContain("Rio Roofing");
     expect(body.toLowerCase()).toContain("either way we'll see it");
+    // AMENDMENT B13: `{when}` renders in the BOOKER's zone. A Los Angeles
+    // booker of a Texas company reads their own clock — this is the one text
+    // whose entire job is getting a customer to confirm a time, and two hours
+    // wrong is the whole message wasted. Mutation: `safeZone(row.accountTimezone,
+    // "UTC")` in the pass → this reds by name.
+    const when = formatWhen(new Date(STARTS), "America/Los_Angeles");
+    expect(when).not.toBe(formatWhen(new Date(STARTS), "America/Chicago"));   // guards the fixture
+    expect(body).toContain(when);
     // The company's INTERNAL label can never reach a customer: the due-row
     // has no field for it. sentinel.test.ts scans every send argument.
     expect(body).not.toContain("trial");
@@ -110,7 +127,7 @@ describe("the confirmation ask sends", () => {
     dbMocks.listDueAppointmentConfirms.mockResolvedValue([row()]);
     send.mockRejectedValueOnce(new Error("carrier timeout"));
     const c = await appointmentConfirmPass.run(ctx());
-    expect(c).toEqual({ sent: 0, failed: 1, unstamped: 0, held: 0, skippedNoAddress: 0, skippedSmsGate: 0 });
+    expect(c).toEqual({ sent: 0, failed: 1, unstamped: 0, held: 0, skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 0 });
     expect(dbMocks.stampAppointmentConfirmSmsFailed).toHaveBeenCalledWith(expect.anything(), "bk_1");
     expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       source: "appointment_confirm", subjectKey: "booking:bk_1", status: "failed", reason: "Couldn't be delivered",
@@ -129,13 +146,58 @@ describe("the confirmation ask sends", () => {
     dbMocks.listDueAppointmentConfirms.mockResolvedValue([row()]);
     dbMocks.stampAppointmentConfirmAsked.mockRejectedValue(new Error("PostgREST 503"));
     const c = await appointmentConfirmPass.run(ctx());
-    expect(c).toEqual({ sent: 1, failed: 0, unstamped: 1, held: 0, skippedNoAddress: 0, skippedSmsGate: 0 });
+    expect(c).toEqual({ sent: 1, failed: 0, unstamped: 1, held: 0, skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 0 });
     expect(send).toHaveBeenCalledTimes(1);
     expect(dbMocks.stampAppointmentConfirmAsked).toHaveBeenCalledTimes(STAMP_RETRY_DELAYS_MS.length + 1);
     // The log row still says `sent`, because it was: the log is what went out,
     // not whether the bookkeeping afterwards landed.
     expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       subjectKey: "booking:bk_1", status: "sent",
+    }));
+  });
+
+  it("falls back to the ACCOUNT's zone when the booker's is missing or junk, never to UTC", async () => {
+    // The other half of amendment B13, on the `sms-reminder.test.ts:78-84`
+    // model. UTC is named because it is what the mutation reaches for and it
+    // renders a THIRD string — 11:00 UTC here, neither the booker's 04:00 nor
+    // the account's 06:00 — so a fallback that quietly became UTC would still
+    // look like "some time" to a reader of the body.
+    dbMocks.listDueAppointmentConfirms.mockResolvedValue([
+      row({ bookerTimezone: null }),
+      row({ bookingId: "bk_2", bookerTimezone: "Mars/Olympus" }),
+    ]);
+    await appointmentConfirmPass.run(ctx());
+    const account = formatWhen(new Date(STARTS), "America/Chicago");
+    expect(account).not.toBe(formatWhen(new Date(STARTS), "UTC"));            // guards the fixture
+    expect(send).toHaveBeenCalledTimes(2);
+    for (const call of send.mock.calls) expect(call[0].body).toContain(account);
+  });
+
+  it("an unresolvable ACCOUNT zone with no booker zone is SKIPPED with a reason, never counted failed", async () => {
+    // AUDIT B's M1. `safeZone` does not validate its FALLBACK
+    // (`lib/booking/time.ts:20-30`), so junk in both arguments came back as
+    // junk, `formatWhen` threw a RangeError inside the per-row try, and the
+    // row was counted `failed` with NO automation_log row at all: nothing on
+    // the Activity page said why the texts stopped, and a RELEASED row was
+    // left untouched — keeping its past `held_until` and parking the head of
+    // the release queue for ever. The three sibling passes open with this
+    // guard; this one did not.
+    //
+    // Mutation: delete the `resolveAccountZone(row.accountTimezone) === null`
+    // guard → this reds by name with `failed: 1` and no log row.
+    dbMocks.listDueAppointmentConfirms.mockResolvedValue([
+      row({ accountTimezone: "Mars/Olympus", bookerTimezone: null }),
+    ]);
+    const c = await appointmentConfirmPass.run(ctx());
+    expect(c).toEqual({
+      sent: 0, failed: 0, unstamped: 0, held: 0,
+      skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 1,
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(dbMocks.stampAppointmentConfirmAsked).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      source: "appointment_confirm", subjectKey: "booking:bk_1",
+      status: "skipped", reason: "The company's time zone isn't set",
     }));
   });
 

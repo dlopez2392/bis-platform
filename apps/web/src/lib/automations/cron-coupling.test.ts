@@ -117,7 +117,7 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
     expect((SMS_REMINDER_WINDOW_END_MS - SMS_REMINDER_WINDOW_START_MS) / tick).toBe(3);
   });
 
-  it("the route declares a LIVE maxDuration at least double the release pass's own wall-clock budget — the budget bounds the FIRST pass, and the rest of the tick belongs to the other eight (mutation: comment the export out, or delete it, or set it to 61 → each FAILS)", () => {
+  it("the route declares a LIVE maxDuration at least double the release pass's own wall-clock budget — the budget bounds the FIRST pass, and the rest of the tick belongs to the passes after it (mutation: comment the export out, or delete it, or set it to 61 → each FAILS)", () => {
     // Anchored to a whole line (^…$, multiline) so a COMMENTED-OUT export
     // ("// export const maxDuration = 300;") cannot match — the regex used
     // to be bare `export const maxDuration = (\d+);`, which `.exec` finds
@@ -127,8 +127,10 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
     expect(m).not.toBeNull();
     const maxDuration = Number(m![1]);
     // At LEAST double: 61s (one second of headroom) would still pass a
-    // ">" check but leaves nothing for the eight passes that run after the
-    // release pass in the same tick.
+    // ">" check but leaves nothing for the passes that run after the release
+    // pass in the same tick. No count in the prose: `PASSES` grows by a line
+    // per recipe (it is thirteen entries today, and was nine when this
+    // sentence was written), and a number written down here rots silently.
     expect(maxDuration).toBeGreaterThanOrEqual((RELEASE_BUDGET_MS / 1000) * 2);
   });
 });

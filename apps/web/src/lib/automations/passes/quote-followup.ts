@@ -100,12 +100,27 @@ export async function processQuoteFollowups(
     }
 
     // NO `laterOf` anchor here: `stage_changed_at` IS the clock, written by
-    // both `moveOpportunityStage` and `moveOpportunityToStage`. Skipped on a
-    // RELEASE — the band already said yes once, when this row was held.
-    if (!opts.released && !shouldSendQuoteFollowupNow(
-      ctx.now, new Date(row.stageChangedAt), row.quietDays, row.accountTimezone)) {
+    // both `moveOpportunityStage` and `moveOpportunityToStage`.
+    //
+    // THE GATE RUNS ON BOTH PATHS. A release skips the morning BAND and
+    // nothing else (`skipBand`, the spec's release contract at line 16 and
+    // amendment B16). It used to skip the whole composite, which took the
+    // operator's own `quietDays` and the 30-day staleness cap off the release
+    // path altogether — and both of them live nowhere else. A deal dragged
+    // out of the watched stage and back into it during the hold carries a
+    // brand-new `stage_changed_at`, and the customer was chased about a quote
+    // the operator had re-parked hours earlier (audit B's I3).
+    //
+    // When it refuses on a release the row is written `skipped`, never left
+    // untouched: an untouched released row keeps its past `held_until` and
+    // parks the head of the queue for ever. On a normal tick it stays silent
+    // — the row is simply due again tomorrow morning.
+    if (!shouldSendQuoteFollowupNow(
+      ctx.now, new Date(row.stageChangedAt), row.quietDays, row.accountTimezone,
+      { skipBand: opts.released })) {
       c.waitingForMorning++;
-      continue;   // silent: the row is due again tomorrow morning
+      if (opts.released) await logSkipped(ctx, subject, REASONS.noLongerDue);
+      continue;
     }
 
     let target: Target;

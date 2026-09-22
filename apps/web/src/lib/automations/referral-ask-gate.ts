@@ -54,10 +54,22 @@ export function reviewRequestStillOwed(
  *  5. The review request is not still owed (above).
  *
  * `referral_asked_at` does all the deduping; this gate has no memory.
+ *
+ * `skipBand` is THE RELEASE PATH, and it skips rule 2 ALONE (the spec's
+ * release contract, line 16, and amendment B16). A held row passed the band
+ * once, at the hour it was held, and is released at the quiet window's end —
+ * by definition not a band hour — so re-applying rule 2 would park every
+ * overnight hold for a whole extra day. Rules 1, 3, 4 and 5 ARE re-applied,
+ * because rule 4 lives NOWHERE else: two rows held inside the same quiet
+ * window (the review request's, written first, then the referral's) release
+ * on the same tick, and without rule 4 on the release path the customer gets
+ * "would you leave a review?" and "know anyone else?" one minute apart —
+ * audit B's I1, and the exact opposite of what the card promises.
  */
 export function shouldSendReferralAskNow(
   now: Date, anchor: Date, followupSentAt: Date | null, reviewRequestedAt: Date | null,
   reviewRequestEnabled: boolean, timezone: string,
+  opts: { skipBand?: boolean } = {},
 ): boolean {
   // POLARITY, the mirror of the note in `reviewRequestStillOwed`: every
   // `return false` from here down means DO NOT SEND. Same three words, the
@@ -68,9 +80,9 @@ export function shouldSendReferralAskNow(
   if (elapsedMs > REFERRAL_ASK_MAX_AGE_MS) return false;  // too stale to be welcome
 
   const zone = resolveAccountZone(timezone);
-  if (zone === null) return false;
+  if (zone === null) return false;   // never skipped: a release with no zone is still no hour
 
-  if (!isInMorningBand(now, zone)) return false;
+  if (!opts.skipBand && !isInMorningBand(now, zone)) return false;
   if (!isStrictlyEarlierLocalDay(anchor, now, zone)) return false;
 
   for (const stamp of [followupSentAt, reviewRequestedAt]) {

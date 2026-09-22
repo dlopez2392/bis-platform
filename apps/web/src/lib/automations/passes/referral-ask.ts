@@ -102,21 +102,35 @@ export async function processReferralAsks(
     const followupSentAt = row.followupSentAt ? new Date(row.followupSentAt) : null;
     const reviewRequestedAt = row.reviewRequestedAt ? new Date(row.reviewRequestedAt) : null;
 
-    // Both of these are skipped on a RELEASE: the band already said yes once,
-    // when this row was held, and the releaser has already re-applied
-    // precedence itself (and written a real `skipped` row if it bit). Counted
-    // separately because "the review goes first" and "not this morning" are
-    // very different answers to "why has nothing gone out?".
-    if (!opts.released) {
-      if (reviewRequestStillOwed(ctx.now, anchor, reviewRequestedAt, row.reviewRequestEnabled)) {
-        c.waitingForReviewRequest++;
-        continue;   // silent: the row is due again tomorrow morning
-      }
-      if (!shouldSendReferralAskNow(
-        ctx.now, anchor, followupSentAt, reviewRequestedAt, row.reviewRequestEnabled, row.accountTimezone)) {
-        c.waitingForMorning++;
-        continue;
-      }
+    // PRECEDENCE is skipped on a RELEASE: the releaser has already re-applied
+    // it itself and written a real `skipped` row (REASONS.reviewFirst) if it
+    // bit. Counted separately from the gate because "the review goes first"
+    // and "not this morning" are very different answers to "why has nothing
+    // gone out?".
+    if (!opts.released
+      && reviewRequestStillOwed(ctx.now, anchor, reviewRequestedAt, row.reviewRequestEnabled)) {
+      c.waitingForReviewRequest++;
+      continue;   // silent: the row is due again tomorrow morning
+    }
+
+    // THE GATE RUNS ON BOTH PATHS. A release skips the morning BAND and
+    // nothing else (`skipBand`, the spec's release contract at line 16 and
+    // amendment B16). It used to skip the whole composite, which took rule 4
+    // — never two rungs on one morning — off the release path altogether:
+    // the review request's hold and the referral's hold sit in the same quiet
+    // window, release on the same tick, and the customer got both texts one
+    // minute apart (audit B's I1).
+    //
+    // When it refuses on a release the row is written `skipped`, never left
+    // untouched: an untouched released row keeps its past `held_until` and
+    // parks the head of the queue for ever. On a normal tick it stays silent
+    // — the row is simply due again tomorrow morning.
+    if (!shouldSendReferralAskNow(
+      ctx.now, anchor, followupSentAt, reviewRequestedAt, row.reviewRequestEnabled, row.accountTimezone,
+      { skipBand: opts.released })) {
+      c.waitingForMorning++;
+      if (opts.released) await logSkipped(ctx, subject, REASONS.noLongerDue);
+      continue;
     }
 
     let target: Target;
