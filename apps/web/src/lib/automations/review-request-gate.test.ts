@@ -71,6 +71,58 @@ describe("shouldSendReviewRequestNow — THE COLLISION: defers to the calendar f
   });
 });
 
+/**
+ * THE RELEASE PATH. `skipBand` skips the morning BAND and NOTHING ELSE — the
+ * release contract (part B's spec, line 16, and amendment B16). A held row
+ * passed the band once, at the hour it was held, and comes back at the quiet
+ * window's end, which is by definition not a band hour. RULE 4 above is the
+ * reason this matters most: the calendar follow-up and the review request can
+ * both be due on a release tick, and skipping the whole gate on release put
+ * "how did it go?" and "would you leave a review?" on one morning, which is
+ * the exact thing rule 4 exists to stop.
+ *
+ * Mutation for this block: hoist `if (opts.skipBand) return true;` to the top
+ * of `shouldSendReviewRequestNow` → every case below but the control reds.
+ */
+describe("shouldSendReviewRequestNow — the release path skips the band ALONE", () => {
+  const NOON_NY = new Date("2026-09-09T16:00:00Z");   // NY Wed 12:00 · LA Wed 09:00
+  const ENDED = new Date("2026-09-08T22:00:00Z");     // NY Tue 18:00 · LA Tue 15:00
+
+  it("sends at noon when the band was the only rule refusing — the control for the three below", () => {
+    expect(shouldSendReviewRequestNow(NOON_NY, ENDED, null, NY)).toBe(false);
+    expect(shouldSendReviewRequestNow(NOON_NY, ENDED, null, NY, { skipBand: true })).toBe(true);
+  });
+
+  it("re-applies the 61h cap on release: at the bound it goes, one millisecond past it does not", () => {
+    const at = new Date(NOON_NY.getTime() - REVIEW_REQUEST_MAX_AGE_MS);   // NY Sun 23:00
+    const past = new Date(at.getTime() - 1);
+    expect(shouldSendReviewRequestNow(NOON_NY, at, null, NY, { skipBand: true })).toBe(true);
+    expect(shouldSendReviewRequestNow(NOON_NY, past, null, NY, { skipBand: true })).toBe(false);
+  });
+
+  it("RE-APPLIES RULE 4 ON RELEASE: the follow-up that went out this morning still holds it to tomorrow", () => {
+    const THIS_MORNING = new Date("2026-09-09T12:30:00Z");   // NY Wed 08:30, the same local day
+    expect(shouldSendReviewRequestNow(NOON_NY, ENDED, THIS_MORNING, NY, { skipBand: true })).toBe(false);
+    // One stamp instant, two zones, opposite verdicts — the stamp's LOCAL day
+    // is what counts on the release path too.
+    const OVERNIGHT = new Date("2026-09-09T05:30:00Z");      // NY Wed 01:30 (today) · LA Tue 22:30 (yesterday)
+    expect(shouldSendReviewRequestNow(NOON_NY, ENDED, OVERNIGHT, NY, { skipBand: true })).toBe(false);
+    expect(shouldSendReviewRequestNow(NOON_NY, ENDED, OVERNIGHT, LA, { skipBand: true })).toBe(true);
+  });
+
+  it("re-applies the strictly-earlier-local-day rule on release — a job completed TODAY still waits", () => {
+    const COMPLETED_TODAY = new Date("2026-09-09T12:30:00Z");   // NY Wed 08:30
+    expect(shouldSendReviewRequestNow(
+      NOON_NY, laterOf(ENDED, COMPLETED_TODAY), null, NY, { skipBand: true })).toBe(false);
+  });
+
+  it("still fails closed on an unresolvable zone: a release with no zone is still no hour", () => {
+    for (const junk of ["Mars/Olympus", "", "  ", "America/Nowhere"]) {
+      expect(shouldSendReviewRequestNow(NOON_NY, ENDED, null, junk, { skipBand: true })).toBe(false);
+    }
+  });
+});
+
 describe("shouldSendReviewRequestNow — the 61h staleness cap, pinned against real zones", () => {
   it("is exactly the follow-up cap plus one local day", () => {
     expect(REVIEW_REQUEST_MAX_AGE_MS).toBe(61 * HOUR);

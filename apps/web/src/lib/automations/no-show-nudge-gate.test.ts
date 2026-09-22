@@ -46,6 +46,49 @@ describe("shouldSendNoShowNudgeNow — the morning after, in the account's zone"
   });
 });
 
+/**
+ * THE RELEASE PATH. `skipBand` skips the morning BAND and NOTHING ELSE — the
+ * release contract (part B's spec, line 16, and amendment B16). A held row
+ * passed the band once, at the hour it was held, and comes back at the quiet
+ * window's end, which is by definition not a band hour. The 37h cap and the
+ * strictly-earlier-local-day rule ARE re-applied, because a booking
+ * un-completed and re-marked no-show DURING the hold hands the releaser a
+ * brand-new anchor, and nothing else on that path would notice.
+ *
+ * Mutation for this block: hoist `if (opts.skipBand) return true;` to the top
+ * of `shouldSendNoShowNudgeNow` → every case below but the control reds.
+ */
+describe("shouldSendNoShowNudgeNow — the release path skips the band ALONE", () => {
+  const NOON_NY = new Date("2026-09-09T16:00:00Z");   // NY Wed 12:00 · LA Wed 09:00
+  const ANCHOR = new Date("2026-09-08T20:30:00Z");    // NY Tue 16:30 · LA Tue 13:30
+
+  it("sends at noon when the band was the only rule refusing — the control for the three below", () => {
+    expect(shouldSendNoShowNudgeNow(NOON_NY, ANCHOR, NY)).toBe(false);
+    expect(shouldSendNoShowNudgeNow(NOON_NY, ANCHOR, NY, { skipBand: true })).toBe(true);
+  });
+
+  it("re-applies the 37h cap on release: at the bound it goes, one millisecond past it does not", () => {
+    const at = new Date(NOON_NY.getTime() - NO_SHOW_NUDGE_MAX_AGE_MS);   // NY Mon 23:00
+    const past = new Date(at.getTime() - 1);
+    expect(shouldSendNoShowNudgeNow(NOON_NY, at, NY, { skipBand: true })).toBe(true);
+    expect(shouldSendNoShowNudgeNow(NOON_NY, past, NY, { skipBand: true })).toBe(false);
+  });
+
+  it("re-applies the strictly-earlier-local-day rule on release — one instant, two zones, opposite verdicts", () => {
+    // "Mark no-show" pressed again during the hold: laterOf hands the pass an
+    // anchor that is TODAY, and nobody gets texted about this morning's job.
+    const MARKED = new Date("2026-09-09T05:30:00Z");   // NY Wed 01:30 (today) · LA Tue 22:30 (yesterday)
+    expect(shouldSendNoShowNudgeNow(NOON_NY, laterOf(ANCHOR, MARKED), NY, { skipBand: true })).toBe(false);
+    expect(shouldSendNoShowNudgeNow(NOON_NY, laterOf(ANCHOR, MARKED), LA, { skipBand: true })).toBe(true);
+  });
+
+  it("still fails closed on an unresolvable zone: a release with no zone is still no hour", () => {
+    for (const junk of ["Mars/Olympus", "", "  ", "America/Nowhere"]) {
+      expect(shouldSendNoShowNudgeNow(NOON_NY, ANCHOR, junk, { skipBand: true })).toBe(false);
+    }
+  });
+});
+
 describe("shouldSendNoShowNudgeNow — the 37h cap, pinned against real zones", () => {
   it("is exactly the follow-up window: same derivation, nothing to defer to", () => {
     expect(NO_SHOW_NUDGE_MAX_AGE_MS).toBe(37 * HOUR);

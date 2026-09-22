@@ -101,10 +101,21 @@ export async function processNoShowNudges(
 
     // THE CLOCK (0026): the later of the meeting end and "Mark no-show".
     const anchor = laterOf(new Date(row.endsAt), row.noShowAt ? new Date(row.noShowAt) : null);
-    // Skipped entirely on a release: the band already said yes once, when
-    // this row was held — a release is not a second morning to wait for.
-    if (!opts.released && !shouldSendNoShowNudgeNow(ctx.now, anchor, row.accountTimezone)) {
+    // THE GATE RUNS ON BOTH PATHS. A release skips the morning BAND and
+    // nothing else (`skipBand`, the release contract in part B's spec at line
+    // 16 and amendment B16): the band already said yes once, when this row
+    // was held — but the 37h cap and the strictly-earlier-local-day rule live
+    // nowhere else on this path, and the releaser RE-READS the booking, so a
+    // job un-marked and re-marked no-show during the hold arrives here with a
+    // brand-new anchor and would otherwise be texted about the same day.
+    //
+    // When it refuses on a release the row is written `skipped`, never left
+    // untouched: an untouched released row keeps its past `held_until` and
+    // parks the head of the queue for ever. On a normal tick it stays silent
+    // — the row is simply due again tomorrow morning.
+    if (!shouldSendNoShowNudgeNow(ctx.now, anchor, row.accountTimezone, { skipBand: opts.released })) {
       c.waitingForMorning++;
+      if (opts.released) await logSkipped(ctx, subject, REASONS.noLongerDue);
       continue;
     }
 

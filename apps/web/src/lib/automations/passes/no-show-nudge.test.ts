@@ -298,6 +298,23 @@ describe("no-show nudge — quiet hours and release", () => {
     expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ status: "sent" }));
   });
 
+  it("release at noon with the anchor PAST the 37h cap: skipped, and exactly one 'No longer due' row (mutation: put the gate back inside `if (!opts.released)` → this reds with 'sent')", async () => {
+    // The band is skipped on a release; NOTHING ELSE IS. This anchor is 43½h
+    // before the release instant, so the cap — which lives nowhere else on
+    // this path — is the only rule refusing, and it must still refuse.
+    dbMocks.getDueNoShowNudgeById.mockResolvedValue({ due: sms({
+      endsAt: "2026-09-07T20:00:00.000Z", noShowAt: "2026-09-07T20:30:00.000Z",   // 43.5h before NOON
+    }) });
+    expect(await releaseNoShowNudge(ctx(NOON, UNTIL_NOON), heldRow("sms"))).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampNoShowNudged).not.toHaveBeenCalled();
+    // ONE row, replacing the held one on the same (account, source, subject):
+    // a released row left untouched keeps its past `held_until` and parks the
+    // head of the queue for ever.
+    expect(dbMocks.recordAutomationLog.mock.calls.map((c) => [c[1].subjectKey, c[1].status, c[1].reason]))
+      .toEqual([["booking:bk_n1", "skipped", "No longer due"]]);
+  });
+
   it("the daily cap and a missing address write skipped rows with plain reasons", async () => {
     dbMocks.countNoShowNudgesSince.mockResolvedValue(AUTOMATION_DAILY_CAP);
     dbMocks.listDueNoShowNudges.mockResolvedValue([sms(), sms({ bookingId: "bk_2", contactId: "ct_2", contactPhone: null })]);

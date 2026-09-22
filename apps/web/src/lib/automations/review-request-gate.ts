@@ -24,9 +24,21 @@ import {
  *     there is nothing to defer to.
  *
  * `review_requested_at` still does all the deduping; this gate has no memory.
+ *
+ * `skipBand` is THE RELEASE PATH, and it skips rule 2 ALONE (the release
+ * contract in part B's spec, line 16, and amendment B16). A held row passed
+ * the band once, at the hour it was held, and is released at the quiet
+ * window's end — by definition not a band hour — so re-applying rule 2 would
+ * park every overnight hold for a whole extra day. Rules 0, 1, 3 and 4 ARE
+ * re-applied, and RULE 4 IS THE WHOLE POINT: the calendar follow-up and this
+ * request can both be held inside one quiet window and come back on the same
+ * tick, and rule 4 lives nowhere else — without it on the release path the
+ * customer gets "how did it go?" and "would you leave a review?" one minute
+ * apart, the exact collision the rule exists to stop.
  */
 export function shouldSendReviewRequestNow(
   now: Date, anchor: Date, followupSentAt: Date | null, timezone: string,
+  opts: { skipBand?: boolean } = {},
 ): boolean {
   const elapsedMs = now.getTime() - anchor.getTime();
   if (!Number.isFinite(elapsedMs)) return false;
@@ -36,7 +48,7 @@ export function shouldSendReviewRequestNow(
   const zone = resolveAccountZone(timezone);
   if (zone === null) return false;
 
-  if (!isInMorningBand(now, zone)) return false;
+  if (!opts.skipBand && !isInMorningBand(now, zone)) return false;
   if (!isStrictlyEarlierLocalDay(anchor, now, zone)) return false;
 
   if (followupSentAt !== null) {

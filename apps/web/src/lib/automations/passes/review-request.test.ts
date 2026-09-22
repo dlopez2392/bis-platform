@@ -386,6 +386,26 @@ describe("review request — quiet hours and release", () => {
     expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ status: "sent" }));
   });
 
+  it("THE LADDER ON THE RELEASE PATH: the calendar follow-up went out THIS morning, so the release skips and says so (mutation: put the gate back inside `if (!opts.released)` → this reds with 'sent')", async () => {
+    // RULE 4, the reason the release path re-applies the gate at all. The
+    // follow-up pass runs first in the registry and stamps `followup_sent_at`;
+    // its email and this request can both be held inside one quiet window and
+    // come back on the same release tick. Day one "how did it go?", day two
+    // "would you leave a review?" — never both the same morning.
+    dbMocks.getDueReviewRequestById.mockResolvedValue({ due: row({
+      config: { channel: "sms", reviewUrl: URL },
+      followupSentAt: "2026-09-09T12:30:00.000Z",   // NY Wed 08:30, the same local day as NOON
+    }) });
+    expect(await releaseReviewRequest(ctx(NOON, UNTIL_NOON), heldRow("sms"))).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampReviewRequested).not.toHaveBeenCalled();
+    // ONE row, replacing the held one on the same (account, source, subject):
+    // a released row left untouched keeps its past `held_until` and parks the
+    // head of the queue for ever.
+    expect(dbMocks.recordAutomationLog.mock.calls.map((c) => [c[1].subjectKey, c[1].status, c[1].reason]))
+      .toEqual([["booking:bk_r1", "skipped", "No longer due"]]);
+  });
+
   it("the daily cap and a missing address write skipped rows with plain reasons", async () => {
     dbMocks.countReviewRequestsSince.mockResolvedValue(AUTOMATION_DAILY_CAP);
     dbMocks.listDueReviewRequests.mockResolvedValue([row({ config: { channel: "sms", reviewUrl: URL } }), row({ bookingId: "bk_2", contactPhone: null, config: { channel: "sms", reviewUrl: URL } })]);
