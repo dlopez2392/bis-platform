@@ -23,6 +23,16 @@ export const AUTOMATION_DAILY_CAP = 25;
 export const DAILY_CAP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
+ * REACTIVATION'S OWN CAP (danlo, 2026-09-21), and the reason it is not the
+ * platform's 25: 25 a day is 750 people a month who did NOT just interact
+ * with the business, which is a blast. Five is a number an operator can read
+ * in their sent folder. Counted per account per rolling 24h off
+ * `contacts.reactivation_sent_at`, and it composes with the harder limit the
+ * schema itself enforces — one reactivation per contact, ever.
+ */
+export const REACTIVATION_DAILY_CAP = 5;
+
+/**
  * One SMS attempt per booking per day after a FAILED attempt (danlo,
  * 2026-09-06; spec, "Decisions taken after Milestone A shipped").
  * Write-then-send on a 15-minute cron wrote ~12 failed messages rows per

@@ -43,6 +43,7 @@ vi.mock("@/lib/sms/sender", () => ({
 vi.mock("./actions", () => ({
   saveReviewRequestAction: async () => ({ ok: true }),
   saveReferralAskAction: async () => ({ ok: true }),
+  saveReactivationAction: async () => ({ ok: true }),
   saveNoShowNudgeAction: async () => ({ ok: true }),
   saveSmsReminderAction: async () => ({ ok: true }),
   saveAppointmentConfirmAction: async () => ({ ok: true }),
@@ -54,12 +55,16 @@ type Props = Record<string, unknown>;
 const captured = vi.hoisted(() => ({
   review: null as Props | null, noShow: null as Props | null, sms: null as Props | null, instant: null as Props | null,
   confirm: null as Props | null, quiet: null as Props | null, referral: null as Props | null,
+  reactivation: null as Props | null,
 }));
 vi.mock("./automations-settings", () => ({
   AutomationsSettings: (props: Props) => { captured.review = props; return null; },
 }));
 vi.mock("./referral-ask-card", () => ({
   ReferralAskCard: (props: Props) => { captured.referral = props; return null; },
+}));
+vi.mock("./reactivation-card", () => ({
+  ReactivationCard: (props: Props) => { captured.reactivation = props; return null; },
 }));
 vi.mock("./no-show-nudge-card", () => ({
   NoShowNudgeCard: (props: Props) => { captured.noShow = props; return null; },
@@ -84,13 +89,14 @@ const ROWS: Record<string, AutomationRow> = {
   review_request: { ...base, id: "au1", recipe_key: "review_request", enabled: true, body: "Hi",
     config: { channel: "sms", reviewUrl: "https://g.page/r/x/review" } },
   referral_ask: { ...base, id: "au6", recipe_key: "referral_ask", enabled: true, body: "Know anyone else?", config: { channel: "sms" } },
+  reactivation: { ...base, id: "au7", recipe_key: "reactivation", enabled: true, body: "Still holding up?", config: { months: 14 } },
   no_show_nudge: { ...base, id: "au2", recipe_key: "no_show_nudge", enabled: false, body: "Come back", config: { channel: "email" } },
   instant_reply: { ...base, id: "au4", recipe_key: "instant_reply", enabled: false, body: "Hi", config: { bodyEs: "Hola" } },
   appointment_confirm: { ...base, id: "au5", recipe_key: "appointment_confirm", enabled: true, body: "Parking is out front.", config: {} },
 };
 
 async function render() {
-  captured.review = captured.noShow = captured.sms = captured.instant = captured.confirm = captured.quiet = captured.referral = null;
+  captured.review = captured.noShow = captured.sms = captured.instant = captured.confirm = captured.quiet = captured.referral = captured.reactivation = null;
   renderToStaticMarkup(await AutomationsPage({ params: Promise.resolve({ accountId: "a1" }) }));
   return captured;
 }
@@ -173,6 +179,19 @@ describe("automations page", () => {
     expect(c.referral!.brandName).toBe("Rio Roofing");
     expect(c.referral!.smsGate).toEqual({ ok: false, reason: "a2p_not_approved" });
     expect(dbMock.getAutomation).toHaveBeenCalledWith(expect.anything(), "a1", "referral_ask");
+  });
+
+  it("hands the reactivation card ITS OWN row and the brand name — and NO sms gate, because it is email only", async () => {
+    // Mutation: hand it `referral` or `noShow` (the two adjacent bindings in
+    // the positional Promise.all) — this reds, because those rows are au6
+    // and au2 while `reactivation` is au7. The absent `smsGate` prop is the
+    // same email-only rule the due-row type states by carrying no phone.
+    dbFixture.brandName = "Rio Roofing";
+    const c = await render();
+    expect(c.reactivation!.automation).toEqual(ROWS.reactivation);
+    expect(c.reactivation!.brandName).toBe("Rio Roofing");
+    expect(c.reactivation).not.toHaveProperty("smsGate");
+    expect(dbMock.getAutomation).toHaveBeenCalledWith(expect.anything(), "a1", "reactivation");
   });
 
   it("hands the instant-reply card ITS OWN row, the customer-facing name for its defaults, and the SMS gate", async () => {
@@ -303,6 +322,20 @@ describe("guarded reads — one failed read degrades only its own card, never th
     const c = await render();
     expect(c.referral!.automation).toBeNull();
     expect(c.review!.automation).toEqual(ROWS.review_request);
+    expect(c.noShow!.automation).toEqual(ROWS.no_show_nudge);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
+    spy.mockRestore();
+  });
+
+  it("a failed reactivation automation read degrades to null; the rest of the page still renders", async () => {
+    dbMock.getAutomation.mockImplementation(async (_db: unknown, _a: unknown, key: string) => {
+      if (key === "reactivation") throw new Error("down");
+      return ROWS[key] ?? null;
+    });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const c = await render();
+    expect(c.reactivation!.automation).toBeNull();
+    expect(c.referral!.automation).toEqual(ROWS.referral_ask);
     expect(c.noShow!.automation).toEqual(ROWS.no_show_nudge);
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
     spy.mockRestore();

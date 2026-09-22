@@ -7,6 +7,7 @@ import { referralAskPass } from "./passes/referral-ask";
 import { noShowNudgePass } from "./passes/no-show-nudge";
 import { smsReminderPass } from "./passes/sms-reminder";
 import { appointmentConfirmPass } from "./passes/appointment-confirm";
+import { reactivationPass } from "./passes/reactivation";
 import { siteTrafficPass } from "./passes/site-traffic";
 import { weeklyClientReportPass } from "./passes/weekly-report";
 import { weeklyAgencyReportPass } from "./passes/weekly-agency-report";
@@ -40,4 +41,4 @@ import { weeklyAgencyReportPass } from "./passes/weekly-agency-report";
  * same `weeklyMetrics` the client pass just used.
  * Adding a recipe = one line here plus its pass file. Nothing else.
  */
-export const PASSES: readonly Pass[] = [releaseHeldPass, remindersPass, followupsPass, reviewRequestPass, referralAskPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, siteTrafficPass, weeklyClientReportPass, weeklyAgencyReportPass];
+export const PASSES: readonly Pass[] = [releaseHeldPass, remindersPass, followupsPass, reviewRequestPass, referralAskPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, reactivationPass, siteTrafficPass, weeklyClientReportPass, weeklyAgencyReportPass];

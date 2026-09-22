@@ -13,13 +13,14 @@ import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
 import { m } from "@/lib/messages";
 import { AutomationsSettings } from "./automations-settings";
 import { ReferralAskCard } from "./referral-ask-card";
+import { ReactivationCard } from "./reactivation-card";
 import { NoShowNudgeCard } from "./no-show-nudge-card";
 import { SmsReminderCard } from "./sms-reminder-card";
 import { AppointmentConfirmCard } from "./appointment-confirm-card";
 import { InstantReplyCard } from "./instant-reply-card";
 import { QuietHoursCard } from "./quiet-hours-card";
 import {
-  saveReviewRequestAction, saveReferralAskAction, saveNoShowNudgeAction, saveSmsReminderAction,
+  saveReviewRequestAction, saveReferralAskAction, saveReactivationAction, saveNoShowNudgeAction, saveSmsReminderAction,
   saveAppointmentConfirmAction,
   saveInstantReplyAction, saveQuietHoursAction,
 } from "./actions";
@@ -48,7 +49,7 @@ export default async function AutomationsPage({
   // these can no longer 500 the whole agency page; only the one card that
   // lost its read shows the degraded state, and the log line carries the
   // account id so the hiccup is still visible.
-  const [review, referralAsk, noShow, smsReminder, appointmentConfirm, instantReply, account, smsGate, calendar, origin, quiet] = await Promise.all([
+  const [review, referralAsk, reactivation, noShow, smsReminder, appointmentConfirm, instantReply, account, smsGate, calendar, origin, quiet] = await Promise.all([
     getAutomation(db, accountId, "review_request").catch((e): AutomationRow | null => {
       console.error(`automations: review_request read failed for ${accountId}: ${String(e)}`);
       return null;
@@ -58,6 +59,12 @@ export default async function AutomationsPage({
     // the registry.
     getAutomation(db, accountId, "referral_ask").catch((e): AutomationRow | null => {
       console.error(`automations: referral_ask read failed for ${accountId}: ${String(e)}`);
+      return null;
+    }),
+    // POSITIONAL, like the one above it: this promise sits between
+    // referral_ask and no_show_nudge, and so does its binding.
+    getAutomation(db, accountId, "reactivation").catch((e): AutomationRow | null => {
+      console.error(`automations: reactivation read failed for ${accountId}: ${String(e)}`);
       return null;
     }),
     getAutomation(db, accountId, "no_show_nudge").catch((e): AutomationRow | null => {
@@ -156,6 +163,13 @@ export default async function AutomationsPage({
           brandName={account.brandName}
           smsGate={smsGate}
           saveAction={saveReferralAskAction.bind(null, accountId)}
+        />
+        {/* After the referral ask: the three completed-job rungs first,
+            then the recipe that reaches back months later. */}
+        <ReactivationCard
+          automation={reactivation}
+          brandName={account.brandName}
+          saveAction={saveReactivationAction.bind(null, accountId)}
         />
         <NoShowNudgeCard
           automation={noShow}

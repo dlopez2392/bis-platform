@@ -20,6 +20,7 @@ export const AUTOMATION_LOG_SOURCES = [
   // safe in the only direction that matters.
   "appointment_confirm",
   "referral_ask",
+  "reactivation",
 ] as const;
 export type AutomationLogSource = (typeof AUTOMATION_LOG_SOURCES)[number];
 export type AutomationLogChannel = "sms" | "email" | "ai";

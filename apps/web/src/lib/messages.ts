@@ -1277,6 +1277,31 @@ export const m = {
   "automations.referral.saved": "Referral asks saved",
   "automations.referral.saveFailed": "Could not save referral asks.",
 
+  // Part B — the reactivation check-in (a past customer gone quiet). EMAIL
+  // ONLY, so unlike every other recipe's copy in this file there is no GSM-7
+  // budget to keep: nothing here is ever measured by `segmentsFor`, because
+  // the due-row carries no phone number at all. The two numbers the card
+  // restates in words (the month range, the daily limit) cannot be
+  // interpolated from a constant, so `reactivation-copy.test.ts` pins each of
+  // them against the constant it has to agree with.
+  "automations.reactivation.defaultBody": "Hi, it's {name}. It's been a while since we were out at your place. If anything needs looking at before the season, just reply and we'll get you on the schedule.",
+  "automations.reactivation.defaultBodyNoName": "Hi. It's been a while since we were out at your place. If anything needs looking at before the season, just reply and we'll get you on the schedule.",
+  "automations.reactivation.subject": "A note from {name}",
+  "automations.reactivation.subjectNoName": "Checking in",
+  "automations.reactivation.title": "Checking in with past customers",
+  "automations.reactivation.body": "Email a past customer who hasn't been in touch for a while. Only people whose job you completed, at most five a day, and only once each — ever. Email only. Off until you turn it on.",
+  "automations.reactivation.enabled": "Check in with past customers",
+  "automations.reactivation.months": "Quiet for at least",
+  "automations.reactivation.monthsUnit": "months",
+  "automations.reactivation.monthsHint": "Between 6 and 18. Nine is a good default for seasonal work: last spring's customer still knows you.",
+  "automations.reactivation.message": "Message",
+  "automations.reactivation.messageHint": "Leave blank to send our default message. No discount, no offer — just an open door.",
+  "automations.reactivation.limitNote": "At most five a day, oldest first, and never twice to the same person.",
+  "automations.reactivation.save": "Save check-ins",
+  "automations.reactivation.saved": "Check-ins saved",
+  "automations.reactivation.saveFailed": "Could not save check-ins.",
+  "automations.reactivation.monthsInvalid": "Choose a number of months between 6 and 18.",
+
   // Part C — the Quiet hours card (agency, on the Automations page).
   "automations.quiet.title": "Quiet hours",
   "automations.quiet.body": "No automated texts or emails go to your customers between these hours. Anything due overnight waits and goes at the end. Your phone and website assistant still answer.",

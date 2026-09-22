@@ -17,7 +17,7 @@ vi.mock("@/lib/auth", () => ({
 import { m } from "@/lib/messages";
 import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 import {
-  saveReviewRequestAction, saveNoShowNudgeAction, saveReferralAskAction, saveSmsReminderAction,
+  saveReviewRequestAction, saveNoShowNudgeAction, saveReferralAskAction, saveReactivationAction, saveSmsReminderAction,
   saveAppointmentConfirmAction,
   saveInstantReplyAction, saveQuietHoursAction,
 } from "./actions";
@@ -157,6 +157,50 @@ describe("saveReferralAskAction", () => {
   });
 });
 
+describe("saveReactivationAction", () => {
+  it("refuses a non-agency caller before touching the database", async () => {
+    guardFixture.isAgency = false;
+    expect(await saveReactivationAction("acct_1", fd({ enabled: "on", months: "9" })))
+      .toEqual({ ok: false, error: m["automations.agencyOnly"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+  });
+
+  it("saves enabled + months + trimmed body through serviceDb, validated with the pass's own parser", async () => {
+    expect(await saveReactivationAction("acct_1", fd({ enabled: "on", months: "14", body: "  Still holding up?  " })))
+      .toEqual({ ok: true });
+    expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "reactivation",
+      { enabled: true, body: "Still holding up?", config: { months: 14 } }, "user_1");
+  });
+
+  it("REFUSES a months value outside the range rather than clamping it — at both bounds and one past each", async () => {
+    // The card's `max` makes this unreachable from a normal keyboard, which
+    // is why the parser's refusal is proved HERE and never in Playwright.
+    // Mutation: clamp instead of refusing (`Math.min(18, Math.max(6, n))`) →
+    // the two out-of-range lines red, and the operator would see one number
+    // while the send used another.
+    for (const months of ["5", "19", "9.5", "", "abc"]) {
+      expect(await saveReactivationAction("acct_1", fd({ enabled: "on", months })), months)
+        .toEqual({ ok: false, error: m["automations.reactivation.monthsInvalid"] });
+    }
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+    // …and AT each bound it saves, so the refusal is a range and not a wall.
+    expect(await saveReactivationAction("acct_1", fd({ months: "6" }))).toEqual({ ok: true });
+    expect(await saveReactivationAction("acct_1", fd({ months: "18" }))).toEqual({ ok: true });
+  });
+
+  it("a database failure comes back as a toastable failure", async () => {
+    dbMocks.upsertAutomation.mockRejectedValue(new Error("db down"));
+    expect(await saveReactivationAction("acct_1", fd({ enabled: "on", months: "9" })))
+      .toEqual({ ok: false, error: m["automations.reactivation.saveFailed"] });
+  });
+
+  it("stores a whitespace-only body as empty, so it keeps meaning 'use the default'", async () => {
+    expect(await saveReactivationAction("acct_1", fd({ months: "9", body: "  \n  " }))).toEqual({ ok: true });
+    expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "reactivation",
+      { enabled: false, body: "", config: { months: 9 } }, "user_1");
+  });
+});
+
 describe("saveSmsReminderAction", () => {
   it("refuses a non-agency caller before touching the database", async () => {
     guardFixture.isAgency = false;
@@ -233,6 +277,13 @@ describe("the body cap — every recipe refuses a message longer than AUTOMATION
       .toEqual({ ok: false, error: m["automations.bodyTooLong"] });
     expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
     expect(await saveReferralAskAction("acct_1", fd({ channel: "sms", body: atCap }))).toEqual({ ok: true });
+  });
+
+  it("reactivation check-in", async () => {
+    expect(await saveReactivationAction("acct_1", fd({ months: "9", body: tooLong })))
+      .toEqual({ ok: false, error: m["automations.bodyTooLong"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+    expect(await saveReactivationAction("acct_1", fd({ months: "9", body: atCap }))).toEqual({ ok: true });
   });
 
   it("appointment confirmation", async () => {

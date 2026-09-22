@@ -98,6 +98,10 @@ export const REASONS = {
    *  queue. The normal pass re-discovers the unstamped booking the next
    *  morning and moves this same row back to `held` or `sent` in place. */
   reviewFirst: "Waiting for the review request to go first",
+  /** A reactivation or a quote follow-up released after the customer had
+   *  already been in touch. Sending it anyway would talk straight over a live
+   *  conversation — the one failure mode these two recipes cannot survive. */
+  heardBack: "They've been in touch since",
   outsideRegion: "Number is outside the US, Canada or Mexico",
   consentWithheld: "They didn't agree to texts",
   robocall: "Screened as a robocall",

@@ -11,7 +11,7 @@
 import { revalidatePath } from "next/cache";
 import {
   serviceDb, upsertAutomation, parseReviewRequestConfig, parseNoShowNudgeConfig, parseReferralAskConfig,
-  parseInstantReplyConfig,
+  parseReactivationConfig, parseInstantReplyConfig,
   saveQuietSettings, bumpHeldForAccount, isClock,
   type ReviewRequestChannel,
 } from "@bis/db";
@@ -112,6 +112,36 @@ export async function saveReferralAskAction(
   } catch (e) {
     console.error(`saveReferralAskAction: save failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.referral.saveFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/automations`);
+  return { ok: true };
+}
+
+
+export async function saveReactivationAction(
+  accountId: string, formData: FormData,
+): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["automations.agencyOnly"] };
+
+  // The pass's own parser, on write. A months value outside the range is
+  // REFUSED, never clamped: silently turning a typo'd 99 into 18 would show
+  // the operator one number and send on another. The number input's own
+  // `max` makes this unreachable from a normal keyboard, which is why the
+  // refusal is proved here and never in Playwright. There is deliberately no
+  // channel to validate: this recipe is email only.
+  const config = parseReactivationConfig({ months: Number(formData.get("months")) });
+  if (!config) return { ok: false, error: m["automations.reactivation.monthsInvalid"] };
+  const enabled = formData.get("enabled") === "on";
+  const body = String(formData.get("body") ?? "").trim();
+  if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
+
+  try {
+    await upsertAutomation(serviceDb(), accountId, "reactivation", { enabled, body, config }, userId);
+  } catch (e) {
+    console.error(`saveReactivationAction: save failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.reactivation.saveFailed"] };
   }
 
   revalidatePath(`/dashboard/accounts/${accountId}/automations`);

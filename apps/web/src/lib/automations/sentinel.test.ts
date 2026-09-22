@@ -24,6 +24,8 @@ const dbMocks = vi.hoisted(() => ({
   listDueSmsReminders: vi.fn(), stampSmsReminderSent: vi.fn(), stampSmsReminderFailed: vi.fn(),
   listDueAppointmentConfirms: vi.fn(), getDueAppointmentConfirmById: vi.fn(),
   stampAppointmentConfirmAsked: vi.fn(), stampAppointmentConfirmSmsFailed: vi.fn(),
+  listDueReactivations: vi.fn(), getDueReactivationById: vi.fn(),
+  stampReactivationSent: vi.fn(), countReactivationsSince: vi.fn(), conversationQuietSince: vi.fn(),
   getAutomation: vi.fn(), hasRecentOutboundSms: vi.fn(), countInstantRepliesSince: vi.fn(), stampInstantReplySent: vi.fn(),
   ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(),
   listSitesToSync: vi.fn(),
@@ -43,7 +45,7 @@ const inlineSmsSend = vi.fn(async () => ({ providerMessageId: "s-inline" }));
 vi.mock("@/lib/sms", () => ({ getSmsProvider: () => ({ isFake: true, send: inlineSmsSend }) }));
 vi.mock("@/lib/email", () => ({ getEmailProvider: () => ({ isFake: true, send: async () => ({ providerMessageId: "e" }) }) }));
 
-import type { DueReminder, DueFollowup, DueAppointmentConfirm, DueReferralAsk } from "@bis/db";
+import type { DueReminder, DueFollowup, DueAppointmentConfirm, DueReferralAsk, DueReactivation } from "@bis/db";
 import { runPasses } from "./harness";
 import { PASSES } from "./registry";
 import type { PassContext } from "./context";
@@ -88,6 +90,18 @@ const REFERRAL_ROW: DueReferralAsk = {
   fromEmail: null, replyToEmail: null, body: "", config: { channel: "sms" },
 };
 
+/** Part B’s reactivation check-in — EMAIL ONLY, so the row carries no phone
+ *  number at all. Quiet since well before its own nine-month cutoff, and its
+ *  `lastMessageAt` sits BEFORE the tick: a stamp in the future would be the
+ *  same local day and the fixture would be green on a row that cannot occur. */
+const REACTIVATION_ROW: DueReactivation = {
+  contactId: "ct_8", accountId: "acct_1",
+  lastMessageAt: "2025-07-14T16:20:00.000Z", quietMonths: 9,
+  contactEmail: "e@example.com", contactName: "E",
+  brandName: BRAND, branding, accountTimezone: "America/New_York",
+  fromEmail: null, replyToEmail: null, body: "",
+};
+
 beforeEach(() => {
   for (const fn of Object.values(dbMocks)) fn.mockReset().mockResolvedValue(undefined);
   dbMocks.listDueReminders.mockResolvedValue([REMINDER_ROW]);
@@ -129,6 +143,15 @@ beforeEach(() => {
   // `undefined` to the pass's `for…of`, which throws — the harness then
   // reports the pass `errored` and the scan never looks at what it sent.
   dbMocks.listDueAppointmentConfirms.mockResolvedValue([CONFIRM_ROW]);
+  // And the same again for the reactivation pass. TWO explicit values, not
+  // one: left at the reset’s `undefined`, `listDueReactivations` throws the
+  // pass into `errored` and `conversationQuietSince` reads falsy, which
+  // would skip every row as `heardBack` — either way the scan never looks at
+  // what this recipe sent. The positive counter guard below is what proves
+  // it did send.
+  dbMocks.listDueReactivations.mockResolvedValue([REACTIVATION_ROW]);
+  dbMocks.conversationQuietSince.mockResolvedValue(true);
+  dbMocks.countReactivationsSince.mockResolvedValue(0);
   dbMocks.ensureConversation.mockResolvedValue({ id: "convo_1", created: false });
   dbMocks.createMessage.mockResolvedValue({ id: "msg_1" });
   // The site-traffic pass sends nothing, so it has no row here — but it must
@@ -172,6 +195,7 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(results.noShowNudges?.sent).toBe(2);
     expect(results.smsReminders?.sent).toBe(1);
     expect(results.appointmentConfirms?.sent).toBe(1);
+    expect(results.reactivations?.sent).toBe(1);
     // …and the two passes that send nothing this tick ran to their counters,
     // not to `errored`.
     expect(results.siteTraffic).toEqual(expect.objectContaining({ synced: 0, failed: 0 }));
@@ -189,8 +213,8 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(everything).toContain(BRAND);   // and the brand name DID go out, in its place
   });
 
-  it("the registry runs the release pass, then reminders, follow-ups, review requests, referral asks, no-show nudges, text reminders, appointment confirmations, site traffic, then the two weekly reports — the first three's order is the collision's contract", () => {
-    expect(PASSES.map((p) => p.key)).toEqual(["releaseHeld", "reminders", "followups", "reviewRequests", "referralAsks", "noShowNudges", "smsReminders", "appointmentConfirms", "siteTraffic", "weeklyClientReport", "weeklyAgencyReport"]);
+  it("the registry runs the release pass, then reminders, follow-ups, review requests, referral asks, no-show nudges, text reminders, appointment confirmations, check-ins, site traffic, then the two weekly reports — the first three's order is the collision's contract", () => {
+    expect(PASSES.map((p) => p.key)).toEqual(["releaseHeld", "reminders", "followups", "reviewRequests", "referralAsks", "noShowNudges", "smsReminders", "appointmentConfirms", "reactivations", "siteTraffic", "weeklyClientReport", "weeklyAgencyReport"]);
   });
 
   /**
