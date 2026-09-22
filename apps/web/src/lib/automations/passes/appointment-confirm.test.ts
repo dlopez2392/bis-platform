@@ -17,6 +17,7 @@ const gate = vi.fn(async () => ({ ok: true as const, from: "+19565550000" }));
 vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => gate(...(a as [])) }));
 
 import type { PassContext } from "../context";
+import { STAMP_RETRY_DELAYS_MS } from "@/lib/booking/stamp-retry";
 import { appointmentConfirmPass, releaseAppointmentConfirm } from "./appointment-confirm";
 
 const TICK = new Date("2027-04-12T12:00:00.000Z");
@@ -59,7 +60,16 @@ function heldRow(over: Partial<AutomationLogRow> = {}): AutomationLogRow {
   } as AutomationLogRow;
 }
 
-beforeEach(() => { vi.clearAllMocks(); gate.mockResolvedValue({ ok: true, from: "+19565550000" }); });
+beforeEach(() => {
+  vi.clearAllMocks();
+  gate.mockResolvedValue({ ok: true, from: "+19565550000" });
+  // `clearAllMocks` clears CALLS, not IMPLEMENTATIONS. Without this the
+  // unstamped case's rejection survives into every test after it — each then
+  // silently pays stampWithRetry's whole ~0.9s budget (the file went from
+  // 1.06s to 3.80s when that case was added), and a later case could pass or
+  // fail on a fixture set three tests earlier.
+  dbMocks.stampAppointmentConfirmAsked.mockReset();
+});
 
 describe("the confirmation ask sends", () => {
   it("texts, stamps, and writes ONE sent log row", async () => {
@@ -86,6 +96,46 @@ describe("the confirmation ask sends", () => {
     expect(send).not.toHaveBeenCalled();
     expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       status: "skipped", reason: "No phone number we can text",
+    }));
+  });
+
+  it("a send that throws is counted FAILED, writes the attempt marker and a failed log row, and NEVER stamps", async () => {
+    // Send-then-stamp is the load-bearing half: a stamp written before a send
+    // that then failed would silence this booking's ask for good, because the
+    // due-list filters on `confirm_asked_at is null`. The attempt marker
+    // (`confirm_sms_failed_at`) is written instead — visible to the operator,
+    // never read back by this pass (caps.ts's exemption).
+    // Mutation: move the `stampWithRetry` call ABOVE `sendAutomationSms`
+    // inside the holdOrSend callback → this reds BY NAME on the last line.
+    dbMocks.listDueAppointmentConfirms.mockResolvedValue([row()]);
+    send.mockRejectedValueOnce(new Error("carrier timeout"));
+    const c = await appointmentConfirmPass.run(ctx());
+    expect(c).toEqual({ sent: 0, failed: 1, unstamped: 0, held: 0, skippedNoAddress: 0, skippedSmsGate: 0 });
+    expect(dbMocks.stampAppointmentConfirmSmsFailed).toHaveBeenCalledWith(expect.anything(), "bk_1");
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      source: "appointment_confirm", subjectKey: "booking:bk_1", status: "failed", reason: "Couldn't be delivered",
+    }));
+    expect(dbMocks.stampAppointmentConfirmAsked).not.toHaveBeenCalled();
+  });
+
+  it("a text that SENT but could not be stamped is counted UNSTAMPED and still counted sent — the duplicate is the known cost", async () => {
+    // `stampWithRetry` spends its whole budget (three attempts) and gives up
+    // without throwing, so the send is real: the customer has the text, the
+    // row is still unstamped, and it is due again every tick until the
+    // 75-minute window closes. Counting it `sent` AND `unstamped` is what
+    // makes that visible in the cron's body rather than a silent repeat.
+    // Mutation: delete the `if (!stamp.stamped)` block → `unstamped` stays 0
+    // and this reds BY NAME.
+    dbMocks.listDueAppointmentConfirms.mockResolvedValue([row()]);
+    dbMocks.stampAppointmentConfirmAsked.mockRejectedValue(new Error("PostgREST 503"));
+    const c = await appointmentConfirmPass.run(ctx());
+    expect(c).toEqual({ sent: 1, failed: 0, unstamped: 1, held: 0, skippedNoAddress: 0, skippedSmsGate: 0 });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(dbMocks.stampAppointmentConfirmAsked).toHaveBeenCalledTimes(STAMP_RETRY_DELAYS_MS.length + 1);
+    // The log row still says `sent`, because it was: the log is what went out,
+    // not whether the bookkeeping afterwards landed.
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      subjectKey: "booking:bk_1", status: "sent",
     }));
   });
 

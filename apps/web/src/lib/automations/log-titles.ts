@@ -1,9 +1,10 @@
 import type { AutomationLogSource, AutomationLogChannel, AutomationLogStatus } from "@bis/db";
 import { m } from "@/lib/messages";
 
-/** A recipe KEY never reaches a screen (DESIGN.md, Voice). The four recipe
- *  cards' own titles are reused so the history and the settings page name
- *  the same thing the same way. */
+/** A recipe KEY never reaches a screen (DESIGN.md, Voice). Each recipe card's
+ *  own title is reused so the history and the settings page name the same
+ *  thing the same way. (No count in this sentence on purpose: it said "four"
+ *  and part B makes it eight, one task at a time.) */
 export const SOURCE_TITLES: Record<AutomationLogSource, string> = {
   reminders: m["activity.source.reminders"],
   followups: m["activity.source.followups"],

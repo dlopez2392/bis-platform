@@ -13,6 +13,7 @@ import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { m } from "@/lib/messages";
 import { segmentsFor } from "@/lib/sms/segments";
+import { withOptOut } from "@/lib/sms/opt-out";
 import { safeZone, formatWhen } from "@/lib/booking/time";
 import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 import { composeAppointmentConfirm } from "@/lib/automations/appointment-confirm-copy";
@@ -36,7 +37,18 @@ export function AppointmentConfirmCard({
   // approves is not optimistic and does not drift day to day. Reused rather
   // than copied: two preview instants would be two things to keep in step.
   const when = formatWhen(SMS_REMINDER_PREVIEW_INSTANT, safeZone(accountTimezone, "UTC"));
-  const previewText = composeAppointmentConfirm(brandName, when, body);
+  // THROUGH `withOptOut`, and that is the whole message, not a flourish:
+  // `sendAutomationSms` appends the disclosure unconditionally (send-sms.ts's
+  // `withOptOut(input.body, input.language)`) because it is a property of the
+  // SEND PATH, not of any recipe's copy. Counting the composed body alone
+  // reports a number no customer receives and no client is billed — for this
+  // recipe, 160 + len(brandName) septets are billed against 137 + len(brandName)
+  // shown, so there is no company name for which it is right. The `<output>`
+  // shows the same disclosed string it counts: opt-out.ts's own rule is that
+  // an operator must never read a shorter message than the customer got.
+  // `withOptOut` is idempotent on `\bstop\b`, so an operator who wrote the
+  // sentence themselves is not double-counted.
+  const previewText = withOptOut(composeAppointmentConfirm(brandName, when, body));
   const preview = segmentsFor(previewText);
 
   const { pending, onSubmit } = useFormSubmit(async (formData) => {

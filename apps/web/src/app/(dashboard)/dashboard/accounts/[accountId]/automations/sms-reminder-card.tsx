@@ -13,6 +13,7 @@ import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { m } from "@/lib/messages";
 import { segmentsFor } from "@/lib/sms/segments";
+import { withOptOut } from "@/lib/sms/opt-out";
 import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 import { safeZone, formatWhen } from "@/lib/booking/time";
 import {
@@ -33,11 +34,20 @@ export function SmsReminderCard({
 }) {
   const [body, setBody] = useState(automation?.body ?? "");
 
-  // THE PREVIEW IS THE COMPOSED STRING — lead with a sample time, then the
-  // closing line — through the ONE composer the pass uses, so the count the
-  // operator approves is the count that sends (±2 characters of date width).
+  // THE PREVIEW IS THE SENT STRING — lead with a sample time, then the
+  // closing line, then the opt-out disclosure — through the ONE composer the
+  // pass uses AND the same `withOptOut` the send path applies, so the count
+  // the operator approves is the count that sends (±2 characters of date
+  // width). The disclosure was missing here until part B: it is added
+  // unconditionally in `sendAutomationSms` because it belongs to the SEND
+  // PATH rather than to any recipe's copy, and leaving it out of the count
+  // under-reported by 23 septets. Harmless for the default (122 → 145, still
+  // one segment) and not harmless at all for a real operator body — 150
+  // composed reads as one segment where 173 disclosed is two. `withOptOut` is
+  // idempotent on `\bstop\b`, so an operator who wrote the sentence
+  // themselves is not double-counted.
   const when = formatWhen(SMS_REMINDER_PREVIEW_INSTANT, safeZone(accountTimezone, "UTC"));
-  const composed = composeSmsReminder(brandName, when, body.trim() || defaultSmsReminderBody());
+  const composed = withOptOut(composeSmsReminder(brandName, when, body.trim() || defaultSmsReminderBody()));
   const preview = segmentsFor(composed);
 
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
