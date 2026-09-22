@@ -84,8 +84,40 @@ describe("createClientAccount", () => {
     expect(clerkMocks.deleteOrg).toHaveBeenCalledWith("org_test_evil");
   });
 
+  it("logs the rollback's own failure instead of swallowing it silently", async () => {
+    // "Nothing was saved." above is a lie if the Clerk org survives because
+    // the compensating rollback itself failed — orphans.ts surfaces that
+    // later, but only if this log exists to find.
+    clerkMocks.createOrg.mockResolvedValue({ id: "org_test_evil" });
+    clerkMocks.deleteOrg.mockRejectedValue(new Error("clerk is down"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await expect(createClientAccount(form())).rejects.toThrow(
+        "We could not create this account. The new organization came back with an id " +
+        "we reserve for test data, and accounts with that kind of id are deleted " +
+        "automatically an hour later. Nothing was saved. Please try again, and tell " +
+        "the BIS team if it happens twice.",
+      );
+
+      expect(
+        errorSpy.mock.calls.some((call) =>
+          call.some((arg) => typeof arg === "string" && arg.includes("org_test_evil")),
+        ),
+      ).toBe(true);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it("refuses an unusable timezone before it makes a Clerk organisation", async () => {
-    await expect(createClientAccount(form({ timezone: "Mars/Olympus" }))).rejects.toThrow();
+    // Real message from packages/db/src/timezone.ts's assertUsableZone,
+    // pinned so a bare `.rejects.toThrow()` can't pass on any rejection at
+    // all — it must be THIS zone check that fired.
+    await expect(createClientAccount(form({ timezone: "Mars/Olympus" }))).rejects.toThrow(
+      '"Mars/Olympus" is not a timezone this platform can use. ' +
+      "Use an IANA zone name like America/Chicago.",
+    );
 
     expect(clerkMocks.createOrg).not.toHaveBeenCalled();
     expect(dbMocks.createAccount).not.toHaveBeenCalled();

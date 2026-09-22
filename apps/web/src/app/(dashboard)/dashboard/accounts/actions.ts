@@ -33,6 +33,14 @@ export async function createClientAccount(formData: FormData): Promise<void> {
     // it is an hour old (packages/db/src/test/sweep-fixtures.ts), so a
     // test-shaped id that became a real tenant would be a business's account
     // quietly disappearing overnight.
+    //
+    // The thrown message below is a LOG message, plainly, not operator copy:
+    // create-account-dialog.tsx:38-50 wraps this call in try/catch and toasts
+    // the generic m["accounts.createFailed"] for EVERY non-redirect error, so
+    // this text is read here and in actions.test.ts, never by the operator
+    // who hit it. Making it operator-visible would need this action to
+    // return a typed { ok:false, message } the dialog renders instead of
+    // throwing — a contract change, and a follow-up, not this fix.
     if (isTestOrgId(org.id)) {
       throw new Error(
         "We could not create this account. The new organization came back with an id " +
@@ -42,8 +50,14 @@ export async function createClientAccount(formData: FormData): Promise<void> {
     }
     ({ id } = await createAccount(serviceDb(), { clerkOrgId: org.id, name, timezone, actorId: userId }));
   } catch (err) {
-    // compensating rollback: never leave a Clerk org without a tenant row
-    await clerk.organizations.deleteOrganization(org.id).catch(() => {});
+    // compensating rollback: never leave a Clerk org without a tenant row.
+    // Its own failure is swallowed — `err` above is what the caller sees —
+    // but logged: a failed rollback here means the Clerk org SURVIVES while
+    // the refusal above says "Nothing was saved.", and orphans.ts can only
+    // surface that later if this log exists to find.
+    await clerk.organizations.deleteOrganization(org.id).catch((rollbackErr) => {
+      console.error(`compensating rollback failed for org ${org.id}:`, rollbackErr);
+    });
     throw err;
   }
 
