@@ -102,8 +102,14 @@ function namedImportsFromBisDb(code: string): string[] {
 
 describe("deleteAccountCascade / ACCOUNT_OWNED_TABLES stay inside test code", () => {
   it("no non-test file under apps/web/src imports either from @bis/db", () => {
+    const files = walk(WEB_SRC);
+    // Floor is a round number well below today's real count (412 on
+    // 2026-09-22) so a wrong-but-existing directory (e.g. an empty one, or
+    // one pointed at a stray handful of files) fails loudly instead of
+    // vacuously passing an empty `offenders` list.
+    expect(files.length).toBeGreaterThan(100);
     const offenders: string[] = [];
-    for (const file of walk(WEB_SRC)) {
+    for (const file of files) {
       const imported = namedImportsFromBisDb(stripComments(fs.readFileSync(file, "utf8")));
       for (const symbol of GUARDED_SYMBOLS) {
         if (imported.includes(symbol)) {
