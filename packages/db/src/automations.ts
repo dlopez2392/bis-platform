@@ -14,7 +14,7 @@ import { loadSendableRows, type AccountBrandInfo, type DueLookup } from "./booki
  */
 export type RecipeKey =
   | "review_request" | "no_show_nudge" | "sms_reminder" | "instant_reply"
-  | "appointment_confirm";
+  | "appointment_confirm" | "referral_ask";
 
 export type AutomationRow = {
   id: string; account_id: string; recipe_key: RecipeKey;
@@ -820,6 +820,203 @@ export async function applyConfirmationReply(
     .select("id").maybeSingle();
   if (uErr) throw new Error(`applyConfirmationReply write failed: ${uErr.message}`);
   return written ? answer : null;
+}
+
+// ---------------------------------------------------------------------------
+// Recipe: referral ask — the completed-job ladder's third rung (part B)
+// ---------------------------------------------------------------------------
+
+export type ReferralAskChannel = "email" | "sms";
+export type ReferralAskConfig = { channel: ReferralAskChannel };
+
+/** jsonb is untrusted on read AND write, the review request's contract.
+ *  `null` means "treat as missing" and the pass sends nothing. There is
+ *  deliberately NO url field: the referral ask asks for a NAME, never a
+ *  rating, and a config with nowhere to put a link is how that stays true. */
+export function parseReferralAskConfig(raw: unknown): ReferralAskConfig | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const { channel } = raw as Record<string, unknown>;
+  if (channel !== "email" && channel !== "sms") return null;
+  return { channel };
+}
+
+/**
+ * The follow-up's 37h, plus one local day for the review request (61h), plus
+ * one more for this. Day one "how did it go?", day two "would you leave a
+ * review?", day three "know anyone else?" — each rung one strictly-later
+ * local day than the last, so the ladder is a ladder and not a pile.
+ * cron-coupling.test.ts pins the derivation, as it already pins the 61h.
+ */
+export const REFERRAL_ASK_MAX_AGE_MS = REVIEW_REQUEST_MAX_AGE_MS + 24 * 60 * 60 * 1000;
+
+export type DueReferralAsk = {
+  bookingId: string; accountId: string;
+  endsAt: string;
+  /** The completion clock (0026); the pass runs from laterOf(endsAt, completedAt). */
+  completedAt: string | null;
+  /** Rung one's stamp. The gate defers to a strictly later local day. */
+  followupSentAt: string | null;
+  /** Rung two's stamp. Same deferral — never the same morning as the review. */
+  reviewRequestedAt: string | null;
+  /** The last FAILED referral text for this booking. Read back (24h cooldown). */
+  smsFailedAt: string | null;
+  /** THE PRECEDENCE INPUT. When review_request is ON for this account and
+   *  `reviewRequestedAt` is still null and the anchor is still inside 61h,
+   *  the referral ask WAITS — so the review always goes first, never merely
+   *  usually. Resolved here, in the data layer, by a second narrow
+   *  `listEnabled` read, because the gate is pure and cannot query. */
+  reviewRequestEnabled: boolean;
+  contactId: string; contactEmail: string | null; contactPhone: string | null;
+  brandName: string; branding: Branding; accountTimezone: string;
+  fromEmail: string | null; replyToEmail: string | null;
+  body: string;
+  config: ReferralAskConfig | null;
+};
+
+// ONE string literal, never a `+` concatenation, however long the line gets.
+// supabase-js parses the select at the TYPE level off a string LITERAL; a
+// concatenated expression is plain `string`, the parser answers
+// `GenericStringError`, and the `data as { account_id: string }` cast below
+// then fails `tsc` with "neither type sufficiently overlaps". Every other
+// *_SELECT in this file is one literal for the same reason.
+const REFERRAL_ASK_SELECT =
+  "id, account_id, contact_id, ends_at, completed_at, followup_sent_at, review_requested_at, referral_ask_sms_failed_at, contacts(email, phone)";
+
+function toDueReferralAsk(
+  r: any, info: AccountBrandInfo, auto: EnabledRecipe, reviewRequestEnabled: boolean,
+): DueReferralAsk {
+  return {
+    bookingId: r.id,
+    accountId: r.account_id,
+    endsAt: r.ends_at,
+    completedAt: r.completed_at ?? null,
+    followupSentAt: r.followup_sent_at ?? null,
+    reviewRequestedAt: r.review_requested_at ?? null,
+    smsFailedAt: r.referral_ask_sms_failed_at ?? null,
+    reviewRequestEnabled,
+    contactId: r.contact_id,
+    contactEmail: r.contacts?.email ?? null,
+    contactPhone: r.contacts?.phone ?? null,
+    brandName: brandDisplayName(info.branding),
+    branding: info.branding,
+    accountTimezone: info.accountTimezone,
+    fromEmail: info.fromEmail,
+    replyToEmail: info.replyToEmail,
+    body: auto.body,
+    config: parseReferralAskConfig(auto.config),
+  };
+}
+
+/**
+ * Candidates, not decisions: `shouldSendReferralAskNow` decides the MOMENT.
+ * The query only says "enabled, completed, unstamped, inside 85h by either
+ * anchor". The SECOND `listEnabled` read is the precedence input and costs
+ * one narrow indexed query per tick, not one per row.
+ *
+ * THE INDEXES THAT SERVE IT are its own, added by 0047:
+ * `bookings_referral_due` on `(ends_at) where status = 'completed' and
+ * referral_asked_at is null` and `bookings_referral_due_completed` on
+ * `(completed_at)` with the same predicate — one per anchor, because the
+ * `.or(...)` is a union of two ranges. The review request's pair
+ * (`bookings_review_due`, `bookings_review_due_completed`) CANNOT serve this
+ * query: a partial index is only chosen when its predicate is implied by the
+ * query's, and `referral_asked_at is null` does not imply
+ * `review_requested_at is null`.
+ */
+export async function listDueReferralAsks(
+  db: SupabaseClient, nowIso: string,
+): Promise<DueReferralAsk[]> {
+  const enabled = await listEnabled(db, "referral_ask", "listDueReferralAsks");
+  if (enabled.size === 0) return [];
+  const reviewOn = await listEnabled(db, "review_request", "listDueReferralAsks");
+
+  const now = new Date(nowIso).getTime();
+  const windowStart = new Date(now - REFERRAL_ASK_MAX_AGE_MS).toISOString();
+  const windowEnd = new Date(now).toISOString();
+
+  const { data, error } = await db.from("bookings")
+    .select(REFERRAL_ASK_SELECT)
+    .in("account_id", [...enabled.keys()])
+    .eq("status", "completed").is("referral_asked_at", null)
+    .or(eitherAnchorSince("completed_at", windowStart))
+    .lte("ends_at", windowEnd)
+    .order("ends_at", { ascending: true });
+  if (error) throw new Error(`listDueReferralAsks failed: ${error.message}`);
+
+  const rows = (data ?? []) as any[];
+  if (rows.length === 0) return [];
+
+  const { sendable, accountInfo } = await loadSendableRows(
+    db, rows as { account_id: string }[], "listDueReferralAsks");
+
+  return sendable.map((r: any) => toDueReferralAsk(
+    r, accountInfo.get(r.account_id as string)!, enabled.get(r.account_id as string)!,
+    reviewOn.has(r.account_id as string)));
+}
+
+export async function getDueReferralAskById(
+  db: SupabaseClient, bookingId: string,
+): Promise<DueLookup<DueReferralAsk>> {
+  const { data, error } = await db.from("bookings")
+    .select(REFERRAL_ASK_SELECT)
+    .eq("id", bookingId).eq("status", "completed").is("referral_asked_at", null).maybeSingle();
+  if (error) throw new Error(`getDueReferralAskById failed: ${error.message}`);
+  if (!data) return { due: null, why: "gone" };
+  const accountId = (data as any).account_id as string;
+  const auto = await enabledRecipeFor(db, accountId, "referral_ask");
+  if (!auto) return { due: null, why: "off" };
+  // A STORED CONFIG THAT NO LONGER PARSES IS `off` FOR A RELEASE, and saying
+  // so HERE is what keeps a released row from parking. On a normal tick
+  // `processReferralAsks` is silent on `config === null` (the channel is
+  // unknown before the config parses, so there is no subject to write
+  // against) and that is right — the row is simply examined again next tick.
+  // A RELEASED row given the same silence keeps its past `held_until` and is
+  // handed back every tick for ever, the parked-row bug. Answering `off`
+  // sends `releaseReferralAsk` down its existing `REASONS.recipeOff` path,
+  // which writes a real row and takes the hold out of the queue. Same shape
+  // as `getDueQuoteFollowupById` (Task 9), and the reason Task 6's releaser
+  // can state that its `config === null` branch is unreachable on a release.
+  if (parseReferralAskConfig(auto.config) === null) return { due: null, why: "off" };
+  // The precedence input, re-read for THIS account: the agency may have
+  // turned the review request on during the hold, and a release that ignored
+  // that would text a referral ask before the review it must follow.
+  const review = await enabledRecipeFor(db, accountId, "review_request");
+  const { sendable, accountInfo } = await loadSendableRows(
+    db, [data as { account_id: string }], "getDueReferralAskById");
+  if (sendable.length === 0) return { due: null, why: "off" };
+  return { due: toDueReferralAsk(data, accountInfo.get(accountId)!, auto, review !== null) };
+}
+
+/** Send-then-stamp. One referral ask per booking, ever. */
+export async function stampReferralAsked(db: SupabaseClient, bookingId: string): Promise<void> {
+  const { error } = await db.from("bookings")
+    .update({ referral_asked_at: new Date().toISOString() })
+    .eq("id", bookingId);
+  if (error) throw new Error(`stampReferralAsked failed: ${error.message}`);
+}
+
+/** The ATTEMPT marker, read back by the pass for SMS_RETRY_COOLDOWN_MS. */
+export async function stampReferralAskSmsFailed(db: SupabaseClient, bookingId: string): Promise<void> {
+  const { error } = await db.from("bookings")
+    .update({ referral_ask_sms_failed_at: new Date().toISOString() })
+    .eq("id", bookingId);
+  if (error) throw new Error(`stampReferralAskSmsFailed failed: ${error.message}`);
+}
+
+/** The daily cap's input, counted off the stamp column itself — no ledger
+ *  table and no timezone: "a day" is a rolling 24 hours from the tick.
+ *  Served by 0047's `bookings_referral_ask_count` on
+ *  `(account_id, referral_asked_at) where referral_asked_at is not null` —
+ *  a head-only count that never touches a heap page. */
+export async function countReferralAsksSince(
+  db: SupabaseClient, accountId: string, sinceIso: string,
+): Promise<number> {
+  const { count, error } = await db.from("bookings")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId)
+    .gte("referral_asked_at", sinceIso);
+  if (error) throw new Error(`countReferralAsksSince failed: ${error.message}`);
+  return count ?? 0;
 }
 
 // ---------------------------------------------------------------------------

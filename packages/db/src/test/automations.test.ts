@@ -22,6 +22,9 @@ import {
   matchConfirmationReply, applyConfirmationReply,
   APPOINTMENT_CONFIRM_WINDOW_START_MS, APPOINTMENT_CONFIRM_WINDOW_END_MS,
   APPOINTMENT_CONFIRM_MIN_LEAD_MS,
+  parseReferralAskConfig, listDueReferralAsks, getDueReferralAskById,
+  stampReferralAsked, stampReferralAskSmsFailed, countReferralAsksSince,
+  REFERRAL_ASK_MAX_AGE_MS,
 } from "../automations";
 
 const HOUR = 60 * 60 * 1000;
@@ -714,6 +717,197 @@ describe("appointment confirm — data layer", () => {
       expect(await applyConfirmationReply(db, stranger, contactId, "yes", new Date("2027-06-01T12:00:00Z"))).toBeNull();
       const { data } = await db.from("bookings").select("confirm_reply").eq("id", b.id).single();
       expect((data as { confirm_reply: string | null }).confirm_reply).toBeNull();
+    });
+  });
+});
+
+describe("referral ask — data layer", () => {
+  it("the cap is 85 hours, which is the review request's cap plus one local day", () => {
+    // THE LITERAL FIRST. `REFERRAL_ASK_MAX_AGE_MS = REVIEW_REQUEST_MAX_AGE_MS + 24h`
+    // is the constant's own definition, so asserting only the derivation is a
+    // tautology: change both constants and it stays green. 85h is the number
+    // this recipe promises, so 85h is what is pinned; the derivation is
+    // asserted second, as the STATEMENT that the three rungs are one local
+    // day apart.
+    expect(REFERRAL_ASK_MAX_AGE_MS).toBe(85 * HOUR);
+    expect(REFERRAL_ASK_MAX_AGE_MS).toBe(REVIEW_REQUEST_MAX_AGE_MS + 24 * HOUR);
+  });
+
+  it("parseReferralAskConfig takes a channel and NOTHING else — there is nowhere to put a link", () => {
+    expect(parseReferralAskConfig({ channel: "sms" })).toEqual({ channel: "sms" });
+    expect(parseReferralAskConfig({ channel: "email", reviewUrl: "https://x.example" })).toEqual({ channel: "email" });
+    for (const bad of [null, undefined, "sms", 1, [], {}, { channel: "fax" }, { channel: "" }]) {
+      expect(parseReferralAskConfig(bad), JSON.stringify(bad)).toBeNull();
+    }
+    // Mutation: spread `raw` into the result → the second expectation reds,
+    // because a reviewUrl would survive into the config the pass reads.
+  });
+
+  it("listDueReferralAsks: completed, unstamped, inside 85h → due, and carries the precedence input", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await setBranding(db, accountId, { brandName: "Fixture Brand" }, "user_test");
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId,
+        { firstName: "Ref", email: "ref@example.com", phone: "(956) 555-0112" }, "user_test");
+      const now = new Date("2027-08-20T12:00:00Z");
+      const mk = async (endsAt: Date) => {
+        const b = await createBooking(db, accountId,
+          { calendarId: cal.id, contactId, startsAt: new Date(endsAt.getTime() - MINUTE), endsAt }, "user_test");
+        await setBookingStatus(db, accountId, b.id, "completed", "user_test");
+        return b;
+      };
+
+      const fresh = await mk(new Date(now.getTime() - 30 * HOUR));
+      expect((await listDueReferralAsks(db, now.toISOString())).map((r) => r.bookingId)).not.toContain(fresh.id);
+
+      await upsertAutomation(db, accountId, "referral_ask",
+        { enabled: true, body: "", config: { channel: "sms" } }, "user_test");
+      // ONE MILLISECOND either side of the 85h ceiling, never "a week ago":
+      // a fixture far past the bound passes against any ceiling. Built from
+      // the LITERAL 85h, not from REFERRAL_ASK_MAX_AGE_MS: the query window
+      // is derived from that same constant, so a fixture built from it moves
+      // with the window and the pair survives any value the constant takes.
+      const CEILING = 85 * HOUR;
+      const atCeiling = await mk(new Date(now.getTime() - CEILING));
+      const pastCeiling = await mk(new Date(now.getTime() - CEILING - 1));
+      const stamped = await mk(new Date(now.getTime() - 40 * HOUR));
+      await stampReferralAsked(db, stamped.id);
+
+      // THE LADDER'S OWN COLUMNS, written straight onto `fresh`. Four
+      // PAIRWISE DISTINCT instants, so a projection wired to the wrong
+      // column reds instead of matching its neighbour, and the two rungs
+      // land on DIFFERENT LOCAL DAYS in the account's zone
+      // (America/Chicago, CDT here): the follow-up at 09:00 on the 19th and
+      // the review at 06:30 on the 20th. A fixture where those two share an
+      // instant is satisfied by whichever of the gate's clauses survives a
+      // mutation, so it proves neither — the shape this branch has already
+      // shipped once.
+      const COMPLETED_AT = "2027-08-19T07:00:00.000Z";   // 02:00 CDT, the 19th
+      const FOLLOWUP_AT = "2027-08-19T14:00:00.000Z";    // 09:00 CDT, the 19th
+      const REVIEWED_AT = "2027-08-20T11:30:00.000Z";    // 06:30 CDT, the 20th
+      const SMS_FAILED_AT = "2027-08-20T11:45:00.000Z";  // 06:45 CDT, the 20th
+      {
+        const { error } = await db.from("bookings").update({
+          completed_at: COMPLETED_AT, followup_sent_at: FOLLOWUP_AT,
+          review_requested_at: REVIEWED_AT, referral_ask_sms_failed_at: SMS_FAILED_AT,
+        }).eq("id", fresh.id);
+        if (error) throw new Error(`ladder fixture write failed: ${error.message}`);
+      }
+
+      const list = await listDueReferralAsks(db, now.toISOString());
+      const ids = list.map((r) => r.bookingId);
+      expect(ids).toContain(fresh.id);
+      expect(ids).toContain(atCeiling.id);
+      // Mutation: change REFERRAL_ASK_MAX_AGE_MS to 86h → pastCeiling falls
+      // inside the widened window and this reds; change it to 84h and the
+      // atCeiling row above reds instead.
+      expect(ids).not.toContain(pastCeiling.id);
+      expect(ids).not.toContain(stamped.id);
+
+      const row = list.find((r) => r.bookingId === fresh.id)!;
+      expect(row.brandName).toBe("Fixture Brand");
+      expect(row).not.toHaveProperty("accountName");
+      expect(row.config).toEqual({ channel: "sms" });
+      expect(row.contactId).toBe(contactId);
+      expect(row.contactEmail).toBe("ref@example.com");
+      expect(row.contactPhone).toBe("(956) 555-0112");
+      // EVERY LADDER COLUMN BY VALUE, never `not.toBeNull()`: a column
+      // dropped from REFERRAL_ASK_SELECT comes back `undefined`, and
+      // `expect(undefined).not.toBeNull()` PASSES. Task 6's gate reads all
+      // three of these, so a silently-missing one would be a recipe that
+      // sends on the same morning as the review it must follow.
+      expect(new Date(row.endsAt).getTime()).toBe(now.getTime() - 30 * HOUR);
+      expect(new Date(row.completedAt!).getTime()).toBe(Date.parse(COMPLETED_AT));
+      expect(new Date(row.followupSentAt!).getTime()).toBe(Date.parse(FOLLOWUP_AT));
+      expect(new Date(row.reviewRequestedAt!).getTime()).toBe(Date.parse(REVIEWED_AT));
+      expect(new Date(row.smsFailedAt!).getTime()).toBe(Date.parse(SMS_FAILED_AT));
+      // An unstamped row projects nulls, not undefineds — so "the column is
+      // absent" and "the column is empty" cannot be confused by a reader or
+      // by the gate.
+      const clean = list.find((r) => r.bookingId === atCeiling.id)!;
+      expect(clean.followupSentAt).toBeNull();
+      expect(clean.reviewRequestedAt).toBeNull();
+      expect(clean.smsFailedAt).toBeNull();
+      // review_request is OFF for this account, so the precedence input is false.
+      expect(row.reviewRequestEnabled).toBe(false);
+
+      await upsertAutomation(db, accountId, "review_request",
+        { enabled: true, body: "", config: { channel: "email", reviewUrl: "https://g.page/r/x/review" } }, "user_test");
+      const after = (await listDueReferralAsks(db, now.toISOString())).find((r) => r.bookingId === fresh.id)!;
+      // Mutation: hard-code `reviewRequestEnabled: false` in toDueReferralAsk
+      // → this reds and the whole precedence rule silently stops working.
+      expect(after.reviewRequestEnabled).toBe(true);
+    });
+  });
+
+  it("a suppressed account's completed booking is never due, by list or by id", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Hush", email: "h@example.com" }, "user_test");
+      await upsertAutomation(db, accountId, "referral_ask", { enabled: true, body: "", config: { channel: "email" } }, "user_test");
+      const now = new Date("2027-08-20T12:00:00Z");
+      const b = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date(now.getTime() - 31 * HOUR), endsAt: new Date(now.getTime() - 30 * HOUR) }, "user_test");
+      await setBookingStatus(db, accountId, b.id, "completed", "user_test");
+      expect((await listDueReferralAsks(db, now.toISOString())).map((r) => r.bookingId)).toContain(b.id);
+      await db.from("accounts").update({ outbound_suppressed: true }).eq("id", accountId);
+      expect((await listDueReferralAsks(db, now.toISOString())).map((r) => r.bookingId)).not.toContain(b.id);
+      // `off`, not merely null: the releaser writes a different sentence for
+      // each ("This automation was turned off" vs "No longer due"), and
+      // `expect(x.due).toBeNull()` is green under either.
+      expect(await getDueReferralAskById(db, b.id)).toEqual({ due: null, why: "off" });
+    });
+  });
+
+  it("by id, a config that no longer parses answers `off` — so a released hold leaves the queue", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId,
+        { firstName: "Broken", email: "broken@example.com" }, "user_test");
+      await upsertAutomation(db, accountId, "referral_ask",
+        { enabled: true, body: "", config: { channel: "email" } }, "user_test");
+      const now = new Date("2027-08-20T12:00:00Z");
+      const b = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date(now.getTime() - 31 * HOUR), endsAt: new Date(now.getTime() - 30 * HOUR) }, "user_test");
+      await setBookingStatus(db, accountId, b.id, "completed", "user_test");
+      expect((await getDueReferralAskById(db, b.id)).due?.bookingId).toBe(b.id);
+
+      // Straight to the column: `upsertAutomation` validates on write, and
+      // the case being proved is a row that went bad UNDER the app (an older
+      // shape, a hand-edited jsonb, a config written before a parser change).
+      await db.from("automations").update({ config: { channel: "fax" } })
+        .eq("account_id", accountId).eq("recipe_key", "referral_ask");
+      expect(await getDueReferralAskById(db, b.id)).toEqual({ due: null, why: "off" });
+      // Mutation: delete the `parseReferralAskConfig(auto.config) === null`
+      // guard from getDueReferralAskById → this reds, and a released hold
+      // whose config went bad is left `held` with its past `held_until` for
+      // ever, parking the head of the release queue.
+    });
+  });
+
+  it("stampReferralAsked and stampReferralAskSmsFailed write their own columns; only the first counts", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Stamp2" }, "user_test");
+      const mk = (offset: number) => createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date(Date.now() - offset - MINUTE), endsAt: new Date(Date.now() - offset) }, "user_test");
+      const before = new Date();
+      const a = await mk(3 * HOUR);
+      const c = await mk(4 * HOUR);
+      await stampReferralAsked(db, a.id);
+      await stampReferralAsked(db, a.id);                 // idempotent
+      await stampReferralAskSmsFailed(db, c.id);          // an ATTEMPT, not a send
+      const { data } = await db.from("bookings")
+        .select("referral_asked_at, referral_ask_sms_failed_at").eq("id", c.id).single();
+      const marked = data as { referral_asked_at: string | null; referral_ask_sms_failed_at: string | null };
+      expect(marked.referral_asked_at).toBeNull();
+      // BY VALUE, not `.not.toBeNull()`: drop the column from the select and
+      // it reads `undefined`, which `not.toBeNull()` happily accepts — the
+      // exact vacuous shape this branch has shipped before. The review
+      // request's own attempt-marker case (above) is the precedent.
+      expect(new Date(marked.referral_ask_sms_failed_at!).getTime()).toBeGreaterThanOrEqual(before.getTime());
+      expect(await countReferralAsksSince(db, accountId, new Date(before.getTime() - 1000).toISOString())).toBe(1);
+      expect(await countReferralAsksSince(db, accountId, new Date(Date.now() + 60_000).toISOString())).toBe(0);
     });
   });
 });
