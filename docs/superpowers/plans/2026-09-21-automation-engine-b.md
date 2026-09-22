@@ -40,6 +40,8 @@
 - Passes read `ctx.now`, never `new Date()`. Pure modules take `now` as an argument.
 - Only `harness.ts` imports `getEmailProvider`/`getSmsProvider` (`imports.test.ts` scans every other file under `lib/automations`). A pass reaches SMS through `ctx.sms()`, lazily, inside the send's own try/catch.
 - **Any test that exercises the HELD path must mock `getAutomationLogEntry`.** `holdOrSend` reads it before re-writing a held row (`hold-or-send.ts:143`); a factory mock that omits it throws at the moment the export is read (part C's recorded trap; `sentinel.test.ts:30` already carries it).
+- **NO EM DASH, AND NO NON-GSM-7 CHARACTER, IN ANY BODY THAT CAN BE SENT AS A TEXT** (added 2026-09-22, after Task 3 shipped one). `segments.ts:15-19` carries neither U+2014 nor curly quotes in `GSM7_BASE`/`GSM7_EXTENDED`, and ONE occurrence drops the WHOLE body to UCS-2 at 70 chars/segment. Measured on the appointment confirm: the em-dash lead billed 3 segments, the period 2 — one extra billed segment on every send, every client, for one punctuation mark. The rule is already recorded four times in the tree (`sms/opt-out.ts:43-46`, `instant-reply-copy.test.ts:64`, `voice/textback-body.ts:12` and `:35`). **Every SMS-capable recipe's copy test asserts `encoding === "gsm7"` on its default body** — pin the encoding and the segment count, never `chars`, which rots. This plan's own prescribed copy was swept on 2026-09-22 and two bodies fixed (`appointmentConfirm.lead`, `quoteFollowup.defaultBody`); `reactivation` is email-only and exempt.
+- **A SEGMENT COUNTER COUNTS THE DISCLOSED BODY.** `sendAutomationSms` appends `withOptOut` unconditionally (`send-sms.ts:82`), so a card counting the composed body alone under-reports what the carrier bills. Task 3 shipped this and it was caught in review: the card rendered 1 segment where every send was 2. Count `segmentsFor(withOptOut(preview))`, and make the mutation real — counting the undisclosed text must red the case by name.
 - Customer copy passes the "landscaper at 7 AM" read: no milestone codes (`messages.test.ts:44-51` walks the whole catalogue — see B8; nothing in part B goes on its `AGENCY_ONLY` allowlist), no `{{template_syntax}}`, no carrier jargon, deltas as words. A name shown to a customer is `brandDisplayName`, never `accounts.name` — the due-row types carry only `brandName` and `sentinel.test.ts` scans what actually left the building.
 - UI: tokens only, status is dot + word, one primary button per view, every card gets loaded/empty/error states, both themes via `.dark`.
 - **Mutation proof for every test.** Each test step names the mutation that must red it BY NAME. Run the WHOLE file, watch the named test fail, revert. Avoid the shapes this repo has shipped (`bis-vacuous-test-shapes`): no fixture where two asserted properties share a value; no negative fixture more than one unit past the boundary (it would trip an earlier guard and pass against any ceiling); no literal count that rots; no assertion satisfied by an adjacent element; no `-t` filter on a name that does not exist. If a prescribed mutation cannot fail, say so and substitute one that can.
@@ -1488,8 +1490,8 @@ Run: `pnpm --filter web exec vitest run src/lib/automations/appointment-confirm-
 `apps/web/src/lib/messages.ts`, appended under the `automations.` namespace (a registry: add lines, never reorder, never touch another namespace):
 
 ```ts
-  "automations.appointmentConfirm.lead": "Hi, it's {name}. You're booked for {when}. Reply YES to confirm or NO if you need a different time — either way we'll see it.",
-  "automations.appointmentConfirm.leadNoName": "You're booked for {when}. Reply YES to confirm or NO if you need a different time — either way we'll see it.",
+  "automations.appointmentConfirm.lead": "Hi, it's {name}. You're booked for {when}. Reply YES to confirm or NO if you need a different time. Either way we'll see it.",
+  "automations.appointmentConfirm.leadNoName": "You're booked for {when}. Reply YES to confirm or NO if you need a different time. Either way we'll see it.",
   "automations.appointmentConfirm.title": "Appointment confirmations",
   "automations.appointmentConfirm.body": "Two days before an appointment, text the customer to confirm. They reply YES or NO and you see the answer on the booking. Nothing is cancelled automatically. Text only. Off until you turn it on.",
   "automations.appointmentConfirm.enabled": "Ask customers to confirm",
@@ -1638,7 +1640,10 @@ import { appointmentConfirmPass, releaseAppointmentConfirm } from "./appointment
 const TICK = new Date("2027-04-12T12:00:00.000Z");
 const ON = { enabled: true, start: "21:00", end: "08:00" };
 const OFF = { enabled: false, start: "21:00", end: "08:00" };
-const send = vi.fn(async () => ({ providerMessageId: "sm_1" }));
+const send = vi.fn(async (_msg: { to: string; from: string; body: string }) => ({ providerMessageId: "sm_1" }));
+// The parameter is DECLARED, not inferred: `vi.fn(async () => …)` gives
+// `mock.calls` a zero-length tuple, and the `send.mock.calls[0]![0].body` read
+// below is then TS2532 + TS2493. Declaring it keeps that line cast-free.
 
 function ctx(over: Partial<PassContext> = {}): PassContext {
   return {
@@ -2289,7 +2294,7 @@ Expected: the summary block reports every file green, `sentinel.test.ts` include
 | swap the arms of `found.why === "off" ? REASONS.recipeOff : REASONS.noLongerDue` | BOTH `a released row whose recipe was switched off says so` and `a released row whose booking is GONE says that instead — the other arm of the same ternary` |
 | set `appointment_confirm: null` in `RELEASERS` | `only the three non-releasable sources map to null — every recipe source has a real releaser` |
 | change `APPOINTMENT_CONFIRM_WINDOW_START_MS` to 46h | `the appointment-confirm window is wider than one tick, and asks two days out` |
-| change `APPOINTMENT_CONFIRM_MIN_LEAD_MS` to a flat 24h | `the confirmation ask stops at the instant the email reminder becomes eligible` (BOTH of its assertions red, plus `is exactly 24 hours and 15 minutes before the appointment`, plus `a released row still 24h16m out DOES send — the boundary from the other side`) |
+| change `APPOINTMENT_CONFIRM_MIN_LEAD_MS` to a flat 24h | THREE red: `the confirmation ask stops at the instant the email reminder becomes eligible` (its FIRST assertion only — vitest stops a test at the first failure, so "both assertions red" is not observable in one run; the second is proven by the drift mutation below), `is exactly 24 hours and 15 minutes before the appointment`, and `a released row now INSIDE the reminder's own eligibility is skipped with its own reason, never texted`. **NOT the 24h16m case** — corrected 2026-09-22, proven by running it: at a flat 24h lead a 24h16m row is still OUTSIDE the bound and still sends, so it cannot red. THE GENERAL RULE Tasks 6, 8 and 10 must copy: for a bound-LOWERING mutation the case that reds is the one INSIDE the old bound, never the one outside it. |
 | widen `REMINDER_WINDOW_END_MS` to 25h in `packages/db/src/booking.ts`, leaving the lead alone | `the confirmation ask stops at the instant the email reminder becomes eligible` — and ONLY its second assertion. This is the drift mutation; the one above cannot distinguish the two constants. Revert at once: it is an edit outside this task's files. |
 | remove `"appointmentConfirms"` from `PASSES` | `the registry runs the release pass, then reminders, … — the first three's order is the collision's contract` (`sentinel.test.ts`) |
 | delete `appointment_confirm` from `SOURCE_TITLES` | `pnpm --filter web typecheck`, TS2741 — paste it |
@@ -5920,8 +5925,8 @@ export function shouldSendQuoteFollowupNow(
 - [ ] **Step 2: The copy and the message keys**
 
 ```ts
-  "automations.quoteFollowup.defaultBody": "Hi, it's {name}. Just checking you got the quote we sent — happy to answer anything or adjust it. Any questions?",
-  "automations.quoteFollowup.defaultBodyNoName": "Just checking you got the quote we sent — happy to answer anything or adjust it. Any questions?",
+  "automations.quoteFollowup.defaultBody": "Hi, it's {name}. Just checking you got the quote we sent. Happy to answer anything or adjust it. Any questions?",
+  "automations.quoteFollowup.defaultBodyNoName": "Just checking you got the quote we sent. Happy to answer anything or adjust it. Any questions?",
   "automations.quoteFollowup.emailSubject": "About your quote from {name}",
   "automations.quoteFollowup.emailSubjectNoName": "About your quote",
   "automations.quoteFollowup.title": "Quote follow-ups",
