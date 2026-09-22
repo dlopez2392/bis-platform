@@ -41,6 +41,8 @@
 - Only `harness.ts` imports `getEmailProvider`/`getSmsProvider` (`imports.test.ts` scans every other file under `lib/automations`). A pass reaches SMS through `ctx.sms()`, lazily, inside the send's own try/catch.
 - **Any test that exercises the HELD path must mock `getAutomationLogEntry`.** `holdOrSend` reads it before re-writing a held row (`hold-or-send.ts:143`); a factory mock that omits it throws at the moment the export is read (part C's recorded trap; `sentinel.test.ts:30` already carries it).
 - **NO EM DASH, AND NO NON-GSM-7 CHARACTER, IN ANY BODY THAT CAN BE SENT AS A TEXT** (added 2026-09-22, after Task 3 shipped one). `segments.ts:15-19` carries neither U+2014 nor curly quotes in `GSM7_BASE`/`GSM7_EXTENDED`, and ONE occurrence drops the WHOLE body to UCS-2 at 70 chars/segment. Measured on the appointment confirm: the em-dash lead billed 3 segments, the period 2 — one extra billed segment on every send, every client, for one punctuation mark. The rule is already recorded four times in the tree (`sms/opt-out.ts:43-46`, `instant-reply-copy.test.ts:64`, `voice/textback-body.ts:12` and `:35`). **Every SMS-capable recipe's copy test asserts `encoding === "gsm7"` on its default body** — pin the encoding and the segment count, never `chars`, which rots. This plan's own prescribed copy was swept on 2026-09-22 and two bodies fixed (`appointmentConfirm.lead`, `quoteFollowup.defaultBody`); `reactivation` is email-only and exempt.
+- **"ASSERT IT IS NOT NULL" IS VACUOUS AGAINST A MISSING COLUMN** (added 2026-09-22; this plan prescribed it twice and Task 5 produced the receipt). PostgREST OMITS an unselected column entirely, so the value is `undefined`, not `null` — and `expect(undefined).not.toBeNull()` PASSES, as does `toBeDefined`-shaped anything. A stamp case written that way cannot fail under "drop the column from the select", which is the only mutation it exists to catch. **Assert the VALUE**: the instant the writer wrote, or `>= before`. Task 5 proved it by dropping the column, putting the plan's line above its own, and watching the run fail at ITS line.
+- **A supabase-js SELECT IS ONE STRING LITERAL, never a concatenation.** The client parses the select at the TYPE level off a literal; `"a, " + "b"` is plain `string`, the parser answers `GenericStringError`, and the `data as {…}` cast then fails TS2352. Task 5 hit this on the plan's own prescribed code. Every `*_SELECT` in `automations.ts` is a single literal.
 - **AN UNBOUNDED GAP IN A MARKUP ASSERTION IS A VACUOUS ASSERTION** (added 2026-09-22; this plan prescribed one). `/data-testid="x"[sS]*?aria-hidden/` is satisfied by ANY `aria-hidden` later in the document, not by the one you meant — it reds today only if the component happens to emit exactly one, and the first decorative icon added anywhere below makes it pass with the thing under test deleted. This is "an assertion satisfied by an adjacent element" wearing a regex. BIND IT: `/data-testid="x"[^>]*><span aria-hidden="true"/` cannot cross the opening tag, so it asserts the dot IS the pill's first child. Same rule for any `[sS]*` or `.*` between two things you are claiming are adjacent.
 - **A SEGMENT COUNTER COUNTS THE DISCLOSED BODY.** `sendAutomationSms` appends `withOptOut` unconditionally (`send-sms.ts:82`), so a card counting the composed body alone under-reports what the carrier bills. Task 3 shipped this and it was caught in review: the card rendered 1 segment where every send was 2. Count `segmentsFor(withOptOut(preview))`, and make the mutation real — counting the undisclosed text must red the case by name.
 - Customer copy passes the "landscaper at 7 AM" read: no milestone codes (`messages.test.ts:44-51` walks the whole catalogue — see B8; nothing in part B goes on its `AGENCY_ONLY` allowlist), no `{{template_syntax}}`, no carrier jargon, deltas as words. A name shown to a customer is `brandDisplayName`, never `accounts.name` — the due-row types carry only `brandName` and `sentinel.test.ts` scans what actually left the building.
@@ -1188,7 +1190,10 @@ describe("appointment confirm — data layer", () => {
         { status: string; confirm_reply: string | null; confirm_reply_at: string | null };
 
       expect((await read(soon)).confirm_reply).toBe("yes");                  // soonest upcoming
-      expect((await read(soon)).confirm_reply_at).not.toBeNull();
+      // BY VALUE, never .not.toBeNull(): a column dropped from a select comes back
+      // UNDEFINED, and expect(undefined).not.toBeNull() PASSES — so that form cannot
+      // fail under the very mutation it exists to catch (proven in Task 5).
+      expect(new Date((await read(soon.id)).confirm_reply_at!).getTime()).toBe(NOW.getTime());
       expect((await read(soon)).status).toBe("booked");                      // a NO never cancels; a YES never confirms the STATUS either
       expect((await read(later)).confirm_reply).toBeNull();                  // Mutation: order descending → this reds
       expect((await read(past)).confirm_reply).toBeNull();                   // Mutation: drop the starts_at filter → this reds
@@ -2706,9 +2711,11 @@ export type DueReferralAsk = {
   config: ReferralAskConfig | null;
 };
 
+// ONE STRING LITERAL, never a concatenation — see the note in Task 9, and
+// Task 5 proved it: a concatenated select is plain `string`, supabase-js's
+// type-level parser answers `GenericStringError`, and the cast below is TS2352.
 const REFERRAL_ASK_SELECT =
-  "id, account_id, contact_id, ends_at, completed_at, followup_sent_at, review_requested_at, "
-  + "referral_ask_sms_failed_at, contacts(email, phone)";
+  "id, account_id, contact_id, ends_at, completed_at, followup_sent_at, review_requested_at, referral_ask_sms_failed_at, contacts(email, phone)";
 
 function toDueReferralAsk(
   r: any, info: AccountBrandInfo, auto: EnabledRecipe, reviewRequestEnabled: boolean,
@@ -2999,7 +3006,10 @@ describe("referral ask — data layer", () => {
       const { data } = await db.from("bookings")
         .select("referral_asked_at, referral_ask_sms_failed_at").eq("id", c.id).single();
       expect((data as { referral_asked_at: string | null }).referral_asked_at).toBeNull();
-      expect((data as { referral_ask_sms_failed_at: string | null }).referral_ask_sms_failed_at).not.toBeNull();
+      // BY VALUE, never .not.toBeNull() — see the note in Task 2. A dropped column
+      // is UNDEFINED, and not.toBeNull() is green against it.
+      const marked = data as { referral_ask_sms_failed_at: string | null };
+      expect(new Date(marked.referral_ask_sms_failed_at!).getTime()).toBeGreaterThanOrEqual(before.getTime());
       expect(await countReferralAsksSince(db, accountId, new Date(before.getTime() - 1000).toISOString())).toBe(1);
       expect(await countReferralAsksSince(db, accountId, new Date(Date.now() + 60_000).toISOString())).toBe(0);
     });
@@ -5378,9 +5388,13 @@ export type DueQuoteFollowup = {
   config: QuoteFollowupConfig | null;
 };
 
+// ONE STRING LITERAL, never a concatenation: supabase-js parses the select at
+// the TYPE level off a string literal, so `"a, " + "b"` is plain `string`, the
+// parser answers `GenericStringError`, and the `data as {...}` below fails with
+// TS2352. Task 5 hit this and every other *_SELECT in the file is a single
+// literal for the same reason.
 const QUOTE_FOLLOWUP_SELECT =
-  "id, account_id, contact_id, stage_id, stage_changed_at, quote_followup_sms_failed_at, "
-  + "contacts(email, phone)";
+  "id, account_id, contact_id, stage_id, stage_changed_at, quote_followup_sms_failed_at, contacts(email, phone)";
 
 /**
  * Latest INBOUND message per contact since `sinceIso` — the "they already
