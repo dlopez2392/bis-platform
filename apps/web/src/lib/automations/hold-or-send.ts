@@ -102,6 +102,14 @@ export const REASONS = {
    *  already been in touch. Sending it anyway would talk straight over a live
    *  conversation — the one failure mode these two recipes cannot survive. */
   heardBack: "They've been in touch since",
+  /** A quote follow-up released after the operator deleted or replaced the
+   *  pipeline stage this recipe watches. A normal tick can never produce
+   *  this — the due-list filters on the stage, so a vanished one yields no
+   *  row and there is no subject to write against — but a HELD row's stage
+   *  can disappear during the hold, and that row must leave the queue with a
+   *  reason rather than sit in it. The operator-facing half of the same fact
+   *  lives on the Automations card, which can see the account's stages. */
+  stageGone: "The stage this automation watches is gone",
   outsideRegion: "Number is outside the US, Canada or Mexico",
   consentWithheld: "They didn't agree to texts",
   robocall: "Screened as a robocall",

@@ -26,6 +26,9 @@ const dbMocks = vi.hoisted(() => ({
   stampAppointmentConfirmAsked: vi.fn(), stampAppointmentConfirmSmsFailed: vi.fn(),
   listDueReactivations: vi.fn(), getDueReactivationById: vi.fn(),
   stampReactivationSent: vi.fn(), countReactivationsSince: vi.fn(), conversationQuietSince: vi.fn(),
+  listDueQuoteFollowups: vi.fn(), getDueQuoteFollowupById: vi.fn(),
+  stampQuoteFollowupSent: vi.fn(), stampQuoteFollowupSmsFailed: vi.fn(), countQuoteFollowupsSince: vi.fn(),
+  latestInboundByContact: vi.fn(),
   getAutomation: vi.fn(), hasRecentOutboundSms: vi.fn(), countInstantRepliesSince: vi.fn(), stampInstantReplySent: vi.fn(),
   ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(),
   listSitesToSync: vi.fn(),
@@ -45,7 +48,9 @@ const inlineSmsSend = vi.fn(async () => ({ providerMessageId: "s-inline" }));
 vi.mock("@/lib/sms", () => ({ getSmsProvider: () => ({ isFake: true, send: inlineSmsSend }) }));
 vi.mock("@/lib/email", () => ({ getEmailProvider: () => ({ isFake: true, send: async () => ({ providerMessageId: "e" }) }) }));
 
-import type { DueReminder, DueFollowup, DueAppointmentConfirm, DueReferralAsk, DueReactivation } from "@bis/db";
+import type {
+  DueReminder, DueFollowup, DueAppointmentConfirm, DueReferralAsk, DueReactivation, DueQuoteFollowup,
+} from "@bis/db";
 import { runPasses } from "./harness";
 import { PASSES } from "./registry";
 import type { PassContext } from "./context";
@@ -102,6 +107,21 @@ const REACTIVATION_ROW: DueReactivation = {
   fromEmail: null, replyToEmail: null, body: "",
 };
 
+/** Part B's quote follow-up — the only PIPELINE-driven recipe. Five days
+ *  parked in the watched stage against a three-day quiet setting, and
+ *  `stageId === configStageId` because a normal tick can only ever produce a
+ *  row where they agree (the due-list filters on the stage). */
+const QUOTE_FOLLOWUP_ROW: DueQuoteFollowup = {
+  opportunityId: "opp_q", accountId: "acct_1",
+  stageId: "6f1b2c3d-4e5a-4b7c-8d9e-0a1b2c3d4e5f", configStageId: "6f1b2c3d-4e5a-4b7c-8d9e-0a1b2c3d4e5f",
+  stageChangedAt: "2026-09-04T14:00:00.000Z", quietDays: 3,
+  smsFailedAt: null,
+  contactId: "ct_10", contactEmail: null, contactPhone: "9565550106",
+  brandName: BRAND, branding, accountTimezone: "America/New_York",
+  fromEmail: null, replyToEmail: null, body: "",
+  config: { stageId: "6f1b2c3d-4e5a-4b7c-8d9e-0a1b2c3d4e5f", quietDays: 3, channel: "sms" },
+};
+
 beforeEach(() => {
   for (const fn of Object.values(dbMocks)) fn.mockReset().mockResolvedValue(undefined);
   dbMocks.listDueReminders.mockResolvedValue([REMINDER_ROW]);
@@ -152,6 +172,15 @@ beforeEach(() => {
   dbMocks.listDueReactivations.mockResolvedValue([REACTIVATION_ROW]);
   dbMocks.conversationQuietSince.mockResolvedValue(true);
   dbMocks.countReactivationsSince.mockResolvedValue(0);
+  // And the same again for the quote follow-up. THREE explicit values, not
+  // one: left at the reset's `undefined`, `listDueQuoteFollowups` throws the
+  // pass into `errored` and the scan never looks at what it sent, while
+  // `latestInboundByContact` left undefined would make the releaser's Map
+  // read throw the moment a held row of this source appeared. The positive
+  // counter guard below is what proves this pass really did send.
+  dbMocks.listDueQuoteFollowups.mockResolvedValue([QUOTE_FOLLOWUP_ROW]);
+  dbMocks.latestInboundByContact.mockResolvedValue(new Map());
+  dbMocks.countQuoteFollowupsSince.mockResolvedValue(0);
   dbMocks.ensureConversation.mockResolvedValue({ id: "convo_1", created: false });
   dbMocks.createMessage.mockResolvedValue({ id: "msg_1" });
   // The site-traffic pass sends nothing, so it has no row here — but it must
@@ -196,6 +225,7 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(results.smsReminders?.sent).toBe(1);
     expect(results.appointmentConfirms?.sent).toBe(1);
     expect(results.reactivations?.sent).toBe(1);
+    expect(results.quoteFollowups?.sent).toBe(1);
     // …and the two passes that send nothing this tick ran to their counters,
     // not to `errored`.
     expect(results.siteTraffic).toEqual(expect.objectContaining({ synced: 0, failed: 0 }));
@@ -213,8 +243,8 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(everything).toContain(BRAND);   // and the brand name DID go out, in its place
   });
 
-  it("the registry runs the release pass, then reminders, follow-ups, review requests, referral asks, no-show nudges, text reminders, appointment confirmations, check-ins, site traffic, then the two weekly reports — the first three's order is the collision's contract", () => {
-    expect(PASSES.map((p) => p.key)).toEqual(["releaseHeld", "reminders", "followups", "reviewRequests", "referralAsks", "noShowNudges", "smsReminders", "appointmentConfirms", "reactivations", "siteTraffic", "weeklyClientReport", "weeklyAgencyReport"]);
+  it("the registry runs the release pass, then reminders, follow-ups, review requests, referral asks, no-show nudges, text reminders, appointment confirmations, check-ins, quote follow-ups, site traffic, then the two weekly reports — the first three's order is the collision's contract", () => {
+    expect(PASSES.map((p) => p.key)).toEqual(["releaseHeld", "reminders", "followups", "reviewRequests", "referralAsks", "noShowNudges", "smsReminders", "appointmentConfirms", "reactivations", "quoteFollowups", "siteTraffic", "weeklyClientReport", "weeklyAgencyReport"]);
   });
 
   /**

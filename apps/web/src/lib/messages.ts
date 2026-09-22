@@ -1302,6 +1302,36 @@ export const m = {
   "automations.reactivation.saveFailed": "Could not save check-ins.",
   "automations.reactivation.monthsInvalid": "Choose a number of months between 6 and 18.",
 
+  // Part B — quote follow-ups. NO EM DASH and no character outside GSM-7 in
+  // `defaultBody`/`defaultBodyNoName`: this recipe is SMS-capable and one
+  // such character drops the whole body to UCS-2 at 70 characters a segment
+  // (segments.ts:15-19). The two range sentences restate 1 and 30 in prose
+  // because a static catalogue cannot interpolate a constant;
+  // quote-followup-copy.test.ts is what keeps them honest against
+  // QUOTE_FOLLOWUP_MIN_QUIET_DAYS / QUOTE_FOLLOWUP_MAX_QUIET_DAYS.
+  "automations.quoteFollowup.defaultBody": "Hi, it's {name}. Just checking you got the quote we sent. Happy to answer anything or adjust it. Any questions?",
+  "automations.quoteFollowup.defaultBodyNoName": "Just checking you got the quote we sent. Happy to answer anything or adjust it. Any questions?",
+  "automations.quoteFollowup.emailSubject": "About your quote from {name}",
+  "automations.quoteFollowup.emailSubjectNoName": "About your quote",
+  "automations.quoteFollowup.title": "Quote follow-ups",
+  "automations.quoteFollowup.body": "This watches your pipeline. Deals only get there when you or your team put them there, so nothing happens on its own. Move a deal into the stage you pick, and after a few quiet days with no reply it checks in about the quote. Off until you turn it on.",
+  "automations.quoteFollowup.enabled": "Follow up on quiet quotes",
+  "automations.quoteFollowup.stage": "Pipeline stage to watch",
+  "automations.quoteFollowup.stageHint": "Pick the stage you move a deal to once you've sent the quote.",
+  "automations.quoteFollowup.stagePlaceholder": "Choose a stage",
+  "automations.quoteFollowup.stageMissing": "The stage this automation watches is gone. Pick another one before this can run again.",
+  "automations.quoteFollowup.noStages": "This company has no pipeline stages yet, so there is nothing to watch. Set up the pipeline first.",
+  "automations.quoteFollowup.quietDays": "Days with no reply",
+  "automations.quoteFollowup.quietDaysHint": "Between 1 and 30. Three is a good default, long enough to not feel pushy.",
+  "automations.quoteFollowup.quietDaysInvalid": "Choose a number of days between 1 and 30.",
+  "automations.quoteFollowup.stageRequired": "Pick the stage to watch before turning this on.",
+  "automations.quoteFollowup.channel": "Send by",
+  "automations.quoteFollowup.message": "Message",
+  "automations.quoteFollowup.messageHint": "Leave blank to send our default message. The price and the deal's name are never included.",
+  "automations.quoteFollowup.save": "Save quote follow-ups",
+  "automations.quoteFollowup.saved": "Quote follow-ups saved",
+  "automations.quoteFollowup.saveFailed": "Could not save quote follow-ups.",
+
   // Part C — the Quiet hours card (agency, on the Automations page).
   "automations.quiet.title": "Quiet hours",
   "automations.quiet.body": "No automated texts or emails go to your customers between these hours. Anything due overnight waits and goes at the end. Your phone and website assistant still answer.",

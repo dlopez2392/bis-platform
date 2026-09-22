@@ -87,6 +87,20 @@ vi.mock("@bis/db", () => ({
   reactivationCutoff: () => { throw new Error("route.test: nothing is due"); },
   stampReactivationSent: async () => { throw new Error("route.test: nothing is due"); },
   getDueReactivationById: async () => { throw new Error("route.test: nothing is held"); },
+  // The quote follow-up pass (part B). QUOTE_FOLLOWUP_MAX_AGE_MS is the one
+  // entry this suite REQUIRES beyond the due-list: quote-followup-gate.ts
+  // reads that constant at IMPORT time, and a bare factory mock throws the
+  // moment an undefined export is dereferenced, before any test body runs.
+  // The two stamps and the by-id lookup are THROWS, the convention this file
+  // already uses for a thing that must not happen here, so an edit that makes
+  // a row due fails loudly instead of passing quietly.
+  listDueQuoteFollowups: async () => [],
+  latestInboundByContact: async () => new Map(),
+  countQuoteFollowupsSince: async () => 0,
+  QUOTE_FOLLOWUP_MAX_AGE_MS: 30 * 24 * 60 * 60 * 1000,
+  stampQuoteFollowupSent: async () => { throw new Error("route.test: nothing is due"); },
+  stampQuoteFollowupSmsFailed: async () => { throw new Error("route.test: nothing is due"); },
+  getDueQuoteFollowupById: async () => { throw new Error("route.test: nothing is held"); },
   // The appointment-confirm pass (part B): registering a pass and NOT mocking
   // its read here makes it `errored: 1` in this route's exact-equality body.
   listDueAppointmentConfirms: async () => [],
@@ -236,6 +250,11 @@ const EMPTY_REACTIVATIONS = {
   sent: 0, failed: 0, unstamped: 0, held: 0,
   skippedCap: 0, skippedHeardBack: 0, waitingForMorning: 0, unresolvableTimezone: 0,
 };
+const EMPTY_QUOTE_FOLLOWUPS = {
+  sent: 0, failed: 0, unstamped: 0, held: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
+  skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0,
+  waitingForMorning: 0, unresolvableTimezone: 0,
+};
 
 /**
  * The route reads `new Date()` to decide whether a follow-up's morning has
@@ -301,7 +320,7 @@ describe("GET /api/cron/reminders", () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body).toEqual({ sent: 1, failed: 1, unstamped: 0, held: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY });
+    expect(body).toEqual({ sent: 1, failed: 1, unstamped: 0, held: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY });
     expect(stampReminderSentMock).toHaveBeenCalledTimes(1);
     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_ok");
     expect(stampReminderSentMock).not.toHaveBeenCalledWith(expect.anything(), "bk_fail");
@@ -324,7 +343,7 @@ describe("GET /api/cron/reminders", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY });
+    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY });
     expect(stampReminderSentMock).toHaveBeenCalledTimes(2);
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
@@ -347,7 +366,7 @@ describe("GET /api/cron/reminders", () => {
 
     // Counted as sent, never as failed: folding the stamp into the outer catch
     // would misreport a stamp failure as a send failure in triage.
-    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 1, held: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY });
+    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 1, held: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY });
     expect(stampReminderSentMock).toHaveBeenCalledTimes(STAMP_ATTEMPTS);
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
@@ -363,7 +382,7 @@ describe("GET /api/cron/reminders", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY });
+    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY });
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_fail");
   });
@@ -456,7 +475,7 @@ describe("GET /api/cron/reminders", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body).toEqual({ sent: 0, failed: 1, unstamped: 0, held: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY });
+    expect(body).toEqual({ sent: 0, failed: 1, unstamped: 0, held: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY });
     expect(sendMock).not.toHaveBeenCalled();
     expect(stampReminderSentMock).not.toHaveBeenCalled();
   });
@@ -484,6 +503,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
       smsReminders: EMPTY_SMS_REMINDERS,
       appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS,
       reactivations: EMPTY_REACTIVATIONS,
+      quoteFollowups: EMPTY_QUOTE_FOLLOWUPS,
       siteTraffic: EMPTY_SITE_TRAFFIC,
       weeklyClientReport: EMPTY_WEEKLY_CLIENT,
       weeklyAgencyReport: EMPTY_WEEKLY_AGENCY,
@@ -523,6 +543,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
       smsReminders: EMPTY_SMS_REMINDERS,
       appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS,
       reactivations: EMPTY_REACTIVATIONS,
+      quoteFollowups: EMPTY_QUOTE_FOLLOWUPS,
       siteTraffic: EMPTY_SITE_TRAFFIC,
       weeklyClientReport: EMPTY_WEEKLY_CLIENT,
       weeklyAgencyReport: EMPTY_WEEKLY_AGENCY,

@@ -9,6 +9,7 @@ import { releaseSmsReminder } from "./sms-reminder";
 import { releaseAppointmentConfirm } from "./appointment-confirm";
 import { releaseReferralAsk } from "./referral-ask";
 import { releaseReactivation } from "./reactivation";
+import { releaseQuoteFollowup } from "./quote-followup";
 import { releaseInstantReply } from "../instant-reply";
 
 /**
@@ -77,6 +78,7 @@ export const RELEASERS: Record<AutomationLogSource, Releaser | null> = {
   appointment_confirm: releaseAppointmentConfirm,
   referral_ask: releaseReferralAsk,
   reactivation: releaseReactivation,
+  quote_followup: releaseQuoteFollowup,
   weekly_report: null,
   concierge: null,
   voice: null,

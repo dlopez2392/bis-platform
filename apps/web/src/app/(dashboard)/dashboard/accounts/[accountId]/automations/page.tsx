@@ -1,7 +1,7 @@
 import { headers } from "next/headers";
 import Link from "next/link";
 import {
-  serviceDb, getAutomation, getBranding, getCalendarForAccount, readQuietSettings,
+  serviceDb, getAutomation, getBranding, getCalendarForAccount, readQuietSettings, listPipelinesWithStages,
   type AutomationRow, type CalendarRow, type QuietSettings,
 } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
@@ -14,6 +14,7 @@ import { m } from "@/lib/messages";
 import { AutomationsSettings } from "./automations-settings";
 import { ReferralAskCard } from "./referral-ask-card";
 import { ReactivationCard } from "./reactivation-card";
+import { QuoteFollowupCard, type StageOption } from "./quote-followup-card";
 import { NoShowNudgeCard } from "./no-show-nudge-card";
 import { SmsReminderCard } from "./sms-reminder-card";
 import { AppointmentConfirmCard } from "./appointment-confirm-card";
@@ -21,6 +22,7 @@ import { InstantReplyCard } from "./instant-reply-card";
 import { QuietHoursCard } from "./quiet-hours-card";
 import {
   saveReviewRequestAction, saveReferralAskAction, saveReactivationAction, saveNoShowNudgeAction, saveSmsReminderAction,
+  saveQuoteFollowupAction,
   saveAppointmentConfirmAction,
   saveInstantReplyAction, saveQuietHoursAction,
 } from "./actions";
@@ -49,7 +51,7 @@ export default async function AutomationsPage({
   // these can no longer 500 the whole agency page; only the one card that
   // lost its read shows the degraded state, and the log line carries the
   // account id so the hiccup is still visible.
-  const [review, referralAsk, reactivation, noShow, smsReminder, appointmentConfirm, instantReply, account, smsGate, calendar, origin, quiet] = await Promise.all([
+  const [review, referralAsk, reactivation, noShow, smsReminder, appointmentConfirm, quoteFollowup, instantReply, account, smsGate, calendar, origin, quiet, stages] = await Promise.all([
     getAutomation(db, accountId, "review_request").catch((e): AutomationRow | null => {
       console.error(`automations: review_request read failed for ${accountId}: ${String(e)}`);
       return null;
@@ -77,6 +79,12 @@ export default async function AutomationsPage({
     }),
     getAutomation(db, accountId, "appointment_confirm").catch((e): AutomationRow | null => {
       console.error(`automations: appointment_confirm read failed for ${accountId}: ${String(e)}`);
+      return null;
+    }),
+    // POSITIONAL, like every sibling above: this promise sits between
+    // appointment_confirm and instant_reply, and so does its binding.
+    getAutomation(db, accountId, "quote_followup").catch((e): AutomationRow | null => {
+      console.error(`automations: quote_followup read failed for ${accountId}: ${String(e)}`);
       return null;
     }),
     getAutomation(db, accountId, "instant_reply").catch((e): AutomationRow | null => {
@@ -137,6 +145,20 @@ export default async function AutomationsPage({
       console.error(`automations: quiet-hours read failed for ${accountId}: ${String(e)}`);
       return null;
     }),
+    // The quote follow-up card's stage list. Flattened across pipelines and
+    // prefixed with the pipeline's name only when there is more than one, so
+    // a single-pipeline account (every account today) reads "Quoted" rather
+    // than "Sales · Quoted". Degrades to an empty list, which the card shows
+    // as its own "no pipeline stages yet" state with the form disabled.
+    listPipelinesWithStages(db, accountId).then((pipelines): StageOption[] => {
+      const many = pipelines.length > 1;
+      return pipelines.flatMap((p) => p.stages.map((s) => ({
+        id: s.id, label: many ? `${p.name} · ${s.name}` : s.name,
+      })));
+    }).catch((e): StageOption[] => {
+      console.error(`automations: pipeline stage read failed for ${accountId}: ${String(e)}`);
+      return [];
+    }),
   ]);
 
   const bookingUrl = origin && calendar ? `${origin}/b/${calendar.public_id}` : "";
@@ -192,6 +214,16 @@ export default async function AutomationsPage({
           accountTimezone={account.timezone}
           smsGate={smsGate}
           saveAction={saveAppointmentConfirmAction.bind(null, accountId)}
+        />
+        {/* Last of the recipes: the only one driven by the pipeline rather
+            than by a booking, and the only one whose card has to say what
+            does NOT happen on its own. */}
+        <QuoteFollowupCard
+          automation={quoteFollowup}
+          brandName={account.brandName}
+          smsGate={smsGate}
+          stages={stages}
+          saveAction={saveQuoteFollowupAction.bind(null, accountId)}
         />
         <InstantReplyCard
           automation={instantReply}

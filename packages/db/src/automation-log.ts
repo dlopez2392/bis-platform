@@ -21,6 +21,7 @@ export const AUTOMATION_LOG_SOURCES = [
   "appointment_confirm",
   "referral_ask",
   "reactivation",
+  "quote_followup",
 ] as const;
 export type AutomationLogSource = (typeof AUTOMATION_LOG_SOURCES)[number];
 export type AutomationLogChannel = "sms" | "email" | "ai";

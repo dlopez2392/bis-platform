@@ -18,7 +18,7 @@ import { m } from "@/lib/messages";
 import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 import {
   saveReviewRequestAction, saveNoShowNudgeAction, saveReferralAskAction, saveReactivationAction, saveSmsReminderAction,
-  saveAppointmentConfirmAction,
+  saveAppointmentConfirmAction, saveQuoteFollowupAction,
   saveInstantReplyAction, saveQuietHoursAction,
 } from "./actions";
 
@@ -154,6 +154,85 @@ describe("saveReferralAskAction", () => {
     expect(await saveReferralAskAction("acct_1", fd({ channel: "email", body: "  \n  " }))).toEqual({ ok: true });
     expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "referral_ask",
       { enabled: false, body: "", config: { channel: "email" } }, "user_1");
+  });
+});
+
+describe("saveQuoteFollowupAction", () => {
+  const STAGE = "6f1b2c3d-4e5a-4b7c-8d9e-0a1b2c3d4e5f";
+
+  it("refuses a non-agency caller before touching the database", async () => {
+    guardFixture.isAgency = false;
+    expect(await saveQuoteFollowupAction("acct_1", fd({ enabled: "on", stage_id: STAGE, quiet_days: "3", channel: "sms" })))
+      .toEqual({ ok: false, error: m["automations.agencyOnly"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+  });
+
+  it("stores the PARSED config, not the raw form values", async () => {
+    // `quiet_days` arrives as the string "4" and must reach the row as the
+    // number 4 — the pass reads this jsonb back with the same parser, and a
+    // string there would make every send fail its own range check.
+    // Mutation: store `{ stageId, quietDays: formData.get("quiet_days"), channel }`
+    // → this reds on the number.
+    expect(await saveQuoteFollowupAction("acct_1",
+      fd({ enabled: "on", stage_id: STAGE, quiet_days: "4", channel: "sms", body: "  Any questions?  " })))
+      .toEqual({ ok: true });
+    expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "quote_followup",
+      { enabled: true, body: "Any questions?", config: { stageId: STAGE, quietDays: 4, channel: "sms" } }, "user_1");
+  });
+
+  it("asks for a stage BY NAME when the recipe is being turned on without one", async () => {
+    // Mutation: return the generic `saveFailed` here → this reds, and the
+    // operator is told nothing about what is actually missing.
+    expect(await saveQuoteFollowupAction("acct_1", fd({ enabled: "on", stage_id: "", quiet_days: "3", channel: "sms" })))
+      .toEqual({ ok: false, error: m["automations.quoteFollowup.stageRequired"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES a quiet-days value outside the range rather than clamping it — at both bounds and one past each", async () => {
+    // The card's `max` makes this unreachable from a normal keyboard, which is
+    // why the parser's refusal is proved HERE and never in Playwright.
+    // Mutation: clamp instead of refusing (`Math.min(30, Math.max(1, n))`) →
+    // the out-of-range lines red, and the operator would see one number while
+    // the send used another.
+    for (const quiet_days of ["0", "31", "3.5", "", "abc"]) {
+      expect(await saveQuoteFollowupAction("acct_1", fd({ enabled: "on", stage_id: STAGE, quiet_days, channel: "sms" })), quiet_days)
+        .toEqual({ ok: false, error: m["automations.quoteFollowup.quietDaysInvalid"] });
+    }
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+    // …and AT each bound it saves, so the refusal is a range and not a wall.
+    expect(await saveQuoteFollowupAction("acct_1", fd({ stage_id: STAGE, quiet_days: "1", channel: "sms" }))).toEqual({ ok: true });
+    expect(await saveQuoteFollowupAction("acct_1", fd({ stage_id: STAGE, quiet_days: "30", channel: "sms" }))).toEqual({ ok: true });
+  });
+
+  it("refuses a stage id that is not a uuid, and an unknown channel, with the generic message", async () => {
+    // A junk stage id would reach the due-list's `.in("stage_id", …)` and make
+    // PostgREST 400 the WHOLE tick, every account's rows with it — which is
+    // why the parser carries a uuid shape check at all.
+    expect(await saveQuoteFollowupAction("acct_1", fd({ enabled: "on", stage_id: "Quoted", quiet_days: "3", channel: "sms" })))
+      .toEqual({ ok: false, error: m["automations.quoteFollowup.saveFailed"] });
+    expect(await saveQuoteFollowupAction("acct_1", fd({ enabled: "on", stage_id: STAGE, quiet_days: "3", channel: "carrier-pigeon" })))
+      .toEqual({ ok: false, error: m["automations.quoteFollowup.saveFailed"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+  });
+
+  it("a database failure comes back as a toastable failure", async () => {
+    dbMocks.upsertAutomation.mockRejectedValue(new Error("db down"));
+    expect(await saveQuoteFollowupAction("acct_1", fd({ enabled: "on", stage_id: STAGE, quiet_days: "3", channel: "sms" })))
+      .toEqual({ ok: false, error: m["automations.quoteFollowup.saveFailed"] });
+  });
+
+  it("stores a whitespace-only body as empty, so it keeps meaning 'use the default'", async () => {
+    expect(await saveQuoteFollowupAction("acct_1", fd({ stage_id: STAGE, quiet_days: "3", channel: "email", body: "  \n  " })))
+      .toEqual({ ok: true });
+    expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "quote_followup",
+      { enabled: false, body: "", config: { stageId: STAGE, quietDays: 3, channel: "email" } }, "user_1");
+  });
+
+  it("refuses a body past the platform maximum", async () => {
+    expect(await saveQuoteFollowupAction("acct_1",
+      fd({ stage_id: STAGE, quiet_days: "3", channel: "sms", body: "x".repeat(AUTOMATION_BODY_MAX_LENGTH + 1) })))
+      .toEqual({ ok: false, error: m["automations.bodyTooLong"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
   });
 });
 

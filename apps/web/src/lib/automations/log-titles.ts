@@ -18,6 +18,7 @@ export const SOURCE_TITLES: Record<AutomationLogSource, string> = {
   appointment_confirm: m["automations.appointmentConfirm.title"],
   referral_ask: m["automations.referral.title"],
   reactivation: m["automations.reactivation.title"],
+  quote_followup: m["automations.quoteFollowup.title"],
 };
 
 export const CHANNEL_WORDS: Record<AutomationLogChannel, string> = {
