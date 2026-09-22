@@ -297,6 +297,14 @@ function anOwnedNumberAndAKnownContact() {
   dbMocks.createContact.mockResolvedValue({ id: "contact_1", existing: true });
   dbMocks.ensureConversation.mockResolvedValue({ id: "conv_1", created: false });
   dbMocks.createMessage.mockResolvedValue({ id: "msg_1" });
+  // The file's top-level beforeEach runs `vi.clearAllMocks()`, which clears
+  // CALLS and not IMPLEMENTATIONS. Without this line a case appended after
+  // "a failure recording the answer is CONTAINED" inherits its REJECTING
+  // applyConfirmationReply, the route swallows the rejection by design, and
+  // the new case passes green while silently exercising the failure path.
+  // The same shape cost part C's appointment-confirm suite ~0.9s per test
+  // before it was noticed.
+  dbMocks.applyConfirmationReply.mockResolvedValue(null);
 }
 
 const inbound = (text: string, from = THEIR_NUMBER) => post({
@@ -336,10 +344,33 @@ describe("an inbound text that is a one-word answer", () => {
     // `smsSend` spy in this file to assert against — so the assertion is on
     // the source, not on a mock that does not exist. `Object.keys(await
     // import(...))` would not be an assertion; this is.
-    // Mutation: add any outbound send to handleInbound -> red.
+    //
+    // It asserts the IMPORT SURFACE, not a list of function names. The first
+    // form of this case deny-listed four
+    // (getSmsProvider / sendSmsAction / sendAutomationSms / sendInstantReply)
+    // and six of the seven real senders in this tree walked past it —
+    // MEASURED, not argued: a real `sendAlertSms` import plus a real call in
+    // handleInbound left this file 15/15 green. "Text the operator that the
+    // customer confirmed" is exactly the feature someone adds here next, and
+    // sendAlertSms is the one-call helper they would reach for.
+    //
+    // Every sender that lives in a LIBRARY lives under `@/lib/sms` or
+    // `@/lib/automations`, so those two roots cannot rot when an eighth send
+    // function is named. `sendSmsAction` keeps its name because it is the one
+    // sender that is not in a library at all: it is a server action in the
+    // conversations route group (conversations/actions.ts:112), and dropping
+    // it would have been a strict loss against the four-name form.
+    //
+    // Three `toContain`s rather than one alternating regex on purpose: the
+    // failure names WHICH root was crossed, and an escaped-slash regex
+    // literal is the exact shape that gets mangled when an assertion is
+    // copied between files.
+    // Mutation: import any sender into this route -> red.
     const routeSource = readFileSync(
       new URL("./route.ts", import.meta.url), "utf8");
-    expect(routeSource).not.toMatch(/getSmsProvider|sendSmsAction|sendAutomationSms|sendInstantReply/);
+    expect(routeSource).not.toContain('from "@/lib/sms');
+    expect(routeSource).not.toContain('from "@/lib/automations');
+    expect(routeSource).not.toContain("sendSmsAction");
   });
 
   it("a failure recording the answer is CONTAINED — the customer's message is filed and the outer catch never sees it", async () => {
@@ -377,6 +408,12 @@ describe("an inbound text that is a one-word answer", () => {
     dbMocks.getAlertPhone.mockResolvedValue("+19565559999");
     await POST(inbound("yes", "+19565559999"));
     expect(dbMocks.applyConfirmationReply).not.toHaveBeenCalled();
-    // Mutation: move the new block above the alert-phone guard -> red.
+    // Mutation: delete the guard's early return (route.ts:130-133) -> red.
+    //
+    // NOT "move the new block above the alert-phone guard", which is what the
+    // plan prescribed and nobody can apply: the block reads `contact.id`, and
+    // `contact` is const-declared 27 lines BELOW the guard (route.ts:157), so
+    // that move is a TDZ/compile error rather than a test failure. A mutation
+    // that cannot be applied proves nothing about the case it names.
   });
 });
