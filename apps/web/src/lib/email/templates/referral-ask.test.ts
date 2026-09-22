@@ -16,16 +16,16 @@ const UNBRANDED: Branding = {
   replyToEmail: null,
 };
 const brand = emailBrand({ ...UNBRANDED, brandName: "Rio Roofing" });
-const SUBJECT = "One favour, from Rio Roofing";
+const SUBJECT = "One favor, from Rio Roofing";
 
 describe("referralAskEmail", () => {
   it("passes the CALLER's subject through unchanged, including the unbranded one", () => {
     // Mutation: build the subject inside the template from `brand.name` →
-    // the second line reds with "One favour, from " for an account that has
+    // the second line reds with "One favor, from " for an account that has
     // never set a brand name. The copy module owns that branch.
     expect(referralAskEmail({ brand, subject: SUBJECT, body: "Thanks again." }).subject).toBe(SUBJECT);
-    expect(referralAskEmail({ brand: emailBrand(UNBRANDED), subject: "One favour", body: "Thanks again." }).subject)
-      .toBe("One favour");
+    expect(referralAskEmail({ brand: emailBrand(UNBRANDED), subject: "One favor", body: "Thanks again." }).subject)
+      .toBe("One favor");
   });
 
   it("splits the operator's body on blank lines into separate paragraphs, in both parts", () => {

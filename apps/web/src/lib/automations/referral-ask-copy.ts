@@ -24,7 +24,7 @@ export function defaultReferralAskBody(brandName: string): string {
  * The email's subject line, here rather than in the template, for the same
  * reason the body's blank-brand branch is here: `brandDisplayName` returns
  * `""` for an account that has never set a brand name (`branding.ts:197-199`),
- * and a template that interpolates it directly sends "One favour, from "
+ * and a template that interpolates it directly sends "One favor, from "
  * with nothing after the comma. Task 8's `reactivationSubject` and Task 10's
  * `quoteFollowupSubject` are the same function for the same reason.
  */

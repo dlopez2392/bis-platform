@@ -1249,12 +1249,24 @@ export const m = {
   // config has no url field, so an operator cannot turn it into a second
   // review request by configuration either. GSM-7 throughout (straight
   // apostrophe, no em dash): one character outside the set drops the whole
-  // text to UCS-2 at 70 characters a segment. referral-ask-copy.test.ts
-  // pins the encoding and the segment count.
-  "automations.referral.defaultBody": "Thanks again from {name}. If you know someone who needs the same done, reply with their name and number and we'll look after them.",
-  "automations.referral.defaultBodyNoName": "Thanks again. If you know someone who needs the same done, reply with their name and number and we'll look after them.",
-  "automations.referral.emailSubject": "One favour, from {name}",
-  "automations.referral.emailSubjectNoName": "One favour",
+  // text to UCS-2 at 70 characters a segment.
+  //
+  // LENGTH IS A COST, not a style note, and the budget is stated rather than
+  // hoped for: `sendAutomationSms` appends " Reply STOP to opt out." (23
+  // septets) to every text, GSM-7 holds 160 in one segment, and this template
+  // is 110 — so ONE SEGMENT HOLDS A BRAND NAME OF 27 CHARACTERS OR FEWER.
+  // "Valley Air Conditioning" (23) and "Rio Grande Valley Roofing" (25) both
+  // fit. The first draft of this line was 124 septets, which left 13, and
+  // "Sunrise Plumbing" alone pushed every send to two billed segments — so
+  // the ask was tightened ("Know anyone who needs the same done? Send their
+  // name and number") rather than the promise dropped. A name carrying an
+  // accent is UCS-2 and three parts whatever this says, which is why
+  // referral-ask-copy.test.ts measures "García Roofing" too and the card
+  // renders the real count.
+  "automations.referral.defaultBody": "Thanks again from {name}. Know anyone who needs the same done? Send their name and number and we'll look after them.",
+  "automations.referral.defaultBodyNoName": "Thanks again. Know anyone who needs the same done? Send their name and number and we'll look after them.",
+  "automations.referral.emailSubject": "One favor, from {name}",
+  "automations.referral.emailSubjectNoName": "One favor",
   "automations.referral.title": "Referral asks",
   "automations.referral.body": "The morning after the review request, ask the customer whether they know someone else who needs the same work. Never lands on the same morning as the review request. Off until you turn it on.",
   "automations.referral.enabled": "Ask for referrals",

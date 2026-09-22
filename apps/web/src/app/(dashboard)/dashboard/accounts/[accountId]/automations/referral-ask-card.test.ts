@@ -40,19 +40,22 @@ function countText(html: string): string {
 }
 
 describe("the referral-ask card's segment counter", () => {
-  it("MEASURED: counts the DISCLOSED text — 158 characters, not the 135 the composed body alone would show", () => {
-    // The default body is 135 septets for this brand name; " Reply STOP to
+  it("MEASURED: counts the DISCLOSED text — 144 characters, not the 121 the composed body alone would show", () => {
+    // The default body is 121 septets for this brand name; " Reply STOP to
     // opt out." is 23 more. Mutation: count the body without `withOptOut` →
     // this reds BY NAME.
-    expect(countText(render())).toBe("158 characters · 1 message(s)");
+    expect(countText(render())).toBe("144 characters · 1 message(s)");
   });
 
-  it("MEASURED: a longer company name puts the DISCLOSED text into a second segment the undisclosed one would hide", () => {
-    // 149 septets composed, 172 disclosed: the undisclosed count says one
-    // message and the client is billed for two. A name this long is ordinary
-    // for a Valley roofer. Mutation: count the body without `withOptOut` →
-    // this reds on the MESSAGE COUNT, not merely on the character count.
-    expect(countText(render({ brandName: "Rio Grande Valley Roofing" }))).toBe("172 characters · 2 message(s)");
+  it("MEASURED: a long company name puts the DISCLOSED text into a second segment the undisclosed one would hide", () => {
+    // 140 septets composed, 163 disclosed: the undisclosed count says one
+    // message and the client is billed for two. The copy's budget is a name
+    // of 27 characters or fewer (messages.ts); this one is 30, so the second
+    // segment here is REAL rather than a defect — and the counter is what
+    // tells the agency before they turn it on. Mutation: count the body
+    // without `withOptOut` → this reds on the MESSAGE COUNT, not merely on
+    // the character count.
+    expect(countText(render({ brandName: "Hernandez Brothers Sheet Metal" }))).toBe("163 characters · 2 message(s)");
   });
 
   it("does not double the disclosure when the operator's own message already says STOP", () => {

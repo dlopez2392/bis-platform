@@ -269,7 +269,7 @@ async function sendEmail(
   const brand = emailBrandNamed(row.branding, row.brandName);
   // The subject is composed here, not inside the template: an account with no
   // brand name has `brandName === ""` (brandDisplayName, branding.ts:197-199)
-  // and a template interpolating it would ship "One favour, from ".
+  // and a template interpolating it would ship "One favor, from ".
   const { subject, html, text } = referralAskEmail({
     brand, subject: referralAskSubject(row.brandName), body,
   });

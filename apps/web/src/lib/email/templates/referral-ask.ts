@@ -4,7 +4,7 @@ export type ReferralAskEmailInput = {
   brand: EmailBrand;
   /** Composed by the caller with `referralAskSubject(row.brandName)`, never
    *  interpolated here: `brand.name` is `""` for an account with no brand
-   *  name, and `One favour, from ${brand.name}` would then ship a subject
+   *  name, and `One favor, from ${brand.name}` would then ship a subject
    *  ending in a comma and a space. */
   subject: string;
   /** Already defaulted by the caller (the pass). Blank lines are paragraph

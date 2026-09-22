@@ -100,8 +100,8 @@ describe("the referral ask sends by the CONFIGURED channel", () => {
   it("texts, stamps, and writes one sent row — with no link anywhere in the body", async () => {
     dbMocks.listDueReferralAsks.mockResolvedValue([row()]);
     expect(await referralAskPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
-    const body = "Thanks again from Rio Roofing. If you know someone who needs the same done, "
-      + "reply with their name and number and we'll look after them. Reply STOP to opt out.";
+    const body = "Thanks again from Rio Roofing. Know anyone who needs the same done? "
+      + "Send their name and number and we'll look after them. Reply STOP to opt out.";
     expect(smsSend).toHaveBeenCalledWith({ to: "+19565550112", from: "+19565550000", body });
     expect(dbMocks.createMessage).toHaveBeenCalledWith(expect.anything(), "acct_1",
       { conversationId: "convo_1", channel: "sms", direction: "outbound", body }, "automation", "system");
@@ -122,7 +122,7 @@ describe("the referral ask sends by the CONFIGURED channel", () => {
     expect(sent.fromName).toBe("Rio Roofing");
     expect(sent.fromAddress).toBe("hello@rioroofing.com");
     expect(sent.replyTo).toBe("owner@rioroofing.com");
-    expect(sent.subject).toBe("One favour, from Rio Roofing");
+    expect(sent.subject).toBe("One favor, from Rio Roofing");
     expect(sent.body).toContain("Thanks again from Rio Roofing.");
     expect(sent.html).not.toContain("href=");
     expect(smsSend).not.toHaveBeenCalled();

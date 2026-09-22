@@ -20,9 +20,22 @@ import {
 export function reviewRequestStillOwed(
   now: Date, anchor: Date, reviewRequestedAt: Date | null, reviewRequestEnabled: boolean,
 ): boolean {
-  if (!reviewRequestEnabled) return false;
-  if (reviewRequestedAt !== null) return false;
+  // POLARITY, because every `return false` in this function means "NOT owed",
+  // which lets the referral ask PROCEED — the opposite of what the identical
+  // line means in `shouldSendReferralAskNow` below, where false means "do not
+  // send". The two functions are one file apart and their `return false`s are
+  // byte-identical; a line copied from here into a send gate would turn a
+  // fail-closed into a fail-open.
+  if (!reviewRequestEnabled) return false;      // reviews are off: nothing to defer to
+  if (reviewRequestedAt !== null) return false; // already sent: the rung below is done
   const elapsedMs = now.getTime() - anchor.getTime();
+  // NOT owed on an unreadable anchor. Unreachable today (both anchors are
+  // `timestamptz` and the pass only reaches here past its own parse), and the
+  // SAFE direction for THIS predicate is the permissive one: the alternative
+  // is a row that defers to a review request that can never be sent, i.e. a
+  // referral ask that is never sent either. The send gate re-checks the same
+  // arithmetic and fails CLOSED on it (see below), so a broken anchor still
+  // sends nothing — this line decides only whether the review has priority.
   if (!Number.isFinite(elapsedMs)) return false;
   return elapsedMs <= REVIEW_REQUEST_MAX_AGE_MS;
 }
@@ -46,8 +59,11 @@ export function shouldSendReferralAskNow(
   now: Date, anchor: Date, followupSentAt: Date | null, reviewRequestedAt: Date | null,
   reviewRequestEnabled: boolean, timezone: string,
 ): boolean {
+  // POLARITY, the mirror of the note in `reviewRequestStillOwed`: every
+  // `return false` from here down means DO NOT SEND. Same three words, the
+  // opposite decision — this is the fail-closed half.
   const elapsedMs = now.getTime() - anchor.getTime();
-  if (!Number.isFinite(elapsedMs)) return false;
+  if (!Number.isFinite(elapsedMs)) return false;          // unreadable anchor: no defensible hour
   if (elapsedMs < 0) return false;                        // has not ended
   if (elapsedMs > REFERRAL_ASK_MAX_AGE_MS) return false;  // too stale to be welcome
 
