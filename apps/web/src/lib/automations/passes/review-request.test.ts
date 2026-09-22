@@ -439,6 +439,21 @@ describe("review request — quiet hours and release", () => {
     expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ reason: "This automation was turned off" }));
   });
 
+  it("characterises the silent branch the data layer's parse guard makes unreachable", async () => {
+    // A due row whose `config` is null CANNOT come out of
+    // `getDueReviewRequestById` — it answers `why: "off"` for a config that
+    // will not parse, which is the case above. Forced here, the pass takes
+    // its silent `config === null` branch and writes NOTHING, which is right
+    // on a normal tick and would park a released row for ever. This case
+    // stays green; it is the thing that goes green-for-the-wrong-reason if
+    // anyone removes that guard, and the guard's own RED lives in the db
+    // suite (`by id, a review-request config that no longer parses answers
+    // 'off'`). No mutation is prescribed here for that reason.
+    dbMocks.getDueReviewRequestById.mockResolvedValue({ due: row({ config: null }) });
+    expect(await releaseReviewRequest(ctx(), heldRow("email"))).toBe("skipped");
+    expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
+  });
+
   it("release: a held row's account is not trusted across tenants — a mismatch never sends (mutation: delete the check → FAILS)", async () => {
     dbMocks.getDueReviewRequestById.mockResolvedValue({ due: row({ config: { channel: "sms", reviewUrl: URL } }) });   // due.accountId is "acct_1"
     const crossTenant: AutomationLogRow = { ...heldRow("sms"), account_id: "acct_2" };

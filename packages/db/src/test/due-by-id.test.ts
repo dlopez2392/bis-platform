@@ -82,6 +82,30 @@ describe("the recipe lookups: `off` until the recipe is on, `gone` in the wrong 
     });
   });
 
+  it("by id, a review-request config that no longer parses answers `off` — so a released hold leaves the queue", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { bookingId } = await seed(db, accountId);
+      await upsertAutomation(db, accountId, "review_request",
+        { enabled: true, body: "", config: { channel: "email", reviewUrl: "https://g.page/r/x/review" } }, "user_test");
+      await setBookingStatus(db, accountId, bookingId, "completed", "user_test");
+      expect((await getDueReviewRequestById(db, bookingId)).due?.bookingId).toBe(bookingId);
+
+      // Straight to the column: `upsertAutomation` validates on write, and
+      // the case being proved is a row that went bad UNDER the app (an older
+      // shape, a hand-edited jsonb, a config written before a parser change).
+      await db.from("automations").update({ config: { channel: "fax", reviewUrl: "https://g.page/r/x/review" } })
+        .eq("account_id", accountId).eq("recipe_key", "review_request");
+      // `off`, not merely null: the releaser writes a different sentence for
+      // each ("This automation was turned off" vs "No longer due"), and
+      // `expect(x.due).toBeNull()` is green under either.
+      expect(await getDueReviewRequestById(db, bookingId)).toEqual({ due: null, why: "off" });
+      // Mutation: delete the `parseReviewRequestConfig(auto.config) === null`
+      // guard from getDueReviewRequestById → this reds, and a released hold
+      // whose config went bad is left `held` with its past `held_until` for
+      // ever, parking the head of the release queue.
+    });
+  });
+
   it("no-show nudge needs status no_show and carries the calendar's public id", async () => {
     await withTestAccount(async (db, accountId) => {
       const { cal, bookingId } = await seed(db, accountId);
@@ -89,6 +113,23 @@ describe("the recipe lookups: `off` until the recipe is on, `gone` in the wrong 
       await setBookingStatus(db, accountId, bookingId, "no_show", "user_test");
       const found = await getDueNoShowNudgeById(db, bookingId);
       expect(found.due?.calendarPublicId).toBe(cal.public_id);
+    });
+  });
+
+  it("by id, a no-show-nudge config that no longer parses answers `off` — so a released hold leaves the queue", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { bookingId } = await seed(db, accountId);
+      await upsertAutomation(db, accountId, "no_show_nudge", { enabled: true, body: "", config: { channel: "email" } }, "user_test");
+      await setBookingStatus(db, accountId, bookingId, "no_show", "user_test");
+      expect((await getDueNoShowNudgeById(db, bookingId)).due?.bookingId).toBe(bookingId);
+
+      // Same reasoning as the review request above: written under the app,
+      // not through `upsertAutomation`, which validates on write.
+      await db.from("automations").update({ config: { channel: "fax" } })
+        .eq("account_id", accountId).eq("recipe_key", "no_show_nudge");
+      expect(await getDueNoShowNudgeById(db, bookingId)).toEqual({ due: null, why: "off" });
+      // Mutation: delete the `parseNoShowNudgeConfig(auto.config) === null`
+      // guard from getDueNoShowNudgeById → this reds.
     });
   });
 
