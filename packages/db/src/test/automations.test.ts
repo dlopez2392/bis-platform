@@ -667,6 +667,38 @@ describe("appointment confirm — data layer", () => {
     });
   });
 
+  it("applyConfirmationReply never answers a CANCELLED booking, even when it is the soonest asked", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Scrapped", phone: "(956) 555-0112" }, "user_test");
+      const now = new Date("2027-08-01T12:00:00Z");
+      const mk = (startsAt: Date) => createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt, endsAt: new Date(startsAt.getTime() + MINUTE) }, "user_test");
+
+      // The cancelled booking is the SOONEST on purpose. Behind the live one
+      // the ascending order would skip it anyway and `.eq("status", "booked")`
+      // would carry no weight — the non-load-bearing negative fixture this
+      // file has already been caught by once (see `never`, above).
+      const scrapped = await mk(new Date(now.getTime() + 47 * HOUR));
+      const live = await mk(new Date(now.getTime() + 71 * HOUR));
+      for (const b of [scrapped, live]) await stampAppointmentConfirmAsked(db, b.id);
+      await cancelBookingByToken(db, scrapped.cancelToken);
+
+      // Mutation: delete `.eq("status", "booked")` from the lookup → this reds.
+      // Without it the YES lands on the cancelled row, and Task 4's badge
+      // paints "confirmed" on a job nobody is doing while the live
+      // appointment shows no answer at all.
+      expect(await applyConfirmationReply(db, accountId, contactId, "yes", now)).toBe("yes");
+      const read = async (id: string) => (await db.from("bookings")
+        .select("status, confirm_reply").eq("id", id).single()).data as
+        { status: string; confirm_reply: string | null };
+
+      expect((await read(live.id)).confirm_reply).toBe("yes");
+      expect((await read(scrapped.id)).confirm_reply).toBeNull();
+      expect((await read(scrapped.id)).status).toBe("cancelled");
+    });
+  });
+
   it("applyConfirmationReply never reaches another account's booking", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");

@@ -764,10 +764,11 @@ export function matchConfirmationReply(text: string): ConfirmationAnswer | null 
  *     own STOP handling. The ask's own "either way we'll see it" is what
  *     covers the customer (spec decision 6).
  *
- * "Which booking": the SOONEST UPCOMING one this contact was asked about and
- * has not answered. Soonest rather than most recently asked, because that is
- * the appointment the customer has in mind when they reply; an appointment
- * that has already started is not a thing anyone is confirming.
+ * "Which booking": the SOONEST UPCOMING STILL-BOOKED one this contact was
+ * asked about and has not answered. Soonest rather than most recently asked,
+ * because that is the appointment the customer has in mind when they reply;
+ * an appointment that has already started, or that has been cancelled since
+ * the ask went out, is not a thing anyone is confirming.
  *
  * Returns the answer it wrote, or null when it wrote nothing — the route logs
  * the difference and does nothing else with it.
@@ -781,6 +782,15 @@ export async function applyConfirmationReply(
   const { data, error } = await db.from("bookings")
     .select("id")
     .eq("account_id", accountId).eq("contact_id", contactId)
+    // STILL BOOKED. A booking that was asked and then cancelled is not a
+    // thing anyone is confirming, and being the sooner of the two it would
+    // win the ordering: the answer would land on the scrapped job while the
+    // live appointment read as unanswered. `bookings_confirm_reply_pending`
+    // (account_id, contact_id, starts_at where confirm_asked_at is not null
+    // and confirm_reply is null) still serves this read — an equality on a
+    // column the index does not carry is a cheap recheck of the rows it
+    // returned, not a lost index.
+    .eq("status", "booked")
     .not("confirm_asked_at", "is", null)
     .is("confirm_reply", null)
     .gt("starts_at", now.toISOString())
@@ -789,7 +799,7 @@ export async function applyConfirmationReply(
   if (error) throw new Error(`applyConfirmationReply lookup failed: ${error.message}`);
   if (!data) return null;
 
-  const { error: uErr } = await db.from("bookings")
+  const { data: written, error: uErr } = await db.from("bookings")
     .update({ confirm_reply: answer, confirm_reply_at: now.toISOString() })
     .eq("id", (data as { id: string }).id)
     // Re-scoped by account on the WRITING statement too. Not a live hole —
@@ -797,9 +807,19 @@ export async function applyConfirmationReply(
     // service-role, and a writing statement whose tenancy you have to trace
     // to another query to see is how the next edit loses it.
     .eq("account_id", accountId)
-    .is("confirm_reply", null);
+    // COMPARE-AND-SET, and the ONLY thing it can lose to is a second inbound
+    // text for the same contact landing between the SELECT and this UPDATE.
+    // No test can red this predicate — the SELECT two statements up already
+    // excludes answered rows, so single-threaded it always matches. It is
+    // defence in depth, and it is said out loud here rather than left looking
+    // like a filter someone could prove.
+    .is("confirm_reply", null)
+    // The row it actually matched, so the return value is a fact rather than
+    // a hope: the caller (the inbound SMS route) logs on exactly this value,
+    // and the loser of that race must not be reported as a recorded answer.
+    .select("id").maybeSingle();
   if (uErr) throw new Error(`applyConfirmationReply write failed: ${uErr.message}`);
-  return answer;
+  return written ? answer : null;
 }
 
 // ---------------------------------------------------------------------------
