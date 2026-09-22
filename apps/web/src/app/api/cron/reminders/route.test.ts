@@ -65,27 +65,26 @@ vi.mock("@bis/db", () => ({
   stampReferralAsked: async () => { throw new Error("route.test: nothing is due"); },
   stampReferralAskSmsFailed: async () => { throw new Error("route.test: nothing is due"); },
   // The reactivation pass (part B). EMAIL ONLY, so no sender gate and no
-  // message row — but `reactivationCutoff` is a PURE function the pass reads
-  // at IMPORT TIME, and this is a BARE factory mock (no importOriginal) that
-  // throws on any export it does not define. A stub returning `undefined`
-  // would throw on `.toISOString()` the moment a row were ever due here, so
-  // the real implementation is reproduced. Nothing is due in this suite, so
-  // the copy below is never EXECUTED: if it ever drifts from
-  // `automations.ts`'s own, the divergence is invisible here — which is why
-  // the cutoff's behaviour is pinned in `passes/reactivation.test.ts`
-  // (importOriginal, the real function) and in the db suite, never here.
+  // message row. `listDueReactivations` is the only one of these six this
+  // suite REQUIRES — MEASURED, not assumed: delete it and the mock's proxy
+  // throws `No "listDueReactivations" export is defined`, the pass reports
+  // `errored: 1` and all seven whole-body equalities red. Delete any of the
+  // other five and all 30 stay green, because vitest's proxy throws when an
+  // export is DEREFERENCED, not when the importing module is loaded, and
+  // nothing is ever due here so the loop that reads them never runs. (That
+  // is what separates them from `REFERRAL_ASK_MAX_AGE_MS` above, which a
+  // gate module really does read at import time.)
+  //
+  // They stay anyway, as the loud failure a future edit deserves the moment
+  // it makes a row due here. For the same reason `reactivationCutoff` is a
+  // THROW and not a hand-copy of the real arithmetic: a copy would carry no
+  // coverage at all while drifting silently from `automations.ts`. The
+  // cutoff's real behaviour is pinned in `passes/reactivation.test.ts`
+  // (importOriginal, the real function) and in the db suite.
   listDueReactivations: async () => [],
   countReactivationsSince: async () => 0,
   conversationQuietSince: async () => true,
-  reactivationCutoff: (now: Date, months: number) => {
-    const d = new Date(now.getTime());
-    const day = d.getUTCDate();
-    d.setUTCDate(1);
-    d.setUTCMonth(d.getUTCMonth() - months);
-    const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
-    d.setUTCDate(Math.min(day, last));
-    return d;
-  },
+  reactivationCutoff: () => { throw new Error("route.test: nothing is due"); },
   stampReactivationSent: async () => { throw new Error("route.test: nothing is due"); },
   getDueReactivationById: async () => { throw new Error("route.test: nothing is held"); },
   // The appointment-confirm pass (part B): registering a pass and NOT mocking

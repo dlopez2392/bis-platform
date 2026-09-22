@@ -18,6 +18,7 @@ vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>
 
 import { reactivationCutoff } from "@bis/db";
 import { AUTOMATION_DAILY_CAP, REACTIVATION_DAILY_CAP } from "../caps";
+import { STAMP_RETRY_DELAYS_MS } from "@/lib/booking/stamp-retry";
 import { m } from "@/lib/messages";
 import type { PassContext } from "../context";
 import { reactivationPass, releaseReactivation } from "./reactivation";
@@ -136,6 +137,38 @@ describe("the reactivation check-in is EMAIL ONLY", () => {
     expect(emailSend).not.toHaveBeenCalled();
     expect(dbMocks.stampReactivationSent).not.toHaveBeenCalled();
     expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
+  });
+
+  it("an email that SENT but could not be stamped is counted UNSTAMPED and still counted sent — and for THIS recipe that is a repeat, not a duplicate", async () => {
+    // `stampWithRetry` spends its whole budget (three attempts) and gives up
+    // WITHOUT throwing, so the send is real: the customer has the email and
+    // `contacts.reactivation_sent_at` is still null.
+    //
+    // WHY IT IS WORSE HERE THAN ANYWHERE ELSE (stamp-retry.ts's own header:
+    // "one failed stamp is no longer 'a duplicate'. It is up to five more
+    // reminders... to the same customer, fifteen minutes apart"). This
+    // recipe's morning band is THREE HOURS — twelve ticks — and
+    // `listDueReactivations` orders `last_message_at` ASCENDING
+    // (automations.ts:1238), so the same person sits at the head of the queue
+    // every one of them. REACTIVATION_DAILY_CAP cannot bound it either:
+    // `countReactivationsSince` counts the very column that failed to write,
+    // so it reads 0 again next tick. An unstamped send therefore breaks
+    // "once per contact, EVER" — the restraint this whole recipe exists to
+    // keep — and counting it `sent` AND `unstamped` is what makes that
+    // visible in the cron's body rather than a silent repeat.
+    //
+    // Mutation: delete the `if (!stamp.stamped)` block → `unstamped` stays 0
+    // and this reds BY NAME.
+    dbMocks.listDueReactivations.mockResolvedValue([row()]);
+    dbMocks.stampReactivationSent.mockRejectedValue(new Error("PostgREST 503"));
+    expect(await reactivationPass.run(ctx())).toEqual({ ...EMPTY, sent: 1, unstamped: 1 });
+    expect(emailSend).toHaveBeenCalledTimes(1);
+    expect(dbMocks.stampReactivationSent).toHaveBeenCalledTimes(STAMP_RETRY_DELAYS_MS.length + 1);
+    // The log row still says `sent`, because it was: the log is what went
+    // out, not whether the bookkeeping afterwards landed.
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      source: "reactivation", subjectKey: "contact:ct_1", status: "sent",
+    }));
   });
 
   it("an unresolvable account zone HOLDS the row and says so, rather than guessing an hour", async () => {
