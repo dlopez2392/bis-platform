@@ -32,6 +32,10 @@ export type BookingRow = {
   review_request_sms_failed_at: string | null;
   no_show_nudge_sms_failed_at: string | null;
   sms_reminder_failed_at: string | null;
+  /** 0047: the customer's own answer to the confirmation text, and when.
+   *  Written by the inbound SMS webhook; it never changes `status`. */
+  confirm_reply: "yes" | "no" | null;
+  confirm_reply_at: string | null;
 };
 
 export type CalendarSettingsPatch = Partial<{
@@ -93,7 +97,8 @@ const BOOKING_COLS =
   "id, account_id, calendar_id, contact_id, starts_at, ends_at, status, note, " +
   "cancel_token, booker_timezone, reminder_sent_at, meeting_url, followup_sent_at, review_requested_at, " +
   "completed_at, no_show_at, no_show_nudged_at, sms_reminder_sent_at, " +
-  "review_request_sms_failed_at, no_show_nudge_sms_failed_at, sms_reminder_failed_at";
+  "review_request_sms_failed_at, no_show_nudge_sms_failed_at, sms_reminder_failed_at, " +
+  "confirm_reply, confirm_reply_at";
 
 // Same shape as newPublicId in forms.ts, but twice the length (24 bytes, not
 // 12): this token rides an email link with no rate limit protecting it, so it

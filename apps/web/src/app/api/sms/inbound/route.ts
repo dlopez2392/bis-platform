@@ -27,6 +27,7 @@ import { NextResponse } from "next/server";
 import {
   serviceDb, ensureConversation, createMessage, createContact, incrementUnreadCount,
   updateMessageStatusByProviderId, findMessageByProviderId, getPhoneNumberByE164, getAlertPhone,
+  applyConfirmationReply,
   type MessageStatus, type SupabaseClient,
 } from "@bis/db";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
@@ -170,6 +171,38 @@ async function handleInbound(db: SupabaseClient, payload: TelnyxPayload | undefi
   // route's outer try (see POST) — a failure here logs and falls through to
   // the same 200 ack, it never escapes as a 500.
   await incrementUnreadCount(db, accountId, conversation.id);
+
+  // PART B: the appointment-confirmation answer. The ONE place in this
+  // platform where an inbound text means something other than "a person
+  // wrote in" — `appointment_confirm` asks "Reply YES to confirm or NO if
+  // you need a different time", and this records what they said.
+  //
+  // CONTAINED ON PURPOSE, the getAlertPhone pattern above (:124-128). This
+  // route's outer catch logs and still returns 200, so an uncontained throw
+  // here is reported to Telnyx as "handled" while the customer's whole
+  // message — already written above — would be the last thing that happened
+  // before the failure. The message is the product; the keyword is a
+  // convenience. A failed recognition therefore degrades to "nobody recorded
+  // the answer", which the operator sees as an ordinary unread text saying
+  // "yes". THE LOG LINE BELOW IS LOAD-BEARING: it is the only observable
+  // difference between contained and uncontained, and route.test.ts asserts
+  // on exactly it.
+  //
+  // AFTER incrementUnreadCount, never before: the answer is a fact ABOUT a
+  // message that must already exist, and the operator's unread badge must
+  // rise whether or not the word was recognised.
+  //
+  // It sends NOTHING. A second outbound per confirmation costs a message,
+  // risks a loop against the carrier's own STOP handling, and would make this
+  // webhook a sender rather than a recorder (spec decision 6). It changes no
+  // booking STATUS either: a destructive action from one word in a text, with
+  // no confirmation, is what DESIGN.md rule 6 forbids (decision 5).
+  try {
+    const answer = await applyConfirmationReply(db, accountId, contact.id, payload?.text ?? "", new Date());
+    if (answer) log("recorded an appointment confirmation reply", accountId, contact.id, answer);
+  } catch (e) {
+    log("could not record a confirmation reply — the customer's message is filed regardless", accountId, String(e));
+  }
 }
 
 async function handleStatus(db: SupabaseClient, payload: TelnyxPayload | undefined): Promise<void> {

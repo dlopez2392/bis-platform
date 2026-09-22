@@ -133,6 +133,33 @@ export function BookingsList({
                           {timeRange(b.starts_at, b.ends_at, timezone)}
                         </span>
                         <Badge variant={STATUS_VARIANT[b.status]}>{STATUS_LABEL[b.status]}</Badge>
+                        {/* The customer's own answer to the confirmation text (0047,
+                            written by the inbound SMS webhook). DOT AND WORD, never
+                            colour alone (DESIGN.md rule 3); the two colour pairs are
+                            STATUS_TREATMENTS.sent and .skipped verbatim, so this pill
+                            and the automation-history pills read as one system. */}
+                        {b.confirm_reply ? (
+                          <span
+                            data-testid="booking-confirm-reply"
+                            className={
+                              "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs "
+                              + (b.confirm_reply === "yes"
+                                ? "border-success/30 bg-success/10 text-foreground"
+                                : "border-border bg-transparent text-muted-foreground")
+                            }
+                          >
+                            <span
+                              aria-hidden
+                              className={
+                                "size-1.5 rounded-full "
+                                + (b.confirm_reply === "yes" ? "bg-success" : "bg-muted-foreground/60")
+                              }
+                            />
+                            {b.confirm_reply === "yes"
+                              ? m["calendar.bookings.confirmed"]
+                              : m["calendar.bookings.confirmDeclined"]}
+                          </span>
+                        ) : null}
                         <Link
                           href={`/dashboard/accounts/${accountId}/contacts/${b.contact_id}`}
                           className="text-xs text-primary underline"
