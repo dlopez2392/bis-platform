@@ -7,7 +7,9 @@ import type { BookingRow, BookingStatus } from "@bis/db";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { STATUS_TREATMENTS } from "@/lib/automations/log-titles";
 import { m } from "@/lib/messages";
+import { cn } from "@/lib/utils";
 import type { ActionResult } from "./actions";
 
 type Booking = BookingRow & { contact_name: string; contact_email: string | null };
@@ -135,30 +137,45 @@ export function BookingsList({
                         <Badge variant={STATUS_VARIANT[b.status]}>{STATUS_LABEL[b.status]}</Badge>
                         {/* The customer's own answer to the confirmation text (0047,
                             written by the inbound SMS webhook). DOT AND WORD, never
-                            colour alone (DESIGN.md rule 3); the two colour pairs are
-                            STATUS_TREATMENTS.sent and .skipped verbatim, so this pill
-                            and the automation-history pills read as one system. */}
+                            colour alone (DESIGN.md rule 3) — through the real `Badge`
+                            and the real STATUS_TREATMENTS (`sent` for a yes, `skipped`
+                            for a no), which is what `LogStatusPill` does, so this pill
+                            and the automation-history pills ARE one system rather than
+                            two that happen to match today. The hand-rolled base classes
+                            this replaced were a partial reimplementation missing
+                            `font-medium`, `w-fit`, `shrink-0` and `whitespace-nowrap`:
+                            it rendered at normal weight beside the `font-medium` status
+                            badge on this very row, and could wrap where that badge
+                            cannot. No padding override, unlike LogStatusPill's
+                            `py-1 pr-2.5 pl-2` — the badge's own `px-2 py-0.5` is what
+                            the status badge next to it uses.
+
+                            Rendered for EVERY status, cancelled included: "they
+                            confirmed, and then it was cancelled" is a true thing and
+                            arguably the most useful row on the screen. Only
+                            `StatusActions` below gates on status.
+
+                            `confirm_reply_at` is selected and typed but deliberately
+                            NOT shown: the answer is what an operator acts on, the
+                            minute it arrived is not. */}
                         {b.confirm_reply ? (
-                          <span
+                          <Badge
+                            variant="chip"
+                            className={cn("gap-1.5", b.confirm_reply === "yes"
+                              ? STATUS_TREATMENTS.sent.chip
+                              : STATUS_TREATMENTS.skipped.chip)}
                             data-testid="booking-confirm-reply"
-                            className={
-                              "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs "
-                              + (b.confirm_reply === "yes"
-                                ? "border-success/30 bg-success/10 text-foreground"
-                                : "border-border bg-transparent text-muted-foreground")
-                            }
                           >
                             <span
                               aria-hidden
-                              className={
-                                "size-1.5 rounded-full "
-                                + (b.confirm_reply === "yes" ? "bg-success" : "bg-muted-foreground/60")
-                              }
+                              className={cn("size-[7px] rounded-full", b.confirm_reply === "yes"
+                                ? STATUS_TREATMENTS.sent.dot
+                                : STATUS_TREATMENTS.skipped.dot)}
                             />
                             {b.confirm_reply === "yes"
                               ? m["calendar.bookings.confirmed"]
                               : m["calendar.bookings.confirmDeclined"]}
-                          </span>
+                          </Badge>
                         ) : null}
                         <Link
                           href={`/dashboard/accounts/${accountId}/contacts/${b.contact_id}`}
