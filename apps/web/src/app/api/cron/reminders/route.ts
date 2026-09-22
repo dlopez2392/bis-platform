@@ -10,8 +10,9 @@ export const dynamic = "force-dynamic";
 // FIRST pass so it cannot starve the passes after it; this is that budget plus
 // headroom for them — the two numbers are one coupling, so changing either
 // without the other is the bug. (No count here on purpose: `PASSES` grows by a
-// line per recipe, and a number written in prose rots the first time it does.) 300 is Vercel's current per-function default;
-// declaring it here makes the assumption explicit rather than inherited.
+// line per recipe, and a number written in prose rots the first time it does.)
+// 300 is Vercel's current per-function default; declaring it here makes the
+// assumption explicit rather than inherited.
 export const maxDuration = 300;
 
 /**

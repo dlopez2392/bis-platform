@@ -240,6 +240,10 @@ test.describe("part B's recipes on the Automations page (agency)", () => {
       await expect(after.getByLabel("Pipeline stage to watch")).toContainText(chosen);
       // The stage is stored by ID, so a card that had lost the mapping would
       // render its own "the stage this automation watches is gone" state.
+      // This is the NEGATIVE side only — it proves the banner is absent
+      // here, not that the banner renders correctly when the stage IS
+      // missing. The positive guard for that testid is
+      // quote-followup-card.test.ts:106-107; don't treat this line as it.
       await expect(after.getByTestId("quote-followup-stage-missing")).toHaveCount(0);
     } finally {
       // Gone, not merely off: the pipeline is about to be deleted and a

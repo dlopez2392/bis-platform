@@ -1617,15 +1617,22 @@ const QUOTE_FOLLOWUP_SELECT =
  * makes one pair of reads for the whole candidate set rather than a pair per
  * account. The release path passes `[row.accountId]`.
  *
- * It buys two things at once. Tenancy: `conversations.contact_id` is a plain
- * FK, so without it another account's conversation answers for this
- * contact — the same shape as the reactivation chain's cross-account read.
- * And the index: every usable index on these two tables leads with
- * `account_id` (`messages_thread`, `conversations_account_contact_unique`,
- * `conversations_account_recent`) and PostgreSQL 17 has no skip scan, so
- * without a constraint on that leading column both reads were sequential
- * scans. `listDueReactivations` states the same rule over the same two
- * tables.
+ * It buys the index unconditionally: every usable index on these two tables
+ * leads with `account_id` (`messages_thread`,
+ * `conversations_account_contact_unique`, `conversations_account_recent`)
+ * and PostgreSQL 17 has no skip scan, so without a constraint on that
+ * leading column both reads were sequential scans. `listDueReactivations`
+ * states the same rule over the same two tables.
+ *
+ * It buys TENANCY only on the release path, where `accountIds` is a single
+ * account. On the TICK path `accountIds` is every enabled account and the
+ * map below is keyed by `contactId` ALONE, so a cross-account
+ * `conversations` row can still let account A's inbound suppress account
+ * B's follow-up for a contact both happen to know of (fail-safe: it can
+ * only make a due row wait, never send one early). The stronger fix — key
+ * the map by the `(account_id, contact_id)` pair, the way
+ * `listDueReactivations`' `customerKey` already does — is a follow-up, not
+ * done here.
  */
 export async function latestInboundByContact(
   db: SupabaseClient, accountIds: readonly string[], contactIds: readonly string[], sinceIso: string,

@@ -23,10 +23,10 @@
 - **B9. `listDueQuoteFollowups` is bounded by its own candidate limit, not by the tick cap.** The spec (line 42) says "Candidates are bounded by the tick cap". They are not: `AUTOMATION_TICK_CAP` is applied inside `processQuoteFollowups`, after the read. This recipe's trigger is a RESTING state with a thirty-day window, so an account whose nominated stage holds hundreds of open deals would put hundreds of uuids into the quiet test's `.in(…)` and fail the whole tick for every account. So `QUOTE_FOLLOWUP_CANDIDATE_LIMIT = 200` (oldest stage change first) bounds the due-list, mirroring `REACTIVATION_CANDIDATE_LIMIT`, and the thirty-day ceiling — not the ordering — is what drains the head of that queue.
 - **B10. `0047` ships NINE indexes, not the five the spec’s shape implied, and one the first draft named is dropped.** Three are the cap counts, one per CAPPED recipe — and `appointment_confirm` is not one of them, so `bookings_confirm_asked` is gone: it would index a column nothing ever counts (the recipe is uncapped by decision 2, and this plan deliberately declares no `countAppointmentConfirmsSince`), while `countQuoteFollowupsSince` would have had a sequential scan on `opportunities` every tick. Three more were added because two new due-lists would otherwise scan `bookings` whole on every tick: `listDueReferralAsks` needs its OWN two anchor indexes, because a partial index is chosen only when its predicate is IMPLIED by the query's and `referral_asked_at is null` does not imply `review_requested_at is null` (so the review request's pair, `0025:44` and `0026:49-50`, cannot serve it); and `listDueReactivations`' anti-blast read filters `bookings` on `contact_id`, which **had no index of any kind** — the live catalogue's only bookings indexes are `bookings_pkey`, `bookings_cancel_token_key`, `bookings_no_overlap`, `bookings_by_calendar`, `bookings_reminder_due`, `bookings_review_due`, `bookings_review_due_completed`, `bookings_no_show_due`, `bookings_no_show_due_marked` and `bookings_sms_reminder_due`. Names follow the house form (a bare table prefix, `opps_` for `opportunities` as `opps_account_pipeline` and `opps_contact` already do); **zero of the 113 indexes in `public` use an `idx_` prefix** and none of the nine may. The NINTH was added by the pre-apply review: `applyConfirmationReply` (Task 4) looks a booking up by `(account_id, contact_id)` with `confirm_asked_at is not null and confirm_reply is null and starts_at > now()`, on the hot path of every inbound text from a known contact, and neither `bookings_confirm_due` (whose `confirm_asked_at IS NULL` is that query’s exact contradiction) nor `bookings_completed_by_contact` (whose `status = 'completed'` the query does not imply) can serve it — so `bookings_confirm_reply_pending` does. B10 reached the opposite conclusion for the structurally identical reactivation read; the reply lookup was simply not considered until the apply gate.
 - **B11. `APPOINTMENT_CONFIRM_MIN_LEAD_MS` is the email reminder's window END (24h15m), not the spec's flat 24h.** The spec's reason is right and its number is not: the email reminder's due window is `starts_at ∈ [now + REMINDER_WINDOW_START_MS, now + REMINDER_WINDOW_END_MS]` = `[23h, 24h15m]` (`booking.ts:383-384`, used at `:546-547`), so a booking becomes eligible for the reminder the first tick at which its lead is **24h15m** — the window's CLOSE is where the reminder OPENS. A 24h lead therefore leaves a 15-minute band in which a released confirmation ask and the email reminder are both due. The constant is `(24 * 60 + 15) * 60 * 1000`, declared as its own literal (the `REVIEW_REQUEST_MAX_AGE_MS = 61h` shape, `automations.ts:158`) with `cron-coupling.test.ts` pinning it against `REMINDER_WINDOW_END_MS` — derived from the import it could never drift, and a coupling assertion that cannot fail is not a coupling assertion. **The collision is ONE TEXT AND ONE EMAIL**, not "two texts": the SMS reminder's window is 90–135 minutes (`automations.ts:466-467`) and cannot meet a 24h lead at all. Every comment that said "two texts and one confused customer" says the true thing instead.
-- **B12. The confirmation-reply lookup takes the SOONEST UPCOMING unanswered ask, not the spec's "most recent".** Spec Recipe 2 says "that contact's single most recent booking with `confirm_asked_at is not null`". The appointment a customer has in mind when they text YES is the next one, not the one they were asked about last, and an appointment that has already started is not a thing anyone is confirming — so the query orders `starts_at` ASCENDING behind `.gt("starts_at", now)`. With one outstanding ask the two rules agree; they differ only when a contact has two, which is exactly when getting it wrong writes the answer on the wrong job.
+- **B12. The confirmation-reply lookup took the SOONEST UPCOMING unanswered ask, not the spec's "most recent" — REVERTED 2026-09-22 by audit B's I2.** Spec Recipe 2 says "that contact's single most recent booking with `confirm_asked_at is not null`". This amendment originally argued the appointment a customer has in mind when they text YES is the next one, not the one they were asked about last, and ordered the query by `starts_at` ASCENDING behind `.gt("starts_at", now)`. That reasoning was wrong: it reasoned about which appointment the customer has in mind and forgot which TEXT they are holding — the ask names `formatWhen(startsAt, zone)` for one specific booking, so with two asks outstanding (a two-day job, or a morning slot plus a next-day slot, asked about on consecutive days) the soonest is precisely the one they are NOT answering. Audit B's I2 is exactly that case: two booked jobs under 48h apart, both asks outstanding, and ordering by `starts_at` put the answer on the wrong job. `applyConfirmationReply` now orders `confirm_asked_at` DESC, with `starts_at` ascending as the millisecond tiebreak; `.gt("starts_at", now)` and `.eq("status", "booked")` are unchanged and still do their own work. The spec's Recipe 2 line, which said "most recent" from the start, stands as written and needed no change. `bookings_confirm_reply_pending` is `(account_id, contact_id, starts_at)` and so no longer supplies the ORDER (it still supplies the equalities and the partial predicate); the query sorts the handful of rows one contact's two equalities return, which is the trade this reversal buys and 0047 needed no change for.
 - **B13. `{when}` in the confirmation text renders in the BOOKER's zone, not the spec's "the account's zone".** The spec sentence points at "the formatter the SMS reminder already uses" and that formatter is called `safeZone(row.bookerTimezone ?? undefined, row.accountTimezone)` (`passes/sms-reminder.ts:115`, the email reminder's rule) — the precedent the spec cites contradicts the zone the spec names. A Los Angeles booker of a Texas company reads their own clock; the account zone is the fallback when the booking carries none.
 - **B14. The confirmation answer surfaces on ONE screen, not the spec's three.** Spec Recipe 2 ends "The booking drawer and the work queue show the answer." There is no booking drawer in this app — `…/[accountId]/calendar/` holds `bookings-list.tsx`, `calendar-settings.tsx`, `embed-snippet.tsx`, `hours-form.ts`, `actions.ts` and `page.tsx`, and nothing else. And the work queue's booking rows are a fixed projection of `id, contact_id, ends_at` over bookings that are STILL `booked` with `ends_at` already in the past (`work-queue.ts:95-108`) — a confirmation answer for an appointment that has already ended is moot, and adding it would be a `bis-booking` change to that query rather than a render. So Task 4 ships the one surface that is both real and timely: the badge on the calendar's bookings list.
-- **B15. The confirmation-reply lookup is scoped to STILL-BOOKED bookings, and its UPDATE reports what it matched.** The spec lists the reply predicates (`2026-09-21-automation-engine-b-design.md:57`) as account, contact, `confirm_asked_at is not null`, `confirm_reply is null` and upcoming — no status. That is a live bug, not a tidiness point: a contact with an asked booking at +47h that was then cancelled through the cancel link, and a second asked booking at +71h, sends one "YES" and the answer lands on the CANCELLED one, because it is the sooner and B12 takes the soonest. Task 4's badge would then paint "confirmed" on a job nobody is doing while the live appointment reads as unanswered. So the lookup carries `.eq("status", "booked")`, proven by `applyConfirmationReply never answers a CANCELLED booking, even when it is the soonest asked` in `automations.test.ts` (the cancelled fixture is the SOONEST on purpose — behind the live one the ordering would exclude it anyway and the filter would be non-load-bearing). `bookings_confirm_reply_pending` still serves the read: an equality on a column the index does not carry is a recheck of the rows it returned, not a lost index, so 0047 needs nothing. Second half: the UPDATE's `.is("confirm_reply", null)` is a compare-and-set whose only possible loser is a second inbound text arriving between the SELECT and the UPDATE, and without a `.select()` the function could not tell a matched write from a lost race — it returned the answer either way, while its own doc comment promised "the answer it wrote, or null when it wrote nothing" and Task 4's route logs on exactly that value. It is now `.select("id").maybeSingle()` with `return written ? answer : null`. **No mutation can red that CAS predicate** (the SELECT already excludes answered rows, so single-threaded it always matches) and the code says so in place, rather than leaving it looking like a filter a later author should be able to prove; dropping the `.select()` DOES red two cases, which is what keeps the guarded return honest.
+- **B15. The confirmation-reply lookup is scoped to STILL-BOOKED bookings, and its UPDATE reports what it matched.** The spec lists the reply predicates (`2026-09-21-automation-engine-b-design.md:57`) as account, contact, `confirm_asked_at is not null`, `confirm_reply is null` and upcoming — no status. That is a live bug, not a tidiness point: a contact with an asked booking at +47h that was then cancelled through the cancel link, and a second asked booking at +71h, sends one "YES" and the answer lands on the CANCELLED one, because it was asked most recently and B12 (as reverted — see above) takes the most recently asked. Task 4's badge would then paint "confirmed" on a job nobody is doing while the live appointment reads as unanswered. So the lookup carries `.eq("status", "booked")`, proven by `applyConfirmationReply never answers a CANCELLED booking, even when it is the most recently asked` in `automations.test.ts` (the cancelled fixture WINS THE ORDERING on purpose — behind the live one the order would exclude it anyway and the filter would be non-load-bearing: an explicit `confirm_asked_at` more recent than the live booking's, not merely an earlier `starts_at`). `bookings_confirm_reply_pending` still serves the read: an equality on a column the index does not carry is a recheck of the rows it returned, not a lost index, so 0047 needs nothing. Second half: the UPDATE's `.is("confirm_reply", null)` is a compare-and-set whose only possible loser is a second inbound text arriving between the SELECT and the UPDATE, and without a `.select()` the function could not tell a matched write from a lost race — it returned the answer either way, while its own doc comment promised "the answer it wrote, or null when it wrote nothing" and Task 4's route logs on exactly that value. It is now `.select("id").maybeSingle()` with `return written ? answer : null`. **No mutation can red that CAS predicate** (the SELECT already excludes answered rows, so single-threaded it always matches) and the code says so in place, rather than leaving it looking like a filter a later author should be able to prove; dropping the `.select()` DOES red two cases, which is what keeps the guarded return honest.
 
 ## Global Constraints
 
@@ -462,7 +462,7 @@ describe("0047 - the nine columns exist and carry their constraints", () => {
 
 /**
  * THE CATALOGUE CLAIMS — the two CHECK definitions in full, the nine columns,
- * the EIGHT index names with their partial predicates, and the
+ * the NINE index names with their partial predicates, and the
  * no-grant-change claim. `withRollback` + raw SQL, because supabase-js goes
  * through PostgREST and PostgREST reaches neither `pg_indexes` nor
  * `information_schema.role_table_grants`: a file that advertises an index
@@ -1174,46 +1174,23 @@ describe("appointment confirm — data layer", () => {
     });
   });
 
-  it("applyConfirmationReply writes the answer on the SOONEST unanswered ask, and nothing else", async () => {
-    await withTestAccount(async (db, accountId) => {
-      const cal = await getOrCreateCalendar(db, accountId, "user_test");
-      const { id: contactId } = await createContact(db, accountId, { firstName: "Replier", phone: "(956) 555-0110" }, "user_test");
-      const now = new Date("2027-06-01T12:00:00Z");
-      const mk = (startsAt: Date) => createBooking(db, accountId,
-        { calendarId: cal.id, contactId, startsAt, endsAt: new Date(startsAt.getTime() + MINUTE) }, "user_test");
-
-      const past = await mk(new Date(now.getTime() - 3 * HOUR));
-      const soon = await mk(new Date(now.getTime() + 47 * HOUR));
-      const later = await mk(new Date(now.getTime() + 71 * HOUR));
-      const never = await mk(new Date(now.getTime() + 95 * HOUR));   // asked? no.
-      for (const b of [past, soon, later]) await stampAppointmentConfirmAsked(db, b.id);
-
-      // A message that is not an answer writes nothing at all.
-      expect(await applyConfirmationReply(db, accountId, contactId, "can I confirm the address?", now)).toBeNull();
-      const { data: untouched } = await db.from("bookings").select("confirm_reply").eq("id", soon.id).single();
-      expect((untouched as { confirm_reply: string | null }).confirm_reply).toBeNull();
-
-      expect(await applyConfirmationReply(db, accountId, contactId, "YES", now)).toBe("yes");
-      const read = async (id: string) => (await db.from("bookings")
-        .select("status, confirm_reply, confirm_reply_at").eq("id", id).single()).data as
-        { status: string; confirm_reply: string | null; confirm_reply_at: string | null };
-
-      expect((await read(soon)).confirm_reply).toBe("yes");                  // soonest upcoming
-      // BY VALUE, never .not.toBeNull(): a column dropped from a select comes back
-      // UNDEFINED, and expect(undefined).not.toBeNull() PASSES — so that form cannot
-      // fail under the very mutation it exists to catch (proven in Task 5).
-      expect(new Date((await read(soon.id)).confirm_reply_at!).getTime()).toBe(NOW.getTime());
-      expect((await read(soon)).status).toBe("booked");                      // a NO never cancels; a YES never confirms the STATUS either
-      expect((await read(later)).confirm_reply).toBeNull();                  // Mutation: order descending → this reds
-      expect((await read(past)).confirm_reply).toBeNull();                   // Mutation: drop the starts_at filter → this reds
-      expect((await read(never)).confirm_reply).toBeNull();                  // Mutation: drop the confirm_asked_at filter → this reds
-
-      // A second answer does not overwrite the first: the row is already answered.
-      expect(await applyConfirmationReply(db, accountId, contactId, "no", now)).toBe("no");
-      expect((await read(soon)).confirm_reply).toBe("yes");
-      expect((await read(later)).confirm_reply).toBe("no");                  // it moved to the next unanswered one
-    });
-  });
+  // SHIPPED AS "applyConfirmationReply writes the answer on the MOST
+  // RECENTLY ASKED booking, and nothing else" (packages/db/src/test/
+  // automations.test.ts:638 — B12's reversal, above, is why the title and
+  // the ordering changed). The fixture's whole point: SOONEST-STARTING and
+  // MOST-RECENTLY-ASKED disagree, so a test that got either measure right by
+  // accident could not exist. `soon` starts first (+47h) but was asked
+  // earliest of the outstanding asks (3h ago); `later` starts last (+71h)
+  // but was asked most recently (1h ago). A "YES" lands on `later`, not
+  // `soon` — proving the DESC order on `confirm_asked_at`. `past` (starts
+  // before `now`, asked most recently of ALL three) stays unanswered,
+  // proving `.gt("starts_at", now)` still excludes it on its own. A fourth
+  // booking is never asked at all (`confirm_asked_at` stays null); Postgres
+  // sorts nulls FIRST in a DESC order, so it would win outright if
+  // `.not("confirm_asked_at", "is", null)` were dropped — the assertion that
+  // row stays unanswered is what catches that mutation, not the ordering
+  // itself. A second reply does not overwrite the first; it answers the
+  // next unanswered one instead.
 
   it("applyConfirmationReply never reaches another account's booking", async () => {
     await withTestAccount(async (db, accountId) => {
@@ -1279,7 +1256,7 @@ Expected: vitest's summary block reports all three files green. Then run EACH pr
 | replace the set membership test with `cleaned.includes(...)` | `reads NOTHING out of a sentence that merely contains the word` |
 | subtract 1h from `windowStart` / add 1h to `windowEnd` in the due-list query | `listDueAppointmentConfirms: enabled, booked, starting 47h–48h15m out, unasked → due; edges inclusive` (moving the CONSTANTS instead moves the `tooSoon`/`tooFar` fixtures with them and cannot red this case — only the describe block's own constants-pin case reds that) |
 | add a `.is("confirm_sms_failed_at", null)` predicate to the due-list | same case (the `lowerEdge` expectation) |
-| order `starts_at` descending in `applyConfirmationReply`'s lookup | `applyConfirmationReply writes the answer on the SOONEST unanswered ask, and nothing else` |
+| delete the `confirm_asked_at` DESC order in `applyConfirmationReply`'s lookup | `applyConfirmationReply writes the answer on the MOST RECENTLY ASKED booking, and nothing else` |
 | drop the `.gt("starts_at", …)` filter / drop the `confirm_asked_at` filter | same case |
 | delete `.eq("account_id", accountId)` from the LOOKUP | `applyConfirmationReply never reaches another account's booking` |
 | return `why: "gone"` from the `!auto` branch of `getDueAppointmentConfirmById` | `appointment confirm: off until the recipe is on, gone once asked` |
@@ -3066,7 +3043,10 @@ git commit -m "db(automations): referral_ask due-list with the review-request pr
   ```ts
   // referral-ask-gate.ts
   export function reviewRequestStillOwed(now: Date, anchor: Date, reviewRequestedAt: Date | null, reviewRequestEnabled: boolean): boolean;
-  export function shouldSendReferralAskNow(now: Date, anchor: Date, followupSentAt: Date | null, reviewRequestedAt: Date | null, reviewRequestEnabled: boolean, timezone: string): boolean;
+  // `opts` added by the fix wave (ea06904, amendment B16): a release calls
+  // this SAME gate with `{ skipBand: true }` instead of skipping the whole
+  // call, so every OTHER rule it carries is re-applied on release too.
+  export function shouldSendReferralAskNow(now: Date, anchor: Date, followupSentAt: Date | null, reviewRequestedAt: Date | null, reviewRequestEnabled: boolean, timezone: string, opts?: { skipBand?: boolean }): boolean;
   // referral-ask-copy.ts
   export function defaultReferralAskBody(brandName: string): string;
   export function referralAskSubject(brandName: string): string;
@@ -3266,10 +3246,16 @@ export function reviewRequestStillOwed(
  *  5. The review request is not still owed (above).
  *
  * `referral_asked_at` does all the deduping; this gate has no memory.
+ *
+ * `opts.skipBand` is THE RELEASE PATH (fix wave ea06904, amendment B16) —
+ * skips rule 2 ALONE. A held row passed the band once, at the hour it was
+ * held, and releases at the quiet window's end, by definition not a band
+ * hour; rules 1, 3, 4 and 5 are RE-APPLIED on a release, because rule 4 —
+ * never two rungs on one morning — lives nowhere else (audit B's I1).
  */
 export function shouldSendReferralAskNow(
   now: Date, anchor: Date, followupSentAt: Date | null, reviewRequestedAt: Date | null,
-  reviewRequestEnabled: boolean, timezone: string,
+  reviewRequestEnabled: boolean, timezone: string, opts: { skipBand?: boolean } = {},
 ): boolean {
   const elapsedMs = now.getTime() - anchor.getTime();
   if (!Number.isFinite(elapsedMs)) return false;
@@ -3279,7 +3265,7 @@ export function shouldSendReferralAskNow(
   const zone = resolveAccountZone(timezone);
   if (zone === null) return false;
 
-  if (!isInMorningBand(now, zone)) return false;
+  if (!opts.skipBand && !isInMorningBand(now, zone)) return false;
   if (!isStrictlyEarlierLocalDay(anchor, now, zone)) return false;
 
   for (const stamp of [followupSentAt, reviewRequestedAt]) {
@@ -3306,7 +3292,7 @@ Run green, then each prescribed mutation.
   "automations.referral.emailSubject": "One favour, from {name}",
   "automations.referral.emailSubjectNoName": "One favour",
   "automations.referral.title": "Referral asks",
-  "automations.referral.body": "The morning after the review request, ask the customer whether they know someone else who needs the same work. Never lands on the same morning as the review request. Off until you turn it on.",
+  "automations.referral.body": "Ask the customer whether they know someone else who needs the same work. It goes the morning after the last message this job sent, and never on the same morning as one. If review requests are on, that one goes first. Off until you turn it on.",
   "automations.referral.enabled": "Ask for referrals",
   "automations.referral.channel": "Send by",
   "automations.referral.message": "Message",
@@ -3634,21 +3620,30 @@ export async function processReferralAsks(
     const followupSentAt = row.followupSentAt ? new Date(row.followupSentAt) : null;
     const reviewRequestedAt = row.reviewRequestedAt ? new Date(row.reviewRequestedAt) : null;
 
-    // Both of these are skipped on a RELEASE: the band already said yes once,
-    // when this row was held, and the releaser has already re-applied
-    // precedence itself (and written a real `skipped` row if it bit). Counted
-    // separately because "the review goes first" and "not this morning" are
-    // very different answers to "why has nothing gone out?".
-    if (!opts.released) {
-      if (reviewRequestStillOwed(ctx.now, anchor, reviewRequestedAt, row.reviewRequestEnabled)) {
-        c.waitingForReviewRequest++;
-        continue;   // silent: the row is due again tomorrow morning
-      }
-      if (!shouldSendReferralAskNow(
-        ctx.now, anchor, followupSentAt, reviewRequestedAt, row.reviewRequestEnabled, row.accountTimezone)) {
-        c.waitingForMorning++;
-        continue;
-      }
+    // PRECEDENCE is skipped on a RELEASE (fix wave ea06904, amendment B16):
+    // the releaser has already re-applied it itself and written a real
+    // `skipped` row (`REASONS.reviewFirst`) if it bit. Counted separately
+    // from the gate because "the review goes first" and "not this morning"
+    // are very different answers to "why has nothing gone out?".
+    if (!opts.released
+      && reviewRequestStillOwed(ctx.now, anchor, reviewRequestedAt, row.reviewRequestEnabled)) {
+      c.waitingForReviewRequest++;
+      continue;   // silent: the row is due again tomorrow morning
+    }
+
+    // THE GATE RUNS ON BOTH PATHS. A release skips the morning BAND alone
+    // (`skipBand: opts.released` — the old shape skipped the WHOLE call,
+    // which took rule 4, never two rungs on one morning, off the release
+    // path too; audit B's I1). A refusal on a release is written `skipped`,
+    // never left untouched — an untouched released row keeps its past
+    // `held_until` and parks the head of the queue forever; on a normal
+    // tick it stays silent, the row is simply due again tomorrow morning.
+    if (!shouldSendReferralAskNow(
+      ctx.now, anchor, followupSentAt, reviewRequestedAt, row.reviewRequestEnabled, row.accountTimezone,
+      { skipBand: opts.released })) {
+      c.waitingForMorning++;
+      if (opts.released) await logSkipped(ctx, subject, REASONS.noLongerDue);
+      continue;
     }
 
     let target: Target;
@@ -5293,7 +5288,10 @@ git commit -m "automations(reactivation): a once-ever check-in to a past custome
   };
   export async function listDueQuoteFollowups(db: SupabaseClient, nowIso: string): Promise<DueQuoteFollowup[]>;
   export async function getDueQuoteFollowupById(db: SupabaseClient, opportunityId: string): Promise<DueLookup<DueQuoteFollowup>>;
-  export async function latestInboundByContact(db: SupabaseClient, contactIds: readonly string[], sinceIso: string): Promise<Map<string, string>>;
+  // `accountIds` added by the fix wave (f619470): the index on the tick
+  // path (every usable index on `conversations`/`messages` leads with
+  // `account_id`), true tenancy on the single-account release path.
+  export async function latestInboundByContact(db: SupabaseClient, accountIds: readonly string[], contactIds: readonly string[], sinceIso: string): Promise<Map<string, string>>;
   export async function stampQuoteFollowupSent(db: SupabaseClient, opportunityId: string): Promise<void>;
   export async function stampQuoteFollowupSmsFailed(db: SupabaseClient, opportunityId: string): Promise<void>;
   export async function countQuoteFollowupsSince(db: SupabaseClient, accountId: string, sinceIso: string): Promise<number>;
@@ -5416,13 +5414,33 @@ const QUOTE_FOLLOWUP_SELECT =
  *
  * Exported because the RELEASE needs the single-contact case: a customer who
  * replied during a hold must not be chased at 8 AM.
+ *
+ * `accountIds` ADDED BY THE FIX WAVE (f619470). It IS A LIST, not one id,
+ * because the tick's call covers every account whose quote_followup is on —
+ * `listDueQuoteFollowups` deliberately makes one pair of reads for the whole
+ * candidate set rather than a pair per account. The release path passes
+ * `[row.accountId]`.
+ *
+ * It buys two things at once. Tenancy: `conversations.contact_id` is a plain
+ * FK, so without it another account's conversation answers for this
+ * contact — the same shape as the reactivation chain's cross-account read.
+ * And the index: every usable index on these two tables leads with
+ * `account_id` (`messages_thread`, `conversations_account_contact_unique`,
+ * `conversations_account_recent`) and PostgreSQL 17 has no skip scan, so
+ * without a constraint on that leading column both reads were sequential
+ * scans. `listDueReactivations` states the same rule over the same two
+ * tables. (On the TICK path `accountIds` is every enabled account and the
+ * map below is keyed by contact alone, so it buys the INDEX there, not real
+ * tenancy — see the source-file comment above the shipped function.)
  */
 export async function latestInboundByContact(
-  db: SupabaseClient, contactIds: readonly string[], sinceIso: string,
+  db: SupabaseClient, accountIds: readonly string[], contactIds: readonly string[], sinceIso: string,
 ): Promise<Map<string, string>> {
-  if (contactIds.length === 0) return new Map();
+  if (contactIds.length === 0 || accountIds.length === 0) return new Map();
   const { data: convos, error } = await db.from("conversations")
-    .select("id, contact_id").in("contact_id", [...contactIds]);
+    .select("id, contact_id")
+    .in("account_id", [...accountIds])
+    .in("contact_id", [...contactIds]);
   if (error) throw new Error(`latestInboundByContact conversations read failed: ${error.message}`);
   const byConversation = new Map(((convos ?? []) as { id: string; contact_id: string }[])
     .map((c) => [c.id, c.contact_id] as const));
@@ -5430,6 +5448,7 @@ export async function latestInboundByContact(
 
   const { data: msgs, error: mErr } = await db.from("messages")
     .select("conversation_id, created_at")
+    .in("account_id", [...accountIds])
     .in("conversation_id", [...byConversation.keys()])
     .eq("direction", "inbound")
     .gt("created_at", sinceIso)
@@ -5950,9 +5969,18 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * database would not be a gate.
  *
  * FAIL CLOSED on an unresolvable zone: no hour is defensible.
+ *
+ * `opts.skipBand` is THE RELEASE PATH (fix wave ea06904, amendment B16) —
+ * skips the band ALONE. A held row passed the band once, at the hour it was
+ * held, and releases at the quiet window's end, by definition not a band
+ * hour; everything else here — the operator's own `quietDays` and the
+ * 30-day staleness cap — is RE-APPLIED on a release, because they live
+ * nowhere else (audit B's I3: a deal dragged out of the watched stage and
+ * back into it during a hold has a brand-new `stage_changed_at`).
  */
 export function shouldSendQuoteFollowupNow(
   now: Date, stageChangedAt: Date, quietDays: number, timezone: string,
+  opts: { skipBand?: boolean } = {},
 ): boolean {
   const elapsedMs = now.getTime() - stageChangedAt.getTime();
   if (!Number.isFinite(elapsedMs)) return false;
@@ -5960,7 +5988,8 @@ export function shouldSendQuoteFollowupNow(
   if (elapsedMs > QUOTE_FOLLOWUP_MAX_AGE_MS) return false;  // a month on, it reads as a mistake
 
   const zone = resolveAccountZone(timezone);
-  if (zone === null) return false;
+  if (zone === null) return false;   // never skipped: a release with no zone is still no hour
+  if (opts.skipBand) return true;
   return isInMorningBand(now, zone);
 }
 ```
@@ -6078,14 +6107,14 @@ Cases and mutations:
     channel: config.channel, subjectKey: `opportunity:${row.opportunityId}`, contactId: row.contactId,
   };
   ```
-- the band call is `shouldSendQuoteFollowupNow(ctx.now, new Date(row.stageChangedAt), row.quietDays, row.accountTimezone)`, wrapped in `if (!opts.released && …)`;
+- THE GATE RUNS ON BOTH PATHS (fix wave ea06904, amendment B16 — `quote_followup` has no separate precedence check, unlike the referral ask, so there is no outer `if (!opts.released)` wrap here at all): the band call is `shouldSendQuoteFollowupNow(ctx.now, new Date(row.stageChangedAt), row.quietDays, row.accountTimezone, { skipBand: opts.released })`, called unconditionally; a refusal writes `c.waitingForMorning++` always, plus `if (opts.released) await logSkipped(ctx, subject, REASONS.noLongerDue)` so a release that refuses is never left untouched;
 - there is no `laterOf` anchor — `stage_changed_at` IS the clock, written by both `moveOpportunityStage` and `moveOpportunityToStage`;
 - the stamp is `stampQuoteFollowupSent(ctx.db, row.opportunityId)` and the failure marker `stampQuoteFollowupSmsFailed(ctx.db, row.opportunityId)`;
 - the cap count is `countQuoteFollowupsSince`, against `AUTOMATION_TICK_CAP` and `AUTOMATION_DAILY_CAP`;
 - the SMS body is `row.body.trim() || defaultQuoteFollowupBody(row.brandName)` with **no trailing link** (there is nothing to link to — the quote is a document the operator already sent);
 - the email is `shell`-based like the referral ask's, with `quoteFollowupSubject(row.brandName)`; create `apps/web/src/lib/email/templates/quote-followup.ts` in the `referral-ask.ts` shape (no button) and its test (no `href`, escaping, paragraph breaks);
 - counters: `{ sent, failed, unstamped, held, skippedInvalidConfig, skippedNoAddress, skippedSmsGate, skippedRecentFailure, skippedCap, waitingForMorning, unresolvableTimezone }` — `skippedInvalidConfig` is the defensive one described in Step 4's case 3; every other one moves on a real path;
-- **the `continue`s you are copying, and why none of them parks a released row here.** A released row that is left untouched keeps its past `held_until` and is handed back every tick for ever — the parked-row bug. Three branches `continue` without writing: `config === null` is UNREACHABLE on a release (the by-id lookup returns `why: "off"` for an unparseable config, so the releaser logs `recipeOff` and never enters the loop); the SMS gate READ failure is a transient `failed` the next tick retries, the same call `review-request.ts:142-146` makes; and the SMS cooldown is the one that must write on a release and does — `if (opts.released) await logSkipped(ctx, subject, REASONS.smsCooldown)` (`review-request.ts:168-171`). Copy that `if`, not just the `continue`.
+- **the `continue`s you are copying, and why none of them parks a released row here.** A released row that is left untouched keeps its past `held_until` and is handed back every tick for ever — the parked-row bug. Four branches `continue` without writing unconditionally: `config === null` is UNREACHABLE on a release (the by-id lookup returns `why: "off"` for an unparseable config, so the releaser logs `recipeOff` and never enters the loop); the SMS gate READ failure is a transient `failed` the next tick retries, the same call `review-request.ts:142-146` makes; the SMS cooldown is the one that must write on a release and does — `if (opts.released) await logSkipped(ctx, subject, REASONS.smsCooldown)` (`review-request.ts:168-171`); and (fix wave ea06904, amendment B16) the gate refusal above is the fourth — `if (opts.released) await logSkipped(ctx, subject, REASONS.noLongerDue)`, because the gate now runs on both paths instead of being skipped outright on a release. Copy those `if`s, not just the `continue`s.
 
 The releaser:
 
@@ -6113,8 +6142,11 @@ export const releaseQuoteFollowup: Releaser = async (ctx, row) => {
   // chased at 8 AM about a quote they already answered. Written `skipped`,
   // never left untouched: an untouched released row keeps its past
   // `held_until` and parks the head of the queue.
+  // [found.due.accountId] added by the fix wave (f619470): on this
+  // single-account release path it is what buys real tenancy, not merely
+  // the index the tick path gets.
   const inbound = await latestInboundByContact(
-    ctx.db, [found.due.contactId], found.due.stageChangedAt);
+    ctx.db, [found.due.accountId], [found.due.contactId], found.due.stageChangedAt);
   const replied = inbound.get(found.due.contactId);
   if (replied && new Date(replied).getTime() > new Date(found.due.stageChangedAt).getTime()) {
     await logSkipped(ctx, subjectOf(row), REASONS.heardBack);
