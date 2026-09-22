@@ -278,7 +278,7 @@ describe("0047 - the catalogue, read directly", () => {
     });
   });
 
-  it("changes no grant: bookings keeps NO client UPDATE, and the new columns carry exactly their table's standing", async () => {
+  it("changes no grant: bookings keeps NO client UPDATE, and the two control columns keep exactly four", async () => {
     await withRollback(async (c) => {
       // THE SHARPEST PIN AVAILABLE. `0016_booking.sql:88` revokes UPDATE on
       // bookings from authenticated and never re-grants it, so the client's
@@ -306,8 +306,35 @@ describe("0047 - the catalogue, read directly", () => {
         [table, col])).rows.map((r) => r.p);
       const FOUR = ["INSERT", "REFERENCES", "SELECT", "UPDATE"];
       expect(await privs("contacts", "first_name"), "contacts.first_name (the control)").toEqual(FOUR);
-      expect(await privs("contacts", "reactivation_sent_at"), "contacts.reactivation_sent_at").toEqual(FOUR);
       expect(await privs("opportunities", "name"), "opportunities.name (the control)").toEqual(FOUR);
+    });
+  });
+
+  // SPLIT OUT OF THE CASE ABOVE ON PURPOSE (2026-09-21, from Task 1's report).
+  // The two live on opposite sides of the apply and must not share an `it`:
+  //
+  //   the case above is GREEN BEFORE AND AFTER. That is its whole evidentiary
+  //   value — the grant surface is proven not to have MOVED, and a value that
+  //   does not move is only proof if the assertion could not have been red for
+  //   an unrelated reason. Bundling a red-before assertion into it destroyed
+  //   exactly that property: pre-apply the case failed at the first new
+  //   column, so nothing it claimed about the unmoved grants was demonstrated.
+  //
+  //   this case is RED BEFORE, GREEN AFTER, like every other case in the file:
+  //   `information_schema.column_privileges` returns no rows for a column that
+  //   does not exist yet, so [] !== FOUR until 0047 lands.
+  //
+  // Pre-apply this file is therefore 8 red / 4 green, and the plan's Step 2
+  // postscript says so.
+  it("the three new client-writable columns inherit their table's four privileges", async () => {
+    await withRollback(async (c) => {
+      const privs = async (table: string, col: string) => (await c.query<{ p: string }>(
+        `select privilege_type as p from information_schema.column_privileges
+          where grantee = 'authenticated' and table_schema = 'public'
+            and table_name = $1 and column_name = $2 order by privilege_type`,
+        [table, col])).rows.map((r) => r.p);
+      const FOUR = ["INSERT", "REFERENCES", "SELECT", "UPDATE"];
+      expect(await privs("contacts", "reactivation_sent_at"), "contacts.reactivation_sent_at").toEqual(FOUR);
       expect(await privs("opportunities", "quote_followup_sent_at"), "opportunities.quote_followup_sent_at").toEqual(FOUR);
       expect(await privs("opportunities", "quote_followup_sms_failed_at"), "opportunities.quote_followup_sms_failed_at").toEqual(FOUR);
     });
