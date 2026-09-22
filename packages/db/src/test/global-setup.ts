@@ -27,7 +27,7 @@ export default async function setup(): Promise<void> {
   if (swept.length > 0) {
     console.log(
       `[sweep] removed ${swept.length} fixture account(s) abandoned by an earlier run: ` +
-      swept.join(", "),
+      swept.map((a) => `${a.name} (${a.id})`).join(", "),
     );
   }
 }

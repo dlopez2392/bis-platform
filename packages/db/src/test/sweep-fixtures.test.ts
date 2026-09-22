@@ -9,8 +9,10 @@ import { DEMO_ACCOUNT_NAME, DEMO_ORG_ID } from "../demo/fiction";
  * cases run with no credentials and no network.
  *
  * The cases below are the ones that actually occurred or could: a genuine
- * leak, a fixture belonging to a run that is still going, and the three
- * near-misses that must never be swept.
+ * leak under each name a test in this repo invents, the demo seeder's
+ * throwaway copy, a fixture belonging to a run that is still going, and the
+ * near-misses on the org-id prefix that must never be swept — the prefix
+ * being the SOLE remaining safety condition now that the name list is gone.
  */
 const NOW = Date.parse("2026-09-15T20:00:00Z");
 const minutesAgo = (n: number) => new Date(NOW - n * 60_000).toISOString();
@@ -23,12 +25,52 @@ const fixture = (over: Partial<SweepCandidate> = {}): SweepCandidate => ({
   ...over,
 });
 
+/**
+ * Every name a test in this repo creates an account under, read off the
+ * `createAccount(` call sites in `packages/db/src` and `apps/web/src` on
+ * 2026-09-22. This list is the REASON the sweep no longer keys on names: it
+ * grew from one to seven without anybody thinking to extend a name list in a
+ * different package, and `Fixture Co (call proposals)` sat stranded in the
+ * production project from 2026-09-20 to 2026-09-22 because of it.
+ *
+ * It is here as a witness, not as a rule. The predicate must sweep every one
+ * of these and must go on sweeping the eighth name somebody invents next
+ * week without this file being touched.
+ */
+const FIXTURE_NAMES = [
+  "Fixture Co",                   // packages/db/src/test/fixtures.ts (the harness)
+  "Fixture Co (call proposals)",  // apps/web/…/calls/[callId]/actions.test.ts
+  "Fixture Co (returning lead)",  // apps/web/src/app/f/[publicId]/actions.returning-lead.test.ts
+  "Test Co",                      // packages/db/src/test/accounts.test.ts
+  "Other Co",                     // packages/db/src/test/opportunities.test.ts
+  "Fixture WS Two A",             // packages/db/src/test/voice-web-sessions.test.ts
+  "Fixture WS Two B",             // packages/db/src/test/voice-web-sessions.test.ts
+] as const;
+
 describe("isAbandonedFixture", () => {
   it("sweeps a fixture an earlier run left behind", () => {
     // The real case: three of these were left in the database when a merge
     // cancelled main's CI mid-suite, and sat there for two hours.
     expect(isAbandonedFixture(fixture(), NOW)).toBe(true);
   });
+
+  /**
+   * Guards the `it.each` below against the shape that cannot fail: an empty
+   * or truncated list would generate no cases (or too few) and the suite
+   * would go green having proved nothing about the six names that are not
+   * "Fixture Co".
+   */
+  it("knows all seven names the repo's tests create accounts under", () => {
+    expect(FIXTURE_NAMES).toHaveLength(7);
+    expect(new Set(FIXTURE_NAMES).size).toBe(7);
+  });
+
+  it.each(FIXTURE_NAMES)(
+    "sweeps an abandoned fixture whatever it is named — %s",
+    (name) => {
+      expect(isAbandonedFixture(fixture({ name }), NOW)).toBe(true);
+    },
+  );
 
   /**
    * The dangerous direction. While this was being written there were two live
@@ -49,17 +91,22 @@ describe("isAbandonedFixture", () => {
   });
 
   /**
-   * The name alone is not enough. A real business could legitimately be called
-   * Fixture Co, and its clerk org id comes from Clerk rather than from
-   * `withTestAccount`'s generator — so the `org_test_` prefix is what actually
-   * proves the row is ours to delete.
+   * The org-id prefix is now the ONLY thing standing between a row and
+   * deletion, so these are the assertions that carry the whole safety
+   * argument. A real business could legitimately be called Fixture Co — even
+   * "Fixture Co (call proposals)" — and it is still safe, because its clerk
+   * org id comes from Clerk rather than from a test's generator.
    */
-  it("never sweeps a real account, whatever it is called", () => {
+  it("never sweeps an account whose org id did not come from a test", () => {
+    // A real business that happens to be named exactly like the harness's
+    // own fixture. Clerk-shaped id, so the name buys the sweep nothing.
     expect(isAbandonedFixture(fixture({ clerk_org_id: "org_2abcDEFghiJKL" }), NOW)).toBe(false);
+    expect(isAbandonedFixture(
+      fixture({ name: "Test Client One", clerk_org_id: "org_2abcDEFghiJKL" }), NOW)).toBe(false);
+    expect(isAbandonedFixture(
+      fixture({ name: "Bespoke Intelligent Solutions", clerk_org_id: "org_31KlmNOPqrs" }), NOW),
+    ).toBe(false);
     expect(isAbandonedFixture(fixture({ clerk_org_id: null }), NOW)).toBe(false);
-    expect(isAbandonedFixture(fixture({ name: "Test Client One" }), NOW)).toBe(false);
-    expect(isAbandonedFixture(fixture({ name: "Bespoke Intelligent Solutions" }), NOW)).toBe(false);
-    expect(isAbandonedFixture(fixture({ name: "Resaca Air Conditioning" }), NOW)).toBe(false);
     // Near-misses on the prefix. The trailing underscore in `org_test_` is
     // load-bearing: without it "org_testimonials_inc" would match, and a real
     // company's account would be in scope for deletion.
@@ -81,10 +128,10 @@ describe("isAbandonedFixture", () => {
  * demo-seed.test.ts builds the entire demo tenant under a throwaway
  * `org_test_demoseed_<random>` org and tears it down in a `finally` — so a
  * run that is killed or times out mid-seed leaves a full Resaca Air account
- * behind. Because the sweep keyed on the name "Fixture Co" alone, nothing in
- * the system would EVER have reclaimed one: five were found sitting in the
- * production Supabase project on 2026-09-17, from three CI runs that failed
- * inside half an hour.
+ * behind. Because the sweep once keyed on the name "Fixture Co" alone,
+ * nothing in the system would EVER have reclaimed one: five were found
+ * sitting in the production Supabase project on 2026-09-17, from three CI
+ * runs that failed inside half an hour.
  *
  * The danger here runs the other way from the Fixture Co cases. The real demo
  * tenant shares its NAME with every throwaway copy, and it is the account
