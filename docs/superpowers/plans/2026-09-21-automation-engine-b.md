@@ -6375,7 +6375,7 @@ git commit -m "e2e(automations): part B's four cards on the fixture account; the
 
 | Spec section | Task |
 | --- | --- |
-| Migration `0047_automations_b.sql` (both CHECKs, nine columns, **nine** indexes — three cap counts, two due-lists the spec named, and the three the review added for the referral ask's two anchors and reactivation's anti-blast read — no grant changes) | Task 1 |
+| Migration `0047_automations_b.sql` (both CHECKs, nine columns, **nine** indexes — three cap counts, two due-lists the spec named, three the plan review added for the referral ask's two anchors and reactivation's anti-blast read, and one the PRE-APPLY review added for applyConfirmationReply's lookup — no grant changes) | Task 1 |
 | Recipe 2 `appointment_confirm` — trigger, window, SMS-only, deadline, uncapped, copy, subject key, release, off switches | Tasks 2, 3 |
 | Recipe 2's reply leg — `applyConfirmationReply`, whole-word matching, no reply-back, no status change, the operator sees it | Tasks 2, 4 |
 | Recipe 4 `referral_ask` — anchor, ladder, precedence, no-link enforcement, channel config, caps, subject key, release | Tasks 5, 6 |
