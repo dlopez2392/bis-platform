@@ -44,26 +44,26 @@ function fd(entries: Record<string, string>) {
   return formData;
 }
 
-/** Every table this file's fixture puts a row in. Not the delete list — that
- * is `ACCOUNT_OWNED_TABLES`, and the test below pins this as a subset of it.
- * This copy is the one that went stale: it omitted `messages` and
- * `conversations`, which M1c began creating for every lead ("every lead opens
- * a thread") AFTER the list was written, so the accounts delete failed on a
- * foreign key and the row survived — silently, because none of the deletes
- * checked `.error`. Eleven orphaned "Fixture Co (returning lead)" accounts
- * had accumulated in the shared project, visible in the real accounts list,
- * before anyone noticed. Pinning the subset is what turns that into a red
- * test instead of a leak. */
-const TABLES_THIS_FIXTURE_TOUCHES = [
+/** The tables `deleteAccountCascade` must delete BY `account_id` for this
+ * fixture — not the delete list itself, which is `ACCOUNT_OWNED_TABLES`; the
+ * test below pins this as a subset of it. This copy is the one that went
+ * stale: it omitted `messages` and `conversations`, which M1c began creating
+ * for every lead ("every lead opens a thread") AFTER the list was written, so
+ * the accounts delete failed on a foreign key and the row survived —
+ * silently, because none of the deletes checked `.error`. Eleven orphaned
+ * "Fixture Co (returning lead)" accounts had accumulated in the shared
+ * project, visible in the real accounts list, before anyone noticed. Pinning
+ * the subset is what turns that into a red test instead of a leak. */
+const TABLES_THE_CASCADE_MUST_DELETE_BY_ACCOUNT_ID = [
   "events", "form_submissions", "forms", "messages", "conversations",
   "checklist_items", "contact_tags", "notes", "tasks",
   "opportunities", "pipeline_stages", "pipelines", "custom_fields",
   "custom_values", "tags", "contacts",
 ] as const;
 
-it("the shared cascade still covers every table this file's fixture writes to", () => {
+it("the shared cascade still covers every table this fixture needs deleted by account_id", () => {
   const covered = new Set<string>(ACCOUNT_OWNED_TABLES);
-  expect(TABLES_THIS_FIXTURE_TOUCHES.filter((t) => !covered.has(t))).toEqual([]);
+  expect(TABLES_THE_CASCADE_MUST_DELETE_BY_ACCOUNT_ID.filter((t) => !covered.has(t))).toEqual([]);
 });
 
 /** Throwaway account, cleaned up in `finally` by packages/db's OWN

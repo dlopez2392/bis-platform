@@ -76,18 +76,23 @@ beforeEach(async () => {
   vi.mocked(cache.revalidatePath).mockReset();
 });
 
-/** Every table this file's fixture puts a row in. Not the delete list — that
- *  is `ACCOUNT_OWNED_TABLES`, and the test below pins this as a subset of it,
- *  so removing one of these from the shared list fails HERE rather than as a
- *  foreign-key error on the accounts delete at the end of an unrelated run. */
-const TABLES_THIS_FIXTURE_TOUCHES = [
+/** The tables `deleteAccountCascade` must delete BY `account_id` for this
+ *  fixture — not "every table this file's fixture writes to": this file also
+ *  writes `call_proposals`, which is deliberately OFF `ACCOUNT_OWNED_TABLES`
+ *  because it rides `calls`' own `on delete cascade` via `call_id` rather than
+ *  being deleted by `account_id` (see `packages/db/src/account-teardown.ts:43-52`),
+ *  so it belongs off this list too. The test below pins this list as a subset
+ *  of `ACCOUNT_OWNED_TABLES`, so removing one of these from the shared list
+ *  fails HERE rather than as a foreign-key error on the accounts delete at the
+ *  end of an unrelated run. */
+const TABLES_THE_CASCADE_MUST_DELETE_BY_ACCOUNT_ID = [
   "calls", "events", "contact_tags", "notes", "tasks",
   "opportunities", "pipeline_stages", "pipelines", "contacts", "phone_numbers",
 ] as const;
 
-it("the shared cascade still covers every table this file's fixture writes to", () => {
+it("the shared cascade still covers every table this fixture needs deleted by account_id", () => {
   const covered = new Set<string>(ACCOUNT_OWNED_TABLES);
-  expect(TABLES_THIS_FIXTURE_TOUCHES.filter((t) => !covered.has(t))).toEqual([]);
+  expect(TABLES_THE_CASCADE_MUST_DELETE_BY_ACCOUNT_ID.filter((t) => !covered.has(t))).toEqual([]);
 });
 
 /** Throwaway account, cleaned up in `finally` by packages/db's OWN

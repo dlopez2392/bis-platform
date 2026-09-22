@@ -83,6 +83,15 @@ export interface SweepCandidate {
  *   - The REAL demo tenant is `org_demo_resaca_air` — which is exactly why
  *     the seeder's org id is injectable, and why this sweep keys on the id
  *     rather than on the name it shares with its own throwaway copies.
+ *   - The e2e per-run fixture, "E2E Client Co <stamp>", survives the same
+ *     way for a different reason: it is created through a REAL Clerk
+ *     organization (`apps/web/e2e/auth.setup.ts:151-158` —
+ *     `clerk_.organizations.createOrganization({ name: companyName,
+ *     createdBy: user.id })`, then `createAccount(db, { clerkOrgId: org.id,
+ *     … })`), so its `clerk_org_id` is whatever Clerk minted, not an
+ *     `org_test_`-prefixed id this repo invented. It fails the prefix even
+ *     if an e2e run outlives an hour — this sweep was never the mechanism
+ *     that could reclaim it, by construction, not by age.
  *   - Every real business gets its id from Clerk.
  * And everything that must be reclaimed carries it, including the cases the
  * name list kept missing: the demo seeder's throwaway copies are
@@ -126,6 +135,15 @@ export async function sweepAbandonedFixtures(
   // stops working is how the rows accumulated in the first place.
   if (error) throw new Error(`sweepAbandonedFixtures: accounts query failed: ${error.message}`);
 
+  // No per-row try/catch: one undeletable stray (an FK this cascade doesn't
+  // know about, a permissions blip) throws out of the loop and blocks every
+  // account after it in this batch, which — since this runs in globalSetup —
+  // blocks the whole db suite. Deliberately fail-closed rather than
+  // swallowing the error and moving on: a delete path that quietly skips a
+  // row is exactly the mechanism that let these rows accumulate in the first
+  // place (see the doc block above). The trade-off is a wider blast radius
+  // than the old name-list rule ever had, for a stray this sweep cannot
+  // clear itself either way.
   const swept: { id: string; name: string }[] = [];
   for (const row of (data ?? []) as SweepCandidate[]) {
     if (!isAbandonedFixture(row, now)) continue;
