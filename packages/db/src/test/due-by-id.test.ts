@@ -3,7 +3,8 @@ import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
 import { getOrCreateCalendar, createBooking, setBookingStatus, getDueReminderById, getDueFollowupById, stampReminderSent } from "../booking";
 import { upsertAutomation, getDueSmsReminderById, getDueReviewRequestById, getDueNoShowNudgeById,
-  getDueAppointmentConfirmById, stampAppointmentConfirmAsked } from "../automations";
+  getDueAppointmentConfirmById, stampAppointmentConfirmAsked,
+  getDueReferralAskById, stampReferralAsked } from "../automations";
 
 /**
  * Each lookup answers "is this still a thing to send" WITHOUT a time window
@@ -103,6 +104,58 @@ describe("the recipe lookups: `off` until the recipe is on, `gone` in the wrong 
       expect((await getDueAppointmentConfirmById(db, bookingId)).due?.bookingId).toBe(bookingId);
       await stampAppointmentConfirmAsked(db, bookingId);
       expect(await getDueAppointmentConfirmById(db, bookingId)).toEqual({ due: null, why: "gone" });
+    });
+  });
+
+  it("referral ask: gone while still booked, off until the recipe is on, gone once asked, and carries the precedence input", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { bookingId } = await seed(db, accountId);
+
+      // STILL BOOKED → `gone`. The lookup's own `.eq("status","completed")`
+      // is the only thing that says so, and it is checked BEFORE the recipe
+      // is enabled so the answer cannot be the `!auto` branch wearing the
+      // wrong name. Mutation: drop `.eq("status","completed")` → this reds
+      // with `why: "off"`, because the row is then found and the recipe is
+      // not yet on.
+      expect(await getDueReferralAskById(db, bookingId)).toEqual({ due: null, why: "gone" });
+
+      await setBookingStatus(db, accountId, bookingId, "completed", "user_test");
+      // "off", not "gone" — the releaser writes a DIFFERENT sentence for each
+      // ("This automation was turned off" vs "No longer due"). Mutation:
+      // return `why: "gone"` from the `!auto` branch → this reds by name.
+      expect(await getDueReferralAskById(db, bookingId)).toEqual({ due: null, why: "off" });
+
+      await upsertAutomation(db, accountId, "referral_ask",
+        { enabled: true, body: "", config: { channel: "email" } }, "user_test");
+      // No window check on the by-id path, on purpose: a release is a held
+      // row coming back, and its 85h window closed hours ago by definition.
+      const found = await getDueReferralAskById(db, bookingId);
+      expect(found.due?.bookingId).toBe(bookingId);
+
+      // THE PRECEDENCE INPUT, ON THE RELEASE PATH. The list path resolves it
+      // from a second `listEnabled`; this path re-reads it per account
+      // because the agency may have switched the review request ON during
+      // the hold, and a release that ignored that would text a referral ask
+      // before the review it must follow. Asserted in BOTH directions, so
+      // hard-coding it either way reds: `found` here is read with
+      // review_request absent entirely.
+      expect(found.due?.reviewRequestEnabled).toBe(false);
+      await upsertAutomation(db, accountId, "review_request",
+        { enabled: true, body: "", config: { channel: "email", reviewUrl: "https://g.page/r/x/review" } }, "user_test");
+      expect((await getDueReferralAskById(db, bookingId)).due?.reviewRequestEnabled).toBe(true);
+      // The row EXISTS but is switched off — a different state from "no row
+      // at all", and `enabledRecipeFor` must answer null for both.
+      await upsertAutomation(db, accountId, "review_request",
+        { enabled: false, body: "", config: { channel: "email", reviewUrl: "https://g.page/r/x/review" } }, "user_test");
+      expect((await getDueReferralAskById(db, bookingId)).due?.reviewRequestEnabled).toBe(false);
+
+      // THE ONLY DOUBLE-SEND GUARD ON THE RELEASE PATH. `releaseReferralAsk`
+      // (Task 6) calls this and then sends; nothing else re-checks the stamp.
+      // Mutation: drop `.is("referral_asked_at", null)` → this reds, and a
+      // held row whose booking was stamped during the hold is handed back as
+      // due and the customer gets a second referral text.
+      await stampReferralAsked(db, bookingId);
+      expect(await getDueReferralAskById(db, bookingId)).toEqual({ due: null, why: "gone" });
     });
   });
 });

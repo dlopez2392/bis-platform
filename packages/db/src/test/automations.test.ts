@@ -840,6 +840,50 @@ describe("referral ask — data layer", () => {
     });
   });
 
+  it("matches on EITHER ends_at or completed_at, so a batch marked completed on Friday still earns its ask", async () => {
+    // THE COMPLETION ANCHOR (0026), and the reason 0047 ships
+    // `bookings_referral_due_completed` as well as `bookings_referral_due`.
+    // The clock columns are written DIRECTLY here: `setBookingStatus` stamps
+    // REAL time, which sits eleven months outside this fake 2027 window, so
+    // every row in the case above matches by `ends_at` alone and the second
+    // disjunct of the `.or(...)` carries nothing. That is exactly what hid
+    // this — replacing the whole `.or(eitherAnchorSince(...))` with a plain
+    // `.gte("ends_at", ...)` left the describe green.
+    await withTestAccount(async (db, accountId) => {
+      await upsertAutomation(db, accountId, "referral_ask",
+        { enabled: true, body: "", config: { channel: "email" } }, "user_test");
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Batch", phone: "(956) 555-0113" }, "user_test");
+      const now = new Date("2027-08-20T12:00:00Z");
+      const mk = (endsAt: Date) => createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date(endsAt.getTime() - 30 * MINUTE), endsAt }, "user_test");
+      const clock = (id: string, patch: Record<string, string | null>) =>
+        db.from("bookings").update({ status: "completed", ...patch }).eq("id", id).then(({ error }) => {
+          if (error) throw new Error(error.message);
+        });
+
+      // Ended nine days ago — far outside 85h by ends_at — but marked
+      // completed an hour ago. Due by the COMPLETION anchor alone.
+      const batchMarked = await mk(new Date(now.getTime() - 9 * 24 * HOUR));
+      await clock(batchMarked.id, { completed_at: new Date(now.getTime() - HOUR).toISOString() });
+      // A pre-0026 row: completed, completed_at NULL. Due by ends_at alone.
+      const legacy = await mk(new Date(now.getTime() - 4 * HOUR));
+      await clock(legacy.id, { completed_at: null });
+      // Outside by BOTH anchors, so the window is proven to apply at all.
+      const stale = await mk(new Date(now.getTime() - 9 * 24 * HOUR - 2 * HOUR));
+      await clock(stale.id, { completed_at: new Date(now.getTime() - 9 * 24 * HOUR).toISOString() });
+
+      const list = await listDueReferralAsks(db, now.toISOString());
+      const ids = list.map((r) => r.bookingId);
+      expect(ids).toContain(batchMarked.id);   // Mutation: drop completed_at from the .or() window → this reds
+      expect(ids).toContain(legacy.id);        // Mutation: drop ends_at from the .or() window → this reds
+      expect(ids).not.toContain(stale.id);
+      expect(new Date(list.find((r) => r.bookingId === batchMarked.id)!.completedAt!).getTime())
+        .toBe(now.getTime() - HOUR);
+      expect(list.find((r) => r.bookingId === legacy.id)!.completedAt).toBeNull();
+    });
+  });
+
   it("a suppressed account's completed booking is never due, by list or by id", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
