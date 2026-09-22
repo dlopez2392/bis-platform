@@ -4751,7 +4751,7 @@ git commit -m "db(automations): reactivation due-list — quiet, unstamped, emai
 
 **Files:**
 - Modify: `packages/db/src/automation-log.ts` (`"reactivation"`)
-- Modify: `apps/web/src/lib/automations/caps.ts` — **TWO edits:** the new `REACTIVATION_DAILY_CAP`, and the file's opening doc comment grows to name `appointment_confirm` as the **third** uncapped pass (Task 3's decision, documented here because this is the file that states which passes are capped). Third, not second: `caps.ts:3-5` already names TWO — "the reminder and follow-up passes are uncapped". The File Structure entry near the top of this plan still says "second"; it is wrong and the orchestrator lands the correction there.
+- Modify: `apps/web/src/lib/automations/caps.ts` — **TWO edits:** the new `REACTIVATION_DAILY_CAP`, and the file's opening doc comment grows to name `appointment_confirm` as the **third** uncapped pass (Task 3's decision, documented here because this is the file that states which passes are capped). Third, not second: `caps.ts:3-5` already names TWO — "the reminder and follow-up passes are uncapped". (The File Structure entry near the top of this plan ALREADY says THIRD — that correction landed; this note is the stale text, kept only so nobody re-files it as open.)
 - Modify: `apps/web/src/lib/automations/hold-or-send.ts` (`REASONS.heardBack`)
 - Create: `apps/web/src/lib/automations/reactivation-gate.ts` (+ `.test.ts`), `reactivation-copy.ts` (+ `.test.ts`), `passes/reactivation.ts` (+ `.test.ts`)
 - Create: `apps/web/src/lib/email/templates/reactivation.ts` (+ `.test.ts`)
