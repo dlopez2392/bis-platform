@@ -4,7 +4,7 @@ import { clerkClient } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { requireAgency } from "@/lib/auth";
-import { serviceDb, createAccount, applyBlueprint, assertUsableZone } from "@bis/db";
+import { serviceDb, createAccount, applyBlueprint, assertUsableZone, isTestOrgId } from "@bis/db";
 import { NO_BLUEPRINT_SENTINEL } from "./constants";
 
 export async function createClientAccount(formData: FormData): Promise<void> {
@@ -24,6 +24,22 @@ export async function createClientAccount(formData: FormData): Promise<void> {
   const org = await clerk.organizations.createOrganization({ name, createdBy: userId });
   let id: string;
   try {
+    // Refused HERE, and deliberately not inside createAccount: this is the one
+    // door a Clerk-issued org id enters production through, while createAccount
+    // is called with an org_test_ id on purpose by every fixture in the repo,
+    // so a guard down there would fail the suites it is meant to protect.
+    // Inside the try so the compensating rollback below takes the Clerk org
+    // with it — the fixture sweep deletes any account carrying this prefix once
+    // it is an hour old (packages/db/src/test/sweep-fixtures.ts), so a
+    // test-shaped id that became a real tenant would be a business's account
+    // quietly disappearing overnight.
+    if (isTestOrgId(org.id)) {
+      throw new Error(
+        "We could not create this account. The new organization came back with an id " +
+        "we reserve for test data, and accounts with that kind of id are deleted " +
+        "automatically an hour later. Nothing was saved. Please try again, and tell " +
+        "the BIS team if it happens twice.");
+    }
     ({ id } = await createAccount(serviceDb(), { clerkOrgId: org.id, name, timezone, actorId: userId }));
   } catch (err) {
     // compensating rollback: never leave a Clerk org without a tenant row

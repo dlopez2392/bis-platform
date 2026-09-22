@@ -138,3 +138,9 @@ export * from "./concierge";
 // why those copies existed; this list is not a fixture, it is the schema's own
 // FK order, and there is now exactly one of it.
 export { deleteAccountCascade, ACCOUNT_OWNED_TABLES } from "./account-teardown";
+
+// The throwaway-org-id prefix and its predicate. Exported because the two
+// sides that must agree on it live in different packages: the fixture sweep
+// here deletes accounts carrying it, and `createClientAccount` in apps/web
+// refuses to create one. See ./org-id.ts.
+export { TEST_ORG_ID_PREFIX, isTestOrgId } from "./org-id";
