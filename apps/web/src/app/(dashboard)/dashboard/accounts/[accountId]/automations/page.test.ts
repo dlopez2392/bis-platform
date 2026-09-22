@@ -42,6 +42,7 @@ vi.mock("@/lib/sms/sender", () => ({
 }));
 vi.mock("./actions", () => ({
   saveReviewRequestAction: async () => ({ ok: true }),
+  saveReferralAskAction: async () => ({ ok: true }),
   saveNoShowNudgeAction: async () => ({ ok: true }),
   saveSmsReminderAction: async () => ({ ok: true }),
   saveAppointmentConfirmAction: async () => ({ ok: true }),
@@ -52,10 +53,13 @@ vi.mock("./actions", () => ({
 type Props = Record<string, unknown>;
 const captured = vi.hoisted(() => ({
   review: null as Props | null, noShow: null as Props | null, sms: null as Props | null, instant: null as Props | null,
-  confirm: null as Props | null, quiet: null as Props | null,
+  confirm: null as Props | null, quiet: null as Props | null, referral: null as Props | null,
 }));
 vi.mock("./automations-settings", () => ({
   AutomationsSettings: (props: Props) => { captured.review = props; return null; },
+}));
+vi.mock("./referral-ask-card", () => ({
+  ReferralAskCard: (props: Props) => { captured.referral = props; return null; },
 }));
 vi.mock("./no-show-nudge-card", () => ({
   NoShowNudgeCard: (props: Props) => { captured.noShow = props; return null; },
@@ -79,13 +83,14 @@ const base = { account_id: "a1", created_at: "2026-09-06T00:00:00Z", updated_at:
 const ROWS: Record<string, AutomationRow> = {
   review_request: { ...base, id: "au1", recipe_key: "review_request", enabled: true, body: "Hi",
     config: { channel: "sms", reviewUrl: "https://g.page/r/x/review" } },
+  referral_ask: { ...base, id: "au6", recipe_key: "referral_ask", enabled: true, body: "Know anyone else?", config: { channel: "sms" } },
   no_show_nudge: { ...base, id: "au2", recipe_key: "no_show_nudge", enabled: false, body: "Come back", config: { channel: "email" } },
   instant_reply: { ...base, id: "au4", recipe_key: "instant_reply", enabled: false, body: "Hi", config: { bodyEs: "Hola" } },
   appointment_confirm: { ...base, id: "au5", recipe_key: "appointment_confirm", enabled: true, body: "Parking is out front.", config: {} },
 };
 
 async function render() {
-  captured.review = captured.noShow = captured.sms = captured.instant = captured.confirm = captured.quiet = null;
+  captured.review = captured.noShow = captured.sms = captured.instant = captured.confirm = captured.quiet = captured.referral = null;
   renderToStaticMarkup(await AutomationsPage({ params: Promise.resolve({ accountId: "a1" }) }));
   return captured;
 }
@@ -156,6 +161,18 @@ describe("automations page", () => {
     expect(c.confirm!.accountTimezone).toBe("America/Chicago");
     expect(c.confirm!.smsGate).toEqual({ ok: false, reason: "a2p_not_approved" });
     expect(dbMock.getAutomation).toHaveBeenCalledWith(expect.anything(), "a1", "appointment_confirm");
+  });
+
+  it("hands the referral-ask card ITS OWN row, the brand name and the SMS gate", async () => {
+    // Mutation: hand it `review` or `noShow` (the two adjacent bindings in
+    // the positional Promise.all) — this reds, because those rows are au1
+    // and au2 while `referral_ask` is au6.
+    dbFixture.brandName = "Rio Roofing";
+    const c = await render();
+    expect(c.referral!.automation).toEqual(ROWS.referral_ask);
+    expect(c.referral!.brandName).toBe("Rio Roofing");
+    expect(c.referral!.smsGate).toEqual({ ok: false, reason: "a2p_not_approved" });
+    expect(dbMock.getAutomation).toHaveBeenCalledWith(expect.anything(), "a1", "referral_ask");
   });
 
   it("hands the instant-reply card ITS OWN row, the customer-facing name for its defaults, and the SMS gate", async () => {
@@ -277,6 +294,20 @@ describe("guarded reads — one failed read degrades only its own card, never th
     spy.mockRestore();
   });
 
+  it("a failed referral_ask automation read degrades to null; the rest of the page still renders", async () => {
+    dbMock.getAutomation.mockImplementation(async (_db: unknown, _a: unknown, key: string) => {
+      if (key === "referral_ask") throw new Error("down");
+      return ROWS[key] ?? null;
+    });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const c = await render();
+    expect(c.referral!.automation).toBeNull();
+    expect(c.review!.automation).toEqual(ROWS.review_request);
+    expect(c.noShow!.automation).toEqual(ROWS.no_show_nudge);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
+    spy.mockRestore();
+  });
+
   it("a failed instant_reply automation read degrades to null; the rest of the page still renders", async () => {
     dbMock.getAutomation.mockImplementation(async (_db: unknown, _a: unknown, key: string) => {
       if (key === "instant_reply") throw new Error("down");
@@ -299,6 +330,7 @@ describe("guarded reads — one failed read degrades only its own card, never th
     expect(c.noShow!.smsGate).toEqual(refused);
     expect(c.sms!.smsGate).toEqual(refused);
     expect(c.confirm!.smsGate).toEqual(refused);
+    expect(c.referral!.smsGate).toEqual(refused);
     expect(c.instant!.smsGate).toEqual(refused);
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
     spy.mockRestore();

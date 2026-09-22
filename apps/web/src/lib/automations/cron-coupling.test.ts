@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import {
   REMINDER_WINDOW_START_MS, REMINDER_WINDOW_END_MS, FOLLOWUP_QUERY_WINDOW_MS,
-  REVIEW_REQUEST_MAX_AGE_MS, NO_SHOW_NUDGE_MAX_AGE_MS,
+  REVIEW_REQUEST_MAX_AGE_MS, NO_SHOW_NUDGE_MAX_AGE_MS, REFERRAL_ASK_MAX_AGE_MS,
   SMS_REMINDER_WINDOW_START_MS, SMS_REMINDER_WINDOW_END_MS,
   APPOINTMENT_CONFIRM_WINDOW_START_MS, APPOINTMENT_CONFIRM_WINDOW_END_MS,
   APPOINTMENT_CONFIRM_MIN_LEAD_MS,
@@ -52,6 +52,17 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
 
   it("the review-request cap is the follow-up cap plus one local day", () => {
     expect(REVIEW_REQUEST_MAX_AGE_MS).toBe(FOLLOWUP_MAX_AGE_MS + 24 * 60 * MINUTE);
+  });
+
+  it("the referral ask is the review request's cap plus one local day — one rung further down the ladder", () => {
+    // THE LITERALS FIRST. The ladder's whole span, stated once: follow-up 37h,
+    // review 61h, referral 85h. Mutation: change any one constant → this reds.
+    expect([FOLLOWUP_MAX_AGE_MS, REVIEW_REQUEST_MAX_AGE_MS, REFERRAL_ASK_MAX_AGE_MS])
+      .toEqual([37 * 60 * MINUTE, 61 * 60 * MINUTE, 85 * 60 * MINUTE]);
+    // The derivation second, and only as a STATEMENT of the relationship: on
+    // its own it mirrors `REFERRAL_ASK_MAX_AGE_MS`'s own definition and reds
+    // for nothing but a sign flip.
+    expect(REFERRAL_ASK_MAX_AGE_MS).toBe(REVIEW_REQUEST_MAX_AGE_MS + 24 * 60 * MINUTE);
   });
 
   it("the SMS reminder window is wider than one tick, and fires about two hours ahead", () => {

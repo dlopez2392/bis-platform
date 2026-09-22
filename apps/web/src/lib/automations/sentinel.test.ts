@@ -18,6 +18,8 @@ const dbMocks = vi.hoisted(() => ({
   listDueFollowups: vi.fn(), stampFollowupSent: vi.fn(),
   listDueReviewRequests: vi.fn(), stampReviewRequested: vi.fn(), countReviewRequestsSince: vi.fn(),
   stampReviewRequestSmsFailed: vi.fn(),
+  listDueReferralAsks: vi.fn(), getDueReferralAskById: vi.fn(),
+  stampReferralAsked: vi.fn(), stampReferralAskSmsFailed: vi.fn(), countReferralAsksSince: vi.fn(),
   listDueNoShowNudges: vi.fn(), stampNoShowNudged: vi.fn(), stampNoShowNudgeSmsFailed: vi.fn(), countNoShowNudgesSince: vi.fn(),
   listDueSmsReminders: vi.fn(), stampSmsReminderSent: vi.fn(), stampSmsReminderFailed: vi.fn(),
   listDueAppointmentConfirms: vi.fn(), getDueAppointmentConfirmById: vi.fn(),
@@ -41,7 +43,7 @@ const inlineSmsSend = vi.fn(async () => ({ providerMessageId: "s-inline" }));
 vi.mock("@/lib/sms", () => ({ getSmsProvider: () => ({ isFake: true, send: inlineSmsSend }) }));
 vi.mock("@/lib/email", () => ({ getEmailProvider: () => ({ isFake: true, send: async () => ({ providerMessageId: "e" }) }) }));
 
-import type { DueReminder, DueFollowup, DueAppointmentConfirm } from "@bis/db";
+import type { DueReminder, DueFollowup, DueAppointmentConfirm, DueReferralAsk } from "@bis/db";
 import { runPasses } from "./harness";
 import { PASSES } from "./registry";
 import type { PassContext } from "./context";
@@ -73,6 +75,19 @@ const CONFIRM_ROW: DueAppointmentConfirm = {
   accountTimezone: "America/New_York", body: "",
 };
 
+/** Part B's referral ask — the ladder's third rung, one strictly-later local
+ *  day than each of the two stamps it carries (Sunday's job, Monday's
+ *  follow-up, Tuesday's review request, this Wednesday morning). */
+const REFERRAL_ROW: DueReferralAsk = {
+  bookingId: "bk_ra", accountId: "acct_1",
+  endsAt: "2026-09-06T22:00:00.000Z", completedAt: null,
+  followupSentAt: "2026-09-07T12:30:00.000Z", reviewRequestedAt: "2026-09-08T13:05:00.000Z",
+  smsFailedAt: null, reviewRequestEnabled: true,
+  contactId: "ct_7", contactEmail: null, contactPhone: "9565550105",
+  brandName: BRAND, branding, accountTimezone: "America/New_York",
+  fromEmail: null, replyToEmail: null, body: "", config: { channel: "sms" },
+};
+
 beforeEach(() => {
   for (const fn of Object.values(dbMocks)) fn.mockReset().mockResolvedValue(undefined);
   dbMocks.listDueReminders.mockResolvedValue([REMINDER_ROW]);
@@ -88,6 +103,12 @@ beforeEach(() => {
       config: { channel: "sms", reviewUrl: "https://g.page/r/x/review" } },
   ]);
   dbMocks.countReviewRequestsSince.mockResolvedValue(0);
+  // EXPLICIT, for the same reason the three due-lists around it are: the
+  // reset above leaves every mock resolving `undefined`, and a pass handed
+  // `undefined` throws, which the harness reports as `errored` — a pass the
+  // scan then never looks at.
+  dbMocks.listDueReferralAsks.mockResolvedValue([REFERRAL_ROW]);
+  dbMocks.countReferralAsksSince.mockResolvedValue(0);
   const nudge = {
     accountId: "acct_1", endsAt: "2026-09-08T20:00:00.000Z", noShowAt: "2026-09-08T20:30:00.000Z", smsFailedAt: null,
     calendarPublicId: "cal_pub_1", calendarEnabled: true, brandName: BRAND, branding,
@@ -147,6 +168,7 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(results.reminders?.sent).toBe(1);
     expect(results.followups?.sent).toBe(1);
     expect(results.reviewRequests?.sent).toBe(2);
+    expect(results.referralAsks?.sent).toBe(1);
     expect(results.noShowNudges?.sent).toBe(2);
     expect(results.smsReminders?.sent).toBe(1);
     expect(results.appointmentConfirms?.sent).toBe(1);
@@ -167,8 +189,8 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(everything).toContain(BRAND);   // and the brand name DID go out, in its place
   });
 
-  it("the registry runs the release pass, then reminders, follow-ups, review requests, no-show nudges, text reminders, appointment confirmations, site traffic, then the two weekly reports — the first three's order is the collision's contract", () => {
-    expect(PASSES.map((p) => p.key)).toEqual(["releaseHeld", "reminders", "followups", "reviewRequests", "noShowNudges", "smsReminders", "appointmentConfirms", "siteTraffic", "weeklyClientReport", "weeklyAgencyReport"]);
+  it("the registry runs the release pass, then reminders, follow-ups, review requests, referral asks, no-show nudges, text reminders, appointment confirmations, site traffic, then the two weekly reports — the first three's order is the collision's contract", () => {
+    expect(PASSES.map((p) => p.key)).toEqual(["releaseHeld", "reminders", "followups", "reviewRequests", "referralAsks", "noShowNudges", "smsReminders", "appointmentConfirms", "siteTraffic", "weeklyClientReport", "weeklyAgencyReport"]);
   });
 
   /**

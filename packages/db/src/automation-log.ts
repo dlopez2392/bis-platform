@@ -19,6 +19,7 @@ export const AUTOMATION_LOG_SOURCES = [
   // carries all thirteen; a TS constant NARROWER than the database's CHECK is
   // safe in the only direction that matters.
   "appointment_confirm",
+  "referral_ask",
 ] as const;
 export type AutomationLogSource = (typeof AUTOMATION_LOG_SOURCES)[number];
 export type AutomationLogChannel = "sms" | "email" | "ai";

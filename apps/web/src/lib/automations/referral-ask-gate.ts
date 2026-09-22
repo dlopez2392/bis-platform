@@ -1,0 +1,69 @@
+import { REFERRAL_ASK_MAX_AGE_MS, REVIEW_REQUEST_MAX_AGE_MS } from "@bis/db";
+import {
+  resolveAccountZone, isInMorningBand, isStrictlyEarlierLocalDay,
+} from "@/lib/booking/followup-timing";
+
+/**
+ * THE PRECEDENCE RULE, on its own so the pass can count it separately from
+ * "not this morning" — two very different reasons a referral ask did not go.
+ *
+ * When review requests are ON for this account, the review has not been sent,
+ * and the job's anchor is still inside the review's OWN 61-hour window, the
+ * referral ask waits. That makes the ladder an ordering rather than a
+ * coincidence: without it, a morning where both became eligible would send
+ * whichever pass ran first, and the registry's order is not a product promise.
+ *
+ * Once the review's 61h has run out unsent (the feature was off, no address,
+ * three failed texts), there is nothing left to defer to and the referral ask
+ * goes on its own.
+ */
+export function reviewRequestStillOwed(
+  now: Date, anchor: Date, reviewRequestedAt: Date | null, reviewRequestEnabled: boolean,
+): boolean {
+  if (!reviewRequestEnabled) return false;
+  if (reviewRequestedAt !== null) return false;
+  const elapsedMs = now.getTime() - anchor.getTime();
+  if (!Number.isFinite(elapsedMs)) return false;
+  return elapsedMs <= REVIEW_REQUEST_MAX_AGE_MS;
+}
+
+/**
+ * WHEN a referral ask may be sent — the pure, unit-testable half of the pass.
+ * Composes the same predicates as the review-request gate rather than copying
+ * them, so the three rungs cannot drift. All must hold:
+ *  0. A zone we can resolve — else FAIL CLOSED (no hour is defensible).
+ *  1. Not stale: the anchor is within 85h (61h plus one local day).
+ *  2. Morning band, 08:00–11:00 in the account's zone.
+ *  3. The anchor fell on a strictly EARLIER local day.
+ *  4. BOTH earlier rungs' stamps, when set, fell on strictly earlier local
+ *     days: day one "how did it go?", day two "would you leave a review?",
+ *     day three "know anyone else?" — never two on one morning.
+ *  5. The review request is not still owed (above).
+ *
+ * `referral_asked_at` does all the deduping; this gate has no memory.
+ */
+export function shouldSendReferralAskNow(
+  now: Date, anchor: Date, followupSentAt: Date | null, reviewRequestedAt: Date | null,
+  reviewRequestEnabled: boolean, timezone: string,
+): boolean {
+  const elapsedMs = now.getTime() - anchor.getTime();
+  if (!Number.isFinite(elapsedMs)) return false;
+  if (elapsedMs < 0) return false;                        // has not ended
+  if (elapsedMs > REFERRAL_ASK_MAX_AGE_MS) return false;  // too stale to be welcome
+
+  const zone = resolveAccountZone(timezone);
+  if (zone === null) return false;
+
+  if (!isInMorningBand(now, zone)) return false;
+  if (!isStrictlyEarlierLocalDay(anchor, now, zone)) return false;
+
+  for (const stamp of [followupSentAt, reviewRequestedAt]) {
+    if (stamp === null) continue;
+    // An unparseable stamp is a data problem; the safe direction is to hold.
+    if (!Number.isFinite(stamp.getTime())) return false;
+    if (!isStrictlyEarlierLocalDay(stamp, now, zone)) return false;
+  }
+
+  if (reviewRequestStillOwed(now, anchor, reviewRequestedAt, reviewRequestEnabled)) return false;
+  return true;
+}

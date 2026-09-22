@@ -3,6 +3,7 @@ import { releaseHeldPass } from "./passes/release-held";
 import { remindersPass } from "./passes/reminders";
 import { followupsPass } from "./passes/followups";
 import { reviewRequestPass } from "./passes/review-request";
+import { referralAskPass } from "./passes/referral-ask";
 import { noShowNudgePass } from "./passes/no-show-nudge";
 import { smsReminderPass } from "./passes/sms-reminder";
 import { appointmentConfirmPass } from "./passes/appointment-confirm";
@@ -17,7 +18,15 @@ import { weeklyAgencyReportPass } from "./passes/weekly-agency-report";
  * follow-up pass stamps `followup_sent_at` and the review-request pass
  * reads it in the same tick, which is what guarantees "how did it go?" on
  * day one and "would you leave a review?" on day two even when both become
- * eligible on the same morning.
+ * eligible on the same morning. The same holds one rung further down: the
+ * review-request pass stamps `review_requested_at` and the referral-ask pass
+ * reads it in the same tick, which is what guarantees the review goes out on
+ * day two and the referral on day three even when both become eligible on
+ * the same morning — the same dependency the follow-up and the review
+ * request already have. (The referral ask also defers EXPLICITLY, through
+ * `reviewRequestStillOwed`, so the ordering is a rule rather than a
+ * property of this array; the array keeps the two from colliding inside one
+ * tick.)
  *
  * The SMS reminder reads nothing the others write. The confirmation ask
  * (part B) reads nothing the other booking passes write and writes only its
@@ -31,4 +40,4 @@ import { weeklyAgencyReportPass } from "./passes/weekly-agency-report";
  * same `weeklyMetrics` the client pass just used.
  * Adding a recipe = one line here plus its pass file. Nothing else.
  */
-export const PASSES: readonly Pass[] = [releaseHeldPass, remindersPass, followupsPass, reviewRequestPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, siteTrafficPass, weeklyClientReportPass, weeklyAgencyReportPass];
+export const PASSES: readonly Pass[] = [releaseHeldPass, remindersPass, followupsPass, reviewRequestPass, referralAskPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, siteTrafficPass, weeklyClientReportPass, weeklyAgencyReportPass];

@@ -1241,6 +1241,30 @@ export const m = {
   "calendar.bookings.confirmed": "Confirmed by text",
   "calendar.bookings.confirmDeclined": "Asked for a different time",
 
+  // Part B — the referral ask, the completed-job ladder's THIRD rung (day
+  // one "how did it go?", day two "would you leave a review?", day three
+  // this). `{name}` is the customer-facing brand name, filled at send time;
+  // the NoName variants drop the identifying clause rather than invent one.
+  // It asks for a NAME, never a rating, and carries NO LINK anywhere — the
+  // config has no url field, so an operator cannot turn it into a second
+  // review request by configuration either. GSM-7 throughout (straight
+  // apostrophe, no em dash): one character outside the set drops the whole
+  // text to UCS-2 at 70 characters a segment. referral-ask-copy.test.ts
+  // pins the encoding and the segment count.
+  "automations.referral.defaultBody": "Thanks again from {name}. If you know someone who needs the same done, reply with their name and number and we'll look after them.",
+  "automations.referral.defaultBodyNoName": "Thanks again. If you know someone who needs the same done, reply with their name and number and we'll look after them.",
+  "automations.referral.emailSubject": "One favour, from {name}",
+  "automations.referral.emailSubjectNoName": "One favour",
+  "automations.referral.title": "Referral asks",
+  "automations.referral.body": "The morning after the review request, ask the customer whether they know someone else who needs the same work. Never lands on the same morning as the review request. Off until you turn it on.",
+  "automations.referral.enabled": "Ask for referrals",
+  "automations.referral.channel": "Send by",
+  "automations.referral.message": "Message",
+  "automations.referral.messageHint": "Leave blank to send our default message. No link is added — this asks for a name, not a rating.",
+  "automations.referral.save": "Save referral asks",
+  "automations.referral.saved": "Referral asks saved",
+  "automations.referral.saveFailed": "Could not save referral asks.",
+
   // Part C — the Quiet hours card (agency, on the Automations page).
   "automations.quiet.title": "Quiet hours",
   "automations.quiet.body": "No automated texts or emails go to your customers between these hours. Anything due overnight waits and goes at the end. Your phone and website assistant still answer.",

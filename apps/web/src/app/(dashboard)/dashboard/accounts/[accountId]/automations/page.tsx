@@ -12,13 +12,15 @@ import { originFrom } from "@/lib/email/origin";
 import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
 import { m } from "@/lib/messages";
 import { AutomationsSettings } from "./automations-settings";
+import { ReferralAskCard } from "./referral-ask-card";
 import { NoShowNudgeCard } from "./no-show-nudge-card";
 import { SmsReminderCard } from "./sms-reminder-card";
 import { AppointmentConfirmCard } from "./appointment-confirm-card";
 import { InstantReplyCard } from "./instant-reply-card";
 import { QuietHoursCard } from "./quiet-hours-card";
 import {
-  saveReviewRequestAction, saveNoShowNudgeAction, saveSmsReminderAction, saveAppointmentConfirmAction,
+  saveReviewRequestAction, saveReferralAskAction, saveNoShowNudgeAction, saveSmsReminderAction,
+  saveAppointmentConfirmAction,
   saveInstantReplyAction, saveQuietHoursAction,
 } from "./actions";
 
@@ -46,9 +48,16 @@ export default async function AutomationsPage({
   // these can no longer 500 the whole agency page; only the one card that
   // lost its read shows the degraded state, and the log line carries the
   // account id so the hiccup is still visible.
-  const [review, noShow, smsReminder, appointmentConfirm, instantReply, account, smsGate, calendar, origin, quiet] = await Promise.all([
+  const [review, referralAsk, noShow, smsReminder, appointmentConfirm, instantReply, account, smsGate, calendar, origin, quiet] = await Promise.all([
     getAutomation(db, accountId, "review_request").catch((e): AutomationRow | null => {
       console.error(`automations: review_request read failed for ${accountId}: ${String(e)}`);
+      return null;
+    }),
+    // POSITIONAL: this promise sits between review_request and no_show_nudge,
+    // and so does its binding above — the ladder's order, on the page as in
+    // the registry.
+    getAutomation(db, accountId, "referral_ask").catch((e): AutomationRow | null => {
+      console.error(`automations: referral_ask read failed for ${accountId}: ${String(e)}`);
       return null;
     }),
     getAutomation(db, accountId, "no_show_nudge").catch((e): AutomationRow | null => {
@@ -138,6 +147,15 @@ export default async function AutomationsPage({
           brandName={account.brandName}
           smsGate={smsGate}
           saveAction={saveReviewRequestAction.bind(null, accountId)}
+        />
+        {/* After the review request, so the page reads in ladder order:
+            "how did it go?", "would you leave a review?", "know anyone
+            else?". */}
+        <ReferralAskCard
+          automation={referralAsk}
+          brandName={account.brandName}
+          smsGate={smsGate}
+          saveAction={saveReferralAskAction.bind(null, accountId)}
         />
         <NoShowNudgeCard
           automation={noShow}

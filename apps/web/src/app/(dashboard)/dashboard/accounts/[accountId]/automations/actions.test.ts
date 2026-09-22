@@ -17,7 +17,8 @@ vi.mock("@/lib/auth", () => ({
 import { m } from "@/lib/messages";
 import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 import {
-  saveReviewRequestAction, saveNoShowNudgeAction, saveSmsReminderAction, saveAppointmentConfirmAction,
+  saveReviewRequestAction, saveNoShowNudgeAction, saveReferralAskAction, saveSmsReminderAction,
+  saveAppointmentConfirmAction,
   saveInstantReplyAction, saveQuietHoursAction,
 } from "./actions";
 
@@ -122,6 +123,40 @@ describe("saveNoShowNudgeAction", () => {
   });
 });
 
+describe("saveReferralAskAction", () => {
+  it("refuses a non-agency caller before touching the database", async () => {
+    guardFixture.isAgency = false;
+    expect(await saveReferralAskAction("acct_1", fd({ enabled: "on", channel: "sms" })))
+      .toEqual({ ok: false, error: m["automations.agencyOnly"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+  });
+
+  it("saves enabled + channel + trimmed body through serviceDb, validated with the pass's own parser", async () => {
+    expect(await saveReferralAskAction("acct_1", fd({ enabled: "on", channel: "sms", body: "  Know anyone else?  " }))).toEqual({ ok: true });
+    expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "referral_ask",
+      { enabled: true, body: "Know anyone else?", config: { channel: "sms" } }, "user_1");
+  });
+
+  it("an unknown channel and a database failure both come back as a toastable failure", async () => {
+    // Mutation: default an unknown channel to email instead of refusing.
+    expect(await saveReferralAskAction("acct_1", fd({ channel: "carrier pigeon" })))
+      .toEqual({ ok: false, error: m["automations.referral.saveFailed"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+    dbMocks.upsertAutomation.mockRejectedValue(new Error("db down"));
+    expect(await saveReferralAskAction("acct_1", fd({ enabled: "on", channel: "email" })))
+      .toEqual({ ok: false, error: m["automations.referral.saveFailed"] });
+  });
+
+  it("stores a whitespace-only body as empty, so it keeps meaning 'use the default'", async () => {
+    // The card previews `body.trim() || default` and the pass sends
+    // `row.body.trim() || default`; a stored "   " must not survive to make
+    // those two disagree on a reload.
+    expect(await saveReferralAskAction("acct_1", fd({ channel: "email", body: "  \n  " }))).toEqual({ ok: true });
+    expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "referral_ask",
+      { enabled: false, body: "", config: { channel: "email" } }, "user_1");
+  });
+});
+
 describe("saveSmsReminderAction", () => {
   it("refuses a non-agency caller before touching the database", async () => {
     guardFixture.isAgency = false;
@@ -191,6 +226,13 @@ describe("the body cap — every recipe refuses a message longer than AUTOMATION
     expect(await saveSmsReminderAction("acct_1", fd({ body: tooLong })))
       .toEqual({ ok: false, error: m["automations.bodyTooLong"] });
     expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+  });
+
+  it("referral ask", async () => {
+    expect(await saveReferralAskAction("acct_1", fd({ channel: "sms", body: tooLong })))
+      .toEqual({ ok: false, error: m["automations.bodyTooLong"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+    expect(await saveReferralAskAction("acct_1", fd({ channel: "sms", body: atCap }))).toEqual({ ok: true });
   });
 
   it("appointment confirmation", async () => {

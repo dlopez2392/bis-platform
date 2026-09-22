@@ -92,6 +92,12 @@ export const REASONS = {
    *  hour as "here's your reminder" is ONE TEXT AND ONE EMAIL landing
    *  together, asking the customer for the same thing twice. */
   tooCloseToAppointment: "Too close to the appointment to ask",
+  /** The referral ask, released while the review request is still owed. The
+   *  row is written `skipped` rather than left untouched: an untouched
+   *  released row keeps its past `held_until` and parks the head of the
+   *  queue. The normal pass re-discovers the unstamped booking the next
+   *  morning and moves this same row back to `held` or `sent` in place. */
+  reviewFirst: "Waiting for the review request to go first",
   outsideRegion: "Number is outside the US, Canada or Mexico",
   consentWithheld: "They didn't agree to texts",
   robocall: "Screened as a robocall",

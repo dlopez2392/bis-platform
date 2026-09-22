@@ -10,7 +10,8 @@
 
 import { revalidatePath } from "next/cache";
 import {
-  serviceDb, upsertAutomation, parseReviewRequestConfig, parseNoShowNudgeConfig, parseInstantReplyConfig,
+  serviceDb, upsertAutomation, parseReviewRequestConfig, parseNoShowNudgeConfig, parseReferralAskConfig,
+  parseInstantReplyConfig,
   saveQuietSettings, bumpHeldForAccount, isClock,
   type ReviewRequestChannel,
 } from "@bis/db";
@@ -84,6 +85,33 @@ export async function saveNoShowNudgeAction(
   } catch (e) {
     console.error(`saveNoShowNudgeAction: save failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.noShow.saveFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/automations`);
+  return { ok: true };
+}
+
+export async function saveReferralAskAction(
+  accountId: string, formData: FormData,
+): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["automations.agencyOnly"] };
+
+  // The pass's own parser, on write: an unknown channel is refused, never
+  // defaulted — a default here would let the page show one channel while the
+  // row stores another. There is deliberately no url field to validate: this
+  // recipe asks for a name, not a rating.
+  const config = parseReferralAskConfig({ channel: String(formData.get("channel") ?? "email") });
+  if (!config) return { ok: false, error: m["automations.referral.saveFailed"] };
+  const enabled = formData.get("enabled") === "on";
+  const body = String(formData.get("body") ?? "").trim();
+  if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
+
+  try {
+    await upsertAutomation(serviceDb(), accountId, "referral_ask", { enabled, body, config }, userId);
+  } catch (e) {
+    console.error(`saveReferralAskAction: save failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.referral.saveFailed"] };
   }
 
   revalidatePath(`/dashboard/accounts/${accountId}/automations`);
