@@ -76,7 +76,7 @@ pnpm --filter @bis/db typecheck
 ## File Structure
 
 **Create**
-- `packages/db/supabase/migrations/0047_automations_b.sql` — both CHECK rewrites, nine columns, **eight** indexes (B10).
+- `packages/db/supabase/migrations/0047_automations_b.sql` — both CHECK rewrites, nine columns, **nine** indexes (B10 — the ninth, `bookings_confirm_reply_pending`, was added at the pre-apply review for `applyConfirmationReply`'s lookup).
 - `packages/db/src/test/automations-b-schema.test.ts` — the constraints, the columns, the indexes and the no-grant-change claim, against the live project. **Two harnesses in one file, on purpose:** `withTestAccount` (PostgREST, real rows) for the two CHECKs, because each refused insert is its own transaction there; `withRollback` + `actAs` (raw `pg`) for the catalogue reads, because `pg_indexes` and `information_schema.role_table_grants` are not reachable through supabase-js at all — a file that advertises an index claim and goes through PostgREST cannot make it.
 - `apps/web/src/lib/automations/appointment-confirm-gate.ts` (+ `.test.ts`) — the deadline and the too-close check.
 - `apps/web/src/lib/automations/appointment-confirm-copy.ts` (+ `.test.ts`) — the fixed lead and the composer.
@@ -6375,7 +6375,7 @@ git commit -m "e2e(automations): part B's four cards on the fixture account; the
 
 | Spec section | Task |
 | --- | --- |
-| Migration `0047_automations_b.sql` (both CHECKs, nine columns, **eight** indexes — three cap counts, two due-lists the spec named, and the three the review added for the referral ask's two anchors and reactivation's anti-blast read — no grant changes) | Task 1 |
+| Migration `0047_automations_b.sql` (both CHECKs, nine columns, **nine** indexes — three cap counts, two due-lists the spec named, and the three the review added for the referral ask's two anchors and reactivation's anti-blast read — no grant changes) | Task 1 |
 | Recipe 2 `appointment_confirm` — trigger, window, SMS-only, deadline, uncapped, copy, subject key, release, off switches | Tasks 2, 3 |
 | Recipe 2's reply leg — `applyConfirmationReply`, whole-word matching, no reply-back, no status change, the operator sees it | Tasks 2, 4 |
 | Recipe 4 `referral_ask` — anchor, ladder, precedence, no-link enforcement, channel config, caps, subject key, release | Tasks 5, 6 |
