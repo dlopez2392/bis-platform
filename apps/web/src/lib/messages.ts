@@ -1215,6 +1215,135 @@ export const m = {
   "automations.instantReply.saved": "Instant reply saved",
   "automations.instantReply.saveFailed": "Could not save the instant reply.",
   "automations.instantReply.bodiesRequired": "Write both the English and the Spanish message before turning this on.",
+  // Part B — the appointment confirmation, two days out. The LEAD is fixed
+  // copy the operator cannot rearrange: "either way we'll see it" is the
+  // whole reason a YES gets no text back (spec decision 6), so it cannot sit
+  // in an editable field anyone can delete. `{name}` is the customer-facing
+  // brand name, `{when}` is formatWhen's output in the BOOKER's zone; the
+  // NoName variant drops the opening clause rather than invent a noun.
+  // GSM-7 THROUGHOUT, and the sentence break is a PERIOD, not an em dash:
+  // one em dash drops the whole text to UCS-2 at 70 characters a segment
+  // (segments.ts), which measured 3 segments against the period's 2 on every
+  // confirmation this recipe ever sends. appointment-confirm-copy.test.ts
+  // pins the encoding.
+  "automations.appointmentConfirm.lead": "Hi, it's {name}. You're booked for {when}. Reply YES to confirm or NO if you need a different time. Either way we'll see it.",
+  "automations.appointmentConfirm.leadNoName": "You're booked for {when}. Reply YES to confirm or NO if you need a different time. Either way we'll see it.",
+  "automations.appointmentConfirm.title": "Appointment confirmations",
+  "automations.appointmentConfirm.body": "Two days before an appointment, text the customer to confirm. They reply YES or NO and you see the answer on the booking. Nothing is cancelled automatically. Text only. Off until you turn it on.",
+  "automations.appointmentConfirm.enabled": "Ask customers to confirm",
+  "automations.appointmentConfirm.message": "Closing line",
+  "automations.appointmentConfirm.messageHint": "Optional. Comes after the confirmation question. Leave blank to send just the question.",
+  "automations.appointmentConfirm.preview": "Preview",
+  "automations.appointmentConfirm.save": "Save appointment confirmations",
+  "automations.appointmentConfirm.saved": "Appointment confirmations saved",
+  "automations.appointmentConfirm.saveFailed": "Could not save appointment confirmations.",
+  // The answer, on the calendar's bookings list (Task 4's badge reads these).
+  "calendar.bookings.confirmed": "Confirmed by text",
+  "calendar.bookings.confirmDeclined": "Asked for a different time",
+
+  // Part B — the referral ask, the completed-job ladder's THIRD rung (day
+  // one "how did it go?", day two "would you leave a review?", day three
+  // this). `{name}` is the customer-facing brand name, filled at send time;
+  // the NoName variants drop the identifying clause rather than invent one.
+  // It asks for a NAME, never a rating, and carries NO LINK anywhere — the
+  // config has no url field, so an operator cannot turn it into a second
+  // review request by configuration either. GSM-7 throughout (straight
+  // apostrophe, no em dash): one character outside the set drops the whole
+  // text to UCS-2 at 70 characters a segment.
+  //
+  // LENGTH IS A COST, not a style note, and the budget is stated rather than
+  // hoped for: `sendAutomationSms` appends " Reply STOP to opt out." (23
+  // septets) to every text, GSM-7 holds 160 in one segment, and this template
+  // is 110 — so ONE SEGMENT HOLDS A BRAND NAME OF 27 CHARACTERS OR FEWER.
+  // "Valley Air Conditioning" (23) and "Rio Grande Valley Roofing" (25) both
+  // fit. The first draft of this line was 124 septets, which left 13, and
+  // "Sunrise Plumbing" alone pushed every send to two billed segments — so
+  // the ask was tightened ("Know anyone who needs the same done? Send their
+  // name and number") rather than the promise dropped. A name carrying an
+  // accent is UCS-2 and three parts whatever this says, which is why
+  // referral-ask-copy.test.ts measures "García Roofing" too and the card
+  // renders the real count.
+  // Shared by the two part-B cards that count a TEXT (referral ask, quote
+  // follow-up). The count they show is of the DISCLOSED body — `withOptOut`,
+  // appended by `sendAutomationSms` on every send — and those 23 characters
+  // appear nowhere else on the page, because the message box's placeholder
+  // shows the undisclosed default. Rendered only beside the segment counter,
+  // never on the message hint: the hint shows for the email channel too, and
+  // an email has no opt-out sentence appended and no count at all.
+  //
+  // No quotation marks around the sentence: React escapes `"` to `&quot;` in
+  // the rendered markup, so a key carrying one cannot be asserted literally
+  // against the HTML, and the guard would end up written around the escaping
+  // instead of around the copy.
+  "automations.optOutCounted": "Every text ends with Reply STOP to opt out. That sentence is included in the count above.",
+  "automations.referral.defaultBody": "Thanks again from {name}. Know anyone who needs the same done? Send their name and number and we'll look after them.",
+  "automations.referral.defaultBodyNoName": "Thanks again. Know anyone who needs the same done? Send their name and number and we'll look after them.",
+  "automations.referral.emailSubject": "One favor, from {name}",
+  "automations.referral.emailSubjectNoName": "One favor",
+  "automations.referral.title": "Referral asks",
+  "automations.referral.body": "Ask the customer whether they know someone else who needs the same work. It goes the morning after the last message this job sent, and never on the same morning as one. If review requests are on, that one goes first. Off until you turn it on.",
+  "automations.referral.enabled": "Ask for referrals",
+  "automations.referral.channel": "Send by",
+  "automations.referral.message": "Message",
+  "automations.referral.messageHint": "Leave blank to send our default message. No link is added — this asks for a name, not a rating.",
+  "automations.referral.save": "Save referral asks",
+  "automations.referral.saved": "Referral asks saved",
+  "automations.referral.saveFailed": "Could not save referral asks.",
+
+  // Part B — the reactivation check-in (a past customer gone quiet). EMAIL
+  // ONLY, so unlike every other recipe's copy in this file there is no GSM-7
+  // budget to keep: nothing here is ever measured by `segmentsFor`, because
+  // the due-row carries no phone number at all. The two numbers the card
+  // restates in words (the month range, the daily limit) cannot be
+  // interpolated from a constant, so `reactivation-copy.test.ts` pins each of
+  // them against the constant it has to agree with.
+  "automations.reactivation.defaultBody": "Hi, it's {name}. It's been a while since we were out at your place. If anything needs looking at before the season, just reply and we'll get you on the schedule.",
+  "automations.reactivation.defaultBodyNoName": "Hi. It's been a while since we were out at your place. If anything needs looking at before the season, just reply and we'll get you on the schedule.",
+  "automations.reactivation.subject": "A note from {name}",
+  "automations.reactivation.subjectNoName": "Checking in",
+  "automations.reactivation.title": "Checking in with past customers",
+  "automations.reactivation.body": "Email a past customer who hasn't been in touch for a while. Only people whose job you completed, at most five a day, and only once each — ever. Email only. Off until you turn it on.",
+  "automations.reactivation.enabled": "Check in with past customers",
+  "automations.reactivation.months": "Quiet for at least",
+  "automations.reactivation.monthsUnit": "months",
+  "automations.reactivation.monthsHint": "Between 6 and 18. Nine is a good default for seasonal work: last spring's customer still knows you.",
+  "automations.reactivation.message": "Message",
+  "automations.reactivation.messageHint": "Leave blank to send our default message. No discount, no offer — just an open door.",
+  "automations.reactivation.limitNote": "At most five a day, oldest first, and never twice to the same person.",
+  "automations.reactivation.save": "Save check-ins",
+  "automations.reactivation.saved": "Check-ins saved",
+  "automations.reactivation.saveFailed": "Could not save check-ins.",
+  "automations.reactivation.monthsInvalid": "Choose a number of months between 6 and 18.",
+
+  // Part B — quote follow-ups. NO EM DASH and no character outside GSM-7 in
+  // `defaultBody`/`defaultBodyNoName`: this recipe is SMS-capable and one
+  // such character drops the whole body to UCS-2 at 70 characters a segment
+  // (segments.ts:15-19). The two range sentences restate 1 and 30 in prose
+  // because a static catalogue cannot interpolate a constant;
+  // quote-followup-copy.test.ts is what keeps them honest against
+  // QUOTE_FOLLOWUP_MIN_QUIET_DAYS / QUOTE_FOLLOWUP_MAX_QUIET_DAYS.
+  "automations.quoteFollowup.defaultBody": "Hi, it's {name}. Just checking you got the quote we sent. Happy to answer anything or adjust it. Any questions?",
+  "automations.quoteFollowup.defaultBodyNoName": "Just checking you got the quote we sent. Happy to answer anything or adjust it. Any questions?",
+  "automations.quoteFollowup.emailSubject": "About your quote from {name}",
+  "automations.quoteFollowup.emailSubjectNoName": "About your quote",
+  "automations.quoteFollowup.title": "Quote follow-ups",
+  "automations.quoteFollowup.body": "This watches your pipeline. Deals only get there when you or your team put them there, so nothing happens on its own. Move a deal into the stage you pick, and after a few quiet days with no reply it checks in about the quote. Off until you turn it on.",
+  "automations.quoteFollowup.enabled": "Follow up on quiet quotes",
+  "automations.quoteFollowup.stage": "Pipeline stage to watch",
+  "automations.quoteFollowup.stageHint": "Pick the stage you move a deal to once you've sent the quote.",
+  "automations.quoteFollowup.stagePlaceholder": "Choose a stage",
+  "automations.quoteFollowup.stageMissing": "The stage this automation watches is gone. Pick another one before this can run again.",
+  "automations.quoteFollowup.noStages": "This company has no pipeline stages yet, so there is nothing to watch. Set up the pipeline first.",
+  "automations.quoteFollowup.quietDays": "Days with no reply",
+  "automations.quoteFollowup.quietDaysHint": "Between 1 and 30. Three is a good default, long enough to not feel pushy.",
+  "automations.quoteFollowup.quietDaysInvalid": "Choose a number of days between 1 and 30.",
+  "automations.quoteFollowup.stageRequired": "Pick the stage to watch before turning this on.",
+  "automations.quoteFollowup.channel": "Send by",
+  "automations.quoteFollowup.message": "Message",
+  "automations.quoteFollowup.messageHint": "Leave blank to send our default message. The price and the deal's name are never included.",
+  "automations.quoteFollowup.save": "Save quote follow-ups",
+  "automations.quoteFollowup.saved": "Quote follow-ups saved",
+  "automations.quoteFollowup.saveFailed": "Could not save quote follow-ups.",
 
   // Part C — the Quiet hours card (agency, on the Automations page).
   "automations.quiet.title": "Quiet hours",

@@ -86,6 +86,30 @@ export const REASONS = {
    *  "skipped" and re-left `held` forever, parking it at the head of the
    *  queue and starving every newer hold behind it. */
   smsCooldown: "Waiting before trying this text again",
+  /** The confirmation ask, released after a long hold into the window in
+   *  which the email reminder is already eligible (24h15m out,
+   *  REMINDER_WINDOW_END_MS). Sending "can you confirm?" in the same quarter
+   *  hour as "here's your reminder" is ONE TEXT AND ONE EMAIL landing
+   *  together, asking the customer for the same thing twice. */
+  tooCloseToAppointment: "Too close to the appointment to ask",
+  /** The referral ask, released while the review request is still owed. The
+   *  row is written `skipped` rather than left untouched: an untouched
+   *  released row keeps its past `held_until` and parks the head of the
+   *  queue. The normal pass re-discovers the unstamped booking the next
+   *  morning and moves this same row back to `held` or `sent` in place. */
+  reviewFirst: "Waiting for the review request to go first",
+  /** A reactivation or a quote follow-up released after the customer had
+   *  already been in touch. Sending it anyway would talk straight over a live
+   *  conversation — the one failure mode these two recipes cannot survive. */
+  heardBack: "They've been in touch since",
+  /** A quote follow-up released after the operator deleted or replaced the
+   *  pipeline stage this recipe watches. A normal tick can never produce
+   *  this — the due-list filters on the stage, so a vanished one yields no
+   *  row and there is no subject to write against — but a HELD row's stage
+   *  can disappear during the hold, and that row must leave the queue with a
+   *  reason rather than sit in it. The operator-facing half of the same fact
+   *  lives on the Automations card, which can see the account's stages. */
+  stageGone: "The stage this automation watches is gone",
   outsideRegion: "Number is outside the US, Canada or Mexico",
   consentWithheld: "They didn't agree to texts",
   robocall: "Screened as a robocall",

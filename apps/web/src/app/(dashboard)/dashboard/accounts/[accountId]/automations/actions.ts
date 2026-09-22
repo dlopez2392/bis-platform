@@ -10,7 +10,9 @@
 
 import { revalidatePath } from "next/cache";
 import {
-  serviceDb, upsertAutomation, parseReviewRequestConfig, parseNoShowNudgeConfig, parseInstantReplyConfig,
+  serviceDb, upsertAutomation, parseReviewRequestConfig, parseNoShowNudgeConfig, parseReferralAskConfig,
+  parseReactivationConfig, parseQuoteFollowupConfig, parseInstantReplyConfig,
+  QUOTE_FOLLOWUP_MIN_QUIET_DAYS, QUOTE_FOLLOWUP_MAX_QUIET_DAYS,
   saveQuietSettings, bumpHeldForAccount, isClock,
   type ReviewRequestChannel,
 } from "@bis/db";
@@ -90,6 +92,105 @@ export async function saveNoShowNudgeAction(
   return { ok: true };
 }
 
+export async function saveReferralAskAction(
+  accountId: string, formData: FormData,
+): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["automations.agencyOnly"] };
+
+  // The pass's own parser, on write: an unknown channel is refused, never
+  // defaulted — a default here would let the page show one channel while the
+  // row stores another. There is deliberately no url field to validate: this
+  // recipe asks for a name, not a rating.
+  const config = parseReferralAskConfig({ channel: String(formData.get("channel") ?? "email") });
+  if (!config) return { ok: false, error: m["automations.referral.saveFailed"] };
+  const enabled = formData.get("enabled") === "on";
+  const body = String(formData.get("body") ?? "").trim();
+  if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
+
+  try {
+    await upsertAutomation(serviceDb(), accountId, "referral_ask", { enabled, body, config }, userId);
+  } catch (e) {
+    console.error(`saveReferralAskAction: save failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.referral.saveFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/automations`);
+  return { ok: true };
+}
+
+
+export async function saveReactivationAction(
+  accountId: string, formData: FormData,
+): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["automations.agencyOnly"] };
+
+  // The pass's own parser, on write. A months value outside the range is
+  // REFUSED, never clamped: silently turning a typo'd 99 into 18 would show
+  // the operator one number and send on another. The number input's own
+  // `max` makes this unreachable from a normal keyboard, which is why the
+  // refusal is proved here and never in Playwright. There is deliberately no
+  // channel to validate: this recipe is email only.
+  const config = parseReactivationConfig({ months: Number(formData.get("months")) });
+  if (!config) return { ok: false, error: m["automations.reactivation.monthsInvalid"] };
+  const enabled = formData.get("enabled") === "on";
+  const body = String(formData.get("body") ?? "").trim();
+  if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
+
+  try {
+    await upsertAutomation(serviceDb(), accountId, "reactivation", { enabled, body, config }, userId);
+  } catch (e) {
+    console.error(`saveReactivationAction: save failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.reactivation.saveFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/automations`);
+  return { ok: true };
+}
+
+export async function saveQuoteFollowupAction(
+  accountId: string, formData: FormData,
+): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["automations.agencyOnly"] };
+
+  const stageId = String(formData.get("stage_id") ?? "").trim();
+  const quietDays = Number(formData.get("quiet_days"));
+  const enabled = formData.get("enabled") === "on";
+
+  // ONE parse with the pass's own parser, then the specific messages, most
+  // specific first — the review-request action's shape (actions.ts above).
+  // A days value outside the range is REFUSED, never clamped: silently
+  // turning a typo'd 99 into 30 would show the operator one number and send
+  // on another. The number input's own `max` makes that unreachable from a
+  // normal keyboard, which is why the refusal is proved in actions.test.ts
+  // and never in Playwright.
+  const config = parseQuoteFollowupConfig({ stageId, quietDays, channel: String(formData.get("channel") ?? "email") });
+  if (!config) {
+    if (enabled && stageId === "") return { ok: false, error: m["automations.quoteFollowup.stageRequired"] };
+    if (!Number.isInteger(quietDays)
+      || quietDays < QUOTE_FOLLOWUP_MIN_QUIET_DAYS || quietDays > QUOTE_FOLLOWUP_MAX_QUIET_DAYS) {
+      return { ok: false, error: m["automations.quoteFollowup.quietDaysInvalid"] };
+    }
+    return { ok: false, error: m["automations.quoteFollowup.saveFailed"] };
+  }
+  const body = String(formData.get("body") ?? "").trim();
+  if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
+
+  try {
+    // The PARSED config, never the raw form values: the stored jsonb is then
+    // exactly what the pass will read back.
+    await upsertAutomation(serviceDb(), accountId, "quote_followup", { enabled, body, config }, userId);
+  } catch (e) {
+    console.error(`saveQuoteFollowupAction: save failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.quoteFollowup.saveFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/automations`);
+  return { ok: true };
+}
+
 export async function saveSmsReminderAction(
   accountId: string, formData: FormData,
 ): Promise<ActionResult> {
@@ -106,6 +207,29 @@ export async function saveSmsReminderAction(
   } catch (e) {
     console.error(`saveSmsReminderAction: save failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.smsReminder.saveFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/automations`);
+  return { ok: true };
+}
+
+export async function saveAppointmentConfirmAction(
+  accountId: string, formData: FormData,
+): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["automations.agencyOnly"] };
+
+  const enabled = formData.get("enabled") === "on";
+  const body = String(formData.get("body") ?? "").trim();
+  if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
+
+  try {
+    // Nothing to configure: the channel IS the recipe (a "Reply YES" email
+    // points at a no-reply address), and the time is the booking's.
+    await upsertAutomation(serviceDb(), accountId, "appointment_confirm", { enabled, body, config: {} }, userId);
+  } catch (e) {
+    console.error(`saveAppointmentConfirmAction: save failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.appointmentConfirm.saveFailed"] };
   }
 
   revalidatePath(`/dashboard/accounts/${accountId}/automations`);

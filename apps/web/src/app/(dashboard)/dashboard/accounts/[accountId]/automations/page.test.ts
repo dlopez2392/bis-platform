@@ -21,6 +21,7 @@ const dbFixture = vi.hoisted(() => ({
 }));
 const dbMock = vi.hoisted(() => ({
   getAutomation: vi.fn(), getBranding: vi.fn(), getCalendarForAccount: vi.fn(), readQuietSettings: vi.fn(),
+  listPipelinesWithStages: vi.fn(),
 }));
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({
@@ -34,6 +35,7 @@ vi.mock("@bis/db", () => ({
   getBranding: (...a: unknown[]) => dbMock.getBranding(...a),
   getCalendarForAccount: (...a: unknown[]) => dbMock.getCalendarForAccount(...a),
   readQuietSettings: (...a: unknown[]) => dbMock.readQuietSettings(...a),
+  listPipelinesWithStages: (...a: unknown[]) => dbMock.listPipelinesWithStages(...a),
   DEFAULT_QUIET_SETTINGS: { enabled: true, start: "21:00", end: "08:00" },
 }));
 const smsMock = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
@@ -42,8 +44,12 @@ vi.mock("@/lib/sms/sender", () => ({
 }));
 vi.mock("./actions", () => ({
   saveReviewRequestAction: async () => ({ ok: true }),
+  saveReferralAskAction: async () => ({ ok: true }),
+  saveReactivationAction: async () => ({ ok: true }),
   saveNoShowNudgeAction: async () => ({ ok: true }),
   saveSmsReminderAction: async () => ({ ok: true }),
+  saveAppointmentConfirmAction: async () => ({ ok: true }),
+  saveQuoteFollowupAction: async () => ({ ok: true }),
   saveInstantReplyAction: async () => ({ ok: true }),
   saveQuietHoursAction: async () => ({ ok: true }),
 }));
@@ -51,16 +57,29 @@ vi.mock("./actions", () => ({
 type Props = Record<string, unknown>;
 const captured = vi.hoisted(() => ({
   review: null as Props | null, noShow: null as Props | null, sms: null as Props | null, instant: null as Props | null,
-  quiet: null as Props | null,
+  confirm: null as Props | null, quiet: null as Props | null, referral: null as Props | null,
+  reactivation: null as Props | null, quoteFollowup: null as Props | null,
 }));
 vi.mock("./automations-settings", () => ({
   AutomationsSettings: (props: Props) => { captured.review = props; return null; },
+}));
+vi.mock("./referral-ask-card", () => ({
+  ReferralAskCard: (props: Props) => { captured.referral = props; return null; },
+}));
+vi.mock("./reactivation-card", () => ({
+  ReactivationCard: (props: Props) => { captured.reactivation = props; return null; },
+}));
+vi.mock("./quote-followup-card", () => ({
+  QuoteFollowupCard: (props: Props) => { captured.quoteFollowup = props; return null; },
 }));
 vi.mock("./no-show-nudge-card", () => ({
   NoShowNudgeCard: (props: Props) => { captured.noShow = props; return null; },
 }));
 vi.mock("./sms-reminder-card", () => ({
   SmsReminderCard: (props: Props) => { captured.sms = props; return null; },
+}));
+vi.mock("./appointment-confirm-card", () => ({
+  AppointmentConfirmCard: (props: Props) => { captured.confirm = props; return null; },
 }));
 vi.mock("./instant-reply-card", () => ({
   InstantReplyCard: (props: Props) => { captured.instant = props; return null; },
@@ -72,15 +91,21 @@ vi.mock("./quiet-hours-card", () => ({
 const { default: AutomationsPage } = await import("./page");
 
 const base = { account_id: "a1", created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z" };
+const STAGE_ID = "6f1b2c3d-4e5a-4b7c-8d9e-0a1b2c3d4e5f";
 const ROWS: Record<string, AutomationRow> = {
   review_request: { ...base, id: "au1", recipe_key: "review_request", enabled: true, body: "Hi",
     config: { channel: "sms", reviewUrl: "https://g.page/r/x/review" } },
+  referral_ask: { ...base, id: "au6", recipe_key: "referral_ask", enabled: true, body: "Know anyone else?", config: { channel: "sms" } },
+  reactivation: { ...base, id: "au7", recipe_key: "reactivation", enabled: true, body: "Still holding up?", config: { months: 14 } },
   no_show_nudge: { ...base, id: "au2", recipe_key: "no_show_nudge", enabled: false, body: "Come back", config: { channel: "email" } },
   instant_reply: { ...base, id: "au4", recipe_key: "instant_reply", enabled: false, body: "Hi", config: { bodyEs: "Hola" } },
+  appointment_confirm: { ...base, id: "au5", recipe_key: "appointment_confirm", enabled: true, body: "Parking is out front.", config: {} },
+  quote_followup: { ...base, id: "au8", recipe_key: "quote_followup", enabled: true, body: "Any questions?",
+    config: { stageId: STAGE_ID, quietDays: 4, channel: "email" } },
 };
 
 async function render() {
-  captured.review = captured.noShow = captured.sms = captured.instant = captured.quiet = null;
+  captured.review = captured.noShow = captured.sms = captured.instant = captured.confirm = captured.quiet = captured.referral = captured.reactivation = captured.quoteFollowup = null;
   renderToStaticMarkup(await AutomationsPage({ params: Promise.resolve({ accountId: "a1" }) }));
   return captured;
 }
@@ -96,6 +121,9 @@ beforeEach(() => {
   }));
   dbMock.getCalendarForAccount.mockReset().mockResolvedValue({ id: "cal_1", public_id: "cal_pub_1", enabled: true });
   dbMock.readQuietSettings.mockReset().mockResolvedValue({ enabled: true, start: "22:30", end: "06:15" });
+  dbMock.listPipelinesWithStages.mockReset().mockResolvedValue([
+    { id: "pl_1", name: "Sales", stages: [{ id: STAGE_ID, name: "Quoted", position: 2 }] },
+  ]);
   smsMock.resolveSmsSender.mockReset().mockResolvedValue({ ok: false, reason: "a2p_not_approved" });
   originMock.headers.mockReset().mockResolvedValue(new Headers({ host: "app.example.com" }));
   originMock.originFrom.mockReset().mockReturnValue("https://app.example.com");
@@ -138,6 +166,83 @@ describe("automations page", () => {
 
   it("hands the text-reminder card the account's zone for its sample time", async () => {
     expect((await render()).sms!.accountTimezone).toBe("America/Chicago");
+  });
+
+  it("hands the confirmation card ITS OWN row, the brand name, the account's zone and the SMS gate", async () => {
+    // Mutation: hand it `smsReminder` (the adjacent binding in the positional
+    // Promise.all) — this reds, because that read has no stored row and
+    // resolves null while `appointment_confirm` has au5.
+    dbFixture.brandName = "Rio Roofing";
+    const c = await render();
+    expect(c.confirm!.automation).toEqual(ROWS.appointment_confirm);
+    expect(c.confirm!.brandName).toBe("Rio Roofing");
+    expect(c.confirm!.accountTimezone).toBe("America/Chicago");
+    expect(c.confirm!.smsGate).toEqual({ ok: false, reason: "a2p_not_approved" });
+    expect(dbMock.getAutomation).toHaveBeenCalledWith(expect.anything(), "a1", "appointment_confirm");
+  });
+
+  it("hands the referral-ask card ITS OWN row, the brand name and the SMS gate", async () => {
+    // Mutation: hand it `review` or `noShow` (the two adjacent bindings in
+    // the positional Promise.all) — this reds, because those rows are au1
+    // and au2 while `referral_ask` is au6.
+    dbFixture.brandName = "Rio Roofing";
+    const c = await render();
+    expect(c.referral!.automation).toEqual(ROWS.referral_ask);
+    expect(c.referral!.brandName).toBe("Rio Roofing");
+    expect(c.referral!.smsGate).toEqual({ ok: false, reason: "a2p_not_approved" });
+    expect(dbMock.getAutomation).toHaveBeenCalledWith(expect.anything(), "a1", "referral_ask");
+  });
+
+  it("hands the reactivation card ITS OWN row and the brand name — and NO sms gate, because it is email only", async () => {
+    // Mutation: hand it `referral` or `noShow` (the two adjacent bindings in
+    // the positional Promise.all) — this reds, because those rows are au6
+    // and au2 while `reactivation` is au7. The absent `smsGate` prop is the
+    // same email-only rule the due-row type states by carrying no phone.
+    dbFixture.brandName = "Rio Roofing";
+    const c = await render();
+    expect(c.reactivation!.automation).toEqual(ROWS.reactivation);
+    expect(c.reactivation!.brandName).toBe("Rio Roofing");
+    expect(c.reactivation).not.toHaveProperty("smsGate");
+    expect(dbMock.getAutomation).toHaveBeenCalledWith(expect.anything(), "a1", "reactivation");
+  });
+
+  it("hands the quote follow-up card ITS OWN row, the SMS gate, and the account's stages flattened for the select", async () => {
+    // Mutation: hand it `confirm` or `instant` (the two adjacent bindings in
+    // the positional Promise.all) — this reds, because those rows are au5 and
+    // au4 while `quote_followup` is au8. ONE pipeline, so the label is the
+    // bare stage name; the "Sales · Quoted" form is the many-pipeline case
+    // below.
+    dbFixture.brandName = "Rio Roofing";
+    const c = await render();
+    expect(c.quoteFollowup!.automation).toEqual(ROWS.quote_followup);
+    expect(c.quoteFollowup!.brandName).toBe("Rio Roofing");
+    expect(c.quoteFollowup!.smsGate).toEqual({ ok: false, reason: "a2p_not_approved" });
+    expect(c.quoteFollowup!.stages).toEqual([{ id: STAGE_ID, label: "Quoted" }]);
+    expect(dbMock.getAutomation).toHaveBeenCalledWith(expect.anything(), "a1", "quote_followup");
+  });
+
+  it("prefixes a stage with its pipeline ONLY when the account has more than one pipeline", async () => {
+    // Mutation: prefix unconditionally → the single-pipeline case above reds;
+    // never prefix → this one reds. Two stages from two pipelines could
+    // otherwise both read "Quoted" in the same select.
+    dbMock.listPipelinesWithStages.mockResolvedValue([
+      { id: "pl_1", name: "Sales", stages: [{ id: STAGE_ID, name: "Quoted", position: 2 }] },
+      { id: "pl_2", name: "Service", stages: [{ id: "stg_b", name: "Quoted", position: 1 }] },
+    ]);
+    const c = await render();
+    expect(c.quoteFollowup!.stages).toEqual([
+      { id: STAGE_ID, label: "Sales · Quoted" }, { id: "stg_b", label: "Service · Quoted" },
+    ]);
+  });
+
+  it("a failed pipeline read degrades to NO stages; the rest of the page still renders", async () => {
+    dbMock.listPipelinesWithStages.mockRejectedValue(new Error("down"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const c = await render();
+    expect(c.quoteFollowup!.stages).toEqual([]);
+    expect(c.review!.automation).toEqual(ROWS.review_request);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
+    spy.mockRestore();
   });
 
   it("hands the instant-reply card ITS OWN row, the customer-facing name for its defaults, and the SMS gate", async () => {
@@ -196,7 +301,7 @@ describe("the Quiet hours card", () => {
 
 /**
  * Part C cleanup item 1: every remaining unguarded read on this page (the
- * four `getAutomation` calls, `resolveSmsSender`, `getCalendarForAccount`,
+ * eight `getAutomation` calls, `listPipelinesWithStages`, `resolveSmsSender`, `getCalendarForAccount`,
  * and the `headers()`/origin lookup) degrades to the value its own card
  * already treats as "nothing configured" — a transient Supabase hiccup on
  * ANY one of these must not 500 the whole agency page. Each card already
@@ -245,6 +350,48 @@ describe("guarded reads — one failed read degrades only its own card, never th
     spy.mockRestore();
   });
 
+  it("a failed appointment_confirm automation read degrades to null; the rest of the page still renders", async () => {
+    dbMock.getAutomation.mockImplementation(async (_db: unknown, _a: unknown, key: string) => {
+      if (key === "appointment_confirm") throw new Error("down");
+      return ROWS[key] ?? null;
+    });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const c = await render();
+    expect(c.confirm!.automation).toBeNull();
+    expect(c.review!.automation).toEqual(ROWS.review_request);
+    expect(c.instant!.automation).toEqual(ROWS.instant_reply);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
+    spy.mockRestore();
+  });
+
+  it("a failed referral_ask automation read degrades to null; the rest of the page still renders", async () => {
+    dbMock.getAutomation.mockImplementation(async (_db: unknown, _a: unknown, key: string) => {
+      if (key === "referral_ask") throw new Error("down");
+      return ROWS[key] ?? null;
+    });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const c = await render();
+    expect(c.referral!.automation).toBeNull();
+    expect(c.review!.automation).toEqual(ROWS.review_request);
+    expect(c.noShow!.automation).toEqual(ROWS.no_show_nudge);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
+    spy.mockRestore();
+  });
+
+  it("a failed reactivation automation read degrades to null; the rest of the page still renders", async () => {
+    dbMock.getAutomation.mockImplementation(async (_db: unknown, _a: unknown, key: string) => {
+      if (key === "reactivation") throw new Error("down");
+      return ROWS[key] ?? null;
+    });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const c = await render();
+    expect(c.reactivation!.automation).toBeNull();
+    expect(c.referral!.automation).toEqual(ROWS.referral_ask);
+    expect(c.noShow!.automation).toEqual(ROWS.no_show_nudge);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
+    spy.mockRestore();
+  });
+
   it("a failed instant_reply automation read degrades to null; the rest of the page still renders", async () => {
     dbMock.getAutomation.mockImplementation(async (_db: unknown, _a: unknown, key: string) => {
       if (key === "instant_reply") throw new Error("down");
@@ -266,6 +413,8 @@ describe("guarded reads — one failed read degrades only its own card, never th
     expect(c.review!.smsGate).toEqual(refused);
     expect(c.noShow!.smsGate).toEqual(refused);
     expect(c.sms!.smsGate).toEqual(refused);
+    expect(c.confirm!.smsGate).toEqual(refused);
+    expect(c.referral!.smsGate).toEqual(refused);
     expect(c.instant!.smsGate).toEqual(refused);
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
     spy.mockRestore();

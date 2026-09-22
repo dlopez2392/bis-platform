@@ -5,6 +5,7 @@ const dbMocks = vi.hoisted(() => ({ listReleasableHolds: vi.fn(), recordAutomati
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const releasers = vi.hoisted(() => ({
   reminders: vi.fn(), followups: vi.fn(), review: vi.fn(), noShow: vi.fn(), sms: vi.fn(), instant: vi.fn(),
+  quoteFollowup: vi.fn(),
 }));
 vi.mock("./reminders", () => ({ releaseReminder: (...a: unknown[]) => releasers.reminders(...a) }));
 vi.mock("./followups", () => ({ releaseFollowup: (...a: unknown[]) => releasers.followups(...a) }));
@@ -12,9 +13,10 @@ vi.mock("./review-request", () => ({ releaseReviewRequest: (...a: unknown[]) => 
 vi.mock("./no-show-nudge", () => ({ releaseNoShowNudge: (...a: unknown[]) => releasers.noShow(...a) }));
 vi.mock("./sms-reminder", () => ({ releaseSmsReminder: (...a: unknown[]) => releasers.sms(...a) }));
 vi.mock("../instant-reply", () => ({ releaseInstantReply: (...a: unknown[]) => releasers.instant(...a) }));
+vi.mock("./quote-followup", () => ({ releaseQuoteFollowup: (...a: unknown[]) => releasers.quoteFollowup(...a) }));
 
 import type { PassContext } from "../context";
-import { releaseHeldPass, RELEASE_BATCH, RELEASE_BUDGET_MS } from "./release-held";
+import { releaseHeldPass, RELEASERS, RELEASE_BATCH, RELEASE_BUDGET_MS } from "./release-held";
 
 const NOW = new Date("2026-09-22T13:00:00Z");
 const row = (source: AutomationLogRow["source"], key: string): AutomationLogRow => ({
@@ -52,6 +54,32 @@ describe("releaseHeldPass", () => {
     expect(releasers.noShow).toHaveBeenCalledWith(ctx, expect.objectContaining({ subject_key: "booking:4" }));
     expect(releasers.sms).toHaveBeenCalledWith(ctx, expect.objectContaining({ subject_key: "booking:5" }));
     expect(releasers.instant).toHaveBeenCalledWith(ctx, expect.objectContaining({ subject_key: "submission:6" }));
+  });
+
+  it("only the three non-releasable sources map to null — every recipe source has a real releaser", () => {
+    // Written as the list of NULLS, not the list of functions, so it never
+    // needs to grow again: each of part B's four recipes is caught by this
+    // case the moment its source is registered, whether or not anyone
+    // remembers to come back here. A releaser left `null` type-checks and
+    // then drops every held row of that source as "No longer due".
+    const nulls = Object.entries(RELEASERS).filter(([, r]) => r === null).map(([k]) => k).sort();
+    expect(nulls).toEqual(["concierge", "voice", "weekly_report"]);
+  });
+
+  /**
+   * THE SAME FACT SPELLED PER SOURCE, which the plan asked Task 10 to add on
+   * the premise that nothing else caught it. THE PREMISE IS STALE: the case
+   * above already reds on any of these being null, and does so as the list of
+   * NULLS, which is strictly stronger - it catches a source nobody remembered
+   * to add here. This stays as the named, per-recipe spelling; if the two ever
+   * disagree, the one above is the contract.
+   */
+  it("every part B source has a REAL releaser, not the `null` the type would accept", () => {
+    for (const source of ["appointment_confirm", "referral_ask", "reactivation", "quote_followup"] as const) {
+      expect(typeof RELEASERS[source], source).toBe("function");
+    }
+    // Mutation: set any one of the four to `null` -> it compiles, and both
+    // this and the null-set case above red.
   });
 
   it("RELEASE_BATCH is pinned at 200", () => {
@@ -128,4 +156,5 @@ describe("releaseHeldPass — the wall-clock budget", () => {
 
     expect(await releaseHeldPass.run(ctx)).toEqual({ examined: 2, sent: 2, held: 0, skipped: 0, failed: 0, errored: 0, deferred: 0 });
   });
+
 });

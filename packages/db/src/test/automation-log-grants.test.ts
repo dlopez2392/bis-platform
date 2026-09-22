@@ -224,6 +224,42 @@ describe("0046 accessors, live (serviceDb under withTestAccount)", () => {
     });
   });
 
+  it("two holds sharing one held_until come back OLDEST-WRITTEN first, not in whatever order the sort happens to emit", async () => {
+    // AUDIT B's I1, the ordering half. A review request held at 08:00 and a
+    // referral ask held at 09:15 inside the SAME quiet window get the
+    // IDENTICAL `held_until` — both are `quietWindowEnd` for one account and
+    // one window — so `held_until` alone leaves their order undefined. The
+    // ladder depends on it: the review must release first, so that the
+    // referral's re-applied same-local-day rule can see the stamp it just
+    // wrote and refuse. `occurred_at` ascending is that tiebreak, and it is
+    // the right one because it IS the order the two rows were held in.
+    //
+    // Mutation: flip the secondary order to `{ ascending: false }` -> this
+    // case reds by name. Deleting the `.order("occurred_at", …)` line
+    // altogether is NOT a reliable red and is not claimed as one: with two
+    // rows Postgres's sort is small enough to be stable in practice, so an
+    // undefined order and the right order coincide. The line is here to make
+    // "in practice" into "by contract".
+    await withTestAccount(async (db, accountId) => {
+      const SAME = "2026-01-05T14:00:00.000Z";
+      const mk = (k: string) => recordAutomationLog(db, {
+        accountId, source: "followups", channel: "email", contactId: null,
+        subjectKey: `booking:${k}`, status: "held", heldUntil: SAME,
+      });
+      await mk("held-first");
+      await mk("held-second");
+      const due = (await listReleasableHolds(db, "2026-06-01T00:00:00.000Z"))
+        .filter((r) => r.account_id === accountId);
+      expect(due.map((r) => r.subject_key)).toEqual(["booking:held-first", "booking:held-second"]);
+      // FIXTURE GUARD: the two rows really do share `held_until` and really
+      // do differ on `occurred_at`. Without this, a pair that happened to
+      // land in the same millisecond would make the assertion above true for
+      // a reason that has nothing to do with the order under test.
+      expect(due[0]!.held_until).toBe(due[1]!.held_until);
+      expect(due[0]!.occurred_at).not.toBe(due[1]!.occurred_at);
+    });
+  });
+
   it("bumpHeldForAccount makes every held row of ONE account due now and touches no other status", async () => {
     await withTestAccount(async (db, accountId) => {
       await recordAutomationLog(db, { accountId, source: "reminders", channel: "email", contactId: null, subjectKey: "booking:h", status: "held", heldUntil: "2099-01-01T00:00:00.000Z" });

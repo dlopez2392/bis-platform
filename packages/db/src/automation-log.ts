@@ -10,6 +10,18 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 export const AUTOMATION_LOG_SOURCES = [
   "reminders", "followups", "review_request", "no_show_nudge", "sms_reminder",
   "instant_reply", "weekly_report", "concierge", "voice",
+  // Part B, ONE per recipe task (plan amendment B1) — never all four at once.
+  // The moment a source is added, RELEASERS (passes/release-held.ts) and
+  // SOURCE_TITLES (log-titles.ts) stop compiling, and that red IS the
+  // registry's bookkeeping: it arrives in the same commit as the releaser and
+  // the title that answer it. Four at once would be four errors an
+  // implementer can silence with three `null`s. The SQL CHECK (0047) already
+  // carries all thirteen; a TS constant NARROWER than the database's CHECK is
+  // safe in the only direction that matters.
+  "appointment_confirm",
+  "referral_ask",
+  "reactivation",
+  "quote_followup",
 ] as const;
 export type AutomationLogSource = (typeof AUTOMATION_LOG_SOURCES)[number];
 export type AutomationLogChannel = "sms" | "email" | "ai";
@@ -80,13 +92,26 @@ export async function getAutomationLogEntry(
   return (data as AutomationLogRow | null) ?? null;
 }
 
-/** The release pass's queue: held rows whose time has come, oldest first. */
+/**
+ * The release pass's queue: held rows whose time has come, oldest first.
+ *
+ * `occurred_at` ASCENDING is the tiebreak, and it is not decoration. Two rows
+ * held inside the SAME quiet window for the same account carry the IDENTICAL
+ * `held_until` — both are `quietWindowEnd` for that one window — so ordering
+ * by `held_until` alone leaves them in whatever order the sort happens to
+ * emit. The completed-job ladder depends on the answer: the review request is
+ * held first and must release first, so that the referral ask's re-applied
+ * same-local-day rule can see the stamp the review just wrote and refuse.
+ * `occurred_at` is the order the two rows were held in, which is exactly the
+ * order they should come back in (audit B's I1).
+ */
 export async function listReleasableHolds(
   db: SupabaseClient, nowIso: string, limit = 200,
 ): Promise<AutomationLogRow[]> {
   const { data, error } = await db.from("automation_log").select(LOG_COLS)
     .eq("status", "held").lte("held_until", nowIso)
-    .order("held_until", { ascending: true }).limit(limit);
+    .order("held_until", { ascending: true })
+    .order("occurred_at", { ascending: true }).limit(limit);
   if (error) throw new Error(`listReleasableHolds failed: ${error.message}`);
   return (data ?? []) as AutomationLogRow[];
 }
