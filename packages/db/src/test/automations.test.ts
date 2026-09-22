@@ -28,7 +28,7 @@ import {
   parseReactivationConfig, reactivationCutoff, listDueReactivations, getDueReactivationById,
   conversationQuietSince, stampReactivationSent, countReactivationsSince,
   REACTIVATION_MIN_MONTHS, REACTIVATION_MAX_MONTHS,
-  parseQuoteFollowupConfig, listDueQuoteFollowups, getDueQuoteFollowupById,
+  parseQuoteFollowupConfig, listDueQuoteFollowups, getDueQuoteFollowupById, latestInboundByContact,
   stampQuoteFollowupSent, stampQuoteFollowupSmsFailed, countQuoteFollowupsSince,
   QUOTE_FOLLOWUP_MAX_AGE_MS, QUOTE_FOLLOWUP_MAX_QUIET_DAYS,
 } from "../automations";
@@ -635,7 +635,7 @@ describe("appointment confirm — data layer", () => {
     });
   });
 
-  it("applyConfirmationReply writes the answer on the SOONEST unanswered ask, and nothing else", async () => {
+  it("applyConfirmationReply writes the answer on the MOST RECENTLY ASKED booking, and nothing else", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
       const { id: contactId } = await createContact(db, accountId, { firstName: "Replier", phone: "(956) 555-0110" }, "user_test");
@@ -644,20 +644,36 @@ describe("appointment confirm — data layer", () => {
         { calendarId: cal.id, contactId, startsAt, endsAt: new Date(startsAt.getTime() + MINUTE) }, "user_test");
 
       const past = await mk(new Date(now.getTime() - 3 * HOUR));
-      // NEVER ASKED, and deliberately the SOONEST upcoming of the four: at
-      // +95h (the plan's placement) it sits behind two asked bookings, so
-      // dropping `.not("confirm_asked_at", "is", null)` could not change a
-      // single result and the assertion below could not fail — verified by
-      // running that mutation. Soonest, the filter is the only thing keeping
-      // this row out of the answer.
+      // NEVER ASKED. `confirm_asked_at` is null, and Postgres sorts nulls
+      // FIRST in a DESC order, so with `.not("confirm_asked_at", "is", null)`
+      // deleted this row wins outright — which is exactly the mutation the
+      // assertion below exists to catch.
       const never = await mk(new Date(now.getTime() + 23 * HOUR));
       const soon = await mk(new Date(now.getTime() + 47 * HOUR));
       const later = await mk(new Date(now.getTime() + 71 * HOUR));
       for (const b of [past, soon, later]) await stampAppointmentConfirmAsked(db, b.id);
 
+      // THE WHOLE POINT OF THIS FIXTURE: "soonest" and "most recently asked"
+      // DISAGREE. Two booked jobs less than 48h apart — a two-day job, or a
+      // morning slot plus a next-day slot — are asked about on consecutive
+      // days, and the text the customer is holding when they reply named the
+      // LATER one. `soon` starts first but was asked three hours ago;
+      // `later` starts last and was asked an hour ago. `past` was asked most
+      // recently of all, so `starts_at > now` is the only thing keeping it
+      // out of the answer. Without this block every stamp above lands in the
+      // same millisecond and the order is whatever the database felt like.
+      const askedAt = async (id: string, at: Date) => {
+        const { error } = await db.from("bookings")
+          .update({ confirm_asked_at: at.toISOString() }).eq("id", id);
+        if (error) throw new Error(`askedAt ${id} failed: ${error.message}`);
+      };
+      await askedAt(soon.id, new Date(now.getTime() - 3 * HOUR));
+      await askedAt(later.id, new Date(now.getTime() - 1 * HOUR));
+      await askedAt(past.id, new Date(now.getTime() - 30 * MINUTE));
+
       // A message that is not an answer writes nothing at all.
       expect(await applyConfirmationReply(db, accountId, contactId, "can I confirm the address?", now)).toBeNull();
-      const { data: untouched } = await db.from("bookings").select("confirm_reply").eq("id", soon.id).single();
+      const { data: untouched } = await db.from("bookings").select("confirm_reply").eq("id", later.id).single();
       expect((untouched as { confirm_reply: string | null }).confirm_reply).toBeNull();
 
       expect(await applyConfirmationReply(db, accountId, contactId, "YES", now)).toBe("yes");
@@ -665,21 +681,22 @@ describe("appointment confirm — data layer", () => {
         .select("status, confirm_reply, confirm_reply_at").eq("id", id).single()).data as
         { status: string; confirm_reply: string | null; confirm_reply_at: string | null };
 
-      expect((await read(soon.id)).confirm_reply).toBe("yes");               // soonest upcoming
-      expect((await read(soon.id)).confirm_reply_at).not.toBeNull();
-      expect((await read(soon.id)).status).toBe("booked");                   // a NO never cancels; a YES never confirms the STATUS either
-      expect((await read(later.id)).confirm_reply).toBeNull();               // Mutation: order descending → this reds
+      expect((await read(later.id)).confirm_reply).toBe("yes");              // the ask they are answering
+      expect((await read(later.id)).confirm_reply_at).not.toBeNull();
+      expect((await read(later.id)).status).toBe("booked");                  // a NO never cancels; a YES never confirms the STATUS either
+      expect((await read(soon.id)).confirm_reply).toBeNull();                // Mutation: order `starts_at` ascending again → this reds
       expect((await read(past.id)).confirm_reply).toBeNull();                // Mutation: drop the starts_at filter → this reds
       expect((await read(never.id)).confirm_reply).toBeNull();               // Mutation: drop the confirm_asked_at filter → this reds
 
-      // A second answer does not overwrite the first: the row is already answered.
+      // A second answer does not overwrite the first: it moves to the next
+      // unanswered ask, which is the one asked before it.
       expect(await applyConfirmationReply(db, accountId, contactId, "no", now)).toBe("no");
-      expect((await read(soon.id)).confirm_reply).toBe("yes");
-      expect((await read(later.id)).confirm_reply).toBe("no");               // it moved to the next unanswered one
+      expect((await read(later.id)).confirm_reply).toBe("yes");
+      expect((await read(soon.id)).confirm_reply).toBe("no");                // it moved to the next unanswered one
     });
   });
 
-  it("applyConfirmationReply never answers a CANCELLED booking, even when it is the soonest asked", async () => {
+  it("applyConfirmationReply never answers a CANCELLED booking, even when it is the most recently asked", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
       const { id: contactId } = await createContact(db, accountId, { firstName: "Scrapped", phone: "(956) 555-0112" }, "user_test");
@@ -687,13 +704,23 @@ describe("appointment confirm — data layer", () => {
       const mk = (startsAt: Date) => createBooking(db, accountId,
         { calendarId: cal.id, contactId, startsAt, endsAt: new Date(startsAt.getTime() + MINUTE) }, "user_test");
 
-      // The cancelled booking is the SOONEST on purpose. Behind the live one
-      // the ascending order would skip it anyway and `.eq("status", "booked")`
-      // would carry no weight — the non-load-bearing negative fixture this
-      // file has already been caught by once (see `never`, above).
+      // The cancelled booking WINS THE ORDERING on purpose — it is both the
+      // soonest AND, once the stamps below are placed, the most recently
+      // asked. Behind the live one the order would skip it anyway and
+      // `.eq("status", "booked")` would carry no weight — the
+      // non-load-bearing negative fixture this file has already been caught
+      // by once (see `never`, above). The explicit stamps are what keep that
+      // true now the order is `confirm_asked_at` and not `starts_at`.
       const scrapped = await mk(new Date(now.getTime() + 47 * HOUR));
       const live = await mk(new Date(now.getTime() + 71 * HOUR));
       for (const b of [scrapped, live]) await stampAppointmentConfirmAsked(db, b.id);
+      const askedAt = async (id: string, at: Date) => {
+        const { error } = await db.from("bookings")
+          .update({ confirm_asked_at: at.toISOString() }).eq("id", id);
+        if (error) throw new Error(`askedAt ${id} failed: ${error.message}`);
+      };
+      await askedAt(live.id, new Date(now.getTime() - 3 * HOUR));
+      await askedAt(scrapped.id, new Date(now.getTime() - 30 * MINUTE));
       await cancelBookingByToken(db, scrapped.cancelToken);
 
       // Mutation: delete `.eq("status", "booked")` from the lookup → this reds.
@@ -961,6 +988,26 @@ describe("referral ask — data layer", () => {
       expect(new Date(marked.referral_ask_sms_failed_at!).getTime()).toBeGreaterThanOrEqual(before.getTime());
       expect(await countReferralAsksSince(db, accountId, new Date(before.getTime() - 1000).toISOString())).toBe(1);
       expect(await countReferralAsksSince(db, accountId, new Date(Date.now() + 60_000).toISOString())).toBe(0);
+    });
+  });
+
+  it("countReferralAsksSince never counts another account's stamps", async () => {
+    // Mutation: drop `.eq("account_id", accountId)` and accountA counts 1.
+    // The consequence is not abstract: this number IS the input to
+    // AUTOMATION_DAILY_CAP, so one busy client's asks would spend a quiet
+    // client's allowance and that client would silently stop sending.
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db, accountB) => {
+        const cal = await getOrCreateCalendar(db, accountB, "user_test");
+        const { id: contactId } = await createContact(db, accountB, { firstName: "Asked" }, "user_test");
+        const b = await createBooking(db, accountB,
+          { calendarId: cal.id, contactId, startsAt: new Date(Date.now() - 4 * HOUR), endsAt: new Date(Date.now() - 3 * HOUR) },
+          "user_test");
+        const floor = new Date(Date.now() - 60_000).toISOString();
+        await stampReferralAsked(db, b.id);
+        expect(await countReferralAsksSince(db, accountB, floor)).toBe(1);
+        expect(await countReferralAsksSince(db, accountA, floor)).toBe(0);
+      });
     });
   });
 });
@@ -1290,6 +1337,146 @@ describe("reactivation — data layer", () => {
       expect(await getDueReactivationById(db, contactId)).toEqual({ due: null, why: "gone" });
     });
   });
+
+  it("countReactivationsSince never counts another account's stamps", async () => {
+    // Mutation: drop `.eq("account_id", accountId)` and accountA counts 1.
+    // This number is REACTIVATION_DAILY_CAP's input — five a day, its own
+    // cap and not the platform's 25 — so unscoped it lets one account's
+    // sends stop another account's.
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db, accountB) => {
+        const { id: contactId } = await createContact(db, accountB,
+          { firstName: "Woken", email: "woken@example.com" }, "user_test");
+        const floor = new Date(Date.now() - 60_000).toISOString();
+        await stampReactivationSent(db, contactId);
+        expect(await countReactivationsSince(db, accountB, floor)).toBe(1);
+        expect(await countReactivationsSince(db, accountA, floor)).toBe(0);
+      });
+    });
+  });
+
+  it("conversationQuietSince never reads another account's conversation", async () => {
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db, accountB) => {
+        const { id: contactB } = await createContact(db, accountB,
+          { firstName: "Chatty", email: "chatty@example.com" }, "user_test");
+        const convo = await ensureConversation(db, accountB, contactB, "user_test");
+        await createMessage(db, accountB,
+          { conversationId: convo.id, channel: "sms", direction: "inbound", body: "still here" }, "user_test");
+        // AN ACCOUNT-A MESSAGE ON ACCOUNT B'S CONVERSATION. `messages` carries
+        // `account_id` and `conversation_id` as two independent plain FKs, so
+        // the row is constructible. It is here because without it NEITHER of
+        // this function's two `.eq("account_id", accountId)` calls can be
+        // redded alone: dropping the conversation lookup's is masked by the
+        // message count's (A's count over B's conversation finds nothing),
+        // and dropping the message count's is masked by the lookup's (A has
+        // no conversation, so the count never runs). Measured, both ways,
+        // before this row was added.
+        const { id: stray } = await createMessage(db, accountA,
+          { conversationId: convo.id, channel: "sms", direction: "inbound", body: "stray" }, "user_test");
+        const floor = new Date(Date.now() - 60_000).toISOString();
+        try {
+          // B sees its own message. Without this line the assertion below
+          // would read `true` for want of any data at all, and the account
+          // predicate would carry no weight. It also pins that the stray row
+          // does not change B's own answer.
+          expect(await conversationQuietSince(db, accountB, contactB, floor)).toBe(false);
+          // Mutation: drop `.eq("account_id", accountId)` from the
+          // CONVERSATION lookup → A finds B's conversation, counts the stray
+          // and this reds. The message count's own account predicate is not
+          // redded by this case — it is the index's leading column and
+          // defence in depth — and that is said here rather than left
+          // looking provable.
+          expect(await conversationQuietSince(db, accountA, contactB, floor)).toBe(true);
+        } finally {
+          // The stray points at B's conversation, so B's teardown would fail
+          // on `conversations` without this. Logged, never thrown: a throw in
+          // a `finally` replaces the assertion that brought us here.
+          const { error: mDel } = await db.from("messages").delete().eq("id", stray);
+          if (mDel) console.error(`stray message cleanup failed: ${mDel.message}`);
+        }
+      });
+    });
+  });
+
+  it("a conversation pointing at ANOTHER account's contact is never due, by list or by id", async () => {
+    // The nested-account shape this file already uses for
+    // `countInstantRepliesSince` (:488). `conversations.contact_id` and
+    // `bookings.contact_id` are plain single-column FKs — there is no
+    // composite `(account_id, contact_id)` key anywhere — so a row whose
+    // contact belongs to a different account is constructible, and the whole
+    // reactivation chain used to resolve the customer, the email address and
+    // the "past customer" proof through `contact_id` alone. Account A then
+    // emailed account B's customer under A's brand, and the permanent stamp
+    // landed on B's contact so B could never send its own.
+    await withTestAccount(async (db, accountA) => {
+      const calA = await getOrCreateCalendar(db, accountA, "user_test");
+      await upsertAutomation(db, accountA, "reactivation",
+        { enabled: true, body: "", config: { months: 9 } }, "user_test");
+      const now = new Date("2027-09-21T12:00:00Z");
+      const longAgo = new Date("2026-10-01T12:00:00Z");
+
+      await withTestAccount(async (_db, accountB) => {
+        await upsertAutomation(db, accountB, "reactivation",
+          { enabled: true, body: "", config: { months: 9 } }, "user_test");
+        const { id: contactB } = await createContact(db, accountB,
+          { firstName: "Crossed", email: "crossed@example.com" }, "user_test");
+
+        // B's OWN conversation, quiet since long ago. Without it B's side of
+        // the due-list would be refused for want of a conversation and the
+        // booking's account would carry no weight — the non-load-bearing
+        // negative fixture this file has been caught by before.
+        const convoB = await ensureConversation(db, accountB, contactB, "user_test");
+        await db.from("conversations")
+          .update({ last_message_at: longAgo.toISOString() }).eq("id", convoB.id)
+          .then(({ error }) => { if (error) throw new Error(`convoB touch failed: ${error.message}`); });
+
+        // THE TWO CROSS-ACCOUNT ROWS: A's conversation on B's contact, and
+        // the completed booking that proves "past customer" — owned by A,
+        // not by B.
+        const convoA = await ensureConversation(db, accountA, contactB, "user_test");
+        await db.from("conversations")
+          .update({ last_message_at: longAgo.toISOString() }).eq("id", convoA.id)
+          .then(({ error }) => { if (error) throw new Error(`convoA touch failed: ${error.message}`); });
+        const crossed = await createBooking(db, accountA,
+          { calendarId: calA.id, contactId: contactB, startsAt: new Date(longAgo.getTime() - HOUR), endsAt: longAgo },
+          "user_test");
+        await setBookingStatus(db, accountA, crossed.id, "completed", "user_test");
+
+        try {
+          // Mutation: delete the contact-account check in `listDueReactivations`
+          // → B's customer comes back due under ACCOUNT A and this reds.
+          // Mutation: key `customers` by contact alone again (drop the account
+          // from the completed-bookings read) → B's own conversation qualifies
+          // on A's booking and this reds too.
+          expect((await listDueReactivations(db, now.toISOString())).map((r) => r.contactId))
+            .not.toContain(contactB);
+          // Mutation: delete `.eq("account_id", accountId)` from
+          // `getDueReactivationById`'s bookings read → this answers with a due
+          // row and reds.
+          expect(await getDueReactivationById(db, contactB)).toEqual({ due: null, why: "gone" });
+          const { data: after } = await db.from("contacts")
+            .select("reactivation_sent_at").eq("id", contactB).single();
+          expect((after as { reactivation_sent_at: string | null }).reactivation_sent_at).toBeNull();
+        } finally {
+          // A's two rows point at B's contact, and both FKs are plain
+          // `references` with no cascade, so B's teardown fails on `contacts`
+          // without this. IN A `finally`, because a failed assertion would
+          // otherwise skip it and the FK violation would replace the real
+          // failure message with one naming no cause at all — which is
+          // exactly what the first run of this case printed. LOGGED, never
+          // thrown, for the same reason: a throw here would mask the
+          // assertion that brought us into the finally. A cleanup that
+          // really fails is still loud, one line later, out of
+          // `deleteAccountCascade`.
+          const { error: bDel } = await db.from("bookings").delete().eq("id", crossed.id);
+          if (bDel) console.error(`cross-account bookings cleanup failed: ${bDel.message}`);
+          const { error: cDel } = await db.from("conversations").delete().eq("id", convoA.id);
+          if (cDel) console.error(`cross-account conversations cleanup failed: ${cDel.message}`);
+        }
+      });
+    });
+  });
 });
 
 describe("quote follow-up — data layer", () => {
@@ -1453,6 +1640,63 @@ describe("quote follow-up — data layer", () => {
       // so only `.is("quote_followup_sent_at", null)` can answer `gone` here.
       // Mutation: drop that `.is(...)` from getDueQuoteFollowupById → this reds.
       expect(await getDueQuoteFollowupById(db, opp.id)).toEqual({ due: null, why: "gone" });
+    });
+  });
+
+  it("latestInboundByContact never answers out of another account's conversation", async () => {
+    // A3. Both reads gained `.in("account_id", accountIds)` — for tenancy
+    // (`conversations.contact_id` is a plain FK) and for the index (every
+    // usable index on `messages` and `conversations` leads with `account_id`,
+    // and PostgreSQL 17 has no skip scan).
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db, accountB) => {
+        const { id: contactB } = await createContact(db, accountB,
+          { firstName: "Answered", email: "answered@example.com" }, "user_test");
+        const convo = await ensureConversation(db, accountB, contactB, "user_test");
+        await createMessage(db, accountB,
+          { conversationId: convo.id, channel: "sms", direction: "inbound", body: "got it, thanks" }, "user_test");
+        // The same account-A-message-on-B's-conversation row
+        // `conversationQuietSince` above needs, and for the same reason:
+        // without it the conversations read's account predicate is masked by
+        // the messages read's and neither can be redded alone.
+        const { id: stray } = await createMessage(db, accountA,
+          { conversationId: convo.id, channel: "sms", direction: "inbound", body: "stray" }, "user_test");
+        const floor = new Date(Date.now() - 60_000).toISOString();
+        try {
+          // B's own answer is found — so the empty map below is a refusal,
+          // not an absence of data.
+          expect([...(await latestInboundByContact(db, [accountB], [contactB], floor)).keys()])
+            .toEqual([contactB]);
+          // Mutation: drop `.in("account_id", accountIds)` from the
+          // CONVERSATIONS read → account A resolves B's conversation, the
+          // stray answers for it and this reds. The messages read's own
+          // account predicate is not redded by this case; it is the index's
+          // leading column and defence in depth, said here rather than left
+          // looking provable.
+          expect([...(await latestInboundByContact(db, [accountA], [contactB], floor)).keys()])
+            .toEqual([]);
+        } finally {
+          const { error: mDel } = await db.from("messages").delete().eq("id", stray);
+          if (mDel) console.error(`stray message cleanup failed: ${mDel.message}`);
+        }
+      });
+    });
+  });
+
+  it("countQuoteFollowupsSince never counts another account's stamps", async () => {
+    // Mutation: drop `.eq("account_id", accountId)` and accountA counts 1 —
+    // another account's sends spending this account's AUTOMATION_DAILY_CAP.
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db, accountB) => {
+        const { pipelineId } = await ensureDefaultPipeline(db, accountB);
+        const { id: contactId } = await createContact(db, accountB,
+          { firstName: "Quoted", email: "quoted@example.com" }, "user_test");
+        const opp = await createOpportunity(db, accountB, { contactId, pipelineId, name: "Job" }, "user_test");
+        const floor = new Date(Date.now() - 60_000).toISOString();
+        await stampQuoteFollowupSent(db, opp.id);
+        expect(await countQuoteFollowupsSince(db, accountB, floor)).toBe(1);
+        expect(await countQuoteFollowupsSince(db, accountA, floor)).toBe(0);
+      });
     });
   });
 });

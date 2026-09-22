@@ -324,15 +324,17 @@ describe("releasing a held quote follow-up", () => {
     expect(dbMocks.stampQuoteFollowupSent).toHaveBeenCalledWith(expect.anything(), "opp_q1");
   });
 
-  it("the release asks for the inbound scan SCOPED to this one contact, from the stage change", async () => {
-    // `latestInboundByContact` reads `conversations` with no account_id scope
-    // of its own (its comment says so): on the tick path the ids come from an
-    // already-narrowed candidate set, and here the single contact id is that
-    // narrowing. Mutation: pass `[]` or a wider list -> this reds.
+  it("the release asks for the inbound scan SCOPED to this account and this one contact, from the stage change", async () => {
+    // `latestInboundByContact` now takes the accounts as well as the
+    // contacts (audit A3): on the tick path it is handed every configured
+    // account at once, and here BOTH lists are this one row's, read off the
+    // re-read `due` rather than off the log line. Mutation: pass `[]`, a
+    // wider list, or the log row's account instead of the re-read one ->
+    // this reds.
     dbMocks.getDueQuoteFollowupById.mockResolvedValue({ due: row() });
     await releaseQuoteFollowup(ctx(), heldRow());
     expect(dbMocks.latestInboundByContact).toHaveBeenCalledWith(
-      expect.anything(), ["ct_q1"], STAGE_CHANGED);
+      expect.anything(), ["acct_1"], ["ct_q1"], STAGE_CHANGED);
   });
 
   it("characterises the silent branch the data layer's parse guard makes unreachable", async () => {

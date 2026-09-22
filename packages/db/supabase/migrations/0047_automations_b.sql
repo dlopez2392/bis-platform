@@ -48,6 +48,24 @@
 --                                    toggle: turning reactivation off mid-drain
 --                                    strands nothing, because the stamp is
 --                                    permanent.
+--
+-- WHOM THE "EVER" IS ENFORCED AGAINST (appended after the fact, audit A4;
+-- this migration is APPLIED and its SQL is unchanged). Two of the three
+-- permanent stamps sit on tables the CLIENT role can write:
+-- `information_schema.role_table_grants` gives `authenticated` UPDATE on
+-- `contacts` and on `opportunities`, and `contacts_member_all` /
+-- `opportunities_member_all` are ALL to `authenticated`. So a logged-in user
+-- can clear `reactivation_sent_at` or `quote_followup_sent_at` and make the
+-- recipe sendable again. `bookings` is the exception, not the rule - 0016:88
+-- revoked its `authenticated` UPDATE and nothing re-granted it, which is why
+-- the six booking columns above carry no such caveat. The permanence these
+-- three columns provide is therefore against THE CRON - one send per tick
+-- sequence, per contact or per deal, for ever - and not against the account's
+-- own users. That is deliberate (an operator who genuinely wants to re-send
+-- has no other lever), and it is written down here because the grant test
+-- proves the columns ARE client-writable
+-- (automations-b-schema.test.ts, "the three new client-writable columns")
+-- without saying what follows from it.
 
 -- 1. The recipe catalogue: four keys become eight. 0027's shape - Postgres
 --    has no "alter check", so drop and re-add.

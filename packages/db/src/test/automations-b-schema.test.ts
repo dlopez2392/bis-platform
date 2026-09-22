@@ -151,7 +151,7 @@ describe("0047 - the nine columns exist and carry their constraints", () => {
 
 /**
  * THE CATALOGUE CLAIMS — the two CHECK definitions in full, the nine columns,
- * the EIGHT index names with their partial predicates, and the
+ * the NINE index names with their partial predicates, and the
  * no-grant-change claim. `withRollback` + raw SQL, because supabase-js goes
  * through PostgREST and PostgREST reaches neither `pg_indexes` nor
  * `information_schema.role_table_grants`: a file that advertises an index

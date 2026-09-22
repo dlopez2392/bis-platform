@@ -249,12 +249,13 @@ export const releaseQuoteFollowup: Releaser = async (ctx, row) => {
   // never left untouched: an untouched released row keeps its past
   // `held_until` and parks the head of the queue.
   //
-  // SCOPED BY THE SINGLE CONTACT ID: `latestInboundByContact` reads
-  // `conversations` with no account_id filter of its own, and on the tick
-  // path the ids come from an already-narrowed candidate set. Here that
-  // narrowing IS this one id, taken from the re-read row rather than the log.
+  // SCOPED BY THE ACCOUNT AND THE SINGLE CONTACT ID, both taken from the
+  // RE-READ row rather than from the log line. On the tick path
+  // `latestInboundByContact` is handed every configured account at once;
+  // here the list is this one account, which is the narrowest the call can
+  // be.
   const inbound = await latestInboundByContact(
-    ctx.db, [found.due.contactId], found.due.stageChangedAt);
+    ctx.db, [found.due.accountId], [found.due.contactId], found.due.stageChangedAt);
   const replied = inbound.get(found.due.contactId);
   if (replied && new Date(replied).getTime() > new Date(found.due.stageChangedAt).getTime()) {
     await logSkipped(ctx, subjectOf(row), REASONS.heardBack);

@@ -764,11 +764,28 @@ export function matchConfirmationReply(text: string): ConfirmationAnswer | null 
  *     own STOP handling. The ask's own "either way we'll see it" is what
  *     covers the customer (spec decision 6).
  *
- * "Which booking": the SOONEST UPCOMING STILL-BOOKED one this contact was
- * asked about and has not answered. Soonest rather than most recently asked,
- * because that is the appointment the customer has in mind when they reply;
- * an appointment that has already started, or that has been cancelled since
- * the ask went out, is not a thing anyone is confirming.
+ * "Which booking": the one this contact was asked about MOST RECENTLY and
+ * has not answered, among those still `booked` and still in the future.
+ *
+ * Most recently asked, not soonest starting, because the customer is
+ * answering a text — and the text they are holding named a particular day
+ * and time (`composeAppointmentConfirm(..., formatWhen(startsAt, zone), ...)`).
+ * Two booked jobs less than 48h apart — a two-day job, or a morning slot plus
+ * a next-day slot — are asked about on consecutive days, and both asks are
+ * outstanding when the second one is answered. Ordering by `starts_at` then
+ * writes Sunday's "NO" onto Saturday's job: the operator's calendar reads
+ * "Asked for a different time" against the wrong day and Sunday still reads
+ * as unanswered. (This function shipped `starts_at` ascending under plan
+ * amendment B12; audit B's I2 found the case above and the spec's own Recipe
+ * 2 had said "most recent" all along.)
+ *
+ * The other three predicates are unchanged and each carries its own weight:
+ * an appointment that has already started, that was cancelled since the ask
+ * went out, or that was never asked about at all is not a thing anyone is
+ * confirming. `starts_at` ascending survives only as the TIEBREAK, for two
+ * asks stamped in the same millisecond; no single-threaded test can red it,
+ * and it is here so `limit(1)` has one answer rather than whichever row the
+ * plan happened to emit first.
  *
  * Returns the answer it wrote, or null when it wrote nothing — the route logs
  * the difference and does nothing else with it.
@@ -794,6 +811,13 @@ export async function applyConfirmationReply(
     .not("confirm_asked_at", "is", null)
     .is("confirm_reply", null)
     .gt("starts_at", now.toISOString())
+    // THE ASK THEY ARE ANSWERING. `bookings_confirm_reply_pending` is
+    // (account_id, contact_id, starts_at) and no longer supplies this order,
+    // so the plan sorts the rows it returns — which is a handful per contact
+    // (`.eq("account_id").eq("contact_id")` plus a partial index on the two
+    // null-state columns), not a table scan. Correctness over an ordered
+    // index read at that size.
+    .order("confirm_asked_at", { ascending: false })
     .order("starts_at", { ascending: true })
     .limit(1).maybeSingle();
   if (error) throw new Error(`applyConfirmationReply lookup failed: ${error.message}`);
@@ -1134,10 +1158,20 @@ export type DueReactivation = {
   body: string;
 };
 
-/** One page's worth of candidate conversation, contact already joined. */
+/** One page's worth of candidate conversation, contact already joined.
+ *
+ *  `contacts.account_id` is selected for ONE reason: to be compared with the
+ *  conversation's. `conversations.contact_id` is a plain single-column FK —
+ *  there is no composite `(account_id, contact_id)` key on `conversations`,
+ *  `bookings` or `opportunities` — so a conversation in account A can point
+ *  at a contact of account B, and this recipe resolved the customer, the
+ *  email address and the "past customer" proof through `contact_id` alone. */
 type ReactivationCandidate = {
   id: string; account_id: string; contact_id: string; last_message_at: string;
-  contacts: { id: string; first_name: string | null; last_name: string | null; email: string };
+  contacts: {
+    id: string; account_id: string;
+    first_name: string | null; last_name: string | null; email: string;
+  };
 };
 
 /**
@@ -1230,7 +1264,7 @@ export async function listDueReactivations(
     // which two conversations sharing a `last_message_at` could swap places
     // between pages and one of them would never be read.
     const { data: convos, error: cErr } = await db.from("conversations")
-      .select("id, account_id, contact_id, last_message_at, contacts!inner(id, first_name, last_name, email)")
+      .select("id, account_id, contact_id, last_message_at, contacts!inner(id, account_id, first_name, last_name, email)")
       .in("account_id", accountIds)
       .lte("last_message_at", widest.toISOString())
       .is("contacts.reactivation_sent_at", null)
@@ -1247,8 +1281,18 @@ export async function listDueReactivations(
     // `last_message_at` never reaches here (`lte` excludes nulls), which is
     // right: a conversation with no messages says nothing about how long it
     // has been.
+    //
+    // AND to its own account's CONTACT. The embed crosses
+    // `conversations_contact_id_fkey`, which carries no account condition of
+    // its own, so a conversation in account A pointing at a contact of
+    // account B joins in B's name and email address — and everything
+    // downstream (the send, and the permanent `reactivation_sent_at` stamp)
+    // then happens to B's customer under A's brand. There is no composite
+    // `(account_id, contact_id)` key to express this in the database, so it
+    // is expressed here.
     const candidates = rows.filter(
-      (c) => new Date(c.last_message_at).getTime() <= cutoffs.get(c.account_id)!.cutoff.getTime());
+      (c) => c.contacts.account_id === c.account_id
+        && new Date(c.last_message_at).getTime() <= cutoffs.get(c.account_id)!.cutoff.getTime());
 
     if (candidates.length > 0) {
       // THE ANTI-BLAST RULE. Not "a contact", not "a lead" — someone whose
@@ -1256,12 +1300,21 @@ export async function listDueReactivations(
       // `bookings_completed_by_contact` on `(contact_id) where status =
       // 'completed'`; before it there was no index on `bookings.contact_id`
       // at all and this was a sequential scan every tick.
+      //
+      // ACCOUNT-KEYED, not contact-keyed. `bookings.contact_id` is another
+      // plain FK, so account A's completed booking for contact X would
+      // otherwise prove that X is account B's past customer. The set key is
+      // the PAIR, and `.in("account_id", accountIds)` keeps the read itself
+      // inside the recipe's own accounts.
       const { data: done, error: bErr } = await db.from("bookings")
-        .select("contact_id")
+        .select("contact_id, account_id")
+        .in("account_id", accountIds)
         .in("contact_id", candidates.map((c) => c.contact_id))
         .eq("status", "completed");
       if (bErr) throw new Error(`listDueReactivations bookings read failed: ${bErr.message}`);
-      const customers = new Set(((done ?? []) as { contact_id: string }[]).map((b) => b.contact_id));
+      const customerKey = (accountId: string, contactId: string) => `${accountId}:${contactId}`;
+      const customers = new Set(((done ?? []) as { contact_id: string; account_id: string }[])
+        .map((b) => customerKey(b.account_id, b.contact_id)));
 
       // `account_id` is in the filter so `messages_thread (account_id,
       // conversation_id, created_at)` (0005) can be used — without a
@@ -1281,7 +1334,7 @@ export async function listDueReactivations(
       }
 
       const surviving = candidates.filter((c) => {
-        if (!customers.has(c.contact_id)) return false;
+        if (!customers.has(customerKey(c.account_id, c.contact_id))) return false;
         const newest = newestByConversation.get(c.id);
         // Compared to THIS account's cutoff, never to `earliest`.
         return newest === undefined || newest <= cutoffs.get(c.account_id)!.cutoff.getTime();
@@ -1347,8 +1400,13 @@ export async function getDueReactivationById(
   const config = parseReactivationConfig(auto.config);
   if (config === null) return { due: null, why: "off" };
 
+  // `.eq("account_id", accountId)` — the contact's own account, read off the
+  // contact two statements up. Without it another account's completed
+  // booking proves this account's "past customer" rule, because
+  // `bookings.contact_id` is a plain FK with no account condition on it.
   const { data: done, error: bErr } = await db.from("bookings")
-    .select("id").eq("contact_id", contactId).eq("status", "completed").limit(1).maybeSingle();
+    .select("id").eq("account_id", accountId)
+    .eq("contact_id", contactId).eq("status", "completed").limit(1).maybeSingle();
   if (bErr) throw new Error(`getDueReactivationById bookings read failed: ${bErr.message}`);
   if (!done) return { due: null, why: "gone" };
 
@@ -1415,7 +1473,16 @@ export async function conversationQuietSince(
 
 /** Send-then-stamp. ONE reactivation per contact, EVER — and this column is
  *  the off switch that outlives the toggle: turning the recipe off mid-drain
- *  strands nothing, because the stamp is permanent. */
+ *  strands nothing, because the stamp is permanent.
+ *
+ *  "EVER" is enforced AGAINST THE CRON, not against the client role.
+ *  `contacts` carries a table-level UPDATE grant to `authenticated` and
+ *  `contacts_member_all` is ALL to `authenticated`, so a logged-in user of
+ *  the account can clear `reactivation_sent_at` and make the contact
+ *  sendable again — unlike every earlier permanent stamp, which sat on
+ *  `bookings`, whose `authenticated` UPDATE 0016 revoked. Same for
+ *  `opportunities.quote_followup_sent_at`. 0047's header records the grants
+ *  this rests on. */
 export async function stampReactivationSent(db: SupabaseClient, contactId: string): Promise<void> {
   const { error } = await db.from("contacts")
     .update({ reactivation_sent_at: new Date().toISOString() })
@@ -1544,13 +1611,30 @@ const QUOTE_FOLLOWUP_SELECT =
  *
  * Exported because the RELEASE needs the single-contact case: a customer who
  * replied during a hold must not be chased at 8 AM.
+ *
+ * `accountIds` IS A LIST, not one id, because the tick's call covers every
+ * account whose quote_followup is on — `listDueQuoteFollowups` deliberately
+ * makes one pair of reads for the whole candidate set rather than a pair per
+ * account. The release path passes `[row.accountId]`.
+ *
+ * It buys two things at once. Tenancy: `conversations.contact_id` is a plain
+ * FK, so without it another account's conversation answers for this
+ * contact — the same shape as the reactivation chain's cross-account read.
+ * And the index: every usable index on these two tables leads with
+ * `account_id` (`messages_thread`, `conversations_account_contact_unique`,
+ * `conversations_account_recent`) and PostgreSQL 17 has no skip scan, so
+ * without a constraint on that leading column both reads were sequential
+ * scans. `listDueReactivations` states the same rule over the same two
+ * tables.
  */
 export async function latestInboundByContact(
-  db: SupabaseClient, contactIds: readonly string[], sinceIso: string,
+  db: SupabaseClient, accountIds: readonly string[], contactIds: readonly string[], sinceIso: string,
 ): Promise<Map<string, string>> {
-  if (contactIds.length === 0) return new Map();
+  if (contactIds.length === 0 || accountIds.length === 0) return new Map();
   const { data: convos, error } = await db.from("conversations")
-    .select("id, contact_id").in("contact_id", [...contactIds]);
+    .select("id, contact_id")
+    .in("account_id", [...accountIds])
+    .in("contact_id", [...contactIds]);
   if (error) throw new Error(`latestInboundByContact conversations read failed: ${error.message}`);
   const byConversation = new Map(((convos ?? []) as { id: string; contact_id: string }[])
     .map((c) => [c.id, c.contact_id] as const));
@@ -1558,6 +1642,7 @@ export async function latestInboundByContact(
 
   const { data: msgs, error: mErr } = await db.from("messages")
     .select("conversation_id, created_at")
+    .in("account_id", [...accountIds])
     .in("conversation_id", [...byConversation.keys()])
     .eq("direction", "inbound")
     .gt("created_at", sinceIso)
@@ -1657,7 +1742,8 @@ export async function listDueQuoteFollowups(
     .map((r: any) => new Date(r.stage_changed_at).getTime())
     .reduce((a: number, b: number) => Math.min(a, b));
   const inbound = await latestInboundByContact(
-    db, sendable.map((r: any) => r.contact_id as string), new Date(earliest).toISOString());
+    db, [...configured.keys()], sendable.map((r: any) => r.contact_id as string),
+    new Date(earliest).toISOString());
 
   return sendable
     .filter((r: any) => {
