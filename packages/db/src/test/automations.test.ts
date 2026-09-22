@@ -17,6 +17,11 @@ import {
   listDueSmsReminders, stampSmsReminderSent, stampSmsReminderFailed,
   SMS_REMINDER_WINDOW_START_MS, SMS_REMINDER_WINDOW_END_MS,
   parseInstantReplyConfig, stampInstantReplySent, countInstantRepliesSince,
+  listDueAppointmentConfirms, getDueAppointmentConfirmById,
+  stampAppointmentConfirmAsked, stampAppointmentConfirmSmsFailed,
+  matchConfirmationReply, applyConfirmationReply,
+  APPOINTMENT_CONFIRM_WINDOW_START_MS, APPOINTMENT_CONFIRM_WINDOW_END_MS,
+  APPOINTMENT_CONFIRM_MIN_LEAD_MS,
 } from "../automations";
 
 const HOUR = 60 * 60 * 1000;
@@ -479,6 +484,204 @@ describe("instant reply — data layer (Milestone C, the inline recipe)", () => 
         expect(await countInstantRepliesSince(db, accountB, floor)).toBe(1);
         expect(await countInstantRepliesSince(db, accountA, floor)).toBe(0);
       });
+    });
+  });
+});
+
+describe("appointment confirm — the matcher is the whole message, never a substring", () => {
+  it("reads a one-word yes in the forms a customer actually sends", () => {
+    for (const yes of ["yes", "YES", " Yes ", "yes.", "YES!!", "y", "Si", "sí", "SÍ", "confirm", "Confirmed"]) {
+      expect(matchConfirmationReply(yes), JSON.stringify(yes)).toBe("yes");
+    }
+  });
+
+  it("reads a DECOMPOSED sí — the form some phone keyboards actually send", () => {
+    // ESCAPED codepoints, NEVER editor-typed literals. A typed decomposed
+    // "s" + U+0301 is one save away from being silently recomposed, and this
+    // case would then pass with `.normalize("NFC")` DELETED — which is the
+    // one mutation it exists to catch. Every fixture in the case above is
+    // already composed, so not one of them can red that deletion: verified
+    // by running the matcher both ways.
+    // Mutation: delete `.normalize("NFC")` from matchConfirmationReply —
+    // THIS case reds by name and nothing else in the file moves.
+    expect(matchConfirmationReply("si\u0301"), "si + U+0301").toBe("yes");
+    expect(matchConfirmationReply("SI\u0301"), "SI + U+0301").toBe("yes");
+    expect(matchConfirmationReply("si\u0301."), "si + U+0301 + a full stop").toBe("yes");
+  });
+
+  it("reads a one-word no", () => {
+    for (const no of ["no", "NO", "no.", "n", "cancel", "Cancel!"]) {
+      expect(matchConfirmationReply(no), JSON.stringify(no)).toBe("no");
+    }
+  });
+
+  it("reads NOTHING out of a sentence that merely contains the word", () => {
+    // Mutation: replace the set membership test with `cleaned.includes(...)`
+    // — BOTH of the first two go red, and they are the two real customer
+    // sentences this rule exists for.
+    for (const other of [
+      "yes please, but move it to Friday",
+      "I said no problem",
+      "", "   ", "yesterday", "know", "can I confirm the address?", "👍",
+      // Only TRAILING punctuation is stripped, so the opening "¡" survives
+      // and this is a sentence, not a tap. Documented in the matcher's own
+      // comment so the asymmetry reads as a decision.
+      "¡Sí!",
+    ]) {
+      expect(matchConfirmationReply(other), JSON.stringify(other)).toBeNull();
+    }
+  });
+});
+
+describe("appointment confirm — data layer", () => {
+  it("the window is 47h to 48h15m ahead and 75 minutes wide, and the ask's lead is 24h15m", () => {
+    expect(APPOINTMENT_CONFIRM_WINDOW_START_MS).toBe(47 * HOUR);
+    expect(APPOINTMENT_CONFIRM_WINDOW_END_MS).toBe(48 * HOUR + 15 * MINUTE);
+    // 24h15m, not 24h: the email reminder becomes eligible at 24h15m out, so
+    // that is where the ask has to stop (B11). `cron-coupling.test.ts` is
+    // what pins it to REMINDER_WINDOW_END_MS; this pins the number itself.
+    expect(APPOINTMENT_CONFIRM_MIN_LEAD_MS).toBe(24 * HOUR + 15 * MINUTE);
+  });
+
+  it("listDueAppointmentConfirms: enabled, booked, starting 47h–48h15m out, unasked → due; edges inclusive", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await setBranding(db, accountId, { brandName: "Fixture Brand" }, "user_test");
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Twodays", phone: "(956) 555-0107" }, "user_test");
+      const now = new Date("2027-04-12T12:00:00Z");
+      const mk = (startsAt: Date, bookerTimezone?: string) => createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt, endsAt: new Date(startsAt.getTime() + MINUTE), bookerTimezone }, "user_test");
+
+      const inside = await mk(new Date(now.getTime() + 47 * HOUR + 30 * MINUTE), "America/Los_Angeles");
+      // OFF: nothing is due while the recipe is disabled.
+      expect((await listDueAppointmentConfirms(db, now.toISOString())).map((r) => r.bookingId)).not.toContain(inside.id);
+
+      await upsertAutomation(db, accountId, "appointment_confirm",
+        { enabled: true, body: "Any questions, just reply.", config: {} }, "user_test");
+      const lowerEdge = await mk(new Date(now.getTime() + APPOINTMENT_CONFIRM_WINDOW_START_MS));
+      const upperEdge = await mk(new Date(now.getTime() + APPOINTMENT_CONFIRM_WINDOW_END_MS));
+      // ONE MINUTE outside each edge, never "next week": a fixture a day past
+      // the bound passes against any ceiling and proves nothing.
+      const tooSoon = await mk(new Date(now.getTime() + APPOINTMENT_CONFIRM_WINDOW_START_MS - MINUTE));
+      const tooFar = await mk(new Date(now.getTime() + APPOINTMENT_CONFIRM_WINDOW_END_MS + MINUTE));
+      const asked = await mk(new Date(now.getTime() + 47 * HOUR + 40 * MINUTE));
+      await stampAppointmentConfirmAsked(db, asked.id);
+      const cancelled = await mk(new Date(now.getTime() + 47 * HOUR + 50 * MINUTE));
+      await cancelBookingByToken(db, cancelled.cancelToken);
+      // An ATTEMPT marker must NOT remove the row from the list: this recipe
+      // never reads the cooldown back (0047's own comment). Mutation: add a
+      // `.is("confirm_sms_failed_at", null)` predicate — this expectation reds.
+      // Written through the recipe's OWN stamp rather than a raw update, so
+      // the writer is exercised too (and no import is left unused: this
+      // package has no lint step that would catch one).
+      await stampAppointmentConfirmSmsFailed(db, lowerEdge.id);
+      const { data: marker } = await db.from("bookings")
+        .select("confirm_sms_failed_at, confirm_asked_at").eq("id", lowerEdge.id).single();
+      const markerRow = marker as { confirm_sms_failed_at: string | null; confirm_asked_at: string | null };
+      expect(markerRow.confirm_sms_failed_at).not.toBeNull();
+      expect(markerRow.confirm_asked_at).toBeNull();   // the attempt marker is NOT the dedupe stamp
+
+      const ids = (await listDueAppointmentConfirms(db, now.toISOString())).map((r) => r.bookingId);
+      expect(ids).toContain(inside.id);
+      expect(ids).toContain(lowerEdge.id);
+      expect(ids).toContain(upperEdge.id);
+      // The mutation that reds these is one to the QUERY's bounds, NOT one to
+      // the constants: both edge fixtures are derived FROM the constants, so
+      // moving APPOINTMENT_CONFIRM_WINDOW_START_MS to 46h moves `tooSoon` with
+      // it and this case stays green (verified — only the constants case above
+      // reds). Proven mutations: `windowStart − 1h` reds the first line,
+      // `windowEnd + 1h` reds the second.
+      expect(ids).not.toContain(tooSoon.id);     // Mutation: windowStart − 1h in the due-list query
+      expect(ids).not.toContain(tooFar.id);      // Mutation: windowEnd + 1h in the due-list query
+      expect(ids).not.toContain(asked.id);
+      expect(ids).not.toContain(cancelled.id);
+
+      const row = (await listDueAppointmentConfirms(db, now.toISOString())).find((r) => r.bookingId === inside.id)!;
+      expect(row.brandName).toBe("Fixture Brand");
+      expect(row).not.toHaveProperty("accountName");
+      expect(row).not.toHaveProperty("contactEmail");   // SMS only: no address it must not use
+      expect(row).not.toHaveProperty("smsFailedAt");    // written, never read back
+      expect(row.bookerTimezone).toBe("America/Los_Angeles");
+      expect(row.contactPhone).toBe("(956) 555-0107");
+      expect(row.body).toBe("Any questions, just reply.");
+    });
+  });
+
+  it("a suppressed account's booking is never due", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Quiet", phone: "(956) 555-0108" }, "user_test");
+      await upsertAutomation(db, accountId, "appointment_confirm", { enabled: true, body: "", config: {} }, "user_test");
+      const now = new Date("2027-04-12T12:00:00Z");
+      const b = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date(now.getTime() + 47 * HOUR + 30 * MINUTE),
+          endsAt: new Date(now.getTime() + 47 * HOUR + 31 * MINUTE) }, "user_test");
+      expect((await listDueAppointmentConfirms(db, now.toISOString())).map((r) => r.bookingId)).toContain(b.id);
+      await db.from("accounts").update({ outbound_suppressed: true }).eq("id", accountId);
+      expect((await listDueAppointmentConfirms(db, now.toISOString())).map((r) => r.bookingId)).not.toContain(b.id);
+      expect((await getDueAppointmentConfirmById(db, b.id)).due).toBeNull();
+    });
+  });
+
+  it("applyConfirmationReply writes the answer on the SOONEST unanswered ask, and nothing else", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Replier", phone: "(956) 555-0110" }, "user_test");
+      const now = new Date("2027-06-01T12:00:00Z");
+      const mk = (startsAt: Date) => createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt, endsAt: new Date(startsAt.getTime() + MINUTE) }, "user_test");
+
+      const past = await mk(new Date(now.getTime() - 3 * HOUR));
+      // NEVER ASKED, and deliberately the SOONEST upcoming of the four: at
+      // +95h (the plan's placement) it sits behind two asked bookings, so
+      // dropping `.not("confirm_asked_at", "is", null)` could not change a
+      // single result and the assertion below could not fail — verified by
+      // running that mutation. Soonest, the filter is the only thing keeping
+      // this row out of the answer.
+      const never = await mk(new Date(now.getTime() + 23 * HOUR));
+      const soon = await mk(new Date(now.getTime() + 47 * HOUR));
+      const later = await mk(new Date(now.getTime() + 71 * HOUR));
+      for (const b of [past, soon, later]) await stampAppointmentConfirmAsked(db, b.id);
+
+      // A message that is not an answer writes nothing at all.
+      expect(await applyConfirmationReply(db, accountId, contactId, "can I confirm the address?", now)).toBeNull();
+      const { data: untouched } = await db.from("bookings").select("confirm_reply").eq("id", soon.id).single();
+      expect((untouched as { confirm_reply: string | null }).confirm_reply).toBeNull();
+
+      expect(await applyConfirmationReply(db, accountId, contactId, "YES", now)).toBe("yes");
+      const read = async (id: string) => (await db.from("bookings")
+        .select("status, confirm_reply, confirm_reply_at").eq("id", id).single()).data as
+        { status: string; confirm_reply: string | null; confirm_reply_at: string | null };
+
+      expect((await read(soon.id)).confirm_reply).toBe("yes");               // soonest upcoming
+      expect((await read(soon.id)).confirm_reply_at).not.toBeNull();
+      expect((await read(soon.id)).status).toBe("booked");                   // a NO never cancels; a YES never confirms the STATUS either
+      expect((await read(later.id)).confirm_reply).toBeNull();               // Mutation: order descending → this reds
+      expect((await read(past.id)).confirm_reply).toBeNull();                // Mutation: drop the starts_at filter → this reds
+      expect((await read(never.id)).confirm_reply).toBeNull();               // Mutation: drop the confirm_asked_at filter → this reds
+
+      // A second answer does not overwrite the first: the row is already answered.
+      expect(await applyConfirmationReply(db, accountId, contactId, "no", now)).toBe("no");
+      expect((await read(soon.id)).confirm_reply).toBe("yes");
+      expect((await read(later.id)).confirm_reply).toBe("no");               // it moved to the next unanswered one
+    });
+  });
+
+  it("applyConfirmationReply never reaches another account's booking", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Tenant", phone: "(956) 555-0111" }, "user_test");
+      const b = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date("2027-07-01T15:00:00Z"), endsAt: new Date("2027-07-01T15:30:00Z") }, "user_test");
+      await stampAppointmentConfirmAsked(db, b.id);
+      const stranger = "00000000-0000-4000-8000-000000000000";
+      // Mutation: delete the .eq("account_id", accountId) from the SELECT
+      // (the lookup, not the UPDATE) → this reds. Deleting it from the
+      // UPDATE alone cannot red anything, which is why that one carries a
+      // comment saying it is defence in depth rather than a live guard.
+      expect(await applyConfirmationReply(db, stranger, contactId, "yes", new Date("2027-06-01T12:00:00Z"))).toBeNull();
+      const { data } = await db.from("bookings").select("confirm_reply").eq("id", b.id).single();
+      expect((data as { confirm_reply: string | null }).confirm_reply).toBeNull();
     });
   });
 });

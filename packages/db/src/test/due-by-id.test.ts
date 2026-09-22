@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
 import { getOrCreateCalendar, createBooking, setBookingStatus, getDueReminderById, getDueFollowupById, stampReminderSent } from "../booking";
-import { upsertAutomation, getDueSmsReminderById, getDueReviewRequestById, getDueNoShowNudgeById } from "../automations";
+import { upsertAutomation, getDueSmsReminderById, getDueReviewRequestById, getDueNoShowNudgeById,
+  getDueAppointmentConfirmById, stampAppointmentConfirmAsked } from "../automations";
 
 /**
  * Each lookup answers "is this still a thing to send" WITHOUT a time window
@@ -82,6 +83,26 @@ describe("the recipe lookups: `off` until the recipe is on, `gone` in the wrong 
       await setBookingStatus(db, accountId, bookingId, "no_show", "user_test");
       const found = await getDueNoShowNudgeById(db, bookingId);
       expect(found.due?.calendarPublicId).toBe(cal.public_id);
+    });
+  });
+
+  it("appointment confirm: off until the recipe is on, gone once asked", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { bookingId } = await seed(db, accountId);
+      // "off", not "gone" — the releaser writes a DIFFERENT reason for each
+      // ("This automation was turned off" vs "No longer due"), so a lookup
+      // that collapsed them would put the wrong sentence on a client's
+      // screen. Mutation: return `why: "gone"` from the `!auto` branch of
+      // getDueAppointmentConfirmById → this case reds by name.
+      expect(await getDueAppointmentConfirmById(db, bookingId)).toEqual({ due: null, why: "off" });
+      await upsertAutomation(db, accountId, "appointment_confirm",
+        { enabled: true, body: "", config: {} }, "user_test");
+      // No window check on the by-id path, on purpose: a release is a held
+      // row coming back, and its 75-minute window closed hours ago by
+      // definition. `seed`'s booking is in 2027 and is never inside it.
+      expect((await getDueAppointmentConfirmById(db, bookingId)).due?.bookingId).toBe(bookingId);
+      await stampAppointmentConfirmAsked(db, bookingId);
+      expect(await getDueAppointmentConfirmById(db, bookingId)).toEqual({ due: null, why: "gone" });
     });
   });
 });

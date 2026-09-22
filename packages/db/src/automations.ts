@@ -12,7 +12,9 @@ import { loadSendableRows, type AccountBrandInfo, type DueLookup } from "./booki
  *
  * The catalogue is fixed (the CHECK in 0025 + 0026 + 0027 mirrors `RecipeKey`).
  */
-export type RecipeKey = "review_request" | "no_show_nudge" | "sms_reminder" | "instant_reply";
+export type RecipeKey =
+  | "review_request" | "no_show_nudge" | "sms_reminder" | "instant_reply"
+  | "appointment_confirm";
 
 export type AutomationRow = {
   id: string; account_id: string; recipe_key: RecipeKey;
@@ -554,6 +556,250 @@ export async function stampSmsReminderFailed(db: SupabaseClient, bookingId: stri
     .update({ sms_reminder_failed_at: new Date().toISOString() })
     .eq("id", bookingId);
   if (error) throw new Error(`stampSmsReminderFailed failed: ${error.message}`);
+}
+
+// ---------------------------------------------------------------------------
+// Recipe: appointment confirmation, two days out (part B)
+// ---------------------------------------------------------------------------
+
+/**
+ * Two days out, 75 minutes wide — the email reminder's width and for its
+ * reason (booking.ts:383-384, the measured cron jitter). The CLOSE is 48h15m
+ * so a text sent at the far edge still reads as "two days from now"; the OPEN
+ * at 47h is how long a missed tick can catch up. A booking made less than 47
+ * hours ahead is never inside and is never asked — its email reminder and its
+ * text reminder are already on the way.
+ *
+ * cron-coupling.test.ts pins both against vercel.json. Change one, change both.
+ */
+export const APPOINTMENT_CONFIRM_WINDOW_START_MS = 47 * 60 * 60 * 1000;
+export const APPOINTMENT_CONFIRM_WINDOW_END_MS = 48 * 60 * 60 * 1000 + 15 * 60 * 1000;
+
+/**
+ * The instant the ask stops being worth making: 24 HOURS AND 15 MINUTES
+ * before the appointment, which is the instant the EMAIL reminder becomes
+ * eligible.
+ *
+ * Read `REMINDER_WINDOW_*` in booking.ts (:383-384) before changing this. The
+ * email reminder's due window is `starts_at ∈ [now + 23h, now + 24h15m]`
+ * (:546-547): a booking first matches it on the tick where its lead is
+ * 24h15m, and stops matching at 23h. So the window's CLOSE is where the
+ * reminder OPENS, and a 24h bound here would leave a fifteen-minute band in
+ * which both are due. The collision is ONE TEXT AND ONE EMAIL — "can you
+ * confirm?" and "here's your reminder" in the same quarter hour. (Not two
+ * texts: the SMS reminder's window is 90-135 minutes, SMS_REMINDER_WINDOW_*
+ * above, and cannot meet a 24h lead at all.)
+ *
+ * Its own literal, not `= REMINDER_WINDOW_END_MS`, and that is deliberate:
+ * derived from the import the two could never drift and cron-coupling's
+ * assertion could never fail, which is the shape this repo keeps shipping by
+ * accident. REVIEW_REQUEST_MAX_AGE_MS (:158) is the same choice — a literal
+ * 61h, with cron-coupling.test.ts pinning the derivation.
+ *
+ * Used twice: as the held subject's `deadline` (hold rather than send past
+ * usefulness) and as `releaseAppointmentConfirm`'s own re-check.
+ */
+export const APPOINTMENT_CONFIRM_MIN_LEAD_MS = (24 * 60 + 15) * 60 * 1000;
+
+/** SMS only, by definition of the recipe ("Reply YES" in an email points at a
+ *  no-reply address), so the row carries no email address at all — the type is
+ *  how a recipe author is kept from sending this by mail. It also carries no
+ *  `smsFailedAt`: this recipe writes its attempt marker and NEVER reads it
+ *  back (a 24h cooldown over a 75-minute window is one attempt ever — the text
+ *  reminder's recorded bug), and a field that must not be read is best absent. */
+export type DueAppointmentConfirm = {
+  bookingId: string; accountId: string;
+  startsAt: string;
+  /** The booker's own zone, captured at booking, for the time in the text —
+   *  safeZone(bookerTimezone, accountTimezone), the email reminder's rule. */
+  bookerTimezone: string | null;
+  contactId: string; contactPhone: string | null;
+  brandName: string; accountTimezone: string;
+  /** The operator's optional CLOSING line. The ask itself is fixed copy
+   *  (appointment-confirm-copy.ts): "either way we'll see it" is the whole
+   *  reason there is no reply-back, so it cannot live in an editable field. */
+  body: string;
+};
+
+const APPOINTMENT_CONFIRM_SELECT =
+  "id, account_id, contact_id, starts_at, booker_timezone, contacts(phone)";
+
+function toDueAppointmentConfirm(r: any, info: AccountBrandInfo, auto: EnabledRecipe): DueAppointmentConfirm {
+  return {
+    bookingId: r.id,
+    accountId: r.account_id,
+    startsAt: r.starts_at,
+    bookerTimezone: r.booker_timezone ?? null,
+    contactId: r.contact_id,
+    contactPhone: r.contacts?.phone ?? null,
+    brandName: brandDisplayName(info.branding),
+    accountTimezone: info.accountTimezone,
+    body: auto.body,
+  };
+}
+
+/** No gate follows this list beyond the window: the ask is tied to the
+ *  appointment, not to a morning, and quiet hours already holds a 6 AM send
+ *  until 08:00. */
+export async function listDueAppointmentConfirms(
+  db: SupabaseClient, nowIso: string,
+): Promise<DueAppointmentConfirm[]> {
+  const enabled = await listEnabled(db, "appointment_confirm", "listDueAppointmentConfirms");
+  if (enabled.size === 0) return [];
+
+  const now = new Date(nowIso).getTime();
+  const windowStart = new Date(now + APPOINTMENT_CONFIRM_WINDOW_START_MS).toISOString();
+  const windowEnd = new Date(now + APPOINTMENT_CONFIRM_WINDOW_END_MS).toISOString();
+
+  const { data, error } = await db.from("bookings")
+    .select(APPOINTMENT_CONFIRM_SELECT)
+    .in("account_id", [...enabled.keys()])
+    .eq("status", "booked").is("confirm_asked_at", null)
+    .gte("starts_at", windowStart).lte("starts_at", windowEnd)
+    .order("starts_at", { ascending: true });
+  if (error) throw new Error(`listDueAppointmentConfirms failed: ${error.message}`);
+
+  const rows = (data ?? []) as any[];
+  if (rows.length === 0) return [];
+
+  const { sendable, accountInfo } = await loadSendableRows(
+    db, rows as { account_id: string }[], "listDueAppointmentConfirms");
+
+  return sendable.map((r: any) =>
+    toDueAppointmentConfirm(r, accountInfo.get(r.account_id as string)!, enabled.get(r.account_id as string)!));
+}
+
+export async function getDueAppointmentConfirmById(
+  db: SupabaseClient, bookingId: string,
+): Promise<DueLookup<DueAppointmentConfirm>> {
+  const { data, error } = await db.from("bookings")
+    .select(APPOINTMENT_CONFIRM_SELECT)
+    .eq("id", bookingId).eq("status", "booked").is("confirm_asked_at", null).maybeSingle();
+  if (error) throw new Error(`getDueAppointmentConfirmById failed: ${error.message}`);
+  if (!data) return { due: null, why: "gone" };
+  const auto = await enabledRecipeFor(db, (data as any).account_id, "appointment_confirm");
+  if (!auto) return { due: null, why: "off" };
+  const { sendable, accountInfo } = await loadSendableRows(
+    db, [data as { account_id: string }], "getDueAppointmentConfirmById");
+  if (sendable.length === 0) return { due: null, why: "off" };
+  return { due: toDueAppointmentConfirm(data, accountInfo.get((data as any).account_id)!, auto) };
+}
+
+/** Send-then-stamp, same reasoning as every other recipe: only after a
+ *  confirmed send. This is what stops five copies over the 75-minute window. */
+export async function stampAppointmentConfirmAsked(db: SupabaseClient, bookingId: string): Promise<void> {
+  const { error } = await db.from("bookings")
+    .update({ confirm_asked_at: new Date().toISOString() })
+    .eq("id", bookingId);
+  if (error) throw new Error(`stampAppointmentConfirmAsked failed: ${error.message}`);
+}
+
+/** The attempt marker, WRITTEN AND NEVER READ BACK (caps.ts's text-reminder
+ *  exemption, for the same reason: a 24h cooldown over a 75-minute window is
+ *  one attempt ever). It exists so a failed attempt is visible to the
+ *  operator, not so the pass can hold on it. */
+export async function stampAppointmentConfirmSmsFailed(db: SupabaseClient, bookingId: string): Promise<void> {
+  const { error } = await db.from("bookings")
+    .update({ confirm_sms_failed_at: new Date().toISOString() })
+    .eq("id", bookingId);
+  if (error) throw new Error(`stampAppointmentConfirmSmsFailed failed: ${error.message}`);
+}
+
+// --- the reply -------------------------------------------------------------
+
+export type ConfirmationAnswer = "yes" | "no";
+
+// The accented member is written as an ESCAPED codepoint, never as an editor
+// literal: an editor, a formatter or a git filter that re-saved this file in
+// NFD would turn a typed "sí" into s + U+0301, and the set would then
+// silently stop matching the composed form the matcher normalises to. A
+// \u00ed cannot be decomposed by a save.
+const CONFIRM_YES: ReadonlySet<string> = new Set([
+  "yes", "y", "si", "s\u00ed" /* sí, COMPOSED. The ESCAPE is the protection:
+                                  an editor that re-saves this file in NFD
+                                  cannot decompose a codepoint written so. */
+  , "confirm", "confirmed",
+]);
+const CONFIRM_NO: ReadonlySet<string> = new Set(["no", "n", "cancel"]);
+
+/**
+ * The WHOLE message, not a word inside it. "yes please, but move it to
+ * Friday" is a conversation, not a confirmation, and "I said no problem" is
+ * not a cancellation — a substring match would mis-read both, and the second
+ * would tell an operator a customer cancelled when they did not.
+ *
+ * So: normalise (NFC, because "sí" can arrive as s + U+0301 — iOS and some
+ * Android keyboards send the decomposed form, and the set above holds the
+ * composed one), trim, lowercase, strip TRAILING punctuation and symbols
+ * ("yes.", "YES!!", "no 👍"), then test set membership. Anything else returns
+ * null and nothing is written at all.
+ *
+ * TRAILING ONLY, and that is a decision: "¡Sí!" returns null, because the
+ * opening "¡" survives the strip. A Spanish speaker who opens with "¡" is
+ * writing a sentence, not tapping one word, and widening the strip to both
+ * ends would start admitting fragments of sentences — the exact thing the
+ * whole-message rule exists to refuse.
+ *
+ * Pure, and exported on its own so it can be tested without a database.
+ */
+export function matchConfirmationReply(text: string): ConfirmationAnswer | null {
+  const cleaned = text.normalize("NFC").trim().toLowerCase().replace(/[\s\p{P}\p{S}]+$/u, "");
+  if (CONFIRM_YES.has(cleaned)) return "yes";
+  if (CONFIRM_NO.has(cleaned)) return "no";
+  return null;
+}
+
+/**
+ * Records a customer's one-word answer against the booking the ask went out
+ * for. Called from the inbound SMS webhook, in its own try/catch, AFTER the
+ * message has been filed — a keyword failure must never discard a customer's
+ * message (the getAlertPhone pattern, api/sms/inbound/route.ts:124-128).
+ *
+ * What it does NOT do, and both are decisions, not omissions:
+ *   - it never touches bookings.status. A destructive action from one word in
+ *     a text, with no confirmation, is what DESIGN.md rule 6 forbids; the
+ *     operator cancels, having read the answer on the booking.
+ *   - it never sends anything. A reply-back would make this webhook a sender,
+ *     cost a message per confirmation and risk a loop against the carrier's
+ *     own STOP handling. The ask's own "either way we'll see it" is what
+ *     covers the customer (spec decision 6).
+ *
+ * "Which booking": the SOONEST UPCOMING one this contact was asked about and
+ * has not answered. Soonest rather than most recently asked, because that is
+ * the appointment the customer has in mind when they reply; an appointment
+ * that has already started is not a thing anyone is confirming.
+ *
+ * Returns the answer it wrote, or null when it wrote nothing — the route logs
+ * the difference and does nothing else with it.
+ */
+export async function applyConfirmationReply(
+  db: SupabaseClient, accountId: string, contactId: string, text: string, now: Date,
+): Promise<ConfirmationAnswer | null> {
+  const answer = matchConfirmationReply(text);
+  if (answer === null) return null;
+
+  const { data, error } = await db.from("bookings")
+    .select("id")
+    .eq("account_id", accountId).eq("contact_id", contactId)
+    .not("confirm_asked_at", "is", null)
+    .is("confirm_reply", null)
+    .gt("starts_at", now.toISOString())
+    .order("starts_at", { ascending: true })
+    .limit(1).maybeSingle();
+  if (error) throw new Error(`applyConfirmationReply lookup failed: ${error.message}`);
+  if (!data) return null;
+
+  const { error: uErr } = await db.from("bookings")
+    .update({ confirm_reply: answer, confirm_reply_at: now.toISOString() })
+    .eq("id", (data as { id: string }).id)
+    // Re-scoped by account on the WRITING statement too. Not a live hole —
+    // the id came out of the account-scoped SELECT above — but this runs
+    // service-role, and a writing statement whose tenancy you have to trace
+    // to another query to see is how the next edit loses it.
+    .eq("account_id", accountId)
+    .is("confirm_reply", null);
+  if (uErr) throw new Error(`applyConfirmationReply write failed: ${uErr.message}`);
+  return answer;
 }
 
 // ---------------------------------------------------------------------------
