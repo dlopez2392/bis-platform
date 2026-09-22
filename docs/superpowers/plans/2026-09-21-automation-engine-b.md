@@ -5547,8 +5547,11 @@ export async function listDueQuoteFollowups(
   const earliest = sendable
     .map((r: any) => new Date(r.stage_changed_at).getTime())
     .reduce((a: number, b: number) => Math.min(a, b));
+  // Amended by the fix wave (ea06904, audit A3): accountIds first — every enabled
+  // account on the tick path, so both reads can use the account-led indexes.
   const inbound = await latestInboundByContact(
-    db, sendable.map((r: any) => r.contact_id as string), new Date(earliest).toISOString());
+    db, [...configured.keys()], sendable.map((r: any) => r.contact_id as string),
+    new Date(earliest).toISOString());
 
   return sendable
     .filter((r: any) => {
