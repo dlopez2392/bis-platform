@@ -232,6 +232,9 @@ describe("no-show nudge pass — fail closed, each case its own counter", () => 
     expect(await noShowNudgePass.run(ctx())).toEqual({ ...EMPTY, waitingForMorning: 1 });
     dbMocks.listDueNoShowNudges.mockResolvedValue([row({ noShowAt: marked, accountTimezone: "America/Chicago" })]);
     expect(await noShowNudgePass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
+    // Neither call above was a release — "no longer due" is a release-path
+    // write only; a normal tick that holds stays silent.
+    expect(dbMocks.recordAutomationLog.mock.calls.filter((c) => c[1].status === "skipped")).toEqual([]);
   });
 
   it("a pre-0026 row (noShowAt null) runs from ends_at", async () => {

@@ -234,6 +234,9 @@ describe("review-request pass — fail closed, each case its own counter", () =>
     expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, waitingForMorning: 1 });
     dbMocks.listDueReviewRequests.mockResolvedValue([row({ followupSentAt: stamped, accountTimezone: "America/Chicago" })]);
     expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
+    // Neither call above was a release — "no longer due" is a release-path
+    // write only; a normal tick that holds stays silent.
+    expect(dbMocks.recordAutomationLog.mock.calls.filter((c) => c[1].status === "skipped")).toEqual([]);
   });
 });
 
