@@ -109,10 +109,25 @@ export async function processReviewRequests(
     const followupSentAt = row.followupSentAt ? new Date(row.followupSentAt) : null;
     // THE CLOCK (0026): the later of the meeting end and "Mark completed".
     const anchor = laterOf(new Date(row.endsAt), row.completedAt ? new Date(row.completedAt) : null);
-    // Skipped entirely on a release: the band already said yes once, when
-    // this row was held — a release is not a second morning to wait for.
-    if (!opts.released && !shouldSendReviewRequestNow(ctx.now, anchor, followupSentAt, row.accountTimezone)) {
+    // THE GATE RUNS ON BOTH PATHS. A release skips the morning BAND and
+    // nothing else (`skipBand`, the release contract in part B's spec at line
+    // 16 and amendment B16): the band already said yes once, when this row was
+    // held. Everything else is RE-APPLIED, and RULE 4 is the whole point — the
+    // follow-up pass runs first in the registry and stamps `followup_sent_at`,
+    // and its email and this request can both be held inside one quiet window
+    // and come back on the same release tick. Skipping the composite put "how
+    // did it go?" and "would you leave a review?" on one morning, the exact
+    // collision rule 4 exists to stop; it also sent a request whose 61h cap
+    // had run out during the hold.
+    //
+    // When it refuses on a release the row is written `skipped`, never left
+    // untouched: an untouched released row keeps its past `held_until` and
+    // parks the head of the queue for ever. On a normal tick it stays silent
+    // — the row is simply due again tomorrow morning.
+    if (!shouldSendReviewRequestNow(
+      ctx.now, anchor, followupSentAt, row.accountTimezone, { skipBand: opts.released })) {
       c.waitingForMorning++;
+      if (opts.released) await logSkipped(ctx, subject, REASONS.noLongerDue);
       continue;
     }
 

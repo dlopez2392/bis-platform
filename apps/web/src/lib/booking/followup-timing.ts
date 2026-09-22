@@ -212,8 +212,19 @@ export function isStrictlyEarlierLocalDay(instant: Date, now: Date, zone: string
  * read; the staleness cap ages the booking out on its own; and the operator
  * can fix `accounts.timezone` and have every later booking work. An unsent
  * follow-up is a missing nicety. A 3 a.m. one is a complaint.
+ *
+ * `skipBand` is THE RELEASE PATH, and it skips the morning BAND ALONE (the
+ * release contract in part B's spec, line 16, and amendment B16). A held row
+ * passed the band once, at the hour it was held, and is released at the quiet
+ * window's end — by definition not a band hour — so re-applying the band would
+ * park every overnight hold for a whole extra day. The 37h cap, the zone and
+ * the strictly-earlier-local-day rule ARE re-applied, because on that path
+ * they live nowhere else: the releaser re-reads the booking, so a meeting that
+ * moved during the hold hands this gate a brand-new anchor.
  */
-export function shouldSendFollowupNow(now: Date, meetingEnd: Date, timezone: string): boolean {
+export function shouldSendFollowupNow(
+  now: Date, meetingEnd: Date, timezone: string, opts: { skipBand?: boolean } = {},
+): boolean {
   // Epoch milliseconds, never lexicographic ISO comparison: the strings in
   // play come from Postgres (`+00:00`) and from JS (`.000Z`) and do not sort
   // against each other reliably. NaN from an unparseable date must read as
@@ -230,6 +241,6 @@ export function shouldSendFollowupNow(now: Date, meetingEnd: Date, timezone: str
 
   // Rules 1 and 2, as the two exported predicates — the review-request gate
   // composes the same two, so they cannot drift apart.
-  if (!isInMorningBand(now, zone)) return false;
+  if (!opts.skipBand && !isInMorningBand(now, zone)) return false;
   return isStrictlyEarlierLocalDay(meetingEnd, now, zone);
 }

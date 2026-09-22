@@ -74,10 +74,24 @@ export async function processFollowups(
     // THE SEND-TIME GATE, before the no-email check so a contact with no
     // email is not logged 96 times a day for something that was never
     // going to send this tick. The dominant branch by a wide margin.
-    // Skipped entirely on a release: the band already said yes once, when
-    // this row was held — a release is not a second morning to wait for.
-    if (!opts.released && !shouldSendFollowupNow(ctx.now, new Date(followup.endsAt), followup.accountTimezone)) {
+    //
+    // IT RUNS ON BOTH PATHS. A release skips the morning BAND and nothing
+    // else (`skipBand`, the release contract in part B's spec at line 16 and
+    // amendment B16): the band already said yes once, when this row was held,
+    // and a release is not a second morning to wait for — but the 37h cap and
+    // the strictly-earlier-local-day rule live nowhere else on this path, and
+    // the releaser RE-READS the booking, so a meeting that moved during the
+    // hold arrives here with a brand-new anchor. It used to skip the whole
+    // composite, which sent a follow-up about a meeting that had aged out.
+    //
+    // When it refuses on a release the row is written `skipped`, never left
+    // untouched: an untouched released row keeps its past `held_until` and
+    // parks the head of the queue for ever. On a normal tick it stays silent
+    // — the row is simply due again tomorrow morning.
+    if (!shouldSendFollowupNow(
+      ctx.now, new Date(followup.endsAt), followup.accountTimezone, { skipBand: opts.released })) {
       waitingForMorning++;
+      if (opts.released) await logSkipped(ctx, subject, REASONS.noLongerDue);
       continue;
     }
 

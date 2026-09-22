@@ -85,6 +85,24 @@ describe("follow-ups: the band decides WHEN IT IS DUE, the window decides WHEN I
     expect(dbMocks.stampFollowupSent).toHaveBeenCalledWith(expect.anything(), "bk_f1");
   });
 
+  it("release at noon with the meeting PAST the 37h cap: skipped, and exactly one 'No longer due' row (mutation: put the gate back inside `if (!opts.released)` → this reds with 'sent')", async () => {
+    // The band is skipped on a release; NOTHING ELSE IS. This booking ended
+    // 45h before the release instant, so the cap — which lives nowhere else on
+    // this path — is the only rule refusing, and it must still refuse.
+    dbMocks.getDueFollowupById.mockResolvedValue({ due: row({
+      startsAt: "2026-09-20T19:00:00.000Z", endsAt: "2026-09-20T20:00:00.000Z",   // 45h before NOON
+    }) });
+    expect(await releaseFollowup(ctx(NOON, UNTIL_NOON), heldRow())).toBe("skipped");
+    expect(emailSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampFollowupSent).not.toHaveBeenCalled();
+    // ONE row, replacing the held one on the same (account, source, subject):
+    // a released row left untouched keeps its past `held_until` and parks the
+    // head of the queue for ever.
+    expect(logCalls()).toEqual([expect.objectContaining({
+      subjectKey: "booking:bk_f1", status: "skipped", reason: "No longer due",
+    })]);
+  });
+
   it("no email: a skipped row with the plain reason, counted as before", async () => {
     dbMocks.listDueFollowups.mockResolvedValue([row({ contactEmail: null })]);
     expect(await followupsPass.run(ctx(MORNING))).toEqual({ ...EMPTY, skippedNoEmail: 1 });
