@@ -28,8 +28,13 @@ import {
   parseReactivationConfig, reactivationCutoff, listDueReactivations, getDueReactivationById,
   conversationQuietSince, stampReactivationSent, countReactivationsSince,
   REACTIVATION_MIN_MONTHS, REACTIVATION_MAX_MONTHS,
+  parseQuoteFollowupConfig, listDueQuoteFollowups, getDueQuoteFollowupById,
+  stampQuoteFollowupSent, stampQuoteFollowupSmsFailed, countQuoteFollowupsSince,
+  QUOTE_FOLLOWUP_MAX_AGE_MS, QUOTE_FOLLOWUP_MAX_QUIET_DAYS,
 } from "../automations";
 import { ensureConversation, createMessage } from "../messaging";
+import { ensureDefaultPipeline, listPipelinesWithStages } from "../crm-config";
+import { createOpportunity } from "../opportunities";
 
 const HOUR = 60 * 60 * 1000;
 
@@ -1283,6 +1288,171 @@ describe("reactivation — data layer", () => {
       expect(await countReactivationsSince(db, accountId, new Date(before.getTime() - 1000).toISOString())).toBe(1);
       expect(await countReactivationsSince(db, accountId, new Date(Date.now() + 60_000).toISOString())).toBe(0);
       expect(await getDueReactivationById(db, contactId)).toEqual({ due: null, why: "gone" });
+    });
+  });
+});
+
+describe("quote follow-up — data layer", () => {
+  it("parseQuoteFollowupConfig needs a real uuid stage, a channel and a day count in range", () => {
+    const stage = "3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b";
+    expect(parseQuoteFollowupConfig({ stageId: stage, quietDays: 3, channel: "sms" }))
+      .toEqual({ stageId: stage, quietDays: 3, channel: "sms" });
+    for (const bad of [
+      null, {}, { stageId: stage, quietDays: 3 },
+      { stageId: "", quietDays: 3, channel: "sms" },
+      { stageId: "Quoted", quietDays: 3, channel: "sms" },            // a NAME, not an id
+      { stageId: stage, quietDays: 0, channel: "sms" },               // one under the floor
+      { stageId: stage, quietDays: QUOTE_FOLLOWUP_MAX_QUIET_DAYS + 1, channel: "sms" },
+      { stageId: stage, quietDays: 3.5, channel: "sms" },
+      { stageId: stage, quietDays: 3, channel: "fax" },
+    ]) {
+      expect(parseQuoteFollowupConfig(bad), JSON.stringify(bad)).toBeNull();
+    }
+    // Mutation: drop the uuid regex → the "Quoted" row reds, and a stage NAME
+    // would reach `.in("stage_id", …)` and 400 the whole tick.
+  });
+
+  it("an open deal parked in the configured stage past the quiet days is due; one that moved, closed, or was answered is not", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await setBranding(db, accountId, { brandName: "Fixture Brand" }, "user_test");
+      // TWO arguments. `ensureDefaultPipeline(db, accountId)` takes no actor and
+      // writes no event (crm-config.ts:72-74) — a third argument is TS2554 and
+      // Step 5's typecheck stops before a single test runs.
+      const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+      const pipelines = await listPipelinesWithStages(db, accountId);
+      const stages = pipelines.find((p) => p.id === pipelineId)!.stages;
+      const quoted = stages[1] ?? stages[0]!;
+      const other = stages[0]!.id === quoted.id ? stages[stages.length - 1]! : stages[0]!;
+
+      const now = new Date("2027-10-20T12:00:00Z");
+      const DAY = 24 * HOUR;
+      // THE CEILING IS PINNED HERE, not by the `tooOld` fixture below: that
+      // fixture is written as `now - QUOTE_FOLLOWUP_MAX_AGE_MS - MINUTE`, so
+      // WIDENING the constant moves the fixture with it and the row stays out
+      // — the prescribed "widen QUOTE_FOLLOWUP_MAX_AGE_MS" mutation cannot red
+      // a derived fixture. This line is what reds it, the way the sms
+      // reminder pins its own window at :379-380.
+      expect(QUOTE_FOLLOWUP_MAX_AGE_MS).toBe(30 * DAY);   // Mutation: widen QUOTE_FOLLOWUP_MAX_AGE_MS
+      await upsertAutomation(db, accountId, "quote_followup",
+        { enabled: true, body: "", config: { stageId: quoted.id, quietDays: 3, channel: "sms" } }, "user_test");
+
+      // THE FIXTURE WRITE THROWS. The house `clock` helpers above do the same
+      // (automations.test.ts:208-211): a swallowed PostgREST error here would
+      // leave every deal in "New Lead" with today's `stage_changed_at`, and the
+      // suite would report an empty due-list rather than the failed write.
+      const park = (id: string, patch: Record<string, string>) =>
+        db.from("opportunities").update(patch).eq("id", id).then(({ error }) => {
+          if (error) throw new Error(`park ${id} failed: ${error.message}`);
+        });
+
+      // A DISTINCT NUMBER PER CONTACT. `createContact` dedupes within the
+      // account on `phone_key` (`contacts.ts:120-141`), and the winner is
+      // `match.emailMatch ?? match.phoneMatch` (`:150-179`) — so distinct
+      // emails do NOT save a shared number: the phone match wins and all eight
+      // rows collapse onto ONE contact. Every opportunity would then point at
+      // that contact, the `replied` fixture's inbound message would be its
+      // message, and the quiet filter would drop the entire list.
+      let seq = 0;
+      const mk = async (name: string, stageId: string, changedAt: Date) => {
+        const phone = `(956) 555-${1200 + seq++}`;
+        const { id: contactId } = await createContact(db, accountId,
+          { firstName: name, email: `${name.toLowerCase()}@example.com`, phone }, "user_test");
+        const opp = await createOpportunity(db, accountId, { contactId, pipelineId, name: "Reroof" }, "user_test");
+        await park(opp.id, { stage_id: stageId, stage_changed_at: changedAt.toISOString() });
+        return { oppId: opp.id, contactId };
+      };
+
+      const due = await mk("Due", quoted.id, new Date(now.getTime() - 5 * DAY));
+      // ONE MINUTE either side of the three-day bound, never "yesterday".
+      const atBound = await mk("Atbound", quoted.id, new Date(now.getTime() - 3 * DAY));
+      const tooFresh = await mk("Fresh", quoted.id, new Date(now.getTime() - 3 * DAY + MINUTE));
+      const tooOld = await mk("Old", quoted.id, new Date(now.getTime() - QUOTE_FOLLOWUP_MAX_AGE_MS - MINUTE));
+      const elsewhere = await mk("Elsewhere", other.id, new Date(now.getTime() - 5 * DAY));
+      const won = await mk("Won", quoted.id, new Date(now.getTime() - 5 * DAY));
+      await park(won.oppId, { status: "won" });
+      const stamped = await mk("Stamped", quoted.id, new Date(now.getTime() - 5 * DAY));
+      await stampQuoteFollowupSent(db, stamped.oppId);
+
+      // The one who already replied — AFTER the stage changed.
+      const replied = await mk("Replied", quoted.id, new Date(now.getTime() - 5 * DAY));
+      const convo = await ensureConversation(db, accountId, replied.contactId, "user_test");
+      const { id: msg } = await createMessage(db, accountId,
+        { conversationId: convo.id, channel: "sms", direction: "inbound", body: "got it, thanks" }, "user_test");
+      await db.from("messages").update({ created_at: new Date(now.getTime() - 2 * DAY).toISOString() }).eq("id", msg)
+        .then(({ error }) => { if (error) throw new Error(`replied message clock failed: ${error.message}`); });
+
+      // And one whose only inbound message is OLDER than the stage change —
+      // the negative that keeps the quiet test from being "has ever written".
+      //
+      // ITS POSITION IS THE WHOLE POINT, and it is not "nine days ago". The
+      // read is scoped to the EARLIEST stage change in the candidate set
+      // (`sinceIso`, here now−5d from `due` and `replied`), so a message four
+      // days older than that never enters the map at all and the row would
+      // survive on `!replied` alone — leaving the `<=` comparison untested and
+      // the mutation below unable to red. So: stage changed four days ago, the
+      // message ONE MINUTE before that. It is inside the scan window, it IS in
+      // the map, and only the per-row comparison keeps it.
+      const wroteBefore = await mk("Before", quoted.id, new Date(now.getTime() - 4 * DAY));
+      const convo2 = await ensureConversation(db, accountId, wroteBefore.contactId, "user_test");
+      const { id: msg2 } = await createMessage(db, accountId,
+        { conversationId: convo2.id, channel: "sms", direction: "inbound", body: "can you quote this?" }, "user_test");
+      await db.from("messages").update({ created_at: new Date(now.getTime() - 4 * DAY - MINUTE).toISOString() }).eq("id", msg2)
+        .then(({ error }) => { if (error) throw new Error(`wroteBefore message clock failed: ${error.message}`); });
+
+      const ids = (await listDueQuoteFollowups(db, now.toISOString())).map((r) => r.opportunityId);
+      expect(ids).toContain(due.oppId);
+      expect(ids).toContain(atBound.oppId);
+      expect(ids).toContain(wroteBefore.oppId);      // Mutation: `return !replied;` (drop the `<=` comparison) → this reds
+      expect(ids).not.toContain(tooFresh.oppId);     // Mutation: query `now` instead of `quietCutoff` → this reds and nothing else does
+      expect(ids).not.toContain(tooOld.oppId);       // Mutation: drop the `.gte("stage_changed_at", oldest)` floor
+      expect(ids).not.toContain(elsewhere.oppId);    // Mutation: drop the stage filter
+      expect(ids).not.toContain(won.oppId);          // Mutation: drop the status filter
+      expect(ids).not.toContain(stamped.oppId);
+      expect(ids).not.toContain(replied.oppId);      // Mutation: delete the latestInboundByContact read
+
+      const row = (await listDueQuoteFollowups(db, now.toISOString())).find((r) => r.opportunityId === due.oppId)!;
+      expect(row.brandName).toBe("Fixture Brand");
+      expect(row).not.toHaveProperty("accountName");
+      expect(row).not.toHaveProperty("name");        // the DEAL's name is the operator's internal words
+      expect(row.stageId).toBe(quoted.id);
+      expect(row.configStageId).toBe(quoted.id);
+      expect(row.quietDays).toBe(3);
+    });
+  });
+
+  it("a suppressed account's deal is never due, and the stamps are idempotent and separate", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+      const pipelines = await listPipelinesWithStages(db, accountId);
+      const { id: stageId } = pipelines.find((p) => p.id === pipelineId)!.stages[0]!;
+      await upsertAutomation(db, accountId, "quote_followup",
+        { enabled: true, body: "", config: { stageId, quietDays: 3, channel: "email" } }, "user_test");
+      const now = new Date("2027-10-20T12:00:00Z");
+      const { id: contactId } = await createContact(db, accountId,
+        { firstName: "Supp", email: "supp@example.com" }, "user_test");
+      const opp = await createOpportunity(db, accountId, { contactId, pipelineId, name: "Job" }, "user_test");
+      await db.from("opportunities")
+        .update({ stage_id: stageId, stage_changed_at: new Date(now.getTime() - 5 * 24 * HOUR).toISOString() })
+        .eq("id", opp.id)
+        .then(({ error }) => { if (error) throw new Error(`park ${opp.id} failed: ${error.message}`); });
+
+      expect((await listDueQuoteFollowups(db, now.toISOString())).map((r) => r.opportunityId)).toContain(opp.id);
+      await db.from("accounts").update({ outbound_suppressed: true }).eq("id", accountId);
+      expect((await listDueQuoteFollowups(db, now.toISOString())).map((r) => r.opportunityId)).not.toContain(opp.id);
+      // THE WHOLE ANSWER, not `.due` alone: suppressed is `off`, and the
+      // releaser writes a different sentence for `off` than for `gone`.
+      expect(await getDueQuoteFollowupById(db, opp.id)).toEqual({ due: null, why: "off" });
+      await db.from("accounts").update({ outbound_suppressed: false }).eq("id", accountId);
+
+      const before = new Date();
+      await stampQuoteFollowupSmsFailed(db, opp.id);
+      await stampQuoteFollowupSent(db, opp.id);
+      await stampQuoteFollowupSent(db, opp.id);
+      expect(await countQuoteFollowupsSince(db, accountId, new Date(before.getTime() - 1000).toISOString())).toBe(1);
+      // THE DOUBLE-SEND GUARD on the release path — the deal is still `open`,
+      // so only `.is("quote_followup_sent_at", null)` can answer `gone` here.
+      // Mutation: drop that `.is(...)` from getDueQuoteFollowupById → this reds.
+      expect(await getDueQuoteFollowupById(db, opp.id)).toEqual({ due: null, why: "gone" });
     });
   });
 });

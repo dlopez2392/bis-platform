@@ -5,8 +5,11 @@ import { getOrCreateCalendar, createBooking, setBookingStatus, getDueReminderByI
 import { upsertAutomation, getDueSmsReminderById, getDueReviewRequestById, getDueNoShowNudgeById,
   getDueAppointmentConfirmById, stampAppointmentConfirmAsked,
   getDueReferralAskById, stampReferralAsked,
-  getDueReactivationById, stampReactivationSent } from "../automations";
+  getDueReactivationById, stampReactivationSent,
+  getDueQuoteFollowupById } from "../automations";
 import { ensureConversation, createMessage } from "../messaging";
+import { ensureDefaultPipeline, listPipelinesWithStages } from "../crm-config";
+import { createOpportunity, updateOpportunity } from "../opportunities";
 
 /**
  * Each lookup answers "is this still a thing to send" WITHOUT a time window
@@ -209,6 +212,37 @@ describe("the recipe lookups: `off` until the recipe is on, `gone` in the wrong 
       // due and the customer gets a second email.
       await stampReactivationSent(db, contactId);
       expect(await getDueReactivationById(db, contactId)).toEqual({ due: null, why: "gone" });
+    });
+  });
+
+  it("quote follow-up is `off` until the recipe is on, and `gone` once the deal is closed", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { contactId } = await seed(db, accountId);
+      const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+      const stages = (await listPipelinesWithStages(db, accountId)).find((p) => p.id === pipelineId)!.stages;
+      const stageId = stages[1]!.id;
+      const { id: oppId } = await createOpportunity(db, accountId, { contactId, pipelineId, name: "Reroof" }, "user_test");
+      await db.from("opportunities").update({ stage_id: stageId }).eq("id", oppId)
+        .then(({ error }) => { if (error) throw new Error(`park ${oppId} failed: ${error.message}`); });
+
+      expect(await getDueQuoteFollowupById(db, oppId)).toEqual({ due: null, why: "off" });
+      // Mutation: answer `why: "gone"` from the `!auto` branch of
+      // getDueQuoteFollowupById → this reds. (The plan asked for "return the
+      // row before `enabledRecipeFor`", which cannot be written: with the
+      // recipe off there is no config to build a due row from, so the hoisted
+      // return has nothing to return. The releaser writes a different
+      // sentence for `off` than for `gone`, which is what this pins.)
+      await upsertAutomation(db, accountId, "quote_followup",
+        { enabled: true, body: "", config: { stageId, quietDays: 3, channel: "email" } }, "user_test");
+      const found = await getDueQuoteFollowupById(db, oppId);
+      expect(found.due?.opportunityId).toBe(oppId);
+      expect(found.due?.configStageId).toBe(stageId);
+
+      await updateOpportunity(db, accountId, oppId, { status: "won" }, "user_test");
+      expect(await getDueQuoteFollowupById(db, oppId)).toEqual({ due: null, why: "gone" });
+      // Mutation: drop `.eq("status", "open")` from the by-id lookup → the won
+      // deal comes back due and this reds. It is the one the RELEASE path
+      // depends on: a held row whose deal was won must not send.
     });
   });
 });

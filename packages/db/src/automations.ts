@@ -14,7 +14,7 @@ import { loadSendableRows, type AccountBrandInfo, type DueLookup } from "./booki
  */
 export type RecipeKey =
   | "review_request" | "no_show_nudge" | "sms_reminder" | "instant_reply"
-  | "appointment_confirm" | "referral_ask" | "reactivation";
+  | "appointment_confirm" | "referral_ask" | "reactivation" | "quote_followup";
 
 export type AutomationRow = {
   id: string; account_id: string; recipe_key: RecipeKey;
@@ -1436,6 +1436,315 @@ export async function countReactivationsSince(
     .eq("account_id", accountId)
     .gte("reactivation_sent_at", sinceIso);
   if (error) throw new Error(`countReactivationsSince failed: ${error.message}`);
+  return count ?? 0;
+}
+
+// ---------------------------------------------------------------------------
+// Recipe: quote follow-up — a quoted lead that went quiet (part B)
+// ---------------------------------------------------------------------------
+
+/** A month. A 7 AM text about a quote sent five weeks ago reads as a mistake,
+ *  and the operator has almost certainly moved the card by then anyway. */
+export const QUOTE_FOLLOWUP_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+export const QUOTE_FOLLOWUP_MIN_QUIET_DAYS = 1;
+export const QUOTE_FOLLOWUP_MAX_QUIET_DAYS = 30;
+export const QUOTE_FOLLOWUP_DEFAULT_QUIET_DAYS = 3;
+
+/**
+ * How many parked deals one tick will look at. The reactivation recipe's
+ * `REACTIVATION_CANDIDATE_LIMIT` bounds its candidate read the same way, but
+ * for a DIFFERENT residual: that one WALKS pages, because its disqualifier (no
+ * completed booking) is permanent and would otherwise park the window for
+ * ever. This one needs no walk — see the head-drain note below.
+ *
+ * THIS RECIPE'S TRIGGER IS A RESTING STATE, not an event: a card sits in the
+ * nominated stage for up to thirty days, so an account whose "Quote Sent"
+ * column holds hundreds of open deals yields hundreds of rows on EVERY tick —
+ * and every contact id on them goes into an `.in("contact_id", …)` and then an
+ * `.in("conversation_id", …)`. A PostgREST GET carrying that many uuids fails,
+ * and a throw here fails the whole tick for every account, not just this one.
+ * `AUTOMATION_TICK_CAP` does not help: it is applied inside the PASS, after
+ * this read has already been made.
+ *
+ * Rows beyond the limit are the next tick's — the query orders oldest stage
+ * change first, so the overflow drains from the front. What drains the HEAD is
+ * `QUOTE_FOLLOWUP_MAX_AGE_MS`: a row the quiet test keeps refusing (they
+ * replied) stays unstamped and keeps its place until it ages out at thirty
+ * days. That is the bound; do not claim "nobody starves" here.
+ */
+export const QUOTE_FOLLOWUP_CANDIDATE_LIMIT = 200;
+
+/**
+ * How many inbound messages the quiet test will scan. Ordered newest first, so
+ * within one contact the answer never changes; the limit can only drop a
+ * contact whose latest inbound is older than 1,000 others in the candidate
+ * set's window — and that errs towards SENDING, which is why it is generous
+ * (five times the candidate limit) rather than tight. It exists so one very
+ * busy account cannot make this read unbounded.
+ */
+const QUOTE_FOLLOWUP_INBOUND_SCAN_LIMIT = 1000;
+
+export type QuoteFollowupChannel = "email" | "sms";
+export type QuoteFollowupConfig = { stageId: string; quietDays: number; channel: QuoteFollowupChannel };
+
+/**
+ * jsonb is untrusted on read AND write. `stageId` is the id of one of THIS
+ * account's `pipeline_stages` rows — free text per account (0003), so there
+ * is no platform-wide "Quoted" stage to hard-code and the operator picks one.
+ * Validated as a shape here; that it still BELONGS to the account is a
+ * question only a query can answer, and the card asks it (see Task 10).
+ */
+export function parseQuoteFollowupConfig(raw: unknown): QuoteFollowupConfig | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const { stageId, quietDays, channel } = raw as Record<string, unknown>;
+  if (channel !== "email" && channel !== "sms") return null;
+  if (typeof stageId !== "string") return null;
+  const id = stageId.trim();
+  // The shape Postgres will accept as a uuid. A junk string would otherwise
+  // reach the `.in("stage_id", …)` filter and make PostgREST return a 400 for
+  // the WHOLE tick, taking every other account's rows with it.
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return null;
+  if (typeof quietDays !== "number" || !Number.isInteger(quietDays)) return null;
+  if (quietDays < QUOTE_FOLLOWUP_MIN_QUIET_DAYS || quietDays > QUOTE_FOLLOWUP_MAX_QUIET_DAYS) return null;
+  return { stageId: id, quietDays, channel };
+}
+
+export type DueQuoteFollowup = {
+  opportunityId: string; accountId: string;
+  /** The opportunity's CURRENT stage, and what the recipe watches. Equal by
+   *  construction in the due-list; compared by the RELEASER, which is the
+   *  only place they can have drifted. */
+  stageId: string; configStageId: string;
+  stageChangedAt: string; quietDays: number;
+  smsFailedAt: string | null;
+  contactId: string; contactEmail: string | null; contactPhone: string | null;
+  brandName: string; branding: Branding; accountTimezone: string;
+  fromEmail: string | null; replyToEmail: string | null;
+  /** The operator's prose. NEVER the deal's own `name` — "Smith reroof —
+   *  maybe" is the operator's internal words, the same class of leak
+   *  `accounts.name` is, and this row has no field for it. */
+  body: string;
+  config: QuoteFollowupConfig | null;
+};
+
+// ONE STRING LITERAL, never a concatenation: supabase-js parses the select at
+// the TYPE level off a string literal, so `"a, " + "b"` is plain `string`, the
+// parser answers `GenericStringError`, and the `data as {...}` below fails with
+// TS2352. Task 5 hit this and every other *_SELECT in the file is a single
+// literal for the same reason.
+const QUOTE_FOLLOWUP_SELECT =
+  "id, account_id, contact_id, stage_id, stage_changed_at, quote_followup_sms_failed_at, contacts(email, phone)";
+
+/**
+ * Latest INBOUND message per contact since `sinceIso` — the "they already
+ * replied" test the opportunities query cannot express. Two narrow reads,
+ * bounded by the candidate list (`QUOTE_FOLLOWUP_CANDIDATE_LIMIT`) and by
+ * `QUOTE_FOLLOWUP_INBOUND_SCAN_LIMIT`, so this is one pair of reads per tick
+ * and not one per row.
+ *
+ * Exported because the RELEASE needs the single-contact case: a customer who
+ * replied during a hold must not be chased at 8 AM.
+ */
+export async function latestInboundByContact(
+  db: SupabaseClient, contactIds: readonly string[], sinceIso: string,
+): Promise<Map<string, string>> {
+  if (contactIds.length === 0) return new Map();
+  const { data: convos, error } = await db.from("conversations")
+    .select("id, contact_id").in("contact_id", [...contactIds]);
+  if (error) throw new Error(`latestInboundByContact conversations read failed: ${error.message}`);
+  const byConversation = new Map(((convos ?? []) as { id: string; contact_id: string }[])
+    .map((c) => [c.id, c.contact_id] as const));
+  if (byConversation.size === 0) return new Map();
+
+  const { data: msgs, error: mErr } = await db.from("messages")
+    .select("conversation_id, created_at")
+    .in("conversation_id", [...byConversation.keys()])
+    .eq("direction", "inbound")
+    .gt("created_at", sinceIso)
+    .order("created_at", { ascending: false })
+    .limit(QUOTE_FOLLOWUP_INBOUND_SCAN_LIMIT);
+  if (mErr) throw new Error(`latestInboundByContact messages read failed: ${mErr.message}`);
+
+  const latest = new Map<string, string>();
+  for (const msg of (msgs ?? []) as { conversation_id: string; created_at: string }[]) {
+    const contactId = byConversation.get(msg.conversation_id);
+    if (!contactId) continue;
+    // Ordered newest first, so the first one wins.
+    if (!latest.has(contactId)) latest.set(contactId, msg.created_at);
+  }
+  return latest;
+}
+
+/**
+ * Candidates, then the quiet test the query cannot express.
+ *
+ * `stage_id` and `quietDays` are BOTH per-account config, so the query gets
+ * the union of the stage ids (exact — uuids do not collide across accounts)
+ * and the WIDEST quiet cutoff, and each row is then narrowed to its own
+ * account's. `stage_changed_at` is written by both `moveOpportunityStage` and
+ * `moveOpportunityToStage` (opportunities.ts:45-46, 65-66), so "parked in the
+ * stage you nominate, and how long ago" is a real column and not an
+ * inference.
+ *
+ * The index that serves this read is `opps_quote_followup_due`
+ * (0047, `(account_id, stage_id, stage_changed_at) where quote_followup_sent_at
+ * is null and status = 'open'`) — its predicate is implied by this query's, in
+ * that direction only. BOUNDED by `QUOTE_FOLLOWUP_CANDIDATE_LIMIT`: read that
+ * constant's comment before removing the `.limit(...)`.
+ */
+export async function listDueQuoteFollowups(
+  db: SupabaseClient, nowIso: string,
+): Promise<DueQuoteFollowup[]> {
+  const enabled = await listEnabled(db, "quote_followup", "listDueQuoteFollowups");
+  if (enabled.size === 0) return [];
+
+  const now = new Date(nowIso).getTime();
+  const DAY = 24 * 60 * 60 * 1000;
+  const configured = new Map<string, { config: QuoteFollowupConfig; quietCutoff: number; body: string }>();
+  for (const [accountId, auto] of enabled) {
+    const config = parseQuoteFollowupConfig(auto.config);
+    // An invalid config cannot even be queried for — there is no stage id to
+    // filter on — so it is dropped here rather than surviving as a row the
+    // pass would have to refuse. Logged, because an operator believes this
+    // recipe is on.
+    if (!config) {
+      console.error(
+        `listDueQuoteFollowups: account ${accountId} has quote_followup enabled with an invalid `
+        + `config — re-save the recipe in Automations`,
+      );
+      continue;
+    }
+    configured.set(accountId, {
+      config, quietCutoff: now - config.quietDays * DAY, body: auto.body,
+    });
+  }
+  if (configured.size === 0) return [];
+
+  const widestQuiet = new Date(Math.max(...[...configured.values()].map((c) => c.quietCutoff)));
+  const oldest = new Date(now - QUOTE_FOLLOWUP_MAX_AGE_MS);
+
+  const { data, error } = await db.from("opportunities")
+    .select(QUOTE_FOLLOWUP_SELECT)
+    .in("account_id", [...configured.keys()])
+    .in("stage_id", [...configured.values()].map((c) => c.config.stageId))
+    .eq("status", "open").is("quote_followup_sent_at", null)
+    .lte("stage_changed_at", widestQuiet.toISOString())
+    .gte("stage_changed_at", oldest.toISOString())
+    .order("stage_changed_at", { ascending: true })
+    .limit(QUOTE_FOLLOWUP_CANDIDATE_LIMIT);
+  if (error) throw new Error(`listDueQuoteFollowups failed: ${error.message}`);
+
+  // Narrow each row to ITS OWN account's stage and quiet period. The stage
+  // check is belt-and-braces against the `.in(...)` union — and it is also
+  // what keeps one account's stage id from ever selecting another's row.
+  const rows = ((data ?? []) as any[]).filter((r) => {
+    const conf = configured.get(r.account_id);
+    if (!conf) return false;
+    if (r.stage_id !== conf.config.stageId) return false;
+    return new Date(r.stage_changed_at).getTime() <= conf.quietCutoff;
+  });
+  if (rows.length === 0) return [];
+
+  const { sendable, accountInfo } = await loadSendableRows(
+    db, rows as { account_id: string }[], "listDueQuoteFollowups");
+  if (sendable.length === 0) return [];
+
+  // THE QUIET TEST. Any inbound message since the stage changed means this
+  // person is already talking to the business, and a "just checking you got
+  // the quote" text would land on top of that conversation. One read pair for
+  // the whole candidate set, since the earliest stage change among them.
+  const earliest = sendable
+    .map((r: any) => new Date(r.stage_changed_at).getTime())
+    .reduce((a: number, b: number) => Math.min(a, b));
+  const inbound = await latestInboundByContact(
+    db, sendable.map((r: any) => r.contact_id as string), new Date(earliest).toISOString());
+
+  return sendable
+    .filter((r: any) => {
+      const replied = inbound.get(r.contact_id as string);
+      return !replied || new Date(replied).getTime() <= new Date(r.stage_changed_at).getTime();
+    })
+    .map((r: any) => {
+      const conf = configured.get(r.account_id as string)!;
+      const info = accountInfo.get(r.account_id as string)!;
+      return {
+        opportunityId: r.id, accountId: r.account_id,
+        stageId: r.stage_id, configStageId: conf.config.stageId,
+        stageChangedAt: r.stage_changed_at, quietDays: conf.config.quietDays,
+        smsFailedAt: r.quote_followup_sms_failed_at ?? null,
+        contactId: r.contact_id,
+        contactEmail: r.contacts?.email ?? null, contactPhone: r.contacts?.phone ?? null,
+        brandName: brandDisplayName(info.branding), branding: info.branding,
+        accountTimezone: info.accountTimezone, fromEmail: info.fromEmail, replyToEmail: info.replyToEmail,
+        body: conf.body, config: conf.config,
+      };
+    });
+}
+
+/**
+ * The release's re-read. It does NOT compare the opportunity's stage with the
+ * configured one: the releaser does, so that "the stage this automation
+ * watches is gone" gets its own client-readable reason. Both ids are on the
+ * row for exactly that comparison.
+ */
+export async function getDueQuoteFollowupById(
+  db: SupabaseClient, opportunityId: string,
+): Promise<DueLookup<DueQuoteFollowup>> {
+  const { data, error } = await db.from("opportunities")
+    .select(QUOTE_FOLLOWUP_SELECT)
+    .eq("id", opportunityId).eq("status", "open").is("quote_followup_sent_at", null).maybeSingle();
+  if (error) throw new Error(`getDueQuoteFollowupById failed: ${error.message}`);
+  if (!data) return { due: null, why: "gone" };
+  const accountId = (data as any).account_id as string;
+  const auto = await enabledRecipeFor(db, accountId, "quote_followup");
+  if (!auto) return { due: null, why: "off" };
+  const config = parseQuoteFollowupConfig(auto.config);
+  if (!config) return { due: null, why: "off" };
+  const { sendable, accountInfo } = await loadSendableRows(
+    db, [data as { account_id: string }], "getDueQuoteFollowupById");
+  if (sendable.length === 0) return { due: null, why: "off" };
+  const r = data as any;
+  const info = accountInfo.get(accountId)!;
+  return {
+    due: {
+      opportunityId: r.id, accountId,
+      stageId: r.stage_id, configStageId: config.stageId,
+      stageChangedAt: r.stage_changed_at, quietDays: config.quietDays,
+      smsFailedAt: r.quote_followup_sms_failed_at ?? null,
+      contactId: r.contact_id,
+      contactEmail: r.contacts?.email ?? null, contactPhone: r.contacts?.phone ?? null,
+      brandName: brandDisplayName(info.branding), branding: info.branding,
+      accountTimezone: info.accountTimezone, fromEmail: info.fromEmail, replyToEmail: info.replyToEmail,
+      body: auto.body, config,
+    },
+  };
+}
+
+/** Send-then-stamp. One quote follow-up per opportunity, EVER — re-arming
+ *  when a card re-enters the stage is recorded out of scope for v1. */
+export async function stampQuoteFollowupSent(db: SupabaseClient, opportunityId: string): Promise<void> {
+  const { error } = await db.from("opportunities")
+    .update({ quote_followup_sent_at: new Date().toISOString() })
+    .eq("id", opportunityId);
+  if (error) throw new Error(`stampQuoteFollowupSent failed: ${error.message}`);
+}
+
+/** The ATTEMPT marker, read back by the pass for SMS_RETRY_COOLDOWN_MS. */
+export async function stampQuoteFollowupSmsFailed(db: SupabaseClient, opportunityId: string): Promise<void> {
+  const { error } = await db.from("opportunities")
+    .update({ quote_followup_sms_failed_at: new Date().toISOString() })
+    .eq("id", opportunityId);
+  if (error) throw new Error(`stampQuoteFollowupSmsFailed failed: ${error.message}`);
+}
+
+export async function countQuoteFollowupsSince(
+  db: SupabaseClient, accountId: string, sinceIso: string,
+): Promise<number> {
+  const { count, error } = await db.from("opportunities")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId)
+    .gte("quote_followup_sent_at", sinceIso);
+  if (error) throw new Error(`countQuoteFollowupsSince failed: ${error.message}`);
   return count ?? 0;
 }
 
