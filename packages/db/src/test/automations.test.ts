@@ -952,9 +952,11 @@ describe("referral ask — data layer", () => {
       await setBookingStatus(db, accountId, b.id, "completed", "user_test");
       expect((await getDueReferralAskById(db, b.id)).due?.bookingId).toBe(b.id);
 
-      // Straight to the column: `upsertAutomation` validates on write, and
-      // the case being proved is a row that went bad UNDER the app (an older
-      // shape, a hand-edited jsonb, a config written before a parser change).
+      // Straight to the column: the SETTINGS ACTION validates on write, not
+      // `upsertAutomation` itself (a bare upsert, automations.ts:46-62); this
+      // test writes the raw column on purpose, so the case being proved is a
+      // row that went bad UNDER THE APP (an older shape, a hand-edited jsonb,
+      // a config written before a parser change).
       await db.from("automations").update({ config: { channel: "fax" } })
         .eq("account_id", accountId).eq("recipe_key", "referral_ask");
       expect(await getDueReferralAskById(db, b.id)).toEqual({ due: null, why: "off" });
@@ -1288,8 +1290,9 @@ describe("reactivation — data layer", () => {
       expect((await listDueReactivations(db, now.toISOString())).map((r) => r.contactId)).toContain(contactId);
       expect((await getDueReactivationById(db, contactId)).due?.contactId).toBe(contactId);
 
-      // Straight to the column: `upsertAutomation` validates on write, and
-      // the case being proved is a row that went bad UNDER the app.
+      // Straight to the column: the SETTINGS ACTION validates on write, not
+      // `upsertAutomation` itself (a bare upsert, automations.ts:46-62); the
+      // case being proved is a row that went bad UNDER THE APP.
       await db.from("automations").update({ config: { months: 99 } })
         .eq("account_id", accountId).eq("recipe_key", "reactivation");
       // Mutation: restore `?? { months: REACTIVATION_DEFAULT_MONTHS }` in

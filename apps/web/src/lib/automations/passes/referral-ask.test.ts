@@ -164,6 +164,14 @@ describe("THE LADDER — never two rungs on one morning", () => {
     dbMocks.listDueReferralAsks.mockResolvedValue([row({ reviewRequestedAt: "2027-09-24T13:05:00.000Z" })]);
     expect(await referralAskPass.run(ctx())).toEqual({ ...EMPTY, waitingForMorning: 1 });
     expect(smsSend).not.toHaveBeenCalled();
+    // THE NORMAL-TICK HALF of `referral-ask.ts`'s guarded logSkipped: a tick
+    // that refuses writes NOTHING, because the row is simply due again
+    // tomorrow morning and a log row per morning per booking would fill the
+    // Activity page with the automation thinking. (The release half — the
+    // same refusal writing exactly one "No longer due" — is pinned in the
+    // release describe below.) Mutation: make that write unconditional by
+    // dropping its `if (opts.released)` → this case reds.
+    expect(skippedReasons()).toEqual([]);
     dbMocks.listDueReferralAsks.mockResolvedValue([row({ reviewRequestedAt: "2027-09-23T14:05:00.000Z" })]);
     expect(await referralAskPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
   });

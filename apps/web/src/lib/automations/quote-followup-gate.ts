@@ -25,6 +25,13 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * and back into it during the hold has a brand-new `stage_changed_at`, and
  * chasing it at noon is exactly the setting the operator wrote down being
  * ignored (audit B's I3).
+ *
+ * The band is therefore a GUARDED REFUSAL (`if (!opts.skipBand && !isInMorningBand(...)) return false`),
+ * the shape the other four release-aware gates use, and not an early
+ * `return true` on the release path: a rule appended to the bottom of this
+ * function must run on BOTH paths, and under the early return a release
+ * would have silently skipped it. Same verdicts, one less way to get the
+ * next amendment wrong.
  */
 export function shouldSendQuoteFollowupNow(
   now: Date, stageChangedAt: Date, quietDays: number, timezone: string,
@@ -37,6 +44,6 @@ export function shouldSendQuoteFollowupNow(
 
   const zone = resolveAccountZone(timezone);
   if (zone === null) return false;   // never skipped: a release with no zone is still no hour
-  if (opts.skipBand) return true;
-  return isInMorningBand(now, zone);
+  if (!opts.skipBand && !isInMorningBand(now, zone)) return false;
+  return true;
 }

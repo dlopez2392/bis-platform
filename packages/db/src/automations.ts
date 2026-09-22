@@ -270,6 +270,18 @@ export async function getDueReviewRequestById(db: SupabaseClient, bookingId: str
   if (!data) return { due: null, why: "gone" };
   const auto = await enabledRecipeFor(db, (data as any).account_id, "review_request");
   if (!auto) return { due: null, why: "off" };
+  // A STORED CONFIG THAT NO LONGER PARSES IS `off` FOR A RELEASE, and saying
+  // so HERE is what keeps a released row from parking. On a normal tick the
+  // pass is silent on `config === null` (the channel is unknown before the
+  // config parses, so there is no subject to write against) and that is
+  // right — the row is simply examined again next tick. A RELEASED row given
+  // the same silence keeps its past `held_until` and is handed back every
+  // tick for ever, the parked-row bug. Answering `off` sends
+  // `releaseReviewRequest` down its existing `REASONS.recipeOff` path, which
+  // writes a real row and takes the hold out of the queue. Same shape as
+  // `getDueReferralAskById`, and the reason the pass's `config === null`
+  // branch is unreachable on a release.
+  if (parseReviewRequestConfig(auto.config) === null) return { due: null, why: "off" };
   const { sendable, accountInfo } = await loadSendableRows(db, [data as { account_id: string }], "getDueReviewRequestById");
   if (sendable.length === 0) return { due: null, why: "off" };
   return { due: toDueReviewRequest(data, accountInfo.get((data as any).account_id)!, auto) };
@@ -421,6 +433,18 @@ export async function getDueNoShowNudgeById(db: SupabaseClient, bookingId: strin
   if (!data) return { due: null, why: "gone" };
   const auto = await enabledRecipeFor(db, (data as any).account_id, "no_show_nudge");
   if (!auto) return { due: null, why: "off" };
+  // A STORED CONFIG THAT NO LONGER PARSES IS `off` FOR A RELEASE, and saying
+  // so HERE is what keeps a released row from parking. On a normal tick the
+  // pass is silent on `config === null` (the channel is unknown before the
+  // config parses, so there is no subject to write against) and that is
+  // right — the row is simply examined again next tick. A RELEASED row given
+  // the same silence keeps its past `held_until` and is handed back every
+  // tick for ever, the parked-row bug. Answering `off` sends
+  // `releaseNoShowNudge` down its existing `REASONS.recipeOff` path, which
+  // writes a real row and takes the hold out of the queue. Same shape as
+  // `getDueReferralAskById`, and the reason the pass's `config === null`
+  // branch is unreachable on a release.
+  if (parseNoShowNudgeConfig(auto.config) === null) return { due: null, why: "off" };
   const { sendable, accountInfo } = await loadSendableRows(db, [data as { account_id: string }], "getDueNoShowNudgeById");
   if (sendable.length === 0) return { due: null, why: "off" };
   return { due: toDueNoShowNudge(data, accountInfo.get((data as any).account_id)!, auto) };

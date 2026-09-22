@@ -359,6 +359,21 @@ describe("no-show nudge — quiet hours and release", () => {
     }));
   });
 
+  it("characterises the silent branch the data layer's parse guard makes unreachable", async () => {
+    // A due row whose `config` is null CANNOT come out of
+    // `getDueNoShowNudgeById` — it answers `why: "off"` for a config that
+    // will not parse, which is the case above. Forced here, the pass takes
+    // its silent `config === null` branch and writes NOTHING, which is right
+    // on a normal tick and would park a released row for ever. This case
+    // stays green; it is the thing that goes green-for-the-wrong-reason if
+    // anyone removes that guard, and the guard's own RED lives in the db
+    // suite (`by id, a no-show-nudge config that no longer parses answers
+    // 'off'`). No mutation is prescribed here for that reason.
+    dbMocks.getDueNoShowNudgeById.mockResolvedValue({ due: row({ config: null }) });
+    expect(await releaseNoShowNudge(ctx(), heldRow("email"))).toBe("skipped");
+    expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
+  });
+
   it("the booking page switched off: a skipped row 'The booking page is switched off'", async () => {
     dbMocks.listDueNoShowNudges.mockResolvedValue([row({ calendarEnabled: false })]);
     await noShowNudgePass.run(ctx());

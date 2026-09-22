@@ -91,6 +91,10 @@ describe("when a quote follow-up may go", () => {
     expect(shouldSendQuoteFollowupNow(utcMorning, ago(5 * DAY), 3, "UTC")).toBe(true);   // the positive control
     for (const junk of ["Mars/Olympus", "", "  ", "x".repeat(65), "America/Nowhere"]) {
       expect(shouldSendQuoteFollowupNow(utcMorning, ago(5 * DAY), 3, junk), junk).toBe(false);
+      // Release path too: a junk zone is still no hour even with the band
+      // skipped. Mutation: hoist the zone check inside `if (!opts.skipBand)
+      // { ... }` -> this reds.
+      expect(shouldSendQuoteFollowupNow(utcMorning, ago(5 * DAY), 3, junk, { skipBand: true }), junk).toBe(false);
     }
     expect(shouldSendQuoteFollowupNow(NOW, new Date(NOW.getTime() + DAY), 3, ZONE)).toBe(false);
     expect(shouldSendQuoteFollowupNow(NOW, new Date("nonsense"), 3, ZONE)).toBe(false);

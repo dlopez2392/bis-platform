@@ -153,6 +153,19 @@ describe("the referral ask is the ladder's third rung", () => {
     expect(send({ now: utcMorning, zone: "UTC" })).toBe(true);  // the positive control
     for (const junk of ["Mars/Olympus", "", "  ", "x".repeat(65), "America/Nowhere"]) {
       expect(send({ now: utcMorning, zone: junk }), junk).toBe(false);
+      // Release path too: a junk zone is still no hour even with the band
+      // skipped. followup/reviewed/reviewOn neutralised so this isolates the
+      // zone check from rules 4 and 5's OWN independent refusals. Mutation:
+      // hoist the whole zone-dependent chain (rule 2's band AND rule 3's
+      // strictly-earlier-day check on the anchor) inside `if (!opts.skipBand)
+      // { ... }` -> this reds. (Hoisting the null-check alone does not: rule
+      // 3's `isStrictlyEarlierLocalDay` re-resolves and re-guards the zone on
+      // its own, unlike `quote-followup-gate.ts`, which has no second
+      // zone-dependent check to fall back on.)
+      expect(send({
+        now: utcMorning, zone: junk, skipBand: true,
+        followup: null, reviewed: null, reviewOn: false,
+      }), junk).toBe(false);
     }
     expect(send({ anchor: new Date(NOW.getTime() + 3600_000) })).toBe(false);
     expect(send({ reviewed: new Date("nonsense") })).toBe(false);
