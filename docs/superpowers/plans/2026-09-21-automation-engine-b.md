@@ -1136,8 +1136,14 @@ describe("appointment confirm — data layer", () => {
       expect(ids).toContain(inside.id);
       expect(ids).toContain(lowerEdge.id);
       expect(ids).toContain(upperEdge.id);
-      expect(ids).not.toContain(tooSoon.id);     // Mutation: move the start to 46h
-      expect(ids).not.toContain(tooFar.id);      // Mutation: move the end to 49h
+      // The mutation that reds these is one to the QUERY's bounds, NOT one to
+      // the constants: both edge fixtures are derived FROM
+      // APPOINTMENT_CONFIRM_WINDOW_START_MS/_END_MS, so moving the start to
+      // 46h moves `tooSoon` with it and this case stays green — only the
+      // separate constants pin above (this describe block's first case) reds
+      // that. Mutate the QUERY instead.
+      expect(ids).not.toContain(tooSoon.id);     // Mutation: windowStart − 1h in the due-list query
+      expect(ids).not.toContain(tooFar.id);      // Mutation: windowEnd + 1h in the due-list query
       expect(ids).not.toContain(asked.id);
       expect(ids).not.toContain(cancelled.id);
 
@@ -1271,7 +1277,7 @@ Expected: vitest's summary block reports all three files green. Then run EACH pr
 | swap `loadSendableRows` for `loadAccountBrandInfo` in `listDueAppointmentConfirms` | `routes every due-list, and every by-id release lookup, through loadSendableRows` |
 | delete `.normalize("NFC")` from `matchConfirmationReply` | `reads a DECOMPOSED sí — the form some phone keyboards actually send` |
 | replace the set membership test with `cleaned.includes(...)` | `reads NOTHING out of a sentence that merely contains the word` |
-| move the window start to 46h / the end to 49h | `listDueAppointmentConfirms: enabled, booked, starting 47h–48h15m out, unasked → due; edges inclusive` |
+| subtract 1h from `windowStart` / add 1h to `windowEnd` in the due-list query | `listDueAppointmentConfirms: enabled, booked, starting 47h–48h15m out, unasked → due; edges inclusive` (moving the CONSTANTS instead moves the `tooSoon`/`tooFar` fixtures with them and cannot red this case — only the describe block's own constants-pin case reds that) |
 | add a `.is("confirm_sms_failed_at", null)` predicate to the due-list | same case (the `lowerEdge` expectation) |
 | order `starts_at` descending in `applyConfirmationReply`'s lookup | `applyConfirmationReply writes the answer on the SOONEST unanswered ask, and nothing else` |
 | drop the `.gt("starts_at", …)` filter / drop the `confirm_asked_at` filter | same case |
@@ -5645,8 +5651,11 @@ describe("quote follow-up — data layer", () => {
     ]) {
       expect(parseQuoteFollowupConfig(bad), JSON.stringify(bad)).toBeNull();
     }
-    // Mutation: drop the uuid regex → the "Quoted" row reds, and a stage NAME
-    // would reach `.in("stage_id", …)` and 400 the whole tick.
+    // Mutation: drop the uuid regex → the ""-stageId row reds FIRST (an empty
+    // string still passes the remaining checks once the regex is gone), and
+    // the "Quoted" row also catches it — but the "" row is the guard; a later
+    // reader must not delete it believing "Quoted" alone covers this. A stage
+    // NAME reaching `.in("stage_id", …)` would 400 the whole tick.
   });
 
   it("an open deal parked in the configured stage past the quiet days is due; one that moved, closed, or was answered is not", async () => {
@@ -5663,6 +5672,14 @@ describe("quote follow-up — data layer", () => {
 
       const now = new Date("2027-10-20T12:00:00Z");
       const DAY = 24 * HOUR;
+      // THE CEILING IS PINNED HERE, not by the `tooOld` fixture below: that
+      // fixture is written as `now - QUOTE_FOLLOWUP_MAX_AGE_MS - MINUTE`, so
+      // WIDENING the constant moves the fixture with it and the row stays out
+      // — "widen QUOTE_FOLLOWUP_MAX_AGE_MS" cannot red a derived fixture.
+      // This line is what reds it, the way the sms reminder pins its own
+      // window (`SMS_REMINDER_WINDOW_START_MS`/`_END_MS`, this file's own
+      // shape at the equivalent pin elsewhere in this suite).
+      expect(QUOTE_FOLLOWUP_MAX_AGE_MS).toBe(30 * DAY);
       await upsertAutomation(db, accountId, "quote_followup",
         { enabled: true, body: "", config: { stageId: quoted.id, quietDays: 3, channel: "sms" } }, "user_test");
 
@@ -5724,7 +5741,7 @@ describe("quote follow-up — data layer", () => {
       expect(ids).toContain(atBound.oppId);
       expect(ids).toContain(wroteBefore.oppId);      // Mutation: `return !replied;` (drop the `<=` comparison) → this reds
       expect(ids).not.toContain(tooFresh.oppId);     // Mutation: query `now` instead of `quietCutoff` → this reds and nothing else does
-      expect(ids).not.toContain(tooOld.oppId);       // Mutation: widen QUOTE_FOLLOWUP_MAX_AGE_MS
+      expect(ids).not.toContain(tooOld.oppId);       // Mutation: drop the `.gte("stage_changed_at", oldest)` floor
       expect(ids).not.toContain(elsewhere.oppId);    // Mutation: drop the stage filter
       expect(ids).not.toContain(won.oppId);          // Mutation: drop the status filter
       expect(ids).not.toContain(stamped.oppId);
@@ -5792,7 +5809,13 @@ Then the by-id lookup's live `off` case, appended to the third `describe` in `pa
       await db.from("opportunities").update({ stage_id: stageId }).eq("id", oppId);
 
       expect(await getDueQuoteFollowupById(db, oppId)).toEqual({ due: null, why: "off" });
-      // Mutation: return the row before `enabledRecipeFor` → this reds.
+      // Mutation: answer `why: "gone"` from the `!auto` branch of
+      // getDueQuoteFollowupById → this reds. ("return the row before
+      // `enabledRecipeFor`" cannot be written: with the recipe off there is
+      // no automation row, hence no config, hence nothing to build a
+      // DueQuoteFollowup from — the hoisted return has nothing to return. This
+      // pins that the releaser writes a different sentence for `off` than for
+      // `gone`.)
       await upsertAutomation(db, accountId, "quote_followup",
         { enabled: true, body: "", config: { stageId, quietDays: 3, channel: "email" } }, "user_test");
       const found = await getDueQuoteFollowupById(db, oppId);
@@ -6138,6 +6161,8 @@ export const releaseQuoteFollowup: Releaser = async (ctx, row) => {
 
 `saveQuoteFollowupAction` — agency-gated; ONE `parseQuoteFollowupConfig({ stageId, quietDays: Number(...), channel })`, then branch on WHY it failed, which is the review-request action's own shape (`actions.ts:46-48`: one parse, then the specific messages, most specific first): an empty `stage_id` with `enabled` returns `m["automations.quoteFollowup.stageRequired"]`; a `quiet_days` outside the range returns `m["automations.quoteFollowup.quietDaysInvalid"]`; anything else that failed to parse returns `m["automations.quoteFollowup.saveFailed"]`. Store the PARSED config, not the raw form values — the same reason that action gives at `actions.ts:50-53`.
 
+> **OPEN — danlo's decision, not applied.** As prescribed above and as shipped, an operator who fills body + days, forgets the stage, leaves `enabled` OFF and saves gets the generic `m["automations.quoteFollowup.saveFailed"]` ("Could not save quote follow-ups.") with no clue what is missing — reachable on a first visit, since `stageRequired` only fires when `enabled` is on. `stageRequired`'s own copy reads "…before turning this on.", which is why the branch was not widened unilaterally. Two options, undecided: widen the `stageRequired` branch to fire on any empty stage regardless of `enabled`, or add a second, toggle-neutral string for the off-and-empty case. This note does not change the prescription above.
+
 `page.tsx` — one more `getAutomation`, plus `listPipelinesWithStages(db, accountId).catch(…) => []` in the same `Promise.all` with its own log line, and the card last. Positional bindings in the same positions.
 
 **`page.test.ts` needs four edits before the page compiles under it, all of them the same trap and all of them silent until the file runs:**
@@ -6146,7 +6171,7 @@ export const releaseQuoteFollowup: Releaser = async (ctx, row) => {
 - add `vi.mock("./quote-followup-card", …)` with its own `captured` slot, the shape the other five use (`:56-70`);
 - the comment at `:199` says "the four `getAutomation` calls". After part B there are eight. Correct the number rather than leaving a comment that names a count the page no longer has.
 
-Card tests: the stage select lists the account's stages; the missing-stage notice renders when the stored id is absent **and does not render when it is present** (a one-sided assertion here would pass against a notice that always renders); the no-stages state disables submit.
+Card tests: **the stage select's option list is NOT assertable here.** Radix mounts `SelectContent` in a portal only while the menu is open, so `renderToStaticMarkup` emits a bare `<select aria-hidden="true" name="stage_id"></select>` with no options — a `toContain` on a stage name would pass by accident of some other string and reds nothing real; it FAILS against a correct card, not a broken one. What `renderToStaticMarkup` CAN assert, and what this card's tests assert instead, is control presence: the select is named (`toContain('name="stage_id"')`) when the account has stages, and is replaced by prose (`data-testid="quote-followup-no-stages"`) when it has none. The actual option list — that the menu lists the account's REAL stages and the picked one round-trips — is Playwright's, in `apps/web/e2e/automations-b.spec.ts` ("the quote follow-up stage menu lists the account's real stages, and the one the operator picks round-trips"). Also: the missing-stage notice renders when the stored id is absent **and does not render when it is present** (a one-sided assertion here would pass against a notice that always renders); the no-stages state disables submit.
 
 - [ ] **Step 8: Run, mutate, commit**
 
@@ -6163,8 +6188,8 @@ pnpm --filter web exec vitest run src/lib/automations src/lib/email src/app/api/
 | remove `latestInboundByContact` from the releaser | the quiet-re-check release case |
 | change `elapsedMs < quietDays * DAY_MS` to `<=` in `shouldSendQuoteFollowupNow` | `goes once the deal has sat for the configured days, and not a minute before` |
 | hard-code `"America/Chicago"` in `shouldSendQuoteFollowupNow` instead of reading `timezone` | `reads the ACCOUNT's zone, not the machine's: the same instant sends in Chicago and waits in Los Angeles` |
-| drop the uuid regex from `parseQuoteFollowupConfig` | the db suite's `"Quoted"` row |
-| set `RELEASERS.quote_followup` to `null` | the release suite's "every part B source has a REAL releaser" case — it COMPILES, so nothing else moves |
+| drop the uuid regex from `parseQuoteFollowupConfig` | the db suite's `""`-stageId row (first) and its `"Quoted"` row (also) |
+| set `RELEASERS.quote_followup` to `null` | `release-held.test.ts`'s `"only the three non-releasable sources map to null — every recipe source has a real releaser"` case — it lists NULLS by name and reds the instant `quote_followup` joins them. `"every part B source has a REAL releaser, not the `null` the type would accept"` catches the same mutation too, but the null-set case above is the stronger one and is the contract if the two ever disagree. |
 | delete `quote_followup` from `RELEASERS` | `pnpm --filter web typecheck`, TS2741 |
 | change `QUOTE_FOLLOWUP_MAX_QUIET_DAYS` to 21 | the copy's day-range case |
 
