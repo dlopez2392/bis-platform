@@ -1,6 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { deleteAccountCascade } from "../account-teardown";
-import { DEMO_ACCOUNT_NAME } from "../demo/fiction";
 
 /**
  * `withTestAccount` deletes its account in a `finally`, which covers a failing
@@ -35,46 +34,65 @@ export interface SweepCandidate {
 }
 
 /**
- * The two account names a killed run can strand, and the ONLY names this
- * sweep will consider. Each still has to clear the `org_test_` check below —
- * the name narrows the query, the org id prefix is what proves the row is
- * ours.
- *
- * `DEMO_ACCOUNT_NAME` was the gap. demo-seed.test.ts seeds the whole demo
- * tenant under a throwaway `org_test_demoseed_<random>` org and tears it down
- * in a `finally`, so a killed or timed-out run leaves a full Resaca Air
- * account behind — and it is NOT called "Fixture Co", so the sweep walked
- * straight past it. Five of them were sitting in the production project on
- * 2026-09-17, from three CI runs that failed within half an hour, with
- * nothing in the system that would ever have reclaimed them. Imported from
- * the fiction module rather than written out, so renaming the demo tenant
- * cannot silently reopen the gap.
- *
- * The REAL demo tenant is safe by construction: it is `org_demo_resaca_air`,
- * which fails the `org_test_` prefix. That is the whole reason the seeder's
- * org id is injectable, and the reason this sweep keys on the id rather than
- * on the name it shares with its own throwaway copies.
- */
-const SWEEPABLE_NAMES: readonly string[] = ["Fixture Co", DEMO_ACCOUNT_NAME];
-
-/**
  * Whether a row is beyond doubt an abandoned fixture.
  *
- * Three conditions, and ALL of them have to hold, because the cost of a false
- * positive here is deleting a real tenant's account from the production
- * database:
+ * TWO conditions, and both have to hold, because the cost of a false positive
+ * here is deleting a real tenant's account from the production database:
  *
- *   - one of the two names a fixture can carry (SWEEPABLE_NAMES), and
- *   - the `org_test_` prefix it generates its clerk org id with — a real
- *     account's id comes from Clerk and never looks like this, so the pair
- *     rules out a genuine business that happens to be called Fixture Co, and
+ *   - the `org_test_` prefix that every test in this repo generates its clerk
+ *     org id with, and
  *   - older than any run that could still be using it.
+ *
+ * The name is NOT one of them, and that is the point of this rewrite.
+ *
+ * ── Why the name list had to go ────────────────────────────────────────────
+ * This predicate used to carry a third condition: the row's name had to be in
+ * a two-entry `SWEEPABLE_NAMES` list. That list was the gap TWICE, in the
+ * same week, for the same structural reason — the list lived here while the
+ * names were invented somewhere else, sometimes in another package entirely,
+ * by someone with no reason to know this file exists.
+ *
+ *   2026-09-17 — the demo tenant. demo-seed.test.ts seeds the whole Resaca
+ *   Air account under a throwaway org, and the account is NOT called
+ *   "Fixture Co", so the sweep walked straight past it. Five of them were
+ *   sitting in the production project, from three CI runs that failed inside
+ *   half an hour. The fix then was to add `DEMO_ACCOUNT_NAME` to the list.
+ *
+ *   2026-09-20 → 22 — `Fixture Co (call proposals)`. The call-proposals suite
+ *   in apps/web rolls its own throwaway account, one name over from the
+ *   harness's. `org_test_3gbbpohe` was created on 2026-09-20 16:28 and was
+ *   still there two days later, walked past by every sweep in between. The
+ *   returning-lead test's own comment records ELEVEN of its accounts piling
+ *   up once, for the same reason.
+ *
+ * Adding a third name would have fixed neither the fourth nor the seven that
+ * a `createAccount(` grep on 2026-09-22 actually found. So the list is gone
+ * and the rule is the org-id prefix alone.
+ *
+ * ── Why the prefix alone is safe ───────────────────────────────────────────
+ * ASSUMPTION, not a repo-verified invariant: a Clerk-issued org id is `org_`
+ * plus an alphanumeric suffix and therefore cannot contain `test_`. Nothing
+ * in this repo validates the shape of a Clerk org id — `createAccount` passes
+ * Clerk's `org.id` straight through — so this is reasoning about Clerk's
+ * format, not an enforced constraint. The live check that backs it today:
+ * on 2026-09-22 the project held 6 accounts, of which exactly two matched
+ * `clerk_org_id like 'org_test_%'` and both were stranded fixtures (none had
+ * a null org id, and none carried `test` anywhere else in the id).
+ *
+ * Everything that must survive fails the prefix by construction:
+ *   - The REAL demo tenant is `org_demo_resaca_air` — which is exactly why
+ *     the seeder's org id is injectable, and why this sweep keys on the id
+ *     rather than on the name it shares with its own throwaway copies.
+ *   - Every real business gets its id from Clerk.
+ * And everything that must be reclaimed carries it, including the cases the
+ * name list kept missing: the demo seeder's throwaway copies are
+ * `org_test_demoseed_<random>`, so dropping `DEMO_ACCOUNT_NAME` from here
+ * loses nothing — the prefix still covers them.
  *
  * Pure, and exported, so the judgement that decides what gets deleted is
  * tested directly rather than only through a live database.
  */
 export function isAbandonedFixture(row: SweepCandidate, now: number): boolean {
-  if (!SWEEPABLE_NAMES.includes(row.name)) return false;
   if (!row.clerk_org_id?.startsWith("org_test_")) return false;
   const created = Date.parse(row.created_at);
   if (Number.isNaN(created)) return false;
@@ -84,29 +102,35 @@ export function isAbandonedFixture(row: SweepCandidate, now: number): boolean {
 /**
  * Deletes every abandoned fixture account, and returns what it removed.
  *
- * Filtered in JS rather than in the query on purpose: `isAbandonedFixture` is
- * then the single place the rule lives, and the one place a test has to cover.
+ * Returns the name alongside the id so the one line this prints into a CI log
+ * is readable by a human: an id alone says a row went away, `name (id)` says
+ * WHICH suite is being killed mid-run, which is the thing actually worth
+ * knowing when the sweep speaks up.
+ *
+ * Age is still filtered in JS rather than in the query on purpose:
+ * `isAbandonedFixture` is then the single place the rule lives, and the one
+ * place a test has to cover.
  */
 export async function sweepAbandonedFixtures(
   db: SupabaseClient, now: number = Date.now(),
-): Promise<string[]> {
+): Promise<{ id: string; name: string }[]> {
   const { data, error } = await db.from("accounts")
     .select("id, name, clerk_org_id, created_at")
-    // `in`, not `eq` — the demo-seed test's throwaway account carries the
-    // demo tenant's name, and an `eq("Fixture Co")` here would filter it out
-    // in the QUERY, before isAbandonedFixture ever saw it. The predicate is
-    // still the single place the rule lives; this list only has to be no
-    // narrower than the predicate.
-    .in("name", SWEEPABLE_NAMES);
+    // No name filter, and there must never be one again — a name filter here
+    // would reintroduce the exact gap the predicate above just closed, in the
+    // one place a test of the predicate cannot see. This narrows on the org
+    // id only, which is the predicate's own first condition, so the query
+    // stays no narrower than the predicate.
+    .like("clerk_org_id", "org_test_%");
   // Fail loud rather than silently sweeping nothing — a cleanup that quietly
   // stops working is how the rows accumulated in the first place.
   if (error) throw new Error(`sweepAbandonedFixtures: accounts query failed: ${error.message}`);
 
-  const swept: string[] = [];
+  const swept: { id: string; name: string }[] = [];
   for (const row of (data ?? []) as SweepCandidate[]) {
     if (!isAbandonedFixture(row, now)) continue;
     await deleteAccountCascade(db, row.id, "sweepAbandonedFixtures");
-    swept.push(row.id);
+    swept.push({ id: row.id, name: row.name });
   }
   return swept;
 }

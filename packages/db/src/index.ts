@@ -126,3 +126,15 @@ export {
 } from "./call-proposals";
 export * from "./voice-web-sessions";
 export * from "./concierge";
+
+// The account-teardown cascade. Exported not for the app — nothing in
+// apps/web's PRODUCTION code should ever delete an account this way — but for
+// apps/web's own tests, which create throwaway accounts against the shared
+// Supabase project and until now each hand-maintained a private copy of the
+// FK-ordered delete list. Both copies had already drifted (the returning-lead
+// one omitted `messages`/`conversations` after M1c started creating them, and
+// 11 orphaned accounts accumulated in the shared project before anyone
+// noticed). `packages/db`'s test fixtures are not a public subpath, which is
+// why those copies existed; this list is not a fixture, it is the schema's own
+// FK order, and there is now exactly one of it.
+export { deleteAccountCascade, ACCOUNT_OWNED_TABLES } from "./account-teardown";
