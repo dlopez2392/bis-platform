@@ -334,7 +334,7 @@ describe("an inbound text that is a one-word answer", () => {
     expect(answeredAt).toBeGreaterThan(filedAt);
   });
 
-  it("NEVER sends a text back — the route is a recorder", async () => {
+  it("NEVER sends anything back — the route is a recorder", async () => {
     dbMocks.applyConfirmationReply.mockResolvedValue("yes");
     const res = await POST(inbound("yes"));
     expect(res.status).toBe(200);

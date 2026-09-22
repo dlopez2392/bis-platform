@@ -2392,7 +2392,7 @@ describe("an inbound text that is a one-word answer", () => {
     expect(answeredAt).toBeGreaterThan(filedAt);
   });
 
-  it("NEVER sends a text back — the route is a recorder", async () => {
+  it("NEVER sends anything back — the route is a recorder", async () => {
     dbMocks.applyConfirmationReply.mockResolvedValue("yes");
     const res = await POST(inbound("yes"));
     expect(res.status).toBe(200);
@@ -2512,7 +2512,7 @@ Expected: the summary block reports the file green. Run each prescribed mutation
 | move the new block ABOVE `createMessage` | `records the answer AFTER the message is filed, and sends nothing` |
 | drop the try/catch around `applyConfirmationReply` | `a failure recording the answer is CONTAINED — the customer's message is filed and the outer catch never sees it` (the log-line pair; the status and the two call counts all stay true, which is why they are not the evidence) |
 | move the new block ABOVE the alert-phone guard | `a text from the account's own alert phone never reaches the matcher` |
-| add any outbound send to `handleInbound` | `NEVER sends a text back — the route is a recorder` |
+| add any outbound send to `handleInbound` | `NEVER sends anything back — the route is a recorder` |
 
 - [ ] **Step 5: The operator sees the answer (bis-booking's two files)**
 
