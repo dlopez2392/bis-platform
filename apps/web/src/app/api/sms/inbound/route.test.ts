@@ -354,12 +354,27 @@ describe("an inbound text that is a one-word answer", () => {
     // customer confirmed" is exactly the feature someone adds here next, and
     // sendAlertSms is the one-call helper they would reach for.
     //
-    // Every sender that lives in a LIBRARY lives under `@/lib/sms` or
-    // `@/lib/automations`, so those two roots cannot rot when an eighth send
-    // function is named. `sendSmsAction` keeps its name because it is the one
-    // sender that is not in a library at all: it is a server action in the
-    // conversations route group (conversations/actions.ts:112), and dropping
-    // it would have been a strict loss against the four-name form.
+    // Every sender that lives in a LIBRARY lives under `@/lib/sms`,
+    // `@/lib/automations` or `@/lib/email`, so those three roots cannot rot
+    // when an eighth send function is named. `sendSmsAction` keeps its name
+    // because it is the one sender that is not in a library at all: it is a
+    // server action in the conversations route group
+    // (conversations/actions.ts:112), and dropping it would have been a
+    // strict loss against the four-name form.
+    //
+    // `@/lib/email` is in here because spec decision 6 is "no send of ANY
+    // kind", not "no text back". Its recorded reasoning — a second outbound
+    // costs a message, risks a loop against the carrier's own STOP handling,
+    // and makes this webhook a sender rather than a recorder — is about the
+    // outbound existing at all, and an emailed "your customer confirmed"
+    // alert is the same failure over a different transport. Also MEASURED: a
+    // real `getEmailProvider().send({...})` in handleInbound left this file
+    // 15/15 green while the guard named only the two SMS roots. The one
+    // import this could ever obstruct is `originFrom` from
+    // `@/lib/email/origin`, which an inbound SMS recorder has no use for; if
+    // some later task genuinely needs it, a deliberate carve-out with a
+    // comment beats a gap nobody noticed, which is what the four-name
+    // deny-list turned out to be.
     //
     // Three `toContain`s rather than one alternating regex on purpose: the
     // failure names WHICH root was crossed, and an escaped-slash regex
@@ -370,6 +385,7 @@ describe("an inbound text that is a one-word answer", () => {
       new URL("./route.ts", import.meta.url), "utf8");
     expect(routeSource).not.toContain('from "@/lib/sms');
     expect(routeSource).not.toContain('from "@/lib/automations');
+    expect(routeSource).not.toContain('from "@/lib/email');
     expect(routeSource).not.toContain("sendSmsAction");
   });
 
