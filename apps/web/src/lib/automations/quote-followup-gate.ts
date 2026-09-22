@@ -27,7 +27,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * ignored (audit B's I3).
  *
  * The band is therefore a GUARDED REFUSAL (`if (!opts.skipBand && !isInMorningBand(...)) return false`),
- * the shape the other three release-aware gates use, and not an early
+ * the shape the other four release-aware gates use, and not an early
  * `return true` on the release path: a rule appended to the bottom of this
  * function must run on BOTH paths, and under the early return a release
  * would have silently skipped it. Same verdicts, one less way to get the

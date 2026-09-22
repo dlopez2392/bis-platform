@@ -90,9 +90,11 @@ describe("the recipe lookups: `off` until the recipe is on, `gone` in the wrong 
       await setBookingStatus(db, accountId, bookingId, "completed", "user_test");
       expect((await getDueReviewRequestById(db, bookingId)).due?.bookingId).toBe(bookingId);
 
-      // Straight to the column: `upsertAutomation` validates on write, and
-      // the case being proved is a row that went bad UNDER the app (an older
-      // shape, a hand-edited jsonb, a config written before a parser change).
+      // Straight to the column: the SETTINGS ACTION validates on write, not
+      // `upsertAutomation` itself (a bare upsert, automations.ts:46-62); this
+      // test writes the raw column on purpose, so the case being proved is a
+      // row that went bad UNDER THE APP (an older shape, a hand-edited jsonb,
+      // a config written before a parser change).
       await db.from("automations").update({ config: { channel: "fax", reviewUrl: "https://g.page/r/x/review" } })
         .eq("account_id", accountId).eq("recipe_key", "review_request");
       // `off`, not merely null: the releaser writes a different sentence for
@@ -124,7 +126,8 @@ describe("the recipe lookups: `off` until the recipe is on, `gone` in the wrong 
       expect((await getDueNoShowNudgeById(db, bookingId)).due?.bookingId).toBe(bookingId);
 
       // Same reasoning as the review request above: written under the app,
-      // not through `upsertAutomation`, which validates on write.
+      // not through the settings action, which validates on write —
+      // `upsertAutomation` itself is a bare upsert (automations.ts:46-62).
       await db.from("automations").update({ config: { channel: "fax" } })
         .eq("account_id", accountId).eq("recipe_key", "no_show_nudge");
       expect(await getDueNoShowNudgeById(db, bookingId)).toEqual({ due: null, why: "off" });
