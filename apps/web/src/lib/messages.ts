@@ -965,6 +965,14 @@ export const m = {
   "voice.textback.defaultBodyNoNameEn": "Sorry we missed you just now, reply here and we'll help.",
   "voice.textback.defaultBodyEs": "Hola, somos {name}. No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
   "voice.textback.defaultBodyNoNameEs": "No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
+  // Same class of note as `automations.optOutCounted` (the count above
+  // includes a sentence not shown in the textarea/placeholder) but worded
+  // WITHOUT quoting the English disclosure verbatim: this card's preview
+  // language switches with the operator's `languages` selection
+  // (previewLanguage, voice-settings.tsx), and a Spanish preview counts
+  // "Responde STOP para cancelar." — a note that named the English sentence
+  // there would be describing text nobody is about to receive.
+  "voice.textback.optOutCounted": "Every text ends with an opt-out line. That sentence is included in the count above.",
   "voice.profile.save": "Save voice profile",
   "voice.profile.saved": "Voice profile saved",
   "voice.profile.saveFailed": "Could not save the voice profile.",
