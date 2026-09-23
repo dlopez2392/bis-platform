@@ -1279,10 +1279,13 @@ describe("reactivation — data layer", () => {
       // reliable: the candidate read is platform-wide (`.in("account_id",
       // <every enabled account>)`), so a conversation left by a concurrent
       // run could otherwise land between these three and push the customer
-      // past page 3. Nothing else in this project carries a 2020 timestamp,
-      // so these three are the first three rows of an oldest-first walk.
-      // (The db suite also runs ONE AT A TIME across implementers — the
-      // slot — which is the backstop, not the guarantee.)
+      // past page 3. Superseded: this is no longer the only 2020(-adjacent)
+      // timestamp in the file — the starvation case below writes 2019 rows —
+      // so these three are the first three rows of an oldest-first walk only
+      // because no OTHER case in this file dates a row between 2019-01-01 and
+      // 2020-03-01. Runs of this file must not overlap for that reason, on
+      // top of the db suite's own ONE-AT-A-TIME-across-implementers slot,
+      // which is the backstop, not the guarantee.
       await mk("Leadone", new Date("2020-01-01T12:00:00Z"), false);
       await mk("Leadtwo", new Date("2020-02-01T12:00:00Z"), false);
       const customer = await mk("Customer", new Date("2020-03-01T12:00:00Z"), true);

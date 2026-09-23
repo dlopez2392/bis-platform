@@ -1474,14 +1474,13 @@ export async function listDueReactivations(
       });
 
       if (surviving.length > 0) {
-        // NO CAST on `surviving`. The loader below is generic over
+        // NO CAST on `surviving`. `loadSendableRows` below is generic over
         // `T extends { account_id: string }` (`booking.ts`), so casting the
         // argument to `{ account_id: string }[]` pins `T` to exactly that
         // and erases `contact_id`, `id` and `last_message_at` from
-        // `sendable`. (The loader is deliberately not NAMED in this comment:
-        // `outbound-suppressed.test.ts` strips comments and counts CALL
-        // SITES per function, so a comment carrying the name would not
-        // satisfy that count with the call itself deleted.)
+        // `sendable`. (Naming it here is harmless: `outbound-suppressed.test.ts`
+        // strips comments before counting CALL SITES per function, so this
+        // mention could never stand in for the real call below.)
         const { sendable, accountInfo } = await loadSendableRows(
           db, surviving, "listDueReactivations");
 

@@ -362,10 +362,14 @@ describe("the operator's own words", () => {
  * under CAN-SPAM (the orchestrator's reading, not a lawyer's) needs the
  * sender's postal address and a working opt-out — here, a reply that reaches
  * the BUSINESS. The save refuses to turn the recipe on without either, but
- * either can be cleared on the Branding page afterwards, so the pass checks
- * again before every send, on a normal tick AND on a release (the releaser
- * runs the same loop). Logged with a client-readable reason, never sent,
- * never stamped — the contact stays due for the day the field is filled in.
+ * either can be cleared afterwards, so the pass checks again before every
+ * send (`passes/reactivation.ts:89-108`). ON A NORMAL TICK this check is a
+ * BACKSTOP: `listDueReactivations` already leaves an account missing either
+ * out of its walk, so no row of such an account reaches the pass here. It
+ * BITES on a RELEASE, because `getDueReactivationById` is deliberately
+ * unfiltered, so a held row whose address was cleared during the hold does
+ * reach this check. Logged with a client-readable reason, never sent, never
+ * stamped — the contact stays due for the day the field is filled in.
  */
 describe("the check-in never goes without a postal address and a reply-to", () => {
   const ADDRESS_REASON = "The company's mailing address isn't set";

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { missingForReactivation as fromDb } from "@bis/db";
 import { shouldSendReactivationNow, missingForReactivation } from "./reactivation-gate";
+import { normalizeReplyTo } from "@/lib/email/reply-to";
 
 const ZONE = "America/Chicago";
 const WEST = "America/Los_Angeles";
@@ -87,5 +88,25 @@ describe("what a reactivation email cannot go without", () => {
         .toEqual({ mailingAddress: false, replyTo: true });
     }
     expect(missingForReactivation(null, null)).toEqual({ mailingAddress: true, replyTo: true });
+  });
+
+  /**
+   * THE TWO MUST AGREE (automations.ts:1191-1195): `missingForReactivation`'s
+   * `replyTo` judgement and `normalizeReplyTo` — the send path's own rule for
+   * "no address" (`apps/web/src/lib/email/reply-to.ts`) — decide "blank" on
+   * the same input independently, one in packages/db and one in web, because
+   * packages/db cannot import web. This is the parity check: for every shape,
+   * the gate says missing exactly when the send path would omit the header.
+   *
+   * Mutation: change the db rule to `replyTo: !replyToEmail` (drop the
+   * `.trim()`) → this reds BY NAME, because `normalizeReplyTo("  ")` is
+   * `undefined` (missing) while `!replyToEmail` on `"  "` is `false` (not
+   * missing) — the two disagree on a padded string.
+   */
+  it("agrees with normalizeReplyTo on every shape — one rule, not two", () => {
+    for (const v of [null, "", "  ", " \t", "ops@example.com"]) {
+      expect(missingForReactivation("x", v).replyTo, JSON.stringify(v))
+        .toBe(normalizeReplyTo(v) === undefined);
+    }
   });
 });
