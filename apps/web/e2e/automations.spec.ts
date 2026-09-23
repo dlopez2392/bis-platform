@@ -146,11 +146,11 @@ test.describe("the Automations page — Milestone B cards", () => {
     await page.getByRole("option", { name: "Text message" }).click();
     // TWO, and that is the counter telling the truth: MEASURED for the
     // fixture's 25-character brand name, the default plus the booking link
-    // plus the opt-out sentence is 171 septets on a localhost:3000 origin and
-    // 173 on app.bis-rgv.com — two segments on any origin longer than ten
-    // characters. The character count depends on the origin the server
-    // resolves (APP_ORIGIN, else the request's host), so only the message
-    // count is asserted.
+    // plus the opt-out sentence is 171–172 septets depending on the origin's
+    // scheme on a localhost:3000 origin and 173 on app.bis-rgv.com — two
+    // segments on any origin longer than ten characters. The character count
+    // depends on the origin the server resolves (APP_ORIGIN, else the
+    // request's host), so only the message count is asserted.
     await expect(noShow.getByTestId("no-show-sms-count")).toContainText("2 message(s)");
 
     const reminder = page.getByTestId("sms-reminder-card");
