@@ -222,6 +222,11 @@ export const m = {
   "accounts.empty.body": "Add your first company to start tracking contacts and deals.",
   "accounts.created": "Added {date}",
   "accounts.createFailed": "Could not create that company. Check the name and try again.",
+  // The three refusals createClientAccount RETURNS for the create dialog to
+  // show, instead of the generic line above — each names what to change.
+  "accounts.nameRequired": "Enter a business name.",
+  "accounts.timezoneUnusable": "\"{zone}\" is not a timezone we can use. Use a zone name like America/Chicago.",
+  "accounts.createRefusedTestOrgId": "Could not create that company. Clerk gave it an id we keep for test data, and those are deleted automatically within the hour. Nothing was saved. Try again, and tell the BIS team if it happens twice.",
   "accounts.status.active": "Active",
   "accounts.status.paused": "Paused",
   "accounts.status.archived": "Archived",
