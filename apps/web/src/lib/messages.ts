@@ -434,6 +434,15 @@ export const m = {
   "contact.noOpportunities": "None yet.",
   "contact.noName": "(no name)",
 
+  // The "No marketing emails" switch (drawer + full contact page, migration
+  // 0049). Flipped by the operator when a customer replies "stop" to a
+  // check-in or a referral ask; those two are the only emails it holds back.
+  "contact.marketingOptOut.label": "No marketing emails",
+  "contact.marketingOptOut.hint": "Check-ins and referral asks won't be emailed to this contact. Quotes and appointment emails still go.",
+  "contact.marketingOptOut.onToast": "Marketing emails turned off for this contact",
+  "contact.marketingOptOut.offToast": "Marketing emails turned back on for this contact",
+  "contact.marketingOptOut.failed": "Couldn't save that — please try again.",
+
   // The contact drawer's recent-activity feed (Task 2's summary route,
   // Task 6's drawer). "{outcome}"/"{name}"/"{value}" are the house
   // {placeholder} convention (see setup.progress above) — the route

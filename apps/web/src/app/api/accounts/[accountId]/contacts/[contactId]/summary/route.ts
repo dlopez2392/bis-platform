@@ -18,6 +18,10 @@ export type ContactSummary = {
     label: string;
     at: string;
   }[];
+  /** `contacts.marketing_email_opted_out_at` (0049), for the drawer's "No
+   *  marketing emails" switch. Read here rather than off the list row because
+   *  a deep link to a contact on another page has only a stub row. */
+  marketing_email_opted_out_at: string | null;
 };
 
 const RECENT_LIMIT = 5;
@@ -79,6 +83,10 @@ export async function GET(
   // Epoch-ms sort — sources return mixed lexical ISO forms (+00:00 vs .000Z)
   items.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
 
-  const body: ContactSummary = { tags, recent: items.slice(0, RECENT_LIMIT) };
+  const body: ContactSummary = {
+    tags,
+    recent: items.slice(0, RECENT_LIMIT),
+    marketing_email_opted_out_at: contact.marketing_email_opted_out_at ?? null,
+  };
   return NextResponse.json(body);
 }

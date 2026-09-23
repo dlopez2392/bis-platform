@@ -98,6 +98,7 @@ let pipelineId = "";
 let scrollCheckId = "";
 const seededTagName = "vip-e2e";
 let callLinkContactId = "";
+let optOutId = "";
 
 /**
  * Makes `beforeAll` below safe to run more than once against the SAME
@@ -113,7 +114,7 @@ let callLinkContactId = "";
  * owns an opportunity/pipeline/tag/call/phone_number on it, and none of the
  * first names deleted below collide with what TEST BODIES create live
  * through the UI ("Drawer", "Tag", "Bulk" — never "Deeplink", "SpaceKey",
- * "Retry", "BulkGate", "CallLink", or "Paging"). FK order matters:
+ * "Retry", "BulkGate", "CallLink", "Paging" or "OptOut"). FK order matters:
  * opportunities reference contacts with NO `on delete` clause (migration
  * 0003_crm_core.sql) and the pipeline, so they must go first; pipelines
  * cascade their own stages.
@@ -131,7 +132,7 @@ async function clearOwnFixtures(db: ReturnType<typeof serviceDb>, accId: string)
   if (numErr) throw new Error(`contacts-drawer e2e: pre-clean phone_numbers failed: ${numErr.message}`);
   const { error: contactErr } = await db.from("contacts").delete()
     .eq("account_id", accId)
-    .in("first_name", ["Deeplink", "SpaceKey", "Retry", "BulkGate", "CallLink", "Paging", "ScrollCheck"]);
+    .in("first_name", ["Deeplink", "SpaceKey", "Retry", "BulkGate", "CallLink", "Paging", "ScrollCheck", "OptOut"]);
   if (contactErr) throw new Error(`contacts-drawer e2e: pre-clean contacts failed: ${contactErr.message}`);
 }
 
@@ -244,6 +245,12 @@ test.beforeAll(async () => {
   for (let i = 1; i <= 5; i++) {
     await addNote(db, accountId, scrollCheckId, `Scroll check note ${i}`, ACTOR);
   }
+
+  // Addition I: a contact for the "No marketing emails" switch (0049). Its
+  // own row, so ticking it never changes what any other test here reads.
+  optOutId = (await createContact(
+    db, accountId, { firstName: "OptOut", lastName: "Target" }, ACTOR,
+  )).id;
 });
 
 test.afterAll(async () => {
@@ -395,6 +402,39 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     // locator resolves to nothing. Assert straight on the reopened drawer.
     await page.reload();
     await expect(page.getByRole("dialog").getByText("Painted Proof LLC")).toBeVisible();
+  });
+
+  test("No marketing emails: tick saves for real - reload proves it - untick clears it", async ({ page }) => {
+    const optedOutAt = async () => {
+      const { data, error } = await serviceDb().from("contacts")
+        .select("marketing_email_opted_out_at").eq("id", optOutId).single();
+      if (error) throw new Error(`contacts-drawer e2e: read opt-out failed: ${error.message}`);
+      return (data as { marketing_email_opted_out_at: string | null }).marketing_email_opted_out_at;
+    };
+    const box = () => page.getByRole("dialog")
+      .getByRole("checkbox", { name: m["contact.marketingOptOut.label"] });
+
+    await page.goto(`${base()}/contacts?q=OptOut`);
+    await page.getByRole("row").filter({ hasText: "OptOut Target" }).first().click();
+    await expect(box()).toHaveAttribute("aria-checked", "false");
+
+    await box().click();
+    // The toast only appears once the action has resolved, so the write has
+    // landed before the reload below (and before the db read).
+    await expect(page.getByText(m["contact.marketingOptOut.onToast"])).toBeVisible();
+    expect(await optedOutAt()).not.toBeNull();
+
+    // `?peek=` is still on the URL, so the reload re-opens the same drawer
+    // (the inline-edit test above says why a row re-click would hang); the
+    // box's state now comes from the server, not from the click.
+    await expect(page).toHaveURL(/[?&]peek=/);
+    await page.reload();
+    await expect(box()).toHaveAttribute("aria-checked", "true");
+
+    await box().click();
+    await expect(page.getByText(m["contact.marketingOptOut.offToast"])).toBeVisible();
+    await expect(box()).toHaveAttribute("aria-checked", "false");
+    expect(await optedOutAt()).toBeNull();
   });
 
   test("keyboard: focused row opens on Enter, arrows move focus", async ({ page }) => {

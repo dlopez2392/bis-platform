@@ -4,7 +4,8 @@ vi.mock("@/lib/auth", () => ({
   requireAccountAccess: async () => ({ userId: "user_1", isAgency: true }),
 }));
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
-vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+const revalidatePath = vi.fn();
+vi.mock("next/cache", () => ({ revalidatePath }));
 
 const dbMocks = {
   updateContact: vi.fn(), deleteContacts: vi.fn(),
@@ -13,10 +14,14 @@ const dbMocks = {
   // createContact, addTagToContact, etc. — stub them all or the module
   // import throws. Read the file's import list and cover it.
   createContact: vi.fn(),
+  setMarketingEmailOptOut: vi.fn(),
 };
 vi.mock("@bis/db", () => dbMocks);
 
-const { updateContactFieldAction, bulkDeleteContactsAction, bulkAddTagAction, bulkRemoveTagAction } = await import("./actions");
+const {
+  updateContactFieldAction, bulkDeleteContactsAction, bulkAddTagAction, bulkRemoveTagAction,
+  setMarketingEmailOptOutAction,
+} = await import("./actions");
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -79,5 +84,48 @@ describe("bulkRemoveTagAction", () => {
     dbMocks.removeTagFromContacts.mockRejectedValue(new Error("boom"));
     const r = await bulkRemoveTagAction("a1", ["c1"], "t9");
     expect(r.ok).toBe(false);
+  });
+});
+
+/**
+ * The "No marketing emails" switch's server action. The db function
+ * (setMarketingEmailOptOut, packages/db) is what scopes the write to the
+ * account and THROWS when no row matched — another account's contact, or one
+ * deleted meanwhile — so "refuses another account's contact" here is: that
+ * throw becomes a reported failure, and nothing is revalidated as if it saved.
+ */
+describe("setMarketingEmailOptOutAction", () => {
+  it("stamps the opt-out: passes the account, the contact and `true` to the db", async () => {
+    dbMocks.setMarketingEmailOptOut.mockResolvedValue(undefined);
+    const r = await setMarketingEmailOptOutAction("a1", "c1", true);
+    expect(r).toEqual({ ok: true });
+    expect(dbMocks.setMarketingEmailOptOut).toHaveBeenCalledWith({}, "a1", "c1", true);
+  });
+  it("clears the opt-out: passes `false` through, not a truthy stand-in", async () => {
+    dbMocks.setMarketingEmailOptOut.mockResolvedValue(undefined);
+    const r = await setMarketingEmailOptOutAction("a1", "c1", false);
+    expect(r).toEqual({ ok: true });
+    expect(dbMocks.setMarketingEmailOptOut).toHaveBeenCalledWith({}, "a1", "c1", false);
+  });
+  it("revalidates the list (the drawer's rows) and the full contact page after a save", async () => {
+    dbMocks.setMarketingEmailOptOut.mockResolvedValue(undefined);
+    await setMarketingEmailOptOutAction("a1", "c1", true);
+    expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts");
+    expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts/c1");
+  });
+  it("refuses a contact of another account: the db's no-row throw is ok:false, nothing revalidated", async () => {
+    dbMocks.setMarketingEmailOptOut.mockRejectedValue(
+      new Error("setMarketingEmailOptOut: no contact c9 on account a1"),
+    );
+    const r = await setMarketingEmailOptOutAction("a1", "c9", true);
+    expect(r.ok).toBe(false);
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+  it("rejects a value that is not a real boolean WITHOUT touching the db", async () => {
+    // A server action's arguments arrive off the wire; the string "false" is
+    // truthy and would STAMP the opt-out if it reached the db as-is.
+    const r = await setMarketingEmailOptOutAction("a1", "c1", "false" as never);
+    expect(r.ok).toBe(false);
+    expect(dbMocks.setMarketingEmailOptOut).not.toHaveBeenCalled();
   });
 });
