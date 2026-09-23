@@ -126,8 +126,9 @@ describe("BookingsList — the confirmation answer", () => {
   });
 
   /**
-   * The pill IS a `Badge`, and its colours ARE `STATUS_TREATMENTS` — not a
-   * partial reimplementation that matches by eye. The hand-rolled version
+   * The pill IS a `Badge` (through the shared `DotPill`), and a yes's colours
+   * ARE `STATUS_TREATMENTS.sent` — not a partial reimplementation that
+   * matches by eye (a NO has its own warning treatment, below). The hand-rolled version
    * this replaced carried `inline-flex items-center gap-1.5 rounded-full
    * border px-2 py-0.5 text-xs` and so was missing the badge's `font-medium`,
    * `w-fit`, `shrink-0` and `whitespace-nowrap`: it rendered at normal weight
@@ -140,19 +141,40 @@ describe("BookingsList — the confirmation answer", () => {
    * chip variant's own `border-`/`bg-`/`text-` lose to these) and the
    * survivors are not guaranteed to stay contiguous.
    */
-  it("is the real Badge with the real STATUS_TREATMENTS colours — yes takes `sent`, no takes `skipped`", () => {
+  it("is the real Badge, dense, and a YES takes the history's `sent` colours", () => {
+    // Mutation: give the yes the warn treatment (or `skipped`) → reds BY NAME.
     const yes = pill(render({ ...BASE, confirm_reply: "yes", confirm_reply_at: "2026-09-29T15:05:00Z" }));
     expect(yes.tag).toContain('data-slot="badge"');
     expect(yes.tag).toContain('data-variant="chip"');
     for (const cls of ["w-fit", "shrink-0", "font-medium", "whitespace-nowrap"]) {
       expect(yes.tag).toContain(cls);
     }
+    // DENSE: the badge's own `px-2 py-0.5`, the status badge beside it on the
+    // row, not LogStatusPill's roomier `py-1 pr-2.5 pl-2`.
+    expect(yes.tag).toMatch(/\bpx-2\b/);
+    expect(yes.tag).not.toMatch(/\bpr-2\.5\b/);
     for (const cls of STATUS_TREATMENTS.sent.chip.split(" ")) expect(yes.tag).toContain(cls);
     expect(yes.dot).toContain("size-[7px]");
     expect(yes.dot).toContain(STATUS_TREATMENTS.sent.dot);
+  });
 
+  /**
+   * A NO is the one answer on this row an operator has to ACT on (call the
+   * customer, find another time), so it wears the warning treatment, not the
+   * history's `skipped`, which is the quietest thing on the row. Pinned as
+   * literals, not read off the constant, so editing the constant reds here:
+   * `--warn-bg` ground with a transparent edge and foreground ink (a sentence
+   * keeps the foreground; the ground and the dot carry the hue — Notice's own
+   * rule), `--warn` dot. Never the `bg-warning/NN` utility, a different tone.
+   */
+  it("a NO is a WARNING: the --warn-bg ground, foreground ink and a --warn dot, not the quiet `skipped` grey", () => {
+    // Mutation: give the no `STATUS_TREATMENTS.skipped` again → reds BY NAME.
     const no = pill(render({ ...BASE, confirm_reply: "no", confirm_reply_at: "2026-09-29T15:05:00Z" }));
-    for (const cls of STATUS_TREATMENTS.skipped.chip.split(" ")) expect(no.tag).toContain(cls);
-    expect(no.dot).toContain(STATUS_TREATMENTS.skipped.dot);
+    for (const cls of ["border-transparent", "bg-[var(--warn-bg)]", "text-foreground"]) expect(no.tag).toContain(cls);
+    expect(no.tag).not.toContain("text-muted-foreground");
+    expect(no.tag).not.toContain("bg-[var(--chip-bg)]");
+    expect(no.tag).not.toMatch(/bg-warning\//);
+    expect(no.dot).toContain("bg-[var(--warn)]");
+    expect(no.dot).not.toContain(STATUS_TREATMENTS.skipped.dot);
   });
 });

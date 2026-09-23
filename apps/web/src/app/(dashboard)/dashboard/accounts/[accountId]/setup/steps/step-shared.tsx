@@ -124,7 +124,7 @@ export const TONE: Record<StateKind, { marker: string; chip: string; dot: string
  *  someone else's carrier portal. */
 export function NumberChip({ e164 }: { e164: string }) {
   return (
-    <code className="rounded-[8px] border border-[var(--input-line)] bg-[var(--input-bg)] px-2 py-1 font-mono text-xs text-foreground tabular-nums">
+    <code className="rounded-[var(--radius-ctl)] border border-[var(--input-line)] bg-[var(--input-bg)] px-2 py-1 font-mono text-xs text-foreground tabular-nums">
       {e164}
     </code>
   );

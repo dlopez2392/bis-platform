@@ -91,7 +91,17 @@ they re-resolve against the accent each element inherits.
 6. Reversible actions run immediately with an undo toast; destructive actions
    confirm by typing the name. No reflexive "Are you sure?" dialogs.
 7. Loading = skeletons shaped like the content. No spinners.
-8. One primary button per view; everything else is ghost.
+8. One primary button per view; everything else is ghost. (amended 2026-09-23)
+   A view here is one decision. A settings page made of independent cards —
+   Automations is the first, with nine — is that many views stacked in a
+   column: each card owns its own server action, its own validation and its
+   own toast, and nothing on the page commits any other card's edit. Each such
+   card therefore carries exactly ONE primary Save, and the rule binds within
+   the card, not across the scroll. What the rule still forbids is a second
+   primary inside one card, and a page-level primary sitting above cards that
+   each have their own. The test: if pressing button A could write what
+   button B was going to write, they are one view and only one of them is
+   primary.
 9. Client-customer surfaces (booking page, forms, emails) always carry the
    client's logo + brand color from the theming engine. **Login is the one
    exception and carries the platform's mark and accent instead** — nobody is

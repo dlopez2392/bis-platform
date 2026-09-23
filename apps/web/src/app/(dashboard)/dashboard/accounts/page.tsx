@@ -70,7 +70,7 @@ export default async function AccountsPage() {
         {orphans.length > 0 && (
           <section className="mb-6 rounded-xl border border-[var(--warn)] bg-card px-4 py-3.5">
             <div className="flex items-start gap-3">
-              <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-[8px] bg-[var(--warn-bg)] text-[var(--warn)]">
+              <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-ctl)] bg-[var(--warn-bg)] text-[var(--warn)]">
                 <Unlink className="size-4" aria-hidden />
               </span>
               <div className="min-w-0">
@@ -112,7 +112,7 @@ export default async function AccountsPage() {
                   className="block rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3 transition-colors hover:border-[var(--accent)]"
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <span className="flex size-9 items-center justify-center rounded-[8px] bg-[var(--accent-dim)] text-[var(--accent)]">
+                    <span className="flex size-9 items-center justify-center rounded-[var(--radius-ctl)] bg-[var(--accent-dim)] text-[var(--accent)]">
                       <Building2 className="size-4" aria-hidden />
                     </span>
                     {/* DESIGN.md rule 3: status is dot + word, never the word

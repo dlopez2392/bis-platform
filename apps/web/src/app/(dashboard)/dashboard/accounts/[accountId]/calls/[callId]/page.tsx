@@ -395,7 +395,7 @@ function SummaryBlockView({ block }: { block: SummaryBlock }) {
       // Ladder step 2 (`--surface-2`), the nested-panel step, not an alpha of
       // `--muted`. NO `glass` — this sits inside `CARD`, and a second
       // `--shadow-card` inside the first doubles the ambient.
-      <p className="rounded-[8px] border border-[var(--input-line)] bg-[var(--surface-2)] px-4 py-3 font-mono text-[13px] leading-6 break-words whitespace-pre-wrap text-foreground">
+      <p className="rounded-[var(--radius-ctl)] border border-[var(--input-line)] bg-[var(--surface-2)] px-4 py-3 font-mono text-[13px] leading-6 break-words whitespace-pre-wrap text-foreground">
         {block.text}
       </p>
     );

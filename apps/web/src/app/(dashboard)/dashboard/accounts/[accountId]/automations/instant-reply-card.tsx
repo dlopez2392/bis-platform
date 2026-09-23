@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { SmsPreview } from "@/components/sms-preview";
 import { SubmitButton } from "../../submit-button";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
@@ -107,8 +108,7 @@ export function InstantReplyCard({
             <p className="text-xs text-muted-foreground">{m["automations.instantReply.messageEnHint"]}</p>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="instant-preview-en">{m["automations.instantReply.previewEn"]}</Label>
-            <output id="instant-preview-en" className="block rounded-[8px] border border-[var(--input-line)] bg-[var(--input-bg)] px-3 py-2 text-[13px]" data-testid="instant-reply-preview-en">{previewEn}</output>
+            <SmsPreview id="instant-preview-en" label={m["automations.instantReply.previewEn"]} text={previewEn} testId="instant-reply-preview-en" />
             <p className="text-xs text-muted-foreground" data-testid="instant-reply-count-en">{countText(segmentsFor(previewEn))}</p>
           </div>
 
@@ -121,8 +121,7 @@ export function InstantReplyCard({
             <p className="text-xs text-muted-foreground">{m["automations.instantReply.messageEsHint"]}</p>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="instant-preview-es">{m["automations.instantReply.previewEs"]}</Label>
-            <output id="instant-preview-es" className="block rounded-[8px] border border-[var(--input-line)] bg-[var(--input-bg)] px-3 py-2 text-[13px]" data-testid="instant-reply-preview-es">{previewEs}</output>
+            <SmsPreview id="instant-preview-es" label={m["automations.instantReply.previewEs"]} text={previewEs} testId="instant-reply-preview-es" />
             <p className="text-xs text-muted-foreground" data-testid="instant-reply-count-es">{countText(segmentsFor(previewEs))}</p>
           </div>
 

@@ -1381,6 +1381,12 @@ export const m = {
   "automations.quiet.invalidTime": "Enter both times as hours and minutes, like 9:00 PM.",
   "automations.quiet.readFailed": "Couldn't load the current quiet hours. Reload the page before changing them.",
   "automations.activityLink": "See what went out",
+  // The page's four group headings, in the order the customer lives it; the
+  // last group is the one rule that holds every automation back.
+  "automations.group.firstTouch": "When someone gets in touch",
+  "automations.group.appointment": "Around the appointment",
+  "automations.group.afterJob": "After the job",
+  "automations.group.rules": "Rules for every automation",
 
   // Part C — the Activity page, /dashboard/accounts/<id>/activity. BOTH
   // audiences: this is the record of what the system did on the client's

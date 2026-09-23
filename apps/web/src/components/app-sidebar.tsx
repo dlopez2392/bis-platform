@@ -405,7 +405,7 @@ function SidebarLink({
       // pairs anyway (naming prohibited on the generic role).
       aria-label={hasUnread ? `${item.label} (${unreadCount} unread)` : undefined}
       className={cn(
-        "relative flex items-center gap-2.5 rounded-[8px] px-2.5 py-2 text-[13.5px] font-medium transition-colors",
+        "relative flex items-center gap-2.5 rounded-[var(--radius-ctl)] px-2.5 py-2 text-[13.5px] font-medium transition-colors",
         collapsed && "justify-center px-0",
         active
           ? "bg-sidebar-accent/15 font-medium text-[var(--sidebar-text-strong)] shadow-[inset_0_1px_0_var(--sidebar-line)]"

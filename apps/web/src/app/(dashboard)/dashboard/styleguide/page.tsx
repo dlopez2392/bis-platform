@@ -25,6 +25,11 @@ import { SCREENED_REASONS, screenedClass, type ProposalStatus } from "@bis/db";
 import { CLASS_DOT } from "../screened/screened-table";
 import { STATUS_TREATMENT } from "../accounts/[accountId]/calls/[callId]/proposals";
 import { LogStatusPill } from "../accounts/[accountId]/activity/log-status-pill";
+import { CONFIRM_REPLY_TREATMENTS } from "../accounts/[accountId]/calendar/confirm-reply";
+import { DotPill } from "@/components/dot-pill";
+import { SmsPreview } from "@/components/sms-preview";
+import { withOptOut } from "@/lib/sms/opt-out";
+import { composeSmsReminder, defaultSmsReminderBody } from "@/lib/automations/sms-reminder-copy";
 import { cn } from "@/lib/utils";
 import { RailStates } from "./rail-states";
 import { SettingsFieldCards } from "./settings-field-cards";
@@ -137,6 +142,17 @@ export default async function StyleguidePage() {
           <h2 id="sg-activity-status" className="text-sm font-medium">Activity status</h2>
           <div className="flex flex-wrap gap-2">
             {(["sent", "held", "skipped", "failed"] as const).map((s) => <LogStatusPill key={s} status={s} />)}
+          </div>
+          {/* The same DotPill (components/dot-pill.tsx), `dense`, as the
+              calendar shows the customer's answer to the confirmation text:
+              a yes in the history's `sent` colours, a NO as a warning because
+              it is the one an operator must act on. Read off
+              confirm-reply.ts's own map, so this row cannot drift. */}
+          <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+            components/dot-pill.tsx · …/calendar/confirm-reply.ts
+          </p>
+          <div className="flex flex-wrap gap-2" data-testid="styleguide-confirm-reply">
+            {(["yes", "no"] as const).map((a) => <DotPill key={a} {...CONFIRM_REPLY_TREATMENTS[a]} dense />)}
           </div>
         </section>
 
@@ -280,6 +296,21 @@ export default async function StyleguidePage() {
             <label className="flex items-center gap-2 text-sm">
               <Checkbox id="sg-check" /> Checkbox
             </label>
+          </div>
+        </Section>
+
+        {/* The text a customer will receive, shown as the field it becomes:
+            the one preview box every Automations card renders. The text is
+            the text reminder's real default, built by its own composer and
+            the send path's opt-out rule, so it is exactly what goes out. */}
+        <Section title="SMS preview" file="components/sms-preview.tsx">
+          <div className="grid w-full max-w-sm gap-1.5">
+            <SmsPreview
+              id="sg-sms-preview"
+              label={m["automations.smsReminder.preview"]}
+              text={withOptOut(composeSmsReminder("Rio Roofing", "Wed, Sep 30, 12:30 PM CDT", defaultSmsReminderBody()))}
+              testId="styleguide-sms-preview"
+            />
           </div>
         </Section>
 

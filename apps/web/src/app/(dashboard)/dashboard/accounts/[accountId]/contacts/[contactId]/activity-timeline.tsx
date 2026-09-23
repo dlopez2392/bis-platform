@@ -136,7 +136,7 @@ export function ActivityTimeline({
         <form
           action={boundAddTask}
           aria-label={m["contact.tasks"]}
-          className="flex flex-wrap items-center gap-2 rounded-[8px] border border-dashed border-[var(--line-strong)] p-2"
+          className="flex flex-wrap items-center gap-2 rounded-[var(--radius-ctl)] border border-dashed border-[var(--line-strong)] p-2"
         >
           {hidden}
           <Input

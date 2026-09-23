@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { SmsPreview } from "@/components/sms-preview";
 import { SubmitButton } from "../../submit-button";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
@@ -88,8 +89,7 @@ export function SmsReminderCard({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="smsrem-preview">{m["automations.smsReminder.preview"]}</Label>
-            <output id="smsrem-preview" className="block rounded-[8px] border border-[var(--input-line)] bg-[var(--input-bg)] px-3 py-2 text-[13px]" data-testid="sms-reminder-preview">{composed}</output>
+            <SmsPreview id="smsrem-preview" label={m["automations.smsReminder.preview"]} text={composed} testId="sms-reminder-preview" />
             <p className="text-xs text-muted-foreground" data-testid="sms-reminder-count">
               {m["compose.smsSegments"]
                 .replace("{chars}", String(preview.chars))

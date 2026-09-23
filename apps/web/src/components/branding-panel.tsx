@@ -262,7 +262,7 @@ export function BrandingPanel({
                 aria-label={m["branding.color"]}
                 value={/^#[0-9a-fA-F]{6}$/.test(color) ? color : FORM_ACCENT_FALLBACK}
                 onChange={(e) => setColor(e.target.value)}
-                className="h-9 w-12 shrink-0 rounded-[8px] border border-border bg-[var(--surface-2)] p-1"
+                className="h-9 w-12 shrink-0 rounded-[var(--radius-ctl)] border border-border bg-[var(--surface-2)] p-1"
               />
             </div>
             <p className="text-xs text-muted-foreground">{copy.colorHint}</p>
@@ -366,7 +366,7 @@ export function BrandingPanel({
               <div
                 data-testid="theme-specimen"
                 style={themeStyle(previewTheme)}
-                className="flex gap-3 rounded-[8px] border border-border bg-background p-3"
+                className="flex gap-3 rounded-[var(--radius-ctl)] border border-border bg-background p-3"
               >
                 <span
                   className="flex items-center gap-2 rounded-md px-3 py-2"
@@ -439,7 +439,7 @@ export function BrandingPanel({
               <img
                 src={logoUrl}
                 alt={brandName ?? m["branding.logo"]}
-                className="max-h-12 w-auto rounded-[8px] border border-border bg-[var(--surface-2)] p-1"
+                className="max-h-12 w-auto rounded-[var(--radius-ctl)] border border-border bg-[var(--surface-2)] p-1"
               />
             ) : (
               <p className="text-sm text-muted-foreground">{m["branding.noLogo"]}</p>

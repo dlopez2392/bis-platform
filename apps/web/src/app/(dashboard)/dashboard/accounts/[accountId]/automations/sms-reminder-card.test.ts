@@ -16,9 +16,9 @@ import { SmsReminderCard } from "./sms-reminder-card";
  * body pushes the disclosed text over while the composed body stays under,
  * and the card then says "1 message" for a text that costs two.
  *
- * The two cards sit side by side and sms-reminder-card.tsx's own preview
- * comment says they must not render the same idea two ways; both count and
- * render the DISCLOSED string.
+ * The two cards sit side by side and render ONE preview component
+ * (components/sms-preview.tsx) so they cannot show the same idea two ways;
+ * both count and render the DISCLOSED string.
  */
 const ROW: AutomationRow = {
   id: "au3", account_id: "a1", recipe_key: "sms_reminder", enabled: true,

@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { SmsPreview } from "@/components/sms-preview";
 import { SubmitButton } from "../../submit-button";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
@@ -87,20 +88,16 @@ export function AppointmentConfirmCard({
             <p className="text-xs text-muted-foreground">{m["automations.appointmentConfirm.messageHint"]}</p>
           </div>
 
-          {/* The preview is `SmsReminderCard`'s block verbatim
-              (sms-reminder-card.tsx:80-88), not a bare <p>: a <Label htmlFor>
-              plus an <output id> is what NAMES the preview to a screen
-              reader and makes it a live region, and the --input-line /
-              --input-bg box is what makes it read as the text it will
-              become. Two cards side by side must not render the same idea
-              two ways. */}
+          {/* The one shared preview box (components/sms-preview.tsx), the
+              same one the text-reminder and instant-reply cards render: two
+              cards side by side must not render the same idea two ways. */}
           <div className="space-y-1.5">
-            <Label htmlFor="confirm-preview">{m["automations.appointmentConfirm.preview"]}</Label>
-            <output
+            <SmsPreview
               id="confirm-preview"
-              className="block rounded-[8px] border border-[var(--input-line)] bg-[var(--input-bg)] px-3 py-2 text-[13px]"
-              data-testid="appointment-confirm-preview"
-            >{previewText}</output>
+              label={m["automations.appointmentConfirm.preview"]}
+              text={previewText}
+              testId="appointment-confirm-preview"
+            />
             <p className="text-xs text-muted-foreground" data-testid="appointment-confirm-sms-count">
               {m["compose.smsSegments"]
                 .replace("{chars}", String(preview.chars))
