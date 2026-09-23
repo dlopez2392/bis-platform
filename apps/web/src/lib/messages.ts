@@ -131,8 +131,8 @@ export const m = {
   "branding.clientReplyToHint": "Where replies land when you email a contact, and when you reply to one of your lead alerts. Leave blank and those replies come to us instead of you.",
   "branding.badReplyTo": "Enter an email address, like hello@yourcompany.com.",
   "branding.mailingAddress": "Mailing address",
-  "branding.mailingAddressHint": "Printed at the bottom of the emails this company sends to past customers. The law asks for a real postal address on those, so use one where mail actually reaches them. A P.O. box is fine.",
-  "branding.clientMailingAddressHint": "Printed at the bottom of the emails you send to past customers. The law asks for a real postal address on those, so use one where you actually get mail. A P.O. box is fine.",
+  "branding.mailingAddressHint": "Printed at the bottom of the emails this company sends to past customers. The law asks for a real postal address on those, so use one where mail actually reaches them.",
+  "branding.clientMailingAddressHint": "Printed at the bottom of the emails you send to past customers. The law asks for a real postal address on those, so use one where you actually get mail.",
   "branding.mailingAddressTooLong": "That mailing address is too long. Keep it to 300 characters or fewer.",
   "checklist.reply_to.title": "Set a reply-to address",
   "checklist.reply_to.help": "In this company's Branding, add the address their replies should reach, and do it before setting a sending address. Until it is set, a reply lands wherever the mail came from: the BIS mailbox while they still send from the platform address, and their own sending domain once one is set — which for the send-only subdomain recommended above usually has no mailbox at all, so the reply bounces or vanishes.",
@@ -1325,10 +1325,16 @@ export const m = {
   "automations.reactivation.footerReason": "You're getting this because you've been a customer of {name}. If you'd rather not hear from us, reply and let us know.",
   "automations.reactivation.footerReasonNoName": "You're getting this because you've been a customer of ours. If you'd rather not hear from us, reply and let us know.",
   // What the card and the save say when the email has nothing to stand on.
-  // `{brandingLink}` is split out by the card and rendered as a link.
-  "automations.reactivation.missingBoth": "Check-ins can't go out yet: they need the company's mailing address, printed at the bottom of every one, and a reply-to address, so a customer who replies reaches the company. Add both on the {brandingLink} page.",
-  "automations.reactivation.missingMailingAddress": "Check-ins can't go out yet: they need the company's mailing address, printed at the bottom of every one. Add it on the {brandingLink} page.",
-  "automations.reactivation.missingReplyTo": "Check-ins can't go out yet: they need a reply-to address, so a customer who replies reaches the company. Add one on the {brandingLink} page.",
+  // `{settingsLink}` is split out by the card and rendered as a link to the
+  // Settings page, where the agency edits branding (this card is agency-only).
+  // `missing*` is the amber Notice, shown only while the recipe is saved ON;
+  // `beforeOn*` is the muted line shown while it is off or never saved.
+  "automations.reactivation.missingBoth": "Check-ins can't go out yet: they need the company's mailing address, printed at the bottom of every one, and a reply-to address, so a customer who replies reaches the company. Add both on the {settingsLink} page.",
+  "automations.reactivation.missingMailingAddress": "Check-ins can't go out yet: they need the company's mailing address, printed at the bottom of every one. Add it on the {settingsLink} page.",
+  "automations.reactivation.missingReplyTo": "Check-ins can't go out yet: they need a reply-to address, so a customer who replies reaches the company. Add one on the {settingsLink} page.",
+  "automations.reactivation.beforeOnBoth": "Before you turn this on, add the company's mailing address, printed at the bottom of every check-in, and a reply-to address, so a customer who replies reaches the company. Both are on the {settingsLink} page.",
+  "automations.reactivation.beforeOnMailingAddress": "Before you turn this on, add the company's mailing address, printed at the bottom of every check-in. It's on the {settingsLink} page.",
+  "automations.reactivation.beforeOnReplyTo": "Before you turn this on, add a reply-to address, so a customer who replies reaches the company. It's on the {settingsLink} page.",
   "automations.reactivation.needsMailingAddress": "Add the company's mailing address on the Branding page before turning this on.",
   "automations.reactivation.needsReplyTo": "Add a reply-to address on the Branding page before turning this on.",
 

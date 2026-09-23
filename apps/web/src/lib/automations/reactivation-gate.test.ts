@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { missingForReactivation as fromDb } from "@bis/db";
 import { shouldSendReactivationNow, missingForReactivation } from "./reactivation-gate";
 
 const ZONE = "America/Chicago";
@@ -53,22 +54,33 @@ describe("when a reactivation email may go", () => {
  * WHAT the reactivation email cannot go without (decision A, 2026-09-22): a
  * postal address for its footer, and a reply-to so the "reply and let us
  * know" opt-out reaches the business rather than the agency's `EMAIL_FROM`
- * mailbox. The pass, the save action and the card all ask THIS function, so
- * "blank" is decided once.
+ * mailbox. The due-list walk, the pass, the save action and the card all ask
+ * ONE function, so "blank" is decided once. Its home is `@bis/db`
+ * (`automations.ts`), because the walk lives there and packages/db cannot
+ * import web; this module re-exports it, and these cases run against the
+ * re-export.
  */
 describe("what a reactivation email cannot go without", () => {
+  it("is ONE function: this module re-exports the @bis/db rule, it does not carry a copy", () => {
+    // Mutation: replace the re-export with a local function of the same body
+    // → this reds BY NAME, and the walk and the pass can drift apart.
+    expect(missingForReactivation).toBe(fromDb);
+  });
+
   it("both present → nothing missing", () => {
     expect(missingForReactivation("123 Main St\nMcAllen, TX 78501", "owner@rioroofing.com"))
       .toEqual({ mailingAddress: false, replyTo: false });
   });
 
   it("null, empty, or blank after JavaScript's .trim() is MISSING — for each field on its own", () => {
-    // The column's CHECK (0048) judges "blank" by btrim over the same set
-    // `.trim()` strips, so the junk list includes a newline, a tab and a
-    // non-breaking space as well as spaces. Mutation: drop the `.trim()` on
+    // The column's CHECK (0048) strips EXACTLY the 25 code points `.trim()`
+    // strips, through a named character class — not `btrim`, which strips
+    // only the ASCII space (0048's header measures why) — so the junk list
+    // includes a newline, a tab and a no-break space (written `\u00A0` so the
+    // line is reviewable) as well as spaces. Mutation: drop the `.trim()` on
     // the address → the whitespace rows red BY NAME; drop the reply-to
     // judgement → the reply-to half reds.
-    for (const blank of [null, undefined, "", "   ", " \n\t  "]) {
+    for (const blank of [null, undefined, "", "   ", " \n\t\u00A0 "]) {
       expect(missingForReactivation(blank, "owner@rioroofing.com"), JSON.stringify(blank))
         .toEqual({ mailingAddress: true, replyTo: false });
       expect(missingForReactivation("123 Main St", blank), JSON.stringify(blank))

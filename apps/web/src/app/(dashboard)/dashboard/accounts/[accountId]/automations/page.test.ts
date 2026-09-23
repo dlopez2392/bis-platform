@@ -24,7 +24,13 @@ const dbMock = vi.hoisted(() => ({
   getAutomation: vi.fn(), getBranding: vi.fn(), getCalendarForAccount: vi.fn(), readQuietSettings: vi.fn(),
   listPipelinesWithStages: vi.fn(), getMailingAddress: vi.fn(),
 }));
-vi.mock("@bis/db", () => ({
+vi.mock("@bis/db", async () => ({
+  // THE REAL RULE, not a stub: the page asks `missingForReactivation` (whose
+  // home is @bis/db since the review fix of 2026-09-22; the page reaches it
+  // through reactivation-gate.ts's re-export), and the reactivation case
+  // below exists to prove the page judges "missing" exactly as the save and
+  // the pass do. A stub here would prove the stub.
+  missingForReactivation: (await vi.importActual<typeof import("@bis/db")>("@bis/db")).missingForReactivation,
   serviceDb: () => ({
     from: () => ({
       select: () => ({

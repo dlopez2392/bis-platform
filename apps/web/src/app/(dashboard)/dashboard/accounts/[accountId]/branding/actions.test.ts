@@ -97,11 +97,12 @@ describe("setBrandingAction — mailing address", () => {
   });
 
   it("clears it when the box holds only whitespace — every kind .trim() strips", async () => {
-    // Tab, line breaks, a no-break space and a byte-order mark: blank to the
-    // send path's `.trim()` and to the column's CHECK, so this must arrive as
-    // null and never be sent to the database as text.
+    // Tab, line breaks, a no-break space, a byte-order mark and an
+    // ideographic space — written as `\u` escapes so the line is reviewable:
+    // blank to the send path's `.trim()` and to the column's CHECK, so this
+    // must arrive as null and never be sent to the database as text.
     expect(await setBrandingAction("acct_1", fd({
-      brandName: "Acme Dental", mailingAddress: " \t\r\n ﻿　 ",
+      brandName: "Acme Dental", mailingAddress: " \t\r\n\u00A0\uFEFF\u3000 ",
     }))).toEqual({ ok: true });
     expect(sent().mailingAddress).toBeNull();
   });

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import "dotenv/config";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
@@ -1061,12 +1061,22 @@ describe("reactivation — the cutoff is calendar months, clamped", () => {
 });
 
 describe("reactivation — data layer", () => {
+  // THE WALK LEAVES OUT AN ACCOUNT THAT CANNOT SEND (review fix, 2026-09-22):
+  // with the recipe on but no mailing address or no reply-to, an account's
+  // rows never enter `listDueReactivations`. So every case below that expects
+  // a row to be DUE — and every negative that would otherwise be vacuous
+  // because its account was never walked at all — first gives its account
+  // both. `getDueReactivationById` (the release path) is NOT filtered, so
+  // the by-id cases do not need it.
+  const SEND_READY = { mailingAddress: "1 Fixture Way\nMcAllen, TX 78501", replyToEmail: "owner@example.com" };
+
   it("a quiet past CUSTOMER with an email is due; a quiet contact with no completed booking is NOT", async () => {
     await withTestAccount(async (db, accountId) => {
       await setBranding(db, accountId, { brandName: "Fixture Brand" }, "user_test");
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
       await upsertAutomation(db, accountId, "reactivation",
         { enabled: true, body: "", config: { months: 9 } }, "user_test");
+      await setBranding(db, accountId, SEND_READY, "user_test");
       const now = new Date("2027-09-21T12:00:00Z");
       const longAgo = new Date("2026-10-01T12:00:00Z");    // ~11.7 months, well inside 9
 
@@ -1116,6 +1126,7 @@ describe("reactivation — data layer", () => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
       await upsertAutomation(db, accountId, "reactivation",
         { enabled: true, body: "", config: { months: 9 } }, "user_test");
+      await setBranding(db, accountId, SEND_READY, "user_test");
       const now = new Date("2027-09-21T12:00:00Z");
       const cutoff = reactivationCutoff(now, 9);
 
@@ -1151,6 +1162,7 @@ describe("reactivation — data layer", () => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
       await upsertAutomation(db, accountId, "reactivation",
         { enabled: true, body: "", config: { months: 9 } }, "user_test");
+      await setBranding(db, accountId, SEND_READY, "user_test");
       const now = new Date("2027-09-21T12:00:00Z");
       const longAgo = new Date("2026-10-01T12:00:00Z");
       const { id: contactId } = await createContact(db, accountId,
@@ -1206,6 +1218,10 @@ describe("reactivation — data layer", () => {
           { enabled: true, body: "", config: { months: 18 } }, "user_test");
         await upsertAutomation(db, shortAccountId, "reactivation",
           { enabled: true, body: "", config: { months: 6 } }, "user_test");
+        // Both, or the short account leaves the walk, `widest` becomes the
+        // long account's own cutoff, and the mutation below cannot red.
+        await setBranding(db, longAccountId, SEND_READY, "user_test");
+        await setBranding(db, shortAccountId, SEND_READY, "user_test");
 
         const cal = await getOrCreateCalendar(db, longAccountId, "user_test");
         const { id: contactId } = await createContact(db, longAccountId,
@@ -1237,6 +1253,7 @@ describe("reactivation — data layer", () => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
       await upsertAutomation(db, accountId, "reactivation",
         { enabled: true, body: "", config: { months: 9 } }, "user_test");
+      await setBranding(db, accountId, SEND_READY, "user_test");
       const now = new Date("2027-09-21T12:00:00Z");
 
       // Three quiet, unstamped, emailable contacts, OLDEST FIRST. The two
@@ -1290,6 +1307,7 @@ describe("reactivation — data layer", () => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
       await upsertAutomation(db, accountId, "reactivation",
         { enabled: true, body: "", config: { months: 9 } }, "user_test");
+      await setBranding(db, accountId, SEND_READY, "user_test");
       const now = new Date("2027-09-21T12:00:00Z");
       const longAgo = new Date("2026-10-01T12:00:00Z");
       const { id: contactId } = await createContact(db, accountId,
@@ -1323,6 +1341,7 @@ describe("reactivation — data layer", () => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
       await upsertAutomation(db, accountId, "reactivation",
         { enabled: true, body: "", config: { months: 9 } }, "user_test");
+      await setBranding(db, accountId, SEND_READY, "user_test");
       const now = new Date("2027-09-21T12:00:00Z");
       const longAgo = new Date("2026-10-01T12:00:00Z");
       const { id: contactId } = await createContact(db, accountId,
@@ -1381,21 +1400,18 @@ describe("reactivation — data layer", () => {
   };
   const MAILING = "123 Main St\nMcAllen, TX 78501";
 
-  it("listDueReactivations carries the account's mailing address: null when unset, the value when set", async () => {
+  it("listDueReactivations carries the account's mailing address as stored", async () => {
     await withTestAccount(async (db, accountId) => {
       const contactId = await quietCustomer(db, accountId);
-      const now = new Date("2027-09-21T12:00:00Z").toISOString();
-      const rowOf = async () =>
-        (await listDueReactivations(db, now)).find((r) => r.contactId === contactId);
-
-      // `toBeNull`, not `toBeFalsy`: an absent field reads `undefined`, and
-      // that is the mutation this case exists to catch.
-      const unset = await rowOf();
-      expect(unset, "the fixture customer must be due").toBeDefined();
-      expect(unset!.mailingAddress).toBeNull();
-
-      await setBranding(db, accountId, { mailingAddress: MAILING }, "user_test");
-      expect((await rowOf())!.mailingAddress).toBe(MAILING);
+      // NO "null when unset" half, unlike the by-id case below: the walk
+      // leaves out an account missing its address or its reply-to (review
+      // fix, 2026-09-22), so an unset address never reaches this builder —
+      // the two cases after the by-id one pin that. Both fields, then.
+      await setBranding(db, accountId, { mailingAddress: MAILING, replyToEmail: SEND_READY.replyToEmail }, "user_test");
+      const row = (await listDueReactivations(db, new Date("2027-09-21T12:00:00Z").toISOString()))
+        .find((r) => r.contactId === contactId);
+      expect(row, "the fixture customer must be due").toBeDefined();
+      expect(row!.mailingAddress).toBe(MAILING);
     });
   });
 
@@ -1409,6 +1425,101 @@ describe("reactivation — data layer", () => {
 
       await setBranding(db, accountId, { mailingAddress: MAILING }, "user_test");
       expect((await getDueReactivationById(db, contactId)).due!.mailingAddress).toBe(MAILING);
+    });
+  });
+
+  // THE IMPORTANT FROM THE REVIEW (2026-09-22). An account with the recipe on
+  // but no mailing address or no reply-to can never send, so its rows are
+  // never stamped — and they used to survive the walk anyway (only
+  // suppression was filtered, by the loader, after the page was read). At
+  // the head of the oldest-first order they filled
+  // REACTIVATION_SURVIVOR_TARGET on every tick and starved every other
+  // account, with no error and no counter. The walk now reads both fields
+  // once, up front, and leaves such an account out of the page query.
+  it("leaves out an account with the recipe on but no mailing address — its rows cannot fill the window and starve another account's", async () => {
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db, accountB) => {
+        const now = new Date("2027-09-21T12:00:00Z");
+        for (const id of [accountA, accountB]) {
+          await upsertAutomation(db, id, "reactivation",
+            { enabled: true, body: "", config: { months: 9 } }, "user_test");
+        }
+        // A has a reply-to and NO mailing address, so it is the address alone
+        // that leaves it out. B has both.
+        await setBranding(db, accountA, { replyToEmail: SEND_READY.replyToEmail }, "user_test");
+        await setBranding(db, accountB, SEND_READY, "user_test");
+
+        // A past customer: quiet since `at`, a completed booking, an email —
+        // a row that survives every filter the walk has.
+        const pastCustomerAt = async (accountId: string, name: string, at: Date) => {
+          const cal = await getOrCreateCalendar(db, accountId, "user_test");
+          const { id } = await createContact(db, accountId,
+            { firstName: name, email: `${name.toLowerCase()}@example.com` }, "user_test");
+          const convo = await ensureConversation(db, accountId, id, "user_test");
+          const { id: msg } = await createMessage(db, accountId,
+            { conversationId: convo.id, channel: "sms", direction: "inbound", body: "hi" }, "user_test");
+          await db.from("messages").update({ created_at: at.toISOString() }).eq("id", msg);
+          await db.from("conversations").update({ last_message_at: at.toISOString() }).eq("id", convo.id);
+          const bk = await createBooking(db, accountId,
+            { calendarId: cal.id, contactId: id, startsAt: new Date(at.getTime() - HOUR), endsAt: at }, "user_test");
+          await setBookingStatus(db, accountId, bk.id, "completed", "user_test");
+          return id;
+        };
+        // 2019: older than anything else in this project (the page-walk case
+        // above uses 2020 for the same reason), so these four are the first
+        // four rows of the platform-wide oldest-first walk — A's three, then
+        // B's one.
+        const stuck = [
+          await pastCustomerAt(accountA, "Stuckone", new Date("2019-01-01T12:00:00Z")),
+          await pastCustomerAt(accountA, "Stucktwo", new Date("2019-02-01T12:00:00Z")),
+          await pastCustomerAt(accountA, "Stuckthree", new Date("2019-03-01T12:00:00Z")),
+        ];
+        const waiting = await pastCustomerAt(accountB, "Waiting", new Date("2019-04-01T12:00:00Z"));
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        try {
+          // A window of two, two rows a page, three pages of budget. Without
+          // the drop, page one is A's two oldest, both survive, the window is
+          // full, and the walk stops before B's row is ever read. Mutation:
+          // delete the drop from `listDueReactivations` → this reds BY NAME.
+          const ids = (await listDueReactivations(db, now.toISOString(),
+            { survivorTarget: 2, pageSize: 2, maxPages: 3 })).map((r) => r.contactId);
+          expect(ids).toContain(waiting);
+          for (const id of stuck) expect(ids).not.toContain(id);
+          // ONE line for the dropped account, naming it and why. (Other
+          // accounts in the shared project may log their own; only A's are
+          // counted.)
+          const aboutA = logged.mock.calls.map((c) => String(c[0])).filter((s) => s.includes(accountA));
+          expect(aboutA).toHaveLength(1);
+          expect(aboutA[0]).toContain("no mailing address");
+          expect(aboutA[0]).not.toContain("reply-to");
+        } finally {
+          logged.mockRestore();
+        }
+      });
+    });
+  });
+
+  it("leaves out an account with an address but no reply-to, and walks it once it has both — the drop is not over-broad", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const contactId = await quietCustomer(db, accountId);
+      const ids = async () =>
+        (await listDueReactivations(db, new Date("2027-09-21T12:00:00Z").toISOString())).map((r) => r.contactId);
+
+      // The reply-to half of the rule: a "reply and let us know" opt-out
+      // with nowhere to reply to. Mutation: judge the address alone → reds.
+      await setBranding(db, accountId, { mailingAddress: MAILING }, "user_test");
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        expect(await ids()).not.toContain(contactId);
+      } finally {
+        logged.mockRestore();
+      }
+
+      // Mutation: drop EVERY enabled account (an over-broad drop) → this
+      // reds BY NAME.
+      await setBranding(db, accountId, { replyToEmail: SEND_READY.replyToEmail }, "user_test");
+      expect(await ids()).toContain(contactId);
     });
   });
 
@@ -1487,12 +1598,14 @@ describe("reactivation — data layer", () => {
       const calA = await getOrCreateCalendar(db, accountA, "user_test");
       await upsertAutomation(db, accountA, "reactivation",
         { enabled: true, body: "", config: { months: 9 } }, "user_test");
+      await setBranding(db, accountA, SEND_READY, "user_test");
       const now = new Date("2027-09-21T12:00:00Z");
       const longAgo = new Date("2026-10-01T12:00:00Z");
 
       await withTestAccount(async (_db, accountB) => {
         await upsertAutomation(db, accountB, "reactivation",
           { enabled: true, body: "", config: { months: 9 } }, "user_test");
+        await setBranding(db, accountB, SEND_READY, "user_test");
         const { id: contactB } = await createContact(db, accountB,
           { firstName: "Crossed", email: "crossed@example.com" }, "user_test");
 

@@ -79,49 +79,109 @@ describe("the reactivation card", () => {
 
 /**
  * Decision A (2026-09-22): the check-in cannot go without the company's
- * postal address and a reply-to — the save refuses to turn it on and the
- * pass skips every row — so the card says so up front, names WHICH is
- * missing, and links to the page where it is fixed. A status the operator
- * must act on, so the app's one status banner (`Notice`, role="alert").
+ * postal address and a reply-to — the save refuses to turn it on, the
+ * due-list walk leaves the account out and the pass skips every row — so the
+ * card says so up front, names WHICH is missing, and links to where it is
+ * fixed.
+ *
+ * HOW LOUDLY depends on the STORED `enabled` (review minor M3, 2026-09-22),
+ * never the unsaved checkbox: amber is for something configured that is
+ * broken. Recipe ON and missing → the app's one status banner (`Notice`,
+ * role="alert"), because check-ins that should be going are not. Recipe OFF
+ * (or never saved) and missing → a muted line saying what is needed before it
+ * can be turned on; nothing is broken yet, and every account starts here.
+ * Both carry `data-testid="reactivation-missing"`.
+ *
+ * THE LINK GOES TO SETTINGS (review minor M5): this page is agency-only, and
+ * the agency edits branding on Settings (settings/page.tsx renders the
+ * BrandingPanel). The palette registry has no branding anchor on that page,
+ * so the link carries none.
  */
 describe("the reactivation card — what it cannot send without", () => {
   /** React's own text escaping, so a catalogue string can be found in markup. */
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
-  const parts = (key: "automations.reactivation.missingBoth" | "automations.reactivation.missingMailingAddress"
-    | "automations.reactivation.missingReplyTo") => m[key].split("{brandingLink}").map(esc);
-  const BRANDING_LINK = `href="/dashboard/accounts/a1/branding"`;
+  type LinkedKey =
+    | "automations.reactivation.missingBoth" | "automations.reactivation.missingMailingAddress"
+    | "automations.reactivation.missingReplyTo"
+    | "automations.reactivation.beforeOnBoth" | "automations.reactivation.beforeOnMailingAddress"
+    | "automations.reactivation.beforeOnReplyTo";
+  const parts = (key: LinkedKey) => m[key].split("{settingsLink}").map(esc);
+  const SETTINGS_LINK = `href="/dashboard/accounts/a1/settings"`;
+  const OFF: (AutomationRow | null)[] = [{ ...ROW, enabled: false }, null];
 
-  it("with both set there is NO warning", () => {
-    const html = render();
-    expect(html).not.toContain(`data-testid="reactivation-missing"`);
-    expect(html).not.toContain(`role="alert"`);
+  it("with both set there is NO warning and no line, recipe on or off", () => {
+    for (const automation of [ROW, ...OFF]) {
+      const html = render({ automation });
+      expect(html).not.toContain(`data-testid="reactivation-missing"`);
+      expect(html).not.toContain(`role="alert"`);
+    }
   });
 
-  it("no mailing address → a warn Notice that says so and links to Branding", () => {
+  it("recipe ON, no mailing address → a warn Notice that says so and links to Settings", () => {
     // Mutation: drop the mailing-address arm (render nothing for it) → this
-    // reds BY NAME.
+    // reds BY NAME. Mutation: point the link back at `/branding` → this reds.
     const html = render({ missing: { mailingAddress: true, replyTo: false } });
     expect(html).toContain(`data-testid="reactivation-missing"`);
     expect(html).toContain(`role="alert"`);
     expect(html).toContain("bg-[var(--warn-bg)]");
     for (const p of parts("automations.reactivation.missingMailingAddress")) expect(html).toContain(p);
-    expect(html).toContain(BRANDING_LINK);
-    expect(html).toContain(`>${m["nav.branding"]}</a>`);
+    expect(html).toContain(SETTINGS_LINK);
+    expect(html).toContain(`>${m["nav.settings"]}</a>`);
+    expect(html).not.toContain(`/branding"`);
   });
 
-  it("no reply-to → a warn Notice that says so and links to Branding", () => {
+  it("recipe ON, no reply-to → a warn Notice that says so and links to Settings", () => {
     // Mutation: drop the reply-to arm → this reds BY NAME.
     const html = render({ missing: { mailingAddress: false, replyTo: true } });
     expect(html).toContain(`data-testid="reactivation-missing"`);
+    expect(html).toContain(`role="alert"`);
     for (const p of parts("automations.reactivation.missingReplyTo")) expect(html).toContain(p);
-    expect(html).toContain(BRANDING_LINK);
+    expect(html).toContain(SETTINGS_LINK);
   });
 
-  it("both missing → ONE Notice naming both, not two", () => {
+  it("recipe ON, both missing → ONE Notice naming both, not two", () => {
     // Mutation: render the two single-field Notices instead → this reds.
     const html = render({ missing: { mailingAddress: true, replyTo: true } });
     for (const p of parts("automations.reactivation.missingBoth")) expect(html).toContain(p);
     expect(html.split(`data-testid="reactivation-missing"`).length - 1).toBe(1);
+  });
+
+  it("recipe OFF or never saved → a MUTED line, not a warning: what is needed before it can be turned on, linked to Settings", () => {
+    // Mutation: render the warn Notice whatever the stored setting (the shape
+    // before M3) → this reds BY NAME on `role="alert"`.
+    const cases = [
+      [{ mailingAddress: true, replyTo: false }, "automations.reactivation.beforeOnMailingAddress"],
+      [{ mailingAddress: false, replyTo: true }, "automations.reactivation.beforeOnReplyTo"],
+      [{ mailingAddress: true, replyTo: true }, "automations.reactivation.beforeOnBoth"],
+    ] as const;
+    for (const automation of OFF) {
+      for (const [missing, key] of cases) {
+        const html = render({ automation, missing });
+        const label = `${automation === null ? "never saved" : "off"}: ${key}`;
+        expect(html, label).toContain(`<p class="text-xs text-muted-foreground" data-testid="reactivation-missing">`);
+        expect(html.split(`data-testid="reactivation-missing"`).length - 1, label).toBe(1);
+        expect(html, label).not.toContain(`role="alert"`);
+        expect(html, label).not.toContain("bg-[var(--warn-bg)]");
+        for (const p of parts(key)) expect(html, label).toContain(p);
+        expect(html, label).toContain(SETTINGS_LINK);
+        expect(html, label).toContain(`>${m["nav.settings"]}</a>`);
+      }
+    }
+  });
+
+  it("recipe ON → never the muted line: the amber Notice is keyed on the STORED setting", () => {
+    // Mutation: render the muted line whatever the stored setting → this
+    // reds BY NAME. (The unsaved checkbox cannot reach this: the card reads
+    // `automation.enabled`, the row as saved.)
+    for (const missing of [
+      { mailingAddress: true, replyTo: false }, { mailingAddress: false, replyTo: true },
+      { mailingAddress: true, replyTo: true },
+    ]) {
+      const html = render({ missing });
+      expect(html, JSON.stringify(missing)).toContain(`role="alert"`);
+      expect(html, JSON.stringify(missing))
+        .not.toContain(`<p class="text-xs text-muted-foreground" data-testid="reactivation-missing">`);
+    }
   });
 });

@@ -87,6 +87,9 @@ vi.mock("@bis/db", () => ({
   reactivationCutoff: () => { throw new Error("route.test: nothing is due"); },
   stampReactivationSent: async () => { throw new Error("route.test: nothing is due"); },
   getDueReactivationById: async () => { throw new Error("route.test: nothing is held"); },
+  // Its home moved to @bis/db (review fix, 2026-09-22); the pass reaches it
+  // through reactivation-gate.ts's re-export, and only once a row is due.
+  missingForReactivation: () => { throw new Error("route.test: nothing is due"); },
   // The quote follow-up pass (part B). QUOTE_FOLLOWUP_MAX_AGE_MS is the one
   // entry this suite REQUIRES beyond the due-list: quote-followup-gate.ts
   // reads that constant at IMPORT time, and a bare factory mock throws the

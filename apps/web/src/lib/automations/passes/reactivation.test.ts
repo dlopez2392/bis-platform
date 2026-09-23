@@ -338,6 +338,23 @@ describe("the operator's own words", () => {
     expect((emailSend.mock.calls[0]![0] as Record<string, string>).body?.split("\n\n")[0])
       .toBe(m["automations.reactivation.defaultBody"].replace("{name}", "Rio Roofing"));
   });
+
+  it("composes the footer line from the ROW's brand name — and the no-name line for a blank brand, never 'a customer of .'", async () => {
+    // The template prints the line it is given (review minor M6); composing
+    // it is the pass's job, with `reactivationFooterReason(row.brandName)`,
+    // exactly as it composes the subject. The text part is body, footer
+    // line, address — so the line is the second paragraph. Mutation: pass
+    // `reactivationFooterReason("")` → the first half reds BY NAME.
+    const footerOf = () => (emailSend.mock.calls[0]![0] as Record<string, string>).body!.split("\n\n")[1];
+    dbMocks.listDueReactivations.mockResolvedValue([row()]);
+    expect(await reactivationPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
+    expect(footerOf()).toBe(m["automations.reactivation.footerReason"].replace("{name}", "Rio Roofing"));
+
+    emailSend.mockClear();
+    dbMocks.listDueReactivations.mockResolvedValue([row({ brandName: "" })]);
+    expect(await reactivationPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
+    expect(footerOf()).toBe(m["automations.reactivation.footerReasonNoName"]);
+  });
 });
 
 /**

@@ -1,4 +1,3 @@
-import { reactivationFooterReason } from "@/lib/automations/reactivation-copy";
 import { shell, escapeHtml, type EmailBrand } from "./shell";
 
 export type ReactivationEmailInput = {
@@ -17,6 +16,11 @@ export type ReactivationEmailInput = {
    *  without one, so this template never has to decide what an address-less
    *  footer would say. */
   mailingAddress: string;
+  /** The footer's first line — why they are getting this and how to stop
+   *  it — composed by the caller with `reactivationFooterReason(row.brandName)`,
+   *  for the subject's reason: the blank-brand branch lives in the copy
+   *  module, never here. Plain text; this template escapes it. */
+  footerReason: string;
 };
 
 /** Muted and small, the shell's dialect: inline style, grey, a top margin. */
@@ -43,7 +47,7 @@ export function reactivationEmail(input: ReactivationEmailInput):
     .split(/\n\s*\n/)
     .map((p) => p.trim())
     .filter(Boolean);
-  const reason = reactivationFooterReason(input.brand.name);
+  const reason = input.footerReason;
   // One line per address line, CRLF or LF, blank lines and edge whitespace
   // dropped — the same lines in both parts, joined differently.
   const addressLines = input.mailingAddress

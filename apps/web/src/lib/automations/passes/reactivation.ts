@@ -8,7 +8,7 @@ import { reactivationEmail } from "@/lib/email/templates/reactivation";
 import { resolveAccountZone } from "@/lib/booking/followup-timing";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
 import { shouldSendReactivationNow, missingForReactivation } from "../reactivation-gate";
-import { defaultReactivationBody, reactivationSubject } from "../reactivation-copy";
+import { defaultReactivationBody, reactivationSubject, reactivationFooterReason } from "../reactivation-copy";
 import { AUTOMATION_TICK_CAP, REACTIVATION_DAILY_CAP, DAILY_CAP_WINDOW_MS } from "../caps";
 import {
   holdOrSend, logSkipped, subjectOf, verdict, REASONS, type HoldSubject, type Releaser,
@@ -93,17 +93,19 @@ export async function processReactivations(
     // the agency's `EMAIL_FROM` mailbox. The save refuses to turn the recipe
     // on without both, but either can be cleared on the Branding page since.
     //
-    // Checked on a RELEASE too — `releaseReactivation` comes through this
-    // same loop, so an address cleared during a hold is caught here and the
-    // held row is re-written `skipped` rather than sent.
+    // ON A NORMAL TICK this is a BACKSTOP: `listDueReactivations` asks the
+    // same function and leaves an account missing either out of its walk
+    // (review fix, 2026-09-22), so such rows do not reach this loop and the
+    // operator's signal is the Automations card, not the Activity page.
+    // It BITES on a RELEASE — `releaseReactivation` comes through this same
+    // loop off `getDueReactivationById`, which is deliberately unfiltered,
+    // so an address cleared during a hold is caught here and the held row
+    // is re-written `skipped` with a reason the client can read.
     //
-    // BEFORE THE CAPS, on purpose. The due-list is oldest-first across every
-    // account and a row skipped here is never stamped, so it stays at the
-    // head of the list: behind the tick cap, one account with no address
-    // would spend all ten attempts every tick and starve everyone else.
-    // AFTER the band, so outside the morning nothing is logged at all.
-    // Logged every morning tick while unfixed (the upsert keeps it to one row
-    // per contact) — the Activity page is where the client reads why.
+    // BEFORE THE CAPS, on purpose: a row skipped here is never stamped, and
+    // behind the tick cap a run of them would spend all ten attempts and
+    // starve everyone else. AFTER the band, so outside the morning nothing
+    // is logged at all.
     const missing = missingForReactivation(row.mailingAddress, row.replyToEmail);
     if (missing.mailingAddress) {
       c.skippedNoMailingAddress++;
@@ -178,6 +180,9 @@ export async function processReactivations(
           brand, subject: reactivationSubject(row.brandName), body,
           // Non-null here: the check above skipped every row without one.
           mailingAddress: row.mailingAddress!,
+          // Composed here like the subject, so the blank-brand branch stays
+          // in the copy module and the template only prints.
+          footerReason: reactivationFooterReason(row.brandName),
         });
         await ctx.email.send({
           to: row.contactEmail,
