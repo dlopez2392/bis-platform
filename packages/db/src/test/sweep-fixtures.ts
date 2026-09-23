@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { deleteAccountCascade } from "../account-teardown";
+import { TEST_ORG_ID_PREFIX, isTestOrgId } from "../org-id";
 
 /**
  * `withTestAccount` deletes its account in a `finally`, which covers a failing
@@ -40,7 +41,7 @@ export interface SweepCandidate {
  * here is deleting a real tenant's account from the production database:
  *
  *   - the `org_test_` prefix that every test in this repo generates its clerk
- *     org id with, and
+ *     org id with (`../org-id.ts`, the one place that literal lives), and
  *   - older than any run that could still be using it.
  *
  * The name is NOT one of them, and that is the point of this rewrite.
@@ -78,6 +79,11 @@ export interface SweepCandidate {
  * on 2026-09-22 the project held 6 accounts, of which exactly two matched
  * `clerk_org_id like 'org_test_%'` and both were stranded fixtures (none had
  * a null org id, and none carried `test` anywhere else in the id).
+ * Since 2026-09-22 the assumption is ALSO enforced from the other side:
+ * `createClientAccount` refuses a Clerk organisation whose id passes
+ * `isTestOrgId`, deleting the organisation it had just made, so a
+ * test-shaped id can no longer become a real tenant for this sweep to find
+ * an hour later.
  *
  * Everything that must survive fails the prefix by construction:
  *   - The REAL demo tenant is `org_demo_resaca_air` — which is exactly why
@@ -102,7 +108,7 @@ export interface SweepCandidate {
  * tested directly rather than only through a live database.
  */
 export function isAbandonedFixture(row: SweepCandidate, now: number): boolean {
-  if (!row.clerk_org_id?.startsWith("org_test_")) return false;
+  if (!isTestOrgId(row.clerk_org_id)) return false;
   const created = Date.parse(row.created_at);
   if (Number.isNaN(created)) return false;
   return now - created > ABANDONED_AFTER_MS;
@@ -129,8 +135,10 @@ export async function sweepAbandonedFixtures(
     // would reintroduce the exact gap the predicate above just closed, in the
     // one place a test of the predicate cannot see. This narrows on the org
     // id only, which is the predicate's own first condition, so the query
-    // stays no narrower than the predicate.
-    .like("clerk_org_id", "org_test_%");
+    // stays no narrower than the predicate. `_` is itself a LIKE wildcard, so
+    // this pattern is a strict SUPERSET of the literal prefix — wrong in the
+    // safe direction, and `isTestOrgId` re-checks every row it returns.
+    .like("clerk_org_id", `${TEST_ORG_ID_PREFIX}%`);
   // Fail loud rather than silently sweeping nothing — a cleanup that quietly
   // stops working is how the rows accumulated in the first place.
   if (error) throw new Error(`sweepAbandonedFixtures: accounts query failed: ${error.message}`);

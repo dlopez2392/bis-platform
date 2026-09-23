@@ -4,7 +4,7 @@ import { clerkClient } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { requireAgency } from "@/lib/auth";
-import { serviceDb, createAccount, applyBlueprint, assertUsableZone } from "@bis/db";
+import { serviceDb, createAccount, applyBlueprint, assertUsableZone, isTestOrgId } from "@bis/db";
 import { NO_BLUEPRINT_SENTINEL } from "./constants";
 
 export async function createClientAccount(formData: FormData): Promise<void> {
@@ -24,10 +24,40 @@ export async function createClientAccount(formData: FormData): Promise<void> {
   const org = await clerk.organizations.createOrganization({ name, createdBy: userId });
   let id: string;
   try {
+    // Refused HERE, and deliberately not inside createAccount: this is the one
+    // door a Clerk-issued org id enters production through, while createAccount
+    // is called with an org_test_ id on purpose by every fixture in the repo,
+    // so a guard down there would fail the suites it is meant to protect.
+    // Inside the try so the compensating rollback below takes the Clerk org
+    // with it — the fixture sweep deletes any account carrying this prefix once
+    // it is an hour old (packages/db/src/test/sweep-fixtures.ts), so a
+    // test-shaped id that became a real tenant would be a business's account
+    // quietly disappearing overnight.
+    //
+    // The thrown message below is a LOG message, plainly, not operator copy:
+    // create-account-dialog.tsx:38-50 wraps this call in try/catch and toasts
+    // the generic m["accounts.createFailed"] for EVERY non-redirect error, so
+    // this text is read here and in actions.test.ts, never by the operator
+    // who hit it. Making it operator-visible would need this action to
+    // return a typed { ok:false, message } the dialog renders instead of
+    // throwing — a contract change, and a follow-up, not this fix.
+    if (isTestOrgId(org.id)) {
+      throw new Error(
+        "We could not create this account. The new organization came back with an id " +
+        "we reserve for test data, and accounts with that kind of id are deleted " +
+        "automatically an hour later. Nothing was saved. Please try again, and tell " +
+        "the BIS team if it happens twice.");
+    }
     ({ id } = await createAccount(serviceDb(), { clerkOrgId: org.id, name, timezone, actorId: userId }));
   } catch (err) {
-    // compensating rollback: never leave a Clerk org without a tenant row
-    await clerk.organizations.deleteOrganization(org.id).catch(() => {});
+    // compensating rollback: never leave a Clerk org without a tenant row.
+    // Its own failure is swallowed — `err` above is what the caller sees —
+    // but logged: a failed rollback here means the Clerk org SURVIVES while
+    // the refusal above says "Nothing was saved.", and orphans.ts can only
+    // surface that later if this log exists to find.
+    await clerk.organizations.deleteOrganization(org.id).catch((rollbackErr) => {
+      console.error(`compensating rollback failed for org ${org.id}:`, rollbackErr);
+    });
     throw err;
   }
 
