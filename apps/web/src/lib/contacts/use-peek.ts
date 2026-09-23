@@ -46,7 +46,8 @@ export function usePeek() {
   const open = useCallback((id: string) => {
     const url = new URL(window.location.href);
     url.searchParams.set(PARAM, id);
-    window.history.pushState(window.history.state, "", url);
+    // `null`, never `window.history.state`: its `__NA` makes Next's patched pushState skip telling the router (next@16.2.11 app-router.js:252-263), so the next revalidation strips ?peek=.
+    window.history.pushState(null, "", url);
     pushed.current = true;
     notify();
   }, []);
@@ -58,7 +59,8 @@ export function usePeek() {
     } else {
       const url = new URL(window.location.href);
       url.searchParams.delete(PARAM);
-      window.history.replaceState(window.history.state, "", url);
+      // `null` for the same reason as open() (next@16.2.11 app-router.js:268-279): the router must learn the stripped URL.
+      window.history.replaceState(null, "", url);
       notify();
     }
   }, []);

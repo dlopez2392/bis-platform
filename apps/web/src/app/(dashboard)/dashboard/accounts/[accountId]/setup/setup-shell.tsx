@@ -60,7 +60,8 @@ export function useSetupStep(views: SetupStepView[]) {
     if (key === selected) return;
     const url = new URL(window.location.href);
     url.searchParams.set(PARAM, key);
-    window.history.pushState(window.history.state, "", url);
+    // `null`, never `window.history.state`: its `__NA` makes Next's patched pushState skip telling the router (next@16.2.11 app-router.js:252-263), so the next router.refresh() strips ?step=.
+    window.history.pushState(null, "", url);
     notify(); // pushState does not fire popstate — subscribers must be told directly
   }, [selected]);
 

@@ -7,6 +7,7 @@ import {
 } from "@bis/db";
 import { SETUP_TICK_KEYS } from "../src/lib/setup/setup-status";
 import { m } from "../src/lib/messages";
+import { watchRouterTraffic } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process rather than through a Next request.
@@ -753,6 +754,9 @@ test.describe("the setup wizard, as the agency", () => {
     // wizard's contract restated.
     await email.click();
     await expect(paneHeading(page)).toHaveText(stepTitle("email"));
+    // Watching starts BEFORE the click, so the tick action's own request and
+    // the `router.refresh()` that follows it are both counted.
+    const traffic = watchRouterTraffic(page);
     await pane(page).getByRole("button", { name: "Skip for now" }).click();
 
     // The database, not the button. A button that changed state proves a
@@ -770,9 +774,17 @@ test.describe("the setup wizard, as the agency", () => {
       )
       .toBe(true);
 
-    // `?step=email` is in the URL from the click above, so the reload comes
-    // back on the same pane — the deep-link behaviour, used rather than
-    // separately asserted.
+    // `?step=email` was pushed shallowly by the rail click above, and the tick
+    // button's `router.refresh()` navigates to the router's canonical URL. If
+    // the router never learned the pushed URL (the `__NA` bug), that refresh
+    // strips the param and the pane jumps to the first incomplete step. Hold
+    // it until the router has settled (support.ts says why this cannot pass
+    // early), and the pane with it.
+    await traffic.expectSearchHeld(/[?&]step=email\b/);
+    await expect(page).toHaveURL(/[?&]step=email\b/);
+    await expect(paneHeading(page)).toHaveText(stepTitle("email"));
+    // Because the param survived, the reload is a deep link back onto the
+    // same pane.
     await page.reload();
     await expectRailState(email, "Skipped");
     await expect(paneHeading(page)).toHaveText(stepTitle("email"));
