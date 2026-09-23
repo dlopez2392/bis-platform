@@ -62,6 +62,52 @@ describe("withOptOut", () => {
   });
 });
 
+// Bodies that are NOT a way out yet were read as one: the dangerous direction,
+// a programme text the customer cannot leave. Each is its own named test so a
+// mutation reds on the case it breaks, and each asserts on withOptOut — the
+// disclosure IS appended — because that is the outcome that matters.
+describe("withOptOut — the instruction ends where the line ends", () => {
+  it.each([
+    ["Questions? Just reply\nStop by the shop anytime!", "en"],
+    ["Anything else, call or text\nStop in whenever you like.", "en"],
+    ["Llegamos el martes, si tienes dudas responde\nStop de camiones en la esquina.", "es"],
+    // The three above are ALSO refused by the terminator ("by", "in", "de"),
+    // so on their own they cannot pin the no-newline rule: widening `[ \t]+`
+    // to `\s+` left them green. These two carry a terminator after STOP, so
+    // the newline is the only thing that refuses them.
+    ["Any questions, just reply\nStop, drop and roll: test your smoke alarms this month.", "en"],
+    ["Questions? Just reply\nStop to see the new showroom anytime!", "en"],
+  ] as const)("a newline between the verb and STOP is two sentences: %j", (body, lang) => {
+    expect(withOptOut(body, lang)).toBe(`${body} ${m[lang === "es" ? "sms.optOut.es" : "sms.optOut.en"]}`);
+  });
+});
+
+describe("withOptOut — the instruction ends where the keyword ends", () => {
+  it.each([
+    "We will send stop-work orders tomorrow",
+    "We'll text Stop & Shop coupons weekly",
+    "Remember to text stop sign photos",
+    "send Stop signs",
+  ])("STOP followed by another word is not the keyword: %j", (body) => {
+    expect(withOptOut(body)).toBe(`${body} ${m["sms.optOut.en"]}`);
+  });
+
+  it.each(["resend STOP", "pretext stop"])("the verb must be a whole word: %j", (body) => {
+    expect(withOptOut(body)).toBe(`${body} ${m["sms.optOut.en"]}`);
+  });
+
+  it.each(["Text stopwatch", "Reply STOPALL"])("STOP must be a whole word: %j", (body) => {
+    expect(withOptOut(body)).toBe(`${body} ${m["sms.optOut.en"]}`);
+  });
+
+  it.each(["We text stop orders to the crew", "Send stop tokens by noon"])(
+    "a terminator word must be a whole word: %j",
+    (body) => {
+      expect(withOptOut(body)).toBe(`${body} ${m["sms.optOut.en"]}`);
+    },
+  );
+});
+
 describe("hasOptOutInstruction", () => {
   it("reads an instruction verb followed by STOP, in English or Spanish, any case", () => {
     for (const body of [
@@ -82,6 +128,29 @@ describe("hasOptOutInstruction", () => {
       "Replying stopped", "Please don't STOP", "Reply to stop by", "Replystop", "",
     ]) {
       expect(hasOptOutInstruction(body), body).toBe(false);
+    }
+  });
+
+  it("reads the formal Spanish imperatives, which the text-back's own default uses", () => {
+    // "responda este mensaje" (voice.textback.defaultBodyEs) is usted-form, so
+    // an operator writing in that register writes "Envíe STOP" / "Escriba STOP".
+    // Missing them costs a doubled disclosure, never a missing one.
+    for (const body of ["Envíe STOP para cancelar.", "Envie STOP para cancelar.", "Escriba STOP para cancelar."]) {
+      expect(hasOptOutInstruction(body), body).toBe(true);
+    }
+  });
+
+  it("reads STOP ended by every terminator it accepts", () => {
+    // One body per alternative, so no alternative in the terminator is
+    // unpinned: end of text, each punctuation mark, each following word.
+    for (const body of [
+      "Reply STOP", "reply stop", "Reply STOP.", "Reply STOP, and we'll stop.", "Reply STOP!",
+      "Reply STOP; that's all.", "Reply STOP: done.", "(Reply STOP)", "Reply 'STOP'.",
+      "Reply STOP to opt out.", "Text STOP to unsubscribe", "Responde STOP para cancelar.",
+      "Reply STOP or call us.", "Responde STOP o llamanos.", "Reply STOP anytime",
+      "Reply STOP at any time.", "Responde STOP en cualquier momento.",
+    ]) {
+      expect(hasOptOutInstruction(body), body).toBe(true);
     }
   });
 

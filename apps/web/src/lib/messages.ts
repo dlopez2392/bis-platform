@@ -225,7 +225,7 @@ export const m = {
   // The four refusals createClientAccount RETURNS for the create dialog to
   // show, instead of the generic line above — each names what to change.
   "accounts.nameRequired": "Enter a business name.",
-  "accounts.timezoneRequired": "Choose the business's time zone.",
+  "accounts.timezoneRequired": "Enter the business's timezone.",
   "accounts.timezoneUnusable": "\"{zone}\" is not a timezone we can use. Use a zone name like America/Chicago.",
   "accounts.createRefusedTestOrgId": "Could not create that company. Clerk gave it an id we keep for test data, and those are deleted automatically within the hour. Nothing was saved. Try again, and tell the BIS team if it happens twice.",
   "accounts.status.active": "Active",
