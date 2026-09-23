@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { REACTIVATION_MIN_MONTHS, REACTIVATION_MAX_MONTHS, REACTIVATION_DEFAULT_MONTHS } from "@bis/db";
 import { m } from "@/lib/messages";
 import { REACTIVATION_DAILY_CAP } from "./caps";
-import { defaultReactivationBody, reactivationSubject, reactivationFooterReason } from "./reactivation-copy";
+import { defaultReactivationBody, reactivationSubject } from "./reactivation-copy";
 
 /**
  * NO SEGMENT ASSERTION AND NO OPT-OUT MEASUREMENT IN THIS FILE, unlike every
@@ -61,34 +61,12 @@ describe("the reactivation check-in's copy", () => {
     expect(reactivationSubject("A $& B")).toContain("A $& B");
   });
 
-  it("the footer says WHY they are getting it and HOW TO STOP it, naming the brand — and a reply, never a link", () => {
-    // Decision A (2026-09-22): the opt-out is "reply and let us know", because
-    // the template carries no link of any kind and the recipe's whole call to
-    // action is already "reply to this email". Mutation: drop "reply" from
-    // `automations.reactivation.footerReason` → this reds BY NAME.
-    expect(reactivationFooterReason("Rio Roofing")).toBe(
-      "You're getting this because you've been a customer of Rio Roofing. "
-      + "If you'd rather not hear from us, reply and let us know.");
-    for (const name of ["Rio Roofing", ""]) {
-      const s = reactivationFooterReason(name);
-      expect(s.toLowerCase(), name).toContain("reply and let us know");
-      expect(s, name).not.toContain("http");
-      expect(s.toLowerCase(), name).not.toContain("unsubscribe");
-    }
-  });
-
-  it("the footer drops the brand clause when there is no brand name — never 'a customer of .'", () => {
-    // THE EXACT STRING, as the body's and the subject's blank-name cases
-    // above. Mutation: delete the `if (!brandName.trim())` branch in
-    // `reactivationFooterReason` → this reds BY NAME with "a customer of    .".
-    expect(reactivationFooterReason("   ")).toBe(m["automations.reactivation.footerReasonNoName"]);
-    expect(reactivationFooterReason("")).toBe(m["automations.reactivation.footerReasonNoName"]);
-    expect(reactivationFooterReason("A $& B")).toContain("a customer of A $& B.");
-  });
+  // The footer line's cases moved to `marketing-copy.test.ts` with the
+  // function (now `marketingFooterReason`), when the referral ask started
+  // printing the same line (B21, 2026-09-23).
 
   it("carries no internal milestone code and no template syntax", () => {
-    for (const s of [defaultReactivationBody("Rio Roofing"), reactivationSubject("Rio Roofing"),
-      reactivationFooterReason("Rio Roofing"), reactivationFooterReason("")]) {
+    for (const s of [defaultReactivationBody("Rio Roofing"), reactivationSubject("Rio Roofing")]) {
       expect(s).not.toMatch(/\bM\d[a-z]?\b/);
       expect(s).not.toContain("{{");
     }

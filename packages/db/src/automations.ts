@@ -1184,7 +1184,7 @@ export const REACTIVATION_CANDIDATE_LIMIT = 200;
  * One cause of starvation is NOT residual (review fix, 2026-09-22): an
  * account with the recipe on but no mailing address or no reply-to is left
  * out of the walk before the first page is read, so its rows — never sent,
- * so never stamped — cannot fill the window. That is `missingForReactivation`
+ * so never stamped — cannot fill the window. That is `missingForMarketingEmail`
  * over one up-front accounts read, not suppression's per-page filter, so the
  * suppressed-account residual above is unchanged. On the normal tick the
  * operator's signal for such an account is the Automations card, which says
@@ -1232,12 +1232,13 @@ export function reactivationCutoff(now: Date, months: number): Date {
 }
 
 /**
- * WHAT a reactivation email cannot go without (decision A, danlo,
- * 2026-09-22) — `true` means MISSING. This is the one recipe that emails
- * someone who did not just interact with the business, and its purpose is
- * winning work back: commercial email, which under CAN-SPAM (the
- * orchestrator's reading, not a lawyer's) needs a working opt-out and the
- * sender's physical postal address. So:
+ * WHAT a MARKETING email cannot go without — the reactivation check-in
+ * (decision A, danlo, 2026-09-22) and, since B21 (2026-09-23), the referral
+ * ask on the email channel. `true` means MISSING. Named
+ * `missingForReactivation` until the referral ask started asking it too.
+ * Both are commercial email, which under CAN-SPAM (the orchestrator's
+ * reading, not a lawyer's) needs a working opt-out and the sender's physical
+ * postal address. So:
  *   - `mailingAddress`: the footer prints it. Blank after JavaScript's
  *     `.trim()` is missing — the column's CHECK (0048) strips exactly that
  *     set, through a named character class.
@@ -1250,13 +1251,17 @@ export function reactivationCutoff(now: Date, months: number): Date {
  *     import web, so the rule is written inline here and THE TWO MUST AGREE:
  *     change one, change both.
  *
- * ONE RULE, ONE HOME. Asked by the due-list walk below (an account missing
- * either never enters it), the pass (skip before sending — the release path
- * reaches it that way), the save action (refuse to turn the recipe on) and
- * the Automations card (say what is missing). Web reaches it through
- * `lib/automations/reactivation-gate.ts`, which re-exports this function.
+ * ONE RULE, ONE HOME. For the check-in: asked by the due-list walk below (an
+ * account missing either never enters it), the pass (skip before sending —
+ * the release path reaches it that way), the save action (refuse to turn the
+ * recipe on) and the Automations card (say what is missing). For the
+ * referral ask, the same last three, on the email channel only; its due-list
+ * does not ask, because that list is a bounded booking window rather than a
+ * limited walk, so a skipped row cannot crowd a sendable one out. Web reaches
+ * it through `lib/automations/reactivation-gate.ts`'s re-export or straight
+ * from `@bis/db`.
  */
-export function missingForReactivation(
+export function missingForMarketingEmail(
   mailingAddress: string | null | undefined, replyToEmail: string | null | undefined,
 ): { mailingAddress: boolean; replyTo: boolean } {
   return {
@@ -1318,7 +1323,7 @@ type ReactivationCandidate = {
  *
  *   1. (once) which accounts have the recipe on, and with what config — and
  *      then (once) which of those can SEND, i.e. have a mailing address and
- *      a reply-to (`missingForReactivation`); an account that cannot is left
+ *      a reply-to (`missingForMarketingEmail`); an account that cannot is left
  *      out of every read below;
  *   2. conversations quiet since the WIDEST cutoff, oldest first, one page at
  *      a time, with `contacts!inner(...)` carrying the three contact
@@ -1420,7 +1425,7 @@ export async function listDueReactivations(
       .map((a) => [a.id, a]));
   for (const accountId of [...cutoffs.keys()]) {
     const sender = senderById.get(accountId);
-    const missing = missingForReactivation(sender?.mailing_address, sender?.reply_to_email);
+    const missing = missingForMarketingEmail(sender?.mailing_address, sender?.reply_to_email);
     if (!missing.mailingAddress && !missing.replyTo) continue;
     const why = sender === undefined
       ? "its account row was not returned"

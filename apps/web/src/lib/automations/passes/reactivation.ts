@@ -7,8 +7,9 @@ import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { reactivationEmail } from "@/lib/email/templates/reactivation";
 import { resolveAccountZone } from "@/lib/booking/followup-timing";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
-import { shouldSendReactivationNow, missingForReactivation } from "../reactivation-gate";
-import { defaultReactivationBody, reactivationSubject, reactivationFooterReason } from "../reactivation-copy";
+import { shouldSendReactivationNow, missingForMarketingEmail } from "../reactivation-gate";
+import { defaultReactivationBody, reactivationSubject } from "../reactivation-copy";
+import { marketingFooterReason } from "../marketing-copy";
 import { AUTOMATION_TICK_CAP, REACTIVATION_DAILY_CAP, DAILY_CAP_WINDOW_MS } from "../caps";
 import {
   holdOrSend, logSkipped, subjectOf, verdict, REASONS, type HoldSubject, type Releaser,
@@ -30,6 +31,15 @@ import type { Pass, PassContext } from "../context";
  *     first so nobody starves.
  *   - ONCE PER CONTACT, EVER. `contacts.reactivation_sent_at` is permanent,
  *     which is also why turning the recipe off mid-drain strands nothing.
+ *   - NEVER TO A CONTACT WHO ASKED NOT TO (0049, B21). There is NO check for
+ *     it in this pass, on purpose: both `listDueReactivations` and
+ *     `getDueReactivationById` filter `marketing_email_opted_out_at is null`
+ *     in the QUERY, so an opted-out contact never reaches this loop on a
+ *     tick or on a release (a contact who opts out during a hold answers
+ *     "no longer due"). A skip here instead would leave the row unstamped
+ *     in the walk's 50-survivor window every tick and starve other
+ *     accounts — the #118 I1 trap. The referral ask, whose due-list is a
+ *     bounded booking window, skips in its pass instead.
  *   - THE QUIET PERIOD IS CHECKED EXACTLY, HERE, before every send. The
  *     due-list's bulk message read is a bounded pre-filter against a column
  *     that can lag; this pass asks `conversationQuietSince` per row, with
@@ -106,7 +116,7 @@ export async function processReactivations(
     // behind the tick cap a run of them would spend all ten attempts and
     // starve everyone else. AFTER the band, so outside the morning nothing
     // is logged at all.
-    const missing = missingForReactivation(row.mailingAddress, row.replyToEmail);
+    const missing = missingForMarketingEmail(row.mailingAddress, row.replyToEmail);
     if (missing.mailingAddress) {
       c.skippedNoMailingAddress++;
       await logSkipped(ctx, subject, REASONS.noMailingAddress);
@@ -182,7 +192,7 @@ export async function processReactivations(
           mailingAddress: row.mailingAddress!,
           // Composed here like the subject, so the blank-brand branch stays
           // in the copy module and the template only prints.
-          footerReason: reactivationFooterReason(row.brandName),
+          footerReason: marketingFooterReason(row.brandName),
         });
         await ctx.email.send({
           to: row.contactEmail,

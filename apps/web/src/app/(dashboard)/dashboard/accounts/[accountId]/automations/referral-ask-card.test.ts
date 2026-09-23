@@ -26,8 +26,9 @@ const ROW: AutomationRow = {
 
 function render(over: Partial<Parameters<typeof ReferralAskCard>[0]> = {}): string {
   return renderToStaticMarkup(createElement(ReferralAskCard, {
-    automation: ROW, brandName: "Rio Roofing",
+    automation: ROW, brandName: "Rio Roofing", accountId: "a1",
     smsGate: { ok: true, from: "+19565550000", ownedNumbers: ["+19565550000"] },
+    missing: { mailingAddress: false, replyTo: false },
     saveAction: async () => ({ ok: true as const }),
     ...over,
   }));
@@ -75,7 +76,9 @@ describe("the referral-ask card's segment counter", () => {
     // `xmlns="http://www.w3.org/2000/svg"`, so that assertion fails on a
     // CORRECT card — measured, not guessed. The two below are bound to the
     // thing claimed: no anchor anywhere in the card, and none of the
-    // catalogue's link copy. Mutation: add a link hint line → reds.
+    // catalogue's link copy. Mutation: add a link hint line → reds. (The one
+    // anchor this card CAN carry is the Settings link in the missing-address
+    // notice below, which the default render — nothing missing — never shows.)
     const html = render();
     expect(html).not.toContain("href=");
     expect(html).not.toContain("Added to the end");
@@ -105,5 +108,90 @@ describe("the referral-ask card's segment counter", () => {
     const blocked = render({ smsGate: { ok: false, reason: "a2p_not_approved" } });
     expect(blocked).toContain("Texting is off until this company");
     expect(render()).not.toContain("Texting is off until this company");
+  });
+});
+
+/**
+ * B21 (danlo, 2026-09-23): the referral EMAIL carries the check-in's footer
+ * — the postal address and a "reply and let us know" opt-out — so it cannot
+ * go by email without the company's mailing address and a reply-to. The card
+ * says so the way the check-in's card does (reactivation-card.test.ts):
+ * saved ON by email and missing → the amber `Notice` (role="alert"), because
+ * emails that should be going are not; otherwise, with the email channel
+ * showing → a muted line saying what is needed first. Linked to Settings,
+ * where the agency edits branding. NEVER for the text channel: a text needs
+ * neither.
+ */
+describe("the referral-ask card — what the EMAIL cannot go without", () => {
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
+  type LinkedKey =
+    | "automations.referral.missingBoth" | "automations.referral.missingMailingAddress"
+    | "automations.referral.missingReplyTo"
+    | "automations.referral.beforeOnBoth" | "automations.referral.beforeOnMailingAddress"
+    | "automations.referral.beforeOnReplyTo";
+  const parts = (key: LinkedKey) => m[key].split("{settingsLink}").map(esc);
+  const SETTINGS_LINK = `href="/dashboard/accounts/a1/settings"`;
+  const TESTID = `data-testid="referral-ask-missing"`;
+  const MUTED = `<p class="text-xs text-muted-foreground" ${TESTID}>`;
+  const EMAIL_ON: AutomationRow = { ...ROW, config: { channel: "email" } };
+  // Never saved defaults to the email channel (formDefaults), so it is here.
+  const EMAIL_OFF: (AutomationRow | null)[] = [{ ...EMAIL_ON, enabled: false }, null];
+  const CASES = [
+    [{ mailingAddress: true, replyTo: false }, "MailingAddress"],
+    [{ mailingAddress: false, replyTo: true }, "ReplyTo"],
+    [{ mailingAddress: true, replyTo: true }, "Both"],
+  ] as const;
+
+  it("with both set there is NO warning and no line, on either channel, on or off", () => {
+    for (const automation of [ROW, EMAIL_ON, ...EMAIL_OFF]) {
+      const html = render({ automation });
+      expect(html).not.toContain(TESTID);
+      expect(html).not.toContain(`role="alert"`);
+    }
+  });
+
+  it("saved ON by EMAIL and missing → ONE amber Notice that says what, linked to Settings", () => {
+    // Mutation: drop the Notice branch (or any one arm of the key) → this
+    // reds BY NAME.
+    for (const [missing, arm] of CASES) {
+      const html = render({ automation: EMAIL_ON, missing });
+      expect(html, arm).toContain(`role="alert"`);
+      expect(html, arm).toContain("bg-[var(--warn-bg)]");
+      expect(html.split(TESTID).length - 1, arm).toBe(1);
+      for (const p of parts(`automations.referral.missing${arm}`)) expect(html, arm).toContain(p);
+      expect(html, arm).toContain(SETTINGS_LINK);
+      expect(html, arm).toContain(`>${m["nav.settings"]}</a>`);
+      expect(html, arm).not.toContain(MUTED);
+    }
+  });
+
+  it("EMAIL but OFF or never saved → a MUTED line, not a warning: what is needed first, linked to Settings", () => {
+    // Mutation: render the Notice whatever the stored setting → this reds
+    // BY NAME on `role="alert"`.
+    for (const automation of EMAIL_OFF) {
+      for (const [missing, arm] of CASES) {
+        const label = `${automation === null ? "never saved" : "off"}: ${arm}`;
+        const html = render({ automation, missing });
+        expect(html, label).toContain(MUTED);
+        expect(html.split(TESTID).length - 1, label).toBe(1);
+        expect(html, label).not.toContain(`role="alert"`);
+        for (const p of parts(`automations.referral.beforeOn${arm}`)) expect(html, label).toContain(p);
+        expect(html, label).toContain(SETTINGS_LINK);
+      }
+    }
+  });
+
+  it("the TEXT channel never shows either — on or off — because a text needs neither", () => {
+    // Mutation: drop the channel condition, so the notice shows for SMS too
+    // → this reds BY NAME.
+    for (const automation of [ROW, { ...ROW, enabled: false }]) {
+      for (const [missing, arm] of CASES) {
+        const html = render({ automation, missing });
+        expect(html, arm).not.toContain(TESTID);
+        expect(html, arm).not.toContain(`role="alert"`);
+        expect(html, arm).not.toContain(SETTINGS_LINK);
+      }
+    }
   });
 });

@@ -1,12 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import type { AutomationRow, ReferralAskChannel } from "@bis/db";
 import type { SmsGate } from "@/lib/sms/sender";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { Notice } from "@/components/ui/notice";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { SubmitButton } from "../../submit-button";
@@ -33,18 +35,62 @@ function formDefaults(row: AutomationRow | null): StoredForm {
   };
 }
 
+/**
+ * Which of the two things the referral EMAIL cannot go without is missing
+ * (B21) — one sentence either way, `{settingsLink}` where the catalogue says
+ * so. The reactivation card's two voices: `missing*` when the row is saved ON
+ * by email (something configured is broken — emails that should be going
+ * are not), `beforeOn*` otherwise (nothing is broken yet). Null when nothing
+ * is missing.
+ */
+function missingKey(missing: { mailingAddress: boolean; replyTo: boolean }, brokenNow: boolean) {
+  if (missing.mailingAddress && missing.replyTo) {
+    return brokenNow ? "automations.referral.missingBoth" as const : "automations.referral.beforeOnBoth" as const;
+  }
+  if (missing.mailingAddress) {
+    return brokenNow
+      ? "automations.referral.missingMailingAddress" as const
+      : "automations.referral.beforeOnMailingAddress" as const;
+  }
+  if (missing.replyTo) {
+    return brokenNow ? "automations.referral.missingReplyTo" as const : "automations.referral.beforeOnReplyTo" as const;
+  }
+  return null;
+}
+
 export function ReferralAskCard({
-  automation, brandName, smsGate, saveAction,
+  automation, brandName, accountId, smsGate, missing, saveAction,
 }: {
   automation: AutomationRow | null;
   /** Already the CUSTOMER-FACING name (brandDisplayName, page.tsx). */
   brandName: string;
+  /** For the Settings link in the missing-address/reply-to sentence. */
+  accountId: string;
   smsGate: SmsGate;
+  /** `missingForMarketingEmail` over the account's address and reply-to
+   *  (page.tsx) — the judgement the save refuses on and the pass skips on,
+   *  for the EMAIL channel only (B21). `true` = missing. */
+  missing: { mailingAddress: boolean; replyTo: boolean };
   saveAction: (formData: FormData) => Promise<ActionResult>;
 }) {
   const stored = formDefaults(automation);
   const [channel, setChannel] = useState<ReferralAskChannel>(stored.channel);
   const [body, setBody] = useState(stored.body);
+
+  // AMBER only for the row AS SAVED — on, by email — because that is the
+  // only state in which emails that should be going are not. Otherwise the
+  // muted line, and only while the select shows EMAIL: a text needs neither,
+  // so an operator on the text channel is told nothing.
+  const brokenNow = stored.enabled && stored.channel === "email";
+  const key = brokenNow || channel === "email" ? missingKey(missing, brokenNow) : null;
+  const [missingLead = "", missingTail = ""] = key ? m[key].split("{settingsLink}") : [];
+  // Settings, like the reactivation card's link: this page is agency-only and
+  // the agency edits branding there.
+  const settingsLink = (
+    <Link href={`/dashboard/accounts/${accountId}/settings`} className="underline underline-offset-2">
+      {m["nav.settings"]}
+    </Link>
+  );
 
   // NO COMPOSER AND NO LINK: this recipe asks for a name, never a rating, and
   // there is nowhere for a link to point — the pass sends `body` verbatim.
@@ -73,6 +119,18 @@ export function ReferralAskCard({
       </CardHeader>
       <CardContent>
         <form onSubmit={onSubmit} className="space-y-6">
+          {/* FIRST, above the switch, like the reactivation card's: the save
+              refuses to turn the email channel on without these, so the
+              operator reads why before reaching for the checkbox. */}
+          {key && brokenNow ? (
+            <Notice tone="warn" className="text-foreground" data-testid="referral-ask-missing">
+              {missingLead}{settingsLink}{missingTail}
+            </Notice>
+          ) : key ? (
+            <p className="text-xs text-muted-foreground" data-testid="referral-ask-missing">
+              {missingLead}{settingsLink}{missingTail}
+            </p>
+          ) : null}
           <div className="flex items-center gap-2">
             <Checkbox id="referral-enabled" name="enabled" defaultChecked={stored.enabled} />
             <Label htmlFor="referral-enabled">{m["automations.referral.enabled"]}</Label>

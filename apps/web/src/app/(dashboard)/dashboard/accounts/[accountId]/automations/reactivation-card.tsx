@@ -82,7 +82,7 @@ export function ReactivationCard({
   brandName: string;
   /** For the Settings link in the missing-address/reply-to sentence. */
   accountId: string;
-  /** `missingForReactivation` over the account's address and reply-to
+  /** `missingForMarketingEmail` over the account's address and reply-to
    *  (page.tsx) — the same judgement the save refuses on and the pass skips
    *  on (decision A, 2026-09-22). `true` = missing. */
   missing: { mailingAddress: boolean; replyTo: boolean };

@@ -1323,6 +1323,14 @@ export const m = {
   "automations.referral.save": "Save referral asks",
   "automations.referral.saved": "Referral asks saved",
   "automations.referral.saveFailed": "Could not save referral asks.",
+  // B21: the referral EMAIL carries the check-in's footer, so it needs the
+  // same two things. Saved ON by email → `missing*`; otherwise `beforeOn*`.
+  "automations.referral.missingBoth": "Referral asks can't go out by email yet: they need the company's mailing address, printed at the bottom of every one, and a reply-to address, so a customer who replies reaches the company. Add both on the {settingsLink} page.",
+  "automations.referral.missingMailingAddress": "Referral asks can't go out by email yet: they need the company's mailing address, printed at the bottom of every one. Add it on the {settingsLink} page.",
+  "automations.referral.missingReplyTo": "Referral asks can't go out by email yet: they need a reply-to address, so a customer who replies reaches the company. Add one on the {settingsLink} page.",
+  "automations.referral.beforeOnBoth": "Before these go out by email, add the company's mailing address, printed at the bottom of every one, and a reply-to address, so a customer who replies reaches the company. Both are on the {settingsLink} page.",
+  "automations.referral.beforeOnMailingAddress": "Before these go out by email, add the company's mailing address, printed at the bottom of every one. It's on the {settingsLink} page.",
+  "automations.referral.beforeOnReplyTo": "Before these go out by email, add a reply-to address, so a customer who replies reaches the company. It's on the {settingsLink} page.",
 
   // Part B — the reactivation check-in (a past customer gone quiet). EMAIL
   // ONLY, so unlike every other recipe's copy in this file there is no GSM-7
