@@ -6,6 +6,7 @@ import {
   ensureDefaultPipeline, listPipelinesWithStages,
   type RecipeKey,
 } from "@bis/db";
+import { m } from "../src/lib/messages";
 
 // Same two paths, same reason, as every spec that talks to Supabase from the
 // runner process rather than through a Next request.
@@ -152,14 +153,19 @@ test.describe("part B's recipes on the Automations page (agency)", () => {
    * server action never runs, and the assertion times out. The parser's
    * refusal is real and is proved where it can be — `actions.test.ts`, Task 8.
    * So this asserts the two things only a browser can show: that the refusal
-   * happens at all, and that a VALID non-default value round-trips.
+   * happens at all, and that a VALID non-default value round-trips. The
+   * recipe is left OFF throughout: decision A (2026-09-22) makes
+   * `saveReactivationAction` refuse `enabled=on` on an account with no
+   * mailing address, which the fixture never has (see the test below), and
+   * neither the browser's own range refusal nor the months-value round-trip
+   * needs the checkbox ticked — `upsertAutomation` writes `months`/`body`
+   * regardless of `enabled`.
    */
   test("the reactivation card refuses an out-of-range month count in the browser, and round-trips a valid one", async ({ page }) => {
     const { accountId } = fixture();
     try {
       await page.goto(`/dashboard/accounts/${accountId}/automations`);
       const card = page.getByTestId("reactivation-card");
-      await card.getByRole("checkbox").check();
       const months = card.getByLabel("Quiet for at least");
 
       // The browser's own refusal, asserted as what it is. Mutation: drop
@@ -180,6 +186,42 @@ test.describe("part B's recipes on the Automations page (agency)", () => {
       await expect(after.getByLabel("Quiet for at least")).toHaveValue("12");
       // It is a cap, so it ships with its context (DESIGN.md rule 1).
       await expect(after).toContainText("At most five a day");
+    } finally {
+      await forgetRecipe(accountId, "reactivation");
+    }
+  });
+
+  /**
+   * THE REFUSAL ITSELF, in the browser. `auth.setup.ts`'s per-run fixture
+   * account is created with `setBranding(...)` calls that never set
+   * `mailingAddress` or `replyToEmail`, so `missingForReactivation` reads
+   * both as missing for the whole life of the run UNLESS something writes
+   * one — and the only spec that does, `client-branding.spec.ts`, restores
+   * the prior (address-less) value in its own `finally` rather than leaving
+   * it set. So this test can rely on the fixture being addressless: the
+   * card's Notice renders unconditionally on load, and the save is refused
+   * with the exact string `actions.ts` returns for the FIRST thing it finds
+   * missing — the mailing address, checked before the reply-to — even though
+   * the fixture is short both.
+   */
+  test("the reactivation card shows the missing-address notice and refuses to turn the recipe on", async ({ page }) => {
+    const { accountId } = fixture();
+    try {
+      await page.goto(`/dashboard/accounts/${accountId}/automations`);
+      const card = page.getByTestId("reactivation-card");
+      await expect(card.getByTestId("reactivation-missing")).toBeVisible();
+
+      await card.getByRole("checkbox").check();
+      await card.getByRole("button", { name: "Save check-ins" }).click();
+      // actions.ts checks mailingAddress before replyTo, so this exact
+      // string is what the toast shows even though the fixture is missing
+      // both.
+      await expect(page.getByText(m["automations.reactivation.needsMailingAddress"])).toBeVisible();
+
+      // Nothing saved: a reload must show the checkbox unchecked again.
+      await page.reload();
+      const after = page.getByTestId("reactivation-card");
+      await expect(after.getByRole("checkbox")).not.toBeChecked();
     } finally {
       await forgetRecipe(accountId, "reactivation");
     }
