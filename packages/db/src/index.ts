@@ -17,6 +17,7 @@ export { createContact, updateContact, listContacts, getContact,
          addTagToContact, removeTagFromContact, listContactTags, fillContactBlanks,
          countContacts, deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
          type ContactInput, type SortKey, type SortDir } from "./contacts";
+export { setMarketingEmailOptOut } from "./contacts";
 export { buildMatchIndex, applyImportBatch,
          type MatchIndex, type ImportRow } from "./contact-import";
 export { addNote, listNotes, addTask, listContactTasks, completeTask, reopenTask } from "./activities";

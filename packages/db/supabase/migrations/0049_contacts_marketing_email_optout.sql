@@ -1,0 +1,93 @@
+-- 0049_contacts_marketing_email_optout.sql
+-- A per-contact "No marketing emails" switch, and the column that holds it.
+--
+-- WHY. #118 gave the reactivation email a footer (0048 holds the postal
+-- address it prints), and the footer promises the customer that if they
+-- reply, the business will not email them again. That
+-- reply lands in the business's OWN mailbox (reactivation sends with the
+-- account's reply-to), so nothing in the platform can hear it, and until this
+-- migration nothing on `contacts` could record it either: the promise was not
+-- true. The referral ask makes it worse, because it can reach the same
+-- customer again after every completed job. This column is where the operator
+-- records the customer's "stop" when they read it, and the two MARKETING
+-- emails read it before sending.
+--
+-- WHO HONOURS IT, and who does not (as of this migration):
+--   reactivation        honours it IN THE QUERY. Both its due-list and its
+--                       by-id lookup filter `marketing_email_opted_out_at is
+--                       null`, so an opted-out contact is never a candidate.
+--                       It must be the query and not a per-row skip: an
+--                       opted-out contact is never stamped `reactivation_sent_at`
+--                       (0047), so a skip in the pass would hand the same row
+--                       back every tick, refill the survivor window with it,
+--                       and starve every other account (the #118 I1 trap).
+--   referral_ask        honours it for the EMAIL channel only, as a skip in
+--                       the pass with a reason the client can read. Its
+--                       due-list is a bounded booking window that stamps or
+--                       ages out, so a skipped row does not recur for ever.
+--                       The SMS channel ignores this column: a text's opt-out
+--                       is the carrier's STOP list, not this switch.
+--   quote_followup      EXEMPT, deliberately. It is a reply to a quote the
+--                       customer asked for, not an unprompted pitch.
+--   every transactional email (booking confirmations, reminders, the weekly
+--                       report to the account's own recipients, ...) ignores
+--                       it. The switch is "no marketing emails", not "no
+--                       email", and the UI hint says so.
+-- The reading that an opt-out must hold across ALL of a sender's commercial
+-- email, not just the one campaign it was sent from, is the orchestrator's
+-- reading of the FTC's CAN-SPAM guidance, recorded 2026-09-23. It is not a
+-- lawyer's.
+--
+-- WHY NOT `contacts.dnd`. 0003_crm_core.sql:13 created `dnd jsonb not null
+-- default '{}'` and nothing has ever read or written it: the only reference
+-- outside that line is a comment in packages/db/src/automations.ts (~1212-1216)
+-- that calls it dead, and read-only against this database before writing this
+-- file, 0 of the 54 contacts hold anything but '{}'. It is NOT revived here.
+-- An untyped jsonb bag is a column every reader has to agree on the shape of,
+-- with no constraint to hold them to it; a typed, nullable timestamp says one
+-- thing and cannot say it two ways. `dnd` stays as it is: dead, and not this.
+--
+-- THE SHAPE. timestamptz, nullable, NO default.
+--   NULL        this contact may receive marketing email (every existing row,
+--               and every new one, starts here; no backfill).
+--   a timestamp when the operator recorded the opt-out. Clearing it back to
+--               NULL is how the operator undoes it (the drawer's undo toast).
+-- A timestamp rather than a boolean because "when" is the thing someone asks
+-- after a complaint, and a boolean cannot answer it. No live account has a
+-- reactivation, referral_ask or quote_followup automation row (read
+-- 2026-09-23), so no live sending changes when this lands.
+--
+-- NO INDEX. The reactivation candidate read is driven from `conversations`
+-- (conversations_account_recent, 0005) and meets this column only as a join
+-- predicate on the embedded contact; the by-id read is a primary-key lookup;
+-- the referral due-list is driven from `bookings`. Nothing here orders or
+-- ranges on this column, and opted-out rows are expected to be few.
+--
+-- WHO MAY WRITE IT: the account's own users, and no grant change is needed.
+-- `public.contacts` carries TABLE-level privileges, not a column list. Read
+-- live from pg_class.relacl before writing this file:
+--   {postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,
+--    authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}
+-- `authenticated` holds table-wide UPDATE (the `w`), which covers a column
+-- added today. Exactly ONE contacts column carries a column ACL of its own
+-- (pg_attribute.attacl), and it is `sort_name`, from 0030's grant that its own
+-- appended correction (0030:37-49) calls a no-op: it narrows nothing, because
+-- column ACLs only ADD to a table-level grant. No later migration revokes or
+-- grants anything on public.contacts. So, unlike 0048 on `accounts` (whose
+-- UPDATE is a named column list since 0013), there is no list here to append
+-- to, and a `grant update (col)` would be a second 0030: harmless, and
+-- misleading about how this table is governed.
+-- Rows are governed by `contacts_member_all` (0003), ALL to `authenticated`:
+-- a client's user writes this column on their own account's contacts while
+-- their access is switched on, and on no one else's. That a client can CLEAR
+-- it is the point: it is the operator's switch, recording what their customer
+-- told them. The cron never writes it.
+--
+-- This file is ASCII only and holds no backslash, on purpose: 0048's first
+-- apply went through the MCP and a unicode regex escape arrived altered. There is
+-- nothing here for transit to change.
+alter table public.contacts
+  add column marketing_email_opted_out_at timestamptz;
+
+comment on column public.contacts.marketing_email_opted_out_at is
+  'When the operator recorded that this contact asked not to get marketing email. NULL = may receive it. Read by the reactivation recipe (excluded in its query) and by the referral ask on the email channel (skipped with a reason); quote follow-ups and transactional email ignore it. Client-writable through the table-level UPDATE grant and contacts_member_all; clearing it to NULL undoes the opt-out. contacts.dnd (0003) is unrelated and dead.';

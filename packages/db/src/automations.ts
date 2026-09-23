@@ -924,8 +924,19 @@ export type DueReferralAsk = {
    *  `listEnabled` read, because the gate is pure and cannot query. */
   reviewRequestEnabled: boolean;
   contactId: string; contactEmail: string | null; contactPhone: string | null;
+  /** Migration 0049: the operator recorded that this contact asked not to
+   *  get marketing email. CARRIED, NOT FILTERED: the query cannot know the
+   *  channel's consequence, and an SMS-channel ask still goes (a text's
+   *  opt-out is the carrier's STOP list). The pass skips an EMAIL-channel row
+   *  with this set. Safe as a pass-level skip because this due-list is a
+   *  bounded booking window, unlike reactivation's walk. */
+  contactMarketingEmailOptedOut: boolean;
   brandName: string; branding: Branding; accountTimezone: string;
   fromEmail: string | null; replyToEmail: string | null;
+  /** Migration 0048: the account's postal address, as stored (null = not
+   *  set). The referral EMAIL is commercial and prints it in its footer; the
+   *  pass skips an email-channel row whose address is blank after `.trim()`. */
+  mailingAddress: string | null;
   body: string;
   config: ReferralAskConfig | null;
 };
@@ -937,7 +948,7 @@ export type DueReferralAsk = {
 // then fails `tsc` with "neither type sufficiently overlaps". Every other
 // *_SELECT in this file is one literal for the same reason.
 const REFERRAL_ASK_SELECT =
-  "id, account_id, contact_id, ends_at, completed_at, followup_sent_at, review_requested_at, referral_ask_sms_failed_at, contacts(email, phone)";
+  "id, account_id, contact_id, ends_at, completed_at, followup_sent_at, review_requested_at, referral_ask_sms_failed_at, contacts(email, phone, marketing_email_opted_out_at)";
 
 function toDueReferralAsk(
   r: any, info: AccountBrandInfo, auto: EnabledRecipe, reviewRequestEnabled: boolean,
@@ -954,11 +965,13 @@ function toDueReferralAsk(
     contactId: r.contact_id,
     contactEmail: r.contacts?.email ?? null,
     contactPhone: r.contacts?.phone ?? null,
+    contactMarketingEmailOptedOut: r.contacts?.marketing_email_opted_out_at != null,
     brandName: brandDisplayName(info.branding),
     branding: info.branding,
     accountTimezone: info.accountTimezone,
     fromEmail: info.fromEmail,
     replyToEmail: info.replyToEmail,
+    mailingAddress: info.mailingAddress,
     body: auto.body,
     config: parseReferralAskConfig(auto.config),
   };
@@ -1265,8 +1278,9 @@ type ReactivationCandidate = {
  *      a reply-to (`missingForReactivation`); an account that cannot is left
  *      out of every read below;
  *   2. conversations quiet since the WIDEST cutoff, oldest first, one page at
- *      a time, with `contacts!inner(...)` carrying the two contact
- *      predicates — unstamped and has an email — INTO the same query
+ *      a time, with `contacts!inner(...)` carrying the three contact
+ *      predicates — unstamped, not opted out of marketing email (0049), and
+ *      has an email — INTO the same query
  *      (`calendars!inner` + `.eq("calendars.followup_enabled", true)` in
  *      `booking.ts`'s `listDueFollowups` is the precedent for the shape);
  *   3. bookings: at least one COMPLETED — the rule that stops this being a
@@ -1401,6 +1415,13 @@ export async function listDueReactivations(
       .in("account_id", accountIds)
       .lte("last_message_at", widest.toISOString())
       .is("contacts.reactivation_sent_at", null)
+      // THE MARKETING-EMAIL OPT-OUT (0049), IN THE QUERY and never as a skip
+      // in the pass. An opted-out contact is never sent to, so never stamped:
+      // skipped per row, it would come back on every tick at the head of this
+      // oldest-first walk and refill the survivor window, starving every
+      // other account (the #118 I1 trap, one contact at a time). Here it
+      // never enters a page at all.
+      .is("contacts.marketing_email_opted_out_at", null)
       .not("contacts.email", "is", null)
       .order("last_message_at", { ascending: true })
       .order("id", { ascending: true })
@@ -1524,7 +1545,11 @@ export async function getDueReactivationById(
 ): Promise<DueLookup<DueReactivation>> {
   const { data: contact, error } = await db.from("contacts")
     .select("id, account_id, first_name, last_name, email, reactivation_sent_at")
-    .eq("id", contactId).is("reactivation_sent_at", null).not("email", "is", null).maybeSingle();
+    .eq("id", contactId).is("reactivation_sent_at", null)
+    // The opt-out (0049), same as the walk's: a hold released after the
+    // operator recorded "stop" answers `gone` and leaves the queue unsent.
+    .is("marketing_email_opted_out_at", null)
+    .not("email", "is", null).maybeSingle();
   if (error) throw new Error(`getDueReactivationById failed: ${error.message}`);
   if (!contact) return { due: null, why: "gone" };
   const accountId = (contact as { account_id: string }).account_id;

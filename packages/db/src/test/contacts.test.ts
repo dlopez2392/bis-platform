@@ -6,7 +6,8 @@ import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
 import { createContact, updateContact, listContacts, getContact,
          addTagToContact, listContactTags, fillContactBlanks, countContacts,
-         deleteContacts, addTagToContacts, removeTagFromContacts, listTags } from "../contacts";
+         deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
+         setMarketingEmailOptOut } from "../contacts";
 
 /** Seed helper: inserts a contact row directly, bypassing createContact's
  *  dedupe + event emission — this suite exercises listContacts/countContacts,
@@ -205,6 +206,55 @@ describe("contacts service", () => {
       expect(data![0]!.actor_type).toBe("system");
       expect(data![0]!.actor_id).toBe("form");
     }));
+});
+
+// Migration 0049. The switch the operator flips when a customer replies
+// "stop" to a marketing email. Two cases, so each of the function's two
+// load-bearing lines reds on its own name.
+describe("setMarketingEmailOptOut (0049)", () => {
+  it("stamps the opt-out and clears it, and both contact reads carry the column", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id } = await createContact(db, accountId, { firstName: "Optout" }, "user_test");
+      // BY VALUE, `toBeNull()` and never `toBeFalsy()`: a column missing from
+      // COLS reads `undefined`, which `toBeNull()` refuses. Mutation: drop
+      // `marketing_email_opted_out_at` from COLS → this line reds.
+      expect((await getContact(db, accountId, id))!.marketing_email_opted_out_at).toBeNull();
+
+      const before = Date.now();
+      await setMarketingEmailOptOut(db, accountId, id, true);
+      const after = Date.now();
+      const stamped = (await getContact(db, accountId, id))!.marketing_email_opted_out_at as string | null;
+      expect(stamped, "a timestamp once opted out").toEqual(expect.any(String));
+      const t = new Date(stamped!).getTime();
+      expect(t).toBeGreaterThanOrEqual(before - 1000);
+      expect(t).toBeLessThanOrEqual(after + 1000);
+      // The drawer reads the LIST row as well as the detail row.
+      const listed = (await listContacts(db, accountId, {})).find((r: any) => r.id === id) as any;
+      expect(listed.marketing_email_opted_out_at).toBe(stamped);
+
+      // Undo: back to NULL, which is "may receive marketing email".
+      await setMarketingEmailOptOut(db, accountId, id, false);
+      expect((await getContact(db, accountId, id))!.marketing_email_opted_out_at).toBeNull();
+    }));
+
+  it("refuses a contact of another account, and one that does not exist, and changes nothing", async () => {
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db, accountB) => {
+        const { id: theirs } = await createContact(db, accountB, { firstName: "Theirs" }, "user_test");
+        // Mutation: drop `.eq("account_id", accountId)` → A's call stamps B's
+        // contact and resolves, so this reds. Mutation: drop the no-row throw
+        // → it resolves having matched nothing, and this reds too.
+        await expect(setMarketingEmailOptOut(db, accountA, theirs, true))
+          .rejects.toThrow(/setMarketingEmailOptOut: no contact/);
+        const { data } = await db.from("contacts")
+          .select("marketing_email_opted_out_at").eq("id", theirs).single();
+        expect((data as { marketing_email_opted_out_at: string | null }).marketing_email_opted_out_at).toBeNull();
+
+        await expect(setMarketingEmailOptOut(db, accountA, "00000000-0000-0000-0000-000000000000", false))
+          .rejects.toThrow(/setMarketingEmailOptOut: no contact/);
+      });
+    });
+  });
 });
 
 describe("fillContactBlanks", () => {

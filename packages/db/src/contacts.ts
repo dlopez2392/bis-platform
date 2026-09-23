@@ -12,8 +12,12 @@ export type ContactInput = {
 // cursor (apps/web's contacts/page.tsx) needs whichever column the CURRENT
 // sort used off the last row, and that is cheapest to guarantee by always
 // selecting it rather than conditionally shaping this string per sort key.
+//
+// `marketing_email_opted_out_at` (0049) rides along for the contact drawer and
+// the detail page, which both show the "No marketing emails" switch off these
+// two reads. Snake_case end to end, like every other column here.
 const COLS =
-  "id, first_name, last_name, email, phone, company_name, source, custom, created_at, updated_at, sort_name";
+  "id, first_name, last_name, email, phone, company_name, source, custom, created_at, updated_at, sort_name, marketing_email_opted_out_at";
 
 function toRow(input: Partial<ContactInput>) {
   const row: Record<string, unknown> = {};
@@ -376,6 +380,32 @@ export async function getContact(db: SupabaseClient, accountId: string, contactI
     .eq("account_id", accountId).eq("id", contactId).maybeSingle();
   if (error) throw new Error(error.message);
   return data;
+}
+
+/**
+ * The "No marketing emails" switch (migration 0049). `true` stamps the moment
+ * the operator recorded the customer's "stop"; `false` clears it to NULL,
+ * which is "may receive marketing email" again (the undo).
+ *
+ * Read by the reactivation walk (excluded in its query) and by the referral
+ * ask on the email channel (skipped in the pass). Quote follow-ups and
+ * transactional email ignore it.
+ *
+ * Scoped by account on the writing statement, and `.select("id")` so a write
+ * that matched nothing THROWS instead of reporting success: another account's
+ * contact, or one deleted in the meantime (the setBranding convention).
+ * Re-stamping an already opted-out contact moves the timestamp to now.
+ */
+export async function setMarketingEmailOptOut(
+  db: SupabaseClient, accountId: string, contactId: string, optedOut: boolean,
+): Promise<void> {
+  const now = new Date().toISOString();
+  const { data, error } = await db.from("contacts")
+    .update({ marketing_email_opted_out_at: optedOut ? now : null, updated_at: now })
+    .eq("account_id", accountId).eq("id", contactId)
+    .select("id");
+  if (error) throw new Error(`setMarketingEmailOptOut failed: ${error.message}`);
+  if (!data?.length) throw new Error(`setMarketingEmailOptOut: no contact ${contactId} on account ${accountId}`);
 }
 
 export async function addTagToContact(

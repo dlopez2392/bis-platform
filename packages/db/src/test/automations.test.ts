@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import "dotenv/config";
 import { withTestAccount } from "./fixtures";
-import { createContact } from "../contacts";
+import { createContact, setMarketingEmailOptOut } from "../contacts";
 import { setBranding } from "../branding";
 import { createForm, createSubmission } from "../forms";
 import {
@@ -982,6 +982,50 @@ describe("referral ask — data layer", () => {
     });
   });
 
+  // Migration 0049 + 0048. The referral due-list is a bounded booking window,
+  // so the PASS decides what to do with an opted-out contact (email channel
+  // only) and with a missing address; this layer only has to carry both,
+  // BY VALUE, on both builders' rows.
+  it("carries the contact's marketing-email opt-out and the account's mailing address, by list and by id", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId,
+        { firstName: "Optref", email: "optref@example.com" }, "user_test");
+      await upsertAutomation(db, accountId, "referral_ask",
+        { enabled: true, body: "", config: { channel: "email" } }, "user_test");
+      const now = new Date("2027-08-20T12:00:00Z");
+      const b = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date(now.getTime() - 31 * HOUR), endsAt: new Date(now.getTime() - 30 * HOUR) }, "user_test");
+      await setBookingStatus(db, accountId, b.id, "completed", "user_test");
+      const both = async () => {
+        const listed = (await listDueReferralAsks(db, now.toISOString())).find((r) => r.bookingId === b.id);
+        const byId = (await getDueReferralAskById(db, b.id)).due;
+        expect(listed, "the fixture booking must be due by list").toBeDefined();
+        expect(byId, "the fixture booking must be due by id").not.toBeNull();
+        return [listed!, byId!] as const;
+      };
+
+      // Unset: `false` and `null` BY VALUE (`toBe`, not falsy): a field the
+      // builder forgot reads `undefined` and fails both.
+      for (const row of await both()) {
+        expect(row.contactMarketingEmailOptedOut).toBe(false);
+        expect(row.mailingAddress).toBeNull();
+      }
+
+      await setMarketingEmailOptOut(db, accountId, contactId, true);
+      await setBranding(db, accountId, { mailingAddress: "9 Referral Rd\nMcAllen, TX 78501" }, "user_test");
+      // Mutation: drop `marketing_email_opted_out_at` from REFERRAL_ASK_SELECT,
+      // or hard-code `contactMarketingEmailOptedOut: false` → reds. Mutation:
+      // hard-code `mailingAddress: null` in toDueReferralAsk → reds. And the
+      // opted-out row is STILL DUE here: the query must not filter it, or an
+      // SMS-channel ask would stop reaching a contact who only refused email.
+      for (const row of await both()) {
+        expect(row.contactMarketingEmailOptedOut).toBe(true);
+        expect(row.mailingAddress).toBe("9 Referral Rd\nMcAllen, TX 78501");
+      }
+    });
+  });
+
   it("stampReferralAsked and stampReferralAskSmsFailed write their own columns; only the first counts", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
@@ -1428,6 +1472,43 @@ describe("reactivation — data layer", () => {
 
       await setBranding(db, accountId, { mailingAddress: MAILING }, "user_test");
       expect((await getDueReactivationById(db, contactId)).due!.mailingAddress).toBe(MAILING);
+    });
+  });
+
+  // Migration 0049: the per-contact marketing-email opt-out. Excluded IN THE
+  // QUERY, never skipped in the pass: an opted-out contact is never stamped,
+  // so a pass-level skip would hand the same row back every tick and refill
+  // the survivor window with it (the starvation case below, one contact at a
+  // time). One case per read, so each filter reds on its own name.
+  it("an opted-out contact is never in the walk, and is back in it once the opt-out is cleared", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const contactId = await quietCustomer(db, accountId);
+      await setBranding(db, accountId, SEND_READY, "user_test");
+      const ids = async () =>
+        (await listDueReactivations(db, new Date("2027-09-21T12:00:00Z").toISOString())).map((r) => r.contactId);
+      // The positive first, or the negative below is vacuous.
+      expect(await ids()).toContain(contactId);
+      await setMarketingEmailOptOut(db, accountId, contactId, true);
+      // Mutation: drop `.is("contacts.marketing_email_opted_out_at", null)`
+      // from listDueReactivations → this reds.
+      expect(await ids()).not.toContain(contactId);
+      await setMarketingEmailOptOut(db, accountId, contactId, false);
+      expect(await ids()).toContain(contactId);
+    });
+  });
+
+  it("by id, an opted-out contact answers `gone`, and is due again once the opt-out is cleared", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const contactId = await quietCustomer(db, accountId);
+      expect((await getDueReactivationById(db, contactId)).due?.contactId).toBe(contactId);
+      await setMarketingEmailOptOut(db, accountId, contactId, true);
+      // The WHOLE answer: a released hold for this contact leaves the queue
+      // on the releaser's `gone` path. Mutation: drop
+      // `.is("marketing_email_opted_out_at", null)` from
+      // getDueReactivationById → this reds.
+      expect(await getDueReactivationById(db, contactId)).toEqual({ due: null, why: "gone" });
+      await setMarketingEmailOptOut(db, accountId, contactId, false);
+      expect((await getDueReactivationById(db, contactId)).due?.contactId).toBe(contactId);
     });
   });
 
