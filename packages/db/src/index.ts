@@ -138,7 +138,12 @@ export * from "./concierge";
 // 11 orphaned accounts accumulated in the shared project before anyone
 // noticed). `packages/db`'s test fixtures are not a public subpath, which is
 // why those copies existed; this list is not a fixture, it is the schema's own
-// FK order, and there is now exactly one of it.
+// FK order, and there is now exactly one of it. A fourth caller reads
+// `ACCOUNT_OWNED_TABLES` without importing `deleteAccountCascade`:
+// `apps/web/e2e/fixtures/sweep.ts` (its own `deleteAccountCascade`, not this
+// one, since a Playwright project has no service-role client of this
+// package's shape) — outside `apps/web/src`, so
+// `cascade-export-boundary.test.ts`'s walk rightly allows it.
 export { deleteAccountCascade, ACCOUNT_OWNED_TABLES } from "./account-teardown";
 
 // The throwaway-org-id prefix and its predicate. Exported because the two

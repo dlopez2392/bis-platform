@@ -22,7 +22,7 @@
 import { clerkClient } from "@clerk/nextjs/server";
 import { serviceDb, ACCOUNT_OWNED_TABLES } from "@bis/db";
 import {
-  FIXTURE_EMAIL_RE, STALE_AFTER_MS,
+  FIXTURE_BLUEPRINT_PREFILTER, FIXTURE_EMAIL_RE, FIXTURE_NAME_PREFILTER, STALE_AFTER_MS,
   isStaleFixture, isStaleFixtureAccount, isStaleFixtureBlueprint, isStaleFixtureForm, isUuid,
 } from "./stale";
 
@@ -147,7 +147,7 @@ export async function sweepStaleFixtures({
   // now two (`E2E Client Co`, `E2E Co`) and one prefilter covering both is
   // the same one the forms leg below already uses.
   const { data: accounts, error: accountsError } = await db
-    .from("accounts").select("id, name, clerk_org_id").like("name", "E2E %");
+    .from("accounts").select("id, name, clerk_org_id").like("name", FIXTURE_NAME_PREFILTER);
   if (accountsError) {
     report.errors.push(`accounts select: ${accountsError.message}`);
   }
@@ -227,7 +227,7 @@ export async function sweepStaleFixtures({
   // would be fetched on every run, forever. `isStaleFixtureForm` is what
   // actually admits a row.
   const { data: forms, error: formsError } = await db
-    .from("forms").select("id, name, account_id").like("name", "E2E %");
+    .from("forms").select("id, name, account_id").like("name", FIXTURE_NAME_PREFILTER);
   if (formsError) {
     report.errors.push(`forms select: ${formsError.message}`);
   }
@@ -261,7 +261,7 @@ export async function sweepStaleFixtures({
   // own comment). The `like` is a prefilter; `isStaleFixtureBlueprint`
   // decides. Nothing references `blueprints`, so the row goes on its own.
   const { data: blueprints, error: blueprintsError } = await db
-    .from("blueprints").select("id, name").like("name", "E2E Blueprint %");
+    .from("blueprints").select("id, name").like("name", FIXTURE_BLUEPRINT_PREFILTER);
   if (blueprintsError) {
     report.errors.push(`blueprints select: ${blueprintsError.message}`);
   }

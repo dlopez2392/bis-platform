@@ -11,7 +11,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  *
  * Extracted from `test/fixtures.ts`, which held the only copy until the demo
  * tenant needed to re-seed itself. A second hand-maintained copy of a
- * 25-entry FK-ordered list is a bug with a delivery date: the table that gets
+ * 26-entry FK-ordered list is a bug with a delivery date: the table that gets
  * added to one and not the other leaves rows behind, and the failure surfaces
  * somewhere else entirely, on a unique constraint, far from the cause. One
  * list, two callers.
