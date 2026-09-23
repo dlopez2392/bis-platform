@@ -56,8 +56,8 @@ describe("the appointment-confirm card's segment counter", () => {
   });
 
   it("does not double the disclosure when the operator's own closing line already says STOP", () => {
-    // withOptOut is idempotent on `\bstop\b` (opt-out.ts:63) and the counter
-    // has to inherit that, or a card would over-report for the one operator
+    // withOptOut is idempotent on a STOP instruction (hasOptOutInstruction,
+    // opt-out.ts) and the counter has to inherit that, or a card would over-report for the one operator
     // who wrote the sentence themselves. Mutation: append the disclosure
     // unconditionally instead of calling withOptOut → reds.
     const html = render({ automation: { ...ROW, body: "Reply STOP to opt out." } });

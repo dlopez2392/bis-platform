@@ -72,8 +72,8 @@ describe("the review-request card's segment counter", () => {
   });
 
   it("does not double the disclosure when the operator's own message already says STOP", () => {
-    // withOptOut is idempotent on `\bstop\b` (opt-out.ts:63). "Review us? Text
-    // STOP to opt out." is 32 septets, plus one space and the 34-character
+    // withOptOut is idempotent on a STOP instruction (hasOptOutInstruction,
+    // opt-out.ts). "Review us? Text STOP to opt out." is 32 septets, plus one space and the 34-character
     // link = 67 (measured); a doubled disclosure would read 90.
     const html = render({ automation: { ...ROW, body: "Review us? Text STOP to opt out." } });
     expect(countText(html)).toBe("67 characters · 1 message(s)");

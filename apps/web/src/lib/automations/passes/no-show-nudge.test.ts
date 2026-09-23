@@ -90,7 +90,7 @@ describe("no-show nudge pass — email channel", () => {
     expect(sent.fromAddress).toBe("hello@rioroofing.com");
     expect(sent.replyTo).toBe("owner@rioroofing.com");
     expect(sent.subject).toBe("Want to pick a new time with Rio Roofing?");
-    expect(sent.body).toContain("We missed you for your appointment with Rio Roofing.");
+    expect(sent.body).toContain("We missed you at your appointment with Rio Roofing.");
     expect(sent.body).toContain(URL);                          // Mutation: build the link off a hard-coded origin
     expect(sent.html).toContain(`href="${URL}"`);
     expect(dbMocks.stampNoShowNudged).toHaveBeenCalledWith(expect.anything(), "bk_n1");
@@ -132,7 +132,7 @@ describe("no-show nudge pass — SMS channel", () => {
     // The pass composes the body; sendAutomationSms appends the opt-out
     // disclosure at the one choke point every scheduled text goes through.
     // Both halves are asserted here so a change to either is visible.
-    const composed = `We missed you for your appointment with Rio Roofing. If you'd like to pick a new time, book here: ${URL} Reply STOP to opt out.`;
+    const composed = `We missed you at your appointment with Rio Roofing. Pick a new time here: ${URL} Reply STOP to opt out.`;
     expect(senderMock.resolveSmsSender).toHaveBeenCalledWith(expect.anything(), "acct_1");
     expect(dbMocks.createMessage).toHaveBeenCalledWith(expect.anything(), "acct_1",
       { conversationId: "convo_1", channel: "sms", direction: "outbound", body: composed }, "automation", "system");

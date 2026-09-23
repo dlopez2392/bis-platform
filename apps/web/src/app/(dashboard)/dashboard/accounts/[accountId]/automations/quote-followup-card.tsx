@@ -84,7 +84,7 @@ export function QuoteFollowupCard({
   // THE DISCLOSED BODY: `sendAutomationSms` appends `withOptOut`
   // unconditionally (send-sms.ts:82), so counting the composed body alone
   // reports a number no customer receives and no client is billed for.
-  // `withOptOut` is idempotent on `\bstop\b`, so an operator who wrote the
+  // `withOptOut` is idempotent on a STOP instruction, so an operator who wrote the
   // sentence themselves is not counted twice.
   const previewBody = body.trim() || defaultQuoteFollowupBody(brandName);
   const preview = segmentsFor(withOptOut(previewBody));

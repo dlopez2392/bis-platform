@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { withOptOut } from "./opt-out";
+import { withOptOut, hasOptOutInstruction } from "./opt-out";
 import { segmentsFor } from "./segments";
 import { defaultTextbackBody } from "@/lib/voice/textback-body";
 import { m } from "@/lib/messages";
@@ -22,13 +22,13 @@ describe("withOptOut", () => {
     // is what gets a campaign looked at a second time.
     const once = withOptOut("Sorry we missed you.");
     expect(withOptOut(once)).toBe(once);
-    // Matched on the keyword, not on our exact sentence, so an operator who
-    // wrote their own phrasing keeps it verbatim rather than having ours
-    // stapled on after it.
+    // Matched on an instruction (hasOptOutInstruction), not on our exact
+    // sentence, so an operator who wrote their own phrasing keeps it verbatim
+    // rather than having ours stapled on after it.
     const theirs = "Sorry we missed you. Text STOP to unsubscribe anytime.";
     expect(withOptOut(theirs)).toBe(theirs);
-    // Spanish disclosure recognised by the same guard — the keyword is the
-    // English STOP in both languages precisely so this works.
+    // Spanish disclosure recognised by the same guard — "Responde STOP" is an
+    // instruction, and the keyword is the English STOP in both languages.
     const spanish = withOptOut("Perdon, no alcanzamos a contestar.", "es");
     expect(withOptOut(spanish, "es")).toBe(spanish);
   });
@@ -39,9 +39,50 @@ describe("withOptOut", () => {
     // programme message with no way out of it.
     const body = "We stopped by but nobody was home.";
     expect(withOptOut(body)).toBe(`${body} ${m["sms.optOut.en"]}`);
-    // A bare standalone "stop" IS treated as the disclosure. Accepted: the
-    // failure mode is a message missing a sentence it could have had, not a
-    // customer with no way to opt out, and Telnyx honours STOP either way.
+  });
+
+  it("a bare 'stop' is a word, not an instruction, and still gets the disclosure", () => {
+    // The old guard was the keyword alone, so an operator's "We'll stop by
+    // Tuesday." went out with NO way to opt out: a programme message the
+    // recipient cannot leave, which is the one thing this function exists to
+    // prevent. Only an instruction ("Reply STOP", "Responde STOP") counts.
+    for (const body of ["We'll stop by Tuesday.", "Don't stop now", "STOP by the shop"]) {
+      expect(withOptOut(body), body).toBe(`${body} ${m["sms.optOut.en"]}`);
+    }
+    // Same in Spanish: "stop" as a word in a Spanish body is not "Responde STOP".
+    expect(withOptOut("Hacemos un stop en tu casa el martes.", "es"))
+      .toBe(`Hacemos un stop en tu casa el martes. ${m["sms.optOut.es"]}`);
+  });
+
+  it("an opt-out instruction in either language is not given a second one", () => {
+    for (const body of ["Reply STOP to opt out.", "Text STOP to unsubscribe", "Responde STOP para cancelar."]) {
+      expect(withOptOut(body, "en"), body).toBe(body);
+      expect(withOptOut(body, "es"), body).toBe(body);
+    }
+  });
+});
+
+describe("hasOptOutInstruction", () => {
+  it("reads an instruction verb followed by STOP, in English or Spanish, any case", () => {
+    for (const body of [
+      "Reply STOP to opt out.", "reply stop", "Text STOP to unsubscribe", "Txt STOP to quit",
+      "Send STOP to end these", "Responde STOP para cancelar.", "Responda STOP para cancelar.",
+      "Envia STOP para salir", "Envía STOP para salir", "Escribe STOP para no recibir mas",
+      "Reply  STOP", 'Reply "STOP" to opt out.', "Text 'STOP' to unsubscribe",
+      // A phone's keyboard types these curly on its own.
+      "Reply “STOP” to opt out.", "Text ‘STOP’ to unsubscribe",
+    ]) {
+      expect(hasOptOutInstruction(body), body).toBe(true);
+    }
+  });
+
+  it("does not read a bare 'stop', a 'stop' inside a word, or a verb that is not an instruction", () => {
+    for (const body of [
+      "We'll stop by Tuesday.", "Don't stop now", "STOP by the shop", "We stopped by.",
+      "Replying stopped", "Please don't STOP", "Reply to stop by", "Replystop", "",
+    ]) {
+      expect(hasOptOutInstruction(body), body).toBe(false);
+    }
   });
 
   it("trims, so the disclosure is never double-spaced or trailing-glued", () => {

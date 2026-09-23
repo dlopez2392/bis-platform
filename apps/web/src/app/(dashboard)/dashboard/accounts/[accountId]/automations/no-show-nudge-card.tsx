@@ -56,7 +56,7 @@ export function NoShowNudgeCard({
   // applies unconditionally (send-sms.ts:82; English, because the pass
   // passes no `language`). Without it the counter under-reported by 23
   // septets, and "Valley Air Conditioning" read "1 message" while billing
-  // two (decision B, danlo, 2026-09-22). Idempotent on `\bstop\b`, so an
+  // two (decision B, danlo, 2026-09-22). Idempotent on a STOP instruction, so an
   // operator who wrote the sentence themselves is not counted twice.
   const previewBody = body.trim() || defaultNoShowNudgeBody(brandName);
   const preview = segmentsFor(withOptOut(composeNoShowNudgeSms(previewBody, bookingUrl)));

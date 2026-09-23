@@ -45,7 +45,7 @@ export function SmsReminderCard({
   // under-reported by 23 septets. Harmless for the default (122 → 145, still
   // one segment) and not harmless at all for a real operator body — 150
   // composed reads as one segment where 173 disclosed is two. `withOptOut` is
-  // idempotent on `\bstop\b`, so an operator who wrote the sentence
+  // idempotent on a STOP instruction, so an operator who wrote the sentence
   // themselves is not double-counted.
   const when = formatWhen(SMS_REMINDER_PREVIEW_INSTANT, safeZone(accountTimezone, "UTC"));
   const composed = withOptOut(composeSmsReminder(brandName, when, body.trim() || defaultSmsReminderBody()));

@@ -51,26 +51,35 @@ function previewText(html: string, lang: "en" | "es"): string {
 }
 
 describe("the instant-reply card's previews and counters", () => {
-  it("MEASURED: each counter counts the DISCLOSED default — 139 and 159 characters, not 116 and 130", () => {
+  it("MEASURED: each counter counts the DISCLOSED default — 139 and 135 characters, not 116 and 106", () => {
     // Measured with segmentsFor/withOptOut/defaultInstantReplyBody for "Rio
     // Roofing": English 116 septets composed, 139 disclosed (+23); Spanish
-    // 130 composed, 159 disclosed (+29) — one segment each, the Spanish with
-    // ONE septet to spare. Mutation: drop `withOptOut` from the card's
-    // preview → this reds BY NAME.
+    // 106 composed, 135 disclosed (+29) — one segment each. Mutation: drop
+    // `withOptOut` from the card's preview → this reds BY NAME.
     const html = render();
     expect(countText(html, "en")).toBe("139 characters · 1 message(s)");
-    expect(countText(html, "es")).toBe("159 characters · 1 message(s)");
+    expect(countText(html, "es")).toBe("135 characters · 1 message(s)");
   });
 
-  it("MEASURED: a Spanish reply for \"Valley Air Conditioning\" shows ONE message undisclosed and bills TWO", () => {
-    // Spanish 142 septets composed (one segment), 171 disclosed (two). The
-    // Spanish disclosure is 29 septets, so any GSM-7 name of 13 characters
-    // or more crosses; English, at 23, crosses at 33 (this name: 128 → 151,
-    // still one). Mutation: drop `withOptOut` → this reds on the MESSAGE
-    // COUNT.
+  it("MEASURED: \"Valley Air Conditioning\" is ONE message in both languages, disclosed", () => {
+    // The ledger's case: under the old Spanish default this name was 142
+    // composed and 171 disclosed, TWO billed messages. With the shorter
+    // default it is 118 → 147 in Spanish and 128 → 151 in English, one each.
+    // Mutation: restore the old Spanish default → the Spanish half reds.
     const html = render({ brandName: "Valley Air Conditioning" });
-    expect(countText(html, "es")).toBe("171 characters · 2 message(s)");
+    expect(countText(html, "es")).toBe("147 characters · 1 message(s)");
     expect(countText(html, "en")).toBe("151 characters · 1 message(s)");
+  });
+
+  it("MEASURED: a 39-character name shows ONE message undisclosed and bills TWO, in both languages", () => {
+    // "Valley Air Conditioning and Heating LLC" (39): Spanish 134 septets
+    // composed (one), 163 disclosed (two) — the Spanish default holds a name
+    // of 36 characters or fewer; English 144 composed (one), 167 disclosed
+    // (two) — the English holds 32. Mutation: drop `withOptOut` → this reds
+    // on the MESSAGE COUNT, not merely on the character count.
+    const html = render({ brandName: "Valley Air Conditioning and Heating LLC" });
+    expect(countText(html, "es")).toBe("163 characters · 2 message(s)");
+    expect(countText(html, "en")).toBe("167 characters · 2 message(s)");
   });
 
   it("the Spanish preview ends in the SPANISH disclosure, the English one in the English", () => {

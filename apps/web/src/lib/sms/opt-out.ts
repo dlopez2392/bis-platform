@@ -57,10 +57,31 @@ export function withOptOut(body: string, language: "en" | "es" = "en"): string {
   // operator's own `textback_body` may already carry the disclosure (the
   // settings copy tells them it will be added if they leave it out), and a
   // message reading "...Reply STOP to opt out. Reply STOP to opt out." is
-  // the kind of thing that gets a campaign looked at twice. Matched on the
-  // keyword alone, case-insensitively, so it also catches a hand-written
-  // "Text STOP to unsubscribe" that says the same thing in other words.
-  if (/\bstop\b/i.test(trimmed)) return trimmed;
+  // the kind of thing that gets a campaign looked at twice. Matched on an
+  // INSTRUCTION (hasOptOutInstruction), not our exact sentence, so a
+  // hand-written "Text STOP to unsubscribe" keeps its own wording — and not
+  // on the bare word, because "We'll stop by Tuesday." is not a way out and
+  // must still get one.
+  if (hasOptOutInstruction(trimmed)) return trimmed;
   const disclosure = language === "es" ? m["sms.optOut.es"] : m["sms.optOut.en"];
   return `${trimmed} ${disclosure}`;
+}
+
+/**
+ * Does this body already TELL the recipient how to opt out? An instruction
+ * verb, then STOP: English reply/text/txt/send, Spanish responde/responda/
+ * envia (envía)/escribe, any case, the keyword optionally in quotes
+ * (`Reply "STOP"`). The word "stop" on its own is not enough — "We'll stop by
+ * Tuesday." and "STOP by the shop" are ordinary sentences, and treating them
+ * as the disclosure sent a programme message with no way out of it.
+ *
+ * The failure modes are deliberately lopsided: a phrasing this misses gets
+ * our sentence appended after theirs (a doubled disclosure, cosmetic), while
+ * a phrasing it wrongly accepts ships a text the customer cannot leave. So
+ * the list is short and literal. Exported so a caller that needs the same
+ * decision asks this, never a regex of its own; the settings cards' counters
+ * need nothing extra, because they count `withOptOut(...)` and inherit it.
+ */
+export function hasOptOutInstruction(body: string): boolean {
+  return /\b(?:reply|text|txt|send|responde|responda|env[ií]a|escribe)\s+["'“‘]?stop\b/i.test(body);
 }
