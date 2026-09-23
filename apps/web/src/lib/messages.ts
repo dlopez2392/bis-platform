@@ -1335,8 +1335,8 @@ export const m = {
   "automations.reactivation.beforeOnBoth": "Before you turn this on, add the company's mailing address, printed at the bottom of every check-in, and a reply-to address, so a customer who replies reaches the company. Both are on the {settingsLink} page.",
   "automations.reactivation.beforeOnMailingAddress": "Before you turn this on, add the company's mailing address, printed at the bottom of every check-in. It's on the {settingsLink} page.",
   "automations.reactivation.beforeOnReplyTo": "Before you turn this on, add a reply-to address, so a customer who replies reaches the company. It's on the {settingsLink} page.",
-  "automations.reactivation.needsMailingAddress": "Add the company's mailing address on the Branding page before turning this on.",
-  "automations.reactivation.needsReplyTo": "Add a reply-to address on the Branding page before turning this on.",
+  "automations.reactivation.needsMailingAddress": "Add the company's mailing address in Settings before turning this on.",
+  "automations.reactivation.needsReplyTo": "Add a reply-to address in Settings before turning this on.",
 
   // Part B — quote follow-ups. NO EM DASH and no character outside GSM-7 in
   // `defaultBody`/`defaultBodyNoName`: this recipe is SMS-capable and one

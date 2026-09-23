@@ -1479,9 +1479,9 @@ export async function listDueReactivations(
         // argument to `{ account_id: string }[]` pins `T` to exactly that
         // and erases `contact_id`, `id` and `last_message_at` from
         // `sendable`. (The loader is deliberately not NAMED in this comment:
-        // `outbound-suppressed.test.ts` walks this file per function and
-        // asks whether the body mentions it, so a comment carrying the name
-        // would satisfy that walk with the call itself deleted.)
+        // `outbound-suppressed.test.ts` strips comments and counts CALL
+        // SITES per function, so a comment carrying the name would not
+        // satisfy that count with the call itself deleted.)
         const { sendable, accountInfo } = await loadSendableRows(
           db, surviving, "listDueReactivations");
 

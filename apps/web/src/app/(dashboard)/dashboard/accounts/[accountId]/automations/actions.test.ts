@@ -309,19 +309,19 @@ describe("saveReactivationAction", () => {
   // address and a "reply and let us know" opt-out, so it may not be turned
   // on until both exist. The pass skips a row missing either anyway; refusing
   // here is what tells the operator BEFORE the first morning goes by silent.
-  it("turning it on with no mailing address (blank after .trim()) is REFUSED, naming the Branding page", async () => {
+  it("turning it on with no mailing address (blank after .trim()) is REFUSED, naming Settings", async () => {
     // Mutation: delete the mailing-address refusal → this reds BY NAME.
     for (const blank of [null, "", " \n\t "]) {
       dbMocks.getMailingAddress.mockResolvedValue(blank);
       expect(await saveReactivationAction("acct_1", fd({ enabled: "on", months: "9" })), JSON.stringify(blank))
         .toEqual({ ok: false, error: m["automations.reactivation.needsMailingAddress"] });
     }
-    expect(m["automations.reactivation.needsMailingAddress"]).toContain("Branding page");
+    expect(m["automations.reactivation.needsMailingAddress"]).toContain("Settings");
     expect(dbMocks.getMailingAddress).toHaveBeenCalledWith(expect.anything(), "acct_1");
     expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
   });
 
-  it("turning it on with no reply-to (blank after .trim()) is REFUSED, naming the Branding page", async () => {
+  it("turning it on with no reply-to (blank after .trim()) is REFUSED, naming Settings", async () => {
     // Mutation: delete the reply-to refusal → this reds BY NAME.
     for (const blank of [null, "", "   "]) {
       dbMocks.getBranding.mockResolvedValue({
@@ -331,7 +331,7 @@ describe("saveReactivationAction", () => {
       expect(await saveReactivationAction("acct_1", fd({ enabled: "on", months: "9" })), JSON.stringify(blank))
         .toEqual({ ok: false, error: m["automations.reactivation.needsReplyTo"] });
     }
-    expect(m["automations.reactivation.needsReplyTo"]).toContain("Branding page");
+    expect(m["automations.reactivation.needsReplyTo"]).toContain("Settings");
     expect(dbMocks.getBranding).toHaveBeenCalledWith(expect.anything(), "acct_1");
     expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
   });
