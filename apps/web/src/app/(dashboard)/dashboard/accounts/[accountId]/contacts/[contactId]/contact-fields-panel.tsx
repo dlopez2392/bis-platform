@@ -22,6 +22,7 @@ import { SubmitButton } from "../../../submit-button";
 import { updateContactAction, addTagAction, removeTagAction } from "./actions";
 import { updateContactFieldAction } from "../actions";
 import { FIELDS } from "../contact-drawer";
+import { MarketingOptOutSwitch } from "../marketing-optout-switch";
 import { CLEAR_FIELD_SENTINEL } from "./constants";
 
 type Contact = NonNullable<Awaited<ReturnType<typeof getContact>>>;
@@ -69,6 +70,13 @@ export function ContactFieldsPanel({
               </div>
             ))}
           </dl>
+
+          <MarketingOptOutSwitch
+            key={contactId}
+            accountId={accountId}
+            contactId={contactId}
+            optedOutAt={contact.marketing_email_opted_out_at}
+          />
 
           {fieldDefs.length > 0 ? (
             <>

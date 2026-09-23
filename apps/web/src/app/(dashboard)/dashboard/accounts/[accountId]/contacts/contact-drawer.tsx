@@ -16,6 +16,7 @@ import { Notice } from "@/components/ui/notice";
 import { m } from "@/lib/messages";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { updateContactFieldAction } from "./actions";
+import { MarketingOptOutSwitch } from "./marketing-optout-switch";
 import { addTagAction, removeTagAction } from "./[contactId]/actions";
 import type { ContactRow } from "./contacts-table";
 import type { ContactSummary } from "@/app/api/accounts/[accountId]/contacts/[contactId]/summary/route";
@@ -186,6 +187,16 @@ export function ContactDrawer({
                     contactId={row.id}
                     tags={load.summary.tags}
                     onChanged={() => setRetryNonce((n) => n + 1)}
+                  />
+                  {/* From the summary, not `row`: a `?peek=` of a contact on
+                      another page has only missingRow's all-null stub, which
+                      would show an opted-out contact as unticked. Keyed by
+                      contact so its local state never carries across. */}
+                  <MarketingOptOutSwitch
+                    key={row.id}
+                    accountId={accountId}
+                    contactId={row.id}
+                    optedOutAt={load.summary.marketing_email_opted_out_at}
                   />
                   <div>
                     <p className="text-muted-foreground mb-2 font-mono text-[10px] tracking-[0.14em] uppercase">

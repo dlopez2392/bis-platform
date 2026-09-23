@@ -165,6 +165,67 @@ describe("saveReferralAskAction", () => {
     expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "referral_ask",
       { enabled: false, body: "", config: { channel: "email" } }, "user_1");
   });
+
+  // B21 (danlo, 2026-09-23): the referral EMAIL carries the check-in's footer
+  // — the postal address and a "reply and let us know" opt-out — so it may
+  // not be turned on by email until both exist. The same messages as the
+  // check-in's, which name Settings. The pass skips a row missing either
+  // anyway; refusing here tells the operator before a silent morning.
+  const NO_REPLY_TO = {
+    brandName: "Rio Roofing", brandLogoPath: null, brandColor: null, brandNeutral: null,
+    brandCorners: null, brandType: null, brandMode: null, replyToEmail: null,
+  };
+
+  it("turning the EMAIL channel on with no mailing address (blank after .trim()) is REFUSED, naming Settings", async () => {
+    // Mutation: delete the mailing-address refusal → this reds BY NAME.
+    for (const blank of [null, "", " \n\t "]) {
+      dbMocks.getMailingAddress.mockResolvedValue(blank);
+      expect(await saveReferralAskAction("acct_1", fd({ enabled: "on", channel: "email" })), JSON.stringify(blank))
+        .toEqual({ ok: false, error: m["automations.reactivation.needsMailingAddress"] });
+    }
+    expect(dbMocks.getMailingAddress).toHaveBeenCalledWith(expect.anything(), "acct_1");
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+  });
+
+  it("turning the EMAIL channel on with no reply-to (blank after .trim()) is REFUSED, naming Settings", async () => {
+    // Mutation: delete the reply-to refusal → this reds BY NAME.
+    for (const blank of [null, "", "   "]) {
+      dbMocks.getBranding.mockResolvedValue({ ...NO_REPLY_TO, replyToEmail: blank });
+      expect(await saveReferralAskAction("acct_1", fd({ enabled: "on", channel: "email" })), JSON.stringify(blank))
+        .toEqual({ ok: false, error: m["automations.reactivation.needsReplyTo"] });
+    }
+    expect(dbMocks.getBranding).toHaveBeenCalledWith(expect.anything(), "acct_1");
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+  });
+
+  it("the SMS channel needs neither — a text carries no footer and its opt-out is the carrier's STOP", async () => {
+    // Mutation: check the two regardless of the channel → this reds BY NAME.
+    dbMocks.getMailingAddress.mockResolvedValue(null);
+    dbMocks.getBranding.mockResolvedValue(NO_REPLY_TO);
+    expect(await saveReferralAskAction("acct_1", fd({ enabled: "on", channel: "sms" }))).toEqual({ ok: true });
+    expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "referral_ask",
+      { enabled: true, body: "", config: { channel: "sms" } }, "user_1");
+  });
+
+  it("saving the EMAIL channel with the recipe OFF needs neither — so it can always be switched off", async () => {
+    // Mutation: check the two regardless of `enabled` → this reds BY NAME.
+    dbMocks.getMailingAddress.mockResolvedValue(null);
+    dbMocks.getBranding.mockResolvedValue(NO_REPLY_TO);
+    expect(await saveReferralAskAction("acct_1", fd({ channel: "email", body: "Hi" }))).toEqual({ ok: true });
+    expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "referral_ask",
+      { enabled: false, body: "Hi", config: { channel: "email" } }, "user_1");
+  });
+
+  it("a failed read of either comes back as the toastable save failure, and nothing is written", async () => {
+    // "Not set" is an answer the refusal acts on; a failed query is not one.
+    dbMocks.getBranding.mockRejectedValue(new Error("db down"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await saveReferralAskAction("acct_1", fd({ enabled: "on", channel: "email" })))
+      .toEqual({ ok: false, error: m["automations.referral.saveFailed"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("acct_1"));
+    spy.mockRestore();
+  });
 });
 
 describe("saveQuoteFollowupAction", () => {

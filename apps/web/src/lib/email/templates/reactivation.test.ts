@@ -88,7 +88,7 @@ describe("reactivationEmail", () => {
 
   it("prints the CALLER's footer line verbatim, and composes none of its own — the unbranded one included", () => {
     // The subject's shape (review minor M6, 2026-09-22): the pass composes
-    // the line with `reactivationFooterReason(row.brandName)` and the
+    // the line with `marketingFooterReason(row.brandName)` and the
     // template prints what it is given. The blank-brand branch is the copy
     // module's (reactivation-copy.test.ts). Mutation: compose the line inside
     // the template from `brand.name` again → the distinctive line below is

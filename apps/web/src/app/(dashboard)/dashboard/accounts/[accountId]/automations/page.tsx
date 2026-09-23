@@ -12,7 +12,7 @@ import { brandDisplayName } from "@/lib/email/templates/shell";
 import { originFrom } from "@/lib/email/origin";
 import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
 import { m } from "@/lib/messages";
-import { missingForReactivation } from "@/lib/automations/reactivation-gate";
+import { missingForMarketingEmail } from "@/lib/automations/reactivation-gate";
 import { AutomationsSettings } from "./automations-settings";
 import { ReferralAskCard } from "./referral-ask-card";
 import { ReactivationCard } from "./reactivation-card";
@@ -116,8 +116,8 @@ export default async function AutomationsPage({
       } catch (e) {
         console.error(`automations: account lookup failed for ${accountId}: ${String(e)}`);
         // `undefined` = UNREAD, distinct from `null` = not set: the
-        // reactivation card must not claim a reply-to is missing when it
-        // was only not read (see `reactivationMissing` below).
+        // marketing-email cards must not claim a reply-to is missing when it
+        // was only not read (see `marketingEmailMissing` below).
         return { brandName: "", timezone: "UTC", replyToEmail: undefined as string | null | undefined };
       }
     })(),
@@ -176,13 +176,14 @@ export default async function AutomationsPage({
     }),
   ]);
 
-  // What the check-in cannot go without, judged by the SAME function the save
-  // refuses on and the pass skips on. A fact that was not READ is not
+  // What a marketing email — the check-in, and the referral ask by email
+  // (B21) — cannot go without, judged by the SAME function the saves refuse
+  // on and the passes skip on. One fact, both cards. A fact that was not READ is not
   // reported missing: the card's warning is advice, and the save and the
   // pass enforce regardless, so a false "your address is missing" would only
   // send the operator to fix a field that is fine.
-  const judged = missingForReactivation(mailingAddress, account.replyToEmail);
-  const reactivationMissing = {
+  const judged = missingForMarketingEmail(mailingAddress, account.replyToEmail);
+  const marketingEmailMissing = {
     mailingAddress: mailingAddress !== undefined && judged.mailingAddress,
     replyTo: account.replyToEmail !== undefined && judged.replyTo,
   };
@@ -258,14 +259,16 @@ export default async function AutomationsPage({
           <ReferralAskCard
             automation={referralAsk}
             brandName={account.brandName}
+            accountId={accountId}
             smsGate={smsGate}
+            missing={marketingEmailMissing}
             saveAction={saveReferralAskAction.bind(null, accountId)}
           />
           <ReactivationCard
             automation={reactivation}
             brandName={account.brandName}
             accountId={accountId}
-            missing={reactivationMissing}
+            missing={marketingEmailMissing}
             saveAction={saveReactivationAction.bind(null, accountId)}
           />
         </Group>

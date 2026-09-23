@@ -87,9 +87,12 @@ vi.mock("@bis/db", () => ({
   reactivationCutoff: () => { throw new Error("route.test: nothing is due"); },
   stampReactivationSent: async () => { throw new Error("route.test: nothing is due"); },
   getDueReactivationById: async () => { throw new Error("route.test: nothing is held"); },
-  // Its home moved to @bis/db (review fix, 2026-09-22); the pass reaches it
-  // through reactivation-gate.ts's re-export, and only once a row is due.
-  missingForReactivation: () => { throw new Error("route.test: nothing is due"); },
+  // Its home moved to @bis/db (review fix, 2026-09-22), and it was renamed
+  // from `missingForReactivation` when the referral ask's email started
+  // asking it too (B21). The reactivation pass reaches it through
+  // reactivation-gate.ts's re-export, the referral pass straight from
+  // @bis/db, and each only once an email row is due.
+  missingForMarketingEmail: () => { throw new Error("route.test: nothing is due"); },
   // The quote follow-up pass (part B). QUOTE_FOLLOWUP_MAX_AGE_MS is the one
   // entry this suite REQUIRES beyond the due-list: quote-followup-gate.ts
   // reads that constant at IMPORT time, and a bare factory mock throws the
@@ -230,6 +233,8 @@ const EMPTY_REFERRAL_ASKS = {
   sent: 0, failed: 0, unstamped: 0, held: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
   skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0,
   waitingForMorning: 0, waitingForReviewRequest: 0, unresolvableTimezone: 0,
+  // B21: the email channel's three marketing-email skips.
+  skippedNoMailingAddress: 0, skippedNoReplyTo: 0, skippedOptedOut: 0,
 };
 const EMPTY_NO_SHOW_NUDGES = {
   sent: 0, failed: 0, unstamped: 0, held: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,

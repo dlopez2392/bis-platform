@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { missingForReactivation as fromDb } from "@bis/db";
-import { shouldSendReactivationNow, missingForReactivation } from "./reactivation-gate";
+import { missingForMarketingEmail as fromDb } from "@bis/db";
+import { shouldSendReactivationNow, missingForMarketingEmail } from "./reactivation-gate";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 
 const ZONE = "America/Chicago";
@@ -65,11 +65,11 @@ describe("what a reactivation email cannot go without", () => {
   it("is ONE function: this module re-exports the @bis/db rule, it does not carry a copy", () => {
     // Mutation: replace the re-export with a local function of the same body
     // → this reds BY NAME, and the walk and the pass can drift apart.
-    expect(missingForReactivation).toBe(fromDb);
+    expect(missingForMarketingEmail).toBe(fromDb);
   });
 
   it("both present → nothing missing", () => {
-    expect(missingForReactivation("123 Main St\nMcAllen, TX 78501", "owner@rioroofing.com"))
+    expect(missingForMarketingEmail("123 Main St\nMcAllen, TX 78501", "owner@rioroofing.com"))
       .toEqual({ mailingAddress: false, replyTo: false });
   });
 
@@ -82,16 +82,16 @@ describe("what a reactivation email cannot go without", () => {
     // the address → the whitespace rows red BY NAME; drop the reply-to
     // judgement → the reply-to half reds.
     for (const blank of [null, undefined, "", "   ", " \n\t\u00A0 "]) {
-      expect(missingForReactivation(blank, "owner@rioroofing.com"), JSON.stringify(blank))
+      expect(missingForMarketingEmail(blank, "owner@rioroofing.com"), JSON.stringify(blank))
         .toEqual({ mailingAddress: true, replyTo: false });
-      expect(missingForReactivation("123 Main St", blank), JSON.stringify(blank))
+      expect(missingForMarketingEmail("123 Main St", blank), JSON.stringify(blank))
         .toEqual({ mailingAddress: false, replyTo: true });
     }
-    expect(missingForReactivation(null, null)).toEqual({ mailingAddress: true, replyTo: true });
+    expect(missingForMarketingEmail(null, null)).toEqual({ mailingAddress: true, replyTo: true });
   });
 
   /**
-   * THE TWO MUST AGREE (automations.ts:1191-1195): `missingForReactivation`'s
+   * THE TWO MUST AGREE (automations.ts:1191-1195): `missingForMarketingEmail`'s
    * `replyTo` judgement and `normalizeReplyTo` — the send path's own rule for
    * "no address" (`apps/web/src/lib/email/reply-to.ts`) — decide "blank" on
    * the same input independently, one in packages/db and one in web, because
@@ -105,7 +105,7 @@ describe("what a reactivation email cannot go without", () => {
    */
   it("agrees with normalizeReplyTo on every shape — one rule, not two", () => {
     for (const v of [null, "", "  ", " \t", "ops@example.com"]) {
-      expect(missingForReactivation("x", v).replyTo, JSON.stringify(v))
+      expect(missingForMarketingEmail("x", v).replyTo, JSON.stringify(v))
         .toBe(normalizeReplyTo(v) === undefined);
     }
   });

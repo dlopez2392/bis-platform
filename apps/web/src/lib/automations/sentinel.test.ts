@@ -91,8 +91,12 @@ const REFERRAL_ROW: DueReferralAsk = {
   followupSentAt: "2026-09-07T12:30:00.000Z", reviewRequestedAt: "2026-09-08T13:05:00.000Z",
   smsFailedAt: null, reviewRequestEnabled: true,
   contactId: "ct_7", contactEmail: null, contactPhone: "9565550105",
+  // Not opted out, and a real address: the SMS channel needs neither (B21),
+  // but a row that nulled them would stop sending the day it moved to email.
+  contactMarketingEmailOptedOut: false,
   brandName: BRAND, branding, accountTimezone: "America/New_York",
-  fromEmail: null, replyToEmail: null, body: "", config: { channel: "sms" },
+  fromEmail: null, replyToEmail: null, mailingAddress: "PO Box 12\nMcAllen, TX 78501",
+  body: "", config: { channel: "sms" },
 };
 
 /** Part B’s reactivation check-in — EMAIL ONLY, so the row carries no phone

@@ -1,6 +1,6 @@
 import {
   listDueReferralAsks, stampReferralAsked, stampReferralAskSmsFailed, countReferralAsksSince,
-  getDueReferralAskById, type DueReferralAsk,
+  getDueReferralAskById, missingForMarketingEmail, type DueReferralAsk,
 } from "@bis/db";
 import { emailBrandNamed } from "@/lib/email/templates/shell";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
@@ -12,6 +12,7 @@ import { stampWithRetry } from "@/lib/booking/stamp-retry";
 import { laterOf } from "../anchor";
 import { shouldSendReferralAskNow, reviewRequestStillOwed } from "../referral-ask-gate";
 import { defaultReferralAskBody, referralAskSubject } from "../referral-ask-copy";
+import { marketingFooterReason } from "../marketing-copy";
 import { AUTOMATION_TICK_CAP, AUTOMATION_DAILY_CAP, DAILY_CAP_WINDOW_MS } from "../caps";
 import { sendAutomationSms, markAutomationSmsSent, smsCooldownActive, type SentSms } from "../send-sms";
 import {
@@ -21,7 +22,9 @@ import type { Pass, PassContext } from "../context";
 
 type Target =
   | { channel: "sms"; to: string; from: string }
-  | { channel: "email"; to: string };
+  /** `mailingAddress` is the row's, carried here once the check above has
+   *  proved it non-blank, so the footer never needs a non-null assertion. */
+  | { channel: "email"; to: string; mailingAddress: string };
 
 /**
  * The referral ask — the completed-job ladder's THIRD rung. Day one the
@@ -39,8 +42,14 @@ type Target =
  *
  * Per row, each refusal counted under its own name so triage can tell them
  * apart: invalid config → unresolvable zone → the review is still owed →
- * not this morning → no deliverable address → SMS gate refused (NO fallback
- * to email) → SMS cooldown → caps → send → STAMP → (sms) mark the row sent.
+ * not this morning → no deliverable address → (sms) SMS gate refused (NO
+ * fallback to email) → SMS cooldown | (email) the contact opted out of
+ * marketing email → no postal address → no reply-to → caps → send → STAMP →
+ * (sms) mark the row sent.
+ *
+ * THE EMAIL IS MARKETING (B21, danlo, 2026-09-23): it carries the check-in's
+ * footer and address and honours the contact's "No marketing emails" switch.
+ * The text does neither — its opt-out is the carrier's STOP list.
  */
 export const referralAskPass: Pass = {
   key: "referralAsks",
@@ -58,6 +67,9 @@ export async function processReferralAsks(
     sent: 0, failed: 0, unstamped: 0, held: 0,
     skippedInvalidConfig: 0, skippedNoAddress: 0, skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0,
     waitingForMorning: 0, waitingForReviewRequest: 0, unresolvableTimezone: 0,
+    // B21, email channel only: the contact asked not to get marketing email;
+    // the account has no postal address; the account has no reply-to.
+    skippedNoMailingAddress: 0, skippedNoReplyTo: 0, skippedOptedOut: 0,
   };
 
   const smsGates = new Map<string, SmsGate>();
@@ -183,7 +195,46 @@ export async function processReferralAsks(
         await logSkipped(ctx, subject, REASONS.noEmail);
         continue;
       }
-      target = { channel: "email", to: row.contactEmail };
+      // THE MARKETING-EMAIL RULES (B21, danlo, 2026-09-23), EMAIL CHANNEL
+      // ONLY: a text carries no footer and its opt-out is the carrier's STOP
+      // list, so the SMS branch above asks none of this.
+      //
+      // First the person: a contact the operator marked "No marketing
+      // emails" (0049) — they replied to a footer's "reply and let us know",
+      // and this is the promise kept. Before the account's own gaps, because
+      // "they asked not to" is the truer answer for this row either way.
+      //
+      // Then the account: the footer prints the postal address, and its
+      // opt-out is a REPLY, so a reply must reach the business rather than
+      // the agency's `EMAIL_FROM` mailbox — the check-in's rule, asked
+      // through the same function (under CAN-SPAM, the orchestrator's
+      // reading, not a lawyer's). The save refuses to turn the email channel
+      // on without both; this is either cleared since, or a release.
+      //
+      // PASS-LEVEL SKIPS, where the check-in's opt-out is a query filter:
+      // this due-list is a bounded booking window with no row limit, so a
+      // row skipped here (never stamped) cannot crowd a sendable one out of
+      // it. BEFORE THE CAPS, for the tick cap's sake: behind it, a run of
+      // these would spend all ten attempts every tick of the morning.
+      if (row.contactMarketingEmailOptedOut) {
+        c.skippedOptedOut++;
+        await logSkipped(ctx, subject, REASONS.optedOutEmail);
+        continue;
+      }
+      const missing = missingForMarketingEmail(row.mailingAddress, row.replyToEmail);
+      if (missing.mailingAddress) {
+        c.skippedNoMailingAddress++;
+        await logSkipped(ctx, subject, REASONS.noMailingAddress);
+        continue;
+      }
+      if (missing.replyTo) {
+        c.skippedNoReplyTo++;
+        await logSkipped(ctx, subject, REASONS.noReplyTo);
+        continue;
+      }
+      // `!` is the check above: `missing.mailingAddress` is false only for a
+      // string that is non-blank after `.trim()`.
+      target = { channel: "email", to: row.contactEmail, mailingAddress: row.mailingAddress! };
     }
 
     // CAPS, after the gate and the address so only rows that would actually
@@ -221,7 +272,7 @@ export async function processReferralAsks(
             onProviderFailure: () => stampReferralAskSmsFailed(ctx.db, row.bookingId),
           });
         } else {
-          await sendEmail(ctx, row, target.to, body);
+          await sendEmail(ctx, row, target, body);
         }
 
         const stamp = await stampWithRetry(() => stampReferralAsked(ctx.db, row.bookingId));
@@ -276,19 +327,23 @@ export const releaseReferralAsk: Releaser = async (ctx, row) => {
 };
 
 async function sendEmail(
-  ctx: PassContext, row: DueReferralAsk, to: string, body: string,
+  ctx: PassContext, row: DueReferralAsk, target: Extract<Target, { channel: "email" }>, body: string,
 ): Promise<void> {
   // emailBrandNamed, because the row carries the resolved brand name and
   // nothing else — there is no accountName here to get wrong.
   const brand = emailBrandNamed(row.branding, row.brandName);
   // The subject is composed here, not inside the template: an account with no
   // brand name has `brandName === ""` (brandDisplayName, branding.ts:197-199)
-  // and a template interpolating it would ship "One favor, from ".
+  // and a template interpolating it would ship "One favor, from ". The
+  // footer's line likewise (B21): `marketingFooterReason` owns the
+  // blank-brand branch, and the template only prints.
   const { subject, html, text } = referralAskEmail({
     brand, subject: referralAskSubject(row.brandName), body,
+    mailingAddress: target.mailingAddress,
+    footerReason: marketingFooterReason(row.brandName),
   });
   await ctx.email.send({
-    to,
+    to: target.to,
     fromName: brand.name,
     fromAddress: row.fromEmail ?? undefined,
     // The row's OWN top-level replyToEmail, never branding.replyToEmail.

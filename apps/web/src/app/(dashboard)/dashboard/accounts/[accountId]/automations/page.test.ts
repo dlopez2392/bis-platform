@@ -27,12 +27,12 @@ const dbMock = vi.hoisted(() => ({
   listPipelinesWithStages: vi.fn(), getMailingAddress: vi.fn(),
 }));
 vi.mock("@bis/db", async () => ({
-  // THE REAL RULE, not a stub: the page asks `missingForReactivation` (whose
+  // THE REAL RULE, not a stub: the page asks `missingForMarketingEmail` (whose
   // home is @bis/db since the review fix of 2026-09-22; the page reaches it
   // through reactivation-gate.ts's re-export), and the reactivation case
   // below exists to prove the page judges "missing" exactly as the save and
   // the pass do. A stub here would prove the stub.
-  missingForReactivation: (await vi.importActual<typeof import("@bis/db")>("@bis/db")).missingForReactivation,
+  missingForMarketingEmail: (await vi.importActual<typeof import("@bis/db")>("@bis/db")).missingForMarketingEmail,
   serviceDb: () => ({
     from: () => ({
       select: () => ({
@@ -250,6 +250,25 @@ describe("automations page", () => {
     dbFixture.replyToEmail = null;
     c = await render();
     expect(c.reactivation!.missing).toEqual({ mailingAddress: false, replyTo: true });
+  });
+
+  it("hands the referral card the account id and the SAME missing facts — the email channel needs what the check-in needs (B21)", async () => {
+    // Mutation: hand the referral card a constant
+    // `{ mailingAddress: false, replyTo: false }` → the second and third
+    // halves red BY NAME.
+    let c = await render();
+    expect(c.referral!.accountId).toBe("a1");
+    expect(c.referral!.missing).toEqual({ mailingAddress: false, replyTo: false });
+
+    dbMock.getMailingAddress.mockResolvedValue(" \n ");
+    c = await render();
+    expect(c.referral!.missing).toEqual({ mailingAddress: true, replyTo: false });
+
+    dbMock.getMailingAddress.mockResolvedValue("123 Main St");
+    dbFixture.replyToEmail = null;
+    c = await render();
+    expect(c.referral!.missing).toEqual({ mailingAddress: false, replyTo: true });
+    expect(c.referral!.missing).toEqual(c.reactivation!.missing);
   });
 
   it("a failed address read degrades to NO warning, never a false one — and says so in the log", async () => {

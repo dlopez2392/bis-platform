@@ -23,6 +23,7 @@ export function shouldSendReactivationNow(now: Date, timezone: string): boolean 
  * walk lives there and has to leave out an account missing either, and
  * packages/db cannot import web. The pass, the save action and the card keep
  * importing it from this module; `reactivation-gate.test.ts` pins that this
- * is the same function object, never a copy.
+ * is the same function object, never a copy. Named `missingForReactivation`
+ * until the referral ask's email started asking the same question (B21).
  */
-export { missingForReactivation } from "@bis/db";
+export { missingForMarketingEmail } from "@bis/db";

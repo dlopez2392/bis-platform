@@ -58,4 +58,36 @@ describe("contact summary route", () => {
     expect(body.recent[0].kind).toBe("call");   // tie, stable sort keeps construction order
     expect(body.recent[1].kind).toBe("note");
   });
+
+  /**
+   * The drawer's "No marketing emails" switch reads its starting state from
+   * HERE, not from the list row: a `?peek=` deep link to a contact on another
+   * page of the list has only a stub row (contacts-table.tsx's missingRow,
+   * every field null), which would show an opted-out contact as unticked.
+   */
+  describe("marketing_email_opted_out_at", () => {
+    function emptySources() {
+      access.mockResolvedValue({ userId: "u1", isAgency: true });
+      for (const k of ["listContactTags", "listNotes", "listContactSubmissions",
+        "listContactMessages", "listContactOpportunities", "listContactCalls"] as const) {
+        dbMocks[k].mockResolvedValue([]);
+      }
+    }
+
+    it("carries the contact's opt-out stamp", async () => {
+      emptySources();
+      dbMocks.getContact.mockResolvedValue({
+        id: "c1", marketing_email_opted_out_at: "2026-09-23T12:00:00+00:00",
+      });
+      const body = await (await GET(req(), ctx())).json();
+      expect(body.marketing_email_opted_out_at).toBe("2026-09-23T12:00:00+00:00");
+    });
+
+    it("is null (not absent) for a contact who may be emailed", async () => {
+      emptySources();
+      dbMocks.getContact.mockResolvedValue({ id: "c1", marketing_email_opted_out_at: null });
+      const body = await (await GET(req(), ctx())).json();
+      expect(body).toHaveProperty("marketing_email_opted_out_at", null);
+    });
+  });
 });

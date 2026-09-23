@@ -194,7 +194,7 @@ test.describe("part B's recipes on the Automations page (agency)", () => {
   /**
    * THE REFUSAL ITSELF, in the browser. `auth.setup.ts`'s per-run fixture
    * account is created with `setBranding(...)` calls that never set
-   * `mailingAddress` or `replyToEmail`, so `missingForReactivation` reads
+   * `mailingAddress` or `replyToEmail`, so `missingForMarketingEmail` reads
    * both as missing for the whole life of the run UNLESS something writes
    * one — and the only spec that does, `client-branding.spec.ts`, restores
    * the prior (address-less) value in its own `finally` rather than leaving

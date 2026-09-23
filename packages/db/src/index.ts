@@ -17,6 +17,7 @@ export { createContact, updateContact, listContacts, getContact,
          addTagToContact, removeTagFromContact, listContactTags, fillContactBlanks,
          countContacts, deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
          type ContactInput, type SortKey, type SortDir } from "./contacts";
+export { setMarketingEmailOptOut } from "./contacts";
 export { buildMatchIndex, applyImportBatch,
          type MatchIndex, type ImportRow } from "./contact-import";
 export { addNote, listNotes, addTask, listContactTasks, completeTask, reopenTask } from "./activities";
@@ -83,7 +84,7 @@ export { getAutomation, upsertAutomation, parseReviewRequestConfig,
          type ReferralAskChannel, type ReferralAskConfig, type DueReferralAsk,
          parseReactivationConfig, reactivationCutoff, listDueReactivations, getDueReactivationById,
          conversationQuietSince, stampReactivationSent, countReactivationsSince,
-         missingForReactivation,
+         missingForMarketingEmail,
          REACTIVATION_MIN_MONTHS, REACTIVATION_MAX_MONTHS, REACTIVATION_DEFAULT_MONTHS,
          REACTIVATION_CANDIDATE_LIMIT, REACTIVATION_CANDIDATE_PAGES, REACTIVATION_SURVIVOR_TARGET,
          type ReactivationConfig, type DueReactivation,

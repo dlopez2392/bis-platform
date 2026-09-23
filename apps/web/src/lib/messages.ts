@@ -434,6 +434,15 @@ export const m = {
   "contact.noOpportunities": "None yet.",
   "contact.noName": "(no name)",
 
+  // The "No marketing emails" switch (drawer + full contact page, migration
+  // 0049). Flipped by the operator when a customer replies "stop" to a
+  // check-in or a referral ask; those two are the only emails it holds back.
+  "contact.marketingOptOut.label": "No marketing emails",
+  "contact.marketingOptOut.hint": "Check-ins and referral asks won't be emailed to this contact. Quotes and appointment emails still go.",
+  "contact.marketingOptOut.onToast": "Marketing emails turned off for this contact",
+  "contact.marketingOptOut.offToast": "Marketing emails turned back on for this contact",
+  "contact.marketingOptOut.failed": "Couldn't save that — please try again.",
+
   // The contact drawer's recent-activity feed (Task 2's summary route,
   // Task 6's drawer). "{outcome}"/"{name}"/"{value}" are the house
   // {placeholder} convention (see setup.progress above) — the route
@@ -1314,6 +1323,14 @@ export const m = {
   "automations.referral.save": "Save referral asks",
   "automations.referral.saved": "Referral asks saved",
   "automations.referral.saveFailed": "Could not save referral asks.",
+  // B21: the referral EMAIL carries the check-in's footer, so it needs the
+  // same two things. Saved ON by email → `missing*`; otherwise `beforeOn*`.
+  "automations.referral.missingBoth": "Referral asks can't go out by email yet: they need the company's mailing address, printed at the bottom of every one, and a reply-to address, so a customer who replies reaches the company. Add both on the {settingsLink} page.",
+  "automations.referral.missingMailingAddress": "Referral asks can't go out by email yet: they need the company's mailing address, printed at the bottom of every one. Add it on the {settingsLink} page.",
+  "automations.referral.missingReplyTo": "Referral asks can't go out by email yet: they need a reply-to address, so a customer who replies reaches the company. Add one on the {settingsLink} page.",
+  "automations.referral.beforeOnBoth": "Before these go out by email, add the company's mailing address, printed at the bottom of every one, and a reply-to address, so a customer who replies reaches the company. Both are on the {settingsLink} page.",
+  "automations.referral.beforeOnMailingAddress": "Before these go out by email, add the company's mailing address, printed at the bottom of every one. It's on the {settingsLink} page.",
+  "automations.referral.beforeOnReplyTo": "Before these go out by email, add a reply-to address, so a customer who replies reaches the company. It's on the {settingsLink} page.",
 
   // Part B — the reactivation check-in (a past customer gone quiet). EMAIL
   // ONLY, so unlike every other recipe's copy in this file there is no GSM-7

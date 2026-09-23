@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import "dotenv/config";
 import { withTestAccount } from "./fixtures";
-import { createContact } from "../contacts";
+import { createContact, setMarketingEmailOptOut } from "../contacts";
 import { setBranding } from "../branding";
 import { createForm, createSubmission } from "../forms";
 import {
@@ -11,6 +11,7 @@ import {
 import {
   parseReviewRequestConfig, getAutomation, upsertAutomation,
   listDueReviewRequests, stampReviewRequested, stampReviewRequestSmsFailed, countReviewRequestsSince,
+  getDueReviewRequestById, getDueNoShowNudgeById, getDueSmsReminderById,
   REVIEW_REQUEST_MAX_AGE_MS,
   parseNoShowNudgeConfig, listDueNoShowNudges, stampNoShowNudged, stampNoShowNudgeSmsFailed,
   countNoShowNudgesSince, NO_SHOW_NUDGE_MAX_AGE_MS,
@@ -982,6 +983,50 @@ describe("referral ask — data layer", () => {
     });
   });
 
+  // Migration 0049 + 0048. The referral due-list is a bounded booking window,
+  // so the PASS decides what to do with an opted-out contact (email channel
+  // only) and with a missing address; this layer only has to carry both,
+  // BY VALUE, on both builders' rows.
+  it("carries the contact's marketing-email opt-out and the account's mailing address, by list and by id", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId,
+        { firstName: "Optref", email: "optref@example.com" }, "user_test");
+      await upsertAutomation(db, accountId, "referral_ask",
+        { enabled: true, body: "", config: { channel: "email" } }, "user_test");
+      const now = new Date("2027-08-20T12:00:00Z");
+      const b = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date(now.getTime() - 31 * HOUR), endsAt: new Date(now.getTime() - 30 * HOUR) }, "user_test");
+      await setBookingStatus(db, accountId, b.id, "completed", "user_test");
+      const both = async () => {
+        const listed = (await listDueReferralAsks(db, now.toISOString())).find((r) => r.bookingId === b.id);
+        const byId = (await getDueReferralAskById(db, b.id)).due;
+        expect(listed, "the fixture booking must be due by list").toBeDefined();
+        expect(byId, "the fixture booking must be due by id").not.toBeNull();
+        return [listed!, byId!] as const;
+      };
+
+      // Unset: `false` and `null` BY VALUE (`toBe`, not falsy): a field the
+      // builder forgot reads `undefined` and fails both.
+      for (const row of await both()) {
+        expect(row.contactMarketingEmailOptedOut).toBe(false);
+        expect(row.mailingAddress).toBeNull();
+      }
+
+      await setMarketingEmailOptOut(db, accountId, contactId, true);
+      await setBranding(db, accountId, { mailingAddress: "9 Referral Rd\nMcAllen, TX 78501" }, "user_test");
+      // Mutation: drop `marketing_email_opted_out_at` from REFERRAL_ASK_SELECT,
+      // or hard-code `contactMarketingEmailOptedOut: false` → reds. Mutation:
+      // hard-code `mailingAddress: null` in toDueReferralAsk → reds. And the
+      // opted-out row is STILL DUE here: the query must not filter it, or an
+      // SMS-channel ask would stop reaching a contact who only refused email.
+      for (const row of await both()) {
+        expect(row.contactMarketingEmailOptedOut).toBe(true);
+        expect(row.mailingAddress).toBe("9 Referral Rd\nMcAllen, TX 78501");
+      }
+    });
+  });
+
   it("stampReferralAsked and stampReferralAskSmsFailed write their own columns; only the first counts", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
@@ -1428,6 +1473,43 @@ describe("reactivation — data layer", () => {
 
       await setBranding(db, accountId, { mailingAddress: MAILING }, "user_test");
       expect((await getDueReactivationById(db, contactId)).due!.mailingAddress).toBe(MAILING);
+    });
+  });
+
+  // Migration 0049: the per-contact marketing-email opt-out. Excluded IN THE
+  // QUERY, never skipped in the pass: an opted-out contact is never stamped,
+  // so a pass-level skip would hand the same row back every tick and refill
+  // the survivor window with it (the starvation case below, one contact at a
+  // time). One case per read, so each filter reds on its own name.
+  it("an opted-out contact is never in the walk, and is back in it once the opt-out is cleared", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const contactId = await quietCustomer(db, accountId);
+      await setBranding(db, accountId, SEND_READY, "user_test");
+      const ids = async () =>
+        (await listDueReactivations(db, new Date("2027-09-21T12:00:00Z").toISOString())).map((r) => r.contactId);
+      // The positive first, or the negative below is vacuous.
+      expect(await ids()).toContain(contactId);
+      await setMarketingEmailOptOut(db, accountId, contactId, true);
+      // Mutation: drop `.is("contacts.marketing_email_opted_out_at", null)`
+      // from listDueReactivations → this reds.
+      expect(await ids()).not.toContain(contactId);
+      await setMarketingEmailOptOut(db, accountId, contactId, false);
+      expect(await ids()).toContain(contactId);
+    });
+  });
+
+  it("by id, an opted-out contact answers `gone`, and is due again once the opt-out is cleared", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const contactId = await quietCustomer(db, accountId);
+      expect((await getDueReactivationById(db, contactId)).due?.contactId).toBe(contactId);
+      await setMarketingEmailOptOut(db, accountId, contactId, true);
+      // The WHOLE answer: a released hold for this contact leaves the queue
+      // on the releaser's `gone` path. Mutation: drop
+      // `.is("marketing_email_opted_out_at", null)` from
+      // getDueReactivationById → this reds.
+      expect(await getDueReactivationById(db, contactId)).toEqual({ due: null, why: "gone" });
+      await setMarketingEmailOptOut(db, accountId, contactId, false);
+      expect((await getDueReactivationById(db, contactId)).due?.contactId).toBe(contactId);
     });
   });
 
@@ -1886,6 +1968,134 @@ describe("quote follow-up — data layer", () => {
         await stampQuoteFollowupSent(db, opp.id);
         expect(await countQuoteFollowupsSince(db, accountB, floor)).toBe(1);
         expect(await countQuoteFollowupsSince(db, accountA, floor)).toBe(0);
+      });
+    });
+  });
+});
+
+// THE #111 A1 GUARD, ON EVERY SIBLING. `bookings.contact_id` and
+// `opportunities.contact_id` are plain single-column FKs, so a row in account
+// A can point at a contact of account B, and the `contacts(...)` embed follows
+// it with no account condition. Before `ownAccountContactOnly` every recipe
+// below would have messaged B's customer under A's brand. The reactivation
+// case above ("a conversation pointing at ANOTHER account's contact") is the
+// template; this is the same proof for the six due-lists that join
+// bookings/opportunities -> contacts.
+//
+// Each case builds TWO rows in account A inside the recipe's window: one on
+// A's own contact (the positive control, so the negative is not vacuous) and
+// one on B's contact. Mutation: drop the guard from a recipe's LIST read, or
+// from its BY-ID read -> that recipe's row reds by name.
+describe("no due-list reaches another account's contact (ownAccountContactOnly)", () => {
+  const now = new Date("2027-08-20T12:00:00Z");
+  type Db = Parameters<typeof listDueReviewRequests>[0];
+  type Recipe = {
+    table: "bookings" | "opportunities";
+    /** Turns the recipe on for `accountId` and returns a maker of one due
+     *  row pointing at `contactId`; `n` spaces the rows apart in the window. */
+    prepare: (db: Db, accountId: string) => Promise<(contactId: string, n: number) => Promise<string>>;
+    list: (db: Db) => Promise<string[]>;
+    byId: (db: Db, id: string) => Promise<{ due: unknown; why?: string }>;
+  };
+
+  const booking = (status: "completed" | "no_show" | null, startsAt: (n: number) => Date, lengthMs: number) =>
+    async (db: Db, accountId: string, contactId: string, n: number) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const start = startsAt(n);
+      const b = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: start, endsAt: new Date(start.getTime() + lengthMs) }, "user_test");
+      if (status) await setBookingStatus(db, accountId, b.id, status, "user_test");
+      return b.id;
+    };
+  const bookingRecipe = (
+    key: "review_request" | "no_show_nudge" | "sms_reminder" | "appointment_confirm" | "referral_ask",
+    config: Record<string, unknown>,
+    make: ReturnType<typeof booking>,
+    list: (db: Db) => Promise<{ bookingId: string }[]>,
+    byId: Recipe["byId"],
+  ): Recipe => ({
+    table: "bookings",
+    prepare: async (db, accountId) => {
+      await upsertAutomation(db, accountId, key, { enabled: true, body: "", config }, "user_test");
+      return (contactId, n) => make(db, accountId, contactId, n);
+    },
+    list: async (db) => (await list(db)).map((r) => r.bookingId),
+    byId,
+  });
+
+  const RECIPES: Record<string, Recipe> = {
+    review_request: bookingRecipe("review_request",
+      { channel: "email", reviewUrl: "https://g.page/r/x/review" },
+      booking("completed", (n) => new Date(now.getTime() - (30 + n) * HOUR), 30 * MINUTE),
+      (db) => listDueReviewRequests(db, now.toISOString()), (db, id) => getDueReviewRequestById(db, id)),
+    no_show_nudge: bookingRecipe("no_show_nudge", { channel: "sms" },
+      booking("no_show", (n) => new Date(now.getTime() - (10 + n) * HOUR), 30 * MINUTE),
+      (db) => listDueNoShowNudges(db, now.toISOString()), (db, id) => getDueNoShowNudgeById(db, id)),
+    sms_reminder: bookingRecipe("sms_reminder", {},
+      booking(null, (n) => new Date(now.getTime() + (100 + 10 * n) * MINUTE), 5 * MINUTE),
+      (db) => listDueSmsReminders(db, now.toISOString()), (db, id) => getDueSmsReminderById(db, id)),
+    appointment_confirm: bookingRecipe("appointment_confirm", {},
+      booking(null, (n) => new Date(now.getTime() + 47 * HOUR + (10 + 10 * n) * MINUTE), 5 * MINUTE),
+      (db) => listDueAppointmentConfirms(db, now.toISOString()), (db, id) => getDueAppointmentConfirmById(db, id)),
+    referral_ask: bookingRecipe("referral_ask", { channel: "email" },
+      booking("completed", (n) => new Date(now.getTime() - (30 + n) * HOUR), 30 * MINUTE),
+      (db) => listDueReferralAsks(db, now.toISOString()), (db, id) => getDueReferralAskById(db, id)),
+    quote_followup: {
+      table: "opportunities",
+      prepare: async (db, accountId) => {
+        const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+        const stages = (await listPipelinesWithStages(db, accountId)).find((p) => p.id === pipelineId)!.stages;
+        const quoted = stages[1] ?? stages[0]!;
+        await upsertAutomation(db, accountId, "quote_followup",
+          { enabled: true, body: "", config: { stageId: quoted.id, quietDays: 3, channel: "sms" } }, "user_test");
+        // A DIRECT INSERT, not createOpportunity: that function refuses a
+        // contact outside the account (opportunities.ts), which is exactly the
+        // row this case must construct. The own-contact row goes the same way
+        // so the two differ in nothing but the contact.
+        return async (contactId, n) => {
+          const { data, error } = await db.from("opportunities").insert({
+            account_id: accountId, contact_id: contactId, pipeline_id: pipelineId, stage_id: quoted.id,
+            name: "Reroof", monetary_value: 0,
+            stage_changed_at: new Date(now.getTime() - 5 * 24 * HOUR - n * MINUTE).toISOString(),
+          }).select("id").single();
+          if (error || !data) throw new Error(`opportunity fixture failed: ${error?.message}`);
+          return (data as { id: string }).id;
+        };
+      },
+      list: async (db) => (await listDueQuoteFollowups(db, now.toISOString())).map((r) => r.opportunityId),
+      byId: (db, id) => getDueQuoteFollowupById(db, id),
+    },
+  };
+
+  it.each(Object.keys(RECIPES))("%s: a row on another account's contact is never due, by list or by id", async (key) => {
+    const recipe = RECIPES[key]!;
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db, accountB) => {
+        const make = await recipe.prepare(db, accountA);
+        const { id: ownContact } = await createContact(db, accountA,
+          { firstName: "Own", email: "own@example.com", phone: "(956) 555-0171" }, "user_test");
+        const { id: theirContact } = await createContact(db, accountB,
+          { firstName: "Theirs", email: "theirs@example.com", phone: "(956) 555-0172" }, "user_test");
+        const own = await make(ownContact, 0);
+        const crossed = await make(theirContact, 1);
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        try {
+          const ids = await recipe.list(db);
+          expect(ids, "the own-contact control must be due by list").toContain(own);
+          expect(ids, "the cross-account row must not be due by list").not.toContain(crossed);
+          expect((await recipe.byId(db, own)).due, "the own-contact control must be due by id").not.toBeNull();
+          expect(await recipe.byId(db, crossed)).toEqual({ due: null, why: "gone" });
+          // Named in the log, so the data defect is findable.
+          expect(logged.mock.calls.map((c) => String(c[0])).some((s) => s.includes(crossed))).toBe(true);
+        } finally {
+          logged.mockRestore();
+          // The crossed row points at B's contact; B's teardown runs first and
+          // must not trip over it. Logged, never thrown (a throw in `finally`
+          // replaces the assertion that brought us here).
+          const { error } = await db.from(recipe.table).delete().eq("id", crossed);
+          if (error) console.error(`cross-account ${recipe.table} cleanup failed: ${error.message}`);
+        }
       });
     });
   });

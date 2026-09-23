@@ -19,7 +19,7 @@ import {
 import { requireAccountAccess } from "@/lib/auth";
 import { m } from "@/lib/messages";
 import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
-import { missingForReactivation } from "@/lib/automations/reactivation-gate";
+import { missingForMarketingEmail } from "@/lib/automations/reactivation-gate";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -109,6 +109,29 @@ export async function saveReferralAskAction(
   const body = String(formData.get("body") ?? "").trim();
   if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
 
+  // NOT ON BY EMAIL WITHOUT AN ADDRESS AND A REPLY-TO (B21, danlo,
+  // 2026-09-23) — the check-in's rule, for the same reason: the referral
+  // email is marketing, prints the postal address, and its opt-out is a
+  // reply that must reach the business. The same function the pass skips on
+  // and the same messages as the check-in's save. EMAIL ONLY — a text
+  // carries no footer and its opt-out is the carrier's STOP list — and only
+  // when turning it ON, so a recipe can always be switched off. A failed
+  // read is a failed save, never "not set".
+  if (enabled && config.channel === "email") {
+    try {
+      const db = serviceDb();
+      const [mailingAddress, branding] = await Promise.all([
+        getMailingAddress(db, accountId), getBranding(db, accountId),
+      ]);
+      const missing = missingForMarketingEmail(mailingAddress, branding.replyToEmail);
+      if (missing.mailingAddress) return { ok: false, error: m["automations.reactivation.needsMailingAddress"] };
+      if (missing.replyTo) return { ok: false, error: m["automations.reactivation.needsReplyTo"] };
+    } catch (e) {
+      console.error(`saveReferralAskAction: address/reply-to read failed for account ${accountId}: ${String(e)}`);
+      return { ok: false, error: m["automations.referral.saveFailed"] };
+    }
+  }
+
   try {
     await upsertAutomation(serviceDb(), accountId, "referral_ask", { enabled, body, config }, userId);
   } catch (e) {
@@ -155,7 +178,7 @@ export async function saveReactivationAction(
       const [mailingAddress, branding] = await Promise.all([
         getMailingAddress(db, accountId), getBranding(db, accountId),
       ]);
-      const missing = missingForReactivation(mailingAddress, branding.replyToEmail);
+      const missing = missingForMarketingEmail(mailingAddress, branding.replyToEmail);
       if (missing.mailingAddress) return { ok: false, error: m["automations.reactivation.needsMailingAddress"] };
       if (missing.replyTo) return { ok: false, error: m["automations.reactivation.needsReplyTo"] };
     } catch (e) {

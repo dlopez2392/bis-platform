@@ -3,7 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
-import { createContact, deleteContacts, addTagToContacts, removeTagFromContacts, updateContact } from "@bis/db";
+import { createContact, deleteContacts, addTagToContacts, removeTagFromContacts, updateContact,
+         setMarketingEmailOptOut } from "@bis/db";
+import { m } from "@/lib/messages";
 import { EDITABLE_FIELDS, FIELD_TO_INPUT_KEY, normalizeFieldInput,
          type EditableField } from "@/lib/contacts/field-input";
 
@@ -31,6 +33,36 @@ export async function updateContactFieldAction(
       { [FIELD_TO_INPUT_KEY[field]]: norm.value }, userId);
   } catch {
     return { ok: false, error: "Save failed — please try again." };
+  }
+  revalidatePath(contactsPath(accountId));
+  revalidatePath(`${contactsPath(accountId)}/${contactId}`);
+  return { ok: true };
+}
+
+/**
+ * The "No marketing emails" switch (drawer + full contact page). `true`
+ * records the customer's "stop" (stamps `marketing_email_opted_out_at`),
+ * `false` clears it — which is also the undo toast's write.
+ *
+ * Through the request's RLS client, not the service client: a client-role
+ * user manages their own contacts, and RLS is the second fence behind
+ * `requireAccountAccess`. The first fence for a contact of ANOTHER account is
+ * `setMarketingEmailOptOut` itself — scoped by `account_id` on the update and
+ * throwing when no row matched — so that case lands in the catch below as a
+ * reported failure, never a silent "saved".
+ *
+ * `optedOut` is checked to be a real boolean: an action's arguments arrive
+ * off the wire, and a truthy stand-in ("false") would stamp the opt-out.
+ */
+export async function setMarketingEmailOptOutAction(
+  accountId: string, contactId: string, optedOut: boolean,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  await requireAccountAccess(accountId);
+  if (typeof optedOut !== "boolean") return { ok: false, error: m["contact.marketingOptOut.failed"] };
+  try {
+    await setMarketingEmailOptOut(await dbForRequest(), accountId, contactId, optedOut);
+  } catch {
+    return { ok: false, error: m["contact.marketingOptOut.failed"] };
   }
   revalidatePath(contactsPath(accountId));
   revalidatePath(`${contactsPath(accountId)}/${contactId}`);
