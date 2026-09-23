@@ -29,7 +29,10 @@ import { CONFIRM_REPLY_TREATMENTS } from "../accounts/[accountId]/calendar/confi
 import { DotPill } from "@/components/dot-pill";
 import { SmsPreview } from "@/components/sms-preview";
 import { withOptOut } from "@/lib/sms/opt-out";
-import { composeSmsReminder, defaultSmsReminderBody } from "@/lib/automations/sms-reminder-copy";
+import {
+  composeSmsReminder, defaultSmsReminderBody, SMS_REMINDER_PREVIEW_INSTANT,
+} from "@/lib/automations/sms-reminder-copy";
+import { formatWhen } from "@/lib/booking/time";
 import { cn } from "@/lib/utils";
 import { RailStates } from "./rail-states";
 import { SettingsFieldCards } from "./settings-field-cards";
@@ -66,7 +69,7 @@ function Section({
     <Card>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
-        <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+        <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
           {file}
         </p>
       </CardHeader>
@@ -90,12 +93,12 @@ export default async function StyleguidePage() {
             {(["--surface-0", "--surface-1", "--surface-2", "--surface-3"] as const).map((t) => (
               <div key={t} className="flex flex-col gap-1">
                 <div className="h-14 w-28 rounded-lg border border-border glass" style={{ backgroundColor: `var(${t})` }} />
-                <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{t}</span>
+                <span className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{t}</span>
               </div>
             ))}
             <div className="flex flex-col gap-1">
               <div className="h-14 w-28 rounded-lg" style={{ backgroundColor: "var(--accent-2)" }} />
-              <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">--accent-2</span>
+              <span className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">--accent-2</span>
             </div>
           </div>
           {/* The hero gradient — display size only (≥ 22px), one per screen. */}
@@ -148,7 +151,7 @@ export default async function StyleguidePage() {
               a yes in the history's `sent` colours, a NO as a warning because
               it is the one an operator must act on. Read off
               confirm-reply.ts's own map, so this row cannot drift. */}
-          <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+          <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
             components/dot-pill.tsx · …/calendar/confirm-reply.ts
           </p>
           <div className="flex flex-wrap gap-2" data-testid="styleguide-confirm-reply">
@@ -246,7 +249,7 @@ export default async function StyleguidePage() {
               >
                 💬
               </div>
-              <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Launcher</p>
+              <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Launcher</p>
             </div>
             <ol className="bis-concierge-log w-full max-w-xs list-none" aria-hidden>
               <li className="bis-msg bis-msg-assistant">Hi! Ask me anything about our services.</li>
@@ -308,7 +311,11 @@ export default async function StyleguidePage() {
             <SmsPreview
               id="sg-sms-preview"
               label={m["automations.smsReminder.preview"]}
-              text={withOptOut(composeSmsReminder("Rio Roofing", "Wed, Sep 30, 12:30 PM CDT", defaultSmsReminderBody()))}
+              text={withOptOut(composeSmsReminder(
+                "Rio Roofing",
+                formatWhen(SMS_REMINDER_PREVIEW_INSTANT, "America/Chicago"),
+                defaultSmsReminderBody(),
+              ))}
               testId="styleguide-sms-preview"
             />
           </div>

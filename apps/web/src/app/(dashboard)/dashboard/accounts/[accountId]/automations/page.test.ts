@@ -344,32 +344,38 @@ describe("automations page — journey order", () => {
   it("puts each card under its own Label-role group heading, each group a section named by its h2", async () => {
     // Mutation: move QuoteFollowupCard to the top of the appointment group
     // (the card ORDER is unchanged, so the test above stays green) → this
-    // reds BY NAME.
+    // reds BY NAME. Mutation: move QuietHoursCard to just after its own
+    // `</Group>` (order unchanged, rules section renders empty) → this reds
+    // BY NAME too, because the rules section's own slice no longer holds
+    // "quiet" — unlike counting sections that merely OPENED before the
+    // marker, which that mutation survives.
     const html = renderToStaticMarkup(await AutomationsPage({ params: Promise.resolve({ accountId: "a1" }) }));
     const LABEL = "font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground";
-    const sections = [...html.matchAll(/<section aria-labelledby="([^"]+)"[^>]*><h2 id="([^"]+)" class="([^"]*)">([^<]*)<\/h2>/g)];
+    // Sections are not nested, so each match's own group 5 is the slice from
+    // right after ITS h2 to ITS OWN `</section>` — a card counts under a
+    // heading only when its marker sits INSIDE that slice, not merely
+    // somewhere after the heading opened.
+    const sections = [...html.matchAll(
+      /<section aria-labelledby="([^"]+)"[^>]*><h2 id="([^"]+)" class="([^"]*)">([^<]*)<\/h2>([\s\S]*?)<\/section>/g,
+    )];
     expect(sections.map((s) => s[4])).toEqual([
       m["automations.group.firstTouch"],
       m["automations.group.appointment"],
       m["automations.group.afterJob"],
       m["automations.group.rules"],
     ]);
-    for (const s of sections) {
+    const expectedCards: CardKey[][] = [
+      ["instant", "quoteFollowup"],
+      ["confirm", "sms", "noShow"],
+      ["review", "referral", "reactivation"],
+      ["quiet"],
+    ];
+    sections.forEach((s, i) => {
       expect(s[2], "each section is named by its own h2").toBe(s[1]);
       expect(s[3]).toBe(LABEL);
-    }
-    // Which heading each card sits under, read off the markup: the number of
-    // sections that open before the card's marker, minus one.
-    const starts = sections.map((s) => s.index!);
-    const groupOf = (key: CardKey) => {
-      const at = html.indexOf(`data-card="${key}"`);
-      expect(at, key).toBeGreaterThan(-1);
-      return starts.filter((s) => s < at).length - 1;
-    };
-    expect((["instant", "quoteFollowup"] as const).map(groupOf)).toEqual([0, 0]);
-    expect((["confirm", "sms", "noShow"] as const).map(groupOf)).toEqual([1, 1, 1]);
-    expect((["review", "referral", "reactivation"] as const).map(groupOf)).toEqual([2, 2, 2]);
-    expect(groupOf("quiet")).toBe(3);
+      const cardsInSection = [...s[5]!.matchAll(/data-card="([^"]+)"/g)].map((k) => k[1]);
+      expect(cardsInSection, s[4]).toEqual(expectedCards[i]);
+    });
   });
 });
 
