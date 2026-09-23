@@ -4,6 +4,14 @@ import { m } from "../src/lib/messages";
 
 const ACCOUNT_NAME = "Test Client One";
 
+// Minimal escape for building a RegExp from a message string that may
+// contain characters regex treats specially (e.g. a future label with
+// parentheses). None of today's labels need it, but the accessible name
+// below is assembled from message-table strings, not a literal.
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 // Opening a contact was never covered: the contacts spec asserts the table
 // renders and sorts, then stops. A 404 on this route reached the owner.
 //
@@ -36,9 +44,18 @@ test("opening a contact from the table renders the detail screen", async ({ page
   // a page that still "loads". So assert on content only the real detail
   // screen has, and that the not-found copy is absent.
   await expect(page.getByRole("heading", { name })).toBeVisible();
-  // exact: true — since the contact page grew a "No marketing emails"
-  // checkbox, a substring match on "Email" hits both it and this field.
-  await expect(page.getByLabel("Email", { exact: true })).toBeVisible();
+  // The Email value is an InlineField in DISPLAY mode here — a <button>
+  // whose accessible name is "Edit Email: <value>", not a labelled input
+  // (it only gets a plain "Email" label once clicked into edit mode). So
+  // getByLabel("Email") never matched this field at all; before the
+  // contact page grew a "No marketing emails" checkbox it happened to
+  // match THAT checkbox's label by substring ("emails" contains "email"),
+  // which read as passing. Built from the same message keys the component
+  // uses, so a copy change to either stays in sync automatically.
+  const emailEditName = new RegExp(
+    "^" + escapeRegExp(m["inline.edit"].replace("{label}", m["contacts.email"])) + ":",
+  );
+  await expect(page.getByRole("button", { name: emailEditName })).toBeVisible();
   await expect(page.getByText("Page not found")).toHaveCount(0);
 });
 
