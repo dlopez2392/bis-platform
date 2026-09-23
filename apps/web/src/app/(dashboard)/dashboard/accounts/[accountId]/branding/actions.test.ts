@@ -125,6 +125,27 @@ describe("setBrandingAction — mailing address", () => {
     expect(dbMocks.setBranding.mock.calls[1]![2]).toMatchObject({ mailingAddress: "a".repeat(300) });
   });
 
+  it("normalizes CRLF (and lone CR) line breaks to LF before storing", async () => {
+    // An HTML form submission normalizes a textarea's line breaks to CRLF
+    // regardless of what the user actually typed (browsers do this on
+    // submit, not on keystroke) — CI's e2e run caught this: the browser sent
+    // "PO Box 12\r\nEdinburg, TX 78539" and the column held the \r\n verbatim.
+    // Mutation: delete the normalization → FAILS (the \r survives to
+    // setBranding untouched).
+    expect(await setBrandingAction("acct_1", fd({
+      brandName: "Acme Dental", mailingAddress: "PO Box 12\r\nEdinburg, TX 78539",
+    }))).toEqual({ ok: true });
+    expect(sent().mailingAddress).toBe("PO Box 12\nEdinburg, TX 78539");
+
+    // A lone \r (old Mac-style) is normalized too, not just \r\n pairs.
+    expect(await setBrandingAction("acct_1", fd({
+      brandName: "Acme Dental", mailingAddress: "PO Box 12\rEdinburg, TX 78539",
+    }))).toEqual({ ok: true });
+    expect(dbMocks.setBranding.mock.calls[1]![2]).toMatchObject({
+      mailingAddress: "PO Box 12\nEdinburg, TX 78539",
+    });
+  });
+
   it("rides the write that also carries a new logo", async () => {
     // The action has TWO setBranding call sites (with and without a new logo
     // path). Mutation: drop mailingAddress from the logo branch's object →

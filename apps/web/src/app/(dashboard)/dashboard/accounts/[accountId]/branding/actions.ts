@@ -77,7 +77,16 @@ export async function setBrandingAction(
   // the rest at 300 code points: whitespace-only therefore arrives as null,
   // never as text Postgres would refuse, and `.length` counts UTF-16 units —
   // never fewer than code points — so a value this accepts the CHECK accepts.
-  const rawMailing = String(formData.get("mailingAddress") ?? "").trim();
+  // An HTML form submission normalizes a textarea's line breaks to CRLF on
+  // submit, whatever the user actually typed or however the value was set
+  // programmatically — a browser fact, not a bug in the page. Every other
+  // line-break convention (a lone CR included) is folded to LF here, before
+  // the trim and the length check, so the stored value — and the count the
+  // length check uses — is always LF-only, matching what the unit tests
+  // post and what the reactivation email expects to print.
+  const rawMailing = String(formData.get("mailingAddress") ?? "")
+    .replace(/\r\n?/g, "\n")
+    .trim();
   const mailingAddress = rawMailing === "" ? null : rawMailing;
   if (mailingAddress !== null && mailingAddress.length > MAX_MAILING_ADDRESS) {
     return { ok: false, error: m["branding.mailingAddressTooLong"] };
