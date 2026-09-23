@@ -24,15 +24,25 @@ vi.mock("@/lib/auth", () => ({
   requireAccountAccess: async () => ({ userId: "user_1", isAgency: false }),
 }));
 
-const dbFixture = vi.hoisted(() => ({ alertPhone: null as string | null }));
+const dbFixture = vi.hoisted(() => ({
+  alertPhone: null as string | null,
+  mailingAddress: null as string | null,
+  /** The one object serviceDb() hands out, so a read can be traced to it. */
+  service: { tag: "serviceDb" },
+  mailingReads: [] as unknown[][],
+}));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  serviceDb: () => ({}),
+  serviceDb: () => dbFixture.service,
   getBranding: async () => ({
     brandName: null, brandLogoPath: null, brandColor: null, brandNeutral: null,
     brandCorners: null, brandType: null, brandMode: null, replyToEmail: null,
   }),
   getAlertPhone: async () => dbFixture.alertPhone,
+  getMailingAddress: async (...args: unknown[]) => {
+    dbFixture.mailingReads.push(args);
+    return dbFixture.mailingAddress;
+  },
   brandLogoUrl: (p: string) => `https://example.test/${p}`,
 }));
 
@@ -44,10 +54,15 @@ vi.mock("@/lib/sms/sender", () => ({
       : { ok: false, reason: "a2p_not_approved" }),
 }));
 
-vi.mock("@/components/branding-panel", () => ({ BrandingPanel: () => null }));
-
 const captured = vi.hoisted(() => ({
   props: null as { alertPhone: string | null; smsNotReady?: boolean } | null,
+  panel: null as { mailingAddress?: string | null } | null,
+}));
+vi.mock("@/components/branding-panel", () => ({
+  BrandingPanel: (props: { mailingAddress?: string | null }) => {
+    captured.panel = props;
+    return null;
+  },
 }));
 vi.mock("@/components/alert-phone-card", () => ({
   AlertPhoneCard: (props: { alertPhone: string | null; smsNotReady?: boolean }) => {
@@ -63,6 +78,7 @@ const { default: BrandingPage } = await import("./page");
 
 async function render() {
   captured.props = null;
+  captured.panel = null;
   const el = await BrandingPage({
     params: Promise.resolve({ accountId: "a1" }),
     searchParams: Promise.resolve({}),
@@ -73,7 +89,26 @@ async function render() {
 
 beforeEach(() => {
   dbFixture.alertPhone = "+19562921696";
+  dbFixture.mailingAddress = null;
+  dbFixture.mailingReads = [];
   gateFixture.ok = true;
+});
+
+describe("branding page — the mailing address field", () => {
+  it("hands the panel the stored address, read through serviceDb() like getBranding (mutation: pass mailingAddress={null} → FAILS)", async () => {
+    dbFixture.mailingAddress = "123 Main St\nMcAllen, TX 78501";
+    await render();
+    expect(captured.panel?.mailingAddress).toBe("123 Main St\nMcAllen, TX 78501");
+    // The same client the page's own comment says every read of this row
+    // uses — not a second, differently-privileged path.
+    expect(dbFixture.mailingReads).toEqual([[dbFixture.service, "a1"]]);
+  });
+
+  it("hands the panel null when none is stored, so the box renders empty (mutation: pass \"\" → FAILS)", async () => {
+    await render();
+    expect(captured.panel).not.toBeNull();
+    expect(captured.panel?.mailingAddress).toBeNull();
+  });
 });
 
 describe("branding page — alert-phone readiness", () => {

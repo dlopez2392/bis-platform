@@ -1,6 +1,6 @@
 import { Braces, SlidersHorizontal } from "lucide-react";
 import { clerkClient } from "@clerk/nextjs/server";
-import { serviceDb, listCustomFields, listCustomValues, listBlueprints, getBranding,
+import { serviceDb, listCustomFields, listCustomValues, listBlueprints, getBranding, getMailingAddress,
          getSendingIdentity, brandLogoUrl, getSiteForAccount, countTrafficDays, type CustomFieldDef } from "@bis/db";
 import { SubmitButton } from "../../submit-button";
 import { createFieldAction, upsertValueAction, setClientAccessAction, inviteClientAdminAction,
@@ -58,7 +58,7 @@ export default async function CrmSettingsPage({
   const { from } = await searchParams;
   await requireAgencyOnlyAccountAccess(accountId);
   const db = await dbForRequest();
-  const [fields, values, blueprints, account, branding, sendingIdentity, site, daysStored, projects, smsGate] = await Promise.all([
+  const [fields, values, blueprints, account, branding, mailingAddress, sendingIdentity, site, daysStored, projects, smsGate] = await Promise.all([
     listCustomFields(db, accountId, "contact"),
     listCustomValues(db, accountId),
     // Agency-wide, not account-scoped — this account is just where the
@@ -81,6 +81,7 @@ export default async function CrmSettingsPage({
         return data;
       }),
     getBranding(db, accountId),
+    getMailingAddress(db, accountId),
     getSendingIdentity(db, accountId),
     getSiteForAccount(db, accountId),
     countTrafficDays(db, accountId),
@@ -198,6 +199,7 @@ export default async function CrmSettingsPage({
           key={accountId}
           brandName={branding.brandName}
           replyToEmail={branding.replyToEmail}
+          mailingAddress={mailingAddress}
           brandColor={branding.brandColor}
           brandNeutral={branding.brandNeutral}
           brandCorners={branding.brandCorners}

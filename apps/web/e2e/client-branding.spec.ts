@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
-import { serviceDb, setBranding, getBranding, setClientAccess } from "@bis/db";
+import { serviceDb, setBranding, getBranding, getMailingAddress, setClientAccess } from "@bis/db";
 import { mintClientToken } from "./support";
 
 // Same two paths, same reason, as auth.setup.ts: this file calls serviceDb()
@@ -141,6 +141,7 @@ test.describe("a client edits their branding in the browser", () => {
   test("changes the colour from their own Branding page and it persists", async ({ page }) => {
     const { accountId, clerkUserId } = fixture();
     const before = await getBranding(serviceDb(), accountId);
+    const mailingBefore = await getMailingAddress(serviceDb(), accountId);
 
     try {
       await page.goto(`/dashboard/accounts/${accountId}/branding`);
@@ -164,6 +165,12 @@ test.describe("a client edits their branding in the browser", () => {
       // filtered out here and nowhere else. The agency, writing through the
       // service role, would never see it.
       await page.locator("#reply-to-email").fill("hello@rioroofing.com");
+      // The mailing address (0048) rides the same write and needs the same
+      // proof: its grant is its own line in that migration, and a textarea
+      // that posts under a name the action does not read would save nothing
+      // while the toast still says it did. Two lines, so the line break is
+      // proven to survive the form, the action and the column.
+      await page.locator("#mailing-address").fill("PO Box 12\nEdinburg, TX 78539");
       await page.getByRole("button", { name: "Save" }).click();
 
       await expect(page.getByText("Branding updated")).toBeVisible();
@@ -175,9 +182,13 @@ test.describe("a client edits their branding in the browser", () => {
       await expect
         .poll(async () => (await getBranding(serviceDb(), accountId)).replyToEmail)
         .toBe("hello@rioroofing.com");
+      await expect
+        .poll(async () => getMailingAddress(serviceDb(), accountId))
+        .toBe("PO Box 12\nEdinburg, TX 78539");
     } finally {
       await setBranding(serviceDb(), accountId,
-        { brandColor: before.brandColor, replyToEmail: before.replyToEmail }, clerkUserId);
+        { brandColor: before.brandColor, replyToEmail: before.replyToEmail,
+          mailingAddress: mailingBefore }, clerkUserId);
     }
   });
 });

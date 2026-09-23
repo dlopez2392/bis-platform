@@ -4,6 +4,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { badgeVariants } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
@@ -63,6 +64,7 @@ export function BrandingPanel({
   audience = "agency",
   brandName,
   replyToEmail,
+  mailingAddress,
   brandColor,
   brandNeutral,
   brandCorners,
@@ -74,6 +76,10 @@ export function BrandingPanel({
   audience?: BrandingAudience;
   brandName: string | null;
   replyToEmail: string | null;
+  /** Migration 0048, read with `getMailingAddress` — it is not on `Branding`.
+   *  Required, not optional, so a caller that forgets it fails typecheck
+   *  instead of rendering an empty box whose next save clears the address. */
+  mailingAddress: string | null;
   brandColor: string | null;
   brandNeutral: NeutralName | null;
   brandCorners: CornerName | null;
@@ -219,6 +225,21 @@ export function BrandingPanel({
               defaultValue={replyToEmail ?? ""}
             />
             <p className="text-xs text-muted-foreground">{copy.replyToHint}</p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="mailing-address">{m["branding.mailingAddress"]}</Label>
+            {/* Several lines on purpose: an address is several lines, and the
+                reactivation email prints it with its line breaks. Trimmed,
+                blank-means-cleared and the length cap are all enforced in
+                setBrandingAction, where the database's own CHECK is mirrored. */}
+            <Textarea
+              id="mailing-address"
+              name="mailingAddress"
+              rows={3}
+              defaultValue={mailingAddress ?? ""}
+            />
+            <p className="text-xs text-muted-foreground">{copy.mailingAddressHint}</p>
           </div>
 
           <div className="space-y-1.5">
