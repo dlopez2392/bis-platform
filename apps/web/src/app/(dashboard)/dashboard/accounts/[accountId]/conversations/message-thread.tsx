@@ -37,7 +37,7 @@ export function MessageThread({
             // hundreds of these in one thread. Outbound used to carry a raw
             // 10% alpha of the brand colour, which no token names.
             className={cn(
-              "max-w-[75%] rounded-[8px] px-3 py-2",
+              "max-w-[75%] rounded-[var(--radius-ctl)] px-3 py-2",
               message.direction === "outbound"
                 ? "ml-auto bg-[var(--accent-dim)]"
                 : "bg-[var(--surface-2)]",

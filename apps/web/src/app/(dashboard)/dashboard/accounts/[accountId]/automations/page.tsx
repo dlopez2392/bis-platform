@@ -58,9 +58,10 @@ export default async function AutomationsPage({
       console.error(`automations: review_request read failed for ${accountId}: ${String(e)}`);
       return null;
     }),
-    // POSITIONAL: this promise sits between review_request and no_show_nudge,
-    // and so does its binding above — the ladder's order, on the page as in
-    // the registry.
+    // POSITIONAL: this promise sits between review_request and reactivation,
+    // and so does its binding above. The reads keep the registry's order; the
+    // page RENDERS in journey order (the JSX below), and the two need not
+    // agree — only each promise and its own binding must.
     getAutomation(db, accountId, "referral_ask").catch((e): AutomationRow | null => {
       console.error(`automations: referral_ask read failed for ${accountId}: ${String(e)}`);
       return null;
@@ -188,77 +189,107 @@ export default async function AutomationsPage({
 
   const bookingUrl = origin && calendar ? `${origin}/b/${calendar.public_id}` : "";
 
+  // The page reads in the order the customer lives it: the first touch, the
+  // appointment, after the job. Quiet hours comes LAST, under its own
+  // heading, because it is not a step in that journey but the one rule that
+  // holds every step above it back. Each card is its own view (DESIGN.md
+  // rule 8): its own action, validation, toast and one primary Save.
   return (
     <>
       <PageHeader
         title={m["automations.title"]}
         actions={<Link href={`/dashboard/accounts/${accountId}/activity`} className={buttonVariants({ variant: "ghost", size: "sm" })}>{m["automations.activityLink"]}</Link>}
       />
-      <div className="max-w-2xl space-y-6 p-6">
-        <QuietHoursCard settings={quiet} zoneLabel={account.timezone} saveAction={saveQuietHoursAction.bind(null, accountId)} />
-        <AutomationsSettings
-          automation={review}
-          brandName={account.brandName}
-          smsGate={smsGate}
-          saveAction={saveReviewRequestAction.bind(null, accountId)}
-        />
-        {/* After the review request, so the page reads in ladder order:
-            "how did it go?", "would you leave a review?", "know anyone
-            else?". */}
-        <ReferralAskCard
-          automation={referralAsk}
-          brandName={account.brandName}
-          smsGate={smsGate}
-          saveAction={saveReferralAskAction.bind(null, accountId)}
-        />
-        {/* After the referral ask: the three completed-job rungs first,
-            then the recipe that reaches back months later. */}
-        <ReactivationCard
-          automation={reactivation}
-          brandName={account.brandName}
-          accountId={accountId}
-          missing={reactivationMissing}
-          saveAction={saveReactivationAction.bind(null, accountId)}
-        />
-        <NoShowNudgeCard
-          automation={noShow}
-          brandName={account.brandName}
-          smsGate={smsGate}
-          bookingUrl={bookingUrl}
-          calendarEnabled={calendar?.enabled ?? false}
-          saveAction={saveNoShowNudgeAction.bind(null, accountId)}
-        />
-        <SmsReminderCard
-          automation={smsReminder}
-          brandName={account.brandName}
-          accountTimezone={account.timezone}
-          smsGate={smsGate}
-          saveAction={saveSmsReminderAction.bind(null, accountId)}
-        />
-        <AppointmentConfirmCard
-          automation={appointmentConfirm}
-          brandName={account.brandName}
-          accountTimezone={account.timezone}
-          smsGate={smsGate}
-          saveAction={saveAppointmentConfirmAction.bind(null, accountId)}
-        />
-        {/* Last of the recipes: the only one driven by the pipeline rather
-            than by a booking, and the only one whose card has to say what
-            does NOT happen on its own. */}
-        <QuoteFollowupCard
-          automation={quoteFollowup}
-          brandName={account.brandName}
-          smsGate={smsGate}
-          stages={stages}
-          saveAction={saveQuoteFollowupAction.bind(null, accountId)}
-        />
-        <InstantReplyCard
-          automation={instantReply}
-          brandName={account.brandName}
-          smsGate={smsGate}
-          saveAction={saveInstantReplyAction.bind(null, accountId)}
-        />
+      <div className="max-w-2xl space-y-8 p-6">
+        <Group id="automations-group-first-touch" title={m["automations.group.firstTouch"]}>
+          {/* The very first thing a new lead receives. */}
+          <InstantReplyCard
+            automation={instantReply}
+            brandName={account.brandName}
+            smsGate={smsGate}
+            saveAction={saveInstantReplyAction.bind(null, accountId)}
+          />
+          {/* Still before any booking: the only recipe driven by the
+              pipeline rather than by a booking, and the only one whose card
+              has to say what does NOT happen on its own. */}
+          <QuoteFollowupCard
+            automation={quoteFollowup}
+            brandName={account.brandName}
+            smsGate={smsGate}
+            stages={stages}
+            saveAction={saveQuoteFollowupAction.bind(null, accountId)}
+          />
+        </Group>
+        <Group id="automations-group-appointment" title={m["automations.group.appointment"]}>
+          {/* In the order they fire: two days before, two hours before,
+              after a missed one. */}
+          <AppointmentConfirmCard
+            automation={appointmentConfirm}
+            brandName={account.brandName}
+            accountTimezone={account.timezone}
+            smsGate={smsGate}
+            saveAction={saveAppointmentConfirmAction.bind(null, accountId)}
+          />
+          <SmsReminderCard
+            automation={smsReminder}
+            brandName={account.brandName}
+            accountTimezone={account.timezone}
+            smsGate={smsGate}
+            saveAction={saveSmsReminderAction.bind(null, accountId)}
+          />
+          <NoShowNudgeCard
+            automation={noShow}
+            brandName={account.brandName}
+            smsGate={smsGate}
+            bookingUrl={bookingUrl}
+            calendarEnabled={calendar?.enabled ?? false}
+            saveAction={saveNoShowNudgeAction.bind(null, accountId)}
+          />
+        </Group>
+        <Group id="automations-group-after-job" title={m["automations.group.afterJob"]}>
+          {/* The ladder: "would you leave a review?", then "know anyone
+              else?", then the recipe that reaches back months later. */}
+          <AutomationsSettings
+            automation={review}
+            brandName={account.brandName}
+            smsGate={smsGate}
+            saveAction={saveReviewRequestAction.bind(null, accountId)}
+          />
+          <ReferralAskCard
+            automation={referralAsk}
+            brandName={account.brandName}
+            smsGate={smsGate}
+            saveAction={saveReferralAskAction.bind(null, accountId)}
+          />
+          <ReactivationCard
+            automation={reactivation}
+            brandName={account.brandName}
+            accountId={accountId}
+            missing={reactivationMissing}
+            saveAction={saveReactivationAction.bind(null, accountId)}
+          />
+        </Group>
+        <Group id="automations-group-rules" title={m["automations.group.rules"]}>
+          <QuietHoursCard settings={quiet} zoneLabel={account.timezone} saveAction={saveQuietHoursAction.bind(null, accountId)} />
+        </Group>
       </div>
     </>
+  );
+}
+
+/**
+ * One group of cards under a Label-role heading (DESIGN.md type roles: Geist
+ * Mono 500, 10px, +0.14em, uppercase; the class string `usage-card.tsx` and
+ * `work-list.tsx` already use). The page's `<h1>` is PageHeader's; each group
+ * is a section named by its own `<h2>`.
+ */
+function Group({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
+  return (
+    <section aria-labelledby={id} className="space-y-3">
+      <h2 id={id} className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+        {title}
+      </h2>
+      <div className="space-y-6">{children}</div>
+    </section>
   );
 }

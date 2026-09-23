@@ -25,6 +25,14 @@ import { SCREENED_REASONS, screenedClass, type ProposalStatus } from "@bis/db";
 import { CLASS_DOT } from "../screened/screened-table";
 import { STATUS_TREATMENT } from "../accounts/[accountId]/calls/[callId]/proposals";
 import { LogStatusPill } from "../accounts/[accountId]/activity/log-status-pill";
+import { CONFIRM_REPLY_TREATMENTS } from "../accounts/[accountId]/calendar/confirm-reply";
+import { DotPill } from "@/components/dot-pill";
+import { SmsPreview } from "@/components/sms-preview";
+import { withOptOut } from "@/lib/sms/opt-out";
+import {
+  composeSmsReminder, defaultSmsReminderBody, SMS_REMINDER_PREVIEW_INSTANT,
+} from "@/lib/automations/sms-reminder-copy";
+import { formatWhen } from "@/lib/booking/time";
 import { cn } from "@/lib/utils";
 import { RailStates } from "./rail-states";
 import { SettingsFieldCards } from "./settings-field-cards";
@@ -61,7 +69,7 @@ function Section({
     <Card>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
-        <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+        <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
           {file}
         </p>
       </CardHeader>
@@ -85,12 +93,12 @@ export default async function StyleguidePage() {
             {(["--surface-0", "--surface-1", "--surface-2", "--surface-3"] as const).map((t) => (
               <div key={t} className="flex flex-col gap-1">
                 <div className="h-14 w-28 rounded-lg border border-border glass" style={{ backgroundColor: `var(${t})` }} />
-                <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{t}</span>
+                <span className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{t}</span>
               </div>
             ))}
             <div className="flex flex-col gap-1">
               <div className="h-14 w-28 rounded-lg" style={{ backgroundColor: "var(--accent-2)" }} />
-              <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">--accent-2</span>
+              <span className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">--accent-2</span>
             </div>
           </div>
           {/* The hero gradient — display size only (≥ 22px), one per screen. */}
@@ -137,6 +145,17 @@ export default async function StyleguidePage() {
           <h2 id="sg-activity-status" className="text-sm font-medium">Activity status</h2>
           <div className="flex flex-wrap gap-2">
             {(["sent", "held", "skipped", "failed"] as const).map((s) => <LogStatusPill key={s} status={s} />)}
+          </div>
+          {/* The same DotPill (components/dot-pill.tsx), `dense`, as the
+              calendar shows the customer's answer to the confirmation text:
+              a yes in the history's `sent` colours, a NO as a warning because
+              it is the one an operator must act on. Read off
+              confirm-reply.ts's own map, so this row cannot drift. */}
+          <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+            components/dot-pill.tsx · …/calendar/confirm-reply.ts
+          </p>
+          <div className="flex flex-wrap gap-2" data-testid="styleguide-confirm-reply">
+            {(["yes", "no"] as const).map((a) => <DotPill key={a} {...CONFIRM_REPLY_TREATMENTS[a]} dense />)}
           </div>
         </section>
 
@@ -230,7 +249,7 @@ export default async function StyleguidePage() {
               >
                 💬
               </div>
-              <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Launcher</p>
+              <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Launcher</p>
             </div>
             <ol className="bis-concierge-log w-full max-w-xs list-none" aria-hidden>
               <li className="bis-msg bis-msg-assistant">Hi! Ask me anything about our services.</li>
@@ -280,6 +299,25 @@ export default async function StyleguidePage() {
             <label className="flex items-center gap-2 text-sm">
               <Checkbox id="sg-check" /> Checkbox
             </label>
+          </div>
+        </Section>
+
+        {/* The text a customer will receive, shown as the field it becomes:
+            the one preview box every Automations card renders. The text is
+            the text reminder's real default, built by its own composer and
+            the send path's opt-out rule, so it is exactly what goes out. */}
+        <Section title="SMS preview" file="components/sms-preview.tsx">
+          <div className="grid w-full max-w-sm gap-1.5">
+            <SmsPreview
+              id="sg-sms-preview"
+              label={m["automations.smsReminder.preview"]}
+              text={withOptOut(composeSmsReminder(
+                "Rio Roofing",
+                formatWhen(SMS_REMINDER_PREVIEW_INSTANT, "America/Chicago"),
+                defaultSmsReminderBody(),
+              ))}
+              testId="styleguide-sms-preview"
+            />
           </div>
         </Section>
 

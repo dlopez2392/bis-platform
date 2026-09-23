@@ -193,7 +193,7 @@ export function SetupRail({
               // edge, and the 3px gradient rail — not an alpha of the brand
               // colour used as an outline.
               className={cn(
-                "relative flex w-full items-start gap-2.5 rounded-[8px] border px-2.5 py-2 text-left transition-colors",
+                "relative flex w-full items-start gap-2.5 rounded-[var(--radius-ctl)] border px-2.5 py-2 text-left transition-colors",
                 "hover:bg-[var(--surface-3)] focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none",
                 isSelected ? "border-transparent bg-[var(--accent-dim)]" : "border-transparent",
               )}

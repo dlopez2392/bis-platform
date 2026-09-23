@@ -117,7 +117,7 @@ export function A2pPanel({
             nothing left to collect; shown again on `rejected`, because a
             rejection usually means one of these was wrong. */}
         {current.status === "not_started" || current.status === "rejected" ? (
-          <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface-2)] p-3">
+          <div className="rounded-[var(--radius-ctl)] border border-[var(--line)] bg-[var(--surface-2)] p-3">
             <p className="text-xs font-medium text-card-foreground">{m["a2p.gather.title"]}</p>
             <p className="mt-1 text-xs text-muted-foreground">{m["a2p.gather.body"]}</p>
             <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-muted-foreground">

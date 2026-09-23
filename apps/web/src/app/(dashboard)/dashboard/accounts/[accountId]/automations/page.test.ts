@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { m } from "@/lib/messages";
 import type { AutomationRow } from "@bis/db";
 
 /**
@@ -67,33 +69,47 @@ const captured = vi.hoisted(() => ({
   review: null as Props | null, noShow: null as Props | null, sms: null as Props | null, instant: null as Props | null,
   confirm: null as Props | null, quiet: null as Props | null, referral: null as Props | null,
   reactivation: null as Props | null, quoteFollowup: null as Props | null,
+  // The order the page RENDERED the cards in: each mock pushes its own key.
+  order: [] as string[],
 }));
+type CardKey = Exclude<keyof typeof captured, "order">;
+/**
+ * Each mock records its props and its place in the render order, and leaves
+ * a marker (`<i data-card>`) in the markup so a test can see which group
+ * heading a card sits under: the order alone cannot tell "Quote follow-ups
+ * last of the first group" from "Quote follow-ups first of the second".
+ */
+function mark(key: CardKey, props: Props) {
+  captured.order.push(key);
+  captured[key] = props;
+  return createElement("i", { "data-card": key });
+}
 vi.mock("./automations-settings", () => ({
-  AutomationsSettings: (props: Props) => { captured.review = props; return null; },
+  AutomationsSettings: (props: Props) => mark("review", props),
 }));
 vi.mock("./referral-ask-card", () => ({
-  ReferralAskCard: (props: Props) => { captured.referral = props; return null; },
+  ReferralAskCard: (props: Props) => mark("referral", props),
 }));
 vi.mock("./reactivation-card", () => ({
-  ReactivationCard: (props: Props) => { captured.reactivation = props; return null; },
+  ReactivationCard: (props: Props) => mark("reactivation", props),
 }));
 vi.mock("./quote-followup-card", () => ({
-  QuoteFollowupCard: (props: Props) => { captured.quoteFollowup = props; return null; },
+  QuoteFollowupCard: (props: Props) => mark("quoteFollowup", props),
 }));
 vi.mock("./no-show-nudge-card", () => ({
-  NoShowNudgeCard: (props: Props) => { captured.noShow = props; return null; },
+  NoShowNudgeCard: (props: Props) => mark("noShow", props),
 }));
 vi.mock("./sms-reminder-card", () => ({
-  SmsReminderCard: (props: Props) => { captured.sms = props; return null; },
+  SmsReminderCard: (props: Props) => mark("sms", props),
 }));
 vi.mock("./appointment-confirm-card", () => ({
-  AppointmentConfirmCard: (props: Props) => { captured.confirm = props; return null; },
+  AppointmentConfirmCard: (props: Props) => mark("confirm", props),
 }));
 vi.mock("./instant-reply-card", () => ({
-  InstantReplyCard: (props: Props) => { captured.instant = props; return null; },
+  InstantReplyCard: (props: Props) => mark("instant", props),
 }));
 vi.mock("./quiet-hours-card", () => ({
-  QuietHoursCard: (props: Props) => { captured.quiet = props; return null; },
+  QuietHoursCard: (props: Props) => mark("quiet", props),
 }));
 
 const { default: AutomationsPage } = await import("./page");
@@ -114,6 +130,7 @@ const ROWS: Record<string, AutomationRow> = {
 
 async function render() {
   captured.review = captured.noShow = captured.sms = captured.instant = captured.confirm = captured.quiet = captured.referral = captured.reactivation = captured.quoteFollowup = null;
+  captured.order = [];
   renderToStaticMarkup(await AutomationsPage({ params: Promise.resolve({ accountId: "a1" }) }));
   return captured;
 }
@@ -302,6 +319,63 @@ describe("automations page", () => {
     expect(c.instant!.brandName).toBe("Rio Roofing");
     expect(c.instant!.smsGate).toEqual({ ok: false, reason: "a2p_not_approved" });
     expect(dbMock.getAutomation).toHaveBeenCalledWith(expect.anything(), "a1", "instant_reply");
+  });
+});
+
+/**
+ * The page reads in the order the customer lives it (design follow-ups,
+ * 2026-09-23): the first touch, then the appointment, then after the job, and
+ * Quiet hours LAST, under its own heading, as the one rule that holds all the
+ * others back. It used to open with Quiet hours and close with Instant reply,
+ * the very first thing a new lead receives.
+ */
+describe("automations page — journey order", () => {
+  it("renders the nine cards in journey order: first touch, the appointment, after the job, then quiet hours", async () => {
+    // Mutation: swap any two cards in page.tsx → this reds BY NAME.
+    const c = await render();
+    expect(c.order).toEqual([
+      "instant", "quoteFollowup",
+      "confirm", "sms", "noShow",
+      "review", "referral", "reactivation",
+      "quiet",
+    ]);
+  });
+
+  it("puts each card under its own Label-role group heading, each group a section named by its h2", async () => {
+    // Mutation: move QuoteFollowupCard to the top of the appointment group
+    // (the card ORDER is unchanged, so the test above stays green) → this
+    // reds BY NAME. Mutation: move QuietHoursCard to just after its own
+    // `</Group>` (order unchanged, rules section renders empty) → this reds
+    // BY NAME too, because the rules section's own slice no longer holds
+    // "quiet" — unlike counting sections that merely OPENED before the
+    // marker, which that mutation survives.
+    const html = renderToStaticMarkup(await AutomationsPage({ params: Promise.resolve({ accountId: "a1" }) }));
+    const LABEL = "font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground";
+    // Sections are not nested, so each match's own group 5 is the slice from
+    // right after ITS h2 to ITS OWN `</section>` — a card counts under a
+    // heading only when its marker sits INSIDE that slice, not merely
+    // somewhere after the heading opened.
+    const sections = [...html.matchAll(
+      /<section aria-labelledby="([^"]+)"[^>]*><h2 id="([^"]+)" class="([^"]*)">([^<]*)<\/h2>([\s\S]*?)<\/section>/g,
+    )];
+    expect(sections.map((s) => s[4])).toEqual([
+      m["automations.group.firstTouch"],
+      m["automations.group.appointment"],
+      m["automations.group.afterJob"],
+      m["automations.group.rules"],
+    ]);
+    const expectedCards: CardKey[][] = [
+      ["instant", "quoteFollowup"],
+      ["confirm", "sms", "noShow"],
+      ["review", "referral", "reactivation"],
+      ["quiet"],
+    ];
+    sections.forEach((s, i) => {
+      expect(s[2], "each section is named by its own h2").toBe(s[1]);
+      expect(s[3]).toBe(LABEL);
+      const cardsInSection = [...s[5]!.matchAll(/data-card="([^"]+)"/g)].map((k) => k[1]);
+      expect(cardsInSection, s[4]).toEqual(expectedCards[i]);
+    });
   });
 });
 

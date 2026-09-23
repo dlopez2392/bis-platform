@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Inbox } from "lucide-react";
@@ -519,7 +519,7 @@ describe("wave 2 — setup / checklist", () => {
   });
   it("the move-number panel is step 2 and takes no glass (nested in the detail pane)", () => {
     const num = src(`${ACCT}/setup/steps/number.tsx`);
-    expect(num).toContain("rounded-[8px] border border-[var(--line)] bg-[var(--surface-2)] p-3");
+    expect(num).toContain("rounded-[var(--radius-ctl)] border border-[var(--line)] bg-[var(--surface-2)] p-3");
     expect(num).not.toContain("bg-muted/30");
     expect(num).not.toMatch(/\bglass\b/);
   });
@@ -540,12 +540,20 @@ describe("wave 2 — forms and automations", () => {
     expect(ed).not.toContain('className="flex flex-wrap items-center gap-2 rounded-md border border-border p-2"');
   });
   it("the automation previews have a FILL — an unfilled outline on a card is not a field", () => {
-    for (const rel of [
-      `${ACCT}/automations/instant-reply-card.tsx`,
-      `${ACCT}/automations/sms-reminder-card.tsx`,
-    ]) {
+    // Since the design follow-ups (2026-09-23) the box is ONE component,
+    // `SmsPreview`, and every card that previews a text renders it rather
+    // than a hand-copied `<output>` of its own.
+    const box = src("../sms-preview.tsx");
+    expect(box).toContain("border-[var(--input-line)] bg-[var(--input-bg)] px-3 py-2 text-[13px]");
+    expect(box).not.toMatch(/\bglass\b/);
+    for (const [rel, count] of [
+      [`${ACCT}/automations/instant-reply-card.tsx`, 2],
+      [`${ACCT}/automations/sms-reminder-card.tsx`, 1],
+      [`${ACCT}/automations/appointment-confirm-card.tsx`, 1],
+    ] as const) {
       const s = src(rel);
-      expect(s, rel).toContain("border-[var(--input-line)] bg-[var(--input-bg)] px-3 py-2 text-[13px]");
+      expect(s.split("<SmsPreview").length - 1, rel).toBe(count);
+      expect(s, rel).not.toMatch(/<output\s+id=/);
       expect(s, rel).not.toContain("rounded-md border border-input px-3 py-2 text-sm");
       // Nested in a Card in every case.
       expect(s, rel).not.toMatch(/\bglass\b/);
@@ -577,7 +585,7 @@ describe("wave 2 — dashboard activity, settings, branding, accounts", () => {
     const page = src(`${APP}/accounts/page.tsx`);
     expect(page).toContain("rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3");
     expect(page).toContain("hover:border-[var(--accent)]");
-    expect(page).toContain("rounded-[8px] bg-[var(--accent-dim)] text-[var(--accent)]");
+    expect(page).toContain("rounded-[var(--radius-ctl)] bg-[var(--accent-dim)] text-[var(--accent)]");
     expect(page).toContain('<Badge variant="chip"');
     expect(page).toContain("size-[7px] rounded-full");
     expect(page).toContain('className="mt-4 truncate text-[13.5px] font-semibold text-card-foreground"');
@@ -589,8 +597,8 @@ describe("wave 2 — dashboard activity, settings, branding, accounts", () => {
     const s = src("../branding-panel.tsx");
     // --background is --surface-0, a step BELOW the card they sit on.
     expect(s).not.toContain("border border-border bg-background p-1");
-    expect(s).toContain("h-9 w-12 shrink-0 rounded-[8px] border border-border bg-[var(--surface-2)] p-1");
-    expect(s).toContain("max-h-12 w-auto rounded-[8px] border border-border bg-[var(--surface-2)] p-1");
+    expect(s).toContain("h-9 w-12 shrink-0 rounded-[var(--radius-ctl)] border border-border bg-[var(--surface-2)] p-1");
+    expect(s).toContain("max-h-12 w-auto rounded-[var(--radius-ctl)] border border-border bg-[var(--surface-2)] p-1");
   });
   it("branding: the mode toggle is the chip, and the brand preview stays a card-in-a-Card WITHOUT glass", () => {
     const s = src("../branding-panel.tsx");
@@ -611,5 +619,27 @@ describe("wave 2 — styleguide carries this pass's variants (DESIGN.md DoD)", (
     // Status tones pass a FLAT fill — status is never a gradient.
     expect(s).toContain('fill="bg-[var(--good)]"');
     expect(s).toContain('fill="bg-[var(--warn)]"');
+  });
+  it("indexes the SMS preview and both confirmation-answer DotPills (design follow-ups, 2026-09-23)", () => {
+    expect(s).toContain('<Section title="SMS preview" file="components/sms-preview.tsx">');
+    expect(s).toContain("<SmsPreview");
+    // Both answers, read off the calendar's own map, dense as the calendar
+    // renders them.
+    expect(s).toContain('(["yes", "no"] as const).map((a) => <DotPill key={a} {...CONFIRM_REPLY_TREATMENTS[a]} dense />)');
+  });
+});
+
+// DESIGN.md Shape: radii are 8px (controls, `--radius-ctl`), 12px (cards),
+// 999px (pills) — and components consume tokens ONLY. The control radius was
+// spelled `rounded-[8px]` in 23 places and `rounded-[var(--radius-ctl)]` in
+// three; since the design follow-ups (2026-09-23) it is spelled as the token
+// everywhere, which is pixel-identical because the token is 8px in both modes.
+describe("one control radius, spelled as the token", () => {
+  it("no source file in apps/web/src spells the control radius as rounded-[8px]", () => {
+    const root = path.join(here, "../..");
+    const offenders = (readdirSync(root, { recursive: true }) as string[])
+      .filter((f) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f))
+      .filter((f) => readFileSync(path.join(root, f), "utf8").includes("rounded-[8px]"));
+    expect(offenders).toEqual([]);
   });
 });
