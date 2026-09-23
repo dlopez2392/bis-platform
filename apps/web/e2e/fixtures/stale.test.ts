@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
-  FIXTURE_ACCOUNT_RE, FIXTURE_EMAIL_RE, FIXTURE_FORM_RE, STALE_AFTER_MS,
-  fixtureStamp, isStaleFixture, isStaleFixtureForm, isUuid,
+  FIXTURE_ACCOUNT_RE, FIXTURE_BLUEPRINT_RE, FIXTURE_CO_ACCOUNT_RE, FIXTURE_EMAIL_RE,
+  FIXTURE_FORM_RE, STALE_AFTER_MS,
+  fixtureStamp, isStaleFixture, isStaleFixtureAccount, isStaleFixtureBlueprint,
+  isStaleFixtureForm, isUuid,
 } from "./stale";
 
 // A real stamp from a real leaked fixture (the account danlo had to delete by
@@ -145,6 +147,105 @@ describe("FIXTURE_FORM_RE", () => {
   it("requires exactly 13 digits, no fewer and no more", () => {
     expect(FIXTURE_FORM_RE.test(`E2E Form ${String(FORM_STAMP).slice(0, 12)}`)).toBe(false);
     expect(FIXTURE_FORM_RE.test(`E2E Form ${FORM_STAMP}0`)).toBe(false);
+  });
+});
+
+describe("isStaleFixtureAccount", () => {
+  // The per-run fixture and the company blueprints.spec.ts creates through
+  // the real "Add company" dialog — the second is the shape the sweep could
+  // not see before, stranding a real Clerk org + account on every killed run.
+  it("is true for both account shapes a spec mints, once older than the window", () => {
+    expect(isStaleFixtureAccount(`E2E Client Co ${STAMP}`, LATER)).toBe(true);
+    expect(isStaleFixtureAccount(`E2E Co ${STAMP}`, LATER)).toBe(true);
+  });
+
+  it("is false for either shape created moments ago", () => {
+    expect(isStaleFixtureAccount(`E2E Client Co ${STAMP}`, STAMP + 1000)).toBe(false);
+    expect(isStaleFixtureAccount(`E2E Co ${STAMP}`, STAMP + 1000)).toBe(false);
+  });
+
+  // The window is the caller's to widen or narrow (sweepStaleFixtures passes
+  // its own maxAgeMs through), and a pattern list must not drop it.
+  it("honours the caller's window", () => {
+    expect(isStaleFixtureAccount(`E2E Co ${STAMP}`, STAMP + 5000, 10_000)).toBe(false);
+    expect(isStaleFixtureAccount(`E2E Co ${STAMP}`, STAMP + 10_000, 10_000)).toBe(true);
+  });
+
+  // Every near-miss of BOTH shapes, however old the clock: a real company
+  // with a name close to either must never read as a fixture.
+  it("refuses anything that is not exactly one of the two shapes, however old", () => {
+    for (const value of [
+      "Test Client One",
+      `E2E Client Co-op ${STAMP}`,
+      `E2E Co-op ${STAMP}`,                 // a real company that starts the same way
+      `E2E Corp ${STAMP}`,
+      `E2E Company ${STAMP}`,
+      `E2E Co. ${STAMP}`,
+      `E2E  Co ${STAMP}`,                   // two spaces
+      `E2E Co ${STAMP} LLC`,                // not anchored at the end
+      `Acme E2E Co ${STAMP}`,               // not anchored at the start
+      ` E2E Co ${STAMP}`,
+      `e2e Co ${STAMP}`,                    // lowercase
+      `E2E Co ${String(STAMP).slice(0, 12)}`,
+      `E2E Co ${STAMP}0`,
+      "E2E Co 0000000000000",               // 13 digits, not a plausible time
+      `E2E Blueprint ${STAMP}`,             // a blueprint name is not an account name
+      `E2E Form ${STAMP}`,
+    ]) {
+      expect(isStaleFixtureAccount(value, Number.MAX_SAFE_INTEGER), value).toBe(false);
+    }
+  });
+
+  // A future stamp must never read as ancient — the rule isStaleFixture
+  // already pins, re-asserted through the list so a list that bypassed it
+  // (an `Math.abs` of its own, say) would red here.
+  it("is false for a stamp further in the future than the window", () => {
+    expect(isStaleFixtureAccount(`E2E Co ${STAMP}`, STAMP - STALE_AFTER_MS - 1)).toBe(false);
+  });
+});
+
+describe("FIXTURE_CO_ACCOUNT_RE", () => {
+  // Against the regex directly, for the reason FIXTURE_FORM_RE's own digit
+  // test gives: a 12-digit stamp can never clear fixtureStamp's 2020 floor,
+  // so only `.test()` sees a widened quantifier.
+  it("requires exactly 13 digits and nothing else around the words", () => {
+    expect(FIXTURE_CO_ACCOUNT_RE.test(`E2E Co ${STAMP}`)).toBe(true);
+    expect(FIXTURE_CO_ACCOUNT_RE.test(`E2E Co ${String(STAMP).slice(0, 12)}`)).toBe(false);
+    expect(FIXTURE_CO_ACCOUNT_RE.test(`E2E Co ${STAMP}0`)).toBe(false);
+    expect(FIXTURE_CO_ACCOUNT_RE.test(`E2E Client Co ${STAMP}`)).toBe(false);
+    expect(FIXTURE_ACCOUNT_RE.test(`E2E Co ${STAMP}`)).toBe(false);
+  });
+});
+
+describe("isStaleFixtureBlueprint", () => {
+  it("is true for a blueprint stamp older than the window", () => {
+    expect(isStaleFixtureBlueprint(`E2E Blueprint ${STAMP}`, LATER)).toBe(true);
+  });
+
+  it("is false for a blueprint captured moments ago", () => {
+    expect(isStaleFixtureBlueprint(`E2E Blueprint ${STAMP}`, STAMP + 1000)).toBe(false);
+  });
+
+  // Blueprints are agency-wide: a real one ("Roofing starter") sits in the
+  // same table as every stranded fixture, so near-misses stay near-misses.
+  it("refuses anything that is not exactly the fixture shape, however old", () => {
+    for (const value of [
+      "Roofing starter",
+      `E2E Blueprints ${STAMP}`,
+      `E2E Blueprint ${STAMP} v2`,          // the name blueprints.spec.ts types but never saves
+      `e2e Blueprint ${STAMP}`,
+      `My E2E Blueprint ${STAMP}`,
+      `E2E Blueprint ${String(STAMP).slice(0, 12)}`,
+      `E2E Blueprint ${STAMP}0`,
+      `E2E Co ${STAMP}`,
+    ]) {
+      expect(isStaleFixtureBlueprint(value, Number.MAX_SAFE_INTEGER), value).toBe(false);
+    }
+  });
+
+  it("requires exactly 13 digits (against the regex directly)", () => {
+    expect(FIXTURE_BLUEPRINT_RE.test(`E2E Blueprint ${String(STAMP).slice(0, 12)}`)).toBe(false);
+    expect(FIXTURE_BLUEPRINT_RE.test(`E2E Blueprint ${STAMP}0`)).toBe(false);
   });
 });
 

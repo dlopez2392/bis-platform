@@ -1,4 +1,4 @@
-import { type Page, test } from "@playwright/test";
+import { type Page, expect, test } from "@playwright/test";
 import { existsSync, readFileSync } from "node:fs";
 import { contrastRatio } from "../src/lib/branding/color";
 
@@ -54,6 +54,14 @@ export const SEEDED_CONTACT_NAME = "Maria Garcia";
  * skips the current test with a clear reason instead of silently falling
  * back to some other account and passing (or failing) against the wrong
  * data.
+ *
+ * Returns only once the browser is INSIDE the account. `click()` resolves when
+ * the click is dispatched, not when the client-side navigation it starts has
+ * landed, and every caller acts on the account next. palette.spec.ts paid for
+ * that (CI run 35776929496): its trace shows ⌘K pressed and "cal" typed while
+ * the URL was still `/dashboard/accounts`, so the palette answered for the
+ * agency top level — one option, "Screened calls" — and then re-answered for
+ * the account when the navigation landed mid-assertion.
  */
 export async function openAccountByName(page: Page, accountName: string) {
   await page.goto("/dashboard/accounts");
@@ -63,6 +71,7 @@ export async function openAccountByName(page: Page, accountName: string) {
     return;
   }
   await card.click();
+  await expect(page).toHaveURL(/\/dashboard\/accounts\/[0-9a-f-]{36}(?:[/?#]|$)/);
 }
 
 /**
