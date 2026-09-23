@@ -1356,6 +1356,62 @@ describe("reactivation — data layer", () => {
     });
   });
 
+  // Migration 0048. The address rides the SHARED per-account read
+  // (`ACCOUNT_BRAND_COLS` / `loadAccountBrandInfo`), not a new query, and each
+  // of the two builders copies it onto the row. One case per builder, so a
+  // builder that forgets the copy reds on its own name.
+  // Mutation: drop `mailing_address` from ACCOUNT_BRAND_COLS → both red.
+  // Mutation: drop `mailingAddress:` from ONE builder → only its case reds.
+  const quietCustomer = async (db: Parameters<typeof listDueReactivations>[0], accountId: string) => {
+    const cal = await getOrCreateCalendar(db, accountId, "user_test");
+    await upsertAutomation(db, accountId, "reactivation",
+      { enabled: true, body: "", config: { months: 9 } }, "user_test");
+    const longAgo = new Date("2026-10-01T12:00:00Z");
+    const { id: contactId } = await createContact(db, accountId,
+      { firstName: "Posted", email: "posted@example.com" }, "user_test");
+    const convo = await ensureConversation(db, accountId, contactId, "user_test");
+    const { id: msg } = await createMessage(db, accountId,
+      { conversationId: convo.id, channel: "sms", direction: "inbound", body: "hi" }, "user_test");
+    await db.from("messages").update({ created_at: longAgo.toISOString() }).eq("id", msg);
+    await db.from("conversations").update({ last_message_at: longAgo.toISOString() }).eq("id", convo.id);
+    const b = await createBooking(db, accountId,
+      { calendarId: cal.id, contactId, startsAt: new Date(longAgo.getTime() - HOUR), endsAt: longAgo }, "user_test");
+    await setBookingStatus(db, accountId, b.id, "completed", "user_test");
+    return contactId;
+  };
+  const MAILING = "123 Main St\nMcAllen, TX 78501";
+
+  it("listDueReactivations carries the account's mailing address: null when unset, the value when set", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const contactId = await quietCustomer(db, accountId);
+      const now = new Date("2027-09-21T12:00:00Z").toISOString();
+      const rowOf = async () =>
+        (await listDueReactivations(db, now)).find((r) => r.contactId === contactId);
+
+      // `toBeNull`, not `toBeFalsy`: an absent field reads `undefined`, and
+      // that is the mutation this case exists to catch.
+      const unset = await rowOf();
+      expect(unset, "the fixture customer must be due").toBeDefined();
+      expect(unset!.mailingAddress).toBeNull();
+
+      await setBranding(db, accountId, { mailingAddress: MAILING }, "user_test");
+      expect((await rowOf())!.mailingAddress).toBe(MAILING);
+    });
+  });
+
+  it("getDueReactivationById carries the account's mailing address: null when unset, the value when set", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const contactId = await quietCustomer(db, accountId);
+
+      const unset = await getDueReactivationById(db, contactId);
+      expect(unset.due, "the fixture customer must be due").not.toBeNull();
+      expect(unset.due!.mailingAddress).toBeNull();
+
+      await setBranding(db, accountId, { mailingAddress: MAILING }, "user_test");
+      expect((await getDueReactivationById(db, contactId)).due!.mailingAddress).toBe(MAILING);
+    });
+  });
+
   it("countReactivationsSince never counts another account's stamps", async () => {
     // Mutation: drop `.eq("account_id", accountId)` and accountA counts 1.
     // This number is REACTIVATION_DAILY_CAP's input — five a day, its own

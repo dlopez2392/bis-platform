@@ -1188,6 +1188,11 @@ export type DueReactivation = {
   contactName: string;
   brandName: string; branding: Branding; accountTimezone: string;
   fromEmail: string | null; replyToEmail: string | null;
+  /** Migration 0048: the account's postal address, as stored (null = not
+   *  set). This email is commercial, and CAN-SPAM (the orchestrator's reading,
+   *  not a lawyer's) wants a physical address on it, so the pass skips a row
+   *  whose address is blank after `.trim()` rather than send without one. */
+  mailingAddress: string | null;
   body: string;
 };
 
@@ -1395,6 +1400,7 @@ export async function listDueReactivations(
             contactName: [c.contacts.first_name, c.contacts.last_name].filter(Boolean).join(" ").trim(),
             brandName: brandDisplayName(info.branding), branding: info.branding,
             accountTimezone: info.accountTimezone, fromEmail: info.fromEmail, replyToEmail: info.replyToEmail,
+            mailingAddress: info.mailingAddress,
             body: conf.body,
           });
         }
@@ -1463,6 +1469,7 @@ export async function getDueReactivationById(
       contactName: [c.first_name, c.last_name].filter(Boolean).join(" ").trim(),
       brandName: brandDisplayName(info.branding), branding: info.branding,
       accountTimezone: info.accountTimezone, fromEmail: info.fromEmail, replyToEmail: info.replyToEmail,
+      mailingAddress: info.mailingAddress,
       body: auto.body,
     },
   };

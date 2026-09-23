@@ -106,6 +106,10 @@ export async function setBranding(
     brandNeutral?: Branding["brandNeutral"]; brandCorners?: Branding["brandCorners"];
     brandType?: Branding["brandType"]; brandMode?: Branding["brandMode"];
     replyToEmail?: string | null;
+    /** Migration 0048. Not on `Branding` (see `getMailingAddress`), but
+     *  written here because the Branding page saves it with everything else,
+     *  through the same RLS-enforced write and the same granted column list. */
+    mailingAddress?: string | null;
   },
   actorId: string,
 ): Promise<void> {
@@ -118,6 +122,7 @@ export async function setBranding(
   if (input.brandType !== undefined) patch.brand_type = input.brandType;
   if (input.brandMode !== undefined) patch.brand_mode = input.brandMode;
   if (input.replyToEmail !== undefined) patch.reply_to_email = input.replyToEmail;
+  if (input.mailingAddress !== undefined) patch.mailing_address = input.mailingAddress;
   if (Object.keys(patch).length === 0) return;
 
   // `.select("id")` so the update reports WHICH rows it touched. Without it,
@@ -166,6 +171,31 @@ export async function getBranding(
     brandMode: data?.brand_mode ?? null,
     replyToEmail: data?.reply_to_email ?? null,
   };
+}
+
+/**
+ * Reads one account's postal address (migration 0048), as stored: plain text,
+ * possibly several lines, never trimmed here. Callers that judge "is it set"
+ * trim it themselves, with `.trim()`, which strips exactly the whitespace the
+ * column's CHECK strips.
+ *
+ * Its own read, NOT a field on `Branding`, deliberately: dozens of files
+ * construct a `Branding`, and only the Branding panel and the reactivation
+ * gate need this. (The due-lists get it from the shared per-account read in
+ * `booking.ts`, not from here.)
+ *
+ * Same contract as getBranding: an account that does not exist reads as not
+ * set, and a genuine query fault throws, because "not set" is an answer a
+ * gate acts on and a failed query is not one.
+ */
+export async function getMailingAddress(
+  db: SupabaseClient, accountId: string,
+): Promise<string | null> {
+  const { data, error } = await db.from("accounts")
+    .select("mailing_address")
+    .eq("id", accountId).maybeSingle();
+  if (error) throw new Error(`getMailingAddress failed: ${error.message}`);
+  return (data as { mailing_address: string | null } | null)?.mailing_address ?? null;
 }
 
 /**

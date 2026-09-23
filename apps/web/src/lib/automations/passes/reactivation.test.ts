@@ -52,6 +52,7 @@ function row(over: Partial<DueReactivation> = {}): DueReactivation {
                 replyToEmail: "wrong-should-not-be-used@rioroofing.com" },
     accountTimezone: "America/Chicago",
     fromEmail: "hello@rioroofing.com", replyToEmail: "owner@rioroofing.com",
+    mailingAddress: "123 Main St\nMcAllen, TX 78501",
     body: "",
     ...over,
   };

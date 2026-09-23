@@ -104,7 +104,7 @@ const REACTIVATION_ROW: DueReactivation = {
   lastMessageAt: "2025-07-14T16:20:00.000Z", quietMonths: 9,
   contactEmail: "e@example.com", contactName: "E",
   brandName: BRAND, branding, accountTimezone: "America/New_York",
-  fromEmail: null, replyToEmail: null, body: "",
+  fromEmail: null, replyToEmail: null, mailingAddress: null, body: "",
 };
 
 /** Part B's quote follow-up — the only PIPELINE-driven recipe. Five days
