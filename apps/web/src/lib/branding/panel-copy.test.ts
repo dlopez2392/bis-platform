@@ -51,5 +51,6 @@ describe("panelCopy", () => {
     expect(agency.neutralHint).toBe(m["branding.neutralHint"]);
     expect(agency.modeHint).toBe(m["branding.modeHint"]);
     expect(agency.modeFollow).toBe(m["branding.modeFollow"]);
+    expect(agency.mailingAddressHint).toBe(m["branding.mailingAddressHint"]);
   });
 });

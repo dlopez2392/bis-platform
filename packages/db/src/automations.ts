@@ -1124,6 +1124,16 @@ export const REACTIVATION_CANDIDATE_LIMIT = 200;
  * product serves; if a real account reaches it, the counter to raise is
  * PAGES, and the fix after that is a `contacts.last_completed_booking_at`
  * column the candidate query can filter on directly.
+ *
+ * One cause of starvation is NOT residual (review fix, 2026-09-22): an
+ * account with the recipe on but no mailing address or no reply-to is left
+ * out of the walk before the first page is read, so its rows — never sent,
+ * so never stamped — cannot fill the window. That is `missingForReactivation`
+ * over one up-front accounts read, not suppression's per-page filter, so the
+ * suppressed-account residual above is unchanged. On the normal tick the
+ * operator's signal for such an account is the Automations card, which says
+ * what is missing; the Activity page shows nothing for it, because no row
+ * reaches the pass.
  */
 export const REACTIVATION_CANDIDATE_PAGES = 5;
 
@@ -1165,6 +1175,40 @@ export function reactivationCutoff(now: Date, months: number): Date {
   return d;
 }
 
+/**
+ * WHAT a reactivation email cannot go without (decision A, danlo,
+ * 2026-09-22) — `true` means MISSING. This is the one recipe that emails
+ * someone who did not just interact with the business, and its purpose is
+ * winning work back: commercial email, which under CAN-SPAM (the
+ * orchestrator's reading, not a lawyer's) needs a working opt-out and the
+ * sender's physical postal address. So:
+ *   - `mailingAddress`: the footer prints it. Blank after JavaScript's
+ *     `.trim()` is missing — the column's CHECK (0048) strips exactly that
+ *     set, through a named character class.
+ *   - `replyTo`: the opt-out is "reply and let us know", so a reply must
+ *     reach the BUSINESS. With no reply-to the header is omitted and, with no
+ *     `from_email`, the email leaves from `EMAIL_FROM` — the agency's own
+ *     mailbox. Blank after `.trim()` is missing, which is exactly when web's
+ *     `normalizeReplyTo` (`apps/web/src/lib/email/reply-to.ts`, the send
+ *     path's own rule for "no address") omits the header. packages/db cannot
+ *     import web, so the rule is written inline here and THE TWO MUST AGREE:
+ *     change one, change both.
+ *
+ * ONE RULE, ONE HOME. Asked by the due-list walk below (an account missing
+ * either never enters it), the pass (skip before sending — the release path
+ * reaches it that way), the save action (refuse to turn the recipe on) and
+ * the Automations card (say what is missing). Web reaches it through
+ * `lib/automations/reactivation-gate.ts`, which re-exports this function.
+ */
+export function missingForReactivation(
+  mailingAddress: string | null | undefined, replyToEmail: string | null | undefined,
+): { mailingAddress: boolean; replyTo: boolean } {
+  return {
+    mailingAddress: !mailingAddress?.trim(),
+    replyTo: !replyToEmail?.trim(),
+  };
+}
+
 /** Email only in v1 (spec decision 4): there is no per-contact SMS consent in
  *  this schema — `contacts.dnd` is dead and the opt-out mechanism is Telnyx's
  *  carrier-side STOP list — and "we haven't seen you in a while" is marketing,
@@ -1188,6 +1232,11 @@ export type DueReactivation = {
   contactName: string;
   brandName: string; branding: Branding; accountTimezone: string;
   fromEmail: string | null; replyToEmail: string | null;
+  /** Migration 0048: the account's postal address, as stored (null = not
+   *  set). This email is commercial, and CAN-SPAM (the orchestrator's reading,
+   *  not a lawyer's) wants a physical address on it, so the pass skips a row
+   *  whose address is blank after `.trim()` rather than send without one. */
+  mailingAddress: string | null;
   body: string;
 };
 
@@ -1208,10 +1257,13 @@ type ReactivationCandidate = {
 };
 
 /**
- * ONE read up front, then THREE PER PAGE, and every predicate that CAN be
+ * TWO reads up front, then THREE PER PAGE, and every predicate that CAN be
  * server-side is.
  *
- *   1. (once) which accounts have the recipe on, and with what config;
+ *   1. (once) which accounts have the recipe on, and with what config — and
+ *      then (once) which of those can SEND, i.e. have a mailing address and
+ *      a reply-to (`missingForReactivation`); an account that cannot is left
+ *      out of every read below;
  *   2. conversations quiet since the WIDEST cutoff, oldest first, one page at
  *      a time, with `contacts!inner(...)` carrying the two contact
  *      predicates — unstamped and has an email — INTO the same query
@@ -1253,7 +1305,7 @@ type ReactivationCandidate = {
  */
 export async function listDueReactivations(
   db: SupabaseClient, nowIso: string,
-  opts: { pageSize?: number; maxPages?: number } = {},
+  opts: { pageSize?: number; maxPages?: number; survivorTarget?: number } = {},
 ): Promise<DueReactivation[]> {
   const enabled = await listEnabled(db, "reactivation", "listDueReactivations");
   if (enabled.size === 0) return [];
@@ -1280,6 +1332,51 @@ export async function listDueReactivations(
   }
   if (cutoffs.size === 0) return [];
 
+  // AN ACCOUNT THAT CANNOT SEND LEAVES THE WALK (review fix, 2026-09-22).
+  // With no mailing address or no reply-to the pass skips every row of the
+  // account and never stamps one, so those rows stayed due for ever — and,
+  // oldest-first across every account, they could fill the survivor target
+  // on every tick and starve everyone else, silently. So the account is
+  // dropped from `cutoffs` here and the page query's
+  // `.in("account_id", accountIds)` never sees it.
+  //
+  // ONE extra bounded read per tick (one row per enabled account), and
+  // deliberately NOT the shared brand loader: that loader's call sites are
+  // pinned by `outbound-suppressed.test.ts`, and the per-page suppression
+  // filter below stays exactly where it was. A SUPPRESSED account's rows are
+  // therefore still read and filtered per page — see the residual on
+  // `REACTIVATION_CANDIDATE_PAGES`.
+  //
+  // `getDueReactivationById` (the release path) is NOT filtered like this,
+  // on purpose: a held row released after the address was cleared must reach
+  // the pass, which logs it `noMailingAddress` / `noReplyTo` and so takes it
+  // off the release queue.
+  //
+  // An account the read does not return (deleted mid-tick) is judged on
+  // nothing and dropped with the rest.
+  const { data: senders, error: sErr } = await db.from("accounts")
+    .select("id, mailing_address, reply_to_email")
+    .in("id", [...cutoffs.keys()]);
+  if (sErr) throw new Error(`listDueReactivations accounts read failed: ${sErr.message}`);
+  const senderById = new Map(
+    ((senders ?? []) as { id: string; mailing_address: string | null; reply_to_email: string | null }[])
+      .map((a) => [a.id, a]));
+  for (const accountId of [...cutoffs.keys()]) {
+    const sender = senderById.get(accountId);
+    const missing = missingForReactivation(sender?.mailing_address, sender?.reply_to_email);
+    if (!missing.mailingAddress && !missing.replyTo) continue;
+    const why = sender === undefined
+      ? "its account row was not returned"
+      : [missing.mailingAddress && "no mailing address", missing.replyTo && "no reply-to address"]
+        .filter(Boolean).join(" and ");
+    console.error(
+      `listDueReactivations: account ${accountId} has reactivation on but ${why} — `
+      + `left out of the walk; nothing is sent for it until both are set`,
+    );
+    cutoffs.delete(accountId);
+  }
+  if (cutoffs.size === 0) return [];
+
   const accountIds = [...cutoffs.keys()];
   const cutoffTimes = [...cutoffs.values()].map((c) => c.cutoff.getTime());
   const widest = new Date(Math.max(...cutoffTimes));     // latest — the query's superset
@@ -1287,9 +1384,12 @@ export async function listDueReactivations(
 
   const pageSize = opts.pageSize ?? REACTIVATION_CANDIDATE_LIMIT;
   const maxPages = opts.maxPages ?? REACTIVATION_CANDIDATE_PAGES;
+  // Overridable for the same reason as the two above: so a test can fill the
+  // window with three rows instead of fifty.
+  const survivorTarget = opts.survivorTarget ?? REACTIVATION_SURVIVOR_TARGET;
   const out: DueReactivation[] = [];
 
-  for (let page = 0; page < maxPages && out.length < REACTIVATION_SURVIVOR_TARGET; page++) {
+  for (let page = 0; page < maxPages && out.length < survivorTarget; page++) {
     const from = page * pageSize;
     // `conversations_account_recent (account_id, last_message_at desc nulls
     // last)` (0005) serves the account + range + order; a DESC index scans
@@ -1374,14 +1474,13 @@ export async function listDueReactivations(
       });
 
       if (surviving.length > 0) {
-        // NO CAST on `surviving`. The loader below is generic over
+        // NO CAST on `surviving`. `loadSendableRows` below is generic over
         // `T extends { account_id: string }` (`booking.ts`), so casting the
         // argument to `{ account_id: string }[]` pins `T` to exactly that
         // and erases `contact_id`, `id` and `last_message_at` from
-        // `sendable`. (The loader is deliberately not NAMED in this comment:
-        // `outbound-suppressed.test.ts` walks this file per function and
-        // asks whether the body mentions it, so a comment carrying the name
-        // would satisfy that walk with the call itself deleted.)
+        // `sendable`. (Naming it here is harmless: `outbound-suppressed.test.ts`
+        // strips comments before counting CALL SITES per function, so this
+        // mention could never stand in for the real call below.)
         const { sendable, accountInfo } = await loadSendableRows(
           db, surviving, "listDueReactivations");
 
@@ -1395,6 +1494,7 @@ export async function listDueReactivations(
             contactName: [c.contacts.first_name, c.contacts.last_name].filter(Boolean).join(" ").trim(),
             brandName: brandDisplayName(info.branding), branding: info.branding,
             accountTimezone: info.accountTimezone, fromEmail: info.fromEmail, replyToEmail: info.replyToEmail,
+            mailingAddress: info.mailingAddress,
             body: conf.body,
           });
         }
@@ -1412,6 +1512,12 @@ export async function listDueReactivations(
  * applies it separately, through `conversationQuietSince`, so that "they
  * wrote in during the hold" gets its own client-readable reason instead of a
  * flat "No longer due".
+ *
+ * Nor does it apply `listDueReactivations`' up-front drop of an account with
+ * no mailing address or no reply-to (review fix, 2026-09-22), on purpose: a
+ * held row released after the address was cleared must still come back as
+ * due, so the pass logs it `noMailingAddress` / `noReplyTo` and the hold
+ * leaves the queue with a reason the client can read.
  */
 export async function getDueReactivationById(
   db: SupabaseClient, contactId: string,
@@ -1463,6 +1569,7 @@ export async function getDueReactivationById(
       contactName: [c.first_name, c.last_name].filter(Boolean).join(" ").trim(),
       brandName: brandDisplayName(info.branding), branding: info.branding,
       accountTimezone: info.accountTimezone, fromEmail: info.fromEmail, replyToEmail: info.replyToEmail,
+      mailingAddress: info.mailingAddress,
       body: auto.body,
     },
   };

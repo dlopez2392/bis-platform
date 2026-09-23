@@ -376,7 +376,10 @@ export async function countRecentBookings(
 // nothing here for a future mapper to reach for.
 export const ACCOUNT_BRAND_COLS =
   "timezone, brand_name, brand_logo_path, brand_color, brand_neutral, " +
-  "brand_corners, brand_type, brand_mode, reply_to_email, from_email, outbound_suppressed";
+  "brand_corners, brand_type, brand_mode, reply_to_email, from_email, outbound_suppressed, " +
+  // 0048. Appended, not slotted in: one more column in a read every due-list
+  // already makes, rather than a second read for the one recipe that prints it.
+  "mailing_address";
 
 /**
  * The cron windows, exported so they can be asserted against the schedule in
@@ -394,6 +397,9 @@ export type AccountBrandInfo = {
   fromEmail: string | null; replyToEmail: string | null;
   /** Migration 0032. True = every pass skips this account's due work. */
   outboundSuppressed: boolean;
+  /** Migration 0048. The postal address the reactivation email prints; null
+   *  = not set. Carried as stored, untrimmed: the pass judges blankness. */
+  mailingAddress: string | null;
 };
 
 /**
@@ -420,6 +426,7 @@ export async function loadAccountBrandInfo(
       brand_type: Branding["brandType"]; brand_mode: Branding["brandMode"];
       reply_to_email: string | null; from_email: string | null;
       outbound_suppressed: boolean;
+      mailing_address: string | null;
     };
     out.set(accountId, {
       accountTimezone: acct.timezone,
@@ -436,6 +443,7 @@ export async function loadAccountBrandInfo(
       outboundSuppressed: acct.outbound_suppressed === true,
       fromEmail: acct.from_email ?? null,
       replyToEmail: acct.reply_to_email ?? null,
+      mailingAddress: acct.mailing_address ?? null,
     });
   }
   return out;

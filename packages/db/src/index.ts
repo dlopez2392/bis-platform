@@ -52,6 +52,7 @@ export { listChecklistState, setChecklistItem, addCustomChecklistItem,
          type ChecklistStateRow } from "./checklist";
 export { uploadBrandLogo, removeBrandLogo, brandLogoUrl, setBranding, getBranding, brandDisplayName,
          type Branding } from "./branding";
+export { getMailingAddress } from "./branding";
 export { getSendingIdentity, setFromEmail, type SendingIdentity } from "./sending-identity";
 export { getOrCreateCalendar, getCalendarForAccount, getCalendarByPublicId, updateCalendarSettings,
          listBookedRanges, createBooking, cancelBookingByToken, setBookingStatus,
@@ -82,6 +83,7 @@ export { getAutomation, upsertAutomation, parseReviewRequestConfig,
          type ReferralAskChannel, type ReferralAskConfig, type DueReferralAsk,
          parseReactivationConfig, reactivationCutoff, listDueReactivations, getDueReactivationById,
          conversationQuietSince, stampReactivationSent, countReactivationsSince,
+         missingForReactivation,
          REACTIVATION_MIN_MONTHS, REACTIVATION_MAX_MONTHS, REACTIVATION_DEFAULT_MONTHS,
          REACTIVATION_CANDIDATE_LIMIT, REACTIVATION_CANDIDATE_PAGES, REACTIVATION_SURVIVOR_TARGET,
          type ReactivationConfig, type DueReactivation,

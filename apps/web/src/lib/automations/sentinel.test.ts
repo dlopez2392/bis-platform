@@ -104,7 +104,12 @@ const REACTIVATION_ROW: DueReactivation = {
   lastMessageAt: "2025-07-14T16:20:00.000Z", quietMonths: 9,
   contactEmail: "e@example.com", contactName: "E",
   brandName: BRAND, branding, accountTimezone: "America/New_York",
-  fromEmail: null, replyToEmail: null, body: "",
+  // A REAL address and reply-to, not nulls (decision A, 2026-09-22): the pass
+  // skips a check-in missing either, and a skipped row sends nothing for the
+  // scan below to read — `reactivations.sent` is what would red. With them
+  // the scan also covers the footer, which names the company ("a customer
+  // of …") and must name the BRAND, never the label.
+  fromEmail: null, replyToEmail: "office@rioroofing.example", mailingAddress: "PO Box 12\nMcAllen, TX 78501", body: "",
 };
 
 /** Part B's quote follow-up — the only PIPELINE-driven recipe. Five days

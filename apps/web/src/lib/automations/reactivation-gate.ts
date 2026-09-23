@@ -16,3 +16,13 @@ export function shouldSendReactivationNow(now: Date, timezone: string): boolean 
   if (!Number.isFinite(now.getTime())) return false;
   return isInMorningBand(now, zone);
 }
+
+/**
+ * WHAT a reactivation email cannot go without — RE-EXPORTED, not defined
+ * here. The rule's home is `@bis/db` (`automations.ts`) because the due-list
+ * walk lives there and has to leave out an account missing either, and
+ * packages/db cannot import web. The pass, the save action and the card keep
+ * importing it from this module; `reactivation-gate.test.ts` pins that this
+ * is the same function object, never a copy.
+ */
+export { missingForReactivation } from "@bis/db";

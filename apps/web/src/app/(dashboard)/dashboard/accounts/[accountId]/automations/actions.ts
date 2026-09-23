@@ -13,12 +13,13 @@ import {
   serviceDb, upsertAutomation, parseReviewRequestConfig, parseNoShowNudgeConfig, parseReferralAskConfig,
   parseReactivationConfig, parseQuoteFollowupConfig, parseInstantReplyConfig,
   QUOTE_FOLLOWUP_MIN_QUIET_DAYS, QUOTE_FOLLOWUP_MAX_QUIET_DAYS,
-  saveQuietSettings, bumpHeldForAccount, isClock,
+  saveQuietSettings, bumpHeldForAccount, isClock, getMailingAddress, getBranding,
   type ReviewRequestChannel,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { m } from "@/lib/messages";
 import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
+import { missingForReactivation } from "@/lib/automations/reactivation-gate";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -137,6 +138,31 @@ export async function saveReactivationAction(
   const enabled = formData.get("enabled") === "on";
   const body = String(formData.get("body") ?? "").trim();
   if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
+
+  // NOT ON WITHOUT AN ADDRESS AND A REPLY-TO (decision A, danlo, 2026-09-22).
+  // The check-in is commercial email, which under CAN-SPAM (the
+  // orchestrator's reading, not a lawyer's) carries the sender's postal
+  // address and a working opt-out — here "reply and let us know", which only
+  // works if a reply reaches the business rather than the agency's
+  // `EMAIL_FROM` mailbox. Judged by the same function the pass skips on, so
+  // the save and the send cannot disagree about "blank". Only when turning it
+  // ON: saving with the recipe off must never need either, or an account
+  // whose address was cleared could not even be switched off. A failed read
+  // is a failed save, never "not set".
+  if (enabled) {
+    try {
+      const db = serviceDb();
+      const [mailingAddress, branding] = await Promise.all([
+        getMailingAddress(db, accountId), getBranding(db, accountId),
+      ]);
+      const missing = missingForReactivation(mailingAddress, branding.replyToEmail);
+      if (missing.mailingAddress) return { ok: false, error: m["automations.reactivation.needsMailingAddress"] };
+      if (missing.replyTo) return { ok: false, error: m["automations.reactivation.needsReplyTo"] };
+    } catch (e) {
+      console.error(`saveReactivationAction: address/reply-to read failed for account ${accountId}: ${String(e)}`);
+      return { ok: false, error: m["automations.reactivation.saveFailed"] };
+    }
+  }
 
   try {
     await upsertAutomation(serviceDb(), accountId, "reactivation", { enabled, body, config }, userId);

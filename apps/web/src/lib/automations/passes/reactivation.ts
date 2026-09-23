@@ -7,8 +7,8 @@ import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { reactivationEmail } from "@/lib/email/templates/reactivation";
 import { resolveAccountZone } from "@/lib/booking/followup-timing";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
-import { shouldSendReactivationNow } from "../reactivation-gate";
-import { defaultReactivationBody, reactivationSubject } from "../reactivation-copy";
+import { shouldSendReactivationNow, missingForReactivation } from "../reactivation-gate";
+import { defaultReactivationBody, reactivationSubject, reactivationFooterReason } from "../reactivation-copy";
 import { AUTOMATION_TICK_CAP, REACTIVATION_DAILY_CAP, DAILY_CAP_WINDOW_MS } from "../caps";
 import {
   holdOrSend, logSkipped, subjectOf, verdict, REASONS, type HoldSubject, type Releaser,
@@ -55,6 +55,7 @@ export async function processReactivations(
   const c = {
     sent: 0, failed: 0, unstamped: 0, held: 0,
     skippedCap: 0, skippedHeardBack: 0, waitingForMorning: 0, unresolvableTimezone: 0,
+    skippedNoMailingAddress: 0, skippedNoReplyTo: 0,
   };
   const sentToday = new Map<string, number>();
   let attemptsThisTick = 0;
@@ -82,6 +83,38 @@ export async function processReactivations(
     // tomorrow morning and there is nothing a client would want to read.
     if (!opts.released && !shouldSendReactivationNow(ctx.now, row.accountTimezone)) {
       c.waitingForMorning++;
+      continue;
+    }
+
+    // NOTHING TO STAND ON (decision A, danlo, 2026-09-22). The check-in is
+    // commercial email, which under CAN-SPAM (the orchestrator's reading, not
+    // a lawyer's) carries the sender's postal address and a working opt-out;
+    // this one's opt-out is a REPLY, so a reply must reach the business, not
+    // the agency's `EMAIL_FROM` mailbox. The save refuses to turn the recipe
+    // on without both, but either can be cleared on the Branding page since.
+    //
+    // ON A NORMAL TICK this is a BACKSTOP: `listDueReactivations` asks the
+    // same function and leaves an account missing either out of its walk
+    // (review fix, 2026-09-22), so such rows do not reach this loop and the
+    // operator's signal is the Automations card, not the Activity page.
+    // It BITES on a RELEASE — `releaseReactivation` comes through this same
+    // loop off `getDueReactivationById`, which is deliberately unfiltered,
+    // so an address cleared during a hold is caught here and the held row
+    // is re-written `skipped` with a reason the client can read.
+    //
+    // BEFORE THE CAPS, on purpose: a row skipped here is never stamped, and
+    // behind the tick cap a run of them would spend all ten attempts and
+    // starve everyone else. AFTER the band, so outside the morning nothing
+    // is logged at all.
+    const missing = missingForReactivation(row.mailingAddress, row.replyToEmail);
+    if (missing.mailingAddress) {
+      c.skippedNoMailingAddress++;
+      await logSkipped(ctx, subject, REASONS.noMailingAddress);
+      continue;
+    }
+    if (missing.replyTo) {
+      c.skippedNoReplyTo++;
+      await logSkipped(ctx, subject, REASONS.noReplyTo);
       continue;
     }
 
@@ -145,6 +178,11 @@ export async function processReactivations(
         const brand = emailBrandNamed(row.branding, row.brandName);
         const { subject: line, html, text } = reactivationEmail({
           brand, subject: reactivationSubject(row.brandName), body,
+          // Non-null here: the check above skipped every row without one.
+          mailingAddress: row.mailingAddress!,
+          // Composed here like the subject, so the blank-brand branch stays
+          // in the copy module and the template only prints.
+          footerReason: reactivationFooterReason(row.brandName),
         });
         await ctx.email.send({
           to: row.contactEmail,
