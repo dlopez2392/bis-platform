@@ -25,6 +25,35 @@
  */
 export const FIXTURE_ACCOUNT_RE = /^E2E Client Co (\d{13})$/;
 
+/**
+ * `E2E Co 1786412389258` — the company `blueprints.spec.ts` creates through
+ * the real "Add company" dialog. `createClientAccount` names the Clerk org
+ * after the account, so this one string is BOTH an account row and a real
+ * Clerk org, and the spec's own `finally` is the only thing that removed
+ * either: a killed run stranded both where this sweep could not see them,
+ * because `FIXTURE_ACCOUNT_RE` knows only the per-run fixture's name.
+ * Anchored exactly as tightly: "E2E Co-op", "E2E Corp", "E2E Company" and
+ * "E2E Client Co" itself are all refused by THIS pattern.
+ */
+export const FIXTURE_CO_ACCOUNT_RE = /^E2E Co (\d{13})$/;
+
+/**
+ * Every account (and therefore Clerk org) name a spec mints. The accounts leg
+ * and the Clerk orgs leg of the sweep both ask `isStaleFixtureAccount`, which
+ * reads this list, so a shape added here is swept in both systems at once.
+ * `fixture-names.test.ts` walks the specs and fails on any stamped `E2E …`
+ * name that no pattern here (or in the form/blueprint patterns) admits.
+ */
+export const FIXTURE_ACCOUNT_PATTERNS: readonly RegExp[] = [FIXTURE_ACCOUNT_RE, FIXTURE_CO_ACCOUNT_RE];
+
+/**
+ * `E2E Blueprint 1786412389258`, the blueprint `blueprints.spec.ts` captures
+ * from the seeded account. `blueprints` is AGENCY-scoped (migration 0007) and
+ * its `source_account_id` is `on delete set null`, so no account delete ever
+ * takes one of these with it — it needs its own leg.
+ */
+export const FIXTURE_BLUEPRINT_RE = /^E2E Blueprint (\d{13})$/;
+
 /** `e2e-client-1786412389258@example.com`, built in auth.setup.ts. */
 export const FIXTURE_EMAIL_RE = /^e2e-client-(\d{13})@example\.com$/;
 
@@ -97,6 +126,25 @@ export function isStaleFixture(
  */
 export function isStaleFixtureForm(name: string, now: number): boolean {
   return isStaleFixture(name, FIXTURE_FORM_RE, now);
+}
+
+/**
+ * True only for an account (or Clerk org) name matching one of
+ * `FIXTURE_ACCOUNT_PATTERNS`, at least `maxAgeMs` old. Each pattern is asked
+ * on its own through `isStaleFixture`, so every one of them inherits the same
+ * anchoring, plausible-stamp floor and future-stamp refusal.
+ */
+export function isStaleFixtureAccount(
+  name: string, now: number, maxAgeMs: number = STALE_AFTER_MS,
+): boolean {
+  return FIXTURE_ACCOUNT_PATTERNS.some((pattern) => isStaleFixture(name, pattern, now, maxAgeMs));
+}
+
+/** True only for a blueprint name `blueprints.spec.ts` minted, at least `maxAgeMs` old. */
+export function isStaleFixtureBlueprint(
+  name: string, now: number, maxAgeMs: number = STALE_AFTER_MS,
+): boolean {
+  return isStaleFixture(name, FIXTURE_BLUEPRINT_RE, now, maxAgeMs);
 }
 
 /**

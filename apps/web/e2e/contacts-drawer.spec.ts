@@ -6,6 +6,7 @@ import {
   assignPhoneNumber, startCallRow, finishCallRow, addTagToContact, addNote,
 } from "@bis/db";
 import { m } from "../src/lib/messages";
+import { watchRouterTraffic } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process rather than through a Next.js request.
@@ -374,15 +375,24 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     const drawer = page.getByRole("dialog");
     await drawer.getByRole("button", { name: /edit company/i }).click();
     await drawer.getByLabel(/company/i).fill("Painted Proof LLC");
+    // Watching starts BEFORE the save, so the action's own request is counted.
+    const traffic = watchRouterTraffic(page);
     await page.keyboard.press("Enter");
     await expect(page.getByText(/saved/i).first()).toBeVisible();
-    // The URL still carries `?peek=` from the click above, so reload doesn't
-    // land on a bare table — use-peek.ts's deep-link behavior (proved by the
-    // earlier test in this file) re-opens the SAME drawer straight from
-    // hydration. Re-clicking a role="row" locator here would hang: the Sheet
-    // that's already open marks the rest of the page aria-hidden, so the row
-    // locator resolves to nothing. Assert straight on the drawer that's
-    // already open instead of trying to reopen it.
+    // The save revalidates the contacts path, and Next follows that with a
+    // navigation to the router's canonical URL. `?peek=` was pushed shallowly
+    // by use-peek.ts; if the router never learned it (the `__NA` bug), that
+    // navigation strips it and the drawer closes under the operator's hands.
+    // Hold the param until the router has settled (support.ts says why this
+    // cannot pass early), THEN confirm the drawer is still the one on screen.
+    await traffic.expectSearchHeld(/[?&]peek=/);
+    await expect(drawer).toBeVisible();
+    await expect(page).toHaveURL(/[?&]peek=/);
+    // Because `?peek=` survived, the reload is a deep link: use-peek.ts
+    // re-opens the SAME drawer straight from hydration (proved by the earlier
+    // test in this file). Re-clicking a role="row" locator here would hang:
+    // the open Sheet marks the rest of the page aria-hidden, so the row
+    // locator resolves to nothing. Assert straight on the reopened drawer.
     await page.reload();
     await expect(page.getByRole("dialog").getByText("Painted Proof LLC")).toBeVisible();
   });

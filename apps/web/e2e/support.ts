@@ -1,4 +1,4 @@
-import { type Page, test } from "@playwright/test";
+import { type Page, type Request, expect, test } from "@playwright/test";
 import { existsSync, readFileSync } from "node:fs";
 import { contrastRatio } from "../src/lib/branding/color";
 
@@ -54,6 +54,14 @@ export const SEEDED_CONTACT_NAME = "Maria Garcia";
  * skips the current test with a clear reason instead of silently falling
  * back to some other account and passing (or failing) against the wrong
  * data.
+ *
+ * Returns only once the browser is INSIDE the account. `click()` resolves when
+ * the click is dispatched, not when the client-side navigation it starts has
+ * landed, and every caller acts on the account next. palette.spec.ts paid for
+ * that (CI run 35776929496): its trace shows ⌘K pressed and "cal" typed while
+ * the URL was still `/dashboard/accounts`, so the palette answered for the
+ * agency top level — one option, "Screened calls" — and then re-answered for
+ * the account when the navigation landed mid-assertion.
  */
 export async function openAccountByName(page: Page, accountName: string) {
   await page.goto("/dashboard/accounts");
@@ -63,6 +71,7 @@ export async function openAccountByName(page: Page, accountName: string) {
     return;
   }
   await card.click();
+  await expect(page).toHaveURL(/\/dashboard\/accounts\/[0-9a-f-]{36}(?:[/?#]|$)/);
 }
 
 /**
@@ -128,4 +137,83 @@ export async function mintClientToken(userId: string): Promise<string> {
   )).json()) as { jwt?: string };
   if (!token.jwt) throw new Error("Clerk returned no jwt");
   return token.jwt;
+}
+
+/**
+ * Proves a shallow-pushed URL param SURVIVES the Next router's own work after
+ * a server action or `router.refresh()` — the property `?step=` and `?peek=`
+ * lost when their push sites handed `window.history.state` (carrying `__NA`)
+ * back to Next's patched pushState, which then never told the router the new
+ * URL (next@16.2.11 `app-router.js:252-279`). The router's next refresh
+ * navigated to its stale canonical URL and wrote it back to the address bar.
+ *
+ * Why not `waitForLoadState("networkidle")`: a pushState is not a new
+ * document, and Playwright resolves a load state this document has already
+ * reached at once — before anything has had a chance to strip the param — and
+ * pipeline.spec.ts has already paid for networkidle on an App Router page (CI
+ * run 35128151154). Why not a fixed sleep: the strip lands only after the
+ * action's response and any RSC fetch the router spawns from it, and that
+ * round trip has no fixed length on CI.
+ *
+ * So the watch starts BEFORE the triggering click, counting every router
+ * request — a server action (`next-action` header) or an RSC navigation or
+ * refresh (`rsc: 1`), not prefetches, which never commit a URL. The hold then
+ * reads `location.search` straight from the page every 100ms and fails the
+ * moment it stops matching. It passes only once ALL of these are true:
+ *   - at least one router request has been seen to finish (the action itself,
+ *     so a watch attached too late or a wrong header name fails loudly
+ *     instead of degrading to a plain timer);
+ *   - none is still in flight;
+ *   - `quietMs` has passed since the last one finished — Next writes its URL
+ *     in the same React commit that renders the navigation (HistoryUpdater's
+ *     `useInsertionEffect`, `app-router.js:38-67`), which follows the data by
+ *     a render, so a full second of quiet is an order of magnitude of margin;
+ *   - `minMs` has passed since the hold began.
+ */
+export function watchRouterTraffic(page: Page) {
+  const inFlight = new Set<Request>();
+  let finished = 0;
+  let lastFinishedAt = 0;
+  const isRouterRequest = (req: Request) => {
+    const h = req.headers();
+    if ("next-router-prefetch" in h || "next-router-segment-prefetch" in h) return false;
+    return "next-action" in h || h["rsc"] === "1";
+  };
+  const onStart = (req: Request) => { if (isRouterRequest(req)) inFlight.add(req); };
+  const onEnd = (req: Request) => {
+    if (inFlight.delete(req)) { finished += 1; lastFinishedAt = Date.now(); }
+  };
+  page.on("request", onStart);
+  page.on("requestfinished", onEnd);
+  page.on("requestfailed", onEnd);
+
+  return {
+    async expectSearchHeld(
+      pattern: RegExp,
+      { minMs = 2_000, quietMs = 1_000, timeoutMs = 30_000 } = {},
+    ): Promise<void> {
+      const started = Date.now();
+      try {
+        for (;;) {
+          const search = await page.evaluate(() => window.location.search);
+          expect(search, `the URL lost ${pattern} while the router settled`).toMatch(pattern);
+          const now = Date.now();
+          if (
+            finished > 0 && inFlight.size === 0
+            && now - lastFinishedAt >= quietMs && now - started >= minMs
+          ) return;
+          if (now - started > timeoutMs) {
+            throw new Error(
+              `router traffic never settled in ${timeoutMs}ms: ${finished} finished, ${inFlight.size} in flight`,
+            );
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      } finally {
+        page.off("request", onStart);
+        page.off("requestfinished", onEnd);
+        page.off("requestfailed", onEnd);
+      }
+    },
+  };
 }

@@ -113,7 +113,10 @@ describe("deleteAccountCascade / ACCOUNT_OWNED_TABLES stay inside test code", ()
       const imported = namedImportsFromBisDb(stripComments(fs.readFileSync(file, "utf8")));
       for (const symbol of GUARDED_SYMBOLS) {
         if (imported.includes(symbol)) {
-          offenders.push(`${path.relative(WEB_SRC, file)}: ${symbol}`);
+          // `path.relative` yields BACKSLASHES on Windows and forward slashes
+          // on CI's Linux runner; normalised as create-account-callers.test.ts
+          // does, so the offender reads the same wherever the guard fires.
+          offenders.push(`${path.relative(WEB_SRC, file).split(path.sep).join("/")}: ${symbol}`);
         }
       }
     }
