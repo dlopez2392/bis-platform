@@ -522,8 +522,23 @@ describe("appointment confirm — the matcher is the whole message, never a subs
   });
 
   it("reads a one-word no", () => {
-    for (const no of ["no", "NO", "no.", "n", "cancel", "Cancel!"]) {
+    for (const no of ["no", "NO", "no.", "n"]) {
       expect(matchConfirmationReply(no), JSON.stringify(no)).toBe("no");
+    }
+  });
+
+  it("reads NOTHING out of \"cancel\" — it is a carrier opt-out keyword, not an answer", () => {
+    // Decision D (danlo, 2026-09-22). opt-out.ts records Telnyx as detecting
+    // CANCEL (with STOP, STOPALL, UNSUBSCRIBE, END, QUIT) and blocking every
+    // later send to that number — an assumption about Telnyx written there,
+    // not measured here. Recording it as a NO painted "Asked for a different
+    // time" on the booking and invited the operator to text back a customer
+    // the carrier had just unsubscribed. The inbound route still files the
+    // message and bumps unread before the matcher runs, so the operator
+    // still reads the word; it just is not an answer.
+    // Mutation: put "cancel" back in CONFIRM_NO → this reds by name.
+    for (const text of ["cancel", "Cancel", "CANCEL!"]) {
+      expect(matchConfirmationReply(text), JSON.stringify(text)).toBeNull();
     }
   });
 

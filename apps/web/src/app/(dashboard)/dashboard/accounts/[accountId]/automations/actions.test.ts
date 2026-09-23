@@ -188,6 +188,22 @@ describe("saveQuoteFollowupAction", () => {
     expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
   });
 
+  it("asks for the stage BY NAME when the recipe is left OFF too, in words that do not mention turning it on", async () => {
+    // Decision C (danlo, 2026-09-22). A first visit that fills the days and
+    // the message, forgets the stage and saves with the switch off used to
+    // get the generic `saveFailed` — "Could not save" with no clue what was
+    // missing — because the branch only fired with `enabled`. A stage is
+    // required to save at all (the parser refuses an empty one), so the
+    // message is the same either way, and it must read true with the switch
+    // off. Mutation: restore `enabled &&` on the branch → this reds while the
+    // case above stays green; restore the old "…before turning this on." copy
+    // → the wording line reds.
+    expect(await saveQuoteFollowupAction("acct_1", fd({ stage_id: "", quiet_days: "3", channel: "sms", body: "Any questions?" })))
+      .toEqual({ ok: false, error: m["automations.quoteFollowup.stageRequired"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+    expect(m["automations.quoteFollowup.stageRequired"]).not.toMatch(/\bturn/i);
+  });
+
   it("REFUSES a quiet-days value outside the range rather than clamping it — at both bounds and one past each", async () => {
     // The card's `max` makes this unreachable from a normal keyboard, which is
     // why the parser's refusal is proved HERE and never in Playwright.
