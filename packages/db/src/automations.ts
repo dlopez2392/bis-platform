@@ -1046,6 +1046,18 @@ export async function listDueReferralAsks(
   const windowStart = new Date(now - REFERRAL_ASK_MAX_AGE_MS).toISOString();
   const windowEnd = new Date(now).toISOString();
 
+  // DELIBERATELY NO `.limit(...)` HERE. Unlike the reactivation walk, this
+  // recipe's three disqualifiers — opted out (B21), no mailing address, no
+  // reply-to (B20/B21) — are pass-level skips, not query predicates: a
+  // skipped row is never stamped `referral_asked_at`, so it is handed back
+  // on every tick until it ages out of `windowStart..windowEnd` on its own.
+  // That is safe ONLY because the query is bounded by the window and NOT by
+  // a row count — a run of skippable rows has nowhere to sit at the head of
+  // a page and starve a sendable one behind it. Add a `.limit()` here
+  // without first moving those three skips into the query (as
+  // `listDueReactivations` moved its opt-out into the conversations read,
+  // see its comment above) and a full page of skippable rows reproduces the
+  // #118 I1 starvation this query was built to avoid.
   const { data, error } = await db.from("bookings")
     .select(REFERRAL_ASK_SELECT)
     .in("account_id", [...enabled.keys()])
