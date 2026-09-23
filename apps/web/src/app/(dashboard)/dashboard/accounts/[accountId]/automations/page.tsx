@@ -2,6 +2,7 @@ import { headers } from "next/headers";
 import Link from "next/link";
 import {
   serviceDb, getAutomation, getBranding, getCalendarForAccount, readQuietSettings, listPipelinesWithStages,
+  getMailingAddress,
   type AutomationRow, type CalendarRow, type QuietSettings,
 } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
@@ -11,6 +12,7 @@ import { brandDisplayName } from "@/lib/email/templates/shell";
 import { originFrom } from "@/lib/email/origin";
 import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
 import { m } from "@/lib/messages";
+import { missingForReactivation } from "@/lib/automations/reactivation-gate";
 import { AutomationsSettings } from "./automations-settings";
 import { ReferralAskCard } from "./referral-ask-card";
 import { ReactivationCard } from "./reactivation-card";
@@ -51,7 +53,7 @@ export default async function AutomationsPage({
   // these can no longer 500 the whole agency page; only the one card that
   // lost its read shows the degraded state, and the log line carries the
   // account id so the hiccup is still visible.
-  const [review, referralAsk, reactivation, noShow, smsReminder, appointmentConfirm, quoteFollowup, instantReply, account, smsGate, calendar, origin, quiet, stages] = await Promise.all([
+  const [review, referralAsk, reactivation, noShow, smsReminder, appointmentConfirm, quoteFollowup, instantReply, account, smsGate, calendar, origin, quiet, stages, mailingAddress] = await Promise.all([
     getAutomation(db, accountId, "review_request").catch((e): AutomationRow | null => {
       console.error(`automations: review_request read failed for ${accountId}: ${String(e)}`);
       return null;
@@ -106,10 +108,16 @@ export default async function AutomationsPage({
         ]);
         if (error) throw new Error(error.message);
         const acct = data as { timezone: string } | null;
-        return { brandName: brandDisplayName(branding), timezone: acct?.timezone ?? "UTC" };
+        return {
+          brandName: brandDisplayName(branding), timezone: acct?.timezone ?? "UTC",
+          replyToEmail: branding.replyToEmail as string | null | undefined,
+        };
       } catch (e) {
         console.error(`automations: account lookup failed for ${accountId}: ${String(e)}`);
-        return { brandName: "", timezone: "UTC" };
+        // `undefined` = UNREAD, distinct from `null` = not set: the
+        // reactivation card must not claim a reply-to is missing when it
+        // was only not read (see `reactivationMissing` below).
+        return { brandName: "", timezone: "UTC", replyToEmail: undefined as string | null | undefined };
       }
     })(),
     // The same gate the passes consult, so the page can say up front why a
@@ -159,7 +167,24 @@ export default async function AutomationsPage({
       console.error(`automations: pipeline stage read failed for ${accountId}: ${String(e)}`);
       return [];
     }),
+    // The reactivation card's address fact (decision A, 2026-09-22). A failed
+    // read is `undefined` — UNREAD — never `null`, which means "not set".
+    getMailingAddress(db, accountId).catch((e): string | null | undefined => {
+      console.error(`automations: mailing address read failed for ${accountId}: ${String(e)}`);
+      return undefined;
+    }),
   ]);
+
+  // What the check-in cannot go without, judged by the SAME function the save
+  // refuses on and the pass skips on. A fact that was not READ is not
+  // reported missing: the card's warning is advice, and the save and the
+  // pass enforce regardless, so a false "your address is missing" would only
+  // send the operator to fix a field that is fine.
+  const judged = missingForReactivation(mailingAddress, account.replyToEmail);
+  const reactivationMissing = {
+    mailingAddress: mailingAddress !== undefined && judged.mailingAddress,
+    replyTo: account.replyToEmail !== undefined && judged.replyTo,
+  };
 
   const bookingUrl = origin && calendar ? `${origin}/b/${calendar.public_id}` : "";
 
@@ -191,6 +216,8 @@ export default async function AutomationsPage({
         <ReactivationCard
           automation={reactivation}
           brandName={account.brandName}
+          accountId={accountId}
+          missing={reactivationMissing}
           saveAction={saveReactivationAction.bind(null, accountId)}
         />
         <NoShowNudgeCard

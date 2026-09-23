@@ -110,6 +110,19 @@ export const REASONS = {
    *  reason rather than sit in it. The operator-facing half of the same fact
    *  lives on the Automations card, which can see the account's stages. */
   stageGone: "The stage this automation watches is gone",
+  /** A reactivation whose account has no postal address (blank after
+   *  `.trim()`, 0048). The check-in is commercial email, which under
+   *  CAN-SPAM (the orchestrator's reading, not a lawyer's) must carry the
+   *  sender's physical address, so it is skipped rather than sent without
+   *  one (decision A, 2026-09-22). The save refuses to turn the recipe on
+   *  without it; this is the address cleared on the Branding page since. */
+  noMailingAddress: "The company's mailing address isn't set",
+  /** A reactivation whose account has no reply-to. The check-in's opt-out is
+   *  "reply and let us know", and with no reply-to (and no `from_email`) a
+   *  reply lands in the agency's `EMAIL_FROM` mailbox rather than the
+   *  business's — an opt-out that reaches nobody who can act on it. Skipped,
+   *  like the missing address, for the same decision. */
+  noReplyTo: "The company has no reply-to address",
   outsideRegion: "Number is outside the US, Canada or Mexico",
   consentWithheld: "They didn't agree to texts",
   robocall: "Screened as a robocall",

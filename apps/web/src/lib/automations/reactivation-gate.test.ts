@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { shouldSendReactivationNow } from "./reactivation-gate";
+import { shouldSendReactivationNow, missingForReactivation } from "./reactivation-gate";
 
 const ZONE = "America/Chicago";
 const WEST = "America/Los_Angeles";
@@ -46,5 +46,34 @@ describe("when a reactivation email may go", () => {
       expect(shouldSendReactivationNow(utcMorning, junk), junk).toBe(false);
     }
     expect(shouldSendReactivationNow(new Date("nonsense"), ZONE)).toBe(false);
+  });
+});
+
+/**
+ * WHAT the reactivation email cannot go without (decision A, 2026-09-22): a
+ * postal address for its footer, and a reply-to so the "reply and let us
+ * know" opt-out reaches the business rather than the agency's `EMAIL_FROM`
+ * mailbox. The pass, the save action and the card all ask THIS function, so
+ * "blank" is decided once.
+ */
+describe("what a reactivation email cannot go without", () => {
+  it("both present → nothing missing", () => {
+    expect(missingForReactivation("123 Main St\nMcAllen, TX 78501", "owner@rioroofing.com"))
+      .toEqual({ mailingAddress: false, replyTo: false });
+  });
+
+  it("null, empty, or blank after JavaScript's .trim() is MISSING — for each field on its own", () => {
+    // The column's CHECK (0048) judges "blank" by btrim over the same set
+    // `.trim()` strips, so the junk list includes a newline, a tab and a
+    // non-breaking space as well as spaces. Mutation: drop the `.trim()` on
+    // the address → the whitespace rows red BY NAME; drop the reply-to
+    // judgement → the reply-to half reds.
+    for (const blank of [null, undefined, "", "   ", " \n\t  "]) {
+      expect(missingForReactivation(blank, "owner@rioroofing.com"), JSON.stringify(blank))
+        .toEqual({ mailingAddress: true, replyTo: false });
+      expect(missingForReactivation("123 Main St", blank), JSON.stringify(blank))
+        .toEqual({ mailingAddress: false, replyTo: true });
+    }
+    expect(missingForReactivation(null, null)).toEqual({ mailingAddress: true, replyTo: true });
   });
 });

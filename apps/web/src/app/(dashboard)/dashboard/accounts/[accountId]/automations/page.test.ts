@@ -18,10 +18,11 @@ vi.mock("next/headers", () => ({ headers: (...a: unknown[]) => originMock.header
 vi.mock("@/lib/email/origin", () => ({ originFrom: (...a: unknown[]) => originMock.originFrom(...a) }));
 const dbFixture = vi.hoisted(() => ({
   name: "Rio Roofing — trial", timezone: "America/Chicago", brandName: null as string | null,
+  replyToEmail: "owner@rioroofing.com" as string | null,
 }));
 const dbMock = vi.hoisted(() => ({
   getAutomation: vi.fn(), getBranding: vi.fn(), getCalendarForAccount: vi.fn(), readQuietSettings: vi.fn(),
-  listPipelinesWithStages: vi.fn(),
+  listPipelinesWithStages: vi.fn(), getMailingAddress: vi.fn(),
 }));
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({
@@ -36,6 +37,7 @@ vi.mock("@bis/db", () => ({
   getCalendarForAccount: (...a: unknown[]) => dbMock.getCalendarForAccount(...a),
   readQuietSettings: (...a: unknown[]) => dbMock.readQuietSettings(...a),
   listPipelinesWithStages: (...a: unknown[]) => dbMock.listPipelinesWithStages(...a),
+  getMailingAddress: (...a: unknown[]) => dbMock.getMailingAddress(...a),
   DEFAULT_QUIET_SETTINGS: { enabled: true, start: "21:00", end: "08:00" },
 }));
 const smsMock = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
@@ -114,10 +116,12 @@ beforeEach(() => {
   dbFixture.name = "Rio Roofing — trial";
   dbFixture.timezone = "America/Chicago";
   dbFixture.brandName = null;
+  dbFixture.replyToEmail = "owner@rioroofing.com";
+  dbMock.getMailingAddress.mockReset().mockResolvedValue("123 Main St\nMcAllen, TX 78501");
   dbMock.getAutomation.mockReset().mockImplementation(async (_db: unknown, _a: unknown, key: string) => ROWS[key] ?? null);
   dbMock.getBranding.mockReset().mockImplementation(async () => ({
     brandName: dbFixture.brandName, brandLogoPath: null, brandColor: null, brandNeutral: null,
-    brandCorners: null, brandType: null, brandMode: null, replyToEmail: null,
+    brandCorners: null, brandType: null, brandMode: null, replyToEmail: dbFixture.replyToEmail,
   }));
   dbMock.getCalendarForAccount.mockReset().mockResolvedValue({ id: "cal_1", public_id: "cal_pub_1", enabled: true });
   dbMock.readQuietSettings.mockReset().mockResolvedValue({ enabled: true, start: "22:30", end: "06:15" });
@@ -204,6 +208,45 @@ describe("automations page", () => {
     expect(c.reactivation!.brandName).toBe("Rio Roofing");
     expect(c.reactivation).not.toHaveProperty("smsGate");
     expect(dbMock.getAutomation).toHaveBeenCalledWith(expect.anything(), "a1", "reactivation");
+  });
+
+  it("hands the reactivation card the account id and WHAT IS MISSING — the address and the reply-to, judged like the save and the pass judge them", async () => {
+    // Decision A (2026-09-22). Mutation: hand the card a constant
+    // `{ mailingAddress: false, replyTo: false }` → the second and third
+    // halves red BY NAME; swap the two facts → the second half reds.
+    let c = await render();
+    expect(c.reactivation!.accountId).toBe("a1");
+    expect(c.reactivation!.missing).toEqual({ mailingAddress: false, replyTo: false });
+    expect(dbMock.getMailingAddress).toHaveBeenCalledWith(expect.anything(), "a1");
+
+    dbMock.getMailingAddress.mockResolvedValue(" \n ");   // blank after .trim()
+    c = await render();
+    expect(c.reactivation!.missing).toEqual({ mailingAddress: true, replyTo: false });
+
+    dbMock.getMailingAddress.mockResolvedValue("123 Main St");
+    dbFixture.replyToEmail = null;
+    c = await render();
+    expect(c.reactivation!.missing).toEqual({ mailingAddress: false, replyTo: true });
+  });
+
+  it("a failed address read degrades to NO warning, never a false one — and says so in the log", async () => {
+    // The warning is advice; the save and the pass are what enforce. Telling
+    // an operator their address is missing when it was only unread would send
+    // them to fix a field that is fine. Mutation: degrade to `true` → reds.
+    dbMock.getMailingAddress.mockRejectedValue(new Error("down"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    let c = await render();
+    expect(c.reactivation!.missing).toEqual({ mailingAddress: false, replyTo: false });
+    expect(c.reactivation!.automation).toEqual(ROWS.reactivation);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
+    // …and the reply-to, read with the brand name: a failed branding read is
+    // UNREAD, not "no reply-to". Mutation: drop the `!== undefined` guard on
+    // `replyTo` → this half reds.
+    dbMock.getMailingAddress.mockResolvedValue("123 Main St");
+    dbMock.getBranding.mockRejectedValue(new Error("down"));
+    c = await render();
+    expect(c.reactivation!.missing).toEqual({ mailingAddress: false, replyTo: false });
+    spy.mockRestore();
   });
 
   it("hands the quote follow-up card ITS OWN row, the SMS gate, and the account's stages flattened for the select", async () => {

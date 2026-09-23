@@ -250,6 +250,7 @@ const EMPTY_APPOINTMENT_CONFIRMS = {
 const EMPTY_REACTIVATIONS = {
   sent: 0, failed: 0, unstamped: 0, held: 0,
   skippedCap: 0, skippedHeardBack: 0, waitingForMorning: 0, unresolvableTimezone: 0,
+  skippedNoMailingAddress: 0, skippedNoReplyTo: 0,
 };
 const EMPTY_QUOTE_FOLLOWUPS = {
   sent: 0, failed: 0, unstamped: 0, held: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,

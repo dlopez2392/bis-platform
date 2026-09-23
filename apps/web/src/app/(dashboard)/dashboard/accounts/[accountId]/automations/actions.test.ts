@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 const dbMocks = vi.hoisted(() => ({
   upsertAutomation: vi.fn(), saveQuietSettings: vi.fn(), bumpHeldForAccount: vi.fn(),
+  // The reactivation save reads these two before turning the recipe on.
+  getMailingAddress: vi.fn(), getBranding: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({}),
@@ -34,6 +36,14 @@ beforeEach(() => {
   dbMocks.upsertAutomation.mockReset().mockResolvedValue({});
   dbMocks.saveQuietSettings.mockReset().mockResolvedValue(undefined);
   dbMocks.bumpHeldForAccount.mockReset().mockResolvedValue(0);
+  // LOAD-BEARING DEFAULTS: every existing reactivation case that turns the
+  // recipe on is about something else, so the account it saves for HAS an
+  // address and a reply-to. The refusal cases below clear one at a time.
+  dbMocks.getMailingAddress.mockReset().mockResolvedValue("123 Main St\nMcAllen, TX 78501");
+  dbMocks.getBranding.mockReset().mockResolvedValue({
+    brandName: "Rio Roofing", brandLogoPath: null, brandColor: null, brandNeutral: null,
+    brandCorners: null, brandType: null, brandMode: null, replyToEmail: "owner@rioroofing.com",
+  });
 });
 
 describe("saveReviewRequestAction", () => {
@@ -293,6 +303,62 @@ describe("saveReactivationAction", () => {
     expect(await saveReactivationAction("acct_1", fd({ months: "9", body: "  \n  " }))).toEqual({ ok: true });
     expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "reactivation",
       { enabled: false, body: "", config: { months: 9 } }, "user_1");
+  });
+
+  // Decision A (danlo, 2026-09-22): the check-in carries the business's postal
+  // address and a "reply and let us know" opt-out, so it may not be turned
+  // on until both exist. The pass skips a row missing either anyway; refusing
+  // here is what tells the operator BEFORE the first morning goes by silent.
+  it("turning it on with no mailing address (blank after .trim()) is REFUSED, naming the Branding page", async () => {
+    // Mutation: delete the mailing-address refusal → this reds BY NAME.
+    for (const blank of [null, "", " \n\t "]) {
+      dbMocks.getMailingAddress.mockResolvedValue(blank);
+      expect(await saveReactivationAction("acct_1", fd({ enabled: "on", months: "9" })), JSON.stringify(blank))
+        .toEqual({ ok: false, error: m["automations.reactivation.needsMailingAddress"] });
+    }
+    expect(m["automations.reactivation.needsMailingAddress"]).toContain("Branding page");
+    expect(dbMocks.getMailingAddress).toHaveBeenCalledWith(expect.anything(), "acct_1");
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+  });
+
+  it("turning it on with no reply-to (blank after .trim()) is REFUSED, naming the Branding page", async () => {
+    // Mutation: delete the reply-to refusal → this reds BY NAME.
+    for (const blank of [null, "", "   "]) {
+      dbMocks.getBranding.mockResolvedValue({
+        brandName: "Rio Roofing", brandLogoPath: null, brandColor: null, brandNeutral: null,
+        brandCorners: null, brandType: null, brandMode: null, replyToEmail: blank,
+      });
+      expect(await saveReactivationAction("acct_1", fd({ enabled: "on", months: "9" })), JSON.stringify(blank))
+        .toEqual({ ok: false, error: m["automations.reactivation.needsReplyTo"] });
+    }
+    expect(m["automations.reactivation.needsReplyTo"]).toContain("Branding page");
+    expect(dbMocks.getBranding).toHaveBeenCalledWith(expect.anything(), "acct_1");
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+  });
+
+  it("saving with the recipe OFF needs neither — the months and message still save", async () => {
+    // Mutation: check the two regardless of `enabled` → this reds BY NAME,
+    // and an operator could not even turn the recipe OFF on an account whose
+    // address had been cleared.
+    dbMocks.getMailingAddress.mockResolvedValue(null);
+    dbMocks.getBranding.mockResolvedValue({
+      brandName: "Rio Roofing", brandLogoPath: null, brandColor: null, brandNeutral: null,
+      brandCorners: null, brandType: null, brandMode: null, replyToEmail: null,
+    });
+    expect(await saveReactivationAction("acct_1", fd({ months: "12", body: "Hi" }))).toEqual({ ok: true });
+    expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "reactivation",
+      { enabled: false, body: "Hi", config: { months: 12 } }, "user_1");
+  });
+
+  it("a failed read of either comes back as the toastable save failure, and nothing is written", async () => {
+    // "Not set" is an answer the refusal acts on; a failed query is not one.
+    dbMocks.getMailingAddress.mockRejectedValue(new Error("db down"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await saveReactivationAction("acct_1", fd({ enabled: "on", months: "9" })))
+      .toEqual({ ok: false, error: m["automations.reactivation.saveFailed"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("acct_1"));
+    spy.mockRestore();
   });
 });
 

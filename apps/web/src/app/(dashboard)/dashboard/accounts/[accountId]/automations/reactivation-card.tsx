@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import {
   REACTIVATION_MIN_MONTHS, REACTIVATION_MAX_MONTHS, REACTIVATION_DEFAULT_MONTHS,
@@ -10,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Notice } from "@/components/ui/notice";
 import { Textarea } from "@/components/ui/textarea";
 import { SubmitButton } from "../../submit-button";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
@@ -46,15 +48,35 @@ function formDefaults(row: AutomationRow | null): StoredForm {
  * NO SEGMENT COUNTER either, for the same reason: nothing here is ever
  * measured against a GSM-7 budget.
  */
+/**
+ * Which of the two things the check-in cannot go without is missing — ONE
+ * sentence either way, with the Branding page as a link where the catalogue
+ * says `{brandingLink}`. Null when nothing is.
+ */
+function missingKey(missing: { mailingAddress: boolean; replyTo: boolean }) {
+  if (missing.mailingAddress && missing.replyTo) return "automations.reactivation.missingBoth" as const;
+  if (missing.mailingAddress) return "automations.reactivation.missingMailingAddress" as const;
+  if (missing.replyTo) return "automations.reactivation.missingReplyTo" as const;
+  return null;
+}
+
 export function ReactivationCard({
-  automation, brandName, saveAction,
+  automation, brandName, accountId, missing, saveAction,
 }: {
   automation: AutomationRow | null;
   /** Already the CUSTOMER-FACING name (brandDisplayName, page.tsx). */
   brandName: string;
+  /** For the Branding link in the missing-address/reply-to Notice. */
+  accountId: string;
+  /** `missingForReactivation` over the account's address and reply-to
+   *  (page.tsx) — the same judgement the save refuses on and the pass skips
+   *  on (decision A, 2026-09-22). `true` = missing. */
+  missing: { mailingAddress: boolean; replyTo: boolean };
   saveAction: (formData: FormData) => Promise<ActionResult>;
 }) {
   const stored = formDefaults(automation);
+  const key = missingKey(missing);
+  const [missingLead = "", missingTail = ""] = key ? m[key].split("{brandingLink}") : [];
   const [body, setBody] = useState(stored.body);
 
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
@@ -72,6 +94,20 @@ export function ReactivationCard({
       </CardHeader>
       <CardContent>
         <form onSubmit={onSubmit} className="space-y-6">
+          {/* FIRST, above the switch: the save refuses to turn this on and
+              the pass skips every row until it is fixed, so the operator
+              reads why before reaching for the checkbox. A SENTENCE, so it
+              keeps the foreground and lets the ground carry the hue
+              (notice.tsx; alert-phone-card.tsx is the same shape). */}
+          {key ? (
+            <Notice tone="warn" className="text-foreground" data-testid="reactivation-missing">
+              {missingLead}
+              <Link href={`/dashboard/accounts/${accountId}/branding`} className="underline underline-offset-2">
+                {m["nav.branding"]}
+              </Link>
+              {missingTail}
+            </Notice>
+          ) : null}
           <div className="flex items-center gap-2">
             <Checkbox id="reactivation-enabled" name="enabled" defaultChecked={stored.enabled} />
             <Label htmlFor="reactivation-enabled">{m["automations.reactivation.enabled"]}</Label>

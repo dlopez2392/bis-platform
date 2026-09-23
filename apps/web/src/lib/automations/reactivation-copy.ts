@@ -24,3 +24,15 @@ export function reactivationSubject(brandName: string): string {
   if (!brandName.trim()) return m["automations.reactivation.subjectNoName"];
   return m["automations.reactivation.subject"].replace("{name}", () => brandName);
 }
+
+/**
+ * The footer's first line (decision A, 2026-09-22): why this person is
+ * getting a check-in, and how to stop hearing from the business — by
+ * REPLYING, because the email carries no link of any kind. The template
+ * prints it above the postal address. Here rather than in the template for
+ * the subject's reason: a blank brand would otherwise read "a customer of ."
+ */
+export function reactivationFooterReason(brandName: string): string {
+  if (!brandName.trim()) return m["automations.reactivation.footerReasonNoName"];
+  return m["automations.reactivation.footerReason"].replace("{name}", () => brandName);
+}

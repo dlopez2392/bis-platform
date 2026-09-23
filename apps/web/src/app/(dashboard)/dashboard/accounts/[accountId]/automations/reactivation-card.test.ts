@@ -33,7 +33,8 @@ const ROW: AutomationRow = {
 
 function render(over: Partial<Parameters<typeof ReactivationCard>[0]> = {}): string {
   return renderToStaticMarkup(createElement(ReactivationCard, {
-    automation: ROW, brandName: "Rio Roofing",
+    automation: ROW, brandName: "Rio Roofing", accountId: "a1",
+    missing: { mailingAddress: false, replyTo: false },
     saveAction: async () => ({ ok: true as const }),
     ...over,
   }));
@@ -73,5 +74,54 @@ describe("the reactivation card", () => {
       expect(html).toContain(`data-testid="reactivation-limit-note"`);
       expect(html).toContain(m["automations.reactivation.limitNote"]);
     }
+  });
+});
+
+/**
+ * Decision A (2026-09-22): the check-in cannot go without the company's
+ * postal address and a reply-to — the save refuses to turn it on and the
+ * pass skips every row — so the card says so up front, names WHICH is
+ * missing, and links to the page where it is fixed. A status the operator
+ * must act on, so the app's one status banner (`Notice`, role="alert").
+ */
+describe("the reactivation card — what it cannot send without", () => {
+  /** React's own text escaping, so a catalogue string can be found in markup. */
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
+  const parts = (key: "automations.reactivation.missingBoth" | "automations.reactivation.missingMailingAddress"
+    | "automations.reactivation.missingReplyTo") => m[key].split("{brandingLink}").map(esc);
+  const BRANDING_LINK = `href="/dashboard/accounts/a1/branding"`;
+
+  it("with both set there is NO warning", () => {
+    const html = render();
+    expect(html).not.toContain(`data-testid="reactivation-missing"`);
+    expect(html).not.toContain(`role="alert"`);
+  });
+
+  it("no mailing address → a warn Notice that says so and links to Branding", () => {
+    // Mutation: drop the mailing-address arm (render nothing for it) → this
+    // reds BY NAME.
+    const html = render({ missing: { mailingAddress: true, replyTo: false } });
+    expect(html).toContain(`data-testid="reactivation-missing"`);
+    expect(html).toContain(`role="alert"`);
+    expect(html).toContain("bg-[var(--warn-bg)]");
+    for (const p of parts("automations.reactivation.missingMailingAddress")) expect(html).toContain(p);
+    expect(html).toContain(BRANDING_LINK);
+    expect(html).toContain(`>${m["nav.branding"]}</a>`);
+  });
+
+  it("no reply-to → a warn Notice that says so and links to Branding", () => {
+    // Mutation: drop the reply-to arm → this reds BY NAME.
+    const html = render({ missing: { mailingAddress: false, replyTo: true } });
+    expect(html).toContain(`data-testid="reactivation-missing"`);
+    for (const p of parts("automations.reactivation.missingReplyTo")) expect(html).toContain(p);
+    expect(html).toContain(BRANDING_LINK);
+  });
+
+  it("both missing → ONE Notice naming both, not two", () => {
+    // Mutation: render the two single-field Notices instead → this reds.
+    const html = render({ missing: { mailingAddress: true, replyTo: true } });
+    for (const p of parts("automations.reactivation.missingBoth")) expect(html).toContain(p);
+    expect(html.split(`data-testid="reactivation-missing"`).length - 1).toBe(1);
   });
 });

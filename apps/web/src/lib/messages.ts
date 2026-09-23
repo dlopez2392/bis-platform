@@ -1318,6 +1318,19 @@ export const m = {
   "automations.reactivation.saved": "Check-ins saved",
   "automations.reactivation.saveFailed": "Could not save check-ins.",
   "automations.reactivation.monthsInvalid": "Choose a number of months between 6 and 18.",
+  // Decision A (2026-09-22): the footer every check-in carries — why it came
+  // and how to stop it — above the business's postal address. The way out is
+  // a REPLY, not a link: the email carries no link of any kind, and one
+  // check-in per person, ever, leaves no later message to suppress.
+  "automations.reactivation.footerReason": "You're getting this because you've been a customer of {name}. If you'd rather not hear from us, reply and let us know.",
+  "automations.reactivation.footerReasonNoName": "You're getting this because you've been a customer of ours. If you'd rather not hear from us, reply and let us know.",
+  // What the card and the save say when the email has nothing to stand on.
+  // `{brandingLink}` is split out by the card and rendered as a link.
+  "automations.reactivation.missingBoth": "Check-ins can't go out yet: they need the company's mailing address, printed at the bottom of every one, and a reply-to address, so a customer who replies reaches the company. Add both on the {brandingLink} page.",
+  "automations.reactivation.missingMailingAddress": "Check-ins can't go out yet: they need the company's mailing address, printed at the bottom of every one. Add it on the {brandingLink} page.",
+  "automations.reactivation.missingReplyTo": "Check-ins can't go out yet: they need a reply-to address, so a customer who replies reaches the company. Add one on the {brandingLink} page.",
+  "automations.reactivation.needsMailingAddress": "Add the company's mailing address on the Branding page before turning this on.",
+  "automations.reactivation.needsReplyTo": "Add a reply-to address on the Branding page before turning this on.",
 
   // Part B — quote follow-ups. NO EM DASH and no character outside GSM-7 in
   // `defaultBody`/`defaultBodyNoName`: this recipe is SMS-capable and one

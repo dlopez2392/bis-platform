@@ -85,6 +85,7 @@ function ctx(now: Date = TICK, quiet: QuietSettings = QUIET_OFF): PassContext {
 const EMPTY = {
   sent: 0, failed: 0, unstamped: 0, held: 0,
   skippedCap: 0, skippedHeardBack: 0, waitingForMorning: 0, unresolvableTimezone: 0,
+  skippedNoMailingAddress: 0, skippedNoReplyTo: 0,
 };
 const skippedReasons = () => dbMocks.recordAutomationLog.mock.calls
   .filter((c) => c[1].status === "skipped").map((c) => c[1].reason as string);
@@ -122,6 +123,12 @@ describe("the reactivation check-in is EMAIL ONLY", () => {
     expect(sent.subject).toBe("A note from Rio Roofing");
     expect(sent.body).toContain("It's been a while since we were out at your place.");
     expect(sent.html).not.toContain("href=");
+    // The footer (decision A): why, how to stop it, and the ROW's own postal
+    // address, in both parts. Mutation: stop passing `row.mailingAddress` to
+    // `reactivationEmail` → the template throws on `undefined` and this reds.
+    expect(sent.body).toContain("If you'd rather not hear from us, reply and let us know.");
+    expect(sent.body).toContain("123 Main St\nMcAllen, TX 78501");
+    expect(sent.html).toContain("123 Main St<br>McAllen, TX 78501");
     expect(smsFactory).not.toHaveBeenCalled();
     expect(smsSend).not.toHaveBeenCalled();
     expect(dbMocks.stampReactivationSent).toHaveBeenCalledWith(expect.anything(), "ct_1");
@@ -322,11 +329,94 @@ describe("the operator's own words", () => {
   it("sends the stored body when there is one, and the default when it is blank", async () => {
     dbMocks.listDueReactivations.mockResolvedValue([row({ body: "  Roof still holding up?  " })]);
     expect(await reactivationPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
-    expect((emailSend.mock.calls[0]![0] as Record<string, string>).body).toBe("Roof still holding up?");
+    // The text part is the body, then the footer after a blank line — so the
+    // operator's words are its first paragraph, not the whole of it.
+    expect((emailSend.mock.calls[0]![0] as Record<string, string>).body?.split("\n\n")[0]).toBe("Roof still holding up?");
     emailSend.mockClear();
     dbMocks.listDueReactivations.mockResolvedValue([row({ body: "   " })]);
     expect(await reactivationPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
-    expect((emailSend.mock.calls[0]![0] as Record<string, string>).body)
+    expect((emailSend.mock.calls[0]![0] as Record<string, string>).body?.split("\n\n")[0])
       .toBe(m["automations.reactivation.defaultBody"].replace("{name}", "Rio Roofing"));
+  });
+});
+
+/**
+ * DECISION A (danlo, 2026-09-22): the check-in is commercial email, which
+ * under CAN-SPAM (the orchestrator's reading, not a lawyer's) needs the
+ * sender's postal address and a working opt-out — here, a reply that reaches
+ * the BUSINESS. The save refuses to turn the recipe on without either, but
+ * either can be cleared on the Branding page afterwards, so the pass checks
+ * again before every send, on a normal tick AND on a release (the releaser
+ * runs the same loop). Logged with a client-readable reason, never sent,
+ * never stamped — the contact stays due for the day the field is filled in.
+ */
+describe("the check-in never goes without a postal address and a reply-to", () => {
+  const ADDRESS_REASON = "The company's mailing address isn't set";
+  const REPLY_TO_REASON = "The company has no reply-to address";
+
+  it("a blank mailing address (after .trim()) skips the row on a normal tick: logged, not sent, not stamped", async () => {
+    // Mutation: delete the mailing-address check from `processReactivations`
+    // → this reds BY NAME.
+    for (const blank of [null, "", " \n\t "]) {
+      dbMocks.recordAutomationLog.mockClear(); emailSend.mockClear();
+      dbMocks.listDueReactivations.mockResolvedValue([row({ mailingAddress: blank })]);
+      expect(await reactivationPass.run(ctx()), JSON.stringify(blank)).toEqual({ ...EMPTY, skippedNoMailingAddress: 1 });
+      expect(emailSend).not.toHaveBeenCalled();
+      expect(skippedReasons()).toEqual([ADDRESS_REASON]);
+    }
+    expect(dbMocks.stampReactivationSent).not.toHaveBeenCalled();
+  });
+
+  it("a blank reply-to (after .trim()) skips the row on a normal tick: logged, not sent, not stamped", async () => {
+    // Mutation: delete the reply-to check from `processReactivations` → this
+    // reds BY NAME, and the "reply and let us know" opt-out lands in the
+    // agency's mailbox instead of the business's.
+    for (const blank of [null, "", "   "]) {
+      dbMocks.recordAutomationLog.mockClear(); emailSend.mockClear();
+      dbMocks.listDueReactivations.mockResolvedValue([row({ replyToEmail: blank })]);
+      expect(await reactivationPass.run(ctx()), JSON.stringify(blank)).toEqual({ ...EMPTY, skippedNoReplyTo: 1 });
+      expect(emailSend).not.toHaveBeenCalled();
+      expect(skippedReasons()).toEqual([REPLY_TO_REASON]);
+    }
+    expect(dbMocks.stampReactivationSent).not.toHaveBeenCalled();
+  });
+
+  it("released from a hold, a row whose address was cleared DURING the hold is skipped, not sent — and leaves the queue", async () => {
+    // The release path goes through the same loop (`releaseReactivation` →
+    // `processReactivations`), so the same check bites. Mutation: delete the
+    // mailing-address check → this reds BY NAME.
+    dbMocks.getDueReactivationById.mockResolvedValue({ due: row({ mailingAddress: "  " }) });
+    expect(await releaseReactivation(ctx(), heldRow())).toBe("skipped");
+    expect(emailSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampReactivationSent).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
+      subjectKey: "contact:ct_1", status: "skipped", reason: ADDRESS_REASON,
+    }));
+  });
+
+  it("released from a hold, a row whose reply-to was cleared DURING the hold is skipped, not sent — and leaves the queue", async () => {
+    // Mutation: delete the reply-to check → this reds BY NAME.
+    dbMocks.getDueReactivationById.mockResolvedValue({ due: row({ replyToEmail: null }) });
+    expect(await releaseReactivation(ctx(), heldRow())).toBe("skipped");
+    expect(emailSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampReactivationSent).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
+      subjectKey: "contact:ct_1", status: "skipped", reason: REPLY_TO_REASON,
+    }));
+  });
+
+  it("an account that cannot send spends NONE of the tick's ten attempts — another account's customer still goes", async () => {
+    // The due-list is oldest-conversation-first ACROSS accounts, and a row
+    // skipped here stays due for ever (it is never stamped). Checked AFTER
+    // the caps, eleven such rows at the head of the list would burn
+    // AUTOMATION_TICK_CAP every tick and starve every other account
+    // indefinitely. Mutation: move the two checks below the caps → this
+    // reds BY NAME.
+    const stuck = Array.from({ length: 11 }, (_, n) =>
+      row({ contactId: `ct_stuck_${n}`, accountId: "acct_stuck", mailingAddress: null }));
+    dbMocks.listDueReactivations.mockResolvedValue([...stuck, row({ contactId: "ct_ok", accountId: "acct_ok" })]);
+    expect(await reactivationPass.run(ctx())).toEqual({ ...EMPTY, sent: 1, skippedNoMailingAddress: 11 });
+    expect(emailSend).toHaveBeenCalledTimes(1);
+    expect(dbMocks.stampReactivationSent).toHaveBeenCalledWith(expect.anything(), "ct_ok");
   });
 });
