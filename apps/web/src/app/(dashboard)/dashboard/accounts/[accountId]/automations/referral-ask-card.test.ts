@@ -60,8 +60,8 @@ describe("the referral-ask card's segment counter", () => {
   });
 
   it("does not double the disclosure when the operator's own message already says STOP", () => {
-    // withOptOut is idempotent on `\bstop\b` (opt-out.ts:63) and the counter
-    // inherits it, or the one operator who wrote the sentence themselves is
+    // withOptOut is idempotent on a STOP instruction (hasOptOutInstruction,
+    // opt-out.ts) and the counter inherits it, or the one operator who wrote the sentence themselves is
     // over-reported.
     const html = render({ automation: { ...ROW, body: "Know anyone else? Reply STOP to opt out." } });
     expect(countText(html)).toBe("40 characters · 1 message(s)");

@@ -16,7 +16,10 @@ import { m } from "@/lib/messages";
  * in, the receipt email's own signal — so the text and the email a lead gets
  * in the same minute speak the same language. Both defaults are ONE GSM-7
  * segment for a GSM-7 company name and two for an accented one, measured
- * (not assumed) in instant-reply-copy.test.ts.
+ * (not assumed) in instant-reply-copy.test.ts. What is SENT also carries the
+ * opt-out sentence (`withOptOut`, 23 septets in English, 29 in Spanish), and
+ * with it the Spanish default stays one segment for a name of up to 36
+ * characters, the English up to 32; an accented name is three either way.
  *
  * Function replacement, not a plain string: a company name containing `$&`
  * or `$'` would otherwise be re-interpreted by String.replace.

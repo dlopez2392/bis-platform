@@ -8,7 +8,13 @@ import path from "node:path";
  * their own throwaway-account fixtures
  * (`apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/calls/[callId]/actions.test.ts`,
  * `apps/web/src/app/f/[publicId]/actions.returning-lead.test.ts`) can share
- * one FK-ordered delete list instead of hand-rolling it. That export is a
+ * one FK-ordered delete list instead of hand-rolling it. `apps/web/e2e/fixtures/sweep.ts`
+ * is a fourth, sanctioned user of `ACCOUNT_OWNED_TABLES` alone (it reports each
+ * table's delete error instead of throwing, so it keeps its own
+ * `deleteAccountCascade`) — it lives outside `apps/web/src`, so the walk below
+ * rightly never sees it; this is not a gap in the guard, since the guard's own
+ * job is keeping `apps/web/src` PRODUCTION code from importing either symbol,
+ * and e2e fixture code is not that. That export is a
  * tenant-deleting function guarded only by a comment (`account-teardown.ts`'s
  * own doc block), twenty lines below `demo/seed.ts`'s opposite policy for the
  * same shape of danger — its `SEEDABLE_ORG_ID` regex keeps a real Clerk id

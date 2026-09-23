@@ -18,6 +18,7 @@ import { EmbedSnippet } from "@/components/embed-snippet";
 import { SubmitButton } from "../../submit-button";
 import { m } from "@/lib/messages";
 import { segmentsFor } from "@/lib/sms/segments";
+import { withOptOut } from "@/lib/sms/opt-out";
 import { defaultTextbackBody } from "@/lib/voice/textback-body";
 import { NUMBER_STATUS_LABEL } from "@/lib/voice/number-status";
 import type { ActionResult, EnableConciergeResult } from "./actions";
@@ -37,7 +38,12 @@ const DEFAULT_PROFILE: Omit<VoiceProfileRow, "id" | "account_id"> = {
 
 const STATUS_VALUES: PhoneNumberStatus[] = ["provisioned", "testing", "live", "released"];
 
-function VoiceProfileForm({
+// Exported (additive — no other symbol in this file changes) so the
+// text-back segment counter can be exercised directly the same way
+// `ConciergeCard` is below, rather than only through the page-level
+// `VoiceSettings` export, which would drag in unrelated actions and props
+// just to reach this card's own preview state.
+export function VoiceProfileForm({
   profile, brandName, action,
 }: {
   profile: VoiceProfileRow | null;
@@ -72,13 +78,29 @@ function VoiceProfileForm({
   const [previewLanguage, setPreviewLanguage] = useState<"en" | "es">(
     p.languages === "es" ? "es" : "en",
   );
-  // What the counter below previews must match what actually sends: an
-  // empty textarea means "use the live default at send time" (the
-  // empty-means-default contract this column exists for, explained above),
-  // so the preview has to be the default's own segment count, not 0
-  // chars / 1 message for a string that will never be what goes out. The
-  // moment the operator types anything, `textbackBody` itself takes over.
-  const previewBody = textbackBody || defaultTextbackBody(brandName, previewLanguage);
+  // What the counter below previews must match what actually SENDS —
+  // `prepareTextback` (lib/voice/textback.ts):
+  //   withOptOut(r.textbackBody.trim() || defaultTextbackBody(r.brandName, r.language), r.language)
+  // Two things this preview has to mirror exactly, or it under-reports every
+  // live text-back:
+  //   1. `.trim()` before the empty-means-default fallback, not a bare
+  //      truthiness check — a whitespace-only body ("   ") is TRUTHY, so
+  //      `textbackBody || default` would preview the blank string itself
+  //      forever, never the default a caller actually gets.
+  //   2. `withOptOut(...)`, applied OUTSIDE the fallback so it wraps
+  //      whichever branch wins, exactly like the send does — the disclosure
+  //      is appended UNCONDITIONALLY, in the caller's own spoken language,
+  //      and it costs real characters (23 in English, 29 in Spanish,
+  //      lib/sms/opt-out.ts) that never showed up in this counter before.
+  //      `previewLanguage` stands in for "the language the caller actually
+  //      spoke" (`detectSpokenLanguage`, textback.ts can only know that at
+  //      send time) — it is the same value the language Select already
+  //      drives, so the preview cannot disagree with the operator's own
+  //      choice of line.
+  const previewBody = withOptOut(
+    textbackBody.trim() || defaultTextbackBody(brandName, previewLanguage),
+    previewLanguage,
+  );
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     await notifyActionResult(() => action(formData), toast, {
       success: m["voice.profile.saved"],
@@ -195,11 +217,22 @@ function VoiceProfileForm({
               placeholder={defaultTextbackBody(brandName, previewLanguage)}
               className={nativeFieldClass}
             />
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-muted-foreground" data-testid="textback-sms-count">
               {m["compose.smsSegments"]
                 .replace("{chars}", String(segmentsFor(previewBody).chars))
                 .replace("{segments}", String(segmentsFor(previewBody).segments))}
             </p>
+            {/* The count above is of the DISCLOSED body, and those extra
+                characters appear nowhere else on this card — the textarea and
+                its placeholder both show the UNDISCLOSED text, same as
+                `referral-ask-card.tsx`'s own note beside its counter. Says it
+                WITHOUT quoting either language's exact sentence: this field
+                has no channel split (it is always SMS), but its preview
+                switches between the English and Spanish disclosure with
+                `previewLanguage`, and `automations.optOutCounted`'s wording
+                (which quotes "Reply STOP to opt out." verbatim) would be
+                describing text a Spanish caller never receives. */}
+            <p className="text-xs text-muted-foreground">{m["voice.textback.optOutCounted"]}</p>
           </div>
 
           <SubmitButton pending={pending}>{m["voice.profile.save"]}</SubmitButton>

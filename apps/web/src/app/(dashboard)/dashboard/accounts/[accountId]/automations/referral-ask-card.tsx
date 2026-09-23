@@ -53,7 +53,7 @@ export function ReferralAskCard({
   // alone reports a number no customer receives and no client is billed for.
   // For a company name of ordinary length the disclosed text crosses into a
   // second segment where the undisclosed one still reads "1 message".
-  // `withOptOut` is idempotent on `\bstop\b`, so an operator who wrote the
+  // `withOptOut` is idempotent on a STOP instruction, so an operator who wrote the
   // sentence themselves is not counted twice.
   const previewBody = body.trim() || defaultReferralAskBody(brandName);
   const preview = segmentsFor(withOptOut(previewBody));

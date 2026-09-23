@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  STALE_AFTER_MS, isStaleFixtureAccount, isStaleFixtureBlueprint, isStaleFixtureForm,
+  FIXTURE_ACCOUNT_RE, FIXTURE_BLUEPRINT_PREFILTER, FIXTURE_BLUEPRINT_RE, FIXTURE_CO_ACCOUNT_RE,
+  FIXTURE_FORM_RE, FIXTURE_NAME_PREFILTER, STALE_AFTER_MS,
+  isStaleFixtureAccount, isStaleFixtureBlueprint, isStaleFixtureForm,
 } from "./stale";
 
 /**
@@ -24,9 +26,15 @@ import {
  * `auth.setup.ts`, `auth.teardown.ts`, `sweep.setup.ts`, `support.ts`. It
  * collects every template literal that STARTS with `E2E ` and interpolates
  * something — the shape every stamped fixture name has — substitutes a stamp
- * for each `${…}`, and asks the SAME three predicates sweep.ts calls
+ * for each `${…}`, and asks the SAME three DECISION predicates sweep.ts calls
  * (`isStaleFixtureAccount`, `isStaleFixtureForm`, `isStaleFixtureBlueprint`)
- * whether a sweep a day later would admit it.
+ * whether they would admit it a day later. That is narrower than "whether a
+ * sweep would admit it": sweep.ts's own `.like()` prefilter decides what a
+ * decision predicate ever gets to see, and this file said nothing about that
+ * prefilter until the "the network prefilter" describe block below — before
+ * it existed, narrowing that prefilter to `"E2E Client Co %"` still left
+ * every case here green, because a predicate never got asked about a row the
+ * network never returned.
  *
  * LIMITS, stated rather than hidden: a name built by concatenation
  * (`"E2E Co " + stamp`) is not seen; and "admitted" means admitted by SOME
@@ -57,8 +65,25 @@ const NOT_SWEPT_BY_NAME: Record<string, string> = {
   "concierge.spec.ts: E2E Concierge ${stamp}":
     "a form on the per-run fixture account — removed by that account's cascade",
   "forms.spec.ts: E2E Lead ${stamp}":
-    "a CONTACT name the public form captures, not a form; forms.spec.ts's own purge removes it",
-  "work-queue.spec.ts: E2E WorkQueue ${stamp}": "a contact name, not an account/org/form/blueprint",
+    "a CONTACT row the public form captures, on the SEEDED account (Test Client One) — its " +
+    "purge runs in a `finally` that a killed run never reaches, so a killed run DOES strand it " +
+    "(the ledger has found one). Contacts are outside the name sweep entirely — no leg queries " +
+    "the contacts table by name — which is a known gap, ledgered, not a behaviour this sweep " +
+    "closes today.",
+  // NOT the same account as E2E Lead, despite the shape looking alike: this
+  // contact is created on the PER-RUN FIXTURE account (`fixture.accountId`,
+  // work-queue.spec.ts:163-174), never on Test Client One — the spec's own
+  // comment says so (:156-158). `contacts` has no name-based leg of its own,
+  // but it IS in `ACCOUNT_OWNED_TABLES` (packages/db), so once the fixture
+  // ACCOUNT is recognised stale by name (FIXTURE_ACCOUNT_RE) and swept — by
+  // teardown on a completed run, or by the accounts leg's cascade on a
+  // killed one — this row goes with it. It is not independently stranded the
+  // way E2E Lead is; it rides the account's own sweep.
+  "work-queue.spec.ts: E2E WorkQueue ${stamp}":
+    "a contact row on the PER-RUN FIXTURE account, not the seeded account — removed by that " +
+    "account's own cascade (teardown, or the accounts leg once the account's name is " +
+    "recognised stale) because contacts is in ACCOUNT_OWNED_TABLES; contacts have no name-based " +
+    "leg of their own, but this row is not independently stranded the way E2E Lead is.",
   "activity.spec.ts: E2E reason ${STAMP}": "free text on a row, not a name the sweep could key on",
   "automations-b.spec.ts: E2E reason ${STAMP}": "free text on a row, not a name the sweep could key on",
   "calendar-meeting-settings.spec.ts: E2E follow-up body ${Date.now()}":
@@ -156,6 +181,158 @@ describe("every stamped E2E name a spec mints is known to the sweep", () => {
       expect(keys.has(key), `NOT_SWEPT_BY_NAME has a stale entry: ${key}`).toBe(true);
       const sample = FOUND.find((f) => f.key === key)?.sample ?? "";
       expect(sweptByName(sample), `${key} is exempt but the sweep matches it`).toBe(false);
+    }
+  });
+});
+
+/**
+ * Translates a SQL `LIKE` pattern into the regex Postgres behaves as, so a
+ * sample name can be checked against sweep.ts's own network prefilter
+ * exactly the way the database would apply it: `%` is "any run of
+ * characters", `_` is "any one character", and everything else is literal
+ * (escaped here so a future prefilter carrying a regex metacharacter is
+ * still read literally rather than silently, which is what makes "everything
+ * else is literal" true instead of assumed).
+ */
+function likeToRegex(pattern: string): RegExp {
+  const body = pattern
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/%/g, ".*")
+    .replace(/_/g, ".");
+  return new RegExp(`^${body}$`);
+}
+
+/**
+ * #120 review m1: the database prefilters (`FIXTURE_NAME_PREFILTER`,
+ * `FIXTURE_BLUEPRINT_PREFILTER` in stale.ts) were untested — reverting the
+ * first to `"E2E Client Co %"` left `vitest run e2e/fixtures` fully green,
+ * because nothing checked that the row a decision predicate is willing to
+ * admit is a row the network prefilter would ever fetch in the first place.
+ * This walks the SAME `FOUND` samples the describe block above does and
+ * asserts each one satisfies the LIKE of the two EXPORTED CONSTANTS,
+ * translated to a regex above.
+ *
+ * #121 review I3: that is narrower than it sounds — it pins what the
+ * constants themselves would admit, not what `sweep.ts` actually SENDS.
+ * Reverting `sweep.ts`'s accounts leg to the literal
+ * `.like("name", "E2E Client Co %")` changes nothing this describe block
+ * reads, so the suite stayed 52/52 green under that regression too. The
+ * describe block below this one reads `sweep.ts`'s own source instead, and
+ * is the one that actually catches a call site drifting onto its own
+ * literal.
+ */
+describe("the network prefilter each leg's .like() sends actually admits what its decision predicate admits", () => {
+  const ACCOUNT_PREFILTER_RE = likeToRegex(FIXTURE_NAME_PREFILTER);
+  const BLUEPRINT_PREFILTER_RE = likeToRegex(FIXTURE_BLUEPRINT_PREFILTER);
+
+  // Pinned directly, by name, rather than relying only on the walk below:
+  // the exact regression this item exists for.
+  it("admits E2E Co, not just E2E Client Co (the shape a revert would silently starve)", () => {
+    expect(ACCOUNT_PREFILTER_RE.test(`E2E Co ${SAMPLE_STAMP}`)).toBe(true);
+    expect(ACCOUNT_PREFILTER_RE.test(`E2E Client Co ${SAMPLE_STAMP}`)).toBe(true);
+  });
+
+  for (const found of FOUND) {
+    // Exempt names are contacts / free text / message bodies — no leg's
+    // `.like()` ever queries the table they would appear in by this name, so
+    // no prefilter applies to them at all.
+    if (NOT_SWEPT_BY_NAME[found.key] !== undefined) continue;
+
+    const isAccount = FIXTURE_ACCOUNT_RE.test(found.sample) || FIXTURE_CO_ACCOUNT_RE.test(found.sample);
+    const isForm = FIXTURE_FORM_RE.test(found.sample);
+    const isBlueprint = FIXTURE_BLUEPRINT_RE.test(found.sample);
+
+    it(`${found.key} satisfies the LIKE its leg sends over the network`, () => {
+      // At least one of the three must be true here: the describe block
+      // above already reds on any FOUND sample that is neither exempt nor
+      // admitted by some leg, so reaching this `it` at all means one is.
+      if (isAccount || isForm) {
+        expect(ACCOUNT_PREFILTER_RE.test(found.sample), found.sample).toBe(true);
+      }
+      if (isBlueprint) {
+        expect(BLUEPRINT_PREFILTER_RE.test(found.sample), found.sample).toBe(true);
+      }
+    });
+  }
+});
+
+/**
+ * Copied from `packages/db/src/__tests__/cascade-export-boundary.test.ts`,
+ * not imported: that file's helper is private to its own test, and a shared
+ * module is one more file to keep honest for a handful of lines used in two
+ * places. Strings are tracked so a `//` inside a literal cannot eat the rest
+ * of its line, and block comments keep their newlines.
+ */
+function stripComments(src: string): string {
+  let out = "";
+  let mode: "code" | "line" | "block" | "sq" | "dq" | "tpl" = "code";
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    const d = src[i + 1];
+    if (mode === "code") {
+      if (c === "/" && d === "/") { mode = "line"; i++; continue; }
+      if (c === "/" && d === "*") { mode = "block"; i++; continue; }
+      if (c === "'") mode = "sq";
+      else if (c === '"') mode = "dq";
+      else if (c === "`") mode = "tpl";
+      out += c;
+      continue;
+    }
+    if (mode === "line") { if (c === "\n") { mode = "code"; out += c; } continue; }
+    if (mode === "block") {
+      if (c === "*" && d === "/") { mode = "code"; i++; } else if (c === "\n") out += c;
+      continue;
+    }
+    // inside a string literal
+    if (c === "\\") { out += c + (d ?? ""); i++; continue; }
+    if ((mode === "sq" && c === "'") || (mode === "dq" && c === '"') || (mode === "tpl" && c === "`")) {
+      mode = "code";
+    }
+    out += c;
+  }
+  return out;
+}
+
+/**
+ * #121 review I3: the describe block above pins the two EXPORTED CONSTANTS
+ * (`FIXTURE_NAME_PREFILTER`, `FIXTURE_BLUEPRINT_PREFILTER`) against every
+ * sample name this file walks — it never reads `sweep.ts` itself, so
+ * changing `sweep.ts`'s accounts leg (:150) to the literal
+ * `.like("name", "E2E Client Co %")` left `vitest run e2e/fixtures` at
+ * 52/52 green: the constant `FIXTURE_NAME_PREFILTER` was still correct, it
+ * was simply no longer what got sent over the network.
+ *
+ * This reads `sweep.ts` with comments stripped and asserts every
+ * `.like("name", X)` call site passes one of the two exported identifiers —
+ * never a string literal of its own, even one shaped exactly like the
+ * constant it should have used. Three call sites at last count: the
+ * accounts leg and the forms leg both send `FIXTURE_NAME_PREFILTER`, the
+ * blueprints leg sends `FIXTURE_BLUEPRINT_PREFILTER`.
+ *
+ * Mutation: revert `sweep.ts:150`'s `.like("name", FIXTURE_NAME_PREFILTER)`
+ * to `.like("name", "E2E Client Co %")` — reds "every call site passes an
+ * exported identifier" by naming the literal. Add a fourth
+ * `.like("name", "E2E %")` anywhere in `sweep.ts` — reds "finds exactly
+ * three" (four found) and the identifier check (the added literal is not
+ * one of the two names). Both revert byte-identical.
+ */
+describe("sweep.ts's own .like(\"name\", …) call sites send an exported identifier, not a literal", () => {
+  const SWEEP_PATH = path.join(HERE, "sweep.ts");
+  const SWEEP_SRC = stripComments(fs.readFileSync(SWEEP_PATH, "utf8"));
+  const LIKE_NAME_RE = /\.like\(\s*"name"\s*,\s*([^)]+?)\s*\)/g;
+  const ARGS = [...SWEEP_SRC.matchAll(LIKE_NAME_RE)].map((m) => m[1]!.trim());
+  const ALLOWED = ["FIXTURE_NAME_PREFILTER", "FIXTURE_BLUEPRINT_PREFILTER"];
+
+  it("finds exactly three .like(\"name\", …) call sites in sweep.ts", () => {
+    expect(ARGS).toEqual([
+      "FIXTURE_NAME_PREFILTER", "FIXTURE_NAME_PREFILTER", "FIXTURE_BLUEPRINT_PREFILTER",
+    ]);
+  });
+
+  it("every call site passes an exported prefilter identifier, never a literal", () => {
+    for (const arg of ARGS) {
+      expect(ALLOWED, `sweep.ts sends .like("name", ${arg}), not an exported identifier`)
+        .toContain(arg);
     }
   });
 });

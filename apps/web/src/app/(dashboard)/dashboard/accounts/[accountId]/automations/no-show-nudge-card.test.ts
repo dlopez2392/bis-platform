@@ -46,22 +46,28 @@ function countText(html: string): string {
 }
 
 describe("the no-show nudge card's segment counter", () => {
-  it("MEASURED: counts the DISCLOSED text — 159 characters, not the 136 the composed body alone would show", () => {
+  it("MEASURED: counts the DISCLOSED text — 135 characters, not the 112 the composed body alone would show", () => {
     // Measured with segmentsFor/withOptOut/composeNoShowNudgeSms: the default
-    // for "Rio Roofing" plus the 38-character booking link is 136 septets
-    // composed, 159 disclosed — ONE segment with a single septet to spare.
-    // Mutation: count `composeNoShowNudgeSms(...)` without `withOptOut` →
-    // this reds BY NAME.
-    expect(countText(render())).toBe("159 characters · 1 message(s)");
+    // for "Rio Roofing" plus the 38-character booking link is 112 septets
+    // composed, 135 disclosed — ONE segment. Mutation: count
+    // `composeNoShowNudgeSms(...)` without `withOptOut` → this reds BY NAME.
+    expect(countText(render())).toBe("135 characters · 1 message(s)");
   });
 
-  it("MEASURED: \"Valley Air Conditioning\" shows ONE message undisclosed and bills TWO — the ledger's case, reproduced", () => {
-    // 148 septets composed (one segment), 171 disclosed (two). The ledger's
-    // figure was 140 → 163 on a 30-character link (bis-rgv.com/b/abc123xy);
-    // on the real 38-character shape it is 148 → 171, the same flip. Any
-    // GSM-7 name of 13 characters or more crosses on this link. Mutation:
-    // drop `withOptOut` → this reds on the MESSAGE COUNT.
-    expect(countText(render({ brandName: "Valley Air Conditioning" }))).toBe("171 characters · 2 message(s)");
+  it("MEASURED: \"Valley Air Conditioning\" is ONE message disclosed — the ledger's case, no longer billed twice", () => {
+    // Under the old default this name was 148 composed and 171 disclosed, TWO
+    // billed messages. With the shorter default it is 124 → 147, one.
+    // Mutation: restore the old default → this reds.
+    expect(countText(render({ brandName: "Valley Air Conditioning" }))).toBe("147 characters · 1 message(s)");
+  });
+
+  it("MEASURED: a 39-character name shows ONE message undisclosed and bills TWO", () => {
+    // "Valley Air Conditioning and Heating LLC" (39): 140 septets composed
+    // (one segment), 163 disclosed (two). On this link the default holds a
+    // GSM-7 name of 36 characters or fewer. Mutation: drop `withOptOut` →
+    // this reds on the MESSAGE COUNT, not merely on the character count.
+    expect(countText(render({ brandName: "Valley Air Conditioning and Heating LLC" })))
+      .toBe("163 characters · 2 message(s)");
   });
 
   it("says out loud that the count includes the opt-out sentence, and only on the text channel", () => {

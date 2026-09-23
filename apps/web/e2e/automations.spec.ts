@@ -135,7 +135,7 @@ test.describe("a client cannot reach the Automations page", () => {
 });
 
 test.describe("the Automations page — Milestone B cards", () => {
-  test("the no-show and text-reminder cards count the text that sends — link, time and opt-out sentence included", async ({ page }) => {
+  test("the no-show and text-reminder cards count the text that sends — link, time and opt-out sentence included, one message each", async ({ page }) => {
     const { accountId } = fixture();
     await page.goto(`/dashboard/accounts/${accountId}/automations`);
 
@@ -144,14 +144,16 @@ test.describe("the Automations page — Milestone B cards", () => {
     await expect(noShow.getByTestId("no-show-link")).toContainText("/b/");
     await noShow.getByLabel("Send by").click();
     await page.getByRole("option", { name: "Text message" }).click();
-    // TWO, and that is the counter telling the truth: MEASURED for the
-    // fixture's 25-character brand name, the default plus the booking link
-    // plus the opt-out sentence is 171–172 septets depending on the origin's
-    // scheme on a localhost:3000 origin and 173 on app.bis-rgv.com — two
-    // segments on any origin longer than ten characters. The character count
-    // depends on the origin the server resolves (APP_ORIGIN, else the
-    // request's host), so only the message count is asserted.
-    await expect(noShow.getByTestId("no-show-sms-count")).toContainText("2 message(s)");
+    // ONE. MEASURED with segmentsFor/withOptOut/composeNoShowNudgeSms for the
+    // fixture's 25-character brand name: the default plus the booking link
+    // (origin + `/b/` + a 12-character id) plus the opt-out sentence is 147
+    // septets on http://localhost:3000, 148 on https://localhost:3000 and
+    // 149 on https://app.bis-rgv.com, one segment each. (The longer default
+    // this replaced measured 171–173 here, two.) The character count depends
+    // on the origin the server resolves (APP_ORIGIN, else the request's
+    // host), so only the message count is pinned — and an origin longer than
+    // 34 characters (a preview URL under E2E_BASE_URL) WOULD make it two.
+    await expect(noShow.getByTestId("no-show-sms-count")).toHaveText(/^\d+ characters · 1 message\(s\)$/);
 
     const reminder = page.getByTestId("sms-reminder-card");
     await expect(reminder.getByText("Text reminders", { exact: true })).toBeVisible();
@@ -162,7 +164,7 @@ test.describe("the Automations page — Milestone B cards", () => {
 });
 
 test.describe("the Automations page — Milestone C card", () => {
-  test("the instant-reply card previews both texts as they send, opt-out sentence included, and the counter follows the text", async ({ page }) => {
+  test("the instant-reply card previews both texts as they send, opt-out sentence included, one message each, and the counter follows the text", async ({ page }) => {
     const { accountId } = fixture();
     await page.goto(`/dashboard/accounts/${accountId}/automations`);
 
@@ -170,16 +172,17 @@ test.describe("the Automations page — Milestone C card", () => {
     await expect(card.getByText("Instant reply to new leads", { exact: true })).toBeVisible();
     // MEASURED for the fixture's 25-character BRAND name (`Rio Roofing
     // ${stamp}`, auth.setup.ts): English 130 septets composed, 153 with
-    // "Reply STOP to opt out." — one segment; Spanish 144 composed, 173 with
-    // "Responde STOP para cancelar." — TWO. The Spanish default crosses at
-    // any GSM-7 name of 13 characters or more (recorded in
-    // instant-reply-copy.test.ts; the copy is danlo's call).
+    // "Reply STOP to opt out." — one segment; Spanish 120 composed, 149 with
+    // "Responde STOP para cancelar." — one segment. The Spanish default holds
+    // a GSM-7 name of up to 36 characters, the English up to 32 (pinned in
+    // instant-reply-copy.test.ts; the longer Spanish default this replaced
+    // measured 173 here, two).
     await expect(card.getByTestId("instant-reply-preview-en")).toContainText("We got your message");
     await expect(card.getByTestId("instant-reply-preview-en")).toContainText("Reply STOP to opt out.");
     await expect(card.getByTestId("instant-reply-count-en")).toHaveText("153 characters · 1 message(s)");
     await expect(card.getByTestId("instant-reply-preview-es")).toContainText("Recibimos tu mensaje");
     await expect(card.getByTestId("instant-reply-preview-es")).toContainText("Responde STOP para cancelar.");
-    await expect(card.getByTestId("instant-reply-count-es")).toHaveText("173 characters · 2 message(s)");
+    await expect(card.getByTestId("instant-reply-count-es")).toHaveText("149 characters · 1 message(s)");
 
     // Typing redraws the preview and the counter — the counter counts the
     // string that sends, which is the typed text PLUS the opt-out sentence

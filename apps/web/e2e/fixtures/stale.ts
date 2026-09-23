@@ -72,6 +72,30 @@ export const FIXTURE_EMAIL_RE = /^e2e-client-(\d{13})@example\.com$/;
 export const FIXTURE_FORM_RE = /^E2E (?:Form|Spam) (\d{13})$/;
 
 /**
+ * The SQL `LIKE` prefilter sweep.ts's accounts leg AND its forms leg both
+ * send to the database, before either row is handed to `isStaleFixtureAccount`
+ * or `isStaleFixtureForm` at all — one string because both shapes
+ * (`FIXTURE_ACCOUNT_RE`, `FIXTURE_CO_ACCOUNT_RE`, `FIXTURE_FORM_RE`) start
+ * "E2E ". A row this refuses is never fetched, so a prefilter narrower than
+ * every pattern above silently starves the decision function of rows it
+ * would otherwise admit: narrowing this to "E2E Client Co %" (its shape
+ * before this constant existed) still left `vitest run e2e/fixtures` green,
+ * because nothing exercised the network leg — it only ever stopped fetching
+ * "E2E Co <stamp>" rows, which `isStaleFixtureAccount` would still have
+ * admitted had they arrived. `fixture-names.test.ts` now pins this string
+ * against every admitted sample name directly, so that regression reds by
+ * name instead of passing silently again.
+ */
+export const FIXTURE_NAME_PREFILTER = "E2E %";
+
+/**
+ * The blueprints leg's own prefilter — narrower than `FIXTURE_NAME_PREFILTER`
+ * because `blueprints` rows are agency-scoped and never share a table with
+ * an account or a form, so nothing else needs this one widened.
+ */
+export const FIXTURE_BLUEPRINT_PREFILTER = "E2E Blueprint %";
+
+/**
  * How long a fixture is left alone before it is considered abandoned.
  *
  * This is a concurrency guard, not a tidiness preference: a suite that is

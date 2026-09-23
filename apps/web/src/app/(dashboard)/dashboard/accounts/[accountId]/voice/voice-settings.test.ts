@@ -5,7 +5,7 @@ import type { VoiceProfileRow } from "@bis/db";
 import {
   conciergeLockReason, shouldShowConciergeEmptyState, conciergeDestinationOptions,
   conciergeFormUnpublished, conciergeSnippetPublicId, conciergeToggleLocked, ConciergeCard,
-  conciergeCanTurnOn, conciergeAttemptReenable,
+  conciergeCanTurnOn, conciergeAttemptReenable, VoiceProfileForm,
 } from "./voice-settings";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
@@ -441,5 +441,102 @@ describe("ConciergeCard — the render proof", () => {
       publishedForms: [{ id: "A", name: "Contact us" }, { id: "B", name: "Other" }],
     });
     expect(renderedText(html)).not.toContain("data-concierge=");
+  });
+});
+
+/**
+ * THE COUNTER MUST COUNT WHAT THE SEND ALWAYS APPENDS.
+ *
+ * `prepareTextback` (lib/voice/textback.ts) sends
+ * `withOptOut(r.textbackBody.trim() || defaultTextbackBody(r.brandName, r.language), r.language)`
+ * — the disclosure is appended UNCONDITIONALLY, in the caller's own spoken
+ * language, to both the operator's own body and the live default. A counter
+ * that renders `segmentsFor(textbackBody || default)` alone (the pre-fix
+ * shape) reports a number no caller receives and no client is billed for —
+ * the same class of bug `referral-ask-card.test.ts` pins for the automation
+ * cards.
+ *
+ * `previewLanguage` is this card's stand-in for "the language the caller
+ * actually spoke" (`detectSpokenLanguage`, textback.ts) — a preview can never
+ * know that in advance, so it reuses the same language the operator's own
+ * `languages` Select already drives (voice-settings.tsx's own comment).
+ */
+describe("VoiceProfileForm's text-back segment counter — counts the disclosed text, in the caller's own language", () => {
+  const BASE_PROFILE: VoiceProfileRow = {
+    id: "vp1", account_id: "a1", persona_name: "Sofía",
+    greeting_en: "Hi, thanks for calling.", greeting_es: "", facts: "", services: "",
+    languages: "en", booking_enabled: true, after_hours: "hours_then_message",
+    enabled: true, textback_enabled: true, textback_body: "",
+    public_id: null, concierge_enabled: false, concierge_form_id: null,
+  };
+
+  function render(over: Partial<VoiceProfileRow> = {}, brandName = "Rio Roofing"): string {
+    return renderToStaticMarkup(createElement(VoiceProfileForm, {
+      profile: { ...BASE_PROFILE, ...over },
+      brandName,
+      action: async () => ({ ok: true as const }),
+    }));
+  }
+
+  /** The text of the counter paragraph, by its own testid. */
+  function countText(html: string): string {
+    const match = /data-testid="textback-sms-count">([^<]*)</.exec(html);
+    if (!match) throw new Error("the segment counter did not render");
+    return match[1]!.replace(/&#x27;|&#39;/g, "'").replace(/&amp;/g, "&").replace(/&#xB7;|&middot;/g, "·");
+  }
+
+  it("MEASURED: an empty body previews the DISCLOSED English default — 104 characters, not the 81 the composed default alone would show", () => {
+    // "Hi, this is Rio Roofing. Sorry we missed you just now, reply here and
+    // we'll help." is 81 septets; " Reply STOP to opt out." adds 23 more.
+    // Mutation: count without `withOptOut` → this reds BY NAME (would read
+    // "81 characters · 1 message(s)").
+    expect(countText(render({ textback_body: "", languages: "en" }))).toBe("104 characters · 1 message(s)");
+  });
+
+  it("MEASURED: a Spanish line previews the DISCLOSED Spanish default — 123 characters, not the 94 the composed default alone would show", () => {
+    // The disclosure is `withOptOut`'s own Spanish sentence, "Responde STOP
+    // para cancelar." (29 septets on top of 94) — never the English one, and
+    // never the operator's-own-body branch, because `textback_body` is blank
+    // here. Mutation: count without `withOptOut` → this reds BY NAME (would
+    // read "94 characters · 1 message(s)").
+    expect(countText(render({ textback_body: "", languages: "es" }))).toBe("123 characters · 1 message(s)");
+  });
+
+  it("a whitespace-only body previews the default, not the blank/whitespace string itself", () => {
+    // An operator who pressed space and walked away leaves a TRUTHY string
+    // ("   " || default never falls through) unless the preview trims first,
+    // exactly the send path's own `r.textbackBody.trim() || default...`.
+    // Mutation: drop `.trim()` from the count expression → this reds (would
+    // read "24 characters · 1 message(s)": `withOptOut("   ", "en")` collapses
+    // the whitespace to "" internally and appends only the disclosure, with a
+    // stray leading space).
+    expect(countText(render({ textback_body: "   ", languages: "en" }))).toBe("104 characters · 1 message(s)");
+  });
+
+  it("does not double the disclosure when the operator's own message already says STOP", () => {
+    // withOptOut is idempotent on a STOP instruction (hasOptOutInstruction,
+    // opt-out.ts) and the counter inherits it, or the one operator who wrote
+    // the sentence themselves is over-reported.
+    expect(
+      countText(render({ textback_body: "Text back later. Reply STOP to opt out.", languages: "en" })),
+    ).toBe("39 characters · 1 message(s)");
+  });
+
+  it("says out loud that the count includes the opt-out sentence, in words true for either preview language", () => {
+    // `automations.optOutCounted` quotes the English sentence verbatim
+    // ("Reply STOP to opt out.") — reusing it here on a Spanish preview would
+    // claim a caller receives English words they never will, since the
+    // Spanish default is disclosed with "Responde STOP para cancelar."
+    // instead. `voice.textback.optOutCounted` says the same thing without
+    // naming either language's exact words, so it stays true in both faces.
+    // Mutation: delete the note → this reds; render the automations key
+    // instead → this reds too, and the Spanish-preview assertion below would
+    // be asserting a lie.
+    const en = render({ textback_body: "", languages: "en" });
+    expect(en).toContain(m["voice.textback.optOutCounted"]);
+    expect(en).not.toContain(m["automations.optOutCounted"]);
+    const es = render({ textback_body: "", languages: "es" });
+    expect(es).toContain(m["voice.textback.optOutCounted"]);
+    expect(es).not.toContain("Reply STOP to opt out.");
   });
 });

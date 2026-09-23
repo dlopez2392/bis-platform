@@ -64,7 +64,7 @@ export function AutomationsSettings({
   // English because the pass passes no `language`; counting the composed
   // text alone under-reported by 23 septets, and a long pasted review link
   // crossed into a second segment the counter never showed (decision B,
-  // danlo, 2026-09-22). `withOptOut` is idempotent on `\bstop\b`, so an
+  // danlo, 2026-09-22). `withOptOut` is idempotent on a STOP instruction, so an
   // operator who wrote the sentence themselves is not counted twice. An
   // empty body previews the live default (empty-means-default, as the
   // column contract says), and an empty link previews the body alone.

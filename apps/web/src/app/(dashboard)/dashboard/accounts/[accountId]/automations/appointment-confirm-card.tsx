@@ -47,7 +47,7 @@ export function AppointmentConfirmCard({
   // shown, so there is no company name for which it is right. The `<output>`
   // shows the same disclosed string it counts: opt-out.ts's own rule is that
   // an operator must never read a shorter message than the customer got.
-  // `withOptOut` is idempotent on `\bstop\b`, so an operator who wrote the
+  // `withOptOut` is idempotent on a STOP instruction, so an operator who wrote the
   // sentence themselves is not double-counted.
   const previewText = withOptOut(composeAppointmentConfirm(brandName, when, body));
   const preview = segmentsFor(previewText);

@@ -138,7 +138,16 @@ export * from "./concierge";
 // 11 orphaned accounts accumulated in the shared project before anyone
 // noticed). `packages/db`'s test fixtures are not a public subpath, which is
 // why those copies existed; this list is not a fixture, it is the schema's own
-// FK order, and there is now exactly one of it.
+// FK order, and there is now exactly one of it. A fourth caller reads
+// `ACCOUNT_OWNED_TABLES` without importing `deleteAccountCascade`:
+// `apps/web/e2e/fixtures/sweep.ts` (its own `deleteAccountCascade`, not this
+// one — sweep.ts imports `serviceDb` from this package same as any other
+// caller; the reason it keeps a private version is that it REPORTS each
+// table's delete error instead of throwing on the first one, as
+// `sweep.ts:98-100`'s own comment says, so a sweep that clears most of an
+// account still does more good than one that stops at the first FK it hits)
+// — outside `apps/web/src`, so `cascade-export-boundary.test.ts`'s walk
+// rightly allows it.
 export { deleteAccountCascade, ACCOUNT_OWNED_TABLES } from "./account-teardown";
 
 // The throwaway-org-id prefix and its predicate. Exported because the two

@@ -23,6 +23,13 @@ export async function createClientAccount(formData: FormData): Promise<CreateAcc
   const name = String(formData.get("name") ?? "").trim();
   const timezone = String(formData.get("timezone") ?? "America/Chicago");
   if (!name) return { ok: false, error: m["accounts.nameRequired"] };
+  // The `?? "America/Chicago"` fallback above only covers a MISSING field;
+  // a field left empty in the form arrives here as "", which would
+  // otherwise fall straight into assertUsableZone below and come back as
+  // the unusable-zone copy quoting an empty string. That is a different
+  // problem than a typo'd zone, so it gets its own refusal, asking for a
+  // value rather than pretending "" was something the operator typed.
+  if (!timezone.trim()) return { ok: false, error: m["accounts.timezoneRequired"] };
   // BEFORE the Clerk org is created, not after. createAccount refuses an
   // unusable zone on its own — that is the invariant no caller can bypass —
   // but by the time it runs this action has already made an organisation in

@@ -222,9 +222,10 @@ export const m = {
   "accounts.empty.body": "Add your first company to start tracking contacts and deals.",
   "accounts.created": "Added {date}",
   "accounts.createFailed": "Could not create that company. Check the name and try again.",
-  // The three refusals createClientAccount RETURNS for the create dialog to
+  // The four refusals createClientAccount RETURNS for the create dialog to
   // show, instead of the generic line above — each names what to change.
   "accounts.nameRequired": "Enter a business name.",
+  "accounts.timezoneRequired": "Enter the business's timezone.",
   "accounts.timezoneUnusable": "\"{zone}\" is not a timezone we can use. Use a zone name like America/Chicago.",
   "accounts.createRefusedTestOrgId": "Could not create that company. Clerk gave it an id we keep for test data, and those are deleted automatically within the hour. Nothing was saved. Try again, and tell the BIS team if it happens twice.",
   "accounts.status.active": "Active",
@@ -964,6 +965,14 @@ export const m = {
   "voice.textback.defaultBodyNoNameEn": "Sorry we missed you just now, reply here and we'll help.",
   "voice.textback.defaultBodyEs": "Hola, somos {name}. No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
   "voice.textback.defaultBodyNoNameEs": "No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
+  // Same class of note as `automations.optOutCounted` (the count above
+  // includes a sentence not shown in the textarea/placeholder) but worded
+  // WITHOUT quoting the English disclosure verbatim: this card's preview
+  // language switches with the operator's `languages` selection
+  // (previewLanguage, voice-settings.tsx), and a Spanish preview counts
+  // "Responde STOP para cancelar." — a note that named the English sentence
+  // there would be describing text nobody is about to receive.
+  "voice.textback.optOutCounted": "Every text ends with an opt-out line. That sentence is included in the count above.",
   "voice.profile.save": "Save voice profile",
   "voice.profile.saved": "Voice profile saved",
   "voice.profile.saveFailed": "Could not save the voice profile.",
@@ -1144,8 +1153,12 @@ export const m = {
   // NoName variant drops the clause; GSM-7 throughout (straight apostrophe).
   // The trailing colon is where the booking-page link is appended
   // (composeNoShowNudgeSms); the email template renders it as a button.
-  "automations.noShow.defaultBody": "We missed you for your appointment with {name}. If you'd like to pick a new time, book here:",
-  "automations.noShow.defaultBodyNoName": "We missed you for your appointment. If you'd like to pick a new time, book here:",
+  // Short on purpose: sent with a real 38-character booking link and the
+  // opt-out sentence, it is ONE GSM-7 segment for a company name of up to 36
+  // characters (measured in no-show-nudge-copy.test.ts). The longer first
+  // draft crossed into a second billed message at 13.
+  "automations.noShow.defaultBody": "We missed you at your appointment with {name}. Pick a new time here:",
+  "automations.noShow.defaultBodyNoName": "We missed you at your appointment. Pick a new time here:",
   // The text reminder. The LEAD carries the appointment time and is never
   // the operator's to place — `{when}` is formatWhen's output in the
   // booker's zone; the operator's prose (or this default) follows it.
@@ -1160,14 +1173,17 @@ export const m = {
   // the settings page ONLY — the send path sends the saved text verbatim and
   // never resolves a name; the NoName variants drop the opening clause rather
   // than invent a noun. Every one of the four is ONE GSM-7 segment for a
-  // GSM-7 company name (measured in instant-reply-copy.test.ts). The Spanish
+  // GSM-7 company name (measured in instant-reply-copy.test.ts); SENT, with
+  // the opt-out sentence, the Spanish holds a name of up to 36 characters and
+  // the English up to 32 (the Spanish was trimmed for this: its first draft
+  // crossed into a second billed message at 13). The Spanish
   // is written with no á/í/ó/ú, the text-back's rule (voice.textback.*), and
   // in the tú form the receipt email uses ("Recibimos tu mensaje…"). No em
   // dash anywhere: it is outside GSM-7.
   "automations.instantReply.defaultBodyEn": "Hi, this is {name}. We got your message and will be in touch shortly. Reply here if you'd like to add anything.",
   "automations.instantReply.defaultBodyNoNameEn": "We got your message and will be in touch shortly. Reply here if you'd like to add anything.",
-  "automations.instantReply.defaultBodyEs": "Hola, somos {name}. Recibimos tu mensaje y nos pondremos en contacto pronto. Responde a este mensaje si quieres agregar algo.",
-  "automations.instantReply.defaultBodyNoNameEs": "Recibimos tu mensaje y nos pondremos en contacto pronto. Responde a este mensaje si quieres agregar algo.",
+  "automations.instantReply.defaultBodyEs": "Hola, somos {name}. Recibimos tu mensaje y te contactaremos pronto. Responde si quieres agregar algo.",
+  "automations.instantReply.defaultBodyNoNameEs": "Recibimos tu mensaje y te contactaremos pronto. Responde si quieres agregar algo.",
   // Automations page — agency-only, like Voice. Plain admin language; the
   // recipe names are the things a business owner would call them.
   "automations.title": "Automations",
