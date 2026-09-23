@@ -209,8 +209,17 @@ function likeToRegex(pattern: string): RegExp {
  * because nothing checked that the row a decision predicate is willing to
  * admit is a row the network prefilter would ever fetch in the first place.
  * This walks the SAME `FOUND` samples the describe block above does and
- * asserts each one satisfies the LIKE of the prefilter its own leg sends,
+ * asserts each one satisfies the LIKE of the two EXPORTED CONSTANTS,
  * translated to a regex above.
+ *
+ * #121 review I3: that is narrower than it sounds — it pins what the
+ * constants themselves would admit, not what `sweep.ts` actually SENDS.
+ * Reverting `sweep.ts`'s accounts leg to the literal
+ * `.like("name", "E2E Client Co %")` changes nothing this describe block
+ * reads, so the suite stayed 52/52 green under that regression too. The
+ * describe block below this one reads `sweep.ts`'s own source instead, and
+ * is the one that actually catches a call site drifting onto its own
+ * literal.
  */
 describe("the network prefilter each leg's .like() sends actually admits what its decision predicate admits", () => {
   const ACCOUNT_PREFILTER_RE = likeToRegex(FIXTURE_NAME_PREFILTER);
@@ -245,4 +254,85 @@ describe("the network prefilter each leg's .like() sends actually admits what it
       }
     });
   }
+});
+
+/**
+ * Copied from `packages/db/src/__tests__/cascade-export-boundary.test.ts`,
+ * not imported: that file's helper is private to its own test, and a shared
+ * module is one more file to keep honest for a handful of lines used in two
+ * places. Strings are tracked so a `//` inside a literal cannot eat the rest
+ * of its line, and block comments keep their newlines.
+ */
+function stripComments(src: string): string {
+  let out = "";
+  let mode: "code" | "line" | "block" | "sq" | "dq" | "tpl" = "code";
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    const d = src[i + 1];
+    if (mode === "code") {
+      if (c === "/" && d === "/") { mode = "line"; i++; continue; }
+      if (c === "/" && d === "*") { mode = "block"; i++; continue; }
+      if (c === "'") mode = "sq";
+      else if (c === '"') mode = "dq";
+      else if (c === "`") mode = "tpl";
+      out += c;
+      continue;
+    }
+    if (mode === "line") { if (c === "\n") { mode = "code"; out += c; } continue; }
+    if (mode === "block") {
+      if (c === "*" && d === "/") { mode = "code"; i++; } else if (c === "\n") out += c;
+      continue;
+    }
+    // inside a string literal
+    if (c === "\\") { out += c + (d ?? ""); i++; continue; }
+    if ((mode === "sq" && c === "'") || (mode === "dq" && c === '"') || (mode === "tpl" && c === "`")) {
+      mode = "code";
+    }
+    out += c;
+  }
+  return out;
+}
+
+/**
+ * #121 review I3: the describe block above pins the two EXPORTED CONSTANTS
+ * (`FIXTURE_NAME_PREFILTER`, `FIXTURE_BLUEPRINT_PREFILTER`) against every
+ * sample name this file walks — it never reads `sweep.ts` itself, so
+ * changing `sweep.ts`'s accounts leg (:150) to the literal
+ * `.like("name", "E2E Client Co %")` left `vitest run e2e/fixtures` at
+ * 52/52 green: the constant `FIXTURE_NAME_PREFILTER` was still correct, it
+ * was simply no longer what got sent over the network.
+ *
+ * This reads `sweep.ts` with comments stripped and asserts every
+ * `.like("name", X)` call site passes one of the two exported identifiers —
+ * never a string literal of its own, even one shaped exactly like the
+ * constant it should have used. Three call sites at last count: the
+ * accounts leg and the forms leg both send `FIXTURE_NAME_PREFILTER`, the
+ * blueprints leg sends `FIXTURE_BLUEPRINT_PREFILTER`.
+ *
+ * Mutation: revert `sweep.ts:150`'s `.like("name", FIXTURE_NAME_PREFILTER)`
+ * to `.like("name", "E2E Client Co %")` — reds "every call site passes an
+ * exported identifier" by naming the literal. Add a fourth
+ * `.like("name", "E2E %")` anywhere in `sweep.ts` — reds "finds exactly
+ * three" (four found) and the identifier check (the added literal is not
+ * one of the two names). Both revert byte-identical.
+ */
+describe("sweep.ts's own .like(\"name\", …) call sites send an exported identifier, not a literal", () => {
+  const SWEEP_PATH = path.join(HERE, "sweep.ts");
+  const SWEEP_SRC = stripComments(fs.readFileSync(SWEEP_PATH, "utf8"));
+  const LIKE_NAME_RE = /\.like\(\s*"name"\s*,\s*([^)]+?)\s*\)/g;
+  const ARGS = [...SWEEP_SRC.matchAll(LIKE_NAME_RE)].map((m) => m[1]!.trim());
+  const ALLOWED = ["FIXTURE_NAME_PREFILTER", "FIXTURE_BLUEPRINT_PREFILTER"];
+
+  it("finds exactly three .like(\"name\", …) call sites in sweep.ts", () => {
+    expect(ARGS).toEqual([
+      "FIXTURE_NAME_PREFILTER", "FIXTURE_NAME_PREFILTER", "FIXTURE_BLUEPRINT_PREFILTER",
+    ]);
+  });
+
+  it("every call site passes an exported prefilter identifier, never a literal", () => {
+    for (const arg of ARGS) {
+      expect(ALLOWED, `sweep.ts sends .like("name", ${arg}), not an exported identifier`)
+        .toContain(arg);
+    }
+  });
 });
