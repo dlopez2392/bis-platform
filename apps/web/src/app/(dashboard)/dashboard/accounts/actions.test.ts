@@ -129,6 +129,19 @@ describe("createClientAccount", () => {
     expect(dbMocks.createAccount).not.toHaveBeenCalled();
   });
 
+  it("asks for a timezone instead of quoting a blank one", async () => {
+    // The `?? "America/Chicago"` fallback only covers a MISSING field; a
+    // field left empty in the form arrives here as "", which used to fall
+    // straight into assertUsableZone and come back as the unusable-zone
+    // copy quoting an empty string: `"" is not a timezone we can use…`.
+    await expect(createClientAccount(form({ timezone: "" }))).resolves.toEqual({
+      ok: false, error: m["accounts.timezoneRequired"],
+    });
+
+    expect(clerkMocks.createOrg).not.toHaveBeenCalled();
+    expect(dbMocks.createAccount).not.toHaveBeenCalled();
+  });
+
   it("refuses a name that is only spaces before it makes a Clerk organisation", async () => {
     // The input's `required` stops an EMPTY field in the browser, but not one
     // holding only spaces — the action trims, so that reaches here as "".
