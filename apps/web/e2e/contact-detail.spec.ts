@@ -36,7 +36,9 @@ test("opening a contact from the table renders the detail screen", async ({ page
   // a page that still "loads". So assert on content only the real detail
   // screen has, and that the not-found copy is absent.
   await expect(page.getByRole("heading", { name })).toBeVisible();
-  await expect(page.getByLabel("Email")).toBeVisible();
+  // exact: true — since the contact page grew a "No marketing emails"
+  // checkbox, a substring match on "Email" hits both it and this field.
+  await expect(page.getByLabel("Email", { exact: true })).toBeVisible();
   await expect(page.getByText("Page not found")).toHaveCount(0);
 });
 
