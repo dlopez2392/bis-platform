@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { segmentsFor } from "@/lib/sms/segments";
+import { withOptOut } from "@/lib/sms/opt-out";
 import { withTrailingLink } from "./sms-link";
 import { composeReviewRequestSms } from "./review-request-copy";
 import { defaultNoShowNudgeBody, composeNoShowNudgeSms } from "./no-show-nudge-copy";
@@ -41,6 +42,23 @@ describe("defaultNoShowNudgeBody", () => {
     expect(s.encoding).toBe("gsm7");
     expect(s.segments).toBe(1);
     expect(s.chars).toBe(133);
+  });
+
+  it("MEASURED: the SENT string — default, a real booking link, opt-out disclosure — is 159 septets, ONE segment with ONE to spare", () => {
+    // A REAL link's shape: APP_ORIGIN (.env.example) + `/b/` + a 12-character
+    // id from forms.ts's ALPHABET, 38 characters. `sendAutomationSms` appends
+    // `withOptOut` unconditionally (send-sms.ts:82), English because this
+    // pass passes no `language`. Measured with the real functions: 136
+    // septets composed, 159 disclosed, one segment. The "ONE segment" claim
+    // above still holds for "Rio Roofing" (156 disclosed on its shorter
+    // example link), but only just: recorded, not asserted (copy is danlo's
+    // call), any GSM-7 name of 13+ characters crosses on this link —
+    // "Valley Air Conditioning" is 148 / 1 composed and 171 / TWO disclosed —
+    // and the accented case below is 162 UTF-16 units / 3 disclosed.
+    // Mutation: make `withOptOut` return the body undisclosed → this reds.
+    const realLink = "https://app.bis-rgv.com/b/k7m2p9q4x3wz";
+    const s = segmentsFor(withOptOut(composeNoShowNudgeSms(defaultNoShowNudgeBody("Rio Roofing"), realLink)));
+    expect(s).toEqual({ encoding: "gsm7", chars: 159, segments: 1 });
   });
 
   it("MEASURED: an accented company name flips the whole message to UCS-2 and costs THREE segments", () => {

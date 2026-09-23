@@ -1337,7 +1337,7 @@ export const m = {
   "automations.quoteFollowup.quietDays": "Days with no reply",
   "automations.quoteFollowup.quietDaysHint": "Between 1 and 30. Three is a good default, long enough to not feel pushy.",
   "automations.quoteFollowup.quietDaysInvalid": "Choose a number of days between 1 and 30.",
-  "automations.quoteFollowup.stageRequired": "Pick the stage to watch before turning this on.",
+  "automations.quoteFollowup.stageRequired": "Pick the stage to watch before saving.",
   "automations.quoteFollowup.channel": "Send by",
   "automations.quoteFollowup.message": "Message",
   "automations.quoteFollowup.messageHint": "Leave blank to send our default message. The price and the deal's name are never included.",

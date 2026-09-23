@@ -168,7 +168,11 @@ export async function saveQuoteFollowupAction(
   // and never in Playwright.
   const config = parseQuoteFollowupConfig({ stageId, quietDays, channel: String(formData.get("channel") ?? "email") });
   if (!config) {
-    if (enabled && stageId === "") return { ok: false, error: m["automations.quoteFollowup.stageRequired"] };
+    // An empty stage is named whether or not the recipe is being turned on
+    // (decision C, danlo, 2026-09-22): the parser refuses it either way, so
+    // an operator saving with the switch off must still be told what is
+    // missing rather than handed the generic `saveFailed` below.
+    if (stageId === "") return { ok: false, error: m["automations.quoteFollowup.stageRequired"] };
     if (!Number.isInteger(quietDays)
       || quietDays < QUOTE_FOLLOWUP_MIN_QUIET_DAYS || quietDays > QUOTE_FOLLOWUP_MAX_QUIET_DAYS) {
       return { ok: false, error: m["automations.quoteFollowup.quietDaysInvalid"] };

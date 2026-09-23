@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { segmentsFor } from "@/lib/sms/segments";
+import { withOptOut } from "@/lib/sms/opt-out";
 import { defaultInstantReplyBody } from "./instant-reply-copy";
 
 // The counts below are MEASURED, not chosen: if a run reports a different
@@ -58,6 +59,29 @@ describe("defaultInstantReplyBody — Spanish", () => {
     const blank = defaultInstantReplyBody("", "es");
     expect(blank).toBe("Recibimos tu mensaje y nos pondremos en contacto pronto. Responde a este mensaje si quieres agregar algo.");
     expect(segmentsFor(blank)).toMatchObject({ encoding: "gsm7", segments: 1 });
+  });
+});
+
+describe("the SENT string — the default plus the opt-out disclosure, in the lead's language", () => {
+  it("MEASURED: 139 septets in English and 159 in Spanish for a GSM-7 name, ONE segment each", () => {
+    // `sendAutomationSms` appends `withOptOut(body, language)` unconditionally
+    // (send-sms.ts:82) and the instant reply passes the lead's locale
+    // (instant-reply.ts:183), so English carries the 23-septet sentence and
+    // Spanish the 29-septet one. Measured with the real functions: English
+    // 116 → 139, Spanish 130 → 159 — both "ONE segment" claims above still
+    // hold once disclosed, the Spanish with ONE septet to spare. Recorded,
+    // not asserted (copy is danlo's call): the Spanish default crosses at any
+    // GSM-7 name of 13+ characters ("Valley Air Conditioning": 142 / 1
+    // composed, 171 / TWO disclosed), the English at 33+; and the accented
+    // case above is 119 / 2 composed, 142 / THREE disclosed (Spanish 133 / 2,
+    // 162 / 3).
+    // Mutation: make `withOptOut` return the body undisclosed → this reds;
+    // disclose Spanish in English → the Spanish half reds.
+    const en = withOptOut(defaultInstantReplyBody("Rio Roofing", "en"), "en");
+    const es = withOptOut(defaultInstantReplyBody("Rio Roofing", "es"), "es");
+    expect(es.endsWith(" Responde STOP para cancelar.")).toBe(true);
+    expect(segmentsFor(en)).toEqual({ encoding: "gsm7", chars: 139, segments: 1 });
+    expect(segmentsFor(es)).toEqual({ encoding: "gsm7", chars: 159, segments: 1 });
   });
 });
 

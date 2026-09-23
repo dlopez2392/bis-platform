@@ -744,7 +744,16 @@ const CONFIRM_YES: ReadonlySet<string> = new Set([
                                   cannot decompose a codepoint written so. */
   , "confirm", "confirmed",
 ]);
-const CONFIRM_NO: ReadonlySet<string> = new Set(["no", "n", "cancel"]);
+// "cancel" is NOT here, on purpose — do not restore it (danlo, 2026-09-22).
+// It is a carrier opt-out keyword: apps/web/src/lib/sms/opt-out.ts records
+// Telnyx as detecting CANCEL alongside STOP and blocking every later send to
+// that number (an assumption about Telnyx written there, never measured
+// here). Read as a NO, it painted "Asked for a different time" on the booking
+// and invited the operator to text a customer the carrier had just
+// unsubscribed. The inbound route (api/sms/inbound/route.ts) files the
+// message and bumps unread BEFORE this matcher runs, so the operator still
+// sees "Cancel" as an ordinary unread text; it is simply not an answer.
+const CONFIRM_NO: ReadonlySet<string> = new Set(["no", "n"]);
 
 /**
  * The WHOLE message, not a word inside it. "yes please, but move it to
