@@ -199,13 +199,46 @@ export type DueReviewRequest = {
 };
 
 /**
+ * THE CONTACT MUST BE THE ROW'S OWN ACCOUNT'S — every due-list below that
+ * reaches the customer through `bookings.contact_id` or
+ * `opportunities.contact_id`, by list AND by id.
+ *
+ * Both are plain single-column FKs; there is no composite
+ * `(account_id, contact_id)` key anywhere in this schema, so a booking or a
+ * deal in account A can point at a contact of account B. The `contacts(...)`
+ * embed follows the FK with no account condition of its own, and everything
+ * downstream (the send, under A's brand, to B's customer's address) would
+ * follow it too. `listDueReactivations` has guarded its own join this way
+ * since the #111 audit (A1); these six recipes did not.
+ *
+ * FAIL CLOSED: a row is kept only when the embedded contact's `account_id`
+ * EQUALS the row's. A missing embed, or a select that forgot
+ * `contacts(account_id, ...)`, drops the row rather than passing it — every
+ * *_SELECT below carries `account_id` inside its `contacts(...)` for this.
+ * Logged by id, because a row like this is a data defect somebody must fix,
+ * and silence would hide it. The by-id reads answer `gone`, so a released
+ * hold leaves the queue.
+ */
+function ownAccountContactOnly<T>(rows: T[], fn: string, what: "booking" | "opportunity"): T[] {
+  return rows.filter((r) => {
+    const row = r as { id: string; account_id: string; contacts?: { account_id?: string } | null };
+    if (row.contacts?.account_id === row.account_id) return true;
+    console.error(
+      `${fn}: ${what} ${row.id} (account ${row.account_id}) points at a contact of `
+      + `${row.contacts ? `account ${row.contacts.account_id}` : "no readable account"} — dropped; nothing is sent for it`,
+    );
+    return false;
+  });
+}
+
+/**
  * Candidates, not decisions: everything returned here still goes through
  * `shouldSendReviewRequestNow` in the pass, which decides the MOMENT. The
  * query only says "enabled, completed, unstamped, inside 61h by either
  * anchor".
  */
 const REVIEW_REQUEST_SELECT =
-  "id, account_id, contact_id, ends_at, completed_at, followup_sent_at, review_request_sms_failed_at, contacts(email, phone)";
+  "id, account_id, contact_id, ends_at, completed_at, followup_sent_at, review_request_sms_failed_at, contacts(account_id, email, phone)";
 
 function toDueReviewRequest(r: any, info: AccountBrandInfo, auto: EnabledRecipe): DueReviewRequest {
   return {
@@ -247,7 +280,7 @@ export async function listDueReviewRequests(
     .order("ends_at", { ascending: true });
   if (error) throw new Error(`listDueReviewRequests failed: ${error.message}`);
 
-  const rows = (data ?? []) as any[];
+  const rows = ownAccountContactOnly((data ?? []) as any[], "listDueReviewRequests", "booking");
   if (rows.length === 0) return [];
 
   const { sendable, accountInfo } = await loadSendableRows(
@@ -268,6 +301,8 @@ export async function getDueReviewRequestById(db: SupabaseClient, bookingId: str
     .eq("id", bookingId).eq("status", "completed").is("review_requested_at", null).maybeSingle();
   if (error) throw new Error(`getDueReviewRequestById failed: ${error.message}`);
   if (!data) return { due: null, why: "gone" };
+  // The contact must be this booking's own account's (ownAccountContactOnly).
+  if (ownAccountContactOnly([data], "getDueReviewRequestById", "booking").length === 0) return { due: null, why: "gone" };
   const auto = await enabledRecipeFor(db, (data as any).account_id, "review_request");
   if (!auto) return { due: null, why: "off" };
   // A STORED CONFIG THAT NO LONGER PARSES IS `off` FOR A RELEASE, and saying
@@ -372,7 +407,7 @@ export type DueNoShowNudge = {
 /** Candidates, not decisions — `shouldSendNoShowNudgeNow` in the pass picks
  *  the moment. "Enabled, no_show, unstamped, inside 37h by either anchor". */
 const NO_SHOW_NUDGE_SELECT =
-  "id, account_id, contact_id, ends_at, no_show_at, no_show_nudge_sms_failed_at, calendars(public_id, enabled), contacts(email, phone)";
+  "id, account_id, contact_id, ends_at, no_show_at, no_show_nudge_sms_failed_at, calendars(public_id, enabled), contacts(account_id, email, phone)";
 
 function toDueNoShowNudge(r: any, info: AccountBrandInfo, auto: EnabledRecipe): DueNoShowNudge {
   return {
@@ -415,7 +450,7 @@ export async function listDueNoShowNudges(
     .order("ends_at", { ascending: true });
   if (error) throw new Error(`listDueNoShowNudges failed: ${error.message}`);
 
-  const rows = (data ?? []) as any[];
+  const rows = ownAccountContactOnly((data ?? []) as any[], "listDueNoShowNudges", "booking");
   if (rows.length === 0) return [];
 
   const { sendable, accountInfo } = await loadSendableRows(
@@ -431,6 +466,8 @@ export async function getDueNoShowNudgeById(db: SupabaseClient, bookingId: strin
     .eq("id", bookingId).eq("status", "no_show").is("no_show_nudged_at", null).maybeSingle();
   if (error) throw new Error(`getDueNoShowNudgeById failed: ${error.message}`);
   if (!data) return { due: null, why: "gone" };
+  // The contact must be this booking's own account's (ownAccountContactOnly).
+  if (ownAccountContactOnly([data], "getDueNoShowNudgeById", "booking").length === 0) return { due: null, why: "gone" };
   const auto = await enabledRecipeFor(db, (data as any).account_id, "no_show_nudge");
   if (!auto) return { due: null, why: "off" };
   // A STORED CONFIG THAT NO LONGER PARSES IS `off` FOR A RELEASE, and saying
@@ -510,7 +547,7 @@ export type DueSmsReminder = {
 /** No gate follows this list: a text reminder is tied to the appointment,
  *  not to a morning, so the window IS the moment. */
 const SMS_REMINDER_SELECT =
-  "id, account_id, contact_id, starts_at, booker_timezone, sms_reminder_failed_at, contacts(phone)";
+  "id, account_id, contact_id, starts_at, booker_timezone, sms_reminder_failed_at, contacts(account_id, phone)";
 
 function toDueSmsReminder(r: any, info: AccountBrandInfo, auto: EnabledRecipe): DueSmsReminder {
   return {
@@ -545,7 +582,7 @@ export async function listDueSmsReminders(
     .order("starts_at", { ascending: true });
   if (error) throw new Error(`listDueSmsReminders failed: ${error.message}`);
 
-  const rows = (data ?? []) as any[];
+  const rows = ownAccountContactOnly((data ?? []) as any[], "listDueSmsReminders", "booking");
   if (rows.length === 0) return [];
 
   const { sendable, accountInfo } = await loadSendableRows(
@@ -561,6 +598,8 @@ export async function getDueSmsReminderById(db: SupabaseClient, bookingId: strin
     .eq("id", bookingId).eq("status", "booked").is("sms_reminder_sent_at", null).maybeSingle();
   if (error) throw new Error(`getDueSmsReminderById failed: ${error.message}`);
   if (!data) return { due: null, why: "gone" };
+  // The contact must be this booking's own account's (ownAccountContactOnly).
+  if (ownAccountContactOnly([data], "getDueSmsReminderById", "booking").length === 0) return { due: null, why: "gone" };
   const auto = await enabledRecipeFor(db, (data as any).account_id, "sms_reminder");
   if (!auto) return { due: null, why: "off" };
   const { sendable, accountInfo } = await loadSendableRows(db, [data as { account_id: string }], "getDueSmsReminderById");
@@ -646,7 +685,7 @@ export type DueAppointmentConfirm = {
 };
 
 const APPOINTMENT_CONFIRM_SELECT =
-  "id, account_id, contact_id, starts_at, booker_timezone, contacts(phone)";
+  "id, account_id, contact_id, starts_at, booker_timezone, contacts(account_id, phone)";
 
 function toDueAppointmentConfirm(r: any, info: AccountBrandInfo, auto: EnabledRecipe): DueAppointmentConfirm {
   return {
@@ -683,7 +722,7 @@ export async function listDueAppointmentConfirms(
     .order("starts_at", { ascending: true });
   if (error) throw new Error(`listDueAppointmentConfirms failed: ${error.message}`);
 
-  const rows = (data ?? []) as any[];
+  const rows = ownAccountContactOnly((data ?? []) as any[], "listDueAppointmentConfirms", "booking");
   if (rows.length === 0) return [];
 
   const { sendable, accountInfo } = await loadSendableRows(
@@ -701,6 +740,8 @@ export async function getDueAppointmentConfirmById(
     .eq("id", bookingId).eq("status", "booked").is("confirm_asked_at", null).maybeSingle();
   if (error) throw new Error(`getDueAppointmentConfirmById failed: ${error.message}`);
   if (!data) return { due: null, why: "gone" };
+  // The contact must be this booking's own account's (ownAccountContactOnly).
+  if (ownAccountContactOnly([data], "getDueAppointmentConfirmById", "booking").length === 0) return { due: null, why: "gone" };
   const auto = await enabledRecipeFor(db, (data as any).account_id, "appointment_confirm");
   if (!auto) return { due: null, why: "off" };
   const { sendable, accountInfo } = await loadSendableRows(
@@ -948,7 +989,7 @@ export type DueReferralAsk = {
 // then fails `tsc` with "neither type sufficiently overlaps". Every other
 // *_SELECT in this file is one literal for the same reason.
 const REFERRAL_ASK_SELECT =
-  "id, account_id, contact_id, ends_at, completed_at, followup_sent_at, review_requested_at, referral_ask_sms_failed_at, contacts(email, phone, marketing_email_opted_out_at)";
+  "id, account_id, contact_id, ends_at, completed_at, followup_sent_at, review_requested_at, referral_ask_sms_failed_at, contacts(account_id, email, phone, marketing_email_opted_out_at)";
 
 function toDueReferralAsk(
   r: any, info: AccountBrandInfo, auto: EnabledRecipe, reviewRequestEnabled: boolean,
@@ -1013,7 +1054,7 @@ export async function listDueReferralAsks(
     .order("ends_at", { ascending: true });
   if (error) throw new Error(`listDueReferralAsks failed: ${error.message}`);
 
-  const rows = (data ?? []) as any[];
+  const rows = ownAccountContactOnly((data ?? []) as any[], "listDueReferralAsks", "booking");
   if (rows.length === 0) return [];
 
   const { sendable, accountInfo } = await loadSendableRows(
@@ -1032,6 +1073,8 @@ export async function getDueReferralAskById(
     .eq("id", bookingId).eq("status", "completed").is("referral_asked_at", null).maybeSingle();
   if (error) throw new Error(`getDueReferralAskById failed: ${error.message}`);
   if (!data) return { due: null, why: "gone" };
+  // The contact must be this booking's own account's (ownAccountContactOnly).
+  if (ownAccountContactOnly([data], "getDueReferralAskById", "booking").length === 0) return { due: null, why: "gone" };
   const accountId = (data as any).account_id as string;
   const auto = await enabledRecipeFor(db, accountId, "referral_ask");
   if (!auto) return { due: null, why: "off" };
@@ -1765,7 +1808,7 @@ export type DueQuoteFollowup = {
 // TS2352. Task 5 hit this and every other *_SELECT in the file is a single
 // literal for the same reason.
 const QUOTE_FOLLOWUP_SELECT =
-  "id, account_id, contact_id, stage_id, stage_changed_at, quote_followup_sms_failed_at, contacts(email, phone)";
+  "id, account_id, contact_id, stage_id, stage_changed_at, quote_followup_sms_failed_at, contacts(account_id, email, phone)";
 
 /**
  * Latest INBOUND message per contact since `sinceIso` — the "they already
@@ -1894,7 +1937,7 @@ export async function listDueQuoteFollowups(
   // Narrow each row to ITS OWN account's stage and quiet period. The stage
   // check is belt-and-braces against the `.in(...)` union — and it is also
   // what keeps one account's stage id from ever selecting another's row.
-  const rows = ((data ?? []) as any[]).filter((r) => {
+  const rows = ownAccountContactOnly((data ?? []) as any[], "listDueQuoteFollowups", "opportunity").filter((r) => {
     const conf = configured.get(r.account_id);
     if (!conf) return false;
     if (r.stage_id !== conf.config.stageId) return false;
@@ -1953,6 +1996,8 @@ export async function getDueQuoteFollowupById(
     .eq("id", opportunityId).eq("status", "open").is("quote_followup_sent_at", null).maybeSingle();
   if (error) throw new Error(`getDueQuoteFollowupById failed: ${error.message}`);
   if (!data) return { due: null, why: "gone" };
+  // The contact must be this opportunity's own account's (ownAccountContactOnly).
+  if (ownAccountContactOnly([data], "getDueQuoteFollowupById", "opportunity").length === 0) return { due: null, why: "gone" };
   const accountId = (data as any).account_id as string;
   const auto = await enabledRecipeFor(db, accountId, "quote_followup");
   if (!auto) return { due: null, why: "off" };
