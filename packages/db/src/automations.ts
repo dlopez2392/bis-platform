@@ -1972,6 +1972,20 @@ export async function listDueQuoteFollowups(
   }
   if (rows.length === 0) return [];
 
+  // ONE ORDER ACROSS ACCOUNTS, oldest stage change first, id breaking a tie.
+  // The pass counts AUTOMATION_TICK_CAP ONCE across every account
+  // (quote-followup.ts, `attemptsThisTick`), so this list's order decides who
+  // is served when the cap bites. The single read before B22 gave that order
+  // platform-wide; the per-account reads above concatenate in `listEnabled`'s
+  // order (PostgREST, no ORDER BY — arbitrary), and left alone the account
+  // that happens to come first would take every tick's attempts, stably.
+  // Re-sorted HERE, where the order is lost: everything after this line
+  // (`loadSendableRows`, the quiet filter, the map) is an order-preserving
+  // filter or map, so the order reaches the pass intact.
+  rows.sort((a, b) =>
+    Date.parse(a.stage_changed_at) - Date.parse(b.stage_changed_at)
+    || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
   const { sendable, accountInfo } = await loadSendableRows(
     db, rows as { account_id: string }[], "listDueQuoteFollowups");
   if (sendable.length === 0) return [];

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import "dotenv/config";
+import { randomUUID } from "node:crypto";
 import { withTestAccount } from "./fixtures";
 import { createContact, setMarketingEmailOptOut } from "../contacts";
 import { setBranding } from "../branding";
@@ -2206,6 +2207,90 @@ describe("listDueQuoteFollowups: a deal on another account's contact never holds
             .eq("account_id", accountA).eq("contact_id", theirContact);
           if (error) console.error(`crossed opportunities cleanup failed: ${error.message}`);
         }
+      });
+    });
+  });
+});
+
+// THE SHARED TICK CAP NEEDS A PLATFORM-WIDE ORDER. `processQuoteFollowups`
+// counts `attemptsThisTick` ONCE across every account (AUTOMATION_TICK_CAP),
+// so the order of the due-list decides who is served when the cap bites. The
+// single read that preceded B22 gave oldest-deal-first across the platform;
+// the per-account reads concatenate in `listEnabled`'s order, which is
+// whatever order PostgREST returns `automations` rows in (no ORDER BY) — so
+// without a re-sort, the account that happens to come first takes every
+// tick's attempts, stably.
+//
+// MAP ORDER IS NOT CONTROLLED, SO THE FIXTURE MAKES IT IRRELEVANT. Each
+// account's deals INTERLEAVE with the other's in age, so the concatenation is
+// wrong whichever account comes first; and each tie pair (two accounts, one
+// instant) is laid out with explicit ids in OPPOSITE senses, so a stable sort
+// without the id tiebreak (which leaves a tie in Map order) is wrong in one
+// pair whichever account comes first. Filtered to the two fixture accounts:
+// the read is platform-wide and the project is shared.
+describe("listDueQuoteFollowups: one oldest-first order across accounts", () => {
+  const now = new Date("2028-03-10T12:00:00Z");
+  const DAY = 24 * HOUR;
+
+  async function enable(db: Parameters<typeof listDueQuoteFollowups>[0], accountId: string, phone: string) {
+    const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+    const stages = (await listPipelinesWithStages(db, accountId)).find((p) => p.id === pipelineId)!.stages;
+    const quoted = stages[1] ?? stages[0]!;
+    await upsertAutomation(db, accountId, "quote_followup",
+      { enabled: true, body: "", config: { stageId: quoted.id, quietDays: 3, channel: "sms" } }, "user_test");
+    const { id: contactId } = await createContact(db, accountId, { firstName: "Quoted", phone }, "user_test");
+    // DIRECT INSERT so the id can be chosen (the tie cases need it), ONE
+    // statement per account, and it throws: a swallowed fixture error would
+    // read as an empty due-list.
+    return async (deals: { ageMs: number; id?: string }[]) => {
+      const { data, error } = await db.from("opportunities").insert(deals.map((d) => ({
+        ...(d.id ? { id: d.id } : {}),
+        account_id: accountId, contact_id: contactId, pipeline_id: pipelineId, stage_id: quoted.id,
+        name: "Reroof", monetary_value: 0,
+        stage_changed_at: new Date(now.getTime() - d.ageMs).toISOString(),
+      }))).select("id, stage_changed_at");
+      if (error || !data) throw new Error(`opportunity fixture failed: ${error?.message}`);
+      return (data as { id: string; stage_changed_at: string }[])
+        .sort((a, b) => Date.parse(a.stage_changed_at) - Date.parse(b.stage_changed_at))
+        .map((r) => r.id);   // oldest first, the order the assertions name them in
+    };
+  }
+
+  const dueFor = async (db: Parameters<typeof listDueQuoteFollowups>[0], accounts: string[]) =>
+    (await listDueQuoteFollowups(db, now.toISOString()))
+      .filter((r) => accounts.includes(r.accountId)).map((r) => r.opportunityId);
+
+  it("the older deal comes first, whichever account listEnabled returns first", async () => {
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db, accountB) => {
+        const insertA = await enable(db, accountA, "(956) 555-0176");
+        const insertB = await enable(db, accountB, "(956) 555-0177");
+        // A: 9d, 7d.  B: 8d, 6d.  Oldest-first is A, B, A, B; the concatenation
+        // is A, A, B, B or B, B, A, A — wrong either way.
+        const [a9, a7] = await insertA([{ ageMs: 9 * DAY }, { ageMs: 7 * DAY }]);
+        const [b8, b6] = await insertB([{ ageMs: 8 * DAY }, { ageMs: 6 * DAY }]);
+        // Mutation: drop the re-sort after the per-account loop → this reds.
+        expect(await dueFor(db, [accountA, accountB]), "oldest stage change first, across both accounts")
+          .toEqual([a9, b8, a7, b6]);
+      });
+    });
+  });
+
+  it("a tie on stage_changed_at across accounts is broken by opportunity id", async () => {
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db, accountB) => {
+        const insertA = await enable(db, accountA, "(956) 555-0178");
+        const insertB = await enable(db, accountB, "(956) 555-0179");
+        const [lo1, hi1] = [randomUUID(), randomUUID()].sort();
+        const [lo2, hi2] = [randomUUID(), randomUUID()].sort();
+        // Pair 1 at 8d: A holds the LOWER id. Pair 2 at 6d: B holds the LOWER
+        // id. Left in Map order, one of the two pairs is backwards.
+        await insertA([{ ageMs: 8 * DAY, id: lo1 }, { ageMs: 6 * DAY, id: hi2 }]);
+        await insertB([{ ageMs: 8 * DAY, id: hi1 }, { ageMs: 6 * DAY, id: lo2 }]);
+        // Mutation: drop the id tiebreak (the sort is stable, so a tie keeps
+        // Map order) → this reds.
+        expect(await dueFor(db, [accountA, accountB]), "a tie goes to the lower opportunity id")
+          .toEqual([lo1, hi1, lo2, hi2]);
       });
     });
   });

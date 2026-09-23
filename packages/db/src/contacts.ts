@@ -404,6 +404,14 @@ export async function getContact(db: SupabaseClient, accountId: string, contactI
  * renders these yet (the contact timeline does not read `events`, and the
  * dashboard feed skips contact.* housekeeping); they are the durable answer
  * to "who switched this, and when".
+ *
+ * KNOWN RESIDUAL: WRITE, THEN EMIT, and not one transaction. The update has
+ * already committed when `emit` runs, so an events-insert failure throws out
+ * of here AFTER the switch holds the new value: the action reports "Couldn't
+ * save that" while the column says otherwise, and that one change has no
+ * event. Kept deliberately — it is the house order (`updateContact` above
+ * does the same) and the column, not the event, is what the marketing sends
+ * read. Closing it takes an RPC that does both in one statement.
  */
 export async function setMarketingEmailOptOut(
   db: SupabaseClient, accountId: string, contactId: string, optedOut: boolean,
