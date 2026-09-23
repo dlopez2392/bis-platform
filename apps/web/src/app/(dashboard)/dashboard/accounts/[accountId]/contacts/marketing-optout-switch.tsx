@@ -1,11 +1,11 @@
 "use client";
 
-import { useId, useState, useTransition } from "react";
+import { useId, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { m } from "@/lib/messages";
-import { flipMarketingOptOut } from "@/lib/contacts/marketing-optout";
+import { flipMarketingOptOut, optOutSinceLine, runGuarded } from "@/lib/contacts/marketing-optout";
 import { setMarketingEmailOptOutAction } from "./actions";
 
 /**
@@ -20,24 +20,41 @@ import { setMarketingEmailOptOutAction } from "./actions";
  * moves back on a failure), so it never waits on the refresh. Callers key
  * this by contact id so a different contact never inherits the state.
  */
-export function MarketingOptOutSwitch({ accountId, contactId, optedOutAt }: {
+export function MarketingOptOutSwitch({ accountId, contactId, optedOutAt, timezone }: {
   accountId: string;
   contactId: string;
   /** `contacts.marketing_email_opted_out_at` — null means "may be emailed". */
   optedOutAt: string | null;
+  /** The account's resolved zone (`renderZone`), for the "Off since" date. */
+  timezone: string;
 }) {
   const [checked, setChecked] = useState(optedOutAt !== null);
+  // The stamp the "Off since" line reads. Dropped on the first flip and never
+  // guessed back: after a tick the server's new stamp is not on this screen
+  // (the drawer's summary is a one-shot fetch), and after untick-then-Undo
+  // the server has RE-stamped at the undo's moment, so the old date would be
+  // wrong. Saying nothing beats saying a date the screen cannot know.
+  const [since, setSince] = useState(optedOutAt);
   const [pending, startTransition] = useTransition();
+  const busy = useRef(false);
   const id = useId();
   const hintId = `${id}-hint`;
+  const sinceLine = checked ? optOutSinceLine(since, timezone) : null;
+
+  // The tick and its toast's Undo go through this one guard (#122 m5).
+  function run(work: () => Promise<void>) {
+    runGuarded(busy, startTransition, work);
+  }
 
   function flip(next: boolean) {
-    if (pending) return;
-    startTransition(() => flipMarketingOptOut(
+    if (pending || busy.current) return;
+    setSince(null);
+    run(() => flipMarketingOptOut(
       next,
       (optedOut) => setMarketingEmailOptOutAction(accountId, contactId, optedOut),
       setChecked,
       toast,
+      run,
     ));
   }
 
@@ -53,6 +70,9 @@ export function MarketingOptOutSwitch({ accountId, contactId, optedOutAt }: {
         />
         <Label htmlFor={id} className="font-normal">{m["contact.marketingOptOut.label"]}</Label>
       </div>
+      {sinceLine ? (
+        <p className="text-muted-foreground text-xs tabular-nums">{sinceLine}</p>
+      ) : null}
       <p id={hintId} className="text-muted-foreground text-xs">{m["contact.marketingOptOut.hint"]}</p>
     </div>
   );

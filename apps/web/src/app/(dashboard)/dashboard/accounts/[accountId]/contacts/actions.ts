@@ -57,11 +57,19 @@ export async function updateContactFieldAction(
 export async function setMarketingEmailOptOutAction(
   accountId: string, contactId: string, optedOut: boolean,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  await requireAccountAccess(accountId);
+  const { userId } = await requireAccountAccess(accountId);
   if (typeof optedOut !== "boolean") return { ok: false, error: m["contact.marketingOptOut.failed"] };
   try {
-    await setMarketingEmailOptOut(await dbForRequest(), accountId, contactId, optedOut);
-  } catch {
+    // `userId` is the actor on the audit event the db function emits
+    // (contact.marketing_email_opted_out / _opted_in): who, and which way.
+    await setMarketingEmailOptOut(await dbForRequest(), accountId, contactId, optedOut, userId);
+  } catch (e) {
+    // The operator reads only "Couldn't save that"; this line is the one
+    // trace of which contact on which account refused, and the db's reason.
+    console.error(
+      `setMarketingEmailOptOutAction: account ${accountId} contact ${contactId} ` +
+      `optedOut=${optedOut} failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
     return { ok: false, error: m["contact.marketingOptOut.failed"] };
   }
   revalidatePath(contactsPath(accountId));

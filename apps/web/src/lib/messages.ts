@@ -442,6 +442,9 @@ export const m = {
   "contact.marketingOptOut.onToast": "Marketing emails turned off for this contact",
   "contact.marketingOptOut.offToast": "Marketing emails turned back on for this contact",
   "contact.marketingOptOut.failed": "Couldn't save that — please try again.",
+  // Under the ticked switch: the day the stop was recorded, in the account's
+  // zone — the operator's answer to "when did they ask?".
+  "contact.marketingOptOut.since": "Off since {date}",
 
   // The contact drawer's recent-activity feed (Task 2's summary route,
   // Task 6's drawer). "{outcome}"/"{name}"/"{value}" are the house

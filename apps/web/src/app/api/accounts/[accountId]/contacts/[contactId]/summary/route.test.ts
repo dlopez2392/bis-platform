@@ -2,7 +2,23 @@ import { describe, it, expect, vi } from "vitest";
 
 const access = vi.fn();
 vi.mock("@/lib/auth", () => ({ apiAccountAccess: (...a: unknown[]) => access(...a) }));
-vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
+// The one direct query the route makes: `accounts.timezone`, for the zone the
+// drawer prints the "Off since" date in. `accountRead` is what it resolves to.
+const accountRead = vi.fn(async (): Promise<{ data: unknown; error: unknown }> =>
+  ({ data: { timezone: "America/Chicago" }, error: null }));
+const accountsFrom = vi.fn();
+const db = {
+  from: (table: string) => {
+    accountsFrom(table);
+    const chain = { select: () => chain, eq: () => chain, maybeSingle: () => accountRead() };
+    return chain;
+  },
+};
+vi.mock("@/lib/db", () => ({ dbForRequest: async () => db }));
+// renderZone reads the agency row through serviceDb for an unusable zone;
+// stubbed to echo what it was handed so the test sees the raw zone passed in.
+const renderZone = vi.fn(async (z: string | undefined) => ({ zone: z ?? "Etc/Fallback", guessed: z === undefined }));
+vi.mock("@/lib/zone", () => ({ renderZone: (z: string | undefined) => renderZone(z) }));
 
 const dbMocks = {
   getContact: vi.fn(), listContactTags: vi.fn(), listNotes: vi.fn(),
@@ -89,5 +105,41 @@ describe("contact summary route", () => {
       const body = await (await GET(req(), ctx())).json();
       expect(body).toHaveProperty("marketing_email_opted_out_at", null);
     });
+  });
+});
+
+/**
+ * The drawer prints the opt-out's "Off since" date in the ACCOUNT's zone, and
+ * a client component cannot read the account row — so the zone rides here,
+ * resolved the same way every other date screen resolves it (`renderZone`).
+ */
+describe("contact summary route: timezone", () => {
+  function emptySources() {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    dbMocks.getContact.mockResolvedValue({ id: "c1", marketing_email_opted_out_at: null });
+    for (const k of ["listContactTags", "listNotes", "listContactSubmissions",
+      "listContactMessages", "listContactOpportunities", "listContactCalls"] as const) {
+      dbMocks[k].mockResolvedValue([]);
+    }
+  }
+
+  it("carries the account's resolved zone, read from the account row", async () => {
+    emptySources();
+    const body = await (await GET(req(), ctx())).json();
+    expect(accountsFrom).toHaveBeenCalledWith("accounts");
+    expect(renderZone).toHaveBeenLastCalledWith("America/Chicago");
+    expect(body.timezone).toBe("America/Chicago");
+  });
+
+  it("a failed account read still answers (resolved without the account's zone) and is logged", async () => {
+    emptySources();
+    accountRead.mockResolvedValueOnce({ data: null, error: { message: "boom" } });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await GET(req(), ctx());
+    expect(res.status).toBe(200);
+    expect(renderZone).toHaveBeenLastCalledWith(undefined);
+    expect((await res.json()).timezone).toBe("Etc/Fallback");
+    expect(errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n")).toContain("boom");
+    errors.mockRestore();
   });
 });

@@ -95,17 +95,19 @@ describe("bulkRemoveTagAction", () => {
  * throw becomes a reported failure, and nothing is revalidated as if it saved.
  */
 describe("setMarketingEmailOptOutAction", () => {
-  it("stamps the opt-out: passes the account, the contact and `true` to the db", async () => {
+  it("stamps the opt-out: passes the account, the contact, `true` and the signed-in user to the db", async () => {
     dbMocks.setMarketingEmailOptOut.mockResolvedValue(undefined);
     const r = await setMarketingEmailOptOutAction("a1", "c1", true);
     expect(r).toEqual({ ok: true });
-    expect(dbMocks.setMarketingEmailOptOut).toHaveBeenCalledWith({}, "a1", "c1", true);
+    // The actor is `requireAccountAccess`'s userId (the mock above returns
+    // "user_1"): the db function records WHO in the audit event it emits.
+    expect(dbMocks.setMarketingEmailOptOut).toHaveBeenCalledWith({}, "a1", "c1", true, "user_1");
   });
   it("clears the opt-out: passes `false` through, not a truthy stand-in", async () => {
     dbMocks.setMarketingEmailOptOut.mockResolvedValue(undefined);
     const r = await setMarketingEmailOptOutAction("a1", "c1", false);
     expect(r).toEqual({ ok: true });
-    expect(dbMocks.setMarketingEmailOptOut).toHaveBeenCalledWith({}, "a1", "c1", false);
+    expect(dbMocks.setMarketingEmailOptOut).toHaveBeenCalledWith({}, "a1", "c1", false, "user_1");
   });
   it("revalidates the list (the drawer's rows) and the full contact page after a save", async () => {
     dbMocks.setMarketingEmailOptOut.mockResolvedValue(undefined);
@@ -117,9 +119,25 @@ describe("setMarketingEmailOptOutAction", () => {
     dbMocks.setMarketingEmailOptOut.mockRejectedValue(
       new Error("setMarketingEmailOptOut: no contact c9 on account a1"),
     );
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     const r = await setMarketingEmailOptOutAction("a1", "c9", true);
     expect(r.ok).toBe(false);
     expect(revalidatePath).not.toHaveBeenCalled();
+    errors.mockRestore();
+  });
+  it("logs a failed save with the account and contact ids and the db's own message", async () => {
+    // The operator sees only "Couldn't save that"; the log is the one trace
+    // of WHICH contact on WHICH account refused, and why.
+    dbMocks.setMarketingEmailOptOut.mockRejectedValue(new Error("db down"));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await setMarketingEmailOptOutAction("a1", "c7", false);
+    expect(r.ok).toBe(false);
+    expect(errors).toHaveBeenCalledTimes(1);
+    const line = errors.mock.calls[0]!.map(String).join(" ");
+    expect(line).toContain("a1");
+    expect(line).toContain("c7");
+    expect(line).toContain("db down");
+    errors.mockRestore();
   });
   it("rejects a value that is not a real boolean WITHOUT touching the db", async () => {
     // A server action's arguments arrive off the wire; the string "false" is
