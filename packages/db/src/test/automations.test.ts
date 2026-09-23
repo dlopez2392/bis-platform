@@ -31,7 +31,7 @@ import {
   REACTIVATION_MIN_MONTHS, REACTIVATION_MAX_MONTHS,
   parseQuoteFollowupConfig, listDueQuoteFollowups, getDueQuoteFollowupById, latestInboundByContact,
   stampQuoteFollowupSent, stampQuoteFollowupSmsFailed, countQuoteFollowupsSince,
-  QUOTE_FOLLOWUP_MAX_AGE_MS, QUOTE_FOLLOWUP_MAX_QUIET_DAYS,
+  QUOTE_FOLLOWUP_MAX_AGE_MS, QUOTE_FOLLOWUP_MAX_QUIET_DAYS, QUOTE_FOLLOWUP_CANDIDATE_LIMIT,
 } from "../automations";
 import { ensureConversation, createMessage } from "../messaging";
 import { ensureDefaultPipeline, listPipelinesWithStages } from "../crm-config";
@@ -1013,7 +1013,7 @@ describe("referral ask — data layer", () => {
         expect(row.mailingAddress).toBeNull();
       }
 
-      await setMarketingEmailOptOut(db, accountId, contactId, true);
+      await setMarketingEmailOptOut(db, accountId, contactId, true, "user_test");
       await setBranding(db, accountId, { mailingAddress: "9 Referral Rd\nMcAllen, TX 78501" }, "user_test");
       // Mutation: drop `marketing_email_opted_out_at` from REFERRAL_ASK_SELECT,
       // or hard-code `contactMarketingEmailOptedOut: false` → reds. Mutation:
@@ -1489,11 +1489,11 @@ describe("reactivation — data layer", () => {
         (await listDueReactivations(db, new Date("2027-09-21T12:00:00Z").toISOString())).map((r) => r.contactId);
       // The positive first, or the negative below is vacuous.
       expect(await ids()).toContain(contactId);
-      await setMarketingEmailOptOut(db, accountId, contactId, true);
+      await setMarketingEmailOptOut(db, accountId, contactId, true, "user_test");
       // Mutation: drop `.is("contacts.marketing_email_opted_out_at", null)`
       // from listDueReactivations → this reds.
       expect(await ids()).not.toContain(contactId);
-      await setMarketingEmailOptOut(db, accountId, contactId, false);
+      await setMarketingEmailOptOut(db, accountId, contactId, false, "user_test");
       expect(await ids()).toContain(contactId);
     });
   });
@@ -1502,13 +1502,13 @@ describe("reactivation — data layer", () => {
     await withTestAccount(async (db, accountId) => {
       const contactId = await quietCustomer(db, accountId);
       expect((await getDueReactivationById(db, contactId)).due?.contactId).toBe(contactId);
-      await setMarketingEmailOptOut(db, accountId, contactId, true);
+      await setMarketingEmailOptOut(db, accountId, contactId, true, "user_test");
       // The WHOLE answer: a released hold for this contact leaves the queue
       // on the releaser's `gone` path. Mutation: drop
       // `.is("marketing_email_opted_out_at", null)` from
       // getDueReactivationById → this reds.
       expect(await getDueReactivationById(db, contactId)).toEqual({ due: null, why: "gone" });
-      await setMarketingEmailOptOut(db, accountId, contactId, false);
+      await setMarketingEmailOptOut(db, accountId, contactId, false, "user_test");
       expect((await getDueReactivationById(db, contactId)).due?.contactId).toBe(contactId);
     });
   });
@@ -2095,6 +2095,116 @@ describe("no due-list reaches another account's contact (ownAccountContactOnly)"
           // replaces the assertion that brought us here).
           const { error } = await db.from(recipe.table).delete().eq("id", crossed);
           if (error) console.error(`cross-account ${recipe.table} cleanup failed: ${error.message}`);
+        }
+      });
+    });
+  });
+});
+
+// THE SAME GUARD ON THE NO-SHOW NUDGE'S CALENDAR. `bookings.calendar_id` is a
+// plain FK too, and `calendars(public_id, enabled)` is what the rebook link is
+// built from: a booking in account A on account B's calendar would text A's
+// no-show a link to B's public booking page. The contact half is proved by
+// the block above; this is the calendar half, with an own-account control so
+// the negative is not vacuous. Mutations: drop "calendars" from the no-show
+// nudge's embed list (list OR by-id) → the crossed row reds; drop
+// `account_id` from its `calendars(...)` select → the CONTROL reds (fail
+// closed).
+describe("the no-show nudge never links another account's calendar", () => {
+  it("a no-show on another account's calendar is never due, by list or by id", async () => {
+    const now = new Date("2028-02-05T12:00:00Z");
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db, accountB) => {
+        await upsertAutomation(db, accountA, "no_show_nudge",
+          { enabled: true, body: "", config: { channel: "sms" } }, "user_test");
+        const calA = await getOrCreateCalendar(db, accountA, "user_test");
+        const calB = await getOrCreateCalendar(db, accountB, "user_test");
+        const { id: contactId } = await createContact(db, accountA,
+          { firstName: "Own", email: "own-noshow@example.com", phone: "(956) 555-0173" }, "user_test");
+        const make = async (calendarId: string, n: number) => {
+          const startsAt = new Date(now.getTime() - (10 + n) * HOUR);
+          const b = await createBooking(db, accountA,
+            { calendarId, contactId, startsAt, endsAt: new Date(startsAt.getTime() + 30 * MINUTE) }, "user_test");
+          await setBookingStatus(db, accountA, b.id, "no_show", "user_test");
+          return b.id;
+        };
+        const own = await make(calA.id, 0);
+        const crossed = await make(calB.id, 1);
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        try {
+          const ids = (await listDueNoShowNudges(db, now.toISOString())).map((r) => r.bookingId);
+          expect(ids, "the own-calendar control must be due by list").toContain(own);
+          expect(ids, "the row on B's calendar must not be due by list").not.toContain(crossed);
+          expect((await getDueNoShowNudgeById(db, own)).due, "the own-calendar control must be due by id").not.toBeNull();
+          expect(await getDueNoShowNudgeById(db, crossed)).toEqual({ due: null, why: "gone" });
+          expect(logged.mock.calls.map((c) => String(c[0]))
+            .some((s) => s.includes(crossed) && s.includes("calendar"))).toBe(true);
+        } finally {
+          logged.mockRestore();
+          const { error } = await db.from("bookings").delete().eq("id", crossed);
+          if (error) console.error(`cross-account bookings cleanup failed: ${error.message}`);
+        }
+      });
+    });
+  });
+});
+
+// THE QUOTE FOLLOW-UP'S CAPPED WINDOW. The candidate read is bounded
+// (`QUOTE_FOLLOWUP_CANDIDATE_LIMIT`) and ordered oldest stage change first.
+// When the cross-account drop ran AFTER the limit, a deal on another account's
+// contact still took a slot — and, never stamped, took it again on every tick —
+// so enough of them starved every real deal behind them. The drop now happens
+// IN the query (one read per account, `contacts!inner` constrained to that
+// account), so a crossed deal never reaches the limit at all.
+//
+// A full window of crossed deals, all OLDER than one real deal: before, the
+// limit was spent on the crossed rows and the real one never surfaced.
+// Mutation: drop `.eq("contacts.account_id", accountId)` (or `!inner`) from
+// the per-account read → the crossed rows fill the window and this reds.
+describe("listDueQuoteFollowups: a deal on another account's contact never holds a slot", () => {
+  it("a full window of crossed deals does not hide a real one", async () => {
+    const now = new Date("2028-02-10T12:00:00Z");
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db, accountB) => {
+        const { pipelineId } = await ensureDefaultPipeline(db, accountA);
+        const stages = (await listPipelinesWithStages(db, accountA)).find((p) => p.id === pipelineId)!.stages;
+        const quoted = stages[1] ?? stages[0]!;
+        await upsertAutomation(db, accountA, "quote_followup",
+          { enabled: true, body: "", config: { stageId: quoted.id, quietDays: 3, channel: "sms" } }, "user_test");
+        const { id: ownContact } = await createContact(db, accountA,
+          { firstName: "Own", phone: "(956) 555-0174" }, "user_test");
+        const { id: theirContact } = await createContact(db, accountB,
+          { firstName: "Theirs", phone: "(956) 555-0175" }, "user_test");
+        const row = (contactId: string, ageMs: number) => ({
+          account_id: accountA, contact_id: contactId, pipeline_id: pipelineId, stage_id: quoted.id,
+          name: "Reroof", monetary_value: 0,
+          stage_changed_at: new Date(now.getTime() - ageMs).toISOString(),
+        });
+
+        // DIRECT INSERTS (createOpportunity refuses a contact outside the
+        // account — exactly the row this case must construct). One statement.
+        const crossedRows = Array.from({ length: QUOTE_FOLLOWUP_CANDIDATE_LIMIT },
+          (_, n) => row(theirContact, 10 * 24 * HOUR + n * MINUTE));
+        const { error: cErr } = await db.from("opportunities").insert(crossedRows);
+        if (cErr) throw new Error(`crossed opportunities fixture failed: ${cErr.message}`);
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        try {
+          const { data: ownRow, error: oErr } = await db.from("opportunities")
+            .insert(row(ownContact, 5 * 24 * HOUR)).select("id").single();
+          if (oErr || !ownRow) throw new Error(`own opportunity fixture failed: ${oErr?.message}`);
+
+          // Filtered to A: the read is platform-wide, and the shared project
+          // may hold another suite's rows at the same moment.
+          const ids = (await listDueQuoteFollowups(db, now.toISOString()))
+            .filter((r) => r.accountId === accountA).map((r) => r.opportunityId);
+          expect(ids, "the real deal, and nothing else of A's, is due behind a full window of crossed ones")
+            .toEqual([(ownRow as { id: string }).id]);
+        } finally {
+          logged.mockRestore();
+          const { error } = await db.from("opportunities").delete()
+            .eq("account_id", accountA).eq("contact_id", theirContact);
+          if (error) console.error(`crossed opportunities cleanup failed: ${error.message}`);
         }
       });
     });

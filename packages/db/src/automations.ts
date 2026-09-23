@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { brandDisplayName, type Branding } from "./branding";
-import { loadSendableRows, type AccountBrandInfo, type DueLookup } from "./booking";
+import { loadSendableRows, ownAccountEmbedsOnly, type AccountBrandInfo, type DueLookup } from "./booking";
 
 /**
  * The automations spine. Config is GENERIC — one row per (account, recipe)
@@ -218,17 +218,13 @@ export type DueReviewRequest = {
  * Logged by id, because a row like this is a data defect somebody must fix,
  * and silence would hide it. The by-id reads answer `gone`, so a released
  * hold leaves the queue.
+ *
+ * The contact-only case of `ownAccountEmbedsOnly` (booking.ts), which is the
+ * one implementation; a recipe that also builds something from its calendar
+ * (the no-show nudge's rebook link) calls that directly with `"calendars"`.
  */
 function ownAccountContactOnly<T>(rows: T[], fn: string, what: "booking" | "opportunity"): T[] {
-  return rows.filter((r) => {
-    const row = r as { id: string; account_id: string; contacts?: { account_id?: string } | null };
-    if (row.contacts?.account_id === row.account_id) return true;
-    console.error(
-      `${fn}: ${what} ${row.id} (account ${row.account_id}) points at a contact of `
-      + `${row.contacts ? `account ${row.contacts.account_id}` : "no readable account"} — dropped; nothing is sent for it`,
-    );
-    return false;
-  });
+  return ownAccountEmbedsOnly(rows, fn, what, ["contacts"]);
 }
 
 /**
@@ -405,9 +401,11 @@ export type DueNoShowNudge = {
 };
 
 /** Candidates, not decisions — `shouldSendNoShowNudgeNow` in the pass picks
- *  the moment. "Enabled, no_show, unstamped, inside 37h by either anchor". */
+ *  the moment. "Enabled, no_show, unstamped, inside 37h by either anchor".
+ *  `calendars(account_id, ...)` because the rebook link is built from the
+ *  calendar: both embeds go through `ownAccountEmbedsOnly`. */
 const NO_SHOW_NUDGE_SELECT =
-  "id, account_id, contact_id, ends_at, no_show_at, no_show_nudge_sms_failed_at, calendars(public_id, enabled), contacts(account_id, email, phone)";
+  "id, account_id, contact_id, ends_at, no_show_at, no_show_nudge_sms_failed_at, calendars(account_id, public_id, enabled), contacts(account_id, email, phone)";
 
 function toDueNoShowNudge(r: any, info: AccountBrandInfo, auto: EnabledRecipe): DueNoShowNudge {
   return {
@@ -450,7 +448,8 @@ export async function listDueNoShowNudges(
     .order("ends_at", { ascending: true });
   if (error) throw new Error(`listDueNoShowNudges failed: ${error.message}`);
 
-  const rows = ownAccountContactOnly((data ?? []) as any[], "listDueNoShowNudges", "booking");
+  // The contact AND the calendar the rebook link points at (ownAccountEmbedsOnly).
+  const rows = ownAccountEmbedsOnly((data ?? []) as any[], "listDueNoShowNudges", "booking", ["contacts", "calendars"]);
   if (rows.length === 0) return [];
 
   const { sendable, accountInfo } = await loadSendableRows(
@@ -466,8 +465,10 @@ export async function getDueNoShowNudgeById(db: SupabaseClient, bookingId: strin
     .eq("id", bookingId).eq("status", "no_show").is("no_show_nudged_at", null).maybeSingle();
   if (error) throw new Error(`getDueNoShowNudgeById failed: ${error.message}`);
   if (!data) return { due: null, why: "gone" };
-  // The contact must be this booking's own account's (ownAccountContactOnly).
-  if (ownAccountContactOnly([data], "getDueNoShowNudgeById", "booking").length === 0) return { due: null, why: "gone" };
+  // The contact AND the calendar must be this booking's own account's (ownAccountEmbedsOnly).
+  if (ownAccountEmbedsOnly([data], "getDueNoShowNudgeById", "booking", ["contacts", "calendars"]).length === 0) {
+    return { due: null, why: "gone" };
+  }
   const auto = await enabledRecipeFor(db, (data as any).account_id, "no_show_nudge");
   if (!auto) return { due: null, why: "off" };
   // A STORED CONFIG THAT NO LONGER PARSES IS `off` FOR A RELEASE, and saying
@@ -1731,7 +1732,11 @@ export const QUOTE_FOLLOWUP_MAX_QUIET_DAYS = 30;
 export const QUOTE_FOLLOWUP_DEFAULT_QUIET_DAYS = 3;
 
 /**
- * How many parked deals one tick will look at. The reactivation recipe's
+ * How many parked deals one tick will look at PER ACCOUNT (since B22 the
+ * candidate read is one query per enabled account; before, this capped the
+ * whole tick). What it protects is per REQUEST, so it survives the move: no
+ * `.in(...)` below ever carries more than this many ids, because the quiet
+ * test's reads are per account too. The reactivation recipe's
  * `REACTIVATION_CANDIDATE_LIMIT` bounds its candidate read the same way, but
  * for a DIFFERENT residual: that one WALKS pages, because its disqualifier (no
  * completed booking) is permanent and would otherwise park the window for
@@ -1813,22 +1818,21 @@ export type DueQuoteFollowup = {
 // TS2352. Task 5 hit this and every other *_SELECT in the file is a single
 // literal for the same reason.
 const QUOTE_FOLLOWUP_SELECT =
-  "id, account_id, contact_id, stage_id, stage_changed_at, quote_followup_sms_failed_at, contacts(account_id, email, phone)";
+  "id, account_id, contact_id, stage_id, stage_changed_at, quote_followup_sms_failed_at, contacts!inner(account_id, email, phone)";
 
 /**
  * Latest INBOUND message per contact since `sinceIso` — the "they already
  * replied" test the opportunities query cannot express. Two narrow reads,
  * bounded by the candidate list (`QUOTE_FOLLOWUP_CANDIDATE_LIMIT`) and by
- * `QUOTE_FOLLOWUP_INBOUND_SCAN_LIMIT`, so this is one pair of reads per tick
- * and not one per row.
+ * `QUOTE_FOLLOWUP_INBOUND_SCAN_LIMIT`, so this is one pair of reads per
+ * account per tick and not one per row.
  *
  * Exported because the RELEASE needs the single-contact case: a customer who
  * replied during a hold must not be chased at 8 AM.
  *
- * `accountIds` IS A LIST, not one id, because the tick's call covers every
- * account whose quote_followup is on — `listDueQuoteFollowups` deliberately
- * makes one pair of reads for the whole candidate set rather than a pair per
- * account. The release path passes `[row.accountId]`.
+ * `accountIds` is a list, but since B22 both callers pass ONE account:
+ * `listDueQuoteFollowups` makes one pair of reads per account with a
+ * sendable row, and the release path passes `[row.accountId]`.
  *
  * It buys the index unconditionally: every usable index on these two tables
  * leads with `account_id` (`messages_thread`,
@@ -1837,15 +1841,14 @@ const QUOTE_FOLLOWUP_SELECT =
  * leading column both reads were sequential scans. `listDueReactivations`
  * states the same rule over the same two tables.
  *
- * It buys TENANCY only on the release path, where `accountIds` is a single
- * account. On the TICK path `accountIds` is every enabled account and the
- * map below is keyed by `contactId` ALONE, so a cross-account
- * `conversations` row can still let account A's inbound suppress account
- * B's follow-up for a contact both happen to know of (fail-safe: it can
- * only make a due row wait, never send one early). The stronger fix — key
- * the map by the `(account_id, contact_id)` pair, the way
- * `listDueReactivations`' `customerKey` already does — is a follow-up, not
- * done here.
+ * It buys TENANCY because every caller passes a single account. The map is
+ * keyed by `contactId` ALONE, which is sound only for that: a caller that
+ * passed several accounts would let account A's inbound quiet account B's
+ * follow-up for a contact both know of (fail-safe: it can only make a due
+ * row wait, never send one early). Until B22 the tick path did exactly
+ * that; do not go back to one call for every account without keying the
+ * map by the `(account_id, contact_id)` pair, the way
+ * `listDueReactivations`' `customerKey` does.
  */
 export async function latestInboundByContact(
   db: SupabaseClient, accountIds: readonly string[], contactIds: readonly string[], sinceIso: string,
@@ -1883,10 +1886,10 @@ export async function latestInboundByContact(
 /**
  * Candidates, then the quiet test the query cannot express.
  *
- * `stage_id` and `quietDays` are BOTH per-account config, so the query gets
- * the union of the stage ids (exact — uuids do not collide across accounts)
- * and the WIDEST quiet cutoff, and each row is then narrowed to its own
- * account's. `stage_changed_at` is written by both `moveOpportunityStage` and
+ * `stage_id` and `quietDays` are BOTH per-account config, and since B22 each
+ * account gets its own read with its own stage and quiet cutoff in the query
+ * (see the comment at the loop for why it is per account at all).
+ * `stage_changed_at` is written by both `moveOpportunityStage` and
  * `moveOpportunityToStage` (opportunities.ts:45-46, 65-66), so "parked in the
  * stage you nominate, and how long ago" is a real column and not an
  * inference.
@@ -1894,8 +1897,9 @@ export async function latestInboundByContact(
  * The index that serves this read is `opps_quote_followup_due`
  * (0047, `(account_id, stage_id, stage_changed_at) where quote_followup_sent_at
  * is null and status = 'open'`) — its predicate is implied by this query's, in
- * that direction only. BOUNDED by `QUOTE_FOLLOWUP_CANDIDATE_LIMIT`: read that
- * constant's comment before removing the `.limit(...)`.
+ * that direction only, and each per-account read now binds its leading
+ * `account_id` column by equality. BOUNDED by `QUOTE_FOLLOWUP_CANDIDATE_LIMIT`
+ * per account: read that constant's comment before removing the `.limit(...)`.
  */
 export async function listDueQuoteFollowups(
   db: SupabaseClient, nowIso: string,
@@ -1925,29 +1929,35 @@ export async function listDueQuoteFollowups(
   }
   if (configured.size === 0) return [];
 
-  const widestQuiet = new Date(Math.max(...[...configured.values()].map((c) => c.quietCutoff)));
-  const oldest = new Date(now - QUOTE_FOLLOWUP_MAX_AGE_MS);
+  const oldest = new Date(now - QUOTE_FOLLOWUP_MAX_AGE_MS).toISOString();
 
-  const { data, error } = await db.from("opportunities")
-    .select(QUOTE_FOLLOWUP_SELECT)
-    .in("account_id", [...configured.keys()])
-    .in("stage_id", [...configured.values()].map((c) => c.config.stageId))
-    .eq("status", "open").is("quote_followup_sent_at", null)
-    .lte("stage_changed_at", widestQuiet.toISOString())
-    .gte("stage_changed_at", oldest.toISOString())
-    .order("stage_changed_at", { ascending: true })
-    .limit(QUOTE_FOLLOWUP_CANDIDATE_LIMIT);
-  if (error) throw new Error(`listDueQuoteFollowups failed: ${error.message}`);
-
-  // Narrow each row to ITS OWN account's stage and quiet period. The stage
-  // check is belt-and-braces against the `.in(...)` union — and it is also
-  // what keeps one account's stage id from ever selecting another's row.
-  const rows = ownAccountContactOnly((data ?? []) as any[], "listDueQuoteFollowups", "opportunity").filter((r) => {
-    const conf = configured.get(r.account_id);
-    if (!conf) return false;
-    if (r.stage_id !== conf.config.stageId) return false;
-    return new Date(r.stage_changed_at).getTime() <= conf.quietCutoff;
-  });
+  // ONE READ PER ACCOUNT, and the cross-account drop IN the query. When this
+  // was one read for every account, the drop ran AFTER `.limit(...)`: a deal
+  // pointing at another account's contact still took a slot, and, never
+  // stamped, took it again on every tick. PostgREST cannot compare an embed's
+  // `account_id` with each row's own (`.eq` takes a literal), so the literal
+  // is the account this read is for: `contacts!inner` plus
+  // `.eq("contacts.account_id", accountId)` keeps such a row out of the
+  // window entirely. Per account also means the exact stage and quiet cutoff
+  // in the query (no union, no widest cutoff), and the quiet test's reads are
+  // this account's alone. `ownAccountContactOnly` stays on the result, fail
+  // closed, for a select that ever loses the `!inner`.
+  const rows: any[] = [];
+  const inbound = new Map<string, Map<string, string>>();
+  for (const [accountId, conf] of configured) {
+    const { data, error } = await db.from("opportunities")
+      .select(QUOTE_FOLLOWUP_SELECT)
+      .eq("account_id", accountId)
+      .eq("contacts.account_id", accountId)
+      .eq("stage_id", conf.config.stageId)
+      .eq("status", "open").is("quote_followup_sent_at", null)
+      .lte("stage_changed_at", new Date(conf.quietCutoff).toISOString())
+      .gte("stage_changed_at", oldest)
+      .order("stage_changed_at", { ascending: true })
+      .limit(QUOTE_FOLLOWUP_CANDIDATE_LIMIT);
+    if (error) throw new Error(`listDueQuoteFollowups failed: ${error.message}`);
+    rows.push(...ownAccountContactOnly((data ?? []) as any[], "listDueQuoteFollowups", "opportunity"));
+  }
   if (rows.length === 0) return [];
 
   const { sendable, accountInfo } = await loadSendableRows(
@@ -1956,18 +1966,22 @@ export async function listDueQuoteFollowups(
 
   // THE QUIET TEST. Any inbound message since the stage changed means this
   // person is already talking to the business, and a "just checking you got
-  // the quote" text would land on top of that conversation. One read pair for
-  // the whole candidate set, since the earliest stage change among them.
-  const earliest = sendable
-    .map((r: any) => new Date(r.stage_changed_at).getTime())
-    .reduce((a: number, b: number) => Math.min(a, b));
-  const inbound = await latestInboundByContact(
-    db, [...configured.keys()], sendable.map((r: any) => r.contact_id as string),
-    new Date(earliest).toISOString());
+  // the quote" text would land on top of that conversation. One read pair per
+  // account with a sendable row, since that account's earliest stage change:
+  // every `.in(...)` stays within one account's candidate limit, and one
+  // account's inbound can never quiet another's follow-up.
+  for (const accountId of new Set(sendable.map((r: any) => r.account_id as string))) {
+    const mine = sendable.filter((r: any) => r.account_id === accountId);
+    const earliest = mine
+      .map((r: any) => new Date(r.stage_changed_at).getTime())
+      .reduce((a: number, b: number) => Math.min(a, b));
+    inbound.set(accountId, await latestInboundByContact(
+      db, [accountId], mine.map((r: any) => r.contact_id as string), new Date(earliest).toISOString()));
+  }
 
   return sendable
     .filter((r: any) => {
-      const replied = inbound.get(r.contact_id as string);
+      const replied = inbound.get(r.account_id as string)?.get(r.contact_id as string);
       return !replied || new Date(replied).getTime() <= new Date(r.stage_changed_at).getTime();
     })
     .map((r: any) => {

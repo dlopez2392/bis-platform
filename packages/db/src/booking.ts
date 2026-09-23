@@ -538,8 +538,53 @@ export async function loadSendableRows<T extends { account_id: string }>(
  *  calendar's feature, or the account's outbound is switched off). */
 export type DueLookup<T> = { due: T; why?: undefined } | { due: null; why: "gone" | "off" };
 
+/** An embed a due row reaches through a plain FK, and the noun its log line uses. */
+const EMBED_NOUN = { contacts: "contact", calendars: "calendar" } as const;
+export type AccountEmbed = keyof typeof EMBED_NOUN;
+
+/**
+ * EVERY EMBED MUST BE THE ROW'S OWN ACCOUNT'S — every due-list that reaches
+ * the customer, or the calendar a link is built from, through a plain FK:
+ * `bookings.contact_id`, `bookings.calendar_id`, `opportunities.contact_id`.
+ *
+ * All three are single-column FKs; there is no composite
+ * `(account_id, contact_id)` or `(account_id, calendar_id)` key anywhere in
+ * this schema, so a booking in account A can point at a contact or a calendar
+ * of account B. The embed follows the FK with no account condition of its
+ * own, and everything downstream would follow it too: the send, under A's
+ * brand, to B's customer's address, or a link to B's public booking page.
+ * `listDueReactivations` has guarded its own join this way since the #111
+ * audit (A1); automations.ts's recipes since 36e8c89 (`ownAccountContactOnly`,
+ * now a delegate of this); the booking reminder and follow-up since B22.
+ *
+ * FAIL CLOSED: a row is kept only when EVERY named embed's `account_id`
+ * EQUALS the row's. A missing embed, or a select that forgot `account_id`
+ * inside one, drops the row rather than passing it — every *_SELECT that
+ * comes through here carries `account_id` inside each embed it names.
+ * Logged by id and by embed, because a row like this is a data defect
+ * somebody must fix, and silence would hide it. The by-id reads answer
+ * `gone`, so a released hold leaves the queue.
+ */
+export function ownAccountEmbedsOnly<T>(
+  rows: T[], fn: string, what: "booking" | "opportunity", embeds: readonly AccountEmbed[],
+): T[] {
+  return rows.filter((r) => {
+    const row = r as { id: string; account_id: string } & Partial<Record<AccountEmbed, { account_id?: string } | null>>;
+    for (const embed of embeds) {
+      const got = row[embed];
+      if (got?.account_id === row.account_id) continue;
+      console.error(
+        `${fn}: ${what} ${row.id} (account ${row.account_id}) points at a ${EMBED_NOUN[embed]} of `
+        + `${got ? `account ${got.account_id}` : "no readable account"} — dropped; nothing is sent for it`,
+      );
+      return false;
+    }
+    return true;
+  });
+}
+
 const REMINDER_SELECT = `id, account_id, contact_id, starts_at, booker_timezone, cancel_token, meeting_url,
-             calendars(public_id), contacts(first_name, last_name, email)`;
+             calendars(account_id, public_id), contacts(account_id, first_name, last_name, email)`;
 
 function toDueReminder(r: any, info: AccountBrandInfo): DueReminder {
   const contactName = [r.contacts?.first_name, r.contacts?.last_name].filter(Boolean).join(" ").trim();
@@ -566,7 +611,9 @@ export async function listDueReminders(
     .order("starts_at", { ascending: true });
   if (error) throw new Error(`listDueReminders failed: ${error.message}`);
 
-  const rows = (data ?? []) as any[];
+  // The contact AND the calendar (whose public id is the reschedule link)
+  // must be this booking's own account's (ownAccountEmbedsOnly).
+  const rows = ownAccountEmbedsOnly((data ?? []) as any[], "listDueReminders", "booking", ["contacts", "calendars"]);
   if (rows.length === 0) return [];
 
   // One `accounts` read per distinct account (in practice always one) for
@@ -584,6 +631,9 @@ export async function getDueReminderById(db: SupabaseClient, bookingId: string):
     .eq("id", bookingId).eq("status", "booked").is("reminder_sent_at", null).maybeSingle();
   if (error) throw new Error(`getDueReminderById failed: ${error.message}`);
   if (!data) return { due: null, why: "gone" };
+  if (ownAccountEmbedsOnly([data], "getDueReminderById", "booking", ["contacts", "calendars"]).length === 0) {
+    return { due: null, why: "gone" };
+  }
   const { sendable, accountInfo } = await loadSendableRows(db, [data as { account_id: string }], "getDueReminderById");
   if (sendable.length === 0) return { due: null, why: "off" };
   return { due: toDueReminder(data, accountInfo.get((data as any).account_id)!) };
@@ -648,7 +698,7 @@ export async function stampReminderSent(db: SupabaseClient, bookingId: string): 
  * memory, so without that column the ~12 ticks inside one morning band would
  * each send.
  */
-const FOLLOWUP_SELECT = `id, account_id, contact_id, starts_at, ends_at, calendars!inner(followup_body, followup_enabled), contacts(first_name, last_name, email)`;
+const FOLLOWUP_SELECT = `id, account_id, contact_id, starts_at, ends_at, calendars!inner(account_id, followup_body, followup_enabled), contacts(account_id, first_name, last_name, email)`;
 
 function toDueFollowup(r: any, info: AccountBrandInfo): DueFollowup {
   const contactName = [r.contacts?.first_name, r.contacts?.last_name].filter(Boolean).join(" ").trim();
@@ -678,7 +728,9 @@ export async function listDueFollowups(
     .order("starts_at", { ascending: true });
   if (error) throw new Error(`listDueFollowups failed: ${error.message}`);
 
-  const rows = (data ?? []) as any[];
+  // The contact AND the calendar (whose words are the body) must be this
+  // booking's own account's (ownAccountEmbedsOnly).
+  const rows = ownAccountEmbedsOnly((data ?? []) as any[], "listDueFollowups", "booking", ["contacts", "calendars"]);
   if (rows.length === 0) return [];
 
   // Same per-account cache as listDueReminders. DueFollowup carries
@@ -696,6 +748,11 @@ export async function getDueFollowupById(db: SupabaseClient, bookingId: string):
     .eq("id", bookingId).in("status", ["booked", "completed"]).is("followup_sent_at", null).maybeSingle();
   if (error) throw new Error(`getDueFollowupById failed: ${error.message}`);
   if (!data) return { due: null, why: "gone" };
+  // Before the `followup_enabled` read: that flag means something only on
+  // the booking's OWN calendar.
+  if (ownAccountEmbedsOnly([data], "getDueFollowupById", "booking", ["contacts", "calendars"]).length === 0) {
+    return { due: null, why: "gone" };
+  }
   if ((data as any).calendars?.followup_enabled !== true) return { due: null, why: "off" };
   const { sendable, accountInfo } = await loadSendableRows(db, [data as { account_id: string }], "getDueFollowupById");
   if (sendable.length === 0) return { due: null, why: "off" };
