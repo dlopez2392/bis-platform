@@ -1,16 +1,12 @@
 import { test, expect, type Page } from "@playwright/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb } from "@bis/db";
+import { SEEDED_ACCOUNT_NAME, openAccountByName } from "./support";
 
 // Playwright's config passes env to the webServer, not to this process, so the
 // service-role credentials have to be loaded explicitly for setup and cleanup.
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
-
-// Pinned by name, not position — same reasoning as messaging.spec.ts: "first
-// card" on /dashboard/accounts broke once stray accounts existed alongside the
-// seeded one.
-const ACCOUNT_NAME = "Test Client One";
 
 // Both specs drive the whole loop — build a form, publish it, submit it as a
 // stranger, read the lead back on three screens — against a dev server that
@@ -96,12 +92,32 @@ async function addConsentField(page: Page, label: string): Promise<void> {
 async function newPublishedForm(
   page: Page, formName: string, consentLabel?: string,
 ): Promise<string> {
-  await page.goto("/dashboard/accounts");
-  await page.getByRole("link", { name: new RegExp(ACCOUNT_NAME, "i") }).first().click();
-  await expect(page).toHaveURL(/\/contacts$/);
+  // By accessible name, never `.first()` — the seeded-account rule in
+  // support.ts.
+  await openAccountByName(page, SEEDED_ACCOUNT_NAME);
+  const accountId = new URL(page.url()).pathname.split("/")[3]!;
 
-  await page.getByRole("link", { name: "Forms" }).click();
-  await expect(page).toHaveURL(/\/forms$/);
+  // A fresh document load of the forms list, NOT a click on the sidebar's
+  // Forms link. That click is how "a honeypot submission..." timed out in CI
+  // run 36021404608: the editor opened, then the page fell back to the forms
+  // list (without the new form) and Save was never found.
+  //
+  // The trace shows why. The shell reads its badges with a server action on
+  // every route change (shell-data.tsx). The Forms click was made while the
+  // Contacts page's read was still in flight, so the Next router discarded
+  // it. When that discarded read finished, the router started the next queued
+  // action, createFormAction, while the Forms page's own read was still
+  // running (next@16.2.11 app-router-instance.js, runRemainingActions). Their
+  // responses arrived 5ms apart, and the router kept the read's state, which
+  // it had captured BEFORE the form existed: the editor's own read was then
+  // sent with the forms list as its router state (URL and router-state-tree
+  // say /forms, Referer says the editor), and when that read came back it put
+  // the stale list back on screen.
+  //
+  // That is a product race, reported separately rather than fixed here. A
+  // full load leaves no discarded action behind, so createFormAction queues
+  // behind the Forms page's read the normal way.
+  await page.goto(`/dashboard/accounts/${accountId}/forms`);
 
   await page.getByRole("button", { name: "New form" }).click();
   await page.getByLabel("Form name").fill(formName);

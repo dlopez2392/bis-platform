@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page, type Response } from "@playwright/test";
 import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import {
@@ -82,6 +82,54 @@ function fullFixture(): ClientFixtureFull {
     );
   }
   return JSON.parse(readFileSync(CLIENT_FIXTURE_FILE, "utf-8")) as ClientFixtureFull;
+}
+
+/**
+ * The bulk delete's own server action, from the click to the last byte of
+ * its response. Start it BEFORE the click.
+ *
+ * Why the two delete tests need it (CI run 36014117982, both failed):
+ *
+ * - The toast is not proof that the table has changed. Its text comes from
+ *   the action's return value, which is at the front of the response. The
+ *   refreshed contact list (revalidatePath) comes after it in the same
+ *   response. In the failed run the headers came back after 1.8s and the body
+ *   was still arriving 10s later, when `toHaveCount(0)` gave up with
+ *   "Deleted 2 contacts" already on screen.
+ * - The delete does not start when the button is clicked. Next runs server
+ *   actions one at a time, and the shell's badge read (shell-data.tsx, sent on
+ *   every page load) was ahead of it. That read took 6.2s, the delete was
+ *   only sent when it came back, and the delete's own response had still not
+ *   arrived when the 10s toast wait ran out.
+ *
+ * Both are latency. Another run's `verify` job (36015930225) was running the
+ * live db suite against the same database for the whole of this file. The
+ * fix is to wait for the action itself instead of guessing a time budget.
+ *
+ * The request is found by a contact id in its body. The badge read goes to the
+ * same URL with the same `next-action` header, but carries only the account
+ * id, so matching on URL and header alone would also match the read.
+ */
+function watchBulkDelete(page: Page, oneOfTheIds: string) {
+  const sent = page.waitForRequest((req) =>
+    req.method() === "POST"
+    && "next-action" in req.headers()
+    && (req.postData() ?? "").includes(oneOfTheIds));
+  return {
+    /** Once the result is in: the toast can be asserted from here. */
+    async answered(): Promise<Response> {
+      const res = await (await sent).response();
+      expect(res, "the bulk delete action got no response").not.toBeNull();
+      expect(res!.status(), "the bulk delete action failed").toBe(200);
+      return res!;
+    },
+    /** Once the refreshed list is in: the table can be asserted from here. */
+    async complete(): Promise<void> {
+      const res = await (await sent).response();
+      const failure = await res?.finished();
+      expect(failure ?? null, "the bulk delete response was cut off").toBeNull();
+    },
+  };
 }
 
 const stamp = Date.now();
@@ -662,8 +710,14 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     await dialog.getByRole("textbox").fill("1");
     await expect(dialog.getByRole("button", { name: /delete/i })).toBeDisabled();
     await dialog.getByRole("textbox").fill("2");
+    const bulkOneId = await page.getByRole("row").filter({ hasText: "Bulk One" })
+      .getAttribute("data-contact-row");
+    expect(bulkOneId, "the Bulk One row carries its contact id").toBeTruthy();
+    const deletion = watchBulkDelete(page, bulkOneId!);
     await dialog.getByRole("button", { name: /delete/i }).click();
+    await deletion.answered();
     await expect(page.getByText("Deleted 2 contacts")).toBeVisible();
+    await deletion.complete();
     await expect(page.getByText("Bulk One")).toHaveCount(0);
     await expect(page.getByText("Bulk Two")).toHaveCount(0);
   });
@@ -684,11 +738,14 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     await bar.getByRole("button", { name: /delete/i }).click();
     const dialog = page.getByRole("dialog").filter({ hasText: /delete 2 contacts/i });
     await dialog.getByRole("textbox").fill("2");
+    const deletion = watchBulkDelete(page, blockedId);
     await dialog.getByRole("button", { name: /delete/i }).click();
 
+    await deletion.answered();
     await expect(page.getByText(
       "Deleted 1 · skipped 1 linked to bookings, deals, or conversations",
     )).toBeVisible();
+    await deletion.complete();
     await expect(page.getByText("BulkGate Free")).toHaveCount(0);
     await expect(page.getByText("BulkGate Blocked")).toBeVisible();
   });
