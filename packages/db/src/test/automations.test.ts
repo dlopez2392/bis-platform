@@ -12,7 +12,6 @@ import {
 import {
   parseReviewRequestConfig, getAutomation, upsertAutomation,
   listDueReviewRequests, stampReviewRequested, stampReviewRequestSmsFailed, countReviewRequestsSince,
-  getDueReviewRequestById, getDueNoShowNudgeById, getDueSmsReminderById,
   REVIEW_REQUEST_MAX_AGE_MS,
   parseNoShowNudgeConfig, listDueNoShowNudges, stampNoShowNudged, stampNoShowNudgeSmsFailed,
   countNoShowNudgesSince, NO_SHOW_NUDGE_MAX_AGE_MS,
@@ -32,7 +31,7 @@ import {
   REACTIVATION_MIN_MONTHS, REACTIVATION_MAX_MONTHS,
   parseQuoteFollowupConfig, listDueQuoteFollowups, getDueQuoteFollowupById, latestInboundByContact,
   stampQuoteFollowupSent, stampQuoteFollowupSmsFailed, countQuoteFollowupsSince,
-  QUOTE_FOLLOWUP_MAX_AGE_MS, QUOTE_FOLLOWUP_MAX_QUIET_DAYS, QUOTE_FOLLOWUP_CANDIDATE_LIMIT,
+  QUOTE_FOLLOWUP_MAX_AGE_MS, QUOTE_FOLLOWUP_MAX_QUIET_DAYS,
 } from "../automations";
 import { ensureConversation, createMessage } from "../messaging";
 import { ensureDefaultPipeline, listPipelinesWithStages } from "../crm-config";
@@ -1672,14 +1671,21 @@ describe("reactivation — data layer", () => {
 
   it("a conversation pointing at ANOTHER account's contact is never due, by list or by id", async () => {
     // The nested-account shape this file already uses for
-    // `countInstantRepliesSince` (:488). `conversations.contact_id` and
-    // `bookings.contact_id` are plain single-column FKs — there is no
-    // composite `(account_id, contact_id)` key anywhere — so a row whose
-    // contact belongs to a different account is constructible, and the whole
-    // reactivation chain used to resolve the customer, the email address and
-    // the "past customer" proof through `contact_id` alone. Account A then
-    // emailed account B's customer under A's brand, and the permanent stamp
-    // landed on B's contact so B could never send its own.
+    // `countInstantRepliesSince` (:488). `conversations.contact_id` is still a
+    // plain single-column FK (0050 made bookings and opportunities composite,
+    // not conversations), so a conversation in account A on account B's
+    // contact is constructible, and the reactivation chain used to resolve the
+    // customer and the email address through `contact_id` alone. Account A
+    // then emailed account B's customer under A's brand, and the permanent
+    // stamp landed on B's contact so B could never send its own.
+    //
+    // A BOOKING can no longer cross (0050: `bookings (account_id, contact_id)`
+    // references `contacts (account_id, id)`), so the "past customer" proof
+    // here is B's OWN completed job for B's own contact: contactB really is a
+    // past customer, of B. B holds NO conversation with them, so nothing is
+    // due for contactB anywhere — unless A's conversation is taken for it.
+    // That makes the crossed conversation the only thing that could make
+    // contactB due, i.e. load-bearing.
     await withTestAccount(async (db, accountA) => {
       const calA = await getOrCreateCalendar(db, accountA, "user_test");
       await upsertAutomation(db, accountA, "reactivation",
@@ -1687,64 +1693,74 @@ describe("reactivation — data layer", () => {
       await setBranding(db, accountA, SEND_READY, "user_test");
       const now = new Date("2027-09-21T12:00:00Z");
       const longAgo = new Date("2026-10-01T12:00:00Z");
+      const job = { startsAt: new Date(longAgo.getTime() - HOUR), endsAt: longAgo };
+
+      // THE CONTROL: A's own past customer, quiet since long ago, due under
+      // A. Without it "contactB is not due under A" would also read green if
+      // A's side of the walk were dead for any other reason.
+      const { id: contactA } = await createContact(db, accountA,
+        { firstName: "Own", email: "own-react@example.com" }, "user_test");
+      const convoOwn = await ensureConversation(db, accountA, contactA, "user_test");
+      await db.from("conversations")
+        .update({ last_message_at: longAgo.toISOString() }).eq("id", convoOwn.id)
+        .then(({ error }) => { if (error) throw new Error(`convoOwn touch failed: ${error.message}`); });
+      const ownJob = await createBooking(db, accountA, { calendarId: calA.id, contactId: contactA, ...job }, "user_test");
+      await setBookingStatus(db, accountA, ownJob.id, "completed", "user_test");
 
       await withTestAccount(async (_db, accountB) => {
         await upsertAutomation(db, accountB, "reactivation",
           { enabled: true, body: "", config: { months: 9 } }, "user_test");
         await setBranding(db, accountB, SEND_READY, "user_test");
+        const calB = await getOrCreateCalendar(db, accountB, "user_test");
         const { id: contactB } = await createContact(db, accountB,
           { firstName: "Crossed", email: "crossed@example.com" }, "user_test");
-
-        // B's OWN conversation, quiet since long ago. Without it B's side of
-        // the due-list would be refused for want of a conversation and the
-        // booking's account would carry no weight — the non-load-bearing
-        // negative fixture this file has been caught by before.
-        const convoB = await ensureConversation(db, accountB, contactB, "user_test");
-        await db.from("conversations")
-          .update({ last_message_at: longAgo.toISOString() }).eq("id", convoB.id)
-          .then(({ error }) => { if (error) throw new Error(`convoB touch failed: ${error.message}`); });
-
-        // THE TWO CROSS-ACCOUNT ROWS: A's conversation on B's contact, and
-        // the completed booking that proves "past customer" — owned by A,
-        // not by B.
-        const convoA = await ensureConversation(db, accountA, contactB, "user_test");
-        await db.from("conversations")
-          .update({ last_message_at: longAgo.toISOString() }).eq("id", convoA.id)
-          .then(({ error }) => { if (error) throw new Error(`convoA touch failed: ${error.message}`); });
-        const crossed = await createBooking(db, accountA,
-          { calendarId: calA.id, contactId: contactB, startsAt: new Date(longAgo.getTime() - HOUR), endsAt: longAgo },
-          "user_test");
-        await setBookingStatus(db, accountA, crossed.id, "completed", "user_test");
+        const theirJob = await createBooking(db, accountB, { calendarId: calB.id, contactId: contactB, ...job }, "user_test");
+        await setBookingStatus(db, accountB, theirJob.id, "completed", "user_test");
 
         try {
-          // Mutation: delete the contact-account check in `listDueReactivations`
-          // → B's customer comes back due under ACCOUNT A and this reds.
-          // Mutation: key `customers` by contact alone again (drop the account
-          // from the completed-bookings read) → B's own conversation qualifies
-          // on A's booking and this reds too.
-          expect((await listDueReactivations(db, now.toISOString())).map((r) => r.contactId))
-            .not.toContain(contactB);
+          // THE ONE CROSS-ACCOUNT ROW: A's conversation on B's contact.
+          // Created INSIDE the try (#123 m5): it holds an FK into B's contact,
+          // so it must be deleted even when a later fixture call throws, or
+          // B's teardown trips over it and B leaks.
+          const convoA = await ensureConversation(db, accountA, contactB, "user_test");
+          await db.from("conversations")
+            .update({ last_message_at: longAgo.toISOString() }).eq("id", convoA.id)
+            .then(({ error }) => { if (error) throw new Error(`convoA touch failed: ${error.message}`); });
+
+          const due = await listDueReactivations(db, now.toISOString());
+          // Filtered to A's rows and to B's contact: the read is platform-wide
+          // and the project shared. ONE assertion, the conjunction of what
+          // used to be two ("A's rows are exactly [contactA]" and "no row for
+          // contactB anywhere"). As the code stands the second could only red
+          // with the first — a due row's accountId is its conversation's, and
+          // the only conversation on contactB is A's — but the `||` keeps it
+          // honest if a row were ever attributed to the CONTACT's account.
+          expect(due.filter((r) => r.accountId === accountA || r.contactId === contactB)
+            .map((r) => [r.accountId, r.contactId]),
+            "A's own past customer is due (the control); B's contact is due under no account")
+            .toEqual([[accountA, contactA]]);
+          // The LIST has two guards against this row, and since 0050 each
+          // alone holds it: the contact-account check drops the candidate, and
+          // `customers` is keyed by (account, contact) so B's job cannot prove
+          // A's customer. Measured on this fixture: delete the contact-account
+          // check alone → still green; key `customers` by contact alone →
+          // still green; do BOTH → contactB comes back due under A and the
+          // assertion above reds.
+
           // Mutation: delete `.eq("account_id", accountId)` from
-          // `getDueReactivationById`'s bookings read → this answers with a due
-          // row and reds.
+          // `getDueReactivationById`'s CONVERSATION read → it finds A's
+          // conversation for B's past customer, answers with a due row, and
+          // this reds. (Its bookings read's account scope can no longer be
+          // redded by any fixture: since 0050 a booking of contactB is B's.)
           expect(await getDueReactivationById(db, contactB)).toEqual({ due: null, why: "gone" });
-          const { data: after } = await db.from("contacts")
-            .select("reactivation_sent_at").eq("id", contactB).single();
-          expect((after as { reactivation_sent_at: string | null }).reactivation_sent_at).toBeNull();
         } finally {
-          // A's two rows point at B's contact, and both FKs are plain
-          // `references` with no cascade, so B's teardown fails on `contacts`
-          // without this. IN A `finally`, because a failed assertion would
-          // otherwise skip it and the FK violation would replace the real
-          // failure message with one naming no cause at all — which is
-          // exactly what the first run of this case printed. LOGGED, never
-          // thrown, for the same reason: a throw here would mask the
-          // assertion that brought us into the finally. A cleanup that
-          // really fails is still loud, one line later, out of
-          // `deleteAccountCascade`.
-          const { error: bDel } = await db.from("bookings").delete().eq("id", crossed.id);
-          if (bDel) console.error(`cross-account bookings cleanup failed: ${bDel.message}`);
-          const { error: cDel } = await db.from("conversations").delete().eq("id", convoA.id);
+          // Deleted by what MAKES it crossed (account A + B's contact), not by
+          // id, so it is removed even if its id never came back. LOGGED, never
+          // thrown: a throw in a `finally` replaces the assertion that brought
+          // us here. A cleanup that really fails is still loud, one line
+          // later, out of `deleteAccountCascade`.
+          const { error: cDel } = await db.from("conversations").delete()
+            .eq("account_id", accountA).eq("contact_id", contactB);
           if (cDel) console.error(`cross-account conversations cleanup failed: ${cDel.message}`);
         }
       });
@@ -1974,258 +1990,15 @@ describe("quote follow-up — data layer", () => {
   });
 });
 
-// THE #111 A1 GUARD, ON EVERY SIBLING. `bookings.contact_id` and
-// `opportunities.contact_id` are plain single-column FKs, so a row in account
-// A can point at a contact of account B, and the `contacts(...)` embed follows
-// it with no account condition. Before `ownAccountContactOnly` every recipe
-// below would have messaged B's customer under A's brand. The reactivation
-// case above ("a conversation pointing at ANOTHER account's contact") is the
-// template; this is the same proof for the six due-lists that join
-// bookings/opportunities -> contacts.
-//
-// Each case builds TWO rows in account A inside the recipe's window: one on
-// A's own contact (the positive control, so the negative is not vacuous) and
-// one on B's contact. Mutation: drop the guard from a recipe's LIST read, or
-// from its BY-ID read -> that recipe's row reds by name.
-describe("no due-list reaches another account's contact (ownAccountContactOnly)", () => {
-  const now = new Date("2027-08-20T12:00:00Z");
-  type Db = Parameters<typeof listDueReviewRequests>[0];
-  type Recipe = {
-    table: "bookings" | "opportunities";
-    /** Turns the recipe on for `accountId` and returns a maker of one due
-     *  row pointing at `contactId`; `n` spaces the rows apart in the window. */
-    prepare: (db: Db, accountId: string) => Promise<(contactId: string, n: number) => Promise<string>>;
-    list: (db: Db) => Promise<string[]>;
-    byId: (db: Db, id: string) => Promise<{ due: unknown; why?: string }>;
-  };
-
-  const booking = (status: "completed" | "no_show" | null, startsAt: (n: number) => Date, lengthMs: number) =>
-    async (db: Db, accountId: string, contactId: string, n: number) => {
-      const cal = await getOrCreateCalendar(db, accountId, "user_test");
-      const start = startsAt(n);
-      const b = await createBooking(db, accountId,
-        { calendarId: cal.id, contactId, startsAt: start, endsAt: new Date(start.getTime() + lengthMs) }, "user_test");
-      if (status) await setBookingStatus(db, accountId, b.id, status, "user_test");
-      return b.id;
-    };
-  const bookingRecipe = (
-    key: "review_request" | "no_show_nudge" | "sms_reminder" | "appointment_confirm" | "referral_ask",
-    config: Record<string, unknown>,
-    make: ReturnType<typeof booking>,
-    list: (db: Db) => Promise<{ bookingId: string }[]>,
-    byId: Recipe["byId"],
-  ): Recipe => ({
-    table: "bookings",
-    prepare: async (db, accountId) => {
-      await upsertAutomation(db, accountId, key, { enabled: true, body: "", config }, "user_test");
-      return (contactId, n) => make(db, accountId, contactId, n);
-    },
-    list: async (db) => (await list(db)).map((r) => r.bookingId),
-    byId,
-  });
-
-  const RECIPES: Record<string, Recipe> = {
-    review_request: bookingRecipe("review_request",
-      { channel: "email", reviewUrl: "https://g.page/r/x/review" },
-      booking("completed", (n) => new Date(now.getTime() - (30 + n) * HOUR), 30 * MINUTE),
-      (db) => listDueReviewRequests(db, now.toISOString()), (db, id) => getDueReviewRequestById(db, id)),
-    no_show_nudge: bookingRecipe("no_show_nudge", { channel: "sms" },
-      booking("no_show", (n) => new Date(now.getTime() - (10 + n) * HOUR), 30 * MINUTE),
-      (db) => listDueNoShowNudges(db, now.toISOString()), (db, id) => getDueNoShowNudgeById(db, id)),
-    sms_reminder: bookingRecipe("sms_reminder", {},
-      booking(null, (n) => new Date(now.getTime() + (100 + 10 * n) * MINUTE), 5 * MINUTE),
-      (db) => listDueSmsReminders(db, now.toISOString()), (db, id) => getDueSmsReminderById(db, id)),
-    appointment_confirm: bookingRecipe("appointment_confirm", {},
-      booking(null, (n) => new Date(now.getTime() + 47 * HOUR + (10 + 10 * n) * MINUTE), 5 * MINUTE),
-      (db) => listDueAppointmentConfirms(db, now.toISOString()), (db, id) => getDueAppointmentConfirmById(db, id)),
-    referral_ask: bookingRecipe("referral_ask", { channel: "email" },
-      booking("completed", (n) => new Date(now.getTime() - (30 + n) * HOUR), 30 * MINUTE),
-      (db) => listDueReferralAsks(db, now.toISOString()), (db, id) => getDueReferralAskById(db, id)),
-    quote_followup: {
-      table: "opportunities",
-      prepare: async (db, accountId) => {
-        const { pipelineId } = await ensureDefaultPipeline(db, accountId);
-        const stages = (await listPipelinesWithStages(db, accountId)).find((p) => p.id === pipelineId)!.stages;
-        const quoted = stages[1] ?? stages[0]!;
-        await upsertAutomation(db, accountId, "quote_followup",
-          { enabled: true, body: "", config: { stageId: quoted.id, quietDays: 3, channel: "sms" } }, "user_test");
-        // A DIRECT INSERT, not createOpportunity: that function refuses a
-        // contact outside the account (opportunities.ts), which is exactly the
-        // row this case must construct. The own-contact row goes the same way
-        // so the two differ in nothing but the contact.
-        return async (contactId, n) => {
-          const { data, error } = await db.from("opportunities").insert({
-            account_id: accountId, contact_id: contactId, pipeline_id: pipelineId, stage_id: quoted.id,
-            name: "Reroof", monetary_value: 0,
-            stage_changed_at: new Date(now.getTime() - 5 * 24 * HOUR - n * MINUTE).toISOString(),
-          }).select("id").single();
-          if (error || !data) throw new Error(`opportunity fixture failed: ${error?.message}`);
-          return (data as { id: string }).id;
-        };
-      },
-      list: async (db) => (await listDueQuoteFollowups(db, now.toISOString())).map((r) => r.opportunityId),
-      byId: (db, id) => getDueQuoteFollowupById(db, id),
-    },
-  };
-
-  it.each(Object.keys(RECIPES))("%s: a row on another account's contact is never due, by list or by id", async (key) => {
-    const recipe = RECIPES[key]!;
-    await withTestAccount(async (db, accountA) => {
-      await withTestAccount(async (_db, accountB) => {
-        const make = await recipe.prepare(db, accountA);
-        const { id: ownContact } = await createContact(db, accountA,
-          { firstName: "Own", email: "own@example.com", phone: "(956) 555-0171" }, "user_test");
-        const { id: theirContact } = await createContact(db, accountB,
-          { firstName: "Theirs", email: "theirs@example.com", phone: "(956) 555-0172" }, "user_test");
-        const own = await make(ownContact, 0);
-        const crossed = await make(theirContact, 1);
-
-        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-        try {
-          const ids = await recipe.list(db);
-          expect(ids, "the own-contact control must be due by list").toContain(own);
-          expect(ids, "the cross-account row must not be due by list").not.toContain(crossed);
-          expect((await recipe.byId(db, own)).due, "the own-contact control must be due by id").not.toBeNull();
-          expect(await recipe.byId(db, crossed)).toEqual({ due: null, why: "gone" });
-          // Named in the log, so the data defect is findable.
-          expect(logged.mock.calls.map((c) => String(c[0])).some((s) => s.includes(crossed))).toBe(true);
-        } finally {
-          logged.mockRestore();
-          // The crossed row points at B's contact; B's teardown runs first and
-          // must not trip over it. Logged, never thrown (a throw in `finally`
-          // replaces the assertion that brought us here).
-          const { error } = await db.from(recipe.table).delete().eq("id", crossed);
-          if (error) console.error(`cross-account ${recipe.table} cleanup failed: ${error.message}`);
-        }
-      });
-    });
-  });
-});
-
-// THE SAME GUARD ON THE NO-SHOW NUDGE'S CALENDAR. `bookings.calendar_id` is a
-// plain FK too, and `calendars(public_id, enabled)` is what the rebook link is
-// built from: a booking in account A on account B's calendar would text A's
-// no-show a link to B's public booking page. The contact half is proved by
-// the block above; this is the calendar half, with an own-account control so
-// the negative is not vacuous. Mutations: drop "calendars" from the no-show
-// nudge's embed list (list OR by-id) → the crossed row reds; drop
-// `account_id` from its `calendars(...)` select → the CONTROL reds (fail
-// closed).
-describe("the no-show nudge never links another account's calendar", () => {
-  it("a no-show on another account's calendar is never due, by list or by id", async () => {
-    const now = new Date("2028-02-05T12:00:00Z");
-    await withTestAccount(async (db, accountA) => {
-      await withTestAccount(async (_db, accountB) => {
-        await upsertAutomation(db, accountA, "no_show_nudge",
-          { enabled: true, body: "", config: { channel: "sms" } }, "user_test");
-        const calA = await getOrCreateCalendar(db, accountA, "user_test");
-        const calB = await getOrCreateCalendar(db, accountB, "user_test");
-        const { id: contactId } = await createContact(db, accountA,
-          { firstName: "Own", email: "own-noshow@example.com", phone: "(956) 555-0173" }, "user_test");
-        const make = async (calendarId: string, n: number) => {
-          const startsAt = new Date(now.getTime() - (10 + n) * HOUR);
-          const b = await createBooking(db, accountA,
-            { calendarId, contactId, startsAt, endsAt: new Date(startsAt.getTime() + 30 * MINUTE) }, "user_test");
-          await setBookingStatus(db, accountA, b.id, "no_show", "user_test");
-          return b.id;
-        };
-        const own = await make(calA.id, 0);
-
-        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-        try {
-          // Created INSIDE the try (#123 m5): the row holds a restrict FK into
-          // B's calendar, so it must be deleted even when a later fixture call
-          // throws — or B's teardown trips over it and B leaks.
-          const crossed = await make(calB.id, 1);
-
-          const ids = (await listDueNoShowNudges(db, now.toISOString())).map((r) => r.bookingId);
-          expect(ids, "the own-calendar control must be due by list").toContain(own);
-          expect(ids, "the row on B's calendar must not be due by list").not.toContain(crossed);
-          expect((await getDueNoShowNudgeById(db, own)).due, "the own-calendar control must be due by id").not.toBeNull();
-          expect(await getDueNoShowNudgeById(db, crossed)).toEqual({ due: null, why: "gone" });
-          expect(logged.mock.calls.map((c) => String(c[0]))
-            .some((s) => s.includes(crossed) && s.includes("calendar"))).toBe(true);
-        } finally {
-          logged.mockRestore();
-          // The crossed row points at B's calendar; B's teardown runs first and
-          // must not trip over it. Deleted by what MAKES it crossed (A's row on
-          // B's calendar), not by id: `make` creates the booking and then sets
-          // its status, so a throw between the two never hands the id back.
-          // Logged, never thrown (a throw in `finally` replaces the assertion
-          // that brought us here).
-          const { error } = await db.from("bookings").delete()
-            .eq("account_id", accountA).eq("calendar_id", calB.id);
-          if (error) console.error(`cross-account bookings cleanup failed: ${error.message}`);
-        }
-      });
-    });
-  });
-});
-
-// THE QUOTE FOLLOW-UP'S CAPPED WINDOW. The candidate read is bounded
-// (`QUOTE_FOLLOWUP_CANDIDATE_LIMIT`) and ordered oldest stage change first.
-// When the cross-account drop ran AFTER the limit, a deal on another account's
-// contact still took a slot — and, never stamped, took it again on every tick —
-// so enough of them starved every real deal behind them. The drop now happens
-// IN the query (one read per account, `contacts!inner` constrained to that
-// account), so a crossed deal never reaches the limit at all.
-//
-// A full window of crossed deals, all OLDER than one real deal: before, the
-// limit was spent on the crossed rows and the real one never surfaced.
-// Mutation: drop `.eq("contacts.account_id", accountId)` (or `!inner`) from
-// the per-account read → the crossed rows fill the window and this reds.
-describe("listDueQuoteFollowups: a deal on another account's contact never holds a slot", () => {
-  it("a full window of crossed deals does not hide a real one", async () => {
-    const now = new Date("2028-02-10T12:00:00Z");
-    await withTestAccount(async (db, accountA) => {
-      await withTestAccount(async (_db, accountB) => {
-        const { pipelineId } = await ensureDefaultPipeline(db, accountA);
-        const stages = (await listPipelinesWithStages(db, accountA)).find((p) => p.id === pipelineId)!.stages;
-        const quoted = stages[1] ?? stages[0]!;
-        await upsertAutomation(db, accountA, "quote_followup",
-          { enabled: true, body: "", config: { stageId: quoted.id, quietDays: 3, channel: "sms" } }, "user_test");
-        const { id: ownContact } = await createContact(db, accountA,
-          { firstName: "Own", phone: "(956) 555-0174" }, "user_test");
-        const { id: theirContact } = await createContact(db, accountB,
-          { firstName: "Theirs", phone: "(956) 555-0175" }, "user_test");
-        const row = (contactId: string, ageMs: number) => ({
-          account_id: accountA, contact_id: contactId, pipeline_id: pipelineId, stage_id: quoted.id,
-          name: "Reroof", monetary_value: 0,
-          stage_changed_at: new Date(now.getTime() - ageMs).toISOString(),
-        });
-
-        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-        try {
-          // DIRECT INSERTS (createOpportunity refuses a contact outside the
-          // account — exactly the row this case must construct). One statement.
-          // INSIDE the try (#123 m5): the rows point at B's contact, so an
-          // insert that landed but answered with an error must still be
-          // cleaned up by the `finally`, or B's teardown trips over them.
-          const crossedRows = Array.from({ length: QUOTE_FOLLOWUP_CANDIDATE_LIMIT },
-            (_, n) => row(theirContact, 10 * 24 * HOUR + n * MINUTE));
-          const { error: cErr } = await db.from("opportunities").insert(crossedRows);
-          if (cErr) throw new Error(`crossed opportunities fixture failed: ${cErr.message}`);
-
-          const { data: ownRow, error: oErr } = await db.from("opportunities")
-            .insert(row(ownContact, 5 * 24 * HOUR)).select("id").single();
-          if (oErr || !ownRow) throw new Error(`own opportunity fixture failed: ${oErr?.message}`);
-
-          // Filtered to A: the read is platform-wide, and the shared project
-          // may hold another suite's rows at the same moment.
-          const ids = (await listDueQuoteFollowups(db, now.toISOString()))
-            .filter((r) => r.accountId === accountA).map((r) => r.opportunityId);
-          expect(ids, "the real deal, and nothing else of A's, is due behind a full window of crossed ones")
-            .toEqual([(ownRow as { id: string }).id]);
-        } finally {
-          logged.mockRestore();
-          const { error } = await db.from("opportunities").delete()
-            .eq("account_id", accountA).eq("contact_id", theirContact);
-          if (error) console.error(`crossed opportunities cleanup failed: ${error.message}`);
-        }
-      });
-    });
-  });
-});
+// A BOOKING OR A DEAL ON ANOTHER ACCOUNT'S CONTACT OR CALENDAR cannot be written
+// since 0050 (`bookings (account_id, contact_id|calendar_id)` and
+// `opportunities (account_id, contact_id)` are composite FKs onto
+// `(account_id, id)`). The three blocks that stood here built exactly those
+// rows to prove the recipes' reader guards (`ownAccountContactOnly`, the
+// no-show nudge's calendar, the quote read's capped window); the refusal is
+// now proved once, in same-account-fk-schema.test.ts, and the guards stay in
+// the source as defence in depth. Each recipe's own-account due rows are
+// proved by its own block above and in due-by-id.test.ts.
 
 // THE SHARED TICK CAP NEEDS A PLATFORM-WIDE ORDER. `processQuoteFollowups`
 // counts `attemptsThisTick` ONCE across every account (AUTOMATION_TICK_CAP),

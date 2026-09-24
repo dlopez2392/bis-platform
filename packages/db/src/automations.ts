@@ -203,13 +203,15 @@ export type DueReviewRequest = {
  * reaches the customer through `bookings.contact_id` or
  * `opportunities.contact_id`, by list AND by id.
  *
- * Both are plain single-column FKs; there is no composite
- * `(account_id, contact_id)` key anywhere in this schema, so a booking or a
- * deal in account A can point at a contact of account B. The `contacts(...)`
- * embed follows the FK with no account condition of its own, and everything
+ * Until 0050 both were plain single-column FKs, so a booking or a deal in
+ * account A could point at a contact of account B. The `contacts(...)` embed
+ * followed the FK with no account condition of its own, and everything
  * downstream (the send, under A's brand, to B's customer's address) would
- * follow it too. `listDueReactivations` has guarded its own join this way
- * since the #111 audit (A1); these six recipes did not.
+ * have followed it too.
+ * Migration 0050 makes both composite FKs onto `contacts (account_id, id)`,
+ * so that row can no longer be written; this guard stays as defence in depth.
+ * `listDueReactivations` has guarded its own join this way since the #111
+ * audit (A1); these six recipes did not.
  *
  * FAIL CLOSED: a row is kept only when the embedded contact's `account_id`
  * EQUALS the row's. A missing embed, or a select that forgot
@@ -222,8 +224,12 @@ export type DueReviewRequest = {
  * The contact-only case of `ownAccountEmbedsOnly` (booking.ts), which is the
  * one implementation; a recipe that also builds something from its calendar
  * (the no-show nudge's rebook link) calls that directly with `"calendars"`.
+ *
+ * Exported for `own-account-embeds.test.ts` only (not in the barrel): since
+ * 0050 no real row reaches the drop branch, so an in-memory test is the one
+ * thing that pins it.
  */
-function ownAccountContactOnly<T>(rows: T[], fn: string, what: "booking" | "opportunity"): T[] {
+export function ownAccountContactOnly<T>(rows: T[], fn: string, what: "booking" | "opportunity"): T[] {
   return ownAccountEmbedsOnly(rows, fn, what, ["contacts"]);
 }
 
@@ -1318,10 +1324,10 @@ export type DueReactivation = {
  *
  *  `contacts.account_id` is selected for ONE reason: to be compared with the
  *  conversation's. `conversations.contact_id` is a plain single-column FK —
- *  there is no composite `(account_id, contact_id)` key on `conversations`,
- *  `bookings` or `opportunities` — so a conversation in account A can point
- *  at a contact of account B, and this recipe resolved the customer, the
- *  email address and the "past customer" proof through `contact_id` alone. */
+ *  migration 0050 made `bookings` and `opportunities` composite, not
+ *  `conversations` — so a conversation in account A can point at a contact
+ *  of account B, and this recipe resolved the customer and the email
+ *  address through `contact_id` alone. */
 type ReactivationCandidate = {
   id: string; account_id: string; contact_id: string; last_message_at: string;
   contacts: {
@@ -1503,8 +1509,8 @@ export async function listDueReactivations(
     // account B joins in B's name and email address — and everything
     // downstream (the send, and the permanent `reactivation_sent_at` stamp)
     // then happens to B's customer under A's brand. There is no composite
-    // `(account_id, contact_id)` key to express this in the database, so it
-    // is expressed here.
+    // `(account_id, contact_id)` key on `conversations` (0050 covered only
+    // bookings and opportunities), so it is expressed here.
     const candidates = rows.filter(
       (c) => c.contacts.account_id === c.account_id
         && new Date(c.last_message_at).getTime() <= cutoffs.get(c.account_id)!.cutoff.getTime());
@@ -1516,11 +1522,13 @@ export async function listDueReactivations(
       // 'completed'`; before it there was no index on `bookings.contact_id`
       // at all and this was a sequential scan every tick.
       //
-      // ACCOUNT-KEYED, not contact-keyed. `bookings.contact_id` is another
-      // plain FK, so account A's completed booking for contact X would
-      // otherwise prove that X is account B's past customer. The set key is
+      // ACCOUNT-KEYED, not contact-keyed. Before 0050 `bookings.contact_id`
+      // was another plain FK, so account A's completed booking for contact X
+      // could have proved that X is account B's past customer. The set key is
       // the PAIR, and `.in("account_id", accountIds)` keeps the read itself
       // inside the recipe's own accounts.
+      // Migration 0050 (composite `bookings (account_id, contact_id)`) makes
+      // that booking impossible; the pair key stays as defence in depth.
       const { data: done, error: bErr } = await db.from("bookings")
         .select("contact_id, account_id")
         .in("account_id", accountIds)
@@ -1626,9 +1634,10 @@ export async function getDueReactivationById(
   if (config === null) return { due: null, why: "off" };
 
   // `.eq("account_id", accountId)` — the contact's own account, read off the
-  // contact two statements up. Without it another account's completed
-  // booking proves this account's "past customer" rule, because
-  // `bookings.contact_id` is a plain FK with no account condition on it.
+  // contact two statements up. Before 0050, without it another account's
+  // completed booking could have proved this account's "past customer" rule,
+  // because `bookings.contact_id` was a plain FK with no account condition.
+  // Migration 0050 makes that booking impossible; this stays as defence in depth.
   const { data: done, error: bErr } = await db.from("bookings")
     .select("id").eq("account_id", accountId)
     .eq("contact_id", contactId).eq("status", "completed").limit(1).maybeSingle();
@@ -1954,6 +1963,8 @@ export async function listDueQuoteFollowups(
   // in the query (no union, no widest cutoff), and the quiet test's reads are
   // this account's alone. `ownAccountContactOnly` stays on the result, fail
   // closed, for a select that ever loses the `!inner`.
+  // Migration 0050 (composite `opportunities (account_id, contact_id)`) makes
+  // such a deal impossible to write; the in-query drop stays as defence in depth.
   const rows: any[] = [];
   const inbound = new Map<string, Map<string, string>>();
   for (const [accountId, conf] of configured) {
