@@ -15,7 +15,8 @@ name: CI
 # migration files by .github/workflows/ci-project-setup.yml and seeded by
 # `ci:seed`. Of the workflows on main, only seed-demo.yml and
 # screenshots.yml still reach production, through the non-CI_ secrets. (A
-# LOCAL test run has no guard: it writes wherever its env files point.)
+# LOCAL test runs now refuse production too, since #135: they throw before
+# connecting when their env files name production's ref.)
 # Rebuilding, restoring or re-seeding the CI project:
 # docs/runbooks/ci-supabase-project.md.
 #

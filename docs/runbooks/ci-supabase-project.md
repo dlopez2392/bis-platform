@@ -49,11 +49,23 @@ In CI, and in the CI-only tools, a check names the CI project by
   production secret, drops or weakens the guard step, or names a different
   project from `ci-project-setup.yml`.
 
-**What is NOT protected: local runs.** The db suite, the web suite and the e2e
-suite have no target check of their own. They write to whatever
-`apps/web/.env.local` and `packages/db/.env` point at. Until both are switched
-to the CI project (section 9), a local `pnpm check` or e2e run on a machine
-whose env still points at production WRITES PRODUCTION.
+**Local runs refuse production too (since #135).** Every live local entry
+point checks the same env before connecting and throws, naming the variable
+(never its value), when any Supabase/PG* value names production's ref:
+
+- `packages/db`: the db suite's global setup (`src/test/global-setup.ts`,
+  before any sweep, fixture or connection) and the integration suite's own
+  guard-only global setup (`vitest.integration.config.ts`).
+- `apps/web` e2e: `playwright.config.ts` (the one place `--no-deps` and
+  `--project=teardown` cannot skip it), `e2e/auth.setup.ts` and
+  `e2e/sweep.setup.ts`.
+- `apps/web` unit: the two tests that load `.env.local` and write through
+  the real `serviceDb` (call proposals, returning lead), plus a scan that
+  fails `pnpm check` if a live test ever skips the guard.
+
+Until `apps/web/.env.local` and `packages/db/.env` are switched to the CI
+project (section 9), a local `pnpm check` or e2e run on a machine whose env
+still points at production is refused, not run.
 
 ### How the steps are run
 
@@ -233,7 +245,9 @@ steps above. A lost project is about half an hour.
 
 **Status, 2026-09-24: NOT done** (plan step D7). The local env files on
 danlo's machine still point at production, so a local `pnpm check` or e2e run
-there writes production. Nothing refuses it; see "What is NOT protected" above.
+there is refused before it connects; see "Local runs refuse production too"
+above. Switching the env files below is what lets these runs actually
+proceed, against the CI project instead.
 
 Local runs of `pnpm check` and `pnpm --filter web test:e2e` create and delete
 rows exactly as CI does, so they belong on the CI project too: the four
