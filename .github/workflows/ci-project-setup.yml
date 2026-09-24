@@ -1,0 +1,150 @@
+name: CI project setup
+
+# The one-time setup of the CI Supabase project (bis-ci, ref
+# odnobiodsftffphuuosz), run from a runner because nobody is at the laptop
+# that holds the credentials. Plan steps O5 (bootstrap), O6 (push) and O8
+# (parity fingerprint, seed).
+#
+# ONE STEP PER DISPATCH, on purpose. Each result is read before the next is
+# started: the bootstrap's default privileges must be right BEFORE the push
+# (grants attach at CREATE time), the dry run must list exactly the
+# migrations expected BEFORE the real push, and the fingerprint must match
+# production's BEFORE anything is seeded. A workflow that ran them in a row
+# would push on top of a wrong bootstrap before anyone looked.
+#
+#   gh workflow run ci-project-setup.yml --ref <branch> -f step=<step>
+#
+# MANUAL ONLY. There is no push trigger and there must never be one.
+#
+# Every runner behind these steps (packages/db src/ci and src/ci-seed) passes
+# assertCiTarget before it connects: it refuses production's ref, any API URL
+# that is not https://<BIS_CI_SUPABASE_REF>.supabase.co, and any DB URL that
+# does not log in as postgres.<BIS_CI_SUPABASE_REF> through the pooler. It
+# prints the target (never the password) before it touches anything.
+
+run-name: "CI project setup: ${{ inputs.step }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      step:
+        description: >-
+          One step. Writes: bootstrap, push, seed. Everything else only reads.
+          Order: bootstrap, push-dry-run, push, migrations, fingerprint,
+          fingerprint-detail, seed.
+        type: choice
+        required: true
+        # A read, so a stray click on "Run workflow" writes nothing.
+        default: fingerprint
+        options:
+          - bootstrap
+          - push-dry-run
+          - push
+          - migrations
+          - fingerprint
+          - fingerprint-detail
+          - migration-history
+          - seed
+
+permissions:
+  contents: read
+
+# One setup step at a time. Never cancelled: a push or bootstrap killed
+# mid-flight is exactly the half-state the one-transaction runners exist to
+# avoid, and the dispatcher reads each result before starting the next.
+concurrency:
+  group: ci-project-setup
+  cancel-in-progress: false
+
+# THE CI PROJECT ONLY. This workflow must NEVER reference the production
+# secrets SUPABASE_DB_URL, SUPABASE_SERVICE_ROLE_KEY or
+# NEXT_PUBLIC_SUPABASE_URL: those point at the project production serves
+# (tlbkbmlrfafquucsmsmm). The runners would refuse them anyway, but the
+# control is that they are never handed over. The CI project's credentials
+# are the CI_SUPABASE_* secrets, and they are set on the two steps that need
+# them rather than here, so no third-party action ever sees them.
+env:
+  BIS_CI_SUPABASE_REF: odnobiodsftffphuuosz
+  NEXT_PUBLIC_SUPABASE_URL: https://odnobiodsftffphuuosz.supabase.co
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    # The longest step is the push: every migration, over the Session pooler,
+    # from a runner that is a slower client than a dev machine.
+    timeout-minutes: 20
+    steps:
+      # Before anything else, so a missing secret costs nothing. Length tests
+      # only: nothing here prints a value.
+      - name: Check that the CI project secrets are configured
+        env:
+          SUPABASE_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CI_SUPABASE_SECRET_KEY }}
+        run: |
+          missing=""
+          if [ "${#SUPABASE_DB_URL}" -eq 0 ]; then missing="$missing CI_SUPABASE_DB_URL"; fi
+          if [ "${#SUPABASE_SERVICE_ROLE_KEY}" -eq 0 ]; then missing="$missing CI_SUPABASE_SECRET_KEY"; fi
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing. Add them under Settings > Secrets and variables > Actions. Nothing was run."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      # Same setup as ci.yml: pnpm from package.json's "packageManager".
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Every runner loads packages/db/.env through dotenv/config. On a runner
+      # that file does not exist, which dotenv treats as nothing to load, and
+      # dotenv never overrides a variable that is already set, so the values
+      # below are the ones used.
+      #
+      # The three read-only SQL steps also write their rows to a file (pnpm
+      # --silent keeps pnpm's own banner out of it; the target summary goes to
+      # stderr), so two fingerprints can be diffed as plain files. Only those
+      # three: GitHub masks secrets in the log, but not inside an artifact, so
+      # nothing a write step or the CLI prints is ever uploaded.
+      - name: Run ${{ inputs.step }}
+        shell: bash
+        env:
+          STEP: ${{ inputs.step }}
+          SUPABASE_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CI_SUPABASE_SECRET_KEY }}
+        run: |
+          out="$RUNNER_TEMP/ci-project-setup"
+          mkdir -p "$out"
+          case "$STEP" in
+            bootstrap)
+              pnpm --filter @bis/db ci:sql supabase/bootstrap/ci-project.sql --allow-write ;;
+            push-dry-run)
+              pnpm --filter @bis/db db:push:ci --dry-run ;;
+            push)
+              pnpm --filter @bis/db db:push:ci ;;
+            migrations)
+              pnpm --filter @bis/db db:migrations:ci ;;
+            fingerprint|fingerprint-detail|migration-history)
+              pnpm --silent --filter @bis/db ci:sql "supabase/parity/$STEP.sql" | tee "$out/$STEP.tsv" ;;
+            seed)
+              pnpm --filter @bis/db ci:seed ;;
+            *)
+              echo "::error::Unknown step: $STEP"
+              exit 1 ;;
+          esac
+
+      - name: Upload the result rows
+        if: ${{ !cancelled() && (inputs.step == 'fingerprint' || inputs.step == 'fingerprint-detail' || inputs.step == 'migration-history') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-project-${{ inputs.step }}
+          path: ${{ runner.temp }}/ci-project-setup/${{ inputs.step }}.tsv
+          if-no-files-found: ignore
+          retention-days: 14
