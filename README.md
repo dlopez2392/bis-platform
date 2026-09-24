@@ -45,6 +45,15 @@ account ("Test Client One") on the CI project. It runs
 missing. Creating, restoring or rebuilding the CI project, and applying a new
 migration to it: docs/runbooks/ci-supabase-project.md.
 
+How the two jobs queue. `verify` runs per branch: pushes to different branches
+run side by side, a newer push to a branch cancels that branch's older run,
+and a run on main is never cancelled. `e2e` stays one queue for the whole repo,
+never cancelled, because two runs on the shared account race each other.
+GitHub keeps at most one WAITING run per queue, and a newer one cancels it, so
+a third e2e arriving while one runs and one waits cancels the waiting one,
+which may be another PR's. That PR's e2e then shows "cancelled", the ruleset
+will not merge it, and it needs a manual re-run from the Actions tab.
+
 ## Deploy
 Vercel project "bis-platform" (team danlopez508-8452s-projects), Root Directory apps/web,
 framework pinned via apps/web/vercel.json. Push to main = deploy.

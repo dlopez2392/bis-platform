@@ -105,6 +105,24 @@ function steps(job: string[]): Step[] {
   return out;
 }
 
+/**
+ * A job's own `concurrency:` block (four columns in) as its `key: value`
+ * pairs (six columns in). Values are read whole, so an expression with spaces
+ * inside `${{ }}` is compared as written.
+ */
+function concurrency(job: string[]): Record<string, string> {
+  const at = job.findIndex((line) => /^ {4}concurrency:\s*$/.test(line));
+  if (at < 0) throw new Error("job has no concurrency block");
+  const out: Record<string, string> = {};
+  for (const line of job.slice(at + 1)) {
+    if (line.trim() === "") continue;
+    const m = /^ {6}([A-Za-z0-9_-]+): (.+)$/.exec(line);
+    if (!m?.[1] || !m[2]) break; // the block ends at the next key that is not inside it
+    out[m[1]] = m[2].trim();
+  }
+  return out;
+}
+
 /** The keys set directly on a job (four columns in): `name`, `if`, `needs`… */
 function jobKeys(job: string[]): string[] {
   return job.flatMap((line) => {
@@ -216,12 +234,29 @@ describe("ci.yml's jobs", () => {
     expect(playwright, "Playwright step").toBeGreaterThan(seed);
   });
 
-  it.each([
-    ["verify", "verify-ci-supabase"],
-    ["e2e", "e2e-ci-supabase"],
-  ])("%s queues in its own CI-project group and is never cancelled", (id, group) => {
-    const text = job(id).join("\n");
-    expect(/^\s+group: (\S+)\s*$/m.exec(text)?.[1]).toBe(group);
-    expect(/^\s+cancel-in-progress: (\S+)\s*$/m.exec(text)?.[1]).toBe("false");
+  it("verify queues per branch: a newer push cancels the same branch's run, never main's", () => {
+    // One group per ref, so a run only ever waits for, or is cancelled by, a
+    // newer run of the SAME branch. main is exempt from cancelling: a merged
+    // commit is the one being deployed, and it must finish being checked.
+    // Pinned as written: `true`, `${{ true }}` or a group without the ref
+    // would each break one of the two halves.
+    expect(concurrency(job("verify"))).toEqual({
+      group: "verify-ci-${{ github.ref }}",
+      "cancel-in-progress": "${{ github.ref != 'refs/heads/main' }}",
+    });
+  });
+
+  it("e2e queues in ONE repo-wide CI-project group and is never cancelled", () => {
+    // Every e2e run shares the seeded account, so two at once race each other.
+    expect(concurrency(job("e2e"))).toEqual({
+      group: "e2e-ci-supabase",
+      "cancel-in-progress": "false",
+    });
+  });
+
+  it("sets no workflow-level concurrency over the two jobs' own groups", () => {
+    // A top-level group would queue (or, with cancel-in-progress, cancel)
+    // whole runs across every branch, main included, above the job groups.
+    expect(ciLines.filter((line) => /^concurrency:/.test(line))).toEqual([]);
   });
 });

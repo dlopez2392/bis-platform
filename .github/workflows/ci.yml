@@ -32,17 +32,26 @@ name: CI
 #           `pnpm check` and `pnpm --filter web build` from CLAUDE.md, no
 #           more and no less, so CI and a contributor's terminal cannot
 #           disagree about what "green" means. The guard in front of them is
-#           a preflight, not a gate.
+#           a preflight, not a gate. Queued PER BRANCH: runs on different
+#           branches go side by side, a newer push to a branch cancels that
+#           branch's older run, and a run on main is never cancelled.
 #
 #   e2e     seeds the CI project (idempotent; a no-op once seeded), then the
 #           Playwright journey. Serialized ACROSS THE WHOLE REPO, never
 #           cancelled: every run shares the one seeded account ("Test Client
 #           One") and specs drag its pipeline card, create forms and leads on
 #           it and read its unread counts, so two runs at once race each
-#           other. A second push while one e2e run is live waits for it.
-#           (GitHub keeps at most one pending run per group, so a THIRD push
-#           within the same window cancels the second's e2e job — re-run it
-#           from the Actions tab if that ever bites.)
+#           other. A second e2e while one is live waits for it.
+#
+# THE SIDE EFFECT of that pair, stated so nobody has to discover it: GitHub
+# keeps at most ONE pending run per concurrency group, and a newly queued one
+# cancels the one already waiting. With verify running side by side, e2e jobs
+# arrive in bunches, so a THIRD e2e arriving while one runs and one waits
+# cancels the waiting one, and it may be ANOTHER PR's (or main's). That PR's
+# e2e then reads "cancelled", the main ruleset will not merge it, and it needs
+# a manual re-run from the Actions tab. If that bites often, the fix is
+# per-run seeded accounts (a spec refactor) or a real queue, not verify back
+# in one group.
 #
 # Both jobs REFUSE to run without their credentials, naming what is missing
 # (the guard's check 1). A gate that quietly skips when it cannot run is how
@@ -93,38 +102,44 @@ jobs:
     # a Free project on the smallest compute; it has not been timed there yet.
     timeout-minutes: 35
     concurrency:
-      # ONE group for the whole repo, never cancelled — the same semantics
-      # this job had on production's project, under a new name.
+      # ONE GROUP PER REF (plan stage 2). Runs on different branches go side
+      # by side; a newer push to a branch cancels that branch's run still in
+      # flight, whose result would describe a commit nobody will merge.
       #
-      # Why one group: two db suites against one project at once is
-      # contention, and contention fails on wall clock. On 2026-09-17
+      # main never cancels: a merged commit is the one being DEPLOYED, and it
+      # must finish being checked (#62 and #64 each had their main run killed
+      # by the next merge). That protects only a run that has STARTED: GitHub
+      # still keeps one pending run per group, so a third merge inside one
+      # run's window replaces the second merge's waiting run.
+      #
+      # Until stage 2 this was ONE group for the whole repo, never cancelled.
+      # One group, for capacity: two db suites against one project at once
+      # fail on wall clock. On 2026-09-17, on production's project,
       # `feat/sms-opt-out` and `feat/call-handoff` overlapped for 13.5 minutes
       # and BOTH failed inside `pnpm check`; a re-run failed on a DIFFERENT
-      # test, which is the signature of contention rather than a defect (db
-      # round trips measured 10-20s contended, ~2.2s alone). The fixture data
-      # itself does not collide — ids are random and the sweep only takes
-      # rows older than an hour — so this is about capacity, and the Free
-      # project has less of it than production had.
+      # test, the signature of contention rather than a defect (db round
+      # trips measured 10-20s contended, ~2.2s alone). Never cancelled,
+      # because in a repo-wide group a push on one branch would kill ANOTHER
+      # branch's run mid-db-suite and strand its fixtures in production.
       #
-      # Why never cancelled: a group is repo-wide, so cancelling would let a
-      # push on one branch kill a DIFFERENT branch's verify mid-db-suite; and
-      # a cancelled run on main means the commit being DEPLOYED never
-      # finished being checked (#62 and #64 each had their main run killed by
-      # the next merge). GitHub keeps at most one PENDING run per group, so
-      # the worst case is one running plus one waiting.
+      # Why per branch is safe now: a per-branch group only ever cancels the
+      # same branch's superseded run, and a fixture a cancelled run strands
+      # lands in the CI project, where the next db suite's sweep reclaims it
+      # (packages/db/src/test/sweep-fixtures.ts takes `org_test_` accounts
+      # older than an hour, against this 35-minute job). The fixture data
+      # never collided in the first place: ids are random.
       #
-      # Why a new name: a branch that has not merged main yet still carries
-      # the old ci.yml, which runs on production's project under the old
-      # group names. The two queues no longer share a database, so they must
-      # not block each other.
+      # What is still open is capacity, on the smallest Free compute. The bar
+      # for staying here: two concurrent runs both pass and the slower
+      # `pnpm check` stays under about 25 minutes (ten of headroom under the
+      # timeout). If that stops holding, the answer is a bigger CI project or
+      # one repo-wide group again, never a longer timeout.
       #
-      # Next (plan stage 2, only after two concurrent runs are measured on
-      # the CI project): a per-branch group, cancelling superseded runs on
-      # branches but never on main. It is safe now in a way it was not on
-      # production — a cancelled run's stranded fixtures land in the CI
-      # project, where the next run's sweep reclaims them.
-      group: verify-ci-supabase
-      cancel-in-progress: false
+      # A branch whose ci.yml predates stage 2 still queues in stage 1's
+      # repo-wide `verify-ci-supabase` (#133), apart from these groups, and
+      # runs alongside them on the same CI project until it merges main.
+      group: verify-ci-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -198,11 +213,15 @@ jobs:
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     concurrency:
-      # Serialized repo-wide and never cancelled; see the header. A new name
-      # for the reason verify's has one: branches still on the old ci.yml run
-      # e2e on production's project under `e2e-shared-supabase` (which the
-      # seed-demo and screenshots workflows also take), and this queue must
-      # neither wait for nor block theirs.
+      # Serialized repo-wide and never cancelled; see the header, including
+      # what GitHub's one-pending-run rule does to a third e2e. Unlike
+      # verify's, this race is correctness, not capacity (every run drives
+      # the one seeded account), so it stays one group in stage 2.
+      #
+      # The name is not the old `e2e-shared-supabase`: branches still on the
+      # pre-2026-09-24 ci.yml run e2e on production's project under that one
+      # (which the seed-demo and screenshots workflows also take), and this
+      # queue must neither wait for nor block theirs.
       group: e2e-ci-supabase
       cancel-in-progress: false
     steps:

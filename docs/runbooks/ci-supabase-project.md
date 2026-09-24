@@ -74,6 +74,39 @@ project's values and `BIS_CI_SUPABASE_REF=odnobiodsftffphuuosz`, e.g.
 `pnpm --filter @bis/db db:push:ci --dry-run`. The workflow exists so this never
 depends on the laptop that holds the credentials.
 
+### How CI queues on the one project
+
+The `concurrency` blocks in `ci.yml` (pinned by `ci-workflow.test.ts`):
+
+- **`verify` runs concurrently, one queue per branch** (`verify-ci-<ref>`).
+  Pushes to different branches run their db suites side by side on this
+  project. A newer push to a branch cancels that branch's run still in flight;
+  a run on main is never cancelled, because a merged commit is the one being
+  deployed. This is safe here and was not on production: the fixture data
+  never collides (random ids), and a fixture a cancelled run strands is
+  reclaimed by the next db suite's sweep (`org_test_` accounts older than an
+  hour).
+- **`e2e` stays serialized across the whole repo** (`e2e-ci-supabase`), never
+  cancelled. Every run drives the one seeded account, Test Client One, so two
+  runs at once race each other; that is a correctness problem, not a capacity
+  one. It also waits for its own run's `verify` (`needs`).
+- **The side effect.** GitHub keeps at most one WAITING run per queue, and a
+  newer one cancels it. With `verify` concurrent, e2e jobs arrive in bunches,
+  so a third e2e arriving while one runs and one waits cancels the waiting
+  one, which may be another PR's (or main's). That PR's e2e shows
+  "cancelled", the ruleset will not merge it, and it needs a manual re-run
+  from the Actions tab. If that bites often, the fix is per-run seeded
+  accounts or a real queue, not `verify` back in one queue.
+- **Capacity is the open question** on the Free compute. The bar for keeping
+  `verify` concurrent: two concurrent runs both pass and the slower
+  `pnpm check` stays under about 25 minutes, ten under the job's 35-minute
+  timeout. If it stops holding (red runs that fail on a DIFFERENT test each
+  time, on wall clock rather than an assertion), the answer is a bigger CI
+  project or one repo-wide `verify` queue again, never a longer timeout.
+
+The setup workflow has its own queue (`ci-project-setup`) and does not wait
+for CI; section 6 says when to dispatch a push.
+
 ## 1. Create (danlo, dashboard)
 
 1. Supabase: a **Free** organization (a paid organization cannot hold free
