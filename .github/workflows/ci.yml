@@ -68,7 +68,7 @@ env:
   # project as ci-project-setup.yml's env (pinned by ci-workflow.test.ts).
   BIS_CI_SUPABASE_REF: odnobiodsftffphuuosz
   NEXT_PUBLIC_SUPABASE_URL: https://odnobiodsftffphuuosz.supabase.co
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_REPLACE_WITH_CI_PROJECT_KEY
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_TjstwU6y9KPtV8XD4BSFrw_WaNtv0Qc
   # Secrets. Sending is FAKE everywhere except VERCEL_ENV=production
   # (.env.example), so a CI run never emails a real address. The secret key
   # and DB URL are the CI project's (CI_* secrets; SUPABASE_DB_URL is its
