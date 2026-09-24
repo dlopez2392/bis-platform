@@ -13,11 +13,16 @@
  * exactly as it is — it is still the fast path, and it deletes by known id
  * rather than by search.
  *
- * ⚠️ This runs against the SAME database, Clerk instance and bucket that hold
- * `Test Client One` and danlo's own identity. Every decision about what to
- * delete is delegated to `stale.ts`, which is pure and directly tested; this
- * module does no matching of its own. It also reports before it deletes, and
- * `dryRun` is the default at every entry point that a human can invoke.
+ * ⚠️ This runs against whatever database and bucket the run's env points at,
+ * and the Clerk DEVELOPMENT instance. That database holds `Test Client One`
+ * wherever it is: on the separate CI Supabase project it is created by
+ * `pnpm --filter @bis/db ci:seed`, and a machine whose env files have not been
+ * switched is pointed at PRODUCTION, beside real customers. The Clerk instance
+ * holds danlo's own identity in every case. So the care below does not relax
+ * on the CI project: every decision about what to delete is delegated to
+ * `stale.ts`, which is pure and directly tested; this module does no matching
+ * of its own. It also reports before it deletes, and `dryRun` is the default
+ * at every entry point that a human can invoke.
  */
 import { clerkClient } from "@clerk/nextjs/server";
 import { serviceDb, ACCOUNT_OWNED_TABLES } from "@bis/db";
