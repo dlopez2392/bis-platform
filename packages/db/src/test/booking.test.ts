@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import "dotenv/config";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
@@ -8,6 +8,7 @@ import {
   createBooking, cancelBookingByToken, setBookingStatus,
   listBookedRanges, listUpcomingBookings, listDueReminders, stampReminderSent,
   listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
+  getDueReminderById, getDueFollowupById,
   SlotTakenError,
 } from "../booking";
 import { stampAppointmentConfirmAsked, applyConfirmationReply } from "../automations";
@@ -659,6 +660,105 @@ describe("listBookingCreationsBetween", () => {
           new Date("2027-06-10T12:00:00.000Z").getTime(),
           new Date("2027-06-14T23:59:59.999Z").getTime(),
         ]);
+      });
+    });
+  });
+});
+
+/**
+ * The reminder and the follow-up are EMAILS, and both reach the customer and
+ * the calendar through plain single-column FKs (`bookings.contact_id`,
+ * `bookings.calendar_id`); nothing in the schema stops a booking in account A
+ * from pointing at a contact or a calendar of account B. Unguarded, the
+ * reminder would mail B's customer under A's brand, and would link B's public
+ * booking page; the follow-up would mail B's customer B's calendar's words.
+ * The guard is the one automations.ts's recipes carry (36e8c89): each embed's
+ * `account_id` must EQUAL the row's, or the row is dropped and logged, and the
+ * by-id read answers `gone`.
+ *
+ * Each case builds three rows in account A — an own-account CONTROL, one on
+ * B's contact, one on B's calendar — so a guard that dropped everything, or
+ * nothing, reds. B's calendar has follow-ups ON, so the crossed-calendar
+ * follow-up row cannot be excluded by `followup_enabled` instead of by the
+ * guard. Mutations: drop "contacts" from the embed list → the crossed-contact
+ * assertions red; drop "calendars" → the crossed-calendar ones; drop
+ * `account_id` from either embed in the select → the CONTROL reds (fail
+ * closed, never open).
+ */
+describe("the reminder and the follow-up never reach another account's rows", () => {
+  type Due = { bookingId: string };
+  const cases: {
+    name: string;
+    now: Date;
+    at: (now: Date, n: number) => { startsAt: Date; endsAt: Date };
+    list: (db: SupabaseClient, nowIso: string) => Promise<Due[]>;
+    byId: (db: SupabaseClient, id: string) => Promise<{ due: unknown; why?: string }>;
+  }[] = [
+    {
+      name: "listDueReminders / getDueReminderById",
+      now: new Date("2028-02-01T12:00:00Z"),
+      // Inside [now+23h, now+24h15m], spaced so no two rows share a slot.
+      at: (now, n) => {
+        const startsAt = new Date(now.getTime() + 23 * 3_600_000 + (10 + 10 * n) * 60_000);
+        return { startsAt, endsAt: new Date(startsAt.getTime() + 5 * 60_000) };
+      },
+      list: listDueReminders, byId: getDueReminderById,
+    },
+    {
+      name: "listDueFollowups / getDueFollowupById",
+      now: new Date("2028-02-03T12:00:00Z"),
+      // Ended inside the 37h look-back.
+      at: (now, n) => {
+        const endsAt = new Date(now.getTime() - (2 * 3_600_000 + 10 * n * 60_000));
+        return { startsAt: new Date(endsAt.getTime() - 5 * 60_000), endsAt };
+      },
+      list: listDueFollowups, byId: getDueFollowupById,
+    },
+  ];
+
+  it.each(cases)("$name: a booking on another account's contact or calendar is never due", async (c) => {
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db, accountB) => {
+        const calA = await getOrCreateCalendar(db, accountA, "user_test");
+        const calB = await getOrCreateCalendar(db, accountB, "user_test");
+        for (const acct of [accountA, accountB]) {
+          await updateCalendarSettings(db, acct, { followupEnabled: true, followupBody: "How did it go?" }, "user_test");
+        }
+        const { id: ownContact } = await createContact(db, accountA,
+          { firstName: "Own", email: "own-cross@example.com" }, "user_test");
+        const { id: theirContact } = await createContact(db, accountB,
+          { firstName: "Theirs", email: "theirs-cross@example.com" }, "user_test");
+
+        const own = await createBooking(db, accountA,
+          { calendarId: calA.id, contactId: ownContact, ...c.at(c.now, 0) }, "user_test");
+        const crossedContact = await createBooking(db, accountA,
+          { calendarId: calA.id, contactId: theirContact, ...c.at(c.now, 1) }, "user_test");
+        const crossedCalendar = await createBooking(db, accountA,
+          { calendarId: calB.id, contactId: ownContact, ...c.at(c.now, 2) }, "user_test");
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        try {
+          const ids = (await c.list(db, c.now.toISOString())).map((d) => d.bookingId);
+          expect(ids, "the own-account control must be due by list").toContain(own.id);
+          expect(ids, "a booking on B's contact must not be due by list").not.toContain(crossedContact.id);
+          expect(ids, "a booking on B's calendar must not be due by list").not.toContain(crossedCalendar.id);
+
+          expect((await c.byId(db, own.id)).due, "the own-account control must be due by id").not.toBeNull();
+          expect(await c.byId(db, crossedContact.id)).toEqual({ due: null, why: "gone" });
+          expect(await c.byId(db, crossedCalendar.id)).toEqual({ due: null, why: "gone" });
+
+          // Named in the log, so the data defect is findable.
+          const lines = logged.mock.calls.map((call) => String(call[0]));
+          expect(lines.some((s) => s.includes(crossedContact.id) && s.includes("contact"))).toBe(true);
+          expect(lines.some((s) => s.includes(crossedCalendar.id) && s.includes("calendar"))).toBe(true);
+        } finally {
+          logged.mockRestore();
+          // Both crossed rows hold a restrict FK into B; B's teardown runs
+          // first and must not trip over them. Logged, never thrown (a throw in
+          // `finally` replaces the assertion that brought us here).
+          const { error } = await db.from("bookings").delete().in("id", [crossedContact.id, crossedCalendar.id]);
+          if (error) console.error(`cross-account bookings cleanup failed: ${error.message}`);
+        }
       });
     });
   });

@@ -11,7 +11,7 @@ const { MarketingOptOutSwitch } = await import("./marketing-optout-switch");
 
 function render(optedOutAt: string | null) {
   return renderToStaticMarkup(createElement(MarketingOptOutSwitch, {
-    accountId: "a1", contactId: "c1", optedOutAt,
+    accountId: "a1", contactId: "c1", optedOutAt, timezone: "America/Chicago",
   }));
 }
 
@@ -45,5 +45,18 @@ describe("MarketingOptOutSwitch", () => {
     // switch holds back and what it does not.
     const hint = new RegExp(`<p[^>]*id="${describedBy}"[^>]*>([^<]*)</p>`).exec(html)?.[1];
     expect(hint).toBe(m["contact.marketingOptOut.hint"].replace(/'/g, "&#x27;"));
+  });
+});
+
+describe("MarketingOptOutSwitch: since when", () => {
+  it("under a stamped switch, says since when, dated in the ACCOUNT's zone", () => {
+    // 02:30 UTC on Sep 4 is the evening of Sep 3 in Chicago (the render's zone).
+    const html = render("2026-09-04T02:30:00.000Z");
+    expect(html).toContain(m["contact.marketingOptOut.since"].replace("{date}", "Sep 3, 2026"));
+    expect(html).not.toContain("Sep 4, 2026");
+  });
+
+  it("says nothing about since when while the switch is off", () => {
+    expect(render(null)).not.toContain(m["contact.marketingOptOut.since"].replace("{date}", ""));
   });
 });

@@ -5,6 +5,7 @@ import {
 } from "@bis/db";
 import { apiAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
+import { renderZone } from "@/lib/zone";
 import { formatCurrency } from "@/lib/format";
 import { m } from "@/lib/messages";
 import { OUTCOMES } from "@/app/(dashboard)/dashboard/accounts/[accountId]/calls/format";
@@ -22,6 +23,9 @@ export type ContactSummary = {
    *  marketing emails" switch. Read here rather than off the list row because
    *  a deep link to a contact on another page has only a stub row. */
   marketing_email_opted_out_at: string | null;
+  /** The account's zone, resolved by `renderZone` like every other date
+   *  screen — the drawer prints the opt-out's "Off since" date in it. */
+  timezone: string;
 };
 
 const RECENT_LIMIT = 5;
@@ -37,14 +41,22 @@ export async function GET(
   const contact = await getContact(db, accountId, contactId);
   if (!contact) return NextResponse.json({}, { status: 404 });
 
-  const [tags, notes, submissions, messages, opportunities, calls] = await Promise.all([
+  const [tags, notes, submissions, messages, opportunities, calls, account] = await Promise.all([
     listContactTags(db, accountId, contactId),
     listNotes(db, accountId, contactId),
     listContactSubmissions(db, accountId, contactId),
     listContactMessages(db, accountId, contactId),
     listContactOpportunities(db, accountId, contactId),
     listContactCalls(db, accountId, contactId, RECENT_LIMIT),
+    db.from("accounts").select("timezone").eq("id", accountId).maybeSingle(),
   ]);
+  // Not a throw on a failed read, the checklist page's reasoning: the zone is
+  // for one date line, and 500ing the whole drawer over it is the worse
+  // failure. `undefined` makes `renderZone` fall back (agency zone, else UTC).
+  if (account.error) {
+    console.error(`contact summary: account ${accountId} timezone read failed: ${account.error.message}`);
+  }
+  const zone = await renderZone((account.data as { timezone: string } | null)?.timezone);
 
   type Item = ContactSummary["recent"][number];
   const items: Item[] = [
@@ -87,6 +99,7 @@ export async function GET(
     tags,
     recent: items.slice(0, RECENT_LIMIT),
     marketing_email_opted_out_at: contact.marketing_email_opted_out_at ?? null,
+    timezone: zone.zone,
   };
   return NextResponse.json(body);
 }

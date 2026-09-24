@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { m } from "@/lib/messages";
-import { flipMarketingOptOut, type OptOutToast } from "./marketing-optout";
+import { flipMarketingOptOut, optOutSinceLine, runGuarded, type OptOutToast } from "./marketing-optout";
 
 /**
  * The "No marketing emails" switch's behaviour, minus React: runs at once
@@ -76,5 +76,79 @@ describe("flipMarketingOptOut", () => {
     await flipMarketingOptOut(true, h.save, h.show, h.toast);
     expect(h.shown).toEqual([true, false]);
     expect(h.toast.error).toHaveBeenCalledWith(m["inline.crashed"]);
+  });
+});
+
+/**
+ * #122 m5: Undo used to write straight from the toast, outside the switch's
+ * pending guard — so an Undo clicked while a tick was still saving (or a
+ * second tick while an Undo was saving) raced two writes, and the last to
+ * land won regardless of which the operator did last.
+ */
+describe("Undo runs through the same guard as the tick", () => {
+  it("Undo hands its write to the injected runner; a runner that refuses means no write and no box move", async () => {
+    const h = harness([{ ok: true }]);
+    const refuse = vi.fn<(work: () => Promise<void>) => undefined>(() => undefined);
+    await flipMarketingOptOut(true, h.save, h.show, h.toast, refuse);
+    await (h.undo() as unknown as () => Promise<void>)();
+    expect(refuse).toHaveBeenCalledTimes(1);
+    expect(h.save.mock.calls.map((c) => c[0])).toEqual([true]);
+    expect(h.shown).toEqual([true]);
+  });
+});
+
+describe("runGuarded", () => {
+  function starter() {
+    const started: Array<Promise<void>> = [];
+    const start = (cb: () => Promise<void>) => { started.push(cb()); };
+    return { start, started };
+  }
+
+  it("runs the work inside `start` and is busy until it settles", async () => {
+    const busy = { current: false };
+    const { start, started } = starter();
+    let finish!: () => void;
+    const work = vi.fn(() => new Promise<void>((r) => { finish = r; }));
+    runGuarded(busy, start, work);
+    expect(work).toHaveBeenCalledTimes(1);
+    expect(started).toHaveLength(1);
+    expect(busy.current).toBe(true);
+    finish();
+    await started[0];
+    expect(busy.current).toBe(false);
+  });
+
+  it("refuses a second write while the first is still saving", () => {
+    const busy = { current: false };
+    const { start } = starter();
+    const first = vi.fn(() => new Promise<void>(() => {}));
+    const second = vi.fn(async () => {});
+    runGuarded(busy, start, first);
+    runGuarded(busy, start, second);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).not.toHaveBeenCalled();
+  });
+
+  it("is free again after a write that throws", async () => {
+    const busy = { current: false };
+    const { start, started } = starter();
+    runGuarded(busy, start, async () => { throw new Error("boom"); });
+    await started[0]!.catch(() => {});
+    expect(busy.current).toBe(false);
+  });
+});
+
+describe("optOutSinceLine", () => {
+  it("dates the stamp in the ACCOUNT's zone, not UTC's", () => {
+    // 02:30 UTC on Sep 4 is still the evening of Sep 3 in Chicago.
+    expect(optOutSinceLine("2026-09-04T02:30:00.000Z", "America/Chicago"))
+      .toBe(m["contact.marketingOptOut.since"].replace("{date}", "Sep 3, 2026"));
+    expect(optOutSinceLine("2026-09-04T02:30:00.000Z", "UTC"))
+      .toBe(m["contact.marketingOptOut.since"].replace("{date}", "Sep 4, 2026"));
+  });
+
+  it("says nothing without a stamp, and nothing for one it cannot read", () => {
+    expect(optOutSinceLine(null, "UTC")).toBeNull();
+    expect(optOutSinceLine("not a date", "UTC")).toBeNull();
   });
 });

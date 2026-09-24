@@ -34,12 +34,15 @@ export function ContactFieldsPanel({
   contact,
   tags,
   fieldDefs,
+  timezone,
 }: {
   accountId: string;
   contactId: string;
   contact: Contact;
   tags: Tag[];
   fieldDefs: CustomFieldDef[];
+  /** The account's resolved zone (`renderZone`), for the opt-out's "Off since" date. */
+  timezone: string;
 }) {
   const custom = (contact.custom ?? {}) as Record<string, unknown>;
   const hidden = <input type="hidden" name="contactId" value={contactId} />;
@@ -76,6 +79,7 @@ export function ContactFieldsPanel({
             accountId={accountId}
             contactId={contactId}
             optedOutAt={contact.marketing_email_opted_out_at}
+            timezone={timezone}
           />
 
           {fieldDefs.length > 0 ? (
