@@ -31,6 +31,7 @@ const dbMocks = {
 vi.mock("@bis/db", () => dbMocks);
 
 const { GET } = await import("./route");
+const { parseContactSummary } = await import("@/lib/contacts/summary");
 
 function req() { return new Request("http://x/api/accounts/a1/contacts/c1/summary"); }
 function ctx() { return { params: Promise.resolve({ accountId: "a1", contactId: "c1" }) }; }
@@ -147,5 +148,33 @@ describe("contact summary route: timezone", () => {
     expect((await res.json()).zone).toEqual({ zone: "Etc/Fallback", guessed: true, label: "Etc/Fallback" });
     expect(errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n")).toContain("boom");
     errors.mockRestore();
+  });
+});
+
+/**
+ * The drawer no longer casts this body: it parses it (`parseContactSummary`)
+ * and shows "couldn't load" for anything the parser refuses, and it drops a
+ * recent item whose kind it does not know. So what this route actually
+ * sends (every kind of recent item, a stamp, a zone) must come through the
+ * parser whole. Otherwise every drawer is an error state, or quietly loses
+ * the items of a kind the route added without the parser learning it.
+ */
+describe("contact summary route: what it sends, the drawer's parser accepts", () => {
+  it("parses to exactly the body sent", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    dbMocks.getContact.mockResolvedValue({ id: "c1", marketing_email_opted_out_at: "2026-09-23T12:00:00+00:00" });
+    dbMocks.listContactTags.mockResolvedValue([{ id: "t1", name: "vip" }]);
+    dbMocks.listContactCalls.mockResolvedValue([{ id: "k1", started_at: "2026-09-05T10:00:00+00:00", outcome: "booked" }]);
+    dbMocks.listNotes.mockResolvedValue([{ id: "n1", body: "hi", created_at: "2026-09-04T10:00:00.000Z" }]);
+    dbMocks.listContactSubmissions.mockResolvedValue([{ id: "s1", created_at: "2026-09-03T10:00:00+00:00" }]);
+    dbMocks.listContactMessages.mockResolvedValue([{ id: "m1", created_at: "2026-09-02T10:00:00+00:00" }]);
+    dbMocks.listContactOpportunities.mockResolvedValue([
+      { id: "o1", name: "Deck build", status: "open", monetary_value: 100, created_at: "2026-09-01T10:00:00+00:00" },
+    ]);
+    const body = await (await GET(req(), ctx())).json();
+    // All five kinds made it into the body, so the parser saw every one.
+    expect(body.recent.map((r: { kind: string }) => r.kind).sort())
+      .toEqual(["call", "message", "note", "opportunity", "submission"]);
+    expect(parseContactSummary(body)).toEqual(body);
   });
 });

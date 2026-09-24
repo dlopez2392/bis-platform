@@ -19,17 +19,19 @@ import { updateContactFieldAction } from "./actions";
 import { MarketingOptOutSwitch } from "./marketing-optout-switch";
 import { addTagAction, removeTagAction } from "./[contactId]/actions";
 import type { ContactRow } from "./contacts-table";
-import type { ContactSummary } from "@/app/api/accounts/[accountId]/contacts/[contactId]/summary/route";
+import { summaryLoadFrom, type ParsedContactSummary, type SummaryLoad } from "@/lib/contacts/summary";
 import type { EditableField } from "@/lib/contacts/field-input";
 
-type LoadResult =
-  | { status: "error" }
-  // `nowMs` travels WITH the ready result, captured inside the fetch's own
-  // `.then()` (an allowed impure read — react-hooks/purity flags Date.now()
-  // reachable from the render body itself, same as f/[publicId]/page.tsx's
-  // own comment on signRenderToken's Date.now()) rather than a bare
-  // `Date.now()` call in the component body.
-  | { status: "ready"; summary: ContactSummary; nowMs: number };
+// `nowMs` travels WITH the ready result, read inside the fetch's own
+// `.then()` (an allowed impure read — react-hooks/purity flags Date.now()
+// reachable from the render body itself, same as f/[publicId]/page.tsx's
+// own comment on signRenderToken's Date.now()) and handed to
+// `summaryLoadFrom`, rather than a bare `Date.now()` call in the component
+// body. The summary is the PARSED one (lib/contacts/summary.ts): the body is
+// checked, not cast, so a server older or newer than this tab's bundle gets
+// the "couldn't load" state below instead of a throw during render, which
+// the dashboard's one error boundary would answer by replacing the page.
+type LoadResult = SummaryLoad;
 
 // Paired with the id it was fetched for, the same shape shell-data.tsx uses
 // for its own fetch effect: "loading" for a newly-peeked contact falls out
@@ -66,9 +68,12 @@ export function ContactDrawer({
     fetch(`/api/accounts/${accountId}/contacts/${contactId}/summary`)
       .then(async (res) => {
         if (stale) return;
-        if (!res.ok) { setFetched({ contactId, result: { status: "error" } }); return; }
-        const summary = (await res.json()) as ContactSummary;
-        setFetched({ contactId, result: { status: "ready", summary, nowMs: Date.now() } });
+        const result = await summaryLoadFrom(res, Date.now());
+        // Checked again AFTER the body is read: the cleanup can land while
+        // `res.json()` is pending, and without this a switched-away
+        // contact's result (or an older retry's) would overwrite the
+        // current one.
+        if (!stale) setFetched({ contactId, result });
       })
       .catch(() => { if (!stale) setFetched({ contactId, result: { status: "error" } }); });
     return () => { stale = true; };
@@ -255,7 +260,7 @@ async function submitTagAction(run: () => Promise<void>, onChanged: () => void):
 }
 
 function TagsRow({ accountId, contactId, tags, onChanged }: {
-  accountId: string; contactId: string; tags: ContactSummary["tags"]; onChanged: () => void;
+  accountId: string; contactId: string; tags: ParsedContactSummary["tags"]; onChanged: () => void;
 }) {
   const boundAdd = addTagAction.bind(null, accountId);
   const boundRemove = removeTagAction.bind(null, accountId);
