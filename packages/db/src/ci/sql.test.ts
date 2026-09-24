@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { planCiSql, sqlRefusals } from "./sql";
+import { planCiSql, runSqlFile, sqlRefusals } from "./sql";
 import { PRODUCTION_SUPABASE_REF } from "./target";
 
 /**
@@ -170,6 +170,25 @@ describe("sqlRefusals: read mode", () => {
       .toEqual(['statement 1 uses "pg_read_file", which a read may not use']);
   });
 
+  /**
+   * Side effects BEGIN READ ONLY does not stop (review of PR #130): for these
+   * the lexer is the only defence, so each family is refused.
+   */
+  it.each([
+    ["pg_try_advisory_lock", "select pg_try_advisory_lock(1)"],
+    ["pg_advisory_unlock_all", "select pg_advisory_unlock_all()"],
+    ["pg_stat_reset", "select pg_stat_reset()"],
+    ["pg_stat_reset_shared", "select pg_stat_reset_shared('bgwriter')"],
+    ["pg_notify", "select pg_notify('ch', 'x')"],
+    ["lo_unlink", "select lo_unlink(1)"],
+    ["dblink_connect", "select dblink_connect('x')"],
+    ["pg_create_logical_replication_slot", "select pg_create_logical_replication_slot('s', 'p')"],
+    ["pg_drop_replication_slot", "select pg_drop_replication_slot('s')"],
+    ["pg_switch_wal", "select pg_switch_wal()"],
+  ])("refuses %s, whose effect a read-only transaction does not stop", (word, sql) => {
+    expect(refused(sql)).toEqual([`statement 1 uses "${word}", which a read may not use`]);
+  });
+
   it("names the right statement when the write is not first", () => {
     expect(refused("select 1; select 2; delete from public.t;"))
       .toEqual(['statement 3 starts with "delete", which is not a read']);
@@ -232,5 +251,64 @@ describe("sqlRefusals: write mode", () => {
       "create schema if not exists app;\nalter default privileges for role postgres in schema app grant all on functions to anon;\ninsert into storage.buckets (id, name, public) values ('b', 'b', true);",
       { allowWrite: true },
     )).toEqual([]);
+  });
+});
+
+/**
+ * The transaction ci:sql wraps a file in: the database-side half of "reads are
+ * read-only". Mutating `begin read only` to `begin` used to leave the suite
+ * green (review of PR #130), because the wrapper lived in the untested runner.
+ * A fake client records every statement sent; nothing connects.
+ */
+describe("runSqlFile", () => {
+  const FILE = "select 1 as x";
+  const fakeClient = (failOn?: string, rollbackFails = false) => {
+    const sent: string[] = [];
+    return {
+      sent,
+      async query(text: string) {
+        sent.push(text);
+        if (text === failOn) throw new Error("statement failed");
+        if (rollbackFails && text === "rollback") throw new Error("rollback failed");
+        return { rows: [], fields: [], command: "SELECT", rowCount: 0 };
+      },
+    };
+  };
+
+  it("runs a read inside BEGIN READ ONLY and rolls it back", async () => {
+    const c = fakeClient();
+    await runSqlFile(c, FILE, { allowWrite: false });
+    expect(c.sent).toEqual(["begin read only", "set local statement_timeout = '120s'", FILE, "rollback"]);
+  });
+
+  it("runs a write in one transaction and commits it", async () => {
+    const c = fakeClient();
+    await runSqlFile(c, FILE, { allowWrite: true });
+    expect(c.sent).toEqual(["begin", "set local statement_timeout = '120s'", FILE, "commit"]);
+  });
+
+  it("rolls a failing read back and rethrows", async () => {
+    const c = fakeClient(FILE);
+    await expect(runSqlFile(c, FILE, { allowWrite: false })).rejects.toThrow("statement failed");
+    expect(c.sent).toEqual(["begin read only", "set local statement_timeout = '120s'", FILE, "rollback"]);
+  });
+
+  it("rolls a failing write back, never commits it, and rethrows", async () => {
+    const c = fakeClient(FILE);
+    await expect(runSqlFile(c, FILE, { allowWrite: true })).rejects.toThrow("statement failed");
+    expect(c.sent).toEqual(["begin", "set local statement_timeout = '120s'", FILE, "rollback"]);
+  });
+
+  it("rethrows the statement's error, not the rollback's, when both fail", async () => {
+    const c = fakeClient(FILE, true);
+    await expect(runSqlFile(c, FILE, { allowWrite: true })).rejects.toThrow("statement failed");
+  });
+
+  it("returns every result set, whether the driver gave one or several", async () => {
+    const one = { rows: [{ x: 1 }], fields: [], command: "SELECT", rowCount: 1 };
+    const many = [one, { ...one, rows: [{ x: 2 }] }];
+    const client = (res: unknown) => ({ async query(t: string) { return t === FILE ? res : { rows: [] }; } });
+    expect(await runSqlFile(client(one), FILE, { allowWrite: false })).toEqual([one]);
+    expect(await runSqlFile(client(many), FILE, { allowWrite: false })).toEqual(many);
   });
 });

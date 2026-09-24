@@ -15,11 +15,20 @@
  *      identifiers and dollar-quoted bodies are blanked first, so a write
  *      word in a literal is not a write — and it is a denylist over what may
  *      appear inside a read, so it is a first gate, not a proof.
- *   2. ./sql-run.ts runs a read inside `begin read only` and rolls it back, so
- *      a write the lexer misses is refused by Postgres itself.
- * The one thing layer 2 cannot defend is its own transaction ending early —
- * a `commit` in the file would end the read-only transaction and run the rest
- * in autocommit — so transaction control is refused by layer 1 in BOTH modes.
+ *   2. `runSqlFile` (below) runs a read inside `begin read only` and rolls it
+ *      back, so a TABLE or SEQUENCE write the lexer misses is refused by
+ *      Postgres itself.
+ * Layer 2 is narrower than it sounds (review of PR #130). A read-only
+ * transaction does not stop functions whose side effects live outside the
+ * transaction's writes: advisory locks, `pg_stat_reset*`, `pg_notify`,
+ * large-object functions (`lo_unlink` and friends), dblink, replication
+ * slots, WAL and backend control. For those layer 1 is the ONLY defence, so
+ * they are on its deny list — by name, and by prefix for the families
+ * (`NOT_IN_A_READ`, `NOT_IN_A_READ_PREFIXES`). A deny list is not a proof;
+ * the files this runs are few and reviewed, and that is the real control.
+ * Layer 2 also cannot defend its own transaction ending early — a `commit` in
+ * the file would end the read-only transaction and run the rest in
+ * autocommit — so transaction control is refused by layer 1 in BOTH modes.
  *
  * Writes need `--allow-write`, and then the whole file runs in ONE transaction
  * and commits, so a bootstrap that fails half-way leaves nothing behind.
@@ -33,6 +42,36 @@ import { isAbsolute, relative, resolve } from "node:path";
 import { assertCiTarget, describeCiTarget, nameArgument, type CiTarget } from "./target";
 
 const ALLOW_WRITE = "--allow-write";
+
+/**
+ * Runs `sql` inside the one transaction ci:sql owns: `begin read only` …
+ * `rollback` for a read, `begin` … `commit` for a write. On any error it rolls
+ * back and rethrows the STATEMENT's error (a failing rollback is swallowed so
+ * it cannot hide the cause). Returns every result set the driver produced —
+ * pg gives one object for a one-statement file and an array for several.
+ *
+ * Takes any `{ query }` so the sequence is tested with a recording fake
+ * (./sql.test.ts); ./sql-run.ts passes a real pg Client.
+ */
+export async function runSqlFile(
+  client: { query(text: string): Promise<unknown> }, sql: string, opts: { allowWrite: boolean },
+): Promise<unknown[]> {
+  await client.query(opts.allowWrite ? "begin" : "begin read only");
+  let results: unknown;
+  try {
+    await client.query("set local statement_timeout = '120s'");
+    results = await client.query(sql);
+  } catch (e) {
+    try {
+      await client.query("rollback");
+    } catch {
+      // The statement's error is the one worth reporting.
+    }
+    throw e;
+  }
+  await client.query(opts.allowWrite ? "commit" : "rollback");
+  return Array.isArray(results) ? results : [results];
+}
 
 export function planCiSql(
   env: Record<string, string | undefined>,
@@ -90,7 +129,24 @@ const NOT_IN_A_READ = new Set([
   "pg_read_file", "pg_read_binary_file", "pg_ls_dir", "pg_stat_file", "lo_import", "lo_export",
   "pg_terminate_backend", "pg_cancel_backend", "pg_reload_conf", "pg_rotate_logfile",
   "dblink", "dblink_exec", "pg_advisory_lock", "pg_advisory_xact_lock",
+  "pg_notify", "pg_switch_wal", "pg_promote", "pg_create_restore_point", "pg_log_backend_memory_contexts",
 ]);
+
+/**
+ * Function FAMILIES whose side effects a read-only transaction does not stop
+ * (see the header): advisory locks and unlocks, statistics resets, large
+ * objects, dblink, replication slots and origins, logical decoding messages,
+ * backup and WAL-replay control. Matched as prefixes so a sibling nobody
+ * listed (`pg_advisory_unlock_shared`, `lo_truncate64`) is refused too.
+ */
+const NOT_IN_A_READ_PREFIXES = [
+  "pg_advisory_", "pg_try_advisory_", "pg_stat_reset", "lo_", "dblink_",
+  "pg_create_", "pg_drop_", "pg_replication_", "pg_logical_", "pg_copy_",
+  "pg_backup_", "pg_wal_replay_",
+];
+
+const deniedInRead = (word: string) =>
+  NOT_IN_A_READ.has(word) || NOT_IN_A_READ_PREFIXES.some((p) => word.startsWith(p));
 
 /**
  * Replaces every comment, string literal, quoted identifier and dollar-quoted
@@ -181,7 +237,7 @@ export function sqlRefusals(sql: string, opts: { allowWrite: boolean }): string[
       refusals.push(`${at} starts with "${leader}", which is not a read`);
       return;
     }
-    const bad = words.find((w) => NOT_IN_A_READ.has(w));
+    const bad = words.find(deniedInRead);
     if (bad) refusals.push(`${at} uses "${bad}", which a read may not use`);
   });
   return refusals;

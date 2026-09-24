@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect } from "vitest";
 import "dotenv/config";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { serviceDb } from "../service";
@@ -19,28 +19,19 @@ import type { CiBaselineSpec } from "./config";
  * which no workflow and no root script invokes. It is the repo's existing
  * convention for suites that need a real project, not a new env switch.
  *
- * CI PROJECT ONLY, enforced: `beforeAll` runs the same guard as `ci:seed`, so
- * with production's env (every developer's today, until the local switch) it
- * FAILS rather than seeding production. It does not skip there: a skip reads
- * as "fine" in a summary, and running this against production is a mistake
- * worth a red line. It skips only when there are no credentials at all, and
- * says so loudly, like user-client.integration.test.ts.
+ * CI PROJECT ONLY, enforced: the test's first line runs the same guard as
+ * `ci:seed`, so with production's env (every developer's today, until the
+ * local switch) it FAILS rather than seeding production.
+ *
+ * NO RUNTIME SKIP, not even for missing credentials (review of PR #130; the
+ * brief said so). The file name already keeps it out of `pnpm check`, so the
+ * only way to reach it is to ask for it, and a run that was asked for and
+ * could not happen is a failure, not "1 skipped" in a summary.
  *
  * Never the real seeded account: a random name, an `org_test_ciseed_` org the
  * fixture sweep reclaims an hour later if this run is killed, and a `+999`
  * key-shaped number (test/fixtures.ts testPhoneNumber).
  */
-const hasCredentials =
-  Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL) && Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
-
-if (!hasCredentials) {
-  // eslint-disable-next-line no-console
-  console.warn(
-    "\n[ci-seed/seed.integration.test.ts] SKIPPED: missing NEXT_PUBLIC_SUPABASE_URL and/or " +
-      "SUPABASE_SERVICE_ROLE_KEY. This suite proves ci:seed is idempotent against the CI project " +
-      "and cannot run hermetically -- a skip here is NOT a pass.\n",
-  );
-}
 
 /** Rows the baseline writes, per table, plus its events: a second run must change none of them. */
 async function counts(db: SupabaseClient, accountId: string): Promise<Record<string, number>> {
@@ -53,17 +44,32 @@ async function counts(db: SupabaseClient, accountId: string): Promise<Record<str
   return out;
 }
 
-describe.skipIf(!hasCredentials)("ensureCiBaseline (live, CI project only)", () => {
-  beforeAll(() => {
-    // Throws, naming why, unless this env is the CI project.
-    assertCiTarget({
-      ref: process.env.BIS_CI_SUPABASE_REF,
-      url: process.env.NEXT_PUBLIC_SUPABASE_URL,
-      dbUrl: process.env.SUPABASE_DB_URL,
-    });
+/**
+ * Inside the test body, not a `beforeAll`: vitest reports a failing hook as a
+ * failed FILE but a "skipped" TEST, and "1 skipped" is exactly the summary
+ * line this file must never produce.
+ */
+function assertRunnableHere(): void {
+  // Names which variables are missing, never their values.
+  const missing = ["NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_DB_URL", "BIS_CI_SUPABASE_REF"]
+    .filter((name) => !process.env[name]);
+  if (missing.length > 0) {
+    throw new Error(
+      `ci-seed idempotence cannot run: ${missing.join(", ")} not set. It needs the CI project's ` +
+      "credentials (packages/db/.env); it has no hermetic mode, and it does not skip.",
+    );
+  }
+  // Throws, naming why, unless this env is the CI project.
+  assertCiTarget({
+    ref: process.env.BIS_CI_SUPABASE_REF,
+    url: process.env.NEXT_PUBLIC_SUPABASE_URL,
+    dbUrl: process.env.SUPABASE_DB_URL,
   });
+}
 
+describe("ensureCiBaseline (live, CI project only)", () => {
   it("creates the baseline once, then finds it and writes nothing", async () => {
+    assertRunnableHere();
     const db = serviceDb();
     const tag = Math.random().toString(36).slice(2, 10);
     const spec: CiBaselineSpec = {
@@ -85,7 +91,11 @@ describe.skipIf(!hasCredentials)("ensureCiBaseline (live, CI project only)", () 
     } finally {
       // By org id, not by the first run's return value: if the first run threw
       // after creating the account, the id never came back.
-      const { data } = await db.from("accounts").select("id").eq("clerk_org_id", spec.clerkOrgId).maybeSingle();
+      // A failed lookup must not read as "nothing to clean": that is how
+      // fixture rows get stranded (the sweep reclaims `org_test_` after an
+      // hour, but a loud failure here says so now).
+      const { data, error } = await db.from("accounts").select("id").eq("clerk_org_id", spec.clerkOrgId).maybeSingle();
+      if (error) throw new Error(`ci-seed idempotence cleanup lookup failed: ${error.message}`);
       if (data) await deleteAccountCascade(db, data.id as string, "ci-seed idempotence");
     }
   }, 60_000);

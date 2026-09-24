@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { assertCiTarget, describeCiTarget, PRODUCTION_SUPABASE_REF } from "./target";
+import { assertCiTarget, assertPgResolvesTo, describeCiTarget, PRODUCTION_SUPABASE_REF } from "./target";
 
 /**
  * The one guard between a CI-only write tool (`db:push:ci`, `ci:seed`) and the
@@ -130,6 +130,79 @@ describe("assertCiTarget", () => {
       .toThrow(/SUPABASE_DB_URL is not a postgres connection string/);
   });
 
+  /**
+   * The URL's authority is not the whole story. pg (pg-connection-string) and
+   * the Supabase CLI both honour `?host=`, `?port=` and `?user=` query
+   * overrides, and both percent-decode query values — so a URL whose
+   * authority reads as the CI pooler can still dial another host, or log in
+   * as production's user (`%74` is `t`). Found in review of PR #130: the guard
+   * accepted such a URL and pg resolved `postgres.tlbkbmlrfafquucsmsmm`.
+   */
+  const pooler = `postgresql://postgres.${CI_REF}:pw@aws-0-us-east-1.pooler.supabase.com:5432/postgres`;
+  const PROD_PCT = `%74${PROD.slice(1)}`;
+
+  it("refuses a ?user= override", () => {
+    expect(() => assertCiTarget({ ...good, dbUrl: `${pooler}?user=postgres.${OTHER_REF}` }))
+      .toThrow(/SUPABASE_DB_URL may carry no query parameter but sslmode; found "user"/);
+  });
+
+  it("refuses a ?host= override", () => {
+    expect(() => assertCiTarget({ ...good, dbUrl: `${pooler}?host=evil.example` }))
+      .toThrow(/SUPABASE_DB_URL may carry no query parameter but sslmode; found "host"/);
+  });
+
+  it("refuses a ?port= override", () => {
+    expect(() => assertCiTarget({ ...good, dbUrl: `${pooler}?sslmode=require&port=6543` }))
+      .toThrow(/SUPABASE_DB_URL may carry no query parameter but sslmode; found "port"/);
+  });
+
+  it("refuses ?options=, which pg passes to the server as session settings", () => {
+    expect(() => assertCiTarget({ ...good, dbUrl: `${pooler}?options=-c%20default_transaction_read_only%3Doff` }))
+      .toThrow(/SUPABASE_DB_URL may carry no query parameter but sslmode; found "options"/);
+  });
+
+  it("refuses production's ref percent-encoded in a query override", () => {
+    expect(() => assertCiTarget({ ...good, dbUrl: `${pooler}?user=postgres.${PROD_PCT}` }))
+      .toThrow(/SUPABASE_DB_URL points at production/);
+  });
+
+  it("refuses production's ref percent-encoded in the user name", () => {
+    expect(() => assertCiTarget({
+      ...good, dbUrl: `postgresql://postgres.${PROD_PCT}:pw@aws-0-us-east-1.pooler.supabase.com:5432/postgres`,
+    })).toThrow(/SUPABASE_DB_URL points at production/);
+  });
+
+  it("refuses an sslmode that turns TLS off", () => {
+    expect(() => assertCiTarget({ ...good, dbUrl: `${pooler}?sslmode=disable` }))
+      .toThrow(/SUPABASE_DB_URL sslmode must be require, verify-ca or verify-full/);
+  });
+
+  it("refuses a host carrying a percent-escape, which pg decodes and the URL parser does not", () => {
+    // Probed: WHATWG keeps `aws-0-us-east-1%2Eevil.pooler.supabase.com`; pg
+    // dials `aws-0-us-east-1.evil.pooler.supabase.com`.
+    expect(() => assertCiTarget({ ...good, dbUrl: pooler.replace("aws-0-us-east-1.pooler", "aws-0-us-east-1%2Eevil.pooler") }))
+      .toThrow(/SUPABASE_DB_URL is not a Supabase pooler host/);
+  });
+
+  it("refuses a port that is not the pooler's", () => {
+    expect(() => assertCiTarget({ ...good, dbUrl: pooler.replace(":5432/", ":5433/") }))
+      .toThrow(/SUPABASE_DB_URL port must be 5432 \(session pooler\) or 6543 \(transaction pooler\)/);
+  });
+
+  it("refuses a database other than postgres", () => {
+    expect(() => assertCiTarget({ ...good, dbUrl: pooler.replace(/\/postgres$/, "/template1") }))
+      .toThrow(/SUPABASE_DB_URL must name the database postgres/);
+  });
+
+  it("accepts the session pooler with ?sslmode=require", () => {
+    expect(assertCiTarget({ ...good, dbUrl: `${pooler}?sslmode=require` }).dbUser).toBe(`postgres.${CI_REF}`);
+  });
+
+  it("accepts the session pooler with no port (pg's default, 5432)", () => {
+    expect(assertCiTarget({ ...good, dbUrl: pooler.replace(":5432/", "/") }).dbHost)
+      .toBe("aws-0-us-east-1.pooler.supabase.com");
+  });
+
   it("accepts the CI project and describes it without the password", () => {
     const target = assertCiTarget(good);
     expect(target).toEqual({
@@ -142,5 +215,47 @@ describe("assertCiTarget", () => {
     expect(text).toContain(CI_REF);
     expect(text).toContain("aws-0-us-east-1.pooler.supabase.com:5432");
     expect(text).not.toContain("Secretpass123");
+  });
+});
+
+/**
+ * The second layer: whatever the URL reads as, ask pg's OWN parser what it
+ * would connect to, and refuse unless that is the same user, host, port and
+ * database. It catches a parser quirk the allowlist above did not anticipate;
+ * these cases bypass the allowlist on purpose, to prove this layer alone.
+ */
+describe("assertPgResolvesTo", () => {
+  const want = { user: `postgres.${CI_REF}`, host: "aws-0-us-east-1.pooler.supabase.com", port: 5432, database: "postgres" };
+  const base = `postgresql://postgres.${CI_REF}:pw@aws-0-us-east-1.pooler.supabase.com:5432/postgres`;
+
+  it("passes when pg resolves exactly what the URL reads as", () => {
+    expect(() => assertPgResolvesTo(base, want)).not.toThrow();
+  });
+
+  it("refuses when pg would dial another host", () => {
+    expect(() => assertPgResolvesTo(`${base}?host=evil.example`, want)).toThrow(/pg would connect with a different host/);
+  });
+
+  it("refuses when pg would log in as another user", () => {
+    expect(() => assertPgResolvesTo(`${base}?user=postgres.${OTHER_REF}`, want)).toThrow(/pg would connect with a different user/);
+  });
+
+  it("refuses when pg would use another port", () => {
+    expect(() => assertPgResolvesTo(`${base}?port=6543`, want)).toThrow(/pg would connect with a different port/);
+  });
+
+  it("refuses when pg would open another database", () => {
+    // pg ignores ?database= (the path wins; probed on pg 8.22), so the
+    // difference has to come from the path itself.
+    expect(() => assertPgResolvesTo(base.replace(/\/postgres$/, "/template1"), want))
+      .toThrow(/pg would connect with a different database/);
+  });
+
+  it("does not echo the URL", () => {
+    let message = "";
+    try { assertPgResolvesTo(`${base.replace(":pw@", ":Secretpass123@")}?host=evil.example`, want); } catch (e) { message = (e as Error).message; }
+    expect(message).not.toBe("");
+    expect(message).not.toContain("Secretpass123");
+    expect(message).not.toContain("evil.example");
   });
 });

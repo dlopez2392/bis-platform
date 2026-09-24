@@ -79,15 +79,19 @@ alter default privileges for role postgres in schema app
 -- brandLogoUrl). The db suite needs it too, not only e2e: demo-seed.test.ts
 -- uploads a logo live.
 --
--- Only id, name and public are set. Production's file_size_limit and
--- allowed_mime_types were NOT in the O2 read this file was written from, so
--- they are left to the defaults; the fingerprint's bucket kind shows any
--- difference, and the plan lists bucket settings as an allowed one. The
--- upsert makes a re-run converge on public = true instead of failing.
+-- Settings are production's, read 2026-09-24 13:42Z: public = true,
+-- file_size_limit = 524288 (512 KiB), allowed_mime_types =
+-- {image/png,image/jpeg,image/webp} -- in that order, because the parity
+-- fingerprint compares the array as text. The three types are exactly the
+-- ones branding.ts can name a file for (its EXT table). A bucket difference
+-- is NOT an allowed one at parity: the upsert makes a re-run converge on
+-- these values instead of failing, so any difference is a real finding.
 -- ASSUMPTION (plan section 2): a hosted project accepts a direct insert into
 -- storage.buckets. If it is refused, the whole file rolls back; create the
--- bucket in the dashboard (plan step D3) and re-run the file without this
--- statement.
-insert into storage.buckets (id, name, public)
-  values ('brand-logos', 'brand-logos', true)
-  on conflict (id) do update set public = excluded.public;
+-- bucket in the dashboard (plan step D3) with these settings and re-run the
+-- file without this statement.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+  values ('brand-logos', 'brand-logos', true, 524288, array['image/png', 'image/jpeg', 'image/webp'])
+  on conflict (id) do update set public = excluded.public,
+    file_size_limit = excluded.file_size_limit,
+    allowed_mime_types = excluded.allowed_mime_types;

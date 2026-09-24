@@ -97,9 +97,18 @@ describe("the bootstrap reproduces production's default privileges", () => {
     expect(oneLine(read("bootstrap/ci-project.sql"))).not.toMatch(/supabase_admin|supabase_auth_admin|for role (?!postgres)/);
   });
 
-  it("creates the public brand-logos bucket the branding code and demo-seed test upload to", () => {
+  /**
+   * Production's row, read 2026-09-24 13:42Z (orchestrator): public = true,
+   * file_size_limit = 524288, allowed_mime_types = {image/png,image/jpeg,
+   * image/webp}. The MIME array's ORDER is part of what the fingerprint's
+   * bucket kind compares (`allowed_mime_types::text`), so it is pinned too.
+   */
+  it("creates the brand-logos bucket exactly as production has it, and converges a re-run onto it", () => {
     expect(statements()).toContain(
-      "insert into storage.buckets (id, name, public) values ('brand-logos', 'brand-logos', true) on conflict (id) do update set public = excluded.public;",
+      "insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types) " +
+      "values ('brand-logos', 'brand-logos', true, 524288, array['image/png', 'image/jpeg', 'image/webp']) " +
+      "on conflict (id) do update set public = excluded.public, file_size_limit = excluded.file_size_limit, " +
+      "allowed_mime_types = excluded.allowed_mime_types;",
     );
   });
 });
@@ -128,7 +137,77 @@ describe("the parity fingerprint", () => {
   });
 
   it("summary form ends in one digest per kind; detail form lists the rows", () => {
-    expect(oneLine(read("parity/fingerprint.sql"))).toMatch(/\) select kind, count\(\*\) as n, md5\(string_agg\(key \|\| '=' \|\| coalesce\(def, ''\), chr\(10\) order by key, def\)\) as digest from items group by kind order by kind;$/);
-    expect(oneLine(read("parity/fingerprint-detail.sql"))).toMatch(/\) select kind, key, def from items order by kind, key, def;$/);
+    expect(oneLine(read("parity/fingerprint.sql"))).toMatch(/\) select kind, count\(\*\) as n, md5\(string_agg\(key \|\| '=' \|\| coalesce\(def, ''\), chr\(10\) order by key collate "c", def collate "c"\)\) as digest from items group by kind order by kind collate "c";$/);
+    expect(oneLine(read("parity/fingerprint-detail.sql"))).toMatch(/\) select kind, key, def from items order by kind collate "c", key collate "c", def collate "c";$/);
+  });
+
+  /**
+   * Production's database uses an ICU collation; a new project may not. Text
+   * sorted under two collations aggregates in two orders, and two orders are
+   * two digests for identical catalogues. `collate "C"` (bytewise) is the
+   * same everywhere. The one non-text sort key is the enum's sort order.
+   */
+  it.each(["parity/fingerprint.sql", "parity/fingerprint-detail.sql"])(
+    "%s sorts every text key by the C collation", (f) => {
+      const clauses = [...oneLine(read(f)).matchAll(/order by (.*?)(?=\)|;)/g)].map((m) => m[1]!);
+      // 6 inside the item list, plus the summary's digest + group order (8)
+      // or the detail's row order (7): a floor, so a regex that stopped
+      // matching cannot pass by inspecting nothing.
+      expect(clauses.length).toBeGreaterThanOrEqual(7);
+      for (const clause of clauses) {
+        for (const key of clause.split(",").map((s) => s.trim())) {
+          if (key === "e.enumsortorder") continue;
+          expect(key, `order by ${clause}`).toMatch(/ collate "c"$/);
+        }
+      }
+    },
+  );
+
+  /**
+   * Rows the platform owns, which would otherwise be the whole of the first
+   * diff (review of PR #130): production holds 188 btree_gist functions in
+   * public owned by supabase_admin, supabase_admin's own default privileges,
+   * storage's platform ACL, and the platform's extensions and event triggers.
+   * None is something a migration made; each is scoped out here so the diff
+   * shows only what the files are responsible for.
+   */
+  describe("scopes out what the platform owns", () => {
+    const items = () => oneLine(itemList(read("parity/fingerprint.sql")));
+    const branch = (kind: string) => {
+      const all = items();
+      const start = all.indexOf(`select '${kind}'`);
+      expect(start).toBeGreaterThanOrEqual(0);
+      const end = all.indexOf(" union all ", start);
+      return all.slice(start, end === -1 ? undefined : end);
+    };
+    const NOT_AN_EXTENSION_MEMBER = (catalog: string, oid: string) =>
+      `not exists (select 1 from pg_depend dep where dep.classid = '${catalog}'::regclass and dep.objid = ${oid} and dep.deptype = 'e')`;
+
+    it("compares only the extensions the migrations use", () => {
+      expect(branch("extension")).toContain("where e.extname in ('btree_gist', 'plpgsql')");
+      expect(branch("extension_version(info)")).toContain("where e.extname in ('btree_gist', 'plpgsql')");
+    });
+
+    it("skips functions that belong to an extension", () => {
+      expect(branch("function")).toContain(NOT_AN_EXTENSION_MEMBER("pg_proc", "p.oid"));
+    });
+
+    it("skips relations that belong to an extension", () => {
+      expect(branch("relation")).toContain(NOT_AN_EXTENSION_MEMBER("pg_class", "c.oid"));
+    });
+
+    it("compares only postgres's default privileges", () => {
+      expect(branch("default_acl")).toContain("where d.defaclrole = 'postgres'::regrole");
+    });
+
+    it("compares only our schemas' ACLs, and only our roles in them", () => {
+      const b = branch("schema_acl");
+      expect(b).toContain("where n.nspname in ('public', 'app')");
+      expect(b).toContain("x.grantee in ('postgres'::regrole, 'anon'::regrole, 'authenticated'::regrole, 'service_role'::regrole)");
+    });
+
+    it("compares only event triggers postgres owns", () => {
+      expect(branch("event_trigger")).toContain("where e.evtowner = 'postgres'::regrole");
+    });
   });
 });

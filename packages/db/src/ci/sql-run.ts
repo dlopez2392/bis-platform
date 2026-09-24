@@ -17,7 +17,7 @@ import "dotenv/config";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Client, type QueryResult } from "pg";
-import { planCiSql, sqlRefusals } from "./sql";
+import { planCiSql, runSqlFile, sqlRefusals } from "./sql";
 
 function printResult(r: QueryResult): void {
   if (!r.fields || r.fields.length === 0) {
@@ -52,17 +52,8 @@ async function main(): Promise<void> {
   const client = new Client({ connectionString: process.env.SUPABASE_DB_URL!.trim(), connectionTimeoutMillis: 10_000 });
   await client.connect();
   try {
-    await client.query(plan.allowWrite ? "begin" : "begin read only");
-    await client.query("set local statement_timeout = '120s'");
-    let results: QueryResult | QueryResult[];
-    try {
-      results = await client.query(sql);
-    } catch (e) {
-      await client.query("rollback");
-      throw e;
-    }
-    await client.query(plan.allowWrite ? "commit" : "rollback");
-    for (const r of Array.isArray(results) ? results : [results]) printResult(r);
+    const results = await runSqlFile(client, sql, { allowWrite: plan.allowWrite });
+    for (const r of results as QueryResult[]) printResult(r);
     console.error(plan.allowWrite ? "\ncommitted" : "\nread only; rolled back");
   } finally {
     await client.end();
