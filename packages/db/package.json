@@ -10,7 +10,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "db:push": "supabase db push --db-url \"$SUPABASE_DB_URL\"",
+    "db:push:ci": "tsx src/ci/push-run.ts push",
+    "db:migrations:ci": "tsx src/ci/push-run.ts list",
+    "ci:sql": "tsx src/ci/sql-run.ts",
+    "ci:seed": "tsx src/ci-seed/run.ts",
     "db:seed-demo": "tsx src/demo/run.ts"
   },
   "devDependencies": {
