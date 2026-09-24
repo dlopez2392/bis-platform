@@ -703,6 +703,12 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     }
     const bar = page.getByTestId("bulk-action-bar");
     await expect(bar.getByText("2 selected")).toBeVisible();
+    // Read BEFORE the confirm dialog opens: a modal dialog hides the rest of
+    // the page from the accessibility tree, so no row is found by role once
+    // it is open (the first CI run of this change timed out right here).
+    const bulkOneId = await page.getByRole("row").filter({ hasText: "Bulk One" })
+      .getAttribute("data-contact-row");
+    expect(bulkOneId, "the Bulk One row carries its contact id").toBeTruthy();
 
     await bar.getByRole("button", { name: /delete/i }).click();
     const dialog = page.getByRole("dialog").filter({ hasText: /delete 2 contacts/i });
@@ -710,9 +716,6 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     await dialog.getByRole("textbox").fill("1");
     await expect(dialog.getByRole("button", { name: /delete/i })).toBeDisabled();
     await dialog.getByRole("textbox").fill("2");
-    const bulkOneId = await page.getByRole("row").filter({ hasText: "Bulk One" })
-      .getAttribute("data-contact-row");
-    expect(bulkOneId, "the Bulk One row carries its contact id").toBeTruthy();
     const deletion = watchBulkDelete(page, bulkOneId!);
     await dialog.getByRole("button", { name: /delete/i }).click();
     await deletion.answered();

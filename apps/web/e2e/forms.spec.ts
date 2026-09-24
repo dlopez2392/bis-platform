@@ -114,9 +114,11 @@ async function newPublishedForm(
   // say /forms, Referer says the editor), and when that read came back it put
   // the stale list back on screen.
   //
-  // That is a product race, reported separately rather than fixed here. A
-  // full load leaves no discarded action behind, so createFormAction queues
-  // behind the Forms page's read the normal way.
+  // That is a product race, reported separately rather than fixed here. Next
+  // fixed it in 16.3.0: runRemainingActions now advances the queue only when
+  // the settled action is still at its head. A full load leaves no discarded
+  // action behind, so createFormAction queues behind the Forms page's read
+  // the normal way.
   await page.goto(`/dashboard/accounts/${accountId}/forms`);
 
   await page.getByRole("button", { name: "New form" }).click();
