@@ -96,6 +96,25 @@ describe("planCiCli builds exactly the CLI call it prints", () => {
     expect(plan.args).toEqual(["migration", "list", "--db-url", DB_URL, "--workdir", "/repo/packages/db"]);
   });
 
+  /**
+   * The CLI child inherits its environment. Go pgconn and the TS client both
+   * take PGHOST/PGUSER/PGDATABASE/PGOPTIONS/… as defaults (and the reviewer
+   * saw an upper-case-scheme URL ignored outright in their favour), and the
+   * npm shim EXECUTES whatever binary SUPABASE_CLI_BINARY_OVERRIDE names
+   * (node_modules/supabase/dist/supabase.js:25). None of them may reach it.
+   */
+  it("spawns the CLI with no PG* variable and no binary override, whatever their case", () => {
+    const plan = planCiCli("push", {
+      ...ciEnv, PATH: "/usr/bin", HOME: "/home/ci",
+      PGHOST: "evil.example", PGUSER: "someone", PGDATABASE: "x", PGOPTIONS: "-c role=x",
+      PGPASSWORD: "p", PGSSLMODE: "disable", pgport: "1", PgService: "s",
+      SUPABASE_CLI_BINARY_OVERRIDE: "/tmp/evil", supabase_cli_binary_override: "/tmp/evil2",
+    }, [], paths);
+    expect(Object.keys(plan.env).filter((k) => /^pg/i.test(k) || /^supabase_cli_binary_override$/i.test(k))).toEqual([]);
+    expect(plan.env.PATH).toBe("/usr/bin");
+    expect(plan.env.HOME).toBe("/home/ci");
+  });
+
   it("the printable summary never carries the password", () => {
     const plan = planCiCli("push", ciEnv, ["--dry-run"], paths);
     expect(plan.summary).toContain(CI_REF);

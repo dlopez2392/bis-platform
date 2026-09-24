@@ -17,7 +17,8 @@ import "dotenv/config";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Client, type QueryResult } from "pg";
-import { planCiSql, runSqlFile, sqlRefusals } from "./sql";
+import { pgClientConfig, planCiSql, runSqlFile, sqlRefusals } from "./sql";
+import { withoutConnectionOverrides } from "./target";
 
 function printResult(r: QueryResult): void {
   if (!r.fields || r.fields.length === 0) {
@@ -47,9 +48,13 @@ async function main(): Promise<void> {
     );
   }
 
-  // Ten seconds to connect, as in test/db.ts: an unreachable host otherwise
-  // hangs forever instead of naming itself.
-  const client = new Client({ connectionString: process.env.SUPABASE_DB_URL!.trim(), connectionTimeoutMillis: 10_000 });
+  // No PG* variable may fill in for a field (pg reads them as defaults at
+  // Client construction), and every field is explicit, TLS included, with no
+  // connection string for pg to re-read (./sql.ts pgClientConfig).
+  for (const key of Object.keys(process.env)) {
+    if (!(key in withoutConnectionOverrides({ [key]: "x" }))) delete process.env[key];
+  }
+  const client = new Client(pgClientConfig(process.env));
   await client.connect();
   try {
     const results = await runSqlFile(client, sql, { allowWrite: plan.allowWrite });

@@ -44,8 +44,11 @@ function main(): void {
   console.log(plan.summary);
   console.log("");
 
+  // `plan.env`, not the inherited environment: no PG* variable for either of
+  // the CLI's parsers to fall back on, and no SUPABASE_CLI_BINARY_OVERRIDE
+  // for the shim to execute instead of the real CLI (./push.ts).
   const result = spawnSync(process.execPath, [supabaseCliEntry(), ...plan.args], {
-    cwd: workdir, stdio: "inherit",
+    cwd: workdir, stdio: "inherit", env: plan.env,
   });
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;

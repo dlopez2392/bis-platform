@@ -74,70 +74,147 @@ export function assertCiTarget(input: {
   if (mentionsProduction(dbUrl)) {
     throw new Error("SUPABASE_DB_URL points at production; this tool never writes production");
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(dbUrl);
-  } catch {
-    // Constant message on purpose: `new URL()`'s own error carries its input.
-    throw new Error("SUPABASE_DB_URL is not a postgres connection string");
-  }
-  if (parsed.protocol !== "postgresql:" && parsed.protocol !== "postgres:") {
-    throw new Error("SUPABASE_DB_URL is not a postgres connection string");
-  }
+  const parts = ciDbUrlParts(dbUrl, ref);
 
-  // The authority is not the whole story. pg (pg-connection-string) and the
-  // Supabase CLI both let a query parameter override it — `?host=`, `?port=`,
-  // `?user=`, `?database=`, `?options=` and more — and both percent-decode
-  // the value, so a URL whose authority reads as the CI pooler could dial
-  // another host or log in as another project's user (review of PR #130).
-  // Rather than enumerate what each parser honours, refuse every parameter
-  // but the one a Supabase pooler URI carries. The key is named only when it
-  // is a plain word, never the value.
-  for (const key of new Set(parsed.searchParams.keys())) {
-    if (key !== "sslmode") {
-      const shown = /^[a-z_]{1,32}$/.test(key) ? `"${key}"` : "one that is not shown";
-      throw new Error(`SUPABASE_DB_URL may carry no query parameter but sslmode; found ${shown}`);
-    }
-  }
-  const sslmode = parsed.searchParams.get("sslmode");
-  if (sslmode !== null && !SSL_MODES.has(sslmode)) {
-    throw new Error("SUPABASE_DB_URL sslmode must be require, verify-ca or verify-full");
-  }
+  // Second layer: ask node-pg's own parser (ci:sql's and the db suite's
+  // driver) what it would connect to. After the raw form above it always
+  // agrees; it stays as the backstop for a pg quirk nobody has found. It says
+  // nothing about the Supabase CLI's two parsers — the raw form is what
+  // protects those (see `ciDbUrlParts`).
+  assertPgResolvesTo(dbUrl, { user: parts.user, host: parts.host, port: parts.port, database: "postgres" });
 
-  // The Session pooler's user name carries the project ref
-  // (`postgres.<ref>`); the host is shared by every project in the region, so
-  // the user is the part that says WHICH database this is.
-  const expectedUser = `postgres.${ref}`;
-  const dbUser = decodeOnce(parsed.username);
-  if (dbUser !== expectedUser) {
-    throw new Error(`SUPABASE_DB_URL does not log in as ${expectedUser}`);
-  }
-  // The pooler, not the direct `db.<ref>.supabase.co` host: that host is
-  // IPv6-only and GitHub's runners have no IPv6 (test/db.ts), so a direct URL
-  // here works on one machine and fails on the other.
-  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)*\.pooler\.supabase\.com$/.test(parsed.hostname)) {
-    throw new Error("SUPABASE_DB_URL is not a Supabase pooler host: use the Session pooler URI");
-  }
-  // 5432 is the session pooler (and pg's default when the URL names none);
-  // 6543 the transaction pooler, which the CI plan keeps as the fallback if
-  // the session pool runs out of clients.
-  const port = parsed.port === "" ? 5432 : Number(parsed.port);
-  if (port !== 5432 && port !== 6543) {
-    throw new Error("SUPABASE_DB_URL port must be 5432 (session pooler) or 6543 (transaction pooler)");
-  }
-  if (parsed.pathname !== "/postgres") {
-    throw new Error("SUPABASE_DB_URL must name the database postgres");
-  }
-
-  // Second layer: whatever the URL reads as above, ask pg's own parser what it
-  // would connect to. Anything the allowlist did not anticipate shows up here
-  // as a mismatch instead of as a connection to the wrong database.
-  assertPgResolvesTo(dbUrl, { user: expectedUser, host: parsed.hostname, port, database: "postgres" });
-
-  return { ref, url, dbUser, dbHost: parsed.host };
+  return { ref, url, dbUser: parts.user, dbHost: `${parts.host}:${parts.port}` };
 }
 
 const SSL_MODES = new Set(["require", "verify-ca", "verify-full"]);
+
+/** RFC 3986 unreserved characters, or a %XX escape. Nothing a parser splits on. */
+const PASSWORD_SHAPE = /^(?:[A-Za-z0-9._~-]|%[0-9A-Fa-f]{2})+$/;
+const POOLER_HOST = /^[a-z0-9-]+(\.[a-z0-9-]+)*\.pooler\.supabase\.com$/;
+
+/**
+ * The ONE raw form a CI DB URL may take, checked on the RAW string before any
+ * parser sees it, and its parts:
+ *
+ *   postgresql://postgres.<ref>:<password>@<host>.pooler.supabase.com:<5432|6543>/postgres[?sslmode=<mode>]
+ *
+ * Why the raw string and not a parser's reading of it. There are three
+ * readers, and they disagree (review and re-review of PR #130, the second
+ * proven with the real CLI 2.109.1 against a local TLS listener):
+ *   - `db push` hands the string to Go pgconn, which treats it as a URL only
+ *     when it starts with EXACTLY lowercase `postgres://` or `postgresql://`;
+ *     anything else is parsed as `key=value` pairs, so
+ *     `POSTGRES://postgres.<ci>:a=b host=evil …@<pooler>…` connects to `evil`
+ *     with the pairs smuggled in the password;
+ *   - `migration list` uses a TS client (@effect/sql-pg), which with an
+ *     upper-case scheme ignored the URL for PG* env vars and sent the whole
+ *     URL, password included, as `options`;
+ *   - node-pg (ci:sql, the db suite) honours `?host=`, `?user=`, `?port=`,
+ *     `?options=` overrides and percent-decodes them.
+ * A WHATWG `URL` agreed with none of them: it lower-cases the scheme,
+ * resolves `/./` and `%2e%2e` segments, and keeps `%2E` in a host that pg
+ * decodes. So: a lowercase scheme; the user exactly `postgres.<ref>`; a
+ * password of unreserved characters or %XX (no raw space, `=`, `@`, `:`,
+ * `/`, `?`, `#`, backslash or control character for a parser to split on); a
+ * plain pooler host; an explicit port; the path exactly `/postgres`; and at
+ * most the one `sslmode` parameter, once. (The CLI forces TLS whatever
+ * sslmode says; node-pg does not, which is why ci:sql sets `ssl` itself —
+ * ./sql.ts `pgClientConfig`.)
+ *
+ * Messages are constants or name the expected value; none repeats the input.
+ * Exported for `pgClientConfig`, which needs the password this never returns
+ * to anything that prints.
+ */
+export function ciDbUrlParts(dbUrl: string, ref: string): {
+  user: string; password: string; host: string; port: number;
+} {
+  const scheme = /^(postgresql|postgres):\/\//.exec(dbUrl);
+  if (!scheme) {
+    throw new Error("SUPABASE_DB_URL is not a postgres connection string: it must start with postgresql:// or postgres://, in lowercase");
+  }
+  const rest = dbUrl.slice(scheme[0].length);
+
+  // The LAST @: a raw @ in the password then lands in the password, where
+  // the password check refuses it, instead of being read as the host.
+  const at = rest.lastIndexOf("@");
+  if (at === -1) throw new Error("SUPABASE_DB_URL is not a postgres connection string: it names no user");
+  const userinfo = rest.slice(0, at);
+  const colon = userinfo.indexOf(":");
+  const user = colon === -1 ? userinfo : userinfo.slice(0, colon);
+  const password = colon === -1 ? "" : userinfo.slice(colon + 1);
+
+  // The Session pooler's user name carries the project ref; the host is
+  // shared by every project in the region, so the user is the part that says
+  // WHICH database this is.
+  const expectedUser = `postgres.${ref}`;
+  if (user !== expectedUser) throw new Error(`SUPABASE_DB_URL does not log in as ${expectedUser}`);
+  if (!PASSWORD_SHAPE.test(password)) {
+    throw new Error("SUPABASE_DB_URL password may contain only letters, digits, - . _ ~ and %XX escapes; percent-encode anything else");
+  }
+
+  const hostPart = rest.slice(at + 1);
+  const end = hostPart.search(/[/?#]/);
+  const hostPort = end === -1 ? hostPart : hostPart.slice(0, end);
+  const tail = end === -1 ? "" : hostPart.slice(end);
+  const portColon = hostPort.lastIndexOf(":");
+  const host = portColon === -1 ? hostPort : hostPort.slice(0, portColon);
+  const portText = portColon === -1 ? "" : hostPort.slice(portColon + 1);
+
+  // The pooler, not the direct `db.<ref>.supabase.co` host: that host is
+  // IPv6-only and GitHub's runners have no IPv6 (test/db.ts).
+  if (!POOLER_HOST.test(host)) {
+    throw new Error("SUPABASE_DB_URL is not a Supabase pooler host: use the Session pooler URI");
+  }
+  // Explicit, because every parser has its own default. 5432 is the session
+  // pooler; 6543 the transaction pooler, the CI plan's fallback.
+  if (portText !== "5432" && portText !== "6543") {
+    throw new Error("SUPABASE_DB_URL port must be 5432 (session pooler) or 6543 (transaction pooler)");
+  }
+
+  const q = tail.indexOf("?");
+  const path = q === -1 ? tail : tail.slice(0, q);
+  if (path !== "/postgres") {
+    throw new Error("SUPABASE_DB_URL must name the database postgres, as exactly /postgres");
+  }
+  if (q !== -1) {
+    const query = tail.slice(q + 1);
+    const params = new URLSearchParams(query);
+    for (const key of new Set(params.keys())) {
+      if (key !== "sslmode") {
+        const shown = /^[a-z_]{1,32}$/.test(key) ? `"${key}"` : "one that is not shown";
+        throw new Error(`SUPABASE_DB_URL may carry no query parameter but sslmode; found ${shown}`);
+      }
+    }
+    if (params.getAll("sslmode").length > 1) {
+      throw new Error("SUPABASE_DB_URL may carry sslmode at most once");
+    }
+    const mode = params.get("sslmode");
+    if (mode === null || !SSL_MODES.has(mode) || query !== `sslmode=${mode}`) {
+      throw new Error("SUPABASE_DB_URL sslmode must be require, verify-ca or verify-full");
+    }
+  }
+
+  return { user, password, host, port: Number(portText) };
+}
+
+/**
+ * The environment a CI tool may hand a database client: everything except
+ * the variables that retarget one. Every libpq-style client (Go pgconn, the
+ * CLI's TS client, node-pg) takes PGHOST, PGUSER, PGDATABASE, PGOPTIONS,
+ * PGSSLMODE, PGPASSWORD … as defaults, and the npm `supabase` shim EXECUTES
+ * whatever binary SUPABASE_CLI_BINARY_OVERRIDE names
+ * (node_modules/supabase/dist/supabase.js:25). Matched case-insensitively:
+ * Windows environment names are.
+ */
+export function withoutConnectionOverrides(env: Record<string, string | undefined>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) continue;
+    if (/^pg/i.test(key) || /^supabase_cli_binary_override$/i.test(key)) continue;
+    out[key] = value;
+  }
+  return out;
+}
 
 function decodeOnce(s: string): string {
   try {

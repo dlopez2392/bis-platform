@@ -12,10 +12,21 @@
  * over).
  *
  * Pure. ./push-run.ts loads dotenv, prints `summary`, and spawns the CLI with
- * `args`. `args` carries the password inside the DB URL, so it is handed to
- * the child process and never printed; `summary` is what gets printed.
+ * `args` and `env`. `args` carries the password inside the DB URL, so it is
+ * handed to the child process and never printed; `summary` is what gets
+ * printed.
+ *
+ * The CLI reads the DB URL with TWO different parsers (re-review of PR #130):
+ * `db push` uses Go pgconn and `migration list` a TS client (@effect/sql-pg).
+ * Neither is node-pg, so the guard's pg cross-check says nothing about them;
+ * what protects them is the one exact raw form `assertCiTarget` insists on
+ * (./target.ts `ciDbUrlParts`) and `env`, which drops every PG* variable
+ * both parsers fall back on and the shim's SUPABASE_CLI_BINARY_OVERRIDE. The
+ * CLI forces TLS itself, whatever sslmode says.
  */
-import { assertCiTarget, describeCiTarget, nameArgument, type CiTarget } from "./target";
+import {
+  assertCiTarget, describeCiTarget, nameArgument, withoutConnectionOverrides, type CiTarget,
+} from "./target";
 
 export type CiCliMode = "push" | "list";
 
@@ -30,7 +41,7 @@ export function planCiCli(
   env: Record<string, string | undefined>,
   argv: readonly string[],
   paths: { workdir: string },
-): { target: CiTarget; args: string[]; dryRun: boolean; summary: string } {
+): { target: CiTarget; args: string[]; env: Record<string, string>; dryRun: boolean; summary: string } {
   const target = assertCiTarget({
     ref: env.BIS_CI_SUPABASE_REF,
     url: env.NEXT_PUBLIC_SUPABASE_URL,
@@ -59,5 +70,5 @@ export function planCiCli(
     : "supabase migration list";
   const summary = `${what}\n${describeCiTarget(target)}\n  migrations from ${paths.workdir}/supabase/migrations`;
 
-  return { target, args, dryRun, summary };
+  return { target, args, env: withoutConnectionOverrides(env), dryRun, summary };
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { planCiSql, runSqlFile, sqlRefusals } from "./sql";
+import { pgClientConfig, planCiSql, runSqlFile, sqlRefusals } from "./sql";
 import { PRODUCTION_SUPABASE_REF } from "./target";
 
 /**
@@ -107,6 +107,36 @@ describe("planCiSql: the arguments", () => {
   });
 });
 
+/**
+ * What ci:sql hands `new Client(...)`. Built from the guard-validated parts,
+ * NOT a connectionString: pg lets a URL's query override explicit config
+ * (pg-connection-string's `sslmode=require` would replace the `ssl` set here),
+ * and fills anything absent from PG* env vars. So every field is explicit,
+ * TLS is always on, and there is no URL left for a second parser to read.
+ */
+describe("pgClientConfig", () => {
+  const DB_URL = `postgresql://postgres.${CI_REF}:p%40ss%3Dw0rd@aws-0-us-east-1.pooler.supabase.com:6543/postgres?sslmode=require`;
+
+  it("always turns TLS on", () => {
+    expect(pgClientConfig({ ...ciEnv, SUPABASE_DB_URL: DB_URL }).ssl).toEqual({ rejectUnauthorized: false });
+  });
+
+  it("carries every connection field explicitly, and no connection string", () => {
+    const config = pgClientConfig({ ...ciEnv, SUPABASE_DB_URL: DB_URL });
+    expect(config).toEqual({
+      host: "aws-0-us-east-1.pooler.supabase.com", port: 6543, user: `postgres.${CI_REF}`,
+      password: "p@ss=w0rd", database: "postgres",
+      ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 10_000,
+    });
+    expect(config).not.toHaveProperty("connectionString");
+  });
+
+  it("refuses production, like every other entry point", () => {
+    expect(() => pgClientConfig({ ...ciEnv, SUPABASE_DB_URL: DB_URL.replace(`postgres.${CI_REF}`, `postgres.${PRODUCTION_SUPABASE_REF}`) }))
+      .toThrow(/SUPABASE_DB_URL points at production/);
+  });
+});
+
 describe("sqlRefusals: read mode", () => {
   const refused = (sql: string) => sqlRefusals(sql, { allowWrite: false });
 
@@ -187,6 +217,53 @@ describe("sqlRefusals: read mode", () => {
     ["pg_switch_wal", "select pg_switch_wal()"],
   ])("refuses %s, whose effect a read-only transaction does not stop", (word, sql) => {
     expect(refused(sql)).toEqual([`statement 1 uses "${word}", which a read may not use`]);
+  });
+
+  /**
+   * A quoted identifier is still a function name: `"pg_notify"(…)` calls
+   * pg_notify. The lexer used to blank quoted identifiers whole (so a write
+   * word in a column alias was not a write), which also hid every quoted call
+   * from the deny list (re-review of PR #130). Quoted text is now checked
+   * against the FUNCTION deny list, exactly as written (Postgres does not
+   * case-fold a quoted name, and every deny name is lower-case); SQL keywords
+   * cannot be quoted into keywords, so `as "delete"` still passes.
+   */
+  it.each([
+    ["pg_advisory_lock", 'select "pg_advisory_lock"(1)'],
+    ["pg_notify", `select pg_catalog."pg_notify"('ch', 'x')`],
+    ["pg_terminate_backend", 'select "pg_terminate_backend"(1)'],
+    ["lo_unlink", 'select "lo_unlink"(1)'],
+    ["pg_stat_reset", 'select "pg_stat_reset"()'],
+    ["dblink", `select "dblink"('x', 'y')`],
+    ["set_config", `select "set_config"('transaction_read_only', 'off', true)`],
+  ])("refuses the quoted call %s", (word, sql) => {
+    expect(refused(sql)).toEqual([`statement 1 uses "${word}", which a read may not use`]);
+  });
+
+  it("refuses a U&\"...\" identifier outright (its escapes can spell any name)", () => {
+    expect(refused('select U&"\\0070g_notify"(1)'))
+      .toEqual(['statement 1 uses a U&"..." identifier, which a read may not use']);
+  });
+
+  it("refuses a lower-case u&\"...\" identifier too", () => {
+    expect(refused('select u&"\\0070g_notify"(1)'))
+      .toEqual(['statement 1 uses a U&"..." identifier, which a read may not use']);
+  });
+
+  it("never reads a quoted identifier's encoding as a keyword", () => {
+    // `"é"` is carried as hex (c3a9) between markers; left among the words it
+    // would read as a statement starting with the keyword "c3a9".
+    expect(refused('select 1; "é"')).toEqual(["statement 2 does not start with a keyword, so it is not a read"]);
+  });
+
+  it("reads a doubled quote as part of the identifier, not as its end", () => {
+    // One identifier, `x"pg_notify`; ending it at the first `"` would read a
+    // second identifier `pg_notify` and refuse a harmless alias.
+    expect(refused('select 1 as "x""pg_notify"')).toEqual([]);
+  });
+
+  it("does not split on a semicolon inside a quoted identifier, or count its doubled quote as an end", () => {
+    expect(refused('select 1 as "a;""b; delete"')).toEqual([]);
   });
 
   it("names the right statement when the write is not first", () => {

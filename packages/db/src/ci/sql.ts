@@ -11,10 +11,12 @@
  *
  * Reads are the default and are held to it twice:
  *   1. `sqlRefusals` (below) refuses, before connecting, any statement that is
- *      not plainly a read. It is lexical — comments, string literals, quoted
- *      identifiers and dollar-quoted bodies are blanked first, so a write
- *      word in a literal is not a write — and it is a denylist over what may
- *      appear inside a read, so it is a first gate, not a proof.
+ *      not plainly a read. It is lexical — comments, string literals and
+ *      dollar-quoted bodies are blanked first, so a write word in a literal
+ *      is not a write; a quoted identifier is kept and checked against the
+ *      function deny list, and a `U&"…"` one is refused — and it is a
+ *      denylist over what may appear inside a read, so it is a first gate,
+ *      not a proof.
  *   2. `runSqlFile` (below) runs a read inside `begin read only` and rolls it
  *      back, so a TABLE or SEQUENCE write the lexer misses is refused by
  *      Postgres itself.
@@ -39,9 +41,51 @@
  * in the schema but not the history, and the next push would try it again.
  */
 import { isAbsolute, relative, resolve } from "node:path";
-import { assertCiTarget, describeCiTarget, nameArgument, type CiTarget } from "./target";
+import { assertCiTarget, ciDbUrlParts, describeCiTarget, nameArgument, type CiTarget } from "./target";
 
 const ALLOW_WRITE = "--allow-write";
+
+/**
+ * What ci:sql hands `new pg.Client(...)`: every field explicit, built from
+ * the guard-validated parts of SUPABASE_DB_URL, and NO connection string.
+ * pg merges a connection string's query OVER explicit config (a URL's
+ * `sslmode=require` would replace `ssl` below) and fills any absent field
+ * from PG* env vars; with every field given and no URL left to parse,
+ * neither can happen. ./sql-run.ts also drops PG* from its own env first.
+ *
+ * TLS always (re-review of PR #130: node-pg, unlike the CLI, does not force
+ * it, and a URL with no sslmode connected in plaintext). The certificate is
+ * NOT verified: ASSUMPTION, not checked this session, that the pooler's
+ * certificate chains to Supabase's own root CA rather than one in Node's
+ * store, as Supabase's downloadable "SSL certificate" suggests. Verifying it
+ * means shipping that CA and passing it as `ssl.ca` — a follow-up, recorded
+ * in the report. Encryption without verification still keeps the password
+ * and the rows off the wire in the clear.
+ */
+export function pgClientConfig(env: Record<string, string | undefined>): {
+  host: string; port: number; user: string; password: string; database: "postgres";
+  ssl: { rejectUnauthorized: false }; connectionTimeoutMillis: number;
+} {
+  const target = assertCiTarget({
+    ref: env.BIS_CI_SUPABASE_REF,
+    url: env.NEXT_PUBLIC_SUPABASE_URL,
+    dbUrl: env.SUPABASE_DB_URL,
+  });
+  const parts = ciDbUrlParts(env.SUPABASE_DB_URL!.trim(), target.ref);
+  let password: string;
+  try {
+    password = decodeURIComponent(parts.password);
+  } catch {
+    throw new Error("SUPABASE_DB_URL password has a %XX escape that is not valid UTF-8");
+  }
+  return {
+    host: parts.host, port: parts.port, user: parts.user, password, database: "postgres",
+    ssl: { rejectUnauthorized: false },
+    // Ten seconds, as in test/db.ts: an unreachable host otherwise hangs
+    // forever instead of naming itself.
+    connectionTimeoutMillis: 10_000,
+  };
+}
 
 /**
  * Runs `sql` inside the one transaction ci:sql owns: `begin read only` …
@@ -117,14 +161,21 @@ const READ_LEADERS = new Set(["select", "with", "values", "table", "show"]);
 const TX_CONTROL = new Set(["begin", "start", "commit", "end", "rollback", "abort", "savepoint", "release", "prepare"]);
 
 /**
- * Words that, anywhere inside a statement that starts like a read, make it
- * something else: a data-modifying CTE, `select … into` (creates a table),
- * `for update` (row locks), sequence advances, a `set_config` that could flip
- * `transaction_read_only`, and the server-side file, backend and remote-link
- * functions nothing in this repo has any business calling from a parity read.
+ * SQL keywords that, anywhere inside a statement that starts like a read,
+ * make it something else: a data-modifying CTE, `select … into` (creates a
+ * table), `for update` (row locks). Keywords only count UNQUOTED — `"delete"`
+ * is an identifier, never the keyword — so `select 1 as "delete"` is a read.
+ */
+const SYNTAX_NOT_IN_A_READ = new Set(["insert", "update", "delete", "merge", "truncate", "into"]);
+
+/**
+ * Functions a read may not call, quoted or not (`"pg_notify"(…)` calls
+ * pg_notify): sequence advances, a `set_config` that could flip
+ * `transaction_read_only`, and the server-side file, backend, remote-link,
+ * notify and WAL functions nothing in this repo has any business calling from
+ * a parity read.
  */
 const NOT_IN_A_READ = new Set([
-  "insert", "update", "delete", "merge", "truncate", "into",
   "nextval", "setval", "set_config",
   "pg_read_file", "pg_read_binary_file", "pg_ls_dir", "pg_stat_file", "lo_import", "lo_export",
   "pg_terminate_backend", "pg_cancel_backend", "pg_reload_conf", "pg_rotate_logfile",
@@ -145,14 +196,32 @@ const NOT_IN_A_READ_PREFIXES = [
   "pg_backup_", "pg_wal_replay_",
 ];
 
-const deniedInRead = (word: string) =>
-  NOT_IN_A_READ.has(word) || NOT_IN_A_READ_PREFIXES.some((p) => word.startsWith(p));
+/** A function name a read may not call. Exact: Postgres never folds a quoted name. */
+const deniedFunction = (name: string) =>
+  NOT_IN_A_READ.has(name) || NOT_IN_A_READ_PREFIXES.some((p) => name.startsWith(p));
+
+/** An unquoted word a read may not contain (already lower-cased: Postgres folds these). */
+const deniedInRead = (word: string) => SYNTAX_NOT_IN_A_READ.has(word) || deniedFunction(word);
 
 /**
- * Replaces every comment, string literal, quoted identifier and dollar-quoted
- * body with a space, so what is left is keywords, identifiers, operators and
- * semicolons. Nested block comments nest, as they do in Postgres. An E''
- * string honours backslash escapes; a standard one only doubles its quote.
+ * Markers `blankNonCode` leaves where a quoted identifier stood. Control
+ * characters, so no SQL word can contain them; the identifier's text rides
+ * between them as hex, so a `;` or `"` inside it cannot split a statement.
+ */
+const QUOTED = "\u0001";
+const UNICODE_QUOTED = "\u0002";
+
+/**
+ * Replaces every comment, string literal and dollar-quoted body with a space,
+ * so what is left is keywords, identifiers, operators and semicolons. Nested
+ * block comments nest, as they do in Postgres. An E'' string honours
+ * backslash escapes; a standard one only doubles its quote.
+ *
+ * A quoted identifier is NOT blanked (re-review of PR #130: blanking hid
+ * `"pg_notify"(…)` from the deny list). Its text, `""` collapsed to `"`,
+ * becomes a QUOTED-marked hex token that `sqlRefusals` checks against the
+ * function deny list. A `U&"…"` identifier, whose escapes can spell any name,
+ * becomes a bare UNICODE_QUOTED marker and a read refuses it outright.
  */
 function blankNonCode(sql: string): string {
   let out = "";
@@ -188,16 +257,21 @@ function blankNonCode(sql: string): string {
       }
       out += " ";
     } else if (c === '"') {
+      const unicode = sql[i - 1] === "&" && (sql[i - 2] === "U" || sql[i - 2] === "u") && !isIdent(sql[i - 3]);
+      let text = "";
       i++;
       while (i < n) {
         if (sql[i] === '"') {
-          if (sql[i + 1] === '"') { i += 2; continue; }
+          if (sql[i + 1] === '"') { text += '"'; i += 2; continue; }
           i++;
           break;
         }
+        text += sql[i];
         i++;
       }
-      out += " ";
+      out += unicode
+        ? ` ${UNICODE_QUOTED} `
+        : ` ${QUOTED}${Buffer.from(text, "utf8").toString("hex")}${QUOTED} `;
     } else if (c === "$" && !isIdent(sql[i - 1])) {
       const tag = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(i));
       if (!tag) { out += c; i++; continue; }
@@ -218,27 +292,34 @@ function blankNonCode(sql: string): string {
  * statements that hold code (a trailing `;` or a comment-only chunk is not one).
  */
 export function sqlRefusals(sql: string, opts: { allowWrite: boolean }): string[] {
+  const quotedToken = new RegExp(`${QUOTED}([0-9a-f]*)${QUOTED}`, "g");
   const statements = blankNonCode(sql)
     .split(";")
-    .map((s) => (s.toLowerCase().match(/[a-z_][a-z0-9_$]*/g) ?? []))
-    .filter((words) => words.length > 0);
+    .map((s) => ({
+      quoted: [...s.matchAll(quotedToken)].map((m) => Buffer.from(m[1]!, "hex").toString("utf8")),
+      unicode: s.includes(UNICODE_QUOTED),
+      // Markers out BEFORE words are read: their hex would otherwise read as words.
+      words: s.replace(quotedToken, " ").toLowerCase().match(/[a-z_][a-z0-9_$]*/g) ?? [],
+    }))
+    .filter((st) => st.words.length > 0 || st.quoted.length > 0 || st.unicode);
   if (statements.length === 0) return ["the file has no statements"];
 
   const refusals: string[] = [];
-  statements.forEach((words, index) => {
+  statements.forEach(({ words, quoted, unicode }, index) => {
     const at = `statement ${index + 1}`;
-    const leader = words[0]!;
+    const leader = words[0] ?? "";
     if (TX_CONTROL.has(leader)) {
       refusals.push(`${at} is transaction control ("${leader}"); ci:sql owns the transaction`);
       return;
     }
     if (opts.allowWrite) return;
     if (!READ_LEADERS.has(leader)) {
-      refusals.push(`${at} starts with "${leader}", which is not a read`);
+      refusals.push(leader ? `${at} starts with "${leader}", which is not a read` : `${at} does not start with a keyword, so it is not a read`);
       return;
     }
-    const bad = words.find(deniedInRead);
+    const bad = words.find(deniedInRead) ?? quoted.find(deniedFunction);
     if (bad) refusals.push(`${at} uses "${bad}", which a read may not use`);
+    else if (unicode) refusals.push(`${at} uses a U&"..." identifier, which a read may not use`);
   });
   return refusals;
 }

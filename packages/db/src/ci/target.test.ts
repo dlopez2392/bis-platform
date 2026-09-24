@@ -198,9 +198,85 @@ describe("assertCiTarget", () => {
     expect(assertCiTarget({ ...good, dbUrl: `${pooler}?sslmode=require` }).dbUser).toBe(`postgres.${CI_REF}`);
   });
 
-  it("accepts the session pooler with no port (pg's default, 5432)", () => {
-    expect(assertCiTarget({ ...good, dbUrl: pooler.replace(":5432/", "/") }).dbHost)
-      .toBe("aws-0-us-east-1.pooler.supabase.com");
+  /**
+   * ONE exact raw form, checked on the raw string before any parser (re-review
+   * of PR #130). The Supabase CLI has two parsers: `db push` uses Go pgconn,
+   * which treats the string as a URL only when it starts with EXACTLY
+   * lowercase `postgres://` or `postgresql://` and otherwise parses
+   * `key=value` pairs; `migration list` uses a TS client. A WHATWG parse
+   * lowercases the scheme and resolves dot segments, so it agreed with
+   * neither: the reviewer, with the real CLI against a local TLS listener, got
+   * `POSTGRES://…:a=b host=evil …@pooler` past the guard and the CLI dialled
+   * the smuggled host.
+   */
+  it("refuses an UPPER-case scheme", () => {
+    expect(() => assertCiTarget({ ...good, dbUrl: pooler.replace("postgresql://", "POSTGRESQL://") }))
+      .toThrow(/must start with postgresql:\/\/ or postgres:\/\/, in lowercase/);
+  });
+
+  it("refuses a Mixed-case scheme", () => {
+    expect(() => assertCiTarget({ ...good, dbUrl: pooler.replace("postgresql://", "PostgreSQL://") }))
+      .toThrow(/must start with postgresql:\/\/ or postgres:\/\/, in lowercase/);
+  });
+
+  it("refuses the reviewer's key=value smuggle under an upper-case scheme", () => {
+    const smuggle = `POSTGRES://postgres.${CI_REF}:a=b host=evil port=5432 user=someone dbname=x@aws-0-us-east-1.pooler.supabase.com:5432/postgres`;
+    expect(() => assertCiTarget({ ...good, dbUrl: smuggle })).toThrow(/in lowercase/);
+  });
+
+  it.each([
+    ["an =", "a=b"],
+    ["a space", "a b"],
+    ["an @", "a@b"],
+    ["a :", "a:b"],
+    ["a /", "a/b"],
+    ["a ?", "a?b"],
+    ["a #", "a#b"],
+    ["no password at all", ""],
+  ])("refuses %s raw in the password", (_label, password) => {
+    const url = `postgresql://postgres.${CI_REF}:${password}@aws-0-us-east-1.pooler.supabase.com:5432/postgres`;
+    expect(() => assertCiTarget({ ...good, dbUrl: url }))
+      .toThrow(/SUPABASE_DB_URL password may contain only letters, digits, - \. _ ~ and %XX escapes/);
+  });
+
+  it("accepts a percent-escaped password", () => {
+    expect(assertCiTarget({ ...good, dbUrl: pooler.replace(":pw@", ":p%40ss%3Dw0rd@") }).dbUser).toBe(`postgres.${CI_REF}`);
+  });
+
+  it.each([
+    ["/./postgres"], ["/x/%2e%2e/postgres"], ["/x/../postgres"], ["/postgres/"], ["/postgres/."], ["/%70ostgres"],
+  ])("refuses the dot-segment or escaped path %s", (path) => {
+    expect(() => assertCiTarget({ ...good, dbUrl: pooler.replace(/\/postgres$/, path) }))
+      .toThrow(/SUPABASE_DB_URL must name the database postgres/);
+  });
+
+  it("refuses a fragment", () => {
+    expect(() => assertCiTarget({ ...good, dbUrl: `${pooler}#x` })).toThrow(/SUPABASE_DB_URL must name the database postgres/);
+  });
+
+  it("refuses sslmode given twice, even when both say require", () => {
+    expect(() => assertCiTarget({ ...good, dbUrl: `${pooler}?sslmode=require&sslmode=require` }))
+      .toThrow(/SUPABASE_DB_URL may carry sslmode at most once/);
+  });
+
+  it("refuses sslmode given twice when the second turns TLS off", () => {
+    expect(() => assertCiTarget({ ...good, dbUrl: `${pooler}?sslmode=require&sslmode=disable` }))
+      .toThrow(/SUPABASE_DB_URL may carry sslmode at most once/);
+  });
+
+  it("refuses a percent-escaped sslmode, which one parser decodes and another may not", () => {
+    expect(() => assertCiTarget({ ...good, dbUrl: `${pooler}?sslmode=%72equire` }))
+      .toThrow(/SUPABASE_DB_URL sslmode must be require, verify-ca or verify-full/);
+  });
+
+  it("refuses a URL with no port (every parser would pick its own default)", () => {
+    expect(() => assertCiTarget({ ...good, dbUrl: pooler.replace(":5432/", "/") }))
+      .toThrow(/SUPABASE_DB_URL port must be 5432 \(session pooler\) or 6543 \(transaction pooler\)/);
+  });
+
+  it("accepts the postgres:// spelling of the scheme", () => {
+    expect(assertCiTarget({ ...good, dbUrl: pooler.replace("postgresql://", "postgres://") }).dbHost)
+      .toBe("aws-0-us-east-1.pooler.supabase.com:5432");
   });
 
   it("accepts the CI project and describes it without the password", () => {
