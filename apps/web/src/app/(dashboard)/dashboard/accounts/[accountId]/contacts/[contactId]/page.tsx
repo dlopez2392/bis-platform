@@ -42,7 +42,7 @@ export default async function ContactDetailPage({
   if (account.error) {
     console.error(`contact page: account ${accountId} timezone read failed: ${account.error.message}`);
   }
-  const timezone = (await renderZone((account.data as { timezone: string } | null)?.timezone)).zone;
+  const zone = await renderZone((account.data as { timezone: string } | null)?.timezone);
 
   return (
     <>
@@ -54,7 +54,7 @@ export default async function ContactDetailPage({
           contact={contact}
           tags={tags}
           fieldDefs={fieldDefs}
-          timezone={timezone}
+          zone={{ zone: zone.zone, guessed: zone.guessed, label: zone.label }}
         />
         <ActivityTimeline
           accountId={accountId}

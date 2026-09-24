@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { m } from "@/lib/messages";
-import { flipMarketingOptOut, optOutSinceLine, runGuarded } from "@/lib/contacts/marketing-optout";
+import { flipMarketingOptOut, optOutSinceLine, runGuarded, type OptOutZone } from "@/lib/contacts/marketing-optout";
 import { setMarketingEmailOptOutAction } from "./actions";
 
 /**
@@ -20,13 +20,16 @@ import { setMarketingEmailOptOutAction } from "./actions";
  * moves back on a failure), so it never waits on the refresh. Callers key
  * this by contact id so a different contact never inherits the state.
  */
-export function MarketingOptOutSwitch({ accountId, contactId, optedOutAt, timezone }: {
+export function MarketingOptOutSwitch({ accountId, contactId, optedOutAt, zone }: {
   accountId: string;
   contactId: string;
   /** `contacts.marketing_email_opted_out_at` — null means "may be emailed". */
   optedOutAt: string | null;
-  /** The account's resolved zone (`renderZone`), for the "Off since" date. */
-  timezone: string;
+  /** The account's resolved zone (`renderZone`), for the "Off since" date —
+   *  with `guessed` and `label`, so a stand-in zone is named on the line.
+   *  Undefined when a pre-#124 server answered the drawer's fetch: the line
+   *  is then left out (`optOutSinceLine`), not guessed. */
+  zone: OptOutZone | undefined;
 }) {
   const [checked, setChecked] = useState(optedOutAt !== null);
   // The stamp the "Off since" line reads. Dropped on the first flip and never
@@ -39,11 +42,12 @@ export function MarketingOptOutSwitch({ accountId, contactId, optedOutAt, timezo
   const busy = useRef(false);
   const id = useId();
   const hintId = `${id}-hint`;
-  const sinceLine = checked ? optOutSinceLine(since, timezone) : null;
+  const sinceLine = checked ? optOutSinceLine(since, zone) : null;
 
-  // The tick and its toast's Undo go through this one guard (#122 m5).
-  function run(work: () => Promise<void>) {
-    runGuarded(busy, startTransition, work);
+  // The tick and its toast's Undo go through this one guard (#122 m5). Its
+  // answer goes back to the Undo, which says so when it was refused (#123 m2).
+  function run(work: () => Promise<void>): boolean {
+    return runGuarded(busy, startTransition, work);
   }
 
   function flip(next: boolean) {

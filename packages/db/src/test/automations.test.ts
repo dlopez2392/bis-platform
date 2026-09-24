@@ -2130,10 +2130,14 @@ describe("the no-show nudge never links another account's calendar", () => {
           return b.id;
         };
         const own = await make(calA.id, 0);
-        const crossed = await make(calB.id, 1);
 
         const logged = vi.spyOn(console, "error").mockImplementation(() => {});
         try {
+          // Created INSIDE the try (#123 m5): the row holds a restrict FK into
+          // B's calendar, so it must be deleted even when a later fixture call
+          // throws — or B's teardown trips over it and B leaks.
+          const crossed = await make(calB.id, 1);
+
           const ids = (await listDueNoShowNudges(db, now.toISOString())).map((r) => r.bookingId);
           expect(ids, "the own-calendar control must be due by list").toContain(own);
           expect(ids, "the row on B's calendar must not be due by list").not.toContain(crossed);
@@ -2143,7 +2147,14 @@ describe("the no-show nudge never links another account's calendar", () => {
             .some((s) => s.includes(crossed) && s.includes("calendar"))).toBe(true);
         } finally {
           logged.mockRestore();
-          const { error } = await db.from("bookings").delete().eq("id", crossed);
+          // The crossed row points at B's calendar; B's teardown runs first and
+          // must not trip over it. Deleted by what MAKES it crossed (A's row on
+          // B's calendar), not by id: `make` creates the booking and then sets
+          // its status, so a throw between the two never hands the id back.
+          // Logged, never thrown (a throw in `finally` replaces the assertion
+          // that brought us here).
+          const { error } = await db.from("bookings").delete()
+            .eq("account_id", accountA).eq("calendar_id", calB.id);
           if (error) console.error(`cross-account bookings cleanup failed: ${error.message}`);
         }
       });
@@ -2183,14 +2194,18 @@ describe("listDueQuoteFollowups: a deal on another account's contact never holds
           stage_changed_at: new Date(now.getTime() - ageMs).toISOString(),
         });
 
-        // DIRECT INSERTS (createOpportunity refuses a contact outside the
-        // account — exactly the row this case must construct). One statement.
-        const crossedRows = Array.from({ length: QUOTE_FOLLOWUP_CANDIDATE_LIMIT },
-          (_, n) => row(theirContact, 10 * 24 * HOUR + n * MINUTE));
-        const { error: cErr } = await db.from("opportunities").insert(crossedRows);
-        if (cErr) throw new Error(`crossed opportunities fixture failed: ${cErr.message}`);
         const logged = vi.spyOn(console, "error").mockImplementation(() => {});
         try {
+          // DIRECT INSERTS (createOpportunity refuses a contact outside the
+          // account — exactly the row this case must construct). One statement.
+          // INSIDE the try (#123 m5): the rows point at B's contact, so an
+          // insert that landed but answered with an error must still be
+          // cleaned up by the `finally`, or B's teardown trips over them.
+          const crossedRows = Array.from({ length: QUOTE_FOLLOWUP_CANDIDATE_LIMIT },
+            (_, n) => row(theirContact, 10 * 24 * HOUR + n * MINUTE));
+          const { error: cErr } = await db.from("opportunities").insert(crossedRows);
+          if (cErr) throw new Error(`crossed opportunities fixture failed: ${cErr.message}`);
+
           const { data: ownRow, error: oErr } = await db.from("opportunities")
             .insert(row(ownContact, 5 * 24 * HOUR)).select("id").single();
           if (oErr || !ownRow) throw new Error(`own opportunity fixture failed: ${oErr?.message}`);

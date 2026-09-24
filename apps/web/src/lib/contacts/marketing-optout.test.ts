@@ -88,12 +88,45 @@ describe("flipMarketingOptOut", () => {
 describe("Undo runs through the same guard as the tick", () => {
   it("Undo hands its write to the injected runner; a runner that refuses means no write and no box move", async () => {
     const h = harness([{ ok: true }]);
-    const refuse = vi.fn<(work: () => Promise<void>) => undefined>(() => undefined);
+    const refuse = vi.fn<(work: () => Promise<void>) => false>(() => false);
     await flipMarketingOptOut(true, h.save, h.show, h.toast, refuse);
     await (h.undo() as unknown as () => Promise<void>)();
     expect(refuse).toHaveBeenCalledTimes(1);
     expect(h.save.mock.calls.map((c) => c[0])).toEqual([true]);
     expect(h.shown).toEqual([true]);
+  });
+});
+
+/**
+ * #123 m2: a refused Undo used to be SILENT. Sonner dismisses the toast on the
+ * click, so the operator's only way back was gone with nothing said. The
+ * refusal now tells them what to do instead (use the box itself).
+ */
+describe("a refused Undo says so", () => {
+  it("a runner that refuses (returns false) toasts that the last change is still saving", async () => {
+    const h = harness([{ ok: true }]);
+    await flipMarketingOptOut(true, h.save, h.show, h.toast, () => false);
+    await (h.undo() as unknown as () => Promise<void>)();
+    expect(h.toast.error).toHaveBeenCalledTimes(1);
+    expect(h.toast.error).toHaveBeenCalledWith(
+      m["contact.marketingOptOut.undoBusy"].replace("{label}", m["contact.marketingOptOut.label"]));
+  });
+
+  it("names the box by its label, so a renamed box is never sent to under its old name", async () => {
+    const h = harness([{ ok: true }]);
+    await flipMarketingOptOut(true, h.save, h.show, h.toast, () => false);
+    await (h.undo() as unknown as () => Promise<void>)();
+    const said = String(h.toast.error.mock.calls[0]?.[0]);
+    expect(said).toContain(`“${m["contact.marketingOptOut.label"]}”`);
+    expect(said).not.toMatch(/[{}]/);
+  });
+
+  it("an Undo that runs says nothing of the kind", async () => {
+    const h = harness([{ ok: true }, { ok: true }]);
+    await flipMarketingOptOut(true, h.save, h.show, h.toast);
+    await (h.undo() as unknown as () => Promise<void>)();
+    expect(h.save.mock.calls.map((c) => c[0])).toEqual([true, false]);
+    expect(h.toast.error).not.toHaveBeenCalled();
   });
 });
 
@@ -129,6 +162,13 @@ describe("runGuarded", () => {
     expect(second).not.toHaveBeenCalled();
   });
 
+  it("answers whether it ran: true when it took the work, false when it refused", () => {
+    const busy = { current: false };
+    const { start } = starter();
+    expect(runGuarded(busy, start, () => new Promise<void>(() => {}))).toBe(true);
+    expect(runGuarded(busy, start, async () => {})).toBe(false);
+  });
+
   it("is free again after a write that throws", async () => {
     const busy = { current: false };
     const { start, started } = starter();
@@ -138,17 +178,48 @@ describe("runGuarded", () => {
   });
 });
 
+/** An account's own zone, as `renderZone` answers for a usable one. */
+const own = (zone: string) => ({ zone, guessed: false, label: zone });
+
 describe("optOutSinceLine", () => {
   it("dates the stamp in the ACCOUNT's zone, not UTC's", () => {
     // 02:30 UTC on Sep 4 is still the evening of Sep 3 in Chicago.
-    expect(optOutSinceLine("2026-09-04T02:30:00.000Z", "America/Chicago"))
+    expect(optOutSinceLine("2026-09-04T02:30:00.000Z", own("America/Chicago")))
       .toBe(m["contact.marketingOptOut.since"].replace("{date}", "Sep 3, 2026"));
-    expect(optOutSinceLine("2026-09-04T02:30:00.000Z", "UTC"))
+    expect(optOutSinceLine("2026-09-04T02:30:00.000Z", own("UTC")))
       .toBe(m["contact.marketingOptOut.since"].replace("{date}", "Sep 4, 2026"));
   });
 
   it("says nothing without a stamp, and nothing for one it cannot read", () => {
-    expect(optOutSinceLine(null, "UTC")).toBeNull();
-    expect(optOutSinceLine("not a date", "UTC")).toBeNull();
+    expect(optOutSinceLine(null, own("UTC"))).toBeNull();
+    expect(optOutSinceLine("not a date", own("UTC"))).toBeNull();
+  });
+
+  // A post-#124 tab talking to a pre-#124 server (a rollback while the tab is
+  // open): that summary carries `timezone` and no `zone`. The line is dropped
+  // rather than throwing, since a throw here takes the drawer down with it.
+  it("says nothing, rather than throwing, when the summary carried no zone", () => {
+    expect(() => optOutSinceLine("2026-09-04T02:30:00.000Z", undefined)).not.toThrow();
+    expect(optOutSinceLine("2026-09-04T02:30:00.000Z", undefined)).toBeNull();
+  });
+});
+
+/**
+ * #123 m3: when `renderZone` had to GUESS (the agency's zone, or UTC), the
+ * date may be a day off, and every other dated screen says so. This line
+ * names the zone it is printed in; the account's own zone reads as before.
+ */
+describe("optOutSinceLine: a guessed zone is named", () => {
+  it("guessed: the line names the zone the date is printed in", () => {
+    expect(optOutSinceLine("2026-09-04T02:30:00.000Z", { zone: "UTC", guessed: true, label: "UTC" }))
+      .toBe("Off since Sep 4, 2026 (UTC)");
+    expect(optOutSinceLine("2026-09-04T02:30:00.000Z",
+      { zone: "America/Chicago", guessed: true, label: "America/Chicago" }))
+      .toBe(m["contact.marketingOptOut.sinceGuessed"]
+        .replace("{date}", "Sep 3, 2026").replace("{zone}", "America/Chicago"));
+  });
+
+  it("the account's own zone: byte-identical to the line before this change", () => {
+    expect(optOutSinceLine("2026-09-04T02:30:00.000Z", own("America/Chicago"))).toBe("Off since Sep 3, 2026");
   });
 });

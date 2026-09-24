@@ -22,9 +22,24 @@ vi.mock("@/components/ui/checkbox", () => ({
     return null;
   },
 }));
+/** Every `useState` the render asked for, with its starting value and a
+ *  setter that only RECORDS (#123 m4a). The server renderer's own setters do
+ *  nothing observable after the render, so without this a flip that forgot
+ *  to drop the "Off since" stamp stayed green. Found by starting value, not
+ *  by call order, so reordering the hooks does not break it. */
+const states: { initial: unknown; set: ReturnType<typeof vi.fn> }[] = [];
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
-  return { ...actual, useTransition: () => [false, (cb: () => unknown) => { void cb(); }] };
+  return {
+    ...actual,
+    useTransition: () => [false, (cb: () => unknown) => { void cb(); }],
+    useState: (init: unknown) => {
+      const initial = typeof init === "function" ? (init as () => unknown)() : init;
+      const set = vi.fn();
+      states.push({ initial, set });
+      return [initial, set];
+    },
+  };
 });
 const flip = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
 vi.mock("@/lib/contacts/marketing-optout", async (importOriginal) => ({
@@ -38,7 +53,7 @@ const { MarketingOptOutSwitch } = await import("./marketing-optout-switch");
 function mount(optedOutAt: string | null) {
   captured.onCheckedChange = undefined;
   renderToStaticMarkup(createElement(MarketingOptOutSwitch, {
-    accountId: "a1", contactId: "c1", optedOutAt, timezone: "UTC",
+    accountId: "a1", contactId: "c1", optedOutAt, zone: { zone: "UTC", guessed: false, label: "UTC" },
   }));
   const handler = captured.onCheckedChange as Handler | undefined;
   if (!handler) throw new Error("the switch rendered no onCheckedChange");
@@ -66,24 +81,46 @@ describe("MarketingOptOutSwitch wiring", () => {
   });
 });
 
+/**
+ * A flip drops the stamp the "Off since" line reads: after a tick the new
+ * stamp is not on this screen, and after untick-then-Undo the server has
+ * re-stamped, so the old date would be wrong (the switch's own comment).
+ */
+describe("MarketingOptOutSwitch: a flip forgets the old 'Off since' date", () => {
+  it("clears the stamp the line reads, on the flip itself", () => {
+    const STAMP = "2026-09-04T02:30:00.000Z";
+    states.length = 0;
+    const handler = mount(STAMP);
+    // Exactly one piece of state starts at the stamp — the line's `since`.
+    const since = states.filter((s) => s.initial === STAMP);
+    expect(since).toHaveLength(1);
+    expect(since[0]!.set).not.toHaveBeenCalled();
+    handler(false);
+    expect(since[0]!.set).toHaveBeenCalledWith(null);
+  });
+});
+
 describe("MarketingOptOutSwitch: Undo shares the tick's guard", () => {
   it("the runner handed to Undo refuses while the tick's write is still saving", () => {
     // The tick's write never settles, so the guard stays held.
     flip.mockImplementationOnce(() => new Promise<void>(() => {}));
     mount(null)(true);
-    const undoRunner = flip.mock.calls[0]![4] as (work: () => Promise<void>) => void;
+    const undoRunner = flip.mock.calls[0]![4] as (work: () => Promise<void>) => unknown;
     expect(typeof undoRunner).toBe("function");
     const undoWork = vi.fn(async () => {});
-    undoRunner(undoWork);
+    // #123 m2: the refusal is REPORTED as `false` — what flipMarketingOptOut
+    // reads to tell the operator. A runner that swallowed runGuarded's answer
+    // would leave the refused Undo silent again.
+    expect(undoRunner(undoWork)).toBe(false);
     expect(undoWork).not.toHaveBeenCalled();
   });
 
   it("…and runs Undo once the tick has settled", async () => {
     mount(null)(true);
     await Promise.resolve(); await Promise.resolve();
-    const undoRunner = flip.mock.calls[0]![4] as (work: () => Promise<void>) => void;
+    const undoRunner = flip.mock.calls[0]![4] as (work: () => Promise<void>) => unknown;
     const undoWork = vi.fn(async () => {});
-    undoRunner(undoWork);
+    expect(undoRunner(undoWork)).toBe(true);
     expect(undoWork).toHaveBeenCalledTimes(1);
   });
 });

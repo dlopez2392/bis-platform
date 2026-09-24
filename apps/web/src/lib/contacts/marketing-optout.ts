@@ -1,5 +1,10 @@
+import type { ResolvedZone } from "@bis/db";
 import { m } from "@/lib/messages";
 import { formatDateInZone } from "@/lib/format";
+
+/** The slice of `renderZone`'s answer the "Off since" line needs: the zone to
+ *  print in, whether it was guessed, and the name `ZoneNote` would print. */
+export type OptOutZone = Pick<ResolvedZone, "zone" | "guessed" | "label">;
 
 /**
  * "Off since Sep 3, 2026" — the day `marketing_email_opted_out_at` was
@@ -8,10 +13,24 @@ import { formatDateInZone } from "@/lib/format";
  * day, not UTC's tomorrow). Null without a stamp — and for a stamp that does
  * not parse, because `formatDateInZone` THROWS on one and this renders inside
  * the drawer, where a throw would take the whole panel down over one line.
+ *
+ * When the zone was GUESSED (the account's own is unusable, so `renderZone`
+ * fell back to the agency's or UTC) the date may be a day off, so the line
+ * names the zone it is in: "Off since Sep 3, 2026 (UTC)" (#123 m3). Not a
+ * `ZoneNote` — that is one per screen, and this is one line under a checkbox.
+ *
+ * `zone` may be missing: the drawer casts a fetched JSON summary, and a server
+ * from before #124 (a rollback while this tab is open) sends `timezone` and
+ * no `zone`. No zone means no line, for the same reason as a bad stamp.
  */
-export function optOutSinceLine(optedOutAt: string | null, timeZone: string): string | null {
+export function optOutSinceLine(optedOutAt: string | null, zone: OptOutZone | undefined): string | null {
   if (optedOutAt === null || Number.isNaN(Date.parse(optedOutAt))) return null;
-  return m["contact.marketingOptOut.since"].replace("{date}", formatDateInZone(optedOutAt, timeZone));
+  if (zone === undefined) return null;
+  const date = formatDateInZone(optedOutAt, zone.zone);
+  if (zone.guessed) {
+    return m["contact.marketingOptOut.sinceGuessed"].replace("{date}", date).replace("{zone}", zone.label);
+  }
+  return m["contact.marketingOptOut.since"].replace("{date}", date);
 }
 
 export type OptOutResult = { ok: true } | { ok: false; error: string };
@@ -60,10 +79,13 @@ async function write(
  * Undo's write goes through `run` — the switch passes the SAME guard its tick
  * runs through (`runGuarded`), so an Undo clicked while a tick is still saving
  * is refused rather than racing it (#122 m5). The default runs it at once.
+ * A runner answers `false` when it refused, and a refused Undo SAYS so
+ * (#123 m2): sonner has already dismissed the toast on the click, so the
+ * operator's only way back is gone and they are told to use the box itself.
  */
 export async function flipMarketingOptOut(
   optedOut: boolean, save: OptOutSave, show: (checked: boolean) => void, toast: OptOutToast,
-  run: (work: () => Promise<void>) => unknown = (work) => work(),
+  run: (work: () => Promise<void>) => boolean | Promise<void> = (work) => work(),
 ): Promise<void> {
   show(optedOut);
   if (!(await write(optedOut, save, show, toast))) return;
@@ -74,10 +96,16 @@ export async function flipMarketingOptOut(
         label: m["common.undo"],
         // Returns what `run` returns (sonner ignores it) so a caller can await
         // it when the runner hands back the work's promise.
-        onClick: () => run(async () => {
-          show(!optedOut);
-          await write(!optedOut, save, show, toast);
-        }),
+        onClick: () => {
+          const ran = run(async () => {
+            show(!optedOut);
+            await write(!optedOut, save, show, toast);
+          });
+          if (ran === false) {
+            toast.error(m["contact.marketingOptOut.undoBusy"].replace("{label}", m["contact.marketingOptOut.label"]));
+          }
+          return ran;
+        },
       },
     },
   );
@@ -89,13 +117,16 @@ export async function flipMarketingOptOut(
  * is stale by the time the toast's button is clicked; a ref is read at click
  * time. `start` is the switch's `startTransition`, so the box still reads
  * `pending` (and disables) while the write runs.
+ *
+ * Answers whether it took the work: `false` means refused, which the Undo
+ * path turns into a word to the operator (#123 m2).
  */
 export function runGuarded(
   busy: { current: boolean },
   start: (work: () => Promise<void>) => void,
   work: () => Promise<void>,
-): void {
-  if (busy.current) return;
+): boolean {
+  if (busy.current) return false;
   busy.current = true;
   start(async () => {
     try {
@@ -104,4 +135,5 @@ export function runGuarded(
       busy.current = false;
     }
   });
+  return true;
 }
