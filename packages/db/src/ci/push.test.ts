@@ -109,8 +109,14 @@ describe("planCiCli builds exactly the CLI call it prints", () => {
       PGHOST: "evil.example", PGUSER: "someone", PGDATABASE: "x", PGOPTIONS: "-c role=x",
       PGPASSWORD: "p", PGSSLMODE: "disable", pgport: "1", PgService: "s",
       SUPABASE_CLI_BINARY_OVERRIDE: "/tmp/evil", supabase_cli_binary_override: "/tmp/evil2",
+      // The TS layer (supabase.exe) runs whatever SUPABASE_GO_BINARY names as
+      // the Go CLI and hands it --db-url, password included; both layers read
+      // SUPABASE_CA_SKIP_VERIFY (grep of the 2.109.1 binaries).
+      SUPABASE_GO_BINARY: "/tmp/evil3", supabase_go_binary: "/tmp/evil4",
+      SUPABASE_CA_SKIP_VERIFY: "true", supabase_ca_skip_verify: "1",
     }, [], paths);
-    expect(Object.keys(plan.env).filter((k) => /^pg/i.test(k) || /^supabase_cli_binary_override$/i.test(k))).toEqual([]);
+    expect(Object.keys(plan.env).filter((k) =>
+      /^pg/i.test(k) || /^supabase_(cli_binary_override|go_binary|ca_skip_verify)$/i.test(k))).toEqual([]);
     expect(plan.env.PATH).toBe("/usr/bin");
     expect(plan.env.HOME).toBe("/home/ci");
   });

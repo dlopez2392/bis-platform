@@ -17,8 +17,7 @@ import "dotenv/config";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Client, type QueryResult } from "pg";
-import { pgClientConfig, planCiSql, runSqlFile, sqlRefusals } from "./sql";
-import { withoutConnectionOverrides } from "./target";
+import { ciSqlClientConfig, planCiSql, runSqlFile, sqlRefusals } from "./sql";
 
 function printResult(r: QueryResult): void {
   if (!r.fields || r.fields.length === 0) {
@@ -48,13 +47,10 @@ async function main(): Promise<void> {
     );
   }
 
-  // No PG* variable may fill in for a field (pg reads them as defaults at
-  // Client construction), and every field is explicit, TLS included, with no
-  // connection string for pg to re-read (./sql.ts pgClientConfig).
-  for (const key of Object.keys(process.env)) {
-    if (!(key in withoutConnectionOverrides({ [key]: "x" }))) delete process.env[key];
-  }
-  const client = new Client(pgClientConfig(process.env));
+  // Strips PG* (and the CLI overrides) from process.env — where pg reads its
+  // fallbacks — then builds an explicit config: every field, TLS included, no
+  // connection string for pg to re-read (./sql.ts ciSqlClientConfig).
+  const client = new Client(ciSqlClientConfig(process.env));
   await client.connect();
   try {
     const results = await runSqlFile(client, sql, { allowWrite: plan.allowWrite });

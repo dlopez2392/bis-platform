@@ -41,9 +41,29 @@
  * in the schema but not the history, and the next push would try it again.
  */
 import { isAbsolute, relative, resolve } from "node:path";
-import { assertCiTarget, ciDbUrlParts, describeCiTarget, nameArgument, type CiTarget } from "./target";
+import {
+  assertCiTarget, ciDbUrlParts, describeCiTarget, isConnectionOverride, nameArgument, type CiTarget,
+} from "./target";
 
 const ALLOW_WRITE = "--allow-write";
+
+/**
+ * What ./sql-run.ts builds its pg Client from. Deletes every
+ * `isConnectionOverride` variable from `env` IN PLACE first — the runner
+ * passes `process.env`, which is where pg reads its PG* fallbacks at Client
+ * construction — then returns `pgClientConfig(env)`.
+ *
+ * The strip is load-bearing, not tidiness (re-review of PR #130): pg treats
+ * a falsy config field as unset, so `options: ""` still takes PGOPTIONS
+ * (`-c role=…`), and only removing the variable closes that. Tested against
+ * pg itself in ./sql.test.ts.
+ */
+export function ciSqlClientConfig(env: Record<string, string | undefined>): ReturnType<typeof pgClientConfig> {
+  for (const key of Object.keys(env)) {
+    if (isConnectionOverride(key)) delete env[key];
+  }
+  return pgClientConfig(env);
+}
 
 /**
  * What ci:sql hands `new pg.Client(...)`: every field explicit, built from
@@ -64,7 +84,7 @@ const ALLOW_WRITE = "--allow-write";
  */
 export function pgClientConfig(env: Record<string, string | undefined>): {
   host: string; port: number; user: string; password: string; database: "postgres";
-  ssl: { rejectUnauthorized: false }; connectionTimeoutMillis: number;
+  application_name: string; ssl: { rejectUnauthorized: false }; connectionTimeoutMillis: number;
 } {
   const target = assertCiTarget({
     ref: env.BIS_CI_SUPABASE_REF,
@@ -80,6 +100,10 @@ export function pgClientConfig(env: Record<string, string | undefined>): {
   }
   return {
     host: parts.host, port: parts.port, user: parts.user, password, database: "postgres",
+    // Explicit, so PGAPPNAME cannot supply it. `options` cannot be pinned the
+    // same way — pg treats "" as unset and takes PGOPTIONS — which is why
+    // `ciSqlClientConfig` strips the env first.
+    application_name: "bis-ci-sql",
     ssl: { rejectUnauthorized: false },
     // Ten seconds, as in test/db.ts: an unreachable host otherwise hangs
     // forever instead of naming itself.

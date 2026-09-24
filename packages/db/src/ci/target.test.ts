@@ -174,7 +174,7 @@ describe("assertCiTarget", () => {
 
   it("refuses an sslmode that turns TLS off", () => {
     expect(() => assertCiTarget({ ...good, dbUrl: `${pooler}?sslmode=disable` }))
-      .toThrow(/SUPABASE_DB_URL sslmode must be require, verify-ca or verify-full/);
+      .toThrow(/SUPABASE_DB_URL sslmode may only be require/);
   });
 
   it("refuses a host carrying a percent-escape, which pg decodes and the URL parser does not", () => {
@@ -192,6 +192,18 @@ describe("assertCiTarget", () => {
   it("refuses a database other than postgres", () => {
     expect(() => assertCiTarget({ ...good, dbUrl: pooler.replace(/\/postgres$/, "/template1") }))
       .toThrow(/SUPABASE_DB_URL must name the database postgres/);
+  });
+
+  /**
+   * verify-ca / verify-full promise a check nothing here performs: ci:sql
+   * sets its own TLS options, `db push` (pgconn) does not verify even under
+   * verify-full, and `migration list` (the TS client) does and would likely
+   * fail against the pooler's Supabase-root certificate (re-review of PR #130).
+   * Refused until verification is real, rather than half-honoured.
+   */
+  it.each(["verify-ca", "verify-full"])("refuses sslmode=%s, which no path here would honour consistently", (mode) => {
+    expect(() => assertCiTarget({ ...good, dbUrl: `${pooler}?sslmode=${mode}` }))
+      .toThrow(/SUPABASE_DB_URL sslmode may only be require \(or absent\)/);
   });
 
   it("accepts the session pooler with ?sslmode=require", () => {
@@ -266,7 +278,7 @@ describe("assertCiTarget", () => {
 
   it("refuses a percent-escaped sslmode, which one parser decodes and another may not", () => {
     expect(() => assertCiTarget({ ...good, dbUrl: `${pooler}?sslmode=%72equire` }))
-      .toThrow(/SUPABASE_DB_URL sslmode must be require, verify-ca or verify-full/);
+      .toThrow(/SUPABASE_DB_URL sslmode may only be require/);
   });
 
   it("refuses a URL with no port (every parser would pick its own default)", () => {

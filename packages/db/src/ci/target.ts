@@ -86,7 +86,15 @@ export function assertCiTarget(input: {
   return { ref, url, dbUser: parts.user, dbHost: `${parts.host}:${parts.port}` };
 }
 
-const SSL_MODES = new Set(["require", "verify-ca", "verify-full"]);
+/**
+ * `require` only (or no sslmode). verify-ca / verify-full would promise a
+ * check no path here performs consistently: ci:sql sets its own TLS options
+ * (./sql.ts pgClientConfig, unverified), `db push` (pgconn) does not verify
+ * even under verify-full, and `migration list` (the TS client) does and
+ * would likely fail against the pooler's Supabase-root certificate
+ * (re-review of PR #130). Refused until verification is real.
+ */
+const SSL_MODES = new Set(["require"]);
 
 /** RFC 3986 unreserved characters, or a %XX escape. Nothing a parser splits on. */
 const PASSWORD_SHAPE = /^(?:[A-Za-z0-9._~-]|%[0-9A-Fa-f]{2})+$/;
@@ -117,9 +125,10 @@ const POOLER_HOST = /^[a-z0-9-]+(\.[a-z0-9-]+)*\.pooler\.supabase\.com$/;
  * password of unreserved characters or %XX (no raw space, `=`, `@`, `:`,
  * `/`, `?`, `#`, backslash or control character for a parser to split on); a
  * plain pooler host; an explicit port; the path exactly `/postgres`; and at
- * most the one `sslmode` parameter, once. (The CLI forces TLS whatever
- * sslmode says; node-pg does not, which is why ci:sql sets `ssl` itself —
- * ./sql.ts `pgClientConfig`.)
+ * most the one `sslmode` parameter, once, and only `require`. (Both CLI paths
+ * force TLS whatever sslmode says; `db push` does not verify the certificate
+ * even under verify-full, `migration list` does. node-pg forces nothing,
+ * which is why ci:sql sets `ssl` itself — ./sql.ts `pgClientConfig`.)
  *
  * Messages are constants or name the expected value; none repeats the input.
  * Exported for `pgClientConfig`, which needs the password this never returns
@@ -190,7 +199,7 @@ export function ciDbUrlParts(dbUrl: string, ref: string): {
     }
     const mode = params.get("sslmode");
     if (mode === null || !SSL_MODES.has(mode) || query !== `sslmode=${mode}`) {
-      throw new Error("SUPABASE_DB_URL sslmode must be require, verify-ca or verify-full");
+      throw new Error("SUPABASE_DB_URL sslmode may only be require (or absent): nothing here verifies the certificate yet");
     }
   }
 
@@ -198,19 +207,35 @@ export function ciDbUrlParts(dbUrl: string, ref: string): {
 }
 
 /**
- * The environment a CI tool may hand a database client: everything except
- * the variables that retarget one. Every libpq-style client (Go pgconn, the
- * CLI's TS client, node-pg) takes PGHOST, PGUSER, PGDATABASE, PGOPTIONS,
- * PGSSLMODE, PGPASSWORD … as defaults, and the npm `supabase` shim EXECUTES
- * whatever binary SUPABASE_CLI_BINARY_OVERRIDE names
- * (node_modules/supabase/dist/supabase.js:25). Matched case-insensitively:
+ * Whether an environment variable may retarget a database client, or swap
+ * the program that will be handed the DB URL. Matched case-insensitively:
  * Windows environment names are.
+ *
+ *   - PG*: every libpq-style client — Go pgconn, the CLI's TS client, node-pg
+ *     — takes PGHOST, PGUSER, PGDATABASE, PGOPTIONS, PGAPPNAME, PGSSLMODE,
+ *     PGPASSWORD … as defaults for whatever the config leaves unset.
+ *   - The Supabase CLI 2.109.1 is THREE programs, and each earlier one
+ *     launches the next by a path the environment can replace (re-review of
+ *     PR #130; names grep-confirmed in the installed binaries):
+ *       1. the npm shim (node_modules/supabase/dist/supabase.js:25) runs
+ *          whatever SUPABASE_CLI_BINARY_OVERRIDE names instead of
+ *       2. supabase.exe, the TypeScript CLI, which serves `migration list`
+ *          itself (@effect/sql-pg) and runs whatever SUPABASE_GO_BINARY names
+ *          instead of
+ *       3. supabase-go.exe, which serves `db push` with pgconn.
+ *     A replaced program receives `--db-url`, password included.
+ *   - SUPABASE_CA_SKIP_VERIFY: read by both CLI binaries; it turns off the
+ *     certificate checks the CLI does make.
  */
+export function isConnectionOverride(key: string): boolean {
+  return /^pg/i.test(key) || /^supabase_(cli_binary_override|go_binary|ca_skip_verify)$/i.test(key);
+}
+
+/** The environment a CI tool may hand a database client or the CLI: everything but `isConnectionOverride`. */
 export function withoutConnectionOverrides(env: Record<string, string | undefined>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
-    if (value === undefined) continue;
-    if (/^pg/i.test(key) || /^supabase_cli_binary_override$/i.test(key)) continue;
+    if (value === undefined || isConnectionOverride(key)) continue;
     out[key] = value;
   }
   return out;

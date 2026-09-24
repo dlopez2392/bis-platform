@@ -16,13 +16,22 @@
  * handed to the child process and never printed; `summary` is what gets
  * printed.
  *
- * The CLI reads the DB URL with TWO different parsers (re-review of PR #130):
- * `db push` uses Go pgconn and `migration list` a TS client (@effect/sql-pg).
- * Neither is node-pg, so the guard's pg cross-check says nothing about them;
- * what protects them is the one exact raw form `assertCiTarget` insists on
- * (./target.ts `ciDbUrlParts`) and `env`, which drops every PG* variable
- * both parsers fall back on and the shim's SUPABASE_CLI_BINARY_OVERRIDE. The
- * CLI forces TLS itself, whatever sslmode says.
+ * The CLI 2.109.1 is THREE programs, each launching the next (re-reviews of
+ * PR #130):
+ *   1. the npm shim, which runs `supabase.exe` — or whatever
+ *      SUPABASE_CLI_BINARY_OVERRIDE names;
+ *   2. `supabase.exe`, the TypeScript CLI: it serves `migration list` itself
+ *      with @effect/sql-pg, and runs `supabase-go.exe` for `db push` — or
+ *      whatever SUPABASE_GO_BINARY names;
+ *   3. `supabase-go.exe`, which serves `db push` with Go pgconn.
+ * So the DB URL meets two parsers, neither of them node-pg, and the guard's
+ * pg cross-check says nothing about them. What protects them is the one
+ * exact raw form `assertCiTarget` insists on (./target.ts `ciDbUrlParts`)
+ * and `env`, which drops every PG* variable both parsers fall back on, both
+ * binary overrides, and SUPABASE_CA_SKIP_VERIFY (./target.ts
+ * `isConnectionOverride`). Both CLI paths force TLS whatever sslmode says;
+ * `db push` does not verify the certificate even under verify-full,
+ * `migration list` does — hence the guard allows only `sslmode=require`.
  */
 import {
   assertCiTarget, describeCiTarget, nameArgument, withoutConnectionOverrides, type CiTarget,

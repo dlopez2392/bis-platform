@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { pgClientConfig, planCiSql, runSqlFile, sqlRefusals } from "./sql";
+import { Client } from "pg";
+import { ciSqlClientConfig, pgClientConfig, planCiSql, runSqlFile, sqlRefusals } from "./sql";
 import { PRODUCTION_SUPABASE_REF } from "./target";
 
 /**
@@ -125,7 +126,7 @@ describe("pgClientConfig", () => {
     const config = pgClientConfig({ ...ciEnv, SUPABASE_DB_URL: DB_URL });
     expect(config).toEqual({
       host: "aws-0-us-east-1.pooler.supabase.com", port: 6543, user: `postgres.${CI_REF}`,
-      password: "p@ss=w0rd", database: "postgres",
+      password: "p@ss=w0rd", database: "postgres", application_name: "bis-ci-sql",
       ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 10_000,
     });
     expect(config).not.toHaveProperty("connectionString");
@@ -134,6 +135,46 @@ describe("pgClientConfig", () => {
   it("refuses production, like every other entry point", () => {
     expect(() => pgClientConfig({ ...ciEnv, SUPABASE_DB_URL: DB_URL.replace(`postgres.${CI_REF}`, `postgres.${PRODUCTION_SUPABASE_REF}`) }))
       .toThrow(/SUPABASE_DB_URL points at production/);
+  });
+});
+
+/**
+ * pg fills any field the config leaves falsy from PG* env vars, AT Client
+ * construction, from the real process.env. `application_name` can be pinned
+ * in the config; `options` cannot — probed on pg 8.22: `options: ""` still
+ * takes PGOPTIONS, so `-c role=…` would ride in. The strip is therefore
+ * load-bearing (re-review of PR #130) and is tested here against pg itself,
+ * on process.env, with fake values that are restored afterwards.
+ */
+describe("ciSqlClientConfig", () => {
+  const PLANTED: Record<string, string> = {
+    PGOPTIONS: "-c role=evil", PGAPPNAME: "evil-app", pgoptions: "-c role=evil2",
+    SUPABASE_GO_BINARY: "/tmp/evil", SUPABASE_CA_SKIP_VERIFY: "true",
+  };
+  const withProcessEnv = (vars: Record<string, string>, fn: () => void) => {
+    const saved = new Map(Object.keys(vars).map((k) => [k, process.env[k]] as const));
+    Object.assign(process.env, vars);
+    try { fn(); } finally {
+      for (const [k, v] of saved) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    }
+  };
+
+  it("drops PG* and the CLI overrides from the env it is given", () => {
+    withProcessEnv({ ...ciEnv, ...PLANTED }, () => {
+      ciSqlClientConfig(process.env);
+      expect(Object.keys(process.env).filter((k) => k in PLANTED)).toEqual([]);
+      expect(process.env.BIS_CI_SUPABASE_REF).toBe(CI_REF);
+    });
+  });
+
+  it("leaves pg nothing to take from PGOPTIONS or PGAPPNAME", () => {
+    withProcessEnv({ ...ciEnv, ...PLANTED }, () => {
+      const resolved = (new Client(ciSqlClientConfig(process.env)) as unknown as {
+        connectionParameters: { options?: string; application_name?: string };
+      }).connectionParameters;
+      expect(resolved.options).toBeUndefined();
+      expect(resolved.application_name).toBe("bis-ci-sql");
+    });
   });
 });
 
