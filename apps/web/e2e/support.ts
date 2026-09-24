@@ -1,6 +1,7 @@
 import { type Page, type Request, expect, test } from "@playwright/test";
 import { existsSync, readFileSync } from "node:fs";
 import { contrastRatio } from "../src/lib/branding/color";
+import { seededAccountMissingMessage } from "./fixtures/seeded";
 
 /**
  * `rgb(30, 58, 138)` — what getComputedStyle reports — back to `#1e3a8a`, so
@@ -49,11 +50,16 @@ export const SEEDED_CONTACT_NAME = "Maria Garcia";
 
 /**
  * Navigates to /dashboard/accounts and opens the card for `accountName`,
- * found by its accessible name rather than position. If no such card is
- * present — a fresh or reset database, or the seed data being renamed —
- * skips the current test with a clear reason instead of silently falling
- * back to some other account and passing (or failing) against the wrong
- * data.
+ * found by its accessible name rather than position — never falling back to
+ * some other account and passing (or failing) against the wrong data.
+ *
+ * If no such card appears, the test FAILS, naming `ci:seed`. It used to skip,
+ * and a skip is a green: on a fresh or reset project — including the separate
+ * CI Supabase project before its seed step has run — contacts, pipeline and
+ * most of palette.spec would all have "passed" by never running. A missing
+ * seed is an operator error with one fix (fixtures/seeded.ts), so the run says
+ * which. `not.toHaveCount(0)` retries until the list has rendered, so a slow
+ * page is not mistaken for a missing account.
  *
  * Returns only once the browser is INSIDE the account. `click()` resolves when
  * the click is dispatched, not when the client-side navigation it starts has
@@ -66,10 +72,8 @@ export const SEEDED_CONTACT_NAME = "Maria Garcia";
 export async function openAccountByName(page: Page, accountName: string) {
   await page.goto("/dashboard/accounts");
   const card = page.getByRole("link", { name: accountName });
-  if ((await card.count()) === 0) {
-    test.skip(true, `No account named "${accountName}" found on /dashboard/accounts — seed it before running this spec.`);
-    return;
-  }
+  await expect(card, seededAccountMissingMessage(accountName, "on /dashboard/accounts"))
+    .not.toHaveCount(0);
   await card.click();
   await expect(page).toHaveURL(/\/dashboard\/accounts\/[0-9a-f-]{36}(?:[/?#]|$)/);
 }
@@ -79,12 +83,20 @@ export async function openAccountByName(page: Page, accountName: string) {
  * deletes — the account for specs that MUTATE account state (calendar
  * settings, bookings). Written on 2026-08-30, the day the booking journeys'
  * "reset the calendar to disabled when done" convention wiped a LIVE video
- * exit-gate configuration on `Test Client One` twice in one afternoon: there
- * is exactly ONE Supabase project, so an e2e write to the shared seeded
- * account IS a production write. Specs that only need to READ real rows
- * (calls.spec's real phone calls, messaging's seeded contact) stay on
- * `Test Client One`; anything that changes account-level state belongs here,
- * where the whole account evaporates after the run.
+ * exit-gate configuration on `Test Client One` twice in one afternoon: at the
+ * time there was exactly ONE Supabase project, so an e2e write to the seeded
+ * account WAS a production write.
+ *
+ * The rule outlives that reason. CI is moving to its own Supabase project,
+ * where `Test Client One` is created by `pnpm --filter @bis/db ci:seed`
+ * rather than by hand; but whichever project a run points at, the seeded
+ * account is ONE account shared by every run against it (a local run and a CI
+ * run can land on it at the same time), and until a machine's env files are
+ * switched that project is still production. Specs that only need to READ
+ * seeded rows (messaging's and palette's seeded contact, the "another
+ * company" in client-access and client-branding) use `Test Client One`;
+ * anything that changes account-level state belongs
+ * here, where the whole account evaporates after the run.
  */
 const CLIENT_FIXTURE_FILE = "e2e/.auth/client-fixture.json";
 
