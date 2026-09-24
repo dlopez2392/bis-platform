@@ -19,9 +19,11 @@ export type OptOutZone = Pick<ResolvedZone, "zone" | "guessed" | "label">;
  * names the zone it is in: "Off since Sep 3, 2026 (UTC)" (#123 m3). Not a
  * `ZoneNote` — that is one per screen, and this is one line under a checkbox.
  *
- * `zone` may be missing: the drawer casts a fetched JSON summary, and a server
- * from before #124 (a rollback while this tab is open) sends `timezone` and
- * no `zone`. No zone means no line, for the same reason as a bad stamp.
+ * `zone` may be missing: a server from before #124 (a rollback while this tab
+ * is open) sends `timezone` and no `zone`, and the drawer's summary parser
+ * (`parseContactSummary`, lib/contacts/summary.ts) tolerates that rather than
+ * refusing the summary. No zone means no line, for the same reason as a bad
+ * stamp.
  */
 export function optOutSinceLine(optedOutAt: string | null, zone: OptOutZone | undefined): string | null {
   if (optedOutAt === null || Number.isNaN(Date.parse(optedOutAt))) return null;
