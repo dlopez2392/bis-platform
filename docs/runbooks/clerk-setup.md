@@ -293,6 +293,14 @@ Recommendation: **keep e2e on the development instance** if Part E confirms
 two domains are supported, because it also removes a standing hazard. If it
 does not, move e2e and accept the fixture churn.
 
+**Settled, 2026-09-24 (#133):** CI now runs on its own Supabase project
+(`bis-ci`, `docs/runbooks/ci-supabase-project.md`), whose only Third-Party
+Auth provider is the Clerk **development** instance
+(`topical-redfish-40.clerk.accounts.dev`) — so the first option above is no
+longer a recommendation but the only one CI's database will accept. This
+does not change what a LOCAL run does until that machine's env files are
+switched (that runbook's section 9).
+
 ## Part I — verify, in this order, and stop at the first failure
 
 **Steps 1–3 gate Part H2.** Do not touch the database until all three pass;

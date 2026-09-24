@@ -12,10 +12,19 @@
 -- ASCII only, no backslashes anywhere (newline is chr(10)), so it survives the
 -- MCP path intact (memory bis-mcp-sql-escapes).
 --
--- Expected, allowed difference: extension_version(info) only. Everything else
--- must match. The CI project is pushed byte-exact from the migration files,
--- so it is the reference for "what the files say". (The bucket is NOT an
--- allowed difference: bootstrap/ci-project.sql sets production's values.)
+-- Expected, allowed differences (first parity run, 2026-09-24): extension_version(info);
+-- and three cosmetic differences on production's side, in the column and
+-- function kinds, each an artefact of how the MCP applied a file rather than
+-- a difference in what the database does:
+--   - column: public.contacts.email_key's generation expression stores a raw
+--     U+00A0 character where the migration file spells it as an escape (the
+--     ASCII backslash character followed by u00A0);
+--   - function: app.current_account_id() is re-indented;
+--   - function: public.concierge_enable(...) lacks 0045's three-line comment.
+-- Everything else must match. The CI project is pushed byte-exact from the
+-- migration files, so it is the reference for "what the files say". (The
+-- bucket is NOT an allowed difference: bootstrap/ci-project.sql sets
+-- production's values.)
 --
 -- WHAT IS COMPARED, AND WHAT IS SCOPED OUT. The fingerprint covers what the
 -- migrations, the bootstrap and the manual bucket are responsible for, and
