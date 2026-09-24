@@ -1,11 +1,16 @@
 import { test as sweep } from "@playwright/test";
 import { config as loadEnv } from "dotenv";
 import { sweepStaleFixtures, formatSweepReport } from "./fixtures/sweep";
+import { refuseProduction } from "./fixtures/production-guard";
 
 // Same two paths, same reason, as auth.setup.ts: this file talks to Supabase
 // and Clerk from the Playwright runner process, not through a Next request.
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
+
+// Before the sweep is registered, even in report-only mode: a dry run still
+// reads production's customers. See fixtures/production-guard.ts.
+refuseProduction(process.env, "The e2e fixture sweep");
 
 /**
  * The human entry point: `pnpm --filter web e2e:sweep`.

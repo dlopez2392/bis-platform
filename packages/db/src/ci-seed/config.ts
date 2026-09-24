@@ -4,8 +4,10 @@
  * The e2e suite reads ONE hand-made account, "Test Client One", that no script
  * ever created: it was built by hand in the M1a smoke
  * (docs/superpowers/plans/2026-07-26-m1a-crm-core.md, Task 9 Step 5), and
- * `openAccountByName` SKIPS when it is missing — so a fresh CI project would
- * turn contacts/pipeline/palette specs into a vacuous green. This file names
+ * `openAccountByName` used to SKIP when it was missing, which on a fresh CI
+ * project would have turned contacts/pipeline/palette specs into a vacuous
+ * green. Since #132 it FAILS instead, naming `ci:seed`
+ * (apps/web/e2e/fixtures/seeded.ts `seededAccountMissingMessage`). This file names
  * what that account has to hold, so a script can make it (./seed.ts) and say
  * when it is not there. Every value is pinned by ./config.test.ts against the
  * spec, migration or rule that depends on it.

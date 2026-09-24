@@ -253,8 +253,9 @@ function decodeOnce(s: string): string {
  * Production's ref anywhere in the string, raw OR percent-decoded (up to
  * three rounds, until it stops changing). `%74lbkb…` is production's ref to
  * every parser that decodes, so a search of the raw bytes alone missed it.
+ * Exported for the local test-run guard (../test/refuse-production.ts).
  */
-function mentionsProduction(value: string): boolean {
+export function mentionsProduction(value: string): boolean {
   let current = value.toLowerCase();
   for (let round = 0; round < 4; round++) {
     if (current.includes(PRODUCTION_SUPABASE_REF)) return true;

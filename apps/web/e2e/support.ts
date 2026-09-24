@@ -87,12 +87,12 @@ export async function openAccountByName(page: Page, accountName: string) {
  * time there was exactly ONE Supabase project, so an e2e write to the seeded
  * account WAS a production write.
  *
- * The rule outlives that reason. CI is moving to its own Supabase project,
- * where `Test Client One` is created by `pnpm --filter @bis/db ci:seed`
- * rather than by hand; but whichever project a run points at, the seeded
- * account is ONE account shared by every run against it (a local run and a CI
- * run can land on it at the same time), and until a machine's env files are
- * switched that project is still production. Specs that only need to READ
+ * The rule outlives that reason. CI now runs on its own Supabase project
+ * (#133), where `Test Client One` is created by `pnpm --filter @bis/db
+ * ci:seed` rather than by hand, and a local run refuses production outright
+ * (playwright.config.ts, fixtures/production-guard.ts); but the seeded
+ * account is still ONE account shared by every run against that project (a
+ * local run and a CI run can land on it at the same time). Specs that only need to READ
  * seeded rows (messaging's and palette's seeded contact, the "another
  * company" in client-access and client-branding) use `Test Client One`;
  * anything that changes account-level state belongs

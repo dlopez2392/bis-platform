@@ -1,11 +1,21 @@
 import "dotenv/config";
 import { serviceDb } from "../service";
 import { sweepAbandonedFixtures } from "./sweep-fixtures";
+import { refuseProduction } from "./refuse-production";
 
 /**
- * Runs once before the db suite, to clear fixture accounts that earlier runs
- * were killed before they could remove. See `sweep-fixtures.ts` for why the
- * `finally` in `withTestAccount` is not enough on its own.
+ * Runs once before the db suite: first refuses production, then clears
+ * fixture accounts that earlier runs were killed before they could remove.
+ * See `sweep-fixtures.ts` for why the `finally` in `withTestAccount` is not
+ * enough on its own.
+ *
+ * The refusal comes first and does not depend on credentials being complete.
+ * CI runs this suite on its own Supabase project, behind
+ * .github/scripts/ci-target-guard.sh; a local run reads packages/db/.env, and
+ * where that file still names production (docs/runbooks/ci-supabase-project.md,
+ * section 9) the sweep and every test after it would write there. The DB URL
+ * alone is enough for `withRollback` to connect, so it is checked even when
+ * the API credentials are missing. See ./refuse-production.ts.
  *
  * Before the suite rather than after it, deliberately: an "after" hook is
  * exactly what a killed process skips, so it would share the failure mode it
@@ -13,6 +23,8 @@ import { sweepAbandonedFixtures } from "./sweep-fixtures";
  * next run rather than waiting for someone to notice.
  */
 export default async function setup(): Promise<void> {
+  refuseProduction(process.env, "The db suite");
+
   // The suite itself reports missing credentials, per test, far more clearly
   // than a global setup can. Failing here would only replace that with one
   // confusing error before a single test is collected.

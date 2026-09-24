@@ -5,8 +5,10 @@ import { TEST_ORG_ID_PREFIX, isTestOrgId } from "../org-id";
 /**
  * `withTestAccount` deletes its account in a `finally`, which covers a failing
  * assertion but NOT the process being killed underneath it. A killed run
- * leaves a real account row in the Supabase project that also serves
- * production, and it stays there.
+ * leaves a real account row in the Supabase project the run pointed at, and
+ * it stays there. That project was production's until CI moved to its own
+ * (#133); a local run now refuses production before this sweep is reached
+ * (./global-setup.ts, ./refuse-production.ts).
  *
  * That is not hypothetical. Merging two PRs 37 seconds apart on 2026-09-15 let
  * the second merge cancel main's CI for the first (`verify` runs with
@@ -38,7 +40,9 @@ export interface SweepCandidate {
  * Whether a row is beyond doubt an abandoned fixture.
  *
  * TWO conditions, and both have to hold, because the cost of a false positive
- * here is deleting a real tenant's account from the production database:
+ * here is deleting a real account. On production, where this suite ran until
+ * #133, that was a real tenant's; the local guard now refuses production, and
+ * the predicate does not relax on the strength of that guard:
  *
  *   - the `org_test_` prefix that every test in this repo generates its clerk
  *     org id with (`../org-id.ts`, the one place that literal lives), and
