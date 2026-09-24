@@ -538,21 +538,22 @@ export async function loadSendableRows<T extends { account_id: string }>(
  *  calendar's feature, or the account's outbound is switched off). */
 export type DueLookup<T> = { due: T; why?: undefined } | { due: null; why: "gone" | "off" };
 
-/** An embed a due row reaches through a plain FK, and the noun its log line uses. */
+/** An embed a due row reaches through an FK, and the noun its log line uses. */
 const EMBED_NOUN = { contacts: "contact", calendars: "calendar" } as const;
 export type AccountEmbed = keyof typeof EMBED_NOUN;
 
 /**
  * EVERY EMBED MUST BE THE ROW'S OWN ACCOUNT'S — every due-list that reaches
- * the customer, or the calendar a link is built from, through a plain FK:
+ * the customer, or the calendar a link is built from, through an FK:
  * `bookings.contact_id`, `bookings.calendar_id`, `opportunities.contact_id`.
  *
- * All three are single-column FKs; there is no composite
- * `(account_id, contact_id)` or `(account_id, calendar_id)` key anywhere in
- * this schema, so a booking in account A can point at a contact or a calendar
- * of account B. The embed follows the FK with no account condition of its
- * own, and everything downstream would follow it too: the send, under A's
- * brand, to B's customer's address, or a link to B's public booking page.
+ * Until 0050 all three were single-column FKs, so a booking in account A
+ * could point at a contact or a calendar of account B. The embed followed the
+ * FK with no account condition of its own, and everything downstream would
+ * have followed it too: the send, under A's brand, to B's customer's address,
+ * or a link to B's public booking page.
+ * Migration 0050 makes all three composite FKs onto `(account_id, id)`, so
+ * that row can no longer be written; this guard stays as defence in depth.
  * `listDueReactivations` has guarded its own join this way since the #111
  * audit (A1); automations.ts's recipes since 36e8c89 (`ownAccountContactOnly`,
  * now a delegate of this); the booking reminder and follow-up since B22.
