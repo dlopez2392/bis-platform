@@ -9,7 +9,12 @@ export default defineConfig({
     // decides what gets DELETED from the shared dev database — and a decision
     // that dangerous belongs in a unit test rather than only in the e2e run
     // that acts on it.
-    include: ["src/**/*.test.ts", "e2e/**/*.test.ts"],
+    //
+    // `ci/**` holds the tests for the CI preflight scripts under
+    // .github/scripts/. Those scripts belong to no workspace package, and a
+    // test that `pnpm check` does not collect proves nothing, so they are
+    // tested from here.
+    include: ["src/**/*.test.ts", "e2e/**/*.test.ts", "ci/**/*.test.ts"],
     // Runtime-only configuration is pinned OFF for the unit suite, whatever
     // the ambient environment holds. `originFrom` checks APP_ORIGIN ahead of
     // the Host header by design, so eleven tests that assert host-derived
