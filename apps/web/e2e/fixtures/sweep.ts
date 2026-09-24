@@ -106,6 +106,100 @@ export async function deleteAccountCascade(
   if (error) report.errors.push(`accounts delete for ${accountId}: ${error.message}`);
 }
 
+/**
+ * Clerk paginates every list endpoint with `limit`/`offset` and reports how
+ * many rows exist remotely as `totalCount` (both `getUserList` and
+ * `getOrganizationList` share this shape — `ClerkPaginationRequest` /
+ * `PaginatedResourceResponse` in `@clerk/backend`'s `UserApi.d.ts` /
+ * `OrganizationApi.d.ts`, `dist/api/resources/Deserializer.d.ts` for
+ * `totalCount`). A single `limit: 100` call therefore only ever sees the
+ * newest 100 identities (Clerk's default order is newest-first) — anything
+ * stale on page 2+ was never reachable and accumulates forever in the Clerk
+ * instance production shares.
+ *
+ * This collects every page BEFORE the caller decides anything: the sweep
+ * deletes some of what it finds, and deleting mid-page shifts every
+ * remaining offset by the number removed so far, silently skipping whatever
+ * lands in the gap. Collecting first means every decision is made against a
+ * stable snapshot.
+ *
+ * Stops the instant a page comes back empty — a defensive floor against a
+ * `totalCount` that never counts down, not an expected path.
+ */
+const CLERK_PAGE_SIZE = 100;
+
+async function fetchAllPages<T>(
+  fetchPage: (page: { limit: number; offset: number }) => Promise<{ data: T[]; totalCount: number }>,
+): Promise<T[]> {
+  const all: T[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = await fetchPage({ limit: CLERK_PAGE_SIZE, offset });
+    if (page.data.length === 0) break;
+    all.push(...page.data);
+    offset += page.data.length;
+    if (offset >= page.totalCount) break;
+  }
+  return all;
+}
+
+/** The slice of the real Clerk client this module needs — narrow on purpose
+ *  so a unit test can inject a fake without a real Clerk instance. The real
+ *  client (`clerkClient()` from `@clerk/nextjs/server`) satisfies this
+ *  structurally; nothing here imports its type. */
+export type ClerkForSweep = {
+  users: {
+    getUserList: (
+      params: { query?: string; limit?: number; offset?: number },
+    ) => Promise<{ data: Array<{ id: string; emailAddresses: Array<{ emailAddress: string }> }>; totalCount: number }>;
+    deleteUser: (userId: string) => Promise<unknown>;
+  };
+  organizations: {
+    getOrganizationList: (
+      params: { limit?: number; offset?: number },
+    ) => Promise<{ data: Array<{ id: string; name: string }>; totalCount: number }>;
+    deleteOrganization: (organizationId: string) => Promise<unknown>;
+  };
+};
+
+/** Exported for `sweep.test.ts`, which injects a fake `ClerkForSweep` — real
+ *  Clerk identities are exactly what this module must never touch in a unit
+ *  test. */
+export async function sweepClerkUsers(
+  clerk: ClerkForSweep, report: SweepReport, now: number, maxAgeMs: number, dryRun: boolean,
+): Promise<void> {
+  try {
+    const users = await fetchAllPages((page) =>
+      clerk.users.getUserList({ query: "e2e-client-", ...page }));
+    for (const user of users) {
+      const email = user.emailAddresses[0]?.emailAddress ?? "";
+      if (!isStaleFixture(email, FIXTURE_EMAIL_RE, now, maxAgeMs)) continue;
+      report.clerkUsers.push({ id: user.id, email });
+      if (!dryRun) await clerk.users.deleteUser(user.id);
+    }
+  } catch (e) {
+    report.errors.push(`clerk users: ${String(e)}`);
+  }
+}
+
+/** Exported for `sweep.test.ts`, same reason as `sweepClerkUsers`. */
+export async function sweepClerkOrgs(
+  clerk: ClerkForSweep, report: SweepReport, now: number, maxAgeMs: number, dryRun: boolean,
+): Promise<void> {
+  try {
+    const orgs = await fetchAllPages((page) => clerk.organizations.getOrganizationList(page));
+    for (const org of orgs) {
+      // Same decision as the accounts leg: an org is named after its account
+      // (auth.setup.ts by hand, blueprints.spec.ts through createClientAccount).
+      if (!isStaleFixtureAccount(org.name, now, maxAgeMs)) continue;
+      report.clerkOrgs.push({ id: org.id, name: org.name });
+      if (!dryRun) await clerk.organizations.deleteOrganization(org.id);
+    }
+  } catch (e) {
+    report.errors.push(`clerk orgs: ${String(e)}`);
+  }
+}
+
 /** Every object under one account's Storage prefix. */
 async function removePrefix(
   db: Db, accountId: string, report: SweepReport, dryRun: boolean,
@@ -164,32 +258,13 @@ export async function sweepStaleFixtures({
 
   // 2. Clerk identities. Independent of step 1 on purpose: a run killed
   // between createUser and createAccount leaves a user with no account row,
-  // so keying off accounts alone would never find it.
+  // so keying off accounts alone would never find it. Both legs page through
+  // every Clerk result rather than trusting a single `limit: 100` call — see
+  // `fetchAllPages`'s own comment for why a single page silently strands
+  // anything past the first 100.
   const clerk = await clerkClient();
-  try {
-    const users = await clerk.users.getUserList({ query: "e2e-client-", limit: 100 });
-    for (const user of users.data) {
-      const email = user.emailAddresses[0]?.emailAddress ?? "";
-      if (!isStaleFixture(email, FIXTURE_EMAIL_RE, now, maxAgeMs)) continue;
-      report.clerkUsers.push({ id: user.id, email });
-      if (!dryRun) await clerk.users.deleteUser(user.id);
-    }
-  } catch (e) {
-    report.errors.push(`clerk users: ${String(e)}`);
-  }
-
-  try {
-    const orgs = await clerk.organizations.getOrganizationList({ limit: 100 });
-    for (const org of orgs.data) {
-      // Same decision as the accounts leg: an org is named after its account
-      // (auth.setup.ts by hand, blueprints.spec.ts through createClientAccount).
-      if (!isStaleFixtureAccount(org.name, now, maxAgeMs)) continue;
-      report.clerkOrgs.push({ id: org.id, name: org.name });
-      if (!dryRun) await clerk.organizations.deleteOrganization(org.id);
-    }
-  } catch (e) {
-    report.errors.push(`clerk orgs: ${String(e)}`);
-  }
+  await sweepClerkUsers(clerk, report, now, maxAgeMs, dryRun);
+  await sweepClerkOrgs(clerk, report, now, maxAgeMs, dryRun);
 
   // 3. Orphaned Storage objects — a prefix whose account row no longer
   // exists. Runs AFTER the deletes above so it also catches what they just
