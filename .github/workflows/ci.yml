@@ -6,60 +6,79 @@ name: CI
 # removed, and nobody knew until the author ran the suite by hand. The guards
 # this repo relies on protect nothing unless something runs them on every push.
 #
-# Two jobs. The ORIGINAL split criterion below — "whether the work touches
-# the shared Supabase project" — IS WRONG, and it is left standing because
-# the correction is the useful part: BOTH jobs touch it. `pnpm check` runs 423
-# live tests against that project. Treating verify as though it did not is the
-# assumption behind #82's fix and behind the `needs: verify` on e2e; the real
-# difference between these two jobs is only what they each do with the project.
+# WHERE THE GATES RUN. Both jobs write to a Supabase database: `pnpm check`
+# runs the packages/db suite (hundreds of live tests that create and delete
+# their own rows), and e2e creates a fixture client and drives a real browser
+# through it. Until 2026-09-24 that database was PRODUCTION's project,
+# because it was the only one. They now run on a separate Free project that
+# exists only for CI, `bis-ci` (BIS_CI_SUPABASE_REF below), built from the
+# migration files by .github/workflows/ci-project-setup.yml and seeded by
+# `ci:seed`. Of the workflows in this repo, only seed-demo.yml and
+# screenshots.yml still reach production, through the non-CI_ secrets.
+# Rebuilding, restoring or re-seeding the CI project:
+# docs/runbooks/ci-supabase-project.md.
 #
-# (see CLAUDE.md: e2e and production share one project):
+# The switch is enforced, not assumed. Every job runs
+# .github/scripts/ci-target-guard.sh straight after checkout: it refuses any
+# value that names production, a DB URL that is not the CI project's Session
+# pooler user, a Clerk key from the production instance, and a secret key
+# that does not open the CI project's REST API. The repository secrets that
+# hold production's values — the ones NAMED NEXT_PUBLIC_SUPABASE_URL,
+# SUPABASE_SERVICE_ROLE_KEY and SUPABASE_DB_URL — are never read here;
+# apps/web/ci/ci-workflow.test.ts fails `pnpm check` if one ever is.
 #
 #   verify  typecheck + lint + unit tests + production build. This is exactly
 #           `pnpm check` and `pnpm --filter web build` from CLAUDE.md, no
 #           more and no less, so CI and a contributor's terminal cannot
-#           disagree about what "green" means. Serialized ACROSS THE WHOLE
-#           REPO and never cancelled, for the same reason e2e is: `pnpm
-#           check` runs the packages/db suite, which is live network work
-#           against that one shared project.
+#           disagree about what "green" means. The guard in front of them is
+#           a preflight, not a gate.
 #
-#   e2e     the Playwright journey. Serialized ACROSS THE WHOLE REPO, never
-#           cancelled: two runs against the one shared database at the same
-#           time would race on the fixture account and on the agency user's
-#           persisted preferences. A second push while one e2e run is live
-#           waits for it. (GitHub keeps at most one pending run per group, so
-#           a THIRD push within the same window cancels the second's e2e job —
-#           re-run it from the Actions tab if that ever bites.)
+#   e2e     seeds the CI project (idempotent; a no-op once seeded), then the
+#           Playwright journey. Serialized ACROSS THE WHOLE REPO, never
+#           cancelled: every run shares the one seeded account ("Test Client
+#           One") and specs drag its pipeline card, create forms and leads on
+#           it and read its unread counts, so two runs at once race each
+#           other. A second push while one e2e run is live waits for it.
+#           (GitHub keeps at most one pending run per group, so a THIRD push
+#           within the same window cancels the second's e2e job — re-run it
+#           from the Actions tab if that ever bites.)
 #
-# Both jobs need the same five secrets — the values from apps/web/.env.local —
-# and REFUSE to run without them, naming what is missing. A gate that quietly
-# skips when it cannot run is how the pre-CI state came about in the first
-# place.
+# Both jobs REFUSE to run without their credentials, naming what is missing
+# (the guard's check 1). A gate that quietly skips when it cannot run is how
+# the pre-CI state came about in the first place.
 
 on:
   push:
   workflow_dispatch:
 
 env:
-  # Not secrets — the same literals .env.example carries for every developer.
-  # Only what the gates actually need to RUN belongs here. APP_ORIGIN and
-  # EMAIL_FROM were set in the first draft, on the reasoning that CI should
-  # mirror the deployment; they are runtime configuration, and mirroring them
-  # changed what the gates measure. APP_ORIGIN is read ahead of the Host
-  # header by design, so it inverted eleven link-building tests and pointed
-  # the e2e run's cancel links at the production domain instead of the local
-  # server. A gate must test the code, not the deployment's settings.
+  # Not secrets. Only what the gates actually need to RUN belongs here.
+  # APP_ORIGIN and EMAIL_FROM were set in the first draft, on the reasoning
+  # that CI should mirror the deployment; they are runtime configuration, and
+  # mirroring them changed what the gates measure. APP_ORIGIN is read ahead of
+  # the Host header by design, so it inverted eleven link-building tests and
+  # pointed the e2e run's cancel links at the production domain instead of the
+  # local server. A gate must test the code, not the deployment's settings.
   NEXT_PUBLIC_CLERK_SIGN_IN_URL: /sign-in
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_h2GmSCjLzD74RotkQAvMbA_BL6FAI4k
+  # The CI project, as literals so the target is visible in review. The ref is
+  # the one allowlist every CI-only tool checks against (the guard, ci:seed,
+  # db:push:ci); the URL must be exactly https://<ref>.supabase.co. The
+  # publishable key is publishable by design. All three must name the same
+  # project as ci-project-setup.yml's env (pinned by ci-workflow.test.ts).
+  BIS_CI_SUPABASE_REF: odnobiodsftffphuuosz
+  NEXT_PUBLIC_SUPABASE_URL: https://odnobiodsftffphuuosz.supabase.co
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_REPLACE_WITH_CI_PROJECT_KEY
   # Secrets. Sending is FAKE everywhere except VERCEL_ENV=production
-  # (.env.example), so a CI run never emails a real address; the service-role
-  # key and DB URL are what the db suite, one web test, and the e2e fixture
-  # setup use to create and delete their own per-run rows.
+  # (.env.example), so a CI run never emails a real address. The secret key
+  # and DB URL are the CI project's (CI_* secrets; SUPABASE_DB_URL is its
+  # Session pooler URI, since runners have no IPv6), mapped onto the names the
+  # code reads; the db suite, one web test, ci:seed and the e2e fixture setup
+  # use them to create and delete their own rows. Clerk stays the development
+  # instance, which the guard enforces.
   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
   CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
-  NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-  SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CI_SUPABASE_SECRET_KEY }}
+  SUPABASE_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}
 
 jobs:
   verify:
@@ -69,72 +88,49 @@ jobs:
     # runner is a slower, more distant client than a dev machine (the same
     # command takes ~3 minutes locally). 20 left under four minutes of
     # headroom, which is a gate that eventually fails on wall clock and
-    # trains everyone to re-run red CI without reading it.
+    # trains everyone to re-run red CI without reading it. The CI project is
+    # a Free project on the smallest compute; it has not been timed there yet.
     timeout-minutes: 35
     concurrency:
-      # ONE group for the whole repo, exactly like e2e below — not
-      # `verify-${{ github.ref }}`, which is what this was and what broke.
+      # ONE group for the whole repo, never cancelled — the same semantics
+      # this job had on production's project, under a new name.
       #
-      # `pnpm check` runs the packages/db suite, and that suite is live
-      # network work against the one Supabase project that also serves
-      # production. Keyed on the branch, two branches ran two db suites
-      # against that project simultaneously. This job's own comments already
-      # conceded "the db suite and one web test are live against the shared
-      # Supabase project" and blamed a previous wall-clock failure on
-      # "contention" — without drawing the conclusion e2e had already drawn.
+      # Why one group: two db suites against one project at once is
+      # contention, and contention fails on wall clock. On 2026-09-17
+      # `feat/sms-opt-out` and `feat/call-handoff` overlapped for 13.5 minutes
+      # and BOTH failed inside `pnpm check`; a re-run failed on a DIFFERENT
+      # test, which is the signature of contention rather than a defect (db
+      # round trips measured 10-20s contended, ~2.2s alone). The fixture data
+      # itself does not collide — ids are random and the sweep only takes
+      # rows older than an hour — so this is about capacity, and the Free
+      # project has less of it than production had.
       #
-      # What it cost, on 2026-09-17: `feat/sms-opt-out` (verify 02:14:52—
-      # 02:28:37) and `feat/call-handoff` (02:15:11—02:30:48) overlapped for
-      # 13.5 minutes and BOTH failed inside `pnpm check`. A re-run of the
-      # first, which again caught the tail of the second, failed on a
-      # DIFFERENT test. Different test each time is the signature of
-      # contention, not of a defect — and the timings agree: db round trips
-      # measured 10-20s each while contended and ~2.2s once alone. Every
-      # such kill also strands fixture rows, because a suite stopped
-      # mid-test never reaches its `finally`.
+      # Why never cancelled: a group is repo-wide, so cancelling would let a
+      # push on one branch kill a DIFFERENT branch's verify mid-db-suite; and
+      # a cancelled run on main means the commit being DEPLOYED never
+      # finished being checked (#62 and #64 each had their main run killed by
+      # the next merge). GitHub keeps at most one PENDING run per group, so
+      # the worst case is one running plus one waiting.
       #
-      # cancel-in-progress: false, and this is the part that needs saying.
-      # The obvious "fix" — one group, keep cancelling — is WORSE than the
-      # race it replaces: a group is repo-wide, so a push on one branch
-      # would cancel a DIFFERENT branch's running verify, killing someone
-      # else's gate mid-db-suite and stranding its fixtures. GitHub gives
-      # one group and one cancel flag per job, so "cancel my own branch's
-      # older run, queue everyone else's" is not expressible. Correctness
-      # wins: nothing is cancelled, and a superseded run on the same branch
-      # now finishes instead of being killed. e2e has run this way since it
-      # was written.
+      # Why a new name: a branch that has not merged main yet still carries
+      # the old ci.yml, which runs on production's project under the old
+      # group names. The two queues no longer share a database, so they must
+      # not block each other.
       #
-      # This still does not queue without bound. GitHub keeps at most one
-      # PENDING run per group and cancels the older pending one, so the
-      # worst case is one running plus one waiting — and a run cancelled
-      # before it ever starts has nothing to leak.
-      #
-      # The original reason this job avoided cancelling on main is unchanged
-      # and now covers every ref: a cancelled run means the commit being
-      # DEPLOYED never finished being checked. Merging #62 and #64 each had
-      # their main run killed by the next merge (runs #107 and #109, both
-      # `cancelled`), so nothing established either commit was green — and
-      # pushing to main deploys production.
-      #
-      # The real fix is a CI Supabase project separate from production's.
-      # Until that exists, this is the cheap half of it, and the cost is
-      # wall clock when several branches are in flight rather than a gate
-      # whose answer depends on who else happened to push.
-      group: verify-shared-supabase
+      # Next (plan stage 2, only after two concurrent runs are measured on
+      # the CI project): a per-branch group, cancelling superseded runs on
+      # branches but never on main. It is safe now in a way it was not on
+      # production — a cancelled run's stranded fixtures land in the CI
+      # project, where the next run's sweep reclaims them.
+      group: verify-ci-supabase
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
 
-      - name: Check that the repository secrets are configured
-        run: |
-          missing=""
-          for name in NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY CLERK_SECRET_KEY NEXT_PUBLIC_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL; do
-            if [ -z "${!name}" ]; then missing="$missing $name"; fi
-          done
-          if [ -n "$missing" ]; then
-            echo "::error::Missing repository secret(s):$missing — add them under Settings > Secrets and variables > Actions, using the values from apps/web/.env.local."
-            exit 1
-          fi
+      # Before `pnpm install` and before anything touches a database. Needs
+      # only bash and curl. Names every problem it finds, prints no value.
+      - name: Check that CI targets the CI Supabase project
+        run: bash .github/scripts/ci-target-guard.sh
 
       # Reads the pinned version from package.json's "packageManager" field, so
       # bumping pnpm is one edit, not two.
@@ -149,7 +145,7 @@ jobs:
 
       # `pnpm check` = typecheck + lint + every package's vitest suite,
       # verbatim from CLAUDE.md. The db suite and one web test are live
-      # against the shared Supabase project and clean up after themselves.
+      # against the CI project and clean up after themselves.
       - name: pnpm check
         run: pnpm check
 
@@ -162,11 +158,8 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # AFTER verify, not alongside it. #82 serialized verify against OTHER
-    # VERIFY RUNS and stopped there — but verify and e2e are separate
-    # concurrency groups, so on every push they started within a second of
-    # each other and raced for the one Supabase project regardless.
-    #
+    # AFTER verify, not alongside it. On production's project, verify and e2e
+    # started within a second of each other and raced for the one database.
     # What it cost, on b9f31dc (the merge commit for #85) — the SAME TREE that
     # had just passed both jobs on its own branch:
     #
@@ -175,38 +168,21 @@ jobs:
     #   run 3  auth.setup.ts:51        a bare 30s test timeout
     #
     # A DIFFERENT test each time and EVERY ONE a wall-clock timeout, never an
-    # assertion — the signature this file's own #82 comment names for
-    # contention rather than a defect. Three consecutive reds on a commit that
-    # was already serving production, which is precisely the state the
-    # no-cancel rule above exists to prevent.
-    #
-    # main is worse than a branch, and that is the tell: a push to main runs
-    # verify and e2e together AND the Vercel production deploy AND live
-    # production traffic, all against the one project. A branch run has no
-    # production deploy and no live traffic.
+    # assertion: contention, not a defect. The CI project removes production
+    # traffic and the production deploy from that contention, but not the
+    # other job; on the smallest Free compute the two jobs would still compete.
     #
     # "needs" rather than one shared concurrency group across both jobs, and
     # the difference matters. A shared group would serialize them, but GitHub
     # keeps only ONE PENDING run per group and cancels the older pending one —
     # so a third push inside the window would silently drop a middle commit's
-    # gate entirely. "needs" orders the two jobs WITHIN a run, which is the
-    # thing that was actually wrong, and leaves each job's own group to handle
-    # whole runs racing each other.
+    # gate entirely. "needs" orders the two jobs WITHIN a run, and leaves each
+    # job's own group to handle whole runs racing each other.
     #
-    # THE COST, stated rather than discovered later: a push goes from about
-    # twelve minutes to about eighteen, because e2e waits instead of running
-    # alongside. The gain is that "green" means something. A gate whose answer
-    # depends on who else happened to push is how everyone learns to re-run
-    # red CI without reading it — the habit the top of this file exists to
-    # prevent.
-    #
-    # A SIDE EFFECT WORTH HAVING: e2e no longer runs at all when verify is
-    # already red. It stops burning a runner on a commit that cannot merge,
-    # and stops stranding e2e fixture rows in the shared project on runs that
-    # were doomed before they started.
-    #
-    # The real fix remains a CI Supabase project separate from production's.
-    # This is the other cheap half of it.
+    # THE COST: a push takes about eighteen minutes instead of twelve, because
+    # e2e waits instead of running alongside. The gain is that "green" means
+    # something. And e2e no longer runs at all when verify is already red, so
+    # it stops burning a runner on a commit that cannot merge.
     needs: verify
     # The one e2e test that calls the model (concierge.spec.ts, "a visitor's
     # message comes back with a reply") skips itself when this is unset — so
@@ -221,21 +197,20 @@ jobs:
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     concurrency:
-      group: e2e-shared-supabase
+      # Serialized repo-wide and never cancelled; see the header. A new name
+      # for the reason verify's has one: branches still on the old ci.yml run
+      # e2e on production's project under `e2e-shared-supabase` (which the
+      # seed-demo and screenshots workflows also take), and this queue must
+      # neither wait for nor block theirs.
+      group: e2e-ci-supabase
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
 
-      - name: Check that the repository secrets are configured
-        run: |
-          missing=""
-          for name in NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY CLERK_SECRET_KEY NEXT_PUBLIC_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL; do
-            if [ -z "${!name}" ]; then missing="$missing $name"; fi
-          done
-          if [ -n "$missing" ]; then
-            echo "::error::Missing repository secret(s):$missing — add them under Settings > Secrets and variables > Actions, using the values from apps/web/.env.local."
-            exit 1
-          fi
+      # Same guard as verify, for the same reason: this job creates and
+      # deletes rows AND Clerk users.
+      - name: Check that CI targets the CI Supabase project
+        run: bash .github/scripts/ci-target-guard.sh
 
       - uses: pnpm/action-setup@v4
 
@@ -245,6 +220,16 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      # The account every run shares ("Test Client One", its contact, its
+      # "Sales" pipeline and card, its custom field, one inert number). Adds
+      # only what is missing and never updates or deletes, so on a seeded
+      # project it writes nothing. It then verifies every row the specs assume
+      # and fails naming what is missing: an unseeded project is a red job
+      # here, not a run of specs that skip. Runs its own target check first
+      # (packages/db/src/ci/target.ts).
+      - name: Seed the CI project
+        run: pnpm --filter @bis/db ci:seed
 
       - name: Install Chromium for Playwright
         run: pnpm --filter web exec playwright install --with-deps chromium

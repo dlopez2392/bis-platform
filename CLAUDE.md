@@ -26,6 +26,12 @@
   developer's own machine before the server has to; it is a courtesy, not
   the control, and it does not exist in a fresh clone until that command is
   run.
-- The e2e suite shares the ONE Supabase project with production. Booking and
-  calendar-settings specs run on the per-run fixture account — never point
-  mutating specs at `Test Client One` or any live account.
+- CI and the e2e suite run on a separate Free Supabase project,
+  `odnobiodsftffphuuosz` (`bis-ci`), never on production's
+  (`tlbkbmlrfafquucsmsmm`); local test runs belong there too. Production is
+  written only by the deployed app, the seed-demo and screenshots workflows,
+  and the orchestrator's MCP migration applies. Every new migration goes to
+  the CI project FIRST (the `ci-project-setup.yml` workflow), then
+  production, then a parity check (`docs/runbooks/ci-supabase-project.md`).
+  Booking and calendar-settings specs run on the per-run fixture account —
+  never point mutating specs at `Test Client One` or any live account.
