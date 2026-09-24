@@ -36,6 +36,13 @@
 # NEVER prints a value: every message names a variable, never its content.
 # Tested by apps/web/ci/ci-target-guard.test.ts (collected by `pnpm check`).
 
+# Tracing off before anything touches a value. `bash -x`, or SHELLOPTS=xtrace
+# in the environment, would otherwise print every assignment below, including
+# DERIVED strings such as `user:password@host` that GitHub's log masking (which
+# matches whole secret values only) would not hide. The braces and redirect
+# keep the `set +x` line itself out of the trace.
+{ set +x; } 2>/dev/null
+
 set -u
 
 PROD_REF="tlbkbmlrfafquucsmsmm"
@@ -127,10 +134,12 @@ if [ "$failed" -ne 0 ]; then
 fi
 
 # The key travels on stdin (`--header @-`), never on curl's command line,
-# where any process on the machine could read it.
+# where any process on the machine could read it. `-q` must stay curl's FIRST
+# argument: it stops curl reading ~/.curlrc (or $CURL_HOME/.curlrc), where a
+# `verbose` line would print the request headers, key included.
 probe="$url/rest/v1/agencies?select=id&limit=1"
 status="$(printf 'apikey: %s\n' "$key" |
-  curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+  curl -q --silent --show-error --output /dev/null --write-out '%{http_code}' \
     --max-time 20 --retry 2 --header @- "$probe")" || true
 
 case "$status" in

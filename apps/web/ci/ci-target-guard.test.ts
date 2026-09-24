@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -68,12 +68,22 @@ printf '%s' "\${FAKE_CURL_STATUS:-200}"
 exit "\${FAKE_CURL_EXIT:-0}"
 `;
 
+// Every case spawns a real bash, and bash on Windows (MSYS) starts slowly on a
+// loaded machine; vitest's 5s default is a flake waiting to happen there.
+vi.setConfig({ testTimeout: 20_000 });
+
 let fakeDir = "";
+let bash = "";
 
 beforeAll(() => {
   fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-target-guard-"));
   fs.writeFileSync(path.join(fakeDir, "curl"), FAKE_CURL, { mode: 0o755 });
-});
+  // Resolved once, and started once so the first case does not pay the
+  // cold start. A missing bash fails here, and so every case: never a skip.
+  bash = bashExecutable();
+  const warm = spawnSync(bash, ["-c", ":"], { encoding: "utf8" });
+  if (warm.error) throw warm.error;
+}, 60_000);
 
 afterAll(() => {
   fs.rmSync(fakeDir, { recursive: true, force: true });
@@ -93,20 +103,21 @@ function toBashPath(p: string) {
  */
 function bashExecutable(): string {
   if (process.platform !== "win32") return "bash";
+  const bashUnder = (root: string) => path.join(root, "usr", "bin", "bash.exe");
   const roots: string[] = [];
   for (const base of [process.env.ProgramFiles, process.env["ProgramFiles(x86)"]]) {
     if (base) roots.push(path.join(base, "Git"));
   }
+  const found = roots.find((root) => fs.existsSync(bashUnder(root)));
+  if (found) return bashUnder(found);
   try {
-    // .../Git/mingw64/libexec/git-core -> .../Git
+    // Git installed elsewhere: .../Git/mingw64/libexec/git-core -> .../Git
     const execPath = execFileSync("git", ["--exec-path"], { encoding: "utf8" }).trim();
-    roots.push(path.resolve(execPath, "..", "..", ".."));
+    const root = path.resolve(execPath, "..", "..", "..");
+    roots.push(root);
+    if (fs.existsSync(bashUnder(root))) return bashUnder(root);
   } catch {
-    // no git on PATH; the Program Files candidates above still apply
-  }
-  for (const root of roots) {
-    const candidate = path.join(root, "usr", "bin", "bash.exe");
-    if (fs.existsSync(candidate)) return candidate;
+    // no git on PATH either
   }
   throw new Error(`No Git for Windows bash found (looked under: ${roots.join(", ")})`);
 }
@@ -119,9 +130,29 @@ type Run = {
   curlStdin: string;
 };
 
+/**
+ * The secret values a case handed the guard: the secret key, the Clerk
+ * secret, the whole DB URL and, separately, the DB URL's password (a derived
+ * string like `user:password@host` would not contain the whole URL). Empty
+ * values are skipped, since every output "contains" the empty string.
+ */
+function secretsGiven(merged: Partial<Record<GuardVar, string | undefined>>): string[] {
+  const db = merged.SUPABASE_DB_URL ?? "";
+  const password = /^[a-z]+:\/\/[^:@/]*:(.+)@[^@]*$/.exec(db)?.[1] ?? "";
+  return [merged.SUPABASE_SERVICE_ROLE_KEY, merged.CLERK_SECRET_KEY, db, password].filter(
+    (v): v is string => typeof v === "string" && v.length > 0,
+  );
+}
+
+/**
+ * Runs the guard. EVERY run asserts that its output carries none of the
+ * secret values that run was given, so a new message that echoes a value is
+ * red in whichever case reaches it, not only in a hand-picked list.
+ */
 function runGuard(
   overrides: Partial<Record<GuardVar, string | undefined>> = {},
   curl: { status?: string; exit?: number } = {},
+  extraEnv: Record<string, string> = {},
 ): Run {
   for (const f of ["argv", "stdin"]) fs.rmSync(path.join(fakeDir, f), { force: true });
 
@@ -141,16 +172,21 @@ function runGuard(
   env.FAKE_CURL_DIR = toBashPath(fakeDir);
   env.FAKE_CURL_STATUS = curl.status ?? "200";
   env.FAKE_CURL_EXIT = String(curl.exit ?? 0);
+  Object.assign(env, extraEnv);
 
-  const r = spawnSync(bashExecutable(), [SCRIPT], { env, encoding: "utf8" });
+  const r = spawnSync(bash, [SCRIPT], { env, encoding: "utf8" });
   if (r.error) throw r.error;
   const read = (f: string) => {
     const p = path.join(fakeDir, f);
     return fs.existsSync(p) ? fs.readFileSync(p, "utf8") : "";
   };
+  const output = `${r.stdout}${r.stderr}`;
+  secretsGiven(merged).forEach((secret, i) => {
+    expect(output.includes(secret), `the guard printed secret #${i} it was given`).toBe(false);
+  });
   return {
     status: r.status,
-    output: `${r.stdout}${r.stderr}`,
+    output,
     curlCalled: fs.existsSync(path.join(fakeDir, "argv")),
     curlArgv: read("argv"),
     curlStdin: read("stdin"),
@@ -171,6 +207,28 @@ describe("ci-target-guard.sh: a correctly configured CI project", () => {
     expect(r.status).toBe(0);
     expect(r.curlStdin).toContain(`apikey: ${SECRET_KEY}`);
     expect(r.curlArgv).not.toContain(SECRET_KEY);
+  });
+
+  it("starts curl with -q, so no ~/.curlrc (e.g. one saying `verbose`) can echo the key's header", () => {
+    const r = runGuard();
+    expect(r.status).toBe(0);
+    expect(r.curlArgv.split("\n")[0]).toBe("-q");
+  });
+});
+
+describe("the guard under shell tracing", () => {
+  // SHELLOPTS in the environment turns xtrace on before the script's first
+  // line, and a trace prints DERIVED strings (`user:password@host`) that
+  // GitHub's exact-value log masking would not recognise.
+  it("prints no secret when SHELLOPTS=xtrace, on a passing run", () => {
+    const r = runGuard({}, {}, { SHELLOPTS: "xtrace" });
+    expect(r.status).toBe(0);
+  });
+
+  it("prints no secret when SHELLOPTS=xtrace, on a run the DB URL check refuses", () => {
+    const r = runGuard({ SUPABASE_DB_URL: dbUrl(`postgres.${OTHER_REF}`) }, {}, { SHELLOPTS: "xtrace" });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::.*SUPABASE_DB_URL/);
   });
 });
 
@@ -244,12 +302,15 @@ describe("check 2: the Supabase URL is exactly the CI project's", () => {
   });
 
   it("refuses a BIS_CI_SUPABASE_REF that is not shaped like a project ref", () => {
+    // URL and DB user both agree with the malformed ref, so the shape check is
+    // the ONLY thing that can refuse this run.
     const r = runGuard({
       BIS_CI_SUPABASE_REF: "Not A Ref",
       NEXT_PUBLIC_SUPABASE_URL: "https://Not A Ref.supabase.co",
+      SUPABASE_DB_URL: dbUrl("postgres.Not A Ref"),
     });
     expect(r.status).toBe(1);
-    expect(r.output).toMatch(/::error::.*BIS_CI_SUPABASE_REF/);
+    expect(r.output).toMatch(/::error::BIS_CI_SUPABASE_REF is not shaped like a Supabase project ref/);
   });
 });
 
