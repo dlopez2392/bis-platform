@@ -1,10 +1,15 @@
 import { describe, it, expect, vi, beforeAll } from "vitest";
 import { config as loadEnv } from "dotenv";
+import { refuseProduction } from "../../../../e2e/fixtures/production-guard";
 
 // `apps/web`'s test script runs with this directory as cwd, and its
 // credentials live in `.env.local`, not the `.env` that `dotenv/config`
 // loads by default — this file needs the path spelled out.
 loadEnv({ path: ".env.local" });
+// This suite creates and deletes real accounts. Where .env.local still names
+// production (docs/runbooks/ci-supabase-project.md, section 9), refuse before
+// anything is created. Policed by e2e/fixtures/production-guard.test.ts.
+refuseProduction(process.env, "f/[publicId]/actions.returning-lead.test.ts");
 
 vi.mock("next/headers", () => ({ headers: vi.fn() }));
 

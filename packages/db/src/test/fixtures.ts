@@ -24,8 +24,9 @@ const issuedPhoneNumbers = new Set<string>();
  * ceiling and the `phone_numbers_e164_check` ceiling with it. Country code 999
  * is assigned to no country and no service, so this is a KEY shaped like a
  * number rather than a number anybody can dial — the property that matters for
- * a row that lives, however briefly, in the one Supabase project production
- * also uses.
+ * a row that lives, however briefly, in a Supabase project other runs share.
+ * That project was production's own until CI moved to a separate one (#133)
+ * and local runs began refusing production (./refuse-production.ts).
  *
  * It deliberately does not borrow from the demo's `+1 956 555 01xx`. That
  * block is a hundred numbers and `demo/fiction.ts` already partitions all of
@@ -155,7 +156,8 @@ export async function withTestAccount(fn: (db: SupabaseClient, accountId: string
  * `unique (agency_id, name)`), so `withTestAccount` — which isolates by
  * ACCOUNT — gives blueprint rows no isolation at all. A hard-coded blueprint
  * name is therefore a mutable singleton shared by every run against this
- * Supabase project, and this suite shares ONE project with production.
+ * Supabase project: every CI run, and every machine switched to the CI project,
+ * shares ONE. (Production is no longer among them; ./refuse-production.ts.)
  *
  * Two concurrent runs capturing "Starter" do not get a row each. The second
  * finds the first's row and takes the UPDATE branch of `captureBlueprint`,
