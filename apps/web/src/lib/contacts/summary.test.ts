@@ -95,19 +95,23 @@ describe("parseContactSummary: a required field missing or wrong is null", () =>
     expect(parseContactSummary(wire({ ...real(), recent: "none" }))).toBeNull();
   });
 
-  it("a recent item whose kind is not one of the five", () => {
-    const recent = [{ kind: "booking", label: "Booked", at: "2026-09-01T10:00:00+00:00" }];
-    expect(parseContactSummary(wire({ ...real(), recent }))).toBeNull();
-  });
-
-  it("a recent item whose kind is an inherited property name, not a kind", () => {
-    const recent = [{ kind: "constructor", label: "x", at: "2026-09-01T10:00:00+00:00" }];
-    expect(parseContactSummary(wire({ ...real(), recent }))).toBeNull();
+  it("a recent item that is not an object", () => {
+    for (const item of [null, "Note", 3, [], true]) {
+      const recent = [real().recent[0], item];
+      expect(parseContactSummary(wire({ ...real(), recent })), JSON.stringify(item)).toBeNull();
+    }
   });
 
   it("a recent item without a string label or at", () => {
     expect(parseContactSummary(wire({ ...real(), recent: [{ kind: "note", at: "2026-09-01T10:00:00Z" }] }))).toBeNull();
     expect(parseContactSummary(wire({ ...real(), recent: [{ kind: "note", label: "Note", at: 5 }] }))).toBeNull();
+  });
+
+  it("a recent item of an unknown kind whose label or at is not a string — still malformed, not dropped", () => {
+    // The drop below is for a well-formed item this bundle has no kind for;
+    // a broken label or at is a broken body whatever the kind says.
+    expect(parseContactSummary(wire({ ...real(), recent: [{ kind: "booking", label: 7, at: "2026-09-01T10:00:00Z" }] }))).toBeNull();
+    expect(parseContactSummary(wire({ ...real(), recent: [{ kind: "booking", label: "Booked" }] }))).toBeNull();
   });
 
   it("marketing_email_opted_out_at missing — NOT defaulted to null", () => {
@@ -119,6 +123,42 @@ describe("parseContactSummary: a required field missing or wrong is null", () =>
   it("marketing_email_opted_out_at neither a string nor null", () => {
     expect(parseContactSummary(wire({ ...real(), marketing_email_opted_out_at: 0 }))).toBeNull();
     expect(parseContactSummary(wire({ ...real(), marketing_email_opted_out_at: false }))).toBeNull();
+  });
+});
+
+describe("parseContactSummary: a recent item of a kind this bundle does not know is dropped", () => {
+  // The drawer renders only an item's label and time, never its kind. A
+  // server deployed with a new kind must not turn every open tab's drawer
+  // into "couldn't load" for the contacts that have one.
+  const booking = { kind: "booking", label: "Booked", at: "2026-09-02T10:00:00+00:00" };
+
+  it("drops that item and keeps the rest of the summary, in order", () => {
+    const [call, note, ...rest] = real().recent;
+    const parsed = parseContactSummary(wire({ ...real(), recent: [call, booking, note, ...rest] }));
+    expect(parsed).toEqual(real());
+  });
+
+  it("drops a kind that is an inherited property name, not a kind", () => {
+    // `=== true`, not `in`: "constructor" is a property of any object.
+    for (const kind of ["constructor", "toString", "__proto__"]) {
+      const parsed = parseContactSummary(wire({ ...real(), recent: [{ ...booking, kind }, real().recent[1]] }));
+      expect(parsed, kind).not.toBeNull();
+      expect(parsed!.recent, kind).toEqual([real().recent[1]]);
+    }
+  });
+
+  it("drops a missing or non-string kind", () => {
+    const kindless = { label: booking.label, at: booking.at };
+    for (const item of [kindless,{ ...booking, kind: 3 }, { ...booking, kind: null }]) {
+      const parsed = parseContactSummary(wire({ ...real(), recent: [item] }));
+      expect(parsed, JSON.stringify(item)).not.toBeNull();
+      expect(parsed!.recent, JSON.stringify(item)).toEqual([]);
+    }
+  });
+
+  it("a body whose every recent item is unknown still loads, tags and stamp intact", () => {
+    const parsed = parseContactSummary(wire({ ...real(), recent: [booking, booking] }));
+    expect(parsed).toEqual({ ...real(), recent: [] });
   });
 });
 

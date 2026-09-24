@@ -11,9 +11,11 @@ export type ParsedContactSummary = Omit<ContactSummary, "zone"> & { zone: OptOut
 
 type Kind = ContactSummary["recent"][number]["kind"];
 
-/** Every kind the route may send. A `Record` over the union, so adding a kind
- *  to the route's type without adding it here fails typecheck — and the
- *  drawer would otherwise refuse every summary carrying the new kind. */
+/** Every kind this bundle knows. A `Record` over the union, so adding a kind
+ *  to the route's type without adding it here fails typecheck; otherwise the
+ *  parser would silently drop the new kind from every drawer built from the
+ *  same commit. It cannot help a tab whose bundle predates a server that added
+ *  one. That tab drops those items and still shows the rest of the summary. */
 const KINDS: Record<Kind, true> = { call: true, note: true, submission: true, message: true, opportunity: true };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -57,6 +59,14 @@ function parseZone(v: unknown): OptOutZone | undefined {
  *   them missing or the wrong shape answers null, and the drawer shows its
  *   "couldn't load" state. The stamp is not defaulted to null: that would
  *   show an opted-out contact as unticked, and one tick would then write.
+ * - A `recent` item that is not an object, or whose `label` or `at` is not a
+ *   string, is a malformed body: null. Those two are what the drawer renders.
+ * - A `recent` item whose `kind` this bundle does not know is DROPPED, and the
+ *   rest of the summary still loads. The drawer never reads `kind`, and the
+ *   likely stale-tab case after a deploy is an OLD bundle talking to a NEW
+ *   server. If the server adds a kind, refusing it would show "couldn't load"
+ *   in every open tab for each contact with such an item. The cost: the
+ *   dropped items are missing from that tab's "Recent" list until a reload.
  * - `zone` is TOLERATED: missing or malformed (or a zone this browser cannot
  *   format in) becomes undefined, and the switch leaves out its "Off since"
  *   line (`optOutSinceLine`, #124).
@@ -78,7 +88,11 @@ export function parseContactSummary(json: unknown): ParsedContactSummary | null 
   if (!Array.isArray(json.recent)) return null;
   const recent: ParsedContactSummary["recent"] = [];
   for (const r of json.recent) {
-    if (!isRecord(r) || !isKind(r.kind) || typeof r.label !== "string" || typeof r.at !== "string") return null;
+    // Malformed first: an item the drawer would render (label, at) has to
+    // be renderable whatever its kind says.
+    if (!isRecord(r) || typeof r.label !== "string" || typeof r.at !== "string") return null;
+    // Then dropped, not refused: a kind this bundle does not know.
+    if (!isKind(r.kind)) continue;
     recent.push({ kind: r.kind, label: r.label, at: r.at });
   }
 

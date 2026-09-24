@@ -68,7 +68,12 @@ export function ContactDrawer({
     fetch(`/api/accounts/${accountId}/contacts/${contactId}/summary`)
       .then(async (res) => {
         if (stale) return;
-        setFetched({ contactId, result: await summaryLoadFrom(res, Date.now()) });
+        const result = await summaryLoadFrom(res, Date.now());
+        // Checked again AFTER the body is read: the cleanup can land while
+        // `res.json()` is pending, and without this a switched-away
+        // contact's result (or an older retry's) would overwrite the
+        // current one.
+        if (!stale) setFetched({ contactId, result });
       })
       .catch(() => { if (!stale) setFetched({ contactId, result: { status: "error" } }); });
     return () => { stale = true; };

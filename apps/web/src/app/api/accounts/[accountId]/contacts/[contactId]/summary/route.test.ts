@@ -153,9 +153,11 @@ describe("contact summary route: timezone", () => {
 
 /**
  * The drawer no longer casts this body: it parses it (`parseContactSummary`)
- * and shows "couldn't load" for anything the parser refuses. So what this
- * route actually sends — every kind of recent item, a stamp, a zone — must
- * come through the parser whole, or every drawer is an error state.
+ * and shows "couldn't load" for anything the parser refuses, and it drops a
+ * recent item whose kind it does not know. So what this route actually
+ * sends (every kind of recent item, a stamp, a zone) must come through the
+ * parser whole. Otherwise every drawer is an error state, or quietly loses
+ * the items of a kind the route added without the parser learning it.
  */
 describe("contact summary route: what it sends, the drawer's parser accepts", () => {
   it("parses to exactly the body sent", async () => {
