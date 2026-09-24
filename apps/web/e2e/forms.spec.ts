@@ -95,31 +95,19 @@ async function newPublishedForm(
   // By accessible name, never `.first()` — the seeded-account rule in
   // support.ts.
   await openAccountByName(page, SEEDED_ACCOUNT_NAME);
-  const accountId = new URL(page.url()).pathname.split("/")[3]!;
+  await expect(page).toHaveURL(/\/contacts$/);
 
-  // A fresh document load of the forms list, NOT a click on the sidebar's
-  // Forms link. That click is how "a honeypot submission..." timed out in CI
-  // run 36021404608: the editor opened, then the page fell back to the forms
-  // list (without the new form) and Save was never found.
-  //
-  // The trace shows why. The shell reads its badges with a server action on
-  // every route change (shell-data.tsx). The Forms click was made while the
-  // Contacts page's read was still in flight, so the Next router discarded
-  // it. When that discarded read finished, the router started the next queued
-  // action, createFormAction, while the Forms page's own read was still
-  // running (next@16.2.11 app-router-instance.js, runRemainingActions). Their
-  // responses arrived 5ms apart, and the router kept the read's state, which
-  // it had captured BEFORE the form existed: the editor's own read was then
-  // sent with the forms list as its router state (URL and router-state-tree
-  // say /forms, Referer says the editor), and when that read came back it put
-  // the stale list back on screen.
-  //
-  // That is a product race, reported separately rather than fixed here. Next
-  // fixed it in 16.3.0: runRemainingActions now advances the queue only when
-  // the settled action is still at its head. A full load leaves no discarded
-  // action behind, so createFormAction queues behind the Forms page's read
-  // the normal way.
-  await page.goto(`/dashboard/accounts/${accountId}/forms`);
+  // The sidebar's Forms link, on purpose: it is the path a real user takes,
+  // and it is the path that exposed a Next router race. The shell reads its
+  // badges with a server action on every route change (shell-data.tsx), so
+  // this click can land while the Contacts page's read is still in flight.
+  // Next 16.2.11 then started createFormAction early and put a stale forms
+  // list back over the new editor (CI run 36021404608). 16.3.0 fixed it
+  // upstream (#95391): runRemainingActions advances the queue only when the
+  // settled action is still at its head. If this spec flakes here again,
+  // suspect that race before the form builder.
+  await page.getByRole("link", { name: "Forms" }).click();
+  await expect(page).toHaveURL(/\/forms$/);
 
   await page.getByRole("button", { name: "New form" }).click();
   await page.getByLabel("Form name").fill(formName);
