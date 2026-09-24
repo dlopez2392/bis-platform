@@ -731,13 +731,17 @@ describe("the reminder and the follow-up never reach another account's rows", ()
 
         const own = await createBooking(db, accountA,
           { calendarId: calA.id, contactId: ownContact, ...c.at(c.now, 0) }, "user_test");
-        const crossedContact = await createBooking(db, accountA,
-          { calendarId: calA.id, contactId: theirContact, ...c.at(c.now, 1) }, "user_test");
-        const crossedCalendar = await createBooking(db, accountA,
-          { calendarId: calB.id, contactId: ownContact, ...c.at(c.now, 2) }, "user_test");
 
         const logged = vi.spyOn(console, "error").mockImplementation(() => {});
         try {
+          // The crossed rows are created INSIDE the try (#123 m5): if the
+          // second createBooking threw, the first used to be left behind,
+          // holding a restrict FK into B, and B's teardown tripped over it.
+          const crossedContact = await createBooking(db, accountA,
+            { calendarId: calA.id, contactId: theirContact, ...c.at(c.now, 1) }, "user_test");
+          const crossedCalendar = await createBooking(db, accountA,
+            { calendarId: calB.id, contactId: ownContact, ...c.at(c.now, 2) }, "user_test");
+
           const ids = (await c.list(db, c.now.toISOString())).map((d) => d.bookingId);
           expect(ids, "the own-account control must be due by list").toContain(own.id);
           expect(ids, "a booking on B's contact must not be due by list").not.toContain(crossedContact.id);
@@ -754,10 +758,15 @@ describe("the reminder and the follow-up never reach another account's rows", ()
         } finally {
           logged.mockRestore();
           // Both crossed rows hold a restrict FK into B; B's teardown runs
-          // first and must not trip over them. Logged, never thrown (a throw in
+          // first and must not trip over them. Deleted by what MAKES each one
+          // crossed (A's row on B's contact, A's row on B's calendar), not by
+          // id, so whichever exist are removed — including one whose insert
+          // landed but never answered. Logged, never thrown (a throw in
           // `finally` replaces the assertion that brought us here).
-          const { error } = await db.from("bookings").delete().in("id", [crossedContact.id, crossedCalendar.id]);
-          if (error) console.error(`cross-account bookings cleanup failed: ${error.message}`);
+          for (const [column, value] of [["contact_id", theirContact], ["calendar_id", calB.id]] as const) {
+            const { error } = await db.from("bookings").delete().eq("account_id", accountA).eq(column, value);
+            if (error) console.error(`cross-account bookings cleanup failed (${column}): ${error.message}`);
+          }
         }
       });
     });
