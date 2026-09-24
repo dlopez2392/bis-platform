@@ -452,7 +452,9 @@ export const m = {
   "contact.marketingOptOut.sinceGuessed": "Off since {date} ({zone})",
   // Undo clicked while the last tick is still saving: the toast (and its
   // Undo) is gone once clicked, so the operator is told what to do instead.
-  "contact.marketingOptOut.undoBusy": "Your last change is still saving. Use the “No marketing emails” box to change it back.",
+  // "{label}" is `contact.marketingOptOut.label` above, .replace()d by
+  // `flipMarketingOptOut`, so the box is always named by what it says.
+  "contact.marketingOptOut.undoBusy": "Your last change is still saving. Use the “{label}” box to change it back.",
 
   // The contact drawer's recent-activity feed (Task 2's summary route,
   // Task 6's drawer). "{outcome}"/"{name}"/"{value}" are the house

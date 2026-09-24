@@ -18,9 +18,14 @@ export type OptOutZone = Pick<ResolvedZone, "zone" | "guessed" | "label">;
  * fell back to the agency's or UTC) the date may be a day off, so the line
  * names the zone it is in: "Off since Sep 3, 2026 (UTC)" (#123 m3). Not a
  * `ZoneNote` — that is one per screen, and this is one line under a checkbox.
+ *
+ * `zone` may be missing: the drawer casts a fetched JSON summary, and a server
+ * from before #124 (a rollback while this tab is open) sends `timezone` and
+ * no `zone`. No zone means no line, for the same reason as a bad stamp.
  */
-export function optOutSinceLine(optedOutAt: string | null, zone: OptOutZone): string | null {
+export function optOutSinceLine(optedOutAt: string | null, zone: OptOutZone | undefined): string | null {
   if (optedOutAt === null || Number.isNaN(Date.parse(optedOutAt))) return null;
+  if (zone === undefined) return null;
   const date = formatDateInZone(optedOutAt, zone.zone);
   if (zone.guessed) {
     return m["contact.marketingOptOut.sinceGuessed"].replace("{date}", date).replace("{zone}", zone.label);
@@ -96,7 +101,9 @@ export async function flipMarketingOptOut(
             show(!optedOut);
             await write(!optedOut, save, show, toast);
           });
-          if (ran === false) toast.error(m["contact.marketingOptOut.undoBusy"]);
+          if (ran === false) {
+            toast.error(m["contact.marketingOptOut.undoBusy"].replace("{label}", m["contact.marketingOptOut.label"]));
+          }
           return ran;
         },
       },

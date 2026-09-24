@@ -26,8 +26,10 @@ export function MarketingOptOutSwitch({ accountId, contactId, optedOutAt, zone }
   /** `contacts.marketing_email_opted_out_at` — null means "may be emailed". */
   optedOutAt: string | null;
   /** The account's resolved zone (`renderZone`), for the "Off since" date —
-   *  with `guessed` and `label`, so a stand-in zone is named on the line. */
-  zone: OptOutZone;
+   *  with `guessed` and `label`, so a stand-in zone is named on the line.
+   *  Undefined when a pre-#124 server answered the drawer's fetch: the line
+   *  is then left out (`optOutSinceLine`), not guessed. */
+  zone: OptOutZone | undefined;
 }) {
   const [checked, setChecked] = useState(optedOutAt !== null);
   // The stamp the "Off since" line reads. Dropped on the first flip and never

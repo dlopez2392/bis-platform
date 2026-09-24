@@ -108,7 +108,17 @@ describe("a refused Undo says so", () => {
     await flipMarketingOptOut(true, h.save, h.show, h.toast, () => false);
     await (h.undo() as unknown as () => Promise<void>)();
     expect(h.toast.error).toHaveBeenCalledTimes(1);
-    expect(h.toast.error).toHaveBeenCalledWith(m["contact.marketingOptOut.undoBusy"]);
+    expect(h.toast.error).toHaveBeenCalledWith(
+      m["contact.marketingOptOut.undoBusy"].replace("{label}", m["contact.marketingOptOut.label"]));
+  });
+
+  it("names the box by its label, so a renamed box is never sent to under its old name", async () => {
+    const h = harness([{ ok: true }]);
+    await flipMarketingOptOut(true, h.save, h.show, h.toast, () => false);
+    await (h.undo() as unknown as () => Promise<void>)();
+    const said = String(h.toast.error.mock.calls[0]?.[0]);
+    expect(said).toContain(`“${m["contact.marketingOptOut.label"]}”`);
+    expect(said).not.toMatch(/[{}]/);
   });
 
   it("an Undo that runs says nothing of the kind", async () => {
@@ -183,6 +193,14 @@ describe("optOutSinceLine", () => {
   it("says nothing without a stamp, and nothing for one it cannot read", () => {
     expect(optOutSinceLine(null, own("UTC"))).toBeNull();
     expect(optOutSinceLine("not a date", own("UTC"))).toBeNull();
+  });
+
+  // A post-#124 tab talking to a pre-#124 server (a rollback while the tab is
+  // open): that summary carries `timezone` and no `zone`. The line is dropped
+  // rather than throwing, since a throw here takes the drawer down with it.
+  it("says nothing, rather than throwing, when the summary carried no zone", () => {
+    expect(() => optOutSinceLine("2026-09-04T02:30:00.000Z", undefined)).not.toThrow();
+    expect(optOutSinceLine("2026-09-04T02:30:00.000Z", undefined)).toBeNull();
   });
 });
 
