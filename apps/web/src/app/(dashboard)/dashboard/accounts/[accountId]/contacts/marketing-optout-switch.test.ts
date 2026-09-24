@@ -9,9 +9,11 @@ vi.mock("./actions", () => ({ setMarketingEmailOptOutAction: vi.fn() }));
 
 const { MarketingOptOutSwitch } = await import("./marketing-optout-switch");
 
-function render(optedOutAt: string | null) {
+const CHICAGO = { zone: "America/Chicago", guessed: false, label: "America/Chicago" };
+
+function render(optedOutAt: string | null, zone: { zone: string; guessed: boolean; label: string } = CHICAGO) {
   return renderToStaticMarkup(createElement(MarketingOptOutSwitch, {
-    accountId: "a1", contactId: "c1", optedOutAt, timezone: "America/Chicago",
+    accountId: "a1", contactId: "c1", optedOutAt, zone,
   }));
 }
 
@@ -54,6 +56,15 @@ describe("MarketingOptOutSwitch: since when", () => {
     const html = render("2026-09-04T02:30:00.000Z");
     expect(html).toContain(m["contact.marketingOptOut.since"].replace("{date}", "Sep 3, 2026"));
     expect(html).not.toContain("Sep 4, 2026");
+    // The account's OWN zone is not a guess, so the line does not name it.
+    expect(html).not.toContain("(America/Chicago)");
+  });
+
+  it("names the zone when the account's own could not be used (#123 m3)", () => {
+    // renderZone fell back to UTC: 02:30 UTC on Sep 4 is printed as Sep 4, and
+    // the line says so rather than passing it off as the account's local day.
+    const html = render("2026-09-04T02:30:00.000Z", { zone: "UTC", guessed: true, label: "UTC" });
+    expect(html).toContain("Off since Sep 4, 2026 (UTC)");
   });
 
   it("says nothing about since when while the switch is off", () => {

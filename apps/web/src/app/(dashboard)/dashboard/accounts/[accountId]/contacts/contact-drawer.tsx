@@ -197,7 +197,7 @@ export function ContactDrawer({
                     accountId={accountId}
                     contactId={row.id}
                     optedOutAt={load.summary.marketing_email_opted_out_at}
-                    timezone={load.summary.timezone}
+                    zone={load.summary.zone}
                   />
                   <div>
                     <p className="text-muted-foreground mb-2 font-mono text-[10px] tracking-[0.14em] uppercase">

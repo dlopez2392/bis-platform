@@ -23,6 +23,7 @@ import { updateContactAction, addTagAction, removeTagAction } from "./actions";
 import { updateContactFieldAction } from "../actions";
 import { FIELDS } from "../contact-drawer";
 import { MarketingOptOutSwitch } from "../marketing-optout-switch";
+import type { OptOutZone } from "@/lib/contacts/marketing-optout";
 import { CLEAR_FIELD_SENTINEL } from "./constants";
 
 type Contact = NonNullable<Awaited<ReturnType<typeof getContact>>>;
@@ -34,7 +35,7 @@ export function ContactFieldsPanel({
   contact,
   tags,
   fieldDefs,
-  timezone,
+  zone,
 }: {
   accountId: string;
   contactId: string;
@@ -42,7 +43,7 @@ export function ContactFieldsPanel({
   tags: Tag[];
   fieldDefs: CustomFieldDef[];
   /** The account's resolved zone (`renderZone`), for the opt-out's "Off since" date. */
-  timezone: string;
+  zone: OptOutZone;
 }) {
   const custom = (contact.custom ?? {}) as Record<string, unknown>;
   const hidden = <input type="hidden" name="contactId" value={contactId} />;
@@ -79,7 +80,7 @@ export function ContactFieldsPanel({
             accountId={accountId}
             contactId={contactId}
             optedOutAt={contact.marketing_email_opted_out_at}
-            timezone={timezone}
+            zone={zone}
           />
 
           {fieldDefs.length > 0 ? (

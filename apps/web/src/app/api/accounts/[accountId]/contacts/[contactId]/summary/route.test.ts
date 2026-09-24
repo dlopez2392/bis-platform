@@ -17,7 +17,10 @@ const db = {
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => db }));
 // renderZone reads the agency row through serviceDb for an unusable zone;
 // stubbed to echo what it was handed so the test sees the raw zone passed in.
-const renderZone = vi.fn(async (z: string | undefined) => ({ zone: z ?? "Etc/Fallback", guessed: z === undefined }));
+const renderZone = vi.fn(async (z: string | undefined) => ({
+  zone: z ?? "Etc/Fallback", guessed: z === undefined, label: z ?? "Etc/Fallback",
+  source: z === undefined ? "fallback" : "account",
+}));
 vi.mock("@/lib/zone", () => ({ renderZone: (z: string | undefined) => renderZone(z) }));
 
 const dbMocks = {
@@ -128,7 +131,8 @@ describe("contact summary route: timezone", () => {
     const body = await (await GET(req(), ctx())).json();
     expect(accountsFrom).toHaveBeenCalledWith("accounts");
     expect(renderZone).toHaveBeenLastCalledWith("America/Chicago");
-    expect(body.timezone).toBe("America/Chicago");
+    // The slice the switch needs, and nothing more (no `source`).
+    expect(body.zone).toEqual({ zone: "America/Chicago", guessed: false, label: "America/Chicago" });
   });
 
   it("a failed account read still answers (resolved without the account's zone) and is logged", async () => {
@@ -138,7 +142,9 @@ describe("contact summary route: timezone", () => {
     const res = await GET(req(), ctx());
     expect(res.status).toBe(200);
     expect(renderZone).toHaveBeenLastCalledWith(undefined);
-    expect((await res.json()).timezone).toBe("Etc/Fallback");
+    // #123 m3: GUESSED rides along, so the drawer's "Off since" line can name
+    // the stand-in zone rather than pass it off as the account's own.
+    expect((await res.json()).zone).toEqual({ zone: "Etc/Fallback", guessed: true, label: "Etc/Fallback" });
     expect(errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n")).toContain("boom");
     errors.mockRestore();
   });

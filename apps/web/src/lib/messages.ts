@@ -445,6 +445,14 @@ export const m = {
   // Under the ticked switch: the day the stop was recorded, in the account's
   // zone — the operator's answer to "when did they ask?".
   "contact.marketingOptOut.since": "Off since {date}",
+  // The same line when the account's own timezone could not be used and the
+  // date is printed in a stand-in zone (`renderZone`'s `guessed`) — so a
+  // date that may be a day off says which zone it is in. Not a full zone
+  // note: that is one per screen, and this is one line under a checkbox.
+  "contact.marketingOptOut.sinceGuessed": "Off since {date} ({zone})",
+  // Undo clicked while the last tick is still saving: the toast (and its
+  // Undo) is gone once clicked, so the operator is told what to do instead.
+  "contact.marketingOptOut.undoBusy": "Your last change is still saving. Use the “No marketing emails” box to change it back.",
 
   // The contact drawer's recent-activity feed (Task 2's summary route,
   // Task 6's drawer). "{outcome}"/"{name}"/"{value}" are the house
