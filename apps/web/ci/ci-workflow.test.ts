@@ -68,27 +68,49 @@ function jobs(lines: string[]): Record<string, string[]> {
   return out;
 }
 
-type Step = { uses?: string; run?: string };
+/**
+ * One step: EVERY key it carries (so `if:` or `continue-on-error:` cannot hide
+ * from an assertion that only looked at `run`), and its `uses` and one-line
+ * `run` values.
+ */
+type Step = { keys: string[]; uses?: string; run?: string };
 
-/** A job's steps in order, with `uses` and a one-line `run` read off each. */
+/** A job's steps in order. */
 function steps(job: string[]): Step[] {
   const at = job.findIndex((line) => /^\s+steps:\s*$/.test(line));
   if (at < 0) throw new Error("job has no steps");
   const out: Step[] = [];
-  let indent = -1;
+  let dashIndent = -1;
   for (const line of job.slice(at + 1)) {
-    const dashIndent = /^(\s*)- /.exec(line)?.[1]?.length;
-    if (dashIndent !== undefined && (indent < 0 || dashIndent === indent)) {
-      indent = dashIndent;
-      out.push({});
+    const dash = /^(\s*)- ([A-Za-z0-9_-]+):(?: (.*))?$/.exec(line);
+    const indent = dash?.[1]?.length;
+    let key: string | undefined;
+    let value: string | undefined;
+    if (dash && indent !== undefined && (dashIndent < 0 || indent === dashIndent)) {
+      dashIndent = indent;
+      out.push({ keys: [] });
+      key = dash[2];
+      value = dash[3];
+    } else if (dashIndent >= 0) {
+      // A sibling key of the step: exactly two columns right of its dash.
+      const sibling = new RegExp(`^ {${dashIndent + 2}}([A-Za-z0-9_-]+):(?: (.*))?$`).exec(line);
+      key = sibling?.[1];
+      value = sibling?.[2];
     }
-    const kv = /^\s*(?:- )?(uses|run): (.+)$/.exec(line);
-    const field = kv?.[1] as "uses" | "run" | undefined;
-    const value = kv?.[2];
     const step = out[out.length - 1];
-    if (field && value && step) step[field] = value.trim();
+    if (!step || !key) continue;
+    step.keys.push(key);
+    if ((key === "uses" || key === "run") && value) step[key] = value.trim();
   }
   return out;
+}
+
+/** The keys set directly on a job (four columns in): `name`, `if`, `needs`… */
+function jobKeys(job: string[]): string[] {
+  return job.flatMap((line) => {
+    const key = /^ {4}([A-Za-z0-9_-]+):/.exec(line)?.[1];
+    return key ? [key] : [];
+  });
 }
 
 const ciLines = codeLines(read("../../../.github/workflows/ci.yml"));
@@ -106,9 +128,26 @@ describe("ci.yml points the gates at the CI Supabase project, never production's
   it("references none of the production Supabase secrets", () => {
     // Those three names still mean production for seed-demo.yml and
     // screenshots.yml. The CI project's credentials are the CI_* secrets.
+    // Case-insensitive: GitHub resolves context properties regardless of case,
+    // so `secrets.supabase_db_url` reads the same secret.
     const found = ciLines.filter((line) =>
-      /secrets\.(NEXT_PUBLIC_SUPABASE_URL|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_DB_URL)\b/.test(line));
+      /secrets\.(NEXT_PUBLIC_SUPABASE_URL|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_DB_URL)\b/i.test(line));
     expect(found).toEqual([]);
+  });
+
+  it("reads secrets only by name, and only the five it needs", () => {
+    // `secrets['X']` and `toJSON(secrets)` reach a production secret without
+    // ever writing `secrets.X`. So every mention of the secrets context must
+    // be exactly `secrets.<one of these>`; anything else is listed.
+    const allowed = new Set([
+      "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "CLERK_SECRET_KEY",
+      "CI_SUPABASE_SECRET_KEY", "CI_SUPABASE_DB_URL", "OPENAI_API_KEY",
+    ]);
+    const offending = ciLines.flatMap((line) =>
+      [...line.matchAll(/\bsecrets\b(\.[A-Za-z0-9_]+)?/gi)]
+        .filter((m) => m[0].slice(0, 8) !== "secrets." || !allowed.has(m[0].slice(8)))
+        .map(() => line.trim()));
+    expect(offending).toEqual([]);
   });
 
   it("carries neither production's project ref nor its publishable key", () => {
@@ -137,10 +176,29 @@ describe("ci.yml's jobs", () => {
     expect(job("e2e").some((line) => /^\s+needs: verify\s*$/.test(line))).toBe(true);
   });
 
+  it.each(["verify", "e2e"])("%s has no job-level name, if or continue-on-error", (id) => {
+    // A `name:` renames the check run, so the ruleset's required `verify` /
+    // `e2e` would never report. A job skipped by `if:` reports as skipped,
+    // which does not block a merge. `continue-on-error` turns a red job green.
+    const keys = jobKeys(job(id));
+    expect(keys).toContain("steps"); // the parser found the job's own keys
+    expect(keys.filter((k) => ["name", "if", "continue-on-error"].includes(k))).toEqual([]);
+  });
+
   it.each(["verify", "e2e"])("%s runs the target guard straight after checkout, before anything else", (id) => {
     const [first, second] = steps(job(id));
     expect(first?.uses ?? "").toMatch(/^actions\/checkout@/);
     expect(second?.run).toBe(GUARD);
+    // Nothing else on the step: an `if:` could skip it and a
+    // `continue-on-error:` could let a refusal pass.
+    expect([...(second?.keys ?? [])].sort()).toEqual(["name", "run"]);
+  });
+
+  it.each(["verify", "e2e"])("%s lets no step fail quietly or skip a command on a condition", (id) => {
+    const all = steps(job(id));
+    expect(all.length).toBeGreaterThan(3);
+    expect(all.filter((s) => s.keys.includes("continue-on-error"))).toEqual([]);
+    expect(all.filter((s) => s.run && s.keys.includes("if"))).toEqual([]);
   });
 
   it("verify runs exactly the guard, the install, pnpm check and the build, in that order", () => {

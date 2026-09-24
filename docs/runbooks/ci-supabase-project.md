@@ -19,8 +19,9 @@ MCP reads of production).
 | Region | us-east-1 (same as production, so runner latency matches) | us-east-1 |
 | Schema from | `supabase db push` of the migration files (`db:push:ci`) | the Supabase MCP `apply_migration`, one file at a time |
 | Clerk it trusts | the **development** instance, `topical-redfish-40.clerk.accounts.dev` | production's instance, and the development one too (`clerk-setup.md`) |
-| URL, ref, publishable key | literals in `ci.yml` and `ci-project-setup.yml` | Vercel env |
-| Secret key, DB URL | repository secrets `CI_SUPABASE_SECRET_KEY`, `CI_SUPABASE_DB_URL` | Vercel env; repository secrets `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL` (read only by `seed-demo.yml` and `screenshots.yml`) |
+| URL, ref | literals in `ci.yml` and `ci-project-setup.yml` | Vercel env |
+| Publishable key | a literal in `ci.yml` (`ci-project-setup.yml` does not use it) | Vercel env |
+| Secret key, DB URL | repository secrets `CI_SUPABASE_SECRET_KEY`, `CI_SUPABASE_DB_URL` | Vercel env; repository secrets `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL` (read only by `seed-demo.yml` and `screenshots.yml`); and any local env file not yet switched (section 9) |
 
 Never edit the three non-`CI_` secrets to point at the CI project. The demo
 seeder and the screenshot run would then "succeed" against the wrong database.
@@ -32,19 +33,27 @@ is IPv6-only, and GitHub's runners have no IPv6.
 
 ### What protects production
 
-Every tool that writes the CI project names it by `BIS_CI_SUPABASE_REF` and
-refuses anything else, before it connects:
+In CI, and in the CI-only tools, a check names the CI project by
+`BIS_CI_SUPABASE_REF` and refuses anything else before anything connects:
 
 - `.github/scripts/ci-target-guard.sh`: the first step of both CI jobs. It
   refuses production's ref anywhere, an API URL that is not exactly
   `https://<ref>.supabase.co`, a DB URL whose user is not `postgres.<ref>`, a
   `pk_live_`/`sk_live_` Clerk key, and a secret key that does not open the
   project's REST API. Tested by `apps/web/ci/ci-target-guard.test.ts`.
-- `packages/db/src/ci/target.ts` (`assertCiTarget`): the same checks inside
-  `db:push:ci`, `db:migrations:ci`, `ci:sql` and `ci:seed`.
+- `packages/db/src/ci/target.ts` (`assertCiTarget`), inside `db:push:ci`,
+  `db:migrations:ci`, `ci:sql` and `ci:seed`: a narrower check of the ref, the
+  API URL and the DB URL only (refuses production's ref, a URL or DB user for
+  any other project). No Clerk check and no REST probe.
 - `apps/web/ci/ci-workflow.test.ts`: fails `pnpm check` if `ci.yml` ever reads a
-  production secret, drops the guard, or names a different project from
-  `ci-project-setup.yml`.
+  production secret, drops or weakens the guard step, or names a different
+  project from `ci-project-setup.yml`.
+
+**What is NOT protected: local runs.** The db suite, the web suite and the e2e
+suite have no target check of their own. They write to whatever
+`apps/web/.env.local` and `packages/db/.env` point at. Until both are switched
+to the CI project (section 9), a local `pnpm check` or e2e run on a machine
+whose env still points at production WRITES PRODUCTION.
 
 ### How the steps are run
 
@@ -221,6 +230,10 @@ steps above. A lost project is about half an hour.
 4. Push any branch; both CI jobs green on its head SHA is the proof.
 
 ## 9. Local development
+
+**Status, 2026-09-24: NOT done** (plan step D7). The local env files on
+danlo's machine still point at production, so a local `pnpm check` or e2e run
+there writes production. Nothing refuses it; see "What is NOT protected" above.
 
 Local runs of `pnpm check` and `pnpm --filter web test:e2e` create and delete
 rows exactly as CI does, so they belong on the CI project too: the four

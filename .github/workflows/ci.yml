@@ -13,8 +13,9 @@ name: CI
 # because it was the only one. They now run on a separate Free project that
 # exists only for CI, `bis-ci` (BIS_CI_SUPABASE_REF below), built from the
 # migration files by .github/workflows/ci-project-setup.yml and seeded by
-# `ci:seed`. Of the workflows in this repo, only seed-demo.yml and
-# screenshots.yml still reach production, through the non-CI_ secrets.
+# `ci:seed`. Of the workflows on main, only seed-demo.yml and
+# screenshots.yml still reach production, through the non-CI_ secrets. (A
+# LOCAL test run has no guard: it writes wherever its env files point.)
 # Rebuilding, restoring or re-seeding the CI project:
 # docs/runbooks/ci-supabase-project.md.
 #
