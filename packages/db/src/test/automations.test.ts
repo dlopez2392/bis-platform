@@ -1728,17 +1728,24 @@ describe("reactivation — data layer", () => {
             .then(({ error }) => { if (error) throw new Error(`convoA touch failed: ${error.message}`); });
 
           const due = await listDueReactivations(db, now.toISOString());
-          // Filtered to A: the read is platform-wide and the project shared.
-          expect(due.filter((r) => r.accountId === accountA).map((r) => r.contactId),
-            "A's own past customer is due (the control); B's contact is not").toEqual([contactA]);
-          expect(due.filter((r) => r.contactId === contactB), "B's contact is due under no account").toEqual([]);
+          // Filtered to A's rows and to B's contact: the read is platform-wide
+          // and the project shared. ONE assertion, the conjunction of what
+          // used to be two ("A's rows are exactly [contactA]" and "no row for
+          // contactB anywhere"). As the code stands the second could only red
+          // with the first — a due row's accountId is its conversation's, and
+          // the only conversation on contactB is A's — but the `||` keeps it
+          // honest if a row were ever attributed to the CONTACT's account.
+          expect(due.filter((r) => r.accountId === accountA || r.contactId === contactB)
+            .map((r) => [r.accountId, r.contactId]),
+            "A's own past customer is due (the control); B's contact is due under no account")
+            .toEqual([[accountA, contactA]]);
           // The LIST has two guards against this row, and since 0050 each
           // alone holds it: the contact-account check drops the candidate, and
           // `customers` is keyed by (account, contact) so B's job cannot prove
           // A's customer. Measured on this fixture: delete the contact-account
           // check alone → still green; key `customers` by contact alone →
           // still green; do BOTH → contactB comes back due under A and the
-          // first line above reds.
+          // assertion above reds.
 
           // Mutation: delete `.eq("account_id", accountId)` from
           // `getDueReactivationById`'s CONVERSATION read → it finds A's

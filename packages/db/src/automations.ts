@@ -224,8 +224,12 @@ export type DueReviewRequest = {
  * The contact-only case of `ownAccountEmbedsOnly` (booking.ts), which is the
  * one implementation; a recipe that also builds something from its calendar
  * (the no-show nudge's rebook link) calls that directly with `"calendars"`.
+ *
+ * Exported for `own-account-embeds.test.ts` only (not in the barrel): since
+ * 0050 no real row reaches the drop branch, so an in-memory test is the one
+ * thing that pins it.
  */
-function ownAccountContactOnly<T>(rows: T[], fn: string, what: "booking" | "opportunity"): T[] {
+export function ownAccountContactOnly<T>(rows: T[], fn: string, what: "booking" | "opportunity"): T[] {
   return ownAccountEmbedsOnly(rows, fn, what, ["contacts"]);
 }
 

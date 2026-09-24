@@ -30,6 +30,12 @@
 --      (0003 named none). Names are reused so a violation reads exactly as it
 --      did, and nothing in the repo names a constraint (no `!..._fkey` embed
 --      hint, no error-text match; grepped before writing this file).
+--      An embed hint on these three relationships must name the CONSTRAINT
+--      (`contacts!bookings_contact_id_fkey`), never the column: PostgREST
+--      resolves a column-name hint (`contacts!contact_id`) only against a
+--      single-column FK, so after this file it would fail with PGRST200.
+--      (From PostgREST's documented behaviour, not measured here; no hint of
+--      either kind exists in packages/ or apps/ today.)
 --   3. The single-column FKs are DROPPED IN THE SAME STATEMENT as each
 --      composite is added. Both left in place would be two relationships
 --      between the same pair of tables, and PostgREST then refuses every
@@ -54,7 +60,9 @@
 -- pairs. A crossed row written between that read and the apply makes the
 -- FK's ALTER fail and change nothing; the orchestrator's pre-flight re-reads
 -- the crossed counts. No referencing-side index is added: the delete-side
--- check on bookings had no index on contact_id before this either, and
+-- check on bookings had no FULL index on contact_id before this either (the
+-- two PARTIAL ones, bookings_completed_by_contact and
+-- bookings_confirm_reply_pending, cannot serve its unfiltered lookup), and
 -- `opps_contact (contact_id)` still serves the deal's.
 --
 -- PostgREST reloads its relationship cache on this DDL through the
@@ -76,6 +84,11 @@
 --   alter table public.calendars drop constraint calendars_account_id_id_key;
 --
 -- ASCII only, no backslash anywhere (0048's MCP apply altered an escape).
+
+-- The UNIQUE builds take ACCESS EXCLUSIVE on contacts and calendars. If another
+-- session holds a lock there, fail after 5s instead of queueing every read
+-- behind this apply. `set local` only takes effect inside a transaction.
+set local lock_timeout = '5s';
 
 alter table public.contacts
   add constraint contacts_account_id_id_key unique (account_id, id);
