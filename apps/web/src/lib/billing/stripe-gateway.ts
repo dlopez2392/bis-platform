@@ -113,20 +113,69 @@ export function stripeGateway(stripe: Stripe): BillingGateway {
 
 export type StripeKeyVerdict =
   | { ok: true; key: string }
-  | { ok: false; reason: "missing" | "live_key_outside_production" | "not_a_secret_key" };
+  | {
+    ok: false;
+    reason: "missing" | "live_key_outside_production" | "not_a_secret_key" | "test_key_on_production_data";
+  };
+
+/** What the verdict reads. `NEXT_PUBLIC_SUPABASE_URL` is the database
+ *  `serviceDb()` writes plans to. */
+export type StripeEnv = { STRIPE_SECRET_KEY?: string; VERCEL_ENV?: string; NEXT_PUBLIC_SUPABASE_URL?: string };
 
 /**
+ * Production's Supabase project ref. apps/web cannot import
+ * packages/db/src/ci/target.ts (@bis/db exports only "." and
+ * "./search-term", and that file imports `pg`), so this is apps/web's app-side
+ * copy; stripe-gateway.test.ts fails if it stops matching that one.
+ */
+export const PRODUCTION_SUPABASE_REF = "tlbkbmlrfafquucsmsmm";
+
+/**
+ * Does this URL's HOST name production's project? Read with `new URL`, the
+ * way a client resolves it (lower-cased, percent-decoded), and only the
+ * hostname: production's ref in a path, query or userinfo is some other
+ * server. Anywhere in the hostname, not only as the first label, because a
+ * false "yes" costs a refused test key and a false "no" costs a test-mode plan
+ * in production's table. `null` when there is no usable URL: no client can
+ * reach any database with one, so it names none.
+ */
+function namesProductionDatabase(url: string | undefined): boolean | null {
+  const raw = (url ?? "").trim();
+  if (!raw) return null;
+  try {
+    return new URL(raw).hostname.includes(PRODUCTION_SUPABASE_REF);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A key's MODE has to match the DATABASE the plan is written to.
+ *
  * A live key runs ONLY where VERCEL_ENV=production. Previews, local runs
  * and CI get test mode or nothing, the app-side twin of the CI guard's
  * check 6. A key that is not a secret key at all is named, not guessed at.
+ *
+ * A TEST key is refused wherever the app talks to production's database: a
+ * plan saved there would be a row whose product and prices exist only in
+ * Stripe test mode, shown as Active under a real plan's name, and every
+ * live-mode edit of it would fail forever. That is `pnpm dev` on a machine
+ * whose apps/web/.env.local still names production, and any preview that
+ * shares production's database. With no usable URL the database is unknown;
+ * then only VERCEL_ENV=production refuses a test key, because production
+ * always means production's data, and anywhere else nothing can be written
+ * without a URL anyway (`serviceDb()` throws first).
  */
-export function stripeKeyVerdict(env: { STRIPE_SECRET_KEY?: string; VERCEL_ENV?: string }): StripeKeyVerdict {
+export function stripeKeyVerdict(env: StripeEnv): StripeKeyVerdict {
   const key = (env.STRIPE_SECRET_KEY ?? "").trim();
   if (!key) return { ok: false, reason: "missing" };
   const live = key.startsWith("sk_live_") || key.startsWith("rk_live_");
   const test = key.startsWith("sk_test_") || key.startsWith("rk_test_");
   if (!live && !test) return { ok: false, reason: "not_a_secret_key" };
   if (live && env.VERCEL_ENV !== "production") return { ok: false, reason: "live_key_outside_production" };
+  if (test && (namesProductionDatabase(env.NEXT_PUBLIC_SUPABASE_URL) ?? env.VERCEL_ENV === "production")) {
+    return { ok: false, reason: "test_key_on_production_data" };
+  }
   return { ok: true, key };
 }
 
@@ -136,7 +185,7 @@ export function billingGatewayFromEnv(
   // "weak type" check (both sides all-optional, zero named properties in
   // common) does not count — hence the explicit cast rather than a bare
   // default (TS2559 under this repo's strict: true).
-  env: { STRIPE_SECRET_KEY?: string; VERCEL_ENV?: string } = process.env as { STRIPE_SECRET_KEY?: string; VERCEL_ENV?: string },
+  env: StripeEnv = process.env as StripeEnv,
 ): { ok: true; gateway: BillingGateway } | Extract<StripeKeyVerdict, { ok: false }> {
   const verdict = stripeKeyVerdict(env);
   if (!verdict.ok) return verdict;

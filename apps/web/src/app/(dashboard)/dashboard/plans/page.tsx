@@ -17,7 +17,7 @@ import { PageHeader } from "@/components/page-header";
 import { Notice } from "@/components/ui/notice";
 import { requireAgency } from "@/lib/auth";
 import { planRowView } from "@/lib/billing/plan-rows";
-import { stripeKeyVerdict } from "@/lib/billing/stripe-gateway";
+import { stripeKeyVerdict, type StripeEnv } from "@/lib/billing/stripe-gateway";
 import { m } from "@/lib/messages";
 import { archivePlanAction, createPlanAction, restorePlanAction, updatePlanAction } from "./actions";
 import { NewPlanButton } from "./plan-dialog";
@@ -35,11 +35,12 @@ export default async function PlansPage() {
   const [plans, counts] = await Promise.all([listPlans(db), countBilledAccountsByPlan(db)]);
   const rows = plans.map((p) => planRowView(p, counts[p.id] ?? 0));
 
-  // Only the key's SHAPE is read here, never Stripe itself: a Stripe outage
-  // must not take the list down. A save still fails with its own message.
+  // Only the key's SHAPE (and which database this copy uses) is read here,
+  // never Stripe itself: a Stripe outage must not take the list down. A save
+  // still fails with its own message.
   // The cast is billingGatewayFromEnv's own (TS2559: ProcessEnv's index
   // signature does not count against an all-optional target).
-  const stripe = stripeKeyVerdict(process.env as { STRIPE_SECRET_KEY?: string; VERCEL_ENV?: string });
+  const stripe = stripeKeyVerdict(process.env as StripeEnv);
   const newPlan = <NewPlanButton create={createPlanAction} disabled={!stripe.ok} />;
 
   return (

@@ -5,7 +5,8 @@ import type { Plan } from "@bis/db";
 /**
  * The page is the agency boundary for a client who types /dashboard/plans:
  * the agency nav can list Plans whenever it renders without an account, so
- * `requireAgency()` as the page's first line (plus RLS) is the real gate.
+ * `requireAgency()` as the page's first line is the real gate, and the only
+ * one: the reads go through serviceDb(), which bypasses RLS.
  * The page is CALLED, not rendered: the props each piece receives are found
  * by walking the element tree it returns.
  */
@@ -90,6 +91,9 @@ beforeEach(() => {
   dbMocks.countBilledAccountsByPlan.mockResolvedValue({});
   vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_page_fixture");
   vi.stubEnv("VERCEL_ENV", "");
+  // Pinned, whatever the ambient environment holds: a machine whose env still
+  // names production would otherwise flip every "Stripe connected" case.
+  vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://odnobiodsftffphuuosz.supabase.co");
 });
 
 afterEach(() => {
@@ -175,5 +179,18 @@ describe("PlansPage — states", () => {
     expect(newPlan.disabled).toBe(true);
     const list = one(tree, PlansList);
     expect(list.canEdit).toBe(false);
+  });
+
+  it("a Stripe TEST key on a copy of the app that uses production's database: the Notice says why, New plan is disabled, rows cannot Edit (mutation: the page builds its verdict from STRIPE_SECRET_KEY and VERCEL_ENV only → FAILS)", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://tlbkbmlrfafquucsmsmm.supabase.co");
+    dbMocks.listPlans.mockResolvedValue([plan("p1", "Growth")]);
+    const tree = await PlansPage();
+
+    const notice = one(tree, Notice);
+    expect(notice.tone).toBe("warn");
+    expect(notice.children).toBe(m["plans.stripe.test_key_on_production_data"]);
+    const header = one(tree, PageHeader);
+    expect(one(header.actions as ReactNode, NewPlanButton).disabled).toBe(true);
+    expect(one(tree, PlansList).canEdit).toBe(false);
   });
 });

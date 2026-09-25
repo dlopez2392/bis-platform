@@ -1,7 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import type Stripe from "stripe";
 import {
-  billingGatewayFromEnv, priceCreateParams, stripeGateway, stripeKeyVerdict, STRIPE_API_VERSION,
+  billingGatewayFromEnv, priceCreateParams, PRODUCTION_SUPABASE_REF, stripeGateway, stripeKeyVerdict,
+  STRIPE_API_VERSION, type StripeEnv,
 } from "./stripe-gateway";
 import { FakeGateway } from "./fake-gateway";
 
@@ -162,7 +165,105 @@ describe("stripeKeyVerdict (a live key never runs outside production)", () => {
   });
 });
 
+/** Fake literal URLs only; nothing here connects. */
+const PROD_URL = "https://tlbkbmlrfafquucsmsmm.supabase.co";
+const CI_URL = "https://odnobiodsftffphuuosz.supabase.co";
+
+describe("stripeKeyVerdict (a Stripe TEST key never writes plans into production's database)", () => {
+  it("carries the same production ref as packages/db's constant (mutation: change one character of this file's PRODUCTION_SUPABASE_REF → FAILS)", () => {
+    // apps/web cannot import packages/db/src/ci/target.ts (@bis/db exports
+    // only "." and "./search-term", and that file imports `pg`), so the ref
+    // is one constant per package and this keeps the two in step, the same
+    // way e2e/fixtures/production-guard.test.ts does for its own copy.
+    expect(PRODUCTION_SUPABASE_REF).toBe("tlbkbmlrfafquucsmsmm");
+    const dbSource = readFileSync(path.resolve(__dirname, "../../../../../packages/db/src/ci/target.ts"), "utf-8");
+    expect(dbSource).toContain(`export const PRODUCTION_SUPABASE_REF = "${PRODUCTION_SUPABASE_REF}";`);
+  });
+
+  it.each<[string, StripeEnv, ReturnType<typeof stripeKeyVerdict>]>([
+    ["a test key locally, against production's database", { STRIPE_SECRET_KEY: "sk_test_a", NEXT_PUBLIC_SUPABASE_URL: PROD_URL }, { ok: false, reason: "test_key_on_production_data" }],
+    ["a restricted test key on a preview that shares production's database", { STRIPE_SECRET_KEY: "rk_test_b", VERCEL_ENV: "preview", NEXT_PUBLIC_SUPABASE_URL: PROD_URL }, { ok: false, reason: "test_key_on_production_data" }],
+    ["a test key in production", { STRIPE_SECRET_KEY: "sk_test_c", VERCEL_ENV: "production", NEXT_PUBLIC_SUPABASE_URL: PROD_URL }, { ok: false, reason: "test_key_on_production_data" }],
+  ])("%s is refused (mutation: drop the production-database check → FAILS)", (_label, env, expected) => {
+    expect(stripeKeyVerdict(env)).toEqual(expected);
+  });
+
+  it.each<[string, StripeEnv]>([
+    ["a test key against the CI project", { STRIPE_SECRET_KEY: "sk_test_d", NEXT_PUBLIC_SUPABASE_URL: CI_URL }],
+    ["a test key on a preview with its own database", { STRIPE_SECRET_KEY: "sk_test_e", VERCEL_ENV: "preview", NEXT_PUBLIC_SUPABASE_URL: CI_URL }],
+  ])("%s is allowed (mutation: refuse every test key whenever a URL is set → FAILS)", (_label, env) => {
+    expect(stripeKeyVerdict(env)).toEqual({ ok: true, key: env.STRIPE_SECRET_KEY });
+  });
+
+  it("a live key against production's database, in production, is allowed (mutation: refuse ANY key when the URL names production → FAILS)", () => {
+    expect(stripeKeyVerdict({ STRIPE_SECRET_KEY: "sk_live_f", VERCEL_ENV: "production", NEXT_PUBLIC_SUPABASE_URL: PROD_URL }))
+      .toEqual({ ok: true, key: "sk_live_f" });
+  });
+
+  it("a live key against production's database on a preview keeps the live-key reason (mutation: check the database before the live-key rule and report it for live keys too → FAILS)", () => {
+    expect(stripeKeyVerdict({ STRIPE_SECRET_KEY: "sk_live_g", VERCEL_ENV: "preview", NEXT_PUBLIC_SUPABASE_URL: PROD_URL }))
+      .toEqual({ ok: false, reason: "live_key_outside_production" });
+  });
+
+  it("production's ref only counts in the HOST: a path or query that mentions it is another server (mutation: search the whole URL string instead of its hostname → FAILS)", () => {
+    for (const url of [
+      `https://evil.example/${PRODUCTION_SUPABASE_REF}`,
+      `https://evil.example/?next=https://${PRODUCTION_SUPABASE_REF}.supabase.co`,
+      `https://user:${PRODUCTION_SUPABASE_REF}@evil.example`,
+    ]) {
+      expect(stripeKeyVerdict({ STRIPE_SECRET_KEY: "sk_test_h", NEXT_PUBLIC_SUPABASE_URL: url }), url)
+        .toEqual({ ok: true, key: "sk_test_h" });
+    }
+  });
+
+  it("the host is read the way a client resolves it: upper case and percent-encoding still name production (mutation: take the host by splitting the raw string instead of new URL(...).hostname → FAILS)", () => {
+    for (const url of [
+      `https://${PRODUCTION_SUPABASE_REF.toUpperCase()}.SUPABASE.CO`,
+      `https://%74${PRODUCTION_SUPABASE_REF.slice(1)}.supabase.co`,
+    ]) {
+      expect(stripeKeyVerdict({ STRIPE_SECRET_KEY: "sk_test_i", NEXT_PUBLIC_SUPABASE_URL: url }), url)
+        .toEqual({ ok: false, reason: "test_key_on_production_data" });
+    }
+  });
+
+  it("no URL (or one no client could use) cannot name a database, so only Vercel production refuses a test key (mutation: drop the VERCEL_ENV=production fallback → FAILS)", () => {
+    for (const url of [undefined, "", "   ", "not a url"]) {
+      expect(stripeKeyVerdict({ STRIPE_SECRET_KEY: "sk_test_j", VERCEL_ENV: "production", NEXT_PUBLIC_SUPABASE_URL: url }), String(url))
+        .toEqual({ ok: false, reason: "test_key_on_production_data" });
+      expect(stripeKeyVerdict({ STRIPE_SECRET_KEY: "sk_test_j", VERCEL_ENV: "preview", NEXT_PUBLIC_SUPABASE_URL: url }), String(url))
+        .toEqual({ ok: true, key: "sk_test_j" });
+    }
+  });
+});
+
 describe("billingGatewayFromEnv", () => {
+  it("never constructs Stripe for a test key against production's database, through the function the app actually calls (mutation: drop the production-database check → FAILS)", () => {
+    stripeCtorSpy.mockClear();
+    const g = billingGatewayFromEnv({ STRIPE_SECRET_KEY: "sk_test_UNIT", NEXT_PUBLIC_SUPABASE_URL: PROD_URL });
+    expect(g).toEqual({ ok: false, reason: "test_key_on_production_data" });
+    expect(stripeCtorSpy).not.toHaveBeenCalled();
+  });
+
+  it("with no argument (how the server actions call it) it reads the database URL from process.env too (mutation: default env built from STRIPE_SECRET_KEY and VERCEL_ENV only → FAILS)", () => {
+    stripeCtorSpy.mockClear();
+    vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_UNIT");
+    vi.stubEnv("VERCEL_ENV", "");
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", PROD_URL);
+    try {
+      expect(billingGatewayFromEnv()).toEqual({ ok: false, reason: "test_key_on_production_data" });
+      expect(stripeCtorSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("a test key against the CI project still constructs Stripe (mutation: refuse every test key whenever a URL is set → FAILS)", () => {
+    stripeCtorSpy.mockClear();
+    const g = billingGatewayFromEnv({ STRIPE_SECRET_KEY: "sk_test_UNIT", NEXT_PUBLIC_SUPABASE_URL: CI_URL });
+    expect(g.ok).toBe(true);
+    expect(stripeCtorSpy).toHaveBeenCalledWith("sk_test_UNIT", expect.objectContaining({ apiVersion: STRIPE_API_VERSION }));
+  });
+
   it("reports why there is no gateway instead of constructing one (mutation: construct with an empty key → FAILS)", () => {
     stripeCtorSpy.mockClear();
     expect(billingGatewayFromEnv({})).toEqual({ ok: false, reason: "missing" });

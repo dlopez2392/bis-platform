@@ -44,7 +44,8 @@ test.describe("a client cannot reach the Plans page", () => {
     // database checks only the ids' shape), so the leak check has something
     // to leak.
     const db = serviceDb();
-    const { data: agency } = await db.from("agencies").select("id").limit(1).single();
+    const { data: agency, error: agencyError } = await db.from("agencies").select("id").limit(1).single();
+    if (agencyError || !agency) throw new Error(`plans.spec canary: agencies select failed: ${agencyError?.message ?? "no row"}`);
     const canary = `E2E Canary ${RUN}`;
     const { data: row, error } = await db.from("plans").insert({
       agency_id: (agency as { id: string }).id, name: canary, monthly_price_cents: 4900,
@@ -55,12 +56,21 @@ test.describe("a client cannot reach the Plans page", () => {
       stripe_price_ids: { base: "price_e2e_b", voice_minutes: "price_e2e_v", sms: "price_e2e_s", ai_chats: "price_e2e_a" },
     }).select("id").single();
     expect(error).toBeNull();
+    let bodyOk = false;
     try {
       await page.goto("/dashboard/plans");
       await expect(page).toHaveURL(new RegExp(`/dashboard/accounts/${fixture.accountId}/dashboard(?:[/?]|$)`));
       await expect(page.getByText(canary)).toHaveCount(0);
+      bodyOk = true;
     } finally {
-      await db.from("plans").delete().eq("id", (row as { id: string }).id);
+      // Thrown only when the body passed: a throw from finally would REPLACE
+      // the primary failure (packages/db/src/test/billing.test.ts's withPlans).
+      const { error: cleanupError } = await db.from("plans").delete().eq("id", (row as { id: string }).id);
+      if (cleanupError) {
+        const msg = `plans.spec canary cleanup failed on plans: ${cleanupError.message}`;
+        if (bodyOk) throw new Error(msg);
+        console.error(msg);
+      }
     }
   });
 });
@@ -68,11 +78,22 @@ test.describe("a client cannot reach the Plans page", () => {
 test.describe("the agency's plan becomes Stripe prices", () => {
   let planId: string | null = null;
   let productId: string | null = null;
+  // Set as the test's LAST line, so afterAll can tell a cleanup failure after
+  // a green test (thrown) from one after a red test (logged, never masking it).
+  let bodyOk = false;
 
   test.afterAll(async () => {
-    if (planId) await serviceDb().from("plans").delete().eq("id", planId);
+    let cleanupError: string | null = null;
+    if (planId) {
+      const { error } = await serviceDb().from("plans").delete().eq("id", planId);
+      if (error) cleanupError = `plans.spec cleanup failed on plans (${planId}): ${error.message}`;
+    }
     if (productId && /^(sk|rk)_test_/.test(STRIPE_KEY)) {
       await new Stripe(STRIPE_KEY).products.update(productId, { active: false });
+    }
+    if (cleanupError) {
+      if (bodyOk) throw new Error(cleanupError);
+      console.error(cleanupError);
     }
   });
 
@@ -158,10 +179,10 @@ test.describe("the agency's plan becomes Stripe prices", () => {
     expect(afterIds.base).not.toBe(ids.base);
     expect([afterIds.voice_minutes, afterIds.sms, afterIds.ai_chats]).toEqual([ids.voice_minutes, ids.sms, ids.ai_chats]);
     expect((await stripe.prices.retrieve(afterIds.base)).unit_amount).toBe(5900);
-    // syncPlanToStripe re-asserts the product NAME on every save of an
-    // existing plan (so a rename that got ahead of a failed DB write is
-    // repaired) — this edit never touched the name, so the repair is a no-op
-    // here, but the re-assertion still has to have happened.
+    // The edit left the product's name as it was. This cannot observe
+    // syncPlanToStripe's re-assertion of the name on every save (the name
+    // is unchanged, so a save that skipped the rename looks identical here);
+    // the unit tests in stripe-catalog.test.ts pin that call.
     expect((await stripe.products.retrieve(productId)).name).toBe(PLAN_NAME);
 
     // --- Archive, then Undo (DESIGN.md rule 6) -----------------------------
@@ -169,5 +190,6 @@ test.describe("the agency's plan becomes Stripe prices", () => {
     await expect(row).toContainText(m["plans.status.archived"]);
     await page.getByRole("button", { name: m["common.undo"] }).click();
     await expect(row).toContainText(m["plans.status.active"]);
+    bodyOk = true;
   });
 });

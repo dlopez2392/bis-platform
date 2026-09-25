@@ -2180,7 +2180,7 @@ export const m = {
   "plans.error.overage.sms": "Enter a price for each extra text, up to $100.00.",
   "plans.error.overage.ai_chats": "Enter a price for each extra website chat, up to $100.00.",
   "plans.error.stripeNotConnected": "Stripe isn't connected, so plans can't be saved yet.",
-  "plans.error.stripeFailed": "Stripe didn't accept this plan, so nothing was saved. Try again in a minute.",
+  "plans.error.stripeFailed": "Stripe didn't accept this plan, so nothing was saved. Try again later. If it keeps failing, change the plan or check it in Stripe.",
   "plans.error.saveFailed": "The plan couldn't be saved. Try again.",
   "plans.error.stale": "This plan was changed somewhere else. Reload the page and make your edit again.",
   "plans.error.archived": "This plan is archived. Restore it before editing.",
@@ -2188,7 +2188,8 @@ export const m = {
   "plans.error.reload": "This page is out of date. Reload it and try again.",
   "plans.error.alreadySaved": "This plan was already saved. Reload the page to see it, then make your change from there.",
   "plans.stripe.missing": "Stripe isn't connected. Add STRIPE_SECRET_KEY to this deployment to create or edit plans.",
-  "plans.stripe.live_key_outside_production": "This deployment holds a live Stripe key but isn't production, so plans are switched off here. Use a test key (sk_test_).",
+  "plans.stripe.live_key_outside_production": "This deployment holds a live Stripe key but isn't production, so plans are switched off here. The live key belongs only on the live site; a copy of the app that uses the test database takes a test key (sk_test_).",
+  "plans.stripe.test_key_on_production_data": "This copy of the app uses the live database, so it won't save plans with a Stripe test key (sk_test_). Stripe couldn't bill a plan made that way. Create and edit plans on the live site.",
   "plans.stripe.not_a_secret_key": "STRIPE_SECRET_KEY isn't a Stripe secret key. It should start with sk_test_ (or sk_live_ in production).",
 } as const;
 

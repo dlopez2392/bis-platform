@@ -40,6 +40,13 @@ export const ACCOUNT_OWNED_TABLES = [
  * assuming it, by inserting a row, letting `withTestAccount` tear the account
  * down, and then asserting nothing is left.
  *
+ * `account_billing` and `usage_events` (0051) are deliberately not on it
+ * either, for the same reason: both carry `account_id … on delete cascade`
+ * (derived billing state), so the account's own deletion carries their rows
+ * away. `billing-schema.test.ts` proves that cascade live. (`plans` is
+ * agency-scoped, not account-owned, so it never belonged on the list;
+ * `account_billing.plan_id` is `restrict` toward it, not toward the account.)
+ *
  * `call_proposals` (0040) is ALSO not on that list, but for a different
  * reason, and it needs no `account_id`-cascade proof of its own: `call_id`
  * is `not null … on delete cascade`, and `calls` IS on `ACCOUNT_OWNED_TABLES`

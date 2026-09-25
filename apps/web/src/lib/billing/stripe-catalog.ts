@@ -84,6 +84,14 @@ export type StripeState = { terms: PlanTerms; productId: string; priceIds: Strip
  * unreferenced product/price set rather than replaying the expired one —
  * an orphan, same as the same-day case this module already accepts, and
  * harmless to money since nothing customer-facing points at it.
+ *
+ * The same window cuts the other way after a Stripe SERVER error. Stripe
+ * stores the first response for a key, a 500 included, and replays it for
+ * every retry that sends the same key within those ~24 hours. Because every
+ * key here is derived from the terms, a same-terms retry after a Stripe 500
+ * keeps failing with the stored 500 until the key expires or the terms
+ * change (which derives a new key). That is why the save's failure copy
+ * (plans.error.stripeFailed) promises no timeframe.
  */
 export async function syncPlanToStripe(
   gateway: BillingGateway, planId: string, terms: PlanTerms, current: StripeState,
