@@ -141,8 +141,17 @@ test.describe("a client's branding boundary, at the database", () => {
       // seeded account is restored ONLY if its colour actually moved, and
       // without an audit event — a green run writes nothing to it at all
       // (see restoreSeededBrandColor).
-      await setBranding(serviceDb(), accountId, { brandColor: before.brandColor }, clerkUserId);
+      //
+      // ORDER MATTERS: the seeded account (`otherAccount`) is a REAL account
+      // shared by every run against this project, while the fixture account
+      // (`accountId`) is this run's own throwaway — auth.teardown.ts deletes
+      // it wholesale regardless of what its brand_color holds. Restoring the
+      // seeded account FIRST means a throw from the fixture restore below can
+      // never skip it; restoring it second (the previous order) meant a throw
+      // from the lower-stakes fixture restore left the real, shared account
+      // un-restored with nothing left in this `finally` to catch it.
       await restoreSeededBrandColor(serviceDb(), otherAccount, otherBefore.brandColor);
+      await setBranding(serviceDb(), accountId, { brandColor: before.brandColor }, clerkUserId);
     }
   });
 });
