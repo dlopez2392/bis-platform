@@ -516,6 +516,33 @@ export async function POST(
       log("transcript append failed", { conversationId, error: String(e) });
     }
 
+    // USAGE (client billing): ONE `ai_chats` row per conversation, recorded
+    // when Sofía's FIRST reply has succeeded (danlo, 2026-09-25: a failed
+    // start, e.g. the model call's 503 during an OpenAI outage, never
+    // bills). Every refusal and the model call are above this line, so none
+    // of them can reach it. "Succeeded" is `spoken`'s own condition: the
+    // model wrote a reply, or a lead was filed this turn; an empty completion
+    // that fell back to `strings.unavailable` is not an answer.
+    //
+    // Turn 1 only (`!priorId`): a later turn never attempts it. The unique
+    // (meter, source_ref) on `conversation:<id>` is the backstop, not the
+    // gate. recordUsageSafely never throws, and the LAZY import (this
+    // handler's rule, lines 113-123: lib/billing/usage imports @bis/db at its
+    // module scope) sits inside this leg's own try, so neither a ledger
+    // failure nor a failed import can cost the visitor the answer below.
+    const answered = Boolean(reply || (toolArgs && filed));
+    if (!priorId && answered) {
+      try {
+        const { recordUsageSafely } = await import("@/lib/billing/usage");
+        await recordUsageSafely(db, {
+          accountId: profile.account_id, meter: "ai_chats", quantity: 1,
+          occurredAt: new Date(), sourceRef: `conversation:${conversationId}`,
+        }, `concierge ${conversationId}`);
+      } catch (e) {
+        log("usage leg failed", { conversationId, error: String(e) });
+      }
+    }
+
     return quiet(conversationId, spoken, false);
   } catch (e) {
     // Anything the reads above threw. A refusal, so it costs nothing — and

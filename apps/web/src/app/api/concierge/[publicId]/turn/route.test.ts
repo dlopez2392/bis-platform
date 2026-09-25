@@ -17,6 +17,7 @@ const dbFns = vi.hoisted(() => ({
   getForm: vi.fn(),
   createSubmission: vi.fn(),
   recordAutomationLog: vi.fn(async () => undefined),
+  recordUsage: vi.fn(async () => "recorded"),
 }));
 const enrichMock = vi.hoisted(() => vi.fn());
 
@@ -231,6 +232,7 @@ beforeEach(() => {
   dbFns.createSubmission.mockResolvedValue({ id: "s1" });
   dbFns.setConciergeSubmission.mockResolvedValue(true);
   dbFns.recordAutomationLog.mockResolvedValue(undefined);
+  dbFns.recordUsage.mockResolvedValue("recorded");
 });
 
 afterEach(() => {
@@ -819,5 +821,46 @@ describe("POST /api/concierge/[publicId]/turn — filing the lead", () => {
     // unpublished form still produced "Thanks. I have passed your details…".
     const body = await res.json() as { reply: string };
     expect(body.reply).not.toBe(conciergeStrings("en").captured);
+  });
+});
+
+describe("POST /api/concierge/[publicId]/turn — usage: one website chat, billed when Sofía's FIRST reply succeeds (client billing)", () => {
+  it("a first turn Sofía answered records ONE website chat against the conversation (mutation: drop the usage leg → FAILS)", async () => {
+    const res = await firstTurn();
+    expect(res.status).toBe(200);
+    expect(dbFns.recordUsage).toHaveBeenCalledTimes(1);
+    expect(dbFns.recordUsage).toHaveBeenCalledWith(expect.anything(), {
+      accountId: "a1", meter: "ai_chats", quantity: 1, occurredAt: expect.any(Date), sourceRef: "conversation:c1",
+    });
+  });
+
+  it("a first turn whose model call FAILS (an OpenAI outage's 503) records nothing, though the conversation row exists (mutation: record at createConciergeConversation → FAILS)", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 503, json: async () => ({}) });
+    const res = await firstTurn();
+    expect(res.status).toBe(503);
+    expect(dbFns.createConciergeConversation).toHaveBeenCalledTimes(1);
+    expect(dbFns.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it("a first turn whose completion is EMPTY (the visitor reads the 'unavailable' line) records nothing (mutation: gate on the model call returning alone → FAILS)", async () => {
+    fetchMock.mockResolvedValue(modelReplies(""));
+    const res = await firstTurn();
+    expect(res.status).toBe(200);
+    expect((await res.json() as { reply: string }).reply).toBe(conciergeStrings("en").unavailable);
+    expect(dbFns.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it("a later turn, answered, records nothing: only turn 1 ever attempts it (mutation: drop the turn-1 gate → FAILS)", async () => {
+    const res = await laterTurn();
+    expect(res.status).toBe(200);
+    expect(dbFns.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it("a failing usage write leaves the visitor's answer untouched (mutation: remove recordUsageSafely's catch AND the leg's own try → the route's outer catch answers 503, FAILS)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    dbFns.recordUsage.mockRejectedValue(new Error("usage_events is down"));
+    const res = await firstTurn();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ conversationId: "c1", reply: "Yes, we do.", ended: false, closing: "" });
   });
 });
