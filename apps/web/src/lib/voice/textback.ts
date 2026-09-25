@@ -28,6 +28,9 @@ import { getSmsProvider } from "@/lib/sms";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { defaultTextbackBody } from "./textback-body";
 import { withOptOut } from "@/lib/sms/opt-out";
+import { segmentsFor } from "@/lib/sms/segments";
+import type { SmsProvider } from "@/lib/sms/types";
+import { recordUsageSafely, smsBillable } from "@/lib/billing/usage";
 
 /** The service-role client every voice write goes through, named the way
  *  finish-call.ts names it rather than reaching for @supabase/supabase-js,
@@ -239,8 +242,10 @@ export async function deliverTextback(
     // catch instead, where it is logged and the message is left exactly as
     // written. Identical reasoning to sendSmsAction (conversations/actions.ts).
     let providerMessageId: string;
+    let provider: SmsProvider;
     try {
-      ({ providerMessageId } = await getSmsProvider().send({ to, from, body }));
+      provider = getSmsProvider();
+      ({ providerMessageId } = await provider.send({ to, from, body }));
     } catch (sendError) {
       // Nothing left the building, so `failed` is the honest label — and it is
       // the only signal this failure has, since there is no retry and no human
@@ -260,6 +265,17 @@ export async function deliverTextback(
         console.error(`${label}: could not mark message ${messageId} failed: ${String(statusError)}`);
       }
       throw sendError;
+    }
+    // USAGE (client billing): the text reached the customer, so its segments
+    // bill. BEFORE the `sent` write, which may throw into the catch below and
+    // must not take a delivered text's usage with it; recordUsageSafely never
+    // throws, so it cannot stop that write either. This one leg covers both
+    // callers (finishCall and the handoff-result route).
+    if (smsBillable(provider)) {
+      await recordUsageSafely(db, {
+        accountId, meter: "sms", quantity: segmentsFor(body).segments,
+        occurredAt: new Date(), sourceRef: `message:${messageId}`,
+      }, label);
     }
     await updateMessageStatus(db, accountId, messageId, "sent",
       { providerMessageId }, ACTOR_ID, ACTOR_TYPE);

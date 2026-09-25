@@ -19,8 +19,17 @@ const gateMock = vi.fn();
 vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => gateMock(...a) }));
 
 const smsSendMock = vi.fn();
+// The service client the usage write goes through, and the provider's
+// billing-relevant shape. Hoisted: the two mock factories read them.
+const svc = vi.hoisted(() => ({
+  db: { tag: "service-db" }, throws: false,
+  provider: { isFake: false as boolean, redirectTo: undefined as string | undefined },
+}));
 vi.mock("@/lib/sms", () => ({
-  getSmsProvider: () => ({ send: (...a: unknown[]) => smsSendMock(...a) }),
+  getSmsProvider: () => ({
+    isFake: svc.provider.isFake, redirectTo: svc.provider.redirectTo,
+    send: (...a: unknown[]) => smsSendMock(...a),
+  }),
 }));
 
 /**
@@ -91,13 +100,19 @@ vi.mock("@bis/db", () => ({
   createMessage: vi.fn(async () => ({ id: "msg_1" })),
   updateMessageStatus: vi.fn(),
   clearUnreadCount: vi.fn(),
+  serviceDb: () => {
+    if (svc.throws) throw new Error("SUPABASE_SERVICE_ROLE_KEY is missing");
+    return svc.db;
+  },
+  recordUsage: vi.fn(),
 }));
 
 import { sendEmailAction, sendSmsAction } from "./actions";
-import { createMessage, updateMessageStatus } from "@bis/db";
+import { createMessage, updateMessageStatus, recordUsage } from "@bis/db";
 
 const createMessageMock = vi.mocked(createMessage);
 const updateMessageStatusMock = vi.mocked(updateMessageStatus);
+const recordUsageMock = vi.mocked(recordUsage);
 
 function fd(entries: Record<string, string>) {
   const formData = new FormData();
@@ -118,6 +133,10 @@ beforeEach(() => {
   accountRow.brand_name = "Rio Roofing";
   contactRow.email = "customer@example.com";
   contactRow.phone = "9565551234";
+  svc.throws = false;
+  svc.provider.isFake = false;
+  svc.provider.redirectTo = undefined;
+  recordUsageMock.mockReset().mockResolvedValue("recorded");
 });
 
 /**
@@ -325,5 +344,53 @@ describe("sendSmsAction — success, and the one place it must not paper over a 
 
     expect(updateMessageStatusMock).toHaveBeenCalledTimes(1);
     expect(updateMessageStatusMock.mock.calls[0]![3]).toBe("sent");
+  });
+});
+
+describe("sendSmsAction — usage (client billing)", () => {
+  beforeEach(() => { vi.spyOn(console, "error").mockImplementation(() => {}); });
+
+  it("a sent text records its segments on the SERVICE client, against the message row (mutation: pass the request's RLS client → FAILS)", async () => {
+    await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }));
+    expect(recordUsageMock).toHaveBeenCalledTimes(1);
+    expect(recordUsageMock).toHaveBeenCalledWith(svc.db, {
+      accountId: "acct_1", meter: "sms", quantity: 1, occurredAt: expect.any(Date), sourceRef: "message:msg_1",
+    });
+  });
+
+  it("a 161-character text bills two segments (mutation: bill 1 per text → FAILS)", async () => {
+    await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "a".repeat(161) }));
+    expect(recordUsageMock).toHaveBeenCalledWith(svc.db, expect.objectContaining({ quantity: 2 }));
+  });
+
+  it("a text the carrier refused records nothing (mutation: record before the send → FAILS)", async () => {
+    smsSendMock.mockRejectedValue(new Error("carrier rejected"));
+    await expect(sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }))).rejects.toThrow("carrier rejected");
+    expect(recordUsageMock).not.toHaveBeenCalled();
+  });
+
+  it("a fake provider, or a real one redirected to a developer's phone, records nothing (mutation: drop the smsBillable gate → FAILS)", async () => {
+    svc.provider.isFake = true;
+    await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }));
+    svc.provider.isFake = false;
+    svc.provider.redirectTo = "+19565550199";
+    await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }));
+    expect(smsSendMock).toHaveBeenCalledTimes(2);
+    expect(recordUsageMock).not.toHaveBeenCalled();
+  });
+
+  it("the usage row lands even when the final 'sent' write throws (mutation: record after that write → FAILS)", async () => {
+    updateMessageStatusMock.mockRejectedValue(new Error("db down"));
+    await expect(sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }))).rejects.toThrow("db down");
+    expect(recordUsageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failing usage write, even a service client that cannot be built, leaves the action resolving and the row marked sent (mutation: remove the catch, or call serviceDb() outside it → rejects, FAILS)", async () => {
+    svc.throws = true;
+    await expect(sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }))).resolves.toBeUndefined();
+    svc.throws = false;
+    recordUsageMock.mockRejectedValue(new Error("usage_events is down"));
+    await expect(sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }))).resolves.toBeUndefined();
+    expect(updateMessageStatusMock.mock.calls.map((c) => c[3])).toEqual(["sent", "sent"]);
   });
 });
