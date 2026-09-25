@@ -113,6 +113,19 @@ function jobKeys(job: string[]): string[] {
   });
 }
 
+/** `NAME: value` pairs in a job's OWN `env:` block (six columns in). */
+function jobEnv(jobLines: string[]): Record<string, string> {
+  const at = jobLines.findIndex((line) => /^ {4}env:\s*$/.test(line));
+  if (at < 0) return {};
+  const out: Record<string, string> = {};
+  for (const line of jobLines.slice(at + 1)) {
+    if (line.trim() !== "" && !/^ {6}/.test(line)) break;
+    const m = /^ {6}([A-Za-z0-9_-]+): (.+)$/.exec(line);
+    if (m?.[1] && m[2]) out[m[1]] = m[2].trim();
+  }
+  return out;
+}
+
 const ciLines = codeLines(read("../../../.github/workflows/ci.yml"));
 const ciEnv = mapping(topLevelBlock(ciLines, "env"));
 const ciJobs = jobs(ciLines);
@@ -135,13 +148,14 @@ describe("ci.yml points the gates at the CI Supabase project, never production's
     expect(found).toEqual([]);
   });
 
-  it("reads secrets only by name, and only the five it needs", () => {
+  it("reads secrets only by name, and only the six it needs", () => {
     // `secrets['X']` and `toJSON(secrets)` reach a production secret without
     // ever writing `secrets.X`. So every mention of the secrets context must
     // be exactly `secrets.<one of these>`; anything else is listed.
     const allowed = new Set([
       "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "CLERK_SECRET_KEY",
       "CI_SUPABASE_SECRET_KEY", "CI_SUPABASE_DB_URL", "OPENAI_API_KEY",
+      "CI_STRIPE_SECRET_KEY",
     ]);
     const offending = ciLines.flatMap((line) =>
       [...line.matchAll(/\bsecrets\b(\.[A-Za-z0-9_]+)?/gi)]
@@ -159,6 +173,21 @@ describe("ci.yml points the gates at the CI Supabase project, never production's
     expect(ciEnv.SUPABASE_SERVICE_ROLE_KEY).toBe("${{ secrets.CI_SUPABASE_SECRET_KEY }}");
     expect(ciEnv.SUPABASE_DB_URL).toBe("${{ secrets.CI_SUPABASE_DB_URL }}");
     expect(ciEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY).toMatch(/^sb_publishable_/);
+  });
+
+  it("hands the Stripe TEST key to the e2e job only, as STRIPE_SECRET_KEY (mutation: move it to the top-level env, or drop it → FAILS)", () => {
+    expect(jobEnv(job("e2e")).STRIPE_SECRET_KEY).toBe("${{ secrets.CI_STRIPE_SECRET_KEY }}");
+    expect(jobEnv(job("verify")).STRIPE_SECRET_KEY).toBeUndefined();
+    expect(ciEnv.STRIPE_SECRET_KEY).toBeUndefined();
+  });
+
+  it("references secrets.CI_STRIPE_SECRET_KEY on exactly one non-comment line: e2e's own job-level env (mutation: also give a STEP inside verify its own `env: STRIPE_SECRET_KEY: ${{ secrets.CI_STRIPE_SECRET_KEY }}` — jobEnv only reads a job's 4-space env: block, so the two checks above stay green and this is the only one that FAILS)", () => {
+    const matches = ciLines.filter((line) => line.includes("secrets.CI_STRIPE_SECRET_KEY"));
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.trim()).toBe("STRIPE_SECRET_KEY: ${{ secrets.CI_STRIPE_SECRET_KEY }}");
+    // The one occurrence is the same line jobEnv already found inside e2e's
+    // own job-level env: block, not a second copy living on some step.
+    expect(jobEnv(job("e2e")).STRIPE_SECRET_KEY).toBe("${{ secrets.CI_STRIPE_SECRET_KEY }}");
   });
 
   it("names the same CI project as the setup workflow that builds it, as a literal URL", () => {

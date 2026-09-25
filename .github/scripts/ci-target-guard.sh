@@ -19,6 +19,7 @@
 #   SUPABASE_DB_URL                    from secret CI_SUPABASE_DB_URL
 #   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY  from secret NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
 #   CLERK_SECRET_KEY                   from secret CLERK_SECRET_KEY
+#   STRIPE_SECRET_KEY                  from secret CI_STRIPE_SECRET_KEY (e2e job only; OPTIONAL)
 #
 # Checks, all reported together, then the probe only if all of them passed:
 #   1. every value above is present;
@@ -29,6 +30,10 @@
 #   4. neither Clerk key is a live (production-instance) key;
 #   5. the secret key is not a publishable key, and it opens the CI project's
 #      REST API (HTTP 200), with the failure named by status.
+#   6. STRIPE_SECRET_KEY, when set, is a Stripe TEST-mode secret key
+#      (sk_test_ or rk_test_), never a live one. It is optional: only the e2e
+#      job carries it, and the one spec that needs it skips itself loudly
+#      without it. The guard never sends it anywhere.
 #
 # The probe runs last on purpose: the secret key is only ever sent to a host
 # the static checks have already accepted.
@@ -70,6 +75,7 @@ key="${SUPABASE_SERVICE_ROLE_KEY:-}"
 db="${SUPABASE_DB_URL:-}"
 clerk_pk="${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}"
 clerk_sk="${CLERK_SECRET_KEY:-}"
+stripe_key="${STRIPE_SECRET_KEY:-}"
 
 # --- 1. present -------------------------------------------------------------
 for name in BIS_CI_SUPABASE_REF NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY \
@@ -127,6 +133,21 @@ esac
 case "$key" in
   sb_publishable_*) fail "SUPABASE_SERVICE_ROLE_KEY is a publishable key (sb_publishable_), not a secret key. Put the CI project's secret key (sb_secret_) in CI_SUPABASE_SECRET_KEY." ;;
 esac
+
+# --- 6. Stripe test mode (optional) --------------------------------------------
+# CI creates Stripe products and prices (e2e/plans.spec.ts). A live key would
+# create them in the LIVE Stripe account, beside real customers' billing.
+if [ -n "$stripe_key" ]; then
+  case "$stripe_key" in
+    sk_live_* | rk_live_*)
+      fail "STRIPE_SECRET_KEY is a live-mode Stripe key. CI creates products and prices and must use a test-mode key (sk_test_). Put the Stripe TEST secret key in the repository secret CI_STRIPE_SECRET_KEY."
+      ;;
+    sk_test_* | rk_test_*) ;;
+    *)
+      fail "STRIPE_SECRET_KEY is not a Stripe test-mode secret key (sk_test_ or rk_test_). Put the Stripe TEST secret key in the repository secret CI_STRIPE_SECRET_KEY."
+      ;;
+  esac
+fi
 
 if [ "$failed" -ne 0 ]; then
   echo "CI target guard: refused. Nothing was sent to any server."

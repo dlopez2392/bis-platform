@@ -14,7 +14,7 @@ describe("buildNavGroups", () => {
     expect(groups[0]!.label).toBeNull();
     expect(hrefs(groups)).toEqual([
       "/dashboard/accounts", "/dashboard/blueprints", "/dashboard/work", "/dashboard/numbers",
-      "/dashboard/screened",
+      "/dashboard/screened", "/dashboard/plans",
     ]);
   });
 
@@ -27,6 +27,15 @@ describe("buildNavGroups", () => {
     expect(hrefs(buildNavGroups(null, true))).toContain("/dashboard/numbers");
     for (const isAgency of [true, false]) {
       expect(hrefs(buildNavGroups(BASE, isAgency))).not.toContain("/dashboard/numbers");
+    }
+  });
+
+  it("offers Plans at the top level and nowhere inside an account (mutation: add it to an in-account group → FAILS)", () => {
+    // Plans are agency-wide (0051: agency-scoped, agency-only RLS). A copy
+    // inside one company's nav would say something false about its scope.
+    expect(hrefs(buildNavGroups(null, true))).toContain("/dashboard/plans");
+    for (const isAgency of [true, false]) {
+      expect(hrefs(buildNavGroups(BASE, isAgency))).not.toContain("/dashboard/plans");
     }
   });
 

@@ -72,7 +72,15 @@ describe("buildPaletteEntries", () => {
     // Derived from buildNavGroups, so a nav destination cannot exist without
     // a palette entry — this asserts the newest one actually made it through.
     expect(hrefs).toContain("/dashboard/numbers");
+    expect(hrefs).toContain("/dashboard/plans");
     expect(hrefs.some((h) => h.includes("/contacts"))).toBe(false);
+  });
+
+  it("finds Plans by the words an operator types for it (mutation: drop its NAV_KEYWORDS entry → FAILS)", () => {
+    const entries = buildPaletteEntries(null, true);
+    for (const word of ["billing", "pricing", "stripe"]) {
+      expect(filterEntries(entries, word).map((e) => e.id)).toContain("nav:/dashboard/plans");
+    }
   });
 
   it("offers no action that writes tenant data", () => {

@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   FIXTURE_ACCOUNT_RE, FIXTURE_BLUEPRINT_RE, FIXTURE_CO_ACCOUNT_RE, FIXTURE_EMAIL_RE,
-  FIXTURE_FORM_RE, STALE_AFTER_MS,
+  FIXTURE_FORM_RE, FIXTURE_PLAN_RE, STALE_AFTER_MS,
   fixtureStamp, isStaleFixture, isStaleFixtureAccount, isStaleFixtureBlueprint,
-  isStaleFixtureForm, isUuid,
+  isStaleFixtureForm, isStaleFixturePlan, isUuid,
 } from "./stale";
 
 // A real stamp from a real leaked fixture (the account danlo had to delete by
@@ -246,6 +246,56 @@ describe("isStaleFixtureBlueprint", () => {
   it("requires exactly 13 digits (against the regex directly)", () => {
     expect(FIXTURE_BLUEPRINT_RE.test(`E2E Blueprint ${String(STAMP).slice(0, 12)}`)).toBe(false);
     expect(FIXTURE_BLUEPRINT_RE.test(`E2E Blueprint ${STAMP}0`)).toBe(false);
+  });
+});
+
+// MUTATION: widening FIXTURE_PLAN_RE (e.g. dropping the anchors, or the word
+// alternation, down to something like /E2E .*(\d{13})/) reds the near-miss
+// test below — a real "Growth" plan or a name like "E2E Plans <stamp>" would
+// then be admitted, which is exactly the direction that sweeps a live plan.
+describe("isStaleFixturePlan", () => {
+  it("is true for a plan stamp older than the window, both name shapes", () => {
+    expect(isStaleFixturePlan(`E2E Plan ${STAMP}`, LATER)).toBe(true);
+    expect(isStaleFixturePlan(`E2E Canary ${STAMP}`, LATER)).toBe(true);
+  });
+
+  // The concurrency guard again: a suite running right now owns a plan it
+  // created seconds ago.
+  it("is false for either shape created moments ago", () => {
+    expect(isStaleFixturePlan(`E2E Plan ${STAMP}`, STAMP + 1000)).toBe(false);
+    expect(isStaleFixturePlan(`E2E Canary ${STAMP}`, STAMP + 1000)).toBe(false);
+  });
+
+  // A real "Growth" plan sits in the same table as every stranded fixture,
+  // so a near-miss has to stay a near-miss.
+  it("refuses anything that is not exactly one of the two shapes, however old", () => {
+    for (const value of [
+      "Growth",
+      `E2E Plans ${STAMP}`,
+      `E2E Plann ${STAMP}`,
+      `E2E Canaries ${STAMP}`,
+      `e2e Plan ${STAMP}`,
+      `My E2E Plan ${STAMP}`,
+      `E2E Plan ${STAMP} Draft`,
+      `E2E Plan ${String(STAMP).slice(0, 12)}`,
+      `E2E Plan ${STAMP}0`,
+      `E2E Canary ${String(STAMP).slice(0, 12)}`,
+      `E2E Canary ${STAMP}0`,
+      `E2E Co ${STAMP}`,
+      `E2E Blueprint ${STAMP}`,
+    ]) {
+      expect(isStaleFixturePlan(value, Number.MAX_SAFE_INTEGER), value).toBe(false);
+    }
+  });
+
+  it("is false for a stamp further in the future than the window", () => {
+    expect(isStaleFixturePlan(`E2E Plan ${STAMP}`, STAMP - STALE_AFTER_MS - 1)).toBe(false);
+  });
+
+  it("requires exactly 13 digits (against the regex directly)", () => {
+    expect(FIXTURE_PLAN_RE.test(`E2E Plan ${String(STAMP).slice(0, 12)}`)).toBe(false);
+    expect(FIXTURE_PLAN_RE.test(`E2E Plan ${STAMP}0`)).toBe(false);
+    expect(FIXTURE_PLAN_RE.test(`E2E Canary ${STAMP}`)).toBe(true);
   });
 });
 

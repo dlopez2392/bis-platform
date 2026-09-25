@@ -31,7 +31,8 @@ import { clerkClient } from "@clerk/nextjs/server";
 import { serviceDb, ACCOUNT_OWNED_TABLES } from "@bis/db";
 import {
   FIXTURE_BLUEPRINT_PREFILTER, FIXTURE_EMAIL_RE, FIXTURE_NAME_PREFILTER, STALE_AFTER_MS,
-  isStaleFixture, isStaleFixtureAccount, isStaleFixtureBlueprint, isStaleFixtureForm, isUuid,
+  isStaleFixture, isStaleFixtureAccount, isStaleFixtureBlueprint, isStaleFixtureForm,
+  isStaleFixturePlan, isUuid,
 } from "./stale";
 
 const BUCKET = "brand-logos";
@@ -47,6 +48,7 @@ export type SweepReport = {
   clerkOrgs: Array<{ id: string; name: string }>;
   strandedForms: Array<{ id: string; name: string; accountId: string }>;
   strandedBlueprints: Array<{ id: string; name: string }>;
+  strandedPlans: Array<{ id: string; name: string }>;
   orphanObjects: string[];
   errors: string[];
 };
@@ -55,7 +57,7 @@ export type SweepReport = {
  *  instead of a literal that has to learn every new leg by hand. */
 export const emptySweepReport = (): SweepReport => ({
   accounts: [], clerkUsers: [], clerkOrgs: [], strandedForms: [], strandedBlueprints: [],
-  orphanObjects: [], errors: [],
+  strandedPlans: [], orphanObjects: [], errors: [],
 });
 
 /**
@@ -360,6 +362,41 @@ export async function sweepStaleFixtures({
     }
   }
 
+  // 6. Plans a killed `plans.spec.ts` run left behind. `plans` is AGENCY-
+  // scoped exactly like `blueprints` — no `account_id`, nothing cascades it —
+  // so a killed run strands `E2E Plan <stamp>` (created through the UI) or
+  // `E2E Canary <stamp>` (written straight to the table by the boundary
+  // test) forever without its own leg. The `like` is a prefilter, never the
+  // decision; `isStaleFixturePlan` decides.
+  //
+  // A plan referenced by `account_billing` (migration 0051, `on delete
+  // restrict`) cannot be deleted this way — e2e never creates billing rows,
+  // so this is not expected to fire, but if it ever does the delete error is
+  // reported like every other leg, never thrown.
+  //
+  // Deliberately NOT calling Stripe here: `plans.spec.ts`'s own `afterAll`
+  // deactivates the Stripe product on a completed run, but a killed run
+  // leaves a stranded TEST-mode product too. That is harmless (no real
+  // customer, no live charge) and this sweep only ever touches Postgres/Clerk
+  // rows that are stranded in the SHARED environment — a leftover test-mode
+  // Stripe product is not.
+  const { data: plans, error: plansError } = await db
+    .from("plans").select("id, name").like("name", FIXTURE_NAME_PREFILTER);
+  if (plansError) {
+    report.errors.push(`plans select: ${plansError.message}`);
+  }
+  const stalePlans = (plans ?? []).filter(
+    (p: { name: string }) => isStaleFixturePlan(p.name, now, maxAgeMs),
+  ) as Array<{ id: string; name: string }>;
+
+  for (const plan of stalePlans) {
+    report.strandedPlans.push({ id: plan.id, name: plan.name });
+    if (!dryRun) {
+      const { error } = await db.from("plans").delete().eq("id", plan.id);
+      if (error) report.errors.push(`plans delete for ${plan.id}: ${error.message}`);
+    }
+  }
+
   return report;
 }
 
@@ -377,6 +414,8 @@ export function formatSweepReport(report: SweepReport, dryRun: boolean): string 
     ...report.strandedForms.map((f) => `    ${f.name} (${f.id}, account ${f.accountId})`),
     `  blueprints:      ${report.strandedBlueprints.length}`,
     ...report.strandedBlueprints.map((b) => `    ${b.name} (${b.id})`),
+    `  plans:           ${report.strandedPlans.length}`,
+    ...report.strandedPlans.map((p) => `    ${p.name} (${p.id})`),
     `  storage objects: ${report.orphanObjects.length}`,
     ...report.orphanObjects.map((p) => `    ${p}`),
   ];
