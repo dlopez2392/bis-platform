@@ -32,7 +32,7 @@
 //      consumed. v1 accepts that: the failure mode is a duplicated pair in a
 //      transcript, not a duplicated lead (the submission slot is claimed
 //      once, in the database).
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 // Type-only: erased at compile time, so it does not put `@bis/db` back at
 // module scope (see the lazy imports in the handler below).
 import type { serviceDb as serviceDbType, Branding, ConciergeConversationRow } from "@bis/db";
@@ -526,21 +526,26 @@ export async function POST(
     //
     // Turn 1 only (`!priorId`): a later turn never attempts it. The unique
     // (meter, source_ref) on `conversation:<id>` is the backstop, not the
-    // gate. recordUsageSafely never throws, and the LAZY import (this
-    // handler's rule, lines 113-123: lib/billing/usage imports @bis/db at its
-    // module scope) sits inside this leg's own try, so neither a ledger
-    // failure nor a failed import can cost the visitor the answer below.
+    // gate. In `after()`, once the response is sent (the voice routes'
+    // precedent): the visitor is waiting on this reply, and a stalled ledger
+    // write could otherwise hold it up to recordUsageSafely's 5 s.
+    // recordUsageSafely never throws, and the LAZY import (this handler's
+    // rule, lines 113-123: lib/billing/usage imports @bis/db at its module
+    // scope) sits inside the callback's own try, so neither a ledger failure
+    // nor a failed import rejects the background work.
     const answered = Boolean(reply || (toolArgs && filed));
     if (!priorId && answered) {
-      try {
-        const { recordUsageSafely } = await import("@/lib/billing/usage");
-        await recordUsageSafely(db, {
-          accountId: profile.account_id, meter: "ai_chats", quantity: 1,
-          occurredAt: new Date(), sourceRef: `conversation:${conversationId}`,
-        }, `concierge ${conversationId}`);
-      } catch (e) {
-        log("usage leg failed", { conversationId, error: String(e) });
-      }
+      after(async () => {
+        try {
+          const { recordUsageSafely } = await import("@/lib/billing/usage");
+          await recordUsageSafely(db, {
+            accountId: profile.account_id, meter: "ai_chats", quantity: 1,
+            occurredAt: new Date(), sourceRef: `conversation:${conversationId}`,
+          }, `concierge ${conversationId}`);
+        } catch (e) {
+          log("usage leg failed", { conversationId, error: String(e) });
+        }
+      });
     }
 
     return quiet(conversationId, spoken, false);
