@@ -213,12 +213,22 @@ describe("0051 RLS reads: a foreign row is PRESENT in every case", () => {
     }));
 });
 
-describe("0051 writes: only service_role writes (42501, the GRANT refusing, never 'an error')", () => {
+// Code AND message, never the code alone: RLS default-deny on a table with no
+// INSERT policy ALSO raises 42501 ("new row violates row-level security
+// policy"), so with the insert grant mutated in, a code-only assertion stays
+// green. "permission denied for table <t>" is the GRANT refusing, which is the
+// barrier under test. (Precedent: call-proposals-grants.test.ts.)
+const denied = (table: string) => ({
+  code: "42501",
+  message: expect.stringMatching(new RegExp(`permission denied for table ${table}`, "i")),
+});
+
+describe("0051 writes: only service_role writes (42501 AND 'permission denied for table <t>': the GRANT refusing, not RLS)", () => {
   it("a client cannot INSERT a plan (mutation: grant insert on plans to authenticated → FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       await actAs(c, { org_id: orgId("A") });
-      await expect(c.query(PLAN_SQL, planParams(s.agencyId, `Client ${RUN}`))).rejects.toMatchObject({ code: "42501" });
+      await expect(c.query(PLAN_SQL, planParams(s.agencyId, `Client ${RUN}`))).rejects.toMatchObject(denied("plans"));
     }));
 
   it("a client cannot UPDATE a plan's price (mutation: grant update on plans to authenticated → FAILS)", () =>
@@ -226,14 +236,14 @@ describe("0051 writes: only service_role writes (42501, the GRANT refusing, neve
       const s = await seed(c);
       await actAs(c, { org_id: orgId("A") });
       await expect(c.query("update plans set monthly_price_cents = 100 where id = $1", [s.plan]))
-        .rejects.toMatchObject({ code: "42501" });
+        .rejects.toMatchObject(denied("plans"));
     }));
 
   it("even the agency's own JWT cannot INSERT a plan directly: writes go through serviceDb() after requireAgency() (mutation: grant insert on plans to authenticated → FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       await actAs(c, { app_role: "agency_admin" });
-      await expect(c.query(PLAN_SQL, planParams(s.agencyId, `Agency ${RUN}`))).rejects.toMatchObject({ code: "42501" });
+      await expect(c.query(PLAN_SQL, planParams(s.agencyId, `Agency ${RUN}`))).rejects.toMatchObject(denied("plans"));
     }));
 
   it("a client cannot mark its own account complimentary (mutation: grant update on account_billing to authenticated → FAILS)", () =>
@@ -241,7 +251,7 @@ describe("0051 writes: only service_role writes (42501, the GRANT refusing, neve
       const s = await seed(c);
       await actAs(c, { org_id: orgId("A") });
       await expect(c.query("update account_billing set complimentary = true where account_id = $1", [s.a]))
-        .rejects.toMatchObject({ code: "42501" });
+        .rejects.toMatchObject(denied("account_billing"));
     }));
 
   it("a client cannot INSERT usage for its own account (mutation: grant insert on usage_events to authenticated → FAILS)", () =>
@@ -250,7 +260,7 @@ describe("0051 writes: only service_role writes (42501, the GRANT refusing, neve
       await actAs(c, { org_id: orgId("A") });
       await expect(c.query(
         "insert into usage_events (account_id, meter, quantity, occurred_at, source_ref) values ($1,'sms',1,now(),'message:forged')", [s.a],
-      )).rejects.toMatchObject({ code: "42501" });
+      )).rejects.toMatchObject(denied("usage_events"));
     }));
 
   it("a client cannot DELETE its own usage (erasing its bill) (mutation: grant delete on usage_events to authenticated → FAILS)", () =>
@@ -258,7 +268,7 @@ describe("0051 writes: only service_role writes (42501, the GRANT refusing, neve
       const s = await seed(c);
       await actAs(c, { org_id: orgId("A") });
       await expect(c.query("delete from usage_events where account_id = $1", [s.a]))
-        .rejects.toMatchObject({ code: "42501" });
+        .rejects.toMatchObject(denied("usage_events"));
     }));
 });
 
@@ -393,6 +403,7 @@ describe("0051 cascade, live (serviceDb under withTestAccount)", () => {
     expect(planErr).toBeNull();
     const planId = (plan as { id: string }).id;
     let accountId = "";
+    let bodyOk = false;
     try {
       await withTestAccount(async (tdb, id) => {
         accountId = id;
@@ -407,11 +418,19 @@ describe("0051 cascade, live (serviceDb under withTestAccount)", () => {
         expect(error).toBeNull();
         expect(data).toEqual([]);
       }
+      bodyOk = true;
     } finally {
       // plans is agency-scoped, so it cannot ride withTestAccount's account
       // loop; and a swallowed delete error strands the row for the next run.
+      // Thrown only when the body succeeded: a throw from finally would
+      // REPLACE a primary failure (and a failed body usually leaves the
+      // account_billing row that makes this delete fail on the restrict FK).
       const { error: delErr } = await db.from("plans").delete().eq("id", planId);
-      if (delErr) throw new Error(`billing-schema cleanup failed on plans: ${delErr.message}`);
+      if (delErr) {
+        const msg = `billing-schema cleanup failed on plans: ${delErr.message}`;
+        if (bodyOk) throw new Error(msg);
+        console.error(msg);
+      }
     }
   });
 });
