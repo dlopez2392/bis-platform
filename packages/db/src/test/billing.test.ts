@@ -31,8 +31,23 @@ function write(name: string, over: Partial<PlanWrite["terms"]> = {}): PlanWrite 
 
 async function withPlans(fn: (made: string[]) => Promise<void>): Promise<void> {
   const made: string[] = [];
-  try { await fn(made); } finally {
-    if (made.length) await serviceDb().from("plans").delete().in("id", made);
+  let bodyOk = false;
+  try {
+    await fn(made);
+    bodyOk = true;
+  } finally {
+    // Thrown only when the body succeeded: a throw from finally would
+    // REPLACE a primary failure, and a failed body can itself leave a
+    // surviving account_billing row that makes this delete fail on the
+    // restrict FK (billing-schema.test.ts's cascade test, ~line 428).
+    if (made.length) {
+      const { error } = await serviceDb().from("plans").delete().in("id", made);
+      if (error) {
+        const msg = `billing.test withPlans cleanup failed on plans: ${error.message}`;
+        if (bodyOk) throw new Error(msg);
+        console.error(msg);
+      }
+    }
   }
 }
 
@@ -67,10 +82,11 @@ describe("billing.ts plans, live", () => {
       expect(r).toEqual({ ok: false, reason: "name_taken" });
     }));
 
-  it("insertPlan reports a reused id as id_taken, the double-submit case (mutation: drop the plans_pkey branch → throws, FAILS)", () =>
+  it("insertPlan reports a reused id as id_taken, the double-submit case — same id AND same name, like a real retry (mutation: drop the plans_pkey branch → throws, FAILS)", () =>
     withPlans(async (made) => {
-      const id = await mustInsert(made, write(planName("Once")));
-      const r = await insertPlan(serviceDb(), { id, ...write(planName("Twice")) });
+      const w = write(planName("Once"));
+      const id = await mustInsert(made, w);
+      const r = await insertPlan(serviceDb(), { id, ...w });
       expect(r).toEqual({ ok: false, reason: "id_taken" });
     }));
 
