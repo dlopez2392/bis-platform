@@ -32,6 +32,8 @@ const SECRET_KEY = "sb_secret_UNIT_TEST_SECRET_KEY_7f3a";
 const DB_PASSWORD = "UnitTestDbPassword_9c1e";
 const CLERK_SECRET = "sk_test_UNIT_TEST_CLERK_SECRET_4b2d";
 const CLERK_PUBLISHABLE = "pk_test_UNIT_TEST_CLERK_PK_81aa";
+const STRIPE_TEST = "sk_test_UNIT_TEST_STRIPE_SECRET_5e6f";
+const STRIPE_LIVE = "sk_live_UNIT_TEST_STRIPE_LIVE_77c1";
 
 const GUARD_VARS = [
   "BIS_CI_SUPABASE_REF",
@@ -43,6 +45,11 @@ const GUARD_VARS = [
   "CLERK_SECRET_KEY",
 ] as const;
 type GuardVar = (typeof GUARD_VARS)[number];
+
+/** Read by the guard but optional: absent is fine, present must be valid. */
+const OPTIONAL_VARS = ["STRIPE_SECRET_KEY"] as const;
+type OptionalVar = (typeof OPTIONAL_VARS)[number];
+type AnyVar = GuardVar | OptionalVar;
 
 function dbUrl(user: string, host = "aws-0-us-east-1.pooler.supabase.com:5432") {
   return `postgresql://${user}:${DB_PASSWORD}@${host}/postgres`;
@@ -57,6 +64,8 @@ const VALID: Record<GuardVar, string> = {
   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: CLERK_PUBLISHABLE,
   CLERK_SECRET_KEY: CLERK_SECRET,
 };
+
+const VALID_OPTIONAL: Record<OptionalVar, string> = { STRIPE_SECRET_KEY: STRIPE_TEST };
 
 const FAKE_CURL = `#!/usr/bin/env bash
 # Stand-in for curl: records its argv and stdin, answers with a canned status.
@@ -136,10 +145,10 @@ type Run = {
  * string like `user:password@host` would not contain the whole URL). Empty
  * values are skipped, since every output "contains" the empty string.
  */
-function secretsGiven(merged: Partial<Record<GuardVar, string | undefined>>): string[] {
+function secretsGiven(merged: Partial<Record<AnyVar, string | undefined>>): string[] {
   const db = merged.SUPABASE_DB_URL ?? "";
   const password = /^[a-z]+:\/\/[^:@/]*:(.+)@[^@]*$/.exec(db)?.[1] ?? "";
-  return [merged.SUPABASE_SERVICE_ROLE_KEY, merged.CLERK_SECRET_KEY, db, password].filter(
+  return [merged.SUPABASE_SERVICE_ROLE_KEY, merged.CLERK_SECRET_KEY, merged.STRIPE_SECRET_KEY, db, password].filter(
     (v): v is string => typeof v === "string" && v.length > 0,
   );
 }
@@ -150,7 +159,7 @@ function secretsGiven(merged: Partial<Record<GuardVar, string | undefined>>): st
  * red in whichever case reaches it, not only in a hand-picked list.
  */
 function runGuard(
-  overrides: Partial<Record<GuardVar, string | undefined>> = {},
+  overrides: Partial<Record<AnyVar, string | undefined>> = {},
   curl: { status?: string; exit?: number } = {},
   extraEnv: Record<string, string> = {},
 ): Run {
@@ -160,9 +169,11 @@ function runGuard(
   // variable the guard reads is removed and set only from this case — so a
   // developer's or CI's real secrets can never leak into a case.
   const env: NodeJS.ProcessEnv = { ...process.env };
-  for (const name of GUARD_VARS) delete env[name];
-  const merged = { ...VALID, ...overrides };
-  for (const name of GUARD_VARS) {
+  // Optional variables are stripped too, so an ambient Stripe key (a
+  // developer's .env, CI's e2e job) can never leak into a case.
+  for (const name of [...GUARD_VARS, ...OPTIONAL_VARS]) delete env[name];
+  const merged: Partial<Record<AnyVar, string | undefined>> = { ...VALID, ...VALID_OPTIONAL, ...overrides };
+  for (const name of [...GUARD_VARS, ...OPTIONAL_VARS]) {
     const value = merged[name];
     if (value !== undefined) env[name] = value;
   }
@@ -410,6 +421,38 @@ describe("check 5: the secret key opens the CI project's REST API", () => {
   });
 });
 
+describe("check 6: a Stripe key, when present, is a TEST-mode key", () => {
+  it("passes with no Stripe key at all: only the e2e job carries one (mutation: add STRIPE_SECRET_KEY to check 1's presence loop → FAILS)", () => {
+    const r = runGuard({ STRIPE_SECRET_KEY: undefined });
+    expect(r.status).toBe(0);
+  });
+
+  it("passes with a restricted test key (rk_test_) (mutation: accept only sk_test_ → FAILS)", () => {
+    const r = runGuard({ STRIPE_SECRET_KEY: "rk_test_UNIT_TEST_RESTRICTED_19ab" });
+    expect(r.status).toBe(0);
+  });
+
+  it("refuses an sk_live_ key by name, as live, and never probes (mutation: delete check 6 → exit 0, FAILS)", () => {
+    const r = runGuard({ STRIPE_SECRET_KEY: STRIPE_LIVE });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::.*STRIPE_SECRET_KEY.*live-mode/);
+    expect(r.output).toContain("CI_STRIPE_SECRET_KEY");
+    expect(r.curlCalled).toBe(false);
+  });
+
+  it("refuses an rk_live_ restricted live key (mutation: match only sk_live_ → falls to the generic refusal, loses 'live-mode', FAILS)", () => {
+    const r = runGuard({ STRIPE_SECRET_KEY: "rk_live_UNIT_TEST_RESTRICTED_LIVE_3d" });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::.*STRIPE_SECRET_KEY.*live-mode/);
+  });
+
+  it("refuses a value that is not a Stripe secret key (a publishable key in the wrong box) (mutation: drop the catch-all arm → exit 0, FAILS)", () => {
+    const r = runGuard({ STRIPE_SECRET_KEY: "pk_test_UNIT_TEST_WRONG_BOX" });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::.*STRIPE_SECRET_KEY.*not a Stripe test-mode secret key/);
+  });
+});
+
 describe("the guard reports, it does not stop at the first problem", () => {
   it("names every problem in one run", () => {
     const r = runGuard({
@@ -425,9 +468,9 @@ describe("the guard reports, it does not stop at the first problem", () => {
 });
 
 describe("the guard never prints a secret value", () => {
-  const secrets = [SECRET_KEY, DB_PASSWORD, CLERK_SECRET, CLERK_PUBLISHABLE, "pk_live_UNIT_TEST_LIVE_PK", "sk_live_UNIT_TEST_LIVE_SK"];
+  const secrets = [SECRET_KEY, DB_PASSWORD, CLERK_SECRET, CLERK_PUBLISHABLE, "pk_live_UNIT_TEST_LIVE_PK", "sk_live_UNIT_TEST_LIVE_SK", STRIPE_TEST, STRIPE_LIVE];
 
-  it.each<[string, Partial<Record<GuardVar, string>>, { status?: string; exit?: number }]>([
+  it.each<[string, Partial<Record<AnyVar, string>>, { status?: string; exit?: number }]>([
     ["passing", {}, {}],
     ["probe 401", {}, { status: "401" }],
     ["probe unreachable", {}, { status: "000", exit: 7 }],
@@ -438,6 +481,8 @@ describe("the guard never prints a secret value", () => {
     ["key in DB URL box", { SUPABASE_DB_URL: SECRET_KEY }, {}],
     ["pk_live_", { NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "pk_live_UNIT_TEST_LIVE_PK" }, {}],
     ["sk_live_", { CLERK_SECRET_KEY: "sk_live_UNIT_TEST_LIVE_SK" }, {}],
+    ["stripe live key", { STRIPE_SECRET_KEY: STRIPE_LIVE }, {}],
+    ["stripe wrong box", { STRIPE_SECRET_KEY: "pk_test_UNIT_TEST_WRONG_BOX" }, {}],
   ])("%s", (_label, overrides, curl) => {
     const r = runGuard(overrides, curl);
     for (const secret of secrets) expect(r.output).not.toContain(secret);
