@@ -279,8 +279,23 @@ describe("openAccountByName fails loudly rather than skipping when the account i
     },
   );
 
-  it("fails via a not.toHaveCount(0) expectation naming seededAccountMissingMessage, not a silent return", () => {
-    expect(body).toMatch(/\.not\.toHaveCount\(0\)/);
-    expect(body).toMatch(/seededAccountMissingMessage\(/);
-  });
+  it(
+    "fails via a not.toHaveCount(0) expectation naming seededAccountMissingMessage, not a silent " +
+    "return (mutation: comment out the real expect with `// was: await expect(card, " +
+    "seededAccountMissingMessage(accountName, \"x\")).not.toHaveCount(0);` followed by " +
+    "`if ((await card.count()) === 0) return;` → FAILS once matched against stripComments(body), " +
+    "same comment-fooling 3b fixed for client-branding.spec.ts above)",
+    () => {
+      const stripped = stripComments(body);
+      expect(stripped).toMatch(/\.not\.toHaveCount\(0\)/);
+      expect(stripped).toMatch(/seededAccountMissingMessage\(/);
+      // Defense in depth: even if the two checks above were somehow satisfied,
+      // a bare early return or a direct `.count()` call is exactly the
+      // silent-return shape this guard exists to catch — the real function
+      // never returns explicitly and never calls `.count()` itself, only
+      // `expect(...).not.toHaveCount(0)`.
+      expect(stripped).not.toMatch(/\breturn\b/);
+      expect(stripped).not.toMatch(/\.count\(\)/);
+    },
+  );
 });

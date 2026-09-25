@@ -74,16 +74,19 @@ jobs:
     # from a runner that is a slower client than a dev machine.
     timeout-minutes: 20
     steps:
-      # Before anything else, so a missing secret costs nothing. Length tests
-      # only: nothing here prints a value.
+      # Before anything else, so a missing secret costs nothing. Presence
+      # tests only: SUPABASE_DB_URL is length-checked, and the service-role
+      # key is never handed to this step at all — only a boolean computed
+      # from it in the workflow expression, so this step never holds the
+      # real secret value.
       - name: Check that the CI project secrets are configured
         env:
           SUPABASE_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CI_SUPABASE_SECRET_KEY }}
+          HAS_SERVICE_KEY: ${{ secrets.CI_SUPABASE_SECRET_KEY != '' }}
         run: |
           missing=""
           if [ "${#SUPABASE_DB_URL}" -eq 0 ]; then missing="$missing CI_SUPABASE_DB_URL"; fi
-          if [ "${#SUPABASE_SERVICE_ROLE_KEY}" -eq 0 ]; then missing="$missing CI_SUPABASE_SECRET_KEY"; fi
+          if [ "$HAS_SERVICE_KEY" != "true" ]; then missing="$missing CI_SUPABASE_SECRET_KEY"; fi
           if [ -n "$missing" ]; then
             echo "::error::Missing repository secret(s):$missing. Add them under Settings > Secrets and variables > Actions. Nothing was run."
             exit 1

@@ -299,6 +299,9 @@ describe("ci-project-setup.yml scopes the service-role secret to the dispatch th
   }
 
   const runStepEnv = stepEnv(stepBlock(setupLines, "- name: Run ${{ inputs.step }}"));
+  const preflightStepEnv = stepEnv(
+    stepBlock(setupLines, "- name: Check that the CI project secrets are configured"),
+  );
 
   it(
     "hands the real secret to a `seed` dispatch only, and an empty string to every other " +
@@ -314,4 +317,58 @@ describe("ci-project-setup.yml scopes the service-role secret to the dispatch th
   it("still hands SUPABASE_DB_URL to every dispatch — every case authenticates with it", () => {
     expect(runStepEnv.SUPABASE_DB_URL).toBe("${{ secrets.CI_SUPABASE_DB_URL }}");
   });
+
+  it(
+    "the secrets pre-flight step tests the service-role secret via a boolean, never its real " +
+    "value (mutation: SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CI_SUPABASE_SECRET_KEY }} → FAILS)",
+    () => {
+      expect(preflightStepEnv.HAS_SERVICE_KEY).toBe("${{ secrets.CI_SUPABASE_SECRET_KEY != '' }}");
+      expect(preflightStepEnv.SUPABASE_SERVICE_ROLE_KEY).toBeUndefined();
+    },
+  );
+
+  it("still names the missing secret when the boolean is false", () => {
+    const block = stepBlock(setupLines, "- name: Check that the CI project secrets are configured");
+    const text = block.join("\n");
+    expect(text).toMatch(/"\$HAS_SERVICE_KEY" != "true"/);
+    expect(text).toContain("CI_SUPABASE_SECRET_KEY");
+  });
+
+  /**
+   * The line RANGE (start index inclusive, end index exclusive, into
+   * `setupLines`) covered by one step, found the same way `stepBlock` finds
+   * its body — but returned as indices rather than copied lines, so an
+   * occurrence elsewhere in the file can be tested for membership without a
+   * content comparison (two steps can share an identical line).
+   */
+  function stepLineRange(lines: string[], dashLine: string): [number, number] {
+    const start = lines.findIndex((l) => l.trim() === dashLine);
+    if (start < 0) throw new Error(`ci-project-setup.yml has no step "${dashLine}"`);
+    const dashIndent = lines[start]!.search(/\S/);
+    const rest = lines.slice(start + 1);
+    const relEnd = rest.findIndex((l) => /^\s*-\s/.test(l) && l.search(/\S/) === dashIndent);
+    const end = relEnd < 0 ? lines.length : start + 1 + relEnd;
+    return [start, end];
+  }
+
+  it(
+    "references secrets.CI_SUPABASE_SECRET_KEY only inside the two steps that need it — never in " +
+    "workflow-level env, job-level env, or any other step (mutation B: add " +
+    "`SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CI_SUPABASE_SECRET_KEY }}` to the workflow-level " +
+    "`env:` block → FAILS; mutation C: add the same line to the `pnpm install --frozen-lockfile` " +
+    "step's own `env:` → FAILS)",
+    () => {
+      const [preflightStart, preflightEnd] = stepLineRange(
+        setupLines, "- name: Check that the CI project secrets are configured",
+      );
+      const [runStart, runEnd] = stepLineRange(setupLines, "- name: Run ${{ inputs.step }}");
+      const offenders = setupLines.flatMap((line, i) => {
+        if (!line.includes("secrets.CI_SUPABASE_SECRET_KEY")) return [];
+        const inPreflight = i >= preflightStart && i < preflightEnd;
+        const inRun = i >= runStart && i < runEnd;
+        return inPreflight || inRun ? [] : [line.trim()];
+      });
+      expect(offenders).toEqual([]);
+    },
+  );
 });
