@@ -50,6 +50,7 @@ export function ActivateSoleOrganization() {
       // resolved state and sends a client on to their own dashboard. This runs
       // once, on a path that was previously a dead end, so the reload costs
       // nothing anyone was going to keep.
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- deliberate full page load so the re-issued session cookie's new claim is read fresh, not a client-side transition
       .then(() => { window.location.assign("/"); })
       .catch((e: unknown) => {
         // Leave the page as it was. A failure here is a worse day than it

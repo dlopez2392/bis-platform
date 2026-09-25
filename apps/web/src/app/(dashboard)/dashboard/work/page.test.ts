@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { AgencyWorkRow, CallProposal } from "@bis/db";
 import { m } from "@/lib/messages";
@@ -79,6 +79,20 @@ function proposal(overrides: Partial<CallProposal & { brandName: string }> = {})
 }
 
 describe("AgencyWorkPage", () => {
+  // Hoisted out of every test: `import("./page")` cold-loads the whole
+  // module graph (page.tsx's Next conventions, @bis/db, agency-work-list,
+  // pipeline-stage types) exactly once — vitest's module cache serves every
+  // later `import("./page")` from memory. In isolation that first load is
+  // fast, but under a full-suite run on a contended machine it has exceeded
+  // vitest's 5s default per-test timeout — not because the module is slow,
+  // but because whichever test happens to run first was paying for it. Paid
+  // for here instead, in `beforeAll`, with its own explicit timeout, so no
+  // single `it()` carries a cost that belongs to the file as a whole.
+  let AgencyWorkPage: typeof import("./page").default;
+  beforeAll(async () => {
+    ({ default: AgencyWorkPage } = await import("./page"));
+  }, 15000);
+
   beforeEach(() => {
     requireAgencyMock.mockReset().mockImplementation(async () => ({ userId: "user_1" }));
     listAgencyWorkMock.mockReset().mockResolvedValue([]);
@@ -98,7 +112,6 @@ describe("AgencyWorkPage", () => {
   // green — PROVED live, see this task's own report.
   it("guards before any read — a rejected agency check never reaches listAgencyWork, listPendingProposalsForAgency or the pipeline_stages read", async () => {
     requireAgencyMock.mockRejectedValueOnce(new Error("NEXT_REDIRECT"));
-    const { default: AgencyWorkPage } = await import("./page");
     await expect(AgencyWorkPage()).rejects.toThrow("NEXT_REDIRECT");
     expect(listAgencyWorkMock).not.toHaveBeenCalled();
     expect(listPendingProposalsForAgencyMock).not.toHaveBeenCalled();
@@ -106,7 +119,6 @@ describe("AgencyWorkPage", () => {
   });
 
   it("renders the chosen heading once the agency check passes", async () => {
-    const { default: AgencyWorkPage } = await import("./page");
     const html = renderToStaticMarkup(await AgencyWorkPage());
     expect(html).toMatch(new RegExp(`<h1[^>]*>${m["work.agency.title"]}</h1>`));
   });
@@ -119,21 +131,18 @@ describe("AgencyWorkPage", () => {
       row({ id: "task:bad", accountId: "acct-bad", timezone: "Not/AZone", dueAt: "2026-09-01T00:00:00Z" }),
       row({ id: "task:overdue", accountId: "acct-good", timezone: "America/Chicago", dueAt: "2026-09-01T00:00:00Z" }),
     ]);
-    const { default: AgencyWorkPage } = await import("./page");
     const html = renderToStaticMarkup(await AgencyWorkPage());
     expect(html).toContain(m["work.bucket.waiting"]);
     expect(html).toContain(m["work.bucket.overdue"]);
   });
 
   it("renders the sold-empty-state sentence when every account's queue is empty", async () => {
-    const { default: AgencyWorkPage } = await import("./page");
     const html = renderToStaticMarkup(await AgencyWorkPage());
     expect(html).toContain(m["work.empty"]);
     expect(html).toContain(m["work.agency.empty.body"]);
   });
 
   it("renders no line-down banner on the good day, when the count is zero", async () => {
-    const { default: AgencyWorkPage } = await import("./page");
     const html = renderToStaticMarkup(await AgencyWorkPage());
     expect(html).not.toContain(m["work.linesDown.action"]);
   });
@@ -141,7 +150,6 @@ describe("AgencyWorkPage", () => {
   it("renders the line-down banner when a number is turning callers away, and reads the window off the real clock", async () => {
     countLinesTurningCallersAwayMock.mockResolvedValueOnce(2);
     const before = Date.now();
-    const { default: AgencyWorkPage } = await import("./page");
     const html = renderToStaticMarkup(await AgencyWorkPage());
     const after = Date.now();
 
@@ -178,7 +186,6 @@ describe("AgencyWorkPage", () => {
       return 0;
     });
 
-    const { default: AgencyWorkPage } = await import("./page");
     await expect(AgencyWorkPage()).resolves.toBeTruthy();
   }, 2000);
 
@@ -187,7 +194,6 @@ describe("AgencyWorkPage", () => {
     listAgencyWorkMock.mockResolvedValueOnce([row()]);
     countLinesTurningCallersAwayMock.mockRejectedValueOnce(new Error("permission denied for table screened_calls"));
 
-    const { default: AgencyWorkPage } = await import("./page");
     const html = renderToStaticMarkup(await AgencyWorkPage());
 
     // The queue itself is still there…
@@ -203,13 +209,11 @@ describe("AgencyWorkPage", () => {
   // queue, never inside it.
   it("renders pending proposals in their own suggestions section", async () => {
     listPendingProposalsForAgencyMock.mockResolvedValueOnce([proposal()]);
-    const { default: AgencyWorkPage } = await import("./page");
     const html = renderToStaticMarkup(await AgencyWorkPage());
     expect(html).toContain(m["proposals.work.heading"]);
   });
 
   it("renders no suggestions section when there are no pending proposals", async () => {
-    const { default: AgencyWorkPage } = await import("./page");
     const html = renderToStaticMarkup(await AgencyWorkPage());
     expect(html).not.toContain(m["proposals.work.heading"]);
   });
@@ -234,7 +238,6 @@ describe("AgencyWorkPage", () => {
       id: "prop-unique", payload: { title: "UNIQUE_TASK_TITLE_5678", dueAt: null },
       evidence: "UNIQUE_CALLER_QUOTE_1234",
     })]);
-    const { default: AgencyWorkPage } = await import("./page");
     const html = renderToStaticMarkup(await AgencyWorkPage());
 
     const waitingSection = html.match(/<section data-bucket="waiting"[\s\S]*?<\/section>/)?.[0] ?? "";
@@ -251,7 +254,6 @@ describe("AgencyWorkPage", () => {
     listAgencyWorkMock.mockResolvedValueOnce([row()]);
     listPendingProposalsForAgencyMock.mockRejectedValueOnce(new Error("permission denied for table call_proposals"));
 
-    const { default: AgencyWorkPage } = await import("./page");
     const html = renderToStaticMarkup(await AgencyWorkPage());
 
     // The queue itself is still there…
@@ -277,7 +279,6 @@ describe("AgencyWorkPage", () => {
       return [];
     });
 
-    const { default: AgencyWorkPage } = await import("./page");
     await expect(AgencyWorkPage()).resolves.toBeTruthy();
   }, 2000);
 
@@ -301,7 +302,6 @@ describe("AgencyWorkPage", () => {
       ],
       error: null,
     });
-    const { default: AgencyWorkPage } = await import("./page");
     const html = renderToStaticMarkup(await AgencyWorkPage());
 
     expect(html).not.toContain(m["work.empty"]);
@@ -325,7 +325,6 @@ describe("AgencyWorkPage", () => {
     pipelineStagesInMock.mockResolvedValueOnce({
       data: null, error: { message: "permission denied for table pipeline_stages" },
     });
-    const { default: AgencyWorkPage } = await import("./page");
     const html = renderToStaticMarkup(await AgencyWorkPage());
 
     expect(html).not.toContain(m["work.empty"]);
