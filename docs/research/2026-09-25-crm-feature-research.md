@@ -17,6 +17,9 @@ documents in this folder, and a line-by-line audit of the repository:
 | [Appendix E](2026-09-25-appendix-e-industry-software.md) | Industry software for the four target verticals, with Texas rules |
 | [Pricing study](2026-09-21-pricing-and-packaging.md) | Valley competitors, prices, demographics (21 September) |
 | [Insights brief](2026-09-20-insights-content-brief.md) | Texas and federal rule changes affecting small businesses (20 September) |
+| [Appendix F](2026-09-25-appendix-f-market-sizing.md) | Valley business counts and concentration for 50+ industries (Census 2023) |
+| [Appendix G](2026-09-25-appendix-g-professional-services.md) | Law, insurance, tax, real estate and freight: software, needs, compliance |
+| [Appendix H](2026-09-25-appendix-h-consumer-services.md) | Events and quinceañeras, route services, studios, vets, auto, salons, funeral homes |
 
 **How it was checked — four independent reviews.** Revision 1 went to an independent reviewer told to
 find what was wrong: verify every repository claim against the code, spot-check numbers
@@ -33,8 +36,9 @@ lapse. Revision 4 then went to a final verification, which confirmed nine of tho
 eleven fixes and caught one error of fact: Google's 7-day rule applies to publishing the
 *branding*, not the app, and publishing the whole project early would have broken the
 Testing-mode pilot the plan relies on. Checked against Google's own pages and corrected
-here, with four smaller consistency fixes. This is revision 5; §7.2 records a decision for
-every HubSpot and monday.com idea. The two integration claims the plan depends on
+here, with four smaller consistency fixes. Revision 5 recorded a decision for every HubSpot
+and monday.com idea. **Revision 6** records the owner's decision on adult day care and adds
+§9.5–§9.6 — which other Valley businesses to target, from three new appendices (F–H). The two integration claims the plan depends on
 most were re-verified against Google's and Microsoft's own documentation.
 
 **One limitation, stated plainly.** This work ran in a cloud session that cannot see the
@@ -87,19 +91,32 @@ sends after a call, every form's own labels, and the owner's dashboard are Engli
 | 9 | **Money**: price book, quotes with options, invoices, ACH and card, deposits, recurring billing | Getting paid is a service business's close |
 | 10 | **The client portal, the MCP server, and industry packs** | One link for the customer; Claude and ChatGPT for the owner with every AI write landing as a proposal; the industry specifics |
 
-**The full plan is about 120–168 engineer-weeks** in conventional units (§11), with a
+**The full plan is about 148–207 engineer-weeks** in conventional units (§11), with a
 first release of roughly 27–36 engineer-weeks that delivers the record page, the vault,
 consent, bilingual messages, inbound email and the AI summary. This repository's own pace is the
 better guide to calendar time: foundation, CRM, booking, the voice receptionist,
 white-labelling, the automation engine and the web concierge all shipped between 25 July
 and 22 September.
 
-**Industry packs**, delivered by extending blueprints, in this order: **home services**
-(the product and its specs are already shaped around trades), **child care** positioned as
-the center's front office beside its child-care management system, **restaurant catering
-and events** after POS research. **Adult day care is out of scope** by the owner's decision,
-because of HIPAA's compliance burden and cost; medical offices wait on the same HIPAA
-question.
+**Industry packs**, delivered by extending blueprints, in this order (§9, §12 decision 8):
+**home services**, with pest, lawn, pool and cleaning as templates inside it; **law firms**
+and **insurance agencies**, which need the same vault, e-signature and household features
+and are where a Spanish-first receptionist is worth most; **quinceañera and wedding
+vendors**, the best-scoring new segment at 21 of 25; **child care** as the front office
+beside the center's own software; and **restaurant catering** after POS research. Freight
+brokers and studios get pilots; tax preparers get a seasonal receptionist-only offer.
+**Adult day care is out of scope** by the owner's decision, because of HIPAA's compliance
+burden and cost; medical offices wait on the same HIPAA question.
+
+**Sell Sofía first, the packs second.** Law firms, insurance agencies, event venues and tax
+preparers all buy the phone before anything else. With industry guardrails, caller identity
+checks and price-list grounding — about 3–4 engineer-weeks — Sofía can be sold into them
+while the foundation is built (§9.5).
+
+**One fix is due this week.** A Spanish-speaking customer who replies "ALTO" or "PARAR" to a
+BIS text is not opted out today, because Telnyx recognises only English stop words unless
+Spanish ones are registered on the messaging profile. That is configuration, not code
+(§9.6).
 
 **One go-to-market consequence the owner should see first.** The pricing study named the
 Valley's healthcare cluster the best ground for Sofía. But a clinic's calls put health
@@ -775,7 +792,7 @@ Spanish, the bundle and local service, not price.
   underwriting, job costing beyond the basics, full dispatch for 10-plus-technician shops
   (sync with ServiceTitan or Housecall Pro instead).
 
-### 9.2 Child day care — second, as the front office
+### 9.2 Child day care — fourth, as the front office
 
 HubSpot and monday price compliant children's data out of reach, but the real incumbents are
 child-care management systems — brightwheel, Procare and Playground already hold the child
@@ -810,7 +827,7 @@ should not try to replace a center's system; it should be the **front office bes
   subsidy attendance kiosks (those need KinderSystems certification). Integrate with
   brightwheel, Procare or Playground; that integration needs its own research and estimate.
 
-### 9.3 Restaurant catering and events — third, after research
+### 9.3 Restaurant catering — fifth, after research
 
 - **Where BIS earns its place:** the catering and private-events pipeline — inquiry form →
   quote or event sheet → e-sign → deposit schedule → final invoice, with the gratuity
@@ -871,13 +888,198 @@ The same cost argument that settled adult day care applies here, so if no such c
 appears, the consistent conclusion is to leave medical offices out as well. In any case,
 never build clinical records, claims submission or EVV.
 
-### 9.5 Others
+### 9.5 Other Valley businesses worth targeting
 
-- **Salons and spas:** prepaid packages and a portal showing sessions left (Thryv's model).
-- **Auto repair:** vehicles as equipment; digital inspections with photos.
-- **Insurance agencies:** policies as expiring documents, renewal pipelines.
-- **Legal practices:** matters as client groups; Clio as the integration.
-- **Medical and dental front office:** the largest local opportunity, gated by §9.4.
+Added on 2026-09-25 at the owner's request. Three sources, each an appendix: local business
+counts and concentration from the Census 2023 county files (Appendix F), and segment
+research on professional services (Appendix G) and consumer services (Appendix H). The two
+segment studies scored every candidate 1–5 on the same five measures — fit with BIS, Valley
+demand, willingness to pay, incumbent weakness, and compliance cost (5 = cheapest) — so
+their totals out of 25 are comparable. HIPAA segments are excluded throughout, per the
+owner's decision.
+
+| Segment | Valley businesses with staff | Concentration vs US | Score /25 | Verdict |
+|---|---|---|---|---|
+| **Quinceañera and wedding vendors** — venues and salones, planners, decor, cakes, dresses | 137 event-hall landlords (a proxy); 48 bakeries; about 11,900 girls turn 15 each year | 1.59× halls; 2.08× bakeries | **21** | **Yes** — a new events pack on the catering pipeline; lead with venues |
+| **Law firms** — immigration, family, criminal defense | 510; one attorney per about 800 residents, against 1 per 310 statewide | 1.23× | **19** | **Yes**, with the guardrails below |
+| **Insurance agencies** — personal lines and non-standard auto | 524; 12% of Texas's county-mutual agents | 1.57× | **18** | **Yes** — property and casualty first |
+| Route services — pest, lawn, pool, cleaning | 40 pest, 63 landscaping, 66 janitorial, plus thousands of one-person operators | 1.6–1.8× among one-person firms | 17 | Yes, as templates inside the home-services pack |
+| Studios and schools — martial arts, dance, tutoring, driving | about 141 combined | 0.5–1.4× | 17 | Pilot in months 9–12 |
+| Pet grooming and boarding | 30 | 0.47× | 17 | Later, 12–18 months |
+| Customs brokers and freight forwarders | 218; 1.17 million northbound trucks through Valley ports in 2025 | **3.99×** | 16 | Pilot with two or three design partners |
+| Auto repair and tire shops | 147 repair, 64 tire | 0.69× / 1.26× | 16 | No pack; a receptionist-only add-on at most |
+| Real estate agents and property managers | 190 / 120 | 0.46× / 0.79× | 14 | No |
+| Veterinary clinics | 32 | 0.37× | 14 | No |
+| Funeral homes | 46 | 1.21× | 14 | No |
+| Salons, barbers, nails, spas | 238 with staff; about 2,950 licensed premises | 0.3–0.8× | 14 | No |
+| Tax preparers | 139, plus 631 one-person firms; 36.4% of Valley returns claim the EITC against 15.0% nationally | 1.93× | 13 | **Receptionist only**, seasonal, storing no tax documents |
+| Used-car dealers | 140, plus 1,462 one-person dealers | 2.23× | 13 | No |
+
+**Where the sources disagreed, and how it was settled.**
+
+- **Tax preparers.** The numbers are the Valley's most distinctive: 319,000 returns a year
+  done by paid preparers and $1.8 billion in refunds. But most buyers are one-person
+  firms averaging about $39,000 in receipts; TaxDome and its peers cost under $100 a user
+  and already ship a Spanish portal; and storing returns would make BIS a service provider
+  under the FTC Safeguards Rule and probably a "tax return preparer" under IRC §7216. The
+  demand is real for the **phone** in January to April, not for the vault. So: a seasonal
+  receptionist offer — booking, reminders and Spanish answers — with no document storage,
+  no Social Security number fields, and U.S.-only processing.
+- **Used-car dealers.** Highly concentrated here, but dealers that finance their own sales
+  fall under the Safeguards Rule, which would make BIS a contracted service provider, and
+  Texas requires four years of collection-contact logs. Not worth it.
+- **Produce wholesalers and installment lenders** topped the pure-numbers ranking (15.8×
+  and 8.9× the national concentration), but the software buyer is often a chain's head
+  office and lending brings collection-call law. Not pursued; produce brokers are worth a
+  later look as a CRM-and-documents sale with no receptionist.
+- **Veterinary clinics and real estate**, which looked natural on paper, are thin in the
+  Valley: 32 vet clinics with staff, and real estate at less than half the national
+  density. Neither is worth leading with.
+
+**Sell the receptionist first.** Law firms, insurance agencies, event venues and seasonal
+tax preparers all buy the phone before anything else, and Sofía already answers it. What
+she needs before serving them is small — industry guardrail packs, caller identity
+checks, and answers grounded in the business's own price list (§9.6 items 1–3, about 3–4
+engineer-weeks). With those in place, BIS can sell Sofía into these segments while the
+foundation is still being built, and sell the full pack once the vault, e-signature and
+money land.
+
+#### Quinceañera and wedding vendors — the best new fit
+
+- **Why:** the only segment where every planned piece lines up — phone inquiry, tour,
+  package quote, deposit schedule, contract, portal, date-timed reminders. No incumbent
+  (HoneyBook, Perfect Venue, Tripleseat, Planning Pod) ships a voice receptionist, and none
+  of their pricing pages mentions Spanish. Mothers and grandmothers call in Spanish on
+  evenings and weekends while staff are running events. The Valley holds two quince and
+  wedding expos a year at the McAllen Convention Center.
+- **Who first:** venues and full-package sellers, at about $8,000–$20,000 an event; then
+  decor, cake and dress shops; solo photographers and DJs last, where HoneyBook at $29 is
+  hard to beat.
+- **New work:** a date and room calendar with **tentative holds that expire**; package
+  quotes priced by tier and guest count with add-ons; payment schedules **split across
+  several payers** (parents and padrinos) with **cash payments logged**; reminders timed from
+  the event date (final headcount 30 days out, balance 14 days out, review two days after);
+  bilingual contract templates whose cancellation schedule steps down by time before the
+  event — under Texas law a flat 100% forfeiture is likely an unenforceable penalty; vendor
+  insurance certificates with expiry; and a parent-signed photo release, because the
+  quinceañera is a minor.
+- **Sofía** answers date and package questions only from the venue's current price sheet
+  and never improvises refund terms (Texas's deceptive-trade-practices law applies).
+- **Relationship to the restaurant pack:** the same pipeline without the POS dependency, so
+  the events pack can ship before restaurant catering.
+- **Do not build:** floor plans, kitchen and banquet production, rental inventory, seating
+  charts, RSVP sites, photo galleries. HoneyBook shipped a Claude connector and a ChatGPT
+  app in September 2026, so in events BIS's MCP server is parity; the edge is Spanish voice.
+
+#### Law firms — immigration, family, criminal defense
+
+- **Why:** immigration callers are overwhelmingly Spanish-speaking and face shorter
+  hearing notices; the Valley has about a third of the state's attorney density, so firms
+  overflow. Clio's AI intake agent launched only on 20 August 2026, at $25 per converted
+  lead on top of $99 a user.
+- **Sofía's rules, in both languages:** she says she is a virtual assistant and not a
+  lawyer; never judges eligibility, promises an outcome, calls herself or the firm a
+  "notario", advises on hearings, travel, ICE or forms, or asks for payment "for the
+  forms"; hot-transfers detention, same-week-hearing and ICE-encounter calls to a person;
+  verifies identity before discussing any existing matter; and is **inbound-only**, because
+  Texas Rule 7.03 bars electronic solicitation of non-clients. Required disclaimers go out in
+  every language used (Rule 7.01(d)).
+- **Tenant policy:** accept immigration tenants only if they are licensed attorneys, with the
+  bar number checked, or DOJ-recognized organizations with accredited representatives —
+  otherwise BIS risks powering a notario operation (Gov't Code §406.017; 8 CFR 292.1).
+- **Paperwork BIS must supply:** a one-page due-diligence sheet answering Texas ethics
+  opinions 680 (cloud) and 705 (AI) — no training on client data, zero-retention AI
+  processors, encryption, retention, human approval of AI updates — and a policy requiring
+  legal process for any government request, since immigration status is sensitive data
+  under Texas law.
+- **Records:** petitioner, beneficiary, spouse and co-defendant as relationships; required
+  documents per case type (passports, I-94s, birth certificates, prior filings).
+- **Exclude** firms whose clients are healthcare providers, which makes them HIPAA business
+  associates. Personal-injury plaintiff firms are not covered but hold medical records;
+  inbound intake only.
+- **Integrate** with Clio, MyCase, Docketwise and LawPay; never build practice management.
+
+#### Insurance agencies — personal lines and non-standard auto
+
+- **Why:** the largest pool of small businesses in the list (367 with under five staff),
+  Spanish quote calls all day, and AgencyZoom has no native voice agent.
+- **Scope:** property and casualty first. **ACA marketplace storefronts after a review** —
+  they are not HIPAA covered entities, but they handle health-plan applications and CMS
+  requires consent records kept ten years. **Medicare and group health are out**, because
+  those agencies often sign business-associate terms with health plans.
+- **Sofía's rules:** capture the quote request and route it to a licensed agent; never quote
+  a premium, bind, say "you're covered", interpret coverage or a claim, or advise rejecting
+  UM or PIP coverage — under Texas Insurance Code §4001.051 discussing policy terms is an
+  agent's act. Identity check before discussing an existing policy.
+- **Records:** drivers and vehicles as relationships and equipment; declarations pages,
+  licences, VINs and proof of insurance in the vault; renewals as expiring documents; written
+  UM/PIP rejections through e-signature.
+- **Compliance:** privacy under Texas Insurance Code ch. 601 and TDI rules, not the FTC
+  Safeguards Rule; Texas has not adopted the NAIC insurance data-security model law.
+  Outbound AI renewal calls need prior consent.
+- **Integrate** with NowCerts or EZLynx first, then AgencyZoom. Price anchors: AgencyZoom
+  $149–$349 a month for seven seats; HawkSoft $99 a user.
+
+#### The rest, briefly
+
+- **Route services** become templates in the home-services pack: recurring visits from
+  service agreements, route days, treatment and chemistry logs. Jobber sells an AI
+  receptionist at $29 a month and Skimmer an AI phone at $99.
+- **Customs brokers and freight forwarders:** bilingual calls with Reynosa counterparts and
+  carrier packets whose insurance certificates expire fit the vault well, but the core work
+  lives in their TMS and customs-filing systems. Pilot with two or three brokers; never
+  build a TMS.
+- **Studios and schools** reuse the households and minors built for child care, but carry a
+  trap: under the **Texas Health Spa Act**, a gym or martial-arts studio that turns on
+  recurring drafts may need Secretary of State registration and a $20,000–$50,000 bond, and
+  its contracts need a three-business-day cancellation notice (dance and aerobics-only
+  businesses are excluded). BIS's recurring-billing setup must ask before enabling
+  autopay. Parent-signed waivers generally cannot waive a child's injury claim.
+- **Not targeting,** with the deciding reason:
+  - **Salons:** Booksy's English and Spanish AI receptionist is free for 12 months.
+  - **Auto repair:** AutoLeap's Spanish-speaking receptionist costs $99 and works with any
+    shop system.
+  - **Veterinary clinics:** only 32 in the Valley, and BIS would need to write back into
+    each clinic's practice-management system.
+  - **Funeral homes:** only 46, and the FTC Funeral Rule means any price answer must match
+    the current price list exactly.
+  - **Real estate:** brokerages hand agents a CRM for free, and willingness to pay is low.
+
+### 9.6 What the new segments add to the platform
+
+1. **Industry guardrail packs for Sofía** — legal, insurance, events and a seasonal tax
+   pack — each with a bilingual virtual-assistant disclosure and hot-transfer rules.
+2. **Caller identity verification** before discussing an existing matter, policy, event or
+   account.
+3. **Answers grounded in the business's own price list**, with a versioned record of what
+   Sofía quoted — a trust feature for every tenant, essential for events.
+4. **A regulated-professional security baseline**: MFA enforced per business, an exportable
+   access log, retention settings up to ten years with disposal and legal hold, a security
+   addendum, a published list of data processors with U.S.-only processing, a written
+   security-plan support pack, and a government-data-request policy. Much of it builds on
+   the foundation's audit log.
+5. **Date and room availability with tentative holds** that expire.
+6. **Payment schedules split across several payers**, with cash payments logged.
+7. **Automations timed from any date on the record**, such as an event date.
+8. **A bilingual contract template library** carrying statutory text: the Health Spa Act
+   cancellation notice, UM/PIP rejection wording, the Texas kennel notice, event
+   cancellation schedules.
+9. **Consent ledger additions**: retention up to ten years; Spanish opt-out words; Texas
+   calling hours in the recipient's local time; and a free-text Spanish revocation ("ya no
+   me manden mensajes") surfaced as a proposal for staff to confirm.
+10. **Integrations**: Clio, MyCase, Docketwise and LawPay; NowCerts, EZLynx and AgencyZoom;
+    imports from HoneyBook and Perfect Venue; Meta lead ads. The MCP server is a cheap path
+    to some of these.
+11. **Tenant vetting at onboarding**: a bar-number check for immigration tenants, and a
+    polite no for HIPAA segments — adult day care, home health, Medicare and group-health
+    agencies, medical spas, physical therapy and chiropractic.
+
+**One of these is due now, not later.** Telnyx recognises only English stop words by
+default. BIS deliberately tells Spanish speakers to reply "STOP", but a customer who replies
+"ALTO" or "PARAR" anyway is not opted out, and since 11 April 2025 the FCC requires
+revocation by "any reasonable method" to be honoured within ten business days. Registering
+Spanish opt-out keywords on the Telnyx messaging profile is configuration, not code — the
+opt-out module's own comment anticipates it — and should happen this week.
 
 ---
 
@@ -948,15 +1150,17 @@ repository otherwise.
 | **Money and portal** | Price book, quotes with options, invoices, schedules, recurring, ACH, reminders, payment links from Sofía and the concierge, Stripe Connect (9–12); document templates (2); portal on scoped tokens (4–6); QuickBooks push (3–4) | **18–24** |
 | **Reach** | MCP server with auth spike (3–4); Business Profile reviews and AI replies (2–3); spreadsheet import with header mapping, `.xlsx` export (1–2); importers from HubSpot and monday (2–3); installable web app with offline read (2–3) | **10–15** |
 | **Packs** | Blueprint extensions with "describe your business" onboarding (3–4); regulated-tenant mode (1–2); home services parts one (2) and two, with schedule and map views (2–3); child care (4–6); broadcasts and segments (3–4); Sofía knowledge base (2–3); restaurant catering after POS research (3–4); child-care system integration after research (3–4) | **23–32** |
+| **New segments** (§9.5–§9.6) | Guardrail packs, identity checks and price-list grounding (3–4); regulated-professional baseline beyond the foundation's audit log (2–3); date and room holds (2–3); multi-payer schedules with cash (2–3); date-timed automations (1); contract template library (1–2); consent-ledger additions (1); events pack (2–3); law pack (2–3); insurance pack (2–3); law integrations (3–4); insurance integrations (3–4); route-service templates (1); freight pilot (2–3); seasonal tax receptionist offer (1) | **28–39** |
 | **In flight** | M7a steps 2–4 (estimate) | **3–4** |
-| **Total** | | **≈ 120–168** |
+| **Total** | | **≈ 148–207** |
 
-**Not in the total, because each waits on a decision:** HIPAA mode; a native mobile app;
+**Not in the total, because each waits on a decision:** HIPAA mode; the studios pilot; pet
+grooming and boarding; a native mobile app;
 WhatsApp; the rule builder; full inbox sync; a staff business number; sequences; AI fields;
 Meet and Teams transcripts; NPS surveys; multi-currency.
 
-That is roughly two and a half to three and a half years for one engineer working
-conventionally, or about a year for three. **This repository has not moved at conventional
+That is roughly three to four years for one engineer working conventionally, or a little
+over a year for three. **This repository has not moved at conventional
 speed**: its foundation, CRM spine, booking, voice receptionist, white-labelling, automation
 engine and web concierge shipped between 25 July and 22 September. Read calendar time off
 that observed pace, not these units.
@@ -992,7 +1196,10 @@ requires, and every UI item passes DESIGN.md's definition of done.
    inbound email and web chat in the inbox; bilingual messages; Google and Microsoft
    sign-in, with Google branding verified and published and Microsoft publisher verification; the
    Business Profile API application; M7a's remaining steps; the regulated-tenant mode;
-   spreadsheet import and export; the MCP auth spike.
+   spreadsheet import and export; the MCP auth spike; **Spanish opt-out keywords on the
+   Telnyx messaging profile (this week)**; Sofía's guardrail packs, identity checks and
+   price-list grounding, then receptionist-first sales to law firms, insurance agencies,
+   event venues and seasonal tax preparers; tenant vetting at onboarding.
 2. **On staff and roles:** restricted relationship flags and gate codes; the Spanish
    dashboard's per-user language; assignment; per-staff calendars.
 3. **On the record model:** the record page; the audit log and trash; the merge; importers
@@ -1020,11 +1227,16 @@ requires, and every UI item passes DESIGN.md's definition of done.
    **Then, after M7a and entitlements:** money through Stripe Connect, then document
    templates, then the portal, then QuickBooks.
 10. **On the consent ledger:** broadcasts and segments.
-11. **Packs:** home services part one after the vault and blueprint extensions; part two
-    after money and per-staff calendars; child care after money, field-level roles,
-    broadcasts, the installable web app and the child-care system integration research;
-    restaurant catering after POS research, money and broadcasts; Sofía's knowledge base
-    before the child-care and restaurant receptionists.
+11. **Packs, in recommended order:** home services part one after the vault and blueprint
+    extensions, with route-service templates; law and insurance after the vault, checklists,
+    e-signature, households, the regulated-professional baseline and identity checks, then
+    their integrations; home services part two after money and per-staff calendars;
+    quinceañera and wedding vendors after money, date holds and multi-payer schedules;
+    child care after money, field-level roles, broadcasts, the installable web app and the
+    child-care system integration research; restaurant catering after POS research, money
+    and broadcasts; Sofía's knowledge base before the child-care and restaurant
+    receptionists. **Pilots:** freight brokers after the vault; studios in months 9–12,
+    after households, recurring billing with the Health Spa Act check, and e-signature.
 12. **On an anchor clinic:** HIPAA mode, then medical offices. Adult day care is not on the
     plan.
 
@@ -1067,10 +1279,13 @@ takes effect.
    Daily.co video rooms are built but dormant. Recommended: no — use Meet and Teams links from
    the owner's own calendar, retire Daily.co, and keep the in-person notetaker, which does not
    depend on it.
-8. **Pack order.** Recommended: home services, child care as the front office, restaurant
-   catering, then medical offices only if HIPAA is funded — departing from the pricing
-   study's "healthcare is the better ground" only because of §9.4's cost of entry. Adult
-   day care is out.
+8. **Pack order.** Recommended: home services with route-service templates; law firms and
+   insurance agencies; quinceañera and wedding vendors; child care as the front office;
+   restaurant catering; then medical offices only if HIPAA is funded. This moves child
+   care from second to fourth: its incumbents already hold the child's file, while law and
+   insurance share child care's prerequisites and face weaker voice competition. It departs
+   from the pricing study's "healthcare is the better ground" only because of §9.4's cost
+   of entry. Adult day care is out.
 9. **Portal sign-in.** Recommended: magic links on scoped tokens, not Clerk accounts.
 10. **Mobile.** Recommended: an installable web app first — home-screen install, push
     notifications, offline read of today's jobs and a child's emergency file — and a native
@@ -1086,12 +1301,24 @@ takes effect.
     customers ask; Gmail through Nylas only if they insist.
 14. **Packaging** (§10): how many plans M7a ships, staff-login counts, storage per plan,
     portal placement, view-only seats, AI and MCP on every plan.
+15. **Sell Sofía before the packs** to law firms, insurance agencies, event venues and
+    seasonal tax preparers, once the guardrail packs, identity checks and price-list
+    grounding exist. Recommended: yes.
+16. **Insurance scope.** Recommended: property and casualty now; ACA marketplace storefronts
+    only after a review of CMS's consent and privacy terms; Medicare and group health never
+    without HIPAA.
+17. **Immigration tenants.** Recommended: accept only licensed attorneys, with the bar
+    number checked, and DOJ-recognized organizations with accredited representatives;
+    Sofía inbound-only for every law firm.
+18. **Tax preparers.** Recommended: a seasonal receptionist-only offer that stores no tax
+    documents, rather than a pack that would make BIS a Safeguards Rule service provider
+    and likely a tax return preparer under IRC §7216.
 
 ---
 
 ## 13. Risks
 
-- **Scope.** 120–168 engineer-weeks is a lot of product. Shipping each item to a real client
+- **Scope.** 148–207 engineer-weeks is a lot of product. Shipping each item to a real client
   before the next matters more, not less.
 - **Sensitive data before permissions.** Custody flags, no-contact flags, gate codes and
   pickup IDs wait until roles are enforced. Pickup-person driver's-licence images are
@@ -1122,6 +1349,18 @@ takes effect.
 - **The allergen guardrail** for restaurants is a safety issue, not a copy issue.
 - **Child care is contested by its own software vendors**; the front-office position must be
   tested with real centers before the pack is built.
+- **Spanish opt-outs.** Until Spanish keywords are registered on the Telnyx profile, a
+  customer replying "ALTO" is not opted out, which risks the FCC's any-reasonable-method
+  revocation rule in force since April 2025.
+- **An AI receptionist for law firms is an ethics exposure**: legal advice, notario
+  language, or outbound contact would breach Texas rules. The guardrail pack and
+  inbound-only rule are not optional.
+- **An insurance receptionist that discusses policy terms is acting as an unlicensed
+  agent** under Texas Insurance Code §4001.051.
+- **The Health Spa Act bond** can attach the moment a gym or martial-arts studio turns on
+  recurring drafts through BIS.
+- **Outbound AI-voiced calls need prior consent** under the FCC's 2024 ruling; any future
+  outbound Sofía must check the consent ledger first.
 
 ---
 
