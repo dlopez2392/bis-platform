@@ -167,4 +167,5 @@ export { METER_KEYS, listPlans, getPlan, insertPlan, updatePlan, setPlanArchived
 export { recordUsage, reportableFrom, usageRangeFilter, listBilledUsageAccounts, listReportableUsage,
          markUsageReported, staleUsageAccountIds, countExpiredUsage, listAccountsWithStaleUsage,
          USAGE_SOURCE_PREFIX, USAGE_REPORT_WINDOW_MS, USAGE_STALE_AFTER_MS, USAGE_ACCOUNTS_PER_READ,
+         USAGE_ACCOUNTS_PER_EXPIRED_READ, USAGE_FUTURE_GRACE_MS,
          type UsageInput, type UsageRow, type UsageRange, type BilledUsageAccount } from "./usage";

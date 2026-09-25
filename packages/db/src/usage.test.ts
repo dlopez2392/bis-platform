@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
+import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   recordUsage, reportableFrom, listBilledUsageAccounts, listReportableUsage, staleUsageAccountIds, usageRangeFilter,
-  USAGE_REPORT_WINDOW_MS, USAGE_STALE_AFTER_MS, type BilledUsageAccount, type UsageInput,
+  USAGE_REPORT_WINDOW_MS, USAGE_STALE_AFTER_MS, USAGE_FUTURE_GRACE_MS, USAGE_ACCOUNTS_PER_EXPIRED_READ,
+  type BilledUsageAccount, type UsageInput,
 } from "./usage";
 
 /**
@@ -14,6 +16,10 @@ import {
  */
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = new Date("2026-09-25T15:00:00.000Z");
+/** A valid-shaped uuid for account `n`, distinct and deterministic, so a
+ *  test using dozens of "accounts" doesn't need dozens of randomUUID() calls
+ *  and still passes usageRangeFilter's uuid check. */
+const uuidFor = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const billed = (accountId: string): BilledUsageAccount => ({
   accountId, stripeCustomerId: `cus_${accountId}`, billingStartedAt: "2026-09-20T00:00:00+00:00",
 });
@@ -78,12 +84,15 @@ describe("the reporting window", () => {
 });
 
 describe("listBilledUsageAccounts — paging", () => {
-  it("reads past PostgREST's 1,000-row page (mutation: a single request → 1,000 accounts, FAILS)", async () => {
+  it("pages until an EMPTY page, never stopping on one merely SHORTER than the request — a server max_rows below the page size would otherwise make a short-but-nonempty page look like the end and drop every account past it (mutation: stop once a page is shorter than BILLED_PAGE → the third, empty-confirming read never happens, FAILS)", async () => {
     const ranges: [number, number][] = [];
     const page = (n: number, offset: number) => Array.from({ length: n }, (_, i) => ({
       account_id: `acct_${offset + i}`, stripe_customer_id: `cus_${offset + i}`, created_at: "2026-09-01T00:00:00+00:00",
     }));
-    const pages = [page(1000, 0), page(2, 1000)];
+    // Page 2 is short (2 rows, not 1000) but NOT the end: exactly what a
+    // server max_rows cap below the requested 1,000 would produce. Only
+    // page 3's genuine emptiness may end the loop.
+    const pages = [page(1000, 0), page(2, 1000), [] as ReturnType<typeof page>];
     const chain = {
       select: () => chain, not: () => chain, order: () => chain,
       range: async (a: number, b: number) => {
@@ -94,29 +103,53 @@ describe("listBilledUsageAccounts — paging", () => {
     const db = { from: () => chain } as unknown as SupabaseClient;
     const got = await listBilledUsageAccounts(db);
     expect(got).toHaveLength(1002);
-    expect(ranges).toEqual([[0, 999], [1000, 1999]]);
+    expect(ranges).toEqual([[0, 999], [1000, 1999], [1002, 2001]]);
     expect(got[1001]).toEqual({ accountId: "acct_1001", stripeCustomerId: "cus_1001", billingStartedAt: "2026-09-01T00:00:00+00:00" });
   });
 });
 
+describe("usageRangeFilter: the account-id guard", () => {
+  it("refuses an account id that is not uuid-shaped, so a value carrying `,`/`(`/`)` can never widen the filter (mutation: drop the uuid check → the malicious id is written straight into an unquoted account_id.eq clause instead of throwing, FAILS)", () => {
+    const malicious = "x),account_id.not.is.null,and(account_id.eq.x";
+    expect(() => usageRangeFilter([{ accountId: malicious, fromIso: "2026-09-20T10:00:00.000Z" }]))
+      .toThrow(/uuid/);
+  });
+
+  it("accepts a real uuid, upper or lower case (mutation: reject a valid uuid → FAILS)", () => {
+    expect(() => usageRangeFilter([{ accountId: uuidFor(1), fromIso: "2026-09-20T10:00:00.000Z" }])).not.toThrow();
+    expect(() => usageRangeFilter([{ accountId: uuidFor(1).toUpperCase(), fromIso: "2026-09-20T10:00:00.000Z" }])).not.toThrow();
+  });
+});
+
+describe("URL size: the per-account filter must fit in one request", () => {
+  it("countExpiredUsage's chunk (USAGE_ACCOUNTS_PER_EXPIRED_READ accounts, 3 filter parts each — a floor AND a ceiling) stays under a safe URL bound at the longest an id and a timestamp can be: a uuid and a microsecond, `+00:00`-suffixed occurred_at (mutation: raise USAGE_ACCOUNTS_PER_EXPIRED_READ to 50 → the same filter shape encodes past 9,000 characters, FAILS)", () => {
+    const maxTs = "2026-09-20T10:00:00.123456+00:00";
+    const ranges = Array.from({ length: USAGE_ACCOUNTS_PER_EXPIRED_READ }, () => ({
+      accountId: randomUUID(), fromIso: maxTs, beforeIso: maxTs,
+    }));
+    const encoded = encodeURIComponent(usageRangeFilter(ranges));
+    expect(encoded.length).toBeLessThan(6000);
+  });
+});
+
 describe("the per-account reads: bounded, one request per 50 accounts", () => {
-  it("usageRangeFilter: one and() per account with ITS OWN range, every timestamp double-quoted (mutation: unquoted timestamps → PostgREST splits the value on '.', FAILS; one shared floor for every account → FAILS)", () => {
+  it("usageRangeFilter: one and() per account with ITS OWN range, every timestamp double-quoted — checked by exact string comparison, since PostgREST's own acceptance of the quoted form is proved live, not here (mutation: drop the quotes around a timestamp → the built string no longer matches the expected literal, FAILS; one shared floor for every account → FAILS)", () => {
     expect(usageRangeFilter([
-      { accountId: "a1", fromIso: "2026-09-20T10:00:00.123456+00:00" },
-      { accountId: "a2", fromIso: "2026-08-22T15:00:00.000Z", beforeIso: "2026-08-23T15:00:00.000Z" },
+      { accountId: uuidFor(1), fromIso: "2026-09-20T10:00:00.123456+00:00" },
+      { accountId: uuidFor(2), fromIso: "2026-08-22T15:00:00.000Z", beforeIso: "2026-08-23T15:00:00.000Z" },
     ])).toBe(
-      'and(account_id.eq.a1,occurred_at.gte."2026-09-20T10:00:00.123456+00:00"),'
-      + 'and(account_id.eq.a2,occurred_at.gte."2026-08-22T15:00:00.000Z",occurred_at.lt."2026-08-23T15:00:00.000Z")',
+      `and(account_id.eq.${uuidFor(1)},occurred_at.gte."2026-09-20T10:00:00.123456+00:00"),`
+      + `and(account_id.eq.${uuidFor(2)},occurred_at.gte."2026-08-22T15:00:00.000Z",occurred_at.lt."2026-08-23T15:00:00.000Z")`,
     );
   });
 
   it("listReportableUsage reads 50 accounts at a time and merges the reads OLDEST FIRST across accounts, at most `limit` (mutation: concatenate the reads in read order → FAILS; one read naming all 120 accounts → FAILS)", async () => {
-    const accounts = Array.from({ length: 120 }, (_, i) => billed(`acct_${i}`));
+    const accounts = Array.from({ length: 120 }, (_, i) => billed(uuidFor(i)));
     const filters: string[] = [];
     const perRead = [
-      [dbRow("u_late", "acct_0", "2026-09-25T12:00:00+00:00")],
-      [dbRow("u_early", "acct_60", "2026-09-24T12:00:00+00:00")],
-      [dbRow("u_mid", "acct_110", "2026-09-25T01:00:00+00:00")],
+      [dbRow("u_late", uuidFor(0), "2026-09-25T12:00:00+00:00")],
+      [dbRow("u_early", uuidFor(60), "2026-09-24T12:00:00+00:00")],
+      [dbRow("u_mid", uuidFor(110), "2026-09-25T01:00:00+00:00")],
     ];
     const chain = {
       select: () => chain, is: () => chain, order: () => chain,
@@ -128,20 +161,40 @@ describe("the per-account reads: bounded, one request per 50 accounts", () => {
     expect(rows.map((r) => r.id)).toEqual(["u_early", "u_mid"]);
   });
 
-  it("staleUsageAccountIds: a FULL read (one account's backlog) is followed by a read of only the accounts it did not name, until a read comes back short (mutation: stop after the first read → acct_2 missed, FAILS; re-read every account → the second filter still names acct_1, FAILS)", async () => {
-    const accounts = ["acct_1", "acct_2", "acct_3"].map(billed);
+  it("listReportableUsage's filter caps every account's range at now + 5 minutes, the shared future grace, on top of its own floor (mutation: drop the upper bound → the filter carries no occurred_at.lt clause, FAILS)", async () => {
+    const account = billed(uuidFor(1));
     const filters: string[] = [];
-    const reads = [Array.from({ length: 1000 }, () => ({ account_id: "acct_1" })), [{ account_id: "acct_2" }]];
     const chain = {
-      select: () => chain, is: () => chain, lt: () => chain,
+      select: () => chain, is: () => chain, order: () => chain,
       or: (f: string) => { filters.push(f); return chain; },
-      limit: async () => ({ data: reads[filters.length - 1] ?? [], error: null }),
+      limit: async () => ({ data: [], error: null }),
     };
-    expect(await staleUsageAccountIds({ from: () => chain } as unknown as SupabaseClient, accounts, NOW))
-      .toEqual(["acct_1", "acct_2"]);
-    expect(filters).toHaveLength(2);
-    expect(filters[1]).not.toContain("acct_1");
-    expect(filters[1]).toContain("acct_2");
-    expect(filters[1]).toContain("acct_3");
+    await listReportableUsage({ from: () => chain } as unknown as SupabaseClient, [account], NOW, 10);
+    const until = new Date(NOW.getTime() + USAGE_FUTURE_GRACE_MS).toISOString();
+    expect(filters).toHaveLength(1);
+    expect(filters[0]).toContain(`occurred_at.lt."${until}"`);
+  });
+
+  it("staleUsageAccountIds pages a group with .range() until an EMPTY page, never stopping just because a page came back shorter than the request — a lower server max_rows can make every page short even while accounts further down the id order are still unread (mutation: stop once a page is shorter than the request size → the account named only on the third, non-empty-but-short page is missed, FAILS)", async () => {
+    const accounts = [uuidFor(1), uuidFor(2), uuidFor(3)].map(billed);
+    const ranges: [number, number][] = [];
+    // Every page is short of any assumed page size; only the fourth is
+    // genuinely empty. A server max_rows cap would produce exactly this.
+    const reads = [
+      [{ account_id: uuidFor(1) }],
+      [{ account_id: uuidFor(1) }],
+      [{ account_id: uuidFor(2) }],
+      [] as { account_id: string }[],
+    ];
+    const chain = {
+      select: () => chain, is: () => chain, lt: () => chain, or: () => chain, order: () => chain,
+      range: async (a: number, b: number) => {
+        ranges.push([a, b]);
+        return { data: reads[ranges.length - 1] ?? [], error: null };
+      },
+    };
+    const ids = await staleUsageAccountIds({ from: () => chain } as unknown as SupabaseClient, accounts, NOW);
+    expect(ids).toEqual([uuidFor(1), uuidFor(2)]);
+    expect(ranges).toHaveLength(4);
   });
 });

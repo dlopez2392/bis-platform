@@ -36,6 +36,18 @@ export const USAGE_REPORT_WINDOW_MS = 34 * DAY_MS;
  *  the agency banner (spec section 4: "unreported for > 24 h"). */
 export const USAGE_STALE_AFTER_MS = DAY_MS;
 
+/**
+ * How far into the FUTURE a row's `occurred_at` may be and still be sent.
+ * Stripe accepts a meter event timestamped up to 5 minutes ahead of its own
+ * clock and silently drops one further out (same asynchronous-validation
+ * shape as USAGE_REPORT_WINDOW_MS's past-side bound, undocumented as a
+ * number but observed in Stripe's meter event handling). A row past this
+ * bound is left unreported rather than sent and stamped `reported_at`,
+ * which would bury it: `reported_at` is this codebase's only record of
+ * "Stripe has it", and there is no un-reporting a row once stamped.
+ */
+export const USAGE_FUTURE_GRACE_MS = 5 * 60 * 1000;
+
 export type UsageInput = {
   accountId: string;
   meter: MeterKey;
@@ -135,12 +147,18 @@ const BILLED_PAGE = 1000;
  * Every account whose usage goes to Stripe: an account_billing row with a
  * Stripe customer AND a subscription. A complimentary row never has a
  * subscription (0051's account_billing_complimentary_check), so it is left
- * out by construction. Paged by account id so a PostgREST row cap can never
- * silently drop an account.
+ * out by construction. Paged by account id, continuing until an actually
+ * EMPTY page: a page shorter than BILLED_PAGE is NOT proof there is no more
+ * — if the project's PostgREST `max_rows` setting is below BILLED_PAGE, a
+ * request for 1,000 rows can come back with fewer than 1,000 even though
+ * more remain, and advancing `from` by the requested page size (rather than
+ * the page's actual length) would then skip the rest of that window
+ * entirely, silently dropping billed accounts. Advancing by `rows.length`
+ * and stopping only on zero rows is correct under any `max_rows` value.
  */
 export async function listBilledUsageAccounts(db: SupabaseClient): Promise<BilledUsageAccount[]> {
   const out: BilledUsageAccount[] = [];
-  for (let from = 0; ; from += BILLED_PAGE) {
+  for (let from = 0; ; ) {
     const { data, error } = await db.from("account_billing")
       .select("account_id, stripe_customer_id, created_at")
       .not("stripe_customer_id", "is", null)
@@ -152,34 +170,69 @@ export async function listBilledUsageAccounts(db: SupabaseClient): Promise<Bille
     for (const r of rows) {
       out.push({ accountId: r.account_id, stripeCustomerId: r.stripe_customer_id, billingStartedAt: r.created_at });
     }
-    if (rows.length < BILLED_PAGE) return out;
+    if (rows.length === 0) return out;
+    from += rows.length;
   }
 }
 
 /**
- * Accounts per read in the per-account reads below. Each account adds one
- * `and(...)` clause (about 100 characters) to the request URL, so 50 keep a
- * read near 5 KB however many accounts are billed (assumption A18). Today
- * that is ONE read.
+ * Accounts per read for a filter with TWO parts per account (`account_id.eq`
+ * and `occurred_at.gte` — listReportableUsage, staleUsageAccountIds).
+ * Measured with node (usage.test.ts), at the longest an id and a timestamp
+ * can be (a uuid; a microsecond, `+00:00`-suffixed `occurred_at`): 50 such
+ * accounts encode to about 6,150 characters, under postgrest-js's own
+ * 8,000-character warning and a common 8 KB request-line limit. A filter
+ * with a THIRD part per account (a `beforeIso` on every range, like
+ * countExpiredUsage's window) needs its OWN smaller
+ * USAGE_ACCOUNTS_PER_EXPIRED_READ below — at 50 accounts that shape measures
+ * about 9,350 characters, already past the 8,000-character warning.
  */
 export const USAGE_ACCOUNTS_PER_READ = 50;
+
+/**
+ * Accounts per read for a filter that carries BOTH a floor and a ceiling on
+ * every range (three `and(...)` parts per account) — countExpiredUsage's
+ * window is the only caller today. Half of USAGE_ACCOUNTS_PER_READ: measured
+ * (usage.test.ts) at 25 accounts, maximum id/timestamp length, the encoded
+ * filter is about 4,700 characters, comfortably under the 6,000-character
+ * bound that test pins.
+ */
+export const USAGE_ACCOUNTS_PER_EXPIRED_READ = 25;
 
 /** One account's slice of occurred_at: from `fromIso` (inclusive), before
  *  `beforeIso` (exclusive) when given. */
 export type UsageRange = { accountId: string; fromIso: string; beforeIso?: string };
 
+/** The shape Postgres accepts as a uuid (automations.ts's
+ *  parseQuoteFollowupConfig is the precedent for this exact pattern). */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * A PostgREST `or` filter selecting each account's rows in ITS OWN range, so
  * one read serves many accounts whose windows differ (each billing start is
- * its own floor). Timestamps are double-quoted, the documented escape for
- * the `.`, `:` and `+` a timestamp carries inside a logic-tree value
- * (automations.ts's eitherAnchorSince is the precedent, proven live; this
- * file's live test proves it with PostgREST's own `+00:00` microsecond
- * strings). Account ids are uuids and timestamps come from the database or
- * toISOString(): neither can carry the `"`, `,` or `(` that would break out.
+ * its own floor). Timestamps are double-quoted: with a real `MeterKey`
+ * timestamp (from the database or `toISOString()`) supabase-js already
+ * percent-encodes the value before it reaches PostgREST — `+` becomes
+ * `%2B`, so PostgREST never sees the bare `.`/`:`/`+` this quoting was
+ * written to escape, and unquoted timestamps are proven to parse
+ * identically in ./test/usage.test.ts's live read. The quoting stays anyway
+ * as defence-in-depth against a future caller passing an unencoded value
+ * through some other path, and because it matches automations.ts's
+ * eitherAnchorSince precedent for the same column type.
+ *
+ * Account ids are asserted to be uuids and REFUSED otherwise: `account_id`
+ * is not quoted, so an id built from anything but a real uuid — one
+ * carrying `,`, `(` or `)` — could otherwise widen the filter to name rows
+ * outside the caller's ranges (e.g. `x),account_id.not.is.null,and(...)`).
+ * Every caller here sources ids from `accounts.id` (uuid primary key), so
+ * this can only fire on a defect upstream — which is exactly when it must
+ * throw rather than silently building a wider query.
  */
 export function usageRangeFilter(ranges: readonly UsageRange[]): string {
   return ranges.map((r) => {
+    if (!UUID_RE.test(r.accountId)) {
+      throw new Error(`usageRangeFilter: accountId is not a uuid: ${JSON.stringify(r.accountId)}`);
+    }
     const parts = [`account_id.eq.${r.accountId}`, `occurred_at.gte."${r.fromIso}"`];
     if (r.beforeIso !== undefined) parts.push(`occurred_at.lt."${r.beforeIso}"`);
     return `and(${parts.join(",")})`;
@@ -202,9 +255,13 @@ const oldestFirst = (x: UsageRow, y: UsageRow): number =>
 
 /**
  * The next rows the report may send, OLDEST FIRST ACROSS the accounts given,
- * at most `limit`: unreported, each account's from its own `reportableFrom`.
- * One read per USAGE_ACCOUNTS_PER_READ accounts, each ordered and limited in
- * SQL, then merged here, so the result is the true oldest `limit` rows.
+ * at most `limit`: unreported, each account's from its own `reportableFrom`,
+ * and none dated more than USAGE_FUTURE_GRACE_MS past `now` (a row further
+ * in the future than that stays unreported rather than being sent — Stripe
+ * would silently drop it — and stamped reported by markUsageReported, which
+ * would bury it for good). One read per USAGE_ACCOUNTS_PER_READ accounts,
+ * each ordered and limited in SQL, then merged here, so the result is the
+ * true oldest `limit` rows.
  *
  * Oldest first across accounts is the fairness rule (G4): no account waits
  * behind another's place in a list, and a backlog drains in the order it
@@ -215,11 +272,13 @@ export async function listReportableUsage(
   db: SupabaseClient, accounts: readonly BilledUsageAccount[], now: Date, limit: number,
 ): Promise<UsageRow[]> {
   if (!Number.isSafeInteger(limit) || limit <= 0 || accounts.length === 0) return [];
+  const untilIso = new Date(now.getTime() + USAGE_FUTURE_GRACE_MS).toISOString();
   const rows: UsageRow[] = [];
   for (const group of inGroups(accounts, USAGE_ACCOUNTS_PER_READ)) {
+    const ranges = reportableRanges(group, now).map((r) => ({ ...r, beforeIso: untilIso }));
     const { data, error } = await db.from("usage_events").select(USAGE_COLUMNS)
       .is("reported_at", null)
-      .or(usageRangeFilter(reportableRanges(group, now)))
+      .or(usageRangeFilter(ranges))
       .order("occurred_at", { ascending: true }).order("id", { ascending: true })
       .limit(limit);
     if (error) throw new Error(`listReportableUsage failed: ${error.message}`);
@@ -240,8 +299,10 @@ export async function markUsageReported(db: SupabaseClient, id: string, at: Date
   return (data ?? []).length === 1;
 }
 
-/** PostgREST's default page; a read that returns this many rows may have
- *  more behind it. */
+/** A read page size for the stale scan below. Not a claim about PostgREST's
+ *  own page cap — see the function doc: the loop pages by actual row count,
+ *  not by comparing to this number, so it is correct whatever the server's
+ *  `max_rows` is set to. */
 const STALE_READ_ROWS = 1000;
 
 /**
@@ -251,11 +312,16 @@ const STALE_READ_ROWS = 1000;
  * Stripe until it has waited a day). One definition for the cron's log and
  * the agency banner, in the accounts' own order.
  *
- * One read per USAGE_ACCOUNTS_PER_READ accounts. A read returns ROWS, not
- * accounts, so one account's backlog can fill it: when a read comes back
- * full, the accounts it named are settled and the rest are read again. Each
- * repeat names at least one new account, so it ends; with nothing stale it
- * is exactly one read per group.
+ * One group's worth of accounts (USAGE_ACCOUNTS_PER_READ) shares one filter,
+ * paged with `.range()` and ordered by `id` for a stable cursor, continuing
+ * until an EMPTY page — never one merely SHORTER than STALE_READ_ROWS. A
+ * page shorter than requested is not proof there are no more matching rows:
+ * if the project's PostgREST `max_rows` is below STALE_READ_ROWS, every page
+ * for a busy group could come back short while rows for an account further
+ * down the id order are still unread. Only a genuinely empty page is
+ * evidence the group's whole filter is exhausted. (This replaced an earlier
+ * `.limit()`-and-narrow-the-account-set approach that made the same "short
+ * page = done" mistake listBilledUsageAccounts's old paging did.)
  */
 export async function staleUsageAccountIds(
   db: SupabaseClient, accounts: readonly BilledUsageAccount[], now: Date,
@@ -263,17 +329,18 @@ export async function staleUsageAccountIds(
   const createdBefore = new Date(now.getTime() - USAGE_STALE_AFTER_MS).toISOString();
   const stale = new Set<string>();
   for (const group of inGroups(accounts, USAGE_ACCOUNTS_PER_READ)) {
-    let pending = group;
-    while (pending.length > 0) {
+    const filter = usageRangeFilter(reportableRanges(group, now));
+    for (let from = 0; ; ) {
       const { data, error } = await db.from("usage_events").select("account_id")
         .is("reported_at", null).lt("created_at", createdBefore)
-        .or(usageRangeFilter(reportableRanges(pending, now)))
-        .limit(STALE_READ_ROWS);
+        .or(filter)
+        .order("id", { ascending: true })
+        .range(from, from + STALE_READ_ROWS - 1);
       if (error) throw new Error(`staleUsageAccountIds failed: ${error.message}`);
       const rows = (data ?? []) as { account_id: string }[];
       for (const r of rows) stale.add(r.account_id);
-      if (rows.length < STALE_READ_ROWS) break;
-      pending = pending.filter((a) => !stale.has(a.accountId));
+      if (rows.length === 0) break;
+      from += rows.length;
     }
   }
   return accounts.filter((a) => stale.has(a.accountId)).map((a) => a.accountId);
@@ -283,7 +350,9 @@ export async function staleUsageAccountIds(
  * Unreported rows of billed accounts that fell OUT of the window: from the
  * billing start to now − 34 days. Never sent (Stripe would drop them without
  * an error), counted so the cron can say so. Only accounts billed before
- * that floor can have any; one count per USAGE_ACCOUNTS_PER_READ of them.
+ * that floor can have any; one count per USAGE_ACCOUNTS_PER_EXPIRED_READ of
+ * them (this filter carries a `beforeIso` on every range, so it needs the
+ * smaller chunk — see that constant).
  */
 export async function countExpiredUsage(
   db: SupabaseClient, accounts: readonly BilledUsageAccount[], now: Date,
@@ -292,7 +361,7 @@ export async function countExpiredUsage(
   const floorIso = new Date(floorMs).toISOString();
   const old = accounts.filter((a) => Date.parse(a.billingStartedAt) < floorMs);
   let total = 0;
-  for (const group of inGroups(old, USAGE_ACCOUNTS_PER_READ)) {
+  for (const group of inGroups(old, USAGE_ACCOUNTS_PER_EXPIRED_READ)) {
     const { count, error } = await db.from("usage_events").select("id", { count: "exact", head: true })
       .is("reported_at", null)
       .or(usageRangeFilter(group.map((a) => ({ accountId: a.accountId, fromIso: a.billingStartedAt, beforeIso: floorIso }))));

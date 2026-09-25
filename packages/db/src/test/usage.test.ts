@@ -121,7 +121,7 @@ describe("usage.ts, live", () => {
         ]);
       }))))));
 
-  it("listReportableUsage: the unreported rows of the accounts given, each from ITS OWN floor (billing start, or now − 34 days), oldest first ACROSS them, at most `limit`; PostgREST's own microsecond timestamps survive the quoted filter (mutation: drop .is('reported_at', null) → FAILS; one shared floor for both accounts → the pre-billing row appears, FAILS; order descending → FAILS; unquote the filter's timestamps → PostgREST refuses the read, FAILS)", () =>
+  it("listReportableUsage: the unreported rows of the accounts given, each from ITS OWN floor (billing start, or now − 34 days), oldest first ACROSS them, at most `limit`; PostgREST's own microsecond timestamps survive the quoted filter (mutation: drop .is('reported_at', null) → FAILS; one shared floor for both accounts → the pre-billing row appears, FAILS; order descending → FAILS). The quoting itself is defence-in-depth, not something this read can prove red: supabase-js percent-encodes '+' before PostgREST ever sees it, so an unquoted timestamp parses identically here — see usage.ts's usageRangeFilter doc.", () =>
     withPlan((planId) => withTestAccount((db, a) => withTestAccount((_d1, b) => withTestAccount(async (_d2, unbilled) => {
       const now = Date.now();
       await bill(a, planId, now - 5 * DAY);
@@ -140,6 +140,18 @@ describe("usage.ts, live", () => {
       expect(rows[1]).toMatchObject({ accountId: a, meter: "sms", quantity: 1, reportedAt: null });
       expect((await listReportableUsage(db, ours, new Date(now), 1)).map((r) => r.id)).toEqual([b1]);
     })))));
+
+  it("listReportableUsage excludes a row dated more than 5 minutes in the future — Stripe accepts a meter event up to 5 minutes ahead of its own clock and silently drops one further out, so a too-future row must stay unreported rather than be sent and stamped (mutation: drop the upper bound on the filter → the far-future row is returned too, FAILS)", () =>
+    withPlan((planId) => withTestAccount(async (db, a) => {
+      const now = Date.now();
+      await bill(a, planId, now - 5 * DAY);
+      const past = await usageRow(a, { occurredAt: now - 3 * HOUR });
+      const inGrace = await usageRow(a, { occurredAt: now + 3 * 60 * 1000 });   // 3 min ahead: within grace
+      await usageRow(a, { occurredAt: now + 10 * 60 * 1000 });                  // 10 min ahead: excluded
+      const account = (await listBilledUsageAccounts(db)).find((x) => x.accountId === a)!;
+      const rows = await listReportableUsage(db, [account], new Date(now), 10);
+      expect(rows.map((r) => r.id)).toEqual([past, inGrace]);
+    })));
 
   it("markUsageReported stamps reported_at and updated_at once, then reports false (mutation: drop .is('reported_at', null) → the second call returns true, FAILS)", () =>
     withTestAccount(async (db, a) => {
