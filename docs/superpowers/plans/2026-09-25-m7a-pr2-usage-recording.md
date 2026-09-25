@@ -55,9 +55,9 @@ Assumptions (not verified; Task 10's e2e run, reading Stripe's aggregate, is the
 - A17. Stripe aggregates one customer's events on one meter in the order it accepted them, so once a sentinel event sent AFTER the A11 probe shows in the sum, the probe has been counted too (or deduplicated). Task 10 re-reads 30 s after the sentinel appears to narrow the gap; it cannot close it.
 - A18. **Superseded twice (review corrections 2026-09-25; see Task 1's report, Fix 1, and Fix 2/A20 below).** The "about 100 characters per account" estimate was wrong at uuid length: a node measurement of `usageRangeFilter`'s OWN output, encoded as a query string, at maximum id/timestamp length (a uuid; a microsecond, `+00:00`-suffixed `occurred_at`), gives ~6,150 characters for 50 accounts on a two-part (`account_id.eq` + `occurred_at.gte`) filter — still under postgrest-js's 8,000-character warning, so `USAGE_ACCOUNTS_PER_READ = 50` stands for `staleUsageAccountIds` (the only remaining two-part caller after A20) — but ~9,350 characters for 50 accounts on the THREE-part filter `countExpiredUsage` builds (it also sets `beforeIso`), which is past that warning. `countExpiredUsage` therefore chunks by its own, smaller constant (~4,700 characters at 25, comfortably under a 6,000-character bound), unit-pinned in `usage.test.ts`. Today there are a handful of accounts and one read either way. Fix 1's own first version of this note named that smaller constant `USAGE_ACCOUNTS_PER_EXPIRED_READ`; A20 renamed it and gave it a second caller.
 - A20. **Fix 2 (review correction, 2026-09-25).** Fix 1 added a `beforeIso` (the future-grace ceiling) to EVERY range `listReportableUsage` builds, making its filter three-part too, but left it chunking by the two-part `USAGE_ACCOUNTS_PER_READ` (50) — a mismatch A18's own doc comment already warned against. Measured with the real `usageRangeFilter` at 50 accounts, max-length uuid and `+00:00`-suffixed microsecond timestamp on both `fromIso` and `beforeIso`: encoded length 9,347 (all-`beforeIso`-equals-`fromIso` shape; the finding's own measurement using a realistic shorter `untilIso` was 8,747) — over the 6,000-character bound this file enforces and past postgrest-js's 8,000-character warning either way. Fixed by renaming `USAGE_ACCOUNTS_PER_EXPIRED_READ` to `USAGE_ACCOUNTS_PER_BOUNDED_READ` (it now has two callers: `countExpiredUsage` and `listReportableUsage`) and chunking `listReportableUsage` by it instead. `staleUsageAccountIds` was checked and is unaffected: its ranges never set `beforeIso`, so it stays two-part and correctly on `USAGE_ACCOUNTS_PER_READ`. Two new/changed unit tests in `usage.test.ts` capture the filter `listReportableUsage` itself sends (not just the constant's raw value) and assert it stays under 6,000 characters encoded.
-- A19. A meter event round trip takes about 0.2-0.3 s (not measured), so 200 sequential sends take about 40-60 s. The code does not rely on it: the budget (G4) bounds the pass whatever a round trip costs.
+- A19. A meter event round trip takes about 0.2-0.3 s (not measured), so 200 sequential sends take about 40-60 s. The code does not rely on it: the budget (G4) bounds the pass whatever a round trip costs. **Task 7's review** lowered the last-start point from 50 s to 39 s (the transport's real worst case, not the 10 s timeout alone — see G4), which at this same assumed round trip caps a single tick at roughly 130-195 sends rather than 200 (39 s ÷ 0.2-0.3 s); at 96 ticks a day that is still ~12,500-18,700 sends of daily headroom against the ~19,200-a-day estimate below. A tick that cannot fully drain a backlog loses nothing (the next tick picks up the same oldest rows), so this narrows headroom rather than breaking anything; today's real volume is far under either bound. Chose the lower last-start point over keeping 50 s and accepting a stated ~71 s worst-case pass, because that would exceed this pass's own stated 60 s budget by design and the plan preferred a truthful budget that holds over a truthful budget that is routinely allowed to overrun (option (a) over (b); the cron route's 300 s `maxDuration` would still absorb it, but the point of a per-pass budget is that its own callers can trust the number).
 - A12. A 200 from `meterEvents.create` means Stripe RECEIVED the event, not that it will bill it (validation is asynchronous). `reported_at` therefore means "Stripe received it". PR-4's nightly reconciliation is the backstop for events Stripe later drops.
-- A13. `StripeInvalidRequestError` and `StripeIdempotencyError` are about the one request; every other failure (auth, permission, rate limit, connection, 5xx) would repeat for every row this tick.
+- A13. `StripeInvalidRequestError` and `StripeIdempotencyError` are about the one request; every other failure (auth, permission, rate limit, connection, 5xx) would repeat for every row this tick. **Known limitation (Task 7's review):** a deploy whose Stripe key is TEST while the account's customer id is a LIVE one (or vice versa) makes EVERY row of that account fail with `StripeInvalidRequestError` — a per-request problem by Stripe's own classification, not a systemic one — so `meterEventFailureKind` correctly calls it "row" and G4's fairness rule bounds it to one refused send per account per tick, but every tick is noisy (a `failed` count and a `console.error` that never resolves itself) until the key/customer mismatch is fixed by hand. Not a correctness bug; recorded here so the noise is not mistaken for a new one.
 - A14. Events for a customer whose subscription is canceled are recorded by Stripe but invoiced by no subscription, so the reporter need not read `subscription_status`.
 - A15. PostgREST's `upsert(..., { onConflict: "meter,source_ref", ignoreDuplicates: true }).select("id")` returns `[]` for a conflicting row (the same behaviour `crm-config.ts:80-86` relies on). Task 1's live test proves it.
 
@@ -66,7 +66,7 @@ Assumptions (not verified; Task 10's e2e run, reading Stripe's aggregate, is the
 - **G1. The ledger fills for every account; recording is best-effort.** No send path looks at billing status. Each leg runs through `recordUsageSafely`, after the path's primary durable write, and can change nothing the path returns (the existing `recordAutomationLog`/`emit` legs are the pattern).
 - **G2. Insert once.** `recordUsage(db, { accountId, meter, quantity, occurredAt, sourceRef })` is an insert with ON CONFLICT (meter, source_ref) DO NOTHING; it never updates a stored row, and says `"recorded"` or `"duplicate"`. It refuses, before any query, a quantity that is not a positive whole number, a `sourceRef` whose prefix does not match its meter (`call:<calls.id>` for `voice_minutes`, `message:<messages.id>` for `sms`, `conversation:<concierge_conversations.id>` for `ai_chats`), an empty id, more than 200 characters, and an invalid date.
 - **G3. What the reporter sends.** A row is reportable when its account has an `account_billing` row with `stripe_customer_id` AND `stripe_subscription_id` set (a complimentary row has neither subscription nor pause, by 0051's `account_billing_complimentary_check`, so it is excluded by construction), the row is unreported, and its `occurred_at` is on or after `max(account_billing.created_at, now − 34 days)`. **34, not 35:** Stripe validates the timestamp asynchronously and DROPS a too-old event without an error, so a row sent near the 35-day edge could be stamped reported and never billed; one day of margin prevents that. Everything else stays in the ledger unreported, and is not an error. Rows of a billed account between its billing start and the 34-day floor are counted `expired` and logged every tick, never sent. **The banner does not count expired rows**: they can never be sent, so a banner about them could never clear, and every expired row has already spent about 33 days on the banner as stale. In production nothing is reported until PR-3 creates the first billed account.
-- **G4. The reporter.** A new cron pass, key `usageReport`, appended LAST in `PASSES`: every SMS-sending pass runs before it, so a text sent this tick is reported this tick, and nothing reads what it writes. Stripe v1 `billing.meterEvents.create` through a new `BillingGateway.reportMeterEvent`. `identifier` = the row id (spec). Idempotency key `bis-usage-<row id>-<customer id>`: event name, value and timestamp are functions of the row, which never changes after insert (G2), so the row id plus the customer id covers every parameter. Timestamp = `floor(occurred_at / 1000)` seconds; payload values strings. `reported_at` and `updated_at` are stamped with the tick's `now` only after Stripe accepts; a stamp that finds the row already stamped (a concurrent tick) is `alreadyStamped`, never `reported`. **Fairness:** each read takes the OLDEST unreported rows across every billed account (`listReportableUsage`, one read per 50 accounts, merged oldest first), so no account waits behind another's place in a list and a backlog drains in the order it grew. One row's `StripeInvalidRequestError`/`StripeIdempotencyError` → that row `failed`, and that ACCOUNT's other rows wait for the next tick (a refusal is usually the account's, and its rows must not spend everyone's cap); when that read was full, the pass reads again without the refused accounts, so their rows can never fill the cap ahead of everyone else's. Any other failure → `failed`, `stoppedOnError: 1`, the tick stops (A13). Per tick: at most **200** sends (`USAGE_REPORT_TICK_CAP`; reaching it sets `stoppedOnCap: 1`) inside **60 s** (`USAGE_REPORT_BUDGET_MS`). Each send carries its own transport, **no SDK retry and a 10 s timeout** (`METER_EVENT_TIMEOUT_MS`; the next tick is the retry, under the same key), and the pass stops STARTING sends at 60 − 10 = 50 s, so even a send that times out ends inside the 60 s (the client-wide 2 retries × 20 s would let one send run about 61.5 s past the last start). That leaves the route's 300 s `maxDuration` room beside the release pass's own 60 s. 200 rows every 15 minutes is 19,200 a day, about 128 clients at an estimated 150 billable facts a day each (A19 for the time per send; sandbox traffic counts toward the global rate limit, so sequential sends are also the polite shape there). No usable key (`billingGatewayFromEnv` not ok) → `skippedNoStripe` = billed accounts, logged, returned, not an error. Stale accounts (G7) and expired rows (G3) are counted with one read per 50 billed accounts each and logged with `console.error` on every tick that sees them.
+- **G4. The reporter.** A new cron pass, key `usageReport`, appended LAST in `PASSES`: every SMS-sending pass runs before it, so a text sent this tick is reported this tick, and nothing reads what it writes. Stripe v1 `billing.meterEvents.create` through a new `BillingGateway.reportMeterEvent`. `identifier` = the row id (spec). Idempotency key `bis-usage-<row id>-<customer id>`: event name, value and timestamp are functions of the row, which never changes after insert (G2), so the row id plus the customer id covers every parameter. Timestamp = `floor(occurred_at / 1000)` seconds; payload values strings. `reported_at` and `updated_at` are stamped with the tick's `now` only after Stripe accepts; a stamp that finds the row already stamped (a concurrent tick) is `alreadyStamped`, never `reported`. **Fairness:** each read takes the OLDEST unreported rows across every billed account (`listReportableUsage`, one read per 50 accounts, merged oldest first), so no account waits behind another's place in a list and a backlog drains in the order it grew. One row's `StripeInvalidRequestError`/`StripeIdempotencyError` → that row `failed`, and that ACCOUNT's other rows wait for the next tick (a refusal is usually the account's, and its rows must not spend everyone's cap); when that read was full, the pass reads again without the refused accounts, so their rows can never fill the cap ahead of everyone else's. Any other failure → `failed`, `stoppedOnError: 1`, the tick stops (A13). Per tick: at most **200** sends (`USAGE_REPORT_TICK_CAP`; reaching it sets `stoppedOnCap: 1`) inside **60 s** (`USAGE_REPORT_BUDGET_MS`). Each send overrides the client's transport per request (`maxNetworkRetries: 0`, a 10 s `METER_EVENT_TIMEOUT_MS`; the next tick is the retry, under the same key) — but for the installed stripe 22.6.2, that does not mean "no retry, bounded at 10 s": `RequestSender.js`'s `_shouldRetry` retries a reset/broken-pipe connection ONCE regardless of `maxNetworkRetries`, and `timeout` is a socket-idle timeout, not a hard deadline (stripe-gateway.ts's comments carry the file:line evidence). Worst case for one send past its start: ~10 s idle + reset + ~0.5 s backoff + ~10 s idle ≈ 20.5 s. The pass stops STARTING sends at 60 − 21 = **39 s** (`METER_EVENT_WORST_CASE_MS`, rounded up from 20.5 s for margin), so even a send that hits that worst case still ends inside the 60 s budget (the client-wide 2 retries × 20 s would let one send run about 61.5 s past the last start, which the per-request override still prevents). That leaves the route's 300 s `maxDuration` room beside the release pass's own 60 s. 200 rows every 15 minutes is 19,200 a day, about 128 clients at an estimated 150 billable facts a day each (A19 for the time per send; sandbox traffic counts toward the global rate limit, so sequential sends are also the polite shape there). No usable key (`billingGatewayFromEnv` not ok) → `skippedNoStripe` = billed accounts, logged, returned, not an error. Stale accounts (G7) and expired rows (G3) are counted with one read per 50 billed accounts each and logged with `console.error` on every tick that sees them.
 - **G5. The voice leg is gated on the call row id and "Sofía talked to the caller" = `callerSpoke(state) || isMeaningful(outcome)`, NOT on `stored` and NOT on `turn_count`.** danlo's decision is "every call Sofía talked to"; the planning-start ledger line paraphrases it as "caller spoke, turn_count>=1", and that paraphrase is superseded here (the orchestrator appends a ledger correction). `finishCallRow` failing (a database blip) does not un-spend the carrier and model minutes, and `recordAutomationLog`, the precedent leg, is gated on `meta.callRowId` alone (`finish-call.ts:579`). The call id is the `source_ref`; with no row id (`startCallRow` failed open) there is nothing to key idempotently, and nothing is recorded. The two halves: `callerSpoke(state)`, a caller turn with words, exported from `call-state.ts` and shared with `classifyOutcome` (`turn_count >= 1` would bill silent rings, because Sofía's greeting is a turn); and `isMeaningful(outcome)`, because a booked, lead or message outcome means the caller interacted even when no caller turn was transcribed (danlo, 2026-09-25). A silent ring or a connect-timeout (no caller words, no booking/lead/message) never bills. A robocall that reached Sofía is billed (danlo), and it is, because the guard records its words as a caller turn. Quantity = `max(1, ceil(duration_secs / 60))` from the SAME `durationSecs` written to the calls row; `occurred_at` = the call's end.
 - **G6. The Stripe proof is at the gateway, in the e2e job, and it reads Stripe's AGGREGATE, not the 200.** The `verify` job has no Stripe key by design, and the `e2e` job has no `CRON_SECRET`, so the cron route cannot be driven end to end. `e2e/usage-meter.spec.ts` makes a Stripe TEST customer, ensures the meters, sends one meter event through the real `stripeGateway(...).reportMeterEvent`, replays it under the same key, sends a second distinct event, and polls `listEventSummaries` until the sum is the 2 + 3 = 5 a correct dedupe implies (A9, A10, A16). It then sends the first event's identifier under a new key (A11) and a sentinel (7) after it, and polls for 12 (deduplicated) or 14 (counted again) (A17). It deletes the customer. No database, no account, never Test Client One.
 - **G7. The banner.** `listAccountsWithStaleUsage(db, now)` returns the ids of billed accounts with a reportable row (G3's window) still unreported 24 hours after it was RECORDED (`created_at`, not `occurred_at`: a row recorded late is not late to Stripe until it has waited a day). Bounded: the billed-account list (paged), then ONE `usage_events` read per 50 of them (`staleUsageAccountIds`), each account's own window expressed in the read's `.or()`; a read comes back as rows, not accounts, so a FULL read (one account's backlog can fill it) is followed by a read of the accounts it did not name, and each repeat names at least one new account. With nothing stale it is one read per 50 accounts. The cron's stale log calls the same function. `/dashboard/work` renders `UsageStaleBanner` with the count, beside `LineDownBanner`, in the same `Promise.all`, swallowed the same way: a failed read renders no banner and logs `console.error` (`work/page.tsx:62-65`'s precedent). Copy: "Usage for 2 clients hasn't reached Stripe in over a day, so it isn't on their bills yet. We retry every 15 minutes." + a link "Check the Stripe connection" to `/dashboard/plans`, where a missing or refused key is already explained.
@@ -99,11 +99,11 @@ Assumptions (not verified; Task 10's e2e run, reading Stripe's aggregate, is the
 - Modify `apps/web/src/app/api/concierge/[publicId]/turn/route.ts` (the leg, on turn 1's successful reply) and `route.test.ts` (+5).
 
 **apps/web: reporting**
-- Modify `apps/web/src/lib/billing/stripe-gateway.ts`: `MeterEventInput`, `meterEventParams`, `METER_EVENT_TIMEOUT_MS`, `reportMeterEvent` (no SDK retry, 10 s, per request), `meterEventFailureKind`.
+- Modify `apps/web/src/lib/billing/stripe-gateway.ts`: `MeterEventInput`, `meterEventParams`, `METER_EVENT_TIMEOUT_MS`, `reportMeterEvent` (per-request `maxNetworkRetries: 0`, 10 s timeout — does not fully suppress the installed SDK's own single automatic retry of a reset connection, nor does `timeout` cut off a trickling response; corrected in Task 7's review), `meterEventFailureKind`.
 - Modify `apps/web/src/lib/billing/fake-gateway.ts`: `reportMeterEvent` (a new key is a new event: A11 is not assumed), `meterEvents`, `failOn.error`.
 - Modify `apps/web/src/lib/billing/stripe-gateway.test.ts` (+11).
 - Create `apps/web/src/lib/billing/meter-event-failure.test.ts` (1 test, the real Stripe error classes).
-- Modify `apps/web/src/lib/automations/caps.ts`: `USAGE_REPORT_TICK_CAP`, `USAGE_REPORT_BUDGET_MS`.
+- Modify `apps/web/src/lib/automations/caps.ts`: `USAGE_REPORT_TICK_CAP`, `USAGE_REPORT_BUDGET_MS`, `METER_EVENT_WORST_CASE_MS` (added in Task 7's review).
 - Create `apps/web/src/lib/automations/passes/usage-report.ts` and `usage-report.test.ts` (14 tests).
 - Modify `apps/web/src/lib/automations/registry.ts`, `sentinel.test.ts` (2 edited), `apps/web/src/app/api/cron/reminders/route.test.ts` (7 bodies edited, mock extended).
 
@@ -2635,7 +2635,7 @@ describe("meterEventParams (the usage mapping)", () => {
 });
 
 describe("stripeGateway.reportMeterEvent", () => {
-  it("creates ONE meter event with the mapped params under the idempotency key, with NO SDK retry and a 10 s timeout of its own, and returns nothing Stripe sent back (mutation: drop the options argument → FAILS; drop the per-request transport → the client's 2 retries × 20 s apply, one send can run about 61.5 s, FAILS)", async () => {
+  it("creates ONE meter event with the mapped params under the idempotency key, passing maxNetworkRetries: 0 and a 10 s timeout of its own (which does not fully suppress the SDK's own single automatic retry of a reset connection — see stripe-gateway.ts's comments), and returns nothing Stripe sent back (mutation: drop the options argument → FAILS; drop the per-request transport → the client's 2 retries × 20 s apply, one send can run about 61.5 s, FAILS)", async () => {
     const s = stubStripe();
     await expect(stripeGateway(s as unknown as Stripe).reportMeterEvent(EVENT, "bis-usage-u_1-cus_1")).resolves.toBeUndefined();
     expect(s.billing.meterEvents.create).toHaveBeenCalledTimes(1);
@@ -2782,12 +2782,22 @@ export interface BillingGateway {
 const MAX_TIMESTAMP_SECONDS = 100_000_000_000;
 
 /**
- * One meter event's whole budget: the request carries this timeout and NO
- * SDK retry, overriding the client's 2 retries × 20 s (billingGatewayFromEnv
- * below), which could hold one send about 61.5 s. The usage report is the
- * retry (next tick, same idempotency key), and its budget stops starting
- * sends this long before it runs out (usage-report.ts), so a send that times
- * out still ends inside the budget.
+ * One meter event's PER-REQUEST timeout, overriding the client's 2 retries ×
+ * 20 s (billingGatewayFromEnv below), which could hold one send about 61.5 s.
+ *
+ * Assumption about the installed stripe SDK's transport (22.6.2; not
+ * verified against the network, only its source), corrected from an earlier,
+ * false claim of "no retry" and "a send that times out ends inside the
+ * budget": `timeout` here is a SOCKET-IDLE timeout (`req.setTimeout`,
+ * `cjs/net/NodeHttpClient.js:47`), not a hard deadline, so a response that
+ * trickles in is never cut off by it; and `RequestSender.js`'s
+ * `_shouldRetry` retries an `ECONNRESET`/`EPIPE` ONCE even when
+ * `maxNetworkRetries: 0` is set (probed with a fake `httpClient`:
+ * `ECONNRESET attempts=2 keys=["k1","k1"]` under the same idempotency key, so
+ * it cannot double-bill). Worst case for one send that starts near a
+ * budget's last-start point: ~10 s idle + reset + ~0.5 s backoff + ~10 s idle
+ * ≈ 20.5 s past its start. The usage report's own budget (usage-report.ts)
+ * is sized against that worst case, not against this constant alone.
  */
 export const METER_EVENT_TIMEOUT_MS = 10_000;
 
@@ -2850,9 +2860,12 @@ with
       return { id: p.id };
     },
     async reportMeterEvent(input, idempotencyKey) {
-      // Per-request transport (stripe 22.6.2 RequestOptions): no retry, a
-      // bounded wait. The client-wide settings suit the Plans page, not a
-      // cron pass with a budget.
+      // Per-request transport (stripe 22.6.2 RequestOptions), overriding the
+      // client-wide settings that suit the Plans page, not a cron pass with
+      // a budget. `maxNetworkRetries: 0` does not stop the SDK's own single
+      // automatic retry of a reset/broken-pipe connection, and `timeout` is
+      // a socket-idle timeout, not a hard deadline — see the worst-case note
+      // on METER_EVENT_TIMEOUT_MS above.
       await stripe.billing.meterEvents.create(meterEventParams(input), {
         idempotencyKey, maxNetworkRetries: 0, timeout: METER_EVENT_TIMEOUT_MS,
       });
@@ -2987,8 +3000,8 @@ git commit -m "feat(billing): reportMeterEvent on the Stripe gateway and the fak
 - Modify: `apps/web/src/app/api/cron/reminders/route.test.ts` (mock extended, 7 whole-body equalities edited)
 
 **Interfaces:**
-- Consumes: from `@bis/db` (Task 1) `listBilledUsageAccounts`, `listReportableUsage`, `markUsageReported`, `staleUsageAccountIds`, `countExpiredUsage`; from Task 7 `billingGatewayFromEnv`, `meterEventFailureKind`, `METER_EVENT_TIMEOUT_MS`; `METERS` (`stripe-catalog.ts:12-16`). Verified today: `Pass` / `PassContext` (`context.ts:15-56`), `runPasses` (`harness.ts:62-75`, each pass in its own try/catch), `PASSES` (`registry.ts:45`), the route's `maxDuration = 300` (`api/cron/reminders/route.ts:16`), `RELEASE_BUDGET_MS = 60_000` (`passes/release-held.ts:69`).
-- Produces: `usageReportPass: Pass` with key `"usageReport"` and counters `{ reported, unstamped, alreadyStamped, failed, expired, staleAccounts, skippedNoStripe, stoppedOnCap, stoppedOnError, stoppedOnBudget }` (ten); `usageIdempotencyKey(rowId: string, customerId: string): string`; `USAGE_REPORT_TICK_CAP = 200`, `USAGE_REPORT_BUDGET_MS = 60_000`.
+- Consumes: from `@bis/db` (Task 1) `listBilledUsageAccounts`, `listReportableUsage`, `markUsageReported`, `staleUsageAccountIds`, `countExpiredUsage`; from Task 7 `billingGatewayFromEnv`, `meterEventFailureKind`; `METERS` (`stripe-catalog.ts:12-16`). Verified today: `Pass` / `PassContext` (`context.ts:15-56`), `runPasses` (`harness.ts:62-75`, each pass in its own try/catch), `PASSES` (`registry.ts:45`), the route's `maxDuration = 300` (`api/cron/reminders/route.ts:16`), `RELEASE_BUDGET_MS = 60_000` (`passes/release-held.ts:69`).
+- Produces: `usageReportPass: Pass` with key `"usageReport"` and counters `{ reported, unstamped, alreadyStamped, failed, expired, staleAccounts, skippedNoStripe, stoppedOnCap, stoppedOnError, stoppedOnBudget }` (ten); `usageIdempotencyKey(rowId: string, customerId: string): string`; `USAGE_REPORT_TICK_CAP = 200`, `USAGE_REPORT_BUDGET_MS = 60_000`, `METER_EVENT_WORST_CASE_MS = 21_000`.
 - Bounded per tick (G4, G7): the billed-account list (paged), ONE stale read and ONE expired count per 50 billed accounts, then reads of the oldest rows across all of them (one per 50 accounts; a repeat only after an account's refusal emptied a full read); never a read per account.
 
 Every `@bis/db` export the pass uses is dereferenced INSIDE `run()`, never at module scope: the cron route test's `@bis/db` mock is a bare factory, which throws the moment an export it does not define is dereferenced.
@@ -3013,8 +3026,7 @@ vi.mock("@/lib/billing/stripe-gateway", async (importOriginal) => ({
 
 import type { BilledUsageAccount, UsageRow } from "@bis/db";
 import { FakeGateway } from "@/lib/billing/fake-gateway";
-import { METER_EVENT_TIMEOUT_MS } from "@/lib/billing/stripe-gateway";
-import { USAGE_REPORT_BUDGET_MS, USAGE_REPORT_TICK_CAP } from "../caps";
+import { USAGE_REPORT_BUDGET_MS, USAGE_REPORT_TICK_CAP, METER_EVENT_WORST_CASE_MS } from "../caps";
 import type { PassContext } from "../context";
 import { usageReportPass } from "./usage-report";
 
@@ -3192,7 +3204,7 @@ describe("usageReportPass", () => {
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining("was already marked reported"));
   });
 
-  it("stops STARTING sends once the budget less one send's timeout is spent, so a send that times out still ends inside the budget (mutation: check against the whole budget → u2 starts at 50 s, 2 sent, FAILS; drop the budget check → 3 sent, FAILS)", async () => {
+  it("stops STARTING sends once the budget less one send's worst case is spent, so a send that hits that worst case still ends inside the budget (mutation: check against the whole budget → u2 starts at 39 s, 2 sent, FAILS; drop the budget check → 3 sent, FAILS)", async () => {
     dbMocks.listBilledUsageAccounts.mockResolvedValue([A]);
     queue = [usage("u1"), usage("u2"), usage("u3")];
     // Date.now() calls the pass makes: `startedAt`, then one check before
@@ -3201,15 +3213,16 @@ describe("usageReportPass", () => {
     vi.spyOn(Date, "now")
       .mockReturnValueOnce(0)
       .mockReturnValueOnce(0)
-      .mockReturnValueOnce(USAGE_REPORT_BUDGET_MS - METER_EVENT_TIMEOUT_MS);
+      .mockReturnValueOnce(USAGE_REPORT_BUDGET_MS - METER_EVENT_WORST_CASE_MS);
     expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, reported: 1, stoppedOnBudget: 1 });
     expect(fake.meterEvents.map((e) => e.identifier)).toEqual(["u1"]);
   });
 
-  it("pins the cap at 200 rows, the budget at 60 seconds, and so the last send start at 50 seconds (mutation: change any → FAILS)", () => {
+  it("pins the cap at 200 rows, the budget at 60 seconds, the worst case at 21 seconds, and so the last send start at 39 seconds (mutation: change any → FAILS)", () => {
     expect(USAGE_REPORT_TICK_CAP).toBe(200);
     expect(USAGE_REPORT_BUDGET_MS).toBe(60_000);
-    expect(USAGE_REPORT_BUDGET_MS - METER_EVENT_TIMEOUT_MS).toBe(50_000);
+    expect(METER_EVENT_WORST_CASE_MS).toBe(21_000);
+    expect(USAGE_REPORT_BUDGET_MS - METER_EVENT_WORST_CASE_MS).toBe(39_000);
   });
 });
 ```
@@ -3239,14 +3252,22 @@ Append to `apps/web/src/lib/automations/caps.ts`:
  *     a day, about 128 clients at an estimated 150 billable facts a day each.
  *     Past that, Stripe's v2 meter event stream is the next step.
  *   USAGE_REPORT_BUDGET_MS the pass's wall clock for sending. It stops
- *     STARTING sends at this minus METER_EVENT_TIMEOUT_MS (stripe-gateway.ts:
- *     each send has no SDK retry and a 10 s timeout), so the last send ends
- *     inside it even when it times out. The release pass's own shape
- *     (RELEASE_BUDGET_MS): the two 60 s budgets leave the route's 300 s
- *     maxDuration room for every other pass.
+ *     STARTING sends at this minus METER_EVENT_WORST_CASE_MS below, so the
+ *     last send still ends inside it even in that worst case. The release
+ *     pass's own shape (RELEASE_BUDGET_MS): the two 60 s budgets leave the
+ *     route's 300 s maxDuration room for every other pass.
+ *   METER_EVENT_WORST_CASE_MS one send's worst case past its start, for the
+ *     installed stripe SDK (22.6.2; see stripe-gateway.ts's
+ *     METER_EVENT_TIMEOUT_MS/reportMeterEvent comments): its per-request
+ *     `timeout` is a SOCKET-IDLE timeout, not a hard deadline, and its
+ *     `RequestSender.js` retries a reset/broken-pipe connection ONCE even
+ *     with `maxNetworkRetries: 0`. Two idle timeouts plus one retry's
+ *     ~0.5 s backoff: 2 * 10_000 + 500 = 20,500 ms, rounded up to 21,000 for
+ *     margin — hence the 60 − 21 = 39 s last-start point above.
  */
 export const USAGE_REPORT_TICK_CAP = 200;
 export const USAGE_REPORT_BUDGET_MS = 60_000;
+export const METER_EVENT_WORST_CASE_MS = 21_000;
 ```
 
 - [ ] **Step 4: The pass**
@@ -3257,9 +3278,9 @@ Create `apps/web/src/lib/automations/passes/usage-report.ts`:
 import {
   listBilledUsageAccounts, listReportableUsage, markUsageReported, countExpiredUsage, staleUsageAccountIds,
 } from "@bis/db";
-import { billingGatewayFromEnv, meterEventFailureKind, METER_EVENT_TIMEOUT_MS } from "@/lib/billing/stripe-gateway";
+import { billingGatewayFromEnv, meterEventFailureKind } from "@/lib/billing/stripe-gateway";
 import { METERS } from "@/lib/billing/stripe-catalog";
-import { USAGE_REPORT_BUDGET_MS, USAGE_REPORT_TICK_CAP } from "../caps";
+import { USAGE_REPORT_BUDGET_MS, USAGE_REPORT_TICK_CAP, METER_EVENT_WORST_CASE_MS } from "../caps";
 import type { Pass } from "../context";
 
 /**
@@ -3336,9 +3357,12 @@ export const usageReportPass: Pass = {
     const gateway = built.gateway;
     const customerOf = new Map(accounts.map((a) => [a.accountId, a.stripeCustomerId]));
 
-    // The last moment a send may START: a send has no SDK retry and at most
-    // METER_EVENT_TIMEOUT_MS, so one started by then ends inside the budget.
-    const lastStartMs = USAGE_REPORT_BUDGET_MS - METER_EVENT_TIMEOUT_MS;
+    // The last moment a send may START: the installed stripe SDK's transport
+    // can run a send about METER_EVENT_WORST_CASE_MS past its start (a
+    // socket-idle timeout retried once on a reset connection, per
+    // stripe-gateway.ts's comments), so stopping this early keeps one
+    // started by then inside the budget.
+    const lastStartMs = USAGE_REPORT_BUDGET_MS - METER_EVENT_WORST_CASE_MS;
     const startedAt = Date.now();
     const refused = new Set<string>();
     let attempts = 0;
@@ -4186,9 +4210,9 @@ Push. Read the check runs for the head SHA (`gh api repos/{owner}/{repo}/commits
 
 - **Spec coverage (step 2 only):** section 3 flow 3: an answered call ends → minutes rounded up (Task 3; "answered" = Sofía talked to the caller, `callerSpoke(state) || isMeaningful(outcome)`, danlo); an outbound SMS is sent → its segments (Tasks 4-5; outbound to customers only, danlo; staff alerts `lib/sms/alerts.ts:182` and OTP codes `settings/actions.ts:324` untouched, so never billed); a concierge conversation → 1, when Sofía's first reply succeeds (Task 6, danlo 2026-09-25); a cron pass reports unreported rows to Stripe meter events with the row id as identifier (Tasks 7-8). Section 4: rows stay unreported and are retried each pass (Task 8: a refused row, and its account's other rows, go again next tick; `unstamped` rows are resent under the same identifier AND key, so Stripe's idempotent replay, A10, keeps one event). **Section 4's "Stripe dedupes by identifier" is UNPROVEN and relied on nowhere** (A11): the fake assumes the opposite, and only Task 10's observation can clear it, as a PR-3 gate. A row unreported > 24 h raises an agency alert (Task 9's banner, Task 8's per-tick `console.error`). Rollout (2): the ledger fills for every account (G1). Not here by design: reconciliation and the pause (PR-4), Checkout/webhooks/Billing screens (PR-3).
 - **danlo's decisions honoured:** voice bills every call Sofía talked to: a caller turn with words OR a booked/lead/message outcome, robocalls included, silent rings and connect-timeouts never, `max(1, ceil(duration_secs / 60))`, the web demo never (no calls row); SMS only to customers (automations, composer, both text-back callers), after a successful send, `segmentsFor(body).segments`, a re-sent copy billed per copy (G14); 1 AI chat per conversation, recorded when Sofía's FIRST reply succeeds (a failed start never bills), no QA exemption; the stale alert is a derived banner (no migration) plus a `console.error` per cron run.
-- **Review corrections applied (2026-09-25):** the e2e reads Stripe's aggregate with a bounded wait (Task 10, A16-A17); the fake records a second event for a reused identifier under a new key (Task 7); automation-text usage is worked out after the send's `try` by a helper that never throws (Task 4); the concierge bills on turn 1's successful reply, its lazy import inside the leg's own `try` (Task 6); the voice gate has both halves (Task 3); every `usage_events` read is one request per 50 accounts, sends go oldest first across accounts, and a refused account cannot fill the cap (Tasks 1, 8); each meter event carries no SDK retry and a 10 s timeout, and the pass stops starting sends 10 s before its 60 s budget (Tasks 7, 8; A19 labels the round-trip estimate); the duplicate banner test is gone, the length check is an exact-copy assertion, the absence test names its mutation, the SMS scan strips comments, and a `false` stamp counts `alreadyStamped`, not `reported` (Tasks 4, 8, 9).
+- **Review corrections applied (2026-09-25):** the e2e reads Stripe's aggregate with a bounded wait (Task 10, A16-A17); the fake records a second event for a reused identifier under a new key (Task 7); automation-text usage is worked out after the send's `try` by a helper that never throws (Task 4); the concierge bills on turn 1's successful reply, its lazy import inside the leg's own `try` (Task 6); the voice gate has both halves (Task 3); every `usage_events` read is one request per 50 accounts, sends go oldest first across accounts, and a refused account cannot fill the cap (Tasks 1, 8); each meter event carries a per-request `maxNetworkRetries: 0` and a 10 s timeout, which the installed SDK's transport does not turn into a hard "no retry, bounded at 10 s" guarantee (one retry of a reset connection, and a socket-idle rather than hard timeout), so the pass stops starting sends 21 s (not 10 s) before its 60 s budget (Tasks 7, 8 Fix 1; A19 labels the round-trip estimate); the duplicate banner test is gone, the length check is an exact-copy assertion, the absence test names its mutation, the SMS scan strips comments, and a `false` stamp counts `alreadyStamped`, not `reported` (Tasks 4, 8, 9).
 - **Placeholders:** none. Every code step carries the code.
-- **Type consistency:** `UsageInput`, `UsageRow`, `BilledUsageAccount`, `UsageRange` (Task 1) are used unchanged in Tasks 2, 8 and 9. `recordUsageSafely`'s `db` accepts a client or a getter; only the composer passes a getter. Since the Fix 1-4 review corrections (2026-09-25), `input` accepts a `UsageInput` or a thunk that builds one, built inside the same try as `db`; every Task 3-6 call site passes a plain object (none reads its fields off a value that could be null or throw while being read), so none needed to change. `SentSms.usage` (Task 4) is the only shape change on an existing type; its two test literals are edited in the same task. `MeterEventInput` is shared by `meterEventParams`, the adapter, the fake, the pass and the e2e. `METER_EVENT_TIMEOUT_MS` is defined once (`stripe-gateway.ts`) and read by the adapter, the pass and the pass's tests. The pass's counter object and the cron test's `EMPTY_USAGE_REPORT` list the same ten keys in the same order (`reported, unstamped, alreadyStamped, failed, expired, staleAccounts, skippedNoStripe, stoppedOnCap, stoppedOnError, stoppedOnBudget`).
+- **Type consistency:** `UsageInput`, `UsageRow`, `BilledUsageAccount`, `UsageRange` (Task 1) are used unchanged in Tasks 2, 8 and 9. `recordUsageSafely`'s `db` accepts a client or a getter; only the composer passes a getter. Since the Fix 1-4 review corrections (2026-09-25), `input` accepts a `UsageInput` or a thunk that builds one, built inside the same try as `db`; every Task 3-6 call site passes a plain object (none reads its fields off a value that could be null or throw while being read), so none needed to change. `SentSms.usage` (Task 4) is the only shape change on an existing type; its two test literals are edited in the same task. `MeterEventInput` is shared by `meterEventParams`, the adapter, the fake, the pass and the e2e. `METER_EVENT_TIMEOUT_MS` is defined once (`stripe-gateway.ts`) and read by the adapter and its own tests; the pass's last-start threshold reads `METER_EVENT_WORST_CASE_MS` (`caps.ts`, Task 7's review) instead, since the two are not the same number for the installed SDK. The pass's counter object and the cron test's `EMPTY_USAGE_REPORT` list the same ten keys in the same order (`reported, unstamped, alreadyStamped, failed, expired, staleAccounts, skippedNoStripe, stoppedOnCap, stoppedOnError, stoppedOnBudget`).
 - **Counts re-derived from the code blocks:** db `usage.test.ts` 9 (2 guard + 1 insert + 2 window + 1 paging + 3 per-account reads); db `test/usage.test.ts` 7; `billing/usage.test.ts` 8 (revised from 4: Fix 1-4 review corrections, 2026-09-25 — see Task 2's report); call-state 1; finish-call 7; textback 5; send-sms 6 new + 2 edited; composer 6; concierge 5; stripe-gateway 11 (4 + 1 + 1 + 5); meter-event-failure 1; usage-report 14; usage-stale-banner 5; work page 3 new + 1 edited; e2e 1. Total **89** (85 + 4 from the Task 2 fix). Files: 12 created, 23 modified (35), unchanged by the corrections. Tasks: 11, plus Checkpoint A.
 - **Existing tests this plan must not break:** the cron `route.test.ts`'s seven whole-body equalities (edited, Task 8); `sentinel.test.ts`'s exact registry order (edited, Task 8); `imports.test.ts` (the pass imports no email/SMS provider or factory; `@/lib/sms/segments` and `@/lib/sms/types` do not match its patterns); `send-sms.test.ts`'s exact return value and `SentSms` literals (edited, Task 4); the concierge `route.test.ts`'s existing empty-reply and model-failure tests (the leg sits after both of their decisions and records nothing on either); `fixture-names.test.ts` (the new spec mints no `E2E …` name); `messages.test.ts`'s milestone guard (no new string names one); every pass test that spreads `importOriginal` over `@bis/db` keeps the real `recordUsage`, which is never reached because their providers are `isFake: true`.
 - **Not verified here (the reviewer or CI settles them):** that PostgREST accepts `+00:00` microsecond timestamps inside a double-quoted `.or()` value (the precedent quotes `toISOString()` values only; Task 1's live `listReportableUsage` test is the proof, in CI); A16-A19.

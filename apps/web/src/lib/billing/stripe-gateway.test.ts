@@ -368,7 +368,7 @@ describe("meterEventParams (the usage mapping)", () => {
 });
 
 describe("stripeGateway.reportMeterEvent", () => {
-  it("creates ONE meter event with the mapped params under the idempotency key, with NO SDK retry and a 10 s timeout of its own, and returns nothing Stripe sent back (mutation: drop the options argument → FAILS; drop the per-request transport → the client's 2 retries × 20 s apply, one send can run about 61.5 s, FAILS)", async () => {
+  it("creates ONE meter event with the mapped params under the idempotency key, passing maxNetworkRetries: 0 and a 10 s timeout of its own (which does not fully suppress the SDK's own single automatic retry of a reset connection — see stripe-gateway.ts's comments), and returns nothing Stripe sent back (mutation: drop the options argument → FAILS; drop the per-request transport → the client's 2 retries × 20 s apply, one send can run about 61.5 s, FAILS)", async () => {
     const s = stubStripe();
     await expect(stripeGateway(s as unknown as Stripe).reportMeterEvent(EVENT, "bis-usage-u_1-cus_1")).resolves.toBeUndefined();
     expect(s.billing.meterEvents.create).toHaveBeenCalledTimes(1);

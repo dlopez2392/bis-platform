@@ -101,12 +101,22 @@ export function priceCreateParams(spec: PriceSpec): Stripe.PriceCreateParams {
 const MAX_TIMESTAMP_SECONDS = 100_000_000_000;
 
 /**
- * One meter event's whole budget: the request carries this timeout and NO
- * SDK retry, overriding the client's 2 retries × 20 s (billingGatewayFromEnv
- * below), which could hold one send about 61.5 s. The usage report is the
- * retry (next tick, same idempotency key), and its budget stops starting
- * sends this long before it runs out (usage-report.ts), so a send that times
- * out still ends inside the budget.
+ * One meter event's PER-REQUEST timeout, overriding the client's 2 retries ×
+ * 20 s (billingGatewayFromEnv below), which could hold one send about 61.5 s.
+ *
+ * Assumption about the installed stripe SDK's transport (22.6.2; not
+ * verified against the network, only its source), corrected from an earlier,
+ * false claim of "no retry" and "a send that times out ends inside the
+ * budget": `timeout` here is a SOCKET-IDLE timeout (`req.setTimeout`,
+ * `cjs/net/NodeHttpClient.js:47`), not a hard deadline, so a response that
+ * trickles in is never cut off by it; and `RequestSender.js`'s
+ * `_shouldRetry` retries an `ECONNRESET`/`EPIPE` ONCE even when
+ * `maxNetworkRetries: 0` is set (probed with a fake `httpClient`:
+ * `ECONNRESET attempts=2 keys=["k1","k1"]` under the same idempotency key, so
+ * it cannot double-bill). Worst case for one send that starts near a
+ * budget's last-start point: ~10 s idle + reset + ~0.5 s backoff + ~10 s idle
+ * ≈ 20.5 s past its start. The usage report's own budget (usage-report.ts)
+ * is sized against that worst case, not against this constant alone.
  */
 export const METER_EVENT_TIMEOUT_MS = 10_000;
 
@@ -177,9 +187,12 @@ export function stripeGateway(stripe: Stripe): BillingGateway {
       return { id: p.id };
     },
     async reportMeterEvent(input, idempotencyKey) {
-      // Per-request transport (stripe 22.6.2 RequestOptions): no retry, a
-      // bounded wait. The client-wide settings suit the Plans page, not a
-      // cron pass with a budget.
+      // Per-request transport (stripe 22.6.2 RequestOptions), overriding the
+      // client-wide settings that suit the Plans page, not a cron pass with
+      // a budget. `maxNetworkRetries: 0` does not stop the SDK's own single
+      // automatic retry of a reset/broken-pipe connection, and `timeout` is
+      // a socket-idle timeout, not a hard deadline — see the worst-case note
+      // on METER_EVENT_TIMEOUT_MS above.
       await stripe.billing.meterEvents.create(meterEventParams(input), {
         idempotencyKey, maxNetworkRetries: 0, timeout: METER_EVENT_TIMEOUT_MS,
       });
