@@ -62,13 +62,19 @@ describe("deliverTextback — usage (client billing)", () => {
     expect(dbMocks.recordUsage).not.toHaveBeenCalled();
   });
 
-  it("the usage row lands even when the 'sent' write then fails (mutation: record after that write → FAILS)", async () => {
+  it("the 'sent' write, which stores the provider id the status webhook correlates against, comes straight after the send, BEFORE the usage write (mutation: record usage before the 'sent' write → call order FAILS)", async () => {
+    await deliverTextback(DB, "a1", pending, "finishCall call1");
+    expect(dbMocks.updateMessageStatus).toHaveBeenCalledWith(DB, "a1", "m_tb", "sent", { providerMessageId: "sm1" }, "voice", "ai");
+    expect(dbMocks.updateMessageStatus.mock.invocationCallOrder[0]!).toBeLessThan(dbMocks.recordUsage.mock.invocationCallOrder[0]!);
+  });
+
+  it("the usage row lands even when the 'sent' write then fails (mutation: record after that write outside its finally → FAILS)", async () => {
     dbMocks.updateMessageStatus.mockRejectedValue(new Error("db down"));
     await expect(deliverTextback(DB, "a1", pending, "finishCall call1")).resolves.toBeUndefined();
     expect(dbMocks.recordUsage).toHaveBeenCalledTimes(1);
   });
 
-  it("a failing usage write never stops the 'sent' write or reaches the text-back's failure log (mutation: remove recordUsageSafely's catch → the outer catch logs 'text-back failed' and skips 'sent', FAILS)", async () => {
+  it("a failing usage write never stops the 'sent' write or reaches the text-back's failure log (mutation: remove recordUsageSafely's catch → the outer catch logs 'text-back failed', FAILS)", async () => {
     dbMocks.recordUsage.mockRejectedValue(new Error("usage_events is down"));
     await expect(deliverTextback(DB, "a1", pending, "finishCall call1")).resolves.toBeUndefined();
     expect(dbMocks.updateMessageStatus).toHaveBeenCalledWith(DB, "a1", "m_tb", "sent", { providerMessageId: "sm1" }, "voice", "ai");

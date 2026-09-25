@@ -266,19 +266,25 @@ export async function deliverTextback(
       }
       throw sendError;
     }
-    // USAGE (client billing): the text reached the customer, so its segments
-    // bill. BEFORE the `sent` write, which may throw into the catch below and
-    // must not take a delivered text's usage with it; recordUsageSafely never
-    // throws, so it cannot stop that write either. This one leg covers both
-    // callers (finishCall and the handoff-result route).
-    if (smsBillable(provider)) {
-      await recordUsageSafely(db, {
-        accountId, meter: "sms", quantity: segmentsFor(body).segments,
-        occurredAt: new Date(), sourceRef: `message:${messageId}`,
-      }, label);
+    // The `sent` write FIRST, straight after the send: it stores the
+    // provider id Telnyx's status webhook correlates against, and a webhook
+    // that lands before it finds no row and is lost for good, so nothing may
+    // sit in that gap. USAGE (client billing) in its `finally`: the text
+    // reached the customer, so its segments bill even when that write throws
+    // into the catch below; recordUsageSafely never throws, so it cannot
+    // replace that write's error either. This one leg covers both callers
+    // (finishCall and the handoff-result route).
+    try {
+      await updateMessageStatus(db, accountId, messageId, "sent",
+        { providerMessageId }, ACTOR_ID, ACTOR_TYPE);
+    } finally {
+      if (smsBillable(provider)) {
+        await recordUsageSafely(db, {
+          accountId, meter: "sms", quantity: segmentsFor(body).segments,
+          occurredAt: new Date(), sourceRef: `message:${messageId}`,
+        }, label);
+      }
     }
-    await updateMessageStatus(db, accountId, messageId, "sent",
-      { providerMessageId }, ACTOR_ID, ACTOR_TYPE);
   } catch (e) {
     console.error(`${label}: text-back failed: ${String(e)}`);
   }

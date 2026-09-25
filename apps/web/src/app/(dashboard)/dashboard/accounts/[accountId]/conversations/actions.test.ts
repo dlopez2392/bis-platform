@@ -379,7 +379,13 @@ describe("sendSmsAction — usage (client billing)", () => {
     expect(recordUsageMock).not.toHaveBeenCalled();
   });
 
-  it("the usage row lands even when the final 'sent' write throws (mutation: record after that write → FAILS)", async () => {
+  it("the 'sent' write, which stores the provider id the delivery webhook correlates against, comes straight after the send, BEFORE the usage write (mutation: record usage before the 'sent' write → call order FAILS)", async () => {
+    await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }));
+    expect(updateMessageStatusMock.mock.calls.map((c) => c[3])).toEqual(["sent"]);
+    expect(updateMessageStatusMock.mock.invocationCallOrder[0]!).toBeLessThan(recordUsageMock.mock.invocationCallOrder[0]!);
+  });
+
+  it("the usage row lands even when the final 'sent' write throws, and that write's error is what rejects (mutation: record after that write outside its finally → FAILS)", async () => {
     updateMessageStatusMock.mockRejectedValue(new Error("db down"));
     await expect(sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }))).rejects.toThrow("db down");
     expect(recordUsageMock).toHaveBeenCalledTimes(1);

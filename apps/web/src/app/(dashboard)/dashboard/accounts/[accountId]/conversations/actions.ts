@@ -180,6 +180,12 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
     throw e;
   }
 
+  // The `sent` write FIRST, straight after the send: it stores the provider
+  // id the delivery webhook correlates against, and a webhook that lands
+  // before it finds no row and is lost for good, so nothing may sit in that
+  // gap. It is allowed to throw (the action rejects), so the usage write
+  // sits in its `finally`, where a delivered text still bills.
+  //
   // USAGE (client billing): the text is out the door to the customer, so its
   // segments bill. On serviceDb(), not `db`: 0051 lets only service_role
   // write usage_events (a client must not be able to write, or skip, its own
@@ -187,16 +193,18 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
   // automations/actions.ts uses for its service-only table. The account is
   // the one requireAccountAccess passed above and the message id is the row
   // this action just wrote. Passed as a GETTER so a missing service key is
-  // caught inside recordUsageSafely too. BEFORE the `sent` write below, which
-  // is allowed to throw and must not take a delivered text's usage with it.
-  if (smsBillable(provider)) {
-    await recordUsageSafely(() => serviceDb(), {
-      accountId, meter: "sms", quantity: segmentsFor(body).segments,
-      occurredAt: new Date(), sourceRef: `message:${messageId}`,
-    }, `sendSmsAction ${messageId}`);
+  // caught inside recordUsageSafely too; it never throws, so it cannot
+  // replace the `sent` write's error.
+  try {
+    await updateMessageStatus(db, accountId, messageId, "sent", { providerMessageId }, userId);
+  } finally {
+    if (smsBillable(provider)) {
+      await recordUsageSafely(() => serviceDb(), {
+        accountId, meter: "sms", quantity: segmentsFor(body).segments,
+        occurredAt: new Date(), sourceRef: `message:${messageId}`,
+      }, `sendSmsAction ${messageId}`);
+    }
   }
-
-  await updateMessageStatus(db, accountId, messageId, "sent", { providerMessageId }, userId);
 
   revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
   revalidatePath(`/dashboard/accounts/${accountId}/contacts/${contactId}`);
