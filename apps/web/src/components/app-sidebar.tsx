@@ -24,6 +24,7 @@ import {
   Zap,
   ShieldAlert,
   Activity,
+  CreditCard,
   type LucideIcon,
 } from "lucide-react";
 import { AccountSwitcher, type AccountOption } from "@/components/account-switcher";
@@ -75,6 +76,8 @@ const NAV_ICONS: Record<NavIconKey, LucideIcon> = {
   // `ShieldAlert` rather than `Shield`: this screen is not a security
   // setting, it is a list of things that were turned away.
   screened: ShieldAlert,
+  // `CreditCard`: the screen is what clients are charged, not a report.
+  plans: CreditCard,
 };
 
 // Active when pathname matches href exactly, or is nested under it (href + "/…").

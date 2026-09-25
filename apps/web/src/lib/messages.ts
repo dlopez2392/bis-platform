@@ -28,6 +28,7 @@ export const m = {
   "nav.setup": "Setup",
   "nav.accounts": "Companies",
   "nav.blueprints": "Blueprints",
+  "nav.plans": "Plans",
   // Work Queue Task 6 — the agency-wide queue, top level beside Companies
   // and Blueprints. "Work queue" rather than reusing "To do" (nav.tasks):
   // that label already names the per-account screen one level down, and the

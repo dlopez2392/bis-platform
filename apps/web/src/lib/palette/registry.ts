@@ -63,6 +63,7 @@ const NAV_KEYWORDS: Record<string, string[]> = {
   "/dashboard/blueprints": ["templates"],
   "/dashboard/numbers": ["phone", "telnyx", "did", "line", "inventory", "reassign"],
   "/dashboard/screened": ["refused", "blocked", "spam", "declined", "rejected", "turned away"],
+  "/dashboard/plans": ["billing", "pricing", "stripe", "subscription", "tier", "allowance", "overage"],
 };
 
 function keywordsFor(href: string, base: string | null): string[] {

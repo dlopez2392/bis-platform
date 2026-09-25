@@ -25,7 +25,8 @@ export type NavIconKey =
   | "numbers"
   | "checklist"
   | "work"
-  | "screened";
+  | "screened"
+  | "plans";
 
 export type NavItemSpec = {
   href: string;
@@ -78,6 +79,11 @@ export function buildNavGroups(base: string | null, isAgency: boolean): NavGroup
           // construction (requireAgency, first line) and unreadable by
           // `authenticated` at the grant level besides.
           { href: "/dashboard/screened", labelKey: "nav.screened", iconKey: "screened" },
+          // Client billing plans — /dashboard/plans, agency-only by
+          // construction (requireAgency, first line of the page and of every
+          // action) and unreadable by a client at the RLS level besides
+          // (0051: plans_agency_read). Appended: "add a line, never reorder".
+          { href: "/dashboard/plans", labelKey: "nav.plans", iconKey: "plans" },
         ],
       },
     ];
