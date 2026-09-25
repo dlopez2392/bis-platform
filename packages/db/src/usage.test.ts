@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   recordUsage, reportableFrom, listBilledUsageAccounts, listReportableUsage, staleUsageAccountIds, usageRangeFilter,
-  USAGE_REPORT_WINDOW_MS, USAGE_STALE_AFTER_MS, USAGE_FUTURE_GRACE_MS, USAGE_ACCOUNTS_PER_EXPIRED_READ,
+  USAGE_REPORT_WINDOW_MS, USAGE_STALE_AFTER_MS, USAGE_FUTURE_GRACE_MS,
+  USAGE_ACCOUNTS_PER_READ, USAGE_ACCOUNTS_PER_BOUNDED_READ,
   type BilledUsageAccount, type UsageInput,
 } from "./usage";
 
@@ -122,17 +123,33 @@ describe("usageRangeFilter: the account-id guard", () => {
 });
 
 describe("URL size: the per-account filter must fit in one request", () => {
-  it("countExpiredUsage's chunk (USAGE_ACCOUNTS_PER_EXPIRED_READ accounts, 3 filter parts each — a floor AND a ceiling) stays under a safe URL bound at the longest an id and a timestamp can be: a uuid and a microsecond, `+00:00`-suffixed occurred_at (mutation: raise USAGE_ACCOUNTS_PER_EXPIRED_READ to 50 → the same filter shape encodes past 9,000 characters, FAILS)", () => {
+  it("the shared three-part chunk (USAGE_ACCOUNTS_PER_BOUNDED_READ accounts, 3 filter parts each — a floor AND a ceiling — used by both countExpiredUsage's expired-row window and listReportableUsage's future-grace-bounded range) stays under a safe URL bound at the longest an id and a timestamp can be: a uuid and a microsecond, `+00:00`-suffixed occurred_at (mutation: raise USAGE_ACCOUNTS_PER_BOUNDED_READ to 50 → the same filter shape encodes past 9,000 characters, FAILS)", () => {
     const maxTs = "2026-09-20T10:00:00.123456+00:00";
-    const ranges = Array.from({ length: USAGE_ACCOUNTS_PER_EXPIRED_READ }, () => ({
+    const ranges = Array.from({ length: USAGE_ACCOUNTS_PER_BOUNDED_READ }, () => ({
       accountId: randomUUID(), fromIso: maxTs, beforeIso: maxTs,
     }));
     const encoded = encodeURIComponent(usageRangeFilter(ranges));
     expect(encoded.length).toBeLessThan(6000);
   });
+
+  it("listReportableUsage chunks its OWN read (every range it builds carries a beforeIso ceiling, so it is the three-part shape) by USAGE_ACCOUNTS_PER_BOUNDED_READ, not the two-part USAGE_ACCOUNTS_PER_READ — proven by capturing the filter this function itself sends, not just the constant's raw value (mutation: chunk this read by the 50-account USAGE_ACCOUNTS_PER_READ constant → all 50 accounts land in ONE request, whose encoded filter is past 9,000 characters, FAILS)", async () => {
+    const maxTs = "2026-09-20T10:00:00.123456+00:00";
+    const accounts: BilledUsageAccount[] = Array.from({ length: USAGE_ACCOUNTS_PER_READ }, () => ({
+      accountId: randomUUID(), stripeCustomerId: "cus_x", billingStartedAt: maxTs,
+    }));
+    const filters: string[] = [];
+    const chain = {
+      select: () => chain, is: () => chain, order: () => chain,
+      or: (f: string) => { filters.push(f); return chain; },
+      limit: async () => ({ data: [], error: null }),
+    };
+    await listReportableUsage({ from: () => chain } as unknown as SupabaseClient, accounts, NOW, 10);
+    expect(filters).toHaveLength(Math.ceil(USAGE_ACCOUNTS_PER_READ / USAGE_ACCOUNTS_PER_BOUNDED_READ));
+    for (const f of filters) expect(encodeURIComponent(f).length).toBeLessThan(6000);
+  });
 });
 
-describe("the per-account reads: bounded, one request per 50 accounts", () => {
+describe("the per-account reads: bounded, one request per group of accounts", () => {
   it("usageRangeFilter: one and() per account with ITS OWN range, every timestamp double-quoted — checked by exact string comparison, since PostgREST's own acceptance of the quoted form is proved live, not here (mutation: drop the quotes around a timestamp → the built string no longer matches the expected literal, FAILS; one shared floor for every account → FAILS)", () => {
     expect(usageRangeFilter([
       { accountId: uuidFor(1), fromIso: "2026-09-20T10:00:00.123456+00:00" },
@@ -143,12 +160,17 @@ describe("the per-account reads: bounded, one request per 50 accounts", () => {
     );
   });
 
-  it("listReportableUsage reads 50 accounts at a time and merges the reads OLDEST FIRST across accounts, at most `limit` (mutation: concatenate the reads in read order → FAILS; one read naming all 120 accounts → FAILS)", async () => {
+  it("listReportableUsage reads accounts in groups of USAGE_ACCOUNTS_PER_BOUNDED_READ and merges the reads OLDEST FIRST across accounts, at most `limit` (mutation: concatenate the reads in read order → FAILS; one read naming all 120 accounts → FAILS)", async () => {
     const accounts = Array.from({ length: 120 }, (_, i) => billed(uuidFor(i)));
     const filters: string[] = [];
+    // 120 accounts chunked by USAGE_ACCOUNTS_PER_BOUNDED_READ (25) is 5 groups:
+    // [0-24],[25-49],[50-74],[75-99],[100-119]. uuidFor(0) lands in group 0,
+    // uuidFor(60) in group 2, uuidFor(110) in group 4.
     const perRead = [
       [dbRow("u_late", uuidFor(0), "2026-09-25T12:00:00+00:00")],
+      [],
       [dbRow("u_early", uuidFor(60), "2026-09-24T12:00:00+00:00")],
+      [],
       [dbRow("u_mid", uuidFor(110), "2026-09-25T01:00:00+00:00")],
     ];
     const chain = {
@@ -157,7 +179,7 @@ describe("the per-account reads: bounded, one request per 50 accounts", () => {
       limit: async () => ({ data: perRead[filters.length - 1] ?? [], error: null }),
     };
     const rows = await listReportableUsage({ from: () => chain } as unknown as SupabaseClient, accounts, NOW, 2);
-    expect(filters.map((f) => f.split("and(").length - 1)).toEqual([50, 50, 20]);
+    expect(filters.map((f) => f.split("and(").length - 1)).toEqual([25, 25, 25, 25, 20]);
     expect(rows.map((r) => r.id)).toEqual(["u_early", "u_mid"]);
   });
 

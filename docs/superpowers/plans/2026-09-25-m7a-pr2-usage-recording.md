@@ -53,7 +53,8 @@ Assumptions (not verified; Task 10's e2e run, reading Stripe's aggregate, is the
 - A11. The same `identifier` under a DIFFERENT idempotency key (the only way BIS sends one twice: its key expired after 24 hours, or the account's customer id changed) is accepted and deduplicated, accepted and COUNTED AGAIN, or refused with a `StripeInvalidRequestError`. **Unproven; the spec's "Stripe dedupes by identifier" (section 4) is relied on NOWHERE in this plan until Task 10 observes it.** `FakeGateway` therefore assumes the costlier answer (a second event, Task 7). Task 10 records which of the three (or "unproven", if the summary does not settle in time) as a test annotation, and ANY outcome other than "deduplicated as expected" blocks PR-3 from creating the first billed account (Task 11 handoff).
 - A16. Stripe's meter event summaries reflect an accepted event within 120 seconds. Not documented as a bound; Task 10 polls every 5 s for up to 120 s per phase, fails when the sum is WRONG (more than a correct dedupe implies, or a value no outcome explains), and when it simply has not appeared, passes with a `::warning` and an "unproven" annotation (a PR-3 blocker, not a PR-2 one).
 - A17. Stripe aggregates one customer's events on one meter in the order it accepted them, so once a sentinel event sent AFTER the A11 probe shows in the sum, the probe has been counted too (or deduplicated). Task 10 re-reads 30 s after the sentinel appears to narrow the gap; it cannot close it.
-- A18. **Superseded by measurement (review corrections applied 2026-09-25; see Task 1's report).** The "about 100 characters per account" estimate was wrong at uuid length: a node measurement of `usageRangeFilter`'s OWN output, encoded as a query string, at maximum id/timestamp length (a uuid; a microsecond, `+00:00`-suffixed `occurred_at`), gives ~6,150 characters for 50 accounts on a two-part (`account_id.eq` + `occurred_at.gte`) filter — still under postgrest-js's 8,000-character warning, so `USAGE_ACCOUNTS_PER_READ = 50` stands for `listReportableUsage`/`staleUsageAccountIds` — but ~9,350 characters for 50 accounts on the THREE-part filter `countExpiredUsage` builds (it also sets `beforeIso`), which is past that warning. `countExpiredUsage` therefore chunks by its own, smaller `USAGE_ACCOUNTS_PER_EXPIRED_READ = 25` (~4,700 characters at 25, comfortably under a 6,000-character bound), unit-pinned in `usage.test.ts`. Today there are a handful of accounts and one read either way.
+- A18. **Superseded twice (review corrections 2026-09-25; see Task 1's report, Fix 1, and Fix 2/A20 below).** The "about 100 characters per account" estimate was wrong at uuid length: a node measurement of `usageRangeFilter`'s OWN output, encoded as a query string, at maximum id/timestamp length (a uuid; a microsecond, `+00:00`-suffixed `occurred_at`), gives ~6,150 characters for 50 accounts on a two-part (`account_id.eq` + `occurred_at.gte`) filter — still under postgrest-js's 8,000-character warning, so `USAGE_ACCOUNTS_PER_READ = 50` stands for `staleUsageAccountIds` (the only remaining two-part caller after A20) — but ~9,350 characters for 50 accounts on the THREE-part filter `countExpiredUsage` builds (it also sets `beforeIso`), which is past that warning. `countExpiredUsage` therefore chunks by its own, smaller constant (~4,700 characters at 25, comfortably under a 6,000-character bound), unit-pinned in `usage.test.ts`. Today there are a handful of accounts and one read either way. Fix 1's own first version of this note named that smaller constant `USAGE_ACCOUNTS_PER_EXPIRED_READ`; A20 renamed it and gave it a second caller.
+- A20. **Fix 2 (review correction, 2026-09-25).** Fix 1 added a `beforeIso` (the future-grace ceiling) to EVERY range `listReportableUsage` builds, making its filter three-part too, but left it chunking by the two-part `USAGE_ACCOUNTS_PER_READ` (50) — a mismatch A18's own doc comment already warned against. Measured with the real `usageRangeFilter` at 50 accounts, max-length uuid and `+00:00`-suffixed microsecond timestamp on both `fromIso` and `beforeIso`: encoded length 9,347 (all-`beforeIso`-equals-`fromIso` shape; the finding's own measurement using a realistic shorter `untilIso` was 8,747) — over the 6,000-character bound this file enforces and past postgrest-js's 8,000-character warning either way. Fixed by renaming `USAGE_ACCOUNTS_PER_EXPIRED_READ` to `USAGE_ACCOUNTS_PER_BOUNDED_READ` (it now has two callers: `countExpiredUsage` and `listReportableUsage`) and chunking `listReportableUsage` by it instead. `staleUsageAccountIds` was checked and is unaffected: its ranges never set `beforeIso`, so it stays two-part and correctly on `USAGE_ACCOUNTS_PER_READ`. Two new/changed unit tests in `usage.test.ts` capture the filter `listReportableUsage` itself sends (not just the constant's raw value) and assert it stays under 6,000 characters encoded.
 - A19. A meter event round trip takes about 0.2-0.3 s (not measured), so 200 sequential sends take about 40-60 s. The code does not rely on it: the budget (G4) bounds the pass whatever a round trip costs.
 - A12. A 200 from `meterEvents.create` means Stripe RECEIVED the event, not that it will bill it (validation is asynchronous). `reported_at` therefore means "Stripe received it". PR-4's nightly reconciliation is the backstop for events Stripe later drops.
 - A13. `StripeInvalidRequestError` and `StripeIdempotencyError` are about the one request; every other failure (auth, permission, rate limit, connection, 5xx) would repeat for every row this tick.
@@ -82,9 +83,9 @@ Assumptions (not verified; Task 10's e2e run, reading Stripe's aggregate, is the
 12 files created, 23 modified (35 total).
 
 **packages/db**
-- Create `packages/db/src/usage.ts`: `recordUsage`, `reportableFrom`, `usageRangeFilter`, `listBilledUsageAccounts`, `listReportableUsage`, `markUsageReported`, `staleUsageAccountIds`, `countExpiredUsage`, `listAccountsWithStaleUsage`, constants and types. Every `usage_events` read is one request per 50 accounts.
+- Create `packages/db/src/usage.ts`: `recordUsage`, `reportableFrom`, `usageRangeFilter`, `listBilledUsageAccounts`, `listReportableUsage`, `markUsageReported`, `staleUsageAccountIds`, `countExpiredUsage`, `listAccountsWithStaleUsage`, constants and types. Every `usage_events` read is one request per `USAGE_ACCOUNTS_PER_READ` (50, two-part filters) or `USAGE_ACCOUNTS_PER_BOUNDED_READ` (25, three-part filters — see A20) accounts.
 - Modify `packages/db/src/index.ts`: export them.
-- Create `packages/db/src/usage.test.ts` (13 tests, no database; runs in CI only, like the whole db suite).
+- Create `packages/db/src/usage.test.ts` (14 tests, no database; runs in CI only, like the whole db suite).
 - Create `packages/db/src/test/usage.test.ts` (8 tests, live through `serviceDb()`, CI only).
 
 **apps/web: recording**
@@ -115,7 +116,7 @@ Assumptions (not verified; Task 10's e2e run, reading Stripe's aggregate, is the
 **e2e**
 - Create `apps/web/e2e/usage-meter.spec.ts` (1 test).
 
-**New test count: 85** = db usage 9 + db live usage 7 + web billing/usage 4 + call-state 1 + finish-call 7 + textback 5 + send-sms 6 + composer actions 6 + concierge route 5 + stripe-gateway 11 + meter-event-failure 1 + usage-report 14 + usage-stale-banner 5 + work page 3 + e2e 1. `it.each` is not used; each `it` is one test.
+**New test count: 91** (revised from 85 — review corrections applied 2026-09-25, Fix 1 and Fix 2) = db usage 14 + db live usage 8 + web billing/usage 4 + call-state 1 + finish-call 7 + textback 5 + send-sms 6 + composer actions 6 + concierge route 5 + stripe-gateway 11 + meter-event-failure 1 + usage-report 14 + usage-stale-banner 5 + work page 3 + e2e 1. `it.each` is not used; each `it` is one test.
 
 Baselines read on `main` 5dac86a on 2026-09-25 (`pnpm --filter web exec vitest run <file>`): stripe-gateway 45, call-state 20, finish-call 85, send-sms 10, composer actions 14, concierge route 43, sentinel 5, cron route 30, work page 15.
 
@@ -157,7 +158,7 @@ Commands run from the repo root `C:\Users\danlo\bis-platform` (Git Bash).
   - `type UsageInput = { accountId: string; meter: MeterKey; quantity: number; occurredAt: Date; sourceRef: string }`
   - `type UsageRow = { id: string; accountId: string; meter: MeterKey; quantity: number; occurredAt: string; sourceRef: string; reportedAt: string | null; createdAt: string }`
   - `type BilledUsageAccount = { accountId: string; stripeCustomerId: string; billingStartedAt: string }`
-  - `USAGE_ACCOUNTS_PER_READ = 50`, `USAGE_ACCOUNTS_PER_EXPIRED_READ = 25` (smaller: its filter carries a `beforeIso` on every range, three parts per account instead of two — see A18), `USAGE_FUTURE_GRACE_MS = 5 * 60 * 1000`; `type UsageRange = { accountId: string; fromIso: string; beforeIso?: string }`
+  - `USAGE_ACCOUNTS_PER_READ = 50` (two-part filter, no `beforeIso` — `staleUsageAccountIds` only), `USAGE_ACCOUNTS_PER_BOUNDED_READ = 25` (smaller: its filter carries a `beforeIso` on EVERY range, three parts per account instead of two — `countExpiredUsage`'s expired-row window AND `listReportableUsage`'s future-grace-bounded range both need it, since Fix 2 added a `beforeIso` to every range `listReportableUsage` builds — see A18 and A20), `USAGE_FUTURE_GRACE_MS = 5 * 60 * 1000`; `type UsageRange = { accountId: string; fromIso: string; beforeIso?: string }`
   - `recordUsage(db: SupabaseClient, input: UsageInput): Promise<"recorded" | "duplicate">`
   - `reportableFrom(billingStartedAt: string, now: Date): string`
   - `usageRangeFilter(ranges: readonly UsageRange[]): string` (the PostgREST `.or()` string)
@@ -167,7 +168,7 @@ Commands run from the repo root `C:\Users\danlo\bis-platform` (Git Bash).
   - `staleUsageAccountIds(db: SupabaseClient, accounts: readonly BilledUsageAccount[], now: Date): Promise<string[]>`
   - `countExpiredUsage(db: SupabaseClient, accounts: readonly BilledUsageAccount[], now: Date): Promise<number>`
   - `listAccountsWithStaleUsage(db: SupabaseClient, now: Date): Promise<string[]>`
-  - Every read over `usage_events` is ONE request per `USAGE_ACCOUNTS_PER_READ` accounts, never one per account (G7, G8).
+  - Every read over `usage_events` is ONE request per `USAGE_ACCOUNTS_PER_READ` (two-part filters) or `USAGE_ACCOUNTS_PER_BOUNDED_READ` (three-part filters, a `beforeIso` on every range) accounts, never one per account (G7, G8).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -179,7 +180,8 @@ import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   recordUsage, reportableFrom, listBilledUsageAccounts, listReportableUsage, staleUsageAccountIds, usageRangeFilter,
-  USAGE_REPORT_WINDOW_MS, USAGE_STALE_AFTER_MS, USAGE_FUTURE_GRACE_MS, USAGE_ACCOUNTS_PER_EXPIRED_READ,
+  USAGE_REPORT_WINDOW_MS, USAGE_STALE_AFTER_MS, USAGE_FUTURE_GRACE_MS,
+  USAGE_ACCOUNTS_PER_READ, USAGE_ACCOUNTS_PER_BOUNDED_READ,
   type BilledUsageAccount, type UsageInput,
 } from "./usage";
 
@@ -298,17 +300,33 @@ describe("usageRangeFilter: the account-id guard", () => {
 });
 
 describe("URL size: the per-account filter must fit in one request", () => {
-  it("countExpiredUsage's chunk (USAGE_ACCOUNTS_PER_EXPIRED_READ accounts, 3 filter parts each — a floor AND a ceiling) stays under a safe URL bound at the longest an id and a timestamp can be: a uuid and a microsecond, `+00:00`-suffixed occurred_at (mutation: raise USAGE_ACCOUNTS_PER_EXPIRED_READ to 50 → the same filter shape encodes past 9,000 characters, FAILS)", () => {
+  it("the shared three-part chunk (USAGE_ACCOUNTS_PER_BOUNDED_READ accounts, 3 filter parts each — a floor AND a ceiling — used by both countExpiredUsage's expired-row window and listReportableUsage's future-grace-bounded range) stays under a safe URL bound at the longest an id and a timestamp can be: a uuid and a microsecond, `+00:00`-suffixed occurred_at (mutation: raise USAGE_ACCOUNTS_PER_BOUNDED_READ to 50 → the same filter shape encodes past 9,000 characters, FAILS)", () => {
     const maxTs = "2026-09-20T10:00:00.123456+00:00";
-    const ranges = Array.from({ length: USAGE_ACCOUNTS_PER_EXPIRED_READ }, () => ({
+    const ranges = Array.from({ length: USAGE_ACCOUNTS_PER_BOUNDED_READ }, () => ({
       accountId: randomUUID(), fromIso: maxTs, beforeIso: maxTs,
     }));
     const encoded = encodeURIComponent(usageRangeFilter(ranges));
     expect(encoded.length).toBeLessThan(6000);
   });
+
+  it("listReportableUsage chunks its OWN read (every range it builds carries a beforeIso ceiling, so it is the three-part shape) by USAGE_ACCOUNTS_PER_BOUNDED_READ, not the two-part USAGE_ACCOUNTS_PER_READ — proven by capturing the filter this function itself sends, not just the constant's raw value (mutation: chunk this read by the 50-account USAGE_ACCOUNTS_PER_READ constant → all 50 accounts land in ONE request, whose encoded filter is past 9,000 characters, FAILS)", async () => {
+    const maxTs = "2026-09-20T10:00:00.123456+00:00";
+    const accounts: BilledUsageAccount[] = Array.from({ length: USAGE_ACCOUNTS_PER_READ }, () => ({
+      accountId: randomUUID(), stripeCustomerId: "cus_x", billingStartedAt: maxTs,
+    }));
+    const filters: string[] = [];
+    const chain = {
+      select: () => chain, is: () => chain, order: () => chain,
+      or: (f: string) => { filters.push(f); return chain; },
+      limit: async () => ({ data: [], error: null }),
+    };
+    await listReportableUsage({ from: () => chain } as unknown as SupabaseClient, accounts, NOW, 10);
+    expect(filters).toHaveLength(Math.ceil(USAGE_ACCOUNTS_PER_READ / USAGE_ACCOUNTS_PER_BOUNDED_READ));
+    for (const f of filters) expect(encodeURIComponent(f).length).toBeLessThan(6000);
+  });
 });
 
-describe("the per-account reads: bounded, one request per 50 accounts", () => {
+describe("the per-account reads: bounded, one request per group of accounts", () => {
   it("usageRangeFilter: one and() per account with ITS OWN range, every timestamp double-quoted — checked by exact string comparison, since PostgREST's own acceptance of the quoted form is proved live, not here (mutation: drop the quotes around a timestamp → the built string no longer matches the expected literal, FAILS; one shared floor for every account → FAILS)", () => {
     expect(usageRangeFilter([
       { accountId: uuidFor(1), fromIso: "2026-09-20T10:00:00.123456+00:00" },
@@ -319,12 +337,17 @@ describe("the per-account reads: bounded, one request per 50 accounts", () => {
     );
   });
 
-  it("listReportableUsage reads 50 accounts at a time and merges the reads OLDEST FIRST across accounts, at most `limit` (mutation: concatenate the reads in read order → FAILS; one read naming all 120 accounts → FAILS)", async () => {
+  it("listReportableUsage reads accounts in groups of USAGE_ACCOUNTS_PER_BOUNDED_READ and merges the reads OLDEST FIRST across accounts, at most `limit` (mutation: concatenate the reads in read order → FAILS; one read naming all 120 accounts → FAILS)", async () => {
     const accounts = Array.from({ length: 120 }, (_, i) => billed(uuidFor(i)));
     const filters: string[] = [];
+    // 120 accounts chunked by USAGE_ACCOUNTS_PER_BOUNDED_READ (25) is 5 groups:
+    // [0-24],[25-49],[50-74],[75-99],[100-119]. uuidFor(0) lands in group 0,
+    // uuidFor(60) in group 2, uuidFor(110) in group 4.
     const perRead = [
       [dbRow("u_late", uuidFor(0), "2026-09-25T12:00:00+00:00")],
+      [],
       [dbRow("u_early", uuidFor(60), "2026-09-24T12:00:00+00:00")],
+      [],
       [dbRow("u_mid", uuidFor(110), "2026-09-25T01:00:00+00:00")],
     ];
     const chain = {
@@ -333,7 +356,7 @@ describe("the per-account reads: bounded, one request per 50 accounts", () => {
       limit: async () => ({ data: perRead[filters.length - 1] ?? [], error: null }),
     };
     const rows = await listReportableUsage({ from: () => chain } as unknown as SupabaseClient, accounts, NOW, 2);
-    expect(filters.map((f) => f.split("and(").length - 1)).toEqual([50, 50, 20]);
+    expect(filters.map((f) => f.split("and(").length - 1)).toEqual([25, 25, 25, 25, 20]);
     expect(rows.map((r) => r.id)).toEqual(["u_early", "u_mid"]);
   });
 
@@ -376,7 +399,7 @@ describe("the per-account reads: bounded, one request per 50 accounts", () => {
 });
 ```
 
-Count: **13 tests** (revised from 9: +2 for the account-id uuid guard, +1 for the URL-size bound on `USAGE_ACCOUNTS_PER_EXPIRED_READ`, +1 for `listReportableUsage`'s future-grace upper bound — review corrections applied 2026-09-25, see Task 1's report).
+Count: **14 tests** (revised from 9: +2 for the account-id uuid guard, +1 for the URL-size bound on the shared bounded-chunk constant, +1 for `listReportableUsage`'s future-grace upper bound, +1 for `listReportableUsage`'s OWN chunking staying under the URL bound — review corrections applied 2026-09-25, see Task 1's report, Fix 1 and Fix 2).
 
 Create `packages/db/src/test/usage.test.ts`:
 
@@ -774,27 +797,33 @@ export async function listBilledUsageAccounts(db: SupabaseClient): Promise<Bille
 
 /**
  * Accounts per read for a filter with TWO parts per account (`account_id.eq`
- * and `occurred_at.gte` — listReportableUsage, staleUsageAccountIds).
- * Measured with node (usage.test.ts), at the longest an id and a timestamp
- * can be (a uuid; a microsecond, `+00:00`-suffixed `occurred_at`): 50 such
- * accounts encode to about 6,150 characters, under postgrest-js's own
- * 8,000-character warning and a common 8 KB request-line limit. A filter
- * with a THIRD part per account (a `beforeIso` on every range, like
- * countExpiredUsage's window) needs its OWN smaller
- * USAGE_ACCOUNTS_PER_EXPIRED_READ below — at 50 accounts that shape measures
- * about 9,350 characters, already past the 8,000-character warning.
+ * and `occurred_at.gte` — staleUsageAccountIds is the only caller: it never
+ * sets a `beforeIso`, so its ranges stay two-part). Measured with node
+ * (usage.test.ts), at the longest an id and a timestamp can be (a uuid; a
+ * microsecond, `+00:00`-suffixed `occurred_at`): 50 such accounts encode to
+ * about 6,150 characters, under postgrest-js's own 8,000-character warning
+ * and a common 8 KB request-line limit. A filter with a THIRD part per
+ * account (a `beforeIso` on every range) needs its OWN smaller
+ * USAGE_ACCOUNTS_PER_BOUNDED_READ below — at 50 accounts that shape measures
+ * about 9,350 characters, already past the 8,000-character warning. Do not
+ * reuse this constant for a caller that sets `beforeIso` on every range
+ * (listReportableUsage's own future-grace ceiling is exactly that shape —
+ * see USAGE_ACCOUNTS_PER_BOUNDED_READ).
  */
 export const USAGE_ACCOUNTS_PER_READ = 50;
 
 /**
  * Accounts per read for a filter that carries BOTH a floor and a ceiling on
- * every range (three `and(...)` parts per account) — countExpiredUsage's
- * window is the only caller today. Half of USAGE_ACCOUNTS_PER_READ: measured
- * (usage.test.ts) at 25 accounts, maximum id/timestamp length, the encoded
- * filter is about 4,700 characters, comfortably under the 6,000-character
- * bound that test pins.
+ * every range (three `and(...)` parts per account): countExpiredUsage's
+ * expired-row window, and listReportableUsage's per-account range now that
+ * every range also carries the USAGE_FUTURE_GRACE_MS ceiling. Half of
+ * USAGE_ACCOUNTS_PER_READ: measured (usage.test.ts) at 25 accounts, maximum
+ * id/timestamp length, the encoded filter is about 4,700 characters,
+ * comfortably under the 6,000-character bound that test pins — chunking
+ * either of those two reads by USAGE_ACCOUNTS_PER_READ (50) instead measures
+ * past 9,000, over postgrest-js's 8,000-character warning.
  */
-export const USAGE_ACCOUNTS_PER_EXPIRED_READ = 25;
+export const USAGE_ACCOUNTS_PER_BOUNDED_READ = 25;
 
 /** One account's slice of occurred_at: from `fromIso` (inclusive), before
  *  `beforeIso` (exclusive) when given. */
@@ -856,9 +885,11 @@ const oldestFirst = (x: UsageRow, y: UsageRow): number =>
  * and none dated more than USAGE_FUTURE_GRACE_MS past `now` (a row further
  * in the future than that stays unreported rather than being sent — Stripe
  * would silently drop it — and stamped reported by markUsageReported, which
- * would bury it for good). One read per USAGE_ACCOUNTS_PER_READ accounts,
- * each ordered and limited in SQL, then merged here, so the result is the
- * true oldest `limit` rows.
+ * would bury it for good). One read per USAGE_ACCOUNTS_PER_BOUNDED_READ
+ * accounts — every range here carries a `beforeIso` (the future-grace
+ * ceiling), so it is the three-part filter shape, not
+ * USAGE_ACCOUNTS_PER_READ's two-part one — each ordered and limited in SQL,
+ * then merged here, so the result is the true oldest `limit` rows.
  *
  * Oldest first across accounts is the fairness rule (G4): no account waits
  * behind another's place in a list, and a backlog drains in the order it
@@ -871,7 +902,7 @@ export async function listReportableUsage(
   if (!Number.isSafeInteger(limit) || limit <= 0 || accounts.length === 0) return [];
   const untilIso = new Date(now.getTime() + USAGE_FUTURE_GRACE_MS).toISOString();
   const rows: UsageRow[] = [];
-  for (const group of inGroups(accounts, USAGE_ACCOUNTS_PER_READ)) {
+  for (const group of inGroups(accounts, USAGE_ACCOUNTS_PER_BOUNDED_READ)) {
     const ranges = reportableRanges(group, now).map((r) => ({ ...r, beforeIso: untilIso }));
     const { data, error } = await db.from("usage_events").select(USAGE_COLUMNS)
       .is("reported_at", null)
@@ -947,7 +978,7 @@ export async function staleUsageAccountIds(
  * Unreported rows of billed accounts that fell OUT of the window: from the
  * billing start to now − 34 days. Never sent (Stripe would drop them without
  * an error), counted so the cron can say so. Only accounts billed before
- * that floor can have any; one count per USAGE_ACCOUNTS_PER_EXPIRED_READ of
+ * that floor can have any; one count per USAGE_ACCOUNTS_PER_BOUNDED_READ of
  * them (this filter carries a `beforeIso` on every range, so it needs the
  * smaller chunk — see that constant).
  */
@@ -958,7 +989,7 @@ export async function countExpiredUsage(
   const floorIso = new Date(floorMs).toISOString();
   const old = accounts.filter((a) => Date.parse(a.billingStartedAt) < floorMs);
   let total = 0;
-  for (const group of inGroups(old, USAGE_ACCOUNTS_PER_EXPIRED_READ)) {
+  for (const group of inGroups(old, USAGE_ACCOUNTS_PER_BOUNDED_READ)) {
     const { count, error } = await db.from("usage_events").select("id", { count: "exact", head: true })
       .is("reported_at", null)
       .or(usageRangeFilter(group.map((a) => ({ accountId: a.accountId, fromIso: a.billingStartedAt, beforeIso: floorIso }))));
@@ -986,7 +1017,7 @@ Append to the end of `packages/db/src/index.ts`:
 export { recordUsage, reportableFrom, usageRangeFilter, listBilledUsageAccounts, listReportableUsage,
          markUsageReported, staleUsageAccountIds, countExpiredUsage, listAccountsWithStaleUsage,
          USAGE_SOURCE_PREFIX, USAGE_REPORT_WINDOW_MS, USAGE_STALE_AFTER_MS, USAGE_ACCOUNTS_PER_READ,
-         USAGE_ACCOUNTS_PER_EXPIRED_READ, USAGE_FUTURE_GRACE_MS,
+         USAGE_ACCOUNTS_PER_BOUNDED_READ, USAGE_FUTURE_GRACE_MS,
          type UsageInput, type UsageRow, type UsageRange, type BilledUsageAccount } from "./usage";
 ```
 
@@ -3992,7 +4023,7 @@ git commit -m "test(e2e): Stripe test mode counts BIS's usage meter events once 
 
 - [ ] **Step 1: Confirm the new-test count**
 
-Expected new tests: db usage 13 (revised from 9 — review corrections applied 2026-09-25), db live usage 8 (revised from 7), billing/usage 4, call-state 1, finish-call 7, textback 5, send-sms 6, composer actions 6, concierge route 5, stripe-gateway 11, meter-event-failure 1, usage-report 14, usage-stale-banner 5, work page 3, e2e 1 = **90**. The reviewer re-counts from vitest's own output, never from this plan.
+Expected new tests: db usage 14 (revised from 9 — review corrections applied 2026-09-25, Fix 1 and Fix 2), db live usage 8 (revised from 7), billing/usage 4, call-state 1, finish-call 7, textback 5, send-sms 6, composer actions 6, concierge route 5, stripe-gateway 11, meter-event-failure 1, usage-report 14, usage-stale-banner 5, work page 3, e2e 1 = **91**. The reviewer re-counts from vitest's own output, never from this plan.
 
 Run: `pnpm --filter web exec vitest run src/lib/billing/usage.test.ts src/lib/billing/meter-event-failure.test.ts src/lib/voice/textback.test.ts src/lib/automations/passes/usage-report.test.ts src/components/usage-stale-banner.test.ts`
 Expected: `Tests  29 passed (29)` (4 + 1 + 5 + 14 + 5).
