@@ -22,7 +22,7 @@ Daily.co for video links.
 | `bis-automations` | sonnet | cron harness, every pass, weekly reports, website traffic, `automations.ts`/`weekly-report.ts`/`sites.ts` | adds a second scheduler |
 | `bis-crm` | sonnet | contacts, import/export, dedupe flags, pipeline, forms + `/f/[publicId]`, search, blueprints, checklist | mutates Test Client One |
 | `bis-frontend` | sonnet | tokens, shadcn components, theming engine, shell, dashboard, Branding, setup wizard shell, styleguide, copy catalogue | hard-codes a color |
-| `bis-platform` | opus | Clerk auth/tenancy, middleware, CI, hooks, Vercel config, env contract, tooling, runbooks, deploy verification | pushes to main |
+| `bis-platform` | opus | Clerk auth/tenancy, proxy (formerly middleware), CI, hooks, Vercel config, env contract, tooling, runbooks, deploy verification | pushes to main |
 | `bis-reviewer` | opus | two-stage review (spec, then quality) with empirical proof | edits or commits |
 | `bis-design-reviewer` | sonnet | DESIGN.md definition-of-done audit, measured on a running build | starts a build |
 | `bis-e2e-qa` | sonnet | Playwright suite, fixture discipline, the three gates, CI diagnosis | runs two gates at once |
