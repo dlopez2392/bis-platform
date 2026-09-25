@@ -156,3 +156,8 @@ export { deleteAccountCascade, ACCOUNT_OWNED_TABLES } from "./account-teardown";
 // here deletes accounts carrying it, and `createClientAccount` in apps/web
 // refuses to create one. See ./org-id.ts.
 export { TEST_ORG_ID_PREFIX, isTestOrgId } from "./org-id";
+
+// Client billing plans (0051) — the agency Plans page. See ./billing.ts.
+export { METER_KEYS, listPlans, getPlan, insertPlan, updatePlan, setPlanArchived, countBilledAccountsByPlan,
+         type MeterKey, type MeterAmounts, type PlanFeatures, type PlanPriceKey, type StripePriceIds,
+         type PlanTerms, type Plan, type PlanWrite } from "./billing";
