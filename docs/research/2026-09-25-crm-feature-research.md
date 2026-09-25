@@ -402,7 +402,70 @@ the integration).
 
 ## 7. What HubSpot and monday.com teach
 
-*[Pending Appendices A and B — to be filled from the HubSpot and monday.com inventories.]*
+Appendices A and B go through both products line by line — HubSpot's per-tier catalogue
+runs to about 850 rows. This section keeps what changes BIS's plan.
+
+### 7.1 Side by side, on the owner's three asks
+
+| | HubSpot | monday CRM | What BIS should do |
+|---|---|---|---|
+| **One screen per client** | Three-column record: properties left, summary and timeline centre, associations, attachments, Drive and SharePoint cards right. Free plan shows **only the last 30 days** of timeline | A widget grid ("item card") that an admin must design per board | HubSpot's layout, pre-built per industry, full history on every plan (§3.3) |
+| **Relationships** | Association labels ("Parent", "Billing payer") — **Professional and up** | Connect and mirror columns; accounts grouped by email domain | Typed relationships on every plan, shown on both records (§3.2) |
+| **Documents** | Four separate stores (files, attachments, sales documents, file properties) with limits from 20 MB to 2 GB; **files public on a CDN by default**; no expiry tracking | Files column with preview, annotations, zip download; versioning is a "trial feature"; 5–1,000 GB by plan | One private vault with typed categories, expiry, versioning and a required-documents checklist (§3.4, §7.2) |
+| **E-signature** | Quotes only, **Revenue Hub Professional**, 25 signatures per user per month, via Dropbox Sign | No native legally-tracked signature; DocuSign or PandaDoc on Pro | Any document, every plan, with an audit trail (item 7) |
+| **Client portal** | Support portal shows **tickets only**; a billing portal in beta on Revenue Pro | None in the CRM; guests per board | One portal over the same record (§8) |
+| **AI** | Breeze: record summaries, notetaker, agents billed per outcome ($0.50 per resolved conversation), credits at $0.01 | Credits at $0.01: 8 per AI action, 120 per notetaker hour; one-time 6,000-credit trial | Summaries and drafting bundled; proposals for every write (§4) |
+| **MCP** | `mcp.hubspot.com`, every tier including Free | `mcp.monday.com`, 60+ tools, every plan | Read tools plus proposal-only writes (§5.4) |
+| **Google and Microsoft** | Two-way calendar sync but **only the first event of a recurring series**, primary calendar only; Gmail and Outlook logging; Teams app rated 3.2★ | Two-way calendar in the CRM; board-level Outlook needs **M365 Business Premium** | Two-way sync that handles recurring events and shared calendars, with no licence requirement (§5) |
+| **Price for a 4-person shop** | Starter bundle $20/seat list; Pro seats $90–150; Marketing Pro $800+/month plus $3,000 onboarding | 3-seat minimum, then buckets of 5: four people pay for five | Priced per business, not per seat, as in the pricing study |
+| **Spanish** | UI in 15 languages; AI brand voice in 5 beyond English | UI in 14 languages; quotes change format but are not translated | Spanish first-class in the UI, the AI, the documents and Sofía (§1 item 3) |
+
+### 7.2 Ideas to adopt that the draft plan lacked
+
+Reading both inventories against §1–§6 surfaced eight ideas worth adding. Each is folded
+into the roadmap in §9.
+
+1. **A required-documents checklist per record.** An industry pack declares what a
+   complete file holds — for a Texas child, nine items from §746.603 — and the record
+   shows "7 of 9" with the missing ones named. It combines HubSpot's completeness score
+   with monday's "you cannot mark Enrolled without these files" validation, and neither
+   product does it for compliance.
+2. **Stage rules that require documents.** A job cannot move to *Done* without photos
+   and an invoice; a child cannot move to *Enrolled* without immunisations and emergency
+   contacts. monday gates this at Pro; BIS should make it standard.
+3. **Document templates with live fields.** Enrolment agreements, service contracts and
+   catering event sheets that fill themselves from the record and export to PDF — monday
+   docs' `{field}` merge and Pipedrive's Smart Docs. Pairs with e-signature in item 7.
+4. **An email address per record**, not only per business. Forward a doctor's note or a
+   customer's photo from any phone straight onto the right child or job — monday's
+   email-to-item.
+5. **Log by any address on the household.** An email from either parent lands on the
+   family and on each child; monday matches on linked records, and HubSpot logs everything
+   by default with never-log lists for vendors and personal mail.
+6. **Custom activity types on the timeline** — service call, inspection, tasting,
+   incident report, parent conference — so the timeline speaks the industry's language.
+7. **An in-person notetaker.** HubSpot's Mobile Notetaker and monday's turn a tour, a
+   kitchen walk-through or a job-site walk-around into a summary and proposed updates.
+   For BIS it is call proposals with a phone microphone instead of a phone line.
+8. **Ask BIS by text message.** monday's sidekick answers over WhatsApp; BIS already has
+   Telnyx two-way SMS and the owner's verified alert phone. "¿Qué tengo mañana?" answered
+   by text, read-only, fits owners who never sit at a desk better than any dashboard.
+
+### 7.3 Where both leave room for BIS
+
+- **Regulated data is priced out of reach.** HubSpot allows children's and health data
+  only under Enterprise Sensitive Data; monday's HIPAA support is Ultimate-only. A
+  compliant child-care file at small-business prices is open ground, and it needs no
+  HIPAA because Texas child-care records are not PHI.
+- **Both are English-first in the parts that matter to a Valley customer**: HubSpot's
+  full support covers six languages and its SMS is US-only; monday's phone and outreach
+  agents are US-only in four languages, and its quotes are not translated.
+- **Both charge per seat and gate the basics.** HubSpot's own list prices jump from $20 a
+  seat to $800 a month plus onboarding; monday's four-person shop pays for five. Neither
+  gives a front-desk person a full seat for free.
+- **Neither is built for service operations.** No property or equipment history, no
+  enrolment waitlist, no incident workflow, no Google Business Profile reviews in
+  HubSpot at all. That is precisely what the industry packs add.
 
 ---
 
