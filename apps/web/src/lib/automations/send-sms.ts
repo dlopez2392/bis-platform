@@ -1,6 +1,9 @@
 import { ensureConversation, createMessage, updateMessageStatus } from "@bis/db";
 import { SMS_RETRY_COOLDOWN_MS } from "./caps";
 import { withOptOut } from "@/lib/sms/opt-out";
+import { segmentsFor } from "@/lib/sms/segments";
+import { recordUsageSafely, smsBillable } from "@/lib/billing/usage";
+import type { SmsProvider } from "@/lib/sms/types";
 import type { PassContext } from "./context";
 
 /**
@@ -40,7 +43,18 @@ export type AutomationSmsInput = {
   onProviderFailure: () => Promise<void>;
 };
 
-export type SentSms = { messageId: string; providerMessageId: string };
+export type SentSms = {
+  messageId: string;
+  providerMessageId: string;
+  /**
+   * What this text bills (client billing), or null when the provider put
+   * nothing in front of the customer: the fake provider, or a real one
+   * redirected to a developer's phone (`smsBillable`). Segments are counted
+   * on the body AS SENT, the opt-out disclosure included, because that is
+   * what the carrier bills. Recorded by markAutomationSmsSent, never here.
+   */
+  usage: { segments: number; sentAt: Date } | null;
+};
 
 /**
  * WRITE THEN SEND — sendSmsAction's discipline, shared by every SMS-capable
@@ -85,9 +99,9 @@ export async function sendAutomationSms(ctx: SmsSendContext, input: AutomationSm
   const { id: messageId } = await createMessage(ctx.db, input.accountId, {
     conversationId: convo.id, channel: "sms", direction: "outbound", body,
   }, AUTOMATION_ACTOR_ID, AUTOMATION_ACTOR_TYPE);
+  let providerMessageId: string;
   try {
-    const { providerMessageId } = await sms.send({ to: input.to, from: input.from, body });
-    return { messageId, providerMessageId };
+    ({ providerMessageId } = await sms.send({ to: input.to, from: input.from, body }));
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown send failure";
     try {
@@ -103,12 +117,40 @@ export async function sendAutomationSms(ctx: SmsSendContext, input: AutomationSm
     }
     throw e;
   }
+  // AFTER the send's try, never inside it: the text is delivered, and
+  // nothing about its usage may reach the catch above (which marks the row
+  // failed) or reject this function (the caller would then never stamp, and
+  // re-send the text next tick). billedUsage never throws.
+  return { messageId, providerMessageId, usage: billedUsage(sms, body, messageId) };
+}
+
+/**
+ * What a delivered automation text bills, or null. NEVER throws: a failure
+ * here (a provider whose shape changed, a counting bug) loses one text's
+ * usage, logged, rather than the text's `sent` status or its dedupe stamp.
+ */
+function billedUsage(
+  sms: Pick<SmsProvider, "isFake" | "redirectTo">, body: string, messageId: string,
+): SentSms["usage"] {
+  try {
+    return smsBillable(sms) ? { segments: segmentsFor(body).segments, sentAt: new Date() } : null;
+  } catch (e) {
+    console.error(`automation sms: usage not worked out for message ${messageId}, so it will not bill: ${String(e)}`);
+    return null;
+  }
 }
 
 /**
  * Best effort, AFTER the dedupe stamp: the text is gone and stamped, and a
  * failure here must not re-label a delivered text "failed" (that invites a
  * duplicate send). `what` names the recipe in the log line.
+ *
+ * Also where an automation text is BILLED (client billing): after the
+ * caller's stamp and the status write, never between the send and the stamp,
+ * where a ledger round trip would widen the window in which a crash re-sends
+ * the text. `recordUsageSafely` never throws. Every caller of
+ * sendAutomationSms calls this on its success path; send-sms.test.ts's scan
+ * keeps that true.
  */
 export async function markAutomationSmsSent(
   ctx: SmsSendContext, accountId: string, sent: SentSms, what: string,
@@ -118,6 +160,12 @@ export async function markAutomationSmsSent(
       { providerMessageId: sent.providerMessageId }, AUTOMATION_ACTOR_ID, AUTOMATION_ACTOR_TYPE);
   } catch (e) {
     console.error(`${what}: text sent but message ${sent.messageId} not marked sent: ${String(e)}`);
+  }
+  if (sent.usage) {
+    await recordUsageSafely(ctx.db, {
+      accountId, meter: "sms", quantity: sent.usage.segments,
+      occurredAt: sent.usage.sentAt, sourceRef: `message:${sent.messageId}`,
+    }, what);
   }
 }
 

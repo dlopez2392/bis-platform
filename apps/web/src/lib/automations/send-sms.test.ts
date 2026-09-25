@@ -1,13 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
-  ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(),
+  ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(), recordUsage: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 
 import { SMS_RETRY_COOLDOWN_MS } from "./caps";
 import type { PassContext } from "./context";
 import { sendAutomationSms, markAutomationSmsSent, smsCooldownActive } from "./send-sms";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { segmentsFor } from "@/lib/sms/segments";
 
 const NOW = new Date("2026-09-09T14:00:00Z");
 const HOUR = 60 * 60 * 1000;
@@ -56,7 +60,7 @@ beforeEach(() => {
 describe("sendAutomationSms — write then send, the sendSmsAction discipline, written once", () => {
   it("provider → conversation → message row → send, returning both ids; the marker is NOT written on success", async () => {
     const onProviderFailure = vi.fn(async () => {});
-    expect(await sendAutomationSms(ctx(), input(onProviderFailure))).toEqual({ messageId: "msg_1", providerMessageId: "s1" });
+    expect(await sendAutomationSms(ctx(), input(onProviderFailure))).toEqual({ messageId: "msg_1", providerMessageId: "s1", usage: null });
     expect(dbMocks.ensureConversation).toHaveBeenCalledWith(expect.anything(), "acct_1", "ct_1", "automation", "system");
     // The opt-out disclosure is appended HERE, at the one choke point every
     // scheduled text goes through, and the SAME string is stored and sent —
@@ -99,11 +103,11 @@ describe("sendAutomationSms — write then send, the sendSmsAction discipline, w
 
 describe("markAutomationSmsSent — best effort, after the stamp", () => {
   it("marks the row sent with the provider id, and swallows its own failure", async () => {
-    await markAutomationSmsSent(ctx(), "acct_1", { messageId: "msg_1", providerMessageId: "s1" }, "test");
+    await markAutomationSmsSent(ctx(), "acct_1", { messageId: "msg_1", providerMessageId: "s1", usage: null }, "test");
     expect(dbMocks.updateMessageStatus).toHaveBeenCalledWith(expect.anything(), "acct_1", "msg_1", "sent",
       { providerMessageId: "s1" }, "automation", "system");
     dbMocks.updateMessageStatus.mockRejectedValue(new Error("status write failed"));
-    await expect(markAutomationSmsSent(ctx(), "acct_1", { messageId: "msg_1", providerMessageId: "s1" }, "test")).resolves.toBeUndefined();
+    await expect(markAutomationSmsSent(ctx(), "acct_1", { messageId: "msg_1", providerMessageId: "s1", usage: null }, "test")).resolves.toBeUndefined();
   });
 });
 
@@ -126,5 +130,86 @@ describe("sendAutomationSms — the opt-out disclosure", () => {
     expect(smsSend).toHaveBeenCalledWith(expect.objectContaining({
       body: "See you tomorrow. Reply STOP to opt out.",
     }));
+  });
+});
+
+describe("usage: what an automation text bills (client billing)", () => {
+  const realCtx = (redirectTo?: string): PassContext => ({
+    ...ctx(),
+    sms: () => ({ isFake: false, ...(redirectTo === undefined ? {} : { redirectTo }), send: (...a: unknown[]) => smsSend(...a) }),
+  });
+
+  it("a text a real carrier accepted carries its segments counted on the body AS SENT, disclosure included (mutation: count input.body → 1 segment, FAILS)", async () => {
+    const body = "x".repeat(150);
+    expect(segmentsFor(body).segments).toBe(1);
+    const sent = await sendAutomationSms(realCtx(), { ...input(), body });
+    expect(sent.usage).toEqual({ segments: 2, sentAt: expect.any(Date) });
+  });
+
+  it("a fake provider, or a real one redirected to a developer's phone, delivered nothing to the customer: no usage (mutation: drop the smsBillable gate → FAILS)", async () => {
+    expect((await sendAutomationSms(ctx(), input())).usage).toBeNull();
+    expect((await sendAutomationSms(realCtx("+19565550199"), input())).usage).toBeNull();
+  });
+
+  it("a throw while working out a DELIVERED text's usage never marks it failed or gets it re-sent: the send resolves, usage null, no attempt marker (mutation: compute usage inside the send's try → the row is marked failed and the send rejects, FAILS; compute it after the try with no catch → the send rejects, the pass never stamps and re-sends next tick, FAILS)", async () => {
+    const onProviderFailure = vi.fn(async () => {});
+    const explodes: PassContext = {
+      ...ctx(),
+      sms: () => ({
+        get isFake(): boolean { throw new Error("provider shape changed"); },
+        send: (...a: unknown[]) => smsSend(...a),
+      }),
+    };
+    expect(await sendAutomationSms(explodes, input(onProviderFailure)))
+      .toEqual({ messageId: "msg_1", providerMessageId: "s1", usage: null });
+    expect(smsSend).toHaveBeenCalledTimes(1);
+    expect(dbMocks.updateMessageStatus).not.toHaveBeenCalled();
+    expect(onProviderFailure).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("usage not worked out for message msg_1"));
+  });
+
+  it("markAutomationSmsSent records the segments against the message, AFTER the status write (mutation: record before the status write → call order FAILS)", async () => {
+    const sentAt = new Date("2026-09-09T14:00:05Z");
+    await markAutomationSmsSent(ctx(), "acct_1", { messageId: "msg_1", providerMessageId: "s1", usage: { segments: 3, sentAt } }, "test");
+    expect(dbMocks.recordUsage).toHaveBeenCalledWith(expect.anything(), {
+      accountId: "acct_1", meter: "sms", quantity: 3, occurredAt: sentAt, sourceRef: "message:msg_1",
+    });
+    expect(dbMocks.updateMessageStatus.mock.invocationCallOrder[0]!).toBeLessThan(dbMocks.recordUsage.mock.invocationCallOrder[0]!);
+  });
+
+  it("records nothing for a text with no usage, and a failing usage write never escapes (mutation: ignore usage: null → FAILS; remove recordUsageSafely's catch → rejects, FAILS)", async () => {
+    await markAutomationSmsSent(ctx(), "acct_1", { messageId: "msg_1", providerMessageId: "s1", usage: null }, "test");
+    expect(dbMocks.recordUsage).not.toHaveBeenCalled();
+    dbMocks.recordUsage.mockRejectedValue(new Error("usage_events is down"));
+    await expect(markAutomationSmsSent(ctx(), "acct_1",
+      { messageId: "msg_1", providerMessageId: "s1", usage: { segments: 1, sentAt: NOW } }, "test")).resolves.toBeUndefined();
+    expect(dbMocks.recordUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it("every module that sends with sendAutomationSms( also CALLS markAutomationSmsSent(, where its usage is recorded; comments do not count (mutation: delete one pass's markAutomationSmsSent call → that file is named here, FAILS; replace the call with a comment that names it → still named, FAILS)", () => {
+    const ROOT = fileURLToPath(new URL(".", import.meta.url));
+    const walk = (dir: string): string[] => readdirSync(dir).flatMap((name) => {
+      const full = join(dir, name);
+      if (statSync(full).isDirectory()) return walk(full);
+      return full.endsWith(".ts") && !full.endsWith(".test.ts") ? [full] : [];
+    });
+    const rel = (f: string) => f.slice(ROOT.length).replace(/\\/g, "/");
+    // The CODE of a file: block comments, then line comments, stripped (a
+    // `//` right after a `:` is a URL, not a comment), so a doc comment that
+    // names the call cannot satisfy the scan.
+    const code = (f: string) => readFileSync(f, "utf-8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    // Guards the stripper itself: a phrase only send-sms.ts's doc comment holds.
+    expect(readFileSync(join(ROOT, "send-sms.ts"), "utf-8")).toContain("AFTER the dedupe stamp");
+    expect(code(join(ROOT, "send-sms.ts"))).not.toContain("AFTER the dedupe stamp");
+    const senders = walk(ROOT).filter((f) => rel(f) !== "send-sms.ts" && code(f).includes("sendAutomationSms("));
+    // Guards the fixture: the seven callers on 2026-09-25. A new caller reds
+    // here until it is added, which is the moment to check it bills.
+    expect(senders.map(rel).sort()).toEqual([
+      "instant-reply.ts", "passes/appointment-confirm.ts", "passes/no-show-nudge.ts", "passes/quote-followup.ts",
+      "passes/referral-ask.ts", "passes/review-request.ts", "passes/sms-reminder.ts",
+    ]);
+    expect(senders.filter((f) => !code(f).includes("markAutomationSmsSent(")).map(rel)).toEqual([]);
   });
 });
