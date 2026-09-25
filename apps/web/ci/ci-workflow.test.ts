@@ -181,6 +181,15 @@ describe("ci.yml points the gates at the CI Supabase project, never production's
     expect(ciEnv.STRIPE_SECRET_KEY).toBeUndefined();
   });
 
+  it("references secrets.CI_STRIPE_SECRET_KEY on exactly one non-comment line: e2e's own job-level env (mutation: also give a STEP inside verify its own `env: STRIPE_SECRET_KEY: ${{ secrets.CI_STRIPE_SECRET_KEY }}` — jobEnv only reads a job's 4-space env: block, so the two checks above stay green and this is the only one that FAILS)", () => {
+    const matches = ciLines.filter((line) => line.includes("secrets.CI_STRIPE_SECRET_KEY"));
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.trim()).toBe("STRIPE_SECRET_KEY: ${{ secrets.CI_STRIPE_SECRET_KEY }}");
+    // The one occurrence is the same line jobEnv already found inside e2e's
+    // own job-level env: block, not a second copy living on some step.
+    expect(jobEnv(job("e2e")).STRIPE_SECRET_KEY).toBe("${{ secrets.CI_STRIPE_SECRET_KEY }}");
+  });
+
   it("names the same CI project as the setup workflow that builds it, as a literal URL", () => {
     // The project ci-project-setup.yml bootstraps, pushes and seeds is the one
     // the gates must run on. A rebuilt project changes both files together.

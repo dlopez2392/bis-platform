@@ -200,7 +200,8 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       # Stripe TEST mode only. e2e/plans.spec.ts creates a product and four
       # prices with it, and skips itself with a ::warning when it is unset.
-      # The target guard (check 6) refuses a live key before any step runs.
+      # The target guard (check 6) runs second, right after checkout, and
+      # refuses a live key before any other step runs.
       # Scoped to this job for the same reason as OPENAI_API_KEY above.
       STRIPE_SECRET_KEY: ${{ secrets.CI_STRIPE_SECRET_KEY }}
     concurrency:

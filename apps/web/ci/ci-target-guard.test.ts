@@ -427,6 +427,11 @@ describe("check 6: a Stripe key, when present, is a TEST-mode key", () => {
     expect(r.status).toBe(0);
   });
 
+  it("passes with an empty Stripe key: GitHub sets a missing secret to \"\", not unset (mutation: test that the variable is SET rather than non-empty, e.g. `[ -n \"${STRIPE_SECRET_KEY+x}\" ]` → an empty key is still \"set\", falls into the case statement and hits the catch-all arm → FAILS)", () => {
+    const r = runGuard({ STRIPE_SECRET_KEY: "" });
+    expect(r.status).toBe(0);
+  });
+
   it("passes with a restricted test key (rk_test_) (mutation: accept only sk_test_ → FAILS)", () => {
     const r = runGuard({ STRIPE_SECRET_KEY: "rk_test_UNIT_TEST_RESTRICTED_19ab" });
     expect(r.status).toBe(0);
