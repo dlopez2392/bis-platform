@@ -66,7 +66,7 @@ message customers receive are English-only, and so is the owner's dashboard.
 | 9 | **Money**: price book, quotes with options, e-signature on any document, invoices, deposits, recurring billing, payment links | Getting paid is a service business's close |
 | 10 | **The client portal and the MCP server** | One link for the customer; Claude and ChatGPT for the owner, with every AI write landing as a proposal |
 
-**This is not a quarter's work.** Summed honestly (§10), the full plan is roughly **85–115
+**This is not a quarter's work.** Summed honestly (§10), the full plan is roughly **84–118
 engineer-weeks** in conventional units. This repository's own history is the better
 guide to calendar time: foundation, CRM, booking and the voice receptionist all shipped
 between 25 July and 20 September. §10 lays the work out as parallel tracks so the owner
@@ -676,7 +676,7 @@ repository otherwise.
 | **Reach** | MCP server with auth spike (3–4); GBP reviews and AI replies (2–3); spreadsheet import with AI mapping, social sign-in (1–2) | **6–9** |
 | **Packs** | Blueprint extensions (2–3); home services (3–4); child care including field permissions, broadcasts, inspection packet (5–7); restaurant catering after POS research (3–4); Sofía knowledge base (2–3) | **15–21** |
 | **In flight** | M7a steps 2–4 (estimate) | **3–4** |
-| **Total** | | **≈ 85–118** |
+| **Total** | | **84–118** |
 
 That is roughly two years for one engineer working conventionally, or one year for two.
 **Calendar time here has not been conventional**: this repository shipped its foundation,
@@ -741,7 +741,7 @@ rule takes effect.
 
 ## 12. Risks
 
-- **Scope.** 85–118 engineer-weeks is a lot of product. The discipline that kept BIS
+- **Scope.** 84–118 engineer-weeks is a lot of product. The discipline that kept BIS
   sharp — ship to a real client before the next item — matters more, not less.
 - **Sensitive data before permissions.** Custody flags, no-contact flags, gate codes and
   pickup IDs must not be stored until roles are enforced. Pickup-person driver's-licence
