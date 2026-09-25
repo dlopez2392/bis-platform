@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship rollout step (2) of M7a client billing: one `usage_events` row per billable fact, written where the fact already happens (a call Sofía talked to ends → its minutes; a text reaches a customer → its segments; a website chat starts → 1), for EVERY account; a cron pass that sends unreported rows of billed accounts to Stripe Billing Meters with the row id as the identifier; and a derived agency banner when a billed client's usage has not reached Stripe for over a day.
+**Goal:** Ship rollout step (2) of M7a client billing: one `usage_events` row per billable fact, written where the fact already happens (a call Sofía talked to ends → its minutes; a text reaches a customer → its segments; Sofía's FIRST reply in a website chat succeeds → 1), for EVERY account; a cron pass that sends unreported rows of billed accounts to Stripe Billing Meters with the row id as the identifier; and a derived agency banner when a billed client's usage has not reached Stripe for over a day.
 
-**Architecture:** `packages/db/src/usage.ts` is the only code that touches `usage_events`: an insert-once `recordUsage` (ON CONFLICT (meter, source_ref) DO NOTHING) plus the reads the reporter and the banner share. In `apps/web`, every send path records through ONE wrapper, `recordUsageSafely` (`lib/billing/usage.ts`), which never throws, placed after the path's own durable write, so a ledger failure can never change a call, a text or a chat. The reporter is a new cron pass (`usageReport`, last in `PASSES`) that talks to Stripe through a new `BillingGateway.reportMeterEvent` (v1 `billing.meterEvents.create`), stamps `reported_at` only after Stripe accepts, and classifies a failure as that row's problem (continue) or the tick's (stop). The banner copies `LineDownBanner` exactly: computed each render on the agency work queue, nothing stored, nothing at zero. **No migration.**
+**Architecture:** `packages/db/src/usage.ts` is the only code that touches `usage_events`: an insert-once `recordUsage` (ON CONFLICT (meter, source_ref) DO NOTHING) plus the reads the reporter and the banner share, each ONE read per 50 billed accounts (never one per account). In `apps/web`, every send path records through ONE wrapper, `recordUsageSafely` (`lib/billing/usage.ts`), which never throws, placed after the path's own durable write, so a ledger failure can never change a call, a text or a chat. The reporter is a new cron pass (`usageReport`, last in `PASSES`) that sends the OLDEST unreported rows first across every billed account, talks to Stripe through a new `BillingGateway.reportMeterEvent` (v1 `billing.meterEvents.create`, no SDK retry, a 10 s timeout), stamps `reported_at` only after Stripe accepts, and classifies a failure as that account's problem (its other rows wait for the next tick; everyone else's still go) or the tick's (stop). The banner copies `LineDownBanner` exactly: computed each render on the agency work queue, nothing stored, nothing at zero. **No migration.**
 
 **Tech Stack:** Next.js 16.3.6 (App Router, server actions, route handlers), Supabase Postgres 17 (RLS), `@supabase/supabase-js`, vitest 4, Playwright, `stripe@22.6.2` (API version `2026-08-26.dahlia`), Tailwind 4 with the repo's tokens.
 
@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Tier: **HIGH** (money, and three customer-facing send paths: voice, SMS, concierge). Every new assertion names the mutation that turns it red, in the test title. The reviewer applies those probes.
-- **A usage leg never breaks or slows the primary flow.** Every leg goes through `recordUsageSafely`, which catches everything, and sits AFTER the path's own durable write. Each call site has a test proving a throwing `recordUsage` leaves the call/send/conversation result unchanged (mutation: remove `recordUsageSafely`'s catch → that test FAILS).
+- **A usage leg never breaks or slows the primary flow.** Every leg goes through `recordUsageSafely`, which catches everything, and sits AFTER the path's own durable write. Each call site has a test proving a throwing `recordUsage` leaves the call/send/conversation result unchanged (mutation: remove `recordUsageSafely`'s catch → that test FAILS; the concierge leg also wraps its lazy import in its own `try`, so its test names both). Nothing in working out a quantity may sit where a throw could mark a delivered text failed or skip its dedupe stamp (Task 4).
 - Recording never checks billing status: the ledger fills for every account (spec section 4, rollout (2)). Only the reporter looks at `account_billing`.
 - No floats on the money path: every quantity is a positive whole number, checked in `recordUsage` before the database (0051's CHECK is the backstop) and again in `meterEventParams` before Stripe.
 - `usage_events` is written ONLY through `serviceDb()` (0051 grants `authenticated` SELECT only). Writers set `updated_at` themselves (0051 has no trigger).
@@ -42,11 +42,19 @@ Verified on 2026-09-25:
 - `.github/workflows/ci.yml` gives the `e2e` job `STRIPE_SECRET_KEY` (line 206) and **no `CRON_SECRET`** (grep finds none in the file), so the cron route cannot be driven end to end in e2e; it answers 503 without the secret (`api/cron/reminders/route.ts:40-41`).
 - The "Talk to Sofía" web demo writes no `calls` row: `startCallRow` and `finishCall` are called only from `api/voice/incoming/route.ts` (939, 291).
 - `turn_count` is NOT "the caller spoke": `finish-call.ts:560` writes `turnCount: state.transcript.length`, and the transcript holds Sofía's own turns (`call-events.ts:97`, role `assistant`), so a silent ring that heard her greeting has `turn_count` 1. The code's real "caller spoke" signal is a `caller` turn with words: `call-state.ts:123` (the `abandoned` rule) and `proposals/eligibility.ts:58`. A robocall caught by the recording guard still leaves its words as a caller turn (`call-events.ts:132-134` and `:145-147`).
+- A booked/lead/message call need not hold a transcribed caller turn: `classifyOutcome` returns those three from `bookings`/`leads`/`messages` BEFORE it looks at the transcript (`call-state.ts:106-108`), and `isMeaningful` (`finish-call.ts:134-138`) is exactly those three. Hence the voice gate `callerSpoke(state) || isMeaningful(outcome)` (G5).
+- Installed stripe 22.6.2 (`cjs/resources/Billing/Meters.d.ts:33`): `stripe.billing.meters.listEventSummaries(id: string, params: Billing.MeterListEventSummariesParams, options?)`, params `customer: string`, `start_time: number` (inclusive), `end_time: number` (exclusive), both "aligned with minute boundaries" (`:216-236`); without `value_grouping_window` "a single event summary would be returned for the specified time range". `MeterEventSummary.aggregated_value: number` (`MeterEventSummaries.d.ts`).
+- `RequestOptions` (`cjs/lib.d.ts`, the `interface RequestOptions` block) takes `idempotencyKey`, `maxNetworkRetries` and `timeout` (ms) PER REQUEST, and `RequestSender.js:236-240` / `:413-419` prefer the per-request values over the client's. `billingGatewayFromEnv` builds its client with `maxNetworkRetries: 2, timeout: 20_000` (`stripe-gateway.ts:192`); the SDK backs off 0.5 s then 0.5-1 s between retries (`stripe.core.js:101-102`, `RequestSender.js:221-233`), so one call there can take about 61.5 s at worst. `reportMeterEvent` therefore overrides both per request (Task 7).
+- PostgREST `.or()` with double-quoted ISO instants is this repo's proven idiom (`packages/db/src/automations.ts:94-103`, `eitherAnchorSince`, proven live in `automations.test.ts`), and `.in("account_id", [...])` over every enabled account is the recipes' (`automations.ts:278` and five more).
 
-Assumptions (not verified; Task 10's e2e run is the proof for A9-A10 and the observation for A11):
+Assumptions (not verified; Task 10's e2e run, reading Stripe's aggregate, is the proof for A9-A10 and the observation for A11; A16-A19 are labelled where they are used):
 - A9. Stripe test mode accepts `billing.meterEvents.create` for an existing test customer on an active `bis_sms_segments` meter, with our payload shape.
-- A10. Replaying the SAME request under the SAME idempotency key within 24 hours returns without error and records no second event (the no-error half is asserted; "no second event" cannot be observed synchronously, see A12).
-- A11. The same `identifier` under a DIFFERENT idempotency key (the only way BIS sends one twice: its key expired after 24 hours, or the account's customer id changed) is either accepted as a duplicate or refused with a `StripeInvalidRequestError`. Task 10 records which, as a test annotation. The reporter treats that refusal as row-specific (retried each tick, counted `failed`, visible on the banner after 24 hours). If CI shows a refusal, the follow-up (map that error code to "already reported") must land before PR-3 creates the first billed account.
+- A10. Replaying the SAME request under the SAME idempotency key within 24 hours returns without error and records no second event. A 200 cannot show the second half (validation is asynchronous, A12), so Task 10 polls Stripe's own aggregate (`listEventSummaries`) and asserts the sum a correct dedupe implies.
+- A11. The same `identifier` under a DIFFERENT idempotency key (the only way BIS sends one twice: its key expired after 24 hours, or the account's customer id changed) is accepted and deduplicated, accepted and COUNTED AGAIN, or refused with a `StripeInvalidRequestError`. **Unproven; the spec's "Stripe dedupes by identifier" (section 4) is relied on NOWHERE in this plan until Task 10 observes it.** `FakeGateway` therefore assumes the costlier answer (a second event, Task 7). Task 10 records which of the three (or "unproven", if the summary does not settle in time) as a test annotation, and ANY outcome other than "deduplicated as expected" blocks PR-3 from creating the first billed account (Task 11 handoff).
+- A16. Stripe's meter event summaries reflect an accepted event within 120 seconds. Not documented as a bound; Task 10 polls every 5 s for up to 120 s per phase, fails when the sum is WRONG (more than a correct dedupe implies, or a value no outcome explains), and when it simply has not appeared, passes with a `::warning` and an "unproven" annotation (a PR-3 blocker, not a PR-2 one).
+- A17. Stripe aggregates one customer's events on one meter in the order it accepted them, so once a sentinel event sent AFTER the A11 probe shows in the sum, the probe has been counted too (or deduplicated). Task 10 re-reads 30 s after the sentinel appears to narrow the gap; it cannot close it.
+- A18. A read whose `.or()` names 50 accounts (about 100 characters of URL each, so about 5 KB) stays under every URL limit between supabase-js and PostgREST. Hence `USAGE_ACCOUNTS_PER_READ = 50`; today there are a handful of accounts and one read.
+- A19. A meter event round trip takes about 0.2-0.3 s (not measured), so 200 sequential sends take about 40-60 s. The code does not rely on it: the budget (G4) bounds the pass whatever a round trip costs.
 - A12. A 200 from `meterEvents.create` means Stripe RECEIVED the event, not that it will bill it (validation is asynchronous). `reported_at` therefore means "Stripe received it". PR-4's nightly reconciliation is the backstop for events Stripe later drops.
 - A13. `StripeInvalidRequestError` and `StripeIdempotencyError` are about the one request; every other failure (auth, permission, rate limit, connection, 5xx) would repeat for every row this tick.
 - A14. Events for a customer whose subscription is canceled are recorded by Stripe but invoiced by no subscription, so the reporter need not read `subscription_status`.
@@ -57,55 +65,57 @@ Assumptions (not verified; Task 10's e2e run is the proof for A9-A10 and the obs
 - **G1. The ledger fills for every account; recording is best-effort.** No send path looks at billing status. Each leg runs through `recordUsageSafely`, after the path's primary durable write, and can change nothing the path returns (the existing `recordAutomationLog`/`emit` legs are the pattern).
 - **G2. Insert once.** `recordUsage(db, { accountId, meter, quantity, occurredAt, sourceRef })` is an insert with ON CONFLICT (meter, source_ref) DO NOTHING; it never updates a stored row, and says `"recorded"` or `"duplicate"`. It refuses, before any query, a quantity that is not a positive whole number, a `sourceRef` whose prefix does not match its meter (`call:<calls.id>` for `voice_minutes`, `message:<messages.id>` for `sms`, `conversation:<concierge_conversations.id>` for `ai_chats`), an empty id, more than 200 characters, and an invalid date.
 - **G3. What the reporter sends.** A row is reportable when its account has an `account_billing` row with `stripe_customer_id` AND `stripe_subscription_id` set (a complimentary row has neither subscription nor pause, by 0051's `account_billing_complimentary_check`, so it is excluded by construction), the row is unreported, and its `occurred_at` is on or after `max(account_billing.created_at, now − 34 days)`. **34, not 35:** Stripe validates the timestamp asynchronously and DROPS a too-old event without an error, so a row sent near the 35-day edge could be stamped reported and never billed; one day of margin prevents that. Everything else stays in the ledger unreported, and is not an error. Rows of a billed account between its billing start and the 34-day floor are counted `expired` and logged every tick, never sent. **The banner does not count expired rows**: they can never be sent, so a banner about them could never clear, and every expired row has already spent about 33 days on the banner as stale. In production nothing is reported until PR-3 creates the first billed account.
-- **G4. The reporter.** A new cron pass, key `usageReport`, appended LAST in `PASSES`: every SMS-sending pass runs before it, so a text sent this tick is reported this tick, and nothing reads what it writes. Stripe v1 `billing.meterEvents.create` through a new `BillingGateway.reportMeterEvent`. `identifier` = the row id (spec). Idempotency key `bis-usage-<row id>-<customer id>`: event name, value and timestamp are functions of the row, which never changes after insert (G2), so the row id plus the customer id covers every parameter. Timestamp = `floor(occurred_at / 1000)` seconds; payload values strings. `reported_at` and `updated_at` are stamped with the tick's `now` only after Stripe accepts. Per tick: at most **200** sends (`USAGE_REPORT_TICK_CAP`) and **60 s** of starting sends (`USAGE_REPORT_BUDGET_MS`): sequential round trips of about 0.2-0.3 s make 200 rows about 40-60 s, beside the release pass's own 60 s budget inside the route's 300 s; 200 rows every 15 minutes is 19,200 a day, about 128 clients at an estimated 150 billable facts a day each (sandbox traffic counts toward the global rate limit, so sequential sends are also the polite shape there). One row's `StripeInvalidRequestError`/`StripeIdempotencyError` → that row `failed`, the next row goes; any other failure → `failed`, `stoppedOnError: 1`, the tick stops (A13). No usable key (`billingGatewayFromEnv` not ok) → `skippedNoStripe` = billed accounts, logged, returned, not an error. Stale accounts (G7) are logged with `console.error` on every tick that sees them.
-- **G5. The voice leg is gated on the call row id and "the caller spoke", NOT on `stored` and NOT on `turn_count`.** `finishCallRow` failing (a database blip) does not un-spend the carrier and model minutes, and `recordAutomationLog`, the precedent leg, is gated on `meta.callRowId` alone (`finish-call.ts:579`). The call id is the `source_ref`; with no row id (`startCallRow` failed open) there is nothing to key idempotently, and nothing is recorded. "The caller spoke" is `callerSpoke(state)`, a caller turn with words, exported from `call-state.ts` and shared with `classifyOutcome`; `turn_count >= 1` would bill silent rings, because Sofía's greeting is a turn. A robocall that reached Sofía is billed (danlo), and it is, because the guard records its words as a caller turn. Quantity = `max(1, ceil(duration_secs / 60))` from the SAME `durationSecs` written to the calls row; `occurred_at` = the call's end.
-- **G6. The Stripe proof is at the gateway, in the e2e job.** The `verify` job has no Stripe key by design, and the `e2e` job has no `CRON_SECRET`, so the cron route cannot be driven end to end. `e2e/usage-meter.spec.ts` makes a Stripe TEST customer, ensures the meters, sends one meter event through the real `stripeGateway(...).reportMeterEvent`, replays it under the same key (A9, A10), observes a same-identifier/new-key send (A11), and deletes the customer. No database, no account, never Test Client One.
-- **G7. The banner.** `listAccountsWithStaleUsage(db, now)` returns the ids of billed accounts with a reportable row (G3's window) still unreported 24 hours after it was RECORDED (`created_at`, not `occurred_at`: a row recorded late is not late to Stripe until it has waited a day). `/dashboard/work` renders `UsageStaleBanner` with the count, beside `LineDownBanner`, in the same `Promise.all`, swallowed the same way: a failed read renders no banner and logs `console.error` (`work/page.tsx:62-65`'s precedent). Copy: "Usage for 2 clients hasn't reached Stripe in over a day, so it isn't on their bills yet. We retry every 15 minutes." + a link "Check the Stripe connection" to `/dashboard/plans`, where a missing or refused key is already explained.
-- **G8. No migration.** The reporter reads per billed account with `.eq("account_id").is("reported_at", null).gte("occurred_at", from)`, which `usage_events_account_occurred_idx (account_id, occurred_at desc)` serves; it never uses `usage_events_unreported_idx (created_at) where reported_at is null`. That partial index WILL hold every unbilled account's rows forever (every account's usage is unreported until it is billed, and pre-billing rows stay unreported for good): at an estimated 200 rows a day across today's accounts, about 73,000 entries a year. Harmless in size, useless as a queue; dropping or replacing it belongs with PR-4's reconciliation, once that access pattern is known.
+- **G4. The reporter.** A new cron pass, key `usageReport`, appended LAST in `PASSES`: every SMS-sending pass runs before it, so a text sent this tick is reported this tick, and nothing reads what it writes. Stripe v1 `billing.meterEvents.create` through a new `BillingGateway.reportMeterEvent`. `identifier` = the row id (spec). Idempotency key `bis-usage-<row id>-<customer id>`: event name, value and timestamp are functions of the row, which never changes after insert (G2), so the row id plus the customer id covers every parameter. Timestamp = `floor(occurred_at / 1000)` seconds; payload values strings. `reported_at` and `updated_at` are stamped with the tick's `now` only after Stripe accepts; a stamp that finds the row already stamped (a concurrent tick) is `alreadyStamped`, never `reported`. **Fairness:** each read takes the OLDEST unreported rows across every billed account (`listReportableUsage`, one read per 50 accounts, merged oldest first), so no account waits behind another's place in a list and a backlog drains in the order it grew. One row's `StripeInvalidRequestError`/`StripeIdempotencyError` → that row `failed`, and that ACCOUNT's other rows wait for the next tick (a refusal is usually the account's, and its rows must not spend everyone's cap); when that read was full, the pass reads again without the refused accounts, so their rows can never fill the cap ahead of everyone else's. Any other failure → `failed`, `stoppedOnError: 1`, the tick stops (A13). Per tick: at most **200** sends (`USAGE_REPORT_TICK_CAP`; reaching it sets `stoppedOnCap: 1`) inside **60 s** (`USAGE_REPORT_BUDGET_MS`). Each send carries its own transport, **no SDK retry and a 10 s timeout** (`METER_EVENT_TIMEOUT_MS`; the next tick is the retry, under the same key), and the pass stops STARTING sends at 60 − 10 = 50 s, so even a send that times out ends inside the 60 s (the client-wide 2 retries × 20 s would let one send run about 61.5 s past the last start). That leaves the route's 300 s `maxDuration` room beside the release pass's own 60 s. 200 rows every 15 minutes is 19,200 a day, about 128 clients at an estimated 150 billable facts a day each (A19 for the time per send; sandbox traffic counts toward the global rate limit, so sequential sends are also the polite shape there). No usable key (`billingGatewayFromEnv` not ok) → `skippedNoStripe` = billed accounts, logged, returned, not an error. Stale accounts (G7) and expired rows (G3) are counted with one read per 50 billed accounts each and logged with `console.error` on every tick that sees them.
+- **G5. The voice leg is gated on the call row id and "Sofía talked to the caller" = `callerSpoke(state) || isMeaningful(outcome)`, NOT on `stored` and NOT on `turn_count`.** danlo's decision is "every call Sofía talked to"; the planning-start ledger line paraphrases it as "caller spoke, turn_count>=1", and that paraphrase is superseded here (the orchestrator appends a ledger correction). `finishCallRow` failing (a database blip) does not un-spend the carrier and model minutes, and `recordAutomationLog`, the precedent leg, is gated on `meta.callRowId` alone (`finish-call.ts:579`). The call id is the `source_ref`; with no row id (`startCallRow` failed open) there is nothing to key idempotently, and nothing is recorded. The two halves: `callerSpoke(state)`, a caller turn with words, exported from `call-state.ts` and shared with `classifyOutcome` (`turn_count >= 1` would bill silent rings, because Sofía's greeting is a turn); and `isMeaningful(outcome)`, because a booked, lead or message outcome means the caller interacted even when no caller turn was transcribed (danlo, 2026-09-25). A silent ring or a connect-timeout (no caller words, no booking/lead/message) never bills. A robocall that reached Sofía is billed (danlo), and it is, because the guard records its words as a caller turn. Quantity = `max(1, ceil(duration_secs / 60))` from the SAME `durationSecs` written to the calls row; `occurred_at` = the call's end.
+- **G6. The Stripe proof is at the gateway, in the e2e job, and it reads Stripe's AGGREGATE, not the 200.** The `verify` job has no Stripe key by design, and the `e2e` job has no `CRON_SECRET`, so the cron route cannot be driven end to end. `e2e/usage-meter.spec.ts` makes a Stripe TEST customer, ensures the meters, sends one meter event through the real `stripeGateway(...).reportMeterEvent`, replays it under the same key, sends a second distinct event, and polls `listEventSummaries` until the sum is the 2 + 3 = 5 a correct dedupe implies (A9, A10, A16). It then sends the first event's identifier under a new key (A11) and a sentinel (7) after it, and polls for 12 (deduplicated) or 14 (counted again) (A17). It deletes the customer. No database, no account, never Test Client One.
+- **G7. The banner.** `listAccountsWithStaleUsage(db, now)` returns the ids of billed accounts with a reportable row (G3's window) still unreported 24 hours after it was RECORDED (`created_at`, not `occurred_at`: a row recorded late is not late to Stripe until it has waited a day). Bounded: the billed-account list (paged), then ONE `usage_events` read per 50 of them (`staleUsageAccountIds`), each account's own window expressed in the read's `.or()`; a read comes back as rows, not accounts, so a FULL read (one account's backlog can fill it) is followed by a read of the accounts it did not name, and each repeat names at least one new account. With nothing stale it is one read per 50 accounts. The cron's stale log calls the same function. `/dashboard/work` renders `UsageStaleBanner` with the count, beside `LineDownBanner`, in the same `Promise.all`, swallowed the same way: a failed read renders no banner and logs `console.error` (`work/page.tsx:62-65`'s precedent). Copy: "Usage for 2 clients hasn't reached Stripe in over a day, so it isn't on their bills yet. We retry every 15 minutes." + a link "Check the Stripe connection" to `/dashboard/plans`, where a missing or refused key is already explained.
+- **G8. No migration.** Every read names its accounts in one `.or(and(account_id.eq.<id>,occurred_at.gte."<from>"),...)` plus `.is("reported_at", null)`: each clause is an `(account_id, occurred_at)` range that `usage_events_account_occurred_idx (account_id, occurred_at desc)` can serve, and the planner can OR them (a BitmapOr; expected, not measured, and irrelevant at today's row counts). None uses `usage_events_unreported_idx (created_at) where reported_at is null`. That partial index WILL hold every unbilled account's rows forever (every account's usage is unreported until it is billed, and pre-billing rows stay unreported for good): at an estimated 200 rows a day across today's accounts, about 73,000 entries a year. Harmless in size, useless as a queue; dropping or replacing it belongs with PR-4's reconciliation, once that access pattern is known.
 - **G9. A text bills only when it reached the CUSTOMER** (`smsBillable`): a real provider (`isFake === false`) with no `redirectTo`. The fake provider delivers nothing, and a real provider forced outside production sends every text to a developer's phone (`lib/sms/index.ts:35-36`). Production always holds the real, unredirected provider (`getSmsProvider` throws there without a key), so this changes nothing in production; it keeps a preview, which writes production's database, from leaving usage rows for texts no customer received. This refines the research note "key off a successful send, not the environment": it keys off the PROVIDER, not the environment.
 - **G10. Automation texts are billed in `markAutomationSmsSent`,** after the caller's dedupe stamp and the status write, never between the send and the stamp (a ledger round trip there would widen the window in which a crash re-sends the text). `SentSms` gains `usage: { segments, sentAt } | null`, computed on the body AS SENT (the opt-out disclosure included). All seven callers call `markAutomationSmsSent` on their success path; a source-scan test in `send-sms.test.ts` keeps that true.
 - **G11. The two direct sends (composer reply, missed-call text-back) record between the provider send and the `sent` status write.** That write may throw (the composer propagates it; the text-back's outer catch logs it), and it must not take a delivered text's usage with it; `recordUsageSafely` never throws, so it cannot stop that write either. The composer runs on the RLS client, so its usage write uses `serviceDb()`, passed as a getter so a missing service key is caught too (`automations/actions.ts:5`'s precedent for service-only tables after `requireAccountAccess`). One text-back leg covers both callers (`finishCall` and `/api/voice/texml/handoff-result`), because both deliver through `deliverTextback`.
 - **G12. The reporting start is `account_billing.created_at` (binding on PR-3).** PR-3 must write the row when the subscription exists (`checkout.session.completed`), or move this floor to a dedicated column; a row created when the link is SENT would report usage from before the customer subscribed.
+- **G13. A website chat bills when Sofía's FIRST reply succeeds, not when the conversation row is created** (danlo, 2026-09-25: a failed start, e.g. the model call's 503 during an OpenAI outage, never bills). "Succeeds" = on a TURN-1 request (`!priorId`), the model call returned and the visitor was told something real: `reply` non-empty, or a lead filed this turn (`spoken`'s own condition, `route.ts:485`); an empty completion that falls back to `strings.unavailable` is not an answer. Only turn 1 ever attempts it; the unique `(meter, source_ref)` on `conversation:<id>` is the backstop, not the gate. The leg sits just before the route's success response, after the transcript append.
+- **G14. A re-sent automation text bills per copy.** When a pass's dedupe stamp fails after a successful send, the next tick sends the text again (`passes/review-request.ts:254` logs "expect up to 11 more copies before the morning band closes"; `no-show-nudge.ts:233` and `referral-ask.ts:283` say the same); each copy is a real, delivered text with its own `messages` row, so each records its own `sms` usage row. That is correct billing, not a double count, and the PR body says so.
 
 ## File Structure
 
 12 files created, 23 modified (35 total).
 
 **packages/db**
-- Create `packages/db/src/usage.ts`: `recordUsage`, `listBilledUsageAccounts`, `listUnreportedUsage`, `markUsageReported`, `countUnreportedUsage`, `isUsageStale`, `listAccountsWithStaleUsage`, `reportableFrom`, constants and types.
+- Create `packages/db/src/usage.ts`: `recordUsage`, `reportableFrom`, `usageRangeFilter`, `listBilledUsageAccounts`, `listReportableUsage`, `markUsageReported`, `staleUsageAccountIds`, `countExpiredUsage`, `listAccountsWithStaleUsage`, constants and types. Every `usage_events` read is one request per 50 accounts.
 - Modify `packages/db/src/index.ts`: export them.
-- Create `packages/db/src/usage.test.ts` (6 tests, no database; runs in CI only, like the whole db suite).
+- Create `packages/db/src/usage.test.ts` (9 tests, no database; runs in CI only, like the whole db suite).
 - Create `packages/db/src/test/usage.test.ts` (7 tests, live through `serviceDb()`, CI only).
 
 **apps/web: recording**
 - Create `apps/web/src/lib/billing/usage.ts`: `voiceMinutes`, `smsBillable`, `recordUsageSafely`.
 - Create `apps/web/src/lib/billing/usage.test.ts` (4 tests).
 - Modify `apps/web/src/lib/voice/call-state.ts` (`callerSpoke`) and `call-state.test.ts` (+1).
-- Modify `apps/web/src/lib/voice/finish-call.ts` (the voice leg) and `finish-call.test.ts` (+6).
+- Modify `apps/web/src/lib/voice/finish-call.ts` (the voice leg, gated `callerSpoke(state) || isMeaningful(outcome)`) and `finish-call.test.ts` (+7).
 - Modify `apps/web/src/lib/voice/textback.ts` (the text-back leg); create `apps/web/src/lib/voice/textback.test.ts` (5 tests).
-- Modify `apps/web/src/lib/automations/send-sms.ts` (`SentSms.usage`, the leg in `markAutomationSmsSent`) and `send-sms.test.ts` (+5, 2 edited).
+- Modify `apps/web/src/lib/automations/send-sms.ts` (`SentSms.usage` worked out after the send's `try`, the leg in `markAutomationSmsSent`) and `send-sms.test.ts` (+6, 2 edited).
 - Modify `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts` and `actions.test.ts` (+6).
-- Modify `apps/web/src/app/api/concierge/[publicId]/turn/route.ts` and `route.test.ts` (+4).
+- Modify `apps/web/src/app/api/concierge/[publicId]/turn/route.ts` (the leg, on turn 1's successful reply) and `route.test.ts` (+5).
 
 **apps/web: reporting**
-- Modify `apps/web/src/lib/billing/stripe-gateway.ts`: `MeterEventInput`, `meterEventParams`, `reportMeterEvent`, `meterEventFailureKind`.
-- Modify `apps/web/src/lib/billing/fake-gateway.ts`: `reportMeterEvent`, `meterEvents`, `failOn.error`.
+- Modify `apps/web/src/lib/billing/stripe-gateway.ts`: `MeterEventInput`, `meterEventParams`, `METER_EVENT_TIMEOUT_MS`, `reportMeterEvent` (no SDK retry, 10 s, per request), `meterEventFailureKind`.
+- Modify `apps/web/src/lib/billing/fake-gateway.ts`: `reportMeterEvent` (a new key is a new event: A11 is not assumed), `meterEvents`, `failOn.error`.
 - Modify `apps/web/src/lib/billing/stripe-gateway.test.ts` (+11).
 - Create `apps/web/src/lib/billing/meter-event-failure.test.ts` (1 test, the real Stripe error classes).
 - Modify `apps/web/src/lib/automations/caps.ts`: `USAGE_REPORT_TICK_CAP`, `USAGE_REPORT_BUDGET_MS`.
-- Create `apps/web/src/lib/automations/passes/usage-report.ts` and `usage-report.test.ts` (13 tests).
+- Create `apps/web/src/lib/automations/passes/usage-report.ts` and `usage-report.test.ts` (14 tests).
 - Modify `apps/web/src/lib/automations/registry.ts`, `sentinel.test.ts` (2 edited), `apps/web/src/app/api/cron/reminders/route.test.ts` (7 bodies edited, mock extended).
 
 **apps/web: the banner**
 - Modify `apps/web/src/lib/messages.ts`: `work.usageStale.*`.
-- Create `apps/web/src/components/usage-stale-banner.tsx` and `usage-stale-banner.test.ts` (6 tests).
+- Create `apps/web/src/components/usage-stale-banner.tsx` and `usage-stale-banner.test.ts` (5 tests).
 - Modify `apps/web/src/app/(dashboard)/dashboard/work/page.tsx` and `page.test.ts` (+3, 1 edited).
 - Modify `apps/web/src/app/(dashboard)/dashboard/styleguide/page.tsx`.
 
 **e2e**
 - Create `apps/web/e2e/usage-meter.spec.ts` (1 test).
 
-**New test count: 79** = db usage 6 + db live usage 7 + web billing/usage 4 + call-state 1 + finish-call 6 + textback 5 + send-sms 5 + composer actions 6 + concierge route 4 + stripe-gateway 11 + meter-event-failure 1 + usage-report 13 + usage-stale-banner 6 + work page 3 + e2e 1. `it.each` is not used; each `it` is one test.
+**New test count: 85** = db usage 9 + db live usage 7 + web billing/usage 4 + call-state 1 + finish-call 7 + textback 5 + send-sms 6 + composer actions 6 + concierge route 5 + stripe-gateway 11 + meter-event-failure 1 + usage-report 14 + usage-stale-banner 5 + work page 3 + e2e 1. `it.each` is not used; each `it` is one test.
 
 Baselines read on `main` 5dac86a on 2026-09-25 (`pnpm --filter web exec vitest run <file>`): stripe-gateway 45, call-state 20, finish-call 85, send-sms 10, composer actions 14, concierge route 43, sentinel 5, cron route 30, work page 15.
 
@@ -119,11 +129,11 @@ Baselines read on `main` 5dac86a on 2026-09-25 (`pnpm --filter web exec vitest r
 3. Voice leg (`callerSpoke`, `finishCall`)
 4. SMS leg: automations (`send-sms.ts`)
 5. SMS legs: the missed-call text-back and the composer reply
-6. Concierge leg
+6. Concierge leg (billed when Sofía's first reply succeeds)
 7. `BillingGateway.reportMeterEvent`, the fake, failure classification
 8. The `usageReport` pass, caps, registry, sentinel and cron route tests
 9. The stale-usage banner
-10. e2e: Stripe test mode accepts our meter event
+10. e2e: Stripe test mode counts our meter events once (read from its aggregate)
 11. Gates, counts, handoff
 
 Task 2 needs Task 1's exports (code only, no database). Tasks 3-6 need Task 2. Task 8 needs Tasks 1 and 7. Task 9 needs Task 1. Task 10 needs Task 7. Tasks 3, 4, 5, 6, 7 touch disjoint files and may run in parallel lanes; Task 8 edits `sentinel.test.ts` and the cron `route.test.ts`, which no other task touches.
@@ -147,14 +157,17 @@ Commands run from the repo root `C:\Users\danlo\bis-platform` (Git Bash).
   - `type UsageInput = { accountId: string; meter: MeterKey; quantity: number; occurredAt: Date; sourceRef: string }`
   - `type UsageRow = { id: string; accountId: string; meter: MeterKey; quantity: number; occurredAt: string; sourceRef: string; reportedAt: string | null; createdAt: string }`
   - `type BilledUsageAccount = { accountId: string; stripeCustomerId: string; billingStartedAt: string }`
+  - `USAGE_ACCOUNTS_PER_READ = 50`; `type UsageRange = { accountId: string; fromIso: string; beforeIso?: string }`
   - `recordUsage(db: SupabaseClient, input: UsageInput): Promise<"recorded" | "duplicate">`
   - `reportableFrom(billingStartedAt: string, now: Date): string`
+  - `usageRangeFilter(ranges: readonly UsageRange[]): string` (the PostgREST `.or()` string)
   - `listBilledUsageAccounts(db: SupabaseClient): Promise<BilledUsageAccount[]>`
-  - `listUnreportedUsage(db: SupabaseClient, accountId: string, fromIso: string, limit: number): Promise<UsageRow[]>`
+  - `listReportableUsage(db: SupabaseClient, accounts: readonly BilledUsageAccount[], now: Date, limit: number): Promise<UsageRow[]>` (oldest first ACROSS the accounts)
   - `markUsageReported(db: SupabaseClient, id: string, at: Date): Promise<boolean>`
-  - `countUnreportedUsage(db: SupabaseClient, accountId: string, window: { fromIso: string; beforeIso?: string; createdBeforeIso?: string }): Promise<number>`
-  - `isUsageStale(db: SupabaseClient, account: BilledUsageAccount, now: Date): Promise<boolean>`
+  - `staleUsageAccountIds(db: SupabaseClient, accounts: readonly BilledUsageAccount[], now: Date): Promise<string[]>`
+  - `countExpiredUsage(db: SupabaseClient, accounts: readonly BilledUsageAccount[], now: Date): Promise<number>`
   - `listAccountsWithStaleUsage(db: SupabaseClient, now: Date): Promise<string[]>`
+  - Every read over `usage_events` is ONE request per `USAGE_ACCOUNTS_PER_READ` accounts, never one per account (G7, G8).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -164,17 +177,26 @@ Create `packages/db/src/usage.test.ts`:
 import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  recordUsage, reportableFrom, listBilledUsageAccounts, USAGE_REPORT_WINDOW_MS, USAGE_STALE_AFTER_MS,
-  type UsageInput,
+  recordUsage, reportableFrom, listBilledUsageAccounts, listReportableUsage, staleUsageAccountIds, usageRangeFilter,
+  USAGE_REPORT_WINDOW_MS, USAGE_STALE_AFTER_MS, type BilledUsageAccount, type UsageInput,
 } from "./usage";
 
 /**
  * usage.ts without a database: the guards that must fire BEFORE a query, the
- * exact insert shape, the window arithmetic and the paging. The live
- * behaviour is ./test/usage.test.ts. (Like every db-package test, this file
- * runs only where the env names a non-production project: CI.)
+ * exact insert shape, the window arithmetic, the paging, the per-account
+ * filter string and the batching of the reads. The live behaviour is
+ * ./test/usage.test.ts. (Like every db-package test, this file runs only
+ * where the env names a non-production project: CI.)
  */
 const DAY = 24 * 60 * 60 * 1000;
+const NOW = new Date("2026-09-25T15:00:00.000Z");
+const billed = (accountId: string): BilledUsageAccount => ({
+  accountId, stripeCustomerId: `cus_${accountId}`, billingStartedAt: "2026-09-20T00:00:00+00:00",
+});
+const dbRow = (id: string, accountId: string, occurredAt: string) => ({
+  id, account_id: accountId, meter: "sms", quantity: 1, occurred_at: occurredAt,
+  source_ref: `message:${id}`, reported_at: null, created_at: occurredAt,
+});
 const untouchable = {
   from: () => { throw new Error("the database was reached"); },
 } as unknown as SupabaseClient;
@@ -252,9 +274,56 @@ describe("listBilledUsageAccounts — paging", () => {
     expect(got[1001]).toEqual({ accountId: "acct_1001", stripeCustomerId: "cus_1001", billingStartedAt: "2026-09-01T00:00:00+00:00" });
   });
 });
+
+describe("the per-account reads: bounded, one request per 50 accounts", () => {
+  it("usageRangeFilter: one and() per account with ITS OWN range, every timestamp double-quoted (mutation: unquoted timestamps → PostgREST splits the value on '.', FAILS; one shared floor for every account → FAILS)", () => {
+    expect(usageRangeFilter([
+      { accountId: "a1", fromIso: "2026-09-20T10:00:00.123456+00:00" },
+      { accountId: "a2", fromIso: "2026-08-22T15:00:00.000Z", beforeIso: "2026-08-23T15:00:00.000Z" },
+    ])).toBe(
+      'and(account_id.eq.a1,occurred_at.gte."2026-09-20T10:00:00.123456+00:00"),'
+      + 'and(account_id.eq.a2,occurred_at.gte."2026-08-22T15:00:00.000Z",occurred_at.lt."2026-08-23T15:00:00.000Z")',
+    );
+  });
+
+  it("listReportableUsage reads 50 accounts at a time and merges the reads OLDEST FIRST across accounts, at most `limit` (mutation: concatenate the reads in read order → FAILS; one read naming all 120 accounts → FAILS)", async () => {
+    const accounts = Array.from({ length: 120 }, (_, i) => billed(`acct_${i}`));
+    const filters: string[] = [];
+    const perRead = [
+      [dbRow("u_late", "acct_0", "2026-09-25T12:00:00+00:00")],
+      [dbRow("u_early", "acct_60", "2026-09-24T12:00:00+00:00")],
+      [dbRow("u_mid", "acct_110", "2026-09-25T01:00:00+00:00")],
+    ];
+    const chain = {
+      select: () => chain, is: () => chain, order: () => chain,
+      or: (f: string) => { filters.push(f); return chain; },
+      limit: async () => ({ data: perRead[filters.length - 1] ?? [], error: null }),
+    };
+    const rows = await listReportableUsage({ from: () => chain } as unknown as SupabaseClient, accounts, NOW, 2);
+    expect(filters.map((f) => f.split("and(").length - 1)).toEqual([50, 50, 20]);
+    expect(rows.map((r) => r.id)).toEqual(["u_early", "u_mid"]);
+  });
+
+  it("staleUsageAccountIds: a FULL read (one account's backlog) is followed by a read of only the accounts it did not name, until a read comes back short (mutation: stop after the first read → acct_2 missed, FAILS; re-read every account → the second filter still names acct_1, FAILS)", async () => {
+    const accounts = ["acct_1", "acct_2", "acct_3"].map(billed);
+    const filters: string[] = [];
+    const reads = [Array.from({ length: 1000 }, () => ({ account_id: "acct_1" })), [{ account_id: "acct_2" }]];
+    const chain = {
+      select: () => chain, is: () => chain, lt: () => chain,
+      or: (f: string) => { filters.push(f); return chain; },
+      limit: async () => ({ data: reads[filters.length - 1] ?? [], error: null }),
+    };
+    expect(await staleUsageAccountIds({ from: () => chain } as unknown as SupabaseClient, accounts, NOW))
+      .toEqual(["acct_1", "acct_2"]);
+    expect(filters).toHaveLength(2);
+    expect(filters[1]).not.toContain("acct_1");
+    expect(filters[1]).toContain("acct_2");
+    expect(filters[1]).toContain("acct_3");
+  });
+});
 ```
 
-Count: **6 tests**.
+Count: **9 tests**.
 
 Create `packages/db/src/test/usage.test.ts`:
 
@@ -265,8 +334,8 @@ import { serviceDb } from "../service";
 import { withTestAccount } from "./fixtures";
 import { insertPlan, type PlanWrite } from "../billing";
 import {
-  recordUsage, listBilledUsageAccounts, listUnreportedUsage, markUsageReported,
-  countUnreportedUsage, listAccountsWithStaleUsage,
+  recordUsage, listBilledUsageAccounts, listReportableUsage, markUsageReported,
+  countExpiredUsage, listAccountsWithStaleUsage,
 } from "../usage";
 
 /**
@@ -382,20 +451,25 @@ describe("usage.ts, live", () => {
         ]);
       }))))));
 
-  it("listUnreportedUsage: only this account's unreported rows from `from`, oldest first, at most `limit` (mutation: drop .is('reported_at', null) → FAILS; order descending → FAILS; drop .eq('account_id') → FAILS)", () =>
-    withTestAccount((db, a) => withTestAccount(async (_d, b) => {
+  it("listReportableUsage: the unreported rows of the accounts given, each from ITS OWN floor (billing start, or now − 34 days), oldest first ACROSS them, at most `limit`; PostgREST's own microsecond timestamps survive the quoted filter (mutation: drop .is('reported_at', null) → FAILS; one shared floor for both accounts → the pre-billing row appears, FAILS; order descending → FAILS; unquote the filter's timestamps → PostgREST refuses the read, FAILS)", () =>
+    withPlan((planId) => withTestAccount((db, a) => withTestAccount((_d1, b) => withTestAccount(async (_d2, unbilled) => {
       const now = Date.now();
-      await usageRow(a, { occurredAt: now - 10 * DAY });                   // before `from`
-      const r1 = await usageRow(a, { occurredAt: now - 3 * HOUR });
-      const r2 = await usageRow(a, { occurredAt: now - 2 * HOUR });
+      await bill(a, planId, now - 5 * DAY);
+      await bill(b, planId, now - 60 * DAY);
+      await usageRow(a, { occurredAt: now - 6 * DAY });                     // before A's billing start
+      const a1 = await usageRow(a, { occurredAt: now - 3 * HOUR });
       await usageRow(a, { occurredAt: now - 1 * HOUR, reportedAt: now });   // already reported
-      await usageRow(b, { occurredAt: now - 2.5 * HOUR });                // another account
-      const from = iso(now - 5 * HOUR);
-      const rows = await listUnreportedUsage(db, a, from, 10);
-      expect(rows.map((r) => r.id)).toEqual([r1, r2]);
-      expect(rows[0]).toMatchObject({ accountId: a, meter: "sms", quantity: 1, reportedAt: null });
-      expect((await listUnreportedUsage(db, a, from, 1)).map((r) => r.id)).toEqual([r1]);
-    })));
+      await usageRow(b, { occurredAt: now - 40 * DAY });                    // older than the window
+      const b1 = await usageRow(b, { occurredAt: now - 6 * DAY });           // A's floor would exclude it
+      const a2 = await usageRow(a, { occurredAt: now - 2 * HOUR });
+      await usageRow(unbilled, { occurredAt: now - 2.5 * HOUR });            // not an account given
+      const ours = (await listBilledUsageAccounts(db)).filter((x) => [a, b].includes(x.accountId));
+      expect(ours).toHaveLength(2);
+      const rows = await listReportableUsage(db, ours, new Date(now), 10);
+      expect(rows.map((r) => r.id)).toEqual([b1, a1, a2]);
+      expect(rows[1]).toMatchObject({ accountId: a, meter: "sms", quantity: 1, reportedAt: null });
+      expect((await listReportableUsage(db, ours, new Date(now), 1)).map((r) => r.id)).toEqual([b1]);
+    })))));
 
   it("markUsageReported stamps reported_at and updated_at once, then reports false (mutation: drop .is('reported_at', null) → the second call returns true, FAILS)", () =>
     withTestAccount(async (db, a) => {
@@ -410,18 +484,20 @@ describe("usage.ts, live", () => {
       expect(Date.parse(row.updated_at)).toBe(at.getTime());
     }));
 
-  it("countUnreportedUsage honours `from`, `before` and `createdBefore`, and never counts a reported row (mutation: ignore beforeIso → FAILS; ignore createdBeforeIso → FAILS; drop the reported filter → FAILS)", () =>
-    withTestAccount(async (db, a) => {
+  it("countExpiredUsage counts only unreported rows between an account's billing start and now − 34 days, and only for accounts billed before that floor (mutation: drop the billing-start bound → the pre-billing row counts, FAILS; drop the window's upper bound → the in-window row counts, FAILS; drop the reported filter → FAILS)", () =>
+    withPlan((planId) => withTestAccount((db, old) => withTestAccount(async (_d, recent) => {
       const now = Date.now();
-      await usageRow(a, { occurredAt: now - 40 * DAY, createdAt: now - 40 * DAY });
-      await usageRow(a, { occurredAt: now - 2 * DAY, createdAt: now - 2 * DAY });
-      await usageRow(a, { occurredAt: now - HOUR, createdAt: now - HOUR });
-      await usageRow(a, { occurredAt: now - 2 * DAY, createdAt: now - 2 * DAY, reportedAt: now });
-      const fromIso = iso(now - 50 * DAY);
-      expect(await countUnreportedUsage(db, a, { fromIso })).toBe(3);
-      expect(await countUnreportedUsage(db, a, { fromIso, beforeIso: iso(now - 34 * DAY) })).toBe(1);
-      expect(await countUnreportedUsage(db, a, { fromIso, createdBeforeIso: iso(now - DAY) })).toBe(2);
-    }));
+      await bill(old, planId, now - 60 * DAY);
+      await bill(recent, planId, now - 5 * DAY);
+      await usageRow(old, { occurredAt: now - 40 * DAY });                    // expired: counted
+      await usageRow(old, { occurredAt: now - 70 * DAY });                    // before billing: never billable
+      await usageRow(old, { occurredAt: now - 2 * DAY });                     // inside the window
+      await usageRow(old, { occurredAt: now - 40 * DAY, reportedAt: now });   // reported in time
+      await usageRow(recent, { occurredAt: now - 40 * DAY });                 // before ITS billing start
+      const ours = (await listBilledUsageAccounts(db)).filter((x) => [old, recent].includes(x.accountId));
+      expect(ours).toHaveLength(2);
+      expect(await countExpiredUsage(db, ours, new Date(now))).toBe(1);
+    }))));
 
   it("listAccountsWithStaleUsage names a billed account whose reportable row has waited over a day since it was RECORDED; not one whose old row predates billing, nor one whose old event was recorded an hour ago (mutation: drop the billing-start floor → FAILS; test occurred_at instead of created_at → FAILS)", () =>
     withPlan((planId) => withTestAccount((db, stale) => withTestAccount((_d1, preBilling) => withTestAccount(async (_d2, lateRecorded) => {
@@ -612,18 +688,76 @@ export async function listBilledUsageAccounts(db: SupabaseClient): Promise<Bille
   }
 }
 
-/** One account's unreported rows from `fromIso`, oldest first, at most
- *  `limit`. Served by usage_events_account_occurred_idx. */
-export async function listUnreportedUsage(
-  db: SupabaseClient, accountId: string, fromIso: string, limit: number,
+/**
+ * Accounts per read in the per-account reads below. Each account adds one
+ * `and(...)` clause (about 100 characters) to the request URL, so 50 keep a
+ * read near 5 KB however many accounts are billed (assumption A18). Today
+ * that is ONE read.
+ */
+export const USAGE_ACCOUNTS_PER_READ = 50;
+
+/** One account's slice of occurred_at: from `fromIso` (inclusive), before
+ *  `beforeIso` (exclusive) when given. */
+export type UsageRange = { accountId: string; fromIso: string; beforeIso?: string };
+
+/**
+ * A PostgREST `or` filter selecting each account's rows in ITS OWN range, so
+ * one read serves many accounts whose windows differ (each billing start is
+ * its own floor). Timestamps are double-quoted, the documented escape for
+ * the `.`, `:` and `+` a timestamp carries inside a logic-tree value
+ * (automations.ts's eitherAnchorSince is the precedent, proven live; this
+ * file's live test proves it with PostgREST's own `+00:00` microsecond
+ * strings). Account ids are uuids and timestamps come from the database or
+ * toISOString(): neither can carry the `"`, `,` or `(` that would break out.
+ */
+export function usageRangeFilter(ranges: readonly UsageRange[]): string {
+  return ranges.map((r) => {
+    const parts = [`account_id.eq.${r.accountId}`, `occurred_at.gte."${r.fromIso}"`];
+    if (r.beforeIso !== undefined) parts.push(`occurred_at.lt."${r.beforeIso}"`);
+    return `and(${parts.join(",")})`;
+  }).join(",");
+}
+
+function inGroups<T>(xs: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < xs.length; i += size) out.push(xs.slice(i, i + size));
+  return out;
+}
+
+/** Each account's reportable range: from max(billing start, now − 34 days). */
+function reportableRanges(accounts: readonly BilledUsageAccount[], now: Date): UsageRange[] {
+  return accounts.map((a) => ({ accountId: a.accountId, fromIso: reportableFrom(a.billingStartedAt, now) }));
+}
+
+const oldestFirst = (x: UsageRow, y: UsageRow): number =>
+  Date.parse(x.occurredAt) - Date.parse(y.occurredAt) || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0);
+
+/**
+ * The next rows the report may send, OLDEST FIRST ACROSS the accounts given,
+ * at most `limit`: unreported, each account's from its own `reportableFrom`.
+ * One read per USAGE_ACCOUNTS_PER_READ accounts, each ordered and limited in
+ * SQL, then merged here, so the result is the true oldest `limit` rows.
+ *
+ * Oldest first across accounts is the fairness rule (G4): no account waits
+ * behind another's place in a list, and a backlog drains in the order it
+ * grew. The merge compares milliseconds; within one millisecond the order is
+ * by id, which no caller relies on.
+ */
+export async function listReportableUsage(
+  db: SupabaseClient, accounts: readonly BilledUsageAccount[], now: Date, limit: number,
 ): Promise<UsageRow[]> {
-  if (!Number.isSafeInteger(limit) || limit <= 0) return [];
-  const { data, error } = await db.from("usage_events").select(USAGE_COLUMNS)
-    .eq("account_id", accountId).is("reported_at", null).gte("occurred_at", fromIso)
-    .order("occurred_at", { ascending: true }).order("id", { ascending: true })
-    .limit(limit);
-  if (error) throw new Error(`listUnreportedUsage failed: ${error.message}`);
-  return ((data ?? []) as UsageDbRow[]).map(toUsageRow);
+  if (!Number.isSafeInteger(limit) || limit <= 0 || accounts.length === 0) return [];
+  const rows: UsageRow[] = [];
+  for (const group of inGroups(accounts, USAGE_ACCOUNTS_PER_READ)) {
+    const { data, error } = await db.from("usage_events").select(USAGE_COLUMNS)
+      .is("reported_at", null)
+      .or(usageRangeFilter(reportableRanges(group, now)))
+      .order("occurred_at", { ascending: true }).order("id", { ascending: true })
+      .limit(limit);
+    if (error) throw new Error(`listReportableUsage failed: ${error.message}`);
+    rows.push(...((data ?? []) as UsageDbRow[]).map(toUsageRow));
+  }
+  return rows.sort(oldestFirst).slice(0, limit);
 }
 
 /** Stamps a row reported, once. True when this call stamped it; false when
@@ -638,39 +772,72 @@ export async function markUsageReported(db: SupabaseClient, id: string, at: Date
   return (data ?? []).length === 1;
 }
 
-/** How many of an account's unreported rows fall in a window: `occurred_at`
- *  from `fromIso` (inclusive) to `beforeIso` (exclusive), and optionally
- *  RECORDED before `createdBeforeIso`. */
-export async function countUnreportedUsage(
-  db: SupabaseClient, accountId: string,
-  window: { fromIso: string; beforeIso?: string; createdBeforeIso?: string },
+/** PostgREST's default page; a read that returns this many rows may have
+ *  more behind it. */
+const STALE_READ_ROWS = 1000;
+
+/**
+ * The billed accounts, among those given, with STALE usage: a reportable
+ * row (G3's window) still unreported a day after it was RECORDED
+ * (`created_at`, not `occurred_at`: a row recorded late is not late to
+ * Stripe until it has waited a day). One definition for the cron's log and
+ * the agency banner, in the accounts' own order.
+ *
+ * One read per USAGE_ACCOUNTS_PER_READ accounts. A read returns ROWS, not
+ * accounts, so one account's backlog can fill it: when a read comes back
+ * full, the accounts it named are settled and the rest are read again. Each
+ * repeat names at least one new account, so it ends; with nothing stale it
+ * is exactly one read per group.
+ */
+export async function staleUsageAccountIds(
+  db: SupabaseClient, accounts: readonly BilledUsageAccount[], now: Date,
+): Promise<string[]> {
+  const createdBefore = new Date(now.getTime() - USAGE_STALE_AFTER_MS).toISOString();
+  const stale = new Set<string>();
+  for (const group of inGroups(accounts, USAGE_ACCOUNTS_PER_READ)) {
+    let pending = group;
+    while (pending.length > 0) {
+      const { data, error } = await db.from("usage_events").select("account_id")
+        .is("reported_at", null).lt("created_at", createdBefore)
+        .or(usageRangeFilter(reportableRanges(pending, now)))
+        .limit(STALE_READ_ROWS);
+      if (error) throw new Error(`staleUsageAccountIds failed: ${error.message}`);
+      const rows = (data ?? []) as { account_id: string }[];
+      for (const r of rows) stale.add(r.account_id);
+      if (rows.length < STALE_READ_ROWS) break;
+      pending = pending.filter((a) => !stale.has(a.accountId));
+    }
+  }
+  return accounts.filter((a) => stale.has(a.accountId)).map((a) => a.accountId);
+}
+
+/**
+ * Unreported rows of billed accounts that fell OUT of the window: from the
+ * billing start to now − 34 days. Never sent (Stripe would drop them without
+ * an error), counted so the cron can say so. Only accounts billed before
+ * that floor can have any; one count per USAGE_ACCOUNTS_PER_READ of them.
+ */
+export async function countExpiredUsage(
+  db: SupabaseClient, accounts: readonly BilledUsageAccount[], now: Date,
 ): Promise<number> {
-  let q = db.from("usage_events").select("id", { count: "exact", head: true })
-    .eq("account_id", accountId).is("reported_at", null).gte("occurred_at", window.fromIso);
-  if (window.beforeIso !== undefined) q = q.lt("occurred_at", window.beforeIso);
-  if (window.createdBeforeIso !== undefined) q = q.lt("created_at", window.createdBeforeIso);
-  const { count, error } = await q;
-  if (error) throw new Error(`countUnreportedUsage failed: ${error.message}`);
-  return count ?? 0;
+  const floorMs = now.getTime() - USAGE_REPORT_WINDOW_MS;
+  const floorIso = new Date(floorMs).toISOString();
+  const old = accounts.filter((a) => Date.parse(a.billingStartedAt) < floorMs);
+  let total = 0;
+  for (const group of inGroups(old, USAGE_ACCOUNTS_PER_READ)) {
+    const { count, error } = await db.from("usage_events").select("id", { count: "exact", head: true })
+      .is("reported_at", null)
+      .or(usageRangeFilter(group.map((a) => ({ accountId: a.accountId, fromIso: a.billingStartedAt, beforeIso: floorIso }))));
+    if (error) throw new Error(`countExpiredUsage failed: ${error.message}`);
+    total += count ?? 0;
+  }
+  return total;
 }
 
-/** Has a reportable row of this billed account waited over a day, since it
- *  was RECORDED, without reaching Stripe? One definition for the cron's log
- *  and the agency banner. */
-export async function isUsageStale(db: SupabaseClient, account: BilledUsageAccount, now: Date): Promise<boolean> {
-  const n = await countUnreportedUsage(db, account.accountId, {
-    fromIso: reportableFrom(account.billingStartedAt, now),
-    createdBeforeIso: new Date(now.getTime() - USAGE_STALE_AFTER_MS).toISOString(),
-  });
-  return n > 0;
-}
-
-/** The billed accounts with stale usage (the banner's count is its length).
- *  One count per billed account, in parallel. */
+/** The billed accounts with stale usage (the banner's count is its length):
+ *  the paged billed-account list, then staleUsageAccountIds over it. */
 export async function listAccountsWithStaleUsage(db: SupabaseClient, now: Date): Promise<string[]> {
-  const accounts = await listBilledUsageAccounts(db);
-  const stale = await Promise.all(accounts.map((a) => isUsageStale(db, a, now)));
-  return accounts.filter((_, i) => stale[i]).map((a) => a.accountId);
+  return staleUsageAccountIds(db, await listBilledUsageAccounts(db), now);
 }
 ```
 
@@ -682,10 +849,10 @@ Append to the end of `packages/db/src/index.ts`:
 
 // Client billing usage ledger (0051's usage_events): recorded where each
 // billable fact happens, reported to Stripe by the cron. See ./usage.ts.
-export { recordUsage, reportableFrom, listBilledUsageAccounts, listUnreportedUsage, markUsageReported,
-         countUnreportedUsage, isUsageStale, listAccountsWithStaleUsage,
-         USAGE_SOURCE_PREFIX, USAGE_REPORT_WINDOW_MS, USAGE_STALE_AFTER_MS,
-         type UsageInput, type UsageRow, type BilledUsageAccount } from "./usage";
+export { recordUsage, reportableFrom, usageRangeFilter, listBilledUsageAccounts, listReportableUsage,
+         markUsageReported, staleUsageAccountIds, countExpiredUsage, listAccountsWithStaleUsage,
+         USAGE_SOURCE_PREFIX, USAGE_REPORT_WINDOW_MS, USAGE_STALE_AFTER_MS, USAGE_ACCOUNTS_PER_READ,
+         type UsageInput, type UsageRow, type UsageRange, type BilledUsageAccount } from "./usage";
 ```
 
 - [ ] **Step 5: Typecheck**
@@ -709,8 +876,8 @@ git commit -m "feat(db): usage.ts, the usage ledger (insert once, billed account
 
 No migration: 0051 is already on both projects (ledger: "0051 APPLIED ... NEVER RE-APPLY").
 
-1. Push the branch. CI `verify` runs the db suite against the CI project. Read the check runs for the head SHA: `verify` green, and in its log `src/usage.test.ts` 6 passed and `src/test/usage.test.ts` 7 passed.
-2. Mutation probes, as PR-1 ran them: a throwaway branch `probe/m7a-pr2-db` (its own worktree), one commit per probe group, each applying the mutations named in the titles of Task 1's 13 tests; push, confirm each named test is red for its own reason, then delete the branch and the worktree. Never merge a probe.
+1. Push the branch. CI `verify` runs the db suite against the CI project. Read the check runs for the head SHA: `verify` green, and in its log `src/usage.test.ts` 9 passed and `src/test/usage.test.ts` 7 passed.
+2. Mutation probes, as PR-1 ran them: a throwaway branch `probe/m7a-pr2-db` (its own worktree), one commit per probe group, each applying the mutations named in the titles of Task 1's 16 tests; push, confirm each named test is red for its own reason, then delete the branch and the worktree. Never merge a probe.
 3. Ledger line: `M7a-PR2 Checkpoint A: db tests green on <sha>, probes <run ids>`.
 
 ---
@@ -804,8 +971,8 @@ import type { SmsProvider } from "@/lib/sms/types";
  * Client billing, the recording half (spec 2026-09-24, section 3 flow 3).
  * Every billable fact writes one usage_events row where it already happens:
  * a call Sofía talked to ends (finish-call.ts), a text reaches a customer
- * (send-sms.ts, textback.ts, the composer's sendSmsAction), a website chat
- * starts (the concierge turn route). The cron's usage report
+ * (send-sms.ts, textback.ts, the composer's sendSmsAction), Sofía's first
+ * reply in a website chat succeeds (the concierge turn route). The cron's usage report
  * (automations/passes/usage-report.ts) sends the rows to Stripe.
  *
  * Recording NEVER checks whether the account is billed: the ledger fills for
@@ -884,11 +1051,11 @@ git commit -m "feat(billing): recordUsageSafely, voiceMinutes and smsBillable, t
 **Files:**
 - Modify: `apps/web/src/lib/voice/call-state.ts` (`callerSpoke`; `classifyOutcome` uses it)
 - Modify: `apps/web/src/lib/voice/finish-call.ts` (one `durationSecs`; the usage leg after the automation-log leg)
-- Test: `apps/web/src/lib/voice/call-state.test.ts` (+1), `apps/web/src/lib/voice/finish-call.test.ts` (+6)
+- Test: `apps/web/src/lib/voice/call-state.test.ts` (+1), `apps/web/src/lib/voice/finish-call.test.ts` (+7)
 
 **Interfaces:**
 - Consumes: `voiceMinutes`, `recordUsageSafely` (Task 2). Verified today in `finish-call.ts`: `finishCall` at 348; the durable row at 549-572 (duration computed inline at 559); the automation-log leg at 574-590, gated on `meta.callRowId`; the alert-SMS deliver at 598-604; the text-back deliver at 629-632; `emit` at 648-652. `ctx.db` is `serviceDb()` (the incoming route's `finishCtx`).
-- Produces: `callerSpoke(state: Pick<CallState, "transcript">): boolean` (exported from `call-state.ts`); one `voice_minutes` row per call with a caller turn with words and a call row id: `{ accountId: ctx.accountId, meter: "voice_minutes", quantity: voiceMinutes(durationSecs), occurredAt: meta.endedAt, sourceRef: "call:<meta.callRowId>" }`.
+- Produces: `callerSpoke(state: Pick<CallState, "transcript">): boolean` (exported from `call-state.ts`); one `voice_minutes` row per call with a call row id where `callerSpoke(state) || isMeaningful(outcome)` (G5): `{ accountId: ctx.accountId, meter: "voice_minutes", quantity: voiceMinutes(durationSecs), occurredAt: meta.endedAt, sourceRef: "call:<meta.callRowId>" }`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -956,7 +1123,7 @@ describe("finishCall — usage: the minutes of a call Sofía talked to (client b
     endedAt: new Date(new Date("2027-06-01T12:00:00Z").getTime() + secs * 1000),
   });
 
-  it("records voice minutes AFTER the durable row: the stored duration rounded UP, the call as source, the call's end as occurred_at (mutation: Math.round(secs / 60) → 2 minutes, FAILS; mutation: move the leg above finishCallRow → call order FAILS)", async () => {
+  it("records voice minutes AFTER the durable row: the stored duration rounded UP, the call as source, the call's end as occurred_at; an abandoned call bills through the callerSpoke half alone (mutation: Math.round(secs / 60) → 2 minutes, FAILS; move the leg above finishCallRow → call order FAILS; gate on isMeaningful(outcome) alone → this abandoned call records nothing, FAILS)", async () => {
     const m = callOf(125);
     await finishCall(abandonedState(), ctx, m);
     expect(dbMocks.finishCallRow.mock.calls[0]![3]).toEqual(expect.objectContaining({ durationSecs: 125 }));
@@ -967,12 +1134,23 @@ describe("finishCall — usage: the minutes of a call Sofía talked to (client b
     expect(dbMocks.finishCallRow.mock.invocationCallOrder[0]!).toBeLessThan(dbMocks.recordUsage.mock.invocationCallOrder[0]!);
   });
 
-  it("a silent call (Sofía's greeting, no caller words) records nothing, though its turn_count is 1 (mutation: gate on turn_count / transcript.length → FAILS)", async () => {
+  it("a silent call (Sofía's greeting, no caller words, no booking/lead/message) records nothing, though its turn_count is 1; nor does a connect-timeout with no transcript at all (mutation: gate on turn_count / transcript.length → FAILS; gate on the call row id alone → FAILS)", async () => {
     const s = withTranscript(emptyCallState(), { role: "assistant", text: "Hi, this is Sofía with Rio Roofing.", at: "t" });
     const r = await finishCall(s, ctx, meta);
     expect(r.outcome).toBe("spam");
     expect(dbMocks.finishCallRow.mock.calls[0]![3]).toEqual(expect.objectContaining({ turnCount: 1 }));
+    await finishCall(emptyCallState(), ctx, meta);
     expect(dbMocks.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it("a message Sofía took bills though no caller turn was transcribed: the outcome says the caller interacted (mutation: gate on callerSpoke(state) alone → FAILS)", async () => {
+    const s = withMessage(emptyCallState(), { body: "call me", at: "t" });
+    const r = await finishCall(s, ctx, meta);
+    expect(r.outcome).toBe("message");
+    expect(dbMocks.recordUsage).toHaveBeenCalledTimes(1);
+    expect(dbMocks.recordUsage).toHaveBeenCalledWith(ctx.db, {
+      accountId: "a1", meter: "voice_minutes", quantity: 2, occurredAt: meta.endedAt, sourceRef: "call:call1",
+    });
   });
 
   it("a robocall that reached Sofía is billed although it records as spam: its minutes were spent (mutation: skip usage when the outcome is 'spam' → FAILS)", async () => {
@@ -1008,12 +1186,12 @@ describe("finishCall — usage: the minutes of a call Sofía talked to (client b
 });
 ```
 
-Count: **1** (call-state) + **6** (finish-call).
+Count: **1** (call-state) + **7** (finish-call).
 
 - [ ] **Step 2: Run them to verify they fail**
 
 Run: `pnpm --filter web exec vitest run src/lib/voice/call-state.test.ts src/lib/voice/finish-call.test.ts`
-Expected: FAIL: `callerSpoke is not a function`, and the new finish-call tests fail on `recordUsage` never being called (the silent-call, no-row-id and failing-write tests may already pass; the other three must be red).
+Expected: FAIL: `callerSpoke is not a function`, and the new finish-call tests fail on `recordUsage` never being called (the silent-call, no-row-id and failing-write tests may already pass; the other four must be red).
 
 - [ ] **Step 3: Add `callerSpoke`**
 
@@ -1038,7 +1216,8 @@ and add directly after `classifyOutcome`'s closing brace (before the `withRecord
  *
  * Two readers: `classifyOutcome` above (a call where the caller spoke and
  * got nothing is `abandoned`, not `spam`), and client billing, which bills
- * voice minutes for exactly these calls (finish-call.ts). NOT `turn_count`:
+ * voice minutes for these calls and for any booked/lead/message call
+ * (finish-call.ts: `callerSpoke(state) || isMeaningful(outcome)`). NOT `turn_count`:
  * the transcript holds Sofía's own turns too, so a silent ring that heard
  * her greeting has a turn count of 1 and must not bill. A robocall that
  * reached her DOES speak here: the recording guard writes its words as a
@@ -1119,10 +1298,13 @@ with
   }
 
   // USAGE (client billing): one `voice_minutes` row per call Sofía talked
-  // to, i.e. the caller said something (`callerSpoke`). That includes a
-  // robocall that reached her (its words are a caller turn, and its minutes
-  // were spent) and excludes a silent ring or a connect-timeout. Minutes are
-  // the stored duration rounded UP, at least one (`voiceMinutes`).
+  // to (danlo): the caller said something (`callerSpoke`), OR the outcome
+  // is booked/lead/message (`meaningful`, computed at the top), because
+  // those mean the caller interacted even when no caller turn was
+  // transcribed. That includes a robocall that reached her (its words are a
+  // caller turn, and its minutes were spent) and excludes a silent ring or a
+  // connect-timeout. Minutes are the stored duration rounded UP, at least
+  // one (`voiceMinutes`).
   //
   // Gated on `meta.callRowId`, NOT on `stored`, like the automation-log leg
   // above: the carrier and model minutes were spent whether or not
@@ -1133,7 +1315,7 @@ with
   // After the durable row and before the carrier sends below: a database
   // insert, and `recordUsageSafely` never throws, so it cannot cost the call
   // its alert text, its text-back, or this function's never-throws contract.
-  if (meta.callRowId && callerSpoke(state)) {
+  if (meta.callRowId && (callerSpoke(state) || meaningful)) {
     await recordUsageSafely(ctx.db, {
       accountId: ctx.accountId, meter: "voice_minutes", quantity: voiceMinutes(durationSecs),
       occurredAt: meta.endedAt, sourceRef: `call:${meta.callRowId}`,
@@ -1144,7 +1326,7 @@ with
 - [ ] **Step 5: Run them to verify they pass**
 
 Run: `pnpm --filter web exec vitest run src/lib/voice/call-state.test.ts src/lib/voice/finish-call.test.ts`
-Expected: `Tests  112 passed (112)` (call-state 20 → 21, finish-call 85 → 91).
+Expected: `Tests  113 passed (113)` (call-state 20 → 21, finish-call 85 → 92).
 
 Run: `pnpm --filter web typecheck`
 Expected: exit 0.
@@ -1153,7 +1335,7 @@ Expected: exit 0.
 
 ```bash
 git add apps/web/src/lib/voice/call-state.ts apps/web/src/lib/voice/call-state.test.ts apps/web/src/lib/voice/finish-call.ts apps/web/src/lib/voice/finish-call.test.ts
-git commit -m "feat(voice): record voice minutes for every call Sofía talked to (callerSpoke, never turn_count)"
+git commit -m "feat(voice): record voice minutes for every call Sofía talked to (callerSpoke or a meaningful outcome, never turn_count)"
 ```
 
 ---
@@ -1162,11 +1344,11 @@ git commit -m "feat(voice): record voice minutes for every call Sofía talked to
 
 **Files:**
 - Modify: `apps/web/src/lib/automations/send-sms.ts` (whole file shown)
-- Test: `apps/web/src/lib/automations/send-sms.test.ts` (+5, 2 edited)
+- Test: `apps/web/src/lib/automations/send-sms.test.ts` (+6, 2 edited)
 
 **Interfaces:**
 - Consumes: `recordUsageSafely`, `smsBillable` (Task 2); `segmentsFor` (`lib/sms/segments.ts:28`). Verified today: `sendAutomationSms` at `send-sms.ts:62-106` (send at 89, body with the opt-out disclosure built at 82); `markAutomationSmsSent` at 113-122; seven callers, each calling `markAutomationSmsSent` on its success path after its own stamp: `instant-reply.ts:203`, `passes/appointment-confirm.ts:170`, `passes/no-show-nudge.ts:238`, `passes/quote-followup.ts:226`, `passes/referral-ask.ts:286`, `passes/review-request.ts:259`, `passes/sms-reminder.ts:133`. `stampWithRetry` never throws (`lib/booking/stamp-retry.ts:68-86`).
-- Produces: `SentSms = { messageId: string; providerMessageId: string; usage: { segments: number; sentAt: Date } | null }`. `markAutomationSmsSent` records `{ accountId, meter: "sms", quantity: usage.segments, occurredAt: usage.sentAt, sourceRef: "message:<messageId>" }` on `ctx.db` when `usage` is not null.
+- Produces: `SentSms = { messageId: string; providerMessageId: string; usage: { segments: number; sentAt: Date } | null }`, `usage` worked out AFTER the send's `try` by a helper that never throws (a delivered text can never be marked failed, or re-sent, because of its usage). `markAutomationSmsSent` records `{ accountId, meter: "sms", quantity: usage.segments, occurredAt: usage.sentAt, sourceRef: "message:<messageId>" }` on `ctx.db` when `usage` is not null.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1247,6 +1429,23 @@ describe("usage: what an automation text bills (client billing)", () => {
     expect((await sendAutomationSms(realCtx("+19565550199"), input())).usage).toBeNull();
   });
 
+  it("a throw while working out a DELIVERED text's usage never marks it failed or gets it re-sent: the send resolves, usage null, no attempt marker (mutation: compute usage inside the send's try → the row is marked failed and the send rejects, FAILS; compute it after the try with no catch → the send rejects, the pass never stamps and re-sends next tick, FAILS)", async () => {
+    const onProviderFailure = vi.fn(async () => {});
+    const explodes: PassContext = {
+      ...ctx(),
+      sms: () => ({
+        get isFake(): boolean { throw new Error("provider shape changed"); },
+        send: (...a: unknown[]) => smsSend(...a),
+      }),
+    };
+    expect(await sendAutomationSms(explodes, input(onProviderFailure)))
+      .toEqual({ messageId: "msg_1", providerMessageId: "s1", usage: null });
+    expect(smsSend).toHaveBeenCalledTimes(1);
+    expect(dbMocks.updateMessageStatus).not.toHaveBeenCalled();
+    expect(onProviderFailure).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("usage not worked out for message msg_1"));
+  });
+
   it("markAutomationSmsSent records the segments against the message, AFTER the status write (mutation: record before the status write → call order FAILS)", async () => {
     const sentAt = new Date("2026-09-09T14:00:05Z");
     await markAutomationSmsSent(ctx(), "acct_1", { messageId: "msg_1", providerMessageId: "s1", usage: { segments: 3, sentAt } }, "test");
@@ -1265,7 +1464,7 @@ describe("usage: what an automation text bills (client billing)", () => {
     expect(dbMocks.recordUsage).toHaveBeenCalledTimes(1);
   });
 
-  it("every module that sends with sendAutomationSms( also calls markAutomationSmsSent(, where its usage is recorded (mutation: delete one pass's markAutomationSmsSent call → that file is named here, FAILS)", () => {
+  it("every module that sends with sendAutomationSms( also CALLS markAutomationSmsSent(, where its usage is recorded; comments do not count (mutation: delete one pass's markAutomationSmsSent call → that file is named here, FAILS; replace the call with a comment that names it → still named, FAILS)", () => {
     const ROOT = fileURLToPath(new URL(".", import.meta.url));
     const walk = (dir: string): string[] => readdirSync(dir).flatMap((name) => {
       const full = join(dir, name);
@@ -1273,19 +1472,28 @@ describe("usage: what an automation text bills (client billing)", () => {
       return full.endsWith(".ts") && !full.endsWith(".test.ts") ? [full] : [];
     });
     const rel = (f: string) => f.slice(ROOT.length).replace(/\\/g, "/");
-    const senders = walk(ROOT).filter((f) => rel(f) !== "send-sms.ts" && readFileSync(f, "utf-8").includes("sendAutomationSms("));
+    // The CODE of a file: block comments, then line comments, stripped (a
+    // `//` right after a `:` is a URL, not a comment), so a doc comment that
+    // names the call cannot satisfy the scan.
+    const code = (f: string) => readFileSync(f, "utf-8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    // Guards the stripper itself: a phrase only send-sms.ts's doc comment holds.
+    expect(readFileSync(join(ROOT, "send-sms.ts"), "utf-8")).toContain("AFTER the dedupe stamp");
+    expect(code(join(ROOT, "send-sms.ts"))).not.toContain("AFTER the dedupe stamp");
+    const senders = walk(ROOT).filter((f) => rel(f) !== "send-sms.ts" && code(f).includes("sendAutomationSms("));
     // Guards the fixture: the seven callers on 2026-09-25. A new caller reds
     // here until it is added, which is the moment to check it bills.
     expect(senders.map(rel).sort()).toEqual([
       "instant-reply.ts", "passes/appointment-confirm.ts", "passes/no-show-nudge.ts", "passes/quote-followup.ts",
       "passes/referral-ask.ts", "passes/review-request.ts", "passes/sms-reminder.ts",
     ]);
-    expect(senders.filter((f) => !readFileSync(f, "utf-8").includes("markAutomationSmsSent(")).map(rel)).toEqual([]);
+    expect(senders.filter((f) => !code(f).includes("markAutomationSmsSent(")).map(rel)).toEqual([]);
   });
 });
 ```
 
-Count: **+5**, 2 edited.
+Count: **+6**, 2 edited.
 
 - [ ] **Step 2: Run them to verify they fail**
 
@@ -1302,6 +1510,7 @@ import { SMS_RETRY_COOLDOWN_MS } from "./caps";
 import { withOptOut } from "@/lib/sms/opt-out";
 import { segmentsFor } from "@/lib/sms/segments";
 import { recordUsageSafely, smsBillable } from "@/lib/billing/usage";
+import type { SmsProvider } from "@/lib/sms/types";
 import type { PassContext } from "./context";
 
 /**
@@ -1397,12 +1606,9 @@ export async function sendAutomationSms(ctx: SmsSendContext, input: AutomationSm
   const { id: messageId } = await createMessage(ctx.db, input.accountId, {
     conversationId: convo.id, channel: "sms", direction: "outbound", body,
   }, AUTOMATION_ACTOR_ID, AUTOMATION_ACTOR_TYPE);
+  let providerMessageId: string;
   try {
-    const { providerMessageId } = await sms.send({ to: input.to, from: input.from, body });
-    return {
-      messageId, providerMessageId,
-      usage: smsBillable(sms) ? { segments: segmentsFor(body).segments, sentAt: new Date() } : null,
-    };
+    ({ providerMessageId } = await sms.send({ to: input.to, from: input.from, body }));
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown send failure";
     try {
@@ -1417,6 +1623,27 @@ export async function sendAutomationSms(ctx: SmsSendContext, input: AutomationSm
       console.error(`automation sms: could not record the failed attempt for message ${messageId}: ${String(markErr)}`);
     }
     throw e;
+  }
+  // AFTER the send's try, never inside it: the text is delivered, and
+  // nothing about its usage may reach the catch above (which marks the row
+  // failed) or reject this function (the caller would then never stamp, and
+  // re-send the text next tick). billedUsage never throws.
+  return { messageId, providerMessageId, usage: billedUsage(sms, body, messageId) };
+}
+
+/**
+ * What a delivered automation text bills, or null. NEVER throws: a failure
+ * here (a provider whose shape changed, a counting bug) loses one text's
+ * usage, logged, rather than the text's `sent` status or its dedupe stamp.
+ */
+function billedUsage(
+  sms: Pick<SmsProvider, "isFake" | "redirectTo">, body: string, messageId: string,
+): SentSms["usage"] {
+  try {
+    return smsBillable(sms) ? { segments: segmentsFor(body).segments, sentAt: new Date() } : null;
+  } catch (e) {
+    console.error(`automation sms: usage not worked out for message ${messageId}, so it will not bill: ${String(e)}`);
+    return null;
   }
 }
 
@@ -1467,7 +1694,7 @@ export function smsCooldownActive(smsFailedAt: string | null, now: Date): boolea
 - [ ] **Step 4: Run them to verify they pass, and that nothing downstream broke**
 
 Run: `pnpm --filter web exec vitest run src/lib/automations/send-sms.test.ts`
-Expected: `Tests  15 passed (15)` (10 → 15).
+Expected: `Tests  16 passed (16)` (10 → 16).
 
 Run: `pnpm --filter web exec vitest run src/lib/automations src/lib/forms "src/app/(dashboard)/dashboard/accounts/[accountId]/automations"`
 Expected: all pass. (The pass tests' providers are `isFake: true`, so `usage` is null and nothing new is recorded there.)
@@ -1867,7 +2094,7 @@ with
 - [ ] **Step 5: Run them to verify they pass**
 
 Run: `pnpm --filter web exec vitest run src/lib/voice/textback.test.ts "src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.test.ts" src/lib/voice/finish-call.test.ts src/app/api/voice/texml/handoff-result/route.test.ts`
-Expected: all pass; textback 5, composer actions 20 (14 → 20), finish-call 91 (its text-back provider is `isFake: true`, so it records no SMS usage).
+Expected: all pass; textback 5, composer actions 20 (14 → 20), finish-call 92 (its text-back provider is `isFake: true`, so it records no SMS usage).
 
 Run: `pnpm --filter web typecheck && pnpm --filter web lint`
 Expected: exit 0.
@@ -1881,15 +2108,15 @@ git commit -m "feat(sms): bill delivered text-backs and composer replies by segm
 
 ---
 
-### Task 6: The concierge leg (one website chat per conversation start)
+### Task 6: The concierge leg (one website chat, billed when Sofía's first reply succeeds)
 
 **Files:**
 - Modify: `apps/web/src/app/api/concierge/[publicId]/turn/route.ts`
-- Test: `apps/web/src/app/api/concierge/[publicId]/turn/route.test.ts` (+4)
+- Test: `apps/web/src/app/api/concierge/[publicId]/turn/route.test.ts` (+5)
 
 **Interfaces:**
-- Consumes: `recordUsageSafely` (Task 2), imported LAZILY: this route keeps `@bis/db` off module scope (`route.ts:113-123`'s rule: a module-scope `@bis/db` import breaks `next build`'s page-data collection), and `lib/billing/usage.ts` imports `@bis/db` at its module scope. Verified today: `db = serviceDb()` at 131; `createConciergeConversation` at 288; the `recordAutomationLog` leg at 294-302; the caps refuse before creation (e.g. per-IP at 261-264, status 429).
-- Produces: `{ accountId: profile.account_id, meter: "ai_chats", quantity: 1, occurredAt: <now>, sourceRef: "conversation:<created.id>" }`, once per started conversation.
+- Consumes: `recordUsageSafely` (Task 2), imported LAZILY and inside the leg's own `try`: this route keeps `@bis/db` off module scope (`route.ts:113-123`'s rule: a module-scope `@bis/db` import breaks `next build`'s page-data collection), and `lib/billing/usage.ts` imports `@bis/db` at its module scope. Verified today: `db = serviceDb()` at 131; turn 1 is `!priorId` (195); `createConciergeConversation` at 288; the model call at 395-430, whose failure answers 503 (428-429); `spoken`'s condition at 485 (`reply || ((toolArgs && filed) ? strings.captured : strings.unavailable)`); the transcript append at 499-517; the success response at 519.
+- Produces: `{ accountId: profile.account_id, meter: "ai_chats", quantity: 1, occurredAt: <now>, sourceRef: "conversation:<conversationId>" }`, once per conversation, on the TURN-1 request whose reply succeeded (G13, danlo 2026-09-25). A start that fails (model 503, timeout, an empty completion the visitor reads as "unavailable") records nothing; a later turn never attempts it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1920,8 +2147,8 @@ with
 
 ```ts
 
-describe("POST /api/concierge/[publicId]/turn — usage: one website chat per conversation (client billing)", () => {
-  it("a conversation START records one website chat against the new conversation (mutation: drop the usage leg → FAILS)", async () => {
+describe("POST /api/concierge/[publicId]/turn — usage: one website chat, billed when Sofía's FIRST reply succeeds (client billing)", () => {
+  it("a first turn Sofía answered records ONE website chat against the conversation (mutation: drop the usage leg → FAILS)", async () => {
     const res = await firstTurn();
     expect(res.status).toBe(200);
     expect(dbFns.recordUsage).toHaveBeenCalledTimes(1);
@@ -1930,21 +2157,29 @@ describe("POST /api/concierge/[publicId]/turn — usage: one website chat per co
     });
   });
 
-  it("a later turn of the same conversation records nothing (mutation: record on every turn → FAILS)", async () => {
+  it("a first turn whose model call FAILS (an OpenAI outage's 503) records nothing, though the conversation row exists (mutation: record at createConciergeConversation → FAILS)", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 503, json: async () => ({}) });
+    const res = await firstTurn();
+    expect(res.status).toBe(503);
+    expect(dbFns.createConciergeConversation).toHaveBeenCalledTimes(1);
+    expect(dbFns.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it("a first turn whose completion is EMPTY (the visitor reads the 'unavailable' line) records nothing (mutation: gate on the model call returning alone → FAILS)", async () => {
+    fetchMock.mockResolvedValue(modelReplies(""));
+    const res = await firstTurn();
+    expect(res.status).toBe(200);
+    expect((await res.json() as { reply: string }).reply).toBe(conciergeStrings("en").unavailable);
+    expect(dbFns.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it("a later turn, answered, records nothing: only turn 1 ever attempts it (mutation: drop the turn-1 gate → FAILS)", async () => {
     const res = await laterTurn();
     expect(res.status).toBe(200);
     expect(dbFns.recordUsage).not.toHaveBeenCalled();
   });
 
-  it("a start refused by the per-IP cap creates no conversation and records nothing (mutation: record at the top of the turn-1 branch, before the caps → FAILS)", async () => {
-    dbFns.countConciergeConversationsByIp.mockResolvedValue(CONCIERGE_MAX_CONVERSATIONS_PER_IP);
-    const res = await firstTurn();
-    expect(res.status).toBe(429);
-    expect(dbFns.createConciergeConversation).not.toHaveBeenCalled();
-    expect(dbFns.recordUsage).not.toHaveBeenCalled();
-  });
-
-  it("a failing usage write leaves the visitor's answer untouched (mutation: remove recordUsageSafely's catch → the route's error path, FAILS)", async () => {
+  it("a failing usage write leaves the visitor's answer untouched (mutation: remove recordUsageSafely's catch AND the leg's own try → the route's outer catch answers 503, FAILS)", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     dbFns.recordUsage.mockRejectedValue(new Error("usage_events is down"));
     const res = await firstTurn();
@@ -1954,47 +2189,66 @@ describe("POST /api/concierge/[publicId]/turn — usage: one website chat per co
 });
 ```
 
-Count: **+4**.
+Count: **+5**.
 
 - [ ] **Step 2: Run them to verify they fail**
 
 Run: `pnpm --filter web exec vitest run "src/app/api/concierge/[publicId]/turn/route.test.ts"`
-Expected: FAIL: the first test (`recordUsage` never called). The other three pass already (nothing records yet); they are the regression guards.
+Expected: FAIL: the first test (`recordUsage` never called). The other four pass already (nothing records yet); they are the regression guards, and their named mutations are what the reviewer probes.
 
 - [ ] **Step 3: Add the leg**
 
 In `apps/web/src/app/api/concierge/[publicId]/turn/route.ts`, replace
 
 ```ts
-      } catch (e) {
-        log("automation log write failed", { conversationId: created.id, error: String(e) });
-      }
+      log("transcript append failed", { conversationId, error: String(e) });
+    }
+
+    return quiet(conversationId, spoken, false);
 ```
 
 with
 
 ```ts
+      log("transcript append failed", { conversationId, error: String(e) });
+    }
+
+    // USAGE (client billing): ONE `ai_chats` row per conversation, recorded
+    // when Sofía's FIRST reply has succeeded (danlo, 2026-09-25: a failed
+    // start, e.g. the model call's 503 during an OpenAI outage, never
+    // bills). Every refusal and the model call are above this line, so none
+    // of them can reach it. "Succeeded" is `spoken`'s own condition: the
+    // model wrote a reply, or a lead was filed this turn; an empty completion
+    // that fell back to `strings.unavailable` is not an answer.
+    //
+    // Turn 1 only (`!priorId`): a later turn never attempts it. The unique
+    // (meter, source_ref) on `conversation:<id>` is the backstop, not the
+    // gate. recordUsageSafely never throws, and the LAZY import (this
+    // handler's rule, lines 113-123: lib/billing/usage imports @bis/db at its
+    // module scope) sits inside this leg's own try, so neither a ledger
+    // failure nor a failed import can cost the visitor the answer below.
+    const answered = Boolean(reply || (toolArgs && filed));
+    if (!priorId && answered) {
+      try {
+        const { recordUsageSafely } = await import("@/lib/billing/usage");
+        await recordUsageSafely(db, {
+          accountId: profile.account_id, meter: "ai_chats", quantity: 1,
+          occurredAt: new Date(), sourceRef: `conversation:${conversationId}`,
+        }, `concierge ${conversationId}`);
       } catch (e) {
-        log("automation log write failed", { conversationId: created.id, error: String(e) });
+        log("usage leg failed", { conversationId, error: String(e) });
       }
-      // USAGE (client billing): one `ai_chats` row per conversation START,
-      // beside the automation-log row above and after the conversation row
-      // it names, so a start refused by any cap (all of them run above)
-      // records nothing. recordUsageSafely never throws, so the visitor's
-      // answer cannot depend on the ledger. Lazy, like every @bis/db-backed
-      // import in this handler: lib/billing/usage imports @bis/db at its
-      // module scope.
-      const { recordUsageSafely } = await import("@/lib/billing/usage");
-      await recordUsageSafely(db, {
-        accountId: profile.account_id, meter: "ai_chats", quantity: 1,
-        occurredAt: new Date(), sourceRef: `conversation:${created.id}`,
-      }, `concierge ${created.id}`);
+    }
+
+    return quiet(conversationId, spoken, false);
 ```
+
+(The first `transcript append failed` log is the only one in the file, so the match is unique.)
 
 - [ ] **Step 4: Run it to verify it passes**
 
 Run: `pnpm --filter web exec vitest run "src/app/api/concierge/[publicId]/turn/route.test.ts"`
-Expected: `Tests  47 passed (47)` (43 → 47).
+Expected: `Tests  48 passed (48)` (43 → 48).
 
 Run: `pnpm --filter web typecheck`
 Expected: exit 0.
@@ -2003,7 +2257,7 @@ Expected: exit 0.
 
 ```bash
 git add "apps/web/src/app/api/concierge/[publicId]/turn/route.ts" "apps/web/src/app/api/concierge/[publicId]/turn/route.test.ts"
-git commit -m "feat(concierge): record one website chat per conversation start"
+git commit -m "feat(concierge): record one website chat when Sofía's first reply succeeds"
 ```
 
 ---
@@ -2020,9 +2274,10 @@ git commit -m "feat(concierge): record one website chat per conversation start"
 - Produces (used by Tasks 8 and 10):
   - `type MeterEventInput = { eventName: string; customerId: string; value: number; identifier: string; timestampSeconds: number }`
   - `meterEventParams(input: MeterEventInput): Stripe.Billing.MeterEventCreateParams`: `{ event_name, identifier, timestamp, payload: { stripe_customer_id, value: String(value) } }`; throws on a value that is not a positive whole number, a timestamp that is not whole seconds (non-integer, `<= 0`, or `>= 100_000_000_000`, i.e. milliseconds), and a customer id not starting `cus_`.
-  - `BillingGateway.reportMeterEvent(input: MeterEventInput, idempotencyKey: string): Promise<void>`
+  - `BillingGateway.reportMeterEvent(input: MeterEventInput, idempotencyKey: string): Promise<void>`; the real adapter sends it with PER-REQUEST options `{ idempotencyKey, maxNetworkRetries: 0, timeout: METER_EVENT_TIMEOUT_MS }`, overriding the client's 2 retries × 20 s (M6: one send is bounded at 10 s, and the next tick is the retry, under the same key).
+  - `METER_EVENT_TIMEOUT_MS = 10_000` (Task 8's budget reads it).
   - `meterEventFailureKind(e: unknown): "row" | "systemic"`: `"row"` for `.type` `StripeInvalidRequestError` or `StripeIdempotencyError`; `"systemic"` for everything else.
-  - `FakeGateway.meterEvents: MeterEventInput[]` (one per identifier); `FakeGateway.failOn: { op; after?; error?: unknown } | null` (throws `error` when given).
+  - `FakeGateway.meterEvents: MeterEventInput[]` (one per ACCEPTED KEY: a new key records a new event even for an identifier already held, because A11 is unproven and the fake must be at least as strict as Stripe, `fake-gateway.ts:17-24`); `FakeGateway.failOn: { op; after?; error?: unknown } | null` (throws `error` when given).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2033,7 +2288,8 @@ In `apps/web/src/lib/billing/stripe-gateway.test.ts`:
 ```ts
 import {
   billingGatewayFromEnv, priceCreateParams, PRODUCTION_SUPABASE_REF, stripeGateway, stripeKeyVerdict,
-  STRIPE_API_VERSION, meterEventParams, meterEventFailureKind, type StripeEnv, type MeterEventInput,
+  STRIPE_API_VERSION, meterEventParams, meterEventFailureKind, METER_EVENT_TIMEOUT_MS,
+  type StripeEnv, type MeterEventInput,
 } from "./stripe-gateway";
 ```
 
@@ -2090,11 +2346,14 @@ describe("meterEventParams (the usage mapping)", () => {
 });
 
 describe("stripeGateway.reportMeterEvent", () => {
-  it("creates ONE meter event with the mapped params under the idempotency key, and returns nothing Stripe sent back (mutation: drop the options argument → FAILS)", async () => {
+  it("creates ONE meter event with the mapped params under the idempotency key, with NO SDK retry and a 10 s timeout of its own, and returns nothing Stripe sent back (mutation: drop the options argument → FAILS; drop the per-request transport → the client's 2 retries × 20 s apply, one send can run about 61.5 s, FAILS)", async () => {
     const s = stubStripe();
     await expect(stripeGateway(s as unknown as Stripe).reportMeterEvent(EVENT, "bis-usage-u_1-cus_1")).resolves.toBeUndefined();
     expect(s.billing.meterEvents.create).toHaveBeenCalledTimes(1);
-    expect(s.billing.meterEvents.create).toHaveBeenCalledWith(meterEventParams(EVENT), { idempotencyKey: "bis-usage-u_1-cus_1" });
+    expect(s.billing.meterEvents.create).toHaveBeenCalledWith(meterEventParams(EVENT), {
+      idempotencyKey: "bis-usage-u_1-cus_1", maxNetworkRetries: 0, timeout: 10_000,
+    });
+    expect(METER_EVENT_TIMEOUT_MS).toBe(10_000);
   });
 });
 
@@ -2112,7 +2371,7 @@ describe("meterEventFailureKind (does one row's failure stop the tick?)", () => 
   });
 });
 
-describe("FakeGateway meter events (Stripe's replay and identifier dedupe, assumptions A10-A11)", () => {
+describe("FakeGateway meter events (at least as strict as Stripe: replay is A10; identifier dedupe, A11, is NOT assumed)", () => {
   it("the same key with the same event replays: no second event (mutation: record on replay → FAILS)", async () => {
     const g = new FakeGateway();
     await g.reportMeterEvent(EVENT, "k1");
@@ -2121,11 +2380,11 @@ describe("FakeGateway meter events (Stripe's replay and identifier dedupe, assum
     expect(g.calls.filter((c) => c.op === "reportMeterEvent")).toHaveLength(2);
   });
 
-  it("the same identifier under a NEW key is deduped: one event (mutation: dedupe by key only → two events, FAILS)", async () => {
+  it("the same identifier under a NEW key records a SECOND event: A11 is unproven, so the fake assumes the costlier answer and a test can never lean on a dedupe Stripe may not do (mutation: dedupe by identifier → one event, FAILS)", async () => {
     const g = new FakeGateway();
     await g.reportMeterEvent(EVENT, "k1");
     await g.reportMeterEvent(EVENT, "k2");
-    expect(g.meterEvents).toEqual([EVENT]);
+    expect(g.meterEvents).toEqual([EVENT, EVENT]);
   });
 
   it("the same key with a different event throws, as Stripe's 400 does (mutation: replay without comparing → FAILS)", async () => {
@@ -2208,7 +2467,9 @@ export type MeterEventInput = {
   customerId: string;
   /** Whole units. Sent as a string (Stripe's payload values are strings). */
   value: number;
-  /** The usage row's id: Stripe dedupes on it for at least 24 hours. */
+  /** The usage row's id. Stripe documents uniqueness "within a rolling
+   *  period of at least 24 hours"; whether a SECOND key carrying it is
+   *  deduplicated is assumption A11, unproven until the e2e observes it. */
   identifier: string;
   timestampSeconds: number;
 };
@@ -2230,6 +2491,16 @@ export interface BillingGateway {
 /** At or above this, a "seconds" timestamp is really milliseconds (in
  *  seconds it would be the year 5138). */
 const MAX_TIMESTAMP_SECONDS = 100_000_000_000;
+
+/**
+ * One meter event's whole budget: the request carries this timeout and NO
+ * SDK retry, overriding the client's 2 retries × 20 s (billingGatewayFromEnv
+ * below), which could hold one send about 61.5 s. The usage report is the
+ * retry (next tick, same idempotency key), and its budget stops starting
+ * sends this long before it runs out (usage-report.ts), so a send that times
+ * out still ends inside the budget.
+ */
+export const METER_EVENT_TIMEOUT_MS = 10_000;
 
 /**
  * The usage mapping: one usage row → one v1 meter event. The payload keys
@@ -2290,7 +2561,12 @@ with
       return { id: p.id };
     },
     async reportMeterEvent(input, idempotencyKey) {
-      await stripe.billing.meterEvents.create(meterEventParams(input), { idempotencyKey });
+      // Per-request transport (stripe 22.6.2 RequestOptions): no retry, a
+      // bounded wait. The client-wide settings suit the Plans page, not a
+      // cron pass with a budget.
+      await stripe.billing.meterEvents.create(meterEventParams(input), {
+        idempotencyKey, maxNetworkRetries: 0, timeout: METER_EVENT_TIMEOUT_MS,
+      });
     },
   };
 }
@@ -2336,7 +2612,8 @@ with
 ```ts
  *   failOn   throw on the (after + 1)th call of `op`, and every one after;
  *            `error` when given (a Stripe-shaped error), else a plain Error
- *   meterEvents  the meter events Stripe would hold: one per identifier
+ *   meterEvents  the meter events Stripe would hold: one per accepted key,
+ *            even when two keys carry one identifier (A11 is not assumed)
  */
 export class FakeGateway implements BillingGateway {
   meters: StripeMeter[] = [];
@@ -2365,10 +2642,12 @@ with
   /**
    * A meter event. Same idempotency strictness as the creates above (A4):
    * the same key with the same event replays and records nothing; the same
-   * key with a different event throws. A NEW key carrying an identifier
-   * already held records nothing either: Stripe dedupes identifiers for a
-   * rolling 24 hours or more (A11 is what Task 10 observes against real
-   * Stripe); this fake never forgets one.
+   * key with a different event throws. A NEW key records a NEW event, even
+   * when its identifier is one already held: whether Stripe dedupes an
+   * identifier across keys is assumption A11, which only Task 10's e2e
+   * observes, so this fake assumes the costlier answer (the rule in the
+   * class doc: never looser than what it fakes). A test that passes here
+   * cannot be relying on a dedupe Stripe may not do.
    */
   async reportMeterEvent(input: MeterEventInput, key: string): Promise<void> {
     meterEventParams(input);
@@ -2384,7 +2663,6 @@ with
       return;
     }
     this.replay.set(key, { op: "reportMeterEvent", input, value: undefined });
-    if (this.meterEvents.some((e) => e.identifier === input.identifier)) return;
     this.meterEvents.push({ ...input });
   }
 ```
@@ -2414,14 +2692,15 @@ git commit -m "feat(billing): reportMeterEvent on the Stripe gateway and the fak
 **Files:**
 - Modify: `apps/web/src/lib/automations/caps.ts` (append two constants)
 - Create: `apps/web/src/lib/automations/passes/usage-report.ts`
-- Test: `apps/web/src/lib/automations/passes/usage-report.test.ts` (13 tests)
+- Test: `apps/web/src/lib/automations/passes/usage-report.test.ts` (14 tests)
 - Modify: `apps/web/src/lib/automations/registry.ts` (append the pass)
 - Modify: `apps/web/src/lib/automations/sentinel.test.ts` (2 tests edited, mocks extended)
 - Modify: `apps/web/src/app/api/cron/reminders/route.test.ts` (mock extended, 7 whole-body equalities edited)
 
 **Interfaces:**
-- Consumes: from `@bis/db` (Task 1) `listBilledUsageAccounts`, `listUnreportedUsage`, `markUsageReported`, `countUnreportedUsage`, `isUsageStale`, `reportableFrom`, `USAGE_REPORT_WINDOW_MS`; from Task 7 `billingGatewayFromEnv`, `meterEventFailureKind`; `METERS` (`stripe-catalog.ts:12-16`). Verified today: `Pass` / `PassContext` (`context.ts:15-56`), `runPasses` (`harness.ts:62-75`, each pass in its own try/catch), `PASSES` (`registry.ts:45`), the route's `maxDuration = 300` (`api/cron/reminders/route.ts:16`), `RELEASE_BUDGET_MS = 60_000` (`passes/release-held.ts:69`).
-- Produces: `usageReportPass: Pass` with key `"usageReport"` and counters `{ reported, unstamped, failed, expired, staleAccounts, skippedNoStripe, skippedCap, stoppedOnError, stoppedOnBudget }`; `usageIdempotencyKey(rowId: string, customerId: string): string`; `USAGE_REPORT_TICK_CAP = 200`, `USAGE_REPORT_BUDGET_MS = 60_000`.
+- Consumes: from `@bis/db` (Task 1) `listBilledUsageAccounts`, `listReportableUsage`, `markUsageReported`, `staleUsageAccountIds`, `countExpiredUsage`; from Task 7 `billingGatewayFromEnv`, `meterEventFailureKind`, `METER_EVENT_TIMEOUT_MS`; `METERS` (`stripe-catalog.ts:12-16`). Verified today: `Pass` / `PassContext` (`context.ts:15-56`), `runPasses` (`harness.ts:62-75`, each pass in its own try/catch), `PASSES` (`registry.ts:45`), the route's `maxDuration = 300` (`api/cron/reminders/route.ts:16`), `RELEASE_BUDGET_MS = 60_000` (`passes/release-held.ts:69`).
+- Produces: `usageReportPass: Pass` with key `"usageReport"` and counters `{ reported, unstamped, alreadyStamped, failed, expired, staleAccounts, skippedNoStripe, stoppedOnCap, stoppedOnError, stoppedOnBudget }` (ten); `usageIdempotencyKey(rowId: string, customerId: string): string`; `USAGE_REPORT_TICK_CAP = 200`, `USAGE_REPORT_BUDGET_MS = 60_000`.
+- Bounded per tick (G4, G7): the billed-account list (paged), ONE stale read and ONE expired count per 50 billed accounts, then reads of the oldest rows across all of them (one per 50 accounts; a repeat only after an account's refusal emptied a full read); never a read per account.
 
 Every `@bis/db` export the pass uses is dereferenced INSIDE `run()`, never at module scope: the cron route test's `@bis/db` mock is a bare factory, which throws the moment an export it does not define is dereferenced.
 
@@ -2433,8 +2712,8 @@ Create `apps/web/src/lib/automations/passes/usage-report.test.ts`:
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
-  listBilledUsageAccounts: vi.fn(), listUnreportedUsage: vi.fn(), markUsageReported: vi.fn(),
-  countUnreportedUsage: vi.fn(), isUsageStale: vi.fn(),
+  listBilledUsageAccounts: vi.fn(), listReportableUsage: vi.fn(), markUsageReported: vi.fn(),
+  countExpiredUsage: vi.fn(), staleUsageAccountIds: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const gatewayMocks = vi.hoisted(() => ({ fromEnv: vi.fn() }));
@@ -2445,15 +2724,13 @@ vi.mock("@/lib/billing/stripe-gateway", async (importOriginal) => ({
 
 import type { BilledUsageAccount, UsageRow } from "@bis/db";
 import { FakeGateway } from "@/lib/billing/fake-gateway";
+import { METER_EVENT_TIMEOUT_MS } from "@/lib/billing/stripe-gateway";
 import { USAGE_REPORT_BUDGET_MS, USAGE_REPORT_TICK_CAP } from "../caps";
 import type { PassContext } from "../context";
 import { usageReportPass } from "./usage-report";
 
 const TICK = new Date("2026-09-25T15:00:00.000Z");
-const WINDOW_START = "2026-08-22T15:00:00.000Z";   // TICK − 34 days
-/** Billed five days ago: its start is inside the window (microseconds kept). */
 const A: BilledUsageAccount = { accountId: "acct_a", stripeCustomerId: "cus_a", billingStartedAt: "2026-09-20T10:00:00.123456+00:00" };
-/** Billed in June: floored at the window, and it can hold expired rows. */
 const B: BilledUsageAccount = { accountId: "acct_b", stripeCustomerId: "cus_b", billingStartedAt: "2026-06-01T00:00:00+00:00" };
 const C: BilledUsageAccount = { accountId: "acct_c", stripeCustomerId: "cus_c", billingStartedAt: "2026-09-21T00:00:00+00:00" };
 
@@ -2471,26 +2748,36 @@ const ctx = (): PassContext => ({
   quiet: async () => ({ enabled: false, start: "21:00", end: "08:00" }),
 });
 const EMPTY = {
-  reported: 0, unstamped: 0, failed: 0, expired: 0, staleAccounts: 0,
-  skippedNoStripe: 0, skippedCap: 0, stoppedOnError: 0, stoppedOnBudget: 0,
+  reported: 0, unstamped: 0, alreadyStamped: 0, failed: 0, expired: 0, staleAccounts: 0,
+  skippedNoStripe: 0, stoppedOnCap: 0, stoppedOnError: 0, stoppedOnBudget: 0,
 };
 const stripeError = (type: string) => Object.assign(new Error(type), { type });
 
 let fake: FakeGateway;
-/** Rows each account's read returns, before the limit is applied. */
-let rowsByAccount: Record<string, UsageRow[]>;
+/**
+ * The unreported rows the fake database holds, OLDEST FIRST. The read mock
+ * does what the real read does that the pass relies on (only the accounts
+ * asked for, oldest first, at most `limit`), and a stamp removes its row,
+ * as the real read's `reported_at is null` would.
+ */
+let queue: UsageRow[];
 
 beforeEach(() => {
   for (const fn of Object.values(dbMocks)) fn.mockReset();
   fake = new FakeGateway();
-  rowsByAccount = {};
+  queue = [];
   gatewayMocks.fromEnv.mockReset().mockReturnValue({ ok: true, gateway: fake });
   dbMocks.listBilledUsageAccounts.mockResolvedValue([]);
-  dbMocks.listUnreportedUsage.mockImplementation(async (_db: unknown, accountId: string, _from: string, limit: number) =>
-    (rowsByAccount[accountId] ?? []).slice(0, limit));
-  dbMocks.markUsageReported.mockResolvedValue(true);
-  dbMocks.countUnreportedUsage.mockResolvedValue(0);
-  dbMocks.isUsageStale.mockResolvedValue(false);
+  dbMocks.listReportableUsage.mockImplementation(async (_db: unknown, accts: BilledUsageAccount[], _now: Date, limit: number) =>
+    queue.filter((r) => accts.some((a) => a.accountId === r.accountId)).slice(0, limit));
+  dbMocks.markUsageReported.mockImplementation(async (_db: unknown, id: string) => {
+    const i = queue.findIndex((r) => r.id === id);
+    if (i === -1) return false;
+    queue.splice(i, 1);
+    return true;
+  });
+  dbMocks.countExpiredUsage.mockResolvedValue(0);
+  dbMocks.staleUsageAccountIds.mockResolvedValue([]);
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -2501,12 +2788,13 @@ describe("usageReportPass", () => {
     expect(usageReportPass.key).toBe("usageReport");
     expect(await usageReportPass.run(ctx())).toEqual(EMPTY);
     expect(gatewayMocks.fromEnv).not.toHaveBeenCalled();
-    expect(dbMocks.isUsageStale).not.toHaveBeenCalled();
+    expect(dbMocks.staleUsageAccountIds).not.toHaveBeenCalled();
+    expect(dbMocks.countExpiredUsage).not.toHaveBeenCalled();
   });
 
   it("sends each row as one meter event: the meter's permanent event name, the account's customer, the quantity, the row id as identifier, occurred_at in SECONDS, under bis-usage-<row>-<customer> (mutation: timestamp in ms → refused by the guard, FAILS; random identifier → FAILS; key without the customer → FAILS)", async () => {
     dbMocks.listBilledUsageAccounts.mockResolvedValue([A]);
-    rowsByAccount.acct_a = [usage("u1"), usage("u2", { meter: "voice_minutes", quantity: 3 }), usage("u3", { meter: "ai_chats", quantity: 1 })];
+    queue = [usage("u1"), usage("u2", { meter: "voice_minutes", quantity: 3 }), usage("u3", { meter: "ai_chats", quantity: 1 })];
     expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, reported: 3 });
     expect(fake.meterEvents).toEqual([
       { eventName: "bis_sms_segments", customerId: "cus_a", value: 2, identifier: "u1", timestampSeconds: SECS },
@@ -2519,79 +2807,87 @@ describe("usageReportPass", () => {
 
   it("stamps reported_at with the tick's now, only AFTER Stripe accepted (mutation: stamp before the send → call order FAILS)", async () => {
     dbMocks.listBilledUsageAccounts.mockResolvedValue([A]);
-    rowsByAccount.acct_a = [usage("u1")];
+    queue = [usage("u1")];
     const send = vi.spyOn(fake, "reportMeterEvent");
     await usageReportPass.run(ctx());
     expect(dbMocks.markUsageReported).toHaveBeenCalledWith(expect.anything(), "u1", TICK);
     expect(send.mock.invocationCallOrder[0]!).toBeLessThan(dbMocks.markUsageReported.mock.invocationCallOrder[0]!);
   });
 
-  it("reads each account from max(billing start, now − 34 days): a recent start passes through untouched, an old one is floored (mutation: always the billing start → FAILS; always the window → FAILS)", async () => {
+  it("reads the rows of EVERY billed account in ONE call asking for the whole cap, and sends them oldest first ACROSS accounts (mutation: a read per account in list order → acct_a's newer row goes first, FAILS)", async () => {
     dbMocks.listBilledUsageAccounts.mockResolvedValue([A, B]);
-    await usageReportPass.run(ctx());
-    expect(dbMocks.listUnreportedUsage.mock.calls).toEqual([
-      [expect.anything(), "acct_a", "2026-09-20T10:00:00.123456+00:00", USAGE_REPORT_TICK_CAP],
-      [expect.anything(), "acct_b", WINDOW_START, USAGE_REPORT_TICK_CAP],
-    ]);
+    queue = [usage("b1", { accountId: "acct_b", occurredAt: "2026-09-25T13:00:00+00:00" }), usage("a1")];
+    expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, reported: 2 });
+    expect(dbMocks.listReportableUsage.mock.calls).toEqual([[expect.anything(), [A, B], TICK, USAGE_REPORT_TICK_CAP]]);
+    expect(fake.meterEvents.map((e) => e.identifier)).toEqual(["b1", "a1"]);
   });
 
-  it("counts an old account's rows too old for Stripe as expired, logs them, never sends them; a recent account costs no such count (mutation: skip the expired count → FAILS; count every account → FAILS)", async () => {
+  it("counts rows too old for Stripe as expired with ONE call over every billed account, logs them, never sends them (mutation: skip the expired count → FAILS; one count per account → called twice, FAILS)", async () => {
     dbMocks.listBilledUsageAccounts.mockResolvedValue([A, B]);
-    dbMocks.countUnreportedUsage.mockResolvedValue(4);
+    dbMocks.countExpiredUsage.mockResolvedValue(4);
     expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, expired: 4 });
-    expect(dbMocks.countUnreportedUsage).toHaveBeenCalledTimes(1);
-    expect(dbMocks.countUnreportedUsage).toHaveBeenCalledWith(expect.anything(), "acct_b", { fromIso: B.billingStartedAt, beforeIso: WINDOW_START });
+    expect(dbMocks.countExpiredUsage.mock.calls).toEqual([[expect.anything(), [A, B], TICK]]);
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining("older than Stripe accepts"));
   });
 
-  it("counts and logs every billed account with usage unreported for over a day (mutation: drop the stale log → FAILS)", async () => {
+  it("counts and logs the billed accounts with usage unreported for over a day, with ONE call over every billed account (mutation: drop the stale log → FAILS; one read per account → called twice, FAILS)", async () => {
     dbMocks.listBilledUsageAccounts.mockResolvedValue([A, B]);
-    dbMocks.isUsageStale.mockImplementation(async (_db: unknown, a: BilledUsageAccount) => a.accountId === "acct_a");
+    dbMocks.staleUsageAccountIds.mockResolvedValue(["acct_a"]);
     expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, staleAccounts: 1 });
-    expect(dbMocks.isUsageStale).toHaveBeenCalledWith(expect.anything(), A, TICK);
+    expect(dbMocks.staleUsageAccountIds.mock.calls).toEqual([[expect.anything(), [A, B], TICK]]);
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining("unreported for over 24 hours on 1 billed account(s): acct_a"));
   });
 
-  it("sends at most USAGE_REPORT_TICK_CAP rows a tick: each read asks only for what is left, and accounts past the cap are skippedCap (mutation: ask every account for the full cap → 230 sent, FAILS)", async () => {
-    dbMocks.listBilledUsageAccounts.mockResolvedValue([A, B, C]);
-    rowsByAccount.acct_a = Array.from({ length: 150 }, (_, i) => usage(`a${i}`));
-    rowsByAccount.acct_b = Array.from({ length: 80 }, (_, i) => usage(`b${i}`, { accountId: "acct_b" }));
-    expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, reported: 200, skippedCap: 1 });
-    expect(dbMocks.listUnreportedUsage.mock.calls.map((c) => [c[1], c[3]])).toEqual([["acct_a", 200], ["acct_b", 50]]);
+  it("sends at most USAGE_REPORT_TICK_CAP rows a tick and says the cap stopped it (mutation: ask the read for more than the cap leaves → 230 sent, FAILS)", async () => {
+    dbMocks.listBilledUsageAccounts.mockResolvedValue([A, B]);
+    queue = [
+      ...Array.from({ length: 150 }, (_, i) => usage(`a${i}`)),
+      ...Array.from({ length: 80 }, (_, i) => usage(`b${i}`, { accountId: "acct_b" })),
+    ];
+    expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, reported: 200, stoppedOnCap: 1 });
+    expect(fake.meterEvents).toHaveLength(200);
+    expect(dbMocks.listReportableUsage).toHaveBeenCalledTimes(1);
   });
 
-  it("a row Stripe refuses as an invalid request is counted failed and left unstamped, and the next row still goes (mutation: stop on every failure → FAILS)", async () => {
-    dbMocks.listBilledUsageAccounts.mockResolvedValue([A]);
-    rowsByAccount.acct_a = [usage("u1"), usage("u2")];
-    vi.spyOn(fake, "reportMeterEvent").mockRejectedValueOnce(stripeError("StripeInvalidRequestError"));
+  it("an account whose row Stripe refuses as an invalid request waits for the next tick, and its rows can never fill the cap ahead of anyone else's: the full read is repeated without it (mutation: keep sending the refused account's rows → 200 attempts on acct_a and b1 never goes, FAILS; no second read → b1 starves, FAILS)", async () => {
+    dbMocks.listBilledUsageAccounts.mockResolvedValue([A, B]);
+    queue = [
+      ...Array.from({ length: 200 }, (_, i) => usage(`a${i}`)),
+      usage("b1", { accountId: "acct_b", occurredAt: "2026-09-25T14:30:00+00:00" }),
+    ];
+    const send = vi.spyOn(fake, "reportMeterEvent").mockRejectedValueOnce(stripeError("StripeInvalidRequestError"));
     expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, reported: 1, failed: 1 });
-    expect(dbMocks.markUsageReported.mock.calls.map((c) => c[1])).toEqual(["u2"]);
-    expect(fake.meterEvents.map((e) => e.identifier)).toEqual(["u2"]);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(fake.meterEvents.map((e) => e.identifier)).toEqual(["b1"]);
+    expect(dbMocks.listReportableUsage.mock.calls.map((c) => [(c[1] as BilledUsageAccount[]).map((a) => a.accountId), c[3]]))
+      .toEqual([[["acct_a", "acct_b"], 200], [["acct_b"], 199]]);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("account acct_a's other rows wait for the next tick"));
   });
 
   it("a systemic failure (rate limit) stops the tick: counted once, nothing after it attempted (mutation: treat it as row-specific → FAILS)", async () => {
     dbMocks.listBilledUsageAccounts.mockResolvedValue([A, C]);
-    rowsByAccount.acct_a = [usage("u1"), usage("u2")];
-    rowsByAccount.acct_c = [usage("u3", { accountId: "acct_c" })];
-    vi.spyOn(fake, "reportMeterEvent").mockRejectedValueOnce(stripeError("StripeRateLimitError"));
+    queue = [usage("u1"), usage("u2"), usage("u3", { accountId: "acct_c" })];
+    const send = vi.spyOn(fake, "reportMeterEvent").mockRejectedValueOnce(stripeError("StripeRateLimitError"));
     expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, failed: 1, stoppedOnError: 1 });
+    expect(send).toHaveBeenCalledTimes(1);
     expect(fake.meterEvents).toEqual([]);
     expect(dbMocks.markUsageReported).not.toHaveBeenCalled();
-    expect(dbMocks.listUnreportedUsage.mock.calls.map((c) => c[1])).toEqual(["acct_a"]);
+    expect(dbMocks.listReportableUsage).toHaveBeenCalledTimes(1);
   });
 
-  it("with no usable Stripe key every billed account is skippedNoStripe and nothing is read or sent, but stale and expired bookkeeping still runs (mutation: throw instead → the pass errors, FAILS)", async () => {
+  it("with no usable Stripe key every billed account is skippedNoStripe and nothing is read or sent, but the stale and expired bookkeeping still runs (mutation: throw instead → the pass errors, FAILS)", async () => {
     dbMocks.listBilledUsageAccounts.mockResolvedValue([A, B]);
     gatewayMocks.fromEnv.mockReturnValue({ ok: false, reason: "missing" });
     expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, skippedNoStripe: 2 });
-    expect(dbMocks.listUnreportedUsage).not.toHaveBeenCalled();
-    expect(dbMocks.isUsageStale).toHaveBeenCalledTimes(2);
+    expect(dbMocks.listReportableUsage).not.toHaveBeenCalled();
+    expect(dbMocks.staleUsageAccountIds).toHaveBeenCalledTimes(1);
+    expect(dbMocks.countExpiredUsage).toHaveBeenCalledTimes(1);
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining("Stripe is not usable here (missing)"));
   });
 
-  it("Stripe accepted but the stamp failed: counted unstamped, and the next tick resends under the SAME identifier and key, so Stripe keeps ONE event (mutation: a fresh identifier per attempt → two events, FAILS)", async () => {
+  it("Stripe accepted but the stamp failed: counted unstamped, and the next tick resends under the SAME identifier and key, which the idempotent replay keeps to ONE event (mutation: a fresh key per attempt → two events, FAILS)", async () => {
     dbMocks.listBilledUsageAccounts.mockResolvedValue([A]);
-    rowsByAccount.acct_a = [usage("u1")];
+    queue = [usage("u1")];
     dbMocks.markUsageReported.mockRejectedValueOnce(new Error("db down"));
     expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, unstamped: 1 });
     expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, reported: 1 });
@@ -2599,28 +2895,37 @@ describe("usageReportPass", () => {
     expect(fake.calls.filter((c) => c.op === "reportMeterEvent").map((c) => c.key)).toEqual(["bis-usage-u1-cus_a", "bis-usage-u1-cus_a"]);
   });
 
-  it("stops starting sends once USAGE_REPORT_BUDGET_MS is spent (mutation: drop the budget check → 3 sent, FAILS)", async () => {
+  it("a stamp that finds the row already stamped (a concurrent tick) is alreadyStamped, never reported (mutation: count every resolved stamp as reported → FAILS)", async () => {
     dbMocks.listBilledUsageAccounts.mockResolvedValue([A]);
-    rowsByAccount.acct_a = [usage("u1"), usage("u2"), usage("u3")];
+    queue = [usage("u1")];
+    dbMocks.markUsageReported.mockResolvedValueOnce(false);
+    expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, alreadyStamped: 1 });
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("was already marked reported"));
+  });
+
+  it("stops STARTING sends once the budget less one send's timeout is spent, so a send that times out still ends inside the budget (mutation: check against the whole budget → u2 starts at 50 s, 2 sent, FAILS; drop the budget check → 3 sent, FAILS)", async () => {
+    dbMocks.listBilledUsageAccounts.mockResolvedValue([A]);
+    queue = [usage("u1"), usage("u2"), usage("u3")];
     // Date.now() calls the pass makes: `startedAt`, then one check before
-    // each row. Row 1's check reads no time passed; row 2's reads past the
-    // budget, so rows 2 and 3 wait for the next tick.
+    // each row. Row 1's check reads no time passed; row 2's reads exactly
+    // the last moment a send may start, so rows 2 and 3 wait for the next tick.
     vi.spyOn(Date, "now")
       .mockReturnValueOnce(0)
       .mockReturnValueOnce(0)
-      .mockReturnValueOnce(USAGE_REPORT_BUDGET_MS + 1);
+      .mockReturnValueOnce(USAGE_REPORT_BUDGET_MS - METER_EVENT_TIMEOUT_MS);
     expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, reported: 1, stoppedOnBudget: 1 });
     expect(fake.meterEvents.map((e) => e.identifier)).toEqual(["u1"]);
   });
 
-  it("pins the cap at 200 rows and the budget at 60 seconds (mutation: change either → FAILS)", () => {
+  it("pins the cap at 200 rows, the budget at 60 seconds, and so the last send start at 50 seconds (mutation: change any → FAILS)", () => {
     expect(USAGE_REPORT_TICK_CAP).toBe(200);
     expect(USAGE_REPORT_BUDGET_MS).toBe(60_000);
+    expect(USAGE_REPORT_BUDGET_MS - METER_EVENT_TIMEOUT_MS).toBe(50_000);
   });
 });
 ```
 
-Count: **13 tests**.
+Count: **14 tests**.
 
 - [ ] **Step 2: Run it to verify it fails**
 
@@ -2639,13 +2944,17 @@ Append to `apps/web/src/lib/automations/caps.ts`:
  * next ticks, and nothing is lost by waiting (each row carries its own
  * occurred_at, and Stripe takes events up to 35 days old).
  *
- *   USAGE_REPORT_TICK_CAP  meter events sent per tick. Sequential round trips
- *     of about 0.2-0.3 s make 200 rows about 40-60 s. 200 every 15 minutes
- *     is 19,200 a day, about 128 clients at an estimated 150 billable facts
- *     a day each. Past that, Stripe's v2 meter event stream is the next step.
- *   USAGE_REPORT_BUDGET_MS the pass stops STARTING sends after this, the
- *     release pass's own shape (RELEASE_BUDGET_MS): the two 60 s budgets
- *     leave the route's 300 s maxDuration room for every other pass.
+ *   USAGE_REPORT_TICK_CAP  meter events sent per tick. At an ASSUMED 0.2-0.3 s
+ *     a round trip (not measured; the budget below bounds the pass whatever
+ *     it costs), 200 rows take about 40-60 s. 200 every 15 minutes is 19,200
+ *     a day, about 128 clients at an estimated 150 billable facts a day each.
+ *     Past that, Stripe's v2 meter event stream is the next step.
+ *   USAGE_REPORT_BUDGET_MS the pass's wall clock for sending. It stops
+ *     STARTING sends at this minus METER_EVENT_TIMEOUT_MS (stripe-gateway.ts:
+ *     each send has no SDK retry and a 10 s timeout), so the last send ends
+ *     inside it even when it times out. The release pass's own shape
+ *     (RELEASE_BUDGET_MS): the two 60 s budgets leave the route's 300 s
+ *     maxDuration room for every other pass.
  */
 export const USAGE_REPORT_TICK_CAP = 200;
 export const USAGE_REPORT_BUDGET_MS = 60_000;
@@ -2657,10 +2966,9 @@ Create `apps/web/src/lib/automations/passes/usage-report.ts`:
 
 ```ts
 import {
-  listBilledUsageAccounts, listUnreportedUsage, markUsageReported, countUnreportedUsage,
-  isUsageStale, reportableFrom, USAGE_REPORT_WINDOW_MS,
+  listBilledUsageAccounts, listReportableUsage, markUsageReported, countExpiredUsage, staleUsageAccountIds,
 } from "@bis/db";
-import { billingGatewayFromEnv, meterEventFailureKind } from "@/lib/billing/stripe-gateway";
+import { billingGatewayFromEnv, meterEventFailureKind, METER_EVENT_TIMEOUT_MS } from "@/lib/billing/stripe-gateway";
 import { METERS } from "@/lib/billing/stripe-catalog";
 import { USAGE_REPORT_BUDGET_MS, USAGE_REPORT_TICK_CAP } from "../caps";
 import type { Pass } from "../context";
@@ -2682,25 +2990,28 @@ export function usageIdempotencyKey(rowId: string, customerId: string): string {
  * nothing to a customer. LAST in the registry: every SMS-sending pass runs
  * before it, so a text sent this tick is reported this tick.
  *
- * Per tick:
+ * Per tick, every read bounded (never one per account):
  *   1. The billed accounts (a Stripe customer AND subscription). None → done;
  *      production is in that state until the first client subscribes.
- *   2. Bookkeeping, for every billed account, whether or not Stripe is
- *      reachable: stale accounts (usage unreported for over a day) and
- *      expired rows (too old for Stripe to accept) are counted and logged.
- *      The agency banner reads the same `isUsageStale`.
+ *   2. Bookkeeping, whether or not Stripe is reachable: stale accounts
+ *      (usage unreported for over a day) and expired rows (too old for
+ *      Stripe to accept), one read per 50 billed accounts each, logged. The
+ *      agency banner reads the same `staleUsageAccountIds`.
  *   3. No usable Stripe key → `skippedNoStripe`, logged, done. Not an error.
- *   4. Each account's unreported rows from max(billing start, now − 34 days),
- *      oldest first, one meter event each, identifier = row id. reported_at
- *      is stamped only after Stripe accepted. A row Stripe refuses as that
- *      row's problem is `failed` and retried next tick; any other failure
+ *   4. The OLDEST unreported rows across every billed account, one meter
+ *      event each, identifier = row id; reported_at stamped only after
+ *      Stripe accepted. A refusal that is the row's (A13) is `failed`, and
+ *      that ACCOUNT's other rows wait for the next tick; if the read was
+ *      full, the pass reads again without the refused accounts, so their
+ *      rows never fill the cap ahead of everyone else's. Any other failure
  *      stops the tick (the next row would fail the same way).
  *
  * A stamp that fails after Stripe accepted is `unstamped`: the next tick
- * resends the same row under the same identifier and key, and Stripe keeps
- * one event (identifier dedupe, idempotent replay). "reported" means Stripe
- * RECEIVED the event: it validates asynchronously (assumption A12), and
- * PR-4's nightly reconciliation is the backstop.
+ * resends the same row under the same identifier AND the same key, and
+ * Stripe's idempotent replay keeps one event (A10). Identifier dedupe
+ * across keys (A11) is NOT relied on. "reported" means Stripe RECEIVED the
+ * event: it validates asynchronously (A12), and PR-4's nightly
+ * reconciliation is the backstop.
  *
  * Every @bis/db export is dereferenced inside run(), never at module scope
  * (the cron route test's bare mock throws on a dereference).
@@ -2709,30 +3020,22 @@ export const usageReportPass: Pass = {
   key: "usageReport",
   async run(ctx) {
     const c = {
-      reported: 0, unstamped: 0, failed: 0, expired: 0, staleAccounts: 0,
-      skippedNoStripe: 0, skippedCap: 0, stoppedOnError: 0, stoppedOnBudget: 0,
+      reported: 0, unstamped: 0, alreadyStamped: 0, failed: 0, expired: 0, staleAccounts: 0,
+      skippedNoStripe: 0, stoppedOnCap: 0, stoppedOnError: 0, stoppedOnBudget: 0,
     };
     const accounts = await listBilledUsageAccounts(ctx.db);
     if (accounts.length === 0) return c;
 
-    const windowStartMs = ctx.now.getTime() - USAGE_REPORT_WINDOW_MS;
-    const windowStartIso = new Date(windowStartMs).toISOString();
-    const stale: string[] = [];
-    for (const a of accounts) {
-      if (await isUsageStale(ctx.db, a, ctx.now)) stale.push(a.accountId);
-      if (Date.parse(a.billingStartedAt) < windowStartMs) {
-        const n = await countUnreportedUsage(ctx.db, a.accountId, { fromIso: a.billingStartedAt, beforeIso: windowStartIso });
-        if (n > 0) {
-          c.expired += n;
-          console.error(
-            `usage report: account ${a.accountId} has ${n} unreported usage row(s) older than Stripe accepts (34 days); they will never be billed`,
-          );
-        }
-      }
-    }
+    const stale = await staleUsageAccountIds(ctx.db, accounts, ctx.now);
     c.staleAccounts = stale.length;
     if (stale.length > 0) {
       console.error(`usage report: usage unreported for over 24 hours on ${stale.length} billed account(s): ${stale.join(", ")}`);
+    }
+    c.expired = await countExpiredUsage(ctx.db, accounts, ctx.now);
+    if (c.expired > 0) {
+      console.error(
+        `usage report: ${c.expired} unreported usage row(s) of billed accounts are older than Stripe accepts (34 days); they will never be billed`,
+      );
     }
 
     const built = billingGatewayFromEnv();
@@ -2742,36 +3045,43 @@ export const usageReportPass: Pass = {
       return c;
     }
     const gateway = built.gateway;
+    const customerOf = new Map(accounts.map((a) => [a.accountId, a.stripeCustomerId]));
 
+    // The last moment a send may START: a send has no SDK retry and at most
+    // METER_EVENT_TIMEOUT_MS, so one started by then ends inside the budget.
+    const lastStartMs = USAGE_REPORT_BUDGET_MS - METER_EVENT_TIMEOUT_MS;
     const startedAt = Date.now();
+    const refused = new Set<string>();
     let attempts = 0;
     let stop = false;
-    for (let i = 0; i < accounts.length && !stop; i++) {
-      const a = accounts[i]!;
-      const remaining = USAGE_REPORT_TICK_CAP - attempts;
-      if (remaining <= 0) {
-        c.skippedCap = accounts.length - i;
-        break;
-      }
-      const rows = await listUnreportedUsage(ctx.db, a.accountId, reportableFrom(a.billingStartedAt, ctx.now), remaining);
+    while (!stop && attempts < USAGE_REPORT_TICK_CAP) {
+      const want = USAGE_REPORT_TICK_CAP - attempts;
+      const rows = await listReportableUsage(ctx.db, accounts.filter((a) => !refused.has(a.accountId)), ctx.now, want);
+      let refusedHere = false;
       for (const row of rows) {
-        if (Date.now() - startedAt >= USAGE_REPORT_BUDGET_MS) {
+        if (refused.has(row.accountId)) continue;
+        if (Date.now() - startedAt >= lastStartMs) {
           c.stoppedOnBudget = 1;
           console.error(`usage report: budget spent after ${attempts} send(s); the rest go next tick`);
           stop = true;
           break;
         }
         attempts++;
+        const customerId = customerOf.get(row.accountId)!;
         try {
           await gateway.reportMeterEvent({
-            eventName: METERS[row.meter].eventName, customerId: a.stripeCustomerId,
+            eventName: METERS[row.meter].eventName, customerId,
             value: row.quantity, identifier: row.id,
             timestampSeconds: Math.floor(Date.parse(row.occurredAt) / 1000),
-          }, usageIdempotencyKey(row.id, a.stripeCustomerId));
+          }, usageIdempotencyKey(row.id, customerId));
         } catch (e) {
           c.failed++;
           if (meterEventFailureKind(e) === "row") {
-            console.error(`usage report: Stripe refused usage row ${row.id} (account ${a.accountId}); retrying next tick: ${String(e)}`);
+            refused.add(row.accountId);
+            refusedHere = true;
+            console.error(
+              `usage report: Stripe refused usage row ${row.id}; account ${row.accountId}'s other rows wait for the next tick: ${String(e)}`,
+            );
             continue;
           }
           c.stoppedOnError = 1;
@@ -2780,8 +3090,12 @@ export const usageReportPass: Pass = {
           break;
         }
         try {
-          await markUsageReported(ctx.db, row.id, ctx.now);
-          c.reported++;
+          if (await markUsageReported(ctx.db, row.id, ctx.now)) {
+            c.reported++;
+          } else {
+            c.alreadyStamped++;
+            console.error(`usage report: usage row ${row.id} was already marked reported (a concurrent tick); not counted here`);
+          }
         } catch (e) {
           c.unstamped++;
           console.error(
@@ -2789,7 +3103,12 @@ export const usageReportPass: Pass = {
           );
         }
       }
+      // A short read means nothing else is waiting; a full read with no
+      // refusal spent the cap. Only a full read that a refusal left short of
+      // the cap is read again, without the refused accounts.
+      if (stop || rows.length < want || !refusedHere) break;
     }
+    if (!stop && attempts >= USAGE_REPORT_TICK_CAP) c.stoppedOnCap = 1;
     return c;
   },
 };
@@ -2798,7 +3117,7 @@ export const usageReportPass: Pass = {
 - [ ] **Step 5: Run it to verify it passes**
 
 Run: `pnpm --filter web exec vitest run src/lib/automations/passes/usage-report.test.ts`
-Expected: `Tests  13 passed (13)`.
+Expected: `Tests  14 passed (14)`.
 
 - [ ] **Step 6: Register it, and bring the two whole-registry suites along**
 
@@ -2902,10 +3221,10 @@ with
   // idle counters. The rest THROW, this file's convention for a thing that
   // must not happen here, so an edit that bills an account fails loudly.
   listBilledUsageAccounts: async () => [],
-  listUnreportedUsage: async () => { throw new Error("route.test: no account is billed"); },
+  listReportableUsage: async () => { throw new Error("route.test: no account is billed"); },
   markUsageReported: async () => { throw new Error("route.test: no account is billed"); },
-  countUnreportedUsage: async () => { throw new Error("route.test: no account is billed"); },
-  isUsageStale: async () => { throw new Error("route.test: no account is billed"); },
+  staleUsageAccountIds: async () => { throw new Error("route.test: no account is billed"); },
+  countExpiredUsage: async () => { throw new Error("route.test: no account is billed"); },
   // markAutomationSmsSent records each billable text's segments.
   recordUsage: async () => "recorded" as const,
 }));
@@ -2915,8 +3234,8 @@ with
 
 ```ts
 const EMPTY_USAGE_REPORT = {
-  reported: 0, unstamped: 0, failed: 0, expired: 0, staleAccounts: 0,
-  skippedNoStripe: 0, skippedCap: 0, stoppedOnError: 0, stoppedOnBudget: 0,
+  reported: 0, unstamped: 0, alreadyStamped: 0, failed: 0, expired: 0, staleAccounts: 0,
+  skippedNoStripe: 0, stoppedOnCap: 0, stoppedOnError: 0, stoppedOnBudget: 0,
 };
 ```
 
@@ -2952,7 +3271,7 @@ Confirm: `grep -c "usageReport: EMPTY_USAGE_REPORT" apps/web/src/app/api/cron/re
 - [ ] **Step 7: Run everything the registry touches**
 
 Run: `pnpm --filter web exec vitest run src/lib/automations src/app/api/cron`
-Expected: all pass: usage-report 13, sentinel 5 (2 edited), cron route 30 (7 bodies edited), imports.test 2 (the pass imports no email/SMS provider), cron-coupling unchanged.
+Expected: all pass: usage-report 14, sentinel 5 (2 edited), cron route 30 (7 bodies edited), imports.test 2 (the pass imports no email/SMS provider), cron-coupling unchanged.
 
 Run: `pnpm --filter web typecheck && pnpm --filter web lint`
 Expected: exit 0.
@@ -2970,7 +3289,7 @@ git commit -m "feat(automations): the usageReport pass sends unreported usage to
 
 **Files:**
 - Modify: `apps/web/src/lib/messages.ts` (three keys after `work.linesDown.action`)
-- Create: `apps/web/src/components/usage-stale-banner.tsx`, `apps/web/src/components/usage-stale-banner.test.ts` (6 tests)
+- Create: `apps/web/src/components/usage-stale-banner.tsx`, `apps/web/src/components/usage-stale-banner.test.ts` (5 tests)
 - Modify: `apps/web/src/app/(dashboard)/dashboard/work/page.tsx`, `page.test.ts` (+3, 1 edited)
 - Modify: `apps/web/src/app/(dashboard)/dashboard/styleguide/page.tsx`
 
@@ -3011,22 +3330,19 @@ describe("UsageStaleBanner", () => {
     expect(renderedText(render(3))).toContain(m["work.usageStale.many"].replace("{n}", "3"));
   });
 
-  it("says it in WORDS, not by colour alone (mutation: delete the sentence, keep the tint → FAILS)", () => {
-    expect(renderedText(render(2)).trim().length).toBeGreaterThan(40);
+  it("says it in WORDS, not by colour alone: the whole visible text is exactly the sentence and the link, nothing more or less (mutation: delete the sentence, keep the tint → FAILS; add or drop any word → FAILS)", () => {
+    expect(renderedText(render(2)).replace(/\s+/g, " ").trim())
+      .toBe(`${m["work.usageStale.many"].replace("{n}", "2")} ${m["work.usageStale.action"]}`);
   });
 
   it("links to the Plans page, where a missing or refused Stripe key is explained (mutation: drop or change the href → FAILS)", () => {
     expect(render(2)).toContain('href="/dashboard/plans"');
     expect(renderedText(render(2))).toContain(m["work.usageStale.action"]);
   });
-
-  it("never says '1 clients': the plural template does not leak onto the singular (mutation: a stray character in the singular check → FAILS)", () => {
-    expect(renderedText(render(1))).toMatch(/\bUsage for 1 client hasn't reached Stripe\b/);
-  });
 });
 ```
 
-Count: **6 tests**.
+Count: **5 tests**.
 
 In `apps/web/src/app/(dashboard)/dashboard/work/page.test.ts`:
 
@@ -3108,7 +3424,7 @@ with
     expect(now.getTime()).toBeLessThanOrEqual(after);
   });
 
-  it("renders no stale-usage banner when every billed client's usage has reached Stripe", async () => {
+  it("renders no stale-usage banner when every billed client's usage has reached Stripe (mutation: mount the banner with a fixed count, or `staleUsage.length || 1` → FAILS)", async () => {
     const { default: AgencyWorkPage } = await import("./page");
     const text = renderedText(renderToStaticMarkup(await AgencyWorkPage()));
     expect(text).not.toContain(m["work.usageStale.action"]);
@@ -3320,7 +3636,7 @@ with
 - [ ] **Step 7: Run them to verify they pass**
 
 Run: `pnpm --filter web exec vitest run src/components/usage-stale-banner.test.ts "src/app/(dashboard)/dashboard/work/page.test.ts" src/lib/messages.test.ts src/components/line-down-banner.test.ts`
-Expected: all pass; usage-stale-banner 6, work page 18 (15 → 18), messages unchanged (no string names a milestone).
+Expected: all pass; usage-stale-banner 5, work page 18 (15 → 18), messages unchanged (no string names a milestone).
 
 Run: `pnpm --filter web typecheck && pnpm --filter web lint`
 Expected: exit 0.
@@ -3334,14 +3650,15 @@ git commit -m "feat(work): derived banner when a billed client's usage hasn't re
 
 ---
 
-### Task 10: e2e: Stripe test mode accepts our meter event
+### Task 10: e2e: Stripe test mode counts our meter events once
 
 **Files:**
 - Create: `apps/web/e2e/usage-meter.spec.ts` (1 test)
 
 **Interfaces:**
-- Consumes: `stripeGateway`, `meterEventParams`, `STRIPE_API_VERSION`, `type MeterEventInput` (Task 7); `ensureMeters`, `METERS` (`stripe-catalog.ts`); `STRIPE_SECRET_KEY` in the e2e job (`ci.yml:206`). `e2e/plans.spec.ts` is the precedent for importing app modules into a spec, the two `loadEnv` lines, the `NO_STRIPE` skip and the test-key prefix check.
-- Produces: proof of A9 and A10, an annotation recording A11. No database, no account, never Test Client One. The customer name is a template literal that does NOT start with `E2E ` (so `e2e/fixtures/fixture-names.test.ts`, which collects stamped `E2E …` names for the sweep, has nothing to admit: this spec writes nothing the sweep could find).
+- Consumes: `stripeGateway`, `meterEventParams`, `STRIPE_API_VERSION`, `type MeterEventInput` (Task 7); `ensureMeters` (returns `Record<MeterKey, string>` of meter ids, `stripe-catalog.ts:26`), `METERS`; `stripe.billing.meters.listEventSummaries(meterId, { customer, start_time, end_time })` (verified against the installed 22.6.2 types, External facts); `STRIPE_SECRET_KEY` in the e2e job (`ci.yml:206`). `e2e/plans.spec.ts` is the precedent for importing app modules into a spec, the two `loadEnv` lines, the `NO_STRIPE` skip and the test-key prefix check.
+- Produces: proof of A9 and A10 read from Stripe's own AGGREGATE (a 200 proves receipt only: validation is asynchronous, A12), and an observation of A11, each as a test annotation. No database, no account, never Test Client One. The customer name is a template literal that does NOT start with `E2E ` (so `e2e/fixtures/fixture-names.test.ts`, which collects stamped `E2E …` names for the sweep, has nothing to admit: this spec writes nothing the sweep could find).
+- What the bound does (A16): each phase polls every 5 s for up to 120 s. A sum ABOVE what a correct dedupe implies, or one no outcome explains, FAILS the test. A sum that has simply not reached it yet by the bound PASSES with a `::warning` and an "unproven" annotation, because the e2e job must not go red on Stripe's aggregation lag; "unproven" is a PR-3 blocker instead (Task 11). Worst case the test takes about 4.5 minutes (two 120 s waits, a 30 s settle, the sends); the e2e job's limit is 30 minutes (`ci.yml:162`), and normally each wait ends as soon as the sum appears.
 
 - [ ] **Step 1: Write the spec**
 
@@ -3364,9 +3681,14 @@ loadEnv({ path: ".env.local" });
 // Client billing, usage reporting: the one thing only a real Stripe can
 // prove. The cron's usage report sends each usage row as a v1 meter event
 // through `reportMeterEvent`; its unit tests run against FakeGateway, which
-// is only as right as our reading of Stripe. This sends one real event in
-// TEST mode and replays it (assumptions A9, A10), and records what Stripe
-// does with the same identifier under a new idempotency key (A11).
+// is only as right as our reading of Stripe. A 200 from Stripe proves only
+// that it RECEIVED an event (it validates asynchronously), so this reads
+// Stripe's own aggregate for a throwaway customer and asserts the sum a
+// correct dedupe implies:
+//   phase 1: event 1 (2), the same request replayed under the same key, a
+//            distinct event 2 (3)                       → 5    (A9, A10)
+//   phase 2: event 1's identifier under a NEW key, then a sentinel (7)
+//            → 12 if Stripe deduplicated it, 14 if it counted it again (A11)
 //
 // No database and no account: a throwaway Stripe TEST customer, deleted at
 // the end. STRIPE TEST MODE ONLY: CI's target guard refuses a live key before
@@ -3377,55 +3699,117 @@ const NO_STRIPE =
   "STRIPE_SECRET_KEY is not set, so BIS's usage meter event was NOT sent to Stripe test mode. Add the Stripe TEST secret key (sk_test_) as the repository secret CI_STRIPE_SECRET_KEY, or locally only once apps/web/.env.local points at a non-production database.";
 const RUN = Date.now();
 
-test.describe("usage reaches Stripe as a meter event", () => {
-  test("Stripe test mode accepts BIS's meter event and its replay under the same key; a reused identifier under a new key is recorded", async () => {
+/** Assumption A16: Stripe's summaries show an accepted event within this. */
+const SUMMARY_WAIT_MS = 120_000;
+const SUMMARY_POLL_MS = 5_000;
+/** After the sentinel appears, one more read this much later (A17). */
+const SETTLE_MS = 30_000;
+
+type Sum = { value: number; reached: boolean };
+
+/** The customer's aggregate on the meter for [startTime, startTime + 60 s),
+ *  polled until it reaches `target` or the wait runs out. */
+async function waitForSum(
+  stripe: Stripe, meterId: string, customer: string, startTime: number, target: number,
+): Promise<Sum> {
+  const deadline = Date.now() + SUMMARY_WAIT_MS;
+  for (;;) {
+    const page = await stripe.billing.meters.listEventSummaries(meterId, {
+      customer, start_time: startTime, end_time: startTime + 60,
+    });
+    const value = page.data.reduce((sum, s) => sum + s.aggregated_value, 0);
+    if (value >= target) return { value, reached: true };
+    if (Date.now() >= deadline) return { value, reached: false };
+    await new Promise((resolve) => setTimeout(resolve, SUMMARY_POLL_MS));
+  }
+}
+
+function report(type: string, outcome: string, level: "notice" | "warning"): void {
+  test.info().annotations.push({ type, description: outcome });
+  console.log(`::${level} title=usage-meter.spec.ts ${type}::${outcome}`);
+}
+
+test.describe("usage reaches Stripe as meter events, counted once", () => {
+  test("Stripe test mode counts BIS's meter event once, replay included; a reused identifier under a new key is observed", async () => {
     if (!STRIPE_KEY) console.warn(`::warning title=usage-meter.spec.ts skipped::${NO_STRIPE}`);
     test.skip(!STRIPE_KEY, NO_STRIPE);
     expect(/^(sk|rk)_test_/.test(STRIPE_KEY), "usage-meter.spec.ts runs on a Stripe TEST key only").toBe(true);
-    test.setTimeout(90_000);
+    test.setTimeout(330_000);
 
     const stripe = new Stripe(STRIPE_KEY, { apiVersion: STRIPE_API_VERSION });
     const gateway = stripeGateway(stripe);
     // The meters the Plans page makes; created here if this test account has
     // never saved a plan (idempotent, the Plans page's own keys).
-    await ensureMeters(gateway);
+    const meterId = (await ensureMeters(gateway)).sms;
     const customer = await stripe.customers.create({
       name: `usage-meter.spec ${RUN}`, metadata: { bis_e2e: "usage-meter" },
     });
 
     let bodyOk = false;
     try {
-      const identifier = randomUUID();
-      const input: MeterEventInput = {
-        eventName: METERS.sms.eventName, customerId: customer.id, value: 2, identifier,
-        timestampSeconds: Math.floor(Date.now() / 1000) - 60,
-      };
+      // Every event at one minute-aligned instant two minutes ago, so one
+      // summary window [ts, ts + 60) holds them all and lies in the past.
+      const ts = Math.floor(Date.now() / 60_000) * 60 - 120;
+      const eventOf = (value: number): MeterEventInput => ({
+        eventName: METERS.sms.eventName, customerId: customer.id, value, identifier: randomUUID(), timestampSeconds: ts,
+      });
       // The key shape the usage report builds (usageIdempotencyKey).
-      const key = `bis-usage-${identifier}-${customer.id}`;
+      const keyOf = (e: MeterEventInput) => `bis-usage-${e.identifier}-${customer.id}`;
 
-      // A9: accepted.
-      await gateway.reportMeterEvent(input, key);
-      // A10: the same request under the same key (a lost response, retried)
-      // is accepted again, not refused.
-      await gateway.reportMeterEvent(input, key);
+      // ── Phase 1: A9 (accepted and mapped to this customer) and A10 (a
+      // replay under the same key adds nothing). ──
+      const first = eventOf(2);
+      const second = eventOf(3);
+      await gateway.reportMeterEvent(first, keyOf(first));
+      await gateway.reportMeterEvent(first, keyOf(first));   // a lost response, retried
+      await gateway.reportMeterEvent(second, keyOf(second));
+      const p1 = await waitForSum(stripe, meterId, customer.id, ts, 5);
+      if (p1.reached) {
+        // WRONG, not late: more than 5 means the replay was counted (A10) or
+        // the mapping is off (A9). A replay under the same key is answered
+        // from Stripe's idempotency cache, so it cannot arrive later.
+        expect(p1.value, "Stripe's sum for event 1 (2), its replay, and event 2 (3)").toBe(5);
+        report("A9/A10", "deduplicated as expected (5)", "notice");
+      } else {
+        report("A9/A10", `unproven: the summary showed ${p1.value} of 5 after ${SUMMARY_WAIT_MS / 1000} s`, "warning");
+      }
 
-      // A11: observed, not assumed. The reporter treats a refusal here as
-      // that row's problem, so the only acceptable refusal is an invalid
-      // request; anything else fails this test.
-      let outcome: string;
+      // ── Phase 2: A11, observed, never assumed. The only acceptable refusal
+      // is an invalid request (the reporter's row-specific class). ──
+      // Only the probe itself sits in the try, so a failed assertion below
+      // can never be mistaken for Stripe refusing the probe.
+      let refusal: { type?: string; code?: string; message?: string } | null = null;
       try {
-        await stripe.billing.meterEvents.create(meterEventParams(input), {
+        await stripe.billing.meterEvents.create(meterEventParams(first), {
           idempotencyKey: `bis-usage-probe-${randomUUID()}`,
         });
-        outcome = "accepted without an error";
       } catch (e) {
-        const err = e as { type?: string; code?: string; message?: string };
-        outcome = `refused: ${err.type ?? "?"} ${err.code ?? ""} ${err.message ?? ""}`.trim();
-        expect(err.type, "a reused identifier may be refused only as an invalid request (the reporter's row-specific class)")
-          .toBe("StripeInvalidRequestError");
+        refusal = e as { type?: string; code?: string; message?: string };
       }
-      test.info().annotations.push({ type: "A11 same identifier, new idempotency key", description: outcome });
-      console.log(`::notice title=usage-meter.spec.ts A11::${outcome}`);
+      let a11: string;
+      if (refusal) {
+        a11 = `refused: ${refusal.type ?? "?"} ${refusal.code ?? ""} ${refusal.message ?? ""}`.trim();
+        expect(refusal.type, "a reused identifier may be refused only as an invalid request (the reporter's row-specific class)")
+          .toBe("StripeInvalidRequestError");
+      } else {
+        // A sentinel AFTER the probe (A17): once it shows, the probe has
+        // been counted or deduplicated.
+        const sentinel = eventOf(7);
+        await gateway.reportMeterEvent(sentinel, keyOf(sentinel));
+        const seen = await waitForSum(stripe, meterId, customer.id, ts, 12);
+        let value = seen.value;
+        if (seen.reached) {
+          await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+          value = (await waitForSum(stripe, meterId, customer.id, ts, 12)).value;
+          // 12 and 14 are the two answers Stripe can give; anything else is WRONG.
+          expect([12, 14], `Stripe's sum after the A11 probe and the sentinel was ${value}, which no outcome explains`)
+            .toContain(value);
+        }
+        a11 = !seen.reached
+          ? `unproven: accepted, and the summary showed ${value} of 12 after ${SUMMARY_WAIT_MS / 1000} s`
+          : value === 12 ? "deduplicated as expected (12)" : "accepted but double-counted (14)";
+      }
+      report("A11 same identifier, new idempotency key", a11, a11.startsWith("deduplicated") ? "notice" : "warning");
       bodyOk = true;
     } finally {
       try {
@@ -3444,6 +3828,8 @@ test.describe("usage reaches Stripe as a meter event", () => {
 
 Count: **1 test**.
 
+Two things this test can NOT tell apart, recorded so nobody reads more into it: a phase-2 value of 12 read before a late double count lands (A17; the 30 s settle narrows it, cannot close it), and whether Stripe's dedupe window for identifiers outlives the 24-hour idempotency key (the real case is a resend after the key expired; this probe resends within seconds). Both are reasons A11 "deduplicated" still only clears PR-3 together with PR-4's reconciliation as the backstop (A12).
+
 - [ ] **Step 2: Typecheck and lint**
 
 Run: `pnpm --filter web typecheck && pnpm --filter web lint`
@@ -3454,13 +3840,13 @@ Expected: all pass (`fixture-names.test.ts` finds no new `E2E …` name).
 
 - [ ] **Step 3: Where it runs**
 
-Playwright cannot run locally while `apps/web/.env.local` names production (the e2e production guard refuses). The implementer stops here; CI's `e2e` job runs it. Expected there: `usage-meter.spec.ts` 1 passed, and the job log carries the `::notice title=usage-meter.spec.ts A11::...` line. Without the key it is 1 skipped with the `::warning` line.
+Playwright cannot run locally while `apps/web/.env.local` names production (the e2e production guard refuses). The implementer stops here; CI's `e2e` job runs it. Expected there: `usage-meter.spec.ts` 1 passed, and the job log carries a `::notice` or `::warning` line titled `usage-meter.spec.ts A9/A10` and one titled `usage-meter.spec.ts A11 same identifier, new idempotency key`. Without the key it is 1 skipped with the `::warning` skip line.
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add apps/web/e2e/usage-meter.spec.ts
-git commit -m "test(e2e): Stripe test mode accepts BIS's usage meter event and its replay; record the reused-identifier outcome"
+git commit -m "test(e2e): Stripe test mode counts BIS's usage meter events once (read from its aggregate); record the reused-identifier outcome"
 ```
 
 ---
@@ -3471,14 +3857,14 @@ git commit -m "test(e2e): Stripe test mode accepts BIS's usage meter event and i
 
 - [ ] **Step 1: Confirm the new-test count**
 
-Expected new tests: db usage 6, db live usage 7, billing/usage 4, call-state 1, finish-call 6, textback 5, send-sms 5, composer actions 6, concierge route 4, stripe-gateway 11, meter-event-failure 1, usage-report 13, usage-stale-banner 6, work page 3, e2e 1 = **79**. The reviewer re-counts from vitest's own output, never from this plan.
+Expected new tests: db usage 9, db live usage 7, billing/usage 4, call-state 1, finish-call 7, textback 5, send-sms 6, composer actions 6, concierge route 5, stripe-gateway 11, meter-event-failure 1, usage-report 14, usage-stale-banner 5, work page 3, e2e 1 = **85**. The reviewer re-counts from vitest's own output, never from this plan.
 
 Run: `pnpm --filter web exec vitest run src/lib/billing/usage.test.ts src/lib/billing/meter-event-failure.test.ts src/lib/voice/textback.test.ts src/lib/automations/passes/usage-report.test.ts src/components/usage-stale-banner.test.ts`
-Expected: `Tests  29 passed (29)` (4 + 1 + 5 + 13 + 6).
+Expected: `Tests  29 passed (29)` (4 + 1 + 5 + 14 + 5).
 
-Run, per file, and compare with the baselines in File Structure: `stripe-gateway` 56, `call-state` 21, `finish-call` 91, `send-sms` 15, composer `actions` 20, concierge `route` 47, `sentinel` 5, cron `route` 30, `work/page` 18.
+Run, per file, and compare with the baselines in File Structure: `stripe-gateway` 56, `call-state` 21, `finish-call` 92, `send-sms` 16, composer `actions` 20, concierge `route` 48, `sentinel` 5, cron `route` 30, `work/page` 18.
 
-The db counts (6 and 7) come from CI's `verify` log (Checkpoint A).
+The db counts (9 and 7) come from CI's `verify` log (Checkpoint A).
 
 - [ ] **Step 2: Local gates (what runs locally until D7)**
 
@@ -3490,7 +3876,7 @@ Expected: all pass except the two live web tests that refuse production by desig
 
 - [ ] **Step 3: CI is the gate**
 
-Push. Read the check runs for the head SHA (`gh api repos/{owner}/{repo}/commits/<sha>/check-runs`): `verify` (typecheck, lint, the db suite including Task 1's 13 tests, the web suite) and `e2e` (the whole Playwright suite including `usage-meter.spec.ts`, and `pnpm --filter web build`) both green.
+Push. Read the check runs for the head SHA (`gh api repos/{owner}/{repo}/commits/<sha>/check-runs`): `verify` (typecheck, lint, the db suite including Task 1's 16 tests, the web suite) and `e2e` (the whole Playwright suite including `usage-meter.spec.ts`, and `pnpm --filter web build`) both green.
 
 - [ ] **Step 4: Manual DESIGN.md pass (bis-design-reviewer on a running build, or a human on the preview)**
 
@@ -3500,24 +3886,27 @@ Push. Read the check runs for the head SHA (`gh api repos/{owner}/{repo}/commits
 
 - [ ] **Step 5: Handoff to the orchestrator (implementers stop here)**
 
-- Open the PR. The body lists: spec gaps G1-G12, assumptions A9-A15 (A9-A10 proven by the e2e run; A11's observed outcome copied from the job log), "no migration", and "production reports nothing to Stripe until PR-3; from deploy, production's ledger fills for every account".
-- Orchestrator: read `verify` and `e2e` for the head SHA; read the A11 annotation. If A11 says `refused: StripeInvalidRequestError ...`, open the follow-up (map that code to "already reported") as a blocker for PR-3, not for this PR.
+- Open the PR. The body lists: spec gaps G1-G14, assumptions A9-A19 (A9-A11 with the outcomes the e2e job's two annotations recorded, copied from the job log), "no migration", "production reports nothing to Stripe until PR-3; from deploy, production's ledger fills for every account", and, in its own paragraph, G14: **an automation text re-sent because its dedupe stamp failed (review-request, no-show nudge and referral ask each log "expect up to 11 more copies") is billed per copy: each copy is a real, delivered text with its own message row.**
+- Orchestrator: read `verify` and `e2e` for the head SHA; read BOTH annotations (`A9/A10` and `A11 same identifier, new idempotency key`). The only outcome that clears PR-3 is `deduplicated as expected` on BOTH. **Anything else is a PR-3 blocker (not a PR-2 one):** `unproven` (the summary did not settle within the wait: re-run the e2e job on the same SHA until it is proven either way), `refused: StripeInvalidRequestError ...` (map that error to "already reported" before a resend can wedge an account; the reporter's refused-account rule would otherwise hold that account's usage back every tick), and `accepted but double-counted` (the reporter must stop resending a row under a new key, e.g. reconcile against Stripe before resending a row first sent over 24 hours ago). PR-3 does not create the first billed account until its blocker is resolved.
+- Orchestrator: append a ledger line correcting the planning-start paraphrase of the voice decision ("caller spoke, turn_count>=1") to the gate this plan ships: `callerSpoke(state) || isMeaningful(outcome)` (G5).
 - Nothing to apply to any database. Merge per the runbook.
 
 ---
 
 ## Self-review (done while writing; recorded for the reviewer)
 
-- **Spec coverage (step 2 only):** section 3 flow 3: an answered call ends → minutes rounded up (Task 3; "answered" = the caller spoke, danlo); an outbound SMS is sent → its segments (Tasks 4-5; outbound to customers only, danlo; staff alerts `lib/sms/alerts.ts:182` and OTP codes `settings/actions.ts:324` untouched, so never billed); a concierge conversation starts → 1 (Task 6); a cron pass reports unreported rows to Stripe meter events with the row id as identifier (Tasks 7-8). Section 4: rows stay unreported and are retried each pass (Task 8: `failed` rows are retried next tick, `unstamped` rows resent under the same identifier and key); Stripe dedupes by identifier (A10-A11, Task 10); a row unreported > 24 h raises an agency alert (Task 9's banner, Task 8's per-tick `console.error`). Rollout (2): the ledger fills for every account (G1). Not here by design: reconciliation and the pause (PR-4), Checkout/webhooks/Billing screens (PR-3).
-- **danlo's decisions honoured:** voice bills every call Sofía talked to, robocalls included, silent rings and connect-timeouts never, `max(1, ceil(duration_secs / 60))`, the web demo never (no calls row); SMS only to customers (automations, composer, both text-back callers), after a successful send, `segmentsFor(body).segments`; 1 AI chat per conversation start, beside the `recordAutomationLog` leg, no QA exemption; the stale alert is a derived banner (no migration) plus a `console.error` per cron run.
+- **Spec coverage (step 2 only):** section 3 flow 3: an answered call ends → minutes rounded up (Task 3; "answered" = Sofía talked to the caller, `callerSpoke(state) || isMeaningful(outcome)`, danlo); an outbound SMS is sent → its segments (Tasks 4-5; outbound to customers only, danlo; staff alerts `lib/sms/alerts.ts:182` and OTP codes `settings/actions.ts:324` untouched, so never billed); a concierge conversation → 1, when Sofía's first reply succeeds (Task 6, danlo 2026-09-25); a cron pass reports unreported rows to Stripe meter events with the row id as identifier (Tasks 7-8). Section 4: rows stay unreported and are retried each pass (Task 8: a refused row, and its account's other rows, go again next tick; `unstamped` rows are resent under the same identifier AND key, so Stripe's idempotent replay, A10, keeps one event). **Section 4's "Stripe dedupes by identifier" is UNPROVEN and relied on nowhere** (A11): the fake assumes the opposite, and only Task 10's observation can clear it, as a PR-3 gate. A row unreported > 24 h raises an agency alert (Task 9's banner, Task 8's per-tick `console.error`). Rollout (2): the ledger fills for every account (G1). Not here by design: reconciliation and the pause (PR-4), Checkout/webhooks/Billing screens (PR-3).
+- **danlo's decisions honoured:** voice bills every call Sofía talked to: a caller turn with words OR a booked/lead/message outcome, robocalls included, silent rings and connect-timeouts never, `max(1, ceil(duration_secs / 60))`, the web demo never (no calls row); SMS only to customers (automations, composer, both text-back callers), after a successful send, `segmentsFor(body).segments`, a re-sent copy billed per copy (G14); 1 AI chat per conversation, recorded when Sofía's FIRST reply succeeds (a failed start never bills), no QA exemption; the stale alert is a derived banner (no migration) plus a `console.error` per cron run.
+- **Review corrections applied (2026-09-25):** the e2e reads Stripe's aggregate with a bounded wait (Task 10, A16-A17); the fake records a second event for a reused identifier under a new key (Task 7); automation-text usage is worked out after the send's `try` by a helper that never throws (Task 4); the concierge bills on turn 1's successful reply, its lazy import inside the leg's own `try` (Task 6); the voice gate has both halves (Task 3); every `usage_events` read is one request per 50 accounts, sends go oldest first across accounts, and a refused account cannot fill the cap (Tasks 1, 8); each meter event carries no SDK retry and a 10 s timeout, and the pass stops starting sends 10 s before its 60 s budget (Tasks 7, 8; A19 labels the round-trip estimate); the duplicate banner test is gone, the length check is an exact-copy assertion, the absence test names its mutation, the SMS scan strips comments, and a `false` stamp counts `alreadyStamped`, not `reported` (Tasks 4, 8, 9).
 - **Placeholders:** none. Every code step carries the code.
-- **Type consistency:** `UsageInput`, `UsageRow`, `BilledUsageAccount` (Task 1) are used unchanged in Tasks 2, 8 and 9. `recordUsageSafely`'s `db` accepts a client or a getter; only the composer passes a getter. `SentSms.usage` (Task 4) is the only shape change on an existing type; its two test literals are edited in the same task. `MeterEventInput` is shared by `meterEventParams`, the adapter, the fake, the pass and the e2e. The pass's counter object and the cron test's `EMPTY_USAGE_REPORT` list the same nine keys in the same order.
-- **Counts re-derived from the code blocks:** db `usage.test.ts` 6 (2 guard + 1 insert + 2 window + 1 paging); db `test/usage.test.ts` 7; `billing/usage.test.ts` 4; call-state 1; finish-call 6; textback 5; send-sms 5 new + 2 edited; composer 6; concierge 4; stripe-gateway 11 (4 + 1 + 1 + 5); meter-event-failure 1; usage-report 13; usage-stale-banner 6; work page 3 new + 1 edited; e2e 1. Total **79**. Files: 12 created, 23 modified.
-- **Existing tests this plan must not break:** the cron `route.test.ts`'s seven whole-body equalities (edited, Task 8); `sentinel.test.ts`'s exact registry order (edited, Task 8); `imports.test.ts` (the pass imports no email/SMS provider or factory; `@/lib/sms/segments` and `@/lib/sms/types` do not match its patterns); `send-sms.test.ts`'s exact return value and `SentSms` literals (edited, Task 4); `fixture-names.test.ts` (the new spec mints no `E2E …` name); `messages.test.ts`'s milestone guard (no new string names one); every pass test that spreads `importOriginal` over `@bis/db` keeps the real `recordUsage`, which is never reached because their providers are `isFake: true`.
+- **Type consistency:** `UsageInput`, `UsageRow`, `BilledUsageAccount`, `UsageRange` (Task 1) are used unchanged in Tasks 2, 8 and 9. `recordUsageSafely`'s `db` accepts a client or a getter; only the composer passes a getter. `SentSms.usage` (Task 4) is the only shape change on an existing type; its two test literals are edited in the same task. `MeterEventInput` is shared by `meterEventParams`, the adapter, the fake, the pass and the e2e. `METER_EVENT_TIMEOUT_MS` is defined once (`stripe-gateway.ts`) and read by the adapter, the pass and the pass's tests. The pass's counter object and the cron test's `EMPTY_USAGE_REPORT` list the same ten keys in the same order (`reported, unstamped, alreadyStamped, failed, expired, staleAccounts, skippedNoStripe, stoppedOnCap, stoppedOnError, stoppedOnBudget`).
+- **Counts re-derived from the code blocks:** db `usage.test.ts` 9 (2 guard + 1 insert + 2 window + 1 paging + 3 per-account reads); db `test/usage.test.ts` 7; `billing/usage.test.ts` 4; call-state 1; finish-call 7; textback 5; send-sms 6 new + 2 edited; composer 6; concierge 5; stripe-gateway 11 (4 + 1 + 1 + 5); meter-event-failure 1; usage-report 14; usage-stale-banner 5; work page 3 new + 1 edited; e2e 1. Total **85**. Files: 12 created, 23 modified (35), unchanged by the corrections. Tasks: 11, plus Checkpoint A.
+- **Existing tests this plan must not break:** the cron `route.test.ts`'s seven whole-body equalities (edited, Task 8); `sentinel.test.ts`'s exact registry order (edited, Task 8); `imports.test.ts` (the pass imports no email/SMS provider or factory; `@/lib/sms/segments` and `@/lib/sms/types` do not match its patterns); `send-sms.test.ts`'s exact return value and `SentSms` literals (edited, Task 4); the concierge `route.test.ts`'s existing empty-reply and model-failure tests (the leg sits after both of their decisions and records nothing on either); `fixture-names.test.ts` (the new spec mints no `E2E …` name); `messages.test.ts`'s milestone guard (no new string names one); every pass test that spreads `importOriginal` over `@bis/db` keeps the real `recordUsage`, which is never reached because their providers are `isFake: true`.
+- **Not verified here (the reviewer or CI settles them):** that PostgREST accepts `+00:00` microsecond timestamps inside a double-quoted `.or()` value (the precedent quotes `toISOString()` values only; Task 1's live `listReportableUsage` test is the proof, in CI); A16-A19.
 - **Carried minor (PR-1's M4, same shape):** a killed db run strands its `Usage <run> <id>` plan row (agency-scoped, no sweep leg). Harmless; the plans sweep leg PR-1 added in e2e does not cover the db package.
 
 ## Next plans
 
-1. **PR-3: Checkout, webhooks, the Billing card and the client Billing page.** Binding from this plan: (a) `account_billing.created_at` is the usage reporting start (G12): create the row when the subscription exists, or move the floor to a dedicated column; (b) remove `countBilledAccountsByPlan`'s 1000-row cap (PR-1 final review); (c) the usage screens read `usage_events` month to date through `usage_events_account_occurred_idx`; (d) if A11 came back "refused", its follow-up lands first.
+1. **PR-3: Checkout, webhooks, the Billing card and the client Billing page.** Binding from this plan: (a) `account_billing.created_at` is the usage reporting start (G12): create the row when the subscription exists, or move the floor to a dedicated column; (b) remove `countBilledAccountsByPlan`'s 1000-row cap (PR-1 final review); (c) the usage screens read `usage_events` month to date through `usage_events_account_occurred_idx`; (d) PR-3 creates no billed account until Task 10's A9/A10 AND A11 annotations both read `deduplicated as expected`, or the follow-up for the outcome observed has landed (Task 11, Step 5).
 2. **PR-4: the non-payment pause and nightly reconciliation.** Reconciliation is the backstop for A12 (Stripe's asynchronous drops); consider subscribing to `v1.billing.meter.error_report_triggered` thin events there. Decide the fate of `usage_events_unreported_idx` (G8) with the reconciliation's access pattern in hand.
 3. **Scale path (no date):** past about 128 clients at today's estimate, move the reporter to Stripe's v2 meter event stream (100 events per request).
