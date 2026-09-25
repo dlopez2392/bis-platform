@@ -50,6 +50,34 @@ describe("ensureMeters", () => {
     expect(await ensureMeters(g)).toEqual({ voice_minutes: "mtr_vm", sms: "mtr_sms", ai_chats: "mtr_ai" });
     expect(g.created).toEqual([]);
   });
+
+  // Fix 1 (review finding, 2026-09-25): a dashboard meter named
+  // `bis_sms_segments_old`, listed BEFORE the real `bis_sms_segments`, must
+  // never be picked up for the sms meter — a prefix match would attach the
+  // sms price to the wrong (old) meter and overage would never be billed.
+  it("matches a meter by the EXACT event name, never a prefix, even when a decoy is listed first (mutation: match by prefix/startsWith → FAILS)", async () => {
+    const g = fake(false);
+    g.meters = [
+      { id: "mtr_sms_old", eventName: "bis_sms_segments_old" },
+      { id: "mtr_sms", eventName: "bis_sms_segments" },
+    ];
+    const ids = await ensureMeters(g);
+    expect(ids.sms).toBe("mtr_sms");
+  });
+
+  // Fix 3 (review finding, 2026-09-25): the createMeter idempotency key must
+  // cover displayName too, the same rule the product key already follows —
+  // otherwise a key collision on a changed display name would be refused by
+  // real Stripe (and the strict fake) forever.
+  it("meter idempotency keys cover the display name too (mutation: drop the displayName hash from the meter key → FAILS)", async () => {
+    const g = fake(false);
+    await ensureMeters(g);
+    expect(g.calls.filter((c) => c.op === "createMeter").map((c) => c.key)).toEqual([
+      `bis-meter-bis_voice_minutes-${nameHash("Voice minutes")}`,
+      `bis-meter-bis_sms_segments-${nameHash("Text message segments")}`,
+      `bis-meter-bis_ai_chats-${nameHash("Website chat conversations")}`,
+    ]);
+  });
 });
 
 describe("syncPlanToStripe", () => {
@@ -144,6 +172,21 @@ describe("syncPlanToStripe", () => {
     expect(g.calls.filter((c) => c.op === "renameProduct").map((c) => c.input))
       .toEqual([{ productId: "prod_existing", name: "Growth Plus" }]);
     expect(g.created).toEqual([]);
+  });
+
+  // Fix 2 (review finding, 2026-09-25): renaming the product BEFORE new
+  // prices are created means a later createPrice failure leaves Stripe
+  // showing the new name while the database (never written, since the
+  // caller writes only after this resolves) keeps the old one. The rename
+  // must happen only after every price creation this save needs has
+  // succeeded.
+  it("a save that renames AND changes a price never renames if price creation fails (mutation: rename before price creation → FAILS)", async () => {
+    const g = fake();
+    g.failOn = { op: "createPrice" };
+    await expect(
+      syncPlanToStripe(g, PLAN, { ...TERMS, name: "Growth Plus", monthlyPriceCents: 5900 }, CURRENT),
+    ).rejects.toThrow(/fake Stripe refused createPrice/);
+    expect(g.calls.some((c) => c.op === "renameProduct")).toBe(false);
   });
 
   it("a retried new plan with DIFFERENT terms never reuses an old price, while unchanged parts replay (mutation: drop the allowance from the metered key → FAILS)", async () => {

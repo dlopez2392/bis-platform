@@ -15,8 +15,14 @@ export const METERS: Record<MeterKey, { eventName: string; displayName: string }
   ai_chats: { eventName: "bis_ai_chats", displayName: "Website chat conversations" },
 };
 
-/** Every meter's id, creating any that is missing. The idempotency key is
- *  the event name, so two saves racing on a fresh account make one meter. */
+/** Every meter's id, matched by its EXACT event name (never a prefix — a
+ *  retired dashboard meter like `bis_sms_segments_old` sitting ahead of the
+ *  real `bis_sms_segments` in the list must never be picked up: the sms
+ *  price would end up on the wrong meter and overage would never be
+ *  billed), creating any that is missing. The idempotency key covers both
+ *  parameters `createMeter` sends (event name and display name), so two
+ *  saves racing on a fresh account make one meter and a changed display
+ *  name is never handed a stale key. */
 export async function ensureMeters(gateway: BillingGateway): Promise<Record<MeterKey, string>> {
   const active = await gateway.listActiveMeters();
   const out = {} as Record<MeterKey, string>;
@@ -25,20 +31,24 @@ export async function ensureMeters(gateway: BillingGateway): Promise<Record<Mete
     const found = active.find((m) => m.eventName === eventName);
     out[key] = found
       ? found.id
-      : (await gateway.createMeter({ eventName, displayName }, `bis-meter-${eventName}`)).id;
+      : (await gateway.createMeter(
+          { eventName, displayName },
+          `bis-meter-${eventName}-${shortHash(displayName)}`,
+        )).id;
   }
   return out;
 }
 
-/** First 16 hex chars of the SHA-256 of the plan name (UTF-8), so the
- *  product idempotency key covers the one non-id parameter `createProduct`
- *  sends. Without this, a failed first save retried under a new name (same
- *  planId = same draftId) would reuse the bare `bis-plan-<id>-product` key
- *  with different parameters and Stripe (and the strict FakeGateway) would
- *  refuse it forever, per the Task 4 review corrections (2026-09-25).
- *  Server-side only — `node:crypto`, never bundled to the client. */
-function nameHash(name: string): string {
-  return createHash("sha256").update(name, "utf8").digest("hex").slice(0, 16);
+/** First 16 hex chars of the SHA-256 of a short string (UTF-8) — used to
+ *  fold a non-id parameter (a plan's name, a meter's display name) into an
+ *  idempotency key so the key covers every parameter its call sends. A
+ *  failed first save retried with a different value (same planId/meter,
+ *  same draftId) would otherwise reuse a key with different parameters and
+ *  Stripe (and the strict FakeGateway) would refuse it forever, per the
+ *  Task 4 review corrections (2026-09-25). Server-side only — `node:crypto`,
+ *  never bundled to the client. */
+function shortHash(s: string): string {
+  return createHash("sha256").update(s, "utf8").digest("hex").slice(0, 16);
 }
 
 /** What the plan's Stripe objects were built FROM: the stored row, or null for a new plan. */
@@ -65,6 +75,14 @@ export type StripeState = { terms: PlanTerms; productId: string; priceIds: Strip
  *
  * Throws on any Stripe failure. The caller writes the database only after
  * this resolves, so a failure leaves the database exactly as it was.
+ *
+ * Every idempotency key here also expires on Stripe's side after roughly
+ * 24 hours (Stripe's own documented retention window). A retry mounted
+ * after that window, with no plan row ever having been written (the save
+ * that minted the key failed before the database write), creates a fresh,
+ * unreferenced product/price set rather than replaying the expired one —
+ * an orphan, same as the same-day case this module already accepts, and
+ * harmless to money since nothing customer-facing points at it.
  */
 export async function syncPlanToStripe(
   gateway: BillingGateway, planId: string, terms: PlanTerms, current: StripeState,
@@ -75,9 +93,8 @@ export async function syncPlanToStripe(
     ? current.productId
     : (await gateway.createProduct(
         { planId, name: terms.name },
-        `bis-plan-${planId}-product-${nameHash(terms.name)}`,
+        `bis-plan-${planId}-product-${shortHash(terms.name)}`,
       )).id;
-  if (current && current.terms.name !== terms.name) await gateway.renameProduct(productId, terms.name);
 
   const base = current && current.terms.monthlyPriceCents === terms.monthlyPriceCents
     ? current.priceIds.base
@@ -101,5 +118,13 @@ export async function syncPlanToStripe(
           `bis-plan-${planId}-${productId}-${meter}-${meterId}-${allowance}-${overageCents}`,
         )).id;
   }
+
+  // Renamed LAST, only once every price this save needs has been created
+  // successfully. Renaming first (the original order) would let a later
+  // createPrice failure leave Stripe showing the new name while the
+  // database — written only after this whole function resolves — still
+  // holds the old one.
+  if (current && current.terms.name !== terms.name) await gateway.renameProduct(productId, terms.name);
+
   return { productId, priceIds };
 }
