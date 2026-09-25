@@ -4,7 +4,7 @@ const dbMocks = vi.hoisted(() => ({
   finishCallRow: vi.fn(), createContact: vi.fn(), ensureConversation: vi.fn(),
   createMessage: vi.fn(), incrementUnreadCount: vi.fn(), emit: vi.fn(),
   fillContactBlanks: vi.fn(), updateMessageStatus: vi.fn(), hasRecentOutboundSms: vi.fn(),
-  getAlertPhone: vi.fn(), getContact: vi.fn(), recordAutomationLog: vi.fn(),
+  getAlertPhone: vi.fn(), getContact: vi.fn(), recordAutomationLog: vi.fn(), recordUsage: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const emailRefs = vi.hoisted(() => ({ providerShouldThrow: false, send: vi.fn() }));
@@ -48,7 +48,7 @@ import { segmentsFor } from "@/lib/sms/segments";
 import { finishCall, isMeaningful, computeBlankFields, type FinishContext } from "./finish-call";
 import {
   emptyCallState, withLead, withMessage, withTranscript, withBooking, withBookingCancelled, withServed,
-  withTransferred,
+  withTransferred, withRecordedCaller,
 } from "./call-state";
 import { defaultTextbackBody } from "./textback-body";
 import { withOptOut } from "@/lib/sms/opt-out";
@@ -182,6 +182,7 @@ beforeEach(() => {
   // regression guard for this default.
   dbMocks.getAlertPhone.mockResolvedValue(null);
   dbMocks.recordAutomationLog.mockResolvedValue(undefined);
+  dbMocks.recordUsage.mockResolvedValue("recorded");
   // The ordinary case: a contact with all four allow-listed columns already
   // filled, so `blankFields` computes to `[]` unless a test deliberately
   // leaves one of these blank to exercise the propagation.
@@ -1372,5 +1373,73 @@ describe("finishCall — the automation log row", () => {
     dbMocks.recordAutomationLog.mockRejectedValue(new Error("down"));
     const r = await finishCall(bookedState, ctx, meta);
     expect(r).toEqual(expect.objectContaining({ stored: true }));
+  });
+});
+
+describe("finishCall — usage: the minutes of a call Sofía talked to (client billing)", () => {
+  const callOf = (secs: number) => ({
+    callRowId: "call1", startedAt: new Date("2027-06-01T12:00:00Z"),
+    endedAt: new Date(new Date("2027-06-01T12:00:00Z").getTime() + secs * 1000),
+  });
+
+  it("records voice minutes AFTER the durable row: the stored duration rounded UP, the call as source, the call's end as occurred_at; an abandoned call bills through the callerSpoke half alone (mutation: Math.round(secs / 60) → 2 minutes, FAILS; move the leg above finishCallRow → call order FAILS; gate on isMeaningful(outcome) alone → this abandoned call records nothing, FAILS)", async () => {
+    const m = callOf(125);
+    await finishCall(abandonedState(), ctx, m);
+    expect(dbMocks.finishCallRow.mock.calls[0]![3]).toEqual(expect.objectContaining({ durationSecs: 125 }));
+    expect(dbMocks.recordUsage).toHaveBeenCalledTimes(1);
+    expect(dbMocks.recordUsage).toHaveBeenCalledWith(ctx.db, {
+      accountId: "a1", meter: "voice_minutes", quantity: 3, occurredAt: m.endedAt, sourceRef: "call:call1",
+    });
+    expect(dbMocks.finishCallRow.mock.invocationCallOrder[0]!).toBeLessThan(dbMocks.recordUsage.mock.invocationCallOrder[0]!);
+  });
+
+  it("a silent call (Sofía's greeting, no caller words, no booking/lead/message) records nothing, though its turn_count is 1; nor does a connect-timeout with no transcript at all (mutation: gate on turn_count / transcript.length → FAILS; gate on the call row id alone → FAILS)", async () => {
+    const s = withTranscript(emptyCallState(), { role: "assistant", text: "Hi, this is Sofía with Rio Roofing.", at: "t" });
+    const r = await finishCall(s, ctx, meta);
+    expect(r.outcome).toBe("spam");
+    expect(dbMocks.finishCallRow.mock.calls[0]![3]).toEqual(expect.objectContaining({ turnCount: 1 }));
+    await finishCall(emptyCallState(), ctx, meta);
+    expect(dbMocks.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it("a message Sofía took bills though no caller turn was transcribed: the outcome says the caller interacted (mutation: gate on callerSpoke(state) alone → FAILS)", async () => {
+    const s = withMessage(emptyCallState(), { body: "call me", at: "t" });
+    const r = await finishCall(s, ctx, meta);
+    expect(r.outcome).toBe("message");
+    expect(dbMocks.recordUsage).toHaveBeenCalledTimes(1);
+    expect(dbMocks.recordUsage).toHaveBeenCalledWith(ctx.db, {
+      accountId: "a1", meter: "voice_minutes", quantity: 2, occurredAt: meta.endedAt, sourceRef: "call:call1",
+    });
+  });
+
+  it("a robocall that reached Sofía is billed although it records as spam: its minutes were spent (mutation: skip usage when the outcome is 'spam' → FAILS)", async () => {
+    const s = withRecordedCaller(withTranscript(emptyCallState(),
+      { role: "caller", text: "This is an important message about your vehicle's extended warranty", at: "t" }));
+    const r = await finishCall(s, ctx, meta);
+    expect(r.outcome).toBe("spam");
+    expect(dbMocks.recordUsage).toHaveBeenCalledWith(ctx.db, expect.objectContaining({
+      meter: "voice_minutes", quantity: 2, sourceRef: "call:call1",
+    }));
+  });
+
+  it("records the minutes even when the call row could not be written: the call still happened (mutation: gate the leg on `stored` → FAILS)", async () => {
+    dbMocks.finishCallRow.mockRejectedValue(new Error("db down"));
+    const r = await finishCall(abandonedState(), ctx, meta);
+    expect(r.stored).toBe(false);
+    expect(dbMocks.recordUsage).toHaveBeenCalledWith(ctx.db, expect.objectContaining({ quantity: 2, sourceRef: "call:call1" }));
+  });
+
+  it("with no call row there is nothing to key the usage on, so nothing is recorded (mutation: drop the callRowId gate → recorded as 'call:null', FAILS)", async () => {
+    await finishCall(abandonedState(), ctx, { ...meta, callRowId: null });
+    expect(dbMocks.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it("a failing usage write changes nothing: same result, the text-back still sent, the activity event still emitted (mutation: remove recordUsageSafely's catch → finishCall rejects, FAILS)", async () => {
+    dbMocks.recordUsage.mockRejectedValue(new Error("usage_events is down"));
+    const r = await finishCall(abandonedState(), textbackCtx, meta);
+    expect(r).toEqual({ stored: true, notified: false, outcome: "abandoned" });
+    expect(smsRefs.send).toHaveBeenCalledTimes(1);
+    expect(dbMocks.emit).toHaveBeenCalledWith(
+      expect.anything(), "a1", "call.recorded", "voice", { callId: "call1", outcome: "abandoned" }, "ai");
   });
 });

@@ -10,7 +10,8 @@ import { voiceCallAlertEmail } from "@/lib/email/templates/voice";
 import { composeCallAlertSms, prepareAlertSms, deliverAlertSms, type PendingAlertSms } from "@/lib/sms/alerts";
 import { prepareTextback, deliverTextback, type PendingTextback } from "./textback";
 import type { CallState } from "./call-state";
-import { classifyOutcome, wasServed, wasTransferred } from "./call-state";
+import { classifyOutcome, wasServed, wasTransferred, callerSpoke } from "./call-state";
+import { voiceMinutes, recordUsageSafely } from "@/lib/billing/usage";
 import { detectSpokenLanguage } from "./language";
 import { generateSummary } from "./summary-service";
 import { summaryFactLine } from "./summarize";
@@ -546,6 +547,10 @@ export async function finishCall(
     }
   }
 
+  // Computed once: the calls row stores it, and the voice usage below bills
+  // from the SAME number, so the row and the bill agree to the minute.
+  const durationSecs = Math.max(0, Math.round((meta.endedAt.getTime() - meta.startedAt.getTime()) / 1000));
+
   // The durable row. Its own try/catch, independent of both legs above — a
   // DB outage here must not un-send an alert already on the wire, and must
   // not roll back a contact/message already written.
@@ -556,7 +561,7 @@ export async function finishCall(
       await finishCallRow(ctx.db, ctx.accountId, meta.callRowId, {
         outcome,
         endedAt: meta.endedAt,
-        durationSecs: Math.max(0, Math.round((meta.endedAt.getTime() - meta.startedAt.getTime()) / 1000)),
+        durationSecs,
         turnCount: state.transcript.length,
         transcript: state.transcript,
         summary,
@@ -587,6 +592,31 @@ export async function finishCall(
     } catch (e) {
       console.error(`finishCall ${meta.callRowId}: automation log write failed: ${String(e)}`);
     }
+  }
+
+  // USAGE (client billing): one `voice_minutes` row per call Sofía talked
+  // to (danlo): the caller said something (`callerSpoke`), OR the outcome
+  // is booked/lead/message (`meaningful`, computed at the top), because
+  // those mean the caller interacted even when no caller turn was
+  // transcribed. That includes a robocall that reached her (its words are a
+  // caller turn, and its minutes were spent) and excludes a silent ring or a
+  // connect-timeout. Minutes are the stored duration rounded UP, at least
+  // one (`voiceMinutes`).
+  //
+  // Gated on `meta.callRowId`, NOT on `stored`, like the automation-log leg
+  // above: the carrier and model minutes were spent whether or not
+  // finishCallRow landed. The call id is the usage row's source_ref, so a
+  // call with no row id (startCallRow failed open) has nothing to key
+  // idempotently on and is not recorded.
+  //
+  // After the durable row and before the carrier sends below: a database
+  // insert, and `recordUsageSafely` never throws, so it cannot cost the call
+  // its alert text, its text-back, or this function's never-throws contract.
+  if (meta.callRowId && (callerSpoke(state) || meaningful)) {
+    await recordUsageSafely(ctx.db, {
+      accountId: ctx.accountId, meter: "voice_minutes", quantity: voiceMinutes(durationSecs),
+      occurredAt: meta.endedAt, sourceRef: `call:${meta.callRowId}`,
+    }, `finishCall ${meta.callRowId}`);
   }
 
   // The other half of the staff alert SMS leg: the actual carrier POST,
