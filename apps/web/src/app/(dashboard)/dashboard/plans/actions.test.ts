@@ -32,7 +32,7 @@ vi.mock("@/lib/billing/stripe-gateway", async (importOriginal) => ({
 
 import { m } from "@/lib/messages";
 import { FakeGateway } from "@/lib/billing/fake-gateway";
-import { archivePlanAction, createPlanAction, restorePlanAction, updatePlanAction } from "./actions";
+import { archivePlanAction, createPlanAction, restorePlanAction, updatePlanAction, type PlanActionResult } from "./actions";
 
 const DRAFT = "22222222-2222-4222-8222-222222222222";
 const PLAN_ID = "33333333-3333-4333-8333-333333333333";
@@ -173,6 +173,88 @@ describe("createPlanAction", () => {
       dbMocks.getPlan.mockResolvedValue({ ...row, stripeProductId: "prod_from_an_earlier_day", stripePriceIds: OLD_IDS });
       expect(await createPlanAction(DRAFT, form())).toEqual({ ok: false, error: m["plans.error.alreadySaved"] });
     });
+
+    // Fix 1, finding 4: features never reach Stripe, so a retry that changes
+    // ONLY a feature replays identical Stripe ids. The terms half of the
+    // comparison is then the only thing between the user and a false "saved".
+    it("a retry that changes only a feature replays the same Stripe ids and is still not claimed as saved (mutation: drop the features / every terms line from the replay comparison → FAILS)", async () => {
+      await firstSaveLandedThenRetry();
+      expect(await createPlanAction(DRAFT, form({ "feature.web_concierge": "on" }))).toEqual({ ok: false, error: m["plans.error.alreadySaved"] });
+      // Proof the Stripe ids matched: nothing new was made, the first save's five objects replayed.
+      expect(fake.created).toHaveLength(5);
+    });
+
+    it("id_taken with no stored row to compare is not claimed as saved (mutation: treat a missing stored row as a replay → FAILS)", async () => {
+      await firstSaveLandedThenRetry();
+      dbMocks.getPlan.mockResolvedValue(null);
+      expect(await createPlanAction(DRAFT, form())).toEqual({ ok: false, error: m["plans.error.alreadySaved"] });
+    });
+  });
+});
+
+/** Fix 1, finding 5: a dependency's own error text (a Postgres message, a
+ *  Stripe request id, a stack) must never reach the dialog. Each row makes
+ *  ONE dependency throw a recognisable secret and pins the exact catalogue
+ *  copy the action answers with instead. */
+describe("a failing dependency never leaks its error text (mutation: any catch returns String(e) / e.message → FAILS)", () => {
+  const SECRET = "SECRET_INTERNAL_DETAIL";
+  const boom = () => Promise.reject(new Error(SECRET));
+  const cases: Array<{ name: string; arrange: () => void; act: () => Promise<PlanActionResult>; copy: keyof typeof m }> = [
+    { name: "create: plan read", arrange: () => dbMocks.listPlans.mockImplementation(boom), act: () => createPlanAction(DRAFT, form()), copy: "plans.error.saveFailed" },
+    { name: "create: Stripe", arrange: () => { fake.createProduct = boom; }, act: () => createPlanAction(DRAFT, form()), copy: "plans.error.stripeFailed" },
+    { name: "create: insert", arrange: () => dbMocks.insertPlan.mockImplementation(boom), act: () => createPlanAction(DRAFT, form()), copy: "plans.error.saveFailed" },
+    {
+      name: "create: id_taken re-read",
+      arrange: () => { dbMocks.insertPlan.mockResolvedValue({ ok: false, reason: "id_taken" }); dbMocks.getPlan.mockImplementation(boom); },
+      act: () => createPlanAction(DRAFT, form()), copy: "plans.error.saveFailed",
+    },
+    { name: "update: getPlan", arrange: () => dbMocks.getPlan.mockImplementation(boom), act: () => updatePlanAction(PLAN_ID, VERSION, form()), copy: "plans.error.saveFailed" },
+    { name: "update: listPlans", arrange: () => dbMocks.listPlans.mockImplementation(boom), act: () => updatePlanAction(PLAN_ID, VERSION, form()), copy: "plans.error.saveFailed" },
+    { name: "update: Stripe", arrange: () => { fake.createPrice = boom; }, act: () => updatePlanAction(PLAN_ID, VERSION, form({ monthlyPrice: "59" })), copy: "plans.error.stripeFailed" },
+    { name: "update: write", arrange: () => dbMocks.updatePlan.mockImplementation(boom), act: () => updatePlanAction(PLAN_ID, VERSION, form()), copy: "plans.error.saveFailed" },
+    { name: "archive", arrange: () => dbMocks.setPlanArchived.mockImplementation(boom), act: () => archivePlanAction(PLAN_ID), copy: "plans.error.saveFailed" },
+    { name: "restore", arrange: () => dbMocks.setPlanArchived.mockImplementation(boom), act: () => restorePlanAction(PLAN_ID), copy: "plans.error.saveFailed" },
+  ];
+  for (const c of cases) {
+    it(`${c.name} throws → the catalogue's copy, never the error text`, async () => {
+      const log = vi.spyOn(console, "error").mockImplementation(() => {});
+      c.arrange();
+      const r = await c.act();
+      expect(r).toEqual({ ok: false, error: m[c.copy] });
+      expect(JSON.stringify(r)).not.toContain(SECRET);
+      log.mockRestore();
+    });
+  }
+});
+
+/** Fix 1, finding 6: RegExp.test coerces its argument to a string, so
+ *  `UUID.test([uuid])` is true. A server action is a public endpoint whose
+ *  arguments arrive from the wire, so every client-supplied id is checked to
+ *  BE a string first. */
+describe("a client-supplied id that is not a string is refused before anything runs (mutation: drop the typeof check → FAILS)", () => {
+  const asArray = (s: string) => [s] as unknown as string;
+
+  it("create: an array draft id", async () => {
+    expect(await createPlanAction(asArray(DRAFT), form())).toEqual({ ok: false, error: m["plans.error.reload"] });
+    nothingTouched();
+  });
+
+  it("update: an array plan id", async () => {
+    expect(await updatePlanAction(asArray(PLAN_ID), VERSION, form())).toEqual({ ok: false, error: m["plans.error.reload"] });
+    expect(dbMocks.getPlan).not.toHaveBeenCalled();
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("update: an array version", async () => {
+    expect(await updatePlanAction(PLAN_ID, asArray(VERSION), form())).toEqual({ ok: false, error: m["plans.error.reload"] });
+    expect(dbMocks.getPlan).not.toHaveBeenCalled();
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("archive and restore: an array plan id", async () => {
+    expect(await archivePlanAction(asArray(PLAN_ID))).toEqual({ ok: false, error: m["plans.error.reload"] });
+    expect(await restorePlanAction(asArray(PLAN_ID))).toEqual({ ok: false, error: m["plans.error.reload"] });
+    expect(dbMocks.setPlanArchived).not.toHaveBeenCalled();
   });
 });
 
@@ -219,6 +301,45 @@ describe("updatePlanAction", () => {
     dbMocks.updatePlan.mockResolvedValue({ ok: false, reason: "stale" });
     expect(await updatePlanAction(PLAN_ID, VERSION, form({ monthlyPrice: "59" }))).toEqual({ ok: false, error: m["plans.error.stale"] });
   });
+
+  it("the database's name_taken verdict is reported as a name clash, not as stale (mutation: map every refusal to stale → FAILS)", async () => {
+    dbMocks.updatePlan.mockResolvedValue({ ok: false, reason: "name_taken" });
+    expect(await updatePlanAction(PLAN_ID, VERSION, form())).toEqual({ ok: false, error: m["plans.error.nameTaken"] });
+  });
+
+  // Fix 1, finding 2: $59 terms must never be written against $49 prices.
+  it("Stripe failing part-way through an update returns the Stripe message and writes nothing (mutation: fall through to the write with the old price ids → FAILS)", async () => {
+    fake.failOn = { op: "createPrice", after: 1 };
+    expect(await updatePlanAction(PLAN_ID, VERSION, form({ monthlyPrice: "59", "overage.sms": "0.04" })))
+      .toEqual({ ok: false, error: m["plans.error.stripeFailed"] });
+    // Part-way: the new base price was made, the sms price was refused.
+    expect(fake.created.filter((c) => c.op === "createPrice")).toHaveLength(1);
+    expect(dbMocks.updatePlan).not.toHaveBeenCalled();
+  });
+
+  it("a name another plan holds is refused BEFORE Stripe is called (mutation: drop the update's name pre-check → FAILS)", async () => {
+    dbMocks.listPlans.mockResolvedValue([planRow(), planRow({ id: DRAFT, name: "Growth Plus" })]);
+    expect(await updatePlanAction(PLAN_ID, VERSION, form({ name: "Growth Plus" }))).toEqual({ ok: false, error: m["plans.error.nameTaken"] });
+    expect(fake.calls).toEqual([]);
+    expect(dbMocks.updatePlan).not.toHaveBeenCalled();
+  });
+
+  it("the plan's OWN name is not a clash (mutation: drop `p.id !== planId` from the pre-check → FAILS)", async () => {
+    dbMocks.listPlans.mockResolvedValue([planRow()]);
+    expect(await updatePlanAction(PLAN_ID, VERSION, form({ monthlyPrice: "59" }))).toEqual({ ok: true });
+  });
+
+  it("a plan id that is not a uuid is refused before anything runs (mutation: drop the update's UUID test → FAILS)", async () => {
+    expect(await updatePlanAction("not-a-uuid", VERSION, form())).toEqual({ ok: false, error: m["plans.error.reload"] });
+    expect(dbMocks.getPlan).not.toHaveBeenCalled();
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("an empty version is refused before anything runs (mutation: drop the update's version check → FAILS)", async () => {
+    expect(await updatePlanAction(PLAN_ID, "", form())).toEqual({ ok: false, error: m["plans.error.reload"] });
+    expect(dbMocks.getPlan).not.toHaveBeenCalled();
+    expect(fake.calls).toEqual([]);
+  });
 });
 
 describe("archivePlanAction / restorePlanAction", () => {
@@ -236,6 +357,18 @@ describe("archivePlanAction / restorePlanAction", () => {
   it("a client is redirected and nothing is written (mutation: drop requireAgency from archive → FAILS)", async () => {
     guard.agency = false;
     await expect(archivePlanAction(PLAN_ID)).rejects.toThrow("NEXT_REDIRECT");
+    expect(dbMocks.setPlanArchived).not.toHaveBeenCalled();
+  });
+
+  it("a client is redirected from restore and nothing is written (mutation: drop requireAgency from restore → FAILS)", async () => {
+    guard.agency = false;
+    await expect(restorePlanAction(PLAN_ID)).rejects.toThrow("NEXT_REDIRECT");
+    expect(dbMocks.setPlanArchived).not.toHaveBeenCalled();
+  });
+
+  it("a plan id that is not a uuid is refused before any write (mutation: drop setArchived's UUID test → FAILS)", async () => {
+    expect(await archivePlanAction("not-a-uuid")).toEqual({ ok: false, error: m["plans.error.reload"] });
+    expect(await restorePlanAction("not-a-uuid")).toEqual({ ok: false, error: m["plans.error.reload"] });
     expect(dbMocks.setPlanArchived).not.toHaveBeenCalled();
   });
 });

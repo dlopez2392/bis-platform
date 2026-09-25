@@ -57,7 +57,8 @@ export type StripeState = { terms: PlanTerms; productId: string; priceIds: Strip
 /**
  * Makes Stripe match `terms` and returns the ids to store. Creates only
  * what changed:
- *   - the product once (new plan), renamed when the name changes;
+ *   - the product once (new plan); for an existing plan its name is SET to
+ *     `terms.name` on every save (see the rename below);
  *   - a new base price when the monthly price changes;
  *   - a new metered price for a meter whose allowance OR overage changes.
  * Old prices are left as they are: subscriptions on them keep them until
@@ -119,12 +120,19 @@ export async function syncPlanToStripe(
         )).id;
   }
 
-  // Renamed LAST, only once every price this save needs has been created
+  // Named LAST, only once every price this save needs has been created
   // successfully. Renaming first (the original order) would let a later
   // createPrice failure leave Stripe showing the new name while the
   // database — written only after this whole function resolves — still
   // holds the old one.
-  if (current && current.terms.name !== terms.name) await gateway.renameProduct(productId, terms.name);
+  //
+  // And ALWAYS for an existing plan, never only when the name differs from
+  // the row's: a rename can reach Stripe and then lose its database write
+  // (stale, name taken, a crash), leaving Stripe ahead of the row. Every
+  // later save compares against the row, so a rename-on-difference rule
+  // would never put Stripe back, and invoices show the product name.
+  // Setting a name is idempotent, so the cost is one Stripe call per save.
+  if (current) await gateway.renameProduct(productId, terms.name);
 
   return { productId, priceIds };
 }

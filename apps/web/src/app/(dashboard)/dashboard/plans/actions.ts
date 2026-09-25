@@ -29,7 +29,7 @@
 
 import {
   serviceDb, listPlans, getPlan, insertPlan, updatePlan, setPlanArchived,
-  METER_KEYS, type Plan, type PlanWrite,
+  METER_KEYS, type Plan, type PlanFeatures, type PlanTerms, type PlanWrite,
 } from "@bis/db";
 import { requireAgency } from "@/lib/auth";
 import { billingGatewayFromEnv } from "@/lib/billing/stripe-gateway";
@@ -40,18 +40,38 @@ import { m } from "@/lib/messages";
 export type PlanActionResult = { ok: true } | { ok: false; error: string };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** A server action is a public endpoint: its arguments arrive off the wire,
+ *  whatever the TypeScript signature says. `RegExp.test` coerces, so
+ *  `UUID.test([uuid])` is true; the typeof comes first. */
+const isUuid = (x: unknown): x is string => typeof x === "string" && UUID.test(x);
 const fail = (error: string): PlanActionResult => ({ ok: false, error });
 
-/** Whether the stored row holds EXACTLY this write: every term and every
- *  Stripe id. Field by field, so a key added to a type later is a compile
- *  error here only if it is read, never a silent pass. */
+/** Every term's equality, typed so that a term or a feature added to
+ *  PlanTerms / PlanFeatures later is a COMPILE error here until it is given
+ *  a comparison, never a silent pass: SAME_TERM is a mapped type over
+ *  `keyof PlanTerms` (a missing key is TS2741), and the feature list must
+ *  `satisfies Record<keyof PlanFeatures, true>` (TS1360). Meter maps are
+ *  walked with METER_KEYS, the runtime list MeterKey is derived from.
+ *
+ *  The terms half is not redundant with the Stripe ids: features never
+ *  reach Stripe, so a retry that changes only a feature replays identical
+ *  Stripe ids, and this comparison is the only thing that catches it. */
+const FEATURE_KEYS = Object.keys(
+  { voice_receptionist: true, web_concierge: true } satisfies Record<keyof PlanFeatures, true>,
+) as Array<keyof PlanFeatures>;
+
+const SAME_TERM: { [K in keyof PlanTerms]: (a: PlanTerms[K], b: PlanTerms[K]) => boolean } = {
+  name: (a, b) => a === b,
+  monthlyPriceCents: (a, b) => a === b,
+  features: (a, b) => FEATURE_KEYS.every((k) => a[k] === b[k]),
+  allowances: (a, b) => METER_KEYS.every((k) => a[k] === b[k]),
+  overageCents: (a, b) => METER_KEYS.every((k) => a[k] === b[k]),
+};
+const sameTerm = <K extends keyof PlanTerms>(k: K, a: PlanTerms, b: PlanTerms): boolean => SAME_TERM[k](a[k], b[k]);
+
+/** Whether the stored row holds EXACTLY this write: every term and every Stripe id. */
 function rowHolds(row: Plan, w: PlanWrite): boolean {
-  const t = w.terms;
-  return row.name === t.name
-    && row.monthlyPriceCents === t.monthlyPriceCents
-    && row.features.voice_receptionist === t.features.voice_receptionist
-    && row.features.web_concierge === t.features.web_concierge
-    && METER_KEYS.every((k) => row.allowances[k] === t.allowances[k] && row.overageCents[k] === t.overageCents[k])
+  return (Object.keys(SAME_TERM) as Array<keyof PlanTerms>).every((k) => sameTerm(k, row, w.terms))
     && row.stripeProductId === w.stripeProductId
     && row.stripePriceIds.base === w.stripePriceIds.base
     && METER_KEYS.every((k) => row.stripePriceIds[k] === w.stripePriceIds[k]);
@@ -73,7 +93,7 @@ function rowHolds(row: Plan, w: PlanWrite): boolean {
  */
 export async function createPlanAction(draftId: string, formData: FormData): Promise<PlanActionResult> {
   await requireAgency();
-  if (!UUID.test(draftId)) return fail(m["plans.error.reload"]);
+  if (!isUuid(draftId)) return fail(m["plans.error.reload"]);
   const parsed = parsePlanForm(formData);
   if (!parsed.ok) return fail(parsed.error);
   const stripe = billingGatewayFromEnv();
@@ -134,7 +154,7 @@ export async function updatePlanAction(
   planId: string, expectedUpdatedAt: string, formData: FormData,
 ): Promise<PlanActionResult> {
   await requireAgency();
-  if (!UUID.test(planId) || !expectedUpdatedAt) return fail(m["plans.error.reload"]);
+  if (!isUuid(planId) || typeof expectedUpdatedAt !== "string" || !expectedUpdatedAt) return fail(m["plans.error.reload"]);
   const parsed = parsePlanForm(formData);
   if (!parsed.ok) return fail(parsed.error);
   const stripe = billingGatewayFromEnv();
@@ -193,7 +213,7 @@ export async function restorePlanAction(planId: string): Promise<PlanActionResul
  *  touches nothing at Stripe, so it is reversible and runs immediately with
  *  an undo toast (DESIGN.md rule 6). */
 async function setArchived(planId: string, archived: boolean): Promise<PlanActionResult> {
-  if (!UUID.test(planId)) return fail(m["plans.error.reload"]);
+  if (!isUuid(planId)) return fail(m["plans.error.reload"]);
   try {
     return (await setPlanArchived(serviceDb(), planId, archived)) ? { ok: true } : fail(m["plans.error.notFound"]);
   } catch (e) {

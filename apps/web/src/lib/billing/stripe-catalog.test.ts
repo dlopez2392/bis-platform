@@ -137,12 +137,29 @@ describe("syncPlanToStripe", () => {
     expect(second).toEqual(first);
   });
 
-  it("re-saving unchanged terms creates nothing and keeps every id (mutation: drop the unchanged check → FAILS)", async () => {
+  it("re-saving unchanged terms creates nothing, keeps every id, and re-asserts the stored name once (mutations: drop the unchanged check → FAILS; rename only when the name differs → FAILS)", async () => {
     const g = fake();
     const r = await syncPlanToStripe(g, PLAN, TERMS, CURRENT);
     expect(g.created).toEqual([]);
-    expect(g.calls.some((c) => c.op === "renameProduct")).toBe(false);
+    expect(g.calls.filter((c) => c.op === "createProduct" || c.op === "createPrice")).toEqual([]);
+    expect(g.calls.filter((c) => c.op === "renameProduct").map((c) => c.input))
+      .toEqual([{ productId: "prod_existing", name: "Growth" }]);
     expect(r).toEqual({ productId: "prod_existing", priceIds: CURRENT!.priceIds });
+  });
+
+  // Fix 1 (Task 7 review, 2026-09-25): a rename that reached Stripe but whose
+  // database write then failed (stale, name taken, or a crash) leaves Stripe
+  // AHEAD of the row. Every later save compares against the row's name, so a
+  // rename-only-on-difference rule would never put Stripe back, and invoices
+  // would keep showing the name the database never took.
+  it("a save after a Stripe-ahead rename puts the product's name back to the terms (mutation: rename only when the name differs → Stripe keeps the unsaved name, FAILS)", async () => {
+    const g = fake();
+    // Save 1 renames at Stripe; its database write never happens, so `current` is unchanged.
+    await syncPlanToStripe(g, PLAN, { ...TERMS, name: "Growth Plus" }, CURRENT);
+    // Save 2 uses the name the database still holds.
+    await syncPlanToStripe(g, PLAN, TERMS, CURRENT);
+    const renames = g.calls.filter((c) => c.op === "renameProduct").map((c) => c.input);
+    expect(renames.at(-1)).toEqual({ productId: "prod_existing", name: "Growth" });
   });
 
   it("a monthly price change creates exactly one new base price and keeps the three metered ones (mutation: compare allowances for the base → FAILS)", async () => {
