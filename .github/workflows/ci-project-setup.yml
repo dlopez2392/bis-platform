@@ -74,16 +74,19 @@ jobs:
     # from a runner that is a slower client than a dev machine.
     timeout-minutes: 20
     steps:
-      # Before anything else, so a missing secret costs nothing. Length tests
-      # only: nothing here prints a value.
+      # Before anything else, so a missing secret costs nothing. Presence
+      # tests only: SUPABASE_DB_URL is length-checked, and the service-role
+      # key is never handed to this step at all — only a boolean computed
+      # from it in the workflow expression, so this step never holds the
+      # real secret value.
       - name: Check that the CI project secrets are configured
         env:
           SUPABASE_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CI_SUPABASE_SECRET_KEY }}
+          HAS_SERVICE_KEY: ${{ secrets.CI_SUPABASE_SECRET_KEY != '' }}
         run: |
           missing=""
           if [ "${#SUPABASE_DB_URL}" -eq 0 ]; then missing="$missing CI_SUPABASE_DB_URL"; fi
-          if [ "${#SUPABASE_SERVICE_ROLE_KEY}" -eq 0 ]; then missing="$missing CI_SUPABASE_SECRET_KEY"; fi
+          if [ "$HAS_SERVICE_KEY" != "true" ]; then missing="$missing CI_SUPABASE_SECRET_KEY"; fi
           if [ -n "$missing" ]; then
             echo "::error::Missing repository secret(s):$missing. Add them under Settings > Secrets and variables > Actions. Nothing was run."
             exit 1
@@ -94,7 +97,7 @@ jobs:
           persist-credentials: false
 
       # Same setup as ci.yml: pnpm from package.json's "packageManager".
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v5
         with:
@@ -118,7 +121,13 @@ jobs:
         env:
           STEP: ${{ inputs.step }}
           SUPABASE_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CI_SUPABASE_SECRET_KEY }}
+          # Every case below authenticates over SUPABASE_DB_URL alone
+          # (packages/db/src/ci/target.ts, sql.ts, push.ts) EXCEPT seed, whose
+          # runner (../ci-seed/run.ts) writes through serviceDb(), which reads
+          # this. Scoped to that one case so the real secret value reaches the
+          # process only on a `seed` dispatch; every other dispatch gets an
+          # empty string, which none of those runners read.
+          SUPABASE_SERVICE_ROLE_KEY: ${{ inputs.step == 'seed' && secrets.CI_SUPABASE_SECRET_KEY || '' }}
         run: |
           out="$RUNNER_TEMP/ci-project-setup"
           mkdir -p "$out"
@@ -142,7 +151,7 @@ jobs:
 
       - name: Upload the result rows
         if: ${{ !cancelled() && (inputs.step == 'fingerprint' || inputs.step == 'fingerprint-detail' || inputs.step == 'migration-history') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-project-${{ inputs.step }}
           path: ${{ runner.temp }}/ci-project-setup/${{ inputs.step }}.tsv

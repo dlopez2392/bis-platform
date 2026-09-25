@@ -159,6 +159,18 @@ describe("restoreSeededBrandColor", () => {
  * back in the spec → both cases red; pass `"Nonexistent Co"` instead of
  * `SEEDED_ACCOUNT_NAME` → "client-branding.spec.ts looks up…" reds.
  */
+/**
+ * Strips `//` line comments and `/* *\/` block comments before a
+ * source-scanning guard matches against a file's text. Naive (it does not
+ * understand string or regex literals), which is fine for guarding this
+ * repo's own formatted source: without it, a regex like the one below is
+ * satisfied by a call left behind IN A COMMENT — proving nothing — as soon as
+ * the real call is deleted, renamed or broken.
+ */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+}
+
 describe("no e2e spec addresses an account by a hard-coded id", () => {
   const E2E_DIR = path.join(__dirname, "..");
   const HERE = path.resolve(__dirname);
@@ -179,9 +191,21 @@ describe("no e2e spec addresses an account by a hard-coded id", () => {
     return out;
   }
 
-  it("client-branding.spec.ts looks up its other company by SEEDED_ACCOUNT_NAME", () => {
+  it("client-branding.spec.ts looks up its other company by SEEDED_ACCOUNT_NAME (mutation: comment out the real call, leaving it in the file → FAILS once the match runs on comment-stripped source)", () => {
     const src = fs.readFileSync(path.join(E2E_DIR, "client-branding.spec.ts"), "utf8");
-    expect(src).toMatch(/lookupSeededAccountId\(\s*serviceDb\(\)\s*,\s*SEEDED_ACCOUNT_NAME\s*\)/);
+    expect(stripComments(src)).toMatch(/lookupSeededAccountId\(\s*serviceDb\(\)\s*,\s*SEEDED_ACCOUNT_NAME\s*\)/);
+  });
+
+  it("is not fooled by the call surviving only in a comment (proves the guard above reads code, not comments)", () => {
+    const commentedOut = [
+      "// const other = await lookupSeededAccountId(serviceDb(), SEEDED_ACCOUNT_NAME);",
+      "/* const other2 = await lookupSeededAccountId(serviceDb(), SEEDED_ACCOUNT_NAME); */",
+    ].join("\n");
+    // Raw text still matches — this is exactly what would let a broken spec
+    // read as green if the check above matched `src` instead of the stripped
+    // text.
+    expect(commentedOut).toMatch(/lookupSeededAccountId\(\s*serviceDb\(\)\s*,\s*SEEDED_ACCOUNT_NAME\s*\)/);
+    expect(stripComments(commentedOut)).not.toMatch(/lookupSeededAccountId/);
   });
 
   it("no .ts file under e2e/ (outside fixtures/) carries a uuid literal", () => {
@@ -214,4 +238,64 @@ describe("seededAccountMissingMessage", () => {
     expect(pkg.name).toBe(filter);
     expect(Object.keys(pkg.scripts)).toContain(script);
   });
+});
+
+/**
+ * `openAccountByName` (../support.ts) used to `test.skip` when the account
+ * card was not found, which turned a missing seed into a green run on any
+ * project that lacked it (this file's own header explains why that reads as
+ * success). #132 made it fail loudly instead — the same fail-instead-of-skip
+ * rule `lookupSeededAccountId` above enforces for client-branding.spec.ts —
+ * but nothing stopped a later edit from re-adding a skip path. This is that
+ * guard, read as source because Playwright cannot run from `pnpm check`.
+ */
+describe("openAccountByName fails loudly rather than skipping when the account is missing", () => {
+  const SUPPORT_SRC = fs.readFileSync(path.join(__dirname, "../support.ts"), "utf8");
+
+  /** The named function's body, matched by simple brace counting from its first `{`. */
+  function functionBody(source: string, name: string): string {
+    const at = source.indexOf(`function ${name}(`);
+    if (at < 0) throw new Error(`support.ts has no function ${name}`);
+    const braceStart = source.indexOf("{", at);
+    let depth = 0;
+    for (let i = braceStart; i < source.length; i++) {
+      if (source[i] === "{") depth++;
+      else if (source[i] === "}") {
+        depth--;
+        if (depth === 0) return source.slice(braceStart, i + 1);
+      }
+    }
+    throw new Error(`could not find the end of ${name}`);
+  }
+
+  const body = functionBody(SUPPORT_SRC, "openAccountByName");
+
+  it(
+    "never calls test.skip when the account card is not found (mutation: replace the failing " +
+    "expect with `if ((await card.count()) === 0) { test.skip(true, seededAccountMissingMessage(" +
+    "accountName, \"on /dashboard/accounts\")); return; }` → FAILS)",
+    () => {
+      expect(stripComments(body)).not.toMatch(/test\.skip/);
+    },
+  );
+
+  it(
+    "fails via a not.toHaveCount(0) expectation naming seededAccountMissingMessage, not a silent " +
+    "return (mutation: comment out the real expect with `// was: await expect(card, " +
+    "seededAccountMissingMessage(accountName, \"x\")).not.toHaveCount(0);` followed by " +
+    "`if ((await card.count()) === 0) return;` → FAILS once matched against stripComments(body), " +
+    "same comment-fooling 3b fixed for client-branding.spec.ts above)",
+    () => {
+      const stripped = stripComments(body);
+      expect(stripped).toMatch(/\.not\.toHaveCount\(0\)/);
+      expect(stripped).toMatch(/seededAccountMissingMessage\(/);
+      // Defense in depth: even if the two checks above were somehow satisfied,
+      // a bare early return or a direct `.count()` call is exactly the
+      // silent-return shape this guard exists to catch — the real function
+      // never returns explicitly and never calls `.count()` itself, only
+      // `expect(...).not.toHaveCount(0)`.
+      expect(stripped).not.toMatch(/\breturn\b/);
+      expect(stripped).not.toMatch(/\.count\(\)/);
+    },
+  );
 });

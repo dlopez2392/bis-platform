@@ -254,3 +254,121 @@ describe("ci.yml's jobs", () => {
     expect(/^\s+cancel-in-progress: (\S+)\s*$/m.exec(text)?.[1]).toBe("false");
   });
 });
+
+// ci-project-setup.yml runs ONE physical step for every dispatch value
+// (bootstrap, push, migrations, the three read-only parity queries, seed),
+// picked at runtime by a shell `case "$STEP" in`. Of those, only `seed`
+// (packages/db/src/ci-seed/run.ts) calls serviceDb(), which is the only
+// runner that reads SUPABASE_SERVICE_ROLE_KEY — every other case
+// authenticates with SUPABASE_DB_URL alone (packages/db/src/ci/target.ts,
+// sql.ts, push.ts). Setting the real secret unconditionally on that one
+// physical step handed it to a runner that never reads it on six of the
+// seven dispatch values (#131 review). These cases pin that the secret is
+// scoped to the `seed` dispatch instead of every dispatch.
+describe("ci-project-setup.yml scopes the service-role secret to the dispatch that reads it", () => {
+  const setupLines = codeLines(read("../../../.github/workflows/ci-project-setup.yml"));
+
+  /**
+   * A step's own raw lines, found by its exact (trimmed) `- name:`/`- uses:`
+   * line, running up to the next dash at the SAME indent (or EOF). Comment
+   * lines are already gone (`codeLines`), so a step named only in a comment
+   * cannot be found this way.
+   */
+  function stepBlock(lines: string[], dashLine: string): string[] {
+    const start = lines.findIndex((l) => l.trim() === dashLine);
+    if (start < 0) throw new Error(`ci-project-setup.yml has no step "${dashLine}"`);
+    const dashIndent = lines[start]!.search(/\S/);
+    const rest = lines.slice(start + 1);
+    const end = rest.findIndex((l) => /^\s*-\s/.test(l) && l.search(/\S/) === dashIndent);
+    return end < 0 ? rest : rest.slice(0, end);
+  }
+
+  /** `KEY: value` pairs directly under a step's own nested `env:` mapping. */
+  function stepEnv(block: string[]): Record<string, string> {
+    const at = block.findIndex((l) => /^\s*env:\s*$/.test(l));
+    if (at < 0) throw new Error("step has no env: block");
+    const envIndent = block[at]!.search(/\S/);
+    const out: Record<string, string> = {};
+    for (const line of block.slice(at + 1)) {
+      const indent = line.search(/\S/);
+      if (line.trim() !== "" && indent <= envIndent) break;
+      const m = /^\s*([A-Za-z0-9_]+): (.+)$/.exec(line);
+      if (m?.[1] && m[2]) out[m[1]] = m[2].trim();
+    }
+    return out;
+  }
+
+  const runStepEnv = stepEnv(stepBlock(setupLines, "- name: Run ${{ inputs.step }}"));
+  const preflightStepEnv = stepEnv(
+    stepBlock(setupLines, "- name: Check that the CI project secrets are configured"),
+  );
+
+  it(
+    "hands the real secret to a `seed` dispatch only, and an empty string to every other " +
+    "dispatch (mutation: SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CI_SUPABASE_SECRET_KEY }}, " +
+    "unconditional → FAILS)",
+    () => {
+      expect(runStepEnv.SUPABASE_SERVICE_ROLE_KEY).toBe(
+        "${{ inputs.step == 'seed' && secrets.CI_SUPABASE_SECRET_KEY || '' }}",
+      );
+    },
+  );
+
+  it("still hands SUPABASE_DB_URL to every dispatch — every case authenticates with it", () => {
+    expect(runStepEnv.SUPABASE_DB_URL).toBe("${{ secrets.CI_SUPABASE_DB_URL }}");
+  });
+
+  it(
+    "the secrets pre-flight step tests the service-role secret via a boolean, never its real " +
+    "value (mutation: SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CI_SUPABASE_SECRET_KEY }} → FAILS)",
+    () => {
+      expect(preflightStepEnv.HAS_SERVICE_KEY).toBe("${{ secrets.CI_SUPABASE_SECRET_KEY != '' }}");
+      expect(preflightStepEnv.SUPABASE_SERVICE_ROLE_KEY).toBeUndefined();
+    },
+  );
+
+  it("still names the missing secret when the boolean is false", () => {
+    const block = stepBlock(setupLines, "- name: Check that the CI project secrets are configured");
+    const text = block.join("\n");
+    expect(text).toMatch(/"\$HAS_SERVICE_KEY" != "true"/);
+    expect(text).toContain("CI_SUPABASE_SECRET_KEY");
+  });
+
+  /**
+   * The line RANGE (start index inclusive, end index exclusive, into
+   * `setupLines`) covered by one step, found the same way `stepBlock` finds
+   * its body — but returned as indices rather than copied lines, so an
+   * occurrence elsewhere in the file can be tested for membership without a
+   * content comparison (two steps can share an identical line).
+   */
+  function stepLineRange(lines: string[], dashLine: string): [number, number] {
+    const start = lines.findIndex((l) => l.trim() === dashLine);
+    if (start < 0) throw new Error(`ci-project-setup.yml has no step "${dashLine}"`);
+    const dashIndent = lines[start]!.search(/\S/);
+    const rest = lines.slice(start + 1);
+    const relEnd = rest.findIndex((l) => /^\s*-\s/.test(l) && l.search(/\S/) === dashIndent);
+    const end = relEnd < 0 ? lines.length : start + 1 + relEnd;
+    return [start, end];
+  }
+
+  it(
+    "references secrets.CI_SUPABASE_SECRET_KEY only inside the two steps that need it — never in " +
+    "workflow-level env, job-level env, or any other step (mutation B: add " +
+    "`SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CI_SUPABASE_SECRET_KEY }}` to the workflow-level " +
+    "`env:` block → FAILS; mutation C: add the same line to the `pnpm install --frozen-lockfile` " +
+    "step's own `env:` → FAILS)",
+    () => {
+      const [preflightStart, preflightEnd] = stepLineRange(
+        setupLines, "- name: Check that the CI project secrets are configured",
+      );
+      const [runStart, runEnd] = stepLineRange(setupLines, "- name: Run ${{ inputs.step }}");
+      const offenders = setupLines.flatMap((line, i) => {
+        if (!line.includes("secrets.CI_SUPABASE_SECRET_KEY")) return [];
+        const inPreflight = i >= preflightStart && i < preflightEnd;
+        const inRun = i >= runStart && i < runEnd;
+        return inPreflight || inRun ? [] : [line.trim()];
+      });
+      expect(offenders).toEqual([]);
+    },
+  );
+});

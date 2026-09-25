@@ -135,8 +135,13 @@ jobs:
         run: bash .github/scripts/ci-target-guard.sh
 
       # Reads the pinned version from package.json's "packageManager" field, so
-      # bumping pnpm is one edit, not two.
-      - uses: pnpm/action-setup@v4
+      # bumping pnpm is one edit, not two. v6 (not v4): v4 runs its own code on
+      # Node 20, which GitHub now force-runs on Node 24 anyway and warns about
+      # every job ("Node.js 20 is deprecated … pnpm/action-setup@v4" — a run on
+      # this repo, 2026-09-25); v6's action.yml already declares `node24`, so
+      # the warning is gone rather than papered over. v5/v6 changed nothing
+      # this bare (no-`with:`) usage relies on.
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v5
         with:
@@ -220,7 +225,7 @@ jobs:
       - name: Check that CI targets the CI Supabase project
         run: bash .github/scripts/ci-target-guard.sh
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v5
         with:
@@ -251,10 +256,15 @@ jobs:
         run: pnpm --filter web test:e2e
 
       # Traces are retained only on failure (playwright.config.ts), so this
-      # is empty on a green run and skipped.
+      # is empty on a green run and skipped. v7 (not v4): v4 runs on Node 20,
+      # named alongside pnpm/action-setup@v4 in the same "Node.js 20 is
+      # deprecated" job warning once this step actually runs (a failed e2e
+      # run, 2026-09-25); node24 landed at v6, and v7 only adds an optional
+      # `archive` input this step does not set, so `name`/`path`/
+      # `if-no-files-found`/`retention-days` below behave the same.
       - name: Upload traces from failed specs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-traces
           path: apps/web/test-results/
