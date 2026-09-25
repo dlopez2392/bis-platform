@@ -18,15 +18,19 @@ documents in this folder, and a line-by-line audit of the repository:
 | [Pricing study](2026-09-21-pricing-and-packaging.md) | Valley competitors, prices, demographics (21 September) |
 | [Insights brief](2026-09-20-insights-content-brief.md) | Texas and federal rule changes affecting small businesses (20 September) |
 
-**How it was checked — three rounds.** Revision 1 went to an independent reviewer told to
+**How it was checked — three independent reviews.** Revision 1 went to an independent reviewer told to
 find what was wrong: verify every repository claim against the code, spot-check numbers
 against the appendices, and list every researched idea the draft neither adopted nor
 rejected. It found three critical errors and several dozen smaller ones. Revision 2
 corrected them and went to a second reviewer, who confirmed the fixes, checked the
 HubSpot and monday.com section line by line, and found about forty further issues —
 chief among them that only eight of the fifty HubSpot and monday.com ideas had an
-explicit decision. This is revision 3: every finding is addressed, and §7.2 now records a
-decision for every one of those ideas. The two integration claims the plan depends on
+explicit decision. Revision 3 addressed those and went to a third reviewer for a
+convergence check, which found no critical problems and eleven important ones — among
+them Sofía's own English-only emails, a packaging section that ignored the owner's
+approved billing plan, and a Google sequence that would have let brand verification
+lapse. This is revision 4: every finding from all three rounds is addressed, and §7.2
+records a decision for every HubSpot and monday.com idea. The two integration claims the plan depends on
 most were re-verified against Google's and Microsoft's own documentation.
 
 **One limitation, stated plainly.** This work ran in a cloud session that cannot see the
@@ -51,10 +55,11 @@ timeline. There is no place for a document; no way to say two people are a mothe
 child, or that a customer owns three rental properties; no money flowing to the business's
 own customers; no connection to Google or Outlook. Every client user signs in as an
 administrator — there are no staff, no roles and no per-person calendars. And "bilingual"
-stops partway: Sofía, the booking page, forms, the web concierge, the missed-call text,
-the lead receipt, the booking confirmation and the instant reply speak Spanish, but eight
-automated-message modules, the booking reminder and follow-up emails, and the owner's
-dashboard are English-only.
+stops partway: Sofía's voice, the booking page and its own confirmation, the forms'
+buttons and system text, the web concierge, the missed-call text, the lead receipt and
+the instant reply speak Spanish. But eight automated-message modules, the booking
+reminder and follow-up emails, the confirmation and reschedule emails Sofía herself
+sends after a call, every form's own labels, and the owner's dashboard are English-only.
 
 **So the work is a foundation first, then the features on it:**
 
@@ -71,9 +76,9 @@ dashboard are English-only.
 | 9 | **Money**: price book, quotes with options, e-signature, invoices, ACH and card, deposits, recurring billing | Getting paid is a service business's close |
 | 10 | **The client portal, the MCP server, and industry packs** | One link for the customer; Claude and ChatGPT for the owner with every AI write landing as a proposal; the industry specifics |
 
-**The full plan is about 110–157 engineer-weeks** in conventional units (§11), with a
-first release of roughly 25–30 engineer-weeks that delivers the record, the vault, consent,
-bilingual messages, inbound email and the AI summary. This repository's own pace is the
+**The full plan is about 120–168 engineer-weeks** in conventional units (§11), with a
+first release of roughly 27–36 engineer-weeks that delivers the record page, the vault,
+consent, bilingual messages, inbound email and the AI summary. This repository's own pace is the
 better guide to calendar time: foundation, CRM, booking, the voice receptionist,
 white-labelling, the automation engine and the web concierge all shipped between 25 July
 and 22 September.
@@ -125,7 +130,7 @@ separate from it (§12, decision 5).
 | **Client record** | Contact row; `company_name` is free text; notes and deals must attach to one contact; `events` records only the names of changed fields | Companies, households, properties, typed relationships, field history | **Blocking** for every vertical |
 | **Documents** | None: no table, no storage bucket; forms accept no files or signatures | Files on every record, templates, e-signature, expiry, portals | **Blocking** — the owner's first ask |
 | **Consent** | Per-submission form consent; Telnyx handles STOP by design; a marketing-email opt-out | A per-channel consent and revocation ledger | **Blocking** before 31 January 2027 |
-| **Bilingual** | Bilingual: Sofía, booking page, forms, concierge, missed-call text, lead receipt, booking confirmation, instant reply, opt-out line. English-only: eight automated-message modules, the booking reminder and follow-up emails, subjects and buttons hard-coded in several email templates, every operator-written recipe body except the instant reply's, and the dashboard. Contacts have no language field | Spanish customer surfaces are standard among local and vertical competitors | High |
+| **Bilingual** | Bilingual: Sofía's voice, the booking page and its own confirmation email, form buttons and system text, the concierge, missed-call text, lead receipt, instant reply, opt-out line. English-only: eight automated-message modules; the booking reminder and follow-up emails; **the confirmation and reschedule emails Sofía sends after booking by phone** (and their cancel links open an English page); subjects and buttons hard-coded in several email templates; every operator-written recipe body except the instant reply's; each form's labels and success text (one operator-written string per field); and the dashboard. Contacts have no language field | Spanish customer surfaces are standard among local and vertical competitors | High |
 | **Custom fields** | 5 types, on contacts and deals only | 15–30 types, relation fields, on any object | High |
 | **Email** | Sent via Resend. With neither a reply-to nor a client sending domain set, replies land in BIS's own mailbox; otherwise in the client's. Neither is ever recorded, so an emailed "stop" goes unheard | Two-way sync or logging (HubSpot, monday, Less Annoying CRM, Copper) | High |
 | **Calendar** | One calendar per company, enforced by a unique constraint; Sofía's tools and the booking code assume it | Per-user calendars, two-way Google/Outlook sync, Meet and Teams links | High |
@@ -271,7 +276,13 @@ upload appear here — Add a document"), status never by colour alone.
 - **Forms that collect documents.** Today a form field can be a core contact field, a
   custom field, a message or a consent box. Add **file upload, signature, conditional
   logic and URL pre-fill**, so an enrolment packet or a service request with photos can be
-  filled online (monday's WorkForms).
+  filled online (monday's WorkForms). The same field kinds become **custom questions on
+  the booking page** ("¿Qué necesita reparar?"). A signature field uses the e-signature
+  machinery of §8.1, so it ships after that, not before.
+- **Every public link follows one rule.** Share links, client upload links, public forms
+  with uploads and staff calendar-connect links all bypass Clerk, as the portal does. Each
+  uses §8.2's pattern: a scoped, expiring, signed token bound to one account and one
+  record, an explicit tenant check on every query, and its own isolation tests.
 - **Retention.** A class per category, longest applicable clock wins, legal holds, and a
   destruction log. Texas child-care periods are floors, so the default is keep, not purge.
 - **Teardown.** Storage objects do not cascade when an account is deleted. The account
@@ -300,6 +311,11 @@ is table stakes in the Valley. BIS's defensible claim is being bilingual **every
      footer;
    - the booking reminder and follow-up emails, and the subjects and buttons hard-coded in
      the review-request and no-show email templates;
+   - **the confirmation and reschedule emails Sofía sends after a phone booking**, in the
+     language the call was detected in, with a cancel link that opens the cancel page in
+     that language;
+   - **Spanish twins for form labels, help text and success messages**, so one form
+     serves both languages instead of one form per language;
    - **a Spanish twin for every operator-written body**, following the precedent the
      instant reply already sets with `bodyEs` (the follow-up body on the calendar
      included).
@@ -439,16 +455,28 @@ Verified against Google's and Microsoft's own documentation on 2026-09-25:
      vendor and personal addresses (HubSpot's default "log everything" rule).
    - The `messages` table already allows inbound email rows, and an emailed "stop" becomes
      audible for the first time.
-2. **Week 1 — start the clocks that do not need a demo.** Google brand verification and
-   Microsoft publisher verification.
-3. **Build every Google sensitive-scope feature under Testing mode, then submit once.**
-   The review's demo video must show each scope working, so the choice is between building
-   the calendar, send-as-me, contacts and Business Profile features first under Testing mode
-   (up to 100 test users, 7-day refresh tokens) and submitting one review, or submitting
-   when the calendar is ready and accepting a second review later. **Recommended: one
-   submission.** Business Profile API access is a separate approval — apply now, since it
-   requires a verified profile active 60+ days. Sheet import uses the Picker with
-   `drive.file`, so it adds no scope.
+   - **This captures replies and forwards, not everything.** Mail a customer writes
+     straight to the owner's own Gmail or Outlook reaches BIS only with inbox sync (step 7).
+   - **The web concierge's conversations join the inbox in the same change.**
+     `messages.channel` already allows `webchat`; nothing writes it yet.
+2. **Week 1 — publish the Google project and verify the publisher.** Finish Google sign-in
+   (already enabled in Clerk, without production credentials) in the same Google Cloud
+   project the calendar will use, and publish it: sign-in needs only profile and email
+   scopes, so publishing triggers brand verification alone and keeps it from lapsing —
+   Google's brand verification expires after 7 days on an unpublished app. Microsoft
+   publisher verification in parallel.
+3. **Build the Google sensitive-scope features under Testing mode, then submit once.**
+   The review's demo video must show each scope working, so build the calendar, send-as-me,
+   pickers and contacts sync first under Testing mode (up to 100 test users, refresh tokens
+   that expire every 7 days, so pilot users reconnect weekly), then submit one review.
+   **Business Profile stays out of that submission**: its API grants no requests until a
+   separate approval with no published lead time, so its demo cannot be recorded until
+   then; it gets its own review. Apply for Business Profile API access now — it requires a
+   verified profile active 60+ days. Sheet import uses the Picker with `drive.file`, so it
+   adds no scope.
+   **Where a client runs Microsoft 365, ship Outlook first**: publisher verification takes
+   days and admin approval is one click, so Outlook can reach real clients while Google is
+   still in Testing mode.
 4. **The owner's calendar first.** Connect one Google or Outlook calendar to the company
    calendar: busy times block Sofía's slots and the booking page; bookings write events
    with Meet or Teams links; events whose attendees include a known client attach to that
@@ -485,7 +513,7 @@ no particular licence.
 | App | Stance | Why |
 |---|---|---|
 | Google Sheets / Excel | **Adopt** direct `.xlsx` export and Sheets/Excel import, with AI suggesting the column mapping from **headers only** | Owners arrive with spreadsheets. DESIGN.md requires the file to be parsed in the browser and never uploaded; headers alone can go to the model |
-| Google sign-in | **Finish** — already enabled in Clerk, without production credentials yet | Decide whether it shares the Google Cloud project and consent screen with the calendar verification |
+| Google sign-in | **Finish** — already enabled in Clerk, without production credentials yet — in the calendar's Google Cloud project | Publishing it early keeps brand verification from lapsing (§6.2 step 2) |
 | Microsoft sign-in | **Adopt** through Clerk | How Microsoft 365 owners expect to sign in |
 | Google Business Profile | **Adopt** reviews and replies (M5) | We found no HubSpot-built GBP integration; reviews are how local businesses get found |
 | Meet and Teams recordings and transcripts | **Later**, after the meetings decision (§12) | HubSpot syncs Teams transcripts since August 2026 |
@@ -547,39 +575,41 @@ The owner asked for both products to be combed. Appendix A §G1 and Appendix B �
 
 | # | Idea | Decision | Where |
 |---|---|---|---|
-| 1 | Log everything automatically; never-log lists; calendar events with known contacts on the timeline | Adopt | §6.2 steps 1 and 4 |
+| 1 | Log everything automatically; never-log lists; calendar events with known contacts on the timeline | Adopt in part: replies, forwards, never-log lists and calendar events now; mail written straight to the owner's own inbox only with inbox sync (§12 decision 13) | §6.2 steps 1, 4, 7 |
 | 2 | Three-column record page | Adopt | §3.3 |
 | 3 | Association labels, free | Adopt | §3.2 |
 | 4 | Activity rolls up to the household and to open deals | Adopt | §3.3 |
-| 5 | Industry objects by toggle; AI builds the data model from a description of the business | Adopt as industry packs; "describe your business" picks a pack and proposes its pipeline and fields | §9, §5.1 item 1 |
+| 5 | Industry objects by toggle; AI builds the data model from a description of the business | Adopt as industry packs; "describe your business" picks a pack and proposes its pipeline and fields | §9 introduction |
 | 6 | Typed file fields with expiry | Adopt | §3.2 file field type, §3.4 |
 | 7 | Attachments card: source filter, preview, detach vs delete, 24-hour share link | Adopt | §3.4 |
 | 8 | Private files by default | Adopt | §3.4 |
 | 9 | Document view tracking and "notify me when opened" | Adopt. Email-gated content: **Reject** — marketing downloads are not this market's need | §3.4 |
 | 10 | Free invoices, payment links, stored cards, ACH, subscriptions with retries, automated invoice reminders | Adopt | §8.1 |
 | 11 | Quote → accept → pay on one page; e-signature on any document | Adopt | §8.1 |
-| 12 | Booking pages with round-robin, custom questions, several reminders, payment at booking | Adopt: round-robin with per-staff calendars; custom questions and a second reminder now; deposits after money | §6.2 step 5, §8.1 |
+| 12 | Booking pages with round-robin, custom questions, several reminders, payment at booking | Have two reminders (an email about a day before, a text about two hours before). Adopt: custom questions with the form upgrade; round-robin with per-staff calendars; deposits after money | §3.4, §6.2 step 5, §8.1 |
 | 13 | Two-way calendar sync; tasks pushed to the calendar | Adopt calendar; task push Later | §6.2, §6.3 |
-| 14 | One inbox for email, chat, Messenger, WhatsApp, SMS; assignment and routing | Have SMS and email. Adopt: web-chat conversations in the inbox and assignment to staff (`conversations.assigned_to` exists, unused). WhatsApp Later (§12 decision 11); Messenger and Instagram Later | §2, §12 |
-| 15 | Customer Agent priced per outcome; payment links sent in chat | Adopt payment links from Sofía and the concierge after money. Outcome pricing: a packaging decision | §8.1, §10 |
+| 14 | One inbox for email, chat, Messenger, WhatsApp, SMS; assignment and routing | Have SMS and email. Adopt: web-chat conversations in the inbox, and assignment to staff (`conversations.assigned_to` exists, unused). WhatsApp Later (§12 decision 11); Messenger and Instagram Later | §6.2 step 1, §1 item 1 |
+| 15 | Customer Agent priced per outcome; payment links sent in chat | Adopt payment links from Sofía and the concierge after money. Outcome pricing: Reject — M7a meters voice minutes and chats, which owners can predict | §8.1, §10 |
 | 16 | Voice AI on the phone line | Have — Sofía | §2.1 |
 | 17 | Caller ID matched to the CRM; logging staff calls from their own phones | Later — a masked business number for staff (also monday #15) | §7.2 |
 | 18 | Mobile and in-person notetaker | Adopt | §5.1 item 7 |
 | 19 | Record summary; plain-language questions; MCP connectors | Adopt | §5.1, §6.4 |
-| 20 | Smart properties | Adopt as AI fields, written through proposals | §5.1 item 9 |
+| 20 | Smart properties | Later, as AI fields written through proposals | §5.1 item 9 |
 | 21 | Workflows on every tier; template library; agentic workflows | Have catalogue recipes; packs are the templates. Rule builder: Later, per the platform spec, until clients' needs diverge — the first pack is the test (§12 decision 12) | §9, §12 |
 | 22 | NPS and CSAT surveys, paired with review requests | Have review requests. Adopt later: a one-question post-job text | §7.2 |
 | 23 | Self-service portal with billing | Adopt; no tickets | §8.2 |
 | 24 | Data-quality scans; completeness score | Have duplicate flags. Adopt a per-record completeness meter over required fields and documents | §3.4 |
 | 25 | Sensitive-data mode at small-business prices | Adopt restricted fields behind roles and the `sensitivity` column; HIPAA separately | §3.2, §9.4 |
 | HM | Rule-coloured tags | Later | — |
-| HM | Board or calendar view on any object | Have the pipeline board. Calendar view of jobs and visits: Later | — |
+| HM | Board or calendar view on any object | Have the pipeline board. Adopt a schedule view of jobs and visits in home services part two | §9.1 |
 | HM | Task queues and repeating tasks | Have the work queue. Adopt repeating tasks | §3.4 |
 | HM | Recycle bin | Adopt a 30-day trash | §3.2 |
 | HM | Free view-only seats | Packaging decision | §10 |
 | HM | Multi-currency | Later — pesos matter for cross-border customers; M7a is USD-only | — |
 | HM | Scheduled AI prompts ("every Monday: families with overdue balances") | Later, as a section of the weekly report | — |
 | HM | Password-protected share links | Reject — expiring links cover it | §3.4 |
+| HM | Spanish UI and support | Adopt: the Spanish dashboard, and bilingual support as a local service | §4 item 3 |
+| HM | Google Drive and SharePoint cards on the record | Adopt Drive and OneDrive links on the record; SharePoint Reject | §3.4, §6.2 step 6, §6.3 |
 
 **monday.com (Appendix B §H)**
 
@@ -587,13 +617,13 @@ The owner asked for both products to be combed. Appendix A §G1 and Appendix B �
 |---|---|---|---|
 | 1 | One record page from widgets, opinionated per industry | Adopt — packs choose the cards | §3.3 |
 | 2 | Timeline with custom activity types | Adopt | §3.3 |
-| 3 | Auto-log email by any address on the record or linked records; keep following a thread | Adopt | §6.2 step 1 |
+| 3 | Auto-log email by any address on the record or linked records; keep following a thread | Adopt in part: replies and forwards now; mail sent straight to the owner's inbox only with inbox sync | §6.2 steps 1, 7 |
 | 4 | One-click AI timeline summary, free | Adopt | §5.1 item 2 |
 | 5 | Household or company grouping by domain, phone, last name, address | Adopt as suggested groups through proposals | §3.2 |
 | 6 | File preview, annotations, versions, zip download | Adopt preview, versions, zip. Annotations Later | §3.4 |
 | 7 | A files gallery across all clients | Adopt the account-wide Documents view | §3.4 |
 | 8 | Doc templates with live record fields | Adopt | §3.4 |
-| 9 | Intake forms with file upload, signature, conditional logic, URL pre-fill, translation | Adopt all but translation; forms are already English and Spanish, and 50 languages is not this market's need | §3.4 |
+| 9 | Intake forms with file upload, signature, conditional logic, URL pre-fill, translation | Adopt file upload, signature, logic and pre-fill. Translation: Adopt English–Spanish twins for labels and messages; Reject monday's 50 languages, which this market does not need | §3.4, §4 item 2 |
 | 10 | Email-to-record address | Adopt, with sender verification | §6.2 step 1 |
 | 11 | Quotes and invoices from a catalogue, with PDF | Adopt, with real payments and e-signature | §8.1 |
 | 12 | Deal value built from line items | Adopt | §8.1 |
@@ -607,7 +637,7 @@ The owner asked for both products to be combed. Appendix A §G1 and Appendix B �
 | 20 | Required fields and validation on stage changes | Adopt, on every plan | §3.4 |
 | 21 | Date-based reminders: date arrives, after N days, recurring | Adopt generic date triggers | §3.4 |
 | 22 | Calendar events auto-attach to the client when they attend | Adopt | §6.2 step 4 |
-| 23 | Map view of addresses | Later, in the home services pack's second part | §9.1 |
+| 23 | Map view of addresses | Adopt in home services part two | §9.1 |
 | 24 | An AI column that reads a document or photo into fields | Adopt as document intake | §5.1 item 4 |
 | 25 | An owner's assistant over WhatsApp; scheduled PDF dashboards | Adopt Ask BIS by text message; WhatsApp Later. Scheduled PDFs: Reject — the weekly report already arrives by email | §5.1 item 8 |
 | HM | Offline mode | Part of the mobile decision | §12 decision 10 |
@@ -653,6 +683,9 @@ decision** — so this section reverses a recorded decision (§12, decision 1).
   Connect for sub-project #3, multi-agency white-label billing. Businesses taking customer
   payments and agencies reselling BIS cannot both be connected accounts of one platform
   without a deliberate design (§12, decision 3).
+- **Payment links from Sofía and the concierge.** "I can text you a link for the $75
+  deposit" — the receptionist and the website assistant send a payment link on the call or
+  in the chat, as HubSpot's Customer Agent does.
 - **What each industry needs:** tips and card-on-file for trades; deposits for catering;
   **ACH** (0.8% capped at $5, which matters for tuition), autopay, retries of failed
   payments, automated invoice reminders, sibling and multi-payer splits, a separate line
@@ -696,6 +729,12 @@ categories and required-document lists, relationship labels and activity types**
 Appendix E has the full ten-must-have and five-do-not-build lists per vertical, with Texas
 citations.
 
+**Onboarding picks the pack.** The owner describes the business in a sentence — "somos
+una guardería con 60 niños en Weslaco" — and BIS proposes the matching pack, its pipeline
+stages and its fields for the owner to accept or adjust (HubSpot's AI data-model
+recommender, Capsule's pipeline generator). It is a proposal like any other, so nothing is
+created without approval.
+
 ### 9.1 Home services (plumbers, HVAC, electricians, roofers, landscapers) — first
 
 The product is already shaped for trades: the automation engine's quote follow-ups,
@@ -722,7 +761,8 @@ Spanish, the bundle and local service, not price.
 HubSpot and monday price compliant children's data out of reach, but the real incumbents are
 child-care management systems — brightwheel, Procare and Playground already hold the child
 file, and Playground's Camber already answers calls, is trained on handbooks and licensing
-rules, logs inquiries, and ships in Spanish. brightwheel has announced its own CRM. So BIS
+rules, and logs inquiries. Playground's parent app is available in Spanish; whether Camber
+answers in Spanish is unverified. brightwheel has announced its own CRM. So BIS
 should not try to replace a center's system; it should be the **front office beside it**:
 
 - **What BIS holds:** the enrolment pipeline (inquiry → tour booked by Sofía → waitlist by
@@ -785,11 +825,16 @@ different things:
   through it — the magic-link portal avoids that. Telnyx relies on the conduit exception,
   which does not cover stored transcripts. **Floor: at least $1,300 a month plus recovery and
   compute, possibly a Clerk Enterprise contract**, before the first such customer pays.
-- **A HIPAA mode also needs a second Supabase project.** HIPAA settings apply per project,
-  and production holds every non-HIPAA tenant. A second project breaks the assumption that
-  one database holds every tenant — the agency roll-up, the work queue and the dashboards
-  all rely on it — so it is an architectural project, not a switch. The `sensitivity`
-  column avoids a schema change later; it does not avoid moving data.
+- **Where the health data lives is a real choice.** HIPAA settings apply per Supabase
+  project, and nothing in Appendix D rules out making the production project itself the
+  HIPAA project. The two options cost the same floor:
+  - **Harden the one production project** — every tenant inherits the stricter settings,
+    no data moves, and the agency roll-up, work queue and dashboards keep working because
+    they already assume one database. **Recommended**, unless a lawyer requires isolation.
+  - **A separate HIPAA project** — isolation, but it breaks the one-database assumption
+    those features rely on, which makes it an architectural project rather than a switch.
+
+  Either way, the `sensitivity` column means no schema change later.
 
 **Recommendation:** build the regulated-tenant mode now. Treat HIPAA mode as a deliberate
 investment, decided when one anchor customer — a clinic, or an adult day center billing
@@ -813,33 +858,48 @@ certified vendor), claim submission or caregiver scheduling.
 
 ## 10. Packaging and cost to serve
 
-The pricing study set four plans — Lista $97, Recibe $297, Opera $497, Crece $997 — before any
-of this existed. The new features need a place on them. Recommendation, for the owner to
-decide:
+**The owner's own billing decision governs this.** The M7a client-billing spec, approved
+section by section on 24 September, supersedes the pricing study's four tiers of 21
+September: **two or three plans** at fixed monthly prices, each with included allowances
+and overage; **every plan has the CRM, booking, forms and texting; higher plans add Sofía
+and the web chat assistant, and bigger allowances**. The new features fit that shape
+without strain.
 
-| Feature | Lista | Recibe | Opera | Crece |
-|---|---|---|---|---|
-| Client record, relationships, consent, inbound email, bilingual messages | ✓ | ✓ | ✓ | ✓ |
-| Document vault storage | 10 GB | 25 GB | 50 GB | 100 GB |
-| AI summary, drafting, intake, Ask BIS | ✓ | ✓ | ✓ | ✓ |
-| Google and Outlook calendar | owner's calendar | owner's calendar | per staff | per staff |
-| Staff logins | 2 | 3 | unlimited | unlimited |
-| Money: quotes, invoices, payments, e-signature | ✓ | ✓ | ✓ | ✓ |
-| Client portal | — | ✓ | ✓ | ✓ |
-| MCP server | ✓ | ✓ | ✓ | ✓ |
-| Industry pack | ✓ | ✓ | ✓ | ✓ |
+| Feature | Every plan | Higher plans |
+|---|---|---|
+| Client record, relationships, consent, inbound email, bilingual messages, Spanish dashboard | ✓ | ✓ |
+| Document vault, e-signature, document templates | ✓ (smaller storage allowance) | ✓ (larger) |
+| AI summary, drafting, proposals, intake, Ask BIS | ✓ | ✓ |
+| Money: quotes, invoices, payments | ✓ | ✓ |
+| MCP server; industry pack | ✓ | ✓ |
+| Staff logins | a small number | more, or unlimited |
+| Google and Outlook calendar | the owner's calendar | per-staff calendars and round-robin |
+| Client portal | — | ✓ |
+| Sofía and the web concierge (M7a's premium features) | — | ✓ |
 
-- **Staff logins** reconcile the foundation with the pricing study, which gave staff logins
-  only on Opera and Crece: the staff model is built for everyone; the number of logins is
-  the packaging lever. Staff connecting calendars by link do not need a login.
-- **MCP and AI on every plan**, because HubSpot, monday and Pipedrive all put MCP on every
-  tier, and AI hidden behind top tiers is an anti-pattern owners complain about.
+- **This departs from the pricing study in two places, deliberately.** The pricing study put
+  call proposals, custom fields and CSV import on its third tier and above. M7a's shape puts
+  the CRM on every plan, and this study routes all AI writes through proposals, so proposals
+  and custom fields move to every plan. It also gave staff logins only to its top two tiers;
+  here the staff model exists for every plan and the **number** of logins is the lever.
+  Staff who only connect a calendar by link need no login.
+- **AI and MCP on every plan**, because HubSpot, monday and Pipedrive all put MCP on every
+  tier, and AI locked behind top tiers is an anti-pattern owners complain about.
+- **Free view-only seats** (HubSpot's model, for an accountant or a co-owner): recommended —
+  a view-only login costs BIS almost nothing.
+- **Outcome-based AI pricing** (HubSpot's $0.50 per resolved conversation): not
+  recommended; M7a's metered voice minutes and chats are easier for an owner to predict.
+- **Plans cannot yet hold any of this.** `plans.features` accepts exactly two keys
+  (`voice_receptionist`, `web_concierge`) and `plans.allowances` exactly three meters.
+  Storage allowances, staff-login counts, the portal and per-staff calendars need those
+  checks widened and enforcement points added — an **entitlements** item in §11. Until
+  then, the first release applies one default storage quota to every account.
 - **New cost-to-serve lines** to add to the pricing study's margins: storage (about $0.02 per
   GB-month), the ClamAV host (a few dollars a month in total), AI summaries and drafting
-  (cached, capped, well under a dollar per account per month at expected volume — to be
-  measured), document intake (about a cent per document), and Nylas only if Gmail inbox
-  sync is ever bought.
-- **Payments revenue** is a decision: with Stripe setting the fees BIS earns nothing on
+  (cached, capped, expected well under a dollar per account per month — to be measured),
+  document intake (about a cent per document), and Nylas only if Gmail inbox sync is ever
+  bought.
+- **Payments revenue** is a decision: with Stripe setting the fees, BIS earns nothing on
   customer payments. HubSpot charges a 0.5–0.75% platform fee. A small application fee, or
   none as a selling point, is the owner's call (§12, decision 3).
 
@@ -855,42 +915,44 @@ repository otherwise.
 
 | Track | Items (engineer-weeks) | Total |
 |---|---|---|
-| **Foundation** | Staff and roles, with field restriction, assignment, notifications and mentions (3–4); client record model with backfill, relaxed NOT NULLs, suggested groups (5–6); record page, drawer, last-contact and time-in-stage (2–3); `record_changes` audit log and trash (2–3); consent ledger synced with Telnyx (2–3); inbound email with sender checks and review queue (2–3); document vault with scanning, versions, retention, checklist, stage rules, share links, Documents view, quotas, teardown (6–8); bilingual messages (2–3) and Spanish dashboard (3–4); forms with uploads, signatures, logic and pre-fill (2–3); merge with history (2–3) | **31–43** |
+| **Foundation** | Staff and roles, with field restriction, assignment, notifications and mentions (3–4); client record model with backfill, relaxed NOT NULLs, suggested groups (5–6); record page, drawer, last-contact and time-in-stage (2–3); `record_changes` audit log and trash (2–3); consent ledger synced with Telnyx (2–3); inbound email with sender checks, review queue and web-chat threads in the inbox (3–4); document vault with scanning, versions, retention, checklist, stage rules, share links, Documents view, quotas, teardown (6–8); in-house e-signature (3–5); bilingual messages including Sofía's emails and form label twins (3–4); Spanish dashboard (3–4); forms with uploads, signatures, logic, pre-fill and booking questions (3–4); merge with history (2–3); entitlements on plans (2–3) | **39–54** |
 | **AI** | Generalised proposals (2); summary with caching and caps (1–2); drafting and translation (1–2); gone-quiet nudges (1); Ask BIS with read tools and SMS (2–3); document intake (2–3); notetaker (1–2); date triggers and repeating tasks (1–2) | **11–17** |
-| **Google and Microsoft** | Owner's calendar on both providers with Meet, Teams and attendee matching (6–8); per-staff calendars with Sofía's four tools and round-robin (4–5); send-as-me (1–2); Drive and OneDrive pickers (2–3); contacts sync (1–2); verification preparation (1); finish Google sign-in (0.5–1) | **15.5–22** |
-| **Money and portal** | Price book, quotes with options, invoices, schedules, recurring, ACH, reminders, Stripe Connect (8–11); in-house e-signature (3–5); document templates (2); portal on scoped tokens (4–6); QuickBooks push (3–4) | **20–28** |
-| **Reach** | MCP server with auth spike (3–4); Business Profile reviews and AI replies (2–3); spreadsheet import with header mapping, `.xlsx` export (1–2); importers from HubSpot and monday (2–3) | **8–12** |
-| **Packs** | Blueprint extensions (2–3); regulated-tenant mode (1–2); home services parts one (2) and two (2–3); child care (4–6); broadcasts and segments (3–4); Sofía knowledge base (2–3); restaurant catering after POS research (3–4); child-care system integration after research (3–4) | **22–31** |
+| **Google and Microsoft** | Owner's calendar on both providers with Meet, Teams and attendee matching (6–8); per-staff calendars with Sofía's four tools and round-robin (4–5); send-as-me (1–2); Drive and OneDrive pickers (2–3); contacts sync (1–2); verification preparation (1); Google and Microsoft sign-in (0.5–1) | **15.5–22** |
+| **Money and portal** | Price book, quotes with options, invoices, schedules, recurring, ACH, reminders, payment links from Sofía and the concierge, Stripe Connect (9–12); document templates (2); portal on scoped tokens (4–6); QuickBooks push (3–4) | **18–24** |
+| **Reach** | MCP server with auth spike (3–4); Business Profile reviews and AI replies (2–3); spreadsheet import with header mapping, `.xlsx` export (1–2); importers from HubSpot and monday (2–3); installable web app with offline read (2–3) | **10–15** |
+| **Packs** | Blueprint extensions with "describe your business" onboarding (3–4); regulated-tenant mode (1–2); home services parts one (2) and two, with schedule and map views (2–3); child care (4–6); broadcasts and segments (3–4); Sofía knowledge base (2–3); restaurant catering after POS research (3–4); child-care system integration after research (3–4) | **23–32** |
 | **In flight** | M7a steps 2–4 (estimate) | **3–4** |
-| **Total** | | **≈ 110–157** |
+| **Total** | | **≈ 120–168** |
 
-**Not in the total, because each waits on a decision:** HIPAA mode and its second database
-project; a mobile app or offline mode; WhatsApp; the rule builder; full inbox sync; a staff
-business number; sequences; Meet and Teams transcripts; NPS surveys; multi-currency.
+**Not in the total, because each waits on a decision:** HIPAA mode; a native mobile app;
+WhatsApp; the rule builder; full inbox sync; a staff business number; sequences; AI fields;
+Meet and Teams transcripts; NPS surveys; multi-currency.
 
-That is two to three and a half years for one engineer working conventionally, or about a year for
-three. **This repository has not moved at conventional speed**: its foundation, CRM spine,
-booking, voice receptionist, white-labelling, automation engine and web concierge shipped
-between 25 July and 22 September. Read calendar time off that observed pace, not these
-units.
+That is roughly two and a half to three and a half years for one engineer working
+conventionally, or about a year for three. **This repository has not moved at conventional
+speed**: its foundation, CRM spine, booking, voice receptionist, white-labelling, automation
+engine and web concierge shipped between 25 July and 22 September. Read calendar time off
+that observed pace, not these units.
 
 ### 11.2 The first release
 
-Roughly 25–30 engineer-weeks, chosen for value to every industry at once and for having no
-external gate:
+Roughly 27–36 engineer-weeks, chosen for value to every industry at once. It has no
+external gate, but it does need **decisions 1 and 2** (§12) first, because the vault is the
+documents feature the platform spec excluded and its scanner is a new external service.
 
-1. Staff and roles, minimum: users, roles enforced, a language per user.
-2. Client groups and relationships (without the restricted flags until roles are enforced),
-   properties and equipment, the `company_name` backfill.
-3. The consent ledger.
-4. Bilingual automated messages and a language on every contact.
-5. The document vault: upload, scanning, categories, versions, expiry reminders, the
-   checklist, share links.
-6. Inbound email on the client's own domain.
-7. Generalised proposals and the bilingual record summary.
+1. Staff and roles: users, roles enforced, a language per user.
+2. Client groups and relationships (the restricted flags wait for roles), properties and
+   equipment, the `company_name` backfill.
+3. The record page and drawer, with the summary, relationships, groups and documents.
+4. The consent ledger.
+5. Bilingual automated messages, Sofía's emails included, and a language on every contact.
+6. The document vault: upload, scanning, categories, versions, expiry reminders, the
+   checklist, share links — with one default storage quota.
+7. Inbound email on the client's own domain, and web-chat threads in the inbox.
+8. Generalised proposals and the bilingual record summary.
 
-In parallel: Google brand verification, Microsoft publisher verification, the Business
-Profile API application, and M7a's remaining steps.
+In parallel: publishing Google sign-in (which carries brand verification), Microsoft
+publisher verification, the Business Profile API application, and M7a's remaining steps.
 
 ### 11.3 Order and dependencies
 
@@ -899,28 +961,38 @@ ships to a real client before the next item on that track starts, as the platfor
 requires, and every UI item passes DESIGN.md's definition of done.
 
 1. **No prerequisites:** staff and roles; the client record model; the consent ledger;
-   inbound email; bilingual messages; brand and publisher verification; the Business
-   Profile API application; M7a's remaining steps; the regulated-tenant mode; spreadsheet
-   import and export; importers from HubSpot and monday; the MCP auth spike.
+   inbound email and web chat in the inbox; bilingual messages; Google and Microsoft
+   sign-in, with Google brand verification and Microsoft publisher verification; the
+   Business Profile API application; M7a's remaining steps; the regulated-tenant mode;
+   spreadsheet import and export; the MCP auth spike.
 2. **On staff and roles:** restricted relationship flags and gate codes; the Spanish
    dashboard's per-user language; assignment; per-staff calendars.
-3. **On the record model:** the record page; the audit log and trash; the merge; the
-   document vault, then the checklist, stage rules and forms with uploads.
-4. **On generalised proposals:** the summary's suggested actions, proposals from email,
-   texts and documents, document intake (also needs the vault), the notetaker, AI fields,
-   and the MCP server's writes.
-5. **Independent AI items:** drafting and translation, gone-quiet nudges, Ask BIS, date
+3. **On the record model:** the record page; the audit log and trash; the merge; importers
+   from HubSpot and monday (they import companies and relationships); the document vault;
+   the blueprint extensions.
+4. **On the vault:** in-house e-signature, then forms with uploads and signatures and the
+   booking questions; the checklist and stage rules (the "no *Done* without an invoice"
+   rule arrives with money); the installable web app's offline read.
+5. **On generalised proposals:** the summary's suggested actions; proposals from email,
+   texts and documents; document intake (also needs the vault); the notetaker;
+   "describe your business" onboarding; the MCP server's writes. MCP read tools need only
+   the auth spike.
+6. **Independent AI items:** drafting and translation, gone-quiet nudges, Ask BIS, date
    triggers.
-6. **Calendar:** the owner's calendar under Google Testing mode → send-as-me, pickers and
-   contacts sync → one Google sensitive-scope submission → per-staff calendars (needs staff
-   and roles) → round-robin.
-7. **After M7a:** money through Stripe Connect and e-signature, then document templates,
+7. **Calendar:** Outlook first where clients run Microsoft 365; the owner's Google calendar
+   under Testing mode → send-as-me, pickers and contacts sync → one Google sensitive-scope
+   submission → per-staff calendars (needs staff and roles) → round-robin.
+8. **Business Profile:** after API approval, its own Google review, then reviews and AI
+   replies.
+9. **After M7a and entitlements:** money through Stripe Connect, then document templates,
    then the portal, then QuickBooks.
-8. **Packs:** home services part one after the vault; home services part two after money
-   and per-staff calendars; child care after money, field-level roles and broadcasts;
-   restaurant catering after POS research and money; Sofía's knowledge base before the
-   child-care and restaurant receptionists.
-9. **On an anchor customer:** HIPAA mode, then adult day care and medical offices.
+10. **On the consent ledger:** broadcasts and segments.
+11. **Packs:** home services part one after the vault and blueprint extensions; part two
+    after money and per-staff calendars; child care after money, field-level roles,
+    broadcasts, the installable web app and the child-care system integration research;
+    restaurant catering after POS research, money and broadcasts; Sofía's knowledge base
+    before the child-care and restaurant receptionists.
+12. **On an anchor customer:** HIPAA mode, then adult day care and medical offices.
 
 The consent ledger must be live before **31 January 2027**, when the FCC's "revoke all" rule
 takes effect.
@@ -928,6 +1000,8 @@ takes effect.
 ---
 
 ## 12. Decisions only the owner can make
+
+**Needed before the first release:** decisions 1 and 2.
 
 1. **Reverse the recorded non-adoption of payments, invoicing, documents and e-signature**
    (platform spec §2). Recommended: yes — "all their documents" and every industry pack
@@ -938,53 +1012,58 @@ takes effect.
 3. **Stripe Connect for businesses versus M7 #3's Connect for agencies**, and whether BIS
    takes an application fee on customer payments. Recommended: design both uses before
    building either; a small or zero fee is a selling decision.
-4. **Per-staff calendars**, reversing one-calendar-per-company. Recommended: yes, after the
-   owner's-calendar step proves the sync.
+4. **Per-staff calendars**, reversing one-calendar-per-company. Recommended: yes, once the
+   owner's-calendar step has run with real clients — on Outlook, or on Google after its
+   review passes, since a Google pilot in Testing mode means reconnecting every week.
 5. **HIPAA as an investment — including whether clinics may buy Sofía before it exists.**
    A clinic's calls put health information in transcripts, summaries and proposals that BIS
    stores and sends to OpenAI. Recommended: build the regulated-tenant mode now; sell Sofía
-   and the CRM to clinics and adult day centers billing Medicaid only once an anchor
-   customer funds HIPAA mode; offer adult day care front office only, with a legal check.
-6. **Children's health information and AI.** It already reaches OpenAI whenever a parent
-   mentions an allergy or illness on a call with Sofía, and document intake would add
-   immunisation records. A child-care center is not a HIPAA covered entity, but this is
+   and the CRM to clinics and to adult day centers billing Medicaid only once an anchor
+   customer funds HIPAA mode, in the hardened production project; offer adult day care front
+   office only, with a legal check.
+6. **Health information and AI.** Children's health information already reaches OpenAI
+   whenever a parent mentions an allergy or illness on a call with Sofía. The plan adds more
+   paths: document intake, proposals from documents and email, and per-record addresses that
+   receive doctors' notes. A child-care center is not a HIPAA covered entity, but this is
    sensitive children's data under Texas's privacy act. Recommended: request OpenAI's
-   zero-data-retention or a BAA now; until then exclude health document categories from
-   intake.
-7. **Do meetings happen inside BIS?** The meeting-notes work is blocked on this, and Daily.co
-   video rooms are built but dormant. Recommended: no — use Meet and Teams links from the
-   owner's own calendar, retire Daily.co, and keep the in-person notetaker, which does not
+   zero-data-retention or a BAA now; until one is in place, **no document with sensitivity
+   `health` or `phi` reaches any model**, whatever path it arrived by.
+7. **Do meetings happen inside BIS?** The meeting-notes work is blocked on this, and
+   Daily.co video rooms are built but dormant. Recommended: no — use Meet and Teams links from
+   the owner's own calendar, retire Daily.co, and keep the in-person notetaker, which does not
    depend on it.
 8. **Pack order.** Recommended: home services, child care as the front office, restaurant
-   catering, then the HIPAA verticals — departing from the pricing study's "healthcare is
-   the better ground" only because of §9.4's cost of entry.
+   catering, then the HIPAA verticals — departing from the pricing study's "healthcare is the
+   better ground" only because of §9.4's cost of entry.
 9. **Portal sign-in.** Recommended: magic links on scoped tokens, not Clerk accounts.
 10. **Mobile.** Recommended: an installable web app first — home-screen install, push
     notifications, offline read of today's jobs and a child's emergency file — and a native
     app only when Tap to Pay or a larger technician fleet justifies it.
 11. **WhatsApp.** It recurs across three appendices as the default channel for
-    Spanish-speaking customers, and BIS does not have it. Recommended: the next channel
-    after the consent ledger; research the provider (Telnyx or Meta's Cloud API) first — not
-    yet done.
+    Spanish-speaking customers, and BIS does not have it. Recommended: the next channel after
+    the consent ledger; research the provider (Telnyx or Meta's Cloud API) first — not yet
+    done.
 12. **The rule builder** M3 still owes. Recommended: keep deferring, as the platform spec
     says, until clients' needs diverge from the recipe catalogue; the first industry pack is
     the test.
-13. **Full inbox sync.** Recommended: the inbound address first; direct Outlook sync if
+13. **Full inbox sync.** Recommended: replies and forwards first; direct Outlook sync if
     customers ask; Gmail through Nylas only if they insist.
-14. **Packaging** (§10): staff-login counts, storage per plan, portal placement, AI and MCP
-    on every plan.
+14. **Packaging** (§10): how many plans M7a ships, staff-login counts, storage per plan,
+    portal placement, view-only seats, AI and MCP on every plan.
 
 ---
 
 ## 13. Risks
 
-- **Scope.** 110–157 engineer-weeks is a lot of product. Shipping each item to a real client
+- **Scope.** 120–168 engineer-weeks is a lot of product. Shipping each item to a real client
   before the next matters more, not less.
 - **Sensitive data before permissions.** Custody flags, no-contact flags, gate codes and
   pickup IDs wait until roles are enforced. Pickup-person driver's-licence images are
   sensitive personal information under Texas breach law; get a legal check.
-- **Three new paths around RLS** — the portal, the MCP server and per-record email — each need
-  their own isolation tests and, for email, sender verification.
+- **Paths around RLS multiply.** Share links, client upload links, public forms with
+  uploads, staff calendar-connect links, the portal, the MCP server and per-record email
+  addresses each reach tenant data without a Clerk session. Every one follows §8.2's token
+  rule and gets its own isolation tests; email adds sender verification.
 - **Storage abuse and cost**: quotas, rate limits and a type allowlist on every upload path;
   egress at $0.09 per GB past the allowance; teardown of storage on account deletion.
 - **AI cost at scale**: summaries cached and capped per account; model cost tracked per
