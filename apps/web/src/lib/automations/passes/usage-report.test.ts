@@ -118,6 +118,16 @@ describe("usageReportPass", () => {
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining("older than Stripe accepts"));
   });
 
+  it("runs the stale and expired bookkeeping AFTER the sends, so a stale backlog read never spends the send budget (mutation: run the bookkeeping before the send loop → call order FAILS)", async () => {
+    dbMocks.listBilledUsageAccounts.mockResolvedValue([A]);
+    queue = [usage("u1"), usage("u2")];
+    const send = vi.spyOn(fake, "reportMeterEvent");
+    expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, reported: 2 });
+    const lastSend = send.mock.invocationCallOrder.at(-1)!;
+    expect(dbMocks.staleUsageAccountIds.mock.invocationCallOrder[0]!).toBeGreaterThan(lastSend);
+    expect(dbMocks.countExpiredUsage.mock.invocationCallOrder[0]!).toBeGreaterThan(lastSend);
+  });
+
   it("counts and logs the billed accounts with usage unreported for over a day, with ONE call over every billed account (mutation: drop the stale log → FAILS; one read per account → called twice, FAILS)", async () => {
     dbMocks.listBilledUsageAccounts.mockResolvedValue([A, B]);
     dbMocks.staleUsageAccountIds.mockResolvedValue(["acct_a"]);
@@ -137,7 +147,7 @@ describe("usageReportPass", () => {
     expect(dbMocks.listReportableUsage).toHaveBeenCalledTimes(1);
   });
 
-  it("an account whose row Stripe refuses as an invalid request waits for the next tick, and its rows can never fill the cap ahead of anyone else's: the full read is repeated without it (mutation: keep sending the refused account's rows → 200 attempts on acct_a and b1 never goes, FAILS; no second read → b1 starves, FAILS)", async () => {
+  it("an account whose row Stripe refuses as an invalid request waits for the next tick, its refused row is NEVER stamped, and its rows can never fill the cap ahead of anyone else's: the full read is repeated without it (mutation: keep sending the refused account's rows → 200 attempts on acct_a and b1 never goes, FAILS; no second read → b1 starves, FAILS; stamp the refused row in the refusal's catch → a0 among the stamped ids, FAILS)", async () => {
     dbMocks.listBilledUsageAccounts.mockResolvedValue([A, B]);
     queue = [
       ...Array.from({ length: 200 }, (_, i) => usage(`a${i}`)),
@@ -149,6 +159,9 @@ describe("usageReportPass", () => {
     expect(fake.meterEvents.map((e) => e.identifier)).toEqual(["b1"]);
     expect(dbMocks.listReportableUsage.mock.calls.map((c) => [(c[1] as BilledUsageAccount[]).map((a) => a.accountId), c[3]]))
       .toEqual([[["acct_a", "acct_b"], 200], [["acct_b"], 199]]);
+    // Exactly the row Stripe accepted is stamped: a0, refused, stays
+    // unreported, so a later tick sends it again once the refusal is fixed.
+    expect(dbMocks.markUsageReported.mock.calls.map((c) => c[1])).toEqual(["b1"]);
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining("account acct_a's other rows wait for the next tick"));
   });
 

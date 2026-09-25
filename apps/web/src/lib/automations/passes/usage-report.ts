@@ -23,21 +23,27 @@ export function usageIdempotencyKey(rowId: string, customerId: string): string {
  * nothing to a customer. LAST in the registry: every SMS-sending pass runs
  * before it, so a text sent this tick is reported this tick.
  *
- * Per tick, every read bounded (never one per account):
+ * Per tick, every read bounded (never one per account, never one per
+ * backlogged row):
  *   1. The billed accounts (a Stripe customer AND subscription). None → done;
  *      production is in that state until the first client subscribes.
- *   2. Bookkeeping, whether or not Stripe is reachable: stale accounts
- *      (usage unreported for over a day) and expired rows (too old for
- *      Stripe to accept), one read per 50 billed accounts each, logged. The
- *      agency banner reads the same `staleUsageAccountIds`.
- *   3. No usable Stripe key → `skippedNoStripe`, logged, done. Not an error.
- *   4. The OLDEST unreported rows across every billed account, one meter
+ *   2. No usable Stripe key → `skippedNoStripe`, logged, then step 4, done.
+ *      Not an error.
+ *   3. The OLDEST unreported rows across every billed account, one meter
  *      event each, identifier = row id; reported_at stamped only after
  *      Stripe accepted. A refusal that is the row's (A13) is `failed`, and
  *      that ACCOUNT's other rows wait for the next tick; if the read was
  *      full, the pass reads again without the refused accounts, so their
  *      rows never fill the cap ahead of everyone else's. Any other failure
  *      stops the tick (the next row would fail the same way).
+ *   4. Bookkeeping, whether or not Stripe is reachable, AFTER the sends so it
+ *      never spends their budget, logged: stale accounts (usage unreported
+ *      for over a day; the agency banner reads the same
+ *      `staleUsageAccountIds`) — one read of at most STALE_PROBE_ROWS rows
+ *      per stale account plus one per 50 billed accounts, so a backlog
+ *      that grows while Stripe is down never grows the read — and expired
+ *      rows (too old for Stripe to accept), one head-only count per 25
+ *      accounts billed before the window's floor.
  *
  * A stamp that fails after Stripe accepted is `unstamped`: the next tick
  * resends the same row under the same identifier AND the same key, and
@@ -59,22 +65,26 @@ export const usageReportPass: Pass = {
     const accounts = await listBilledUsageAccounts(ctx.db);
     if (accounts.length === 0) return c;
 
-    const stale = await staleUsageAccountIds(ctx.db, accounts, ctx.now);
-    c.staleAccounts = stale.length;
-    if (stale.length > 0) {
-      console.error(`usage report: usage unreported for over 24 hours on ${stale.length} billed account(s): ${stale.join(", ")}`);
-    }
-    c.expired = await countExpiredUsage(ctx.db, accounts, ctx.now);
-    if (c.expired > 0) {
-      console.error(
-        `usage report: ${c.expired} unreported usage row(s) of billed accounts are older than Stripe accepts (34 days); they will never be billed`,
-      );
-    }
+    // Step 4, run last on both paths below.
+    const bookkeeping = async () => {
+      const stale = await staleUsageAccountIds(ctx.db, accounts, ctx.now);
+      c.staleAccounts = stale.length;
+      if (stale.length > 0) {
+        console.error(`usage report: usage unreported for over 24 hours on ${stale.length} billed account(s): ${stale.join(", ")}`);
+      }
+      c.expired = await countExpiredUsage(ctx.db, accounts, ctx.now);
+      if (c.expired > 0) {
+        console.error(
+          `usage report: ${c.expired} unreported usage row(s) of billed accounts are older than Stripe accepts (34 days); they will never be billed`,
+        );
+      }
+    };
 
     const built = billingGatewayFromEnv();
     if (!built.ok) {
       c.skippedNoStripe = accounts.length;
       console.error(`usage report: Stripe is not usable here (${built.reason}); ${accounts.length} billed account(s) not reported this tick`);
+      await bookkeeping();
       return c;
     }
     const gateway = built.gateway;
@@ -153,6 +163,7 @@ export const usageReportPass: Pass = {
       if (stop || rows.length < want || !refusedHere) break;
     }
     if (!stop && attempts >= USAGE_REPORT_TICK_CAP) c.stoppedOnCap = 1;
+    await bookkeeping();
     return c;
   },
 };

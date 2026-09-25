@@ -66,10 +66,10 @@ Assumptions (not verified; Task 10's e2e run, reading Stripe's aggregate, is the
 - **G1. The ledger fills for every account; recording is best-effort.** No send path looks at billing status. Each leg runs through `recordUsageSafely`, after the path's primary durable write, and can change nothing the path returns (the existing `recordAutomationLog`/`emit` legs are the pattern).
 - **G2. Insert once.** `recordUsage(db, { accountId, meter, quantity, occurredAt, sourceRef })` is an insert with ON CONFLICT (meter, source_ref) DO NOTHING; it never updates a stored row, and says `"recorded"` or `"duplicate"`. It refuses, before any query, a quantity that is not a positive whole number, a `sourceRef` whose prefix does not match its meter (`call:<calls.id>` for `voice_minutes`, `message:<messages.id>` for `sms`, `conversation:<concierge_conversations.id>` for `ai_chats`), an empty id, more than 200 characters, and an invalid date.
 - **G3. What the reporter sends.** A row is reportable when its account has an `account_billing` row with `stripe_customer_id` AND `stripe_subscription_id` set (a complimentary row has neither subscription nor pause, by 0051's `account_billing_complimentary_check`, so it is excluded by construction), the row is unreported, and its `occurred_at` is on or after `max(account_billing.created_at, now − 34 days)`. **34, not 35:** Stripe validates the timestamp asynchronously and DROPS a too-old event without an error, so a row sent near the 35-day edge could be stamped reported and never billed; one day of margin prevents that. Everything else stays in the ledger unreported, and is not an error. Rows of a billed account between its billing start and the 34-day floor are counted `expired` and logged every tick, never sent. **The banner does not count expired rows**: they can never be sent, so a banner about them could never clear, and every expired row has already spent about 33 days on the banner as stale. In production nothing is reported until PR-3 creates the first billed account.
-- **G4. The reporter.** A new cron pass, key `usageReport`, appended LAST in `PASSES`: every SMS-sending pass runs before it, so a text sent this tick is reported this tick, and nothing reads what it writes. Stripe v1 `billing.meterEvents.create` through a new `BillingGateway.reportMeterEvent`. `identifier` = the row id (spec). Idempotency key `bis-usage-<row id>-<customer id>`: event name, value and timestamp are functions of the row, which never changes after insert (G2), so the row id plus the customer id covers every parameter. Timestamp = `floor(occurred_at / 1000)` seconds; payload values strings. `reported_at` and `updated_at` are stamped with the tick's `now` only after Stripe accepts; a stamp that finds the row already stamped (a concurrent tick) is `alreadyStamped`, never `reported`. **Fairness:** each read takes the OLDEST unreported rows across every billed account (`listReportableUsage`, one read per 50 accounts, merged oldest first), so no account waits behind another's place in a list and a backlog drains in the order it grew. One row's `StripeInvalidRequestError`/`StripeIdempotencyError` → that row `failed`, and that ACCOUNT's other rows wait for the next tick (a refusal is usually the account's, and its rows must not spend everyone's cap); when that read was full, the pass reads again without the refused accounts, so their rows can never fill the cap ahead of everyone else's. Any other failure → `failed`, `stoppedOnError: 1`, the tick stops (A13). Per tick: at most **200** sends (`USAGE_REPORT_TICK_CAP`; reaching it sets `stoppedOnCap: 1`) inside **60 s** (`USAGE_REPORT_BUDGET_MS`). Each send overrides the client's transport per request (`maxNetworkRetries: 0`, a 10 s `METER_EVENT_TIMEOUT_MS`; the next tick is the retry, under the same key) — but for the installed stripe 22.6.2, that does not mean "no retry, bounded at 10 s": `RequestSender.js`'s `_shouldRetry` retries a reset/broken-pipe connection ONCE regardless of `maxNetworkRetries`, and `timeout` is a socket-idle timeout, not a hard deadline (stripe-gateway.ts's comments carry the file:line evidence). Worst case for one send past its start: ~10 s idle + reset + ~0.5 s backoff + ~10 s idle ≈ 20.5 s. The pass stops STARTING sends at 60 − 21 = **39 s** (`METER_EVENT_WORST_CASE_MS`, rounded up from 20.5 s for margin), so even a send that hits that worst case still ends inside the 60 s budget (the client-wide 2 retries × 20 s would let one send run about 61.5 s past the last start, which the per-request override still prevents). That leaves the route's 300 s `maxDuration` room beside the release pass's own 60 s. 200 rows every 15 minutes is 19,200 a day, about 128 clients at an estimated 150 billable facts a day each (A19 for the time per send; sandbox traffic counts toward the global rate limit, so sequential sends are also the polite shape there). No usable key (`billingGatewayFromEnv` not ok) → `skippedNoStripe` = billed accounts, logged, returned, not an error. Stale accounts (G7) and expired rows (G3) are counted with one read per 50 billed accounts each and logged with `console.error` on every tick that sees them.
+- **G4. The reporter.** A new cron pass, key `usageReport`, appended LAST in `PASSES`: every SMS-sending pass runs before it, so a text sent this tick is reported this tick, and nothing reads what it writes. Stripe v1 `billing.meterEvents.create` through a new `BillingGateway.reportMeterEvent`. `identifier` = the row id (spec). Idempotency key `bis-usage-<row id>-<customer id>`: event name, value and timestamp are functions of the row, which never changes after insert (G2), so the row id plus the customer id covers every parameter. Timestamp = `floor(occurred_at / 1000)` seconds; payload values strings. `reported_at` and `updated_at` are stamped with the tick's `now` only after Stripe accepts; a stamp that finds the row already stamped (a concurrent tick) is `alreadyStamped`, never `reported`. **Fairness:** each read takes the OLDEST unreported rows across every billed account (`listReportableUsage`, one read per 50 accounts, merged oldest first), so no account waits behind another's place in a list and a backlog drains in the order it grew. One row's `StripeInvalidRequestError`/`StripeIdempotencyError` → that row `failed`, and that ACCOUNT's other rows wait for the next tick (a refusal is usually the account's, and its rows must not spend everyone's cap); when that read was full, the pass reads again without the refused accounts, so their rows can never fill the cap ahead of everyone else's. Any other failure → `failed`, `stoppedOnError: 1`, the tick stops (A13). Per tick: at most **200** sends (`USAGE_REPORT_TICK_CAP`; reaching it sets `stoppedOnCap: 1`) inside **60 s** (`USAGE_REPORT_BUDGET_MS`). Each send overrides the client's transport per request (`maxNetworkRetries: 0`, a 10 s `METER_EVENT_TIMEOUT_MS`; the next tick is the retry, under the same key) — but for the installed stripe 22.6.2, that does not mean "no retry, bounded at 10 s": `RequestSender.js`'s `_shouldRetry` retries a reset/broken-pipe connection ONCE regardless of `maxNetworkRetries`, and `timeout` is a socket-idle timeout, not a hard deadline (stripe-gateway.ts's comments carry the file:line evidence). Worst case for one send past its start: ~10 s idle + reset + ~0.5 s backoff + ~10 s idle ≈ 20.5 s. The pass stops STARTING sends at 60 − 21 = **39 s** (`METER_EVENT_WORST_CASE_MS`, rounded up from 20.5 s for margin), so even a send that hits that worst case still ends inside the 60 s budget (the client-wide 2 retries × 20 s would let one send run about 61.5 s past the last start, which the per-request override still prevents). That leaves the route's 300 s `maxDuration` room beside the release pass's own 60 s. 200 rows every 15 minutes is 19,200 a day, about 128 clients at an estimated 150 billable facts a day each (A19 for the time per send; sandbox traffic counts toward the global rate limit, so sequential sends are also the polite shape there). No usable key (`billingGatewayFromEnv` not ok) → `skippedNoStripe` = billed accounts, logged, returned, not an error. Stale accounts (G7) and expired rows (G3) are counted AFTER the send loop (so the bookkeeping never spends the send budget; on the no-Stripe path, before returning), and logged with `console.error` on every tick that sees them: the stale probe reads at most `STALE_PROBE_ROWS` (50) rows per stale account plus 50 per 50 billed accounts (G7), and the expired count is one head-only count per 25 accounts billed before the window's floor. (Review correction 2026-09-25: this line said "one read per 50 billed accounts each", which was never true of the stale read — it paged through every stale row — and the pass ran both before the budget's clock started.)
 - **G5. The voice leg is gated on the call row id and "Sofía talked to the caller" = `callerSpoke(state) || isMeaningful(outcome)`, NOT on `stored` and NOT on `turn_count`.** danlo's decision is "every call Sofía talked to"; the planning-start ledger line paraphrases it as "caller spoke, turn_count>=1", and that paraphrase is superseded here (the orchestrator appends a ledger correction). `finishCallRow` failing (a database blip) does not un-spend the carrier and model minutes, and `recordAutomationLog`, the precedent leg, is gated on `meta.callRowId` alone (`finish-call.ts:579`). The call id is the `source_ref`; with no row id (`startCallRow` failed open) there is nothing to key idempotently, and nothing is recorded. The two halves: `callerSpoke(state)`, a caller turn with words, exported from `call-state.ts` and shared with `classifyOutcome` (`turn_count >= 1` would bill silent rings, because Sofía's greeting is a turn); and `isMeaningful(outcome)`, because a booked, lead or message outcome means the caller interacted even when no caller turn was transcribed (danlo, 2026-09-25). A silent ring or a connect-timeout (no caller words, no booking/lead/message) never bills. A robocall that reached Sofía is billed (danlo), and it is, because the guard records its words as a caller turn. Quantity = `max(1, ceil(duration_secs / 60))` from the SAME `durationSecs` written to the calls row; `occurred_at` = the call's end.
 - **G6. The Stripe proof is at the gateway, in the e2e job, and it reads Stripe's AGGREGATE, not the 200.** The `verify` job has no Stripe key by design, and the `e2e` job has no `CRON_SECRET`, so the cron route cannot be driven end to end. `e2e/usage-meter.spec.ts` makes a Stripe TEST customer, ensures the meters, sends one meter event through the real `stripeGateway(...).reportMeterEvent`, replays it under the same key, sends a second distinct event, and polls `listEventSummaries` until the sum is the 2 + 3 = 5 a correct dedupe implies (A9, A10, A16). It then sends the first event's identifier under a new key (A11) and a sentinel (7) after it, and polls for 12 (deduplicated) or 14 (counted again) (A17). It deletes the customer. No database, no account, never Test Client One.
-- **G7. The banner.** `listAccountsWithStaleUsage(db, now)` returns the ids of billed accounts with a reportable row (G3's window) still unreported 24 hours after it was RECORDED (`created_at`, not `occurred_at`: a row recorded late is not late to Stripe until it has waited a day). Bounded: the billed-account list (paged), then ONE `usage_events` read per 50 of them (`staleUsageAccountIds`), each account's own window expressed in the read's `.or()`; a read comes back as rows, not accounts, so a FULL read (one account's backlog can fill it) is followed by a read of the accounts it did not name, and each repeat names at least one new account. With nothing stale it is one read per 50 accounts. The cron's stale log calls the same function. `/dashboard/work` renders `UsageStaleBanner` with the count, beside `LineDownBanner`, in the same `Promise.all`, swallowed the same way: a failed read renders no banner and logs `console.error` (`work/page.tsx:62-65`'s precedent). Copy: "Usage for 2 clients hasn't reached Stripe in over a day, so it isn't on their bills yet. We retry every 15 minutes." + a link "Check the Stripe connection" to `/dashboard/plans`, where a missing or refused key is already explained.
+- **G7. The banner.** `listAccountsWithStaleUsage(db, now)` returns the ids of billed accounts with a reportable row (G3's window) still unreported 24 hours after it was RECORDED (`created_at`, not `occurred_at`: a row recorded late is not late to Stripe until it has waited a day). Bounded by ACCOUNTS, never by backlog: the billed-account list (paged), then per 50 of them (`staleUsageAccountIds`) a probe of at most `STALE_PROBE_ROWS` (50) rows over the accounts not yet found, each account's own window expressed in the read's `.or()`; every account a read names leaves the next read's filter, and the group ends on the first EMPTY read (never a merely short one: a server `max_rows` below 50 makes reads short while rows remain). So a group takes at most (its stale accounts + 1) reads, and a call reads at most 50 × (stale accounts + groups) rows however large the backlog grows while Stripe is down. With nothing stale it is one read per 50 accounts. (Review correction 2026-09-25: the shipped Task 1 paged through EVERY stale row, 1,000 at a time — unbounded while Stripe is down, and the pass ran it before its budget started.) The cron's stale log calls the same function. `/dashboard/work` renders `UsageStaleBanner` with the count, beside `LineDownBanner`, in the same `Promise.all`, swallowed the same way: a failed read renders no banner and logs `console.error` (`work/page.tsx:62-65`'s precedent). Copy: "Usage for 2 clients hasn't reached Stripe in over a day, so it isn't on their bills yet. We retry every 15 minutes." + a link "Check the Stripe connection" to `/dashboard/plans`, where a missing or refused key is already explained.
 - **G8. No migration.** Every read names its accounts in one `.or(and(account_id.eq.<id>,occurred_at.gte."<from>"),...)` plus `.is("reported_at", null)`: each clause is an `(account_id, occurred_at)` range that `usage_events_account_occurred_idx (account_id, occurred_at desc)` can serve, and the planner can OR them (a BitmapOr; expected, not measured, and irrelevant at today's row counts). None uses `usage_events_unreported_idx (created_at) where reported_at is null`. That partial index WILL hold every unbilled account's rows forever (every account's usage is unreported until it is billed, and pre-billing rows stay unreported for good): at an estimated 200 rows a day across today's accounts, about 73,000 entries a year. Harmless in size, useless as a queue; dropping or replacing it belongs with PR-4's reconciliation, once that access pattern is known.
 - **G9. A text bills only when it reached the CUSTOMER** (`smsBillable`): a real provider (`isFake === false`) with no `redirectTo`. The fake provider delivers nothing, and a real provider forced outside production sends every text to a developer's phone (`lib/sms/index.ts:35-36`). Production always holds the real, unredirected provider (`getSmsProvider` throws there without a key), so this changes nothing in production; it keeps a preview, which writes production's database, from leaving usage rows for texts no customer received. This refines the research note "key off a successful send, not the environment": it keys off the PROVIDER, not the environment.
 - **G10. Automation texts are billed in `markAutomationSmsSent`,** after the caller's dedupe stamp and the status write, never between the send and the stamp (a ledger round trip there would widen the window in which a crash re-sends the text). `SentSms` gains `usage: { segments, sentAt } | null`, computed on the body AS SENT (the opt-out disclosure included). All seven callers call `markAutomationSmsSent` on their success path; a source-scan test in `send-sms.test.ts` keeps that true.
@@ -168,7 +168,7 @@ Commands run from the repo root `C:\Users\danlo\bis-platform` (Git Bash).
   - `staleUsageAccountIds(db: SupabaseClient, accounts: readonly BilledUsageAccount[], now: Date): Promise<string[]>`
   - `countExpiredUsage(db: SupabaseClient, accounts: readonly BilledUsageAccount[], now: Date): Promise<number>`
   - `listAccountsWithStaleUsage(db: SupabaseClient, now: Date): Promise<string[]>`
-  - Every read over `usage_events` is ONE request per `USAGE_ACCOUNTS_PER_READ` (two-part filters) or `USAGE_ACCOUNTS_PER_BOUNDED_READ` (three-part filters, a `beforeIso` on every range) accounts, never one per account (G7, G8).
+  - Every read over `usage_events` is ONE request per `USAGE_ACCOUNTS_PER_READ` (two-part filters) or `USAGE_ACCOUNTS_PER_BOUNDED_READ` (three-part filters, a `beforeIso` on every range) accounts, never one per account (G7, G8) — except the stale probe, which is at most (stale accounts + 1) reads of `STALE_PROBE_ROWS` rows per group (G7, review correction 2026-09-25).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -374,27 +374,58 @@ describe("the per-account reads: bounded, one request per group of accounts", ()
     expect(filters[0]).toContain(`occurred_at.lt."${until}"`);
   });
 
-  it("staleUsageAccountIds pages a group with .range() until an EMPTY page, never stopping just because a page came back shorter than the request — a lower server max_rows can make every page short even while accounts further down the id order are still unread (mutation: stop once a page is shorter than the request size → the account named only on the third, non-empty-but-short page is missed, FAILS)", async () => {
-    const accounts = [uuidFor(1), uuidFor(2), uuidFor(3)].map(billed);
-    const ranges: [number, number][] = [];
-    // Every page is short of any assumed page size; only the fourth is
-    // genuinely empty. A server max_rows cap would produce exactly this.
-    const reads = [
-      [{ account_id: uuidFor(1) }],
-      [{ account_id: uuidFor(1) }],
-      [{ account_id: uuidFor(2) }],
-      [] as { account_id: string }[],
-    ];
-    const chain = {
-      select: () => chain, is: () => chain, lt: () => chain, or: () => chain, order: () => chain,
-      range: async (a: number, b: number) => {
-        ranges.push([a, b]);
-        return { data: reads[ranges.length - 1] ?? [], error: null };
-      },
+  /**
+   * A fake `usage_events` holding stale rows, answering the stale probe the
+   * way PostgREST would: only the accounts the `.or()` names, ordered by id,
+   * at most `.limit()` rows AND at most the server's `max_rows`. Awaiting the
+   * chain without a `.limit()` returns every match (what an unbounded read
+   * would), so a missing cap shows up as rows read, not as a crash.
+   */
+  function staleFake(rows: { id: string; account_id: string }[], maxRows = Infinity) {
+    const served: number[] = [];
+    const read = (named: Set<string>, limit: number) => {
+      const out = rows.filter((r) => named.has(r.account_id))
+        .sort((x, y) => (x.id < y.id ? -1 : 1)).slice(0, Math.min(limit, maxRows))
+        .map((r) => ({ account_id: r.account_id }));
+      served.push(out.length);
+      return { data: out, error: null };
     };
-    const ids = await staleUsageAccountIds({ from: () => chain } as unknown as SupabaseClient, accounts, NOW);
-    expect(ids).toEqual([uuidFor(1), uuidFor(2)]);
-    expect(ranges).toHaveLength(4);
+    const db = {
+      from: () => {
+        let named = new Set<string>();
+        const chain = {
+          select: () => chain, is: () => chain, lt: () => chain, order: () => chain,
+          or: (f: string) => { named = new Set([...f.matchAll(/account_id\.eq\.([0-9a-f-]{36})/g)].map((m) => m[1]!)); return chain; },
+          limit: async (n: number) => read(named, n),
+          then: (ok: (v: unknown) => unknown) => Promise.resolve(read(named, Infinity)).then(ok),
+        };
+        return chain;
+      },
+    } as unknown as SupabaseClient;
+    return { db, served };
+  }
+  const backlog = (accountId: string, n: number) =>
+    Array.from({ length: n }, (_, i) => ({ id: `${accountId}-${String(i).padStart(6, "0")}`, account_id: accountId }));
+
+  it("staleUsageAccountIds reads a number of rows bounded by ACCOUNTS, never by backlog: 8,000 stale rows on two of 60 accounts are found reading at most STALE_PROBE_ROWS × (2 stale accounts + 2 groups) rows (mutation: remove the .limit(STALE_PROBE_ROWS) cap → all 8,000 rows are read, FAILS)", async () => {
+    expect(STALE_PROBE_ROWS).toBe(50);
+    const accounts = Array.from({ length: 60 }, (_, i) => billed(uuidFor(i)));
+    const { db, served } = staleFake([...backlog(uuidFor(1), 5000), ...backlog(uuidFor(55), 3000)]);
+    const ids = await staleUsageAccountIds(db, accounts, NOW);
+    expect(ids).toEqual([uuidFor(1), uuidFor(55)]);
+    const read = served.reduce((a, b) => a + b, 0);
+    expect(read).toBeLessThanOrEqual(STALE_PROBE_ROWS * (2 + 2));
+    // Two groups of USAGE_ACCOUNTS_PER_READ: each reads once per stale
+    // account it holds, then once more to come back empty.
+    expect(served).toEqual([STALE_PROBE_ROWS, 0, STALE_PROBE_ROWS, 0]);
+  });
+
+  it("staleUsageAccountIds ends a group only on an EMPTY read, never a SHORT one — a server max_rows below STALE_PROBE_ROWS makes every read short while accounts are still unread (mutation: stop once a read is shorter than STALE_PROBE_ROWS → only the first account is found, FAILS)", async () => {
+    const accounts = [uuidFor(1), uuidFor(2), uuidFor(3)].map(billed);
+    const { db, served } = staleFake([...backlog(uuidFor(1), 40), ...backlog(uuidFor(3), 2)], 1);
+    const ids = await staleUsageAccountIds(db, accounts, NOW);
+    expect(ids).toEqual([uuidFor(1), uuidFor(3)]);
+    expect(served).toEqual([1, 1, 0]);
   });
 });
 ```
@@ -927,11 +958,10 @@ export async function markUsageReported(db: SupabaseClient, id: string, at: Date
   return (data ?? []).length === 1;
 }
 
-/** A read page size for the stale scan below. Not a claim about PostgREST's
- *  own page cap — see the function doc: the loop pages by actual row count,
- *  not by comparing to this number, so it is correct whatever the server's
- *  `max_rows` is set to. */
-const STALE_READ_ROWS = 1000;
+/** The most rows ONE stale-probe read may return. The probe only has to learn
+ *  WHICH accounts hold a stale row, never how many rows they hold, so a read
+ *  is small and the next one names only the accounts not yet found. */
+export const STALE_PROBE_ROWS = 50;
 
 /**
  * The billed accounts, among those given, with STALE usage: a reportable
@@ -940,16 +970,22 @@ const STALE_READ_ROWS = 1000;
  * Stripe until it has waited a day). One definition for the cron's log and
  * the agency banner, in the accounts' own order.
  *
- * One group's worth of accounts (USAGE_ACCOUNTS_PER_READ) shares one filter,
- * paged with `.range()` and ordered by `id` for a stable cursor, continuing
- * until an EMPTY page — never one merely SHORTER than STALE_READ_ROWS. A
- * page shorter than requested is not proof there are no more matching rows:
- * if the project's PostgREST `max_rows` is below STALE_READ_ROWS, every page
- * for a busy group could come back short while rows for an account further
- * down the id order are still unread. Only a genuinely empty page is
- * evidence the group's whole filter is exhausted. (This replaced an earlier
- * `.limit()`-and-narrow-the-account-set approach that made the same "short
- * page = done" mistake listBilledUsageAccounts's old paging did.)
+ * BOUNDED BY ACCOUNTS, NEVER BY BACKLOG. Per group of USAGE_ACCOUNTS_PER_READ
+ * accounts, one read of at most STALE_PROBE_ROWS rows over the accounts NOT
+ * YET FOUND; every account a read names leaves the next read's filter, and
+ * the group is done on the first EMPTY read. A non-empty read always names
+ * at least one account still in the filter, so a group takes at most (its
+ * stale accounts + 1) reads, and one call reads at most
+ * STALE_PROBE_ROWS × (stale accounts + groups) rows — however many stale
+ * rows pile up while Stripe is down. (It used to page through EVERY stale
+ * row, 1,000 at a time: a day-long outage made the tick's bookkeeping grow
+ * with the backlog.)
+ *
+ * Only an EMPTY read ends a group, never a SHORT one: a read shorter than
+ * STALE_PROBE_ROWS is not proof nothing else matches (a project whose
+ * PostgREST `max_rows` is below it returns short reads while rows remain).
+ * Narrowing the filter is what makes that safe: the loop stops only when
+ * no account left in the filter has a stale row.
  */
 export async function staleUsageAccountIds(
   db: SupabaseClient, accounts: readonly BilledUsageAccount[], now: Date,
@@ -957,18 +993,21 @@ export async function staleUsageAccountIds(
   const createdBefore = new Date(now.getTime() - USAGE_STALE_AFTER_MS).toISOString();
   const stale = new Set<string>();
   for (const group of inGroups(accounts, USAGE_ACCOUNTS_PER_READ)) {
-    const filter = usageRangeFilter(reportableRanges(group, now));
-    for (let from = 0; ; ) {
+    let open = group;
+    while (open.length > 0) {
       const { data, error } = await db.from("usage_events").select("account_id")
         .is("reported_at", null).lt("created_at", createdBefore)
-        .or(filter)
+        .or(usageRangeFilter(reportableRanges(open, now)))
         .order("id", { ascending: true })
-        .range(from, from + STALE_READ_ROWS - 1);
+        .limit(STALE_PROBE_ROWS);
       if (error) throw new Error(`staleUsageAccountIds failed: ${error.message}`);
       const rows = (data ?? []) as { account_id: string }[];
-      for (const r of rows) stale.add(r.account_id);
-      if (rows.length === 0) break;
-      from += rows.length;
+      const found = new Set(rows.map((r) => r.account_id).filter((id) => open.some((a) => a.accountId === id)));
+      // Empty, or (defensively) naming no account still open: nothing left
+      // to learn from this group.
+      if (found.size === 0) break;
+      for (const id of found) stale.add(id);
+      open = open.filter((a) => !found.has(a.accountId));
     }
   }
   return accounts.filter((a) => stale.has(a.accountId)).map((a) => a.accountId);
@@ -3002,7 +3041,7 @@ git commit -m "feat(billing): reportMeterEvent on the Stripe gateway and the fak
 **Interfaces:**
 - Consumes: from `@bis/db` (Task 1) `listBilledUsageAccounts`, `listReportableUsage`, `markUsageReported`, `staleUsageAccountIds`, `countExpiredUsage`; from Task 7 `billingGatewayFromEnv`, `meterEventFailureKind`; `METERS` (`stripe-catalog.ts:12-16`). Verified today: `Pass` / `PassContext` (`context.ts:15-56`), `runPasses` (`harness.ts:62-75`, each pass in its own try/catch), `PASSES` (`registry.ts:45`), the route's `maxDuration = 300` (`api/cron/reminders/route.ts:16`), `RELEASE_BUDGET_MS = 60_000` (`passes/release-held.ts:69`).
 - Produces: `usageReportPass: Pass` with key `"usageReport"` and counters `{ reported, unstamped, alreadyStamped, failed, expired, staleAccounts, skippedNoStripe, stoppedOnCap, stoppedOnError, stoppedOnBudget }` (ten); `usageIdempotencyKey(rowId: string, customerId: string): string`; `USAGE_REPORT_TICK_CAP = 200`, `USAGE_REPORT_BUDGET_MS = 60_000`, `METER_EVENT_WORST_CASE_MS = 21_000`.
-- Bounded per tick (G4, G7): the billed-account list (paged), ONE stale read and ONE expired count per 50 billed accounts, then reads of the oldest rows across all of them (one per 50 accounts; a repeat only after an account's refusal emptied a full read); never a read per account.
+- Bounded per tick (G4, G7): the billed-account list (paged), reads of the oldest rows across all of them (one per 25 accounts; a repeat only after an account's refusal emptied a full read), then, AFTER the sends, the stale probe (at most 50 rows per stale account plus 50 per 50 billed accounts, G7) and one expired count per 25 accounts billed before the window's floor; never a read per account, never a read that grows with the backlog. (Review correction 2026-09-25.)
 
 Every `@bis/db` export the pass uses is dereferenced INSIDE `run()`, never at module scope: the cron route test's `@bis/db` mock is a bare factory, which throws the moment an export it does not define is dereferenced.
 
@@ -3131,6 +3170,16 @@ describe("usageReportPass", () => {
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining("older than Stripe accepts"));
   });
 
+  it("runs the stale and expired bookkeeping AFTER the sends, so a stale backlog read never spends the send budget (mutation: run the bookkeeping before the send loop → call order FAILS)", async () => {
+    dbMocks.listBilledUsageAccounts.mockResolvedValue([A]);
+    queue = [usage("u1"), usage("u2")];
+    const send = vi.spyOn(fake, "reportMeterEvent");
+    expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, reported: 2 });
+    const lastSend = send.mock.invocationCallOrder.at(-1)!;
+    expect(dbMocks.staleUsageAccountIds.mock.invocationCallOrder[0]!).toBeGreaterThan(lastSend);
+    expect(dbMocks.countExpiredUsage.mock.invocationCallOrder[0]!).toBeGreaterThan(lastSend);
+  });
+
   it("counts and logs the billed accounts with usage unreported for over a day, with ONE call over every billed account (mutation: drop the stale log → FAILS; one read per account → called twice, FAILS)", async () => {
     dbMocks.listBilledUsageAccounts.mockResolvedValue([A, B]);
     dbMocks.staleUsageAccountIds.mockResolvedValue(["acct_a"]);
@@ -3150,7 +3199,7 @@ describe("usageReportPass", () => {
     expect(dbMocks.listReportableUsage).toHaveBeenCalledTimes(1);
   });
 
-  it("an account whose row Stripe refuses as an invalid request waits for the next tick, and its rows can never fill the cap ahead of anyone else's: the full read is repeated without it (mutation: keep sending the refused account's rows → 200 attempts on acct_a and b1 never goes, FAILS; no second read → b1 starves, FAILS)", async () => {
+  it("an account whose row Stripe refuses as an invalid request waits for the next tick, its refused row is NEVER stamped, and its rows can never fill the cap ahead of anyone else's: the full read is repeated without it (mutation: keep sending the refused account's rows → 200 attempts on acct_a and b1 never goes, FAILS; no second read → b1 starves, FAILS; stamp the refused row in the refusal's catch → a0 among the stamped ids, FAILS)", async () => {
     dbMocks.listBilledUsageAccounts.mockResolvedValue([A, B]);
     queue = [
       ...Array.from({ length: 200 }, (_, i) => usage(`a${i}`)),
@@ -3162,6 +3211,9 @@ describe("usageReportPass", () => {
     expect(fake.meterEvents.map((e) => e.identifier)).toEqual(["b1"]);
     expect(dbMocks.listReportableUsage.mock.calls.map((c) => [(c[1] as BilledUsageAccount[]).map((a) => a.accountId), c[3]]))
       .toEqual([[["acct_a", "acct_b"], 200], [["acct_b"], 199]]);
+    // Exactly the row Stripe accepted is stamped: a0, refused, stays
+    // unreported, so a later tick sends it again once the refusal is fixed.
+    expect(dbMocks.markUsageReported.mock.calls.map((c) => c[1])).toEqual(["b1"]);
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining("account acct_a's other rows wait for the next tick"));
   });
 
@@ -3300,21 +3352,27 @@ export function usageIdempotencyKey(rowId: string, customerId: string): string {
  * nothing to a customer. LAST in the registry: every SMS-sending pass runs
  * before it, so a text sent this tick is reported this tick.
  *
- * Per tick, every read bounded (never one per account):
+ * Per tick, every read bounded (never one per account, never one per
+ * backlogged row):
  *   1. The billed accounts (a Stripe customer AND subscription). None → done;
  *      production is in that state until the first client subscribes.
- *   2. Bookkeeping, whether or not Stripe is reachable: stale accounts
- *      (usage unreported for over a day) and expired rows (too old for
- *      Stripe to accept), one read per 50 billed accounts each, logged. The
- *      agency banner reads the same `staleUsageAccountIds`.
- *   3. No usable Stripe key → `skippedNoStripe`, logged, done. Not an error.
- *   4. The OLDEST unreported rows across every billed account, one meter
+ *   2. No usable Stripe key → `skippedNoStripe`, logged, then step 4, done.
+ *      Not an error.
+ *   3. The OLDEST unreported rows across every billed account, one meter
  *      event each, identifier = row id; reported_at stamped only after
  *      Stripe accepted. A refusal that is the row's (A13) is `failed`, and
  *      that ACCOUNT's other rows wait for the next tick; if the read was
  *      full, the pass reads again without the refused accounts, so their
  *      rows never fill the cap ahead of everyone else's. Any other failure
  *      stops the tick (the next row would fail the same way).
+ *   4. Bookkeeping, whether or not Stripe is reachable, AFTER the sends so it
+ *      never spends their budget, logged: stale accounts (usage unreported
+ *      for over a day; the agency banner reads the same
+ *      `staleUsageAccountIds`) — one read of at most STALE_PROBE_ROWS rows
+ *      per stale account plus one per 50 billed accounts, so a backlog
+ *      that grows while Stripe is down never grows the read — and expired
+ *      rows (too old for Stripe to accept), one head-only count per 25
+ *      accounts billed before the window's floor.
  *
  * A stamp that fails after Stripe accepted is `unstamped`: the next tick
  * resends the same row under the same identifier AND the same key, and
@@ -3336,22 +3394,26 @@ export const usageReportPass: Pass = {
     const accounts = await listBilledUsageAccounts(ctx.db);
     if (accounts.length === 0) return c;
 
-    const stale = await staleUsageAccountIds(ctx.db, accounts, ctx.now);
-    c.staleAccounts = stale.length;
-    if (stale.length > 0) {
-      console.error(`usage report: usage unreported for over 24 hours on ${stale.length} billed account(s): ${stale.join(", ")}`);
-    }
-    c.expired = await countExpiredUsage(ctx.db, accounts, ctx.now);
-    if (c.expired > 0) {
-      console.error(
-        `usage report: ${c.expired} unreported usage row(s) of billed accounts are older than Stripe accepts (34 days); they will never be billed`,
-      );
-    }
+    // Step 4, run last on both paths below.
+    const bookkeeping = async () => {
+      const stale = await staleUsageAccountIds(ctx.db, accounts, ctx.now);
+      c.staleAccounts = stale.length;
+      if (stale.length > 0) {
+        console.error(`usage report: usage unreported for over 24 hours on ${stale.length} billed account(s): ${stale.join(", ")}`);
+      }
+      c.expired = await countExpiredUsage(ctx.db, accounts, ctx.now);
+      if (c.expired > 0) {
+        console.error(
+          `usage report: ${c.expired} unreported usage row(s) of billed accounts are older than Stripe accepts (34 days); they will never be billed`,
+        );
+      }
+    };
 
     const built = billingGatewayFromEnv();
     if (!built.ok) {
       c.skippedNoStripe = accounts.length;
       console.error(`usage report: Stripe is not usable here (${built.reason}); ${accounts.length} billed account(s) not reported this tick`);
+      await bookkeeping();
       return c;
     }
     const gateway = built.gateway;
@@ -3419,9 +3481,18 @@ export const usageReportPass: Pass = {
       // A short read means nothing else is waiting; a full read with no
       // refusal spent the cap. Only a full read that a refusal left short of
       // the cap is read again, without the refused accounts.
+      //
+      // That re-read can return a row this tick already SENT whose stamp
+      // then threw (`unstamped`): it is still unreported, so it is sent
+      // again. Stripe replays it (same identifier, same key, every
+      // parameter a function of an immutable row), so nothing is billed
+      // twice, but the counters see it twice: one more attempt, and a
+      // second `unstamped` or a `reported`. A stamp that resolves false is
+      // `alreadyStamped`, never `reported`.
       if (stop || rows.length < want || !refusedHere) break;
     }
     if (!stop && attempts >= USAGE_REPORT_TICK_CAP) c.stoppedOnCap = 1;
+    await bookkeeping();
     return c;
   },
 };

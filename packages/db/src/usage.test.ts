@@ -4,7 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   recordUsage, reportableFrom, listBilledUsageAccounts, listReportableUsage, staleUsageAccountIds, usageRangeFilter,
   USAGE_REPORT_WINDOW_MS, USAGE_STALE_AFTER_MS, USAGE_FUTURE_GRACE_MS,
-  USAGE_ACCOUNTS_PER_READ, USAGE_ACCOUNTS_PER_BOUNDED_READ,
+  USAGE_ACCOUNTS_PER_READ, USAGE_ACCOUNTS_PER_BOUNDED_READ, STALE_PROBE_ROWS,
   type BilledUsageAccount, type UsageInput,
 } from "./usage";
 
@@ -197,26 +197,57 @@ describe("the per-account reads: bounded, one request per group of accounts", ()
     expect(filters[0]).toContain(`occurred_at.lt."${until}"`);
   });
 
-  it("staleUsageAccountIds pages a group with .range() until an EMPTY page, never stopping just because a page came back shorter than the request — a lower server max_rows can make every page short even while accounts further down the id order are still unread (mutation: stop once a page is shorter than the request size → the account named only on the third, non-empty-but-short page is missed, FAILS)", async () => {
-    const accounts = [uuidFor(1), uuidFor(2), uuidFor(3)].map(billed);
-    const ranges: [number, number][] = [];
-    // Every page is short of any assumed page size; only the fourth is
-    // genuinely empty. A server max_rows cap would produce exactly this.
-    const reads = [
-      [{ account_id: uuidFor(1) }],
-      [{ account_id: uuidFor(1) }],
-      [{ account_id: uuidFor(2) }],
-      [] as { account_id: string }[],
-    ];
-    const chain = {
-      select: () => chain, is: () => chain, lt: () => chain, or: () => chain, order: () => chain,
-      range: async (a: number, b: number) => {
-        ranges.push([a, b]);
-        return { data: reads[ranges.length - 1] ?? [], error: null };
-      },
+  /**
+   * A fake `usage_events` holding stale rows, answering the stale probe the
+   * way PostgREST would: only the accounts the `.or()` names, ordered by id,
+   * at most `.limit()` rows AND at most the server's `max_rows`. Awaiting the
+   * chain without a `.limit()` returns every match (what an unbounded read
+   * would), so a missing cap shows up as rows read, not as a crash.
+   */
+  function staleFake(rows: { id: string; account_id: string }[], maxRows = Infinity) {
+    const served: number[] = [];
+    const read = (named: Set<string>, limit: number) => {
+      const out = rows.filter((r) => named.has(r.account_id))
+        .sort((x, y) => (x.id < y.id ? -1 : 1)).slice(0, Math.min(limit, maxRows))
+        .map((r) => ({ account_id: r.account_id }));
+      served.push(out.length);
+      return { data: out, error: null };
     };
-    const ids = await staleUsageAccountIds({ from: () => chain } as unknown as SupabaseClient, accounts, NOW);
-    expect(ids).toEqual([uuidFor(1), uuidFor(2)]);
-    expect(ranges).toHaveLength(4);
+    const db = {
+      from: () => {
+        let named = new Set<string>();
+        const chain = {
+          select: () => chain, is: () => chain, lt: () => chain, order: () => chain,
+          or: (f: string) => { named = new Set([...f.matchAll(/account_id\.eq\.([0-9a-f-]{36})/g)].map((m) => m[1]!)); return chain; },
+          limit: async (n: number) => read(named, n),
+          then: (ok: (v: unknown) => unknown) => Promise.resolve(read(named, Infinity)).then(ok),
+        };
+        return chain;
+      },
+    } as unknown as SupabaseClient;
+    return { db, served };
+  }
+  const backlog = (accountId: string, n: number) =>
+    Array.from({ length: n }, (_, i) => ({ id: `${accountId}-${String(i).padStart(6, "0")}`, account_id: accountId }));
+
+  it("staleUsageAccountIds reads a number of rows bounded by ACCOUNTS, never by backlog: 8,000 stale rows on two of 60 accounts are found reading at most STALE_PROBE_ROWS × (2 stale accounts + 2 groups) rows (mutation: remove the .limit(STALE_PROBE_ROWS) cap → all 8,000 rows are read, FAILS)", async () => {
+    expect(STALE_PROBE_ROWS).toBe(50);
+    const accounts = Array.from({ length: 60 }, (_, i) => billed(uuidFor(i)));
+    const { db, served } = staleFake([...backlog(uuidFor(1), 5000), ...backlog(uuidFor(55), 3000)]);
+    const ids = await staleUsageAccountIds(db, accounts, NOW);
+    expect(ids).toEqual([uuidFor(1), uuidFor(55)]);
+    const read = served.reduce((a, b) => a + b, 0);
+    expect(read).toBeLessThanOrEqual(STALE_PROBE_ROWS * (2 + 2));
+    // Two groups of USAGE_ACCOUNTS_PER_READ: each reads once per stale
+    // account it holds, then once more to come back empty.
+    expect(served).toEqual([STALE_PROBE_ROWS, 0, STALE_PROBE_ROWS, 0]);
+  });
+
+  it("staleUsageAccountIds ends a group only on an EMPTY read, never a SHORT one — a server max_rows below STALE_PROBE_ROWS makes every read short while accounts are still unread (mutation: stop once a read is shorter than STALE_PROBE_ROWS → only the first account is found, FAILS)", async () => {
+    const accounts = [uuidFor(1), uuidFor(2), uuidFor(3)].map(billed);
+    const { db, served } = staleFake([...backlog(uuidFor(1), 40), ...backlog(uuidFor(3), 2)], 1);
+    const ids = await staleUsageAccountIds(db, accounts, NOW);
+    expect(ids).toEqual([uuidFor(1), uuidFor(3)]);
+    expect(served).toEqual([1, 1, 0]);
   });
 });

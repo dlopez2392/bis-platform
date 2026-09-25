@@ -307,11 +307,10 @@ export async function markUsageReported(db: SupabaseClient, id: string, at: Date
   return (data ?? []).length === 1;
 }
 
-/** A read page size for the stale scan below. Not a claim about PostgREST's
- *  own page cap — see the function doc: the loop pages by actual row count,
- *  not by comparing to this number, so it is correct whatever the server's
- *  `max_rows` is set to. */
-const STALE_READ_ROWS = 1000;
+/** The most rows ONE stale-probe read may return. The probe only has to learn
+ *  WHICH accounts hold a stale row, never how many rows they hold, so a read
+ *  is small and the next one names only the accounts not yet found. */
+export const STALE_PROBE_ROWS = 50;
 
 /**
  * The billed accounts, among those given, with STALE usage: a reportable
@@ -320,16 +319,22 @@ const STALE_READ_ROWS = 1000;
  * Stripe until it has waited a day). One definition for the cron's log and
  * the agency banner, in the accounts' own order.
  *
- * One group's worth of accounts (USAGE_ACCOUNTS_PER_READ) shares one filter,
- * paged with `.range()` and ordered by `id` for a stable cursor, continuing
- * until an EMPTY page — never one merely SHORTER than STALE_READ_ROWS. A
- * page shorter than requested is not proof there are no more matching rows:
- * if the project's PostgREST `max_rows` is below STALE_READ_ROWS, every page
- * for a busy group could come back short while rows for an account further
- * down the id order are still unread. Only a genuinely empty page is
- * evidence the group's whole filter is exhausted. (This replaced an earlier
- * `.limit()`-and-narrow-the-account-set approach that made the same "short
- * page = done" mistake listBilledUsageAccounts's old paging did.)
+ * BOUNDED BY ACCOUNTS, NEVER BY BACKLOG. Per group of USAGE_ACCOUNTS_PER_READ
+ * accounts, one read of at most STALE_PROBE_ROWS rows over the accounts NOT
+ * YET FOUND; every account a read names leaves the next read's filter, and
+ * the group is done on the first EMPTY read. A non-empty read always names
+ * at least one account still in the filter, so a group takes at most (its
+ * stale accounts + 1) reads, and one call reads at most
+ * STALE_PROBE_ROWS × (stale accounts + groups) rows — however many stale
+ * rows pile up while Stripe is down. (It used to page through EVERY stale
+ * row, 1,000 at a time: a day-long outage made the tick's bookkeeping grow
+ * with the backlog.)
+ *
+ * Only an EMPTY read ends a group, never a SHORT one: a read shorter than
+ * STALE_PROBE_ROWS is not proof nothing else matches (a project whose
+ * PostgREST `max_rows` is below it returns short reads while rows remain).
+ * Narrowing the filter is what makes that safe: the loop stops only when
+ * no account left in the filter has a stale row.
  */
 export async function staleUsageAccountIds(
   db: SupabaseClient, accounts: readonly BilledUsageAccount[], now: Date,
@@ -337,18 +342,21 @@ export async function staleUsageAccountIds(
   const createdBefore = new Date(now.getTime() - USAGE_STALE_AFTER_MS).toISOString();
   const stale = new Set<string>();
   for (const group of inGroups(accounts, USAGE_ACCOUNTS_PER_READ)) {
-    const filter = usageRangeFilter(reportableRanges(group, now));
-    for (let from = 0; ; ) {
+    let open = group;
+    while (open.length > 0) {
       const { data, error } = await db.from("usage_events").select("account_id")
         .is("reported_at", null).lt("created_at", createdBefore)
-        .or(filter)
+        .or(usageRangeFilter(reportableRanges(open, now)))
         .order("id", { ascending: true })
-        .range(from, from + STALE_READ_ROWS - 1);
+        .limit(STALE_PROBE_ROWS);
       if (error) throw new Error(`staleUsageAccountIds failed: ${error.message}`);
       const rows = (data ?? []) as { account_id: string }[];
-      for (const r of rows) stale.add(r.account_id);
-      if (rows.length === 0) break;
-      from += rows.length;
+      const found = new Set(rows.map((r) => r.account_id).filter((id) => open.some((a) => a.accountId === id)));
+      // Empty, or (defensively) naming no account still open: nothing left
+      // to learn from this group.
+      if (found.size === 0) break;
+      for (const id of found) stale.add(id);
+      open = open.filter((a) => !found.has(a.accountId));
     }
   }
   return accounts.filter((a) => stale.has(a.accountId)).map((a) => a.accountId);
