@@ -90,7 +90,7 @@ Assumptions (not verified; Task 10's e2e run, reading Stripe's aggregate, is the
 
 **apps/web: recording**
 - Create `apps/web/src/lib/billing/usage.ts`: `voiceMinutes`, `smsBillable`, `recordUsageSafely`.
-- Create `apps/web/src/lib/billing/usage.test.ts` (4 tests).
+- Create `apps/web/src/lib/billing/usage.test.ts` (8 tests — revised from 4: the original "never throws" test was vacuous; review corrections applied 2026-09-25, see Task 2's report, Fix 1-4).
 - Modify `apps/web/src/lib/voice/call-state.ts` (`callerSpoke`) and `call-state.test.ts` (+1).
 - Modify `apps/web/src/lib/voice/finish-call.ts` (the voice leg, gated `callerSpoke(state) || isMeaningful(outcome)`) and `finish-call.test.ts` (+7).
 - Modify `apps/web/src/lib/voice/textback.ts` (the text-back leg); create `apps/web/src/lib/voice/textback.test.ts` (5 tests).
@@ -1059,14 +1059,16 @@ No migration: 0051 is already on both projects (ledger: "0051 APPLIED ... NEVER 
 - Produces (used by Tasks 3-6):
   - `voiceMinutes(durationSecs: number): number`
   - `smsBillable(provider: Pick<SmsProvider, "isFake" | "redirectTo">): boolean`
-  - `recordUsageSafely(db: SupabaseClient | (() => SupabaseClient), input: UsageInput, label: string): Promise<void>` (never throws)
+  - `recordUsageSafely(db: SupabaseClient | (() => SupabaseClient), input: UsageInput | (() => UsageInput), label: string): Promise<void>` (never throws; `input` may be a thunk, for a caller whose fields are read off a value that could itself be null or throw while being read — built inside the same try as `db`; the write races a 5 s timeout, `USAGE_WRITE_TIMEOUT_MS`, so a stalled insert is abandoned and logged rather than left open forever; an existing caller that passes a plain `UsageInput` object needs no change, since that is still a valid member of the union)
+
+**Review correction (Fix 1, 2026-09-25):** the brief's original `recordUsageSafely` test (single "never throws" case) was vacuous — a rejected write and a throwing getter both logged the same shared prefix, so either failure path alone satisfied both assertions, and an unawaited write (`void recordUsage(...)`) or a silent early return stayed green too. The corrected test below splits that into distinct cases, each asserting its OWN unique log text and an exact call count, and adds a case that proves the write is actually awaited (a deferred promise whose settlement is the only thing that can flip the outer `.then`). It also adds: a case for a throwing input thunk (Fix 2), a fake-timer case for the write's timeout bound (Fix 3), and a case for a rejection reason that cannot survive `String(e)` (Fix 4, `Object.create(null)`).
 
 - [ ] **Step 1: Write the failing test**
 
 Create `apps/web/src/lib/billing/usage.test.ts`:
 
 ```ts
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({ recordUsage: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
@@ -1085,6 +1087,11 @@ beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+
 describe("voiceMinutes", () => {
   it("rounds UP to whole minutes, never below one (mutation: Math.round → 61 s bills 1, FAILS; drop the floor of 1 → 0 s bills 0, FAILS)", () => {
     expect([0, 1, 59, 60, 61, 119, 120, 121, 3600].map(voiceMinutes)).toEqual([1, 1, 1, 1, 2, 2, 2, 3, 60]);
@@ -1101,24 +1108,88 @@ describe("smsBillable", () => {
 });
 
 describe("recordUsageSafely", () => {
-  it("hands recordUsage the input unchanged, on the client given or the one a getter builds (mutation: pass the getter itself as the client → FAILS)", async () => {
+  it("hands recordUsage the input unchanged, on the client given or the one a getter builds, and the input given or the one a thunk builds (mutation: pass the getter itself as the client → FAILS; pass the input thunk itself as the input → FAILS)", async () => {
     await recordUsageSafely(DB, INPUT, "t");
     await recordUsageSafely(() => DB, INPUT, "t");
-    expect(dbMocks.recordUsage.mock.calls).toEqual([[DB, INPUT], [DB, INPUT]]);
+    await recordUsageSafely(DB, () => INPUT, "t");
+    expect(dbMocks.recordUsage.mock.calls).toEqual([[DB, INPUT], [DB, INPUT], [DB, INPUT]]);
   });
 
-  it("never throws: a rejected write and a getter that throws are both logged with what was lost (mutation: remove the catch → rejects, FAILS; build the client outside the try → throws, FAILS)", async () => {
-    dbMocks.recordUsage.mockRejectedValueOnce(new Error("usage_events is down"));
+  it("a rejected write is awaited before it is logged, with its own message, exactly once (mutation: void the write instead of awaiting it → resolves before the write settles, FAILS; remove the catch → rejects, FAILS)", async () => {
+    let reject!: (e: unknown) => void;
+    const pendingWrite = new Promise<never>((_resolve, rej) => { reject = rej; });
+    dbMocks.recordUsage.mockReturnValueOnce(pendingWrite);
+
+    let settled = false;
+    const call = recordUsageSafely(DB, INPUT, "sendSmsAction msg_1").then(() => { settled = true; });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(console.error).not.toHaveBeenCalled();
+
+    reject(new Error("usage_events is down"));
+    await call;
+
+    expect(settled).toBe(true);
+    expect(console.error).toHaveBeenCalledTimes(1);
+    expect(console.error).toHaveBeenCalledWith(
+      "sendSmsAction msg_1: usage not recorded (sms message:msg_1, quantity 2): usage_events is down",
+    );
+  });
+
+  it("a throwing db getter is caught before the write is attempted, and logged with its own message (mutation: build the client outside the try → throws, FAILS)", async () => {
+    await expect(recordUsageSafely(
+      () => { throw new Error("SUPABASE_SERVICE_ROLE_KEY is missing"); }, INPUT, "sendSmsAction msg_1",
+    )).resolves.toBeUndefined();
+
+    expect(dbMocks.recordUsage).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledTimes(1);
+    expect(console.error).toHaveBeenCalledWith(
+      "sendSmsAction msg_1: usage not recorded (sms message:msg_1, quantity 2): SUPABASE_SERVICE_ROLE_KEY is missing",
+    );
+  });
+
+  it("a throwing input builder is caught inside the same try, before recordUsage is ever called (mutation: build the input outside the try → throws, FAILS)", async () => {
+    await expect(recordUsageSafely(
+      DB, () => { throw new Error("row is null"); }, "sendSmsAction msg_1",
+    )).resolves.toBeUndefined();
+
+    expect(dbMocks.recordUsage).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledTimes(1);
+    expect(console.error).toHaveBeenCalledWith(
+      "sendSmsAction msg_1: usage not recorded (input not built): row is null",
+    );
+  });
+
+  it("bounds the write so one that never settles is abandoned and logged, not left open forever (mutation: remove the timeout race → the hanging write outlives the caller, FAILS)", async () => {
+    vi.useFakeTimers();
+    dbMocks.recordUsage.mockReturnValueOnce(new Promise<never>(() => {}));
+
+    const pending = recordUsageSafely(DB, INPUT, "sendSmsAction msg_1");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(pending).resolves.toBeUndefined();
+
+    expect(console.error).toHaveBeenCalledTimes(1);
+    expect(console.error).toHaveBeenCalledWith(
+      "sendSmsAction msg_1: usage not recorded (sms message:msg_1, quantity 2): usage write timed out after 5000ms",
+    );
+  });
+
+  it("describes a rejection reason it cannot stringify without throwing itself (mutation: use String(e) directly → throws on Object.create(null), FAILS)", async () => {
+    dbMocks.recordUsage.mockRejectedValueOnce(Object.create(null) as unknown);
+
     await expect(recordUsageSafely(DB, INPUT, "sendSmsAction msg_1")).resolves.toBeUndefined();
-    await expect(recordUsageSafely(() => { throw new Error("SUPABASE_SERVICE_ROLE_KEY is missing"); }, INPUT, "sendSmsAction msg_1"))
-      .resolves.toBeUndefined();
-    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("sendSmsAction msg_1: usage not recorded (sms message:msg_1, quantity 2)"));
-    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("SUPABASE_SERVICE_ROLE_KEY is missing"));
+
+    expect(console.error).toHaveBeenCalledTimes(1);
+    expect(console.error).toHaveBeenCalledWith(
+      "sendSmsAction msg_1: usage not recorded (sms message:msg_1, quantity 2): unprintable error",
+    );
   });
 });
 ```
 
-Count: **4 tests**.
+Count: **8 tests**.
 
 - [ ] **Step 2: Run it to verify it fails**
 
@@ -1171,6 +1242,44 @@ export function smsBillable(provider: Pick<SmsProvider, "isFake" | "redirectTo">
 }
 
 /**
+ * A usage write must never hold its caller's send path open: supabase-js has
+ * no default timeout on a query (`lib/sms/telnyx.ts:5-8` bounds the same
+ * finishCall path's outbound HTTP call for the identical reason — a hanging
+ * provider there would keep a webhook alive for the platform's whole
+ * function timeout). 5 s, not that call's 10 s: this is one small insert,
+ * not a carrier round trip.
+ */
+const USAGE_WRITE_TIMEOUT_MS = 5_000;
+
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer!: ReturnType<typeof setTimeout>;
+  const timedOut = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`usage write timed out after ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * `String(e)` throws on a rejection reason with no prototype
+ * (`Object.create(null)`): there is no `toString`/`valueOf` to fall back to,
+ * and coercing it would turn a LOGGING call into the very escape
+ * `recordUsageSafely` exists to prevent. Falls back to a fixed string rather
+ * than risk a second throw describing the first.
+ */
+function describeError(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  try {
+    return String(e);
+  } catch {
+    return "unprintable error";
+  }
+}
+
+/**
  * The ONLY way a send path records usage. Best effort, and it NEVER throws:
  * by the time it runs the text is sent, the call is over or the chat has
  * started, and a ledger problem must not change what the caller of the send
@@ -1180,17 +1289,29 @@ export function smsBillable(provider: Pick<SmsProvider, "isFake" | "redirectTo">
  *
  * `db` may be a getter, so a caller on the RLS surface (the composer) builds
  * the service client INSIDE this try: `serviceDb()` throws when its key is
- * missing, and that throw must not escape either.
+ * missing, and that throw must not escape either. `input` may likewise be a
+ * thunk, for a caller whose fields are read off a value that could itself be
+ * null or throw while being read (e.g. a row looked up moments earlier) — it
+ * is built INSIDE this same try, not by the caller before this function is
+ * ever entered, for the same reason. The write itself races
+ * `USAGE_WRITE_TIMEOUT_MS`, so a stalled `usage_events` insert is abandoned
+ * and logged rather than left open forever.
  */
 export async function recordUsageSafely(
-  db: SupabaseClient | (() => SupabaseClient), input: UsageInput, label: string,
+  db: SupabaseClient | (() => SupabaseClient),
+  input: UsageInput | (() => UsageInput),
+  label: string,
 ): Promise<void> {
+  let built: UsageInput | undefined;
   try {
-    await recordUsage(typeof db === "function" ? db() : db, input);
+    built = typeof input === "function" ? input() : input;
+    const client = typeof db === "function" ? db() : db;
+    await withTimeout(recordUsage(client, built), USAGE_WRITE_TIMEOUT_MS);
   } catch (e) {
-    console.error(
-      `${label}: usage not recorded (${input.meter} ${input.sourceRef}, quantity ${input.quantity}): ${String(e)}`,
-    );
+    const detail = built
+      ? `${built.meter} ${built.sourceRef}, quantity ${built.quantity}`
+      : "input not built";
+    console.error(`${label}: usage not recorded (${detail}): ${describeError(e)}`);
   }
 }
 ```
@@ -1198,7 +1319,7 @@ export async function recordUsageSafely(
 - [ ] **Step 4: Run it to verify it passes**
 
 Run: `pnpm --filter web exec vitest run src/lib/billing/usage.test.ts`
-Expected: `Tests  4 passed (4)`.
+Expected: `Tests  8 passed (8)`.
 
 Run: `pnpm --filter web typecheck`
 Expected: exit 0.
@@ -1209,6 +1330,8 @@ Expected: exit 0.
 git add apps/web/src/lib/billing/usage.ts apps/web/src/lib/billing/usage.test.ts
 git commit -m "feat(billing): recordUsageSafely, voiceMinutes and smsBillable, the one way a send path records usage"
 ```
+
+**Note (Fix 1, 2026-09-25):** this task's code shipped in commit `26d4144` with the ORIGINAL (vacuous) test; the corrected test and the `usage.ts` changes above (thunk input, write timeout, safe error describer) shipped separately in a follow-up commit once the review finding was fixed. Tasks 3-6 below call `recordUsageSafely` with a plain `UsageInput` object at every site (no site's fields are read from a value that could be null or throw while being read), so none of them needed to change to pass a thunk — a plain object remains a valid `UsageInput | (() => UsageInput)` argument without modification.
 
 ---
 
@@ -4065,8 +4188,8 @@ Push. Read the check runs for the head SHA (`gh api repos/{owner}/{repo}/commits
 - **danlo's decisions honoured:** voice bills every call Sofía talked to: a caller turn with words OR a booked/lead/message outcome, robocalls included, silent rings and connect-timeouts never, `max(1, ceil(duration_secs / 60))`, the web demo never (no calls row); SMS only to customers (automations, composer, both text-back callers), after a successful send, `segmentsFor(body).segments`, a re-sent copy billed per copy (G14); 1 AI chat per conversation, recorded when Sofía's FIRST reply succeeds (a failed start never bills), no QA exemption; the stale alert is a derived banner (no migration) plus a `console.error` per cron run.
 - **Review corrections applied (2026-09-25):** the e2e reads Stripe's aggregate with a bounded wait (Task 10, A16-A17); the fake records a second event for a reused identifier under a new key (Task 7); automation-text usage is worked out after the send's `try` by a helper that never throws (Task 4); the concierge bills on turn 1's successful reply, its lazy import inside the leg's own `try` (Task 6); the voice gate has both halves (Task 3); every `usage_events` read is one request per 50 accounts, sends go oldest first across accounts, and a refused account cannot fill the cap (Tasks 1, 8); each meter event carries no SDK retry and a 10 s timeout, and the pass stops starting sends 10 s before its 60 s budget (Tasks 7, 8; A19 labels the round-trip estimate); the duplicate banner test is gone, the length check is an exact-copy assertion, the absence test names its mutation, the SMS scan strips comments, and a `false` stamp counts `alreadyStamped`, not `reported` (Tasks 4, 8, 9).
 - **Placeholders:** none. Every code step carries the code.
-- **Type consistency:** `UsageInput`, `UsageRow`, `BilledUsageAccount`, `UsageRange` (Task 1) are used unchanged in Tasks 2, 8 and 9. `recordUsageSafely`'s `db` accepts a client or a getter; only the composer passes a getter. `SentSms.usage` (Task 4) is the only shape change on an existing type; its two test literals are edited in the same task. `MeterEventInput` is shared by `meterEventParams`, the adapter, the fake, the pass and the e2e. `METER_EVENT_TIMEOUT_MS` is defined once (`stripe-gateway.ts`) and read by the adapter, the pass and the pass's tests. The pass's counter object and the cron test's `EMPTY_USAGE_REPORT` list the same ten keys in the same order (`reported, unstamped, alreadyStamped, failed, expired, staleAccounts, skippedNoStripe, stoppedOnCap, stoppedOnError, stoppedOnBudget`).
-- **Counts re-derived from the code blocks:** db `usage.test.ts` 9 (2 guard + 1 insert + 2 window + 1 paging + 3 per-account reads); db `test/usage.test.ts` 7; `billing/usage.test.ts` 4; call-state 1; finish-call 7; textback 5; send-sms 6 new + 2 edited; composer 6; concierge 5; stripe-gateway 11 (4 + 1 + 1 + 5); meter-event-failure 1; usage-report 14; usage-stale-banner 5; work page 3 new + 1 edited; e2e 1. Total **85**. Files: 12 created, 23 modified (35), unchanged by the corrections. Tasks: 11, plus Checkpoint A.
+- **Type consistency:** `UsageInput`, `UsageRow`, `BilledUsageAccount`, `UsageRange` (Task 1) are used unchanged in Tasks 2, 8 and 9. `recordUsageSafely`'s `db` accepts a client or a getter; only the composer passes a getter. Since the Fix 1-4 review corrections (2026-09-25), `input` accepts a `UsageInput` or a thunk that builds one, built inside the same try as `db`; every Task 3-6 call site passes a plain object (none reads its fields off a value that could be null or throw while being read), so none needed to change. `SentSms.usage` (Task 4) is the only shape change on an existing type; its two test literals are edited in the same task. `MeterEventInput` is shared by `meterEventParams`, the adapter, the fake, the pass and the e2e. `METER_EVENT_TIMEOUT_MS` is defined once (`stripe-gateway.ts`) and read by the adapter, the pass and the pass's tests. The pass's counter object and the cron test's `EMPTY_USAGE_REPORT` list the same ten keys in the same order (`reported, unstamped, alreadyStamped, failed, expired, staleAccounts, skippedNoStripe, stoppedOnCap, stoppedOnError, stoppedOnBudget`).
+- **Counts re-derived from the code blocks:** db `usage.test.ts` 9 (2 guard + 1 insert + 2 window + 1 paging + 3 per-account reads); db `test/usage.test.ts` 7; `billing/usage.test.ts` 8 (revised from 4: Fix 1-4 review corrections, 2026-09-25 — see Task 2's report); call-state 1; finish-call 7; textback 5; send-sms 6 new + 2 edited; composer 6; concierge 5; stripe-gateway 11 (4 + 1 + 1 + 5); meter-event-failure 1; usage-report 14; usage-stale-banner 5; work page 3 new + 1 edited; e2e 1. Total **89** (85 + 4 from the Task 2 fix). Files: 12 created, 23 modified (35), unchanged by the corrections. Tasks: 11, plus Checkpoint A.
 - **Existing tests this plan must not break:** the cron `route.test.ts`'s seven whole-body equalities (edited, Task 8); `sentinel.test.ts`'s exact registry order (edited, Task 8); `imports.test.ts` (the pass imports no email/SMS provider or factory; `@/lib/sms/segments` and `@/lib/sms/types` do not match its patterns); `send-sms.test.ts`'s exact return value and `SentSms` literals (edited, Task 4); the concierge `route.test.ts`'s existing empty-reply and model-failure tests (the leg sits after both of their decisions and records nothing on either); `fixture-names.test.ts` (the new spec mints no `E2E …` name); `messages.test.ts`'s milestone guard (no new string names one); every pass test that spreads `importOriginal` over `@bis/db` keeps the real `recordUsage`, which is never reached because their providers are `isFake: true`.
 - **Not verified here (the reviewer or CI settles them):** that PostgREST accepts `+00:00` microsecond timestamps inside a double-quoted `.or()` value (the precedent quotes `toISOString()` values only; Task 1's live `listReportableUsage` test is the proof, in CI); A16-A19.
 - **Carried minor (PR-1's M4, same shape):** a killed db run strands its `Usage <run> <id>` plan row (agency-scoped, no sweep leg). Harmless; the plans sweep leg PR-1 added in e2e does not cover the db package.
