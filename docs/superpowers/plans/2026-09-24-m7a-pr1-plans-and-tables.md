@@ -28,8 +28,10 @@
 ## Prerequisites (danlo / orchestrator, before Task 10 can prove anything)
 
 1. Repository secret `CI_STRIPE_SECRET_KEY` = the Stripe **test** secret key (`sk_test_...`). Until it exists, `plans.spec.ts`'s Stripe test skips with a `::warning`, and everything else stays green.
-2. Local runs: put the same test key in `apps/web/.env.local` as `STRIPE_SECRET_KEY` (never a live key; the app refuses one outside production).
-3. Production (not needed to merge this PR): the live key in Vercel **Production** only, and a test key in Vercel **Preview**. Until then, production's Plans page shows "Stripe isn't connected" and saves nothing.
+2. Local runs: a TEST key only where the app talks to a NON-production database. That is CI now; locally only once `apps/web/.env.local` points at the CI project (runbook §9, plan step D7) — never put a Stripe key in `.env.local` while it still names production, because the app refuses a test key against production's database (`stripeKeyVerdict`, `test_key_on_production_data`).
+3. Production (not needed to merge this PR): the live key in Vercel **Production** only. **No** key on Vercel **Preview** while Preview shares production's database — a test key there would be refused for the same reason, and a live key would run outside production. Until Preview has its own database and Production has its key, both surfaces' Plans page shows "Stripe isn't connected" and saves nothing.
+
+> Corrected during execution (2026-09-25, final-fix pass 2): prerequisites 2–3 originally said to put a test key in `.env.local` and on Vercel Preview unconditionally; that would be refused by `stripeKeyVerdict` wherever the database is production's, which both `.env.local` and Preview are until D7/Preview's own database land.
 
 ## Stripe facts: verified vs assumed
 

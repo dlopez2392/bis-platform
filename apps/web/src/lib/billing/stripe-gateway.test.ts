@@ -188,11 +188,25 @@ describe("stripeKeyVerdict (a Stripe TEST key never writes plans into production
     expect(stripeKeyVerdict(env)).toEqual(expected);
   });
 
+  it(`production's ref counts anywhere in the hostname, not only as the whole host: a subdomain like db.${PRODUCTION_SUPABASE_REF}.supabase.co still names production (mutation: change the hostname check from .includes(ref) to .startsWith(ref) → FAILS; mutation: change it to an exact "\${ref}.supabase.co" suffix match → FAILS)`, () => {
+    expect(stripeKeyVerdict({ STRIPE_SECRET_KEY: "sk_test_k", NEXT_PUBLIC_SUPABASE_URL: `https://db.${PRODUCTION_SUPABASE_REF}.supabase.co` }))
+      .toEqual({ ok: false, reason: "test_key_on_production_data" });
+  });
+
   it.each<[string, StripeEnv]>([
     ["a test key against the CI project", { STRIPE_SECRET_KEY: "sk_test_d", NEXT_PUBLIC_SUPABASE_URL: CI_URL }],
     ["a test key on a preview with its own database", { STRIPE_SECRET_KEY: "sk_test_e", VERCEL_ENV: "preview", NEXT_PUBLIC_SUPABASE_URL: CI_URL }],
   ])("%s is allowed (mutation: refuse every test key whenever a URL is set → FAILS)", (_label, env) => {
     expect(stripeKeyVerdict(env)).toEqual({ ok: true, key: env.STRIPE_SECRET_KEY });
+  });
+
+  it("a known non-production URL wins over VERCEL_ENV=production: a test key against the CI project is allowed even when VERCEL_ENV says production (mutation: change the ?? fallback to || so a known 'false' still falls through to VERCEL_ENV → FAILS)", () => {
+    // The `??` only falls back to VERCEL_ENV when the URL is unusable (null
+    // verdict). A known, non-production URL is a definite "no" (`false`),
+    // which `??` leaves alone — the database is the authority once it is
+    // known, and a `VERCEL_ENV=production` label does not override it.
+    expect(stripeKeyVerdict({ STRIPE_SECRET_KEY: "sk_test_l", VERCEL_ENV: "production", NEXT_PUBLIC_SUPABASE_URL: CI_URL }))
+      .toEqual({ ok: true, key: "sk_test_l" });
   });
 
   it("a live key against production's database, in production, is allowed (mutation: refuse ANY key when the URL names production → FAILS)", () => {

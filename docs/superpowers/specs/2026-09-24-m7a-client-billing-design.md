@@ -69,7 +69,10 @@ accounts have a plan but no Stripe subscription and are never paused.
 ## 4. Safety, failures, rollout
 
 - **Test vs live**: CI, the CI Supabase project and previews use Stripe **test-mode** keys; only production holds
-  live keys. The CI target guard refuses an `sk_live_` Stripe key as it refuses Clerk's `sk_live_`.
+  live keys. The CI target guard refuses an `sk_live_` Stripe key as it refuses Clerk's `sk_live_`. A preview's
+  test key is only usable once that preview has its own (non-production) database — while Preview shares
+  production's database, the app itself refuses a test key there (`stripeKeyVerdict`,
+  `test_key_on_production_data`), so no key belongs on Vercel Preview until then.
 - **Webhooks**: signature-checked, processed once, retried by Stripe on failure.
 - **Usage reporting failure**: rows stay unreported and are retried each pass; Stripe dedupes by identifier; a row
   unreported for > 24 h raises an agency alert.

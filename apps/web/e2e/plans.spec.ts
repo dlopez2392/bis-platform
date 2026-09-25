@@ -27,7 +27,7 @@ loadEnv({ path: ".env.local" });
 // step runs, and this file re-checks the prefix before its first call.
 const STRIPE_KEY = (process.env.STRIPE_SECRET_KEY ?? "").trim();
 const NO_STRIPE =
-  "STRIPE_SECRET_KEY is not set, so the Stripe half of the Plans page was NOT tested. Add the Stripe TEST secret key (sk_test_) as the repository secret CI_STRIPE_SECRET_KEY, or to apps/web/.env.local locally.";
+  "STRIPE_SECRET_KEY is not set, so the Stripe half of the Plans page was NOT tested. Add the Stripe TEST secret key (sk_test_) as the repository secret CI_STRIPE_SECRET_KEY, or locally only once apps/web/.env.local points at a non-production database (the app refuses a test key against production's database).";
 // A real Date.now() stamp (13 digits), not the base36 random RUN this file
 // used to carry: the sweep (fixtures/stale.ts, FIXTURE_PLAN_RE) tells a
 // stale leftover from a concurrent run's live row by reading this stamp back
