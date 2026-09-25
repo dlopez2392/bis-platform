@@ -186,7 +186,7 @@ describe("usage: what an automation text bills (client billing)", () => {
     expect(dbMocks.recordUsage).toHaveBeenCalledTimes(1);
   });
 
-  it("every module that sends with sendAutomationSms( also CALLS markAutomationSmsSent(, where its usage is recorded; comments do not count (mutation: delete one pass's markAutomationSmsSent call → that file is named here, FAILS; replace the call with a comment that names it → still named, FAILS)", () => {
+  it("every module that sends with sendAutomationSms( also CALLS markAutomationSmsSent(, where its usage is recorded; comments do not count (mutation: delete one pass's markAutomationSmsSent call → that file is named here, FAILS; replace the call with a comment that names it → still named, FAILS; delete either comment-stripping regex → the stripper self-check FAILS)", () => {
     const ROOT = fileURLToPath(new URL(".", import.meta.url));
     const walk = (dir: string): string[] => readdirSync(dir).flatMap((name) => {
       const full = join(dir, name);
@@ -200,9 +200,15 @@ describe("usage: what an automation text bills (client billing)", () => {
     const code = (f: string) => readFileSync(f, "utf-8")
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/(^|[^:])\/\/.*$/gm, "$1");
-    // Guards the stripper itself: a phrase only send-sms.ts's doc comment holds.
-    expect(readFileSync(join(ROOT, "send-sms.ts"), "utf-8")).toContain("AFTER the dedupe stamp");
+    // Guards the stripper itself, both halves: a phrase only send-sms.ts's
+    // BLOCK doc comment holds (mutation: delete the block-comment regex →
+    // FAILS), and one only a `//` LINE comment there holds (mutation: delete
+    // the line-comment regex → FAILS).
+    const sendSmsSource = readFileSync(join(ROOT, "send-sms.ts"), "utf-8");
+    expect(sendSmsSource).toContain("AFTER the dedupe stamp");
     expect(code(join(ROOT, "send-sms.ts"))).not.toContain("AFTER the dedupe stamp");
+    expect(sendSmsSource).toContain("  // THE choke point for every unprompted text");
+    expect(code(join(ROOT, "send-sms.ts"))).not.toContain("THE choke point for every unprompted text");
     const senders = walk(ROOT).filter((f) => rel(f) !== "send-sms.ts" && code(f).includes("sendAutomationSms("));
     // Guards the fixture: the seven callers on 2026-09-25. A new caller reds
     // here until it is added, which is the moment to check it bills.
