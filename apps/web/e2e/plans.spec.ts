@@ -28,7 +28,11 @@ loadEnv({ path: ".env.local" });
 const STRIPE_KEY = (process.env.STRIPE_SECRET_KEY ?? "").trim();
 const NO_STRIPE =
   "STRIPE_SECRET_KEY is not set, so the Stripe half of the Plans page was NOT tested. Add the Stripe TEST secret key (sk_test_) as the repository secret CI_STRIPE_SECRET_KEY, or to apps/web/.env.local locally.";
-const RUN = Math.random().toString(36).slice(2, 8);
+// A real Date.now() stamp (13 digits), not the base36 random RUN this file
+// used to carry: the sweep (fixtures/stale.ts, FIXTURE_PLAN_RE) tells a
+// stale leftover from a concurrent run's live row by reading this stamp back
+// out of the name, exactly as every other fixture shape does.
+const RUN = Date.now();
 const PLAN_NAME = `E2E Plan ${RUN}`;
 
 test.describe("a client cannot reach the Plans page", () => {

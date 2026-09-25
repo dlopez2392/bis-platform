@@ -3,8 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   FIXTURE_ACCOUNT_RE, FIXTURE_BLUEPRINT_PREFILTER, FIXTURE_BLUEPRINT_RE, FIXTURE_CO_ACCOUNT_RE,
-  FIXTURE_FORM_RE, FIXTURE_NAME_PREFILTER, STALE_AFTER_MS,
-  isStaleFixtureAccount, isStaleFixtureBlueprint, isStaleFixtureForm,
+  FIXTURE_FORM_RE, FIXTURE_NAME_PREFILTER, FIXTURE_PLAN_RE, STALE_AFTER_MS,
+  isStaleFixtureAccount, isStaleFixtureBlueprint, isStaleFixtureForm, isStaleFixturePlan,
 } from "./stale";
 
 /**
@@ -26,15 +26,15 @@ import {
  * `auth.setup.ts`, `auth.teardown.ts`, `sweep.setup.ts`, `support.ts`. It
  * collects every template literal that STARTS with `E2E ` and interpolates
  * something — the shape every stamped fixture name has — substitutes a stamp
- * for each `${…}`, and asks the SAME three DECISION predicates sweep.ts calls
- * (`isStaleFixtureAccount`, `isStaleFixtureForm`, `isStaleFixtureBlueprint`)
- * whether they would admit it a day later. That is narrower than "whether a
- * sweep would admit it": sweep.ts's own `.like()` prefilter decides what a
- * decision predicate ever gets to see, and this file said nothing about that
- * prefilter until the "the network prefilter" describe block below — before
- * it existed, narrowing that prefilter to `"E2E Client Co %"` still left
- * every case here green, because a predicate never got asked about a row the
- * network never returned.
+ * for each `${…}`, and asks the SAME four DECISION predicates sweep.ts calls
+ * (`isStaleFixtureAccount`, `isStaleFixtureForm`, `isStaleFixtureBlueprint`,
+ * `isStaleFixturePlan`) whether they would admit it a day later. That is
+ * narrower than "whether a sweep would admit it": sweep.ts's own `.like()`
+ * prefilter decides what a decision predicate ever gets to see, and this file
+ * said nothing about that prefilter until the "the network prefilter"
+ * describe block below — before it existed, narrowing that prefilter to
+ * `"E2E Client Co %"` still left every case here green, because a predicate
+ * never got asked about a row the network never returned.
  *
  * LIMITS, stated rather than hidden: a name built by concatenation
  * (`"E2E Co " + stamp`) is not seen; and "admitted" means admitted by SOME
@@ -133,7 +133,8 @@ function findStampedNames(): Found[] {
 function sweptByName(name: string): boolean {
   return isStaleFixtureAccount(name, A_DAY_LATER)
     || isStaleFixtureForm(name, A_DAY_LATER)
-    || isStaleFixtureBlueprint(name, A_DAY_LATER);
+    || isStaleFixtureBlueprint(name, A_DAY_LATER)
+    || isStaleFixturePlan(name, A_DAY_LATER);
 }
 
 const FOUND = findStampedNames();
@@ -148,6 +149,8 @@ describe("every stamped E2E name a spec mints is known to the sweep", () => {
     expect(keys).toContain("blueprints.spec.ts: E2E Blueprint ${stamp}");
     expect(keys).toContain("forms.spec.ts: E2E Form ${stamp}");
     expect(keys).toContain("forms.spec.ts: E2E Spam ${stamp}");
+    expect(keys).toContain("plans.spec.ts: E2E Plan ${RUN}");
+    expect(keys).toContain("plans.spec.ts: E2E Canary ${RUN}");
   });
 
   // Exercises the substitution itself, so a broken `${…}` replacement cannot
@@ -241,12 +244,13 @@ describe("the network prefilter each leg's .like() sends actually admits what it
     const isAccount = FIXTURE_ACCOUNT_RE.test(found.sample) || FIXTURE_CO_ACCOUNT_RE.test(found.sample);
     const isForm = FIXTURE_FORM_RE.test(found.sample);
     const isBlueprint = FIXTURE_BLUEPRINT_RE.test(found.sample);
+    const isPlan = FIXTURE_PLAN_RE.test(found.sample);
 
     it(`${found.key} satisfies the LIKE its leg sends over the network`, () => {
-      // At least one of the three must be true here: the describe block
+      // At least one of the four must be true here: the describe block
       // above already reds on any FOUND sample that is neither exempt nor
       // admitted by some leg, so reaching this `it` at all means one is.
-      if (isAccount || isForm) {
+      if (isAccount || isForm || isPlan) {
         expect(ACCOUNT_PREFILTER_RE.test(found.sample), found.sample).toBe(true);
       }
       if (isBlueprint) {
@@ -305,16 +309,24 @@ function stripComments(src: string): string {
  * This reads `sweep.ts` with comments stripped and asserts every
  * `.like("name", X)` call site passes one of the two exported identifiers —
  * never a string literal of its own, even one shaped exactly like the
- * constant it should have used. Three call sites at last count: the
- * accounts leg and the forms leg both send `FIXTURE_NAME_PREFILTER`, the
- * blueprints leg sends `FIXTURE_BLUEPRINT_PREFILTER`.
+ * constant it should have used. Four call sites at last count: the accounts
+ * leg, the forms leg and the plans leg all send `FIXTURE_NAME_PREFILTER`
+ * (the plans leg reuses it rather than getting its own — see stale.ts's
+ * comment on `FIXTURE_NAME_PREFILTER` for why), the blueprints leg sends
+ * `FIXTURE_BLUEPRINT_PREFILTER`.
  *
  * Mutation: revert `sweep.ts:150`'s `.like("name", FIXTURE_NAME_PREFILTER)`
  * to `.like("name", "E2E Client Co %")` — reds "every call site passes an
- * exported identifier" by naming the literal. Add a fourth
+ * exported identifier" by naming the literal. Add a fifth
  * `.like("name", "E2E %")` anywhere in `sweep.ts` — reds "finds exactly
- * three" (four found) and the identifier check (the added literal is not
- * one of the two names). Both revert byte-identical.
+ * four" (five found) and the identifier check (the added literal is not one
+ * of the two names). Both revert byte-identical.
+ *
+ * Mutation: drop the entire plans leg (step 6 of `sweepStaleFixtures`) — the
+ * `.from("plans")` `.like()` call disappears with it, so ARGS drops to three
+ * and "finds exactly four" reds. This is what would let a killed
+ * `plans.spec.ts` run's `E2E Plan <stamp>` / `E2E Canary <stamp>` row survive
+ * forever, since no other leg's `.like()` ever touches the `plans` table.
  */
 describe("sweep.ts's own .like(\"name\", …) call sites send an exported identifier, not a literal", () => {
   const SWEEP_PATH = path.join(HERE, "sweep.ts");
@@ -323,9 +335,10 @@ describe("sweep.ts's own .like(\"name\", …) call sites send an exported identi
   const ARGS = [...SWEEP_SRC.matchAll(LIKE_NAME_RE)].map((m) => m[1]!.trim());
   const ALLOWED = ["FIXTURE_NAME_PREFILTER", "FIXTURE_BLUEPRINT_PREFILTER"];
 
-  it("finds exactly three .like(\"name\", …) call sites in sweep.ts", () => {
+  it("finds exactly four .like(\"name\", …) call sites in sweep.ts", () => {
     expect(ARGS).toEqual([
       "FIXTURE_NAME_PREFILTER", "FIXTURE_NAME_PREFILTER", "FIXTURE_BLUEPRINT_PREFILTER",
+      "FIXTURE_NAME_PREFILTER",
     ]);
   });
 

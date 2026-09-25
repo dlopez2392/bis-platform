@@ -72,10 +72,11 @@ export const FIXTURE_EMAIL_RE = /^e2e-client-(\d{13})@example\.com$/;
 export const FIXTURE_FORM_RE = /^E2E (?:Form|Spam) (\d{13})$/;
 
 /**
- * The SQL `LIKE` prefilter sweep.ts's accounts leg AND its forms leg both
- * send to the database, before either row is handed to `isStaleFixtureAccount`
- * or `isStaleFixtureForm` at all — one string because both shapes
- * (`FIXTURE_ACCOUNT_RE`, `FIXTURE_CO_ACCOUNT_RE`, `FIXTURE_FORM_RE`) start
+ * The SQL `LIKE` prefilter sweep.ts's accounts leg, forms leg AND plans leg
+ * all send to the database, before any row is handed to
+ * `isStaleFixtureAccount`, `isStaleFixtureForm` or `isStaleFixturePlan` at
+ * all — one string because every shape (`FIXTURE_ACCOUNT_RE`,
+ * `FIXTURE_CO_ACCOUNT_RE`, `FIXTURE_FORM_RE`, `FIXTURE_PLAN_RE`) starts
  * "E2E ". A row this refuses is never fetched, so a prefilter narrower than
  * every pattern above silently starves the decision function of rows it
  * would otherwise admit: narrowing this to "E2E Client Co %" (its shape
@@ -85,6 +86,13 @@ export const FIXTURE_FORM_RE = /^E2E (?:Form|Spam) (\d{13})$/;
  * admitted had they arrived. `fixture-names.test.ts` now pins this string
  * against every admitted sample name directly, so that regression reds by
  * name instead of passing silently again.
+ *
+ * The plans leg reuses this one rather than getting its own narrower
+ * prefilter the way blueprints did: `FIXTURE_PLAN_RE` admits TWO words
+ * ("Plan" and "Canary"), and SQL `LIKE` has no alternation, so nothing
+ * narrower than "E2E %" can cover both without a second query. Blueprints
+ * could narrow to "E2E Blueprint %" only because that leg has a single word
+ * to match.
  */
 export const FIXTURE_NAME_PREFILTER = "E2E %";
 
@@ -169,6 +177,24 @@ export function isStaleFixtureBlueprint(
   name: string, now: number, maxAgeMs: number = STALE_AFTER_MS,
 ): boolean {
   return isStaleFixture(name, FIXTURE_BLUEPRINT_RE, now, maxAgeMs);
+}
+
+/**
+ * `E2E Plan 1786412389258` (the plan Save creates through the UI) or
+ * `E2E Canary 1786412389258` (the row `plans.spec.ts`'s boundary test writes
+ * straight to the table to prove a plan's name never reaches a client's
+ * browser). `plans` is AGENCY-scoped exactly like `blueprints` — nothing
+ * cascades it — so a killed run strands it forever without its own leg. Both
+ * words share one pattern (a non-capturing alternation, same shape as
+ * `FIXTURE_FORM_RE`'s `Form|Spam`) so the stamp stays capture group 1.
+ */
+export const FIXTURE_PLAN_RE = /^E2E (?:Plan|Canary) (\d{13})$/;
+
+/** True only for a plan name `plans.spec.ts` minted, at least `maxAgeMs` old. */
+export function isStaleFixturePlan(
+  name: string, now: number, maxAgeMs: number = STALE_AFTER_MS,
+): boolean {
+  return isStaleFixture(name, FIXTURE_PLAN_RE, now, maxAgeMs);
 }
 
 /**
