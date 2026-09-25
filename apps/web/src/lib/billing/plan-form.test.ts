@@ -31,6 +31,17 @@ describe("parseDollarsToCents (integer arithmetic, never floats)", () => {
     "refuses %j (mutation: accept any Number(s) → FAILS)", (raw) => {
       expect(parseDollarsToCents(raw)).toBeNull();
     });
+
+  it.each(["49,00", "0,12", "1,00", ",100", "1,0,00", "1,0000"])(
+    "refuses %j — a comma that is not a proper thousands group (mutation: restore .replace(/,/g,\"\") before validating → FAILS)",
+    (raw) => {
+      expect(parseDollarsToCents(raw)).toBeNull();
+    });
+
+  it("still accepts commas as proper thousands groups", () => {
+    expect([parseDollarsToCents("1,049.00"), parseDollarsToCents("$1,049"), parseDollarsToCents("1,000,000")])
+      .toEqual([104900, 104900, 100000000]);
+  });
 });
 
 describe("parseWholeNumber", () => {
@@ -42,6 +53,16 @@ describe("parseWholeNumber", () => {
     expect([parseWholeNumber("1.5"), parseWholeNumber("-1"), parseWholeNumber(""), parseWholeNumber("abc")])
       .toEqual([null, null, null, null]);
   });
+
+  it.each(["1,0", ",5", "1,00"])(
+    "refuses %j — a comma that is not a proper thousands group (mutation: restore .replace(/,/g,\"\") before validating → FAILS)",
+    (raw) => {
+      expect(parseWholeNumber(raw)).toBeNull();
+    });
+
+  it("still accepts a comma as a proper thousands group", () => {
+    expect(parseWholeNumber("1,000,000")).toBe(1000000);
+  });
 });
 
 describe("centsToDollars / formatCents", () => {
@@ -51,6 +72,16 @@ describe("centsToDollars / formatCents", () => {
 
   it("formatCents is the display value with a dollar sign and thousands commas", () => {
     expect([formatCents(4900), formatCents(3), formatCents(104900)]).toEqual(["$49.00", "$0.03", "$1,049.00"]);
+  });
+
+  it("centsToDollars throws on a negative or non-integer input (mutation: drop the guard → FAILS)", () => {
+    expect(() => centsToDollars(-5)).toThrow();
+    expect(() => centsToDollars(1.5)).toThrow();
+  });
+
+  it("formatCents throws on a negative or non-integer input (mutation: drop the guard → FAILS)", () => {
+    expect(() => formatCents(-5)).toThrow();
+    expect(() => formatCents(1.5)).toThrow();
   });
 });
 
@@ -91,5 +122,31 @@ describe("parsePlanForm", () => {
     ["a chat overage over $100", { "overage.ai_chats": "150" }, m["plans.error.overage.ai_chats"]],
   ])("%s returns its own message (mutation: one generic message → FAILS)", (_label, over, error) => {
     expect(parsePlanForm(form(over))).toEqual({ ok: false, error });
+  });
+
+  it("accepts a 60-character name (mutation: > becomes >= on the length check → FAILS)", () => {
+    expect(parsePlanForm(form({ name: "x".repeat(60) })).ok).toBe(true);
+  });
+
+  it("counts a name's length the way the DB's char_length does — by code point, not UTF-16 unit (mutation: [...name].length → name.length → FAILS)", () => {
+    // 31 single-codepoint emoji: 31 code points, but 62 UTF-16 units (each is
+    // a surrogate pair). Postgres's char_length counts code points.
+    expect(parsePlanForm(form({ name: "\u{1F600}".repeat(31) })).ok).toBe(true);
+  });
+
+  it("trims the name before saving it (mutation: drop the trim → FAILS)", () => {
+    const r = parsePlanForm(form({ name: " Growth " }));
+    expect(r.ok && r.terms.name).toBe("Growth");
+  });
+
+  it("accepts a zero overage (mutation: enforce a 1-cent overage minimum → FAILS)", () => {
+    expect(parsePlanForm(form({ "overage.sms": "0" })).ok).toBe(true);
+  });
+
+  it("refuses a name made only of invisible characters (mutation: drop the invisible-name check → FAILS)", () => {
+    expect(parsePlanForm(form({ name: "​​" }))).toEqual({
+      ok: false,
+      error: m["plans.error.nameRequired"],
+    });
   });
 });
