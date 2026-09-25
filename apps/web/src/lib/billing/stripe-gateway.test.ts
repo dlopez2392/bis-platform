@@ -3,6 +3,7 @@ import type Stripe from "stripe";
 import {
   billingGatewayFromEnv, priceCreateParams, stripeGateway, stripeKeyVerdict, STRIPE_API_VERSION,
 } from "./stripe-gateway";
+import { FakeGateway } from "./fake-gateway";
 
 /**
  * The seam between BIS and Stripe. The mapping to Stripe's parameters is
@@ -78,6 +79,26 @@ describe("priceCreateParams (the money mapping)", () => {
       metadata: { bis_plan_id: "plan_1", bis_price: "sms" },
     });
   });
+
+  it("rejects a non-integer base unitAmountCents before it can reach Stripe (mutation: drop the Number.isInteger check on unitAmountCents → FAILS)", () => {
+    expect(() => priceCreateParams({ kind: "base", planId: "plan_1", productId: "prod_1", unitAmountCents: 49.5 }))
+      .toThrow(/unitAmountCents/);
+  });
+
+  it("rejects a zero or negative base unitAmountCents (mutation: allow unitAmountCents <= 0 on the base → FAILS)", () => {
+    expect(() => priceCreateParams({ kind: "base", planId: "plan_1", productId: "prod_1", unitAmountCents: 0 }))
+      .toThrow(/unitAmountCents/);
+    expect(() => priceCreateParams({ kind: "base", planId: "plan_1", productId: "prod_1", unitAmountCents: -100 }))
+      .toThrow(/unitAmountCents/);
+  });
+
+  it("rejects a non-integer metered allowance (mutation: drop the allowance guard → FAILS)", () => {
+    expect(() => priceCreateParams(metered(10.5))).toThrow(/allowance/);
+  });
+
+  it("rejects a negative metered overageCents (mutation: drop the overageCents guard → FAILS)", () => {
+    expect(() => priceCreateParams({ ...metered(1000), overageCents: -1 })).toThrow(/overageCents/);
+  });
 });
 
 describe("stripeGateway (the adapter)", () => {
@@ -88,9 +109,10 @@ describe("stripeGateway (the adapter)", () => {
     expect(s.prices.create).toHaveBeenCalledWith(priceCreateParams(metered(1000)), { idempotencyKey: "key-price" });
   });
 
-  it("createProduct names the product and tags it with the plan id, under the idempotency key (mutation: drop metadata → FAILS)", async () => {
+  it("createProduct names the product and tags it with the plan id, under the idempotency key, and returns the Stripe-minted id (mutation: drop metadata → FAILS; mutation: return { id: planId } → FAILS)", async () => {
     const s = stubStripe();
-    await stripeGateway(s as unknown as Stripe).createProduct({ planId: "plan_1", name: "Growth" }, "key-prod");
+    const r = await stripeGateway(s as unknown as Stripe).createProduct({ planId: "plan_1", name: "Growth" }, "key-prod");
+    expect(r).toEqual({ id: "prod_new" });
     expect(s.products.create).toHaveBeenCalledWith({ name: "Growth", metadata: { bis_plan_id: "plan_1" } }, { idempotencyKey: "key-prod" });
   });
 
@@ -147,11 +169,52 @@ describe("billingGatewayFromEnv", () => {
     expect(stripeCtorSpy).not.toHaveBeenCalled();
   });
 
-  it("builds a working gateway from a test key, constructing Stripe with THAT key and the pinned API version (mutation: bypass the verdict, or construct with a stray/raw key or a different apiVersion → FAILS)", () => {
+  it("builds a working gateway from a test key, constructing Stripe with the TRIMMED key and the pinned API version (mutation: pass the raw untrimmed key to the constructor → FAILS; mutation: bypass the verdict, or use a different apiVersion → FAILS)", () => {
     stripeCtorSpy.mockClear();
-    const g = billingGatewayFromEnv({ STRIPE_SECRET_KEY: "sk_test_UNIT" });
+    const g = billingGatewayFromEnv({ STRIPE_SECRET_KEY: "  sk_test_UNIT  " });
     expect(g.ok).toBe(true);
     expect(g.ok && typeof g.gateway.createPrice).toBe("function");
     expect(stripeCtorSpy).toHaveBeenCalledWith("sk_test_UNIT", expect.objectContaining({ apiVersion: STRIPE_API_VERSION }));
+  });
+
+  it("never constructs Stripe for a live key outside production, even through the function the app actually calls (mutation: return early only for 'missing' → FAILS)", () => {
+    stripeCtorSpy.mockClear();
+    const g = billingGatewayFromEnv({ STRIPE_SECRET_KEY: "sk_live_UNIT", VERCEL_ENV: "preview" });
+    expect(g).toEqual({ ok: false, reason: "live_key_outside_production" });
+    expect(stripeCtorSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("FakeGateway idempotency (must be at least as strict as Stripe, assumption A4)", () => {
+  it("a key reused with the SAME op and SAME input replays the first result without minting a new object (mutation: always mint a new id on replay → FAILS)", async () => {
+    const g = new FakeGateway();
+    const first = await g.createProduct({ planId: "plan_1", name: "Growth" }, "key-1");
+    const second = await g.createProduct({ planId: "plan_1", name: "Growth" }, "key-1");
+    expect(second).toEqual(first);
+    expect(g.created).toHaveLength(1);
+  });
+
+  it("a key reused with DIFFERENT input for the same op throws instead of replaying (mutation: replay without comparing input → FAILS)", async () => {
+    const g = new FakeGateway();
+    await g.createProduct({ planId: "plan_1", name: "Growth" }, "key-1");
+    await expect(g.createProduct({ planId: "plan_1", name: "Growth Renamed" }, "key-1"))
+      .rejects.toThrow(/idempotency/i);
+  });
+
+  it("a key reused for a DIFFERENT operation throws even when the input happens to be the same object (mutation: compare input only, not op → FAILS)", async () => {
+    // Same input object by reference on purpose (cast past the differing
+    // per-op input shapes) so this isolates the op comparison specifically:
+    // an input-only check would call these "the same" and replay.
+    const g = new FakeGateway();
+    const sharedInput = { planId: "plan_1", name: "Growth" };
+    await g.createProduct(sharedInput, "key-1");
+    await expect(g.createMeter(sharedInput as unknown as { eventName: string; displayName: string }, "key-1"))
+      .rejects.toThrow(/idempotency/i);
+  });
+
+  it("createPrice enforces the same money guard as the real gateway, so a float reaches nobody (mutation: fake's createPrice skips priceCreateParams/the guard → FAILS)", async () => {
+    const g = new FakeGateway();
+    await expect(g.createPrice({ kind: "base", planId: "plan_1", productId: "prod_1", unitAmountCents: 49.5 }, "key-1"))
+      .rejects.toThrow(/unitAmountCents/);
   });
 });

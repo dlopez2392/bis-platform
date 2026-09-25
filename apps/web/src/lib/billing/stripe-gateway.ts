@@ -29,6 +29,31 @@ export interface BillingGateway {
   createPrice(spec: PriceSpec, idempotencyKey: string): Promise<{ id: string }>;
 }
 
+const isNonNegativeInteger = (n: number): boolean => Number.isInteger(n) && n >= 0;
+
+/**
+ * Money values reach this function as cents; a float or a negative number
+ * is a bug upstream, and Stripe's own validation (a DB CHECK too) runs
+ * AFTER this call, not before it. Guard here so a bad value never leaves
+ * the process — real Stripe and FakeGateway both route through this.
+ */
+function assertMoneyShape(spec: PriceSpec): void {
+  if (spec.kind === "base") {
+    if (!Number.isInteger(spec.unitAmountCents) || spec.unitAmountCents <= 0) {
+      throw new Error(
+        `priceCreateParams: unitAmountCents must be a positive integer number of cents, got ${spec.unitAmountCents}`,
+      );
+    }
+    return;
+  }
+  if (!isNonNegativeInteger(spec.allowance)) {
+    throw new Error(`priceCreateParams: allowance must be a non-negative integer, got ${spec.allowance}`);
+  }
+  if (!isNonNegativeInteger(spec.overageCents)) {
+    throw new Error(`priceCreateParams: overageCents must be a non-negative integer number of cents, got ${spec.overageCents}`);
+  }
+}
+
 /**
  * The money mapping. Base: a licensed monthly price. Metered: a monthly
  * price on the meter, GRADUATED so units up to the allowance cost 0 and every
@@ -36,6 +61,7 @@ export interface BillingGateway {
  * plain per-unit price, because a tier cannot end at 0 (assumption A1).
  */
 export function priceCreateParams(spec: PriceSpec): Stripe.PriceCreateParams {
+  assertMoneyShape(spec);
   if (spec.kind === "base") {
     return {
       product: spec.productId, currency: "usd", unit_amount: spec.unitAmountCents,

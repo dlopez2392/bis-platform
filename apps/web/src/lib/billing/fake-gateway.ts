@@ -1,11 +1,27 @@
-import type { BillingGateway, PriceSpec, StripeMeter } from "./stripe-gateway";
+import { priceCreateParams, type BillingGateway, type PriceSpec, type StripeMeter } from "./stripe-gateway";
 
 export type GatewayOp = "listActiveMeters" | "createMeter" | "createProduct" | "renameProduct" | "createPrice";
 
+/** Structural equality good enough for the plain (no-array) op inputs this
+ *  fake ever stores: PriceSpec and the {planId,name}/{eventName,displayName}
+ *  input shapes. Not a general deep-equal utility; do not reuse elsewhere. */
+function sameInput(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  const aKeys = Object.keys(a as Record<string, unknown>);
+  const bKeys = Object.keys(b as Record<string, unknown>);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((k) => sameInput((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+}
+
 /**
- * In-memory Stripe for unit tests. It mirrors the ONE Stripe behaviour the
+ * In-memory Stripe for unit tests. It mirrors the Stripe behaviour the
  * catalog depends on (assumption A4): a create sent with an idempotency key
- * seen before returns the FIRST result and creates nothing new.
+ * seen before, for the SAME op and the SAME input, returns the FIRST result
+ * and creates nothing new. The SAME key sent with a DIFFERENT op or input
+ * throws, mirroring Stripe's own 400 on an idempotency-key mismatch — a
+ * fake that silently replayed here would be looser than what it fakes, and
+ * every later task's tests run only against this fake.
  *
  *   calls    every call, replays included, in order
  *   created  only calls that made something new (id minted)
@@ -17,7 +33,7 @@ export class FakeGateway implements BillingGateway {
   readonly created: Array<{ op: GatewayOp; input: unknown; id: string }> = [];
   failOn: { op: GatewayOp; after?: number } | null = null;
   private seq = 0;
-  private readonly replay = new Map<string, unknown>();
+  private readonly replay = new Map<string, { op: GatewayOp; input: unknown; value: unknown }>();
   private readonly counts = new Map<GatewayOp, number>();
 
   private step(op: GatewayOp, input?: unknown, key?: string): void {
@@ -31,10 +47,18 @@ export class FakeGateway implements BillingGateway {
 
   private once<T extends { id: string }>(op: GatewayOp, key: string, input: unknown, make: (id: string) => T): T {
     const seen = this.replay.get(key);
-    if (seen) return seen as T;
+    if (seen) {
+      if (seen.op !== op || !sameInput(seen.input, input)) {
+        throw new Error(
+          `fake Stripe: idempotency key "${key}" was already used for ${seen.op} with different parameters; ` +
+            `Stripe itself rejects this with a 400 (assumption A4)`,
+        );
+      }
+      return seen.value as T;
+    }
     const prefix = op === "createMeter" ? "mtr" : op === "createProduct" ? "prod" : "price";
     const value = make(`${prefix}_${++this.seq}`);
-    this.replay.set(key, value);
+    this.replay.set(key, { op, input, value });
     this.created.push({ op, input, id: value.id });
     return value;
   }
@@ -63,6 +87,11 @@ export class FakeGateway implements BillingGateway {
   }
 
   async createPrice(spec: PriceSpec, key: string): Promise<{ id: string }> {
+    // Same money guard the real gateway runs (drives the mapping only for
+    // its validation side effect; the mapped params themselves are never
+    // sent anywhere from here) — a bad value must fail the same way against
+    // both the fake and the real Stripe adapter.
+    priceCreateParams(spec);
     this.step("createPrice", spec, key);
     return this.once("createPrice", key, spec, (id) => ({ id }));
   }
