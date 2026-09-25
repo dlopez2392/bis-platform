@@ -17,8 +17,25 @@ const dbFns = vi.hoisted(() => ({
   getForm: vi.fn(),
   createSubmission: vi.fn(),
   recordAutomationLog: vi.fn(async () => undefined),
+  recordUsage: vi.fn(async () => "recorded"),
 }));
 const enrichMock = vi.hoisted(() => vi.fn());
+
+// `after()` becomes a recorder we invoke ourselves — same pattern as
+// api/voice/texml/route.test.ts. Spreading `actual` matters: the route
+// returns `NextResponse` from this module too.
+const afterMock = vi.hoisted(() => vi.fn());
+vi.mock("next/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/server")>();
+  return { ...actual, after: (cb: () => unknown) => afterMock(cb) };
+});
+/** Runs every callback `after()` recorded so far, as production does once
+ *  the response is sent, and clears them. */
+async function flushAfter(): Promise<void> {
+  const calls = [...afterMock.mock.calls];
+  afterMock.mockClear();
+  for (const [cb] of calls) await (cb as () => unknown)();
+}
 
 /**
  * The `accounts` read is a projection-filtered stub — the row below only
@@ -215,6 +232,7 @@ beforeEach(() => {
   fetchMock.mockResolvedValue(modelReplies("Yes, we do."));
   for (const fn of Object.values(dbFns)) fn.mockReset();
   enrichMock.mockReset();
+  afterMock.mockReset();
   dbSpy.from.length = 0;
   dbSpy.selects.length = 0;
   dbSpy.eqs.length = 0;
@@ -231,6 +249,7 @@ beforeEach(() => {
   dbFns.createSubmission.mockResolvedValue({ id: "s1" });
   dbFns.setConciergeSubmission.mockResolvedValue(true);
   dbFns.recordAutomationLog.mockResolvedValue(undefined);
+  dbFns.recordUsage.mockResolvedValue("recorded");
 });
 
 afterEach(() => {
@@ -819,5 +838,74 @@ describe("POST /api/concierge/[publicId]/turn — filing the lead", () => {
     // unpublished form still produced "Thanks. I have passed your details…".
     const body = await res.json() as { reply: string };
     expect(body.reply).not.toBe(conciergeStrings("en").captured);
+  });
+});
+
+describe("POST /api/concierge/[publicId]/turn — usage: one website chat, billed when Sofía's FIRST reply succeeds (client billing)", () => {
+  // Every test FLUSHES after() before asserting, so "records nothing" means
+  // nothing was scheduled either, not merely that it has not run yet.
+  it("a first turn Sofía answered records ONE website chat against the conversation (mutation: drop the usage leg → FAILS)", async () => {
+    const res = await firstTurn();
+    expect(res.status).toBe(200);
+    await flushAfter();
+    expect(dbFns.recordUsage).toHaveBeenCalledTimes(1);
+    expect(dbFns.recordUsage).toHaveBeenCalledWith(expect.anything(), {
+      accountId: "a1", meter: "ai_chats", quantity: 1, occurredAt: expect.any(Date), sourceRef: "conversation:c1",
+    });
+  });
+
+  it("records in after(), once the visitor has the reply, never before the response (mutation: await the usage write inline → recorded before the flush, FAILS)", async () => {
+    const res = await firstTurn();
+    expect(res.status).toBe(200);
+    expect(dbFns.recordUsage).not.toHaveBeenCalled();
+    expect(afterMock).toHaveBeenCalledTimes(1);
+    await flushAfter();
+    expect(dbFns.recordUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it("a first turn where the model ONLY called capture_lead (no text; the lead was filed, the visitor reads the 'captured' line) bills exactly one chat (mutation: answered = Boolean(reply) → records nothing, FAILS)", async () => {
+    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", need: "a table" }));
+    const res = await firstTurn();
+    expect(res.status).toBe(200);
+    expect((await res.json() as { reply: string }).reply).toBe(conciergeStrings("en").captured);
+    expect(dbFns.createSubmission).toHaveBeenCalledTimes(1);
+    await flushAfter();
+    expect(dbFns.recordUsage).toHaveBeenCalledTimes(1);
+    expect(dbFns.recordUsage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ meter: "ai_chats", sourceRef: "conversation:c1" }));
+  });
+
+  it("a first turn whose model call FAILS (an OpenAI outage's 503) records nothing, though the conversation row exists (mutation: record at createConciergeConversation → FAILS)", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 503, json: async () => ({}) });
+    const res = await firstTurn();
+    expect(res.status).toBe(503);
+    expect(dbFns.createConciergeConversation).toHaveBeenCalledTimes(1);
+    await flushAfter();
+    expect(dbFns.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it("a first turn whose completion is EMPTY (the visitor reads the 'unavailable' line) records nothing (mutation: gate on the model call returning alone → FAILS)", async () => {
+    fetchMock.mockResolvedValue(modelReplies(""));
+    const res = await firstTurn();
+    expect(res.status).toBe(200);
+    expect((await res.json() as { reply: string }).reply).toBe(conciergeStrings("en").unavailable);
+    await flushAfter();
+    expect(dbFns.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it("a later turn, answered, records nothing: only turn 1 ever attempts it (mutation: drop the turn-1 gate → FAILS)", async () => {
+    const res = await laterTurn();
+    expect(res.status).toBe(200);
+    await flushAfter();
+    expect(dbFns.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it("a failing usage write leaves the visitor's answer untouched and never rejects the background work (mutation: remove recordUsageSafely's catch AND the callback's own try → the flushed callback rejects, FAILS)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    dbFns.recordUsage.mockRejectedValue(new Error("usage_events is down"));
+    const res = await firstTurn();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ conversationId: "c1", reply: "Yes, we do.", ended: false, closing: "" });
+    await expect(flushAfter()).resolves.toBeUndefined();
+    expect(dbFns.recordUsage).toHaveBeenCalledTimes(1);
   });
 });

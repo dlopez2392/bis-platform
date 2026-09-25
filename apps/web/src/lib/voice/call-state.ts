@@ -120,8 +120,25 @@ export function classifyOutcome(state: CallState): CallOutcome {
   // caller, whatever that caller actually did has to survive it: an
   // appointment on the calendar must not be re-labelled spam by a regex.
   if (state.recordedCaller) return "spam";
-  if (state.transcript.some((t) => t.role === "caller" && t.text.trim())) return "abandoned";
+  if (callerSpoke(state)) return "abandoned";
   return "spam";
+}
+
+/**
+ * Did the CALLER say anything? A caller turn with words in the transcript.
+ *
+ * Two readers: `classifyOutcome` above (a call where the caller spoke and
+ * got nothing is `abandoned`, not `spam`), and client billing, which bills
+ * voice minutes for these calls and for any booked/lead/message call
+ * (finish-call.ts: `callerSpoke(state) || isMeaningful(outcome)`). NOT `turn_count`:
+ * the transcript holds Sofía's own turns too, so a silent ring that heard
+ * her greeting has a turn count of 1 and must not bill. A robocall that
+ * reached her DOES speak here: the recording guard writes its words as a
+ * caller turn before hanging up (call-events.ts), and those minutes were
+ * spent.
+ */
+export function callerSpoke(state: Pick<CallState, "transcript">): boolean {
+  return state.transcript.some((t) => t.role === "caller" && t.text.trim().length > 0);
 }
 
 /**

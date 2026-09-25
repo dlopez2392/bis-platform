@@ -1,6 +1,9 @@
-import { priceCreateParams, type BillingGateway, type PriceSpec, type StripeMeter } from "./stripe-gateway";
+import {
+  priceCreateParams, meterEventParams, type BillingGateway, type MeterEventInput, type PriceSpec, type StripeMeter,
+} from "./stripe-gateway";
 
-export type GatewayOp = "listActiveMeters" | "createMeter" | "createProduct" | "renameProduct" | "createPrice";
+export type GatewayOp =
+  | "listActiveMeters" | "createMeter" | "createProduct" | "renameProduct" | "createPrice" | "reportMeterEvent";
 
 /** Structural equality good enough for the plain (no-array) op inputs this
  *  fake ever stores: PriceSpec and the {planId,name}/{eventName,displayName}
@@ -25,13 +28,17 @@ function sameInput(a: unknown, b: unknown): boolean {
  *
  *   calls    every call, replays included, in order
  *   created  only calls that made something new (id minted)
- *   failOn   throw on the (after + 1)th call of `op`, and every one after
+ *   failOn   throw on the (after + 1)th call of `op`, and every one after;
+ *            `error` when given (a Stripe-shaped error), else a plain Error
+ *   meterEvents  the meter events Stripe would hold: one per accepted key,
+ *            even when two keys carry one identifier (A11 is not assumed)
  */
 export class FakeGateway implements BillingGateway {
   meters: StripeMeter[] = [];
   readonly calls: Array<{ op: GatewayOp; key?: string; input?: unknown }> = [];
   readonly created: Array<{ op: GatewayOp; input: unknown; id: string }> = [];
-  failOn: { op: GatewayOp; after?: number } | null = null;
+  readonly meterEvents: MeterEventInput[] = [];
+  failOn: { op: GatewayOp; after?: number; error?: unknown } | null = null;
   private seq = 0;
   private readonly replay = new Map<string, { op: GatewayOp; input: unknown; value: unknown }>();
   private readonly counts = new Map<GatewayOp, number>();
@@ -41,7 +48,7 @@ export class FakeGateway implements BillingGateway {
     const n = (this.counts.get(op) ?? 0) + 1;
     this.counts.set(op, n);
     if (this.failOn && this.failOn.op === op && n > (this.failOn.after ?? 0)) {
-      throw new Error(`fake Stripe refused ${op}`);
+      throw this.failOn.error ?? new Error(`fake Stripe refused ${op}`);
     }
   }
 
@@ -94,5 +101,32 @@ export class FakeGateway implements BillingGateway {
     priceCreateParams(spec);
     this.step("createPrice", spec, key);
     return this.once("createPrice", key, spec, (id) => ({ id }));
+  }
+
+  /**
+   * A meter event. Same idempotency strictness as the creates above (A4):
+   * the same key with the same event replays and records nothing; the same
+   * key with a different event throws. A NEW key records a NEW event, even
+   * when its identifier is one already held: whether Stripe dedupes an
+   * identifier across keys is assumption A11, which only Task 10's e2e
+   * observes, so this fake assumes the costlier answer (the rule in the
+   * class doc: never looser than what it fakes). A test that passes here
+   * cannot be relying on a dedupe Stripe may not do.
+   */
+  async reportMeterEvent(input: MeterEventInput, key: string): Promise<void> {
+    meterEventParams(input);
+    this.step("reportMeterEvent", input, key);
+    const seen = this.replay.get(key);
+    if (seen) {
+      if (seen.op !== "reportMeterEvent" || !sameInput(seen.input, input)) {
+        throw new Error(
+          `fake Stripe: idempotency key "${key}" was already used for ${seen.op} with different parameters; ` +
+            `Stripe itself rejects this with a 400 (assumption A4)`,
+        );
+      }
+      return;
+    }
+    this.replay.set(key, { op: "reportMeterEvent", input, value: undefined });
+    this.meterEvents.push({ ...input });
   }
 }

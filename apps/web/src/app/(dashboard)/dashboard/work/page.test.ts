@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { AgencyWorkRow, CallProposal } from "@bis/db";
 import { m } from "@/lib/messages";
+import { renderedText } from "@/lib/rendered-text";
 
 // This is the first screen whose whole purpose is to span every account
 // (task-6-brief.md), and the boundary — requireAgency() on the very first
@@ -26,6 +27,10 @@ const countLinesTurningCallersAwayMock = vi.fn<
 const listPendingProposalsForAgencyMock = vi.fn(
   async (): Promise<(CallProposal & { brandName: string })[]> => [],
 );
+// The stale-usage banner's read (client billing) — defaults to [] (no
+// banner) so every case above is unaffected. Real signature:
+// packages/db/src/usage.ts, `(db, now) => Promise<string[]>`.
+const listAccountsWithStaleUsageMock = vi.fn<(db: unknown, now: Date) => Promise<string[]>>(async () => []);
 // Two distinct batch reads share this fake db: the contacts lookup
 // (page.tsx's pre-existing second query) and, since this task's fix-wave
 // (Important 1), the `pipeline_stages` lookup that resolves an
@@ -56,6 +61,7 @@ vi.mock("@bis/db", () => ({
   countLinesTurningCallersAway: (db: unknown, sinceIso: string) =>
     countLinesTurningCallersAwayMock(db, sinceIso),
   listPendingProposalsForAgency: () => listPendingProposalsForAgencyMock(),
+  listAccountsWithStaleUsage: (db: unknown, now: Date) => listAccountsWithStaleUsageMock(db, now),
 }));
 
 function row(overrides: Partial<AgencyWorkRow> = {}): AgencyWorkRow {
@@ -98,6 +104,7 @@ describe("AgencyWorkPage", () => {
     listAgencyWorkMock.mockReset().mockResolvedValue([]);
     countLinesTurningCallersAwayMock.mockReset().mockResolvedValue(0);
     listPendingProposalsForAgencyMock.mockReset().mockResolvedValue([]);
+    listAccountsWithStaleUsageMock.mockReset().mockResolvedValue([]);
     contactsInMock.mockReset().mockResolvedValue({ data: [], error: null });
     pipelineStagesInMock.mockReset().mockResolvedValue({ data: [], error: null });
   });
@@ -116,6 +123,7 @@ describe("AgencyWorkPage", () => {
     expect(listAgencyWorkMock).not.toHaveBeenCalled();
     expect(listPendingProposalsForAgencyMock).not.toHaveBeenCalled();
     expect(pipelineStagesInMock).not.toHaveBeenCalled();
+    expect(listAccountsWithStaleUsageMock).not.toHaveBeenCalled();
   });
 
   it("renders the chosen heading once the agency check passes", async () => {
@@ -332,6 +340,39 @@ describe("AgencyWorkPage", () => {
     expect(html).toContain(m["proposals.stage.unresolved"]);
     expect(html).not.toContain("stage_1");
     expect(html).not.toContain("stage_2");
+    spy.mockRestore();
+  });
+
+  // Client billing: usage that has not reached Stripe in over a day.
+  it("renders the stale-usage banner with the NUMBER of billed clients behind, reading the real clock (mutation: pass a fixed date → FAILS; always render → the next test FAILS)", async () => {
+    listAccountsWithStaleUsageMock.mockResolvedValueOnce(["acct-a", "acct-b"]);
+    const before = Date.now();
+    const { default: AgencyWorkPage } = await import("./page");
+    const text = renderedText(renderToStaticMarkup(await AgencyWorkPage()));
+    const after = Date.now();
+    expect(text).toContain(m["work.usageStale.many"].replace("{n}", "2"));
+    expect(text).toContain(m["work.usageStale.action"]);
+    expect(listAccountsWithStaleUsageMock).toHaveBeenCalledTimes(1);
+    const now = listAccountsWithStaleUsageMock.mock.calls[0]![1];
+    expect(now.getTime()).toBeGreaterThanOrEqual(before);
+    expect(now.getTime()).toBeLessThanOrEqual(after);
+  });
+
+  it("renders no stale-usage banner when every billed client's usage has reached Stripe (mutation: mount the banner with a fixed count, or `staleUsage.length || 1` → FAILS)", async () => {
+    const { default: AgencyWorkPage } = await import("./page");
+    const text = renderedText(renderToStaticMarkup(await AgencyWorkPage()));
+    expect(text).not.toContain(m["work.usageStale.action"]);
+  });
+
+  it("swallows a failed stale-usage read and still renders the whole queue (mutation: let the rejection propagate → FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    listAgencyWorkMock.mockResolvedValueOnce([row()]);
+    listAccountsWithStaleUsageMock.mockRejectedValueOnce(new Error("permission denied for table usage_events"));
+    const { default: AgencyWorkPage } = await import("./page");
+    const text = renderedText(renderToStaticMarkup(await AgencyWorkPage()));
+    expect(text).toContain("Call back");
+    expect(text).not.toContain(m["work.usageStale.action"]);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("stale-usage read failed"));
     spy.mockRestore();
   });
 });

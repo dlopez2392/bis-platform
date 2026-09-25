@@ -28,6 +28,9 @@ import { getSmsProvider } from "@/lib/sms";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { defaultTextbackBody } from "./textback-body";
 import { withOptOut } from "@/lib/sms/opt-out";
+import { segmentsFor } from "@/lib/sms/segments";
+import type { SmsProvider } from "@/lib/sms/types";
+import { recordUsageSafely, smsBillable } from "@/lib/billing/usage";
 
 /** The service-role client every voice write goes through, named the way
  *  finish-call.ts names it rather than reaching for @supabase/supabase-js,
@@ -239,8 +242,10 @@ export async function deliverTextback(
     // catch instead, where it is logged and the message is left exactly as
     // written. Identical reasoning to sendSmsAction (conversations/actions.ts).
     let providerMessageId: string;
+    let provider: SmsProvider;
     try {
-      ({ providerMessageId } = await getSmsProvider().send({ to, from, body }));
+      provider = getSmsProvider();
+      ({ providerMessageId } = await provider.send({ to, from, body }));
     } catch (sendError) {
       // Nothing left the building, so `failed` is the honest label — and it is
       // the only signal this failure has, since there is no retry and no human
@@ -261,8 +266,25 @@ export async function deliverTextback(
       }
       throw sendError;
     }
-    await updateMessageStatus(db, accountId, messageId, "sent",
-      { providerMessageId }, ACTOR_ID, ACTOR_TYPE);
+    // The `sent` write FIRST, straight after the send: it stores the
+    // provider id Telnyx's status webhook correlates against, and a webhook
+    // that lands before it finds no row and is lost for good, so nothing may
+    // sit in that gap. USAGE (client billing) in its `finally`: the text
+    // reached the customer, so its segments bill even when that write throws
+    // into the catch below; recordUsageSafely never throws, so it cannot
+    // replace that write's error either. This one leg covers both callers
+    // (finishCall and the handoff-result route).
+    try {
+      await updateMessageStatus(db, accountId, messageId, "sent",
+        { providerMessageId }, ACTOR_ID, ACTOR_TYPE);
+    } finally {
+      if (smsBillable(provider)) {
+        await recordUsageSafely(db, {
+          accountId, meter: "sms", quantity: segmentsFor(body).segments,
+          occurredAt: new Date(), sourceRef: `message:${messageId}`,
+        }, label);
+      }
+    }
   } catch (e) {
     console.error(`${label}: text-back failed: ${String(e)}`);
   }

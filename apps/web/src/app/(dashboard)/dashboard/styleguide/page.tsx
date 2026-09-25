@@ -8,6 +8,7 @@ import { DeviceStrip } from "../accounts/[accountId]/website/device-strip";
 import { EmptyState } from "@/components/empty-state";
 import { ZoneNote } from "@/components/zone-note";
 import { LineDownBanner } from "@/components/line-down-banner";
+import { UsageStaleBanner } from "@/components/usage-stale-banner";
 import { TagChips } from "@/components/tag-chips";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -503,6 +504,28 @@ export default async function StyleguidePage() {
             <div className="space-y-2">
               <p className="text-xs text-muted-foreground">Several — distinct numbers in the last 24 hours, not a lifetime total</p>
               <LineDownBanner count={3} />
+            </div>
+          </div>
+        </Section>
+
+        <Section title="Stale-usage banner" file="components/usage-stale-banner.tsx">
+          {/* The line-down banner's design: derived, never stored, and the
+              zero state renders NOTHING. DESIGN.md rule 3: the sentence is
+              the marker, never the tint alone. */}
+          <div className="w-full space-y-5">
+            <p className="text-xs text-muted-foreground">
+              Every billed client up to date renders nothing at all. The line below mounts
+              <code className="font-mono">{"<UsageStaleBanner count={0} />"}</code>
+              and nothing appears between this line and the next one.
+            </p>
+            <UsageStaleBanner count={0} />
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">One client — singular phrase, not a plural template</p>
+              <UsageStaleBanner count={1} />
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">Several — billed clients whose usage has waited over a day</p>
+              <UsageStaleBanner count={3} />
             </div>
           </div>
         </Section>
