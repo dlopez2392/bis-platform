@@ -36,17 +36,33 @@ function PlanRow({ row, canEdit, update, archive, restore }: Omit<Props, "rows">
   const name = row.plan.name;
 
   /** Reversible → immediate + undo toast (DESIGN.md rule 6). The undo runs
-   *  inside the same transition, so the row's buttons stay disabled for it. */
+   *  inside the same transition, so the row's buttons stay disabled for it.
+   *  A THROWN action (a dropped network request) is caught here rather than
+   *  left to escape `startTransition`: an async transition that rejects
+   *  reaches the nearest error boundary, and a network drop is not a crash —
+   *  it gets the same `common.actionCrashed` toast the dialog's Save uses. */
   function run(first: (id: string) => Promise<PlanActionResult>, undo: (id: string) => Promise<PlanActionResult>, message: string) {
     startTransition(async () => {
-      const result = await first(row.id);
+      let result: PlanActionResult;
+      try {
+        result = await first(row.id);
+      } catch {
+        toast.error(m["common.actionCrashed"]);
+        return;
+      }
       if (!result.ok) { toast.error(result.error); return; }
       router.refresh();
       toast.success(message, {
         action: {
           label: m["common.undo"],
           onClick: () => startTransition(async () => {
-            const back = await undo(row.id);
+            let back: PlanActionResult;
+            try {
+              back = await undo(row.id);
+            } catch {
+              toast.error(m["common.actionCrashed"]);
+              return;
+            }
             if (!back.ok) toast.error(back.error);
             else router.refresh();
           }),

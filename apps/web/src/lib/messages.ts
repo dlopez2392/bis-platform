@@ -2187,7 +2187,7 @@ export const m = {
   "plans.error.notFound": "We couldn't find that plan — this page may be out of date.",
   "plans.error.reload": "This page is out of date. Reload it and try again.",
   "plans.error.alreadySaved": "This plan was already saved. Reload the page to see it, then make your change from there.",
-  "plans.stripe.missing": "Stripe isn't connected. Add STRIPE_SECRET_KEY to this deployment to create plans.",
+  "plans.stripe.missing": "Stripe isn't connected. Add STRIPE_SECRET_KEY to this deployment to create or edit plans.",
   "plans.stripe.live_key_outside_production": "This deployment holds a live Stripe key but isn't production, so plans are switched off here. Use a test key (sk_test_).",
   "plans.stripe.not_a_secret_key": "STRIPE_SECRET_KEY isn't a Stripe secret key. It should start with sk_test_ (or sk_live_ in production).",
 } as const;

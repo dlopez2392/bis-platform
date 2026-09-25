@@ -5,11 +5,11 @@
 // nothing is assigned a plan until step 3.
 //
 // requireAgency() is the literal first line, before any read: the reads
-// below are through serviceDb(), and such a read must never be ISSUED on a
-// client's behalf. RLS would refuse a client anyway (0051: plans_agency_read).
-// This line is the real gate, not the nav: the agency-level nav lists Plans
-// whenever it renders without an account, and a client can type the URL
-// (page.test.ts pins the order).
+// below are through serviceDb(), which BYPASSES RLS, so this line is the
+// ONLY gate — there is no RLS fallback behind it. This line is the real
+// gate, not the nav: the agency-level nav lists Plans whenever it renders
+// without an account, and a client can type the URL (page.test.ts pins the
+// order).
 import { CreditCard } from "lucide-react";
 import { countBilledAccountsByPlan, listPlans, serviceDb } from "@bis/db";
 import { EmptyState } from "@/components/empty-state";

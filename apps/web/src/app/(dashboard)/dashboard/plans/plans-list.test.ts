@@ -21,6 +21,38 @@ vi.mock("./plan-dialog", async (importOriginal) => {
   };
 });
 
+const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+vi.mock("sonner", () => ({ toast: toastMock }));
+
+/** `PlanRow`'s `run` schedules its body through `useTransition`'s
+ *  `startTransition`. Overriding it to just COLLECT the callback (instead of
+ *  letting React's real transition machinery run it, which needs a live
+ *  root this DOM-less suite has none of) lets a test invoke the body
+ *  directly, as a plain async function. */
+const transitions = vi.hoisted(() => ({ calls: [] as Array<() => Promise<void>> }));
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react")>();
+  return {
+    ...actual,
+    useTransition: () => [false, (cb: () => Promise<void>) => { transitions.calls.push(cb); }],
+  };
+});
+
+/** Wraps the real Button only to RECORD the props each row hands it — its
+ *  onClick is a row action, otherwise unreachable without a DOM to click in
+ *  this suite. It still renders through the real component. */
+const buttons = vi.hoisted(() => ({ props: [] as Array<Record<string, unknown>> }));
+vi.mock("@/components/ui/button", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/components/ui/button")>();
+  return {
+    ...real,
+    Button: (props: Record<string, unknown>) => {
+      buttons.props.push(props);
+      return createElement(real.Button, props as never);
+    },
+  };
+});
+
 import { m } from "@/lib/messages";
 import { planRowView } from "@/lib/billing/plan-rows";
 import { PlansList } from "./plans-list";
@@ -44,6 +76,17 @@ function render(rows: Plan[], canEdit = true): string {
   }));
 }
 
+/** Renders one row with its own archive/restore, so a test can drive them. */
+function renderRow(
+  p: Plan,
+  actions: { archive?: (id: string) => Promise<PlanActionResult>; restore?: (id: string) => Promise<PlanActionResult> } = {},
+): void {
+  renderToStaticMarkup(createElement(PlansList, {
+    rows: [planRowView(p, 0)], canEdit: true, update: noop,
+    archive: actions.archive ?? noop, restore: actions.restore ?? noop,
+  }));
+}
+
 /** The markup of the <li> for one plan id. */
 function rowHtml(html: string, id: string): string {
   const match = html.match(new RegExp(`<li[^>]*data-plan-row="${id}"[\\s\\S]*?</li>`));
@@ -51,8 +94,29 @@ function rowHtml(html: string, id: string): string {
   return match[0];
 }
 
+/** The one opening <button ...> tag in `html` carrying this exact
+ *  aria-label — row actions are never a click target of their own, so
+ *  identifying by aria-label (rather than position) is the stable handle. */
+function buttonTag(html: string, ariaLabel: string): string {
+  const tags = html.match(/<button[^>]*>/g) ?? [];
+  const tag = tags.find((t) => t.includes(`aria-label="${ariaLabel}"`));
+  if (!tag) throw new Error(`no button aria-label="${ariaLabel}" in: ${html}`);
+  return tag;
+}
+
+/** The onClick of the one captured Button whose aria-label is exactly this. */
+function onClickFor(ariaLabel: string): () => void {
+  const hits = buttons.props.filter((p) => p["aria-label"] === ariaLabel);
+  if (hits.length !== 1) throw new Error(`expected exactly one Button aria-label="${ariaLabel}", got ${hits.length}`);
+  return hits[0]!.onClick as () => void;
+}
+
 beforeEach(() => {
   dialogs.props = [];
+  buttons.props = [];
+  transitions.calls = [];
+  toastMock.success.mockReset();
+  toastMock.error.mockReset();
 });
 
 describe("PlansList", () => {
@@ -65,11 +129,18 @@ describe("PlansList", () => {
     expect(row).toContain(`aria-label="${m["plans.archiveLabel"].replace("{name}", "Growth")}"`);
   });
 
+  it("row actions render the ghost variant, never the default (DESIGN.md rule 8; mutation: Archive with the default variant → FAILS)", () => {
+    const row = rowHtml(render([plan("p1", "Growth", null)]), "p1");
+    expect(buttonTag(row, m["plans.editLabel"].replace("{name}", "Growth"))).toContain('data-variant="ghost"');
+    expect(buttonTag(row, m["plans.archiveLabel"].replace("{name}", "Growth"))).toContain('data-variant="ghost"');
+  });
+
   it("an archived row shows Archived and Restore, and NO Edit (mutation: render Edit for archived rows → FAILS)", () => {
     const row = rowHtml(render([plan("p2", "Legacy", "2026-09-24T11:00:00Z")]), "p2");
     expect(row).toMatch(/<span[^>]*aria-hidden="true"[^>]*><\/span>Archived/);
     expect(row).toContain(`aria-label="${m["plans.restoreLabel"].replace("{name}", "Legacy")}"`);
     expect(row).not.toContain(`aria-label="${m["plans.editLabel"].replace("{name}", "Legacy")}"`);
+    expect(buttonTag(row, m["plans.restoreLabel"].replace("{name}", "Legacy"))).toContain('data-variant="ghost"');
   });
 
   it("with Stripe not connected there is no Edit on any row, but Archive stays (mutation: ignore canEdit → FAILS)", () => {
@@ -109,5 +180,47 @@ describe("PlansList", () => {
     expect(planId).toBe("p6");
     expect(version).toBe(VERSION);
     expect(formData).toBe(fd);
+  });
+});
+
+describe("PlanRow — archive/restore/undo never escape to the error boundary", () => {
+  it("a thrown archive call is caught and toasts common.actionCrashed, not left to escape the transition (mutation: remove the catch → FAILS)", async () => {
+    const archive = vi.fn(async (): Promise<PlanActionResult> => { throw new Error("network drop"); });
+    renderRow(plan("p7", "Growth", null), { archive });
+
+    const onClick = onClickFor(m["plans.archiveLabel"].replace("{name}", "Growth"));
+    onClick();
+    expect(transitions.calls).toHaveLength(1);
+
+    await expect(transitions.calls[0]!()).resolves.toBeUndefined();
+    expect(toastMock.error).toHaveBeenCalledWith(m["common.actionCrashed"]);
+    expect(toastMock.success).not.toHaveBeenCalled();
+  });
+});
+
+describe("PlanRow — undo runs the inverse action", () => {
+  it("Undo after Archive calls RESTORE (the inverse) and surfaces a failed undo's error via toast.error (mutation: undo calls the same action, or the failed undo's error is swallowed → FAILS)", async () => {
+    const archive = vi.fn(async (): Promise<PlanActionResult> => ({ ok: true }));
+    const restore = vi.fn(async (): Promise<PlanActionResult> => ({ ok: false, error: "Could not restore Growth" }));
+    renderRow(plan("p8", "Growth", null), { archive, restore });
+
+    onClickFor(m["plans.archiveLabel"].replace("{name}", "Growth"))();
+    expect(transitions.calls).toHaveLength(1);
+    await transitions.calls[0]!();
+
+    expect(archive).toHaveBeenCalledWith("p8");
+    expect(toastMock.success).toHaveBeenCalledTimes(1);
+    const [, options] = toastMock.success.mock.calls[0]!;
+    const undo = (options as { action: { onClick: () => void } }).action.onClick;
+
+    undo();
+    expect(transitions.calls).toHaveLength(2);
+    await transitions.calls[1]!();
+
+    // The inverse of Archive is Restore, never Archive again.
+    expect(restore).toHaveBeenCalledWith("p8");
+    expect(archive).toHaveBeenCalledTimes(1);
+    // The failed undo's own error reaches the operator.
+    expect(toastMock.error).toHaveBeenCalledWith("Could not restore Growth");
   });
 });

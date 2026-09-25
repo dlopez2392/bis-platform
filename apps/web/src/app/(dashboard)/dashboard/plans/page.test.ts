@@ -128,6 +128,10 @@ describe("PlansPage — states", () => {
     expect(empty.body).toBe(m["plans.empty.body"]);
     expect(findAll(empty.action as ReactNode, NewPlanButton)).toHaveLength(1);
     expect(findAll(tree, PlansList)).toHaveLength(0);
+    // Exactly one primary in the WHOLE tree (rule 8), not just within the
+    // header's own slot: a second New plan anywhere else (e.g. a list
+    // branch that also rendered one) would double the view's primary.
+    expect(findAll(tree, NewPlanButton)).toHaveLength(1);
   });
 
   it("loaded: New plan sits in the header, the list gets each plan's own client count and the real actions (mutation: planRowView(p, 0) → FAILS)", async () => {
@@ -138,6 +142,9 @@ describe("PlansPage — states", () => {
     const header = one(tree, PageHeader);
     expect(findAll(header.actions as ReactNode, NewPlanButton)).toHaveLength(1);
     expect(findAll(tree, EmptyState)).toHaveLength(0);
+    // Exactly one primary in the WHOLE loaded tree (rule 8; mutation: a
+    // second New plan rendered in the list branch too → FAILS).
+    expect(findAll(tree, NewPlanButton)).toHaveLength(1);
 
     const list = one(tree, PlansList);
     const rows = list.rows as PlanRowView[];
