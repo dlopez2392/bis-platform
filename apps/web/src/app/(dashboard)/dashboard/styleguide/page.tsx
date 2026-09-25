@@ -24,11 +24,22 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SCREENED_REASONS, screenedClass, type ProposalStatus } from "@bis/db";
 import { CLASS_DOT } from "../screened/screened-table";
 import { STATUS_TREATMENT } from "../accounts/[accountId]/calls/[callId]/proposals";
+import { LogStatusPill } from "../accounts/[accountId]/activity/log-status-pill";
+import { CONFIRM_REPLY_TREATMENTS } from "../accounts/[accountId]/calendar/confirm-reply";
+import { DotPill } from "@/components/dot-pill";
+import { SmsPreview } from "@/components/sms-preview";
+import { withOptOut } from "@/lib/sms/opt-out";
+import {
+  composeSmsReminder, defaultSmsReminderBody, SMS_REMINDER_PREVIEW_INSTANT,
+} from "@/lib/automations/sms-reminder-copy";
+import { formatWhen } from "@/lib/booking/time";
 import { cn } from "@/lib/utils";
 import { RailStates } from "./rail-states";
 import { SettingsFieldCards } from "./settings-field-cards";
 import { PublicBrand } from "@/components/public-brand";
 import "@/styles/public-brand.css";
+import { EmbedSnippet } from "@/components/embed-snippet";
+import "@/app/c/[publicId]/concierge.css";
 import { m } from "@/lib/messages";
 
 export const dynamic = "force-dynamic";
@@ -58,7 +69,7 @@ function Section({
     <Card>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
-        <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+        <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
           {file}
         </p>
       </CardHeader>
@@ -82,12 +93,12 @@ export default async function StyleguidePage() {
             {(["--surface-0", "--surface-1", "--surface-2", "--surface-3"] as const).map((t) => (
               <div key={t} className="flex flex-col gap-1">
                 <div className="h-14 w-28 rounded-lg border border-border glass" style={{ backgroundColor: `var(${t})` }} />
-                <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{t}</span>
+                <span className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{t}</span>
               </div>
             ))}
             <div className="flex flex-col gap-1">
               <div className="h-14 w-28 rounded-lg" style={{ backgroundColor: "var(--accent-2)" }} />
-              <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">--accent-2</span>
+              <span className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">--accent-2</span>
             </div>
           </div>
           {/* The hero gradient — display size only (≥ 22px), one per screen. */}
@@ -129,6 +140,24 @@ export default async function StyleguidePage() {
             chip + dot
           </Badge>
         </Section>
+
+        <section aria-labelledby="sg-activity-status" data-testid="styleguide-activity-status" className="space-y-3">
+          <h2 id="sg-activity-status" className="text-sm font-medium">Activity status</h2>
+          <div className="flex flex-wrap gap-2">
+            {(["sent", "held", "skipped", "failed"] as const).map((s) => <LogStatusPill key={s} status={s} />)}
+          </div>
+          {/* The same DotPill (components/dot-pill.tsx), `dense`, as the
+              calendar shows the customer's answer to the confirmation text:
+              a yes in the history's `sent` colours, a NO as a warning because
+              it is the one an operator must act on. Read off
+              confirm-reply.ts's own map, so this row cannot drift. */}
+          <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+            components/dot-pill.tsx · …/calendar/confirm-reply.ts
+          </p>
+          <div className="flex flex-wrap gap-2" data-testid="styleguide-confirm-reply">
+            {(["yes", "no"] as const).map((a) => <DotPill key={a} {...CONFIRM_REPLY_TREATMENTS[a]} dense />)}
+          </div>
+        </section>
 
         <Section title="Meter" file="components/meter.tsx">
           {/* The mockup's `.meter` (northern-lights.html:56): a 5px track on
@@ -188,6 +217,79 @@ export default async function StyleguidePage() {
           </div>
         </Section>
 
+        <Section
+          title="Website assistant — launcher & message bubbles"
+          file="lib/forms/embed-script.ts (loader, served at app/embed.js/route.ts) · app/c/[publicId]/concierge-chat.tsx · concierge.css"
+        >
+          <div
+            className="flex w-full flex-wrap items-start gap-8"
+            // concierge.css's `.bis-msg-*` rules paint from `--form-accent`/
+            // `--form-accent-foreground` — `publicFormTheme`'s own CTA pair,
+            // set on the real `/c/[publicId]` page but never on a dashboard
+            // route. Undefined here, `var(--form-accent, #6D28D9)` always
+            // took its literal fallback — the mockup's violet, unmoved by
+            // `.dark` — so the bubbles below looked identical in both
+            // themes. Bridged to this dashboard's own accent pair instead
+            // of inventing a third color, so the demo actually shows what a
+            // themed tenant's visitor sees, in both modes.
+            style={{
+              "--form-accent": "var(--accent)",
+              "--form-accent-foreground": "var(--primary-foreground)",
+            } as React.CSSProperties}
+          >
+            {/* The launcher `embed.js` draws on the HOST page — inline-styled
+                there on purpose (a snippet running on someone else's site
+                cannot reach this app's CSS custom properties), so this is a
+                tokened re-creation for reference, not the literal element. */}
+            <div className="flex flex-col items-center gap-2">
+              <div
+                data-slot="concierge-launcher-demo"
+                className="flex size-14 items-center justify-center rounded-full bg-[var(--accent)] text-2xl text-primary-foreground shadow-[var(--shadow-glow)]"
+                aria-hidden
+              >
+                💬
+              </div>
+              <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Launcher</p>
+            </div>
+            <ol className="bis-concierge-log w-full max-w-xs list-none" aria-hidden>
+              <li className="bis-msg bis-msg-assistant">Hi! Ask me anything about our services.</li>
+              <li data-slot="concierge-bubble-demo" className="bis-msg bis-msg-visitor">Do you serve the 78041 zip code?</li>
+              <li className="bis-msg bis-msg-assistant bis-msg-skeleton" aria-label="Thinking">
+                <span /><span /><span />
+              </li>
+            </ol>
+          </div>
+        </Section>
+
+        <Section title="Shared embed snippet card" file="components/embed-snippet.tsx">
+          <div className="grid w-full max-w-sm gap-4">
+            <EmbedSnippet
+              attribute="data-concierge"
+              publicId="pub_demo123"
+              origin="https://app.example.com"
+              title={m["voice.assistant.snippetTitle"]}
+              hint={m["voice.assistant.snippetHint"]}
+              disabledHint={m["voice.assistant.noFormBody"]}
+              enabled
+              copyLabel={m["voice.assistant.copy"]}
+              copiedLabel={m["voice.assistant.copied"]}
+              publicLinkLabel={m["voice.assistant.publicLink"]}
+            />
+            <EmbedSnippet
+              attribute="data-concierge"
+              publicId="pub_demo123"
+              origin="https://app.example.com"
+              title={m["voice.assistant.snippetTitle"]}
+              hint={m["voice.assistant.snippetHint"]}
+              disabledHint={m["voice.assistant.noFormBody"]}
+              enabled={false}
+              copyLabel={m["voice.assistant.copy"]}
+              copiedLabel={m["voice.assistant.copied"]}
+              publicLinkLabel={m["voice.assistant.publicLink"]}
+            />
+          </div>
+        </Section>
+
         <Section title="Form controls" file="components/ui/{input,label,checkbox}.tsx">
           <div className="grid w-full max-w-sm gap-2">
             <Label htmlFor="sg-input">Label</Label>
@@ -197,6 +299,25 @@ export default async function StyleguidePage() {
             <label className="flex items-center gap-2 text-sm">
               <Checkbox id="sg-check" /> Checkbox
             </label>
+          </div>
+        </Section>
+
+        {/* The text a customer will receive, shown as the field it becomes:
+            the one preview box every Automations card renders. The text is
+            the text reminder's real default, built by its own composer and
+            the send path's opt-out rule, so it is exactly what goes out. */}
+        <Section title="SMS preview" file="components/sms-preview.tsx">
+          <div className="grid w-full max-w-sm gap-1.5">
+            <SmsPreview
+              id="sg-sms-preview"
+              label={m["automations.smsReminder.preview"]}
+              text={withOptOut(composeSmsReminder(
+                "Rio Roofing",
+                formatWhen(SMS_REMINDER_PREVIEW_INSTANT, "America/Chicago"),
+                defaultSmsReminderBody(),
+              ))}
+              testId="styleguide-sms-preview"
+            />
           </div>
         </Section>
 

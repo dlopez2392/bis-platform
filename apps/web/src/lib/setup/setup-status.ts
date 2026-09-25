@@ -7,7 +7,7 @@ import type { CalendarRow, VoiceProfileRow, PhoneNumberRow } from "@bis/db";
 // have no derivable source (see "email" and "forwarding" below).
 
 export type SetupStepKey =
-  | "account" | "branding" | "hours" | "voice_profile" | "number"
+  | "account" | "branding" | "hours" | "voice_profile" | "website_assistant" | "number"
   | "email" | "forwarding" | "test_call" | "go_live";
 
 export type SetupStepState = { key: SetupStepKey; done: boolean; skipped: boolean };
@@ -16,10 +16,37 @@ export type SetupInputs = {
   brandName: string | null;
   fromEmail: string | null;
   calendar: Pick<CalendarRow, "enabled" | "open_hours"> | null;
-  profile: Pick<VoiceProfileRow, "greeting_en" | "greeting_es" | "facts" | "enabled" | "languages"> | null;
+  profile: Pick<
+    VoiceProfileRow,
+    "greeting_en" | "greeting_es" | "facts" | "enabled" | "languages"
+    // The website-assistant trio: read off the SAME voice_profiles row
+    // (getVoiceProfile already selects every PROFILE_COLS column, so this is
+    // a type widening only — no new query). `concierge_enabled` decides
+    // website_assistant's own done bit below; `concierge_form_id` is the
+    // other half of that conjunction; `public_id` is what the setup pane's
+    // fourth row needs to build the embed snippet, threaded through
+    // unchanged by deriveSetupStatus itself.
+    | "concierge_enabled" | "concierge_form_id" | "public_id"
+  > | null;
   numbers: Pick<PhoneNumberRow, "status">[];
   callCount: number;
   ticks: { emailSkipped: boolean; forwardingDone: boolean };
+  /** Published forms only (the setup pane's row 2) — gatherSetupInputs
+   *  narrows `listForms`'s full result down to this count, same narrowing
+   *  the Voice page's own website-assistant card already does. Not used by
+   *  `deriveSetupStatus` below (website_assistant's `done` never gates on
+   *  it — publishing a form is proof of readiness the pane shows, not a
+   *  prerequisite this function enforces) — carried on `SetupInputs`
+   *  anyway because this is the one struct `gatherSetupInputs` assembles
+   *  for every reader downstream, the same reason `profile` sits here for
+   *  callers that only want `hasVoiceProfile`. */
+  publishedFormCount: number;
+  /** Whether AT LEAST ONE conversation is attributed to a real site visit
+   *  (row 4's proof, not a gate) — boolean, not a count (fix-round review,
+   *  MINOR 4: the pane only ever asks yes/no, so the accessor itself is
+   *  bounded with `.limit(1)`) — same "carried for downstream readers"
+   *  reasoning as the field above. */
+  conciergeSiteConversation: boolean;
 };
 
 // localStorage-style keys the wizard persists the two ticks under. Named
@@ -69,6 +96,13 @@ export function deriveSetupStatus(inputs: SetupInputs): SetupStepState[] {
     : null;
   const voiceProfileDone = Boolean(profile) && nonBlank(profile?.facts) && nonBlank(primaryGreeting);
 
+  // Never a stored flag (this file's whole promise, see the header comment):
+  // a client whose concierge got disabled, or whose destination form was
+  // cleared, must see this step un-done again on the very next render, not
+  // keep a green tick from whenever it was FIRST configured.
+  const websiteAssistantDone =
+    profile?.concierge_enabled === true && Boolean(profile.concierge_form_id);
+
   const numberDone = numbers.some((n) => LIVE_NUMBER_STATUSES.has(n.status));
 
   const emailDone = nonBlank(fromEmail);
@@ -87,6 +121,7 @@ export function deriveSetupStatus(inputs: SetupInputs): SetupStepState[] {
     step("branding", brandingDone),
     step("hours", hoursDone),
     step("voice_profile", voiceProfileDone),
+    step("website_assistant", websiteAssistantDone),
     step("number", numberDone),
     step("email", emailDone, emailSkipped),
     step("forwarding", ticks.forwardingDone),

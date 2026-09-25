@@ -237,6 +237,55 @@ describe("shouldSendFollowupNow — an unparseable account timezone FAILS CLOSED
   });
 });
 
+/**
+ * THE RELEASE PATH. `skipBand` skips the morning BAND and NOTHING ELSE — the
+ * release contract (part B's spec, line 16, and amendment B16), and the shape
+ * `shouldSendReferralAskNow` already carries. A held row passed the band once,
+ * at the hour it was held, and comes back at the quiet window's end, which is
+ * by definition not a band hour; re-applying the band would park every
+ * overnight hold for a whole extra day. Every OTHER rule IS re-applied,
+ * because on that path the 37h cap and the strictly-earlier-local-day rule
+ * live nowhere else.
+ *
+ * Mutation for this block: hoist `if (opts.skipBand) return true;` to the top
+ * of `shouldSendFollowupNow` → every case below but the control reds.
+ */
+describe("shouldSendFollowupNow — the release path skips the band ALONE", () => {
+  // 12:00 EDT Wed Sept 9 — outside the 08:00-11:00 band, and the hour a
+  // 21:00 → 12:00 quiet window hands a held row back at.
+  const NOON_NY = new Date("2026-09-09T16:00:00Z");   // NY Wed 12:00 · LA Wed 09:00
+  const ENDED = new Date("2026-09-08T22:00:00Z");     // NY Tue 18:00 · LA Tue 15:00
+
+  it("sends at noon when the band was the only rule refusing — the control for the three below", () => {
+    // Without this pair the refusals below would all be satisfied by a gate
+    // that had simply stopped answering true at all.
+    expect(shouldSendFollowupNow(NOON_NY, ENDED, NY)).toBe(false);
+    expect(shouldSendFollowupNow(NOON_NY, ENDED, NY, { skipBand: true })).toBe(true);
+  });
+
+  it("re-applies the 37h cap on release: at the bound it goes, one millisecond past it does not", () => {
+    const at = new Date(NOON_NY.getTime() - FOLLOWUP_MAX_AGE_MS);   // NY Mon 23:00, a strictly earlier local day
+    const past = new Date(at.getTime() - 1);
+    expect(shouldSendFollowupNow(NOON_NY, at, NY, { skipBand: true })).toBe(true);
+    expect(shouldSendFollowupNow(NOON_NY, past, NY, { skipBand: true })).toBe(false);
+  });
+
+  it("re-applies the strictly-earlier-local-day rule on release — one instant, two zones, opposite verdicts", () => {
+    // The booking whose meeting end moved during the hold: the releaser
+    // re-reads the row, so the pass is handed the NEW anchor and a gate that
+    // was skipped whole would mail someone about this morning's job.
+    const ENDED_OVERNIGHT = new Date("2026-09-09T05:30:00Z");   // NY Wed 01:30 (today) · LA Tue 22:30 (yesterday)
+    expect(shouldSendFollowupNow(NOON_NY, ENDED_OVERNIGHT, NY, { skipBand: true })).toBe(false);
+    expect(shouldSendFollowupNow(NOON_NY, ENDED_OVERNIGHT, LA, { skipBand: true })).toBe(true);
+  });
+
+  it("still fails closed on an unresolvable zone: a release with no zone is still no hour", () => {
+    for (const junk of ["Mars/Olympus", "", "  ", "America/Nowhere"]) {
+      expect(shouldSendFollowupNow(NOON_NY, ENDED, junk, { skipBand: true })).toBe(false);
+    }
+  });
+});
+
 describe("resolveAccountZone", () => {
   it("returns real zones verbatim and null for anything Intl cannot resolve", () => {
     for (const good of [NY, LA, CHI, "UTC", "Antarctica/Troll", "Europe/Madrid"]) {

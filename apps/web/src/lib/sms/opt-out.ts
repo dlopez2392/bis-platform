@@ -57,10 +57,53 @@ export function withOptOut(body: string, language: "en" | "es" = "en"): string {
   // operator's own `textback_body` may already carry the disclosure (the
   // settings copy tells them it will be added if they leave it out), and a
   // message reading "...Reply STOP to opt out. Reply STOP to opt out." is
-  // the kind of thing that gets a campaign looked at twice. Matched on the
-  // keyword alone, case-insensitively, so it also catches a hand-written
-  // "Text STOP to unsubscribe" that says the same thing in other words.
-  if (/\bstop\b/i.test(trimmed)) return trimmed;
+  // the kind of thing that gets a campaign looked at twice. Matched on an
+  // INSTRUCTION (hasOptOutInstruction), not our exact sentence, so a
+  // hand-written "Text STOP to unsubscribe" keeps its own wording — and not
+  // on the bare word, because "We'll stop by Tuesday." is not a way out and
+  // must still get one.
+  if (hasOptOutInstruction(trimmed)) return trimmed;
   const disclosure = language === "es" ? m["sms.optOut.es"] : m["sms.optOut.en"];
   return `${trimmed} ${disclosure}`;
+}
+
+/**
+ * Does this body already TELL the recipient how to opt out? Three parts, all
+ * required, any case:
+ *
+ * 1. An instruction VERB, as a whole word: English reply/text/txt/send,
+ *    Spanish responde/responda/envia (envía)/escribe and the formal
+ *    envie (envíe)/escriba — the text-back's own Spanish default is usted-form.
+ *    "resend STOP" and "pretext stop" are not instructions.
+ * 2. Spaces or tabs, then STOP, optionally quoted (`Reply "STOP"`, and the
+ *    curly quotes a phone types on its own). NOT a newline: "Just reply\nStop
+ *    by the shop anytime!" is two sentences, the second of which is an
+ *    invitation to visit.
+ * 3. A TERMINATOR, so STOP is the keyword and not the first word of something
+ *    else: end of text, one of . , ! ; : ), or a space and then to / para /
+ *    or / o / anytime / at any time / en cualquier momento as a whole word.
+ *    "send stop-work orders", "text Stop & Shop coupons", "text stop sign
+ *    photos", "Text stopwatch" and "Reply STOPALL" all fail here.
+ *
+ * The word "stop" on its own is never enough — "We'll stop by Tuesday." and
+ * "STOP by the shop" are ordinary sentences, and treating them as the
+ * disclosure sent a programme message with no way out of it.
+ *
+ * The failure modes are deliberately lopsided: a phrasing this misses gets
+ * our sentence appended after theirs (a doubled disclosure, cosmetic), while
+ * a phrasing it wrongly accepts ships a text the customer cannot leave. So
+ * every part is short and literal, and anything outside it is a miss.
+ *
+ * KNOWN GAP, accepted: a NEGATED instruction still counts. "No need to reply
+ * STOP." matches parts 1–3 and suppresses the disclosure. Reading negation is
+ * a grammar problem this regex should not pretend to solve, the phrasing is
+ * rare in a message an operator writes to their own customers, and Telnyx
+ * honours STOP whether or not the text told them to send it.
+ *
+ * Exported so a caller that needs the same decision asks this, never a regex
+ * of its own; the settings cards' counters need nothing extra, because they
+ * count `withOptOut(...)` and inherit it.
+ */
+export function hasOptOutInstruction(body: string): boolean {
+  return /\b(?:reply|text|txt|send|responde|responda|env[ií]a|env[ií]e|escribe|escriba)[ \t]+["'“‘]?stop["'”’]?(?:$|[.,!;:)]|[ \t]+(?:to|para|or|o|anytime|at any time|en cualquier momento)\b)/i.test(body);
 }

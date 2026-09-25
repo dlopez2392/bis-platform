@@ -12,8 +12,12 @@ export type ContactInput = {
 // cursor (apps/web's contacts/page.tsx) needs whichever column the CURRENT
 // sort used off the last row, and that is cheapest to guarantee by always
 // selecting it rather than conditionally shaping this string per sort key.
+//
+// `marketing_email_opted_out_at` (0049) rides along for the contact drawer and
+// the detail page, which both show the "No marketing emails" switch off these
+// two reads. Snake_case end to end, like every other column here.
 const COLS =
-  "id, first_name, last_name, email, phone, company_name, source, custom, created_at, updated_at, sort_name";
+  "id, first_name, last_name, email, phone, company_name, source, custom, created_at, updated_at, sort_name, marketing_email_opted_out_at";
 
 function toRow(input: Partial<ContactInput>) {
   const row: Record<string, unknown> = {};
@@ -376,6 +380,53 @@ export async function getContact(db: SupabaseClient, accountId: string, contactI
     .eq("account_id", accountId).eq("id", contactId).maybeSingle();
   if (error) throw new Error(error.message);
   return data;
+}
+
+/**
+ * The "No marketing emails" switch (migration 0049). `true` stamps the moment
+ * the operator recorded the customer's "stop"; `false` clears it to NULL,
+ * which is "may receive marketing email" again (the undo).
+ *
+ * Read by the reactivation walk (excluded in its query) and by the referral
+ * ask on the email channel (skipped in the pass). Quote follow-ups and
+ * transactional email ignore it.
+ *
+ * Scoped by account on the writing statement, and `.select("id")` so a write
+ * that matched nothing THROWS instead of reporting success: another account's
+ * contact, or one deleted in the meantime (the setBranding convention).
+ * Re-stamping an already opted-out contact moves the timestamp to now.
+ *
+ * THE AUDIT RECORD. The column holds only the latest opt-out, and nothing
+ * once it is undone, so each write also emits one event naming WHO did it:
+ * `contact.marketing_email_opted_out` or `contact.marketing_email_opted_in`,
+ * with `actorId`/`actorType` as `updateContact` takes them. Emitted only
+ * after the write matched a row: a refused write records nothing. Nothing
+ * renders these yet (the contact timeline does not read `events`, and the
+ * dashboard feed skips contact.* housekeeping); they are the durable answer
+ * to "who switched this, and when".
+ *
+ * KNOWN RESIDUAL: WRITE, THEN EMIT, and not one transaction. The update has
+ * already committed when `emit` runs, so an events-insert failure throws out
+ * of here AFTER the switch holds the new value: the action reports "Couldn't
+ * save that" while the column says otherwise, and that one change has no
+ * event. Kept deliberately — it is the house order (`updateContact` above
+ * does the same) and the column, not the event, is what the marketing sends
+ * read. Closing it takes an RPC that does both in one statement.
+ */
+export async function setMarketingEmailOptOut(
+  db: SupabaseClient, accountId: string, contactId: string, optedOut: boolean,
+  actorId: string, actorType: ActorType = "user",
+): Promise<void> {
+  const now = new Date().toISOString();
+  const { data, error } = await db.from("contacts")
+    .update({ marketing_email_opted_out_at: optedOut ? now : null, updated_at: now })
+    .eq("account_id", accountId).eq("id", contactId)
+    .select("id");
+  if (error) throw new Error(`setMarketingEmailOptOut failed: ${error.message}`);
+  if (!data?.length) throw new Error(`setMarketingEmailOptOut: no contact ${contactId} on account ${accountId}`);
+  await emit(db, accountId,
+    optedOut ? "contact.marketing_email_opted_out" : "contact.marketing_email_opted_in",
+    actorId, { contactId }, actorType);
 }
 
 export async function addTagToContact(

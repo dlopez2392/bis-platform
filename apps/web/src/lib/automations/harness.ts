@@ -1,4 +1,4 @@
-import type { SupabaseClient } from "@bis/db";
+import { readQuietSettings, type SupabaseClient, type QuietSettings } from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
 import { getSmsProvider } from "@/lib/sms";
 import type { SmsProvider } from "@/lib/sms/types";
@@ -26,10 +26,28 @@ export function lazySmsProvider(): () => SmsProvider {
   return () => (sms ??= getSmsProvider());
 }
 
+/**
+ * One settings read per account per tick, shared by every pass through
+ * `ctx.quiet`. A rejected read is NOT memoised, so the next row asks again
+ * rather than inheriting a dead promise for the rest of the tick.
+ */
+export function quietSettingsReader(db: SupabaseClient): (accountId: string) => Promise<QuietSettings> {
+  const memo = new Map<string, Promise<QuietSettings>>();
+  return (accountId) => {
+    let p = memo.get(accountId);
+    if (!p) {
+      p = readQuietSettings(db, accountId);
+      memo.set(accountId, p);
+      p.catch(() => memo.delete(accountId));
+    }
+    return p;
+  };
+}
+
 export function buildPassContext(
   input: { db: SupabaseClient; now: Date; origin: string },
 ): PassContext {
-  return { ...input, email: getEmailProvider(), sms: lazySmsProvider() };
+  return { ...input, email: getEmailProvider(), sms: lazySmsProvider(), quiet: quietSettingsReader(input.db) };
 }
 
 /**

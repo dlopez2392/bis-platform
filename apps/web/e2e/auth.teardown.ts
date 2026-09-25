@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { clerkClient } from "@clerk/nextjs/server";
 import { serviceDb, setClientAccess, removeBrandLogo } from "@bis/db";
-import { deleteAccountCascade, type SweepReport } from "./fixtures/sweep";
+import { deleteAccountCascade, emptySweepReport } from "./fixtures/sweep";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -72,9 +72,7 @@ teardown("delete the client-access e2e fixture", async () => {
     // file used to carry its own shorter list, which is exactly the drift
     // that would have made the accounts delete start failing SILENTLY the
     // day those specs moved; one exported list, two callers.
-    const report: SweepReport = {
-      accounts: [], clerkUsers: [], clerkOrgs: [], orphanObjects: [], errors: [],
-    };
+    const report = emptySweepReport();
     await deleteAccountCascade(db, fixture.accountId, report);
     for (const err of report.errors) {
       console.error(`e2e teardown: ${err}`);

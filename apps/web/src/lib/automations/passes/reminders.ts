@@ -1,10 +1,13 @@
-import { listDueReminders, stampReminderSent } from "@bis/db";
+import { listDueReminders, stampReminderSent, getDueReminderById, type DueReminder } from "@bis/db";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { bookingReminderEmail } from "@/lib/email/templates/booking";
 import { safeZone, formatWhen } from "@/lib/booking/time";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
-import type { Pass } from "../context";
+import {
+  holdOrSend, logSkipped, subjectOf, verdict, REASONS, type HoldSubject, type Releaser,
+} from "../hold-or-send";
+import type { Pass, PassContext } from "../context";
 
 /**
  * Booking reminders, ~a day before `starts_at`. Moved verbatim from
@@ -21,39 +24,61 @@ import type { Pass } from "../context";
  * is a `failed` send (contrast the follow-up pass, which counts it
  * `skippedNoEmail`). That difference is the reason the registry is a harness
  * and not a shared listDue/send/stamp algorithm.
+ *
+ * QUIET HOURS (part C): the send runs inside `holdOrSend`. Inside the
+ * account's window the row is HELD — not stamped — and `releaseReminder`
+ * brings it back when the window ends, because the 75-minute due window
+ * will have closed by then and `listDueReminders` would never see it again.
+ * The `deadline` is the appointment itself: a reminder for a job that starts
+ * before the window ends goes out now.
  */
 export const remindersPass: Pass = {
   key: "reminders",
   async run(ctx) {
-    const reminders = await listDueReminders(ctx.db, ctx.now.toISOString());
+    return processReminders(ctx, await listDueReminders(ctx.db, ctx.now.toISOString()));
+  },
+};
 
-    let sent = 0;
-    let failed = 0;
-    let unstamped = 0;
+export type ReminderCounters = { sent: number; failed: number; unstamped: number; held: number };
 
-    for (const reminder of reminders) {
-      // SEND-THEN-STAMP, never the reverse: `reminder_sent_at` is a dedupe
-      // marker, not a record of an attempt. A send failure is counted in
-      // `failed` and logged, and the row stays unstamped so
-      // `listDueReminders` returns it again next tick.
-      try {
-        if (!reminder.contactEmail) {
-          throw new Error("no contact email on file");
-        }
+function subjectFor(r: DueReminder): HoldSubject {
+  return {
+    accountId: r.accountId, accountTimezone: r.accountTimezone, source: "reminders", channel: "email",
+    subjectKey: `booking:${r.bookingId}`, contactId: r.contactId, deadline: new Date(r.startsAt),
+  };
+}
 
-        const brand = emailBrand(reminder.branding);
-        const bookerZone = safeZone(reminder.bookerTimezone ?? undefined, reminder.accountTimezone);
-        const whenBookerZone = formatWhen(new Date(reminder.startsAt), bookerZone);
-        const cancelUrl = `${ctx.origin}/b/${reminder.calendarPublicId}/cancel/${reminder.cancelToken}`;
+/** The per-row path, shared by the tick (every due row) and the release (one held row). */
+export async function processReminders(ctx: PassContext, reminders: DueReminder[]): Promise<ReminderCounters> {
+  const c: ReminderCounters = { sent: 0, failed: 0, unstamped: 0, held: 0 };
 
-        const { html, text } = bookingReminderEmail({
-          brand, whenBookerZone, cancelUrl, meetingUrl: reminder.meetingUrl ?? undefined,
-        });
+  for (const reminder of reminders) {
+    const subject = subjectFor(reminder);
+    // SEND-THEN-STAMP, never the reverse: `reminder_sent_at` is a dedupe
+    // marker, not a record of an attempt. A send failure is counted in
+    // `failed` and logged, and the row stays unstamped so
+    // `listDueReminders` returns it again next tick.
+    try {
+      const to = reminder.contactEmail;
+      if (!to) {
+        await logSkipped(ctx, subject, REASONS.noEmail);
+        throw new Error("no contact email on file");
+      }
 
+      const brand = emailBrand(reminder.branding);
+      const bookerZone = safeZone(reminder.bookerTimezone ?? undefined, reminder.accountTimezone);
+      const whenBookerZone = formatWhen(new Date(reminder.startsAt), bookerZone);
+      const cancelUrl = `${ctx.origin}/b/${reminder.calendarPublicId}/cancel/${reminder.cancelToken}`;
+
+      const { html, text } = bookingReminderEmail({
+        brand, whenBookerZone, cancelUrl, meetingUrl: reminder.meetingUrl ?? undefined,
+      });
+
+      const outcome = await holdOrSend(ctx, subject, async () => {
         // fromAddress carries the account's sending address: a reminder is
         // customer-facing outbound, same shape as the booking confirmation.
         await ctx.email.send({
-          to: reminder.contactEmail,
+          to,
           fromName: brand.name,
           fromAddress: reminder.fromEmail ?? undefined,
           replyTo: normalizeReplyTo(reminder.branding.replyToEmail),
@@ -69,21 +94,46 @@ export const remindersPass: Pass = {
         // duplicate window, it does not close it.
         const stamp = await stampWithRetry(() => stampReminderSent(ctx.db, reminder.bookingId));
         if (!stamp.stamped) {
-          unstamped++;
+          c.unstamped++;
           console.error(
             `reminder sent but NOT stamped for booking ${reminder.bookingId} after `
             + `${stamp.attempts} attempts — expect up to 5 more copies over the next 75 `
             + `minutes: ${String(stamp.lastError)}`,
           );
         }
-
-        sent++;
-      } catch (e) {
-        failed++;
-        console.error(`reminder send failed for booking ${reminder.bookingId}: ${String(e)}`);
+      });
+      if (outcome === "held") {
+        c.held++;
+        continue;
       }
+      c.sent++;
+    } catch (e) {
+      c.failed++;
+      console.error(`reminder send failed for booking ${reminder.bookingId}: ${String(e)}`);
     }
+  }
 
-    return { sent, failed, unstamped };
-  },
+  return c;
+}
+
+/** The release: re-read the booking (the due window is long gone), re-check, send through processReminders. */
+export const releaseReminder: Releaser = async (ctx, row) => {
+  const bookingId = row.subject_key.replace(/^booking:/, "");
+  const found = await getDueReminderById(ctx.db, bookingId);
+  if (!found.due) {
+    await logSkipped(ctx, subjectOf(row), found.why === "off" ? REASONS.recipeOff : REASONS.noLongerDue);
+    return "skipped";
+  }
+  // The held row's key is not trusted across tenants: getDueReminderById
+  // takes no account argument and runs service-role, so a mismatch never
+  // sends and leaves the queue.
+  if (found.due.accountId !== row.account_id) {
+    await logSkipped(ctx, subjectOf(row), REASONS.noLongerDue);
+    return "skipped";
+  }
+  if (new Date(found.due.startsAt).getTime() <= ctx.now.getTime()) {
+    await logSkipped(ctx, subjectOf(row), REASONS.appointmentStarted);
+    return "skipped";
+  }
+  return verdict(await processReminders(ctx, [found.due]));
 };

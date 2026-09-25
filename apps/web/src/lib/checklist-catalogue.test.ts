@@ -17,7 +17,16 @@ describe("checklist catalogue", () => {
     // form_notify shows a live count of forms with no notify address, and
     // invite_owner moved in-app in M2 (Settings, under Client access).
     expect(CHECKLIST_CATALOGUE.filter((i) => !i.external).map((i) => i.key).sort())
-      .toEqual(["form_notify", "invite_owner", "reply_to"]);
+      .toEqual(["concierge_embed", "form_notify", "invite_owner", "reply_to"]);
+  });
+
+  it("carries the concierge item, internal, so it reaches every new client", () => {
+    const item = CHECKLIST_CATALOGUE.find((i) => i.key === "concierge_embed");
+    expect(item).toBeDefined();
+    // MUTATION: mark it external — this FAILS. The work happens in this app,
+    // on the Voice page, and a "Done outside BIS" badge on it would be a lie
+    // the checklist tells daily.
+    expect(item!.external).toBe(false);
   });
 
   it("links the two external items that have a single right destination", () => {

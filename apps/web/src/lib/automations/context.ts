@@ -1,4 +1,4 @@
-import type { SupabaseClient } from "@bis/db";
+import type { SupabaseClient, QuietSettings } from "@bis/db";
 import type { EmailProvider } from "@/lib/email/types";
 import type { SmsProvider } from "@/lib/sms/types";
 
@@ -32,6 +32,10 @@ export type PassContext = {
    *  already decided to make, inside that send's own try/catch. Memoised on
    *  success. */
   sms: () => SmsProvider;
+  /** The account's quiet-hours window, read once per account per tick
+   *  (harness.ts's `quietSettingsReader`). Lazy like `sms`: an idle tick
+   *  never reads settings. holdOrSend is the only caller. */
+  quiet: (accountId: string) => Promise<QuietSettings>;
 };
 
 /** Per-pass counters, reported verbatim in the cron's JSON under the pass key. */

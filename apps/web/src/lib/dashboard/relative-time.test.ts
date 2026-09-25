@@ -37,4 +37,8 @@ describe("relativeTime", () => {
     // siblings against a NON-dev-zone fixture.
     expect(relativeTime("2027-01-04T11:50:00.000Z", NOW)).toBe("10m");
   });
+
+  it("an unparseable timestamp reads as unknown, never 'NaNd'", () => {
+    expect(relativeTime("garbage", NOW)).toBe("");
+  });
 });

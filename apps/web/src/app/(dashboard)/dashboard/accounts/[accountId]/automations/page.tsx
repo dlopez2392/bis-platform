@@ -1,16 +1,33 @@
 import { headers } from "next/headers";
-import { serviceDb, getAutomation, getBranding, getCalendarForAccount } from "@bis/db";
+import Link from "next/link";
+import {
+  serviceDb, getAutomation, getBranding, getCalendarForAccount, readQuietSettings, listPipelinesWithStages,
+  getMailingAddress,
+  type AutomationRow, type CalendarRow, type QuietSettings,
+} from "@bis/db";
 import { PageHeader } from "@/components/page-header";
+import { buttonVariants } from "@/components/ui/button";
 import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { brandDisplayName } from "@/lib/email/templates/shell";
 import { originFrom } from "@/lib/email/origin";
-import { resolveSmsSender } from "@/lib/sms/sender";
+import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
 import { m } from "@/lib/messages";
+import { missingForMarketingEmail } from "@/lib/automations/reactivation-gate";
 import { AutomationsSettings } from "./automations-settings";
+import { ReferralAskCard } from "./referral-ask-card";
+import { ReactivationCard } from "./reactivation-card";
+import { QuoteFollowupCard, type StageOption } from "./quote-followup-card";
 import { NoShowNudgeCard } from "./no-show-nudge-card";
 import { SmsReminderCard } from "./sms-reminder-card";
+import { AppointmentConfirmCard } from "./appointment-confirm-card";
 import { InstantReplyCard } from "./instant-reply-card";
-import { saveReviewRequestAction, saveNoShowNudgeAction, saveSmsReminderAction, saveInstantReplyAction } from "./actions";
+import { QuietHoursCard } from "./quiet-hours-card";
+import {
+  saveReviewRequestAction, saveReferralAskAction, saveReactivationAction, saveNoShowNudgeAction, saveSmsReminderAction,
+  saveQuoteFollowupAction,
+  saveAppointmentConfirmAction,
+  saveInstantReplyAction, saveQuietHoursAction,
+} from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -30,11 +47,53 @@ export default async function AutomationsPage({
   await requireAgencyOnlyAccountAccess(accountId);
 
   const db = serviceDb();
-  const [review, noShow, smsReminder, instantReply, account, smsGate, calendar, origin] = await Promise.all([
-    getAutomation(db, accountId, "review_request"),
-    getAutomation(db, accountId, "no_show_nudge"),
-    getAutomation(db, accountId, "sms_reminder"),
-    getAutomation(db, accountId, "instant_reply"),
+  // Every read below degrades to the value its own card already renders as
+  // "nothing configured" — a null AutomationRow, a refused SmsGate, a null
+  // calendar, an empty origin — so one transient Supabase hiccup on ANY of
+  // these can no longer 500 the whole agency page; only the one card that
+  // lost its read shows the degraded state, and the log line carries the
+  // account id so the hiccup is still visible.
+  const [review, referralAsk, reactivation, noShow, smsReminder, appointmentConfirm, quoteFollowup, instantReply, account, smsGate, calendar, origin, quiet, stages, mailingAddress] = await Promise.all([
+    getAutomation(db, accountId, "review_request").catch((e): AutomationRow | null => {
+      console.error(`automations: review_request read failed for ${accountId}: ${String(e)}`);
+      return null;
+    }),
+    // POSITIONAL: this promise sits between review_request and reactivation,
+    // and so does its binding above. The reads keep the registry's order; the
+    // page RENDERS in journey order (the JSX below), and the two need not
+    // agree — only each promise and its own binding must.
+    getAutomation(db, accountId, "referral_ask").catch((e): AutomationRow | null => {
+      console.error(`automations: referral_ask read failed for ${accountId}: ${String(e)}`);
+      return null;
+    }),
+    // POSITIONAL, like the one above it: this promise sits between
+    // referral_ask and no_show_nudge, and so does its binding.
+    getAutomation(db, accountId, "reactivation").catch((e): AutomationRow | null => {
+      console.error(`automations: reactivation read failed for ${accountId}: ${String(e)}`);
+      return null;
+    }),
+    getAutomation(db, accountId, "no_show_nudge").catch((e): AutomationRow | null => {
+      console.error(`automations: no_show_nudge read failed for ${accountId}: ${String(e)}`);
+      return null;
+    }),
+    getAutomation(db, accountId, "sms_reminder").catch((e): AutomationRow | null => {
+      console.error(`automations: sms_reminder read failed for ${accountId}: ${String(e)}`);
+      return null;
+    }),
+    getAutomation(db, accountId, "appointment_confirm").catch((e): AutomationRow | null => {
+      console.error(`automations: appointment_confirm read failed for ${accountId}: ${String(e)}`);
+      return null;
+    }),
+    // POSITIONAL, like every sibling above: this promise sits between
+    // appointment_confirm and instant_reply, and so does its binding.
+    getAutomation(db, accountId, "quote_followup").catch((e): AutomationRow | null => {
+      console.error(`automations: quote_followup read failed for ${accountId}: ${String(e)}`);
+      return null;
+    }),
+    getAutomation(db, accountId, "instant_reply").catch((e): AutomationRow | null => {
+      console.error(`automations: instant_reply read failed for ${accountId}: ${String(e)}`);
+      return null;
+    }),
     // The default bodies name the company. Resolved through brandDisplayName
     // exactly as the passes' due-rows are (packages/db) — the brand name and
     // nothing else, so the preview cannot show what the send cannot, and a
@@ -50,60 +109,190 @@ export default async function AutomationsPage({
         ]);
         if (error) throw new Error(error.message);
         const acct = data as { timezone: string } | null;
-        return { brandName: brandDisplayName(branding), timezone: acct?.timezone ?? "UTC" };
+        return {
+          brandName: brandDisplayName(branding), timezone: acct?.timezone ?? "UTC",
+          replyToEmail: branding.replyToEmail as string | null | undefined,
+        };
       } catch (e) {
         console.error(`automations: account lookup failed for ${accountId}: ${String(e)}`);
-        return { brandName: "", timezone: "UTC" };
+        // `undefined` = UNREAD, distinct from `null` = not set: the
+        // marketing-email cards must not claim a reply-to is missing when it
+        // was only not read (see `marketingEmailMissing` below).
+        return { brandName: "", timezone: "UTC", replyToEmail: undefined as string | null | undefined };
       }
     })(),
     // The same gate the passes consult, so the page can say up front why a
-    // text would be skipped.
-    resolveSmsSender(db, accountId),
+    // text would be skipped. Degrades to the same refusal `resolveSmsSender`
+    // itself returns for a missing/unreadable row (fail closed).
+    resolveSmsSender(db, accountId).catch((e): SmsGate => {
+      console.error(`automations: sms sender read failed for ${accountId}: ${String(e)}`);
+      return { ok: false, reason: "a2p_not_approved" };
+    }),
     // READ-ONLY: a settings page must not create the calendar row on a GET.
     // A company that has never opened Calendar has no row yet; the nudge
     // card then shows its "booking page is off" state and the other two
     // cards render regardless.
-    getCalendarForAccount(db, accountId),
+    getCalendarForAccount(db, accountId).catch((e): CalendarRow | null => {
+      console.error(`automations: calendar read failed for ${accountId}: ${String(e)}`);
+      return null;
+    }),
     // APP_ORIGIN first, then the request's host — the same origin every
     // customer link carries (origin.ts). The pass builds the sent link from
     // ctx.origin the same way, so the preview shows the link that goes out.
-    headers().then((h) => originFrom(h)),
+    headers().then((h) => originFrom(h)).catch((e): string => {
+      console.error(`automations: origin lookup failed for ${accountId}: ${String(e)}`);
+      return "";
+    }),
+    // Part C. UNLIKE the account read beside it, this degrade must not show a
+    // plausible-but-wrong window: rendering `DEFAULT_QUIET_SETTINGS` as if it
+    // were the saved one and letting Save fire would silently overwrite the
+    // client's real hours with the platform default. So a failed read
+    // degrades to `null` — the card renders a Notice and a disabled form
+    // (the agency reloads to fix it, rather than pressing Save on a guess) —
+    // and one log line.
+    readQuietSettings(db, accountId).catch((e): QuietSettings | null => {
+      console.error(`automations: quiet-hours read failed for ${accountId}: ${String(e)}`);
+      return null;
+    }),
+    // The quote follow-up card's stage list. Flattened across pipelines and
+    // prefixed with the pipeline's name only when there is more than one, so
+    // a single-pipeline account (every account today) reads "Quoted" rather
+    // than "Sales · Quoted". Degrades to an empty list, which the card shows
+    // as its own "no pipeline stages yet" state with the form disabled.
+    listPipelinesWithStages(db, accountId).then((pipelines): StageOption[] => {
+      const many = pipelines.length > 1;
+      return pipelines.flatMap((p) => p.stages.map((s) => ({
+        id: s.id, label: many ? `${p.name} · ${s.name}` : s.name,
+      })));
+    }).catch((e): StageOption[] => {
+      console.error(`automations: pipeline stage read failed for ${accountId}: ${String(e)}`);
+      return [];
+    }),
+    // The reactivation card's address fact (decision A, 2026-09-22). A failed
+    // read is `undefined` — UNREAD — never `null`, which means "not set".
+    getMailingAddress(db, accountId).catch((e): string | null | undefined => {
+      console.error(`automations: mailing address read failed for ${accountId}: ${String(e)}`);
+      return undefined;
+    }),
   ]);
+
+  // What a marketing email — the check-in, and the referral ask by email
+  // (B21) — cannot go without, judged by the SAME function the saves refuse
+  // on and the passes skip on. One fact, both cards. A fact that was not READ is not
+  // reported missing: the card's warning is advice, and the save and the
+  // pass enforce regardless, so a false "your address is missing" would only
+  // send the operator to fix a field that is fine.
+  const judged = missingForMarketingEmail(mailingAddress, account.replyToEmail);
+  const marketingEmailMissing = {
+    mailingAddress: mailingAddress !== undefined && judged.mailingAddress,
+    replyTo: account.replyToEmail !== undefined && judged.replyTo,
+  };
 
   const bookingUrl = origin && calendar ? `${origin}/b/${calendar.public_id}` : "";
 
+  // The page reads in the order the customer lives it: the first touch, the
+  // appointment, after the job. Quiet hours comes LAST, under its own
+  // heading, because it is not a step in that journey but the one rule that
+  // holds every step above it back. Each card is its own view (DESIGN.md
+  // rule 8): its own action, validation, toast and one primary Save.
   return (
     <>
-      <PageHeader title={m["automations.title"]} />
-      <div className="max-w-2xl space-y-6 p-6">
-        <AutomationsSettings
-          automation={review}
-          brandName={account.brandName}
-          smsGate={smsGate}
-          saveAction={saveReviewRequestAction.bind(null, accountId)}
-        />
-        <NoShowNudgeCard
-          automation={noShow}
-          brandName={account.brandName}
-          smsGate={smsGate}
-          bookingUrl={bookingUrl}
-          calendarEnabled={calendar?.enabled ?? false}
-          saveAction={saveNoShowNudgeAction.bind(null, accountId)}
-        />
-        <SmsReminderCard
-          automation={smsReminder}
-          brandName={account.brandName}
-          accountTimezone={account.timezone}
-          smsGate={smsGate}
-          saveAction={saveSmsReminderAction.bind(null, accountId)}
-        />
-        <InstantReplyCard
-          automation={instantReply}
-          brandName={account.brandName}
-          smsGate={smsGate}
-          saveAction={saveInstantReplyAction.bind(null, accountId)}
-        />
+      <PageHeader
+        title={m["automations.title"]}
+        actions={<Link href={`/dashboard/accounts/${accountId}/activity`} className={buttonVariants({ variant: "ghost", size: "sm" })}>{m["automations.activityLink"]}</Link>}
+      />
+      <div className="max-w-2xl space-y-8 p-6">
+        <Group id="automations-group-first-touch" title={m["automations.group.firstTouch"]}>
+          {/* The very first thing a new lead receives. */}
+          <InstantReplyCard
+            automation={instantReply}
+            brandName={account.brandName}
+            smsGate={smsGate}
+            saveAction={saveInstantReplyAction.bind(null, accountId)}
+          />
+          {/* Still before any booking: the only recipe driven by the
+              pipeline rather than by a booking, and the only one whose card
+              has to say what does NOT happen on its own. */}
+          <QuoteFollowupCard
+            automation={quoteFollowup}
+            brandName={account.brandName}
+            smsGate={smsGate}
+            stages={stages}
+            saveAction={saveQuoteFollowupAction.bind(null, accountId)}
+          />
+        </Group>
+        <Group id="automations-group-appointment" title={m["automations.group.appointment"]}>
+          {/* In the order they fire: two days before, two hours before,
+              after a missed one. */}
+          <AppointmentConfirmCard
+            automation={appointmentConfirm}
+            brandName={account.brandName}
+            accountTimezone={account.timezone}
+            smsGate={smsGate}
+            saveAction={saveAppointmentConfirmAction.bind(null, accountId)}
+          />
+          <SmsReminderCard
+            automation={smsReminder}
+            brandName={account.brandName}
+            accountTimezone={account.timezone}
+            smsGate={smsGate}
+            saveAction={saveSmsReminderAction.bind(null, accountId)}
+          />
+          <NoShowNudgeCard
+            automation={noShow}
+            brandName={account.brandName}
+            smsGate={smsGate}
+            bookingUrl={bookingUrl}
+            calendarEnabled={calendar?.enabled ?? false}
+            saveAction={saveNoShowNudgeAction.bind(null, accountId)}
+          />
+        </Group>
+        <Group id="automations-group-after-job" title={m["automations.group.afterJob"]}>
+          {/* The ladder: "would you leave a review?", then "know anyone
+              else?", then the recipe that reaches back months later. */}
+          <AutomationsSettings
+            automation={review}
+            brandName={account.brandName}
+            smsGate={smsGate}
+            saveAction={saveReviewRequestAction.bind(null, accountId)}
+          />
+          <ReferralAskCard
+            automation={referralAsk}
+            brandName={account.brandName}
+            accountId={accountId}
+            smsGate={smsGate}
+            missing={marketingEmailMissing}
+            saveAction={saveReferralAskAction.bind(null, accountId)}
+          />
+          <ReactivationCard
+            automation={reactivation}
+            brandName={account.brandName}
+            accountId={accountId}
+            missing={marketingEmailMissing}
+            saveAction={saveReactivationAction.bind(null, accountId)}
+          />
+        </Group>
+        <Group id="automations-group-rules" title={m["automations.group.rules"]}>
+          <QuietHoursCard settings={quiet} zoneLabel={account.timezone} saveAction={saveQuietHoursAction.bind(null, accountId)} />
+        </Group>
       </div>
     </>
+  );
+}
+
+/**
+ * One group of cards under a Label-role heading (DESIGN.md type roles: Geist
+ * Mono 500, 10px, +0.14em, uppercase; the class string `usage-card.tsx` and
+ * `work-list.tsx` already use). The page's `<h1>` is PageHeader's; each group
+ * is a section named by its own `<h2>`.
+ */
+function Group({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
+  return (
+    <section aria-labelledby={id} className="space-y-3">
+      <h2 id={id} className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+        {title}
+      </h2>
+      <div className="space-y-6">{children}</div>
+    </section>
   );
 }

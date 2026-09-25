@@ -88,9 +88,14 @@ test("a client sees only their own account, and nothing when access is off", asy
   // The nav unit test was updated when Task 3 shipped; this file carries its
   // own separate list and was not, and a `next start` production-build run
   // is what caught it, not a reviewer reading the diff.
+  // "What went out" joined directly after "Calls" 2026-09-21 (part C, A9):
+  // both audiences, the record of what the system sent, held and skipped on
+  // the client's behalf. Its own page title, not "Activity" — that word
+  // already names the account dashboard's Activity card, a different card
+  // (cleanup item 2, same date).
   const CLIENT_NAV = [
-    "Dashboard", "To do", "Website", "Contacts", "Opportunities", "Conversations", "Calls", "Forms", "Calendar",
-    "Branding",
+    "Dashboard", "To do", "Website", "Contacts", "Opportunities", "Conversations", "Calls", "What went out", "Forms",
+    "Calendar", "Branding",
   ];
   await expect(page.locator("aside nav a")).toHaveText(CLIENT_NAV);
   for (const label of CLIENT_NAV) {

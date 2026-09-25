@@ -13,17 +13,26 @@
  * exactly as it is — it is still the fast path, and it deletes by known id
  * rather than by search.
  *
- * ⚠️ This runs against the SAME database, Clerk instance and bucket that hold
- * `Test Client One` and danlo's own identity. Every decision about what to
- * delete is delegated to `stale.ts`, which is pure and directly tested; this
- * module does no matching of its own. It also reports before it deletes, and
- * `dryRun` is the default at every entry point that a human can invoke.
+ * ⚠️ This runs against whatever database and bucket the run's env points at,
+ * and the Clerk DEVELOPMENT instance. That database holds `Test Client One`
+ * wherever it is: on the separate CI Supabase project it is created by
+ * `pnpm --filter @bis/db ci:seed`. Production is refused before this module
+ * is reached (auth.setup.ts, sweep.setup.ts and playwright.config.ts run
+ * ./production-guard.ts first), but the Clerk instance holds danlo's own
+ * identity in every case (production still signs in against it), and a
+ * developer may point a run at a project of
+ * their own. So the care below does not relax on the CI project: every
+ * decision about what to delete is delegated to
+ * `stale.ts`, which is pure and directly tested; this module does no matching
+ * of its own. It also reports before it deletes, and `dryRun` is the default
+ * at every entry point that a human can invoke.
  */
 import { clerkClient } from "@clerk/nextjs/server";
-import { serviceDb } from "@bis/db";
+import { serviceDb, ACCOUNT_OWNED_TABLES } from "@bis/db";
 import {
-  FIXTURE_ACCOUNT_RE, FIXTURE_EMAIL_RE, STALE_AFTER_MS,
-  isStaleFixture, isUuid,
+  FIXTURE_BLUEPRINT_PREFILTER, FIXTURE_EMAIL_RE, FIXTURE_NAME_PREFILTER, STALE_AFTER_MS,
+  isStaleFixture, isStaleFixtureAccount, isStaleFixtureBlueprint, isStaleFixtureForm,
+  isStaleFixturePlan, isUuid,
 } from "./stale";
 
 const BUCKET = "brand-logos";
@@ -37,12 +46,19 @@ export type SweepReport = {
   accounts: Array<{ id: string; name: string }>;
   clerkUsers: Array<{ id: string; email: string }>;
   clerkOrgs: Array<{ id: string; name: string }>;
+  strandedForms: Array<{ id: string; name: string; accountId: string }>;
+  strandedBlueprints: Array<{ id: string; name: string }>;
+  strandedPlans: Array<{ id: string; name: string }>;
   orphanObjects: string[];
   errors: string[];
 };
 
-const empty = (): SweepReport =>
-  ({ accounts: [], clerkUsers: [], clerkOrgs: [], orphanObjects: [], errors: [] });
+/** Exported so auth.teardown.ts builds its report from the same shape
+ *  instead of a literal that has to learn every new leg by hand. */
+export const emptySweepReport = (): SweepReport => ({
+  accounts: [], clerkUsers: [], clerkOrgs: [], strandedForms: [], strandedBlueprints: [],
+  strandedPlans: [], orphanObjects: [], errors: [],
+});
 
 /**
  * Child tables first, in the order teardown already proves works: `contacts`
@@ -74,16 +90,124 @@ export async function deleteAccountCascade(
   // auth.teardown.ts runs THIS list rather than a second copy that can
   // drift — the drift already happened once (teardown lacked these tables).
   // 0029: traffic restricts on sites, sites on accounts — these three first.
-  for (const table of ["site_traffic_breakdown", "site_traffic_daily", "sites",
-                       "calls", "bookings", "messages", "conversations", "calendars",
-                       "checklist_items", "form_submissions",
-                       "forms", "contacts", "events", "voice_profiles", "phone_numbers",
-                       "automations"]) {
+  // `concierge_conversations_form_id_fkey` is ON DELETE RESTRICT to `forms`
+  // (migration 0042), same as `form_submissions.form_id` (0006) — both have
+  // to go before `forms`.
+  //
+  // The list itself is packages/db's ACCOUNT_OWNED_TABLES — the schema's one
+  // FK-ordered delete list, which the db suite's own fixtures prove on every
+  // run — and no longer a second copy kept here. The copy that used to live
+  // here had drifted by nine tables (no pipelines, pipeline_stages,
+  // custom_fields, custom_values, tags, opportunities, notes, tasks or
+  // contact_tags), which was harmless only while the sole account it swept
+  // was the per-run fixture. The `E2E Co` company `blueprints.spec.ts`
+  // creates has a blueprint APPLIED to it — pipelines, stages, custom
+  // fields, tags — and `pipelines.account_id` has no ON DELETE behaviour
+  // (0003), so the old list would have admitted that account and then
+  // failed on its `accounts` delete, every sweep, forever.
+  // Errors are still REPORTED per table rather than thrown (packages/db's
+  // own deleteAccountCascade throws on the first one): a sweep that cleared
+  // most of an account did more good than one that stopped at the first.
+  for (const table of ACCOUNT_OWNED_TABLES) {
     const { error } = await db.from(table).delete().eq("account_id", accountId);
     if (error) report.errors.push(`${table} delete for ${accountId}: ${error.message}`);
   }
   const { error } = await db.from("accounts").delete().eq("id", accountId);
   if (error) report.errors.push(`accounts delete for ${accountId}: ${error.message}`);
+}
+
+/**
+ * Clerk paginates every list endpoint with `limit`/`offset` and reports how
+ * many rows exist remotely as `totalCount` (both `getUserList` and
+ * `getOrganizationList` share this shape — `ClerkPaginationRequest` /
+ * `PaginatedResourceResponse` in `@clerk/backend`'s `UserApi.d.ts` /
+ * `OrganizationApi.d.ts`, `dist/api/resources/Deserializer.d.ts` for
+ * `totalCount`). A single `limit: 100` call therefore only ever sees the
+ * newest 100 identities (Clerk's default order is newest-first) — anything
+ * stale on page 2+ was never reachable and accumulates forever in the Clerk
+ * instance production shares.
+ *
+ * This collects every page BEFORE the caller decides anything: the sweep
+ * deletes some of what it finds, and deleting mid-page shifts every
+ * remaining offset by the number removed so far, silently skipping whatever
+ * lands in the gap. Collecting first means every decision is made against a
+ * stable snapshot.
+ *
+ * Stops the instant a page comes back empty — a defensive floor against a
+ * `totalCount` that never counts down, not an expected path.
+ */
+const CLERK_PAGE_SIZE = 100;
+
+async function fetchAllPages<T>(
+  fetchPage: (page: { limit: number; offset: number }) => Promise<{ data: T[]; totalCount: number }>,
+): Promise<T[]> {
+  const all: T[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = await fetchPage({ limit: CLERK_PAGE_SIZE, offset });
+    if (page.data.length === 0) break;
+    all.push(...page.data);
+    offset += page.data.length;
+    if (offset >= page.totalCount) break;
+  }
+  return all;
+}
+
+/** The slice of the real Clerk client this module needs — narrow on purpose
+ *  so a unit test can inject a fake without a real Clerk instance. The real
+ *  client (`clerkClient()` from `@clerk/nextjs/server`) satisfies this
+ *  structurally; nothing here imports its type. */
+export type ClerkForSweep = {
+  users: {
+    getUserList: (
+      params: { query?: string; limit?: number; offset?: number },
+    ) => Promise<{ data: Array<{ id: string; emailAddresses: Array<{ emailAddress: string }> }>; totalCount: number }>;
+    deleteUser: (userId: string) => Promise<unknown>;
+  };
+  organizations: {
+    getOrganizationList: (
+      params: { limit?: number; offset?: number },
+    ) => Promise<{ data: Array<{ id: string; name: string }>; totalCount: number }>;
+    deleteOrganization: (organizationId: string) => Promise<unknown>;
+  };
+};
+
+/** Exported for `sweep.test.ts`, which injects a fake `ClerkForSweep` — real
+ *  Clerk identities are exactly what this module must never touch in a unit
+ *  test. */
+export async function sweepClerkUsers(
+  clerk: ClerkForSweep, report: SweepReport, now: number, maxAgeMs: number, dryRun: boolean,
+): Promise<void> {
+  try {
+    const users = await fetchAllPages((page) =>
+      clerk.users.getUserList({ query: "e2e-client-", ...page }));
+    for (const user of users) {
+      const email = user.emailAddresses[0]?.emailAddress ?? "";
+      if (!isStaleFixture(email, FIXTURE_EMAIL_RE, now, maxAgeMs)) continue;
+      report.clerkUsers.push({ id: user.id, email });
+      if (!dryRun) await clerk.users.deleteUser(user.id);
+    }
+  } catch (e) {
+    report.errors.push(`clerk users: ${String(e)}`);
+  }
+}
+
+/** Exported for `sweep.test.ts`, same reason as `sweepClerkUsers`. */
+export async function sweepClerkOrgs(
+  clerk: ClerkForSweep, report: SweepReport, now: number, maxAgeMs: number, dryRun: boolean,
+): Promise<void> {
+  try {
+    const orgs = await fetchAllPages((page) => clerk.organizations.getOrganizationList(page));
+    for (const org of orgs) {
+      // Same decision as the accounts leg: an org is named after its account
+      // (auth.setup.ts by hand, blueprints.spec.ts through createClientAccount).
+      if (!isStaleFixtureAccount(org.name, now, maxAgeMs)) continue;
+      report.clerkOrgs.push({ id: org.id, name: org.name });
+      if (!dryRun) await clerk.organizations.deleteOrganization(org.id);
+    }
+  } catch (e) {
+    report.errors.push(`clerk orgs: ${String(e)}`);
+  }
 }
 
 /** Every object under one account's Storage prefix. */
@@ -115,21 +239,24 @@ async function removePrefix(
 export async function sweepStaleFixtures({
   now = Date.now(), dryRun = true, maxAgeMs = STALE_AFTER_MS,
 }: { now?: number; dryRun?: boolean; maxAgeMs?: number } = {}): Promise<SweepReport> {
-  const report = empty();
+  const report = emptySweepReport();
   const db = serviceDb();
 
   // 1. Fixture accounts, matched by name and then by age.
   //
-  // The `like` is a prefilter for the network, never the decision: `isStaleFixture`
-  // is what admits a row, and it refuses "E2E Client Co-op 1786412389258",
-  // which this pattern would happily return.
+  // The `like` is a prefilter for the network, never the decision:
+  // `isStaleFixtureAccount` is what admits a row, and it refuses
+  // "E2E Client Co-op 1786412389258", which this pattern would happily
+  // return. "E2E %" rather than one prefix per shape because the shapes are
+  // now two (`E2E Client Co`, `E2E Co`) and one prefilter covering both is
+  // the same one the forms leg below already uses.
   const { data: accounts, error: accountsError } = await db
-    .from("accounts").select("id, name, clerk_org_id").like("name", "E2E Client Co %");
+    .from("accounts").select("id, name, clerk_org_id").like("name", FIXTURE_NAME_PREFILTER);
   if (accountsError) {
     report.errors.push(`accounts select: ${accountsError.message}`);
   }
   const stale = (accounts ?? []).filter(
-    (a: { name: string }) => isStaleFixture(a.name, FIXTURE_ACCOUNT_RE, now, maxAgeMs),
+    (a: { name: string }) => isStaleFixtureAccount(a.name, now, maxAgeMs),
   ) as Array<{ id: string; name: string; clerk_org_id: string | null }>;
 
   for (const account of stale) {
@@ -141,30 +268,13 @@ export async function sweepStaleFixtures({
 
   // 2. Clerk identities. Independent of step 1 on purpose: a run killed
   // between createUser and createAccount leaves a user with no account row,
-  // so keying off accounts alone would never find it.
+  // so keying off accounts alone would never find it. Both legs page through
+  // every Clerk result rather than trusting a single `limit: 100` call — see
+  // `fetchAllPages`'s own comment for why a single page silently strands
+  // anything past the first 100.
   const clerk = await clerkClient();
-  try {
-    const users = await clerk.users.getUserList({ query: "e2e-client-", limit: 100 });
-    for (const user of users.data) {
-      const email = user.emailAddresses[0]?.emailAddress ?? "";
-      if (!isStaleFixture(email, FIXTURE_EMAIL_RE, now, maxAgeMs)) continue;
-      report.clerkUsers.push({ id: user.id, email });
-      if (!dryRun) await clerk.users.deleteUser(user.id);
-    }
-  } catch (e) {
-    report.errors.push(`clerk users: ${String(e)}`);
-  }
-
-  try {
-    const orgs = await clerk.organizations.getOrganizationList({ limit: 100 });
-    for (const org of orgs.data) {
-      if (!isStaleFixture(org.name, FIXTURE_ACCOUNT_RE, now, maxAgeMs)) continue;
-      report.clerkOrgs.push({ id: org.id, name: org.name });
-      if (!dryRun) await clerk.organizations.deleteOrganization(org.id);
-    }
-  } catch (e) {
-    report.errors.push(`clerk orgs: ${String(e)}`);
-  }
+  await sweepClerkUsers(clerk, report, now, maxAgeMs, dryRun);
+  await sweepClerkOrgs(clerk, report, now, maxAgeMs, dryRun);
 
   // 3. Orphaned Storage objects — a prefix whose account row no longer
   // exists. Runs AFTER the deletes above so it also catches what they just
@@ -191,6 +301,102 @@ export async function sweepStaleFixtures({
     report.orphanObjects.push(...objects);
   }
 
+  // 4. Forms a killed `forms.spec.ts` run left behind. Unlike every leg
+  // above, these live on the SEEDED account (`Test Client One`), not a
+  // per-run fixture account — `forms.spec.ts` mints `E2E Form <stamp>` /
+  // `E2E Spam <stamp>` there and deletes them in a `finally` that a killed
+  // run (Ctrl-C, a crashed dev server, a memory kill) never reaches.
+  //
+  // The `like` is a prefilter for the network, never the decision, exactly
+  // as the accounts leg above: without it every real client's every form
+  // would be fetched on every run, forever. `isStaleFixtureForm` is what
+  // actually admits a row.
+  const { data: forms, error: formsError } = await db
+    .from("forms").select("id, name, account_id").like("name", FIXTURE_NAME_PREFILTER);
+  if (formsError) {
+    report.errors.push(`forms select: ${formsError.message}`);
+  }
+  const staleForms = (forms ?? []).filter(
+    (f: { name: string }) => isStaleFixtureForm(f.name, now),
+  ) as Array<{ id: string; name: string; account_id: string }>;
+
+  for (const form of staleForms) {
+    report.strandedForms.push({ id: form.id, name: form.name, accountId: form.account_id });
+    if (!dryRun) {
+      // Child-first — the same order forms.spec.ts's own `finally` uses
+      // (form_submissions before forms). Contacts and conversations are
+      // deliberately left alone: a stranded form's contact cannot be told
+      // apart from a real one on the seeded account by name alone, and the
+      // forms this leg has found so far all have zero submissions anyway.
+      const { error: subsError } = await db
+        .from("form_submissions").delete().eq("form_id", form.id);
+      if (subsError) {
+        report.errors.push(`form_submissions delete for ${form.id}: ${subsError.message}`);
+      }
+      const { error: formError } = await db.from("forms").delete().eq("id", form.id);
+      if (formError) report.errors.push(`forms delete for ${form.id}: ${formError.message}`);
+    }
+  }
+
+  // 5. Blueprints a killed `blueprints.spec.ts` run left behind. Agency-
+  // scoped rows with no `account_id` (migration 0007), and
+  // `source_account_id` is `on delete set null` — so neither the account leg
+  // above nor any account delete anywhere ever removes one. Stranded ones
+  // have already broken unrelated tests that counted blueprints (that spec's
+  // own comment). The `like` is a prefilter; `isStaleFixtureBlueprint`
+  // decides. Nothing references `blueprints`, so the row goes on its own.
+  const { data: blueprints, error: blueprintsError } = await db
+    .from("blueprints").select("id, name").like("name", FIXTURE_BLUEPRINT_PREFILTER);
+  if (blueprintsError) {
+    report.errors.push(`blueprints select: ${blueprintsError.message}`);
+  }
+  const staleBlueprints = (blueprints ?? []).filter(
+    (b: { name: string }) => isStaleFixtureBlueprint(b.name, now, maxAgeMs),
+  ) as Array<{ id: string; name: string }>;
+
+  for (const blueprint of staleBlueprints) {
+    report.strandedBlueprints.push({ id: blueprint.id, name: blueprint.name });
+    if (!dryRun) {
+      const { error } = await db.from("blueprints").delete().eq("id", blueprint.id);
+      if (error) report.errors.push(`blueprints delete for ${blueprint.id}: ${error.message}`);
+    }
+  }
+
+  // 6. Plans a killed `plans.spec.ts` run left behind. `plans` is AGENCY-
+  // scoped exactly like `blueprints` — no `account_id`, nothing cascades it —
+  // so a killed run strands `E2E Plan <stamp>` (created through the UI) or
+  // `E2E Canary <stamp>` (written straight to the table by the boundary
+  // test) forever without its own leg. The `like` is a prefilter, never the
+  // decision; `isStaleFixturePlan` decides.
+  //
+  // A plan referenced by `account_billing` (migration 0051, `on delete
+  // restrict`) cannot be deleted this way — e2e never creates billing rows,
+  // so this is not expected to fire, but if it ever does the delete error is
+  // reported like every other leg, never thrown.
+  //
+  // Deliberately NOT calling Stripe here: `plans.spec.ts`'s own `afterAll`
+  // deactivates the Stripe product on a completed run, but a killed run
+  // leaves a stranded TEST-mode product too. That is harmless (no real
+  // customer, no live charge) and this sweep only ever touches Postgres/Clerk
+  // rows that are stranded in the SHARED environment — a leftover test-mode
+  // Stripe product is not.
+  const { data: plans, error: plansError } = await db
+    .from("plans").select("id, name").like("name", FIXTURE_NAME_PREFILTER);
+  if (plansError) {
+    report.errors.push(`plans select: ${plansError.message}`);
+  }
+  const stalePlans = (plans ?? []).filter(
+    (p: { name: string }) => isStaleFixturePlan(p.name, now, maxAgeMs),
+  ) as Array<{ id: string; name: string }>;
+
+  for (const plan of stalePlans) {
+    report.strandedPlans.push({ id: plan.id, name: plan.name });
+    if (!dryRun) {
+      const { error } = await db.from("plans").delete().eq("id", plan.id);
+      if (error) report.errors.push(`plans delete for ${plan.id}: ${error.message}`);
+    }
+  }
+
   return report;
 }
 
@@ -204,6 +410,12 @@ export function formatSweepReport(report: SweepReport, dryRun: boolean): string 
     ...report.clerkUsers.map((u) => `    ${u.email} (${u.id})`),
     `  clerk orgs:      ${report.clerkOrgs.length}`,
     ...report.clerkOrgs.map((o) => `    ${o.name} (${o.id})`),
+    `  stranded forms:  ${report.strandedForms.length}`,
+    ...report.strandedForms.map((f) => `    ${f.name} (${f.id}, account ${f.accountId})`),
+    `  blueprints:      ${report.strandedBlueprints.length}`,
+    ...report.strandedBlueprints.map((b) => `    ${b.name} (${b.id})`),
+    `  plans:           ${report.strandedPlans.length}`,
+    ...report.strandedPlans.map((p) => `    ${p.name} (${p.id})`),
     `  storage objects: ${report.orphanObjects.length}`,
     ...report.orphanObjects.map((p) => `    ${p}`),
   ];

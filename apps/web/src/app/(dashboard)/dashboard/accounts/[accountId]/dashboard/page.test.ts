@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { WorkRow } from "@bis/db";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
+import { CHECKLIST_CATALOGUE } from "@/lib/checklist-catalogue";
 
 /**
  * The regression this file exists to guard: the dashboard used to render the
@@ -77,8 +78,9 @@ const dbMocks = vi.hoisted(() => ({
   listAccountWork: vi.fn(),
 }));
 // mergeChecklist (@/lib/checklist-catalogue) is NOT mocked — the real
-// 7-item CHECKLIST_CATALOGUE is what makes "the right counts" a meaningful
-// assertion instead of a number this file made up itself.
+// CHECKLIST_CATALOGUE (its length read below, never hard-coded here) is
+// what makes "the right counts" a meaningful assertion instead of a number
+// this file made up itself.
 /** The screen's resolved zone (lib/zone.ts) — mutable so a test can put the
  *  page into the "guessed" state without a second `vi.mock`. */
 let resolvedZone: {
@@ -145,11 +147,17 @@ function row(itemKey: string): { id: string; item_key: string; title: string | n
   return { id: itemKey, item_key: itemKey, title: null, done_at: "2026-01-01T00:00:00Z", done_by: "user_1", note: null, position: 0 };
 }
 
-// The full CHECKLIST_CATALOGUE (checklist-catalogue.ts), so a test can drive
-// "everything done" without hard-coding a key list that drifts from it.
-const ALL_CATALOGUE_KEYS = [
-  "phone_number", "email_domain", "form_notify", "reply_to", "gbp_connect", "invite_owner",
-];
+// Every catalogue key (checklist-catalogue.ts) EXCEPT `a2p_registration`,
+// derived rather than hand-listed so a new catalogue item is covered by
+// construction instead of silently under-counted here. `a2p_registration` is
+// excluded on purpose, not forgotten: this fixture always sets
+// `getA2pRegistration` too, which makes that one key DERIVED
+// (`mergeChecklist`, checklist-catalogue.ts:83) rather than a stored tick —
+// mapping it through `row()` would create a stored row whose `done_at` the
+// merge never even reads for that key.
+const ALL_CATALOGUE_KEYS = CHECKLIST_CATALOGUE
+  .map((item) => item.key)
+  .filter((key) => key !== "a2p_registration");
 
 // Shared by both describe blocks below (checklist row + work row) — the same
 // reset either page-level row needs, factored out rather than duplicated
@@ -169,8 +177,8 @@ function resetFixtures() {
   dbMocks.listBookingCreationsBetween.mockResolvedValue([]);
   dbMocks.listOpportunityValuesCreatedBetween.mockResolvedValue([]);
   dbMocks.listAccountWork.mockResolvedValue([]);
-  // Default: 1 of 7 catalogue items done, A2P not approved — mirrors
-  // blueprints.spec.ts's own GAP 3 fixture shape (1 ticked, A2P rejected).
+  // Default: one item ticked, A2P not approved — mirrors blueprints.spec.ts's
+  // own GAP 3 fixture shape (1 ticked, A2P rejected).
   dbMocks.listChecklistState.mockResolvedValue([row("phone_number")]);
   dbMocks.getA2pRegistration.mockResolvedValue({ status: "rejected", updatedAt: null });
 }
@@ -182,7 +190,9 @@ describe("AccountDashboardPage — the checklist row (replaces the old full Chec
     await renderToStaticMarkup(await AccountDashboardPage(route()));
 
     expect(checklistRowProps.current).not.toBeNull();
-    expect(checklistRowProps.current).toEqual({ accountId: "acct1", done: 1, total: 7 });
+    expect(checklistRowProps.current).toEqual({
+      accountId: "acct1", done: 1, total: CHECKLIST_CATALOGUE.length,
+    });
   });
 
   it("a client never sees the row — nor the completed-state review link — regardless of checklist state", async () => {

@@ -154,3 +154,175 @@ describe("buildSystemPrompt", () => {
     expect(buildSystemPrompt(base, now)).not.toContain("transfer_to_human");
   });
 });
+
+describe("buildSystemPrompt medium", () => {
+  // THE PROPERTY THAT MATTERS MOST: every existing caller passes no `medium`
+  // at all, and their prompt must not move by one byte. A prompt change is a
+  // behaviour change on a live phone line.
+  it("is byte-identical when no medium is given and when medium is phone", () => {
+    expect(buildSystemPrompt(baseInput({ medium: "phone" }), now))
+      .toBe(buildSystemPrompt(base, now));
+    // The Spanish-only LANGUAGE branch is the one line item 6 (Branch 2
+    // hardening) touches — its own byte-identity proof, not covered by the
+    // bilingual case above, since "both" and "es" take different branches.
+    expect(buildSystemPrompt(baseInput({ languages: "es", medium: "phone" }), now))
+      .toBe(buildSystemPrompt(baseInput({ languages: "es" }), now));
+  });
+
+  it("says phone receptionist and phone call by default", () => {
+    const p = buildSystemPrompt(base, now);
+    expect(p).toContain("the phone receptionist for Rio Roofing");
+    expect(p).toContain("This is a phone call");
+  });
+
+  it("says neither of those on the web", () => {
+    const p = buildSystemPrompt(baseInput({ medium: "web" }), now);
+    expect(p).not.toContain("phone receptionist");
+    expect(p).not.toContain("This is a phone call");
+    expect(p).toContain("the assistant on the website for Rio Roofing");
+    expect(p).toContain("This is a text chat");
+  });
+
+  it("keeps the tenant's own facts, limits and tools on both mediums", () => {
+    for (const medium of ["phone", "web"] as const) {
+      const p = buildSystemPrompt(baseInput({ medium }), now);
+      expect(p).toContain(base.facts);
+      expect(p).toContain("Never quote a price");
+      expect(p).toContain("capture_lead");
+    }
+  });
+
+  // IMPORTANT 2 (review of commit 129b43f): the old web demo appended a
+  // notice AFTER a base prompt that still told the model to take a message,
+  // log a transcript, and ask for a callback number — tools that do not
+  // exist on the web. `WEB_TOOL_NOTICE` recreated exactly that contradiction
+  // one layer up. The fix is source-conditional, not an appendix: every
+  // place the phone prompt would say "take a message" resolves to
+  // capture_lead on the web instead.
+  describe("the web prompt never promises a tool it was not given", () => {
+    it("names capture_lead as the ONLY tool, and never offers take_message or log_transcript as things it can call", () => {
+      const p = buildSystemPrompt(baseInput({ medium: "web", bookingEnabled: false }), now);
+      expect(p).toContain("capture_lead is the ONLY tool you have here");
+      // The notice is ALLOWED to name take_message and log_transcript to say
+      // they do not exist — what must never appear is the PHONE bullet that
+      // offers them as callable tools.
+      // MUTATION: leave the phone TOOLS bullets unconditional — this FAILS,
+      // and a web visitor is told Sofía can take a message that nothing
+      // records.
+      expect(p).not.toContain("take_message(body, callbackNumber)");
+      expect(p).not.toContain("log_transcript is called automatically");
+    });
+
+    it("never offers to take a message or asks for a callback number, anywhere in the prompt", () => {
+      const p = buildSystemPrompt(baseInput({
+        medium: "web", bookingEnabled: false, afterHours: "message_only", callerNumber: null,
+      }), now);
+      // MUTATION: revert the IDENTITY line's `wouldRatherTalkToAPerson` to
+      // its old unconditional ternary — this FAILS, and the AFTER HOURS,
+      // HARD LIMITS and no-phone-booking lines below still contain the
+      // phrase too, so any one of them left unguarded also turns this red.
+      expect(p).not.toMatch(/take a message/i);
+      expect(p).not.toMatch(/callback number/i);
+      // IMPORTANT A (second-round review of 108b822): the phone capture_lead
+      // bullet names a `fields` wrapper and a `businessName` capture that the
+      // web tool (`CAPTURE_LEAD_TOOL`, lib/concierge/prompt.ts) does not have
+      // — flat properties, no wrapper, no businessName. A model following the
+      // phone bullet emits `{"fields":{...}}`, `parseCaptureLead` finds no
+      // top-level `fullName`, and the lead is silently dropped.
+      // MUTATION: leave the capture_lead TOOLS bullet unconditional — this
+      // FAILS, and the web prompt still tells the model to wrap its call in
+      // a `fields` object and capture a `businessName` it was never given a
+      // slot for.
+      expect(p).not.toContain("businessName");
+      expect(p).not.toContain("capture_lead(fields)");
+    });
+
+    it("describes capture_lead's real flat web shape, not the phone's fields wrapper", () => {
+      // IMPORTANT A: the web tool's real schema (CAPTURE_LEAD_TOOL) is FLAT —
+      // fullName/email/phone/need at the top level, additionalProperties:
+      // false, no `fields` wrapper, no `businessName`. The web prompt must
+      // describe THAT shape, not the phone tool's.
+      const web = buildSystemPrompt(baseInput({ medium: "web", bookingEnabled: false }), now);
+      expect(web).toContain("capture_lead(fullName, email, phone, need)");
+      expect(web).not.toContain("capture_lead(fields)");
+      // The phone bullet is BYTE-UNCHANGED — this is the live line.
+      const phone = buildSystemPrompt(baseInput({ bookingEnabled: false }), now);
+      expect(phone).toContain(
+        "- capture_lead(fields) — record who the caller is and what they need. "
+        + "Required fields: fullName, need. Also capture when offered: email, businessName.",
+      );
+    });
+
+    it("says visitor, not caller, in the IDENTITY line on the web; the phone line is unchanged", () => {
+      const web = buildSystemPrompt(baseInput({ medium: "web" }), now);
+      expect(web).toContain("get straight to what the visitor needs");
+      expect(web).toContain("If a visitor asks directly whether");
+      expect(web).not.toContain("what the caller needs");
+      expect(web).not.toContain("If a caller asks directly");
+      const phone = buildSystemPrompt(base, now);
+      expect(phone).toContain("get straight to what the caller needs");
+      expect(phone).toContain("If a caller asks directly whether");
+    });
+
+    it("says visitor, not caller, in the bilingual LANGUAGE line on the web; the phone line is unchanged", () => {
+      const web = buildSystemPrompt(baseInput({ medium: "web" }), now);
+      expect(web).toContain("the visitor uses");
+      expect(web).not.toContain("the caller uses");
+      const phone = buildSystemPrompt(base, now);
+      expect(phone).toContain("the caller uses");
+    });
+
+    // Item 6 (Branch 2 hardening): the Spanish-only LANGUAGE branch still
+    // said "caller" on the web — an es-only tenant is a real configuration
+    // in this market, and it never went through the "both" branch above.
+    it("says visitor, not caller, in the Spanish-only LANGUAGE line on the web; the phone line is unchanged", () => {
+      // callerNumber: null — the real value the concierge route always
+      // passes (route.ts's own buildSystemPrompt call), since text has no
+      // caller ID. `base.callerNumber` is a PHONE fixture value and would
+      // otherwise leak an unrelated, pre-existing "The caller is calling
+      // from…" line into this assertion — out of this item's scope, which is
+      // the LANGUAGE branch's own word only.
+      const web = buildSystemPrompt(baseInput({ languages: "es", medium: "web", callerNumber: null }), now);
+      expect(web).toContain("LANGUAGE — Speak Spanish. If a visitor uses English");
+      // MUTATION: revert `${audienceWord}` to the literal "caller" — this
+      // FAILS.
+      expect(web).not.toContain("If a caller uses English");
+      const phone = buildSystemPrompt(baseInput({ languages: "es" }), now);
+      expect(phone).toContain("If a caller uses English");
+    });
+
+    it("resolves 'would rather talk to a person' to capture_lead in the IDENTITY line", () => {
+      const p = buildSystemPrompt(baseInput({ medium: "web", bookingEnabled: false }), now);
+      expect(p).toContain(
+        "use capture_lead to get their name and a way to reach them, and say the "
+        + "team will follow up if they would rather talk to a person",
+      );
+    });
+
+    it("gives the no-phone-booking fallback web wording, and the phone gets its own unchanged", () => {
+      const web = buildSystemPrompt(baseInput({ medium: "web", bookingEnabled: false }), now);
+      expect(web).toContain("This business does not take bookings through this chat");
+      const phone = buildSystemPrompt(baseInput({ bookingEnabled: false }), now);
+      // The phone branch is BYTE-UNCHANGED — this is the live line, and a
+      // medium-conditional edit must not move it.
+      expect(phone).toContain(
+        "This business does not take bookings by phone. If a caller asks to "
+        + "schedule something, take a message with their details and say "
+        + "someone will call them back to arrange it.",
+      );
+    });
+
+    it("gives the AFTER HOURS notice web wording, and the phone gets its own unchanged", () => {
+      const web = buildSystemPrompt(baseInput({
+        medium: "web", bookingEnabled: false, afterHours: "message_only",
+      }), now);
+      expect(web).toContain("AFTER HOURS");
+      expect(web).not.toMatch(/take a message/i);
+      const phone = buildSystemPrompt(baseInput({ afterHours: "message_only" }), now);
+      expect(phone).toContain(
+        "AFTER HOURS — If the business is closed right now, say so briefly "
+        + "and take a message; do not attempt anything else.",
+      );
+    });
+  });
+});

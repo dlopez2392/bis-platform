@@ -17,6 +17,7 @@ export { createContact, updateContact, listContacts, getContact,
          addTagToContact, removeTagFromContact, listContactTags, fillContactBlanks,
          countContacts, deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
          type ContactInput, type SortKey, type SortDir } from "./contacts";
+export { setMarketingEmailOptOut } from "./contacts";
 export { buildMatchIndex, applyImportBatch,
          type MatchIndex, type ImportRow } from "./contact-import";
 export { addNote, listNotes, addTask, listContactTasks, completeTask, reopenTask } from "./activities";
@@ -52,15 +53,17 @@ export { listChecklistState, setChecklistItem, addCustomChecklistItem,
          type ChecklistStateRow } from "./checklist";
 export { uploadBrandLogo, removeBrandLogo, brandLogoUrl, setBranding, getBranding, brandDisplayName,
          type Branding } from "./branding";
+export { getMailingAddress } from "./branding";
 export { getSendingIdentity, setFromEmail, type SendingIdentity } from "./sending-identity";
 export { getOrCreateCalendar, getCalendarForAccount, getCalendarByPublicId, updateCalendarSettings,
          listBookedRanges, createBooking, cancelBookingByToken, setBookingStatus,
          listUpcomingBookings, countRecentBookings, listDueReminders, stampReminderSent,
          listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
          newCancelToken, SlotTakenError,
+         getDueReminderById, getDueFollowupById,
          REMINDER_WINDOW_START_MS, REMINDER_WINDOW_END_MS, FOLLOWUP_QUERY_WINDOW_MS,
          type CalendarRow, type BookingRow, type BookingStatus, type CalendarSettingsPatch,
-         type CreateBookingInput, type DueReminder, type DueFollowup } from "./booking";
+         type CreateBookingInput, type DueReminder, type DueFollowup, type DueLookup } from "./booking";
 export { getAutomation, upsertAutomation, parseReviewRequestConfig,
          listDueReviewRequests, stampReviewRequested, stampReviewRequestSmsFailed, countReviewRequestsSince,
          REVIEW_REQUEST_MAX_AGE_MS,
@@ -69,6 +72,29 @@ export { getAutomation, upsertAutomation, parseReviewRequestConfig,
          listDueSmsReminders, stampSmsReminderSent, stampSmsReminderFailed,
          SMS_REMINDER_WINDOW_START_MS, SMS_REMINDER_WINDOW_END_MS,
          parseInstantReplyConfig, stampInstantReplySent, countInstantRepliesSince,
+         getDueReviewRequestById, getDueNoShowNudgeById, getDueSmsReminderById,
+         listDueAppointmentConfirms, getDueAppointmentConfirmById,
+         stampAppointmentConfirmAsked, stampAppointmentConfirmSmsFailed,
+         matchConfirmationReply, applyConfirmationReply,
+         APPOINTMENT_CONFIRM_WINDOW_START_MS, APPOINTMENT_CONFIRM_WINDOW_END_MS,
+         APPOINTMENT_CONFIRM_MIN_LEAD_MS,
+         parseReferralAskConfig, listDueReferralAsks, getDueReferralAskById,
+         stampReferralAsked, stampReferralAskSmsFailed, countReferralAsksSince,
+         REFERRAL_ASK_MAX_AGE_MS,
+         type ReferralAskChannel, type ReferralAskConfig, type DueReferralAsk,
+         parseReactivationConfig, reactivationCutoff, listDueReactivations, getDueReactivationById,
+         conversationQuietSince, stampReactivationSent, countReactivationsSince,
+         missingForMarketingEmail,
+         REACTIVATION_MIN_MONTHS, REACTIVATION_MAX_MONTHS, REACTIVATION_DEFAULT_MONTHS,
+         REACTIVATION_CANDIDATE_LIMIT, REACTIVATION_CANDIDATE_PAGES, REACTIVATION_SURVIVOR_TARGET,
+         type ReactivationConfig, type DueReactivation,
+         parseQuoteFollowupConfig, listDueQuoteFollowups, getDueQuoteFollowupById,
+         latestInboundByContact, stampQuoteFollowupSent, stampQuoteFollowupSmsFailed,
+         countQuoteFollowupsSince,
+         QUOTE_FOLLOWUP_MAX_AGE_MS, QUOTE_FOLLOWUP_MIN_QUIET_DAYS, QUOTE_FOLLOWUP_MAX_QUIET_DAYS,
+         QUOTE_FOLLOWUP_DEFAULT_QUIET_DAYS, QUOTE_FOLLOWUP_CANDIDATE_LIMIT,
+         type QuoteFollowupChannel, type QuoteFollowupConfig, type DueQuoteFollowup,
+         type DueAppointmentConfirm, type ConfirmationAnswer,
          type RecipeKey, type AutomationRow, type ReviewRequestChannel,
          type ReviewRequestConfig, type DueReviewRequest,
          type NoShowNudgeChannel, type NoShowNudgeConfig, type DueNoShowNudge,
@@ -79,6 +105,8 @@ export { getSiteForAccount, upsertSite, listSitesToSync, writeTrafficDay, stampS
          listTrafficDays, listTrafficBreakdown, countTrafficDays, unlinkSite,
          type SiteRow, type TrafficDay, type TrafficDimension, type TrafficBreakdownRow } from "./sites";
 export * from "./weekly-report";
+export * from "./automation-log";
+export * from "./automation-settings";
 
 // The demo tenant's fiction — data only, no seeder. `seed.ts` deliberately
 // stays out of the package's public surface: it DELETES the account it finds,
@@ -100,3 +128,36 @@ export {
   type ContactFieldPayload, type OpportunityStagePayload,
 } from "./call-proposals";
 export * from "./voice-web-sessions";
+export * from "./concierge";
+
+// The account-teardown cascade. Exported not for the app — nothing in
+// apps/web's PRODUCTION code should ever delete an account this way — but for
+// apps/web's own tests, which create throwaway accounts against the shared
+// Supabase project and until now each hand-maintained a private copy of the
+// FK-ordered delete list. Both copies had already drifted (the returning-lead
+// one omitted `messages`/`conversations` after M1c started creating them, and
+// 11 orphaned accounts accumulated in the shared project before anyone
+// noticed). `packages/db`'s test fixtures are not a public subpath, which is
+// why those copies existed; this list is not a fixture, it is the schema's own
+// FK order, and there is now exactly one of it. A fourth caller reads
+// `ACCOUNT_OWNED_TABLES` without importing `deleteAccountCascade`:
+// `apps/web/e2e/fixtures/sweep.ts` (its own `deleteAccountCascade`, not this
+// one — sweep.ts imports `serviceDb` from this package same as any other
+// caller; the reason it keeps a private version is that it REPORTS each
+// table's delete error instead of throwing on the first one, as
+// `sweep.ts:98-100`'s own comment says, so a sweep that clears most of an
+// account still does more good than one that stops at the first FK it hits)
+// — outside `apps/web/src`, so `cascade-export-boundary.test.ts`'s walk
+// rightly allows it.
+export { deleteAccountCascade, ACCOUNT_OWNED_TABLES } from "./account-teardown";
+
+// The throwaway-org-id prefix and its predicate. Exported because the two
+// sides that must agree on it live in different packages: the fixture sweep
+// here deletes accounts carrying it, and `createClientAccount` in apps/web
+// refuses to create one. See ./org-id.ts.
+export { TEST_ORG_ID_PREFIX, isTestOrgId } from "./org-id";
+
+// Client billing plans (0051) — the agency Plans page. See ./billing.ts.
+export { METER_KEYS, listPlans, getPlan, insertPlan, updatePlan, setPlanArchived, countBilledAccountsByPlan,
+         type MeterKey, type MeterAmounts, type PlanFeatures, type PlanPriceKey, type StripePriceIds,
+         type PlanTerms, type Plan, type PlanWrite } from "./billing";

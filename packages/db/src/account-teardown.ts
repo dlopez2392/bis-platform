@@ -11,14 +11,15 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  *
  * Extracted from `test/fixtures.ts`, which held the only copy until the demo
  * tenant needed to re-seed itself. A second hand-maintained copy of a
- * 25-entry FK-ordered list is a bug with a delivery date: the table that gets
+ * 26-entry FK-ordered list is a bug with a delivery date: the table that gets
  * added to one and not the other leaves rows behind, and the failure surfaces
  * somewhere else entirely, on a unique constraint, far from the cause. One
  * list, two callers.
  */
 export const ACCOUNT_OWNED_TABLES = [
   "site_traffic_breakdown", "site_traffic_daily", "sites",
-  "calls", "bookings", "calendars", "events", "form_submissions", "forms",
+  "calls", "bookings", "calendars", "events",
+  "concierge_conversations", "form_submissions", "forms",
   "messages", "conversations",
   "checklist_items", "contact_tags", "notes", "tasks",
   "opportunities", "pipeline_stages", "pipelines", "custom_fields",
@@ -38,6 +39,13 @@ export const ACCOUNT_OWNED_TABLES = [
  * `alert-phone-verification-grants.test.ts` proves the cascade instead of
  * assuming it, by inserting a row, letting `withTestAccount` tear the account
  * down, and then asserting nothing is left.
+ *
+ * `account_billing` and `usage_events` (0051) are deliberately not on it
+ * either, for the same reason: both carry `account_id … on delete cascade`
+ * (derived billing state), so the account's own deletion carries their rows
+ * away. `billing-schema.test.ts` proves that cascade live. (`plans` is
+ * agency-scoped, not account-owned, so it never belonged on the list;
+ * `account_billing.plan_id` is `restrict` toward it, not toward the account.)
  *
  * `call_proposals` (0040) is ALSO not on that list, but for a different
  * reason, and it needs no `account_id`-cascade proof of its own: `call_id`

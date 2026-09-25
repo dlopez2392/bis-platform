@@ -23,6 +23,8 @@ import {
   PhoneForwarded,
   Zap,
   ShieldAlert,
+  Activity,
+  CreditCard,
   type LucideIcon,
 } from "lucide-react";
 import { AccountSwitcher, type AccountOption } from "@/components/account-switcher";
@@ -53,6 +55,7 @@ const NAV_ICONS: Record<NavIconKey, LucideIcon> = {
   // `PhoneIncoming` rather than `Phone` so Calls stays distinguishable from
   // Voice in the agency's sidebar, where both appear.
   calls: PhoneIncoming,
+  activity: Activity,
   forms: FileText,
   calendar: Calendar,
   branding: Palette,
@@ -73,6 +76,8 @@ const NAV_ICONS: Record<NavIconKey, LucideIcon> = {
   // `ShieldAlert` rather than `Shield`: this screen is not a security
   // setting, it is a list of things that were turned away.
   screened: ShieldAlert,
+  // `CreditCard`: the screen is what clients are charged, not a report.
+  plans: CreditCard,
 };
 
 // Active when pathname matches href exactly, or is nested under it (href + "/…").
@@ -403,7 +408,7 @@ function SidebarLink({
       // pairs anyway (naming prohibited on the generic role).
       aria-label={hasUnread ? `${item.label} (${unreadCount} unread)` : undefined}
       className={cn(
-        "relative flex items-center gap-2.5 rounded-[8px] px-2.5 py-2 text-[13.5px] font-medium transition-colors",
+        "relative flex items-center gap-2.5 rounded-[var(--radius-ctl)] px-2.5 py-2 text-[13.5px] font-medium transition-colors",
         collapsed && "justify-center px-0",
         active
           ? "bg-sidebar-accent/15 font-medium text-[var(--sidebar-text-strong)] shadow-[inset_0_1px_0_var(--sidebar-line)]"

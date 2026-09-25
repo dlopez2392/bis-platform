@@ -109,13 +109,17 @@ test.describe("the Automations page", () => {
     await expect(page.getByLabel("Review link")).toBeVisible();
 
     // The residual the spec names: the live counter. Switch to Text message,
-    // type a link, and the count must be the body PLUS the link, as ONE
-    // segment for the default body (measured in review-request-copy.test.ts).
-    // Nothing is saved — the form is never submitted.
+    // type a link, and the count must be what SENDS: the default body, the
+    // link, and the opt-out sentence `sendAutomationSms` appends to every
+    // automated text (decision B, 2026-09-22). MEASURED with the real
+    // functions for the fixture's BRAND name — `Rio Roofing ${stamp}`,
+    // auth.setup.ts, 25 characters while Date.now() has 13 digits — not its
+    // internal company name: 129 septets composed, 152 disclosed, one
+    // segment. Nothing is saved — the form is never submitted.
     await page.getByTestId("review-request-card").getByLabel("Send by").click();
     await page.getByRole("option", { name: "Text message" }).click();
     await page.locator("#review_url").fill("https://g.page/r/CXyZ123abc/review");
-    await expect(page.getByTestId("review-sms-count")).toContainText("1 message(s)");
+    await expect(page.getByTestId("review-sms-count")).toHaveText("152 characters · 1 message(s)");
   });
 });
 
@@ -131,7 +135,7 @@ test.describe("a client cannot reach the Automations page", () => {
 });
 
 test.describe("the Automations page — Milestone B cards", () => {
-  test("the no-show and text-reminder cards preview the composed message — link and time included — as one segment", async ({ page }) => {
+  test("the no-show and text-reminder cards count the text that sends — link, time and opt-out sentence included, one message each", async ({ page }) => {
     const { accountId } = fixture();
     await page.goto(`/dashboard/accounts/${accountId}/automations`);
 
@@ -140,7 +144,16 @@ test.describe("the Automations page — Milestone B cards", () => {
     await expect(noShow.getByTestId("no-show-link")).toContainText("/b/");
     await noShow.getByLabel("Send by").click();
     await page.getByRole("option", { name: "Text message" }).click();
-    await expect(noShow.getByTestId("no-show-sms-count")).toContainText("1 message(s)");
+    // ONE. MEASURED with segmentsFor/withOptOut/composeNoShowNudgeSms for the
+    // fixture's 25-character brand name: the default plus the booking link
+    // (origin + `/b/` + a 12-character id) plus the opt-out sentence is 147
+    // septets on http://localhost:3000, 148 on https://localhost:3000 and
+    // 149 on https://app.bis-rgv.com, one segment each. (The longer default
+    // this replaced measured 171–173 here, two.) The character count depends
+    // on the origin the server resolves (APP_ORIGIN, else the request's
+    // host), so only the message count is pinned — and an origin longer than
+    // 34 characters (a preview URL under E2E_BASE_URL) WOULD make it two.
+    await expect(noShow.getByTestId("no-show-sms-count")).toHaveText(/^\d+ characters · 1 message\(s\)$/);
 
     const reminder = page.getByTestId("sms-reminder-card");
     await expect(reminder.getByText("Text reminders", { exact: true })).toBeVisible();
@@ -151,22 +164,32 @@ test.describe("the Automations page — Milestone B cards", () => {
 });
 
 test.describe("the Automations page — Milestone C card", () => {
-  test("the instant-reply card previews both texts verbatim, each one segment, and the counter follows the text", async ({ page }) => {
+  test("the instant-reply card previews both texts as they send, opt-out sentence included, one message each, and the counter follows the text", async ({ page }) => {
     const { accountId } = fixture();
     await page.goto(`/dashboard/accounts/${accountId}/automations`);
 
     const card = page.getByTestId("instant-reply-card");
     await expect(card.getByText("Instant reply to new leads", { exact: true })).toBeVisible();
+    // MEASURED for the fixture's 25-character BRAND name (`Rio Roofing
+    // ${stamp}`, auth.setup.ts): English 130 septets composed, 153 with
+    // "Reply STOP to opt out." — one segment; Spanish 120 composed, 149 with
+    // "Responde STOP para cancelar." — one segment. The Spanish default holds
+    // a GSM-7 name of up to 36 characters, the English up to 32 (pinned in
+    // instant-reply-copy.test.ts; the longer Spanish default this replaced
+    // measured 173 here, two).
     await expect(card.getByTestId("instant-reply-preview-en")).toContainText("We got your message");
-    await expect(card.getByTestId("instant-reply-count-en")).toContainText("1 message(s)");
+    await expect(card.getByTestId("instant-reply-preview-en")).toContainText("Reply STOP to opt out.");
+    await expect(card.getByTestId("instant-reply-count-en")).toHaveText("153 characters · 1 message(s)");
     await expect(card.getByTestId("instant-reply-preview-es")).toContainText("Recibimos tu mensaje");
-    await expect(card.getByTestId("instant-reply-count-es")).toContainText("1 message(s)");
+    await expect(card.getByTestId("instant-reply-preview-es")).toContainText("Responde STOP para cancelar.");
+    await expect(card.getByTestId("instant-reply-count-es")).toHaveText("149 characters · 1 message(s)");
 
     // Typing redraws the preview and the counter — the counter counts the
-    // string that sends, nothing composed around it.
+    // string that sends, which is the typed text PLUS the opt-out sentence
+    // every automated text carries: 15 septets typed, 38 sent (measured).
     await card.getByLabel("English message").fill("Got it, thanks!");
-    await expect(card.getByTestId("instant-reply-preview-en")).toHaveText("Got it, thanks!");
-    await expect(card.getByTestId("instant-reply-count-en")).toContainText("15 characters");
+    await expect(card.getByTestId("instant-reply-preview-en")).toHaveText("Got it, thanks! Reply STOP to opt out.");
+    await expect(card.getByTestId("instant-reply-count-en")).toContainText("38 characters");
     // Nothing is saved — the form is never submitted. e2e shares the
     // production database; this recipe must NEVER be enabled here.
   });

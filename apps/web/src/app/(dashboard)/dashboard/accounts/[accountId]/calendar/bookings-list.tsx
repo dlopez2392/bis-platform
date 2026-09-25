@@ -7,7 +7,9 @@ import type { BookingRow, BookingStatus } from "@bis/db";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DotPill } from "@/components/dot-pill";
 import { m } from "@/lib/messages";
+import { CONFIRM_REPLY_TREATMENTS } from "./confirm-reply";
 import type { ActionResult } from "./actions";
 
 type Booking = BookingRow & { contact_name: string; contact_email: string | null };
@@ -133,6 +135,34 @@ export function BookingsList({
                           {timeRange(b.starts_at, b.ends_at, timezone)}
                         </span>
                         <Badge variant={STATUS_VARIANT[b.status]}>{STATUS_LABEL[b.status]}</Badge>
+                        {/* The customer's own answer to the confirmation text (0047,
+                            written by the inbound SMS webhook). DOT AND WORD, never
+                            colour alone (DESIGN.md rule 3) — through the shared
+                            `DotPill` (components/dot-pill.tsx), the same pill
+                            `LogStatusPill` wraps, so this pill and the
+                            automation-history pills ARE one system rather than two
+                            that happen to match today. A yes wears the history's
+                            `sent`; a NO wears the warning treatment, because it is
+                            the one answer here an operator must act on (see
+                            ./confirm-reply.ts). `dense`: no padding override, unlike
+                            LogStatusPill's `py-1 pr-2.5 pl-2` — the badge's own
+                            `px-2 py-0.5` is what the status badge next to it uses.
+
+                            Rendered for EVERY status, cancelled included: "they
+                            confirmed, and then it was cancelled" is a true thing and
+                            arguably the most useful row on the screen. Only
+                            `StatusActions` below gates on status.
+
+                            `confirm_reply_at` is selected and typed but deliberately
+                            NOT shown: the answer is what an operator acts on, the
+                            minute it arrived is not. */}
+                        {b.confirm_reply ? (
+                          <DotPill
+                            {...CONFIRM_REPLY_TREATMENTS[b.confirm_reply]}
+                            dense
+                            testId="booking-confirm-reply"
+                          />
+                        ) : null}
                         <Link
                           href={`/dashboard/accounts/${accountId}/contacts/${b.contact_id}`}
                           className="text-xs text-primary underline"

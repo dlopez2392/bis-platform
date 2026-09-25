@@ -14,7 +14,7 @@ describe("buildNavGroups", () => {
     expect(groups[0]!.label).toBeNull();
     expect(hrefs(groups)).toEqual([
       "/dashboard/accounts", "/dashboard/blueprints", "/dashboard/work", "/dashboard/numbers",
-      "/dashboard/screened",
+      "/dashboard/screened", "/dashboard/plans",
     ]);
   });
 
@@ -27,6 +27,15 @@ describe("buildNavGroups", () => {
     expect(hrefs(buildNavGroups(null, true))).toContain("/dashboard/numbers");
     for (const isAgency of [true, false]) {
       expect(hrefs(buildNavGroups(BASE, isAgency))).not.toContain("/dashboard/numbers");
+    }
+  });
+
+  it("offers Plans at the top level and nowhere inside an account (mutation: add it to an in-account group → FAILS)", () => {
+    // Plans are agency-wide (0051: agency-scoped, agency-only RLS). A copy
+    // inside one company's nav would say something false about its scope.
+    expect(hrefs(buildNavGroups(null, true))).toContain("/dashboard/plans");
+    for (const isAgency of [true, false]) {
+      expect(hrefs(buildNavGroups(BASE, isAgency))).not.toContain("/dashboard/plans");
     }
   });
 
@@ -47,7 +56,7 @@ describe("buildNavGroups", () => {
     // Tasks joined directly under Dashboard on 2026-09-14 (Work Queue Task 3).
     expect(overview!.items.map((i) => i.labelKey)).toEqual(["nav.dashboard", "nav.tasks", "nav.website", "nav.checklist"]);
     expect(crm!.items.map((i) => i.labelKey)).toEqual(["nav.contacts", "nav.opportunities"]);
-    expect(comms!.items.map((i) => i.labelKey)).toEqual(["nav.conversations", "nav.calls", "nav.voice"]);
+    expect(comms!.items.map((i) => i.labelKey)).toEqual(["nav.conversations", "nav.calls", "nav.activity", "nav.voice"]);
     expect(growth!.items.map((i) => i.labelKey)).toEqual(["nav.forms", "nav.calendar", "nav.automations"]);
   });
 
@@ -56,6 +65,13 @@ describe("buildNavGroups", () => {
     for (const isAgency of [true, false]) {
       const [overview] = buildNavGroups(BASE, isAgency);
       expect(overview!.items.slice(0, 3).map((i) => i.labelKey)).toEqual(["nav.dashboard", "nav.tasks", "nav.website"]);
+    }
+  });
+
+  it("shows Activity to both audiences, directly after Calls (mutation: gate it on isAgency → the client case FAILS)", () => {
+    for (const isAgency of [true, false]) {
+      const comms = buildNavGroups(BASE, isAgency)[2]!.items.map((i) => i.labelKey);
+      expect(comms.indexOf("nav.activity")).toBe(comms.indexOf("nav.calls") + 1);
     }
   });
 

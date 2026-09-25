@@ -1,0 +1,252 @@
+/* /c is built on tokens from the start — unlike /f and /b, which never
+   joined the token system and are staying that way (see the task report).
+   Every colour, font and spacing value below is `var(--token, <fallback>)`,
+   and every fallback is a real value copied from the design system rather
+   than invented here:
+     - `--background` / `--foreground` / `--card` / `--border` /
+       `--muted-foreground` / `--font-sans` are exactly the names
+       `themeStyle` (apps/web/src/lib/branding/theme-style.ts) emits on a
+       themed, non-transparent tenant — the SAME names `publicFormTheme`
+       spreads onto <main>'s style attribute, so a themed account's colours
+       land on these custom properties with no renaming in between.
+     - `--form-accent` / `--form-accent-foreground` are `publicFormTheme`'s
+       own CTA pair (`ctaStyle`), set on EVERY branch — themed, unthemed, and
+       "brand colour only, nothing else customised" alike. That last case is
+       common (a new client sets a colour and nothing more) and is exactly
+       why the accent/CTA pieces below read `--form-accent`, never
+       `--accent`: `--accent` only exists on the fully-themed branch, and a
+       colour-only account would silently lose its brand on the send button
+       and the visitor bubble if this read `--accent` instead. This is the
+       one place this file deliberately does NOT match the dashboard's own
+       `var(--accent*)` convention — `form.css` made the same call, for the
+       same reason (see its own comment on the point).
+     - `--radius-ctl` (8px) and `--radius-card` (12px) are tokens.css's own
+       FIXED literals — never tenant-overridden (DESIGN.md's tenant seam
+       list does not include them) and identical in both `:root` and `.dark`
+       — so a literal fallback of the same two numbers is exact, not a guess,
+       whether or not tokens.css's cascade is even in scope.
+     - `--background` / `--foreground` / `--card` / `--font-sans` fall back
+       to tokens.css's own light defaults (`--surface-0`, `--text-1`,
+       opaque white, `--font-ui`) rather than `form.css`'s older, plainer
+       literals (`transparent`, `#18181b`, system-ui) — a deliberate
+       deviation from "read form.css and take its approach" on VALUES only,
+       not on the var()-with-fallback APPROACH itself: this route is never
+       embedded transparently (`transparent` is always false — see page.tsx)
+       and should look like the rest of BIS by default, not like a bare
+       unstyled form. `public-form-theme.test.ts` pins FORM_CSS_FALLBACKS
+       against `form.css`; nothing here is pinned against that constant,
+       because this file intentionally does not reuse its values verbatim.
+
+   `--surface-*` / `--text-*` / `--line*` (tokens.css's mode-keyed chrome
+   ladder) are NOT used here on purpose: they only ever resolve against
+   tokens.css's `:root` block on this route (nothing here ever adds a
+   `.dark` class — there is no next-themes on an anonymous, unauthenticated
+   page), so using them would permanently pin this page to LIGHT regardless
+   of what `publicFormTheme` decided for a tenant with `brand_mode: dark` —
+   exactly the "chrome neutrals are mode-keyed, not tenant-keyed" fact
+   DESIGN.md documents, applied to a route where nothing ever flips the
+   mode key. Using the tenant-keyed names instead keeps every colour here
+   moving in lockstep with the SAME mode `publicFormTheme` resolved. */
+
+/* The only element that paints a surface, matching form.css's own rule that
+   `.bis-concierge-panel` below paints none of its own — a themed page should
+   be today's chat in the tenant's colours, not a card floating on a page. */
+.bis-concierge {
+  background: var(--background, #EFEBF9);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding: 16px;
+  font: 400 15px/1.5 var(--font-sans, "Geist", -apple-system, "Segoe UI", sans-serif);
+  color: var(--foreground, #1D1930);
+  /* The brand header (a SIBLING, not a child) reads this to match the chat
+     column's own width — same technique as `.bis-form-page`. Narrower than
+     the form's 34rem: a chat log reads better as a column than a wide sheet
+     of fields, closer to a messaging app's own measure. */
+  --public-measure: 26rem;
+}
+
+.bis-concierge *,
+.bis-concierge *::before,
+.bis-concierge *::after {
+  box-sizing: border-box;
+}
+
+.bis-concierge-footer {
+  margin: 8px 0 0;
+  padding: 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted-foreground, #71717a);
+}
+
+.bis-concierge-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  max-width: 26rem;
+  margin-inline: auto;
+}
+
+.bis-concierge-log {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Thin marks, tokened radius, 4px-grid padding. Never a status colour —
+   role alone decides which side of the log a bubble sits on, carried by the
+   class name, not by colour meaning anything semantically. */
+.bis-msg {
+  padding: 8px 12px;
+  border-radius: var(--radius-card, 12px);
+  max-width: 80%;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  font-size: 14px;
+}
+
+.bis-msg-assistant {
+  background: var(--card, #FFFFFF);
+  border: 1px solid var(--border, #D4D4D8);
+  align-self: flex-start;
+}
+
+/* Derived from the CTA colour rather than a second token: `--form-accent` is
+   the one accent value guaranteed present on every account (themed,
+   colour-only, or fully unthemed), so mixing it down to a tint keeps the
+   visitor's own bubble on-brand in the colour-only case too, where
+   `--accent-dim` (the fully-themed branch only) would not be set at all.
+   9% mirrors tokens.css's own light `--accent-dim` alpha (.09) — the same
+   dimming the rest of the app uses for this exact role. */
+.bis-msg-visitor {
+  background: color-mix(in srgb, var(--form-accent, #6D28D9) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--form-accent, #6D28D9) 18%, transparent);
+  color: var(--foreground, #1D1930);
+  align-self: flex-end;
+}
+
+/* Loading state: a message-shaped skeleton, never a spinner (DESIGN.md
+   rule 7). Three dots pulse in place of the words that have not arrived. */
+.bis-msg-skeleton {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 12px;
+}
+.bis-msg-skeleton span {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-ctl, 8px);
+  background: var(--muted-foreground, #71717A);
+  opacity: .35;
+  animation: bis-concierge-pulse 1s ease-in-out infinite;
+}
+.bis-msg-skeleton span:nth-child(2) { animation-delay: .15s; }
+.bis-msg-skeleton span:nth-child(3) { animation-delay: .3s; }
+@keyframes bis-concierge-pulse {
+  0%, 100% { opacity: .35; }
+  50% { opacity: .9; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bis-msg-skeleton span { animation: none; opacity: .6; }
+}
+
+/* One sentence, composer stays usable — this is not a dead end. */
+.bis-concierge-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--form-error, #B91C1C);
+}
+
+/* Not an error: the turn cap's own copy, asking for a name instead of
+   apologising. Same visual weight as a normal assistant line, not a red
+   banner — a conversation that reached its cap is a lead, not a failure. */
+.bis-concierge-ended {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-card, 12px);
+  background: var(--card, #FFFFFF);
+  border: 1px solid var(--border, #D4D4D8);
+  font-size: 14px;
+}
+
+.bis-concierge-composer {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding-top: 8px;
+}
+
+.bis-concierge-composer input:not(.bis-hp) {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  font: inherit;
+  color: inherit;
+  border: 1px solid var(--border, #D4D4D8);
+  border-radius: var(--radius-ctl, 8px);
+  background: var(--card, #FFFFFF);
+}
+
+.bis-concierge-composer button {
+  padding: 9px 16px;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--form-accent-foreground, #FFFFFF);
+  background: var(--form-accent, #6D28D9);
+  border: 0;
+  border-radius: var(--radius-ctl, 8px);
+  white-space: nowrap;
+}
+.bis-concierge-composer button[disabled] {
+  opacity: .6;
+  cursor: default;
+}
+
+/* Visible on every interactive element — keyboard users never lose the
+   composer's edges. */
+.bis-concierge-composer input:not(.bis-hp):focus-visible,
+.bis-concierge-composer button:focus-visible {
+  outline: 2px solid var(--form-accent, #6D28D9);
+  outline-offset: 2px;
+}
+
+/* Off-screen, not display:none — copied from form.css's own `.bis-form-hp`:
+   some bots skip hidden inputs but fill anything else they find. */
+.bis-hp {
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+.bis-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* No backdrop-filter is used anywhere on this page — DESIGN.md reserves
+   blur for the sidebar and overlays only, and this route has neither (no
+   dashboard chrome, no dropdown/tooltip surface). There is therefore
+   nothing here for `@supports not (backdrop-filter)` to fall back FROM;
+   see the task report. */

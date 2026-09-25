@@ -45,7 +45,7 @@ function readStep(): string | null {
  * `select` uses `pushState`, not `router.push`: the latter would re-render
  * the whole server component tree on every rail click, which is the exact
  * cost this two-pane shell exists to avoid (`details` below is already
- * fully computed server-side for all nine steps — a step click only ever
+ * fully computed server-side for all ten steps — a step click only ever
  * needs to change which one is DISPLAYED). `pushState` also means Back
  * walks steps one at a time, same as forward navigation through the rail.
  */
@@ -60,7 +60,8 @@ export function useSetupStep(views: SetupStepView[]) {
     if (key === selected) return;
     const url = new URL(window.location.href);
     url.searchParams.set(PARAM, key);
-    window.history.pushState(window.history.state, "", url);
+    // `null`, never `window.history.state`: its `__NA` makes Next's patched pushState skip telling the router (next@16.2.11 app-router.js:252-263), so the next router.refresh() strips ?step=.
+    window.history.pushState(null, "", url);
     notify(); // pushState does not fire popstate — subscribers must be told directly
   }, [selected]);
 
@@ -88,15 +89,15 @@ export function SetupShell({
    *  setup-panel.tsx — reused for its banner rather than deriving a second
    *  string (see setup-rail.tsx's `lockedHint`). */
   blockedReason: string | null;
-  /** One pre-rendered node per step. All nine exist as React elements;
+  /** One pre-rendered node per step. All ten exist as React elements;
    *  only the selected key's is ever placed into the returned tree, so the
-   *  other eight are computed but never mounted. */
+   *  other nine are computed but never mounted. */
   details: Record<SetupStepKey, React.ReactNode>;
 }) {
   const { selected, select } = useSetupStep(views);
   const view = views.find((v) => v.key === selected);
   // Unreachable in practice: `parseStepParam` only ever returns a key that
-  // exists in `SETUP_STEP_KEYS`, and `views` always carries all nine — kept
+  // exists in `SETUP_STEP_KEYS`, and `views` always carries all ten — kept
   // as a typed guard rather than a non-null assertion.
   if (!view) return null;
 

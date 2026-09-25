@@ -1,8 +1,9 @@
 import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
-import { serviceDb, setBranding, getBranding, setClientAccess } from "@bis/db";
-import { mintClientToken } from "./support";
+import { serviceDb, setBranding, getBranding, getMailingAddress, setClientAccess } from "@bis/db";
+import { SEEDED_ACCOUNT_NAME, mintClientToken } from "./support";
+import { lookupSeededAccountId, restoreSeededBrandColor } from "./fixtures/seeded";
 
 // Same two paths, same reason, as auth.setup.ts: this file calls serviceDb()
 // and the Clerk API from the Playwright runner process, not through a Next
@@ -13,9 +14,6 @@ loadEnv({ path: ".env.local" });
 type ClientFixture = { accountId: string; clerkUserId: string };
 const fixture = (): ClientFixture =>
   JSON.parse(readFileSync("e2e/.auth/client-fixture.json", "utf-8")) as ClientFixture;
-
-/** The agency's own seeded account — the "someone else" in the negative case. */
-const OTHER_ACCOUNT = "45240784-a70e-43a0-8a0c-0027c7073f98";
 
 /**
  * PostgREST, called directly with the client's own token.
@@ -77,8 +75,20 @@ test.describe("a client's branding boundary, at the database", () => {
   test("writes its own branding columns, and nothing else, on its own row only", async () => {
     const { accountId, clerkUserId } = fixture();
     const token = await mintClientToken(clerkUserId);
+    // The "someone else" in case 2: the SEEDED account, found by name at run
+    // time. This was a production row id written here as a literal, and on
+    // any project where that id does not exist (the CI project, a reset one)
+    // `getBranding` reads a missing row as all-null — so "zero rows updated"
+    // and "its colour is unchanged" both held whether or not RLS did anything.
+    // The lookup throws, naming `ci:seed`, rather than let that happen; it is
+    // outside the `try` so a missing seed never reaches the `finally` below.
+    const otherAccount = await lookupSeededAccountId(serviceDb(), SEEDED_ACCOUNT_NAME);
     const before = await getBranding(serviceDb(), accountId);
-    const otherBefore = await getBranding(serviceDb(), OTHER_ACCOUNT);
+    const otherBefore = await getBranding(serviceDb(), otherAccount);
+    // A probe colour the seeded account does not already wear; otherwise
+    // "its colour is unchanged" could not tell a refused write from an
+    // accepted one.
+    const probe = otherBefore.brandColor === "#654321" ? "#654322" : "#654321";
 
     try {
       // 1. THE POSITIVE CASE.
@@ -88,9 +98,9 @@ test.describe("a client's branding boundary, at the database", () => {
 
       // 2. Another company's branding. RLS FILTERS rather than throwing, so
       //    the tell is zero rows on a 2xx — not an error status.
-      const other = await patchAccount(token, OTHER_ACCOUNT, { brand_color: "#654321" });
+      const other = await patchAccount(token, otherAccount, { brand_color: probe });
       expect(other.rows, "another company's row must be invisible to this update").toHaveLength(0);
-      expect((await getBranding(serviceDb(), OTHER_ACCOUNT)).brandColor).toBe(otherBefore.brandColor);
+      expect((await getBranding(serviceDb(), otherAccount)).brandColor).toBe(otherBefore.brandColor);
 
       // 3. The escalation the column grant exists to stop. Without it a client
       //    could switch their own access back on after the agency turned it
@@ -126,11 +136,22 @@ test.describe("a client's branding boundary, at the database", () => {
         .toContain("42501");
     } finally {
       // Unconditional, and it covers the case this test exists to disprove:
-      // if assertion 2 ever fails, the agency's real account has been written
-      // to, and leaving it that way would be worse than the failing test.
+      // if assertion 2 ever fails, the seeded account has been written to,
+      // and leaving it that way would be worse than the failing test. The
+      // seeded account is restored ONLY if its colour actually moved, and
+      // without an audit event — a green run writes nothing to it at all
+      // (see restoreSeededBrandColor).
+      //
+      // ORDER MATTERS: the seeded account (`otherAccount`) is a REAL account
+      // shared by every run against this project, while the fixture account
+      // (`accountId`) is this run's own throwaway — auth.teardown.ts deletes
+      // it wholesale regardless of what its brand_color holds. Restoring the
+      // seeded account FIRST means a throw from the fixture restore below can
+      // never skip it; restoring it second (the previous order) meant a throw
+      // from the lower-stakes fixture restore left the real, shared account
+      // un-restored with nothing left in this `finally` to catch it.
+      await restoreSeededBrandColor(serviceDb(), otherAccount, otherBefore.brandColor);
       await setBranding(serviceDb(), accountId, { brandColor: before.brandColor }, clerkUserId);
-      await setBranding(serviceDb(), OTHER_ACCOUNT,
-        { brandColor: otherBefore.brandColor }, clerkUserId);
     }
   });
 });
@@ -141,6 +162,7 @@ test.describe("a client edits their branding in the browser", () => {
   test("changes the colour from their own Branding page and it persists", async ({ page }) => {
     const { accountId, clerkUserId } = fixture();
     const before = await getBranding(serviceDb(), accountId);
+    const mailingBefore = await getMailingAddress(serviceDb(), accountId);
 
     try {
       await page.goto(`/dashboard/accounts/${accountId}/branding`);
@@ -164,6 +186,12 @@ test.describe("a client edits their branding in the browser", () => {
       // filtered out here and nowhere else. The agency, writing through the
       // service role, would never see it.
       await page.locator("#reply-to-email").fill("hello@rioroofing.com");
+      // The mailing address (0048) rides the same write and needs the same
+      // proof: its grant is its own line in that migration, and a textarea
+      // that posts under a name the action does not read would save nothing
+      // while the toast still says it did. Two lines, so the line break is
+      // proven to survive the form, the action and the column.
+      await page.locator("#mailing-address").fill("PO Box 12\nEdinburg, TX 78539");
       await page.getByRole("button", { name: "Save" }).click();
 
       await expect(page.getByText("Branding updated")).toBeVisible();
@@ -175,9 +203,13 @@ test.describe("a client edits their branding in the browser", () => {
       await expect
         .poll(async () => (await getBranding(serviceDb(), accountId)).replyToEmail)
         .toBe("hello@rioroofing.com");
+      await expect
+        .poll(async () => getMailingAddress(serviceDb(), accountId))
+        .toBe("PO Box 12\nEdinburg, TX 78539");
     } finally {
       await setBranding(serviceDb(), accountId,
-        { brandColor: before.brandColor, replyToEmail: before.replyToEmail }, clerkUserId);
+        { brandColor: before.brandColor, replyToEmail: before.replyToEmail,
+          mailingAddress: mailingBefore }, clerkUserId);
     }
   });
 });

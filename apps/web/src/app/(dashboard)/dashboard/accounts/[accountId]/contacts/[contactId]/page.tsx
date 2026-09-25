@@ -12,6 +12,7 @@ import { ActivityTimeline } from "./activity-timeline";
 import { sendEmailAction, sendSmsAction } from "../../conversations/actions";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { toE164 } from "@/lib/voice/phone-number";
+import { renderZone } from "@/lib/zone";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +23,7 @@ export default async function ContactDetailPage({
   const db = await dbForRequest();
   const contact = await getContact(db, accountId, contactId);
   if (!contact) notFound();
-  const [tags, notes, tasks, fieldDefs, opps, submissions, messages, smsGate] = await Promise.all([
+  const [tags, notes, tasks, fieldDefs, opps, submissions, messages, smsGate, account] = await Promise.all([
     listContactTags(db, accountId, contactId),
     listNotes(db, accountId, contactId),
     listContactTasks(db, accountId, contactId),
@@ -33,7 +34,15 @@ export default async function ContactDetailPage({
     // Resolved here (server component) and passed down as a prop — the
     // composer is a client component and must not query the database.
     resolveSmsSender(db, accountId),
+    // Only for the opt-out's "Off since" date, printed in the ACCOUNT's zone.
+    db.from("accounts").select("timezone").eq("id", accountId).maybeSingle(),
   ]);
+  // Not a throw, the checklist page's reasoning: one cosmetic date line must
+  // not 500 the contact page. `undefined` makes `renderZone` fall back.
+  if (account.error) {
+    console.error(`contact page: account ${accountId} timezone read failed: ${account.error.message}`);
+  }
+  const zone = await renderZone((account.data as { timezone: string } | null)?.timezone);
 
   return (
     <>
@@ -45,6 +54,7 @@ export default async function ContactDetailPage({
           contact={contact}
           tags={tags}
           fieldDefs={fieldDefs}
+          zone={{ zone: zone.zone, guessed: zone.guessed, label: zone.label }}
         />
         <ActivityTimeline
           accountId={accountId}

@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import "dotenv/config";
 import { serviceDb } from "../service";
 import { withTestAccount } from "./fixtures";
-import { setBranding, getBranding, brandDisplayName } from "../branding";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { setBranding, getBranding, getMailingAddress, brandDisplayName } from "../branding";
 
 describe("brandDisplayName — the db copy of the ONE customer-facing name rule", () => {
   const base = {
@@ -199,5 +200,74 @@ describe("branding service", () => {
 
       expect((await getBranding(db, accountId)).brandCorners).toBeNull();
     });
+  });
+});
+
+// Migration 0048. The postal address the reactivation email prints. NOT on
+// `Branding`: dozens of files construct one, and this column is read by exactly
+// two surfaces (the Branding panel and the reactivation gate), so it gets its
+// own read rather than a field every Branding literal in the repo must grow.
+describe("mailing address", () => {
+  const ADDRESS = "123 Main St\nMcAllen, TX 78501";
+
+  it("is null on a fresh account: unset is the state every account starts in", async () => {
+    await withTestAccount(async (db, accountId) => {
+      expect(await getMailingAddress(db, accountId)).toBeNull();
+    });
+  });
+
+  it("writes, reads back and clears the address, and leaves it alone when omitted", async () => {
+    await withTestAccount(async (db, accountId) => {
+      // Mutation: drop `patch.mailing_address` from setBranding → this reads null.
+      await setBranding(db, accountId, { mailingAddress: ADDRESS }, "user_test");
+      // Stored and returned verbatim, interior newline included: the email
+      // prints the lines as they were typed.
+      expect(await getMailingAddress(db, accountId)).toBe(ADDRESS);
+
+      // `undefined` means leave alone, the rule every other field in the patch
+      // keeps: a company renaming itself must not lose its address.
+      await setBranding(db, accountId, { brandName: "Rio Roofing" }, "user_test");
+      expect(await getMailingAddress(db, accountId)).toBe(ADDRESS);
+
+      // An explicit null clears it, which is how the form's empty field reads.
+      await setBranding(db, accountId, { mailingAddress: null }, "user_test");
+      expect(await getMailingAddress(db, accountId)).toBeNull();
+    });
+  });
+
+  it("does not ride on getBranding: the Branding shape is unchanged", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await setBranding(db, accountId, { mailingAddress: ADDRESS }, "user_test");
+      expect(await getBranding(db, accountId)).not.toHaveProperty("mailingAddress");
+    });
+  });
+
+  // The write path meets the CHECK, not only the catalog test: a blank that
+  // got past a caller is refused, loudly, and the stored value is untouched.
+  it("refuses a whitespace-only address through setBranding, and keeps the old one", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await setBranding(db, accountId, { mailingAddress: ADDRESS }, "user_test");
+      await expect(setBranding(db, accountId, { mailingAddress: " \t\n " }, "user_test"))
+        .rejects.toThrow(/setBranding failed/);
+      expect(await getMailingAddress(db, accountId)).toBe(ADDRESS);
+    });
+  });
+
+  it("reads an account that does not exist as null", async () => {
+    expect(await getMailingAddress(serviceDb(), "00000000-0000-0000-0000-000000000000")).toBeNull();
+  });
+
+  // getBranding's other half: a query FAULT is not "not set". A gate that read
+  // a failed query as null would refuse to enable with the wrong reason; a
+  // pass that did would skip real work and blame the client.
+  it("throws on a query fault instead of answering null", async () => {
+    const faulty = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: "boom" } }) }),
+        }),
+      }),
+    } as unknown as SupabaseClient;
+    await expect(getMailingAddress(faulty, "acct")).rejects.toThrow(/getMailingAddress failed: boom/);
   });
 });

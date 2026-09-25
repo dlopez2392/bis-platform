@@ -14,6 +14,7 @@ import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { m } from "@/lib/messages";
 import { segmentsFor } from "@/lib/sms/segments";
+import { withOptOut } from "@/lib/sms/opt-out";
 import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 import { composeNoShowNudgeSms, defaultNoShowNudgeBody } from "@/lib/automations/no-show-nudge-copy";
 import type { ActionResult } from "./actions";
@@ -49,10 +50,20 @@ export function NoShowNudgeCard({
   const [channel, setChannel] = useState<NoShowNudgeChannel>(stored.channel);
   const [body, setBody] = useState(stored.body);
 
-  // THE COUNTER COUNTS BODY PLUS LINK, through the ONE function the pass
-  // uses (composeNoShowNudgeSms → withTrailingLink), with the real link.
+  // THE COUNTER COUNTS BODY PLUS LINK PLUS THE OPT-OUT SENTENCE, through the
+  // ONE function the pass uses (composeNoShowNudgeSms → withTrailingLink),
+  // with the real link, and through the SAME `withOptOut` the send path
+  // applies unconditionally (send-sms.ts:82; English, because the pass
+  // passes no `language`). Without it the counter under-reported by 23
+  // septets (decision B, danlo, 2026-09-22): under the OLD, longer default
+  // "Valley Air Conditioning" read "1 message" while billing two. Under the
+  // current default that name is one message either way (147 disclosed);
+  // the name that now reads 1 and bills 2 is a 39-character one, "Valley
+  // Air Conditioning and Heating LLC" (140 → 163, both pinned in
+  // no-show-nudge-card.test.ts). Idempotent on a STOP instruction, so an
+  // operator who wrote the sentence themselves is not counted twice.
   const previewBody = body.trim() || defaultNoShowNudgeBody(brandName);
-  const preview = segmentsFor(composeNoShowNudgeSms(previewBody, bookingUrl));
+  const preview = segmentsFor(withOptOut(composeNoShowNudgeSms(previewBody, bookingUrl)));
 
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     await notifyActionResult(() => saveAction(formData), toast, {
@@ -111,11 +122,19 @@ export function NoShowNudgeCard({
               </p>
             ) : null}
             {channel === "sms" ? (
-              <p className="text-xs text-muted-foreground" data-testid="no-show-sms-count">
-                {m["compose.smsSegments"]
-                  .replace("{chars}", String(preview.chars))
-                  .replace("{segments}", String(preview.segments))}
-              </p>
+              <>
+                <p className="text-xs text-muted-foreground" data-testid="no-show-sms-count">
+                  {m["compose.smsSegments"]
+                    .replace("{chars}", String(preview.chars))
+                    .replace("{segments}", String(preview.segments))}
+                </p>
+                {/* The count above includes the disclosure, which appears
+                    nowhere else on this page. Its own paragraph, so the
+                    counter's testid stays one clean string; `sms` branch
+                    only, because an emailed nudge carries no opt-out
+                    sentence (referral-ask-card.tsx). */}
+                <p className="text-xs text-muted-foreground">{m["automations.optOutCounted"]}</p>
+              </>
             ) : null}
           </div>
 

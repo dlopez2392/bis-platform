@@ -57,14 +57,36 @@ test.describe("the command palette, as the agency", () => {
   });
 
   test("a static destination is reachable with the keyboard alone", async ({ page }) => {
+    // The live half answers with nothing, so the only options are static ones.
+    // Test Client One's REAL rows match "cal" — one contact, five calls, two
+    // conversations (the CI trace of run 35776929496, and a read-only SELECT
+    // on 2026-09-23) — and they render 200ms + one round trip after the
+    // static two. So "exactly two" was only ever true in a window between the
+    // keystroke and the live answer, and a poll that missed it saw 10. This
+    // test is about the static list and the keyboard; the live half has its
+    // own tests below (the seeded contact, and the failed search).
+    await page.route("**/api/accounts/*/search*", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ contacts: [], calls: [], conversations: [] }),
+      }),
+    );
+    // Waits for the account URL (support.ts) — the other half of this
+    // test's failure: typed on /dashboard/accounts, "cal" matched one option.
     await openAccountByName(page, SEEDED_ACCOUNT_NAME);
     await page.keyboard.press("ControlOrMeta+k");
     const palette = page.getByRole(PALETTE);
+    const combobox = palette.getByRole("combobox");
     const options = palette.getByRole("option");
 
     // "cal" matches exactly two destinations — Calls, then Calendar in nav
     // order — so ArrowDown has somewhere to go and Enter lands deterministically.
-    await palette.getByRole("combobox").fill("cal");
+    await combobox.fill("cal");
+    // Asserted, never re-filled: the failing trace shows the value held, and
+    // a palette that dropped typed input would be a product bug for a human
+    // to see, not something for this test to type around.
+    await expect(combobox).toHaveValue("cal");
 
     // WAIT FOR THE FILTERED LIST TO SETTLE before touching the keyboard.
     // fill() returns before React has re-rendered, and keys pressed into the

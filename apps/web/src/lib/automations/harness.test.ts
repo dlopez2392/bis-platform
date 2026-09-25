@@ -76,6 +76,23 @@ describe("buildPassContext — the SMS provider is LAZY", () => {
   });
 });
 
+describe("quietSettingsReader — one read per account per tick", () => {
+  it("memoises per account and drops a rejected read so the next caller retries", async () => {
+    const { quietSettingsReader } = await import("./harness");
+    let calls = 0;
+    const db = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => {
+      calls++;
+      if (calls === 1) return { data: null, error: { message: "boom" } };
+      return { data: { quiet_enabled: true, quiet_start: "22:00:00", quiet_end: "07:00:00" }, error: null };
+    } }) }) }) } as never;
+    const quiet = quietSettingsReader(db);
+    await expect(quiet("a1")).rejects.toThrow(/boom/);
+    expect(await quiet("a1")).toEqual({ enabled: true, start: "22:00", end: "07:00" });
+    expect(await quiet("a1")).toEqual({ enabled: true, start: "22:00", end: "07:00" });
+    expect(calls).toBe(2);   // mutation: memoise the rejection too → 1, and the second await rejects
+  });
+});
+
 describe("PassContext — structurally cannot carry the agency's internal label", () => {
   it("has no accountName (pnpm typecheck fails here if someone adds one)", () => {
     const c = ctx();

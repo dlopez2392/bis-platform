@@ -6,6 +6,7 @@ import { clerkClient } from "@clerk/nextjs/server";
 import { serviceDb, createAccount, setClientAccess, createContact,
          setBranding, uploadBrandLogo, createForm, updateForm } from "@bis/db";
 import { sweepStaleFixtures, formatSweepReport } from "./fixtures/sweep";
+import { refuseProduction } from "./fixtures/production-guard";
 
 // Needed for the client-fixture setup below, which calls serviceDb() and
 // clerkClient() directly from the Playwright test runner process (not
@@ -17,6 +18,13 @@ import { sweepStaleFixtures, formatSweepReport } from "./fixtures/sweep";
 // is the one that actually resolves.
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
+
+// Before any setup test is even registered: everything below creates real
+// rows, Clerk users and Storage objects, and the sweep deletes. Where the env
+// still names production (docs/runbooks/ci-supabase-project.md, section 9),
+// nothing here runs. playwright.config.ts refuses first; this is the check on
+// the values this process actually loaded. See fixtures/production-guard.ts.
+refuseProduction(process.env, "The e2e setup");
 
 const AUTH_FILE = "e2e/.auth/state.json";
 const CLIENT_AUTH_FILE = "e2e/.auth/client-state.json";
@@ -108,7 +116,8 @@ setup("authenticate as client user (no app_role)", async ({ page }) => {
   try {
     const report = await sweepStaleFixtures({ dryRun: false });
     const swept = report.accounts.length + report.clerkUsers.length
-      + report.clerkOrgs.length + report.orphanObjects.length;
+      + report.clerkOrgs.length + report.orphanObjects.length + report.strandedForms.length
+      + report.strandedBlueprints.length;
     if (swept > 0) console.log(formatSweepReport(report, false));
   } catch (e) {
     console.error(`e2e setup: fixture sweep failed (continuing): ${String(e)}`);

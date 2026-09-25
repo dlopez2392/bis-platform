@@ -8,7 +8,7 @@ function Input({ className, type, ...props }: React.ComponentProps<"input">) {
       type={type}
       data-slot="input"
       className={cn(
-        "h-9 w-full min-w-0 rounded-[8px] border border-[var(--input-line)] bg-[var(--input-bg)] px-3 py-1 text-[13px] transition-[color,box-shadow] outline-none selection:bg-primary selection:text-primary-foreground file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 md:text-[13px]",
+        "h-9 w-full min-w-0 rounded-[var(--radius-ctl)] border border-[var(--input-line)] bg-[var(--input-bg)] px-3 py-1 text-[13px] transition-[color,box-shadow] outline-none selection:bg-primary selection:text-primary-foreground file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 md:text-[13px]",
         "focus-visible:border-[var(--accent)] focus-visible:ring-[3px] focus-visible:ring-[var(--ring-glow)]",
         "aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40",
         className
@@ -32,6 +32,6 @@ function Input({ className, type, ...props }: React.ComponentProps<"input">) {
  * server-action `name` wiring, and a wrapper would only get in the way.
  */
 export const nativeFieldClass =
-  "w-full rounded-[8px] border border-[var(--input-line)] bg-[var(--input-bg)] px-3 py-2 text-[13px] outline-none focus-visible:border-[var(--accent)] focus-visible:ring-[3px] focus-visible:ring-[var(--ring-glow)]"
+  "w-full rounded-[var(--radius-ctl)] border border-[var(--input-line)] bg-[var(--input-bg)] px-3 py-2 text-[13px] outline-none focus-visible:border-[var(--accent)] focus-visible:ring-[3px] focus-visible:ring-[var(--ring-glow)]"
 
 export { Input }

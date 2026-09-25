@@ -1,11 +1,16 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { config as loadEnv } from "dotenv";
+import { refuseProduction } from "../../../../../../../../e2e/fixtures/production-guard";
 
 // `apps/web`'s test script runs with this directory as cwd, and its
 // credentials live in `.env.local`, not the `.env` that `dotenv/config`
 // loads by default (same reason `f/[publicId]/actions.returning-lead.test.ts`
 // spells the path out).
 loadEnv({ path: ".env.local" });
+// This suite creates and deletes real accounts. Where .env.local still names
+// production (docs/runbooks/ci-supabase-project.md, section 9), refuse before
+// anything is created. Policed by e2e/fixtures/production-guard.test.ts.
+refuseProduction(process.env, "calls/[callId]/actions.test.ts");
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/auth", () => ({
@@ -31,10 +36,20 @@ import {
   serviceDb, createAccount, createContact, getContact,
   insertProposal, getProposal, markProposalDecided,
   ensureDefaultPipeline, createOpportunity, listBoard, moveOpportunityToStage,
-  setOpportunityStatus,
+  setOpportunityStatus, deleteAccountCascade, ACCOUNT_OWNED_TABLES,
 } from "@bis/db";
 import { acceptProposal, dismissProposal } from "./actions";
 import { m } from "@/lib/messages";
+
+// This suite runs against the LIVE shared Supabase project and each test
+// makes three or more round trips. On vitest's 5s default it went red FOUR
+// times on 2026-09-20 — twice on main, twice on a branch — every time with
+// "Test timed out in 5000ms" on tests that pass alone, whenever CI's db
+// suite, a local gate run or the e2e suite touched the same project at once.
+// A 30s ceiling still fails a genuine hang; it stops a slow-but-correct test
+// failing under load. The real fix is a CI project separate from
+// production's — recorded in the ledger as the owner's call.
+vi.setConfig({ testTimeout: 30_000 });
 
 // Not `SupabaseClient` from `@supabase/supabase-js` directly: apps/web has no
 // dependency on that package (only `@bis/db` does), so naming it here fails
@@ -66,14 +81,35 @@ beforeEach(async () => {
   vi.mocked(cache.revalidatePath).mockReset();
 });
 
-/** Throwaway account, cleaned up in `finally` — mirrors packages/db's
- *  `withTestAccount`/`account-teardown.ts`'s `ACCOUNT_OWNED_TABLES`,
- *  reimplemented locally because `@bis/db`'s package.json only exports "."
- *  (its own test fixtures are not a public subpath — same reason
- *  `f/[publicId]/actions.returning-lead.test.ts` reimplements it too). Order
- *  mirrors that list's relative order for the tables this file touches:
- *  `calls` before `phone_numbers` (calls FK-references phone_numbers).
- *  Must never go near the seeded "Test Client One" account. */
+/** The tables `deleteAccountCascade` must delete BY `account_id` for this
+ *  fixture — not "every table this file's fixture writes to": this file also
+ *  writes `call_proposals`, which is deliberately OFF `ACCOUNT_OWNED_TABLES`
+ *  because it rides `calls`' own `on delete cascade` via `call_id` rather than
+ *  being deleted by `account_id` (see `packages/db/src/account-teardown.ts:43-52`),
+ *  so it belongs off this list too. The test below pins this list as a subset
+ *  of `ACCOUNT_OWNED_TABLES`, so removing one of these from the shared list
+ *  fails HERE rather than as a foreign-key error on the accounts delete at the
+ *  end of an unrelated run. */
+const TABLES_THE_CASCADE_MUST_DELETE_BY_ACCOUNT_ID = [
+  "calls", "events", "contact_tags", "notes", "tasks",
+  "opportunities", "pipeline_stages", "pipelines", "contacts", "phone_numbers",
+] as const;
+
+it("the shared cascade still covers every table this fixture needs deleted by account_id", () => {
+  const covered = new Set<string>(ACCOUNT_OWNED_TABLES);
+  expect(TABLES_THE_CASCADE_MUST_DELETE_BY_ACCOUNT_ID.filter((t) => !covered.has(t))).toEqual([]);
+});
+
+/** Throwaway account, cleaned up in `finally` by packages/db's OWN
+ *  `deleteAccountCascade` — the same FK-ordered list `withTestAccount` uses,
+ *  now that `@bis/db` exports it. It used to be a private copy of that list
+ *  here, because the package only exported "." and its test fixtures are not
+ *  a public subpath; a private copy of a 26-entry FK-ordered list is a bug
+ *  with a delivery date, and the copy in
+ *  `f/[publicId]/actions.returning-lead.test.ts` had already proved it by
+ *  going stale and stranding 11 accounts. The cascade is a strict superset of
+ *  what this file writes (pinned above), so nothing is lost by deferring to
+ *  it. Must never go near the seeded "Test Client One" account. */
 async function withTestAccount(fn: (db: Db, accountId: string) => Promise<void>) {
   const db = serviceDb();
   const orgId = `org_test_${Math.random().toString(36).slice(2, 10)}`;
@@ -82,15 +118,7 @@ async function withTestAccount(fn: (db: Db, accountId: string) => Promise<void>)
   try {
     await fn(db, accountId);
   } finally {
-    for (const table of [
-      "calls", "events", "contact_tags", "notes", "tasks",
-      "opportunities", "pipeline_stages", "pipelines", "contacts", "phone_numbers",
-    ]) {
-      const { error } = await db.from(table).delete().eq("account_id", accountId);
-      if (error) throw new Error(`test cleanup: ${table} delete failed: ${error.message}`);
-    }
-    const { error } = await db.from("accounts").delete().eq("id", accountId);
-    if (error) throw new Error(`test cleanup: accounts delete failed: ${error.message}`);
+    await deleteAccountCascade(db, accountId, "calls/[callId]/actions.test.ts");
   }
 }
 

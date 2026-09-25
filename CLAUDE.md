@@ -26,6 +26,17 @@
   developer's own machine before the server has to; it is a courtesy, not
   the control, and it does not exist in a fresh clone until that command is
   run.
-- The e2e suite shares the ONE Supabase project with production. Booking and
-  calendar-settings specs run on the per-run fixture account — never point
-  mutating specs at `Test Client One` or any live account.
+- CI (`verify` and `e2e`) runs on a separate Free Supabase project,
+  `odnobiodsftffphuuosz` (`bis-ci`), never on production's
+  (`tlbkbmlrfafquucsmsmm`); a guard in both jobs refuses production. Since
+  #135, LOCAL runs refuse production too: the db suite, the integration
+  suite, Playwright and the two live web tests all throw before connecting
+  when any Supabase/PG* variable names production's ref, naming the
+  variable, never its value. Until `apps/web/.env.local` and
+  `packages/db/.env` are switched to the CI project (runbook section 9,
+  plan step D7), a local `pnpm check` or e2e run on a machine whose env
+  still points at production is REFUSED, not run. Every new migration goes to
+  the CI project FIRST (the `ci-project-setup.yml` workflow), then
+  production, then a parity check (`docs/runbooks/ci-supabase-project.md`).
+  Booking and calendar-settings specs run on the per-run fixture account —
+  never point mutating specs at `Test Client One` or any live account.

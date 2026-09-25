@@ -203,7 +203,7 @@ export function ActivityCard({
               <span
                 aria-hidden
                 className={cn(
-                  "flex size-[26px] shrink-0 items-center justify-center rounded-[8px]",
+                  "flex size-[26px] shrink-0 items-center justify-center rounded-[var(--radius-ctl)]",
                   TONE_CLASSES[row.tone],
                 )}
               >

@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 import { parse as parseEnv } from "dotenv";
 import { existsSync, readFileSync } from "node:fs";
+import { refuseProduction } from "./e2e/fixtures/production-guard";
 
 const AUTH_FILE = "e2e/.auth/state.json";
 
@@ -61,6 +62,26 @@ if (missingEnv.length > 0) {
       `configuration error, so the suite fails somewhere far from the cause.`,
   );
 }
+
+/**
+ * Refuses production before the build starts or any project runs.
+ *
+ * CI runs this suite on its own Supabase project behind
+ * .github/scripts/ci-target-guard.sh. A local run reads apps/web/.env.local,
+ * and until that file is switched (docs/runbooks/ci-supabase-project.md,
+ * section 9) it names production, where the setup creates accounts, Clerk
+ * users and Storage objects and the specs write.
+ *
+ * Here, not only in auth.setup.ts, because the setup project can be skipped:
+ * `--no-deps` runs the chromium specs without it, and `--project=teardown`
+ * runs the teardown alone. Every run of this config loads this file. Both
+ * sources are checked, the environment and the file, because either can be
+ * the one a runner process ends up reading (`dotenv` fills only what the
+ * environment leaves unset). playwright.screenshots.config.ts is a separate
+ * config and deliberately does not import this one.
+ */
+refuseProduction(process.env, "The e2e suite");
+refuseProduction(fileEnv, "The e2e suite (apps/web/.env.local)");
 
 // True only when the caller named the sweep project themselves, in either
 // spelling the CLI accepts. See the `sweep` project below.

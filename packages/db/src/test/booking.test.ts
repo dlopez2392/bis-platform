@@ -10,6 +10,7 @@ import {
   listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
   SlotTakenError,
 } from "../booking";
+import { stampAppointmentConfirmAsked, applyConfirmationReply } from "../automations";
 
 describe("booking accessors", () => {
   it("creates the calendar lazily, once, disabled, with a public id", async () => {
@@ -355,6 +356,47 @@ describe("booking accessors", () => {
     });
   });
 
+  /**
+   * THE `BOOKING_COLS` BINDING. Nothing else in this repo asserts that the
+   * confirmation answer survives a READ: every other test that touches those
+   * two columns reaches for them with a direct `.select("confirm_reply")`
+   * (automations.test.ts, automations-b-schema.test.ts), which stays green
+   * however `BOOKING_COLS` is edited. So a later edit that drops either name
+   * from that string leaves the whole suite green while
+   * `listUpcomingBookings` quietly returns rows without it — and the
+   * operator's bookings list, the ONE screen this feature has, stops
+   * rendering the pill in production with nothing red anywhere.
+   *
+   * One assertion chain binds `BOOKING_COLS` -> `BookingRow` -> the
+   * component's data source, through the real writer (the inbound SMS
+   * webhook's `applyConfirmationReply`) rather than a hand-made UPDATE.
+   *
+   * Mutation: delete `confirm_reply` — or `confirm_reply_at` — from
+   * `BOOKING_COLS` in `booking.ts`; this reds by name. The `confirm_reply_at`
+   * assertion is an instant EQUALITY, not `.not.toBeNull()`: a dropped column
+   * comes back `undefined`, and `expect(undefined).not.toBeNull()` passes.
+   */
+  it("listUpcomingBookings carries the confirmation answer the SMS webhook wrote (BOOKING_COLS round-trip)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId,
+        { firstName: "Confirmer", email: "confirmer@example.com" }, "user_test");
+      const now = new Date("2027-05-10T12:00:00Z");
+      const booking = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date("2027-05-12T15:00:00Z"),
+          endsAt: new Date("2027-05-12T16:00:00Z") }, "user_test");
+
+      await stampAppointmentConfirmAsked(db, booking.id);
+      expect(await applyConfirmationReply(db, accountId, contactId, "YES", now)).toBe("yes");
+
+      const row = (await listUpcomingBookings(db, accountId, "2027-05-01T00:00:00Z"))
+        .find((b) => b.id === booking.id);
+      expect(row).toBeDefined();
+      expect(row!.confirm_reply).toBe("yes");
+      expect(new Date(row!.confirm_reply_at!).getTime()).toBe(now.getTime());
+    });
+  });
+
   it("calendar defaults for meeting_type/followup_enabled/followup_body", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
@@ -621,3 +663,11 @@ describe("listBookingCreationsBetween", () => {
     });
   });
 });
+
+// The reminder and the follow-up reach the customer and the calendar through
+// `bookings.contact_id` / `bookings.calendar_id`. Since 0050 both are composite
+// FKs onto `(account_id, id)`, so a booking on another account's contact or
+// calendar cannot be written; the block that stood here built exactly those
+// rows to prove `ownAccountEmbedsOnly`. The refusal is proved in
+// same-account-fk-schema.test.ts; the guard stays in booking.ts as defence in
+// depth; the own-account due rows are proved above and in due-by-id.test.ts.

@@ -30,7 +30,7 @@ export function Notice({
       role="alert"
       data-slot="notice"
       className={cn(
-        "rounded-[8px] border border-transparent px-3 py-2 text-sm",
+        "rounded-[var(--radius-ctl)] border border-transparent px-3 py-2 text-sm",
         tone === "good" && "bg-[var(--good-bg)] text-[var(--good)]",
         tone === "warn" && "bg-[var(--warn-bg)] text-[var(--warn)]",
         tone === "crit" && "bg-[var(--crit-bg)] text-[var(--crit)]",

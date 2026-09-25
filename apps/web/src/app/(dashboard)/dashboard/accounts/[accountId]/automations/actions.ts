@@ -10,12 +10,16 @@
 
 import { revalidatePath } from "next/cache";
 import {
-  serviceDb, upsertAutomation, parseReviewRequestConfig, parseNoShowNudgeConfig, parseInstantReplyConfig,
+  serviceDb, upsertAutomation, parseReviewRequestConfig, parseNoShowNudgeConfig, parseReferralAskConfig,
+  parseReactivationConfig, parseQuoteFollowupConfig, parseInstantReplyConfig,
+  QUOTE_FOLLOWUP_MIN_QUIET_DAYS, QUOTE_FOLLOWUP_MAX_QUIET_DAYS,
+  saveQuietSettings, bumpHeldForAccount, isClock, getMailingAddress, getBranding,
   type ReviewRequestChannel,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { m } from "@/lib/messages";
 import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
+import { missingForMarketingEmail } from "@/lib/automations/reactivation-gate";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -89,6 +93,157 @@ export async function saveNoShowNudgeAction(
   return { ok: true };
 }
 
+export async function saveReferralAskAction(
+  accountId: string, formData: FormData,
+): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["automations.agencyOnly"] };
+
+  // The pass's own parser, on write: an unknown channel is refused, never
+  // defaulted — a default here would let the page show one channel while the
+  // row stores another. There is deliberately no url field to validate: this
+  // recipe asks for a name, not a rating.
+  const config = parseReferralAskConfig({ channel: String(formData.get("channel") ?? "email") });
+  if (!config) return { ok: false, error: m["automations.referral.saveFailed"] };
+  const enabled = formData.get("enabled") === "on";
+  const body = String(formData.get("body") ?? "").trim();
+  if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
+
+  // NOT ON BY EMAIL WITHOUT AN ADDRESS AND A REPLY-TO (B21, danlo,
+  // 2026-09-23) — the check-in's rule, for the same reason: the referral
+  // email is marketing, prints the postal address, and its opt-out is a
+  // reply that must reach the business. The same function the pass skips on
+  // and the same messages as the check-in's save. EMAIL ONLY — a text
+  // carries no footer and its opt-out is the carrier's STOP list — and only
+  // when turning it ON, so a recipe can always be switched off. A failed
+  // read is a failed save, never "not set".
+  if (enabled && config.channel === "email") {
+    try {
+      const db = serviceDb();
+      const [mailingAddress, branding] = await Promise.all([
+        getMailingAddress(db, accountId), getBranding(db, accountId),
+      ]);
+      const missing = missingForMarketingEmail(mailingAddress, branding.replyToEmail);
+      if (missing.mailingAddress) return { ok: false, error: m["automations.reactivation.needsMailingAddress"] };
+      if (missing.replyTo) return { ok: false, error: m["automations.reactivation.needsReplyTo"] };
+    } catch (e) {
+      console.error(`saveReferralAskAction: address/reply-to read failed for account ${accountId}: ${String(e)}`);
+      return { ok: false, error: m["automations.referral.saveFailed"] };
+    }
+  }
+
+  try {
+    await upsertAutomation(serviceDb(), accountId, "referral_ask", { enabled, body, config }, userId);
+  } catch (e) {
+    console.error(`saveReferralAskAction: save failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.referral.saveFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/automations`);
+  return { ok: true };
+}
+
+
+export async function saveReactivationAction(
+  accountId: string, formData: FormData,
+): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["automations.agencyOnly"] };
+
+  // The pass's own parser, on write. A months value outside the range is
+  // REFUSED, never clamped: silently turning a typo'd 99 into 18 would show
+  // the operator one number and send on another. The number input's own
+  // `max` makes this unreachable from a normal keyboard, which is why the
+  // refusal is proved here and never in Playwright. There is deliberately no
+  // channel to validate: this recipe is email only.
+  const config = parseReactivationConfig({ months: Number(formData.get("months")) });
+  if (!config) return { ok: false, error: m["automations.reactivation.monthsInvalid"] };
+  const enabled = formData.get("enabled") === "on";
+  const body = String(formData.get("body") ?? "").trim();
+  if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
+
+  // NOT ON WITHOUT AN ADDRESS AND A REPLY-TO (decision A, danlo, 2026-09-22).
+  // The check-in is commercial email, which under CAN-SPAM (the
+  // orchestrator's reading, not a lawyer's) carries the sender's postal
+  // address and a working opt-out — here "reply and let us know", which only
+  // works if a reply reaches the business rather than the agency's
+  // `EMAIL_FROM` mailbox. Judged by the same function the pass skips on, so
+  // the save and the send cannot disagree about "blank". Only when turning it
+  // ON: saving with the recipe off must never need either, or an account
+  // whose address was cleared could not even be switched off. A failed read
+  // is a failed save, never "not set".
+  if (enabled) {
+    try {
+      const db = serviceDb();
+      const [mailingAddress, branding] = await Promise.all([
+        getMailingAddress(db, accountId), getBranding(db, accountId),
+      ]);
+      const missing = missingForMarketingEmail(mailingAddress, branding.replyToEmail);
+      if (missing.mailingAddress) return { ok: false, error: m["automations.reactivation.needsMailingAddress"] };
+      if (missing.replyTo) return { ok: false, error: m["automations.reactivation.needsReplyTo"] };
+    } catch (e) {
+      console.error(`saveReactivationAction: address/reply-to read failed for account ${accountId}: ${String(e)}`);
+      return { ok: false, error: m["automations.reactivation.saveFailed"] };
+    }
+  }
+
+  try {
+    await upsertAutomation(serviceDb(), accountId, "reactivation", { enabled, body, config }, userId);
+  } catch (e) {
+    console.error(`saveReactivationAction: save failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.reactivation.saveFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/automations`);
+  return { ok: true };
+}
+
+export async function saveQuoteFollowupAction(
+  accountId: string, formData: FormData,
+): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["automations.agencyOnly"] };
+
+  const stageId = String(formData.get("stage_id") ?? "").trim();
+  const quietDays = Number(formData.get("quiet_days"));
+  const enabled = formData.get("enabled") === "on";
+
+  // ONE parse with the pass's own parser, then the specific messages, most
+  // specific first — the review-request action's shape (actions.ts above).
+  // A days value outside the range is REFUSED, never clamped: silently
+  // turning a typo'd 99 into 30 would show the operator one number and send
+  // on another. The number input's own `max` makes that unreachable from a
+  // normal keyboard, which is why the refusal is proved in actions.test.ts
+  // and never in Playwright.
+  const config = parseQuoteFollowupConfig({ stageId, quietDays, channel: String(formData.get("channel") ?? "email") });
+  if (!config) {
+    // An empty stage is named whether or not the recipe is being turned on
+    // (decision C, danlo, 2026-09-22): the parser refuses it either way, so
+    // an operator saving with the switch off must still be told what is
+    // missing rather than handed the generic `saveFailed` below.
+    if (stageId === "") return { ok: false, error: m["automations.quoteFollowup.stageRequired"] };
+    if (!Number.isInteger(quietDays)
+      || quietDays < QUOTE_FOLLOWUP_MIN_QUIET_DAYS || quietDays > QUOTE_FOLLOWUP_MAX_QUIET_DAYS) {
+      return { ok: false, error: m["automations.quoteFollowup.quietDaysInvalid"] };
+    }
+    return { ok: false, error: m["automations.quoteFollowup.saveFailed"] };
+  }
+  const body = String(formData.get("body") ?? "").trim();
+  if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
+
+  try {
+    // The PARSED config, never the raw form values: the stored jsonb is then
+    // exactly what the pass will read back.
+    await upsertAutomation(serviceDb(), accountId, "quote_followup", { enabled, body, config }, userId);
+  } catch (e) {
+    console.error(`saveQuoteFollowupAction: save failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.quoteFollowup.saveFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/automations`);
+  return { ok: true };
+}
+
 export async function saveSmsReminderAction(
   accountId: string, formData: FormData,
 ): Promise<ActionResult> {
@@ -105,6 +260,29 @@ export async function saveSmsReminderAction(
   } catch (e) {
     console.error(`saveSmsReminderAction: save failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.smsReminder.saveFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/automations`);
+  return { ok: true };
+}
+
+export async function saveAppointmentConfirmAction(
+  accountId: string, formData: FormData,
+): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["automations.agencyOnly"] };
+
+  const enabled = formData.get("enabled") === "on";
+  const body = String(formData.get("body") ?? "").trim();
+  if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
+
+  try {
+    // Nothing to configure: the channel IS the recipe (a "Reply YES" email
+    // points at a no-reply address), and the time is the booking's.
+    await upsertAutomation(serviceDb(), accountId, "appointment_confirm", { enabled, body, config: {} }, userId);
+  } catch (e) {
+    console.error(`saveAppointmentConfirmAction: save failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.appointmentConfirm.saveFailed"] };
   }
 
   revalidatePath(`/dashboard/accounts/${accountId}/automations`);
@@ -142,6 +320,48 @@ export async function saveInstantReplyAction(
   } catch (e) {
     console.error(`saveInstantReplyAction: save failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.instantReply.saveFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/automations`);
+  return { ok: true };
+}
+
+/**
+ * The quiet-hours window (part C). Same guard, same Result shape as the
+ * recipe actions above. After the save, every held row of the account is
+ * made due now (`bumpHeldForAccount`), so the release pass re-reads tonight's
+ * queue under the NEW window on the next tick — turning quiet hours off at
+ * 23:00 releases the texts at 23:15, not at 08:00; lengthening the window
+ * re-holds them. The bump is best effort: a save that landed is a success.
+ */
+export async function saveQuietHoursAction(
+  accountId: string, formData: FormData,
+): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["automations.agencyOnly"] };
+
+  const enabled = formData.get("quiet_enabled") === "on";
+  const start = String(formData.get("quiet_start") ?? "").trim();
+  const end = String(formData.get("quiet_end") ?? "").trim();
+  if (!isClock(start) || !isClock(end)) return { ok: false, error: m["automations.quiet.invalidTime"] };
+  // quiet-hours.ts's evaluateWindow treats start === end as DISABLED (no
+  // window at all), so an enabled row with equal times would show ON in the
+  // UI while never actually going quiet. Refused only while turning it on;
+  // a stored OFF row with equal times is a legal (if pointless) rest state.
+  if (enabled && start === end) return { ok: false, error: m["automations.quiet.invalidTime"] };
+
+  const db = serviceDb();
+  try {
+    await saveQuietSettings(db, accountId, { enabled, start, end }, userId);
+  } catch (e) {
+    console.error(`saveQuietHoursAction: save failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.quiet.saveFailed"] };
+  }
+  try {
+    const bumped = await bumpHeldForAccount(db, accountId);
+    if (bumped > 0) console.log(`saveQuietHoursAction: ${bumped} held send(s) for account ${accountId} re-queued under the new window`);
+  } catch (e) {
+    console.error(`saveQuietHoursAction: could not re-queue held sends for account ${accountId}: ${String(e)}`);
   }
 
   revalidatePath(`/dashboard/accounts/${accountId}/automations`);

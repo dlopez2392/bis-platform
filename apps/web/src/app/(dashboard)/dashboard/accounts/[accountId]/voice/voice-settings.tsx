@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
+import { MessageCircle } from "lucide-react";
 import { toast } from "sonner";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
@@ -10,12 +12,16 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input, nativeFieldClass } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/empty-state";
+import { EmbedSnippet } from "@/components/embed-snippet";
 import { SubmitButton } from "../../submit-button";
 import { m } from "@/lib/messages";
 import { segmentsFor } from "@/lib/sms/segments";
+import { withOptOut } from "@/lib/sms/opt-out";
 import { defaultTextbackBody } from "@/lib/voice/textback-body";
 import { NUMBER_STATUS_LABEL } from "@/lib/voice/number-status";
-import type { ActionResult } from "./actions";
+import type { ActionResult, EnableConciergeResult } from "./actions";
 
 // The DB-side defaults (0019_voice_core.sql) — used whenever no row exists
 // yet, which is the common case for an account that has never been touched:
@@ -27,11 +33,17 @@ const DEFAULT_PROFILE: Omit<VoiceProfileRow, "id" | "account_id"> = {
   languages: "both", booking_enabled: true,
   after_hours: "hours_then_message", enabled: false,
   textback_enabled: false, textback_body: "",
+  public_id: null, concierge_enabled: false, concierge_form_id: null,
 };
 
 const STATUS_VALUES: PhoneNumberStatus[] = ["provisioned", "testing", "live", "released"];
 
-function VoiceProfileForm({
+// Exported (additive — no other symbol in this file changes) so the
+// text-back segment counter can be exercised directly the same way
+// `ConciergeCard` is below, rather than only through the page-level
+// `VoiceSettings` export, which would drag in unrelated actions and props
+// just to reach this card's own preview state.
+export function VoiceProfileForm({
   profile, brandName, action,
 }: {
   profile: VoiceProfileRow | null;
@@ -66,13 +78,29 @@ function VoiceProfileForm({
   const [previewLanguage, setPreviewLanguage] = useState<"en" | "es">(
     p.languages === "es" ? "es" : "en",
   );
-  // What the counter below previews must match what actually sends: an
-  // empty textarea means "use the live default at send time" (the
-  // empty-means-default contract this column exists for, explained above),
-  // so the preview has to be the default's own segment count, not 0
-  // chars / 1 message for a string that will never be what goes out. The
-  // moment the operator types anything, `textbackBody` itself takes over.
-  const previewBody = textbackBody || defaultTextbackBody(brandName, previewLanguage);
+  // What the counter below previews must match what actually SENDS —
+  // `prepareTextback` (lib/voice/textback.ts):
+  //   withOptOut(r.textbackBody.trim() || defaultTextbackBody(r.brandName, r.language), r.language)
+  // Two things this preview has to mirror exactly, or it under-reports every
+  // live text-back:
+  //   1. `.trim()` before the empty-means-default fallback, not a bare
+  //      truthiness check — a whitespace-only body ("   ") is TRUTHY, so
+  //      `textbackBody || default` would preview the blank string itself
+  //      forever, never the default a caller actually gets.
+  //   2. `withOptOut(...)`, applied OUTSIDE the fallback so it wraps
+  //      whichever branch wins, exactly like the send does — the disclosure
+  //      is appended UNCONDITIONALLY, in the caller's own spoken language,
+  //      and it costs real characters (23 in English, 29 in Spanish,
+  //      lib/sms/opt-out.ts) that never showed up in this counter before.
+  //      `previewLanguage` stands in for "the language the caller actually
+  //      spoke" (`detectSpokenLanguage`, textback.ts can only know that at
+  //      send time) — it is the same value the language Select already
+  //      drives, so the preview cannot disagree with the operator's own
+  //      choice of line.
+  const previewBody = withOptOut(
+    textbackBody.trim() || defaultTextbackBody(brandName, previewLanguage),
+    previewLanguage,
+  );
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     await notifyActionResult(() => action(formData), toast, {
       success: m["voice.profile.saved"],
@@ -189,17 +217,450 @@ function VoiceProfileForm({
               placeholder={defaultTextbackBody(brandName, previewLanguage)}
               className={nativeFieldClass}
             />
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-muted-foreground" data-testid="textback-sms-count">
               {m["compose.smsSegments"]
                 .replace("{chars}", String(segmentsFor(previewBody).chars))
                 .replace("{segments}", String(segmentsFor(previewBody).segments))}
             </p>
+            {/* The count above is of the DISCLOSED body, and those extra
+                characters appear nowhere else on this card — the textarea and
+                its placeholder both show the UNDISCLOSED text, same as
+                `referral-ask-card.tsx`'s own note beside its counter. Says it
+                WITHOUT quoting either language's exact sentence: this field
+                has no channel split (it is always SMS), but its preview
+                switches between the English and Spanish disclosure with
+                `previewLanguage`, and `automations.optOutCounted`'s wording
+                (which quotes "Reply STOP to opt out." verbatim) would be
+                describing text a Spanish caller never receives. */}
+            <p className="text-xs text-muted-foreground">{m["voice.textback.optOutCounted"]}</p>
           </div>
 
           <SubmitButton pending={pending}>{m["voice.profile.save"]}</SubmitButton>
         </form>
       </CardContent>
     </Card>
+  );
+}
+
+export type ConciergeLockReason = "no_profile" | "blank_greeting" | "no_published_form";
+
+/**
+ * The pure decision behind the website-assistant toggle's disabled state —
+ * extracted so it is a plain unit test rather than a rendered assertion, not
+ * because this repo lacks a render harness for `.tsx` (it has one:
+ * `renderToStaticMarkup` + `createElement`, the shape `calls-table.test.ts`
+ * already uses on a client component, and `ConciergeCard`'s own card-level
+ * tests below use on this file — round 1's report claimed otherwise, which
+ * was wrong). concierge-chat.tsx's `pickTurnUpdate` is the sibling precedent
+ * for pulling a decision out of JSX.
+ *
+ * Order is load-bearing: a profile that does not exist has no greeting to
+ * check, so `no_profile` comes first. `no_published_form` comes last because
+ * it is the destination gate, independent of the profile's own readiness —
+ * an account can have a form published long before its greeting is written,
+ * or vice versa.
+ *
+ * Greeting rule, verbatim from the brief: gate on `greeting_en` ALWAYS
+ * (regardless of `languages`), and on `greeting_es` too when `languages` is
+ * `es` or `both` — a bilingual line silent for half its callers is exactly
+ * the state this exists to prevent.
+ */
+export function conciergeLockReason(
+  profile: Pick<VoiceProfileRow, "greeting_en" | "greeting_es" | "languages"> | null,
+  publishedFormCount: number,
+): ConciergeLockReason | null {
+  if (!profile) return "no_profile";
+  const enBlank = !profile.greeting_en.trim();
+  const esBlank = (profile.languages === "es" || profile.languages === "both") && !profile.greeting_es.trim();
+  if (enBlank || esBlank) return "blank_greeting";
+  if (publishedFormCount === 0) return "no_published_form";
+  return null;
+}
+
+export type ConciergeDestinationOption = { id: string; name: string };
+
+/**
+ * Whether the card's whole body should be replaced by the empty state
+ * (DESIGN.md rule 5) that sells "publish a form first."
+ *
+ * `!enabled` is load-bearing, not decoration (Task 6's review, "an ON
+ * assistant with no off switch"): `conciergeLockReason` correctly reads
+ * `no_published_form` the moment an operator unpublishes the form an ALREADY
+ * ON assistant sends to — deciding to show the empty state from that reason
+ * alone would then hide the toggle itself, and a hidden toggle cannot be
+ * switched off. The empty state is for an account that has never had
+ * anywhere to send a lead; an account that is live and lost its destination
+ * gets `conciergeFormUnpublished`'s sentence instead, beside a toggle it can
+ * still click.
+ */
+export function shouldShowConciergeEmptyState(
+  enabled: boolean, lockReason: ConciergeLockReason | null,
+): boolean {
+  return !enabled && lockReason === "no_published_form";
+}
+
+/**
+ * True when the id the Select is currently SHOWING is not among the
+ * currently published forms — unpublished out from under it, most likely.
+ *
+ * Fix round 2 (Task 6 re-review, IMPORTANT B): this used to take `enabled`
+ * and gate on it, on the theory that an OFF assistant has "no live
+ * destination to warn about yet." Wrong: `disableConcierge` clears neither
+ * `concierge_enabled` nor `concierge_form_id`, and `selectedFormId` (what the
+ * Select renders) is seeded from the stored id regardless of the toggle's own
+ * state — so the blank-trigger, no-lock-reason symptom lived on BOTH faces,
+ * not just the ON one this function used to guard. There is no `enabled`
+ * axis any more: whatever id the caller is showing is the only input, in
+ * either state.
+ */
+export function conciergeFormUnpublished(
+  shownFormId: string, publishedForms: ConciergeDestinationOption[],
+): boolean {
+  return Boolean(shownFormId) && !publishedForms.some((f) => f.id === shownFormId);
+}
+
+/**
+ * The destination Select's own option list. Ordinarily just the published
+ * forms — the only things a NEW selection may point at. But once the shown
+ * id has fallen out of that list (unpublished), the Select's `value` still
+ * equals it, and `SelectValue` renders blank for a value matching no
+ * `SelectItem` — a destination that is very much still live (while ON) or
+ * still stored (while OFF), reading as if nothing were chosen at all. This
+ * component never receives an unpublished form's real title (page.tsx
+ * narrows `listForms` to published on purpose — "a draft has no
+ * /f/<publicId> a lead could land on" — so there is no name to recover here,
+ * only to invent), so the added option carries the explanatory label
+ * `voice.assistant.unpublishedFormOption` instead of a fabricated title.
+ *
+ * Fix round 2: dropped `enabled`, same reasoning as `conciergeFormUnpublished`
+ * above — the caller passes whatever id the Select is showing, in either
+ * state.
+ */
+export function conciergeDestinationOptions(
+  shownFormId: string, publishedForms: ConciergeDestinationOption[],
+): ConciergeDestinationOption[] {
+  if (!shownFormId) return publishedForms;
+  if (publishedForms.some((f) => f.id === shownFormId)) return publishedForms;
+  return [...publishedForms, { id: shownFormId, name: m["voice.assistant.unpublishedFormOption"] }];
+}
+
+/**
+ * The toggle's own disabled state, extracted so the OFF-face lock added in
+ * fix round 2 is unit-testable like its siblings rather than provable only
+ * by rendering the checkbox. ON is never locked (it is the off switch).
+ * OFF locks on every pre-existing reason (`lockReason`, `!selectedFormId`)
+ * plus the new one: the shown destination exists but is no longer published,
+ * which would otherwise let one click call `enableAction` on a form the
+ * operator was never shown a warning about.
+ */
+export function conciergeToggleLocked(
+  enabled: boolean, lockReason: ConciergeLockReason | null,
+  selectedFormId: string, formUnpublished: boolean,
+): boolean {
+  return !enabled && (
+    lockReason === "no_profile" || lockReason === "blank_greeting"
+    || !selectedFormId || formUnpublished
+  );
+}
+
+/**
+ * The ONE gate every path that calls `enableAction` shares — `turnOn`, the
+ * disable toast's Undo (`conciergeAttemptReenable` below), and the
+ * checkbox's own `disabled` (`conciergeToggleLocked` above, which this reuses
+ * directly with `enabled: false` rather than a parallel formula that could
+ * drift from it).
+ *
+ * Whole-branch review, I2: `turnOn` used to guard only `!selectedFormId ||
+ * pending`, and the Undo inside `turnOff` called `enableAction` with no guard
+ * at all — so a click that meant "undo turning it off" could re-enable onto
+ * a destination the checkbox itself refuses to turn on for. Decided in the
+ * card (item 19 of the review), not in SQL: publication is mutable
+ * operational state, and a CHECK constraint proves nothing that survives the
+ * next unpublish.
+ */
+export function conciergeCanTurnOn(
+  lockReason: ConciergeLockReason | null, selectedFormId: string, formUnpublished: boolean,
+): boolean {
+  return !conciergeToggleLocked(false, lockReason, selectedFormId, formUnpublished);
+}
+
+/**
+ * The OFF face's own reason sentence, extracted from `reasonText`'s OFF
+ * branch below so `conciergeAttemptReenable` can reuse the SAME decision
+ * instead of a second, independent one.
+ *
+ * Re-review finding NEW-2: `conciergeAttemptReenable` used to return
+ * `formUnpublishedOff` for every refusal, regardless of which gate actually
+ * fired — reachable because an assistant can be ON with a blank greeting
+ * (I3's own state): turn it off, click Undo, and — even with a perfectly
+ * published destination — the operator was told "This form is no longer
+ * published" about a form that is published. The four conditions here are
+ * the exact same four `conciergeToggleLocked`/`conciergeCanTurnOn` check
+ * (same order, same booleans), so whenever the gate refuses, exactly one of
+ * these is non-null — never a second parallel formula that could drift from
+ * the gate it explains.
+ */
+export function conciergeOffReason(
+  lockReason: ConciergeLockReason | null, selectedFormId: string, formUnpublished: boolean,
+): string | null {
+  return lockReason === "no_profile" ? m["voice.assistant.lockedNoProfile"]
+    : lockReason === "blank_greeting" ? m["voice.assistant.lockedBlankGreeting"]
+    : !selectedFormId ? m["voice.assistant.lockedNoSelection"]
+    : formUnpublished ? m["voice.assistant.formUnpublishedOff"]
+    : null;
+}
+
+/**
+ * The disable toast's Undo, extracted to a standalone function (not inlined
+ * in the toast's `onClick`) so a test can call it directly with a stub
+ * `enableAction` and prove the gate actually runs — `renderToStaticMarkup`
+ * never fires a handler, so nothing short of calling this directly shows the
+ * Undo path shares `conciergeCanTurnOn` with `turnOn` rather than bypassing
+ * it. Refuses with `conciergeOffReason`'s own sentence for whichever gate
+ * actually fired — the `?? m["voice.assistant.formUnpublishedOff"]` fallback
+ * is unreachable by construction (see that function's own note) and exists
+ * only so this always returns a string, never `null`.
+ */
+export async function conciergeAttemptReenable(
+  lockReason: ConciergeLockReason | null, selectedFormId: string, formUnpublished: boolean,
+  enableAction: (formId: string) => Promise<EnableConciergeResult>,
+): Promise<EnableConciergeResult> {
+  if (!conciergeCanTurnOn(lockReason, selectedFormId, formUnpublished)) {
+    return {
+      ok: false,
+      error: conciergeOffReason(lockReason, selectedFormId, formUnpublished)
+        ?? m["voice.assistant.formUnpublishedOff"],
+    };
+  }
+  return enableAction(selectedFormId);
+}
+
+/**
+ * The id the pasteable snippet renders from, or null to hide it.
+ *
+ * Prefers the server-confirmed `profile.public_id` once `enabled` reads
+ * true. Falls back to `optimisticPublicId` — the id `enableConciergeAction`
+ * just minted or kept (Task 1's contract: enabling always returns the
+ * stored id, new or old) — for the moment between that action resolving and
+ * `revalidatePath`'s refresh landing, so the snippet an operator's very
+ * next move is "copy" appears the instant the toggle succeeds rather than
+ * after a second round trip. A stale optimistic id left over from an
+ * earlier click never wins once the real data catches up: the first branch
+ * always takes priority.
+ */
+export function conciergeSnippetPublicId(
+  enabled: boolean, storedPublicId: string | null, optimisticPublicId: string | null,
+): string | null {
+  if (enabled && storedPublicId) return storedPublicId;
+  return optimisticPublicId;
+}
+
+/**
+ * The website assistant — the same receptionist, answering on the client's
+ * site instead of the phone. A sibling card to `VoiceProfileForm` above (its
+ * `booking_enabled`/`textback_enabled` checkboxes are the pattern this
+ * follows: a feature switch beside the profile that has to be ready before
+ * it means anything), not nested inside it — its own action, its own
+ * `enableConcierge`/`disableConcierge` write, matching the rest of this
+ * file's one-form-per-write shape.
+ *
+ * Reversible, immediate, with an undo toast (DESIGN.md rule 6) — no "are you
+ * sure": flipping it back is one click either direction, so a confirm dialog
+ * would only slow down the common case to guard against a mistake that costs
+ * nothing to reverse.
+ *
+ * Ghost actions throughout (DESIGN.md rule 8) — `VoiceProfileForm`'s Save
+ * button above is this page's one primary button.
+ */
+export function ConciergeCard({
+  accountId, profile, publishedForms, origin,
+  enableAction, disableAction,
+}: {
+  accountId: string;
+  profile: VoiceProfileRow | null;
+  publishedForms: { id: string; name: string }[];
+  origin: string;
+  enableAction: (formId: string) => Promise<EnableConciergeResult>;
+  disableAction: () => Promise<ActionResult>;
+}) {
+  const lockReason = conciergeLockReason(profile, publishedForms.length);
+  const enabled = Boolean(profile?.concierge_enabled);
+  // Pre-selected when the account has exactly one published form (the
+  // brief's own rule); otherwise seeded from whatever is already stored, so
+  // a page reload after enabling still shows the real destination.
+  const [selectedFormId, setSelectedFormId] = useState<string>(
+    profile?.concierge_form_id ?? (publishedForms.length === 1 ? publishedForms[0]!.id : ""),
+  );
+  const [pending, startTransition] = useTransition();
+  // The id `enableAction` just minted or kept, held only for the gap between
+  // that promise resolving and `revalidatePath`'s refresh landing — see
+  // `conciergeSnippetPublicId`'s own doc. Cleared on a successful disable so
+  // a stale id never outlives the toggle that produced it.
+  const [optimisticPublicId, setOptimisticPublicId] = useState<string | null>(null);
+
+  function turnOn() {
+    // Same gate the checkbox's own `disabled` and the disable toast's Undo
+    // share (`conciergeCanTurnOn`, I2) — `!selectedFormId` used to be the
+    // only check here, which let a click through on an unpublished shown
+    // destination the checkbox itself would refuse.
+    if (pending || !conciergeCanTurnOn(lockReason, selectedFormId, formUnpublished)) return;
+    startTransition(async () => {
+      const result = await enableAction(selectedFormId);
+      if (!result.ok) { toast.error(result.error); return; }
+      setOptimisticPublicId(result.publicId);
+      toast.success(m["voice.assistant.enabledToast"], {
+        action: {
+          label: m["common.undo"],
+          onClick: () => startTransition(async () => {
+            const r = await disableAction();
+            if (!r.ok) { toast.error(r.error); return; }
+            setOptimisticPublicId(null);
+          }),
+        },
+      });
+    });
+  }
+
+  function turnOff() {
+    if (pending) return;
+    startTransition(async () => {
+      const result = await disableAction();
+      if (!result.ok) { toast.error(result.error); return; }
+      setOptimisticPublicId(null);
+      toast.success(m["voice.assistant.disabledToast"], {
+        action: {
+          label: m["common.undo"],
+          onClick: () => startTransition(async () => {
+            // Shares `turnOn`'s own gate (`conciergeAttemptReenable`, I2) —
+            // Undo is "re-enable", not a bypass of the same rule.
+            const r = await conciergeAttemptReenable(lockReason, selectedFormId, formUnpublished, enableAction);
+            if (!r.ok) { toast.error(r.error); return; }
+            setOptimisticPublicId(r.publicId);
+          }),
+        },
+      });
+    });
+  }
+
+  const showEmptyState = shouldShowConciergeEmptyState(enabled, lockReason);
+  // Both helpers below are driven off the id the Select is actually SHOWING
+  // (`selectedFormId`), never the stored id directly and never `enabled` —
+  // fix round 2, IMPORTANT B. While ON the Select is disabled so the two
+  // read identically; while OFF an operator who picks a different published
+  // form clears the condition immediately, with no reload.
+  const destinationOptions = conciergeDestinationOptions(selectedFormId, publishedForms);
+  const formUnpublished = conciergeFormUnpublished(selectedFormId, publishedForms);
+  const snippetPublicId = conciergeSnippetPublicId(enabled, profile?.public_id ?? null, optimisticPublicId);
+
+  // Which sentence, if any, sits under the toggle — tied to it with
+  // `aria-describedby` (checklist-panel.tsx:65's precedent) so a screen
+  // reader hears WHY a locked toggle refuses a click, or why an ON toggle
+  // still needs attention. `formUnpublished` now fires on BOTH faces, with a
+  // different sentence each time: ON keeps naming the dead path the toggle
+  // itself resolves (turn it off, then pick another); OFF names it as a lock,
+  // exactly like `!selectedFormId` — the operator cannot go live on it
+  // silently, and must publish it again or choose a different one first.
+  //
+  // I3 (whole-branch review): an assistant switched ON whose greeting is
+  // LATER blanked (`saveVoiceProfileAction` accepts one — no server check,
+  // no `required` on the textarea) greets every visitor with an empty first
+  // bubble, silently — `reasonText`'s ON branch used to handle only
+  // `formUnpublished`, computing `lockReason` and then ignoring it entirely.
+  // Checked first — order is a choice, not a coincidence: an assistant can
+  // be blank-greeting AND unpublished at once, and the greeting is the one
+  // that reads as broken rather than merely stale. The toggle itself stays
+  // live either way (it is the off switch); this only ever adds a sentence
+  // beside it.
+  const reasonText = !enabled ? (
+    conciergeOffReason(lockReason, selectedFormId, formUnpublished)
+  ) : (
+    lockReason === "blank_greeting" ? m["voice.assistant.greetingBlankOn"]
+    : formUnpublished ? m["voice.assistant.formUnpublished"]
+    : null
+  );
+  const reasonId = "concierge-toggle-reason";
+
+  const toggleDisabled = pending || conciergeToggleLocked(enabled, lockReason, selectedFormId, formUnpublished);
+
+  return (
+    <>
+      {/* id targeted by the setup wizard's website_assistant step, row 3's
+          link (`/voice?from=setup#website-assistant`) — the only edit this
+          file needs for that step (setup/steps/website-assistant.tsx owns
+          the rest). */}
+      <Card id="website-assistant">
+        <CardHeader>
+          <CardTitle>{m["voice.assistant.title"]}</CardTitle>
+          <CardDescription>{m["voice.assistant.body"]}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {showEmptyState ? (
+            // The empty state (DESIGN.md rule 5): sells the next step rather
+            // than reporting a failure — there is nothing broken here, the
+            // account simply has not published a form yet. Gated on `!enabled`
+            // inside `shouldShowConciergeEmptyState` — an assistant that is ON
+            // never disappears behind this, because it contains no toggle.
+            <EmptyState
+              icon={MessageCircle}
+              title={m["voice.assistant.noFormTitle"]}
+              body={m["voice.assistant.noFormBody"]}
+              action={
+                <Button asChild variant="ghost" size="sm">
+                  <Link href={`/dashboard/accounts/${accountId}/forms`}>{m["voice.assistant.goToForms"]}</Link>
+                </Button>
+              }
+            />
+          ) : (
+            <>
+              <div className="space-y-1.5">
+                <Label htmlFor="concierge_form">{m["voice.assistant.destinationLabel"]}</Label>
+                <Select
+                  value={selectedFormId}
+                  onValueChange={setSelectedFormId}
+                  disabled={enabled || pending}
+                >
+                  <SelectTrigger id="concierge_form" className="w-full">
+                    <SelectValue placeholder={m["voice.assistant.destinationPlaceholder"]} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {destinationOptions.map((f) => (
+                      <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="concierge_enabled"
+                  checked={enabled}
+                  disabled={toggleDisabled}
+                  onCheckedChange={(v) => (v === true ? turnOn() : turnOff())}
+                  aria-describedby={reasonText ? reasonId : undefined}
+                />
+                <Label htmlFor="concierge_enabled">{m["voice.assistant.toggleLabel"]}</Label>
+              </div>
+              {reasonText ? (
+                <p id={reasonId} className="text-xs text-muted-foreground">{reasonText}</p>
+              ) : null}
+            </>
+          )}
+        </CardContent>
+      </Card>
+      {snippetPublicId ? (
+        <EmbedSnippet
+          attribute="data-concierge"
+          publicId={snippetPublicId}
+          origin={origin}
+          title={m["voice.assistant.snippetTitle"]}
+          hint={m["voice.assistant.snippetHint"]}
+          disabledHint={m["voice.assistant.snippetHint"]}
+          enabled
+          copyLabel={m["voice.assistant.copy"]}
+          copiedLabel={m["voice.assistant.copied"]}
+          publicLinkLabel={m["voice.assistant.publicLink"]}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -359,9 +820,11 @@ function PhoneNumbersPanel({
 }
 
 export function VoiceSettings({
-  profile, brandName, numbers, transferPhone,
+  accountId, profile, brandName, numbers, transferPhone, publishedForms, origin,
   saveProfileAction, assignNumberAction, setStatusAction, setTransferPhoneAction,
+  enableConciergeAction, disableConciergeAction,
 }: {
+  accountId: string;
   profile: VoiceProfileRow | null;
   // The live text-back default (defaultTextbackBody) names the company, so
   // the textarea's placeholder needs it — passed down from the server
@@ -375,14 +838,29 @@ export function VoiceSettings({
   // Null is "no transfer configured", which is where every account starts and
   // is not a failure — it is the state that leaves Sofía taking a message.
   transferPhone: string | null;
+  /** Published forms only — the website assistant's destination choices. */
+  publishedForms: { id: string; name: string }[];
+  /** For the pasteable snippet — read from the request, matching the
+   *  forms/calendar embed cards' own origin (page.tsx). */
+  origin: string;
   saveProfileAction: (formData: FormData) => Promise<ActionResult>;
   assignNumberAction: (formData: FormData) => Promise<ActionResult>;
   setStatusAction: (phoneNumberId: string, status: string) => Promise<ActionResult>;
   setTransferPhoneAction: (formData: FormData) => Promise<ActionResult>;
+  enableConciergeAction: (formId: string) => Promise<EnableConciergeResult>;
+  disableConciergeAction: () => Promise<ActionResult>;
 }) {
   return (
     <div className="space-y-6">
       <VoiceProfileForm profile={profile} brandName={brandName} action={saveProfileAction} />
+      <ConciergeCard
+        accountId={accountId}
+        profile={profile}
+        publishedForms={publishedForms}
+        origin={origin}
+        enableAction={enableConciergeAction}
+        disableAction={disableConciergeAction}
+      />
       <TransferPanel transferPhone={transferPhone} action={setTransferPhoneAction} />
       <PhoneNumbersPanel numbers={numbers} assignAction={assignNumberAction} statusAction={setStatusAction} />
     </div>
