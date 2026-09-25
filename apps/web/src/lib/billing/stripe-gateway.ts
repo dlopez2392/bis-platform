@@ -2,7 +2,8 @@ import Stripe from "stripe";
 import type { MeterKey } from "@bis/db";
 
 /**
- * Everything BIS asks of Stripe on the Plans page, behind one interface:
+ * Everything BIS asks of Stripe (the Plans page, and the cron's usage
+ * report), behind one interface:
  * `stripeGateway()` in production code, `FakeGateway` (./fake-gateway.ts)
  * in unit tests. Nothing else in the app imports the `stripe` SDK.
  */
@@ -21,12 +22,26 @@ export type MeteredPriceSpec = {
 };
 export type PriceSpec = BasePriceSpec | MeteredPriceSpec;
 
+/** One usage row as a Stripe meter event (client billing, usage report). */
+export type MeterEventInput = {
+  eventName: string;
+  customerId: string;
+  /** Whole units. Sent as a string (Stripe's payload values are strings). */
+  value: number;
+  /** The usage row's id. Stripe documents uniqueness "within a rolling
+   *  period of at least 24 hours"; whether a SECOND key carrying it is
+   *  deduplicated is assumption A11, unproven until the e2e observes it. */
+  identifier: string;
+  timestampSeconds: number;
+};
+
 export interface BillingGateway {
   listActiveMeters(): Promise<StripeMeter[]>;
   createMeter(input: { eventName: string; displayName: string }, idempotencyKey: string): Promise<StripeMeter>;
   createProduct(input: { planId: string; name: string }, idempotencyKey: string): Promise<{ id: string }>;
   renameProduct(productId: string, name: string): Promise<void>;
   createPrice(spec: PriceSpec, idempotencyKey: string): Promise<{ id: string }>;
+  reportMeterEvent(input: MeterEventInput, idempotencyKey: string): Promise<void>;
 }
 
 const isNonNegativeInteger = (n: number): boolean => Number.isInteger(n) && n >= 0;
@@ -81,6 +96,59 @@ export function priceCreateParams(spec: PriceSpec): Stripe.PriceCreateParams {
   };
 }
 
+/** At or above this, a "seconds" timestamp is really milliseconds (in
+ *  seconds it would be the year 5138). */
+const MAX_TIMESTAMP_SECONDS = 100_000_000_000;
+
+/**
+ * One meter event's whole budget: the request carries this timeout and NO
+ * SDK retry, overriding the client's 2 retries × 20 s (billingGatewayFromEnv
+ * below), which could hold one send about 61.5 s. The usage report is the
+ * retry (next tick, same idempotency key), and its budget stops starting
+ * sends this long before it runs out (usage-report.ts), so a send that times
+ * out still ends inside the budget.
+ */
+export const METER_EVENT_TIMEOUT_MS = 10_000;
+
+/**
+ * The usage mapping: one usage row → one v1 meter event. The payload keys
+ * are the ones the meters were created with (customer_mapping
+ * `stripe_customer_id`, value_settings `value`, createMeter below) and are
+ * PERMANENT; the values are strings. Guarded here, like priceCreateParams,
+ * so a fraction, a millisecond timestamp or a non-customer id never leaves
+ * the process; real Stripe and FakeGateway both run this.
+ */
+export function meterEventParams(input: MeterEventInput): Stripe.Billing.MeterEventCreateParams {
+  if (!Number.isSafeInteger(input.value) || input.value <= 0) {
+    throw new Error(`meterEventParams: value must be a positive whole number, got ${input.value}`);
+  }
+  if (!Number.isSafeInteger(input.timestampSeconds) || input.timestampSeconds <= 0
+    || input.timestampSeconds >= MAX_TIMESTAMP_SECONDS) {
+    throw new Error(`meterEventParams: timestampSeconds must be whole seconds since the epoch, got ${input.timestampSeconds}`);
+  }
+  if (!input.customerId.startsWith("cus_")) {
+    throw new Error(`meterEventParams: customerId must be a Stripe customer id (cus_), got ${input.customerId}`);
+  }
+  return {
+    event_name: input.eventName, identifier: input.identifier, timestamp: input.timestampSeconds,
+    payload: { stripe_customer_id: input.customerId, value: String(input.value) },
+  };
+}
+
+/** Errors about THIS request; anything else (auth, permission, rate limit,
+ *  network, Stripe 5xx) would fail the next row too (assumption A13). */
+const ROW_SPECIFIC_ERRORS = new Set(["StripeInvalidRequestError", "StripeIdempotencyError"]);
+
+/**
+ * Does one meter event's failure stop the report for this tick? Read from
+ * the SDK error's `.type` (each class sets it to its own name), not from
+ * `instanceof`, so a test double and the real SDK classify alike.
+ */
+export function meterEventFailureKind(e: unknown): "row" | "systemic" {
+  const type = typeof e === "object" && e !== null ? (e as { type?: unknown }).type : undefined;
+  return typeof type === "string" && ROW_SPECIFIC_ERRORS.has(type) ? "row" : "systemic";
+}
+
 export function stripeGateway(stripe: Stripe): BillingGateway {
   return {
     async listActiveMeters() {
@@ -107,6 +175,14 @@ export function stripeGateway(stripe: Stripe): BillingGateway {
     async createPrice(spec, idempotencyKey) {
       const p = await stripe.prices.create(priceCreateParams(spec), { idempotencyKey });
       return { id: p.id };
+    },
+    async reportMeterEvent(input, idempotencyKey) {
+      // Per-request transport (stripe 22.6.2 RequestOptions): no retry, a
+      // bounded wait. The client-wide settings suit the Plans page, not a
+      // cron pass with a budget.
+      await stripe.billing.meterEvents.create(meterEventParams(input), {
+        idempotencyKey, maxNetworkRetries: 0, timeout: METER_EVENT_TIMEOUT_MS,
+      });
     },
   };
 }
