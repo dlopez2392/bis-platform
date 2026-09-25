@@ -2,6 +2,8 @@
 
 Part of `2026-09-25-crm-feature-research.md`. Research compiled 2026-09-25 by a delegated research agent, with Texas rules (26 TAC Ch. 746 and 559, TWC CCS, DAHS, EVV, TDLR/TSBPE, SB 140) cited to primary sources where reachable. Secondhand claims marked [2H]. The research brief named two products in error: "Turnout" could not be verified as an adult-day product, and Kidsoft is Australian and does not apply to Texas; the report says so in its caveats.
 
+**Owner decision, 2026-09-25:** adult day care is out of scope because of HIPAA's compliance burden and cost. Section 4 below is kept as research only; nothing in it is planned.
+
 ---
 
 # Vertical software research for a bilingual (EN/ES) Rio Grande Valley small-business CRM

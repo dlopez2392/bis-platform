@@ -43,6 +43,13 @@ from both vendors' published feature tables, knowledge bases and developer docum
 instead — more complete than a walk through one account's screens, but not a view of how
 BIS's own accounts are configured. §14 says how to close that gap.
 
+**Owner decisions recorded since the study was delivered.**
+
+- **2026-09-25 — Adult day care is out of scope.** The owner judged it infeasible because of
+  HIPAA's compliance burden and cost. The adult day pack, the "front office only" fallback
+  and all Medicaid, DAHS and EVV work are dropped; Appendix E §4 is kept as research only.
+  Medical offices remain behind the same HIPAA question (§12, decision 5).
+
 ---
 
 ## 1. The answer, on one page
@@ -90,8 +97,9 @@ and 22 September.
 **Industry packs**, delivered by extending blueprints, in this order: **home services**
 (the product and its specs are already shaped around trades), **child care** positioned as
 the center's front office beside its child-care management system, **restaurant catering
-and events** after POS research, and **adult day care and medical offices** only after an
-explicit decision to invest in HIPAA.
+and events** after POS research. **Adult day care is out of scope** by the owner's decision,
+because of HIPAA's compliance burden and cost; medical offices wait on the same HIPAA
+question.
 
 **One go-to-market consequence the owner should see first.** The pricing study named the
 Valley's healthcare cluster the best ground for Sofía. But a clinic's calls put health
@@ -816,12 +824,21 @@ should not try to replace a center's system; it should be the **front office bes
   staff. Allergy and dietary tags are sensitive and never used for marketing.
 - **Do not build:** POS, online ordering, table management, loyalty points, gift cards.
 
-### 9.4 Adult day care and medical offices — two modes, one investment decision
+### 9.4 Adult day care is out; medical offices are a HIPAA decision
 
-This reconciles the pricing study, which called the Valley's appointment-driven healthcare
-cluster — about 2,376 establishments — the best ground, and the insights brief, which
-recommended a regulated-tenant mode before the next clinic signs. They describe two
-different things:
+**Adult day care is out of scope — the owner's decision, 2026-09-25.** The vertical runs on
+health information: care plans, medications, physician orders, Medicaid authorisations and
+DAHS forms 3050, 3055, 3682 and 3683. Holding that makes BIS a HIPAA business associate at
+the cost set out below. The "front office only" fallback earlier revisions offered depended
+on a lawyer's opinion and on a care setting never letting a health detail reach BIS, which
+is not a rule software can keep. So BIS builds no adult day pack, does not market to adult
+day centers or home-health agencies, and onboarding turns them away politely. Appendix E §4
+stays as research.
+
+**Medical and dental offices are the question that remains.** The pricing study called the
+Valley's appointment-driven healthcare cluster — about 2,376 establishments — the best
+ground, and the insights brief recommended a regulated-tenant mode before the next clinic
+signs. They describe two different things:
 
 - **A regulated-tenant mode** — cheap, and worth building before any clinic signs: the Texas
   AI-disclosure line in Sofía's greeting (TRAIGA), a recorded disclosure time, health
@@ -847,15 +864,12 @@ different things:
 
   Either way, the `sensitivity` column means no schema change later.
 
-**Recommendation:** build the regulated-tenant mode now. Treat HIPAA mode as a deliberate
-investment, decided when one anchor customer — a clinic, or an adult day center billing
-Medicaid — will fund most of the floor. Until then, adult day care **front office only** is
-possible with a legal check: referrals from service coordinators and families, tours booked
-by Sofía, family messaging, private-pay invoicing, with health categories off and a hard
-rule that no health information enters BIS. Private-pay centers that never bill
-electronically are generally not HIPAA covered entities, but Texas law and a care setting's
-practicalities make that a lawyer's call. **Never build** eMAR, EVV (Texas requires a
-certified vendor), claim submission or caregiver scheduling.
+**Recommendation for medical offices:** build the regulated-tenant mode now — it is cheap,
+and TRAIGA's disclosure applies the moment any healthcare business uses Sofía. Treat HIPAA
+mode as a deliberate investment, made only if one anchor clinic will fund most of the floor.
+The same cost argument that settled adult day care applies here, so if no such clinic
+appears, the consistent conclusion is to leave medical offices out as well. In any case,
+never build clinical records, claims submission or EVV.
 
 ### 9.5 Others
 
@@ -1011,7 +1025,8 @@ requires, and every UI item passes DESIGN.md's definition of done.
     broadcasts, the installable web app and the child-care system integration research;
     restaurant catering after POS research, money and broadcasts; Sofía's knowledge base
     before the child-care and restaurant receptionists.
-12. **On an anchor customer:** HIPAA mode, then adult day care and medical offices.
+12. **On an anchor clinic:** HIPAA mode, then medical offices. Adult day care is not on the
+    plan.
 
 The consent ledger must be live before **31 January 2027**, when the FCC's "revoke all" rule
 takes effect.
@@ -1034,12 +1049,13 @@ takes effect.
 4. **Per-staff calendars**, reversing one-calendar-per-company. Recommended: yes, once the
    owner's-calendar step has run with real clients — on Outlook, or on Google after its
    review passes, since a Google pilot in Testing mode means reconnecting every week.
-5. **HIPAA as an investment — including whether clinics may buy Sofía before it exists.**
+5. **HIPAA as an investment, now only for medical offices — including whether clinics may
+   buy Sofía before it exists.** *Decided 2026-09-25: adult day care is out of scope because
+   of HIPAA's compliance burden and cost.* What remains open is medical and dental offices.
    A clinic's calls put health information in transcripts, summaries and proposals that BIS
    stores and sends to OpenAI. Recommended: build the regulated-tenant mode now; sell Sofía
-   and the CRM to clinics and to adult day centers billing Medicaid only once an anchor
-   customer funds HIPAA mode, in the hardened production project; offer adult day care front
-   office only, with a legal check.
+   and the CRM to clinics only once an anchor clinic funds HIPAA mode, in the hardened
+   production project — and if none does, reach the same conclusion as for adult day care.
 6. **Health information and AI.** Children's health information already reaches OpenAI
    whenever a parent mentions an allergy or illness on a call with Sofía. The plan adds more
    paths: document intake, proposals from documents and email, per-record addresses that
@@ -1052,8 +1068,9 @@ takes effect.
    the owner's own calendar, retire Daily.co, and keep the in-person notetaker, which does not
    depend on it.
 8. **Pack order.** Recommended: home services, child care as the front office, restaurant
-   catering, then the HIPAA verticals — departing from the pricing study's "healthcare is the
-   better ground" only because of §9.4's cost of entry.
+   catering, then medical offices only if HIPAA is funded — departing from the pricing
+   study's "healthcare is the better ground" only because of §9.4's cost of entry. Adult
+   day care is out.
 9. **Portal sign-in.** Recommended: magic links on scoped tokens, not Clerk accounts.
 10. **Mobile.** Recommended: an installable web app first — home-screen install, push
     notifications, offline read of today's jobs and a child's emergency file — and a native
@@ -1095,7 +1112,8 @@ takes effect.
   feature alongside M7a's meters.
 - **Google's Limited Use policy**: Workspace data may power prominent user-facing features
   but may not train models or be aggregated beyond the user.
-- **TRAIGA's** AI-disclosure duties apply the moment a clinic or adult-day tenant uses Sofía.
+- **TRAIGA's** AI-disclosure duties apply the moment a clinic or any other healthcare
+  business uses Sofía.
 - **Children's data is "sensitive" under the Texas Data Privacy and Security Act**: never sold,
   never used for marketing.
 - **New infrastructure**: the ClamAV worker needs a host, updates and monitoring.
