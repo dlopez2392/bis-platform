@@ -1393,6 +1393,25 @@ describe("finishCall — usage: the minutes of a call Sofía talked to (client b
     expect(dbMocks.finishCallRow.mock.invocationCallOrder[0]!).toBeLessThan(dbMocks.recordUsage.mock.invocationCallOrder[0]!);
   });
 
+  it("records voice minutes only AFTER both carrier sends, the staff alert SMS and the text-back, so a stalled ledger write never holds up a waiting person (mutation: move the leg back above the sends → call order FAILS)", async () => {
+    dbMocks.getAlertPhone.mockResolvedValue("+19565559000");
+    const lead = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
+      { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
+    expect(await finishCall(lead, ctx, meta)).toMatchObject({ outcome: "lead" });
+    expect(smsRefs.send).toHaveBeenCalledWith(expect.objectContaining({ to: "+19565559000" }));
+    expect(dbMocks.recordUsage).toHaveBeenCalledTimes(1);
+    expect(smsRefs.send.mock.invocationCallOrder.at(-1)!).toBeLessThan(dbMocks.recordUsage.mock.invocationCallOrder[0]!);
+
+    smsRefs.send.mockClear();
+    dbMocks.recordUsage.mockClear();
+    dbMocks.getAlertPhone.mockResolvedValue(null);
+    expect(await finishCall(abandonedState(), textbackCtx, meta)).toMatchObject({ outcome: "abandoned" });
+    expect(smsRefs.send).toHaveBeenCalledTimes(1);
+    expect(dbMocks.recordUsage).toHaveBeenCalledTimes(1);
+    expect(dbMocks.recordUsage).toHaveBeenCalledWith(ctx.db, expect.objectContaining({ meter: "voice_minutes" }));
+    expect(smsRefs.send.mock.invocationCallOrder[0]!).toBeLessThan(dbMocks.recordUsage.mock.invocationCallOrder[0]!);
+  });
+
   it("a silent call (Sofía's greeting, no caller words, no booking/lead/message) records nothing, though its turn_count is 1; nor does a connect-timeout with no transcript at all (mutation: gate on turn_count / transcript.length → FAILS; gate on the call row id alone → FAILS)", async () => {
     const s = withTranscript(emptyCallState(), { role: "assistant", text: "Hi, this is Sofía with Rio Roofing.", at: "t" });
     const r = await finishCall(s, ctx, meta);

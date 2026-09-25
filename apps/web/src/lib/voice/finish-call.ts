@@ -594,31 +594,6 @@ export async function finishCall(
     }
   }
 
-  // USAGE (client billing): one `voice_minutes` row per call Sofía talked
-  // to (danlo): the caller said something (`callerSpoke`), OR the outcome
-  // is booked/lead/message (`meaningful`, computed at the top), because
-  // those mean the caller interacted even when no caller turn was
-  // transcribed. That includes a robocall that reached her (its words are a
-  // caller turn, and its minutes were spent) and excludes a silent ring or a
-  // connect-timeout. Minutes are the stored duration rounded UP, at least
-  // one (`voiceMinutes`).
-  //
-  // Gated on `meta.callRowId`, NOT on `stored`, like the automation-log leg
-  // above: the carrier and model minutes were spent whether or not
-  // finishCallRow landed. The call id is the usage row's source_ref, so a
-  // call with no row id (startCallRow failed open) has nothing to key
-  // idempotently on and is not recorded.
-  //
-  // After the durable row and before the carrier sends below: a database
-  // insert, and `recordUsageSafely` never throws, so it cannot cost the call
-  // its alert text, its text-back, or this function's never-throws contract.
-  if (meta.callRowId && (callerSpoke(state) || meaningful)) {
-    await recordUsageSafely(ctx.db, {
-      accountId: ctx.accountId, meter: "voice_minutes", quantity: voiceMinutes(durationSecs),
-      occurredAt: meta.endedAt, sourceRef: `call:${meta.callRowId}`,
-    }, `finishCall ${meta.callRowId}`);
-  }
-
   // The other half of the staff alert SMS leg: the actual carrier POST,
   // deliberately AFTER the durable row above — same ordering, same reason as
   // the text-back's own split just below (finding 4, alert-send-report
@@ -659,6 +634,34 @@ export async function finishCall(
   if (pendingTextback) {
     await deliverTextback(ctx.db, ctx.accountId, pendingTextback,
       `finishCall ${meta.callRowId ?? "(no row)"}`);
+  }
+
+  // USAGE (client billing): one `voice_minutes` row per call Sofía talked
+  // to (danlo): the caller said something (`callerSpoke`), OR the outcome
+  // is booked/lead/message (`meaningful`, computed at the top), because
+  // those mean the caller interacted even when no caller turn was
+  // transcribed. That includes a robocall that reached her (its words are a
+  // caller turn, and its minutes were spent) and excludes a silent ring or a
+  // connect-timeout. Minutes are the stored duration rounded UP, at least
+  // one (`voiceMinutes`).
+  //
+  // Gated on `meta.callRowId`, NOT on `stored`, like the automation-log leg
+  // above: the carrier and model minutes were spent whether or not
+  // finishCallRow landed. The call id is the usage row's source_ref, so a
+  // call with no row id (startCallRow failed open) has nothing to key
+  // idempotently on and is not recorded.
+  //
+  // After the durable row AND after both carrier sends above: the staff
+  // alert and the text-back are waiting people, and a stalled ledger write
+  // (recordUsageSafely allows it 5 s) must not hold either up. Both sends
+  // carry their own time limits, so this leg still runs. `recordUsageSafely`
+  // never throws, so it cannot cost the call this function's never-throws
+  // contract either.
+  if (meta.callRowId && (callerSpoke(state) || meaningful)) {
+    await recordUsageSafely(ctx.db, {
+      accountId: ctx.accountId, meter: "voice_minutes", quantity: voiceMinutes(durationSecs),
+      occurredAt: meta.endedAt, sourceRef: `call:${meta.callRowId}`,
+    }, `finishCall ${meta.callRowId}`);
   }
 
   // The one failure mode with no other trace anywhere: a real booked/lead/

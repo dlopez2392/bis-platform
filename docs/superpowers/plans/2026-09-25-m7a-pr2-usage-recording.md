@@ -1376,6 +1376,8 @@ git commit -m "feat(billing): recordUsageSafely, voiceMinutes and smsBillable, t
 
 ### Task 3: The voice leg (minutes of every call Sofía talked to)
 
+**Review correction (2026-09-25): the leg runs AFTER both carrier sends.** The first version placed the voice usage write after `finishCallRow` but BEFORE the staff alert SMS and the text-back, so a stalled ledger write (recordUsageSafely allows 5 s) delayed both waiting people. It now sits below `deliverTextback`; both sends carry their own time limits. It is still after the durable row (that ordering test is unchanged), and a new test pins it after both sends (probe: the leg back above them → red). The code blocks below show the first version; the shipped file is the source of truth.
+
 **Files:**
 - Modify: `apps/web/src/lib/voice/call-state.ts` (`callerSpoke`; `classifyOutcome` uses it)
 - Modify: `apps/web/src/lib/voice/finish-call.ts` (one `durationSecs`; the usage leg after the automation-log leg)
