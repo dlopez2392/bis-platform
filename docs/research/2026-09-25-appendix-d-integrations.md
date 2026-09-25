@@ -111,6 +111,7 @@ Part of `2026-09-25-crm-feature-research.md`. Research compiled 2026-09-25 by a 
 - Needed when the app is External, Published, and shows a logo or name on the consent screen.
 - Requirements: domain verified in Search Console, a privacy policy disclosing Google data use, and a public homepage.
 - Timing: automated review in minutes, manual review "usually 2–3 business days". Results are valid for 7 days if you don't publish ([brand verification](https://developers.google.com/identity/protocols/oauth2/production-readiness/brand-verification)).
+  - *Correction added 2026-09-25 after review, checked against the linked page: "publish" here means the **Publish branding** button, not moving the app from Testing to In production. Brand verification can be completed while the app stays in Testing. Apps requesting only name, email and profile scopes work for any user in Testing mode, with no warning and no 7-day token expiry ([publishing status](https://support.google.com/cloud/answer/15549945)).*
 
 **Sensitive-scope verification**
 - Requirements:

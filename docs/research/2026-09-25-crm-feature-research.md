@@ -18,7 +18,7 @@ documents in this folder, and a line-by-line audit of the repository:
 | [Pricing study](2026-09-21-pricing-and-packaging.md) | Valley competitors, prices, demographics (21 September) |
 | [Insights brief](2026-09-20-insights-content-brief.md) | Texas and federal rule changes affecting small businesses (20 September) |
 
-**How it was checked — three independent reviews.** Revision 1 went to an independent reviewer told to
+**How it was checked — four independent reviews.** Revision 1 went to an independent reviewer told to
 find what was wrong: verify every repository claim against the code, spot-check numbers
 against the appendices, and list every researched idea the draft neither adopted nor
 rejected. It found three critical errors and several dozen smaller ones. Revision 2
@@ -29,8 +29,12 @@ explicit decision. Revision 3 addressed those and went to a third reviewer for a
 convergence check, which found no critical problems and eleven important ones — among
 them Sofía's own English-only emails, a packaging section that ignored the owner's
 approved billing plan, and a Google sequence that would have let brand verification
-lapse. This is revision 4: every finding from all three rounds is addressed, and §7.2
-records a decision for every HubSpot and monday.com idea. The two integration claims the plan depends on
+lapse. Revision 4 then went to a final verification, which confirmed nine of those
+eleven fixes and caught one error of fact: Google's 7-day rule applies to publishing the
+*branding*, not the app, and publishing the whole project early would have broken the
+Testing-mode pilot the plan relies on. Checked against Google's own pages and corrected
+here, with four smaller consistency fixes. This is revision 5; §7.2 records a decision for
+every HubSpot and monday.com idea. The two integration claims the plan depends on
 most were re-verified against Google's and Microsoft's own documentation.
 
 **One limitation, stated plainly.** This work ran in a cloud session that cannot see the
@@ -69,11 +73,11 @@ sends after a call, every form's own labels, and the owner's dashboard are Engli
 | 2 | **The client record**: households and business customers, typed relationships on both sides, properties and equipment, 13 field types, an audit log with before and after values, a trash | Every target industry needs it |
 | 3 | **A consent ledger** for texts, calls and email, synced with Telnyx's opt-out list | The FCC's "revoke all" rule takes effect **31 January 2027**; every industry pack needs it |
 | 4 | **Bilingual end to end**: a language on every contact, every automated message in both languages, then the Spanish dashboard | Four of six local competitors already claim Spanish; BIS's edge is being bilingual everywhere |
-| 5 | **The document vault**: private storage, scanning, versions, expiry reminders, retention, a required-documents checklist, stage rules, forms that accept uploads and signatures | The owner's first ask; child-care files are legally required |
+| 5 | **The document vault**: private storage, scanning, versions, expiry reminders, retention, a required-documents checklist, stage rules, e-signature on everyday documents, forms that accept uploads and signatures | The owner's first ask; child-care files are legally required |
 | 6 | **Email that comes back**: an address per business and per record, on the client's own domain where it has one | Replies are never recorded today |
 | 7 | **AI on the record**: generalised proposals, a bilingual summary, drafting, intake from photos and PDFs, "gone quiet" nudges, Ask BIS | Summaries and writing are what small businesses actually use AI for |
 | 8 | **Google and Outlook**: the owner's calendar first, then per-staff calendars, Meet and Teams links, send-as-me, Drive and OneDrive pickers, contacts sync | The schedule is the business |
-| 9 | **Money**: price book, quotes with options, e-signature, invoices, ACH and card, deposits, recurring billing | Getting paid is a service business's close |
+| 9 | **Money**: price book, quotes with options, invoices, ACH and card, deposits, recurring billing | Getting paid is a service business's close |
 | 10 | **The client portal, the MCP server, and industry packs** | One link for the customer; Claude and ChatGPT for the owner with every AI write landing as a proposal; the industry specifics |
 
 **The full plan is about 120–168 engineer-weeks** in conventional units (§11), with a
@@ -280,9 +284,10 @@ upload appear here — Add a document"), status never by colour alone.
   the booking page** ("¿Qué necesita reparar?"). A signature field uses the e-signature
   machinery of §8.1, so it ships after that, not before.
 - **Every public link follows one rule.** Share links, client upload links, public forms
-  with uploads and staff calendar-connect links all bypass Clerk, as the portal does. Each
-  uses §8.2's pattern: a scoped, expiring, signed token bound to one account and one
-  record, an explicit tenant check on every query, and its own isolation tests.
+  with uploads, staff calendar-connect links, e-signature signing sessions, and quote
+  acceptance and payment pages all bypass Clerk, as the portal does. Each uses §8.2's
+  pattern: a scoped, expiring, signed token bound to one account and one record, an
+  explicit tenant check on every query, and its own isolation tests.
 - **Retention.** A class per category, longest applicable clock wins, legal holds, and a
   destruction log. Texas child-care periods are floors, so the default is keep, not purge.
 - **Teardown.** Storage objects do not cascade when an account is deleted. The account
@@ -459,12 +464,14 @@ Verified against Google's and Microsoft's own documentation on 2026-09-25:
      straight to the owner's own Gmail or Outlook reaches BIS only with inbox sync (step 7).
    - **The web concierge's conversations join the inbox in the same change.**
      `messages.channel` already allows `webchat`; nothing writes it yet.
-2. **Week 1 — publish the Google project and verify the publisher.** Finish Google sign-in
-   (already enabled in Clerk, without production credentials) in the same Google Cloud
-   project the calendar will use, and publish it: sign-in needs only profile and email
-   scopes, so publishing triggers brand verification alone and keeps it from lapsing —
-   Google's brand verification expires after 7 days on an unpublished app. Microsoft
-   publisher verification in parallel.
+2. **Week 1 — Google sign-in, Google branding, Microsoft publisher.** Finish Google sign-in
+   (already enabled in Clerk, without production credentials). Sign-in asks only for name,
+   email and profile, and Google exempts exactly those scopes from Testing mode's limits:
+   any Google user can sign in, with no warning and no 7-day expiry. So sign-in goes live
+   **while the project stays in Testing**. Verify the branding (logo and name on the consent
+   screen) and press **Publish branding within 7 days** of approval — that button, not the
+   app's publishing status, is what Google's 7-day rule refers to. Microsoft publisher
+   verification in parallel.
 3. **Build the Google sensitive-scope features under Testing mode, then submit once.**
    The review's demo video must show each scope working, so build the calendar, send-as-me,
    pickers and contacts sync first under Testing mode (up to 100 test users, refresh tokens
@@ -474,6 +481,10 @@ Verified against Google's and Microsoft's own documentation on 2026-09-25:
    then; it gets its own review. Apply for Business Profile API access now — it requires a
    verified profile active 60+ days. Sheet import uses the Picker with `drive.file`, so it
    adds no scope.
+   **Move the project to In production only when that review is submitted** — publishing
+   earlier would show every new user Google's unverified-app warning and count them against
+   a lifetime cap of 100 that cannot be reset. (Google also recommends separate test and
+   production projects; either works.)
    **Where a client runs Microsoft 365, ship Outlook first**: publisher verification takes
    days and admin approval is one click, so Outlook can reach real clients while Google is
    still in Testing mode.
@@ -513,7 +524,7 @@ no particular licence.
 | App | Stance | Why |
 |---|---|---|
 | Google Sheets / Excel | **Adopt** direct `.xlsx` export and Sheets/Excel import, with AI suggesting the column mapping from **headers only** | Owners arrive with spreadsheets. DESIGN.md requires the file to be parsed in the browser and never uploaded; headers alone can go to the model |
-| Google sign-in | **Finish** — already enabled in Clerk, without production credentials yet — in the calendar's Google Cloud project | Publishing it early keeps brand verification from lapsing (§6.2 step 2) |
+| Google sign-in | **Finish** — already enabled in Clerk, without production credentials yet | Its name-email-profile scopes work for any user while the project stays in Testing mode (§6.2 step 2) |
 | Microsoft sign-in | **Adopt** through Clerk | How Microsoft 365 owners expect to sign in |
 | Google Business Profile | **Adopt** reviews and replies (M5) | We found no HubSpot-built GBP integration; reviews are how local businesses get found |
 | Meet and Teams recordings and transcripts | **Later**, after the meetings decision (§12) | HubSpot syncs Teams transcripts since August 2026 |
@@ -892,8 +903,10 @@ without strain.
 - **Plans cannot yet hold any of this.** `plans.features` accepts exactly two keys
   (`voice_receptionist`, `web_concierge`) and `plans.allowances` exactly three meters.
   Storage allowances, staff-login counts, the portal and per-staff calendars need those
-  checks widened and enforcement points added — an **entitlements** item in §11. Until
-  then, the first release applies one default storage quota to every account.
+  checks widened and enforcement points added — an **entitlements** item in §11, after
+  M7a's checkout step. Until then, the first release applies one default storage quota to
+  every account, the agency sets each account's staff-login limit by hand, and per-staff
+  calendars and the portal wait.
 - **New cost-to-serve lines** to add to the pricing study's margins: storage (about $0.02 per
   GB-month), the ClamAV host (a few dollars a month in total), AI summaries and drafting
   (cached, capped, expected well under a dollar per account per month — to be measured),
@@ -951,8 +964,9 @@ documents feature the platform spec excluded and its scanner is a new external s
 7. Inbound email on the client's own domain, and web-chat threads in the inbox.
 8. Generalised proposals and the bilingual record summary.
 
-In parallel: publishing Google sign-in (which carries brand verification), Microsoft
-publisher verification, the Business Profile API application, and M7a's remaining steps.
+In parallel: Google sign-in with its branding verified and published (the project stays in
+Testing mode), Microsoft publisher verification, the Business Profile API application,
+and M7a's remaining steps.
 
 ### 11.3 Order and dependencies
 
@@ -962,7 +976,7 @@ requires, and every UI item passes DESIGN.md's definition of done.
 
 1. **No prerequisites:** staff and roles; the client record model; the consent ledger;
    inbound email and web chat in the inbox; bilingual messages; Google and Microsoft
-   sign-in, with Google brand verification and Microsoft publisher verification; the
+   sign-in, with Google branding verified and published and Microsoft publisher verification; the
    Business Profile API application; M7a's remaining steps; the regulated-tenant mode;
    spreadsheet import and export; the MCP auth spike.
 2. **On staff and roles:** restricted relationship flags and gate codes; the Spanish
@@ -981,11 +995,16 @@ requires, and every UI item passes DESIGN.md's definition of done.
    triggers.
 7. **Calendar:** Outlook first where clients run Microsoft 365; the owner's Google calendar
    under Testing mode → send-as-me, pickers and contacts sync → one Google sensitive-scope
-   submission → per-staff calendars (needs staff and roles) → round-robin.
+   submission, moving the project to In production at the same time → per-staff calendars
+   (needs staff and roles, and entitlements, since it is a higher-plan feature) →
+   round-robin.
 8. **Business Profile:** after API approval, its own Google review, then reviews and AI
    replies.
-9. **After M7a and entitlements:** money through Stripe Connect, then document templates,
-   then the portal, then QuickBooks.
+9. **Entitlements, after M7a's checkout step** (which is what writes a plan's features into
+   `accounts.permissions`): widen the plan checks and add enforcement for storage, staff
+   logins, the portal and per-staff calendars.
+   **Then, after M7a and entitlements:** money through Stripe Connect, then document
+   templates, then the portal, then QuickBooks.
 10. **On the consent ledger:** broadcasts and segments.
 11. **Packs:** home services part one after the vault and blueprint extensions; part two
     after money and per-staff calendars; child care after money, field-level roles,
@@ -1023,8 +1042,8 @@ takes effect.
    office only, with a legal check.
 6. **Health information and AI.** Children's health information already reaches OpenAI
    whenever a parent mentions an allergy or illness on a call with Sofía. The plan adds more
-   paths: document intake, proposals from documents and email, and per-record addresses that
-   receive doctors' notes. A child-care center is not a HIPAA covered entity, but this is
+   paths: document intake, proposals from documents and email, per-record addresses that
+   receive doctors' notes, and the MCP server's read tools. A child-care center is not a HIPAA covered entity, but this is
    sensitive children's data under Texas's privacy act. Recommended: request OpenAI's
    zero-data-retention or a BAA now; until one is in place, **no document with sensitivity
    `health` or `phi` reaches any model**, whatever path it arrived by.
@@ -1060,10 +1079,16 @@ takes effect.
 - **Sensitive data before permissions.** Custody flags, no-contact flags, gate codes and
   pickup IDs wait until roles are enforced. Pickup-person driver's-licence images are
   sensitive personal information under Texas breach law; get a legal check.
-- **Paths around RLS multiply.** Share links, client upload links, public forms with
-  uploads, staff calendar-connect links, the portal, the MCP server and per-record email
-  addresses each reach tenant data without a Clerk session. Every one follows §8.2's token
-  rule and gets its own isolation tests; email adds sender verification.
+- **Paths outside the usual session multiply.** Share links, client upload links, public
+  forms with uploads, staff calendar-connect links, e-signature signing sessions, quote
+  acceptance and payment pages, and the portal reach tenant data without a Clerk session;
+  each follows §8.2's token rule and gets its own isolation tests. Per-record email
+  addresses add sender verification. **Ask BIS by text** trusts only the sender's phone
+  number, so it answers only the account's verified alert phone and never with sensitive
+  data. **The MCP server** is different: it runs on Clerk OAuth tokens under RLS (§6.4), and
+  its risk is a token carrying the agency-admin role — which the spike must rule out. Its
+  read tools are also a route for health information to reach a model, so decision 6
+  covers them.
 - **Storage abuse and cost**: quotas, rate limits and a type allowlist on every upload path;
   egress at $0.09 per GB past the allowance; teardown of storage on account deletion.
 - **AI cost at scale**: summaries cached and capped per account; model cost tracked per
