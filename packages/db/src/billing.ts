@@ -144,12 +144,21 @@ export async function setPlanArchived(db: SupabaseClient, id: string, archived: 
   return (data ?? []).length === 1;
 }
 
+const COUNT_PAGE = 1000;
+
 /** Billed accounts per plan id (the Plans list's "N clients"). A plan with
- *  none is absent from the record. */
+ *  none is absent from the record. Paged until an EMPTY page (PR-1 final
+ *  review): a single read stops at PostgREST's max_rows (1000) silently, and
+ *  a page shorter than asked is not proof of the end under a lower max_rows. */
 export async function countBilledAccountsByPlan(db: SupabaseClient): Promise<Record<string, number>> {
-  const { data, error } = await db.from("account_billing").select("plan_id");
-  if (error) throw new Error(`countBilledAccountsByPlan failed: ${error.message}`);
   const out: Record<string, number> = {};
-  for (const r of (data ?? []) as { plan_id: string }[]) out[r.plan_id] = (out[r.plan_id] ?? 0) + 1;
-  return out;
+  for (let from = 0; ; ) {
+    const { data, error } = await db.from("account_billing").select("account_id, plan_id")
+      .order("account_id", { ascending: true }).range(from, from + COUNT_PAGE - 1);
+    if (error) throw new Error(`countBilledAccountsByPlan failed: ${error.message}`);
+    const rows = (data ?? []) as { account_id: string; plan_id: string }[];
+    for (const r of rows) out[r.plan_id] = (out[r.plan_id] ?? 0) + 1;
+    if (rows.length === 0) return out;
+    from += rows.length;
+  }
 }

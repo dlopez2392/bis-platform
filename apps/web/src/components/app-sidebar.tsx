@@ -25,6 +25,7 @@ import {
   ShieldAlert,
   Activity,
   CreditCard,
+  Receipt,
   type LucideIcon,
 } from "lucide-react";
 import { AccountSwitcher, type AccountOption } from "@/components/account-switcher";
@@ -78,6 +79,9 @@ const NAV_ICONS: Record<NavIconKey, LucideIcon> = {
   screened: ShieldAlert,
   // `CreditCard`: the screen is what clients are charged, not a report.
   plans: CreditCard,
+  // `Receipt`, not `CreditCard`: the client's page is what they were billed
+  // and will be, not the agency's price list.
+  billing: Receipt,
 };
 
 // Active when pathname matches href exactly, or is nested under it (href + "/…").

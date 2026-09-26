@@ -1,5 +1,9 @@
+import { createHash } from "node:crypto";
 import Stripe from "stripe";
-import type { MeterKey } from "@bis/db";
+import {
+  METER_KEYS, type MeterKey, type PlanPriceKey, type StripePriceIds,
+  type SubscriptionItemSnapshot, type SubscriptionSnapshot,
+} from "@bis/db";
 
 /**
  * Everything BIS asks of Stripe (the Plans page, and the cron's usage
@@ -36,6 +40,30 @@ export type MeterEventInput = {
   timestampSeconds: number;
 };
 
+/** A Checkout session for one account on one plan (spec flow 2). */
+export type CheckoutInput = {
+  accountId: string;
+  planId: string;
+  customerId: string;
+  priceIds: StripePriceIds;
+  successUrl: string;
+  cancelUrl: string;
+};
+export type CheckoutSession = { id: string; url: string; expiresAt: number };
+export type CheckoutStatus = "open" | "complete" | "expired";
+/** Change plan (G15): each item's price swapped in place. */
+export type SubscriptionPriceChange = { subscriptionId: string; planId: string; items: { id: string; price: string }[] };
+export type PortalSessionInput = { customerId: string; returnUrl: string; configurationId: string };
+/** The five Customer Portal features BIS sets, each ON or OFF. */
+export const PORTAL_FEATURES = [
+  "invoice_history", "payment_method_update", "customer_update", "subscription_cancel", "subscription_update",
+] as const;
+export type PortalFeature = (typeof PORTAL_FEATURES)[number];
+/** `features` is what the configuration allows NOW, as Stripe reports it: a
+ *  tagged configuration can be edited in the Stripe dashboard after BIS made
+ *  it, and ensurePortalConfiguration (portal.ts) refuses one that drifted. */
+export type PortalConfiguration = { id: string; metadata: Record<string, string>; features: Record<PortalFeature, boolean> };
+
 export interface BillingGateway {
   listActiveMeters(): Promise<StripeMeter[]>;
   createMeter(input: { eventName: string; displayName: string }, idempotencyKey: string): Promise<StripeMeter>;
@@ -43,6 +71,16 @@ export interface BillingGateway {
   renameProduct(productId: string, name: string): Promise<void>;
   createPrice(spec: PriceSpec, idempotencyKey: string): Promise<{ id: string }>;
   reportMeterEvent(input: MeterEventInput, idempotencyKey: string): Promise<void>;
+  createCustomer(input: { accountId: string; name: string | null; email: string }, idempotencyKey: string): Promise<{ id: string }>;
+  updateCustomerEmail(customerId: string, email: string, idempotencyKey: string): Promise<void>;
+  createCheckoutSession(input: CheckoutInput, idempotencyKey: string): Promise<CheckoutSession>;
+  getCheckoutSessionStatus(sessionId: string): Promise<CheckoutStatus>;
+  expireCheckoutSession(sessionId: string): Promise<void>;
+  retrieveSubscription(subscriptionId: string): Promise<SubscriptionSnapshot>;
+  updateSubscriptionPrices(change: SubscriptionPriceChange, idempotencyKey: string): Promise<void>;
+  listPortalConfigurations(): Promise<PortalConfiguration[]>;
+  createPortalConfiguration(idempotencyKey: string): Promise<{ id: string }>;
+  createPortalSession(input: PortalSessionInput): Promise<{ url: string }>;
 }
 
 const isNonNegativeInteger = (n: number): boolean => Number.isInteger(n) && n >= 0;
@@ -182,6 +220,192 @@ export function meterEventFailureKind(e: unknown, sentIdentifier: string): "dupl
   return "row";
 }
 
+/** JSON with every object's keys sorted, recursively: equal params → equal
+ *  text, whatever order they were built in. Only arrays and PLAIN objects
+ *  are walked; any other object (a Date, Map, Set, class instance) has no
+ *  own enumerable keys worth hashing and would read as `{}`, so two different
+ *  requests could share a key. It throws instead. */
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === "object") {
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) {
+      throw new Error(`idempotencyKey: params must be plain objects and arrays, got a ${String(proto?.constructor?.name ?? "non-plain object")}`);
+    }
+    return Object.fromEntries(Object.keys(value as Record<string, unknown>).sort()
+      .map((k) => [k, canonical((value as Record<string, unknown>)[k])]));
+  }
+  return value;
+}
+
+/**
+ * An idempotency key that covers EVERY parameter the request sends (PR-1's
+ * correction): `<prefix>-<id>-<24 hex of sha256(canonical params)>`. The same
+ * request retried replays; any changed parameter is a new request, never a
+ * 400 from Stripe for reusing a key with different parameters. Under
+ * Stripe's 255-character limit for any id under 200 characters.
+ */
+export function idempotencyKey(prefix: string, id: string, params: unknown): string {
+  const hash = createHash("sha256").update(JSON.stringify(canonical(params))).digest("hex").slice(0, 24);
+  return `${prefix}-${id}-${hash}`;
+}
+
+const PRICE_KEYS: readonly PlanPriceKey[] = ["base", ...METER_KEYS];
+
+/**
+ * The Checkout mapping (spec flow 2): subscription mode, the plan's base
+ * price once and its three metered prices WITHOUT a quantity (Stripe
+ * measures them; assumption B1, unverified here, proven only by the e2e),
+ * the account and plan in the session's metadata AND the subscription's (the
+ * webhook reads the subscription's), and client_reference_id for the
+ * dashboard. Guarded like priceCreateParams: a wrong id never leaves the
+ * process.
+ */
+export function checkoutSessionParams(input: CheckoutInput): Stripe.Checkout.SessionCreateParams {
+  if (!input.customerId.startsWith("cus_")) {
+    throw new Error(`checkoutSessionParams: customerId must be a Stripe customer id (cus_), got ${input.customerId}`);
+  }
+  for (const key of PRICE_KEYS) {
+    if (!input.priceIds[key]?.startsWith("price_")) {
+      throw new Error(`checkoutSessionParams: ${key} must be a Stripe price id (price_), got ${input.priceIds[key]}`);
+    }
+  }
+  const metadata = { bis_account_id: input.accountId, bis_plan_id: input.planId };
+  return {
+    mode: "subscription",
+    customer: input.customerId,
+    client_reference_id: input.accountId,
+    line_items: [
+      { price: input.priceIds.base, quantity: 1 },
+      { price: input.priceIds.voice_minutes },
+      { price: input.priceIds.sms },
+      { price: input.priceIds.ai_chats },
+    ],
+    subscription_data: { metadata },
+    metadata,
+    success_url: input.successUrl,
+    cancel_url: input.cancelUrl,
+  };
+}
+
+/**
+ * What BIS keeps of a subscription (G6). The plan is the BASE item's price
+ * metadata (every BIS price carries bis_plan_id and bis_price), never the
+ * subscription's own metadata, which a Change plan could leave stale and a
+ * dashboard edit could forge. The period lives on the ITEMS in this API
+ * version; the earliest across items is the period. One page of items only
+ * (assumption B8, unverified: all four fit); more is refused, not guessed.
+ */
+export function subscriptionSnapshot(sub: Stripe.Subscription): SubscriptionSnapshot {
+  if (sub.items.has_more) throw new Error(`subscriptionSnapshot: ${sub.id} has more items than one page; refusing to guess`);
+  const items: SubscriptionItemSnapshot[] = sub.items.data.map((it) => {
+    const key = it.price.metadata?.bis_price ?? "";
+    return {
+      id: it.id,
+      priceId: it.price.id,
+      priceKey: (PRICE_KEYS as readonly string[]).includes(key) ? (key as PlanPriceKey) : null,
+      planId: it.price.metadata?.bis_plan_id ?? null,
+    };
+  });
+  const starts = sub.items.data.map((it) => it.current_period_start);
+  const ends = sub.items.data.map((it) => it.current_period_end);
+  return {
+    id: sub.id,
+    customerId: typeof sub.customer === "string" ? sub.customer : sub.customer.id,
+    status: sub.status,
+    accountId: sub.metadata?.bis_account_id ?? null,
+    planId: items.find((i) => i.priceKey === "base")?.planId ?? null,
+    currentPeriodStart: starts.length > 0 ? Math.min(...starts) : null,
+    currentPeriodEnd: ends.length > 0 ? Math.min(...ends) : null,
+    startedAt: sub.start_date,
+    items,
+  };
+}
+
+/** The portal configuration BIS creates and later finds by this tag (G19). */
+export const PORTAL_VERSION = "v1";
+
+/** Update a card and see invoices. No self-cancel, no plan switching, no
+ *  profile edits: the agency manages plans (decided, danlo 2026-09-25).
+ *  That Stripe accepts a configuration built from only these features +
+ *  metadata is assumption B3, unverified here; the e2e's portal click
+ *  settles it. */
+export function portalConfigurationParams(): Stripe.BillingPortal.ConfigurationCreateParams {
+  return {
+    features: {
+      invoice_history: { enabled: true },
+      payment_method_update: { enabled: true },
+      customer_update: { enabled: false },
+      subscription_cancel: { enabled: false },
+      subscription_update: { enabled: false },
+    },
+    metadata: { bis_portal: PORTAL_VERSION },
+  };
+}
+
+/** The ON/OFF of each feature in portalConfigurationParams(): what a
+ *  configuration BIS may use must allow, exactly. Read from the params, so
+ *  there is one statement of DECISION 3, not two. */
+export function portalFeatureFlags(): Record<PortalFeature, boolean> {
+  const { features } = portalConfigurationParams();
+  return Object.fromEntries(PORTAL_FEATURES.map((f) => [f, features[f]?.enabled === true])) as Record<PortalFeature, boolean>;
+}
+
+/** The six events the endpoint subscribes to (spec flow 4; Task 13 Step 5). */
+export const HANDLED_WEBHOOK_EVENTS = [
+  "checkout.session.completed", "customer.subscription.created", "customer.subscription.updated",
+  "customer.subscription.deleted", "invoice.paid", "invoice.payment_failed",
+] as const;
+
+/** A verified event, reduced to what BIS acts on: which subscription to
+ *  re-read. Nothing else from the payload is ever used (G5). */
+export type VerifiedWebhookEvent = { id: string; type: string; livemode: boolean; subscriptionId: string | null };
+
+function idOf(ref: string | { id: string } | null | undefined): string | null {
+  if (!ref) return null;
+  return typeof ref === "string" ? ref : ref.id;
+}
+
+function subscriptionIdOf(event: Stripe.Event): string | null {
+  switch (event.type) {
+    case "checkout.session.completed": {
+      const session = event.data.object;
+      return session.mode === "subscription" ? idOf(session.subscription) : null;
+    }
+    case "customer.subscription.created":
+    case "customer.subscription.updated":
+    case "customer.subscription.deleted":
+      return event.data.object.id;
+    case "invoice.paid":
+    case "invoice.payment_failed": {
+      const invoice = event.data.object;
+      // `parent.subscription_details` in this API version; the top-level
+      // `subscription` is what an endpoint on an older version sends
+      // (assumption B7, unverified: the live endpoint is pinned to this
+      // version, and this fallback covers one that is not).
+      return idOf(invoice.parent?.subscription_details?.subscription)
+        ?? idOf((invoice as unknown as { subscription?: string | { id: string } | null }).subscription);
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * Verifies `stripe-signature` over the RAW body (the exact string Stripe
+ * signed; never a re-serialised parse) with Stripe's static helper, and
+ * reduces the event. Throws a StripeSignatureVerificationError on a bad or
+ * stale signature (tolerance: the SDK's 300 s default).
+ */
+export function verifyWebhookEvent(payload: string, signature: string, secret: string): VerifiedWebhookEvent {
+  const event = Stripe.webhooks.constructEvent(payload, signature, secret);
+  return { id: event.id, type: event.type, livemode: event.livemode, subscriptionId: subscriptionIdOf(event) };
+}
+
+export function isSignatureError(e: unknown): boolean {
+  return typeof e === "object" && e !== null && (e as { type?: unknown }).type === "StripeSignatureVerificationError";
+}
+
 export function stripeGateway(stripe: Stripe): BillingGateway {
   return {
     async listActiveMeters() {
@@ -219,6 +443,67 @@ export function stripeGateway(stripe: Stripe): BillingGateway {
       await stripe.billing.meterEvents.create(meterEventParams(input), {
         idempotencyKey, maxNetworkRetries: 0, timeout: METER_EVENT_TIMEOUT_MS,
       });
+    },
+    async createCustomer({ accountId, name, email }, idempotencyKey) {
+      const c = await stripe.customers.create(
+        { email, metadata: { bis_account_id: accountId }, ...(name ? { name } : {}) },
+        { idempotencyKey },
+      );
+      return { id: c.id };
+    },
+    async updateCustomerEmail(customerId, email, idempotencyKey) {
+      // The address Stripe's receipts and payment emails go to (billing-link.ts).
+      await stripe.customers.update(customerId, { email }, { idempotencyKey });
+    },
+    async createCheckoutSession(input, idempotencyKey) {
+      const s = await stripe.checkout.sessions.create(checkoutSessionParams(input), { idempotencyKey });
+      if (!s.url) throw new Error(`createCheckoutSession: Stripe returned session ${s.id} with no url`);
+      return { id: s.id, url: s.url, expiresAt: s.expires_at };
+    },
+    async getCheckoutSessionStatus(sessionId) {
+      const s = await stripe.checkout.sessions.retrieve(sessionId);
+      // Widened first: Stripe's type ends in `| OtherString`, which an
+      // equality check does not narrow away (TS2322 without this line).
+      const status: string | null = s.status;
+      if (status === "open" || status === "complete" || status === "expired") return status;
+      throw new Error(`getCheckoutSessionStatus: ${sessionId} has status ${String(status)}`);
+    },
+    async expireCheckoutSession(sessionId) {
+      await stripe.checkout.sessions.expire(sessionId);
+    },
+    async retrieveSubscription(subscriptionId) {
+      return subscriptionSnapshot(await stripe.subscriptions.retrieve(subscriptionId));
+    },
+    async updateSubscriptionPrices(change, idempotencyKey) {
+      // Change plan NOW, with proration (DECISION 2, danlo 2026-09-25).
+      // Assumption B4, UNVERIFIED: swapping each item's price in place
+      // mid-period prorates the base price, and prices the WHOLE period's
+      // meter usage at the NEW metered prices at period end (a meter
+      // aggregates per customer per meter, not per price). Nothing here or in
+      // the e2e settles it; a Stripe test clock must, before the first live
+      // mid-month Change plan.
+      await stripe.subscriptions.update(change.subscriptionId, {
+        items: change.items.map((i) => ({ id: i.id, price: i.price })),
+        proration_behavior: "create_prorations",
+        metadata: { bis_plan_id: change.planId },
+      }, { idempotencyKey });
+    },
+    async listPortalConfigurations() {
+      const page = await stripe.billingPortal.configurations.list({ active: true, limit: 100 });
+      if (page.has_more) throw new Error("listPortalConfigurations: more than 100 active configurations; refusing to guess");
+      return page.data.map((c) => ({
+        id: c.id,
+        metadata: c.metadata ?? {},
+        features: Object.fromEntries(PORTAL_FEATURES.map((f) => [f, c.features[f].enabled])) as Record<PortalFeature, boolean>,
+      }));
+    },
+    async createPortalConfiguration(idempotencyKey) {
+      const c = await stripe.billingPortal.configurations.create(portalConfigurationParams(), { idempotencyKey });
+      return { id: c.id };
+    },
+    async createPortalSession({ customerId, returnUrl, configurationId }) {
+      const s = await stripe.billingPortal.sessions.create({ customer: customerId, return_url: returnUrl, configuration: configurationId });
+      return { url: s.url };
     },
   };
 }
@@ -291,6 +576,24 @@ export function stripeKeyVerdict(env: StripeEnv): StripeKeyVerdict {
   return { ok: true, key };
 }
 
+/** What webhookSecretFromEnv reads. */
+export type WebhookEnv = { STRIPE_WEBHOOK_SECRET?: string };
+
+/**
+ * The webhook signing secret, trimmed, or null when unset or blank. The ONE
+ * reading of STRIPE_WEBHOOK_SECRET: the webhook route verifies with it, and
+ * billing links are offered (the card) and sent (the action) only when it is
+ * set (final review I1). A key without it lets a client pay while every event
+ * that would mirror the payment is answered 503, so the account shows as
+ * Unbilled until an event can land. Only Send needs it: a complimentary
+ * change never touches Stripe, and a paid Change plan needs a live
+ * subscription, which the webhook already mirrored.
+ */
+export function webhookSecretFromEnv(env: WebhookEnv = process.env as WebhookEnv): string | null {
+  const secret = (env.STRIPE_WEBHOOK_SECRET ?? "").trim();
+  return secret || null;
+}
+
 export function billingGatewayFromEnv(
   // `process.env` (NodeJS.ProcessEnv) satisfies this shape structurally at
   // runtime, but its properties come from an index signature, which TS's
@@ -298,9 +601,11 @@ export function billingGatewayFromEnv(
   // common) does not count — hence the explicit cast rather than a bare
   // default (TS2559 under this repo's strict: true).
   env: StripeEnv = process.env as StripeEnv,
-): { ok: true; gateway: BillingGateway } | Extract<StripeKeyVerdict, { ok: false }> {
+): { ok: true; gateway: BillingGateway; live: boolean } | Extract<StripeKeyVerdict, { ok: false }> {
   const verdict = stripeKeyVerdict(env);
   if (!verdict.ok) return verdict;
   const stripe = new Stripe(verdict.key, { apiVersion: STRIPE_API_VERSION, maxNetworkRetries: 2, timeout: 20_000 });
-  return { ok: true, gateway: stripeGateway(stripe) };
+  // The key's MODE, for the webhook's livemode check (G4 step 4).
+  const live = verdict.key.startsWith("sk_live_") || verdict.key.startsWith("rk_live_");
+  return { ok: true, gateway: stripeGateway(stripe), live };
 }

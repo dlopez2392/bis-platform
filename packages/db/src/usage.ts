@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { MeterKey } from "./billing";
+import type { MeterAmounts, MeterKey } from "./billing";
 
 /**
  * The usage ledger (0051's `usage_events`): one row per billable fact, and
@@ -74,7 +74,7 @@ export type UsageRow = {
 export type BilledUsageAccount = {
   accountId: string;
   stripeCustomerId: string;
-  /** `account_billing.created_at`, untouched: usage before it is never sent. */
+  /** `account_billing.billing_started_at` (0052), untouched: usage before it is never sent. */
   billingStartedAt: string;
 };
 
@@ -160,15 +160,15 @@ export async function listBilledUsageAccounts(db: SupabaseClient): Promise<Bille
   const out: BilledUsageAccount[] = [];
   for (let from = 0; ; ) {
     const { data, error } = await db.from("account_billing")
-      .select("account_id, stripe_customer_id, created_at")
+      .select("account_id, stripe_customer_id, billing_started_at")
       .not("stripe_customer_id", "is", null)
       .not("stripe_subscription_id", "is", null)
       .order("account_id", { ascending: true })
       .range(from, from + BILLED_PAGE - 1);
     if (error) throw new Error(`listBilledUsageAccounts failed: ${error.message}`);
-    const rows = (data ?? []) as { account_id: string; stripe_customer_id: string; created_at: string }[];
+    const rows = (data ?? []) as { account_id: string; stripe_customer_id: string; billing_started_at: string }[];
     for (const r of rows) {
-      out.push({ accountId: r.account_id, stripeCustomerId: r.stripe_customer_id, billingStartedAt: r.created_at });
+      out.push({ accountId: r.account_id, stripeCustomerId: r.stripe_customer_id, billingStartedAt: r.billing_started_at });
     }
     if (rows.length === 0) return out;
     from += rows.length;
@@ -391,4 +391,28 @@ export async function countExpiredUsage(
  *  the paged billed-account list, then staleUsageAccountIds over it. */
 export async function listAccountsWithStaleUsage(db: SupabaseClient, now: Date): Promise<string[]> {
   return staleUsageAccountIds(db, await listBilledUsageAccounts(db), now);
+}
+
+const USAGE_SUM_PAGE = 1000;
+
+/**
+ * Month-to-date (or period-to-date) usage for ONE account, per meter: every
+ * usage_events row of the account with occurred_at >= sinceIso, summed.
+ * The billing screens' only source (never the Activity page's counts, which
+ * count a chat at its start; billing counts it at Sofía's first reply).
+ * Paged until an empty page; served by usage_events_account_occurred_idx.
+ */
+export async function sumUsageSince(db: SupabaseClient, accountId: string, sinceIso: string): Promise<MeterAmounts> {
+  const out: MeterAmounts = { voice_minutes: 0, sms: 0, ai_chats: 0 };
+  for (let from = 0; ; ) {
+    const { data, error } = await db.from("usage_events").select("meter, quantity")
+      .eq("account_id", accountId).gte("occurred_at", sinceIso)
+      .order("occurred_at", { ascending: true }).order("id", { ascending: true })
+      .range(from, from + USAGE_SUM_PAGE - 1);
+    if (error) throw new Error(`sumUsageSince failed: ${error.message}`);
+    const rows = (data ?? []) as { meter: MeterKey; quantity: number }[];
+    for (const r of rows) out[r.meter] += r.quantity;
+    if (rows.length === 0) return out;
+    from += rows.length;
+  }
 }

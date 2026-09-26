@@ -102,6 +102,12 @@ describe("buildNavGroups", () => {
     expect(agencyGrowth.items.map((i) => i.labelKey)).not.toContain("nav.branding");
   });
 
+  it("Billing is a CLIENT nav item, last in Overview; the agency reaches billing through Settings (G20) (mutation: show it to the agency → FAILS; drop it → FAILS)", () => {
+    const overview = (isAgency: boolean) => buildNavGroups(BASE, isAgency).find((g) => g.label === "nav.group.overview")!;
+    expect(overview(false).items.at(-1)).toEqual({ href: `${BASE}/billing`, labelKey: "nav.billing", iconKey: "billing" });
+    expect(overview(true).items.map((i) => i.labelKey)).not.toContain("nav.billing");
+  });
+
   it("never includes a Setup item, for either audience", () => {
     for (const isAgency of [true, false]) {
       const groups = buildNavGroups(BASE, isAgency);
