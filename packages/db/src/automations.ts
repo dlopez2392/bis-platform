@@ -1710,14 +1710,12 @@ export async function conversationQuietSince(
  *  the off switch that outlives the toggle: turning the recipe off mid-drain
  *  strands nothing, because the stamp is permanent.
  *
- *  "EVER" is enforced AGAINST THE CRON, not against the client role.
- *  `contacts` carries a table-level UPDATE grant to `authenticated` and
- *  `contacts_member_all` is ALL to `authenticated`, so a logged-in user of
- *  the account can clear `reactivation_sent_at` and make the contact
- *  sendable again — unlike every earlier permanent stamp, which sat on
- *  `bookings`, whose `authenticated` UPDATE 0016 revoked. Same for
- *  `opportunities.quote_followup_sent_at`. 0047's header records the grants
- *  this rests on. */
+ *  "EVER" holds against the account's own users too, not only the cron:
+ *  since 0053 the client role's UPDATE on contacts and opportunities is a
+ *  column list without the once-ever stamps (0053, section 5), so only
+ *  server code writes `reactivation_sent_at`. Same for
+ *  `opportunities.quote_followup_sent_at` and
+ *  `opportunities.quote_followup_sms_failed_at`. */
 export async function stampReactivationSent(db: SupabaseClient, contactId: string): Promise<void> {
   const { error } = await db.from("contacts")
     .update({ reactivation_sent_at: new Date().toISOString() })
