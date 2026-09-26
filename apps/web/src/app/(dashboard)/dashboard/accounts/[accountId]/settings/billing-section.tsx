@@ -1,4 +1,5 @@
 import { getBillingLink, listPlans, serviceDb, sumUsageSince } from "@bis/db";
+import { requireAgency } from "@/lib/auth";
 import { readAccountBilling } from "@/lib/billing/account-billing-read";
 import { billingCardView, safeZone, usagePeriodStart, type BillingCardView } from "@/lib/billing/billing-view";
 import { stripeKeyVerdict, type StripeEnv } from "@/lib/billing/stripe-gateway";
@@ -45,6 +46,10 @@ async function loadBillingCardView(accountId: string, now: Date): Promise<Billin
 }
 
 export async function BillingSection({ accountId }: { accountId: string }) {
+  // Its own guard, OUTSIDE the try: Settings already ran
+  // requireAgencyOnlyAccountAccess, but this must stay safe wherever it is
+  // mounted next, and a redirect must not be caught into the error card.
+  await requireAgency();
   let view: BillingCardView;
   try {
     view = await loadBillingCardView(accountId, new Date());

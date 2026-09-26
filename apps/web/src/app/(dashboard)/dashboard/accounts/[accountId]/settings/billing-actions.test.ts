@@ -369,12 +369,12 @@ describe("the agency's billing actions", () => {
     expect(dbm.mirrorSubscription).not.toHaveBeenCalled();
   });
 
-  it("change plan, paid, a subscription that is not BIS's four items (hand-edited in Stripe) is refused, never half-moved: no update call, nothing mirrored (mutation: let a null item map fall through → FAILS)", async () => {
+  it("change plan, paid, a subscription that is not BIS's four items (hand-edited in Stripe) is refused, never half-moved, and SAYS so (retrying cannot help, so not the Stripe-failure copy): no update call, nothing mirrored (mutation: let a null item map fall through → FAILS; answer billing.error.stripeFailed → FAILS)", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     dbm.getAccountBilling.mockResolvedValue(billing());
     seedPaidSub(["base", "voice_minutes", "sms"]);
     dbm.mirrorSubscription.mockResolvedValue({ kind: "written", accountId: ACCOUNT, planId: P2, status: "active" });
-    expect(await actions.changePlanAction(ACCOUNT, changeForm())).toEqual({ ok: false, error: m["billing.error.stripeFailed"] });
+    expect(await actions.changePlanAction(ACCOUNT, changeForm())).toEqual({ ok: false, error: m["billing.error.subscriptionEdited"] });
     expect(fake.calls.map((c) => c.op)).toEqual(["retrieveSubscription"]);
     expect(dbm.mirrorSubscription).not.toHaveBeenCalled();
   });

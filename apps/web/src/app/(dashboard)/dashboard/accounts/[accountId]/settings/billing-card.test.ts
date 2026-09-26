@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,10 +41,53 @@ const active: BillingCardView = {
   since: "Since Oct 12", nextInvoice: "Next invoice Nov 12",
   can: { send: false, changePlan: true, markComplimentary: false, stopComplimentary: false, copyLink: false },
 };
+// On p2, NOT planOptions[0]: "the SAME plan" must be tellable from "the
+// first plan in the list" (review I-3).
 const complimentary: BillingCardView = {
-  ...active, status: "complimentary", nextInvoice: null,
+  ...active, status: "complimentary", nextInvoice: null, plan: { id: "p2", name: "Pro", price: "$299.00/month" },
   can: { send: true, changePlan: true, markComplimentary: false, stopComplimentary: true, copyLink: false },
 };
+const LIVE_LINK = { sentTo: "owner@example.com", expires: "Oct 16, 3:30 PM", url: "https://checkout.stripe.com/x" };
+
+/** Copied from lib/history-state.test.ts (itself from packages/db's
+ *  cascade-export-boundary test): a source pin must not be satisfiable by a
+ *  comment that merely quotes the code. */
+function stripComments(src: string): string {
+  let out = "";
+  let mode: "code" | "line" | "block" | "sq" | "dq" | "tpl" = "code";
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    const d = src[i + 1];
+    if (mode === "code") {
+      if (c === "/" && d === "/") { mode = "line"; i++; continue; }
+      if (c === "/" && d === "*") { mode = "block"; i++; continue; }
+      if (c === "'") mode = "sq";
+      else if (c === '"') mode = "dq";
+      else if (c === "`") mode = "tpl";
+      out += c;
+      continue;
+    }
+    if (mode === "line") { if (c === "\n") { mode = "code"; out += c; } continue; }
+    if (mode === "block") {
+      if (c === "*" && d === "/") { mode = "code"; i++; } else if (c === "\n") out += c;
+      continue;
+    }
+    if (c === "\\") { out += c + (d ?? ""); i++; continue; }
+    if ((mode === "sq" && c === "'") || (mode === "dq" && c === '"') || (mode === "tpl" && c === "`")) {
+      mode = "code";
+    }
+    out += c;
+  }
+  return out;
+}
+/** PlanDialog's own code, comments out: from its declaration to the next export. */
+function planDialogCode(): string {
+  const code = stripComments(cardSource);
+  const start = code.indexOf("function PlanDialog(");
+  if (start === -1) throw new Error("PlanDialog not found");
+  const end = code.indexOf("\nexport ", start);
+  return code.slice(start, end === -1 ? undefined : end);
+}
 
 /** Every element in the tree the card RETURNS (called, not rendered: the
  *  card itself holds no React state, so its handlers can be reached and
@@ -133,6 +176,10 @@ describe("BillingCard", () => {
     expect(off).toContain(m["billing.card.noStripe"]);
     expect(off).not.toContain(m["billing.card.empty"]);
     expect(renderedText(render(base))).not.toContain(m["billing.card.noStripe"]);
+    // The same line shows on a PAID account, where no link is being sent, so
+    // it must say billing can't change, not that a link can't go (review M-4).
+    expect(renderedText(render({ ...active, stripeReady: false }))).toContain(m["billing.card.noStripe"]);
+    expect(m["billing.card.noStripe"]).not.toMatch(/billing link/i);
   });
 
   it("the loading skeleton and the error card are the card's own shape on the SAME #billing anchor, so the banner's link and ⌘K land even before it loads or when it fails (rule 5, rule 7) (mutation: drop id=billing from the skeleton → FAILS)", () => {
@@ -197,13 +244,17 @@ describe("BillingCard", () => {
     }));
     expect(html).toMatch(/<input[^>]*name="requestId"[^>]*value="id-2"/);
     expect(html).toMatch(/<input[^>]*name="expectedPlanId"[^>]*value="p1"/);
-    // And the dialog moves its state through these two, not by hand.
-    const dialogSource = cardSource.slice(cardSource.indexOf("function PlanDialog"));
-    expect(dialogSource).toContain("dialogOpened(");
-    expect(dialogSource).toContain("dialogAfter(");
   });
 
-  it("the Change-plan refusal after a Stripe failure never promises 'Nothing was charged': the change may have gone through (mutation: map it back to billing.error.stripeFailed → FAILS)", () => {
+  it("the dialog runs on those two and posts the id its STATE holds: every opening goes through dialogOpened, every answer through dialogAfter, and the hidden field reads state.requestId, never one minted at render (comments stripped, so a comment quoting the code cannot satisfy it) (mutation: mint per render → FAILS; bypass dialogAfter and leave the call in a comment → FAILS)", () => {
+    const code = planDialogCode();
+    expect(code).toContain("setState((s) => dialogAfter(s, outcome, mintRequestId));");
+    expect(code).toContain("setState((s) => (next ? dialogOpened(mintRequestId) : { ...s, open: false }))");
+    expect(code).toContain("requestId={withRequestId ? state.requestId : null}");
+    expect(code.match(/mintRequestId\(\)/g)).toBeNull();
+  });
+
+  it("the Change-plan 'unconfirmed' copy never promises 'Nothing was charged' and says to check the plan first (mutation: reword it to promise nothing was charged → FAILS; the action's mapping to this key is guarded in billing-actions.test.ts)", () => {
     expect(m["billing.error.changePlanUnconfirmed"]).not.toMatch(/nothing was charged/i);
     expect(m["billing.error.changePlanUnconfirmed"]).toMatch(/check the plan/i);
   });
@@ -227,20 +278,85 @@ describe("BillingCard", () => {
     expect(toasts.success.mock.calls.at(-1)![0]).toBe(m["billing.comp.stopped"]);
     undoOf(toasts.success.mock.calls.length - 1).onClick();
     await flush();
-    expect(remark.mock.calls[0]![0].get("planId")).toBe("p1");
+    // The account's OWN plan (p2), not the first in the list (p1).
+    expect(remark.mock.calls[0]![0].get("planId")).toBe("p2");
 
     const change = vi.fn<(f: FormData) => Promise<{ ok: true }>>(async () => ({ ok: true as const }));
     const compChange = byProp(BillingCard(props(complimentary, { changePlan: change })), "trigger", m["billing.changePlan"]);
-    await (compChange.props.onSubmit as (f: FormData) => Promise<unknown>)(form({ planId: "p2", expectedPlanId: "p1", requestId: "r1" }));
+    await (compChange.props.onSubmit as (f: FormData) => Promise<unknown>)(form({ planId: "p1", expectedPlanId: "p2", requestId: "r1" }));
     undoOf(toasts.success.mock.calls.length - 1).onClick();
     await flush();
     const back = change.mock.calls[1]![0];
-    expect([back.get("planId"), back.get("expectedPlanId")]).toEqual(["p1", "p2"]);
+    expect([back.get("planId"), back.get("expectedPlanId")]).toEqual(["p2", "p1"]);
     expect(back.get("requestId")).not.toBe("r1");
 
     toasts.success.mockReset();
     const paidChange = byProp(BillingCard(props(active)), "trigger", m["billing.changePlan"]);
     await (paidChange.props.onSubmit as (f: FormData) => Promise<unknown>)(form({ planId: "p2", expectedPlanId: "p1", requestId: "r2" }));
     expect(toasts.success).toHaveBeenCalledWith(m["billing.changePlan.done"], undefined);
+  });
+
+  it("Stop complimentary while a billing link is still live runs WITHOUT an Undo (Mark complimentary refuses while a link is out, so that Undo could only fail) and says the link is still open; with no link it keeps its Undo (review I-1) (mutation: always offer the Undo → FAILS; drop the link copy → FAILS)", async () => {
+    const remark = vi.fn(ok);
+    const withLink: BillingCardView = { ...complimentary, link: LIVE_LINK, can: { ...complimentary.can, copyLink: true } };
+    const stopButton = byProp(BillingCard(props(withLink, { markComplimentary: remark })), "children", m["billing.comp.stop"]);
+    (stopButton.props.onClick as () => void)();
+    await flush();
+    expect(toasts.success).toHaveBeenCalledOnce();
+    expect(toasts.success).toHaveBeenCalledWith(m["billing.comp.stoppedLinkOpen"], undefined);
+    expect(remark).not.toHaveBeenCalled();
+
+    toasts.success.mockReset();
+    const plain = byProp(BillingCard(props(complimentary)), "children", m["billing.comp.stop"]);
+    (plain.props.onClick as () => void)();
+    await flush();
+    const [text, opts] = toasts.success.mock.calls[0]! as [string, { action?: { label: string } } | undefined];
+    expect(text).toBe(m["billing.comp.stopped"]);
+    expect(opts?.action?.label).toBe(m["common.undo"]);
+  });
+
+  it("a PAID Change plan that crashes says Stripe didn't confirm it (the change may have landed before the mirror failed), never 'reload and try again'; other crashes keep the generic copy (review M-1) (mutation: use common.actionCrashed for the paid change → FAILS)", async () => {
+    const boom = async () => { throw new Error("network"); };
+    const paid = byProp(BillingCard(props(active, { changePlan: boom })), "trigger", m["billing.changePlan"]);
+    expect(await (paid.props.onSubmit as (f: FormData) => Promise<unknown>)(form({ planId: "p2" }))).toEqual({ kind: "crashed" });
+    expect(toasts.error).toHaveBeenLastCalledWith(m["billing.error.changePlanUnconfirmed"]);
+
+    const comp = byProp(BillingCard(props(complimentary, { changePlan: boom })), "trigger", m["billing.changePlan"]);
+    await (comp.props.onSubmit as (f: FormData) => Promise<unknown>)(form({ planId: "p1" }));
+    expect(toasts.error).toHaveBeenLastCalledWith(m["common.actionCrashed"]);
+    const send = byProp(BillingCard(props(base, { send: boom })), "trigger", m["billing.send"]);
+    await (send.props.onSubmit as (f: FormData) => Promise<unknown>)(form({ planId: "p1", email: "a@b.co" }));
+    expect(toasts.error).toHaveBeenLastCalledWith(m["common.actionCrashed"]);
+  });
+
+  describe("Copy link (review M-3)", () => {
+    const linkView: BillingCardView = {
+      ...base, status: "link_sent", link: LIVE_LINK,
+      can: { send: true, changePlan: false, markComplimentary: false, stopComplimentary: false, copyLink: true },
+    };
+    const click = async () => {
+      const button = byProp(BillingCard(props(linkView)), "children", m["billing.link.copy"]);
+      (button.props.onClick as () => void)();
+      await flush();
+    };
+    afterEach(() => vi.unstubAllGlobals());
+
+    it("copies the CHECKOUT URL, not the address it was sent to (mutation: writeText(sentTo) → FAILS)", async () => {
+      const writeText = vi.fn(async () => {});
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      await click();
+      expect(writeText).toHaveBeenCalledWith(LIVE_LINK.url);
+      expect(toasts.success).toHaveBeenCalledWith(m["billing.link.copied"]);
+    });
+
+    it("with no clipboard, or a denied one, says so plainly and hands over the URL to copy by hand, never the 'page may be out of date' crash copy (mutation: drop the missing-clipboard guard → it throws, FAILS; map a denial to common.actionCrashed → FAILS)", async () => {
+      vi.stubGlobal("navigator", {});
+      await click();
+      expect(toasts.error).toHaveBeenLastCalledWith(m["billing.link.copyFailed"], expect.objectContaining({ description: LIVE_LINK.url }));
+      vi.stubGlobal("navigator", { clipboard: { writeText: async () => { throw new Error("NotAllowedError"); } } });
+      await click();
+      expect(toasts.error).toHaveBeenLastCalledWith(m["billing.link.copyFailed"], expect.objectContaining({ description: LIVE_LINK.url }));
+      expect(toasts.error).not.toHaveBeenCalledWith(m["common.actionCrashed"]);
+    });
   });
 });

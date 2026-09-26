@@ -66,6 +66,20 @@ export function dialogAfter(state: DialogState, outcome: Outcome, mint: () => st
 
 const mintRequestId = () => crypto.randomUUID();
 
+/** Copies the checkout URL. With no clipboard (a non-secure origin) or a
+ *  refused one, the URL itself goes in the toast so it can be copied by
+ *  hand; this page is not out of date, so never the generic crash copy. */
+async function copyLink(url: string): Promise<void> {
+  const clipboard = typeof navigator === "undefined" ? undefined : navigator.clipboard;
+  try {
+    if (!clipboard) throw new Error("no clipboard");
+    await clipboard.writeText(url);
+    toast.success(m["billing.link.copied"]);
+  } catch {
+    toast.error(m["billing.link.copyFailed"], { description: url, duration: Infinity, closeButton: true });
+  }
+}
+
 /**
  * The agency's Billing card (spec section 5). Agency-only by construction:
  * rendered from Settings (requireAgencyOnlyAccountAccess), and every action
@@ -90,12 +104,14 @@ export function BillingCard({ view, send, markComplimentary, stopComplimentary, 
   const t = BILLING_STATUS_TREATMENTS[view.status];
 
   type Undo = { go: () => Promise<BillingActionResult>; success: string };
-  const run = async (go: () => Promise<BillingActionResult>, success: string, undo?: Undo): Promise<Outcome> => {
+  const run = async (
+    go: () => Promise<BillingActionResult>, success: string, undo?: Undo, crashed: string = m["common.actionCrashed"],
+  ): Promise<Outcome> => {
     let r: BillingActionResult;
     try {
       r = await go();
     } catch {
-      toast.error(m["common.actionCrashed"]);
+      toast.error(crashed);
       return { kind: "crashed" };
     }
     router.refresh();
@@ -178,9 +194,7 @@ export function BillingCard({ view, send, markComplimentary, stopComplimentary, 
           {view.can.copyLink && view.link ? (
             <Button
               variant="ghost" type="button"
-              onClick={() => void navigator.clipboard.writeText(view.link!.url).then(
-                () => toast.success(m["billing.link.copied"]), () => toast.error(m["common.actionCrashed"]),
-              )}
+              onClick={() => void copyLink(view.link!.url)}
             >
               {m["billing.link.copy"]}
             </Button>
@@ -200,7 +214,10 @@ export function BillingCard({ view, send, markComplimentary, stopComplimentary, 
                     success: m["billing.changePlan.done"],
                   }
                   : undefined;
-                return run(() => changePlan(f), m["billing.changePlan.done"], undo);
+                // A PAID change that throws may have landed at Stripe before
+                // the mirror failed: say so, not "reload and try again".
+                const crashed = view.status === "complimentary" ? undefined : m["billing.error.changePlanUnconfirmed"];
+                return run(() => changePlan(f), m["billing.changePlan.done"], undo, crashed);
               }}
             />
           ) : null}
@@ -216,6 +233,13 @@ export function BillingCard({ view, send, markComplimentary, stopComplimentary, 
             <Button
               variant="ghost" type="button"
               onClick={() => {
+                // With a billing link still live, Mark complimentary refuses
+                // (G16), so an Undo could only fail: stop without one and say
+                // the link is still open.
+                if (view.link) {
+                  void run(() => stopComplimentary(), m["billing.comp.stoppedLinkOpen"]);
+                  return;
+                }
                 const planId = view.plan!.id;
                 void run(() => stopComplimentary(), m["billing.comp.stopped"],
                   { go: () => markComplimentary(planForm({ planId })), success: m["billing.comp.done"] });

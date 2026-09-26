@@ -19,6 +19,8 @@ vi.mock("@bis/db", async (importOriginal) => ({
   }),
 }));
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => dbm.requestDb }));
+const guard = vi.hoisted(() => ({ requireAgency: vi.fn(async () => ({ userId: "u" })) }));
+vi.mock("@/lib/auth", () => guard);
 vi.mock("./billing-actions", () => ({
   sendBillingLinkAction: async () => ({ ok: true }), markComplimentaryAction: async () => ({ ok: true }),
   removeComplimentaryAction: async () => ({ ok: true }), changePlanAction: async () => ({ ok: true }),
@@ -78,6 +80,19 @@ describe("BillingSection", () => {
     dbm.account = { ...dbm.account, reply_to_email: "office@example.com" };
     const el2 = (await BillingSection({ accountId: "a" })) as ReactElement<{ view: { defaultEmail: string } }>;
     expect(el2.props.view.defaultEmail).toBe("office@example.com");
+  });
+
+  it("guards itself: requireAgency runs before ANY billing read, and its redirect is not swallowed into the error card, so a future mount outside agency-only Settings cannot leak billing (review M-8) (mutation: drop the guard → FAILS; put it inside the try → the redirect becomes an error card, FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(null);
+    guard.requireAgency.mockClear();
+    await BillingSection({ accountId: "a" });
+    expect(guard.requireAgency).toHaveBeenCalledOnce();
+    expect(guard.requireAgency.mock.invocationCallOrder[0]!).toBeLessThan(dbm.getBillingLink.mock.invocationCallOrder[0]!);
+
+    for (const f of [dbm.getAccountBilling, dbm.getBillingLink, dbm.listPlans, dbm.sumUsageSince]) f.mockClear();
+    guard.requireAgency.mockRejectedValueOnce(new Error("NEXT_REDIRECT"));
+    await expect(BillingSection({ accountId: "a" })).rejects.toThrow("NEXT_REDIRECT");
+    for (const f of [dbm.getAccountBilling, dbm.getBillingLink, dbm.listPlans, dbm.sumUsageSince]) expect(f).not.toHaveBeenCalled();
   });
 
   it("a failed read renders the error card and logs; it never takes Settings (and its client-access switch) offline (mutation: let the error propagate → FAILS)", async () => {

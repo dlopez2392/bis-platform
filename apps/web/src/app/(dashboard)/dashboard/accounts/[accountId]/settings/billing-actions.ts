@@ -236,7 +236,8 @@ export async function changePlanAction(accountId: string, formData: FormData): P
     const items = planChangeItems(snapshot, plan.stripePriceIds);
     if (!items) {
       console.error(`change plan: subscription ${snapshot.id} is not BIS's four items; refusing to move it`);
-      return fail("billing.error.stripeFailed");
+      // Not the Stripe-failure copy: nothing failed, and a retry cannot help.
+      return fail("billing.error.subscriptionEdited");
     }
     const change = { subscriptionId: snapshot.id, planId, items };
     await gateway.gateway.updateSubscriptionPrices(change, idempotencyKey("bis-subchange", requestId, change));
