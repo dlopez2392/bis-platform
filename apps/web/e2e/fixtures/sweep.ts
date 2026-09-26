@@ -369,10 +369,13 @@ export async function sweepStaleFixtures({
   // test) forever without its own leg. The `like` is a prefilter, never the
   // decision; `isStaleFixturePlan` decides.
   //
-  // A plan referenced by `account_billing` (migration 0051, `on delete
-  // restrict`) cannot be deleted this way — e2e never creates billing rows,
-  // so this is not expected to fire, but if it ever does the delete error is
-  // reported like every other leg, never thrown.
+  // A plan referenced by `account_billing` or `billing_links` (0051/0052,
+  // `on delete restrict`) cannot be deleted this way. `billing.spec.ts` DOES
+  // create both, on the per-run fixture account only, and its afterAll
+  // deletes them before the plan. A killed run's rows go with the fixture
+  // account in leg 1 above (both cascade with their account), before this
+  // leg runs, so this is not expected to fire; if it ever does, the delete
+  // error is reported like every other leg, never thrown.
   //
   // Deliberately NOT calling Stripe here: `plans.spec.ts`'s own `afterAll`
   // deactivates the Stripe product on a completed run, but a killed run
