@@ -54,7 +54,15 @@ export type CheckoutStatus = "open" | "complete" | "expired";
 /** Change plan (G15): each item's price swapped in place. */
 export type SubscriptionPriceChange = { subscriptionId: string; planId: string; items: { id: string; price: string }[] };
 export type PortalSessionInput = { customerId: string; returnUrl: string; configurationId: string };
-export type PortalConfiguration = { id: string; metadata: Record<string, string> };
+/** The five Customer Portal features BIS sets, each ON or OFF. */
+export const PORTAL_FEATURES = [
+  "invoice_history", "payment_method_update", "customer_update", "subscription_cancel", "subscription_update",
+] as const;
+export type PortalFeature = (typeof PORTAL_FEATURES)[number];
+/** `features` is what the configuration allows NOW, as Stripe reports it: a
+ *  tagged configuration can be edited in the Stripe dashboard after BIS made
+ *  it, and ensurePortalConfiguration (portal.ts) refuses one that drifted. */
+export type PortalConfiguration = { id: string; metadata: Record<string, string>; features: Record<PortalFeature, boolean> };
 
 export interface BillingGateway {
   listActiveMeters(): Promise<StripeMeter[]>;
@@ -334,6 +342,14 @@ export function portalConfigurationParams(): Stripe.BillingPortal.ConfigurationC
   };
 }
 
+/** The ON/OFF of each feature in portalConfigurationParams(): what a
+ *  configuration BIS may use must allow, exactly. Read from the params, so
+ *  there is one statement of DECISION 3, not two. */
+export function portalFeatureFlags(): Record<PortalFeature, boolean> {
+  const { features } = portalConfigurationParams();
+  return Object.fromEntries(PORTAL_FEATURES.map((f) => [f, features[f]?.enabled === true])) as Record<PortalFeature, boolean>;
+}
+
 /** The six events the endpoint subscribes to (spec flow 4; Task 13 Step 5). */
 export const HANDLED_WEBHOOK_EVENTS = [
   "checkout.session.completed", "customer.subscription.created", "customer.subscription.updated",
@@ -470,7 +486,11 @@ export function stripeGateway(stripe: Stripe): BillingGateway {
     async listPortalConfigurations() {
       const page = await stripe.billingPortal.configurations.list({ active: true, limit: 100 });
       if (page.has_more) throw new Error("listPortalConfigurations: more than 100 active configurations; refusing to guess");
-      return page.data.map((c) => ({ id: c.id, metadata: c.metadata ?? {} }));
+      return page.data.map((c) => ({
+        id: c.id,
+        metadata: c.metadata ?? {},
+        features: Object.fromEntries(PORTAL_FEATURES.map((f) => [f, c.features[f].enabled])) as Record<PortalFeature, boolean>,
+      }));
     },
     async createPortalConfiguration(idempotencyKey) {
       const c = await stripe.billingPortal.configurations.create(portalConfigurationParams(), { idempotencyKey });

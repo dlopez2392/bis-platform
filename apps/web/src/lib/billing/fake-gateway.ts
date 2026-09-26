@@ -1,6 +1,6 @@
 import type { SubscriptionSnapshot } from "@bis/db";
 import {
-  priceCreateParams, meterEventParams, checkoutSessionParams, PORTAL_VERSION,
+  priceCreateParams, meterEventParams, checkoutSessionParams, PORTAL_VERSION, portalFeatureFlags,
   type BillingGateway, type MeterEventInput, type PriceSpec, type StripeMeter,
   type CheckoutInput, type CheckoutSession, type CheckoutStatus, type SubscriptionPriceChange,
   type PortalSessionInput, type PortalConfiguration,
@@ -247,7 +247,7 @@ export class FakeGateway implements BillingGateway {
   async createPortalConfiguration(key: string): Promise<{ id: string }> {
     this.step("createPortalConfiguration", undefined, key);
     return this.once("createPortalConfiguration", key, { version: PORTAL_VERSION }, (id) => {
-      this.portalConfigurations.push({ id, metadata: { bis_portal: PORTAL_VERSION } });
+      this.portalConfigurations.push({ id, metadata: { bis_portal: PORTAL_VERSION }, features: portalFeatureFlags() });
       return { id };
     });
   }

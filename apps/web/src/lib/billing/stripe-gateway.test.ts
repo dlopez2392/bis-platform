@@ -44,6 +44,16 @@ type StubOverrides = {
   portalHasMore?: boolean;
 };
 
+/** A portal configuration's `features` as Stripe returns them: every
+ *  feature an object with `enabled` (plus fields BIS never reads). */
+const STRIPE_FEATURES = (on: Partial<Record<string, boolean>>) => ({
+  invoice_history: { enabled: on.invoice_history ?? true },
+  payment_method_update: { enabled: on.payment_method_update ?? true, payment_method_configuration: null },
+  customer_update: { enabled: on.customer_update ?? false, allowed_updates: [] },
+  subscription_cancel: { enabled: on.subscription_cancel ?? false, mode: "at_period_end" },
+  subscription_update: { enabled: on.subscription_update ?? false, products: [] },
+});
+
 function stubStripe(overrides: StubOverrides = {}) {
   return {
     customers: {
@@ -68,7 +78,10 @@ function stubStripe(overrides: StubOverrides = {}) {
     billingPortal: {
       configurations: {
         list: vi.fn(async () => ({
-          data: [{ id: "bpc_1", metadata: { bis_portal: "v1" } }, { id: "bpc_2", metadata: null }],
+          data: [
+            { id: "bpc_1", metadata: { bis_portal: "v1" }, features: STRIPE_FEATURES({}) },
+            { id: "bpc_2", metadata: null, features: STRIPE_FEATURES({ subscription_cancel: true, invoice_history: false }) },
+          ],
           has_more: overrides.portalHasMore ?? false,
         })),
         create: vi.fn(async () => ({ id: "bpc_new", object: "billing_portal.configuration", active: true })),
@@ -712,9 +725,13 @@ describe("stripeGateway: the PR-3 calls (exact params AND options, on a stub cli
     }, { idempotencyKey: "k-chg" });
   });
 
-  it("listPortalConfigurations asks for ACTIVE ones, maps id and metadata (a null metadata to {}), and refuses to guess past one page (mutation: drop active → FAILS; ignore has_more → resolves, FAILS)", async () => {
+  it("listPortalConfigurations asks for ACTIVE ones, maps id, metadata (a null metadata to {}) and each of the five features' ON/OFF, and refuses to guess past one page (mutation: drop active → FAILS; ignore has_more → resolves, FAILS; drop the features, or read one feature's flag for another → a configuration changed in the dashboard cannot be noticed, FAILS)", async () => {
     const { s, g } = gw();
-    expect(await g.listPortalConfigurations()).toEqual([{ id: "bpc_1", metadata: { bis_portal: "v1" } }, { id: "bpc_2", metadata: {} }]);
+    const bis = { invoice_history: true, payment_method_update: true, customer_update: false, subscription_cancel: false, subscription_update: false };
+    expect(await g.listPortalConfigurations()).toEqual([
+      { id: "bpc_1", metadata: { bis_portal: "v1" }, features: bis },
+      { id: "bpc_2", metadata: {}, features: { ...bis, subscription_cancel: true, invoice_history: false } },
+    ]);
     expect(s.billingPortal.configurations.list).toHaveBeenCalledWith({ active: true, limit: 100 });
     await expect(gw({ portalHasMore: true }).g.listPortalConfigurations()).rejects.toThrow(/more than 100/);
   });
