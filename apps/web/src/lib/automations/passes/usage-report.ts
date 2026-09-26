@@ -49,14 +49,20 @@ export function usageIdempotencyKey(rowId: string, customerId: string): string {
  *
  * A stamp that fails after Stripe accepted is `unstamped`: the next tick
  * resends the same row under the same identifier AND the same key, and
- * Stripe's idempotent replay keeps one event (A10). When the key is no
- * longer the one Stripe saw (it expired after 24 hours, or the account's
- * customer id changed), Stripe REFUSES the row's identifier as already held
- * (A11, observed in test mode): that refusal is `alreadyAtStripe`, the row is
- * stamped and the account's other rows go on, never a refusal that would
- * hold the account back every tick. "reported" means Stripe RECEIVED the
- * event: it validates asynchronously (A12), and PR-4's nightly
- * reconciliation is the backstop.
+ * Stripe's idempotent replay keeps one event (A10). A11, OBSERVED in test
+ * mode (e2e/usage-meter.spec.ts): the same identifier for the SAME customer
+ * under a FRESH idempotency key, seconds after the first send, is REFUSED
+ * ("An event already exists with identifier <id>."). That refusal is
+ * `alreadyAtStripe`: the row is stamped and the account's other rows go on,
+ * never a refusal that would hold the account back every tick. The resends
+ * that actually reach this path in production are NOT observed: a key that
+ * expired (over 24 hours after the first send) and a changed customer id are
+ * ASSUMED to be refused the same way. Stripe's docs (an external claim)
+ * promise identifier uniqueness only "within a rolling period of at least 24
+ * hours", so a resend after about a day might instead be ACCEPTED and counted
+ * twice. Known limit; PR-4's nightly reconciliation is the backstop for it,
+ * as it is for A12: "reported" means Stripe RECEIVED the event, which it
+ * validates asynchronously.
  *
  * Every @bis/db export is dereferenced inside run(), never at module scope
  * (the cron route test's bare mock throws on a dereference).
@@ -145,17 +151,18 @@ export const usageReportPass: Pass = {
             stop = true;
             break;
           }
-          // "duplicate": Stripe already holds this row's event (A11: its
-          // identifier, resent under a new key after the old one expired or
-          // the customer changed). Stamped like an accepted send; the
-          // account's other rows go on.
+          // "duplicate": Stripe refused this row's identifier as one it
+          // already holds (A11: observed for the same customer under a fresh
+          // key within seconds; the expired-key and changed-customer resends
+          // are assumed to refuse alike, see above). Stamped like an accepted
+          // send; the account's other rows go on.
           alreadyAtStripe = true;
         }
         try {
           if (await markUsageReported(ctx.db, row.id, ctx.now)) {
             if (alreadyAtStripe) {
               c.alreadyAtStripe++;
-              console.error(`usage report: Stripe already held usage row ${row.id} (refused its identifier under a new key); marked reported, not sent twice`);
+              console.error(`usage report: Stripe already held usage row ${row.id} (sent for customer ${customerId}; refused its identifier under a new key); marked reported, not sent twice`);
             } else {
               c.reported++;
             }

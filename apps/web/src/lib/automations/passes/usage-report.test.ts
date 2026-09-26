@@ -196,10 +196,12 @@ describe("usageReportPass", () => {
     expect(fake.calls.filter((c) => c.op === "reportMeterEvent").map((c) => c.key)).toEqual(["bis-usage-u1-cus_a", "bis-usage-u1-cus_a"]);
   });
 
-  // A11 as observed in Stripe test mode: the same identifier under a NEW
-  // idempotency key (the old key expired after a failed stamp, or the
-  // customer id changed) is refused "An event already exists with
-  // identifier <id>.". The event IS at Stripe, so the row is stamped.
+  // A11 as observed in Stripe test mode: the same identifier for the SAME
+  // customer under a FRESH idempotency key, seconds after the first send, is
+  // refused "An event already exists with identifier <id>.". The event IS at
+  // Stripe, so the row is stamped. The resends production would actually
+  // make (a key expired after 24 hours, a changed customer id) are assumed,
+  // not observed, to refuse the same way; the fake models that assumption.
   const seedAtStripe = (row: UsageRow, key: string) => fake.reportMeterEvent({
     eventName: "bis_sms_segments", customerId: "cus_a", value: row.quantity, identifier: row.id,
     timestampSeconds: SECS,
@@ -215,6 +217,10 @@ describe("usageReportPass", () => {
     expect(fake.meterEvents.slice(heldBefore).map((e) => e.identifier)).toEqual(["u2"]);
     expect(fake.meterEvents.filter((e) => e.identifier === "u1")).toHaveLength(1);
     expect(queue).toEqual([]);
+    // The log names the customer this tick SENT for. After a customer-id
+    // change (PR-3) the usage sits at Stripe under the OLD customer, so the
+    // line says "sent for", never that Stripe holds it for this one.
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("Stripe already held usage row u1 (sent for customer cus_a;"));
   });
 
   it("the same refusal for a row a concurrent tick already stamped is alreadyStamped, not alreadyAtStripe (mutation: count every duplicate as alreadyAtStripe → FAILS)", async () => {

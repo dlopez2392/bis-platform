@@ -44,6 +44,20 @@ describe("meterEventFailureKind against the installed SDK's own error classes", 
     expect(meterEventFailureKind(alreadyThere(`${ID}-2`), ID)).toBe("row");
   });
 
+  it("whitespace around the exact observed wording is still a duplicate (mutation: drop the .trim() before the match → 'row', FAILS)", () => {
+    const padded = new Stripe.errors.StripeInvalidRequestError({
+      type: "invalid_request_error", message: `  An event already exists with identifier ${ID}.\n`,
+    });
+    expect(meterEventFailureKind(padded, ID)).toBe("duplicate");
+  });
+
+  it("text BEFORE the observed wording, naming the same identifier, is not the refusal we observed: it stays a row refusal (mutation: drop the ^ anchor on ALREADY_EXISTS → 'duplicate', FAILS)", () => {
+    const prefixed = new Stripe.errors.StripeInvalidRequestError({
+      type: "invalid_request_error", message: `Customer mismatch. An event already exists with identifier ${ID}.`,
+    });
+    expect(meterEventFailureKind(prefixed, ID)).toBe("row");
+  });
+
   it("an unrelated invalid request, and the duplicate's words on any other error class, are not duplicates (mutation: match the message without the type → the rate-limit case is 'duplicate', FAILS)", () => {
     expect(meterEventFailureKind(new Stripe.errors.StripeInvalidRequestError({
       type: "invalid_request_error", message: "No such customer: 'cus_gone'",

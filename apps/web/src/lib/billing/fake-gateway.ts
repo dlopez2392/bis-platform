@@ -31,7 +31,9 @@ function sameInput(a: unknown, b: unknown): boolean {
  *   failOn   throw on the (after + 1)th call of `op`, and every one after;
  *            `error` when given (a Stripe-shaped error), else a plain Error
  *   meterEvents  the meter events Stripe would hold: one per identifier; a
- *            new key carrying a held identifier is refused (A11, observed)
+ *            new key carrying a held identifier is refused, FOREVER (A11:
+ *            observed only for the same customer, a fresh key, within
+ *            seconds; see reportMeterEvent for where the fake departs)
  */
 export class FakeGateway implements BillingGateway {
   meters: StripeMeter[] = [];
@@ -109,9 +111,19 @@ export class FakeGateway implements BillingGateway {
    * key with a different event throws. A NEW key carrying an identifier
    * already held is REFUSED with the invalid request Stripe test mode
    * returned to e2e/usage-meter.spec.ts's A11 probe ("An event already
-   * exists with identifier <id>.") and records nothing. The refusal is keyed
-   * on the identifier alone, whatever customer the new event names
-   * (assumption, unobserved: Stripe holds identifiers per Stripe account).
+   * exists with identifier <id>.") and records nothing. That probe resent
+   * for the SAME customer under a fresh key within seconds; nothing more was
+   * observed. The refusal here is keyed on the identifier alone, whatever
+   * customer the new event names (assumption, unobserved: Stripe holds
+   * identifiers per Stripe account), and it never lapses. Stripe's docs (an
+   * external claim) promise identifier uniqueness only "within a rolling
+   * period of at least 24 hours". Within that window the fake refuses as
+   * Stripe was seen to (and, unobserved, across customers too). After it the
+   * fake is possibly LOOSER than Stripe on the one hazard that costs money:
+   * a real resend after about a day might be ACCEPTED and counted twice,
+   * where the fake refuses it, so a test on this fake can never see that
+   * double count. No test moves time today; PR-4's nightly reconciliation is
+   * the backstop.
    */
   async reportMeterEvent(input: MeterEventInput, key: string): Promise<void> {
     meterEventParams(input);
