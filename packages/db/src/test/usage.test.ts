@@ -51,13 +51,15 @@ async function withPlan(fn: (planId: string) => Promise<void>): Promise<void> {
   }
 }
 
-/** A billed account: a Stripe customer AND a subscription. */
+/** A billed account: a Stripe customer AND a subscription. Reporting starts
+ *  at billing_started_at (0052), NOT created_at: the two are deliberately a
+ *  day apart, so a read of the wrong column shows up as the wrong start. */
 async function bill(accountId: string, planId: string, startedAtMs: number): Promise<string> {
   const customer = `cus_t_${randomUUID()}`;
   const { error } = await serviceDb().from("account_billing").insert({
     account_id: accountId, plan_id: planId, stripe_customer_id: customer,
     stripe_subscription_id: `sub_t_${randomUUID()}`, subscription_status: "active",
-    created_at: iso(startedAtMs),
+    billing_started_at: iso(startedAtMs), created_at: iso(startedAtMs - DAY),
   });
   if (error) throw new Error(`usage.test billing fixture refused: ${error.message}`);
   return customer;
@@ -103,7 +105,7 @@ describe("usage.ts, live", () => {
       expect(data).toEqual([{ quantity: 2 }]);
     }));
 
-  it("listBilledUsageAccounts returns accounts with a Stripe customer AND subscription, with the billing start; complimentary, link-only and customer-less rows are left out (mutation: drop the subscription filter → FAILS; drop the customer filter → FAILS)", () =>
+  it("listBilledUsageAccounts returns accounts with a Stripe customer AND subscription, with the billing start; complimentary, link-only and customer-less rows are left out (mutation: drop the subscription filter → FAILS; drop the customer filter → FAILS); read billing_started_at, not created_at → FAILS (mutation: select created_at → the start is a day early)", () =>
     withPlan((planId) => withTestAccount((db, billed) => withTestAccount((_d1, comp) => withTestAccount((_d2, linkOnly) =>
       withTestAccount(async (_d3, subOnly) => {
         const started = Date.now() - 5 * DAY;

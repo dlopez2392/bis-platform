@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { isValidElement, type ReactNode } from "react";
+import { Suspense, isValidElement, type ReactElement, type ReactNode } from "react";
 
 /**
  * ONE thing under test: the agency's Settings page hands BrandingPanel the
@@ -80,11 +80,16 @@ vi.mock("../website/actions", () => ({
   saveSiteAction: noop, testSiteConnectionAction: noop, unlinkSiteAction: noop,
 }));
 vi.mock("../../../blueprints/actions", () => ({ captureBlueprintAction: noop }));
+vi.mock("./billing-actions", () => ({
+  sendBillingLinkAction: noop, markComplimentaryAction: noop, removeComplimentaryAction: noop, changePlanAction: noop,
+}));
 
 const panel = vi.hoisted(() => ({ BrandingPanel: () => null }));
 vi.mock("@/components/branding-panel", () => panel);
 
 const { default: SettingsPage } = await import("./page");
+const { BillingSection, BillingCardSkeleton } = await import("./billing-section");
+const { ClientAccessPanel } = await import("./client-access-panel");
 
 /** Depth-first search of the returned element tree for BrandingPanel's props. */
 function findPanelProps(node: ReactNode): Record<string, unknown> | null {
@@ -132,5 +137,28 @@ describe("settings page — the Branding panel's mailing address", () => {
     await panelProps();
     expect(fx.brandingReads).toEqual([[fx.requestDb, "a1"]]);
     expect(fx.mailingReads).toEqual([[fx.requestDb, "a1"]]);
+  });
+});
+
+describe("settings page — the Billing card", () => {
+  it("mounts BillingSection for THIS account in its own Suspense boundary (skeleton fallback), directly after the client-access panel (mutation: drop the mount → FAILS; render it outside Suspense → one slow billing read holds all of Settings, FAILS)", async () => {
+    const el = await SettingsPage({ params: Promise.resolve({ accountId: "a1" }), searchParams: Promise.resolve({}) });
+    const all: ReactElement<Record<string, unknown>>[] = [];
+    const walk = (n: ReactNode) => {
+      if (Array.isArray(n)) { n.forEach((c) => walk(c as ReactNode)); return; }
+      if (!isValidElement(n)) return;
+      all.push(n as ReactElement<Record<string, unknown>>);
+      walk((n.props as { children?: ReactNode }).children);
+    };
+    walk(el);
+    const boundary = all.find((e) => e.type === Suspense && isValidElement(e.props.children)
+      && (e.props.children as ReactElement).type === BillingSection);
+    expect(boundary, "BillingSection inside <Suspense>").toBeTruthy();
+    expect(((boundary!.props.children as ReactElement).props as { accountId: string }).accountId).toBe("a1");
+    const fallback = boundary!.props.fallback;
+    expect(isValidElement(fallback) && fallback.type).toBe(BillingCardSkeleton);
+    const column = all.find((e) => Array.isArray(e.props.children) && (e.props.children as unknown[]).includes(boundary));
+    const siblings = (column!.props.children as unknown[]).filter((c) => isValidElement(c));
+    expect((siblings[siblings.indexOf(boundary!) - 1] as ReactElement).type).toBe(ClientAccessPanel);
   });
 });

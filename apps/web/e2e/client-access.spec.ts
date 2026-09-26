@@ -93,9 +93,12 @@ test("a client sees only their own account, and nothing when access is off", asy
   // the client's behalf. Its own page title, not "Activity" — that word
   // already names the account dashboard's Activity card, a different card
   // (cleanup item 2, same date).
+  // "Billing" is last in Overview, directly after "Website", client-only like
+  // Branding (M7a PR-3 Task 10, G20; nav-groups.test.ts pins its place). It
+  // shows before billing starts too: the page then says it isn't set up yet.
   const CLIENT_NAV = [
-    "Dashboard", "To do", "Website", "Contacts", "Opportunities", "Conversations", "Calls", "What went out", "Forms",
-    "Calendar", "Branding",
+    "Dashboard", "To do", "Website", "Billing", "Contacts", "Opportunities", "Conversations", "Calls", "What went out",
+    "Forms", "Calendar", "Branding",
   ];
   await expect(page.locator("aside nav a")).toHaveText(CLIENT_NAV);
   for (const label of CLIENT_NAV) {

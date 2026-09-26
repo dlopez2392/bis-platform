@@ -28,6 +28,10 @@ import { STATUS_TREATMENT } from "../accounts/[accountId]/calls/[callId]/proposa
 import { LogStatusPill } from "../accounts/[accountId]/activity/log-status-pill";
 import { CONFIRM_REPLY_TREATMENTS } from "../accounts/[accountId]/calendar/confirm-reply";
 import { DotPill } from "@/components/dot-pill";
+import { BillingBanner } from "@/components/billing-banner";
+import { ManageBillingButton } from "../accounts/[accountId]/billing/manage-billing-button";
+import { PAYMENT_PROCESSING } from "../accounts/[accountId]/billing/client-status";
+import { BILLING_STATUS_TREATMENTS, type BillingStatus } from "@/lib/billing/billing-view";
 import { SmsPreview } from "@/components/sms-preview";
 import { withOptOut } from "@/lib/sms/opt-out";
 import {
@@ -37,6 +41,7 @@ import { formatWhen } from "@/lib/booking/time";
 import { cn } from "@/lib/utils";
 import { RailStates } from "./rail-states";
 import { SettingsFieldCards } from "./settings-field-cards";
+import { BillingCardStates } from "./billing-card-states";
 import { PublicBrand } from "@/components/public-brand";
 import "@/styles/public-brand.css";
 import { EmbedSnippet } from "@/components/embed-snippet";
@@ -48,6 +53,14 @@ export const dynamic = "force-dynamic";
 /** All three of `STATUS_TREATMENT`'s own keys, in the order a reader meets
  *  them: still open, then the two decided outcomes. */
 const PROPOSAL_STATUSES: ProposalStatus[] = ["pending", "accepted", "dismissed"];
+
+/** The Manage billing specimen's action: it answers with the page's own
+ *  failure sentence and touches nothing (no read, no Stripe), so pressing it
+ *  here shows the button's error state without a real portal. */
+async function styleguidePortalFailed(): Promise<{ ok: false; error: string }> {
+  "use server";
+  return { ok: false, error: m["billing.page.portalFailed"] };
+}
 
 /**
  * The working index DESIGN.md's definition-of-done refers to ("`/styleguide`
@@ -528,6 +541,48 @@ export default async function StyleguidePage() {
               <UsageStaleBanner count={3} />
             </div>
           </div>
+        </Section>
+
+        <Section title="Billing status and banner" file="lib/billing/billing-view.ts · components/billing-banner.tsx">
+          {/* DESIGN rule 3: every billing state is a dot AND a word, in token
+              classes only (billing-view.test.ts pins them). The banner is the
+              payment-failed one, in both audiences' words. */}
+          <div className="w-full space-y-5">
+            <div className="flex flex-wrap gap-2">
+              {(Object.keys(BILLING_STATUS_TREATMENTS) as BillingStatus[]).map((s) => (
+                <DotPill key={s} label={BILLING_STATUS_TREATMENTS[s].label} chip={BILLING_STATUS_TREATMENTS[s].chip}
+                  dot={BILLING_STATUS_TREATMENTS[s].dot} data-status={s} />
+              ))}
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">The client, on every page of their account</p>
+              <BillingBanner audience="client" accountId="styleguide" />
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">The agency, inside that account</p>
+              <BillingBanner audience="agency" accountId="styleguide" />
+            </div>
+          </div>
+        </Section>
+
+        <Section title="Manage billing" file="…/accounts/[accountId]/billing/manage-billing-button.tsx">
+          {/* The client Billing page's one primary (DESIGN rule 8). Pressing it
+              here shows its failure state: the sentence, said inline. Beside
+              it, the one status word only the Billing PAGE uses: a first
+              payment still going through, in the client's words to whoever
+              opens the page (the agency's Settings card says Payment failed). */}
+          <div className="w-full space-y-4">
+            <DotPill {...PAYMENT_PROCESSING} data-status="payment_processing" />
+            <ManageBillingButton open={styleguidePortalFailed} help={m["billing.page.manageHelp"]} />
+          </div>
+        </Section>
+
+        <Section title="Billing card (agency, on account Settings)" file="accounts/[accountId]/settings/billing-card.tsx">
+          {/* Every status word, the no-plans and no-Stripe lines, and the
+              loading and error states. One primary per card (rule 8): Send
+              billing link, where it applies. Built by the real
+              billingCardView from fixture rows (billing-card-states.tsx). */}
+          <BillingCardStates />
         </Section>
 
         <Section title="Empty state" file="components/empty-state.tsx">
