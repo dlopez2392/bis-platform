@@ -1,62 +1,212 @@
 # BIS CRM: what we have, and what we build next
 
-**Written** 2026-09-26. **Verified against the code** at `e38ed7f`, the working branch that includes `main`'s #146.
+**Written** 2026-09-26. **Verified against the code** at `e38ed7f`, the working branch that
+includes `main`'s #146.
 
-**What this is.** A plan for the BIS CRM: what the product does today, what it should do next, in what order, and why. It is the companion to `docs/research/2026-09-25-crm-feature-research.md` ("the study"), not a copy of it. The study sets the direction and the foundation items; this document adds the verified inventory of today, 199 detailed features, a capacity-checked roadmap, the design work underneath, and the decisions the plan needs.
+**What this is.** A plan for the BIS CRM: what the product does today, what it should do next, in
+what order, and why. It is the companion to `docs/research/2026-09-25-crm-feature-research.md` ("the
+study"), not a copy of it. The study sets the direction and the foundation items; this document adds
+the verified inventory of today, 199 detailed features, a capacity-checked roadmap, the design work
+underneath, and the decisions the plan needs.
 
 **How it was made.**
-- Twelve subsystem inventories were written from the code, and each was checked by an adversarial second reader who tried to prove it wrong.
-- Ten independent product lenses (owner workflow, AI, bilingual and border, the end customer, trust, growth, design, industry packs, information architecture, agentic discovery) produced 230 proposals, merged into 192 canonical features, F-001 to F-192. A final pass against the study added seven more, F-193 to F-199.
+- Twelve subsystem inventories were written from the code, and each was checked by an adversarial
+  second reader who tried to prove it wrong.
+- Ten independent product lenses (owner workflow, AI, bilingual and border, the end customer, trust,
+  growth, design, industry packs, information architecture, agentic discovery) produced 230
+  proposals, merged into 192 canonical features, F-001 to F-192. A final pass against the study
+  added seven more, F-193 to F-199.
 - Four judges scored every canonical feature for value, feasibility, differentiation and risk.
 - The roadmap placed every feature and every study item exactly once, against a stated capacity.
 
-**Status.** Nothing here is decided. Every placement, estimate and recommendation is a proposal until the owner rules on the decisions in section 9. Security work is described generically; its specifics are tracked outside this public repository.
+**Status.** Nothing here is decided. Every placement, estimate and recommendation is a proposal
+until the owner rules on the decisions in section 9. Security work is described generically; its
+specifics are tracked outside this public repository.
 
 **Binding constraints** (section 3 gives the reasons):
 1. Adult day care is out (owner decision, 2026-09-25), and home health with it.
-2. HIPAA verticals (medical, dental, therapy, chiropractic, medical spa, Medicare and group health) stay behind study decision 5. Nothing here reopens it.
-3. M7a billing is two or three fixed plans. Every plan has the CRM; higher plans add Sofía, the voice receptionist, and the web chat. Priced per business, never per seat.
-4. DESIGN.md is the UI contract. Where a feature needs it changed, the amendment is flagged for the owner's dated decision, never improvised.
-5. A person approves every AI write; call proposals are the mechanism. Any narrowing is an owner decision.
+2. HIPAA verticals (medical, dental, therapy, chiropractic, medical spa, Medicare and group health)
+   stay behind study decision 5. Nothing here reopens it.
+3. M7a billing is two or three fixed plans. Every plan has the CRM; higher plans add Sofía, the
+   voice receptionist, and the web chat. Priced per business, never per seat.
+4. DESIGN.md is the UI contract. Where a feature needs it changed, the amendment is flagged for the
+   owner's dated decision, never improvised.
+5. A person approves every AI write; call proposals are the mechanism. Any narrowing is an owner
+   decision.
 6. English and Spanish everywhere a customer or an owner reads.
 
-**Conventions.** Effort is in conventional engineer-weeks (ew) for one engineer: S up to 2, M 2–6, L 6–12, XL over 12. Horizons: **now** is Q4 2026 to about March 2027; **next** is H1 2027; **later** is H2 2027 to 2028; **future** is 2029–2030. S-01 to S-62 are the rows of the study's §11.1 table (Appendix B). An asterisk on an effort figure marks this plan's revision of the canonical figure.
+**Conventions.** Effort is in conventional engineer-weeks (ew) for one engineer: S up to 2, M 2–6, L
+6–12, XL over 12. Horizons: **now** is Q4 2026 to about March 2027; **next** is H1 2027; **later**
+is H2 2027 to 2028; **future** is 2029–2030. S-01 to S-62 are the rows of the study's §11.1 table
+(Appendix B). An asterisk on an effort figure marks this plan's revision of the canonical figure.
 
 **Glossary.** Terms the plan uses before it explains them:
-- **M0 to M7, M7a, M1b, M1c, M1d, M2, M4b:** the platform spec's milestones and sub-milestones. M7a is client billing (plans, usage and Stripe); its "PR-3" and "PR-4" are its checkout and non-payment steps. "M7 #2" is self-serve sign-up and "M7 #3" other agencies reselling BIS.
-- **Phase 4 to 7, engine B, automations spec B:** earlier design and automation specs in `docs/superpowers/specs/`, named as the specs name themselves. "B21" is decision 21 as the automation engine B spec records it.
-- **A2P 10DLC:** the US carriers' registration a business must clear before it can text customers from a local number.
-- **Opinion 680 and 705:** the State Bar of Texas ethics opinions on cloud storage and on AI in law practice; "the 680/705 sheet" answers them for law firms.
-- **SB 140, SB 2610, TRAIGA:** Texas's 2025 laws on text-message solicitation, on a cybersecurity safe harbour for small businesses, and on AI governance.
-- **Riders:** six small now-horizon add-ons, capped at 13.5 ew, that make Sofía and the CRM-only plan sellable this winter (§4.1). **Tenant vetting:** checking at onboarding that a new client business is one BIS may serve (S-53, F-173). **TDPSA:** the Texas Data Privacy and Security Act.
-- **BAA:** a HIPAA business associate agreement. **CASA:** Google's paid security assessment for restricted scopes.
-- **UM/PIP:** uninsured-motorist and personal-injury-protection coverage, whose rejection Texas requires in writing. **TSBPE, TDLR:** the Texas plumbing board and the Texas licensing department.
-- **FLAG-M, FLAG-L, FLAG-H:** each judge's own marks, as the score files define them. In the **V** column (the value judge): FLAG-H strains a binding constraint or a recorded owner decision, or builds something large nobody asked for; FLAG-M rests on a Valley pattern nobody has checked, or revisits a recorded decision; FLAG-L is valuable only once a dependency lands, or only for one regulated segment. In the **D** column (the differentiation judge): FLAG-H is a strategic risk that needs a decision before any work; FLAG-M is a real edge that is perishable, rests on an unchecked Valley pattern, or depends on an outside gate or a revisited decision; FLAG-L is an edge in one pack or segment only. In the **F** column, low, med and HIGH are the feasibility judge's marks for a hidden prerequisite or an understated estimate. The skeptic's severities are blocker, major and minor.
-- **MCP (Model Context Protocol):** the open standard that lets AI assistants such as ChatGPT or Claude read and act on a product's data, under that product's rules.
-- **The owner:** BIS's owner, who rules on the decisions in §9. The person who runs a client business is "the business owner" wherever the two could be confused; "owners" in the plural are always client business owners.
-- **HubSpot #N, monday #N:** item N in the study's list of every HubSpot and monday idea (study §7.2); HubSpot #22, for example, is NPS surveys.
-- **Rule numbers:** "rule N" alone means DESIGN.md's rule N; this plan's own rules are always written "§3.2 rule N".
+- **M0 to M7, M7a, M1b, M1c, M1d, M2, M4b:** the platform spec's milestones and sub-milestones. M7a
+  is client billing (plans, usage and Stripe); its "PR-3" and "PR-4" are its checkout and
+  non-payment steps. "M7 #2" is self-serve sign-up and "M7 #3" other agencies reselling BIS.
+- **Phase 4 to 7, engine B, automations spec B:** earlier design and automation specs
+  in `docs/superpowers/specs/`, named as the specs name themselves. "B21" is decision 21 as the
+  automation engine B spec records it.
+- **A2P 10DLC:** the US carriers' registration a business must clear before it can text customers
+  from a local number.
+- **Opinion 680 and 705:** the State Bar of Texas ethics opinions on cloud storage and on AI in law
+  practice; "the 680/705 sheet" answers them for law firms.
+- **SB 140, SB 2610, TRAIGA:** Texas's 2025 laws on text-message solicitation, on a cybersecurity
+  safe harbour for small businesses, and on AI governance.
+- **Riders:** six small now-horizon add-ons, capped at 13.5 ew, that make Sofía and the CRM-only
+  plan sellable this winter (§4.1). **Tenant vetting:** checking at onboarding that a new client
+  business is one BIS may serve (S-53, F-173). **TDPSA:** the Texas Data Privacy and Security Act.
+- **BAA:** a HIPAA business associate agreement. **CASA:** Google's paid security assessment for
+  restricted scopes.
+- **UM/PIP:** uninsured-motorist and personal-injury-protection coverage, whose rejection Texas
+  requires in writing. **TSBPE, TDLR:** the Texas plumbing board and the Texas licensing department.
+- **FLAG-M, FLAG-L, FLAG-H:** each judge's own marks, as the score files define them. In the **V**
+  column (the value judge): FLAG-H strains a binding constraint or a recorded owner decision, or
+  builds something large nobody asked for; FLAG-M rests on a Valley pattern nobody has checked, or
+  revisits a recorded decision; FLAG-L is valuable only once a dependency lands, or only for one
+  regulated segment. In the **D** column (the differentiation judge): FLAG-H is a strategic risk
+  that needs a decision before any work; FLAG-M is a real edge that is perishable, rests on an
+  unchecked Valley pattern, or depends on an outside gate or a revisited decision; FLAG-L is an edge
+  in one pack or segment only. In the **F** column, low, med and HIGH are the feasibility judge's
+  marks for a hidden prerequisite or an understated estimate. The skeptic's severities are blocker,
+  major and minor.
+- **MCP (Model Context Protocol):** the open standard that lets AI assistants such as ChatGPT or
+  Claude read and act on a product's data, under that product's rules.
+- **The owner:** BIS's owner, who rules on the decisions in §9. The person who runs a client
+  business is "the business owner" wherever the two could be confused; "owners" in the plural are
+  always client business owners.
+- **HubSpot #N, monday #N:** item N in the study's list of every HubSpot and monday idea (study
+  §7.2); HubSpot #22, for example, is NPS surveys.
+- **Rule numbers:** "rule N" alone means DESIGN.md's rule N; this plan's own rules are always
+  written "§3.2 rule N".
 
 ---
 
 ## 1. The answer
 
-**Your asks, answered.** Small businesses such as plumbers, restaurants and child day care: item 12. Every customer, with all their documents and information, in one place: item 4. AI with the CRM: items 4 and 7. Microsoft 365 and Google, their calendars first: item 6. Learning from HubSpot and monday: item 13.
+**Your asks, answered.** Small businesses such as plumbers, restaurants and child day care: item 12.
+Every customer, with all their documents and information, in one place: item 4. AI with the CRM:
+items 4 and 7. Microsoft 365 and Google, their calendars first: item 6. Learning from HubSpot and
+monday: item 13.
 
-1. **BIS today is a working, contact-centred CRM with a bilingual AI receptionist that has answered real client calls.** It has contacts, one pipeline, forms, one booking calendar, email, an inbox, automations and weekly reports, behind server-enforced quality gates. It lacks what the owner asked for (documents on the record, calendar sync) and what the constraints and the study require (staff roles, a Spanish dashboard, a phone layout). No company can text yet, and nothing is charged. *See §2.*
-2. **The critical path is the consent chain, not a feature.** The consent ledger, and one send gate that every message must pass, go live by **1 December 2026**, when texting should switch on; no account texts before then, whatever the carrier says. The revocation rule in force since April 2025 applies from the first text. An FCC rewrite, due for a vote on 30 September, could change a revocation's scope from November or December 2026. 31 January 2027, when today's delayed "revoke all" provision takes effect, is an outer limit, not the target. **In the week of 28 September 2026:** start A2P registration for BIS's own line and the one live client, and check the Spanish and missing English stop words on the Telnyx profile. **In October:** engage counsel for five readings (the texting rules, the AI disclosure, the law-firm sheet, the insurance intake and the marketing emails' opt-out). *See §4.2.*
-3. **Fix what exists before adding screens.** The inventories and this plan's reviews found 105 distinct defects (about 14–23 ew), and a hardening sprint of 56 known items (about 8–11 ew); monitoring and a tested restore are not yet in place, and the operational floor adds them now. With the legal chain, an operational floor (alerts and a tested restore) and the first Spanish comparison (a published test of Spanish receptionists, F-194), this is about 31–46 ew, and none of it is optional. *See §2.3 and §4.2.*
-4. **Centralise every customer and their documents in the study's first release (by about March 2027, its last items possibly in April), re-costed at about 54–73 ew, not 27–36.** Staff and roles, the client record, the record page, the consent ledger, bilingual messages, the document vault, inbound email and one review tray for AI suggestions. It answers "centralise each customer with all their documents", and begins the answer to "use AI with the CRM": first a bilingual summary on every record and call suggestions that wait in one tray; then document intake (S-19) in H1 2027, and drafting, translation (S-16, F-025) and Ask BIS (S-18, F-095) in H2 2027–2028, with an MCP connection that lets the owner's own AI assistant read the CRM and propose changes (S-33) (proposal). *See §4.3, §4.8's AI row and §7.1.*
-5. **Sell Sofía first, in parallel.** Guardrail modules, price-list grounding and tenant vetting (checking that each new client business is one BIS may serve) let BIS sell the receptionist to insurance agencies and event venues at once, and to law firms in H1 2027, once the Opinion 680/705 sheet and the law module exist. Six small add-ons (riders), capped at 13.5 ew, make Sofía and the CRM-only plan sellable this winter: a card for every call, texting without Sofía, Spanish at every edge of a call, "manage my appointment", a usable phone width and visible lead sources. *See §4.3.*
-6. **Google and Microsoft: Outlook first, then Google, then everything else.** Outlook leads because Microsoft's publisher verification is free and takes days, while Google's calendar scopes need a review. Sign-in and verification come now. In April 2027 a private feed puts every BIS booking on the business owner's own calendar, Apple's included (within about 15 minutes to an hour on Apple devices, as the device's fetch setting allows; hours behind on Google and Outlook; proposal, F-048 part 2). Also in next, that calendar becomes two-way: Outlook for Microsoft 365 clients, Google once its review passes. Per-staff calendars, send-as-me, file pickers and contacts sync follow in H2 2027–2028; full inbox sync only if customers ask. *See §7.*
-7. **Keep the AI honest.** Every new AI write lands in one review tray, with its evidence and an undo. Sofía and the web chat already write some records live; until the owner rules, Sofía's filling of blank fields becomes a proposal. Whether an act that callers or visitors ask for and confirm counts as an "AI write" is the owner's decision 19; the plan recommends the narrow reading, meant to cover only their own booking or record, as the identity checks (F-116) establish it. *See §3 and §9.*
-8. **Do not build what nobody asked for.** Eighteen features are dropped, among them outbound AI callbacks, payment by consumer agents and a generic lens framework; the design pass also rejects a native app now, a notification bell and a monday-style layout editor. The rule builder stays deferred; four fixed trigger primitives replace it (proposal, decision 30). *See §4.7 and §6.7.*
-9. **The biggest bets are the Spanish dashboard and phone shell, industry packs, a measured Spanish receptionist, and being found by AI assistants.** The Spanish dashboard and the phone shell come in H1 2027, because Spanish on the owner's own screens is what national tools lack and four of six local rivals already claim Spanish, and because owners run the business from a truck or a counter. Industry packs follow in order, home services first, because a trade's own words, documents and rules are what a generic CRM cannot give. The receptionist's Spanish quality is published and measured (F-194, F-130), because a claim of Spanish is cheap and a measured one is not. Being found and booked by AI assistants starts with F-157 now, the rest as the traffic appears, because assistants already phone local businesses for their users (§5.13). A published promise of a local bilingual person behind the product (F-195) is a smaller bet, in later's tail. *See §5.*
-10. **The capacity holds, just: at five a week on the low bounds, at six on the high.** At 5–6 conventional ew a week, now holds about 112–154 ew against 130–156, and the plan through 2028 about 525–720 ew against 585–702. That is five to six times what one engineer produces working conventionally (about 52 ew a year, the study's unit); at that conventional pace the whole plan would take 13 to 18 years. It rests on the pace this repository has shown since July (about 5.5–8 ew a week, costed by us), re-measured monthly; at three to four a week the owner re-scopes the plan, or adds capacity to one named track, rather than re-ordering it. At five a week on the high bounds, through 2028 runs about 135 ew over, roughly half a year, and the same choice applies rather than later's named tail. A written cut order spares the legal chain, the hardening sprint and the first release's eight study items. *See §4.1 and §4.8.*
-11. **Validate before building on a guess.** The RGV Wedding & Quince Expo on 27 September 2026 starts testing how event vendors take inquiries, holds, cash and payments from padrinos (hypotheses H1 to H4, §10); discovery calls in October and November finish those and test the rest. The value judge flagged 26 features (FLAG-M) that rest on an unchecked Valley pattern or revisit a recorded decision; none is built beyond its cheapest part until its hypothesis or decision is answered. *See §10.*
-12. **Plumbers and the other trades come first; restaurants and child day care follow once they confirm the need (proposal).** Study decision 8 and today's Sofía point to home services, and the October and November calls with trades test it: trades get today's Sofía, with her guardrails, the call card and the booking fixes now, her home-services module in H1 2027 and the pack in H2 2027–2028. Insurance agencies and event venues buy Sofía first; law firms follow in H1 2027, once the 680/705 sheet and the law module exist. Restaurants meet Sofía at the front desk in H2 2027–2028 if they want it (hypothesis H10), answering hours and large parties rather than taking orders, with catering in 2029–2030. Child day care gets a Spanish front office in 2028 once centres confirm it (hypothesis H9), beside the centre's own system. Until a sector's never-say lines ship, its businesses may buy the CRM but not Sofía or the web chat; tax preparers wait for the 2028 season (§5.14). Adult day care and home health stay out; HIPAA verticals stay on hold. *See §4.8's owner's-asks table and §5.14.*
-13. **Much of the first release is HubSpot's and monday's lessons, and BIS goes further where both are weak.** The study decided each of their roughly 50 ideas (study §7.2). The first release carries HubSpot's three-column record and unified timeline, private files with expiry reminders, an address that files forwarded email to a record, monday's one-click AI summary, household grouping and its recency cue (a last-contact column and a "no contact in 30 days" filter); merge with history, the change log and document intake follow in next. Saved views, and quotes that are accepted and paid on one page, come later, and a two-question check-in replaces HubSpot's NPS surveys. BIS goes further where both are weak (study §7.3): Spanish end to end rather than a translated interface, sensitive fields behind roles at small-business prices, properties and equipment on the record, and one price per business. It refuses layout editors, record tabs, owner-built custom objects, anything that needs a CRM administrator, and per-seat pricing: adding a technician should not change the price until the shop outgrows its plan. An MCP server, as both offer, and importers from both come later; the importers are built after BIS's own HubSpot and monday accounts are compared with this plan (study §14). *See §4.3, §4.8, §6.1 and §7.3.*
-14. **Seventeen new owner decisions (19 to 35) join the study's eighteen.** Rule on study decisions 1, 2, 6, 14, 15 and 16–18, and on this plan's 19, 20, 21, 25, 27 and 28, decision 33's first group, decision 34's three "needed now" bullets and the first sitting of 35, in October 2026, before the first release starts; on 23, 24 and 35's second sitting in January 2027, before next starts; and on the rest as their features start. *See §9.*
+1. **BIS today is a working, contact-centred CRM with a bilingual AI receptionist that has answered
+   real client calls.** It has contacts, one pipeline, forms, one booking calendar, email, an inbox,
+   automations and weekly reports, behind server-enforced quality gates. It lacks what the owner
+   asked for (documents on the record, calendar sync) and what the constraints and the study require
+   (staff roles, a Spanish dashboard, a phone layout). No company can text yet, and nothing is
+   charged. *See §2.*
+2. **The critical path is the consent chain, not a feature.** The consent ledger, and one send gate
+   that every message must pass, go live by **1 December 2026**, when texting should switch on; no
+   account texts before then, whatever the carrier says. The revocation rule in force since April
+   2025 applies from the first text. An FCC rewrite, due for a vote on 30 September, could change a
+   revocation's scope from November or December 2026. 31 January 2027, when today's delayed "revoke
+   all" provision takes effect, is an outer limit, not the target. **In the week of 28 September
+   2026:** start A2P registration for BIS's own line and the one live client, and check the Spanish
+   and missing English stop words on the Telnyx profile. **In October:** engage counsel for five
+   readings (the texting rules, the AI disclosure, the law-firm sheet, the insurance intake and the
+   marketing emails' opt-out). *See §4.2.*
+3. **Fix what exists before adding screens.** The inventories and this plan's reviews found 105
+   distinct defects (about 14–23 ew), and a hardening sprint of 56 known items (about 8–11 ew);
+   monitoring and a tested restore are not yet in place, and the operational floor adds them now.
+   With the legal chain, an operational floor (alerts and a tested restore) and the first Spanish
+   comparison (a published test of Spanish receptionists, F-194), this is about 31–46 ew, and none
+   of it is optional. *See §2.3 and §4.2.*
+4. **Centralise every customer and their documents in the study's first release (by about March
+   2027, its last items possibly in April), re-costed at about 54–73 ew, not 27–36.** Staff and
+   roles, the client record, the record page, the consent ledger, bilingual messages, the document
+   vault, inbound email and one review tray for AI suggestions. It answers "centralise each customer
+   with all their documents", and begins the answer to "use AI with the CRM": first a bilingual
+   summary on every record and call suggestions that wait in one tray; then document intake (S-19)
+   in H1 2027, and drafting, translation (S-16, F-025) and Ask BIS (S-18, F-095) in H2 2027–2028,
+   with an MCP connection that lets the owner's own AI assistant read the CRM and propose changes
+   (S-33) (proposal). *See §4.3, §4.8's AI row and §7.1.*
+5. **Sell Sofía first, in parallel.** Guardrail modules, price-list grounding and tenant vetting
+   (checking that each new client business is one BIS may serve) let BIS sell the receptionist to
+   insurance agencies and event venues at once, and to law firms in H1 2027, once the Opinion
+   680/705 sheet and the law module exist. Six small add-ons (riders), capped at 13.5 ew, make Sofía
+   and the CRM-only plan sellable this winter: a card for every call, texting without Sofía, Spanish
+   at every edge of a call, "manage my appointment", a usable phone width and visible lead
+   sources. *See §4.3.*
+6. **Google and Microsoft: Outlook first, then Google, then everything else.** Outlook leads because
+   Microsoft's publisher verification is free and takes days, while Google's calendar scopes need a
+   review. Sign-in and verification come now. In April 2027 a private feed puts every BIS booking on
+   the business owner's own calendar, Apple's included (as often as every 15 minutes on an iPhone
+   set to fetch on an interval, but only while it charges on Wi-Fi when set to Automatic; hours
+   behind on Google and Outlook; proposal, F-048 part 2). Also in next, that calendar becomes
+   two-way: Outlook for Microsoft 365 clients, Google once its review passes. Per-staff calendars,
+   send-as-me, file pickers and contacts sync follow in H2 2027–2028; full inbox sync only if
+   customers ask. *See §7.*
+7. **Keep the AI honest.** Every new AI write lands in one review tray, with its evidence and an
+   undo. Sofía and the web chat already write some records live; until the owner rules, Sofía's
+   filling of blank fields becomes a proposal. Whether an act that callers or visitors ask for and
+   confirm counts as an "AI write" is the owner's decision 19; the plan recommends the narrow
+   reading, meant to cover only their own booking or record and a link or code texted to their own
+   number, as the identity checks (F-116) establish them. *See §3 and §9.*
+8. **Do not build what nobody asked for.** Eighteen features are dropped, among them outbound AI
+   callbacks, payment by consumer agents and a generic lens framework; the design pass also rejects
+   a native app now, a notification bell and a monday-style layout editor. The rule builder stays
+   deferred; four fixed trigger primitives replace it (proposal, decision 30). *See §4.7 and §6.7.*
+9. **The biggest bets are the Spanish dashboard and phone shell, industry packs, a measured Spanish
+   receptionist, and being found by AI assistants.** The Spanish dashboard and the phone shell come
+   in H1 2027, because Spanish on the owner's own screens is what national tools lack and four of
+   six local rivals already claim Spanish, and because owners run the business from a truck or a
+   counter. Industry packs follow in order, home services first, because a trade's own words,
+   documents and rules are what a generic CRM cannot give. The receptionist's Spanish quality is
+   published and measured (F-194, F-130), because a claim of Spanish is cheap and a measured one is
+   not. Being found and booked by AI assistants starts with F-157 now, the rest as the traffic
+   appears, because assistants already phone local businesses for their users (§5.13). A published
+   promise of a local bilingual person behind the product (F-195) is a smaller bet, in later's
+   tail. *See §5.*
+10. **The capacity holds, just: at five a week on the low bounds, and at six on the high once about
+    18 ew of later's work slides into 2029.** At 5–6 conventional ew a week, now holds about 112–154
+    ew against 130–156, and the plan through 2028 about 525–720 ew against 585–702. That is five to
+    six times what one engineer produces working conventionally (about 52 ew a year, the study's
+    unit); at that conventional pace the whole plan would take 13 to 18 years. It rests on the pace
+    this repository has shown since July (about 5.5–8 ew a week, costed by us), re-measured monthly;
+    at three to four a week the owner re-scopes the plan, or adds capacity to one named track,
+    rather than re-ordering it. At five a week on the high bounds, through 2028 runs about 135 ew
+    over, roughly half a year, far more than the 18.5–26 ew of later's work first in line for 2029;
+    the pace check then puts the same choice to the owner at its end-of-March 2027 read. A written
+    cut order spares the legal chain, the hardening sprint and the first release's eight study
+    items. *See §4.1 and §4.8.*
+11. **Validate before building on a guess.** The RGV Wedding & Quince Expo on 27 September 2026
+    starts testing how event vendors take inquiries, holds, cash and payments from padrinos
+    (hypotheses H1 to H4, §10); discovery calls in October and November finish those and test the
+    rest. The value judge flagged 26 features (FLAG-M) that rest on an unchecked Valley pattern or
+    revisit a recorded decision; none is built beyond its cheapest part until its hypothesis or
+    decision is answered. *See §10.*
+12. **Plumbers and the other trades come first; restaurants and child day care follow once they
+    confirm the need (proposal).** Study decision 8 and today's Sofía point to home services, and
+    the October and November calls with trades test it: trades get today's Sofía, with her
+    guardrails, the call card and the booking fixes now, her home-services module in H1 2027 and the
+    pack in H2 2027–2028. Insurance agencies and event venues buy Sofía first; law firms may buy the
+    CRM once the 680/705 sheet exists, and Sofía in H1 2027, with the law module. Restaurants meet
+    Sofía at the front desk in H2 2027–2028 if they want it (hypothesis H10), answering hours and
+    large parties rather than taking orders, with catering in 2029–2030. Child day care gets a
+    Spanish front office in 2028 once centres confirm it (hypothesis H9), beside the centre's own
+    system. Until their never-say lines ship, restaurants and child-care centres may buy the CRM but
+    not Sofía or the web chat; tax preparers wait for the 2028 season (§5.14). Adult day care and
+    home health stay out; HIPAA verticals stay on hold. *See §4.8's owner's-asks table and §5.14.*
+13. **Much of the first release is HubSpot's and monday's lessons, and BIS goes further where both
+    are weak.** The study decided each of their roughly 50 ideas (study §7.2). The first release
+    carries HubSpot's three-column record and unified timeline, private files with expiry reminders,
+    an address that files forwarded email to a record, monday's one-click AI summary, household
+    grouping and its recency cue (a last-contact column and a "no contact in 30 days" filter); merge
+    with history, the change log and document intake follow in next. Saved views, and quotes that
+    are accepted and paid on one page, come later, and a two-question check-in replaces HubSpot's
+    NPS surveys. BIS goes further where both are weak (study §7.3): Spanish end to end rather than a
+    translated interface, sensitive fields behind roles at small-business prices, properties and
+    equipment on the record, and one price per business. It refuses layout editors, record tabs,
+    owner-built custom objects, anything that needs a CRM administrator, and per-seat pricing:
+    adding a technician should not change the price until the shop outgrows its plan. An MCP server,
+    as both offer, and importers from both come later; the importers are built after BIS's own
+    HubSpot and monday accounts are compared with this plan (study §14). *See §4.3, §4.8, §6.1 and
+    §7.3.*
+14. **Seventeen new owner decisions (19 to 35) join the study's eighteen.** Rule on study decisions
+    1, 2, 6, 14, 15 and 16–18, and on this plan's 19, 20, 21, 25, 27 and 28, decision 33's first
+    group, decision 34's three "needed now" bullets and the first sitting of 35, in October 2026,
+    before the first release starts; on 23, 24 and 35's second sitting in January 2027, before next
+    starts; and on the rest as their features start. *See §9.*
 
 ---
 
@@ -64,29 +214,74 @@
 
 ### 2.1 The whole picture
 
-BIS is one agency platform that runs many client companies. Each company is a Clerk organisation linked to one Postgres account, and access is enforced in the app's guards, and every table has row-level security. A company gets a contact-centred CRM with one sales pipeline, a To do queue, forms and embeds, one bookable calendar with a branded public page, email through Resend, one inbox per company, eight fixed automation recipes on a 15-minute scheduler, a weekly report, website traffic for sites BIS hosts, and branding that reaches every customer surface. Sofía answers calls in English and Spanish over Telnyx and OpenAI's realtime voice model, books and moves appointments, and proposes next steps that a person accepts. A website chat assistant shares her persona. Most configuration is agency-operated. A client can edit its Branding, its booking settings on Calendar (turning the booking page on, hours, appointment length, buffer, notice, horizon, alert addresses, meeting type and the follow-up email's switch and wording) and its forms; Voice, Automations, quiet hours, Settings, Setup and the Checklist are agency-only. Every owner screen is English, and there is no phone layout.
+BIS is one agency platform that runs many client companies. Each company is a Clerk organisation
+linked to one Postgres account, and access is enforced in the app's guards, and every table has
+row-level security. A company gets a contact-centred CRM with one sales pipeline, a To do queue,
+forms and embeds, one bookable calendar with a branded public page, email through Resend, one inbox
+per company, eight fixed automation recipes on a 15-minute scheduler, a weekly report, website
+traffic for sites BIS hosts, and branding that reaches every customer surface. Sofía answers calls
+in English and Spanish over Telnyx and OpenAI's realtime voice model, books and moves appointments,
+and proposes next steps that a person accepts. A website chat assistant shares her persona. Most
+configuration is agency-operated. A client can edit its Branding, its booking settings on Calendar
+(turning the booking page on, hours, appointment length, buffer, notice, horizon, alert addresses,
+meeting type and the follow-up email's switch and wording) and its forms; Voice, Automations, quiet
+hours, Settings, Setup and the Checklist are agency-only. Every owner screen is English, and there
+is no phone layout.
 
 **Production facts** (read-only checks on 2026-09-26 unless dated):
-- **Four companies exist in production.** Three have client logins switched on. None is paused or archived. None has plan permissions set.
-- **Sofía has answered real client calls, for one real client.** The only real client on the platform is 956 Woodworks, a woodworking business live since 2026-09-16. On 2026-09-17 it took nine calls; eight were the same scam robocall, and the robocall hang-up shipped in response. The other three companies are BIS's own, Test Client One (the test account) and the seeded demo, a fictional HVAC company whose outbound sending is switched off.
-- **Email is live; texting is not.** Resend sends from production and its delivery webhook works. By the repository's record no company is carrier-registered (A2P 10DLC) and no text has been sent or received through BIS in production. A carrier API key has been on the production environment since 2026-09-16; the registration gate, not the key, holds texting back.
-- **Billing has never run.** Production holds 0 plans, 0 billed companies and 0 Stripe webhook events, and no Vercel environment holds a Stripe key (only CI's end-to-end job holds a test-mode key). Usage is recorded for every company. #146, merged after the inventory, marks a usage row that Stripe already holds as reported instead of retrying it on every tick.
-- **Who belongs to which company lives only in Clerk.** The `users` and `memberships` tables are empty, and the `assigned_to` columns are never read.
-- **Sign-in moved to a production Clerk instance on 2026-09-14.** Email-code and password sign-in work; Google sign-in has no production credentials. A live client's first sign-in failed on 2026-09-16, and automatic activation of a user's only company shipped in response.
-- **Dormant or unconfirmed:** video meetings (no Daily.co key), three of automation part B's four recipes (reactivation, referral ask and quote follow-up; the first two are the marketing emails), never set up on a live company as of 2026-09-23, the website assistant (off by default; no recorded use by a real client), and website traffic (live on one real site, BIS's own, since 2026-09-08).
-- **Monitoring and a tested restore are not yet in place.** The operational floor adds them now (§4.2).
-- **The quality gates are real.** A server-side ruleset on `main` requires green `verify` and `e2e`; the suites hold about 3,770 web unit test declarations, about 909 database test declarations and 116 Playwright tests. All 42 tables have row-level security enabled. Migrations are applied by hand, separately from the code deploy.
-- **Three binding constraints are strained today.** Sofía creates contacts, fills blank fields, and books, reschedules and cancels without a person approving, and the web chat files leads the same way (constraint 5). A plan can say whether it includes Sofía and the web chat, but nothing on the call or chat path reads that flag (constraint 3). The owner's own screens, and Clerk's sign-in widgets and emails, are English only (constraint 6; §3.1 row 6).
-- **The dashboard has no Spanish at all:** one English catalogue of 1,257 keys and `<html lang="en">`. Spanish reaches customers only on some public pages, emails and texts.
-- **The research behind this plan is not on `main`.** The study, its appendices, the pricing study, and with them the adult-day-care decision, exist only on the working branch.
+- **Four companies exist in production.** Three have client logins switched on. None is paused or
+  archived. None has plan permissions set.
+- **Sofía has answered real client calls, for one real client.** The only real client on the
+  platform is 956 Woodworks, a woodworking business live since 2026-09-16. On 2026-09-17 it took
+  nine calls; eight were the same scam robocall, and the robocall hang-up shipped in response. The
+  other three companies are BIS's own, Test Client One (the test account) and the seeded demo, a
+  fictional HVAC company whose outbound sending is switched off.
+- **Email is live; texting is not.** Resend sends from production and its delivery webhook works. By
+  the repository's record no company is carrier-registered (A2P 10DLC) and no text has been sent or
+  received through BIS in production. A carrier API key has been on the production environment since
+  2026-09-16; the registration gate, not the key, holds texting back.
+- **Billing has never run.** Production holds 0 plans, 0 billed companies and 0 Stripe webhook
+  events, and no Vercel environment holds a Stripe key (only CI's end-to-end job holds a test-mode
+  key). Usage is recorded for every company. #146, merged after the inventory, marks a usage row
+  that Stripe already holds as reported instead of retrying it on every tick.
+- **Who belongs to which company lives only in Clerk.** The `users` and `memberships` tables are
+  empty, and the `assigned_to` columns are never read.
+- **Sign-in moved to a production Clerk instance on 2026-09-14.** Email-code and password sign-in
+  work; Google sign-in has no production credentials. A live client's first sign-in failed on
+  2026-09-16, and automatic activation of a user's only company shipped in response.
+- **Dormant or unconfirmed:** video meetings (no Daily.co key), three of the four newest recipes
+  (reactivation, referral ask and quote follow-up; the first two are the marketing emails), never
+  set up on a live company as of 2026-09-23, the website assistant (off by default; no recorded use
+  by a real client), and website traffic (live on one real site, BIS's own, since 2026-09-08).
+- **Monitoring and a tested restore are not yet in place.** The operational floor adds them now
+  (§4.2).
+- **The quality gates are real.** A server-side ruleset on `main` requires green `verify` and `e2e`;
+  the suites hold about 3,770 web unit test declarations, about 909 database test declarations and
+  116 Playwright tests. All 42 tables have row-level security enabled. Migrations are applied by
+  hand, separately from the code deploy.
+- **Three binding constraints are strained today.** Sofía creates contacts, fills blank fields, and
+  books, reschedules and cancels without a person approving, and the web chat files leads the same
+  way (constraint 5). A plan can say whether it includes Sofía and the web chat, but nothing on the
+  call or chat path reads that flag (constraint 3). The owner's own screens, and Clerk's sign-in
+  widgets and emails, are English only (constraint 6; §3.1 row 6).
+- **The dashboard has no Spanish at all:** one English catalogue of 1,257 keys and `<html
+  lang="en">`. Spanish reaches customers only on some public pages, emails and texts.
+- **The research behind this plan is not on `main`.** The study, its appendices, the pricing study,
+  and with them the adult-day-care decision, exist only on the working branch.
 
 ### 2.2 The twelve subsystems
 
-Each subsystem below has a short description, the verified status table, the gaps an owner would feel most, and where it stands on Spanish. Its defects are gathered in §2.3. Statuses: **Live**; **Partial**; **Behind a flag** (built, switched off by default); **Built, dormant** (waits on an outside step); **Planned only**.
+Each subsystem below has a short description, the verified status table, the gaps an owner would
+feel most, and where it stands on Spanish. Its defects are gathered in §2.3.
+Statuses: **Live**; **Partial**; **Behind a flag** (built, switched off by default); **Built, dormant** (waits on an
+outside step); **Planned only**.
 
 #### 2.2.1 Accounts, sign-in, roles and billing
 
-There are exactly two roles: the agency admin, who sees every company, and a client user, who sees one. Every client user is invited as an admin, and client logins are a per-company switch the agency turns on. Client billing (M7a) is two of four steps in: plans, usage recording and a Stripe reporter are built, but nothing is charged.
+There are exactly two roles: the agency admin, who sees every company, and a client user, who sees
+one. Every client user is invited as an admin, and client logins are a per-company switch the agency
+turns on. Client billing (M7a) is two of four steps in: plans, usage recording and a Stripe reporter
+are built, but nothing is charged.
 
 | Capability | Status | Evidence |
 |---|---|---|
@@ -109,13 +304,21 @@ There are exactly two roles: the agency admin, who sees every company, and a cli
 | Plans switching Sofía and the web chat on or off | **Planned only** (the flag is stored on a plan; no call or chat path reads it) | `docs/superpowers/specs/2026-09-24-m7a-client-billing-design.md:39-40` |
 | Self-serve sign-up; other agencies reselling BIS | **Planned only** (M7 #2 and #3) | `docs/superpowers/specs/2026-09-24-m7a-client-billing-design.md:3-5` |
 
-**Gaps an owner would feel:** no narrower login for a technician or receptionist, so every invited person can export every contact; every hire and departure goes through the agency; at most five logins per company, the agency's included; no plan, invoice date, or usage measured against a plan's allowances (the "312 of 500 minutes" view); a time zone that cannot be changed after creation.
+**Gaps an owner would feel:** no narrower login for a technician or receptionist, so every invited
+person can export every contact; every hire and departure goes through the agency; at most five
+logins per company, the agency's included; no plan, invoice date, or usage measured against a plan's
+allowances (the "312 of 500 minutes" view); a time zone that cannot be changed after creation.
 
-**Bilingual today:** English only, including Clerk's sign-in screens and invitation emails; no language preference exists for a user or a company.
+**Bilingual today:** English only, including Clerk's sign-in screens and invitation emails; no
+language preference exists for a user or a company.
 
 #### 2.2.2 Contacts, pipeline and the To do queue
 
-A working, contact-centred CRM with one sales pipeline. Contacts have a server-paged list with a true total, a drawer with inline edits and undo, and a full record page with a timeline, tags, notes, tasks and custom fields. A To do queue gathers tasks, unread conversations and unclosed bookings in the company's own zone, and Sofía's call suggestions wait there for a person. Its weakness is breadth: no merge, filters, roles, documents, editable pipeline or change history.
+A working, contact-centred CRM with one sales pipeline. Contacts have a server-paged list with a
+true total, a drawer with inline edits and undo, and a full record page with a timeline, tags,
+notes, tasks and custom fields. A To do queue gathers tasks, unread conversations and unclosed
+bookings in the company's own zone, and Sofía's call suggestions wait there for a person. Its
+weakness is breadth: no merge, filters, roles, documents, editable pipeline or change history.
 
 | Capability | Status | Evidence |
 |---|---|---|
@@ -138,13 +341,22 @@ A working, contact-centred CRM with one sales pipeline. Contacts have a server-p
 | ⌘K palette: jump to pages and settings, live search of contacts, calls and conversations | See §2.2.9 | — |
 | Contact merge, saved views and filters | **Planned only** (deferred in the 2026-09-09 and 2026-09-11 specs) | `docs/superpowers/specs/2026-09-11-contact-dedupe-hardening-design.md:3-5` |
 
-**Gaps an owner would feel:** nowhere to keep a customer's documents, photos or files; duplicates flagged with nowhere to review or merge them; no filters, saved views or segments; "Garcia" does not find "García"; nobody can be assigned a lead, task or deal; a plumber and a day care get the same five-stage pipeline; a customer who asks to be deleted cannot be.
+**Gaps an owner would feel:** nowhere to keep a customer's documents, photos or files; duplicates
+flagged with nowhere to review or merge them; no filters, saved views or segments; "Garcia" does not
+find "García"; nobody can be assigned a lead, task or deal; a plumber and a day care get the same
+five-stage pipeline; a customer who asks to be deleted cannot be.
 
-**Bilingual today:** English only; contacts carry no language although calls and form submissions already record one; search is accent-sensitive; import auto-matches only English headers (Spanish ones must be matched by hand); the default stage names are stored as English data.
+**Bilingual today:** English only; contacts carry no language although calls and form submissions
+already record one; search is accent-sensitive; import auto-matches only English headers (Spanish
+ones must be matched by hand); the default stage names are stored as English data.
 
 #### 2.2.3 Messaging: inbox, email and texts
 
-Every exchange with a person lands in one thread per contact. Email is live, with branded mail, delivery status and an agency-set sending domain. Texting is fully built but switched off: one gate refuses every text until a company's carrier registration is recorded as approved and it has a live number, and no company has cleared it. There is no inbound email, so customer replies never return to the thread.
+Every exchange with a person lands in one thread per contact. Email is live, with branded mail,
+delivery status and an agency-set sending domain. Texting is fully built but switched off: one gate
+refuses every text until a company's carrier registration is recorded as approved and it has a live
+number, and no company has cleared it. There is no inbound email, so customer replies never return
+to the thread.
 
 | Capability | Status | Evidence |
 |---|---|---|
@@ -167,13 +379,23 @@ Every exchange with a person lands in one thread per contact. Email is live, wit
 | Inbound email, so replies return to the thread | **Planned only** (the study's "email that comes back") | `docs/research/2026-09-25-crm-feature-research.md:478-499` |
 | Per-contact consent and revocation record for texts | **Planned only** (the study marks it blocking before 31 January 2027) | `docs/research/2026-09-25-crm-feature-research.md:170` |
 
-**Gaps an owner would feel:** a customer's email reply never comes back into BIS; no company can text, and getting there takes a manual carrier registration of 3 to 7 business days plus fees; the inbox cannot send a text; automatic reminders and receipts do not appear in the thread; nobody can be assigned a thread, and unread is shared; a texted photo arrives as an empty bubble.
+**Gaps an owner would feel:** a customer's email reply never comes back into BIS; no company can
+text, and getting there takes a manual carrier registration of 3 to 7 business days plus fees; the
+inbox cannot send a text; automatic reminders and receipts do not appear in the thread; nobody can
+be assigned a thread, and unread is shared; a texted photo arrives as an empty bubble.
 
-**Bilingual today:** the dashboard is English; customers get Spanish only on the lead receipt, the web booking confirmation, the missed-call text-back, the form instant reply and the opt-out line, and nobody has verified that Spanish stop words (PARAR, DETENER and the rest) are registered on the live carrier profile; the code's own comment says they work only once registered.
+**Bilingual today:** the dashboard is English; customers get Spanish only on the lead receipt, the
+web booking confirmation, the missed-call text-back, the form instant reply and the opt-out line,
+and nobody has verified that Spanish stop words (PARAR, DETENER and the rest) are registered on the
+live carrier profile; the code's own comment says they work only once registered.
 
 #### 2.2.4 Forms and lead intake
 
-Forms are shipped and hardened. An operator builds a form from a fixed set of fields and shares it as a hosted link or a self-sizing embed that carries ad attribution. Every submission is written first and cannot be lost; it then creates or matches a contact, lands in Conversations, emails a lead alert and emails the submitter a receipt in English or Spanish. Two more doors feed the same pipeline, the BIS website's assistant and the web chat, and both depend on switches.
+Forms are shipped and hardened. An operator builds a form from a fixed set of fields and shares it
+as a hosted link or a self-sizing embed that carries ad attribution. Every submission is written
+first and cannot be lost; it then creates or matches a contact, lands in Conversations, emails a
+lead alert and emails the submitter a receipt in English or Spanish. Two more doors feed the same
+pipeline, the BIS website's assistant and the web chat, and both depend on switches.
 
 | Capability | Status | Evidence |
 |---|---|---|
@@ -195,13 +417,22 @@ Forms are shipped and hardened. An operator builds a form from a fixed set of fi
 | File upload, signature, conditional logic, multi-step | **Planned only** (study proposals) | `docs/research/2026-09-25-crm-feature-research.md:314-319` |
 | One form in two languages (Spanish twins for labels, help and success text) | **Planned only** (study proposal) | `docs/research/2026-09-25-crm-feature-research.md:356-357` |
 
-**Gaps an owner would feel:** a bilingual business needs two forms and two embeds; no address, photo, file, signature or multi-step fields, so a landscaper cannot collect a job address and a day care cannot take an enrolment packet; web-form leads reach the owner by email only; submissions cannot be searched, exported or deleted; the owner cannot see which ad or page produced a lead.
+**Gaps an owner would feel:** a bilingual business needs two forms and two embeds; no address,
+photo, file, signature or multi-step fields, so a landscaper cannot collect a job address and a day
+care cannot take an enrolment packet; web-form leads reach the owner by email only; submissions
+cannot be searched, exported or deleted; the owner cannot see which ad or page produced a lead.
 
-**Bilingual today:** buttons, errors, the thank-you text, the receipt email and the instant text are English and Spanish; the operator's own labels, consent and success text are one language per form; the lead alert, the dashboard and the error and not-found pages are English.
+**Bilingual today:** buttons, errors, the thank-you text, the receipt email and the instant text are
+English and Spanish; the operator's own labels, consent and success text are one language per form;
+the lead alert, the dashboard and the error and not-found pages are English.
 
 #### 2.2.5 Booking and calendar
 
-Each company has exactly one bookable calendar with one set of weekly hours, one appointment length, a buffer, a minimum notice and a horizon. A pure availability engine works in the company's zone and handles daylight-saving changes, and the database itself stops two bookings overlapping. Customers book on a branded page in English or Spanish, or by phone with Sofía. Staff calendars, services, holidays and Google or Outlook sync are not built.
+Each company has exactly one bookable calendar with one set of weekly hours, one appointment length,
+a buffer, a minimum notice and a horizon. A pure availability engine works in the company's zone and
+handles daylight-saving changes, and the database itself stops two bookings overlapping. Customers
+book on a branded page in English or Spanish, or by phone with Sofía. Staff calendars, services,
+holidays and Google or Outlook sync are not built.
 
 | Capability | Status | Evidence |
 |---|---|---|
@@ -210,7 +441,7 @@ Each company has exactly one bookable calendar with one set of weekly hours, one
 | Double-booking refused by the database | **Live** | `packages/db/supabase/migrations/0016_booking.sql:60-64` |
 | Branded public booking page in English or Spanish | **Behind a flag** (a per-company switch, off by default, that the agency or the client turns on) | `apps/web/src/app/b/[publicId]/page.tsx:95-159` |
 | Step indicator on the booking page | **Partial** (the markup ships; its styling never landed) | `apps/web/src/app/b/[publicId]/booking-page.tsx:340-355` |
-| Embed on the client's website | **Behind a flag** (the same per-company switch as the page; while it is off, the embed shows a not-found page) | `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/embed-snippet.tsx:12-29`; `apps/web/src/app/b/[publicId]/page.tsx:103-107` |
+| Embed on the client's website | **Behind a flag** (the same per-company switch as the page; while it is off, the embed shows a not-found page) | `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/embed-snippet.tsx:12-29`; `apps/web/src/app/b/[publicId]/page.tsx:103-108` |
 | Booking becomes a lead (contact, thread message, staff alert email) | **Live** | `apps/web/src/app/b/[publicId]/actions.ts:290-431` |
 | Confirmation email with a cancel link | **Live** | `apps/web/src/lib/email/templates/booking.ts:126-167` |
 | Customer cancels by link | **Partial** (no cancellation email to the customer; no way back to rebook) | `apps/web/src/app/b/[publicId]/cancel/[token]/actions.ts:111-201` |
@@ -224,13 +455,24 @@ Each company has exactly one bookable calendar with one set of weekly hours, one
 | Google or Outlook calendar sync; add-to-calendar file | **Planned only** (out of scope in the 2026-08-21 booking spec; proposed in the study) | `docs/superpowers/specs/2026-08-21-booking-design.md:263-270` |
 | Meeting transcripts and AI notes | **Planned only** (blocked on a product decision) | `docs/superpowers/specs/2026-09-15-meeting-notes-design.md:4` |
 
-**Gaps an owner would feel:** nobody can put a walk-in or a phoned-in job on the calendar from the dashboard; a customer cannot reschedule on the web; no closures, holidays or lunch breaks, so Sofía keeps offering those times; one appointment at a time, so three crews still take one job per slot; with no Google or Outlook sync, the owner's own calendar and BIS can double-book; the contact record shows no appointments.
+**Gaps an owner would feel:** nobody can put a walk-in or a phoned-in job on the calendar from the
+dashboard; a customer cannot reschedule on the web; no closures, holidays or lunch breaks, so Sofía
+keeps offering those times; one appointment at a time, so three crews still take one job per slot;
+with no Google or Outlook sync, the owner's own calendar and BIS can double-book; the contact record
+shows no appointments.
 
-**Bilingual today:** the public page, the cancel page and the web confirmation email are English and Spanish; the reminder, the follow-up, the reschedule email and every confirmation Sofía sends by phone are English only, because no language is stored on a booking.
+**Bilingual today:** the public page, the cancel page and the web confirmation email are English and
+Spanish; the reminder, the follow-up, the reschedule email and every confirmation Sofía sends by
+phone are English only, because no language is stored on a booking.
 
 #### 2.2.6 Sofía, the phone receptionist
 
-Sofía answers a company's calls with OpenAI's realtime voice model, bridged over SIP from Telnyx, in English and Spanish, as the business's brand. She checks availability, books, reschedules and cancels, captures leads, takes messages and transfers to one number. At hangup, one pass classifies the call, writes a summary led by a fact line, files the contact and thread, emails staff, meters minutes and proposes up to three next steps that a person must accept. Cost, silence, robocall and daily caps guard spending. The owner cannot change what she says.
+Sofía answers a company's calls with OpenAI's realtime voice model, bridged over SIP from Telnyx, in
+English and Spanish, as the business's brand. She checks availability, books, reschedules and
+cancels, captures leads, takes messages and transfers to one number. At hangup, one pass classifies
+the call, writes a summary led by a fact line, files the contact and thread, emails staff, meters
+minutes and proposes up to three next steps that a person must accept. Cost, silence, robocall and
+daily caps guard spending. The owner cannot change what she says.
 
 | Capability | Status | Evidence |
 |---|---|---|
@@ -252,13 +494,23 @@ Sofía answers a company's calls with OpenAI's realtime voice model, bridged ove
 | "Talk to Sofía" web demo on the BIS website | **Behind a flag** (environment-gated, single company, no tools; leaves no call row, transcript or lead, only one row per session for its cap; production state not visible) | `apps/web/src/app/api/voice/web/session/route.ts:55-247` |
 | Call audio recording; outbound calling | **Planned only** (deferred in the 2026-08-24 V1 spec) | `docs/superpowers/specs/2026-08-24-voice-receptionist-core-design.md:221-225` |
 
-**Gaps an owner would feel:** every change to the greeting, facts, prices, text-back or transfer number goes through the agency; there is no call audio, only a transcript kept forever; what the caller wanted and the callback number are buried in the summary; Sofía's changes to appointments are not yet stamped on the record as hers (F-022); business hours reach Sofía only as free text.
+**Gaps an owner would feel:** every change to the greeting, facts, prices, text-back or transfer
+number goes through the agency; there is no call audio, only a transcript kept forever; what the
+caller wanted and the callback number are buried in the summary; Sofía's changes to appointments are
+not yet stamped on the record as hers (F-022); business hours reach Sofía only as free text.
 
-**Bilingual today:** callers are served in English or Spanish and Sofía switches with them, but the Spanish greeting, phone confirmation emails, the robocall guard and several fixed lines fall back to English, and every summary, alert and staff screen is English.
+**Bilingual today:** callers are served in English or Spanish and Sofía switches with them, but the
+Spanish greeting, phone confirmation emails, the robocall guard and several fixed lines fall back to
+English, and every summary, alert and staff screen is English.
 
 #### 2.2.7 The website assistant and website traffic
 
-**The website assistant** is a text chat that a client pastes onto its own website as one script line. Visitors get short answers from the business's own facts, in English or Spanish, from the same persona that answers the phone, and a visitor who leaves a name and a way to reach them is filed as a lead. The code is complete and machine-tested, but it is off for every company by default, only the agency can switch it on, and no real client conversation is recorded. It never texts, never books and never hands off to a person.
+**The website assistant** is a text chat that a client pastes onto its own website as one script
+line. Visitors get short answers from the business's own facts, in English or Spanish, from the same
+persona that answers the phone, and a visitor who leaves a name and a way to reach them is filed as
+a lead. The code is complete and machine-tested, but it is off for every company by default, only
+the agency can switch it on, and no real client conversation is recorded. It never texts, never
+books and never hands off to a person.
 
 | Capability | Status | Evidence |
 |---|---|---|
@@ -279,7 +531,10 @@ Sofía answers a company's calls with OpenAI's realtime voice model, bridged ove
 | Booking from the chat | **Planned only** (excluded from v1) | `docs/superpowers/specs/2026-09-20-web-concierge-design.md:591-593` |
 | Answers from documents larger than one facts block | **Planned only** (deferred knowledge base) | `docs/superpowers/specs/2026-09-20-web-concierge-design.md:587-590` |
 
-**Website traffic.** The agency links a client account to the Vercel project hosting the website BIS built. Each night after 03:00 in the account's zone a pass pulls Vercel Web Analytics, and the owner sees a Website page: a plain-words sentence, a busiest-day line, four tiles, a daily chart and panels for pages, sources and devices. It is live on one real site, BIS's own, since 2026-09-08.
+**Website traffic.** The agency links a client account to the Vercel project hosting the website BIS
+built. Each night after 03:00 in the account's zone a pass pulls Vercel Web Analytics, and the owner
+sees a Website page: a plain-words sentence, a busiest-day line, four tiles, a daily chart and
+panels for pages, sources and devices. It is live on one real site, BIS's own, since 2026-09-08.
 
 | Capability | Status | Evidence |
 |---|---|---|
@@ -299,13 +554,23 @@ Sofía answers a company's calls with OpenAI's realtime voice model, bridged ove
 | Google search performance (Search Console) | **Planned only** | `docs/superpowers/specs/2026-09-07-website-traffic-design.md:19-22` |
 | Prospect speed audit (PageSpeed) | **Planned only** | `docs/superpowers/specs/2026-09-07-website-traffic-design.md:23-24` |
 
-**Gaps an owner would feel:** the owner cannot read what a visitor asked or what the assistant said; chats never reach Conversations; a visitor who wants an appointment is told the team will set it up; only websites BIS built and hosts are measured, so a client on Wix, Squarespace or WordPress sees nothing; visitors are never connected to the leads they became.
+**Gaps an owner would feel:** the owner cannot read what a visitor asked or what the assistant said;
+chats never reach Conversations; a visitor who wants an appointment is told the team will set it up;
+only websites BIS built and hosts are measured, so a client on Wix, Squarespace or WordPress sees
+nothing; visitors are never connected to the leads they became.
 
-**Bilingual today:** the chat's buttons, greeting, replies and the visitor's receipt are bilingual, but Spanish is chosen only by an attribute the copied snippet never includes; the Website page, its sentence and its report line are English, with numbers and dates pinned to `en-US`.
+**Bilingual today:** the chat's buttons, greeting, replies and the visitor's receipt are bilingual,
+but Spanish is chosen only by an attribute the copied snippet never includes; the Website page, its
+sentence and its report line are English, with numbers and dates pinned to `en-US`.
 
 #### 2.2.8 Automations, "What went out" and the weekly report
 
-One cron runs every 15 minutes and works through 14 passes in a fixed order, each isolated from the others. The catalogue is eight fixed recipes, deliberately not a rule builder, plus an always-on email reminder and an optional follow-up email. Only the agency configures recipes, every recipe starts switched off, and a send due inside quiet hours is held, not dropped. "What went out" shows every automated send with a dot-and-word status and its reason, and every Monday a client with recipients gets four numbers with the changes stated in words.
+One cron runs every 15 minutes and works through 14 passes in a fixed order, each isolated from the
+others. The catalogue is eight fixed recipes, deliberately not a rule builder, plus an always-on
+email reminder and an optional follow-up email. Only the agency configures recipes, every recipe
+starts switched off, and a send due inside quiet hours is held, not dropped. "What went out" shows
+every automated send with a dot-and-word status and its reason, and every Monday a client with
+recipients gets four numbers with the changes stated in words.
 
 | Capability | Status | Evidence |
 |---|---|---|
@@ -339,13 +604,25 @@ One cron runs every 15 minutes and works through 14 passes in a fixed order, eac
 | The palette words "activity", "held" and "quiet hours" open the page | **Live** | `apps/web/src/lib/palette/registry.ts:55` |
 | Owner's plan and usage view ("312 of 500 minutes") | **Planned only** (M7a PR-3 Billing page) | `docs/superpowers/specs/2026-09-24-m7a-client-billing-design.md:94` |
 
-**Gaps an owner would feel:** no automated text reaches any customer, so the three recipes that most cut no-shows do nothing; every scheduled message is English; the owner cannot see or change Automations, preview an email or send a test; messages cannot use the customer's first name; automated emails do not appear on the contact's timeline; the report carries four numbers only, and only the agency can add a recipient.
+**Gaps an owner would feel:** no automated text reaches any customer, so the three recipes that most
+cut no-shows do nothing; every scheduled message is English; the owner cannot see or change
+Automations, preview an email or send a test; messages cannot use the customer's first name;
+automated emails do not appear on the contact's timeline; the report carries four numbers only, and
+only the agency can add a recipient.
 
-**Bilingual today:** only the dormant instant reply has Spanish bodies, so every scheduled recipe and reminder a customer can receive today is English (the lead receipt and the web booking confirmation, sent automatically but not recipes, have Spanish; §2.2.3); the page, its stored reasons and both report emails are English.
+**Bilingual today:** among the recipes, only the dormant instant reply has Spanish bodies, so every
+scheduled recipe and reminder a customer can receive today is English (the lead receipt and the web
+booking confirmation, sent automatically but not recipes, have Spanish; §2.2.3); the page, its
+stored reasons and both report emails are English.
 
 #### 2.2.9 Branding, the app shell and the design system
 
-Each account stores a customer-facing brand name, a logo, a colour and four closed-set theme choices. A pure function derives a full token set and lifts any colour until it meets WCAG AA. The result reaches the client's workspace, the four public pages and every email, and both the agency and the client can edit it; as of 2026-09-11 no logo had been uploaded. The signed-in shell is a grouped sidebar filtered by role and a topbar with the ⌘K palette, Sofía's presence line and a theme toggle; the Northern Lights tokens are pinned by parity tests.
+Each account stores a customer-facing brand name, a logo, a colour and four closed-set theme
+choices. A pure function derives a full token set and lifts any colour until it meets WCAG AA. The
+result reaches the client's workspace, the four public pages and every email, and both the agency
+and the client can edit it; as of 2026-09-11 no logo had been uploaded. The signed-in shell is a
+grouped sidebar filtered by role and a topbar with the ⌘K palette, Sofía's presence line and a theme
+toggle; the Northern Lights tokens are pinned by parity tests.
 
 | Capability | Status | Evidence |
 |---|---|---|
@@ -380,13 +657,23 @@ Each account stores a customer-facing brand name, a logo, a colour and four clos
 | Spanish dashboard and a language per user | **Planned only** (the catalogue is single-locale today, keyed so that Spanish is a translation file later) | `docs/superpowers/specs/2026-07-26-bis-platform-ui-overhaul-design.md:184-189` |
 | Screens that adapt to the client's plan | **Planned only** (M7a) | `docs/superpowers/specs/2026-09-24-m7a-client-billing-design.md:39-40` |
 
-**Gaps an owner would feel:** no phone layout, so a 236 px sidebar sits on a 375 px screen; every screen is English; the dashboard centres on the phone, so a CRM-only plan's headline number would always be 0; the 7-day KPI tiles never say which days they cover (§2.3); customers still see "Powered by BIS", and there are no custom domains; the agency's home shows no client that is quiet, failing or over its allowance.
+**Gaps an owner would feel:** no phone layout, so a 236 px sidebar sits on a 375 px screen; every
+screen is English; the dashboard centres on the phone, so a CRM-only plan's headline number would
+always be 0; the 7-day KPI tiles never say which days they cover (§2.3); customers still see
+"Powered by BIS", and there are no custom domains; the agency's home shows no client that is quiet,
+failing or over its allowance.
 
-**Bilingual today:** every signed-in screen, formatter and Clerk widget is English; public pages switch to Spanish through their own string modules, but public tab titles stay English, and only the lead receipt and booking confirmation emails have Spanish.
+**Bilingual today:** every signed-in screen, formatter and Clerk widget is English; public pages
+switch to Spanish through their own string modules, but public tab titles stay English, and only the
+lead receipt and booking confirmation emails have Spanish.
 
 #### 2.2.10 Setup, the activation checklist and blueprints
 
-Onboarding is something the agency does to a client. Add company creates a Clerk organisation and an account, can apply a blueprint, and lands on a ten-step setup wizard derived from live data. Beside it sit an eight-item activation checklist, whose A2P record gates every outbound text, and blueprints captured from an existing account. All of it is built around Sofía, so a client who buys only the CRM can never finish setup.
+Onboarding is something the agency does to a client. Add company creates a Clerk organisation and an
+account, can apply a blueprint, and lands on a ten-step setup wizard derived from live data. Beside
+it sit an eight-item activation checklist, whose A2P record gates every outbound text, and
+blueprints captured from an existing account. All of it is built around Sofía, so a client who buys
+only the CRM can never finish setup.
 
 | Capability | Status | Evidence |
 |---|---|---|
@@ -406,13 +693,20 @@ Onboarding is something the agency does to a client. Add company creates a Clerk
 | Industry packs and "describe your business" onboarding | **Planned only** (study proposal) | `docs/research/2026-09-25-crm-feature-research.md:106-115` |
 | Turn away out-of-scope trades at onboarding and hold HIPAA verticals | **Planned only** (study proposal) | `docs/research/2026-09-25-crm-feature-research.md:1132-1135` |
 
-**Gaps an owner would feel:** a CRM-only client can never finish setup, and texting needs a Sofía profile; nothing is captured at creation beyond a name and a time zone, so nothing can turn away an out-of-scope trade; the owner has no onboarding of their own; blueprints cannot be viewed, edited or re-applied; numbers are bought, and call forwarding confirmed, by hand outside BIS.
+**Gaps an owner would feel:** a CRM-only client can never finish setup, and texting needs a Sofía
+profile; nothing is captured at creation beyond a name and a time zone, so nothing can turn away an
+out-of-scope trade; the owner has no onboarding of their own; blueprints cannot be viewed, edited or
+re-applied; numbers are bought, and call forwarding confirmed, by hand outside BIS.
 
-**Bilingual today:** English only; no language is recorded for the account or its owner, and a bilingual voice profile counts as done with only the English greeting.
+**Bilingual today:** English only; no language is recorded for the account or its owner, and a
+bilingual voice profile counts as done with only the English greeting.
 
 #### 2.2.11 Platform quality and operations
 
-Every push runs `verify` (typecheck, lint, unit and database tests, build) and then `e2e` (Playwright on a production build) against a separate CI database, and a server-side ruleset makes both required for `main`. CI and local runs refuse to touch production. Merging to `main` deploys to Vercel. The gates are strong; operations are thin.
+Every push runs `verify` (typecheck, lint, unit and database tests, build) and then `e2e`
+(Playwright on a production build) against a separate CI database, and a server-side ruleset makes
+both required for `main`. CI and local runs refuse to touch production. Merging to `main` deploys to
+Vercel. The gates are strong; operations are thin.
 
 | Capability | Status | Evidence |
 |---|---|---|
@@ -434,13 +728,22 @@ Every push runs `verify` (typecheck, lint, unit and database tests, build) and t
 | Demo seeder and screenshot workflows | **Live** (manual; they write the production database) | `.github/workflows/seed-demo.yml:10-20` |
 | Stripe webhook sync | **Planned only** (M7a PR-3) | `docs/superpowers/specs/2026-09-24-m7a-client-billing-design.md:58` |
 
-**Gaps an owner would feel:** if reminders or the phone line break at 2 a.m., nobody at BIS is told and the client finds out first; there is no documented backup or restore; a business that leaves can take only its contacts; no automated test covers a phone call, a real text or a webhook; owners on iPhones get no Safari or phone-sized test run.
+**Gaps an owner would feel:** if reminders or the phone line break at 2 a.m., nobody at BIS is told
+and the client finds out first; there is no documented backup or restore; a business that leaves can
+take only its contacts; no automated test covers a phone call, a real text or a webhook; owners on
+iPhones get no Safari or phone-sized test run.
 
-**Bilingual today:** platform surfaces are English: the booking and form error pages are hard-coded English, a stale public link shows Next's unbranded English "404", and no end-to-end test renders a Spanish public page.
+**Bilingual today:** platform surfaces are English: the booking and form error pages are hard-coded
+English, a stale public link shows Next's unbranded English "404", and no end-to-end test renders a
+Spanish public page.
 
 #### 2.2.12 Roadmap, specs and decisions
 
-The repository holds 44 specs, 51 plans and 13 research documents. M0 has shipped; M1 and M2 are built, with texting dormant until A2P and the public booking page off per company until switched on; M3, M4, M5 and M7 are partial; M6 has not started. The platform spec's §8a tracker is stale on billing and on the web chat. The study lists 18 decisions only the owner can make; decisions 1 and 2 gate its first release, and decision 5 is half-made.
+The repository holds 44 specs, 51 plans and 13 research documents. M0 has shipped; M1 and M2 are
+built, with texting dormant until A2P and the public booking page off per company until switched on;
+M3, M4, M5 and M7 are partial; M6 has not started. The platform spec's §8a tracker is stale on
+billing and on the web chat. The study lists 18 decisions only the owner can make; decisions 1 and 2
+gate its first release, and decision 5 is half-made.
 
 | Capability | Status | Evidence |
 |---|---|---|
@@ -461,13 +764,23 @@ The repository holds 44 specs, 51 plans and 13 research documents. M0 has shippe
 | CRM study foundation: staff and roles, client record, consent ledger, bilingual messages, AI on the record, portal, MCP, industry packs | **Planned only** (147–207 ew in all; first release 27–36 ew) | `docs/research/2026-09-25-crm-feature-research.md:1206-1262` |
 | Roadmap tracker, platform spec §8a | **Partial** (stale on M7 and M4; counts 40 specs, not 44) | `docs/superpowers/specs/2026-07-25-bis-platform-design.md:156-188` |
 
-**Gaps an owner would feel:** the written tracker says things that are no longer true; nothing in the product yet answers the owner's first asks (every document in one place, Google or Outlook sync, taking a payment); DESIGN.md still describes a branded booking card that design phase 7 decided not to build; health details that callers mention reach the AI provider with no zero-retention agreement (study decision 6).
+**Gaps an owner would feel:** the written tracker says things that are no longer true; nothing in
+the product yet answers the owner's first asks (every document in one place, Google or Outlook sync,
+taking a payment); DESIGN.md still describes a branded booking card that design phase 7 decided not
+to build; health details that callers mention reach the AI provider with no zero-retention agreement
+(study decision 6).
 
-**Bilingual today:** a contact language field, bilingual twins for every message, the Spanish dashboard and AI output in the reader's language are all study proposals; four of six local competitors already claim Spanish.
+**Bilingual today:** a contact language field, bilingual twins for every message, the Spanish
+dashboard and AI output in the reader's language are all study proposals; four of six local
+competitors already claim Spanish.
 
 ### 2.3 Defects to fix now
 
-The inventories and this plan's reviews list **105 distinct defects** across fifteen areas. Each is listed once; where one fix reaches a second area, its row says so. Most take hours, not weeks; the plan allows half a day to a day for each, with tests ("½–1 d" below, 0.1–0.2 ew). Where a feature's slice carries the fix, the cell names it and the defect costs nothing more. Each group's heading gives its effort: its ½–1 d rows at that rate, plus the slices it names (§4.2).
+The inventories and this plan's reviews list **105 distinct defects** across fifteen areas. Each is
+listed once; where one fix reaches a second area, its row says so. Most take hours, not weeks; the
+plan allows half a day to a day for each, with tests ("½–1 d" below, 0.1–0.2 ew). Where a feature's
+slice carries the fix, the cell names it and the defect costs nothing more. Each group's heading
+gives its effort: its ½–1 d rows at that rate, plus the slices it names (§4.2).
 
 | Defect | Where | Effort |
 |---|---|---|
@@ -593,9 +906,13 @@ The inventories and this plan's reviews list **105 distinct defects** across fif
 | The platform spec promises do-not-disturb at the send chokepoint, but `contacts.dnd` is never read | `packages/db/supabase/migrations/0003_crm_core.sql:13` | S-05 (the send gate reads it) |
 | **Public front door: the shared layout for `lang`, tab titles and branded not-found pages (F-102), 0.5 ew; its defects are counted above** | | |
 
-Paths beginning `.../` sit under `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/`. The total is **105 defects, 13.9–23.3 ew**: 84 rows at ½–1 d (8.4–16.8 ew), the skeleton row (1–2 ew), and 20 rows that a feature carries, of which the six feature slices add 4.5 ew and the rest cost nothing more. If the F-048 rider is cut (§4.1), its two booking rows return at ½–1 d each.
+Paths beginning `.../` sit under `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/`. The
+total is **105 defects, 13.9–23.3 ew**: 84 rows at ½–1 d (8.4–16.8 ew), the skeleton row (1–2 ew),
+and 20 rows that a feature carries, of which the six feature slices add 4.5 ew and the rest cost
+nothing more. If the F-048 rider is cut (§4.1), its two booking rows return at ½–1 d each.
 
-**Security.** The hardening sprint closes 56 further known items (§4.2). They are tracked outside this public repository.
+**Security.** The hardening sprint closes 56 further known items (§4.2). They are tracked outside
+this public repository.
 
 ---
 
@@ -619,7 +936,7 @@ Paths beginning `.../` sit under `apps/web/src/app/(dashboard)/dashboard/account
 | 1 | **The legal chain is never traded.** It ships first and is live by 1 December 2026; no account texts before its send gate is live, whatever the carrier says | The revocation duty in force since April 2025 binds from the first text, and a missed revocation is a per-message liability; the FCC's revised order may change its scope within weeks of publication |
 | 2 | **No horizon inversion.** A part depends only on work in its own horizon or an earlier one. Where two features need each other, one slice owns the shared piece: F-084 owns the special-hours record; F-115's first part owns the schema changes F-022 builds on; F-019 owns the proposal kind registry; F-004 owns restriction, and "View as customer" moves to F-062; F-023's shared tool belt ships before S-18 and S-33 and needs neither; F-108 depends on F-081, not the reverse, because the router ships email and in-app first; F-015 owns the address component F-047's job address uses; S-08 signs documents from the vault and does not wait for F-113's renderer; F-051's `held` state does not wait for the events pack. The skeptic's four inversions are resolved: F-133's stop flag no longer needs F-081, and its other flags follow F-081 in later; F-107's first part uses today's labels, and the bottom-tab shell waits with F-089 in next; F-072's check-in does not need F-170; F-127 drops its F-134 dependency for the standard tier. Five more pairs are broken the same way: S-17 owns the gone-quiet promise and F-079 builds on it, not the reverse; F-052 needs only F-046's first part; F-172 needs only F-173's vetting slice; F-049's text legs need only F-065's first part; F-033's callback rows ship on today's To do queue, and F-077's inline Done builds on them (the canonical list has F-033 depend on F-077) | A plan whose early items wait on later ones is not a plan |
 | 3 | **No restricted field before roles.** Custody, gate codes, immigration or detention status, a child's date of birth, allergies and health details stay in transcript evidence until F-004 enforces restriction on the server | Every invitee is a company admin today, so a restricted field would be visible to everyone |
-| 4 | **A person approves every AI write.** Every new AI write goes through the review tray. Until decision 19 is dated, Sofía's filling of blank fields on an existing contact becomes a proposal of the existing `contact_field` kind; the acts a caller or visitor asks for and confirms (booking, rescheduling or cancelling their own appointment, leaving their own name and number) continue live and gain author stamps and undo; and no new live write path is added. A text sent during a call or chat carrying a link the customer asked for (F-199's reservation or ordering link; the pay link of F-058 and S-29) is such a path: until decision 19 is dated, the link is read out on a call or shown in the chat, never texted. So is a hold on sends placed by model-based detection, once chain step 5's detection uses a model after decision 6. The exception is meant to cover only the caller's or visitor's own booking or record (proposal; decision 19), and S-47's identity checks (F-116) are what establish "own". An AI write is a change to a record, or a message sent to a customer outside a live conversation the customer started (a text, an email, a follow-up). Two things are not: what Sofía says on a call, or what the web chat replies in a chat the visitor opened, which the guardrail modules (F-174) and the approved facts (F-037) bound instead; and a labelled summary or description shown only to the business's own people (F-028's descriptions, F-100's paragraph). If the owner reads either otherwise, decision 19 settles it | Binding constraint 5 |
+| 4 | **A person approves every AI write.** Every new AI write goes through the review tray. Until decision 19 is dated, Sofía's filling of blank fields on an existing contact becomes a proposal of the existing `contact_field` kind; the acts a caller or visitor asks for and confirms (booking, rescheduling or cancelling their own appointment, leaving their own name and number) continue live and gain author stamps and undo; and no new live write path is added. A text sent during a call or chat is such a path, whether it carries a link the customer asked for (F-199's reservation or ordering link; the pay link of F-058 and S-29) or the one-time code that proves who is calling (F-116's later part): until decision 19 is dated, the link is read out on a call or shown in the chat, never texted, and no code is sent. The exception is meant to cover only the caller's or visitor's own booking or record, and a link they ask for or a code, texted to their own number (proposal; decision 19); S-47's identity checks (F-116) are what establish "own". An AI write is a change to a record, or a message sent to a customer outside a live conversation the customer started (a text, an email, a follow-up). Three things are not: what Sofía says on a call, or what the web chat replies in a chat the visitor opened, which the guardrail modules (F-174) and the approved facts (F-037) bound instead; a labelled summary or description shown only to the business's own people (F-028's descriptions, F-100's paragraph); and a hold on sends placed by stop detection (chain step 5), by keyword or, after decision 6, by a model. The hold only stops messages and waits in To do, later the tray, for a person to confirm or undo it, and the study requires a revocation to stop sends the moment it is detected (study §9.6 item 9), so it runs live whichever option decision 19 takes (proposal). If the owner reads any of these otherwise, decision 19 settles it | Binding constraint 5 |
 | 5 | **The Monday report has one owner and a budget.** F-100 owns it: at most four headline numbers and two lines, from one metrics catalogue; the morning brief is an edition of the same engine. This waits for decision 24 and §6.5 row 13; until they are dated, DESIGN.md's four fixed numbers stand | About twelve features want a line of their own; an email that accretes stops being read |
 | 6 | **One interim per-person store** (`user_prefs`, created with staff and roles) for language and theme now, and text size, collapsed cards and "last seen" as their features and amendments arrive | Per-person settings scattered across Clerk metadata, cookies and feature tables drift |
 | 7 | **Effort bands follow the number.** Above 6 ew is L, whatever the label; a judge's higher re-estimate is used and marked | Labels that understate effort break the capacity check |
@@ -636,17 +953,61 @@ Paths beginning `.../` sit under `apps/web/src/app/(dashboard)/dashboard/account
 
 ## 4. The plan
 
-This section is order and effort; section 5 is what each feature is and why. Every placement is a proposal until the owner decides (§9). "Part" marks a split feature, shown once per horizon it touches. A "Depends on" cell names the owner decisions a feature waits for; every feature a §9 decision's *Blocks* line names, decision 33's second group and decision 34's later moves and pulled-forward items included, also waits on that decision, whether or not its cell repeats it (§3.2 rule 11). Likewise, every feature that §10's "What waits on the answer" column names waits on that hypothesis, whether or not its cell repeats it (§3.2 rule 12).
+This section is order and effort; section 5 is what each feature is and why. Every placement is a
+proposal until the owner decides (§9). "Part" marks a split feature, shown once per horizon it
+touches. A "Depends on" cell names the owner decisions a feature waits for; every feature a §9
+decision's *Blocks* line names, decision 33's second group and decision 34's later moves and
+pulled-forward items included, also waits on that decision, whether or not its cell repeats it (§3.2
+rule 11). Likewise, a feature that §10's "What waits on the answer" column names as waiting on a
+hypothesis waits on it beyond its cheapest part, whether or not its cell repeats it (§3.2 rule 12).
+§10 names the parts that ship first (F-003's relationship labels, F-018's source question inside
+F-157, and F-034's one-account trial, which is how H22 is answered), and a feature the column marks
+as shipping regardless (the calendar feed, F-048 part 2) does not wait.
 
 ### 4.1 Capacity
 
-**The study's own figures.** The whole study costs **147–207 ew**, "roughly three to four years for one engineer working conventionally, or a little over a year for three" (study §11.1). Its first release is **27–36 ew** (study §11.2). The canonical list adds about **660–910 ew** on top of that. The judges counted 79–80 features tagged "now", with stated efforts of about **251–334 ew**, against a first release of 27–36.
+**The study's own figures.** The whole study costs **147–207 ew**, "roughly three to four years for
+one engineer working conventionally, or a little over a year for three" (study §11.1). Its first
+release is **27–36 ew** (study §11.2). The canonical list adds about **660–910 ew** on top of that.
+The judges counted 79–80 features tagged "now", with stated efforts of about **251–334 ew**, against
+a first release of 27–36.
 
-**The observed pace.** The study itself warns against reading those units as calendar time: "This repository has not moved at conventional speed: its foundation, CRM spine, booking, voice receptionist, white-labelling, automation engine and web concierge shipped between 25 July and 22 September. Read calendar time off that observed pace, not these units" (study §11.1). Costing what shipped in the study's own units gives about **47–66 ew in eight and a half weeks**. That costing is ours, not the study's: the CRM spine 10–14, the voice receptionist 10–14, the automation engine and reports 6–8, forms, email and the inbox 6–8, the foundation 5–7, booking 4–6, white-labelling 3–5 and the web concierge 3–4. It comes to roughly **5.5–8 ew a week**.
+**The observed pace.** The study itself warns against reading those units as calendar time: "This
+repository has not moved at conventional speed: its foundation, CRM spine, booking, voice
+receptionist, white-labelling, automation engine and web concierge shipped between 25 July and 22
+September. Read calendar time off that observed pace, not these units" (study §11.1). Costing what
+shipped in the study's own units gives about **47–66 ew in eight and a half weeks**. That costing is
+ours, not the study's: the CRM spine 10–14, the voice receptionist 10–14, the automation engine and
+reports 6–8, forms, email and the inbox 6–8, the foundation 5–7, booking 4–6, white-labelling 3–5
+and the web concierge 3–4. It comes to roughly **5.5–8 ew a week**.
 
-**The assumption.** We plan at **5–6 conventional ew per calendar week**, around the low end of the observed range, for two reasons. The next six months are rework on live data rather than greenfield: roles under row-level security, a record model with a backfill, and one send gate across every send path. And the study's rule that "each item ships to a real client before the next item on that track starts" (study §11.3) adds waits that greenfield work did not have. Effort stays in conventional ew throughout; the pace only converts it to calendar time.
+**The assumption.** We plan at **5–6 conventional ew per calendar week**, around the low end of the
+observed range, for two reasons. The next six months are rework on live data rather than greenfield:
+roles under row-level security, a record model with a backfill, and one send gate across every send
+path. And the study's rule that "each item ships to a real client before the next item on that track
+starts" (study §11.3) adds waits that greenfield work did not have. Effort stays in conventional ew
+throughout; the pace only converts it to calendar time.
 
-**The pace check (proposal).** The pace is our own backcast of greenfield work, not a measurement of rework, so it is re-measured on the first working day of every month: the conventional ew of the items that shipped to a real client, against the weeks elapsed. If two consecutive months come in at three to four ew a week, re-ordering alone does not rescue the plan, and the owner chooses between two responses: re-scope it, or add capacity to one named track, such as a second engineer or a contracted track for money or the packs (proposal). At that pace now holds 78–104 ew. Keeping only the legal chain, the hardening sprint, the operational floor, the defects, the first release's eight items, M7a (S-62) and the first Spanish comparison (F-194) costs 88.4–123.8 ew, or 81.9–114.8 once the first release's last items (the vault's kit and inbound email, 6.5–9 ew) slide into next: still over. At three a week even the low bound is over (81.9 against 78), and at four a week the high bound is (114.8 against 104). Next, 39–52 ew at that pace, would then absorb those items, the riders (10–13.5 ew) and the rest of the parallel work (13.5–16.5 ew, Sofía's insurance and events modules included) on top of its own 54.5–74: 84.5–113 ew, about twice its capacity. So the first step moves that work, and the second is the owner's: which of next's own items slide to later (F-046 part 1, F-077 part 1 and F-175 part 1 first, then F-092 part 1, F-095 part 1 and F-107 part 2), and how much of later then slides into 2029.
+**The pace check (proposal).** The pace is our own backcast of greenfield work, not a measurement of
+rework, so it is re-measured on the first working day of every month: the conventional ew of the
+items that shipped to a real client, against the weeks elapsed. If two consecutive months come in at
+three to four ew a week, re-ordering alone does not rescue the plan, and the owner chooses between
+two responses: re-scope it, or add capacity to one named track, such as a second engineer or a
+contracted track for money or the packs (proposal). The same choice arises if the pace holds at five
+a week but the work tracks its high bounds, because through 2028 that runs about 135 ew over, far
+more than later's named tail covers (§4.5, §4.8): the end-of-March 2027 read below tests it, and if
+now's items have shipped at or near their high bounds, the owner makes the choice then (proposal).
+At three to four a week now holds 78–104 ew. Keeping only the legal chain, the hardening sprint, the
+operational floor, the defects, the first release's eight items, M7a (S-62) and the first Spanish
+comparison (F-194) costs 88.4–123.8 ew, or 81.9–114.8 once the first release's last items (the
+vault's kit and inbound email, 6.5–9 ew) slide into next: still over. At three a week even the low
+bound is over (81.9 against 78), and at four a week the high bound is (114.8 against 104). Next,
+39–52 ew at that pace, would then absorb those items, the riders (10–13.5 ew) and the rest of the
+parallel work (13.5–16.5 ew, Sofía's insurance and events modules included) on top of its
+own 54.5–74: 84.5–113 ew, about twice its capacity. So the first step moves that work, and the second is
+the owner's: which of next's own items slide to later (F-046 part 1, F-077 part 1 and F-175 part 1
+first, then F-092 part 1, F-095 part 1 and F-107 part 2), and how much of later then slides
+into 2029.
 
 | Horizon | Calendar | Weeks | Capacity at 5–6 ew a week | This plan (ew) |
 |---|---|---|---|---|
@@ -656,41 +1017,86 @@ This section is order and effort; section 5 is what each feature is and why. Eve
 | Future | 2029–2030 | 104 | 520–624 | 161.5–222.5 |
 
 **The rule for the now horizon.** Now holds four things, in this order, and nothing else.
-1. **The legal-date chain, and what it stands on:** the consent chain, the hardening sprint, an operational floor, the defects the inventories found, and the first Spanish comparison (F-194, 1 ew). It is not capped, because none of it is optional (31.4–45.8 ew).
+1. **The legal-date chain, and what it stands on:** the consent chain, the hardening sprint, an
+   operational floor, the defects the inventories found, and the first Spanish comparison (F-194, 1
+   ew). It is not capped, because none of it is optional (31.4–45.8 ew).
 2. **The study's first release**, at its re-costed size (53.5–73 ew, against the study's 27–36).
-3. **The parallel work the study names in its §11.2** (M7a's remaining steps; Sofía's guardrails, identity checks and price-list grounding; Google sign-in with its branding verified; Microsoft publisher verification), **plus two items this plan adds from the study's §11.3 step 1** (tenant vetting, and Microsoft sign-in beside Google's), and the Opinion 680/705 sheet that gates law sales (17–21.5 ew).
-4. **Riders, capped at 13.5 ew**, which is half the study's first-release low bound of 27 (10–13.5 ew). The cap exists so that riders never become a second first release, and half of the smallest first release still carries the six fixes that make Sofía and the CRM-only plan sellable this winter. Each rider must:
+3. **The parallel work the study names in its §11.2** (M7a's remaining steps; Sofía's guardrails,
+   identity checks and price-list grounding; Google sign-in with its branding verified; Microsoft
+   publisher verification), **plus two items this plan adds from the study's §11.3 step 1** (tenant
+   vetting, and Microsoft sign-in beside Google's), and the Opinion 680/705 sheet that gates law
+   sales (17–21.5 ew).
+4. **Riders, capped at 13.5 ew**, which is half the study's first-release low bound of 27 (10–13.5
+   ew). The cap exists so that riders never become a second first release, and half of the smallest
+   first release still carries the six fixes that make Sofía and the CRM-only plan sellable this
+   winter. Each rider must:
    - come from a feature the value judge scored 4 or 5 and the feasibility judge 4 or 5;
    - build on shipped code, or on earlier work inside the now horizon, never on a later horizon;
    - cost 3 ew or less.
 
-   Some riders therefore have named same-horizon prerequisites. The owner-facing riders (F-033's call card, F-141's texting settings and F-157's lead-source display) ship after F-013 part 1's runtime and ratchet gate, so that they ship in English and Spanish as §3.2 rule 13 requires; F-010 follows the Spanish-greeting defect; F-141 also follows the send gate (chain step 4). F-107, and F-048's public-page and customer-email parts, use today's bilingual public string modules or add no owner copy, so they can ship first; F-048's one owner-facing piece, the Calendar page's Cancel dialog, which composes the customer notice and then cancels at once with an undo (the notice sends when the undo closes, so rule 6's reversible branch applies), ships after F-013 part 1's runtime and gate, or with its English and Spanish strings written out. The same sequencing binds the parallel work's owner-facing pieces: F-084's switch and its owner grant ship after F-013 part 1's runtime and gate, or with their English and Spanish strings written out; M7a's client-facing pieces (S-62's client Billing page, its billing-link email and its payment-failed and paused banners) do the same; chain step 5's confirmation row, which must be live by 1 December, ships with its strings written out; and S-05, which goes first as chain step 4, sends its customer confirmation in both languages by design and writes out the strings of any consent line an owner reads.
+   Some riders therefore have named same-horizon prerequisites. The owner-facing riders (F-033's
+   call card, F-141's texting settings and F-157's lead-source display) ship after F-013 part 1's
+   runtime and ratchet gate, so that they ship in English and Spanish as §3.2 rule 13 requires;
+   F-010 follows the Spanish-greeting defect; F-141 also follows the send gate (chain step 4).
+   F-107, and F-048's public-page and customer-email parts, use today's bilingual public string
+   modules or add no owner copy, so they can ship first; F-048's one owner-facing piece, the
+   Calendar page's Cancel dialog, which composes the customer notice and then cancels at once with
+   an undo (the notice sends when the undo closes, so rule 6's reversible branch applies), ships
+   after F-013 part 1's runtime and gate, or with its English and Spanish strings written out. The
+   same sequencing binds the parallel work's owner-facing pieces: F-084's switch and its owner grant
+   ship after F-013 part 1's runtime and gate, or with their English and Spanish strings written
+   out; M7a's client-facing pieces (S-62's client Billing page, its billing-link email and its
+   payment-failed and paused banners) do the same, and the Stripe-hosted Checkout and Customer
+   Portal sessions S-62 opens are created with a Spanish locale for a client who reads Spanish;
+   chain step 5's confirmation row, which must be live by 1 December, ships with its strings written
+   out; and S-05, which goes first as chain step 4, sends its customer confirmation in both
+   languages by design and writes out the strings of any consent line an owner reads.
 
-**The check.** Now totals **111.9–153.8 ew** against a capacity of 130–156. At the low bounds it fits at five a week, with about 18 ew to spare. At the high bounds it needs six a week. If the pace is five and the high bounds hold, cut in this order:
-1. the riders, lowest priority first, with F-141 last: without it the CRM-only plan cannot text, so M7a should not sell that plan until F-141 ships;
-2. the first release's inbox increments (F-036 part 1 and F-068 part 1), which slide into the first weeks of next;
+**The check.** Now totals **111.9–153.8 ew** against a capacity of 130–156. At the low bounds it
+fits at five a week, with about 18 ew to spare. At the high bounds it needs six a week. If the pace
+is five and the high bounds hold, cut in this order:
+1. the riders, lowest priority first, with F-141 last: without it the CRM-only plan cannot text, so
+   M7a should not sell that plan until F-141 ships;
+2. the first release's inbox increments (F-036 part 1 and F-068 part 1), which slide into the first
+   weeks of next;
 3. Microsoft sign-in (half of S-28);
-4. the Opinion 680/705 sheet (F-124 part 1), which the law module in next needs first.
+4. the Opinion 680/705 sheet (F-124 part 1), which the law module in next, and CRM sales to law
+   firms, need first.
 
-That brings the horizon to about 137 ew, or about 139 ew if F-141 is kept: 7–9 ew over five a week. The rest is a pace question, not a cut: the first release's last items finish in the first weeks of next, with the cut items next needs (steps 2 to 4), and next's own two-step cut makes room for them (§4.4). Cut riders go to the head of later. F-014 is not cut, because F-013 part 1 cannot ship without it. The legal chain, the hardening sprint and the eight first-release study items are never cut.
+That brings the horizon to about 137 ew, or about 139 ew if F-141 is kept: 7–9 ew over five a week.
+The rest is a pace question, not a cut: the first release's last items finish in the first weeks of
+next, with the cut items next needs (steps 2 to 4), and next's own two-step cut makes room for them
+(§4.4). Cut riders go to the head of later. F-014 is not cut, because F-013 part 1 cannot ship
+without it. The legal chain, the hardening sprint and the eight first-release study items are never
+cut.
 
-**How we will know it is working (proposal).** The pace check measures effort; these outcomes sit beside it, read at the end of March 2027 and again at the end of 2027. The targets are the owner's to set after the October and November calls, not this plan's.
+**How we will know it is working (proposal).** The pace check measures effort; these outcomes sit
+beside it, read at the end of March 2027 and again at the end of 2027. The targets are the owner's
+to set after the October and November calls, not this plan's.
 - The send gate is live by 1 December 2026, and every account that clears A2P texts through it.
 - Each of the first release's eight study items has shipped to a real client (study §11.3's rule).
-- Accounts signed, and the split between the CRM-only plan and the plans with Sofía, once M7a charges.
-- In the review tray, the share of AI suggestions a person accepts, edits or discards, read from the tray itself.
-- The first Spanish comparison (F-194) is published before any sales material claims Spanish quality; from later, F-130's language-parity report tracks it.
+- Now's shipped items costed against their low and high bounds, which is the pace check's second
+  trigger (above).
+- Accounts signed, and the split between the CRM-only plan and the plans with Sofía, once M7a
+  charges.
+- In the review tray, the share of AI suggestions a person accepts, edits or discards, read from the
+  tray itself.
+- The first Spanish comparison (F-194) is published before any sales material claims Spanish
+  quality; from later, F-130's language-parity report tracks it.
 
 ### 4.2 Before the first release (this quarter)
 
-This quarter's work comes before the first release's screens: operational steps that cost owner and staff time, not engineering, except the first Spanish comparison (F-194), the one operational step costed in ew; the one chain with a legal date; a hardening sprint; an operational floor; and the defects the inventories found. Engineering subtotal: **31.4–45.8 ew**.
+This quarter's work comes before the first release's screens: operational steps that cost owner and
+staff time, not engineering, except the first Spanish comparison (F-194), the one operational step
+costed in ew; the one chain with a legal date; a hardening sprint; an operational floor; and the
+defects the inventories found. Engineering subtotal: **31.4–45.8 ew**.
 
 #### Operational steps
 
 | Step | When | Why |
 |---|---|---|
 | Register A2P 10DLC for BIS's own line and the one live client, 956 Woodworks (BIS first, as the runbook advises), by hand in the Telnyx portal | Start in the week of 28 September 2026 | No account is approved, so every text path is dormant: typed texts, reminders, the missed-call text-back, owner alerts and the alert-phone code. Each carrier round takes 3–7 business days, plus fees and evidence. **Texting stays switched off for every account until the send gate (chain step 4) is live**, whatever the carrier says |
-| Check the live Telnyx messaging profile and register the stop keywords Telnyx does not recognise by default: the study's six Spanish words (PARAR, DETENER, ALTO, CANCELAR, BAJA and NO MAS), NO MÁS as well, since customers type with and without accents, and the English REVOKE, OPT OUT and OPTOUT, which 47 CFR 64.1200(a)(10) names but Telnyx's defaults (STOP, STOPALL, STOP ALL, UNSUBSCRIBE, CANCEL, END and QUIT) leave out. Telnyx matches a keyword only when it is the whole message. Proposal: one Telnyx messaging profile per client business, created when its campaign is registered, starting with BIS's own line and 956 Woodworks, because Telnyx applies keyword replies and stop blocks per profile: on a shared profile one reply cannot name each business, and a stop sent to one business blocks every business on it. Start a staff routine for stop requests written in free text and, if either marketing email is switched on before inbound email (S-06) lands, for emailed replies asking to stop, which reach the client's own mailbox: the client forwards them and staff set "No marketing emails" within ten business days | The week of 28 September 2026 (study §11.2) | Nobody has yet confirmed what is registered: Telnyx recognises only seven English stop words by default, not every word the rule names, and the code's comment says the Spanish ones work only once registered. No system honours a stop request written in a sentence |
+| Check the live Telnyx messaging profile and register the stop keywords Telnyx does not recognise by default: the study's six Spanish words (PARAR, DETENER, ALTO, CANCELAR, BAJA and NO MAS), NO MÁS as well, since customers type with and without accents, and the English REVOKE and OPT OUT, which 47 CFR 64.1200(a)(10) names, with OPTOUT, its one-word spelling, all of which Telnyx's defaults (STOP, STOPALL, STOP ALL, UNSUBSCRIBE, CANCEL, END and QUIT) leave out. Telnyx matches a keyword only when it is the whole message. Proposal: one Telnyx messaging profile per client business, created when its campaign is registered, starting with BIS's own line and 956 Woodworks, because Telnyx applies keyword replies and stop blocks per profile: on a shared profile one reply cannot name each business, and a stop sent to one business blocks every business on it. Start a staff routine for stop requests written in free text and, if either marketing email is switched on before inbound email (S-06) lands, for emailed replies asking to stop, which reach the client's own mailbox: the client forwards them and staff set "No marketing emails" within ten business days | The week of 28 September 2026 (study §11.2) | Nobody has yet confirmed what is registered: Telnyx recognises only seven English stop words by default, not every word the rule names, and the code's comment says the Spanish ones work only once registered. No system honours a stop request written in a sentence |
 | Talk to vendors at the RGV Wedding & Quince Expo | 27 September 2026 | The events pack and six other features rest on hypotheses H1 to H4 (§10) |
 | Discovery calls: 5–10 event vendors, 3–5 child-care centres, a handful of restaurants, two insurance agencies, tax preparers, other trades (HVAC, plumbing, pest control), receptionist-first prospects, and the one live client | October and November 2026 | The questions in §10. The pricing study's risk 8 still stands: every demand signal so far comes from vendors, not buyers |
 | Put a Stripe key on the production environment | Before M7a step 3 | No deployment (production or preview) has one, so the Plans page cannot create a plan and nothing is charged |
@@ -707,39 +1113,79 @@ This quarter's work comes before the first release's screens: operational steps 
 #### The legal-date chain
 
 **What the law says, checked on 26 September 2026.**
-- The FCC's 2024 consent-revocation order has required callers and texters since 11 April 2025 to honour a revocation made by any reasonable means, within ten business days (study §13).
-- Its "revoke all" provision was delayed twice. The second delay, a Consumer and Governmental Affairs Bureau order of 6 January 2026 (DA 26-12), moved it from 11 April 2026 to **31 January 2027** ([FCC](https://www.fcc.gov/document/cgb-extends-effective-date-tcpas-consent-revocation-rule); [Burr & Forman](https://www.burr.com/telephone-consumer-protection-act/the-fcc-delays-effective-date-of-tcpa-revoke-all-rule-until-january-31-2027)). That is the date the canonical list uses.
-- **That date may no longer hold.** On 9 September 2026 the FCC released a draft Report and Order and Further Notice rewriting the rule, circulated for a vote at the Commission's 30 September 2026 open meeting; it has not been adopted ([Troutman Pepper Locke, 17 September 2026](https://www.troutman.com/insights/fcc-revises-tcpa-revocation-of-consent-rules-that-were-set-to-go-into-effect-in-january/); [Covington, 11 September 2026](https://www.insideglobaltech.com/2026/09/11/fcc-releases-draft-rules-and-proposals-on-tcpa-consent-revocation/); [Hall Render, 22 September 2026](https://hallrender.com/2026/09/22/tcpa-update-fcc-seeks-to-overhaul-consent-revocation-rules/)). One post headlines it as adopted ([Hunton](https://www.hunton.com/privacy-and-cybersecurity-law-blog/fcc-adopts-clarifying-changes-to-tcpa-revoke-all-rule-effective-30-days-after-publication)); the draft itself ([FCC-CIRC 2609-05 and its fact sheet](https://docs.fcc.gov/public/attachments/DOC-424844A1.pdf)) says it is circulated for tentative consideration at the 30 September open meeting, which contradicts that. As drafted, the order:
-  - lets a sender read a revocation made in response to an informational message as covering only that informational category; a revocation made in response to a marketing message still stops all marketing;
-  - lets a sender designate one or more of three methods (a key-press opt-out, standard text keywords defined by English words, or a website or number) as the exclusive means of revocation, if the method is disclosed clearly in every call or text;
-  - keeps the ten-business-day limit, though its Further Notice asks whether to shorten it (the joint letter it cites suggests seven business days);
-  - rewrites (a)(11) and (a)(12): the new (a)(12), on the confirmation text, drops "one-time", "the only additional message" and today's clause that lets a confirmation ask which categories to stop, and keeps the five-minute presumption;
+- The FCC's 2024 consent-revocation order has required callers and texters since 11 April 2025 to
+  honour a revocation made by any reasonable means, within ten business days (study §13).
+- Its "revoke all" provision was delayed twice. The second delay, a Consumer and Governmental
+  Affairs Bureau order of 6 January 2026 (DA 26-12), moved it from 11 April 2026 to **31 January
+  2027**
+  ([FCC](https://www.fcc.gov/document/cgb-extends-effective-date-tcpas-consent-revocation-rule);
+  [Burr &
+  Forman](https://www.burr.com/telephone-consumer-protection-act/the-fcc-delays-effective-date-of-tcpa-revoke-all-rule-until-january-31-2027)).
+  That is the date the canonical list uses.
+- **That date may no longer hold.** On 9 September 2026 the FCC released a draft Report and Order
+  and Further Notice rewriting the rule, circulated for a vote at the Commission's 30 September 2026
+  open meeting; it has not been adopted ([Troutman Pepper Locke, 17 September
+  2026](https://www.troutman.com/insights/fcc-revises-tcpa-revocation-of-consent-rules-that-were-set-to-go-into-effect-in-january/);
+  [Covington, 11 September
+  2026](https://www.insideglobaltech.com/2026/09/11/fcc-releases-draft-rules-and-proposals-on-tcpa-consent-revocation/);
+  [Hall Render, 22 September
+  2026](https://hallrender.com/2026/09/22/tcpa-update-fcc-seeks-to-overhaul-consent-revocation-rules/)).
+  One post headlines it as adopted
+  ([Hunton](https://www.hunton.com/privacy-and-cybersecurity-law-blog/fcc-adopts-clarifying-changes-to-tcpa-revoke-all-rule-effective-30-days-after-publication));
+  the draft itself ([FCC-CIRC 2609-05 and its fact
+  sheet](https://docs.fcc.gov/public/attachments/DOC-424844A1.pdf)) says it is circulated for
+  tentative consideration at the 30 September open meeting, which contradicts that. As drafted, the
+  order:
+  - lets a sender read a revocation made in response to an informational message as covering only
+    that informational category; a revocation made in response to a marketing message still stops
+    all marketing;
+  - lets a sender designate one or more of three methods (a key-press opt-out, standard text
+    keywords defined by English words, or a website or number) as the exclusive means of revocation,
+    if the method is disclosed clearly in every call or text;
+  - keeps the ten-business-day limit, though its Further Notice asks whether to shorten it (the
+    joint letter it cites suggests seven business days);
+  - rewrites (a)(11) and (a)(12): the new (a)(12), on the confirmation text, drops "one-time", "the
+    only additional message" and today's clause that lets a confirmation ask which categories to
+    stop, and keeps the five-minute presumption;
   - **takes effect 30 days after publication in the Federal Register, superseding 31 January 2027.**
-- If it is adopted on 30 September and published within weeks, the revised scope could apply from November or December 2026.
+- If it is adopted on 30 September and published within weeks, the revised scope could apply from
+  November or December 2026.
 
 **What that means for BIS.**
-- No BIS account texts today, and Sofía only answers calls. Exposure begins the day any account texts: the duty in force since April 2025 (any reasonable means, within ten business days) applies from that first text. If adopted, the revised order changes a revocation's scope and lets a sender designate an exclusive method; BIS keeps honouring any reasonable method by choice (decision 27), and the Further Notice may later shorten the ten days.
-- **The plan puts the chain live by 1 December 2026** because that is when texting should switch on: BIS's own and the live client's A2P registrations should clear by then, and the CRM-only plan needs texting to sell. It is a planning date, not one the law forces, and 31 January 2027 is an outer limit, not a target.
+- No BIS account texts today, and Sofía only answers calls. Exposure begins the day any account
+  texts: the duty in force since April 2025 (any reasonable means, within ten business days) applies
+  from that first text. If adopted, the revised order changes a revocation's scope and lets a sender
+  designate an exclusive method; BIS keeps honouring any reasonable method by choice (decision 27),
+  and the Further Notice may later shorten the ten days.
+- **The plan puts the chain live by 1 December 2026** because that is when texting should switch on:
+  BIS's own and the live client's A2P registrations should clear by then, and the CRM-only plan
+  needs texting to sell. It is a planning date, not one the law forces, and 31 January 2027 is an
+  outer limit, not a target.
 - No account texts before the chain is live.
-- Counsel reads the order after the 30 September vote, and the adopted text in the week it is published.
-- Because the order ties a revocation's reach to the message's category, the chain includes message classes (step 3).
+- Counsel reads the order after the 30 September vote, and the adopted text in the week it is
+  published.
+- Because the order ties a revocation's reach to the message's category, the chain includes message
+  classes (step 3).
 
 | Step | ID | What it does | Effort (ew) | Counted |
 |---|---|---|---|---|
-| 0 | — | Stop keywords on each business's Telnyx profile: the Spanish words and NO MÁS, and the English REVOKE, OPT OUT and OPTOUT that Telnyx's defaults leave out. Telnyx answers a registered keyword itself, before BIS sees the message, and its default reply is generic English. It picks a custom reply by the country of the sender's number, so a Spanish reply to a US number beside the English one is not a documented setting: confirm it with Telnyx before promising it, or send the Spanish confirmation from BIS (step 4). The interim staff routine for stop requests written in free text | configuration | Operational steps |
+| 0 | — | Stop keywords on each business's Telnyx profile: the Spanish words and NO MÁS, and the English REVOKE, OPT OUT and OPTOUT that Telnyx's defaults leave out. Telnyx answers a registered keyword itself, before BIS sees the message, and its default reply is generic English. It picks a custom reply by the country of the sender's number, so a Spanish reply to a US number beside the English one is not a documented setting: confirm it with Telnyx before promising it. In the interim Telnyx's own handling is enough, because no account texts before the send gate is live (step 4 settles who confirms from then on). The interim staff routine for stop requests written in free text | configuration | Operational steps |
 | 1 | F-009 | Mexican numbers stored right, with ambiguous 10-digit numbers marked so that Sofía asks. The ledger keys consent on the number, so it must be right first | 1.5–2 | here |
 | 2 | F-114 (two items) | Two sprint items are preconditions of the chain | in the sprint | Hardening sprint |
 | 3 | F-066 (part) | One table mapping message classes (transactional, informational, marketing) to consent purposes, footers and hours; Texas calling hours in the recipient's time (Business and Commerce Code §301.051; the federal 8 a.m. to 9 p.m. rule in 47 CFR 64.1200(c)(1)), subject to counsel on whether they reach texts | 1.5 | here |
-| 4 | S-05 and F-065 (part) | The ledger. One send gate that every send path must pass, pinned by a source-scan test. English and Spanish stop keywords (in English at least the seven words 47 CFR 64.1200(a)(10) names, plus STOPALL), with "CANCELAR" treated as a revocation, as "cancel" is under 47 CFR 64.1200(a)(10): one plain confirmation that carries no promotion and no rebooking offer (§64.1200(a)(12)), asking which messages to stop only where the contact holds consent for more than one category (today's (a)(12) allows that question; the draft drops it, so counsel confirms it after adoption). Treating any stop as stopping all marketing is BIS's conservative choice, not what the draft requires. Reconciliation with Telnyx, which reads the `autoresponse_type` field Telnyx sets on the inbound message webhook when it has handled a keyword, and settles who sends the one confirmation: Telnyx's configured reply answers a keyword and BIS sends nothing more for it, while BIS confirms only step 5's sentences, which Telnyx does not catch, so no customer gets two (proposal; asking which messages to stop needs BIS to replace Telnyx's reply on that profile and send one bilingual confirmation within five minutes itself). A backfill, and a ten-business-day clock kept as one setting, since the Further Notice may shorten it | 2–3 (S-05) and 2–2.5 | S-05 in the first release; the increment here |
-| 5 | F-133 (part) | Stop requests written in a sentence, in either language ("ya no me manden mensajes"), caught: sends held at once, and a row on today's To do queue asks a person to confirm or undo (F-019's tray takes it over as a proposal kind when it lands). The row's English and Spanish strings are written out, because F-013's runtime may not be live by 1 December. Keywords only until decision 6 | 1 | here |
+| 4 | S-05 and F-065 (part) | The ledger. One send gate that every send path must pass, pinned by a source-scan test. English and Spanish stop keywords (in English at least the seven words 47 CFR 64.1200(a)(10) names, plus STOPALL), with "CANCELAR" treated as a revocation, as "cancel" is under 47 CFR 64.1200(a)(10): one plain confirmation that carries no promotion and no rebooking offer (§64.1200(a)(12)), asking which messages to stop only where the contact holds consent for more than one category (today's (a)(12) allows that question; the draft drops it, so counsel confirms it after adoption). Treating any stop as stopping all marketing is BIS's conservative choice, not what the draft requires. Reconciliation with Telnyx, which reads the `autoresponse_type` field Telnyx sets on the inbound message webhook when it has handled a keyword, and settles who sends the one confirmation: Telnyx's configured reply answers a keyword and BIS sends nothing more for it, while BIS confirms only step 5's sentences, which Telnyx does not catch, so no customer gets two (proposal). Where BIS must word the confirmation itself, to ask which messages to stop or to confirm a Spanish keyword in Spanish when Telnyx cannot (step 0), those keywords come off Telnyx's opt-out operation on that profile and BIS handles them end to end: it records the stop, holds sends at the gate and sends the one confirmation within five minutes. The two are never mixed for one keyword, because once Telnyx has blocked a number it may block BIS's confirmation too (proposal; confirm with Telnyx before the split is configured). A backfill, and a ten-business-day clock kept as one setting, since the Further Notice may shorten it | 2–3 (S-05) and 2–2.5 | S-05 in the first release; the increment here |
+| 5 | F-133 (part) | Stop requests written in a sentence, in either language ("ya no me manden mensajes"), caught: sends held at once, and a row on today's To do queue asks a person to confirm or undo (F-019's tray takes it over as a proposal kind when it lands). The row's English and Spanish strings are written out, because F-013's runtime may not be live by 1 December. Keywords only until decision 6; the hold runs live either way, because it only stops messages (§3.2 rule 4) | 1 | here |
 | 6 | — | Counsel reads the adopted order against steps 3–5 in the week it is published | — | Operational steps |
 | | | **Chain total** | **8–10**, of which **6–7** here | |
 
-The dormant do-not-disturb column (`contacts.dnd`, never read or written today) is read by the new send gate rather than fixed separately.
+The dormant do-not-disturb column (`contacts.dnd`, never read or written today) is read by the new
+send gate rather than fixed separately.
 
 #### The hardening sprint
 
-The sprint closes **56 known items**. The inventories found them, and they are **tracked outside this public repository**. It runs first, before client sign-ins scale and before any security questionnaire is answered. Two of its items are preconditions of the legal chain.
+The sprint closes **56 known items**. The inventories found them, and they are **tracked outside
+this public repository**. It runs first, before client sign-ins scale and before any security
+questionnaire is answered. Two of its items are preconditions of the legal chain.
 
 | ID | What it covers | Effort (ew) |
 |---|---|---|
@@ -748,7 +1194,8 @@ The sprint closes **56 known items**. The inventories found them, and they are *
 
 #### The operational floor
 
-Monitoring and a tested restore are not yet in place (§2.1). The floor adds them, with no new vendor.
+Monitoring and a tested restore are not yet in place (§2.1). The floor adds them, with no new
+vendor.
 
 | ID | What it does now | Effort (ew) |
 |---|---|---|
@@ -756,11 +1203,16 @@ Monitoring and a tested restore are not yet in place (§2.1). The floor adds the
 | F-120 (part) | a restore drill and a per-account call forward | 1.5–2 |
 | | **Subtotal** | **2.5–3.5** |
 
-Today one deployment-wide operator override can already send every call on a number to a person, bypassing Sofía. F-120 makes that lever per account, so one client's phones can be taken back, or kept ringing when the model is down, without touching the others.
+Today one deployment-wide operator override can already send every call on a number to a person,
+bypassing Sofía. F-120 makes that lever per account, so one client's phones can be taken back, or
+kept ringing when the model is down, without touching the others.
 
 #### Defects to fix now
 
-§2.3 lists **105 distinct defects** across fifteen areas, and this table gives only the subtotals. Six features carry a slice that is really a defect fix, and those slices are counted here: F-001's timeline fixes, F-047's phase 1, F-055's "now" half, F-076's hero by plan, F-099's CRM-plan steps and F-102's shared public layout.
+§2.3 lists **105 distinct defects** across fifteen areas, and this table gives only the subtotals.
+Six features carry a slice that is really a defect fix, and those slices are counted here: F-001's
+timeline fixes, F-047's phase 1, F-055's "now" half, F-076's hero by plan, F-099's CRM-plan steps
+and F-102's shared public layout.
 
 Each row is costed as §2.3 sets out, plus the slices and the skeletons named.
 
@@ -784,11 +1236,14 @@ Each row is costed as §2.3 sets out, plus the slices and the skeletons named.
 | Public front door | — | (shared layout; its defects are counted in forms, the website assistant, branding and the app shell) | F-102: one shared public layout for `lang`, titles and branded not-found pages (0.5) | 0.5 |
 | **Total** | **105** | | | **13.9–23.3** |
 
-**Subtotal before the first release:** operational steps (F-194) 1 ew; the legal chain 6–7 ew; the hardening sprint 8–11 ew; the operational floor 2.5–3.5 ew; the defects 13.9–23.3 ew. That is **31.4–45.8 ew**.
+**Subtotal before the first release:** operational steps (F-194) 1 ew; the legal chain 6–7 ew; the
+hardening sprint 8–11 ew; the operational floor 2.5–3.5 ew; the defects 13.9–23.3 ew. That
+is **31.4–45.8 ew**.
 
 ### 4.3 The first release
 
-The study's eight items, in its words (study §11.2), with the canonical features that are their detailed design. A feature adds effort only where it adds scope, and the table shows how much.
+The study's eight items, in its words (study §11.2), with the canonical features that are their
+detailed design. A feature adds effort only where it adds scope, and the table shows how much.
 
 | Item | ID | Detailed design and what it adds | Study (ew) | Plan (ew) |
 |---|---|---|---|---|
@@ -837,18 +1292,43 @@ The study's eight items, in its words (study §11.2), with the canonical feature
 
 **Why 27–36 becomes 53.5–73.**
 - **Realism adds 5–7 ew:** staff and roles +3–5, the vault +2.
-- **Detail the items cannot ship without adds 21.5–30 ew:** the review tray and its kind registry (F-019); authorship on every write (F-022); the Spanish runtime and components that let new screens ship bilingual (F-013 part 1, F-014); the record kit and DESIGN.md's new sections (F-001 part 1, F-101); the vault's kit (F-005); one door for model calls (F-020); and smaller increments in the inbox and messages.
-- **Nothing the study left out of the first release is pulled into it.** The Spanish dashboard (S-10), history (S-04), merge (S-12) and entitlements (S-13) are next.
+- **Detail the items cannot ship without adds 21.5–30 ew:** the review tray and its kind registry
+  (F-019); authorship on every write (F-022); the Spanish runtime and components that let new
+  screens ship bilingual (F-013 part 1, F-014); the record kit and DESIGN.md's new sections (F-001
+  part 1, F-101); the vault's kit (F-005); one door for model calls (F-020); and smaller increments
+  in the inbox and messages.
+- **Nothing the study left out of the first release is pulled into it.** The Spanish dashboard
+  (S-10), history (S-04), merge (S-12) and entitlements (S-13) are next.
 
-**Staff logins and the member cap.** Clerk caps a company at five memberships, the agency's included (§2.2.1), so S-01 gives about four client logins per company. The M2 spec calls the cap "a plan limit, not a design choice. Raise when a client outgrows it", and raising it is a Clerk setting, not code. This plan recommends raising it for a company the day its first client needs a fifth login, as an operational step (§4.2), rather than holding a five-person shop to four logins until F-117's part in later prices logins into the plans (decision 33). If study decision 14 sets a larger entry-plan allowance, that part moves forward.
+**Staff logins and the member cap.** Clerk caps a company at five memberships, the agency's included
+(§2.2.1), so S-01 gives about four client logins per company. The M2 spec calls the cap "a plan
+limit, not a design choice. Raise when a client outgrows it", and raising it is a Clerk setting, not
+code. This plan recommends raising it for a company the day its first client needs a fifth login, as
+an operational step (§4.2), rather than holding a five-person shop to four logins until F-117's part
+in later prices logins into the plans (decision 33). If study decision 14 sets a larger entry-plan
+allowance, that part moves forward.
 
-**Decisions it needs.** Study decisions 1 and 2, as the study says. From this plan: 19, which reads the approval rule for item 8; 27, for the stop confirmation in item 4; 33's first group, for member sync and owner settings in item 1, the reminder timing in item 5 and editing before accept in item 8; and 35's first sitting, for DESIGN.md's new sections, the module contract, "at most one hero", bilingual in the definition of done and the operator's default theme. Suggestions read from email and texts use item 8's tray, but only once study decision 6's terms are in place, because they are a new path for health details to reach the model (§3.2 rule 14).
+**Decisions it needs.** Study decisions 1 and 2, as the study says. From this plan: 19, which reads
+the approval rule for item 8; 27, for the stop confirmation in item 4; 33's first group, for member
+sync and owner settings in item 1, the reminder timing in item 5 and editing before accept in item
+8; and 35's first sitting, for DESIGN.md's new sections, the module contract, "at most one hero",
+bilingual in the definition of done and the operator's default theme. Suggestions read from email
+and texts use item 8's tray, but only once study decision 6's terms are in place, because they are a
+new path for health details to reach the model (§3.2 rule 14).
 
-**Order within the release** (the plan's own, adapted from study §11.3): S-05 goes first, as chain step 4; S-01 and S-02 run in parallel; S-03 and the vault (S-07) follow, because they stand on the record model; inbound email (S-06), which the study lists with no prerequisites, follows them too, only because one engineer cannot run every track at once; S-09 and S-14/S-15 run throughout. Each item ships to a real client before the next item on its track starts.
+**Order within the release** (the plan's own, adapted from study §11.3): S-05 goes first, as chain
+step 4; S-01 and S-02 run in parallel; S-03 and the vault (S-07) follow, because they stand on the
+record model; inbound email (S-06), which the study lists with no prerequisites, follows them too,
+only because one engineer cannot run every track at once; S-09 and S-14/S-15 run throughout. Each
+item ships to a real client before the next item on its track starts.
 
 #### The study's parallel work
 
-These are the items the study's §11.2 runs in parallel, outside its 27–36 ew, re-costed, plus two items this plan adds from the study's §11.3 step 1: tenant vetting (S-53) and Microsoft sign-in (half of S-28). S-47 is where Sofía's receptionist-first sales to insurance agencies and event venues start at once; law firms follow from next, once the Opinion 680/705 sheet and F-174's law module exist (decision 15, as this plan reads it; §5.14).
+These are the items the study's §11.2 runs in parallel, outside its 27–36 ew, re-costed, plus two
+items this plan adds from the study's §11.3 step 1: tenant vetting (S-53) and Microsoft sign-in
+(half of S-28). S-47 is where Sofía's receptionist-first sales to insurance agencies and event
+venues start at once; law firms follow from next, once the Opinion 680/705 sheet and F-174's law
+module exist (decision 15, as this plan reads it, and decision 34; §5.14).
 
 | ID | Work | Study (ew) | Plan (ew) |
 |---|---|---|---|
@@ -866,7 +1346,13 @@ These are the items the study's §11.2 runs in parallel, outside its 27–36 ew,
 | F-124 (part) | the Opinion 680/705 sheet and the subprocessor list | — | 1 |
 | | **Parallel total** | | **17–21.5** |
 
-S-47 grows from 3–4 to 10–12 ew because its canonical detail is larger than the study's line: the modules, with 20–30 tested bilingual conversations each (F-174); the one switch and structured facts that ground prices (F-084, F-037); the disclosure line (F-034); and the verification ladder (F-116). F-084's switch and owner grant, and M7a's client Billing page, billing-link email and non-payment banners (S-62), are the parallel work's owner-facing pieces, so they follow the bilingual sequencing §4.1 sets for them (§3.2 rule 13).
+S-47 grows from 3–4 to 10–12 ew because its canonical detail is larger than the study's line: the
+modules, with 20–30 tested bilingual conversations each (F-174); the one switch and structured facts
+that ground prices (F-084, F-037); the disclosure line (F-034); and the verification ladder (F-116).
+F-084's switch and owner grant, and M7a's client Billing page, billing-link email and non-payment
+banners (S-62), with the Stripe Checkout and Customer Portal sessions opened in the client's
+language, are the parallel work's owner-facing pieces, so they follow the bilingual sequencing §4.1
+sets for them (§3.2 rule 13).
 
 #### Riders
 
@@ -882,13 +1368,31 @@ Six slices on shipped code, each from a feature judged 4–5 on both value and f
 | 6 | F-157 | "Found you through ChatGPT": attribution shown, AI assistants as a source | 4 / 5 | 1.5–2 | Where a lead came from is captured and never shown, and the website's channel rules count Gemini referrals as Google. Expo and truck-door leads need a visible source. The rider is the drawer line, the source question and the Website channel; a Monday-report line waits for F-100 under decision 24 and amendment 13. |
 | | | **Riders total** | | **10–13.5** | Cap: 13.5 ew |
 
-**The now horizon, summed:** before the first release 31.4–45.8 ew; the first release 53.5–73 ew; the parallel work 17–21.5 ew; riders 10–13.5 ew. That is **111.9–153.8 ew** against a capacity of 130–156, so it fits under the rule.
+**The now horizon, summed:** before the first release 31.4–45.8 ew; the first release 53.5–73 ew;
+the parallel work 17–21.5 ew; riders 10–13.5 ew. That is **111.9–153.8 ew** against a capacity of
+130–156, so it fits under the rule.
 
 ### 4.4 Next (H1 2027)
 
-Next is H1 2027, which in practice means April to June, after the now horizon ends. It finishes what M7a and the first release start (entitlements, history and merge); answers the owner's calendar ask (Outlook first, and Google once a review of the calendar scopes alone passes); ships the Spanish dashboard that binding constraint 6 requires; gives owners a phone shell; and extends Sofía's modules to law firms and home services, with a structured intake. Two small proposals open it: a private calendar feed of BIS bookings for any phone calendar (F-048 part 2) and a phone-contacts import (F-150 part 1). Clerk's own sign-in emails and widgets stay English until F-117's part in later (§3.1).
+Next is H1 2027, which in practice means April to June, after the now horizon ends. It finishes what
+M7a and the first release start (entitlements, history and merge); answers the owner's calendar ask
+(Outlook first, and Google once a review of the calendar scopes alone passes); ships the Spanish
+dashboard that binding constraint 6 requires; gives owners a phone shell; and extends Sofía's
+modules to law firms and home services, with a structured intake. Two small proposals open it: a
+private calendar feed of BIS bookings for any phone calendar (F-048 part 2) and a phone-contacts
+import (F-150 part 1). Clerk's own sign-in emails and widgets stay English until F-117's part in
+later (§3.1).
 
-**54.5–74 ew** against 65–78, so it fits on its own. If the pace is five a week and the high bounds hold, next also receives what now could not finish (§4.1): 7–9 ew of the first release's last items, and three items cut from now that next needs, namely the inbox increments (up to 2 ew), the Opinion 680/705 sheet (1 ew, before the law module) and Microsoft sign-in (0.5 ew, before S-22). That is 10.5–12.5 ew in all. Next's cut then has two steps, both to the head of later: first F-046 part 1, F-077 part 1 and F-175 part 1 (10 ew at the high bounds); then F-092 part 1, F-095 part 1 and F-107 part 2 (9.5 ew), so the phone shell waits too. The riders cut from now go to the head of later as well, and the calendar feed (F-048 part 2, 1 ew), which builds on F-048's rider, goes with them. That leaves next at about 64–66 ew against 65: at the edge, and the monthly pace check decides the rest (§4.1).
+**54.5–74 ew** against 65–78, so it fits on its own. If the pace is five a week and the high bounds
+hold, next also receives what now could not finish (§4.1): 7–9 ew of the first release's last items,
+and three items cut from now that next needs, namely the inbox increments (up to 2 ew), the Opinion
+680/705 sheet (1 ew, before the law module) and Microsoft sign-in (0.5 ew, before S-22). That
+is 10.5–12.5 ew in all. Next's cut then has two steps, both to the head of later: first F-046 part 1,
+F-077 part 1 and F-175 part 1 (10 ew at the high bounds); then F-092 part 1, F-095 part 1 and F-107
+part 2 (9.5 ew), so the phone shell waits too. The riders cut from now go to the head of later as
+well, and the calendar feed (F-048 part 2, 1 ew), which builds on F-048's rider, goes with them.
+That leaves next at about 64–66 ew against 65: at the edge, and the monthly pace check decides the
+rest (§4.1).
 
 | ID | Feature | Effort (ew) | Why in this horizon | Depends on |
 |---|---|---|---|---|
@@ -907,7 +1411,7 @@ Next is H1 2027, which in practice means April to June, after the now horizon en
 | F-020 (part: budgets per plan) | One door for every model call: gateway, budgets, registry | 0.5–1 | Needs entitlements | S-13 |
 | | *AI subtotal* | *2.5–4* | | |
 | **Calendar** | | | | |
-| F-048 (part: the owner's calendar feed) | Manage my appointment: move in place, cancel with a way back, add to calendar | 1 | Proposal. A private, revocable link per person, in both languages, that Apple, Google and Outlook calendars subscribe to: every BIS booking on the owner's own phone, with the time, the service and the customer's first name only. It needs no Google review and no Microsoft admin, and it is the only route for an owner whose calendar is the iPhone's own. One-way: the owner's own events do not block Sofía's slots until S-22. It refreshes fastest on Apple devices, within about 15 minutes to an hour as the device's fetch setting allows; Outlook refreshes a subscribed feed about every 3 hours on Outlook.com and 6 on Outlook on the web, though it can take more than 24 hours (Microsoft), and Google publishes no interval, with users reporting 8 to 24 hours; a Google user adds the feed once from a computer, not the phone app. So the booking alert email, and the text once A2P clears, stays the prompt channel, and S-22 is the real-time answer | F-048 (part 1), S-01 |
+| F-048 (part: the owner's calendar feed) | Manage my appointment: move in place, cancel with a way back, add to calendar | 1 | Proposal. A private, revocable link per person, in both languages, that Apple, Google and Outlook calendars subscribe to: every BIS booking on the owner's own phone, with the time, the service and the customer's first name only. It needs no Google review and no Microsoft admin, and it is the only route for an owner whose calendar is the iPhone's own. One-way: the owner's own events do not block Sofía's slots until S-22. It can refresh fastest on Apple devices: as often as every 15 minutes when the iPhone's fetch setting is an interval, though only while it charges on Wi-Fi when the setting is Automatic, and only by hand when it is Manual; Outlook refreshes a subscribed feed about every 3 hours on Outlook.com and 6 on Outlook on the web, though it can take more than 24 hours (Microsoft), and Google publishes no interval, with users reporting 8 to 24 hours; a Google user adds the feed once from a computer, not the phone app. So the booking alert email, and the text once A2P clears, stays the prompt channel, and S-22 is the real-time answer | F-048 (part 1), S-01 |
 | S-22 | Owner's calendar on Outlook and Google, with Meet, Teams and attendee matching | 6–8 | The owner's own ask; Outlook first; Google's calendar scopes submitted for review alone, a Testing-mode pilot until the review is submitted | S-27, S-28, F-196, decision 34 (the Google review) |
 | F-046 (part: the agenda and staff-made bookings) | Run the day from the calendar: agenda, staff bookings, a job card | 3–4 | Staff cannot put a phoned-in job on the calendar today | F-107 (part 2), F-084 |
 | F-049 (part: the text legs) | Reminders that reach people: their language, their channel, however late they booked | 1 | As soon as the live accounts clear A2P | A2P, F-065 (part 1) |
@@ -937,16 +1441,27 @@ Next is H1 2027, which in practice means April to June, after the now horizon en
 | F-196 | Room to run: background work beyond one 15-minute tick | 3–4 | Before calendar sync, money and every new scheduled pass | none |
 | | *Growth subtotal* | *7–9* | | |
 | **Packs** | | | | |
-| F-174 (part: the law module, after the 680/705 sheet, and home services) | Sofía industry modules | 2 | Decision 15: sell Sofía to law firms once the sheet exists; this plan also waits for this module's never-say lines, so law sales start here | F-124 (part 1) |
+| F-174 (part: the law module, after the 680/705 sheet, and home services) | Sofía industry modules | 2 | Decision 15: sell Sofía to law firms once the sheet exists; this plan also places this module's never-say lines here, a move from the study's step 1 (decision 34), so Sofía's sales to law firms start here | F-124 (part 1) |
 | F-175 (part: intake for home services, insurance and events, through one proposal) | Intake schemas: a pack-shaped intake that opens a deal through one proposal | 2–3 | Only packs without restricted fields | F-174, F-019 |
 | | *Packs subtotal* | *4–5* | | |
 | | **Horizon total (26 rows)** | **54.5–74** | | |
 
 ### 4.5 Later (H2 2027 to 2028)
 
-Later is eighteen months. It holds the money track and the portal; the packs in the study's order (home services first, then law and insurance, events, and child care); the Google and Microsoft track's remaining steps; the AI features that need the record, the vault and the tray first; and the trust work that law and tax buyers ask for.
+Later is eighteen months. It holds the money track and the portal; the packs in the study's order
+(home services first, then law and insurance, events, and child care); the Google and Microsoft
+track's remaining steps; the AI features that need the record, the vault and the tray first; and the
+trust work that law and tax buyers ask for.
 
-**359–492 ew** against 390–468. The low bound fits at five a week. The high bound runs about 24 ew past six a week. At five a week on the high bounds, the case §4.1 and §4.4 plan for, later also receives about 32–34 ew from now's and next's cuts (the riders, 11.5–13.5; next's two-step cut, 19.5; the calendar feed, 1), so it holds about 524–526 ew against 390, some 135 ew over: the named tail does not cover that, and the monthly pace check's re-scope, or added capacity, applies (§4.1). **The named tail**, first to slide into 2029 if the high bounds hold, is 18.5–26 ew: F-142 (4–6), F-136 (5–7), F-097 (1.5–2), F-140 (3–4), F-161 (3–4) and F-195 (2–3). F-097 and F-195 are in it because both depend on F-136. S-61's tax offer does not slide with F-142: without its levers, the 2028 season is sold on the ordinary Sofía plan (see S-61's row).
+**359–492 ew** against 390–468. The low bound fits at five a week. The high bound runs about 24 ew
+past six a week. At five a week on the high bounds, the case §4.1 and §4.4 plan for, later also
+receives about 32–34 ew from now's and next's cuts (the riders, 11.5–13.5; next's two-step
+cut, 19.5; the calendar feed, 1), so it holds about 524–526 ew against 390, some 135 ew over: the named
+tail does not cover that, and §4.1's pace check puts the choice to re-scope or add capacity to the
+owner at its end-of-March 2027 read. **The named tail**, first to slide into 2029 if the high bounds
+hold, is 18.5–26 ew: F-142 (4–6), F-136 (5–7), F-097 (1.5–2), F-140 (3–4), F-161 (3–4) and F-195
+(2–3). F-097 and F-195 are in it because both depend on F-136. S-61's tax offer does not slide with
+F-142: without its levers, the 2028 season is sold on the ordinary Sofía plan (see S-61's row).
 
 | ID | Feature | Effort (ew) | Why in this horizon | Depends on |
 |---|---|---|---|---|
@@ -1054,7 +1569,7 @@ Later is eighteen months. It holds the money track and the portal; the packs in 
 | **Trust** | | | | |
 | S-39 | Regulated-tenant mode | 1–2 | Holds regulated tenants; F-173's vetting covers the binding constraint until then | F-173 (decision 5 governs only its HIPAA-tenant behaviour, not the tax switch) |
 | S-48 | Regulated-professional baseline | 2–3 | Law and insurance packs stand on it | S-04 |
-| F-116 (part: one-time codes) | Caller identity checks scaled to each pack's risk | 1 | One-time codes are sent by text, so they follow A2P | A2P |
+| F-116 (part: one-time codes) | Caller identity checks scaled to each pack's risk | 1 | One-time codes are sent by text, so they follow A2P and decision 19 (§3.2 rule 4) | A2P, decision 19 |
 | F-117 (part: MFA and sessions the owner controls; Clerk's Spanish sign-in emails and widgets; the Clerk member cap priced) | Sign-in security the owner controls | 3–4 | Needed before the tax offer (decision 18). Clerk's component localization is experimental and does not reach its hosted Account Portal ([Clerk](https://clerk.com/docs/guides/customizing-clerk/localization)), and its emails come from dashboard templates, one set per instance ([Clerk](https://clerk.com/docs/guides/customizing-clerk/email-sms-templates)), so bilingual invitations and codes need one bilingual template or emails sent by BIS; confirm before costing | S-01 |
 | F-118 (part: the client-facing panel) | See when BIS looked: access transparency and an access log | 1.5–2 | With the law pack (Opinion 680) | S-55 |
 | F-119 (part: error tracking, bilingual incident notices, a status page) | Know first, tell fast: monitoring, incidents, bilingual notices | 2 | An error tracker is a new vendor (decision 2) | decision 2 |
@@ -1118,11 +1633,20 @@ Later is eighteen months. It holds the money track and the portal; the packs in 
 
 ### 4.6 Future bets (2029–2030)
 
-**161.5–222.5 ew** against 520–624. The horizon is deliberately under-filled. What sits here needs a density BIS does not have (60–100 accounts, or eight tenants per pack), waits on a hypothesis, rides platforms that are still changing, or is worth less than what later already holds. Only one feature here scored above 3 on value: F-036, for its staff-takeover part. F-193's 4 is provisional.
+**161.5–222.5 ew** against 520–624. The horizon is deliberately under-filled. What sits here needs a
+density BIS does not have (60–100 accounts, or eight tenants per pack), waits on a hypothesis, rides
+platforms that are still changing, or is worth less than what later already holds. Only one feature
+here scored above 3 on value: F-036, for its staff-takeover part. F-193's 4 is provisional.
 
 The spare capacity is for what 2027 and 2028 teach.
 
-**A 2030 direction (proposal, outside the costed total).** Two bets fit what BIS is building. First, a second border market: Laredo, El Paso or another Spanish-speaking Texas market, once the Valley holds 60–100 accounts and F-139's self-serve sign-up is live, because the bilingual product and the packs travel while the agency's local presence does not. Second, businesses on the Mexican side of the river, once the Spanish dashboard, the US$ and MX$ labels and the WhatsApp research have shown what they need, and only after counsel reads the cross-border privacy and payment rules. Each is a decision for its time, triggered by evidence, not a commitment.
+**A 2030 direction (proposal, outside the costed total).** Two bets fit what BIS is building. First,
+a second border market: Laredo, El Paso or another Spanish-speaking Texas market, once the Valley
+holds 60–100 accounts and F-139's self-serve sign-up is live, because the bilingual product and the
+packs travel while the agency's local presence does not. Second, businesses on the Mexican side of
+the river, once the Spanish dashboard, the US$ and MX$ labels and the WhatsApp research have shown
+what they need, and only after counsel reads the cross-border privacy and payment rules. Each is a
+decision for its time, triggered by evidence, not a commitment.
 
 | ID | Feature | Effort (ew) | Why in this horizon | Depends on |
 |---|---|---|---|---|
@@ -1206,7 +1730,8 @@ The spare capacity is for what 2027 and 2028 teach.
 
 ### 4.7 Folded or dropped
 
-**Folded (13).** The feature's surviving part now lives inside another feature, whose effort includes it.
+**Folded (13).** The feature's surviving part now lives inside another feature, whose effort
+includes it.
 
 | ID | Feature | Canonical effort | Folded into | What survives, and why |
 |---|---|---|---|---|
@@ -1224,7 +1749,8 @@ The spare capacity is for what 2027 and 2028 teach.
 | F-166 | Menus, packages and price sheets machines can read | M (2–3) | F-037 | packages and menus as sections, with the allergen rule |
 | F-178 | Pack reports: four numbers per industry and a pack-aware hero | M (2–3) | F-100 | pack numbers from the one catalogue |
 
-**Dropped (18).** Every one scored 1 or 2 on value. Each also has no segment asking for it, rides a platform BIS does not control, or reopens a position the study settled.
+**Dropped (18).** Every one scored 1 or 2 on value. Each also has no segment asking for it, rides a
+platform BIS does not control, or reopens a position the study settled.
 
 | ID | Feature | Canonical effort | Why dropped |
 |---|---|---|---|
@@ -1247,9 +1773,17 @@ The spare capacity is for what 2027 and 2028 teach.
 | F-169 | Business-to-business agents: work orders from managers' systems | L (6–8) | no demand from Valley property managers; a bet on other companies' systems |
 | F-192 | Seat, date and season forecasting per pack | L (6–8) | needs a season of data nobody asked for |
 
-The 31 folded and dropped features carried **100.5–141.5 ew** in the canonical list, plus F-044's uncosted L–XL. About 8–10 ew of that moved into the targets.
+The 31 folded and dropped features carried **100.5–141.5 ew** in the canonical list, plus F-044's
+uncosted L–XL. About 8–10 ew of that moved into the targets.
 
-**Also cut from features that stay:** F-115's hash chain witnessed in the owner's inbox (the history ships); F-095's voice input; F-102's slice for machine agents; F-134's on-device "Local" tier; F-121's copy to the owner's Drive; F-149's full public API and its Zapier and Make apps; F-159's lanes for AI agents; F-086's combined Hoy; F-063's transfer flow; F-060's peso presentment; F-018's referral link, which waits on H6; F-105's nightly screenshots; F-043's build, of which only the spike is planned; F-092's recent and frequent records per person (phase 6 keeps frecency and per-user history out of scope, and this plan keeps them out); and F-020's second model provider, which decision 2 would have to allow first.
+**Also cut from features that stay:** F-115's hash chain witnessed in the owner's inbox (the history
+ships); F-095's voice input; F-102's slice for machine agents; F-134's on-device "Local" tier;
+F-121's copy to the owner's Drive; F-149's full public API and its Zapier and Make apps; F-159's
+lanes for AI agents; F-086's combined Hoy; F-063's transfer flow; F-060's peso presentment; F-018's
+referral link, which waits on H6; F-105's nightly screenshots; F-043's build, of which only the
+spike is planned; F-092's recent and frequent records per person (phase 6 keeps frecency and
+per-user history out of scope, and this plan keeps them out); and F-020's second model provider,
+which decision 2 would have to allow first.
 
 F-109's field outbox and F-155's cross-account network are placed in future but not costed.
 
@@ -1269,7 +1803,9 @@ F-109's field outbox and F-155's cross-account network are placed in future but 
 | Dropped | 0 | — | 18 | |
 | **Total** | **686.9–942.3** | **62** | **199** | |
 
-**Every feature has exactly one disposition.** All 199 features (192 canonical and seven additions) are placed once. A split counts once, under its first horizon; within now, it counts under its disposition.
+**Every feature has exactly one disposition.** All 199 features (192 canonical and seven additions)
+are placed once. A split counts once, under its first horizon; within now, it counts under its
+disposition.
 
 | Placement | Features |
 |---|---|
@@ -1284,19 +1820,40 @@ F-109's field outbox and F-155's cross-account network are placed in future but 
 | Dropped | 18 |
 | **Total** | **199** |
 
-**Every study item has exactly one horizon.** All 62 are placed: 9 in the first release, 5 in the parallel work, 6 next, 39 later and 3 future.
-- The study's items not in its total (S-N1 to S-N16) stay outside, except where a feature costs part of one: the studios pilot (F-191, future); Meta lead ads (F-193, later); WhatsApp (F-070); a staff business number (F-073, future); sequences (F-079's second phase); NPS (F-072's check-in); and multi-currency (F-055's US$ and MX$ labelling rule, from F-060).
+**Every study item has exactly one horizon.** All 62 are placed: 9 in the first release, 5 in the
+parallel work, 6 next, 39 later and 3 future.
+- The study's items not in its total (S-N1 to S-N16) stay outside, except where a feature costs part
+  of one: the studios pilot (F-191, future); Meta lead ads (F-193, later); WhatsApp (F-070); a staff
+  business number (F-073, future); sequences (F-079's second phase); NPS (F-072's check-in); and
+  multi-currency (F-055's US$ and MX$ labelling rule, from F-060).
 - HIPAA mode (S-N1) stays behind decision 5.
 - Nothing here touches adult day care or home health.
 
 **Against the study.**
-- The study's items re-cost from 147–207 to **160–223.5 ew**: S-01 +3–5, S-07 +2, S-47 +7–8, S-53 +0.5 and S-62 +0.5–1.
-- Features add **517.5–700 ew** on top, against the canonical list's 660–910. The folds, drops, splits and trims above account for the difference.
-- The defects add 9.4–18.8 ew: §2.3's 13.9–23.3 ew less the 4.5 ew that sits in six feature slices, which the features line above already counts.
+- The study's items re-cost from 147–207 to **160–223.5 ew**: S-01 +3–5, S-07 +2, S-47 +7–8,
+  S-53 +0.5 and S-62 +0.5–1.
+- Features add **517.5–700 ew** on top, against the canonical list's 660–910. The folds, drops,
+  splits and trims above account for the difference.
+- The defects add 9.4–18.8 ew: §2.3's 13.9–23.3 ew less the 4.5 ew that sits in six feature slices,
+  which the features line above already counts.
 
-**Through 2028** (now, next and later), the plan is **525.4–719.8 ew**. The capacity for those 117 weeks is 585–702. The low bound fits. At six a week the high bound runs about 18 ew over, which later's named tail (18.5–26 ew) covers. At five a week it runs about 135 ew over (719.8 against 585, roughly half a year at that pace), all of it landing in later, which also receives the 32–34 ew that now's and next's cuts send it (§4.1, §4.4); the named tail covers less than a fifth of that, so the monthly pace check's re-scope, or added capacity, applies instead. At the study's conventional reading (one engineer, about 52 ew a year), the whole plan's 686.9–942.3 ew would be about 13 to 18 years of work; calendar time is read off the observed pace instead (§4.1).
+**Through 2028** (now, next and later), the plan is **525.4–719.8 ew**. The capacity for those 117
+weeks is 585–702. The low bound fits. At six a week the high bound runs about 18 ew over, which
+later's named tail (18.5–26 ew) covers. At five a week it runs about 135 ew over (719.8 against 585,
+roughly half a year at that pace), all of it landing in later: later's own 102 ew over, plus the
+32–34 ew that now's and next's cuts send it (§4.1, §4.4). The named tail covers less than a fifth of
+that, so §4.1's pace check puts the choice to re-scope or add capacity to the owner instead. At the
+study's conventional reading (one engineer, about 52 ew a year), the whole plan's 686.9–942.3 ew
+would be about 13 to 18 years of work; calendar time is read off the observed pace instead (§4.1).
 
-**No horizon inversion.** A script checked every "Depends on" cell in the next, later and future tables against the horizon of what it names; the now tables carry no such column, and their prerequisites are named in the text (§4.1's rider rule and chain order). No checked part depends on work in a later horizon, and §3.2 rule 2 lists the cycles the plan breaks and the skeptic's inversions it resolves. One now-horizon dependency needed a change: Sofía's industry modules (F-174) are tested now against hand-run corpora of 20–30 bilingual conversations each, and the identity ladder (F-116 part) against hand-run test calls, not against F-021's harness, which is later; the harness re-runs both when it lands.
+**No horizon inversion.** A script checked every "Depends on" cell in the next, later and future
+tables against the horizon of what it names; the now tables carry no such column, and their
+prerequisites are named in the text (§4.1's rider rule and chain order). No checked part depends on
+work in a later horizon, and §3.2 rule 2 lists the cycles the plan breaks and the skeptic's
+inversions it resolves. One now-horizon dependency needed a change: Sofía's industry modules (F-174)
+are tested now against hand-run corpora of 20–30 bilingual conversations each, and the identity
+ladder (F-116 part) against hand-run test calls, not against F-021's harness, which is later; the
+harness re-runs both when it lands.
 
 **The owner's asks, scheduled.**
 
@@ -1305,7 +1862,7 @@ F-109's field outbox and F-155's cross-account network are placed in future but 
 | Plumbers and other trades | Sofía's guardrails; the call card (F-033); the booking fixes | The home-services Sofía module and intake; the agenda (F-046) | Starter packs, then home services parts one and two (S-40, S-41, F-179), money, QuickBooks | — |
 | Restaurant owners | Discovery calls (H10); the CRM-only plan, with Sofía and the web chat not sold to restaurants until F-199's allergen rule ships | — | Sofía at the front desk (F-199), after H10: hours and large parties, the restaurant's own reservation or ordering link, never a food order and never an allergy promise | The catering pack (S-45, F-186), after POS research |
 | Child day care | Discovery calls with three to five centres (H9); the CRM-only plan, with Sofía and the web chat not sold to centres until the child-care module ships | — | The child-care pack (S-42, F-185, which carries Sofía's child-care module), in 2028 after H9 | — |
-| Others (insurance, events, law, tax) | Sofía sold to insurance and events (S-47); tax preparers held at vetting until the 2028 season (§5.14) | The law module, once the 680/705 sheet exists, and Sofía sold to law firms with it | Their packs (S-54 to S-56, F-181 to F-183); the seasonal tax offer for the 2028 season (S-61) | Law and insurance integrations (S-57, S-58) |
+| Others (insurance, events, law, tax) | Sofía sold to insurance and events (S-47); law firms may buy the CRM once the 680/705 sheet exists; tax preparers held at vetting until the 2028 season (§5.14) | The law module, once the 680/705 sheet exists, and Sofía sold to law firms with it | Their packs (S-54 to S-56, F-181 to F-183); the seasonal tax offer for the 2028 season (S-61) | Law and insurance integrations (S-57, S-58) |
 | Centralise each customer, with all documents | Staff and roles, the record model, the record page, the vault, inbound email (first release) | History, merge, document intake (S-19), a phone-contacts import (F-150 part 1) | Forms with uploads, e-signature, the portal, the paper back-file (F-197) | — |
 | Use AI with the CRM | The review tray, the record summary, provenance, one model gateway | Document intake; Sofía's structured intake (F-175) | Drafting and translation, Ask BIS, the evaluation harness, the language-parity report, an MCP connection that reads and proposes (S-33) | Memory (F-024), voice debriefs (F-026) |
 | Microsoft 365 and Google, such as calendars | Google branding and Microsoft publisher verification (S-27); Google and Microsoft sign-in (S-28); an add-to-calendar file on every booking (F-048 rider) | A private calendar feed for any phone calendar (F-048 part 2); the owner's calendar, Outlook first and Google after a review of its calendar scopes (S-22); Conexiones (F-148) | Send-as-me and contacts sync (a second Google review), Drive and OneDrive pickers (no review), per-staff calendars (decision 4) | Full inbox sync only on demand (S-N10) |
@@ -1315,11 +1872,19 @@ F-109's field outbox and F-155's cross-account network are placed in future but 
 
 ## 5. The feature areas
 
-Section 4 says when and at what cost. This section says what each feature gives a Valley business and why it belongs. Titles, efforts and horizons are the catalogue's (Appendix A); an asterisk marks this plan's revised effort. A horizon reading "folded" or "dropped" means the feature does not ship on its own (§4.7). Everything in this section is a proposal, the design notes included: a note that rests on a DESIGN.md amendment or an owner decision names it, and none is settled until the owner dates it.
+Section 4 says when and at what cost. This section says what each feature gives a Valley business
+and why it belongs. Titles, efforts and horizons are the catalogue's (Appendix A); an asterisk marks
+this plan's revised effort. A horizon reading "folded" or "dropped" means the feature does not ship
+on its own (§4.7). Everything in this section is a proposal, the design notes included: a note that
+rests on a DESIGN.md amendment or an owner decision names it, and none is settled until the owner
+dates it.
 
 ### 5.1 Client record and documents
 
-This is the owner's first ask. A Valley business keeps its customers in a phone, a notebook and a filing cabinet; families decide together, a plumber needs the house and its water heater, and a day care needs a child's papers and who may collect them. Today one contact holds everything and no document can be stored. The first release makes one record per customer, with every document on it.
+This is the owner's first ask. A Valley business keeps its customers in a phone, a notebook and a
+filing cabinet; families decide together, a plumber needs the house and its water heater, and a day
+care needs a child's papers and who may collect them. Today one contact holds everything and no
+document can be stored. The first release makes one record per customer, with every document on it.
 
 | ID | Feature | What the owner or customer gets | Effort | Horizon |
 |---|---|---|---|---|
@@ -1332,14 +1897,20 @@ This is the owner's first ask. A Valley business keeps its customers in a phone,
 | F-007 | Terms: one fixed record for anything that renews | Policies, service agreements, enrolment terms and contracts with dates, so no renewal is missed | M (3–4) | later |
 
 **Design notes.**
-- Three columns on a desk, one column on a phone in phone order; every card loads, empties and fails on its own. A record page names no hero (proposed; amendment 11).
-- Deleting a document moves it to the trash at once with an undo; a typed name confirms only a permanent purge (rule 6).
+- Three columns on a desk, one column on a phone in phone order; every card loads, empties and fails
+  on its own. A record page names no hero (proposed; amendment 11).
+- Deleting a document moves it to the trash at once with an undo; a typed name confirms only a
+  permanent purge (rule 6).
 
-**What we reject here.** Owner-built layouts and custom-object screens (packs choose the cards instead), HubSpot-style tabs, and, for the first record page, the five-deep peek stack (§6.7).
+**What we reject here.** Owner-built layouts and custom-object screens (packs choose the cards
+instead), HubSpot-style tabs, and, for the first record page, the five-deep peek stack (§6.7).
 
 ### 5.2 Bilingual and border
 
-Most of Hidalgo County speaks Spanish at home (§3.1), callers switch language mid-sentence, relatives call from Reynosa, and "$" means pesos across the river. Being bilingual everywhere, including the owner's own screens, is the edge national tools do not have. Today Spanish reaches customers on some pages; the dashboard has none.
+Most of Hidalgo County speaks Spanish at home (§3.1), callers switch language mid-sentence,
+relatives call from Reynosa, and "$" means pesos across the river. Being bilingual everywhere,
+including the owner's own screens, is the edge national tools do not have. Today Spanish reaches
+customers on some pages; the dashboard has none.
 
 | ID | Feature | What the owner or customer gets | Effort | Horizon |
 |---|---|---|---|---|
@@ -1356,14 +1927,23 @@ Most of Hidalgo County speaks Spanish at home (§3.1), callers switch language m
 | F-018 | "¿Quién le recomendó?": word of mouth, measured | One question that measures word of mouth | S–M (2–3) | folded into F-157 |
 
 **Design notes.**
-- Spanish is designed in: a pseudo-locale at +35% length, one `es-US` formatting layer, accents kept in capitals, and *usted* for platform strings, normalised by a paid Valley reviewer.
-- What a customer wrote stays in their language with its own `lang`; a translation sits beside it, never in its place.
+- Spanish is designed in: a pseudo-locale at +35% length, one `es-US` formatting layer, accents kept
+  in capitals, and *usted* for platform strings, normalised by a paid Valley reviewer.
+- What a customer wrote stays in their language with its own `lang`; a translation sits beside it,
+  never in its place.
 
-**What we reject here.** The Winter Texan profile (unvalidated; a tag and two recipes if a trade client asks), peso presentment (only the US$ and MX$ labels survive, in F-055), and fifty-language support.
+**What we reject here.** The Winter Texan profile (unvalidated; a tag and two recipes if a trade
+client asks), peso presentment (only the US$ and MX$ labels survive, in F-055), and fifty-language
+support.
 
 ### 5.3 AI across the CRM
 
-The owner asked to use AI with the CRM. We assume a small owner has about an hour a day for the office (an assumption the discovery calls can test), so AI earns its place by summarising a record, drafting a reply in the customer's language and reading paper into fields, never by writing on its own, except the caller-confirmed acts decision 19 covers. Today AI answers calls (and can answer web chats once the agency switches the chat on for a company) and writes call summaries; its only suggestions are up to three per call, which a person accepts.
+The owner asked to use AI with the CRM. We assume a small owner has about an hour a day for the
+office (an assumption the discovery calls can test), so AI earns its place by summarising a record,
+drafting a reply in the customer's language and reading paper into fields, never by writing on its
+own, except the caller-confirmed acts decision 19 covers. Today AI answers calls (and can answer web
+chats once the agency switches the chat on for a company) and writes call summaries; its only
+suggestions are up to three per call, which a person accepts.
 
 | ID | Feature | What the owner or customer gets | Effort | Horizon |
 |---|---|---|---|---|
@@ -1383,14 +1963,20 @@ The owner asked to use AI with the CRM. We assume a small owner has about an hou
 | F-032 | The owner line: call your own number to hear the day and file work | Calling the business number to hear the day and file work | M–L (4–7) | dropped |
 
 **Design notes.**
-- AI appears where the work is (the record's summary, the tray, the box), marked "Generado por IA". There is no auto-accept at any confidence, and "Aceptar las 3" never overwrites a filled field.
-- A weekly line, "Aceptó el 82% de las sugerencias", keeps approval honest rather than a rubber stamp.
+- AI appears where the work is (the record's summary, the tray, the box), marked "Generado por IA".
+  There is no auto-accept at any confidence, and "Aceptar las 3" never overwrites a filled field.
+- A weekly line, "Aceptó el 82% de las sugerencias", keeps approval honest rather than a rubber
+  stamp.
 
-**What we reject here.** A top-level AI section or chat pane, the owner line (voice-clone risk, and nobody asked), and a second model provider until decision 2 allows it.
+**What we reject here.** A top-level AI section or chat pane, the owner line (voice-clone risk, and
+nobody asked), and a second model provider until decision 2 allows it.
 
 ### 5.4 Sofía and the web chat
 
-Sofía is what BIS sells first. For a plumber on a roof or a venue on a Saturday night, a missed call is a lost job, and a Spanish-speaking mother who hears English at the edge of the call hangs up. She has handled real calls; what she needs now is honesty up front, exact answers from the business's own facts, a card for every call and a handoff that never fails silently.
+Sofía is what BIS sells first. For a plumber on a roof or a venue on a Saturday night, a missed call
+is a lost job, and a Spanish-speaking mother who hears English at the edge of the call hangs up. She
+has handled real calls; what she needs now is honesty up front, exact answers from the business's
+own facts, a card for every call and a handoff that never fails silently.
 
 | ID | Feature | What the owner or customer gets | Effort | Horizon |
 |---|---|---|---|---|
@@ -1409,16 +1995,32 @@ Sofía is what BIS sells first. For a plumber on a roof or a venue on a Saturday
 | F-045 | Callbacks the customer asked for, placed by Sofía | Callbacks placed by Sofía | M (4–5) | dropped |
 
 **Design notes.**
-- Presence shows only on plans with Sofía, and on a phone as a dot with a word ("En llamada"), never a bare dot (proposed; amendment 5).
-- Owners edit the business status and closures now and facts later; guardrails never become owner-editable (proposed; if decision 28 rules so).
+- Presence shows only on plans with Sofía, and on a phone as a dot with a word ("En llamada"), never
+  a bare dot (proposed; amendment 5).
+- Owners edit the business status and closures now and facts later; guardrails never become
+  owner-editable (proposed; if decision 28 rules so).
 
-**What we reject here.** Live interpretation (Samsung and Apple phones already translate calls, Spanish included), and callbacks placed by Sofía: the study's "no outbound AI calls" stands, and the callback rows F-033 creates go to people.
+**What we reject here.** Live interpretation (Samsung and Apple phones already translate calls,
+Spanish included), and callbacks placed by Sofía: the study's "no outbound AI calls" stands, and the
+callback rows F-033 creates go to people.
 
-**Not in this plan: Sofía by text (proposal to defer).** GoHighLevel's and Podium's AI employees answer customers' texts and chats as well as calls (the study's Appendix C), and Valley customers text. An AI that answers inbound texts and WhatsApp threads is left out of this plan for four reasons: it revisits the SMS spec's exclusion of inbound auto-replies; it cannot start before the send gate and A2P; it would be a higher-plan feature under binding constraint 3; and every reply it sends needs its own reading under decision 19, because a text thread has no clear end and rule 4 exempts only replies inside a live call or chat the customer started. Its natural shape is the web chat's persona on text and WhatsApp threads, answering from F-037's facts, with drafts a person approves and only caller-requested acts live. Bring it back as a proposal once F-036 and F-070 have run with real clients, or sooner if a client asks.
+**Not in this plan: Sofía by text (proposal to defer).** GoHighLevel's and Podium's AI employees
+answer customers' texts and chats as well as calls (the study's Appendix C), and Valley customers
+text. An AI that answers inbound texts and WhatsApp threads is left out of this plan for four
+reasons: it revisits the SMS spec's exclusion of inbound auto-replies; it cannot start before the
+send gate and A2P; it would be a higher-plan feature under binding constraint 3; and every reply it
+sends needs its own reading under decision 19, because a text thread has no clear end and rule 4
+exempts only replies inside a live call or chat the customer started. Its natural shape is the web
+chat's persona on text and WhatsApp threads, answering from F-037's facts, with drafts a person
+approves and only caller-requested acts live. Bring it back as a proposal once F-036 and F-070 have
+run with real clients, or sooner if a client asks.
 
 ### 5.5 Calendar, booking, visits, Google and Microsoft
 
-The schedule is the business. Today there is one calendar per company, no way to book a phoned-in job from the dashboard, no closures, and no sync with the owner's own calendar, so the two can double-book. Calendar sync with Google and Outlook is the study's own track (S-22 to S-28; §7); the features below make the calendar the whole schedule and cut no-shows.
+The schedule is the business. Today there is one calendar per company, no way to book a phoned-in
+job from the dashboard, no closures, and no sync with the owner's own calendar, so the two can
+double-book. Calendar sync with Google and Outlook is the study's own track (S-22 to S-28; §7); the
+features below make the calendar the whole schedule and cut no-shows.
 
 | ID | Feature | What the owner or customer gets | Effort | Horizon |
 |---|---|---|---|---|
@@ -1433,14 +2035,21 @@ The schedule is the business. Today there is one calendar per company, no way to
 | F-054 | One record card in Gmail, Outlook, AI chats and on the lock screen | The record card inside Gmail, Outlook and AI chats | L (6–8) | dropped |
 
 **Design notes.**
-- Customer pages show time in words ("Horario de McAllen (hora del centro)") and step dots that render.
-- Rooms as bookable resources wait for per-staff calendars (decision 22); holds ship first on today's single calendar.
+- Customer pages show time in words ("Horario de McAllen (hora del centro)") and step dots that
+  render.
+- Rooms as bookable resources wait for per-staff calendars (decision 22); holds ship first on
+  today's single calendar.
 
-**What we reject here.** The Gmail and Outlook record card (no inbox-sync demand), a generic list-board-calendar-map lens framework (the events month grid lives in F-183), and GPS tracking or routing, which the study says not to build.
+**What we reject here.** The Gmail and Outlook record card (no inbox-sync demand), a generic
+list-board-calendar-map lens framework (the events month grid lives in F-183), and GPS tracking or
+routing, which the study says not to build.
 
 ### 5.6 Money and the customer portal
 
-Getting paid is the close, and every pack depends on it. Valley customers pay in instalments, in cash, by bank, and sometimes several relatives pay for one quinceañera. Today BIS takes no money for its clients: the platform spec recorded payments, invoicing, documents and e-signature as non-goals, and study decision 1 would reverse that.
+Getting paid is the close, and every pack depends on it. Valley customers pay in instalments, in
+cash, by bank, and sometimes several relatives pay for one quinceañera. Today BIS takes no money for
+its clients: the platform spec recorded payments, invoicing, documents and e-signature as non-goals,
+and study decision 1 would reverse that.
 
 | ID | Feature | What the owner or customer gets | Effort | Horizon |
 |---|---|---|---|---|
@@ -1456,14 +2065,19 @@ Getting paid is the close, and every pack depends on it. Valley customers pay in
 | F-064 | In your phone's wallet: appointments, events and insurance cards | Wallet passes for appointments and cards | M (3–4) | dropped |
 
 **Design notes.**
-- Pay and sign pages use the irreversible pattern: one submission, a "Procesando" state with no second Pay button, and a result that says exactly what happened.
+- Pay and sign pages use the irreversible pattern: one submission, a "Procesando" state with no
+  second Pay button, and a result that says exactly what happened.
 - Where the portal's second stage sits in the plans is decision 25's to make, not settled here.
 
-**What we reject here.** Wallet passes (the calendar file covers appointments), peso presentment, the homeowner-transfer flow, and payment by consumer agents (§5.13).
+**What we reject here.** Wallet passes (the calendar file covers appointments), peso presentment,
+the homeowner-transfer flow, and payment by consumer agents (§5.13).
 
 ### 5.7 Messaging, calling and consent
 
-Valley customers text, and they say "ALTO", not "STOP". The consent ledger carries the plan's one legal date, and one inbox that works like a phone's messages app is what owners compare BIS with. Today texting is built but switched off for every company, and customer email replies never come back.
+Valley customers text, and they say "ALTO", not "STOP". The consent ledger carries the plan's one
+legal date, and one inbox that works like a phone's messages app is what owners compare BIS with.
+Today texting is built but switched off for every company, and customer email replies never come
+back.
 
 | ID | Feature | What the owner or customer gets | Effort | Horizon |
 |---|---|---|---|---|
@@ -1480,14 +2094,20 @@ Valley customers text, and they say "ALTO", not "STOP". The consent ledger carri
 | F-075 | Branded caller ID for calls out | Branded caller ID on outbound calls | M (2–3) | dropped |
 
 **Design notes.**
-- Where texting is not ready, the channel says so in plain words ("Esperando a las compañías telefónicas · 3–7 días hábiles") instead of a tab that fails on send.
+- Where texting is not ready, the channel says so in plain words ("Esperando a las compañías
+  telefónicas · 3–7 días hábiles") instead of a tab that fails on send.
 - Enviar stays the composer's only primary; the reminder chip is ghost.
 
-**What we reject here.** Branded caller ID (it serves outbound calling, which BIS limits). The rule builder stays deferred; four fixed primitives answer the packs' clocks (decision 30), and sequences wait for their own decision.
+**What we reject here.** Branded caller ID (it serves outbound calling, which BIS limits). The rule
+builder stays deferred; four fixed primitives answer the packs' clocks (decision 30), and sequences
+wait for their own decision.
 
 ### 5.8 The owner's day
 
-DESIGN.md's test is a business owner reading at 7 AM. Today's dashboard is built around Sofía: its hero is "Calls answered" for everyone, so a CRM-only plan's headline number would always be 0, and the 7-day tiles never say which days they cover. These features start from the day: what happened, what needs the owner, and one tap to finish it.
+DESIGN.md's test is a business owner reading at 7 AM. Today's dashboard is built around Sofía: its
+hero is "Calls answered" for everyone, so a CRM-only plan's headline number would always be 0, and
+the 7-day tiles never say which days they cover. These features start from the day: what happened,
+what needs the owner, and one tap to finish it.
 
 | ID | Feature | What the owner or customer gets | Effort | Horizon |
 |---|---|---|---|---|
@@ -1504,15 +2124,23 @@ DESIGN.md's test is a business owner reading at 7 AM. Today's dashboard is built
 | F-086 | One login and one Hoy across several businesses | A company switcher for owners of more than one business | S (1–2)* | future |
 
 **Design notes.**
-- Hoy is four bands, the first two above the fold on a phone; its hero is the headline number the metrics catalogue picks for the plan and pack (§6.3) (proposed; amendment 11, decision 24).
+- Hoy is four bands, the first two above the fold on a phone; its hero is the headline number the
+  metrics catalogue picks for the plan and pack (§6.3) (proposed; amendment 11, decision 24).
 - Work goes to Pendientes, news to the timeline; there is no third inbox (proposed; amendment 7).
-- **A second location (proposal, not costed).** A business with two branches, centres or sites stays one account in this plan, with each location's staff and bookings on S-23's per-staff calendars; a location model with its own hours and address waits until H23's answers show the need. Separate businesses, with their own brand and books, are separate accounts under F-086's switcher.
+- **A second location (proposal, not costed).** A business with two branches, centres or sites stays
+  one account in this plan, with each location's staff and bookings on S-23's per-staff calendars; a
+  location model with its own hours and address waits until H23's answers show the need. Separate
+  businesses, with their own brand and books, are separate accounts under F-086's switcher.
 
-**What we reject here.** Ranking the queue by value (small owners have few rows), a notification bell, and a combined Hoy across businesses unless a client asks.
+**What we reject here.** Ranking the queue by value (small owners have few rows), a notification
+bell, and a combined Hoy across businesses unless a client asks.
 
 ### 5.9 Navigation, search and settings
 
-The study roughly triples what the product holds, and GoHighLevel resellers sell a 17-item sidebar. Today the owner can change only branding, the booking settings and forms without the agency, and "Garcia" does not find "García". These features keep the product findable: one map, one search box, one settings page the owner can use without calling.
+The study roughly triples what the product holds, and GoHighLevel resellers sell a 17-item sidebar.
+Today the owner can change only branding, the booking settings and forms without the agency, and
+"Garcia" does not find "García". These features keep the product findable: one map, one search box,
+one settings page the owner can use without calling.
 
 | ID | Feature | What the owner or customer gets | Effort | Horizon |
 |---|---|---|---|---|
@@ -1532,14 +2160,21 @@ The study roughly triples what the product holds, and GoHighLevel resellers sell
 | F-100 | Números: one catalogue of metrics | One definition for every number, used by tiles, the Monday report and pack reports | L (8–11 with F-029, F-082, F-178)* | later |
 
 **Design notes.**
-- The sidebar spine, the one box and one launch plan each need a DESIGN.md amendment (rows 7, 8 and 9 in §6.5); until they are dated, new modules go into today's sidebar groups.
-- "Ask" never writes; the box offers no creates (F-083 owns them) and no destructive action, and today's harmless actions, such as the theme toggle, stay; "ask" shows its filter chips before any number.
+- The sidebar spine, the one box and one launch plan each need a DESIGN.md amendment (rows 7, 8 and
+  9 in §6.5); until they are dated, new modules go into today's sidebar groups.
+- "Ask" never writes; the box offers no creates (F-083 owns them) and no destructive action, and
+  today's harmless actions, such as the theme toggle, stay; "ask" shows its filter chips before any
+  number.
 
-**What we reject here.** The lens framework (L effort for parity), a sidebar that reorders itself by usage, and a top-level "Tu negocio en internet" section.
+**What we reject here.** The lens framework (L effort for parity), a sidebar that reorders itself by
+usage, and a top-level "Tu negocio en internet" section.
 
 ### 5.10 Design system, accessibility and mobile
 
-Owners run the business from a phone, often a mid-range Android on weak signal, and some are older readers. Northern Lights keeps its colours, radii and surfaces; it gains a phone, a second language, named states, and rules that tests enforce, because agents write much of the code and CI is the only reviewer every merge must pass.
+Owners run the business from a phone, often a mid-range Android on weak signal, and some are older
+readers. Northern Lights keeps its colours, radii and surfaces; it gains a phone, a second language,
+named states, and rules that tests enforce, because agents write much of the code and CI is the only
+reviewer every merge must pass.
 
 | ID | Feature | What the owner or customer gets | Effort | Horizon |
 |---|---|---|---|---|
@@ -1558,14 +2193,21 @@ Owners run the business from a phone, often a mid-range Android on weak signal, 
 | F-113 | Paper that looks like the business: print and tagged PDF | Quotes, invoices and contracts as accessible PDFs in the business's brand | M (4–5) | later |
 
 **Design notes.**
-- Every new surface is drawn at 390 px first: 44 px targets, 16 px inputs, the main action within the thumb's reach (proposed; amendment 20's Layout and touch section).
-- No new colours beyond the accessibility tokens of amendment 17, and no new radii, shadows or surfaces; any lighter rendering for cheap phones is chosen by measurement, as the 2026-09-09 blur decision was.
+- Every new surface is drawn at 390 px first: 44 px targets, 16 px inputs, the main action within
+  the thumb's reach (proposed; amendment 20's Layout and touch section).
+- No new colours beyond the accessibility tokens of amendment 17, and no new radii, shadows or
+  surfaces; any lighter rendering for cheap phones is chosen by measurement, as the 2026-09-09 blur
+  decision was.
 
-**What we reject here.** A native app now (decision 10: installable web app first), new typefaces and animated glows, and the offline outbox until field demand is shown.
+**What we reject here.** A native app now (decision 10: installable web app first), new typefaces
+and animated glows, and the offline outbox until field demand is shown.
 
 ### 5.11 Trust, security and compliance
 
-Law firms, insurance agencies and tax preparers answer to regulators and ask vendors for proof; the Valley is primed for impersonation; and a small owner needs to know their data is safe and can leave with them. Today the quality gates are strong but operations are thin, and the known security items are tracked privately (§2.3).
+Law firms, insurance agencies and tax preparers answer to regulators and ask vendors for proof; the
+Valley is primed for impersonation; and a small owner needs to know their data is safe and can leave
+with them. Today the quality gates are strong but operations are thin, and the known security items
+are tracked privately (§2.3).
 
 | ID | Feature | What the owner or customer gets | Effort | Horizon |
 |---|---|---|---|---|
@@ -1592,17 +2234,33 @@ Law firms, insurance agencies and tax preparers answer to regulators and ask ven
 | F-134 | Privacy tiers for AI | A protected tier: U.S.-only processing and no use in evaluation sets | M (3–4)* | later |
 | F-135 | Messages customers can trust: brand first, official channels, the business's own links | Texts that lead with the business's name, and an official-channels page | S–M (2–3)* | future |
 
-**Privacy law (a reading for counsel to confirm, proposal).** Texas's Data Privacy and Security Act (TDPSA, in force since 1 July 2024) exempts businesses that are small under the U.S. Small Business Administration's definitions, which covers most of BIS's clients and probably BIS itself, except for one rule that still binds them: sensitive data, children's data included, is not sold without consent. Where a client is covered, BIS acts as its processor and owes the processor duties (a contract, help with customers' requests, deletion at the end). Insurance agencies fall under the Gramm-Leach-Bliley Act, which the TDPSA exempts (§541.002(b)(2)), and law firms answer to their own professional rules; and child-care data is sensitive whether or not the TDPSA applies (study decision 6). So F-122's full "delete me" and "what do you have on me" can wait for 2029–2030, but not the path itself: today bulk delete skips any contact with a booking, deal or conversation, so until F-122 ships the agency honours a deletion request by hand, following a short runbook step this quarter, and counsel confirms which clients the TDPSA reaches.
+**Privacy law (a reading for counsel to confirm, proposal).** Texas's Data Privacy and Security Act
+(TDPSA, in force since 1 July 2024) exempts businesses that are small under the U.S. Small Business
+Administration's definitions, which covers most of BIS's clients and probably BIS itself, except for
+one rule that still binds them: sensitive data, children's data included, is not sold without
+consent. Where a client is covered, BIS acts as its processor and owes the processor duties (a
+contract, help with customers' requests, deletion at the end). Insurance agencies fall under the
+Gramm-Leach-Bliley Act, which the TDPSA exempts (§541.002(b)(2)), and law firms answer to their own
+professional rules; and child-care data is sensitive whether or not the TDPSA applies (study
+decision 6). So F-122's full "delete me" and "what do you have on me" can wait for 2029–2030, but
+not the path itself: today bulk delete skips any contact with a booking, deal or conversation, so
+until F-122 ships the agency honours a deletion request by hand, following a short runbook step this
+quarter, and counsel confirms which clients the TDPSA reaches.
 
 **Design notes.**
-- Trust is shown in plain words where the owner looks ("Lo guardamos el tiempo que la ley pide, y no más"), not in a separate security section.
+- Trust is shown in plain words where the owner looks ("Lo guardamos el tiempo que la ley pide, y no
+  más"), not in a separate security section.
 - Security specifics never appear in this repository; the sprint is named and counted only.
 
-**What we reject here.** The monthly trust note (a line in the report only when there is news), the hash chain witnessed in the owner's inbox, and an on-device "Local" AI tier.
+**What we reject here.** The monthly trust note (a line in the report only when there is news), the
+hash chain witnessed in the owner's inbox, and an on-device "Local" AI tier.
 
 ### 5.12 Growth, agency and platform
 
-BIS is a small local agency. To serve 50 to 100 businesses it needs problems to find the agency rather than the other way round, an entry plan that sells its own upgrade honestly, and a way for switching prospects to move in quickly. Today every company is created by hand and the agency's home shows four all-time totals.
+BIS is a small local agency. To serve 50 to 100 businesses it needs problems to find the agency
+rather than the other way round, an entry plan that sells its own upgrade honestly, and a way for
+switching prospects to move in quickly. Today every company is created by hand and the agency's home
+shows four all-time totals.
 
 | ID | Feature | What the owner or customer gets | Effort | Horizon |
 |---|---|---|---|---|
@@ -1628,13 +2286,23 @@ BIS is a small local agency. To serve 50 to 100 businesses it needs problems to 
 | F-155 | Recomendados: a referral network between Valley businesses | A trusted list Sofía offers when a caller needs another trade | S (0.5–1 planned; the network not costed)* | future |
 
 **Design notes.**
-- Plans differ by Sofía, the web chat and allowances only (proposed; decision 25); the upgrade is sold by one measured evidence card on Hoy, never by padlocks inside working screens.
+- Plans differ by Sofía, the web chat and allowances only (proposed; decision 25); the upgrade is
+  sold by one measured evidence card on Hoy, never by padlocks inside working screens.
 
-**What we reject here.** MCP directory listings (the study's MCP server, S-33, stays), and Sofía as a partner app inside Jobber or Clio, which sell their own receptionists.
+**What we reject here.** MCP directory listings (the study's MCP server, S-33, stays), and Sofía as
+a partner app inside Jobber or Clio, which sell their own receptionists.
 
 ### 5.13 Agentic discovery
 
-Customers increasingly ask an AI assistant to find a plumber or a salón, and Google Search's AI calling already phones local businesses to ask price and availability. Google announced on 19 May 2026 that its AI will call home-repair, beauty and pet-care businesses for users, rolling out across the U.S. over the summer of 2026 ([Google](https://blog.google/products-and-platforms/products/search/search-io-2026/)), so H13's transcript count can start on the live lines now. A Valley business that is correct, in Spanish, where assistants look will be chosen; one that is not will be skipped. Today a lead's source is captured but never shown to the owner, and the website's channel rules count Gemini referrals as Google (§4.3, rider 6).
+Customers increasingly ask an AI assistant to find a plumber or a salón, and Google Search's AI
+calling already phones local businesses to ask price and availability. Google announced on 19 May
+2026 that its AI will call home-repair, beauty and pet-care businesses for users, rolling out across
+the U.S. over the summer of 2026
+([Google](https://blog.google/products-and-platforms/products/search/search-io-2026/)), so H13's
+transcript count can start on the live lines now. A Valley business that is correct, in Spanish,
+where assistants look will be chosen; one that is not will be skipped. Today a lead's source is
+captured but never shown to the owner, and the website's channel rules count Gemini referrals as
+Google (§4.3, rider 6).
 
 | ID | Feature | What the owner or customer gets | Effort | Horizon |
 |---|---|---|---|---|
@@ -1654,16 +2322,36 @@ Customers increasingly ask an AI assistant to find a plumber or a salón, and Go
 | F-169 | Business-to-business agents: work orders from managers' systems | Work orders filed by property managers' systems | L (6–8) | dropped |
 | F-170 | Is this reviewer a customer? Review authenticity | Each imported review matched privately against real customers | S–M (1.5–2) | future |
 
-**The forward view: found and booked by AI assistants (proposal).** BIS's path is measure first, publish the truth second, open the door last. **Now**, F-157 shows every lead's source, AI assistants included, so an owner can see from their own records whether assistants send business before anyone sells "AI visibility". **Later**, F-037's facts become the one source of truth for what the business says; F-161 keeps the Google profile's hours and holidays in step with Sofía and the booking page after Google approves the API (decision 32, the narrow reading); F-159 holds likely spam before it reaches the calendar; and a machine-made booking lands as a hold that a person confirms (F-051), so constraint 5 holds for assistants too. **In 2029–2030**, once call records show real assistant traffic (hypothesis H13), assistant callers get their own lane (F-156), businesses without a website get a bilingual page assistants can cite (F-160), a monthly check reports what AI answers say (F-162), and a storefront lets a customer's assistant ask and request a time (F-164). What BIS will not do is chase protocols that churn: agent payments, delegated agents and business-to-business agents are dropped until demand exists.
+**The forward view: found and booked by AI assistants (proposal).** BIS's path is measure first,
+publish the truth second, open the door last. **Now**, F-157 shows every lead's source, AI
+assistants included, so an owner can see from their own records whether assistants send business
+before anyone sells "AI visibility". **Later**, F-037's facts become the one source of truth for
+what the business says; F-161 keeps the Google profile's hours and holidays in step with Sofía and
+the booking page after Google approves the API (decision 32, the narrow reading); F-159 holds likely
+spam before it reaches the calendar; and a machine-made booking lands as a hold that a person
+confirms (F-051), so constraint 5 holds for assistants too. **In 2029–2030**, once call records show
+real assistant traffic (hypothesis H13), assistant callers get their own lane (F-156), businesses
+without a website get a bilingual page assistants can cite (F-160), a monthly check reports what AI
+answers say (F-162), and a storefront lets a customer's assistant ask and request a time (F-164).
+What BIS will not do is chase protocols that churn: agent payments, delegated agents and
+business-to-business agents are dropped until demand exists.
 
 **Design notes.**
-- A booking made by an outside assistant is a hold with a named state, never a silent write; the owner sees "Solicitada por un asistente" and confirms. (Sofía's caller-confirmed bookings are decision 19's.)
+- A booking made by an outside assistant is a hold with a named state, never a silent write; the
+  owner sees "Solicitada por un asistente" and confirms. (Sofía's caller-confirmed bookings are
+  decision 19's.)
 
-**What we reject here.** Booking inside Google (a Book button on the Google profile that opens BIS's booking page, through Place Action Links in F-161's scope, covers it), agent payments, customer-delegated agents, business-to-business agents, and a separate settings section for machines (each setting arrives with its feature).
+**What we reject here.** Booking inside Google (a Book button on the Google profile that opens BIS's
+booking page, through Place Action Links in F-161's scope, covers it), agent payments,
+customer-delegated agents, business-to-business agents, and a separate settings section for machines
+(each setting arrives with its feature).
 
 ### 5.14 Industry packs
 
-The owner named plumbers, restaurant owners and child day care "and others". A pack gives a trade its own words, pipeline, documents, clocks, Sofía module and Texas rules, so a plumber sees "Trabajos" and a licence block on the quote rather than a generic sales tool. Today there is one English "Sales" pipeline for everyone and blueprints that apply only at creation.
+The owner named plumbers, restaurant owners and child day care "and others". A pack gives a trade
+its own words, pipeline, documents, clocks, Sofía module and Texas rules, so a plumber sees
+"Trabajos" and a licence block on the quote rather than a generic sales tool. Today there is one
+English "Sales" pipeline for everyone and blueprints that apply only at creation.
 
 | ID | Feature | What the owner or customer gets | Effort | Horizon |
 |---|---|---|---|---|
@@ -1690,28 +2378,64 @@ The owner named plumbers, restaurant owners and child day care "and others". A p
 | F-191 | The next packs from the same parts: studios, freight, grooming, homebuilders | The studios pilot, freight, grooming and homebuilders from the same parts | M per pack (3–4 planned)* | future |
 | F-192 | Seat, date and season forecasting per pack | Seat and season forecasts | L (6–8) | dropped |
 
-**The forward view: the pack order (proposal, study decision 8).** Sofía sells before the packs: insurance agencies and event venues from now, law firms from next, once the Opinion 680/705 sheet and F-174's law module exist (decision 15). The packs then follow one order:
-1. **Home services first** (plumbing, HVAC, electrical and route services), after the vault and the blueprint extensions; part two, with schedule and map views, after money and per-staff calendars.
-2. **Law and insurance** second, after the vault, e-signature, households, the regulated-professional baseline and identity checks. Insurance wins on the bundle, not the receptionist.
-3. **Quinceañera and wedding vendors** third, after money, date holds and multi-payer schedules, and only once the Expo confirms how they sell (H1 to H4). They score best of any segment.
-4. **Child care** fourth, as the Spanish front office beside the centre's own system, after money, field-level roles, broadcasts, the installable app and the integration research, and after three to five centres confirm the position (H9). BIS stays beside that system, because brightwheel and Procare already hold the child's file.
-5. **Restaurant catering** fifth, after POS research, money and broadcasts, and only once a restaurant pays. Restaurants meet BIS sooner through Sofía at the front desk (F-199), if H10 holds, once Sofía can quote menus and hours as owner-edited facts (S-44, F-037 part 2) and F-199's allergen rule ships. She takes no table reservations and no food orders: she texts (once A2P, the send gate and decision 19 allow) or reads out the restaurant's own reservation or ordering link, and files a large party as a lead. Discovery calls with restaurants start now.
+**The forward view: the pack order (proposal, study decision 8).** Sofía sells before the packs:
+insurance agencies and event venues from now, law firms from next, once the Opinion 680/705 sheet
+and F-174's law module exist (decisions 15 and 34). The packs then follow one order:
+1. **Home services first** (plumbing, HVAC, electrical and route services), after the vault and the
+   blueprint extensions; part two, with schedule and map views, after money and per-staff calendars.
+2. **Law and insurance** second, after the vault, e-signature, households, the
+   regulated-professional baseline and identity checks. Insurance wins on the bundle, not the
+   receptionist.
+3. **Quinceañera and wedding vendors** third, after money, date holds and multi-payer schedules, and
+   only once the Expo confirms how they sell (H1 to H4). They score best of any segment.
+4. **Child care** fourth, as the Spanish front office beside the centre's own system, after money,
+   field-level roles, broadcasts, the installable app and the integration research, and after three
+   to five centres confirm the position (H9). BIS stays beside that system, because brightwheel and
+   Procare already hold the child's file.
+5. **Restaurant catering** fifth, after POS research, money and broadcasts, and only once a
+   restaurant pays. Restaurants meet BIS sooner through Sofía at the front desk (F-199), if H10
+   holds, once Sofía can quote menus and hours as owner-edited facts (S-44, F-037 part 2) and
+   F-199's allergen rule ships. She takes no table reservations and no food orders: she texts (once
+   A2P, the send gate and decision 19 allow) or reads out the restaurant's own reservation or
+   ordering link, and files a large party as a lead. Discovery calls with restaurants start now.
 
-**Adult day care is out, and home health with it; the HIPAA verticals stay behind study decision 5** (binding constraints 1 and 2, §3.1). F-173's vetting turns away adult day care and home health at onboarding, and holds the HIPAA verticals until decision 5 is made. Until a sector's pack arrives, its businesses may buy the core CRM, and Sofía on a higher plan, as any small business can (proposal), with three holds:
-- **Restaurants and child-care centres** may buy the CRM-only plan, but Sofía and the web chat are not sold to them until their never-say lines ship (the allergen rule in F-199; the child-care module in F-185), as the study orders it (§11.3: Sofía's knowledge base before the child-care and restaurant receptionists).
-- **Law firms** may buy the CRM from now, and Sofía from next, once both the Opinion 680/705 sheet and F-174's law module ("no legal advice") exist (decision 15, as this plan reads it).
-- **Tax preparers** are held at S-53's vetting, CRM included, until the 2028 season's prerequisites and S-61's vault switch land (proposal; decisions 18, 25 and 34). The vault ships in the first release with no per-tenant off switch, so admitting them earlier would break study decision 18's "stores no tax documents"; the owner may instead pull S-61's switch forward and admit them CRM-only sooner.
+**Adult day care is out, and home health with it; the HIPAA verticals stay behind study decision 5**
+(binding constraints 1 and 2, §3.1). F-173's vetting turns away adult day care and home health at
+onboarding, and holds the HIPAA verticals until decision 5 is made. Until a sector's pack arrives,
+its businesses may buy the core CRM, and Sofía on a higher plan, as any small business can
+(proposal), with three holds:
+- **Restaurants and child-care centres** may buy the CRM-only plan, but Sofía and the web chat are
+  not sold to them until their never-say lines ship (the allergen rule in F-199; the child-care
+  module in F-185), as the study orders it (§11.3: Sofía's knowledge base before the child-care and
+  restaurant receptionists).
+- **Law firms** may buy the CRM once the Opinion 680/705 sheet exists, because it answers Opinion
+  680 on cloud storage (now, or early in next if §4.1's cut order moves it), and Sofía from next,
+  once F-174's law module ("no legal advice") exists as well (decision 15, as this plan reads it,
+  and decision 34).
+- **Tax preparers** are held at S-53's vetting, CRM included, until the 2028 season's prerequisites
+  and S-61's vault switch land (proposal; decisions 18, 25 and 34). The vault ships in the first
+  release with no per-tenant off switch, so admitting them earlier would break study decision 18's
+  "stores no tax documents"; the owner may instead pull S-61's switch forward and admit them
+  CRM-only sooner.
 
-Voice is agency-only today, so these holds need no code. A centre keeps the child's file in its own system; BIS stores no date of birth, allergy or health field until F-004 enforces restriction, and what a parent says on a call stays only in that call's transcript (§3.2 rules 3 and 14). Freight is a pilot after the vault; studios are a pilot in 2029–2030, later than the study's months 9–12 (decision 34).
+Voice is agency-only and only the agency adds companies today, so these holds need no code until
+S-53's vetting enforces them. A centre keeps the child's file in its own system; BIS stores no date
+of birth, allergy or health field until F-004 enforces restriction, and what a parent says on a call
+stays only in that call's transcript (§3.2 rules 3 and 14). Freight is a pilot after the vault;
+studios are a pilot in 2029–2030, later than the study's months 9–12 (decision 34).
 
 **Design notes.**
-- Packs choose the record's cards, nouns and default views through the card registry and the lexicon; they never add a sidebar item beyond the four module slots (proposed; amendment 7).
+- Packs choose the record's cards, nouns and default views through the card registry and the
+  lexicon; they never add a sidebar item beyond the four module slots (proposed; amendment 7).
 
-**What we reject here.** Seat and season forecasting (it needs a season of data nobody asked for), POS, online ordering and table management for restaurants, and structured restricted fields in any pack before F-004 enforces restriction.
+**What we reject here.** Seat and season forecasting (it needs a season of data nobody asked for),
+POS, online ordering and table management for restaurants, and structured restricted fields in any
+pack before F-004 enforces restriction.
 
 ### 5.15 Additions (F-193 to F-199)
 
-Seven features added in the final pass: four answer gaps the judges named, and three are gaps that pass found. Their scores are provisional; no judge has scored them.
+Seven features added in the final pass: four answer gaps the judges named, and three are gaps that
+pass found. Their scores are provisional; no judge has scored them.
 
 | ID | Feature | What the owner or customer gets | Effort | Horizon |
 |---|---|---|---|---|
@@ -1721,10 +2445,12 @@ Seven features added in the final pass: four answer gaps the judges named, and t
 | F-196 | Room to run: background work beyond one 15-minute tick | Reminders and syncs that still arrive on time as background work grows | M (3–4) | next |
 | F-197 | La caja de zapatos: bring the paper files in | Years of paper files split, matched to records and filed on approval | M (3–4) | later |
 | F-198 | Team papers: staff licences, certificates and training that expire | Staff licences and training that expire, with bilingual reminders | S–M (2–3) | later |
-| F-199 | Restaurants start with Sofía at the front desk; the catering pack comes later | Sofía answers hours, large parties and catering for restaurants, texts or reads out the restaurant's own reservation or ordering link rather than taking a booking or an order, and never promises allergen safety | S–M (2–3) | later |
+| F-199 | Restaurants start with Sofía at the front desk; the catering pack comes later | Sofía answers hours, large parties and catering for restaurants, reads out or texts (once A2P, the send gate and decision 19 allow) the restaurant's own reservation or ordering link rather than taking a booking or an order, and never promises allergen safety | S–M (2–3) | later |
 
 **Design notes.**
-- None needs a DESIGN.md amendment: each uses existing patterns (rows that open drawers, status as dot and word, one primary per view). F-197's batch waits in the review tray ("38 listos · 6 por revisar · 4 sin dueño"), and health documents are filed by hand, never read by a model.
+- None needs a DESIGN.md amendment: each uses existing patterns (rows that open drawers, status as
+  dot and word, one primary per view). F-197's batch waits in the review tray ("38 listos · 6 por
+  revisar · 4 sin dueño"), and health documents are filed by hand, never read by a model.
 
 ---
 
@@ -1732,9 +2458,19 @@ Seven features added in the final pass: four answer gaps the judges named, and t
 
 ### 6.1 The picture
 
-**The picture (proposed).** At 7 AM an owner in McAllen opens BIS on a phone and reads, in Spanish, one sentence about what happened overnight, the five things that need them, and today's appointments. Everything else hangs off that screen: one record per customer with all their documents, one box to find or ask, one inbox, one tray where AI suggestions wait for a person's OK, and one settings page the owner can use without calling BIS. Customers see the business's brand in their own language on every link. Northern Lights keeps its colours, radii and surfaces; it gains a phone, a second language, named states and rules that tests enforce.
+**The picture (proposed).** At 7 AM an owner in McAllen opens BIS on a phone and reads, in Spanish,
+one sentence about what happened overnight, the five things that need them, and today's
+appointments. Everything else hangs off that screen: one record per customer with all their
+documents, one box to find or ask, one inbox, one tray where AI suggestions wait for a person's OK,
+and one settings page the owner can use without calling BIS. Customers see the business's brand in
+their own language on every link. Northern Lights keeps its colours, radii and surfaces; it gains a
+phone, a second language, named states and rules that tests enforce.
 
-**Today, across every surface (verified).** The signed-in shell has no phone layout. The owner's screens are English only: one 1,257-key catalogue "single-locale by design", `en-US` formatters and `<html lang="en">`. No screen reads the client's plan (`accounts.permissions` is unused), so a CRM-only account sees a hero of 0 and can never finish Setup. Each surface below starts from what exists.
+**Today, across every surface (verified).** The signed-in shell has no phone layout. The owner's
+screens are English only: one 1,257-key catalogue "single-locale by design", `en-US` formatters
+and `<html lang="en">`. No screen reads the client's plan (`accounts.permissions` is unused), so a
+CRM-only account sees a hero of 0 and can never finish Setup. Each surface below starts from what
+exists.
 
 **The owner's asks, as they land in the experience (proposed).**
 
@@ -1748,32 +2484,84 @@ Seven features added in the final pass: four answer gaps the judges named, and t
 
 ### 6.2 Design principles for what comes next (proposed)
 
-1. **Start from the day, not the database.** Every home, list and alert answers "what needs me now?" before "what happened?". *Why:* we assume the owner has about an hour a day for the office, and DESIGN.md's own test is a business owner reading at 7 AM.
-2. **Design at 390 pixels first.** Every new surface is drawn for a phone in one hand before the desk: compact containers, 44 px targets, 16 px inputs, the main action within the thumb's reach. *Why:* owners run the business from a truck or a counter, and today's signed-in shell has no phone layout.
-3. **Spanish is designed in, not translated after.** Every string, date, amount and sort order is built for both languages from its first commit, and every component survives Spanish's extra length. *Why:* most of the Valley speaks Spanish at home (§3.1, from the pricing study), and the owner's own screens are today the one place BIS is not bilingual.
-4. **A person approves every AI write, and the screen shows who did what.** AI proposes into one tray with its evidence; every row names its author (a person, Sofía, an automation, the customer, an import); every accept has an undo. *Why:* binding constraint 5 stays real only if approval is fast, visible and reversible.
-5. **One of each.** One box, one work queue, one inbox, one review tray, one Ajustes, one upgrade page; a new module arrives through the record, one list, the box and one settings section, not a new sidebar item. *Why:* the overhaul spec rejected GoHighLevel's 17-item sidebar, and the study roughly triples what the product holds.
-6. **Say the state in plain words, and never claim what has not happened.** Every surface is live, needs setup, waiting on someone, in a bigger plan, or absent; a wait names who and how long; a send says "enviaremos" until it is confirmed. *Why:* DESIGN.md bans carrier jargon in client copy, and Setup's "Couldn't check" already proves that a failed read must never look like progress.
-7. **The customer sees the business, not BIS.** Every customer link carries the business's logo, colour and name, speaks the customer's language from the first paint, and stays calm: no lit ground, no glass (amendment 15 would make this part of the contract). *Why:* rule 9, and the Phase 7 decision that customer surfaces are quiet.
-8. **Northern Lights stays; it gets lighter where the phone is weak.** No new colours beyond the accessibility tokens of amendment 17, and no new radii, shadows or surfaces; the four-step ladder, one hero and dot-and-word status carry every new screen, and any lighter rendering for cheap phones is chosen by measurement. *Why:* DESIGN.md is the contract, and the 2026-09-09 blur decision set the method.
-9. **A rule that matters is a test.** Tokens only, a designed state for every route, Spanish keywords in the box and both languages in the styleguide are checked in CI, not remembered in review. *Why:* much of the code is written by agents, and CI is the gate every merge must pass (CLAUDE.md).
+1. **Start from the day, not the database.** Every home, list and alert answers "what needs me now?"
+   before "what happened?". *Why:* we assume the owner has about an hour a day for the office, and
+   DESIGN.md's own test is a business owner reading at 7 AM.
+2. **Design at 390 pixels first.** Every new surface is drawn for a phone in one hand before the
+   desk: compact containers, 44 px targets, 16 px inputs, the main action within the thumb's
+   reach. *Why:* owners run the business from a truck or a counter, and today's signed-in shell has no
+   phone layout.
+3. **Spanish is designed in, not translated after.** Every string, date, amount and sort order is
+   built for both languages from its first commit, and every component survives Spanish's extra
+   length. *Why:* most of the Valley speaks Spanish at home (§3.1, from the pricing study), and the
+   owner's own screens are today the one place BIS is not bilingual.
+4. **A person approves every AI write, and the screen shows who did what.** AI proposes into one
+   tray with its evidence; every row names its author (a person, Sofía, an automation, the customer,
+   an import); every accept has an undo. *Why:* binding constraint 5 stays real only if approval is
+   fast, visible and reversible.
+5. **One of each.** One box, one work queue, one inbox, one review tray, one Ajustes, one upgrade
+   page; a new module arrives through the record, one list, the box and one settings section, not a
+   new sidebar item. *Why:* the overhaul spec rejected GoHighLevel's 17-item sidebar, and the study
+   roughly triples what the product holds.
+6. **Say the state in plain words, and never claim what has not happened.** Every surface is live,
+   needs setup, waiting on someone, in a bigger plan, or absent; a wait names who and how long; a
+   send says "enviaremos" until it is confirmed. *Why:* DESIGN.md bans carrier jargon in client
+   copy, and Setup's "Couldn't check" already proves that a failed read must never look like
+   progress.
+7. **The customer sees the business, not BIS.** Every customer link carries the business's logo,
+   colour and name, speaks the customer's language from the first paint, and stays calm: no lit
+   ground, no glass (amendment 15 would make this part of the contract). *Why:* rule 9, and the
+   Phase 7 decision that customer surfaces are quiet.
+8. **Northern Lights stays; it gets lighter where the phone is weak.** No new colours beyond the
+   accessibility tokens of amendment 17, and no new radii, shadows or surfaces; the four-step
+   ladder, one hero and dot-and-word status carry every new screen, and any lighter rendering for
+   cheap phones is chosen by measurement. *Why:* DESIGN.md is the contract, and the 2026-09-09 blur
+   decision set the method.
+9. **A rule that matters is a test.** Tokens only, a designed state for every route, Spanish
+   keywords in the box and both languages in the styleguide are checked in CI, not remembered in
+   review. *Why:* much of the code is written by agents, and CI is the gate every merge must pass
+   (CLAUDE.md).
 
-**One copy rule underneath.** The canonical examples mix *tú* and *usted* ("Lo que te necesita", "Pídele a BIS"); the canonical list settled *usted* for platform strings, so the labels below use it ("Necesita su atención", "Pedir un cambio"), and a paid Valley reviewer normalises the rest (F-012).
+**One copy rule underneath.** The canonical examples mix *tú* and *usted* ("Lo que te necesita",
+"Pídele a BIS"); the canonical list settled *usted* for platform strings, so the labels below use it
+("Necesita su atención", "Pedir un cambio"), and a paid Valley reviewer normalises the rest (F-012).
 
 ---
 
 ### 6.3 The surfaces that change most
 
-Eight surfaces. For each: what it is for, today, what the owner sees first, its states, its Spanish, and the features that build it. Everything after "Today" is **Proposed**.
+Eight surfaces. For each: what it is for, today, what the owner sees first, its states, its Spanish,
+and the features that build it. Everything after "Today" is **Proposed**.
 
 #### Surface 1. Hoy, the home screen
 
 - **For.** Starting the day, and coming back to it between jobs.
-- **Today.** The account dashboard: a greeting, a work row that is only a count link, three or four 7-day tiles with the hero on "Calls answered", a 14-day calls chart (both count robocalls and abandoned calls, which the weekly report excludes; §2.3) and a feed of booking, form and call events. No appointments for today; no "since you last looked"; the 7-day tiles never name their window; no skeleton while its twelve reads load; English only.
-- **What the owner sees first.** Four bands, the first two above the fold on a phone: (1) **Mientras no estaba**, one sentence of counts since this person's last visit, each clause a link; (2) **Necesita su atención**, the top five queue rows with one-tap ghost actions and "Ver las 12"; (3) **Hoy en la agenda**, today's appointments with status as dot and word; (4) **the numbers**, one hero picked by the metrics catalogue (the pack's headline, else "Clientes nuevos" on a CRM-only plan and "Llamadas contestadas" with Sofía), every tile naming its window in words. A plan without Sofía sees at most one measured evidence card, never a pop-up; until launch is done, a "Primeros pasos" card.
-- **States.** Loaded as above. Empty per band, each selling its feature ("No hay citas hoy. Las citas de su página y de Sofía aparecen aquí — Compartir su enlace"). Error per band: each band fails alone with Reintentar. Pending: a skeleton shaped like the four bands, never a spinner. Later, offline: a "Sin conexión · mostrando lo guardado a las 7:42" banner over a read-only copy of today's agenda.
-- **In Spanish.** Greeting, sentence and deltas in the reader's language ("3 más que la semana anterior"); "hace 3 h" in the account's zone; `es-US` formats; labels that take +35%. The morning brief (F-082) is this digest by email, from one digest builder shared with the weekly report.
-- **Built by.** F-076 (the hero by plan now, as a defect fix; Hoy itself later), F-077 (next → later), F-078 (the "waiting 12 min" clock, future), F-083 (the "+", later), F-084 (the open, closed, late or storm switch, now), F-100 (the hero's catalogue, later), F-141 (the evidence card, later), F-099 (Primeros pasos: CRM-plan steps now, the launch plan later). The CRM-only zero hero is a defect and ships first.
+- **Today.** The account dashboard: a greeting, a work row that is only a count link, three or four
+  7-day tiles with the hero on "Calls answered", a 14-day calls chart (both count robocalls and
+  abandoned calls, which the weekly report excludes; §2.3) and a feed of booking, form and call
+  events. No appointments for today; no "since you last looked"; the 7-day tiles never name their
+  window; no skeleton while its twelve reads load; English only.
+- **What the owner sees first.** Four bands, the first two above the fold on a phone: (1) **Mientras
+  no estaba**, one sentence of counts since this person's last visit, each clause a link;
+  (2) **Necesita su atención**, the top five queue rows with one-tap ghost actions and "Ver las 12";
+  (3) **Hoy en la agenda**, today's appointments with status as dot and word; (4) **the numbers**, one
+  hero picked by the metrics catalogue (the pack's headline, else "Clientes nuevos" on a CRM-only
+  plan and "Llamadas contestadas" with Sofía), every tile naming its window in words. A plan without
+  Sofía sees at most one measured evidence card, never a pop-up; until launch is done, a "Primeros
+  pasos" card.
+- **States.** Loaded as above. Empty per band, each selling its feature ("No hay citas hoy. Las
+  citas de su página y de Sofía aparecen aquí — Compartir su enlace"). Error per band: each band
+  fails alone with Reintentar. Pending: a skeleton shaped like the four bands, never a spinner.
+  Later, offline: a "Sin conexión · mostrando lo guardado a las 7:42" banner over a read-only copy
+  of today's agenda.
+- **In Spanish.** Greeting, sentence and deltas in the reader's language ("3 más que la semana
+  anterior"); "hace 3 h" in the account's zone; `es-US` formats; labels that take +35%. The morning
+  brief (F-082) is this digest by email, from one digest builder shared with the weekly report.
+- **Built by.** F-076 (the hero by plan now, as a defect fix; Hoy itself later), F-077 (next →
+  later), F-078 (the "waiting 12 min" clock, future), F-083 (the "+", later), F-084 (the open,
+  closed, late or storm switch, now), F-100 (the hero's catalogue, later), F-141 (the evidence card,
+  later), F-099 (Primeros pasos: CRM-plan steps now, the launch plan later). The CRM-only zero hero
+  is a defect and ships first.
 
 ```
 Hoy on a phone, 390 px (proposed)
@@ -1803,21 +2591,58 @@ Hoy on a phone, 390 px (proposed)
 #### Surface 2. The phone shell
 
 - **For.** Running the business from a phone without the screen scrolling sideways.
-- **Today.** None exists for signed-in users: the sidebar is 64 or 236 px at every width, there is no off-canvas navigation, and end-to-end tests run on Desktop Chrome only. Only the signed-out shell adapts.
-- **What the owner sees first.** A bottom bar: **Hoy · Bandeja · + Nuevo · Agenda · Clientes**. The spine has five items and the bar four, so **Pendientes lives inside Hoy on a phone** (band 2 is the queue) and the home-screen badge counts it, which settles the skeptic's point that the bar omitted it. The rest sits in a **Más** sheet whose first rows are Ajustes and the launch meter (amendment 2). The topbar keeps the name, a search icon and presence as a dot with a word ("En llamada"; a bare dot breaks rule 3). A thread replaces its list; drawers become full-height sheets; tables become stacked rows whose whole row stays the target. Nothing hides or animates on scroll.
-- **States.** Each list and sheet keeps its loaded, empty, error and skeleton states. The bar never changes with the plan: a module outside the plan goes to the upgrade page, not the bar.
-- **In Spanish.** The bar's nouns are chosen to fit at 320 px in both languages and are tested there; no label truncates. Installed to the home screen, the icon and name are the business's (F-108).
-- **Built by.** F-107 (a usable phone width now, as a rider; the bottom-tab shell next), F-089 for the nouns (next), F-108 (install and push, later), F-110 (the budget, future). **Sequencing:** the phone width ships now with today's screens and labels; the bottom bar and the spine's new nouns follow in next, after the January 2027 sitting on amendments 2 to 7.
+- **Today.** None exists for signed-in users: the sidebar is 64 or 236 px at every width, there is
+  no off-canvas navigation, and end-to-end tests run on Desktop Chrome only. Only the signed-out
+  shell adapts.
+- **What the owner sees first.** A bottom bar: **Hoy · Bandeja · + Nuevo · Agenda · Clientes**. The
+  spine has five items and the bar four, so **Pendientes lives inside Hoy on a phone** (band 2 is
+  the queue) and the home-screen badge counts it, which settles the skeptic's point that the bar
+  omitted it. The rest sits in a **Más** sheet whose first rows are Ajustes and the launch meter
+  (amendment 2). The topbar keeps the name, a search icon and presence as a dot with a word ("En
+  llamada"; a bare dot breaks rule 3). A thread replaces its list; drawers become full-height
+  sheets; tables become stacked rows whose whole row stays the target. Nothing hides or animates on
+  scroll.
+- **States.** Each list and sheet keeps its loaded, empty, error and skeleton states. The bar never
+  changes with the plan: a module outside the plan goes to the upgrade page, not the bar.
+- **In Spanish.** The bar's nouns are chosen to fit at 320 px in both languages and are tested
+  there; no label truncates. Installed to the home screen, the icon and name are the business's
+  (F-108).
+- **Built by.** F-107 (a usable phone width now, as a rider; the bottom-tab shell next), F-089 for
+  the nouns (next), F-108 (install and push, later), F-110 (the budget, future). **Sequencing:** the
+  phone width ships now with today's screens and labels; the bottom bar and the spine's new nouns
+  follow in next, after the January 2027 sitting on amendments 2 to 7.
 
 #### Surface 3. The record page and the vault
 
-- **For.** The owner's central ask: one place for each customer, with all their documents and information.
-- **Today.** A contact page and a drawer over the list. The timeline has no bookings or suggestions, shows calls only as voice messages, prints raw statuses and draws dates in the server's zone, so an evening call can show tomorrow's date. Deals cannot be opened from the record. There are no documents.
-- **What the owner sees first.** On a desk, the study's three columns: who they are, what is happening, what they have. On a phone: the header (language chip, status as dot and word, Llamar · Mensaje · Cómo llegar), the summary (checked fact line first, prose marked "Generado por IA"), the next three things due, the timeline, holdings as collapsed cards, then identity. Every timeline row reads who · did what · when, with a provenance mark (Sofía · IA, Automatización, Cliente, a name).
-- **The vault.** Rows show source ("Lo subió el cliente"), version, expiry in words ("Vence en 12 días") and who can see it. "Tomar foto" uses the rear camera; uploads read Subiendo 45 % → Revisando → Listo. "7 de 9" names each missing document with **Pedir al cliente** and **Subir**. Deleting moves a document to the trash **at once with an undo**; a typed name confirms only a permanent purge (F-005 asked for it on the trash move, which rule 6 reserves for destructive acts).
-- **States.** Every card loads, empties and fails on its own, behind its own streaming boundary; a scanning state ("Revisando") that owners would otherwise read as "lost"; a restricted state ("Hay 2 campos restringidos") once roles exist. A record page names **no hero** (amendment 11).
-- **In Spanish.** Role chips read both ways ("Madre de Lucía R." ↔ "Hija de Ana R."); document categories and pack activity types are bilingual; what the customer said stays in their language and carries its own `lang`, with a translation beside it, never replacing it.
-- **Built by.** F-001 (the kit, card registry and three-column page in the first release; a peek per record type later), F-005 (first release), F-022 (first release), F-003 (relationship labels in the first release), F-004 (later), F-002 (later), F-055 (the money card, later). **Lean first:** timeline fixes as defects on today's data, the three-column page with the first release, the peek stack with the second record type.
+- **For.** The owner's central ask: one place for each customer, with all their documents and
+  information.
+- **Today.** A contact page and a drawer over the list. The timeline has no bookings or suggestions,
+  shows calls only as voice messages, prints raw statuses and draws dates in the server's zone, so
+  an evening call can show tomorrow's date. Deals cannot be opened from the record. There are no
+  documents.
+- **What the owner sees first.** On a desk, the study's three columns: who they are, what is
+  happening, what they have. On a phone: the header (language chip, status as dot and word, Llamar ·
+  Mensaje · Cómo llegar), the summary (checked fact line first, prose marked "Generado por IA"), the
+  next three things due, the timeline, holdings as collapsed cards, then identity. Every timeline
+  row reads who · did what · when, with a provenance mark (Sofía · IA, Automatización, Cliente, a
+  name).
+- **The vault.** Rows show source ("Lo subió el cliente"), version, expiry in words ("Vence en 12
+  días") and who can see it. "Tomar foto" uses the rear camera; uploads read Subiendo 45 % →
+  Revisando → Listo. "7 de 9" names each missing document with **Pedir al cliente** and **Subir**.
+  Deleting moves a document to the trash **at once with an undo**; a typed name confirms only a
+  permanent purge (F-005 asked for it on the trash move, which rule 6 reserves for destructive
+  acts).
+- **States.** Every card loads, empties and fails on its own, behind its own streaming boundary; a
+  scanning state ("Revisando") that owners would otherwise read as "lost"; a restricted state ("Hay
+  2 campos restringidos") once roles exist. A record page names **no hero** (amendment 11).
+- **In Spanish.** Role chips read both ways ("Madre de Lucía R." ↔ "Hija de Ana R."); document
+  categories and pack activity types are bilingual; what the customer said stays in their language
+  and carries its own `lang`, with a translation beside it, never replacing it.
+- **Built by.** F-001 (the kit, card registry and three-column page in the first release; a peek per
+  record type later), F-005 (first release), F-022 (first release), F-003 (relationship labels in
+  the first release), F-004 (later), F-002 (later), F-055 (the money card, later). **Lean first:**
+  timeline fixes as defects on today's data, the three-column page with the first release, the peek
+  stack with the second record type.
 
 ```
 The record page on a desk, 1,280 px (proposed)
@@ -1837,30 +2662,73 @@ The record page on a desk, 1,280 px (proposed)
 
 #### Surface 4. The one box: find, go or ask
 
-- **For.** Finding anything, reaching any screen, or asking a question, by typing in either language.
-- **Today.** The ⌘K palette searches contacts, calls and conversations, five of each. Its only action is the theme toggle, which misbehaves on themed accounts. It has no Spanish keywords, so "citas" finds nothing, and contact search does not match "Garcia" to "García".
-- **What the owner sees first.** A "Buscar o preguntar" field at the top of the sidebar and a search icon in the phone header (⌘K still works). Results group by type, with "Ver los 42 resultados" on one server-paged page. "¿Dónde cambio el horario?" is answered from the product map with a link, never generated. "¿Quién no ha confirmado su cita de mañana?" offers **Preguntar a BIS**: editable filter chips first, then the count from the database, the rows and "Guardar como vista". "Preguntar a BIS" never writes, and the box offers no creates and no destructive action.
-- **States.** A skeleton row while searching; empty "Sin resultados para 'Garsia' — Pruebe con el teléfono"; error with Reintentar; "ask" shows its chips before any number, so a wrong reading is visible before it misleads.
-- **In Spanish.** Accent-folded and typo-tolerant; phone digits in any format; nicknames (Chuy → Jesús) for search only, never for merging; type words in either language filter ("citas mañana"); a test fails when any entry lacks a Spanish keyword. "?" opens a bilingual shortcuts sheet.
-- **Built by.** F-092 (contact search next; one index across record types later), F-095 (find and go next, read-only ask later; voice dropped), F-087 (the product map, next), F-093 (saved views, later), F-083 (creates live in "+", not here).
+- **For.** Finding anything, reaching any screen, or asking a question, by typing in either
+  language.
+- **Today.** The ⌘K palette searches contacts, calls and conversations, five of each. Its only
+  action is the theme toggle, which misbehaves on themed accounts. It has no Spanish keywords, so
+  "citas" finds nothing, and contact search does not match "Garcia" to "García".
+- **What the owner sees first.** A "Buscar o preguntar" field at the top of the sidebar and a search
+  icon in the phone header (⌘K still works). Results group by type, with "Ver los 42 resultados" on
+  one server-paged page. "¿Dónde cambio el horario?" is answered from the product map with a link,
+  never generated. "¿Quién no ha confirmado su cita de mañana?" offers **Preguntar a BIS**: editable
+  filter chips first, then the count from the database, the rows and "Guardar como vista".
+  "Preguntar a BIS" never writes, and the box offers no creates and no destructive action.
+- **States.** A skeleton row while searching; empty "Sin resultados para 'Garsia' — Pruebe con el
+  teléfono"; error with Reintentar; "ask" shows its chips before any number, so a wrong reading is
+  visible before it misleads.
+- **In Spanish.** Accent-folded and typo-tolerant; phone digits in any format; nicknames (Chuy →
+  Jesús) for search only, never for merging; type words in either language filter ("citas mañana");
+  a test fails when any entry lacks a Spanish keyword. "?" opens a bilingual shortcuts sheet.
+- **Built by.** F-092 (contact search next; one index across record types later), F-095 (find and go
+  next, read-only ask later; voice dropped), F-087 (the product map, next), F-093 (saved views,
+  later), F-083 (creates live in "+", not here).
 
 #### Surface 5. The inbox (Bandeja)
 
 - **For.** Answering customers on the channel they used, in their language, from a phone.
-- **Today.** The reply box sends email only, one line at a time; the list does not refresh on its own; there are no saved replies and no open or done state; on a phone the thread renders under the list. Texting waits on each account's texting registration, which no client has completed yet.
-- **What the owner sees first.** Threads with their channel as icon and word, "Sin responder" first; the header opens the customer's record. The composer is multi-line and follows the customer's last channel; "/" inserts a saved reply from a bilingual pair; a ghost chip offers "Si no responde en 2 días, recuérdeme" (Enviar stays the only primary). Later, drafts and translations sit beside the original, never replacing it (F-025).
-- **States.** Abierta · Hecha · Pospuesta, as dot and word; any new message reopens a thread. Delivery status as dot and word. Where texting is not ready, the Text channel reads "Esperando a las compañías telefónicas · 3–7 días hábiles" instead of a tab that fails on send. Empty "Aquí aparecen los mensajes de sus clientes — Compartir su número". Refresh by polling first, live updates later.
-- **In Spanish.** Saved replies, delivery words and the waiting state in both languages; the customer's message keeps its own `lang`.
-- **Built by.** F-068 (the channel-following composer in the first release; saved replies and states later), F-079 phase 1 (the reminder chip, later), F-067 (the number and texting registration, later), F-065 (every send passes the consent gate, now), F-011 and F-025 (drafting), F-193 (Facebook and Instagram threads, later → future).
+- **Today.** The reply box sends email only, one line at a time; the list does not refresh on its
+  own; there are no saved replies and no open or done state; on a phone the thread renders under the
+  list. Texting waits on each account's texting registration, which no client has completed yet.
+- **What the owner sees first.** Threads with their channel as icon and word, "Sin responder" first;
+  the header opens the customer's record. The composer is multi-line and follows the customer's last
+  channel; "/" inserts a saved reply from a bilingual pair; a ghost chip offers "Si no responde en 2
+  días, recuérdeme" (Enviar stays the only primary). Later, drafts and translations sit beside the
+  original, never replacing it (F-025).
+- **States.** Abierta · Hecha · Pospuesta, as dot and word; any new message reopens a thread.
+  Delivery status as dot and word. Where texting is not ready, the Text channel reads "Esperando a
+  las compañías telefónicas · 3–7 días hábiles" instead of a tab that fails on send. Empty "Aquí
+  aparecen los mensajes de sus clientes — Compartir su número". Refresh by polling first, live
+  updates later.
+- **In Spanish.** Saved replies, delivery words and the waiting state in both languages; the
+  customer's message keeps its own `lang`.
+- **Built by.** F-068 (the channel-following composer in the first release; saved replies and states
+  later), F-079 phase 1 (the reminder chip, later), F-067 (the number and texting registration,
+  later), F-065 (every send passes the consent gate, now), F-011 and F-025 (drafting), F-193
+  (Facebook and Instagram threads, later → future).
 
 #### Surface 6. The review tray for AI suggestions
 
-- **For.** Making "a person approves every AI write" fast enough that it stays real and does not become rubber-stamping.
-- **Today.** Up to three suggestions per call (a task, a blank contact field, a later deal stage), each quoting the caller. They can be accepted or dismissed only on the call's page, with no undo and no editing; To do and the agency queue only link there.
-- **What the owner sees first.** In Pendientes, cards grouped by customer and source. Each shows the change as before → after, the evidence linked to its exact moment, and **Aceptar** (the card's one primary), Editar y aceptar and Descartar. The same card appears in the drawer and on the call page. "Aceptar las 3" works only within one source and never overwrites a filled field.
-- **States.** Pendiente · Aceptada · Editada · Descartada · Vencida, as dot and word. Accept runs at once with a 10-second undo, which names what it cannot reverse ("El correo ya salió"). Empty: "Las sugerencias aparecen aquí después de una llamada, un correo o un documento. Nada cambia hasta que usted acepte." Skeleton cards; Reintentar on error. Phone swipes always have undo and visible buttons.
-- **In Spanish.** Titles and summaries in the reader's language; the evidence in the caller's own words, marked with its language. A weekly line, "Aceptó el 82% de las sugerencias", measures accuracy.
-- **Built by.** F-019 (first release, on today's call suggestions first), F-077 (next), F-022 (first release), F-021 (later). **No auto-accept at any confidence.** F-022's proposed exemption for caller-directed live writes narrows binding constraint 5; the tray does not assume it, and it waits for the owner's decision 19.
+- **For.** Making "a person approves every AI write" fast enough that it stays real and does not
+  become rubber-stamping.
+- **Today.** Up to three suggestions per call (a task, a blank contact field, a later deal stage),
+  each quoting the caller. They can be accepted or dismissed only on the call's page, with no undo
+  and no editing; To do and the agency queue only link there.
+- **What the owner sees first.** In Pendientes, cards grouped by customer and source. Each shows the
+  change as before → after, the evidence linked to its exact moment, and **Aceptar** (the card's one
+  primary), Editar y aceptar and Descartar. The same card appears in the drawer and on the call
+  page. "Aceptar las 3" works only within one source and never overwrites a filled field.
+- **States.** Pendiente · Aceptada · Editada · Descartada · Vencida, as dot and word. Accept runs at
+  once with a 10-second undo, which names what it cannot reverse ("El correo ya salió"). Empty: "Las
+  sugerencias aparecen aquí después de una llamada, un correo o un documento. Nada cambia hasta que
+  usted acepte." Skeleton cards; Reintentar on error. Phone swipes always have undo and visible
+  buttons.
+- **In Spanish.** Titles and summaries in the reader's language; the evidence in the caller's own
+  words, marked with its language. A weekly line, "Aceptó el 82% de las sugerencias", measures
+  accuracy.
+- **Built by.** F-019 (first release, on today's call suggestions first), F-077 (next), F-022 (first
+  release), F-021 (later). **No auto-accept at any confidence.** F-022's proposed exemption for
+  caller-directed live writes narrows binding constraint 5; the tray does not assume it, and it
+  waits for the owner's decision 19.
 
 ```
 One card in the tray, on a phone (proposed)
@@ -1877,29 +2745,71 @@ One card in the tray, on a phone (proposed)
 
 #### Surface 7. Customer-facing pages, and the customer's own page
 
-- **For.** The customer's side: booking, forms, chat and cancel today; from 2027, manage, share and upload links, then sign, quote and pay links with money, and a page the customer can come back to.
-- **Today.** Four public pages carry the business's logo, name and theme and speak Spanish through per-surface string modules. All are served as `lang="en"`, and the chat and cancel pages never correct it; tab titles are generic English words; the booking page has no `<h1>`; a switched-off chat opens a bare 404; email addresses containing "_" are refused on intake. "Powered by BIS" cannot be removed.
-- **What the customer sees first.** A front door: logo, the business's name as the page's `<h1>`, the service area ("McAllen · Edinburg · Mission"), "Atendemos en español", tap-to-call, step dots that render, and time in words ("Horario de McAllen (hora del centro)"). The tab reads "{Negocio} · Agendar cita". The language is decided on the server: the link's parameter, then the contact's preference, then the browser, then the form's default, with an EN | ES switch on every page.
-- **The customer's own page.** Stage 1, **Mi página**: a magic link in transactional messages, with upcoming and past visits, copies of messages sent and preferences. Stage 2, **Mi cuenta**: what they owe and what the business needs, one primary for the most urgent act (Pagar or Firmar). No password. Placement strains binding constraint 3 (Stage 2 is a non-Sofía feature on higher plans), so both stages' placement is **decision 25's to make** (study decision 14's scope), not settled here.
-- **States.** Designed dead ends in the business's brand and the visitor's language: not found, error, expired, revoked, already done, offline ("Estamos fuera de línea — llámenos"). Pay and sign pages use the irreversible pattern: one submission, a "Procesando" state with no second Pay button, and a result that says exactly what happened ("No se cobró nada. Su tarjeta fue rechazada.").
-- **In Spanish.** Spanish from the first paint, with the right `lang`; money in `es-US` with "USD" wherever pesos could also appear; 16 px inputs, 44 px targets, errors announced and focused.
-- **Built by.** F-102 (the shared layout now, as defects; the public-page kit later, before the first new link type), F-047 (the "_" fix now, as its phase 1), F-048 (manage my appointment, a rider now), F-062 (later), F-106 (the pending patterns, later), F-055 (amounts), F-065 (preferences). Calm surfaces and the no-card booking header need amendments 14 and 15.
+- **For.** The customer's side: booking, forms, chat and cancel today; from 2027, manage, share and
+  upload links, then sign, quote and pay links with money, and a page the customer can come back to.
+- **Today.** Four public pages carry the business's logo, name and theme and speak Spanish through
+  per-surface string modules. All are served as `lang="en"`, and the chat and cancel pages never
+  correct it; tab titles are generic English words; the booking page has no `<h1>`; a switched-off
+  chat opens a bare 404; email addresses containing "_" are refused on intake. "Powered by BIS"
+  cannot be removed.
+- **What the customer sees first.** A front door: logo, the business's name as the page's `<h1>`,
+  the service area ("McAllen · Edinburg · Mission"), "Atendemos en español", tap-to-call, step dots
+  that render, and time in words ("Horario de McAllen (hora del centro)"). The tab reads "{Negocio}
+  · Agendar cita". The language is decided on the server: the link's parameter, then the contact's
+  preference, then the browser, then the form's default, with an EN | ES switch on every page.
+- **The customer's own page.** Stage 1, **Mi página**: a magic link in transactional messages, with
+  upcoming and past visits, copies of messages sent and preferences. Stage 2, **Mi cuenta**: what
+  they owe and what the business needs, one primary for the most urgent act (Pagar or Firmar). No
+  password. Placement strains binding constraint 3 (Stage 2 is a non-Sofía feature on higher plans),
+  so both stages' placement is **decision 25's to make** (study decision 14's scope), not settled
+  here.
+- **States.** Designed dead ends in the business's brand and the visitor's language: not found,
+  error, expired, revoked, already done, offline ("Estamos fuera de línea — llámenos"). Pay and sign
+  pages use the irreversible pattern: one submission, a "Procesando" state with no second Pay
+  button, and a result that says exactly what happened ("No se cobró nada. Su tarjeta fue
+  rechazada.").
+- **In Spanish.** Spanish from the first paint, with the right `lang`; money in `es-US` with "USD"
+  wherever pesos could also appear; 16 px inputs, 44 px targets, errors announced and focused.
+- **Built by.** F-102 (the shared layout now, as defects; the public-page kit later, before the
+  first new link type), F-047 (the "_" fix now, as its phase 1), F-048 (manage my appointment, a
+  rider now), F-062 (later), F-106 (the pending patterns, later), F-055 (amounts), F-065
+  (preferences). Calm surfaces and the no-card booking header need amendments 14 and 15.
 
 #### Surface 8. Ajustes, settings for owners
 
 - **For.** Changing what is the owner's without a phone call, and seeing plainly what BIS manages.
-- **Today.** Clients have no Settings page; what they can edit today is listed in §2.1. The theme is saved per browser, not per person.
-- **What the owner sees first.** One **Ajustes** in the sidebar footer (at the top of Más on a phone), with a search box and three scopes: **Mis preferencias** (language, display, notifications, my calendar, security; not "Mi cuenta", which names the customer's own page); **Negocio** (Perfil y marca, Horario y cierres, Equipo, Canales, Automatizaciones, Conexiones, Plan y facturación); and **Administrado por BIS** (the phone number, texting registration, sending domain, Sofía's rules), read-only with its status and a ghost **Pedir un cambio** that lands in the agency's queue and is tracked as Recibida · En proceso · Hecha.
-- **Conexiones, for Google and Microsoft.** One page for every integration. First the owner's own calendar: busy times block Sofía's slots and the booking page, bookings write events with Meet or Teams links, and events with a known customer join their timeline; Outlook first where a client runs Microsoft 365 (study §6.2). Each connection shows status as dot and word, what it reads, Desconectar.
-- **States.** One primary Save per card (rule 8 as amended 2026-09-23); reversible changes with undo, destructive ones confirmed by typing the name; a skeleton per section; each section in one of the five surface states; every change recorded with its before and after.
-- **In Spanish.** Section names and search keywords in both languages ("horario", "cierres", "avisos"). Sign-in stays platform-branded (rule 9) and follows the browser's language with an EN | ES switch, because no company is known before sign-in.
-- **Built by.** F-096 (Mis preferencias in the first release; Negocio and Equipo later), F-097 (later), F-081 (later), F-084 (now), F-117, F-099, F-112 (future), and F-148 (next) on the study's Google and Microsoft track. The agency keeps its two-pane Setup and gains a read-only "Ver como Dueño" (F-098, folded into F-087).
+- **Today.** Clients have no Settings page; what they can edit today is listed in §2.1. The theme is
+  saved per browser, not per person.
+- **What the owner sees first.** One **Ajustes** in the sidebar footer (at the top of Más on a
+  phone), with a search box and three scopes: **Mis preferencias** (language, display,
+  notifications, my calendar, security; not "Mi cuenta", which names the customer's own
+  page); **Negocio** (Perfil y marca, Horario y cierres, Equipo, Canales, Automatizaciones, Conexiones,
+  Plan y facturación); and **Administrado por BIS** (the phone number, texting registration, sending
+  domain, Sofía's rules), read-only with its status and a ghost **Pedir un cambio** that lands in
+  the agency's queue and is tracked as Recibida · En proceso · Hecha.
+- **Conexiones, for Google and Microsoft.** One page for every integration. First the owner's own
+  calendar: busy times block Sofía's slots and the booking page, bookings write events with Meet or
+  Teams links, and events with a known customer join their timeline; Outlook first where a client
+  runs Microsoft 365 (study §6.2). Each connection shows status as dot and word, what it reads,
+  Desconectar.
+- **States.** One primary Save per card (rule 8 as amended 2026-09-23); reversible changes with
+  undo, destructive ones confirmed by typing the name; a skeleton per section; each section in one
+  of the five surface states; every change recorded with its before and after.
+- **In Spanish.** Section names and search keywords in both languages ("horario", "cierres",
+  "avisos"). Sign-in stays platform-branded (rule 9) and follows the browser's language with an EN |
+  ES switch, because no company is known before sign-in.
+- **Built by.** F-096 (Mis preferencias in the first release; Negocio and Equipo later), F-097
+  (later), F-081 (later), F-084 (now), F-117, F-099, F-112 (future), and F-148 (next) on the study's
+  Google and Microsoft track. The agency keeps its two-pane Setup and gains a read-only "Ver como
+  Dueño" (F-098, folded into F-087).
 
 ---
 
 ### 6.4 The design system work underneath
 
-These enablers make the eight surfaces possible and keep them consistent. Most are **engineering work an owner never sees**; the value judge scored them mostly 1 to 3 by design, and they should be judged on feasibility and risk instead. Efforts and horizons below are the roadmap's (§4).
+These enablers make the eight surfaces possible and keep them consistent. Most are **engineering
+work an owner never sees**; the value judge scored them mostly 1 to 3 by design, and they should be
+judged on feasibility and risk instead. Efforts and horizons below are the roadmap's (§4).
 
 | Enabler | What it is (proposed) | Who sees it | Effort · horizon | Features |
 |---|---|---|---|---|
@@ -1915,11 +2825,20 @@ These enablers make the eight surfaces possible and keep them consistent. Most a
 | One token source | Tokens authored once as data, generating CSS, TypeScript, email-safe literals, the PDF theme, the checkout appearance and the home-screen manifest | Engineering | 2–3 ew · future (PDFs use today's CSS tokens first) | F-104 |
 | One per-person preferences store | Language, theme, text size, collapsed cards and "last seen" in one interim table, not scattered across auth metadata, cookies and separate tables | Engineering | small, created with staff and roles (S-01) · now | §3.2 rule 6 |
 
-**The honest note.** Only the phone primitives, the accessibility fixes and the offline banner are things an owner would name; the rest is insurance, including a burn-down of known violations such as the base Button's 10 px radius against DESIGN.md's 8 px controls.
+**The honest note.** Only the phone primitives, the accessibility fixes and the offline banner are
+things an owner would name; the rest is insurance, including a burn-down of known violations such as
+the base Button's 10 px radius against DESIGN.md's 8 px controls.
 
 ### 6.5 DESIGN.md amendments this plan needs
 
-Every row was checked against DESIGN.md's text on 2026-09-26. **Corrected:** the canonical "dark-first" item read DESIGN.md as dark for everyone; it already makes light the default for client-role users, so only the operator default conflicts (row 1). **Kept for the owner's ruling:** "a partner line on the signed-out shell" (F-145, row 23). A partner's line in the content area may leave rule 9's platform mark and accent in place, but that is a reading of rule 9, and DESIGN.md says to flag rather than improvise; until the owner rules, F-145 ships partner links without logos. **Added:** rows 4, 5, 6, 9, 12, 13, 18 and 19, which the canonical list missed. F-101 (DESIGN.md v2, with its own Amendments table) is the vehicle for all of them.
+Every row was checked against DESIGN.md's text on 2026-09-26. **Corrected:** the canonical
+"dark-first" item read DESIGN.md as dark for everyone; it already makes light the default for
+client-role users, so only the operator default conflicts (row 1). **Kept for the owner's ruling:**
+"a partner line on the signed-out shell" (F-145, row 23). A partner's line in the content area may
+leave rule 9's platform mark and accent in place, but that is a reading of rule 9, and DESIGN.md
+says to flag rather than improvise; until the owner rules, F-145 ships partner links without
+logos. **Added:** rows 4, 5, 6, 9, 12, 13, 18 and 19, which the canonical list missed. F-101 (DESIGN.md v2,
+with its own Amendments table) is the vehicle for all of them.
 
 | # | Amendment | Needed by | Recommendation | Status |
 |---|---|---|---|---|
@@ -1949,13 +2868,20 @@ Every row was checked against DESIGN.md's text on 2026-09-26. **Corrected:** the
 
 ### 6.6 Sequencing the design work
 
-The design pass recommended building the product map, the state catalogue, the lint burn-down and the accessibility fixes in the now horizon, because they are cheapest before the record page ships. The capacity check (§4.1) places them as above instead. If the now horizon runs under its low bound, they are the first candidates to move forward, in that order.
+The design pass recommended building the product map, the state catalogue, the lint burn-down and
+the accessibility fixes in the now horizon, because they are cheapest before the record page ships.
+The capacity check (§4.1) places them as above instead. If the now horizon runs under its low bound,
+they are the first candidates to move forward, in that order.
 
-The amendments are ruled in two sittings, **October 2026** for the first release and **January 2027** for next, and the rest as their features start; decision 35 lists the rows in each. Until an amendment is dated, new modules go into today's sidebar groups, and no feature ships nouns or patterns the contract does not yet allow.
+The amendments are ruled in two sittings, **October 2026** for the first release and **January
+2027** for next, and the rest as their features start; decision 35 lists the rows in each. Until an
+amendment is dated, new modules go into today's sidebar groups, and no feature ships nouns or
+patterns the contract does not yet allow.
 
 ### 6.7 What we will not do
 
-Design ideas from the ten lenses that this vision rejects or defers. A deferral names what would bring the idea back.
+Design ideas from the ten lenses that this vision rejects or defers. A deferral names what would
+bring the idea back.
 
 | # | Idea (source) | Verdict | Reason |
 |---|---|---|---|
@@ -1985,14 +2911,18 @@ Design ideas from the ten lenses that this vision rejects or defers. A deferral 
 
 ### 7.1 The owner's question, answered
 
-**Yes (proposal): BIS should connect to Microsoft 365 and Google, starting with the owner's own calendar.** Today nothing in production connects to Google or Microsoft: Google sign-in is built but has no production credentials, there is no calendar sync and no add-to-calendar file, and the owner's own calendar and BIS can double-book. The study plans the whole track (study §6; S-22 to S-28, 15.5–22 ew); this plan schedules it and adds what the canonical features design around it.
+**Yes (proposal): BIS should connect to Microsoft 365 and Google, starting with the owner's own
+calendar.** Today nothing in production connects to Google or Microsoft: Google sign-in is built but
+has no production credentials, there is no calendar sync and no add-to-calendar file, and the
+owner's own calendar and BIS can double-book. The study plans the whole track (study §6; S-22 to
+S-28, 15.5–22 ew); this plan schedules it and adds what the canonical features design around it.
 
 | When | What | Study item or feature | Effort (ew) |
 |---|---|---|---|
 | Now | Google branding verified and published, Microsoft publisher verification | S-27 | 1 |
 | Now | Google and Microsoft sign-in (Google while the project stays in Testing mode) | S-28 | 0.5–1 |
 | Now | An add-to-calendar file on every booking, so the customer's own phone holds the appointment | F-048 (rider) | 2–2.5 |
-| Next, first | A private, revocable calendar feed of the business's BIS bookings, in both languages, that Apple, Google and Outlook calendars subscribe to, with minimal customer detail. One-way: the owner's own events do not block Sofía's slots until S-22. Within about 15 minutes to an hour on Apple devices, as the device's fetch setting allows; a delayed view on Google and Outlook: Outlook refreshes about every 3 hours on Outlook.com and 6 on Outlook on the web, though it "can take more than 24 hours" ([Microsoft](https://support.microsoft.com/en-us/outlook/import-or-subscribe-to-a-calendar-in-outlook-com-or-outlook-on-the-web)), Google publishes no interval and users report 8 to 24 hours, and Google users add it once from a computer ([Google](https://support.google.com/calendar/answer/37100?hl=en)) (proposal) | F-048 (part 2) | 1 |
+| Next, first | A private, revocable calendar feed of the business's BIS bookings, in both languages, that Apple, Google and Outlook calendars subscribe to, with minimal customer detail. One-way: the owner's own events do not block Sofía's slots until S-22. As often as every 15 minutes on an iPhone set to fetch on an interval, but only while it charges on Wi-Fi when set to Automatic ([Apple](https://support.apple.com/guide/iphone/change-calendar-settings-iphc37be2016/ios)); a delayed view on Google and Outlook: Outlook refreshes about every 3 hours on Outlook.com and 6 on Outlook on the web, though it "can take more than 24 hours" ([Microsoft](https://support.microsoft.com/en-us/outlook/import-or-subscribe-to-a-calendar-in-outlook-com-or-outlook-on-the-web)), Google publishes no interval and users report 8 to 24 hours, and Google users add it once from a computer ([Google](https://support.google.com/calendar/answer/37100?hl=en)) (proposal) | F-048 (part 2) | 1 |
 | Next | The background job runner that calendar sync, subscriptions and retries need | F-196 | 3–4 |
 | Next | **The owner's calendar**: busy times block Sofía's slots and the booking page; bookings write events with Meet or Teams links; events with a known customer join the record's timeline. Outlook first where the client runs Microsoft 365; Google's calendar scopes submitted for review alone, with a Testing-mode pilot until the review is submitted | S-22 | 6–8 |
 | Next | Conexiones: one page to connect, see and cut every integration | F-148 | 2 |
@@ -2004,20 +2934,58 @@ Design ideas from the ten lenses that this vision rejects or defers. A deferral 
 | On demand | Full inbox sync (direct for Outlook; Gmail only through a vendor holding the security assessment), then a Gmail add-on and an Outlook add-in | S-N10, study decision 13 | not in the total |
 | After decision 7 | Meet and Teams transcripts | S-N14 | not in the total |
 
-**The verification gates** (study §6.1, checked against Google's and Microsoft's documentation on 2026-09-25):
-- **Google's sensitive scopes** (calendar, send-as, contacts) need one verification review with no fee: a privacy policy, a demo video of each scope in use and a justification per scope, typically 3–5 business days and realistically 1–3 weeks. The study's rule is to build the calendar, send-as-me, pickers and contacts sync under Testing mode (up to 100 test users, reconnecting weekly) and submit once. This plan ships the owner's calendar in H1 2027 and the other three in H2 2027–2028, so submitting once would keep Google calendar users in Testing mode for up to about eighteen months. **This plan therefore proposes two reviews** (a revision of the study's §6, listed in decision 34): the calendar scopes alone in H1 2027, with the project moved to In production when that review is submitted, as the study's §6.2 step 3 says, because Google reviews only a project already published to production (users who join between submission and approval see Google's unverified-app screen and count toward its lifetime cap of 100); then send-as and contacts in later, a second review reported at 2–4 weeks (study §6.1). Send-as and contacts are built and demonstrated in a separate Testing project, as Google recommends (study §6.2), so that the production project never asks real users for a scope not yet reviewed.
-- **Google's restricted scopes** (reading the inbox, browsing all of Drive) need a paid security assessment every year, reported at roughly $540–$4,500 or more. That is why full Gmail sync waits for demand.
-- **Microsoft blocks users, not apps.** Ordinary users cannot grant calendar access in a new tenant, so Outlook sync needs the business's Microsoft 365 admin, usually the owner at a five-person business, to approve once through an "approve for your company" link. Publisher verification is free and takes days, which is why Outlook can reach real clients first.
-- **The calendar feed needs no review.** Calendars subscribe to F-048 part 2's feed as a link, so it asks for no Google scope and no Microsoft admin approval (§4.4).
-- **Google Business Profile** needs its own API approval; its conditions, and the application BIS files this quarter, are in §4.2's operational steps.
-- **Do better than both incumbents:** sync recurring events properly, and need no particular Microsoft licence.
-- **Validate the order.** Hypothesis H17 asks every discovery call which calendar the owner and staff use (§10).
+**The verification gates** (study §6.1, checked against Google's and Microsoft's documentation on
+2026-09-25):
+- **Google's sensitive scopes** (calendar, send-as, contacts) need one verification review with no
+  fee: a privacy policy, a demo video of each scope in use and a justification per scope, typically
+  3–5 business days and realistically 1–3 weeks. The study's rule is to build the calendar,
+  send-as-me, pickers and contacts sync under Testing mode (up to 100 test users, reconnecting
+  weekly) and submit once. This plan ships the owner's calendar in H1 2027 and the other three in H2
+  2027–2028, so submitting once would keep Google calendar users in Testing mode for up to about
+  eighteen months. **This plan therefore proposes two reviews** (a revision of the study's §6,
+  listed in decision 34): the calendar scopes alone in H1 2027, with the project moved to In
+  production when that review is submitted, as the study's §6.2 step 3 says, because Google reviews
+  only a project already published to production (users who join between submission and approval see
+  Google's unverified-app screen and count toward its lifetime cap of 100); then send-as and
+  contacts in later, a second review reported at 2–4 weeks (study §6.1). Send-as and contacts are
+  built and demonstrated in a separate Testing project, as Google recommends (study §6.2), so that
+  the production project never asks real users for a scope not yet reviewed.
+- **Google's restricted scopes** (reading the inbox, browsing all of Drive) need a paid security
+  assessment every year, reported at roughly $540–$4,500 or more. That is why full Gmail sync waits
+  for demand.
+- **Microsoft blocks users, not apps.** Ordinary users cannot grant calendar access in a new tenant,
+  so Outlook sync needs the business's Microsoft 365 admin, usually the owner at a five-person
+  business, to approve once through an "approve for your company" link. Publisher verification is
+  free and takes days, which is why Outlook can reach real clients first.
+- **The calendar feed needs no review.** Calendars subscribe to F-048 part 2's feed as a link, so it
+  asks for no Google scope and no Microsoft admin approval (§4.4).
+- **Google Business Profile** needs its own API approval; its conditions, and the application BIS
+  files this quarter, are in §4.2's operational steps.
+- **Do better than both incumbents:** sync recurring events properly, and need no particular
+  Microsoft licence.
+- **Validate the order.** Hypothesis H17 asks every discovery call which calendar the owner and
+  staff use (§10).
 
-**Where email stops.** Inbound email in the first release (S-06) captures replies to mail BIS sends and anything the business forwards to a record's own address. Mail a customer writes straight to the business owner's own Gmail or Outlook does not reach the record until full inbox sync, which is direct for Outlook and, for Gmail, needs Google's paid annual security assessment, which the study recommends reaching through a vendor that holds it (decision 13); it waits for customers to ask (study §6.2).
+**Where email stops.** Inbound email in the first release (S-06) captures replies to mail BIS sends
+and anything the business forwards to a record's own address. Mail a customer writes straight to the
+business owner's own Gmail or Outlook does not reach the record until full inbox sync, which is
+direct for Outlook and, for Gmail, needs Google's paid annual security assessment, which the study
+recommends reaching through a vendor that holds it (decision 13); it waits for customers to ask
+(study §6.2).
 
-**Google Sheets and Docs.** A customer list kept in a Google Sheet comes in today by downloading it as a CSV file, which the import wizard reads. Importing straight from a Sheet through S-25's Drive picker, with AI suggesting the column matching from the headers only, is part of S-35 as the study adopts and costs it (study §6.3 and §11.1; later); the picker's `drive.file` access adds no Google scope. Exporting to Sheets is a proposal, not costed; `.xlsx` and CSV cover that need until a client asks. Google Docs and Word files attach to a record through the Drive and OneDrive pickers (S-25, later); BIS's own quotes, invoices and contracts render as PDFs (F-113, later); no Docs or Word sync is planned.
+**Google Sheets and Docs.** A customer list kept in a Google Sheet comes in today by downloading it
+as a CSV file, which the import wizard reads. Importing straight from a Sheet through S-25's Drive
+picker, with AI suggesting the column matching from the headers only, is part of S-35 as the study
+adopts and costs it (study §6.3 and §11.1; later); the picker's `drive.file` access adds no Google
+scope. Exporting to Sheets is a proposal, not costed; `.xlsx` and CSV cover that need until a client
+asks. Google Docs and Word files attach to a record through the Drive and OneDrive pickers (S-25,
+later); BIS's own quotes, invoices and contracts render as PDFs (F-113, later); no Docs or Word sync
+is planned.
 
-**Not planned:** Microsoft Bookings, Google and Microsoft Forms, SharePoint and Google Chat (BIS replaces or does not need them), and the dropped F-054 (a record card inside Gmail, Outlook and AI chats). Task push to Microsoft To Do and Google Tasks, and Teams notifications, are not placed or costed in this plan; the study marks them "Later", and they return as proposals if a client asks.
+**Not planned:** Microsoft Bookings, Google and Microsoft Forms, SharePoint and Google Chat (BIS
+replaces or does not need them), and the dropped F-054 (a record card inside Gmail, Outlook and AI
+chats). Task push to Microsoft To Do and Google Tasks, and Teams notifications, are not placed or
+costed in this plan; the study marks them "Later", and they return as proposals if a client asks.
 
 ### 7.2 Money: Stripe and QuickBooks
 
@@ -2040,7 +3008,7 @@ Design ideas from the ten lenses that this vision rejects or defers. A deferral 
 | Google Business Profile | A manual checklist tick | Reviews and AI replies (S-34) and hours kept in step (F-161), both later, after API approval |
 | Meta (Facebook, Instagram, WhatsApp) | None | A WhatsApp link that measures demand next (F-070); lead ads later and direct messages in 2029–2030 (F-193), if the Expo confirms H2 |
 | The MCP server | None | Later (S-33): reads answer at once, writes become proposals; the auth spike proves tokens are scoped to one client organisation. Because Microsoft 365 Copilot (through Copilot Studio) and other assistants accept MCP servers, S-33 may also reach owners who work inside Microsoft 365 or Google; S-33's spike checks which clients a small business can actually use, since Copilot Studio needs its own licence (proposal) |
-| Restaurant reservation and ordering systems (OpenTable, Resy, SevenRooms; Toast, Square, Clover) | None | Research only (study §9.3). Sofía texts or reads out the restaurant's own link (F-199); POS research comes with the catering pack (S-45) |
+| Restaurant reservation and ordering systems (OpenTable, Resy, SevenRooms; Toast, Square, Clover) | None | Research only (study §9.3). Sofía reads out, or texts once decision 19 allows, the restaurant's own link (F-199); POS research comes with the catering pack (S-45) |
 | Industry systems (child-care, law, insurance) | None | One adapter each, after research and tied to a signed tenant that asks (S-46 later; S-57 and S-58 future) |
 | Lead marketplaces (Google's Local Services ads, Angi, Thumbtack, Yelp) | None; their leads reach BIS only by hand | Proposal, not costed: where a marketplace offers a lead feed or a lead email, its leads enter through the form pipeline as a named source (F-157), with the home-services pack in later. Whether each offers a usable feed is checked first, and the discovery calls ask where trades' jobs come from (H6). Consumer financing for large jobs is not planned; the money track asks whether trades need it |
 | HubSpot and monday.com | None | A comparison of BIS's own HubSpot and monday accounts with this plan, through the vendors' connectors, before the importers are built (study §14); importers when a switching prospect needs one (S-36, later); a switch kit for GoHighLevel, Jobber and HoneyBook in 2029–2030 (F-150) |
@@ -2052,7 +3020,7 @@ Design ideas from the ten lenses that this vision rejects or defers. A deferral 
 
 | # | Risk | Mitigation |
 |---|---|---|
-| 1 | **Scope outruns capacity.** The plan totals 686.9–942.3 ew, and the study notes that Appendix D's estimates assume a team of two or three | Plan at 5–6 ew a week, re-measured monthly; at a pace of three to four, the owner re-scopes, or adds capacity to one named track, rather than re-orders (§4.1); a written cut order for now; slices of 4 ew or less, each shipped to a real client; a named tail in later that slides to 2029 first (§4) |
+| 1 | **Scope outruns capacity.** The plan totals 686.9–942.3 ew, and the study notes that Appendix D's estimates assume a team of two or three | Plan at 5–6 ew a week, re-measured monthly; at a pace of three to four, or at five with the high bounds holding, the owner re-scopes, or adds capacity to one named track, rather than re-orders (§4.1); a written cut order for now; slices of 4 ew or less, each shipped to a real client; a named tail in later that slides to 2029 first (§4) |
 | 2 | **The revocation rules change under a live texting programme.** The FCC's draft order, to be voted on 30 September, may change revocation scope from November or December 2026; the duty in force since April 2025 already binds from the first text | The chain is live by 1 December 2026; no account texts before its gate; counsel reads the order after the vote and the adopted text in the week it is published (§4.2) |
 | 3 | **AI writes without a person.** Sofía and the web chat already write some records live, against constraint 5 | One review tray for every new AI write; Sofía's blank-fills become proposals now; author stamps and undo on the caller-confirmed acts that stay live; no new live path before decision 19 is dated (§3.2 rule 4) |
 | 4 | **Sensitive data before permissions.** Custody, gate codes, immigration status and children's health details need roles that do not exist yet | No restricted field before F-004 enforces restriction; no new path sends a health-marked document or field to a model before decision 6's terms, and the zero-retention request goes out now (§3.2 rules 3 and 14) |
@@ -2062,7 +3030,7 @@ Design ideas from the ten lenses that this vision rejects or defers. A deferral 
 | 8 | **Outside reviews stall.** Google's scope review, the Business Profile API, Meta's app review and the carriers' 3–7 business days | Outlook first; Google's calendar scopes submitted alone in H1 2027, a Testing-mode pilot until they are submitted; applications filed this quarter; texting states shown to owners in plain words |
 | 9 | **Plans are not enforced, and AI costs are uncapped per plan.** No call or chat path reads the plan flag today | Entitlements (S-13) follow M7a's checkout in next; one model gateway with budgets and kill switches in the first release (F-020) |
 | 10 | **Regulated professions carry ethics exposure.** A receptionist that gives legal advice or discusses policy terms can breach Texas rules | Guardrail modules tested in both languages (F-174), inbound-only for law firms, counsel's review of the insurance intake, and the Opinion 680/705 sheet and the law module before Sofía is sold to law firms (F-124, F-174) |
-| 11 | **One person carries the product.** The pace, the agents' output and the operating knowledge rest on the owner and a very small team | The runbooks and this plan's written rules; the operational floor's alerts reach more than one person; the monthly pace check shows early when capacity drops (§4.1); and, as a proposal, a second engineer or a contracted track once two consecutive months come in under four ew a week (§4.1) |
+| 11 | **One person carries the product.** The pace, the agents' output and the operating knowledge rest on the owner and a very small team | The runbooks and this plan's written rules; the operational floor's alerts reach more than one person; the monthly pace check shows early when capacity drops (§4.1); and, as a proposal, a second engineer or a contracted track once the pace check calls for it: two consecutive months at three to four ew a week, or the high bounds holding at five (§4.1) |
 | 12 | **One model vendor.** Sofía, the summaries and the chat all run on OpenAI, and the platform spec's no-external-services rule, on which study decision 2 rules, keeps it to one provider | One model gateway (F-020) so that a second provider is a configuration change once decision 2 allows it; the per-account kill switches; the call forward (F-120) keeps phones ringing if the model is down |
 | 13 | **A known security item is used before the sprint closes.** The repository is public, so anyone can read the code | The hardening sprint runs first, before client sign-ins scale and before any security questionnaire is answered; its items are tracked privately, never here; the operational floor's alerts tell BIS when something breaks (§4.2) |
 
@@ -2070,131 +3038,394 @@ Design ideas from the ten lenses that this vision rejects or defers. A deferral 
 
 ## 9. Decisions the owner needs to make
 
-The study's decisions 1–18 stand and are not repeated. Those this plan needs soonest are 1 and 2, before the first release; 6, the zero-retention request; 14, the plan shape M7a ships; 15, selling Sofía first; and 16–18, which F-173's vetting uses as recommended defaults until the owner confirms them. In one line each, those October decisions are:
+The study's decisions 1–18 stand and are not repeated. Those this plan needs soonest are 1 and 2,
+before the first release; 6, the zero-retention request; 14, the plan shape M7a ships; 15, selling
+Sofía first; and 16–18, which F-173's vetting uses as recommended defaults until the owner confirms
+them. In one line each, those October decisions are:
 - **1:** reverse the platform spec's non-adoption of payments, invoicing, documents and e-signature;
-- **2:** the "no external services for core features" rule. The study recommends accepting ClamAV (the vault's scanner) and Stripe and deferring the rest (BoldSign or SignWell, Nylas). This plan departs from that where it names a vendor, each marked "decision 2" in §4: F-057's v1 multi-signer e-signature above all, so multi-signer contracts for events and padrinos wait on this decision, or on sequential signing built in-house;
-- **6:** request zero data retention or a BAA from the AI provider, with no health-marked document reaching a model meanwhile;
-- **14:** the plan shape M7a ships (how many plans, logins, storage per plan, portal placement, view-only seats, AI and MCP on every plan), and a receptionist-only plan shape for the seasonal tax offer and the auto-shop add-on, which binding constraint 3 strains (S-61 reads it as the Sofía plan sold seasonally, through F-142's levers or, if they slide, the ordinary plan for the season's months, with the vault's uploads switched off for those tenants so that decision 18's "stores no tax documents" still holds);
-- **15:** sell Sofía before the packs: to insurance agencies and event venues at once, to law firms once the 680/705 sheet states the AI providers' retention terms (this plan adds: and once F-174's law module ships in next, §5.14), and to seasonal tax preparers once the security contract and U.S.-only processing attestation exist;
-- **16 to 18:** insurance scope (property and casualty now; ACA storefronts and final-expense agents only after a review; Medicare and group health never without HIPAA); immigration tenants (licensed attorneys with the bar number checked, and DOJ-recognised organisations with accredited representatives; Sofía inbound-only for every law firm); tax preparers (a seasonal receptionist-only offer that stores no tax documents).
+- **2:** the "no external services for core features" rule. The study recommends accepting ClamAV
+  (the vault's scanner) and Stripe and deferring the rest (BoldSign or SignWell, Nylas). This plan
+  departs from that where it names a vendor, each marked "decision 2" in §4: F-057's v1 multi-signer
+  e-signature above all, so multi-signer contracts for events and padrinos wait on this decision, or
+  on sequential signing built in-house;
+- **6:** request zero data retention or a BAA from the AI provider, with no health-marked document
+  reaching a model meanwhile;
+- **14:** the plan shape M7a ships (how many plans, logins, storage per plan, portal placement,
+  view-only seats, AI and MCP on every plan), and a receptionist-only plan shape for the seasonal
+  tax offer and the auto-shop add-on, which binding constraint 3 strains (S-61 reads it as the Sofía
+  plan sold seasonally, through F-142's levers or, if they slide, the ordinary plan for the season's
+  months, with the vault's uploads switched off for those tenants so that decision 18's "stores no
+  tax documents" still holds);
+- **15:** sell Sofía before the packs: to insurance agencies and event venues at once, to law firms
+  once the 680/705 sheet states the AI providers' retention terms (the study builds the legal
+  guardrail pack in its §11.3 step 1; this plan places it, F-174's law module, and so Sofía's law
+  sales, in next, a move decision 34 lists; §5.14), and to seasonal tax preparers once the security
+  contract and U.S.-only processing attestation exist;
+- **16 to 18:** insurance scope (property and casualty now; ACA storefronts and final-expense agents
+  only after a review; Medicare and group health never without HIPAA); immigration tenants (licensed
+  attorneys with the bar number checked, and DOJ-recognised organisations with accredited
+  representatives; Sofía inbound-only for every law firm); tax preparers (a seasonal
+  receptionist-only offer that stores no tax documents).
 
-One choice is not numbered, because it arises only if the monthly pace check fails: re-scope the plan, or add capacity to one named track (§4.1). The numbering continues from 19. Each decision below gives today's position, the options, the recommendation with its reason, and what it blocks.
+One choice is not numbered, because it arises only when the pace check calls for it: if two
+consecutive months come in at three to four ew a week, or if the pace holds at five a week while the
+work tracks its high bounds, which through 2028 runs about 135 ew over (§4.1, §4.5, §4.8). The
+choice is to re-scope the plan, or add capacity to one named track (§4.1). The numbering continues
+from 19. Each decision below gives today's position, the options, the recommendation with its
+reason, and what it blocks.
 
 #### 19. Does an act the caller asks for count as an AI write? (F-022; binding constraint 5)
 
-- **Today.** Sofía creates contacts, fills blank fields, and books, reschedules and cancels appointments directly, with no person approving; only her post-call suggestions wait for a person, and her acts carry no author stamp of their own (voice, CRM and booking inventories). The web chat also creates or matches a contact, opens a thread and files a submission with no person approving (web-chat inventory). The skeptic marks this reading the most consequential in the canonical list.
-- **Options.** (a) A narrow reading. Acts the caller or visitor asks for and confirms (aloud on a call, in the chat for a visitor) run live: book, reschedule or cancel their own appointment, leave their own name and number, and receive by text a link they ask for (F-199's reservation or ordering link; the pay link of F-058 and S-29). Once chain step 5's detection uses a model (after decision 6), its hold on sends also runs live, because it only stops messages and a person confirms or undoes it from To do at once. The exception is meant to cover only the caller's or visitor's own booking or record, and it relies on S-47's identity checks (F-116) to establish which booking or record that is. Each live act is stamped as AI, visible on the record and undoable. Everything else, filling blank fields on an existing contact included, goes through the review tray. (b) The strict reading. Every such act becomes a proposal, bookings included. (c) F-022 as written, with blank-fills live as well.
-- **Recommendation: (a).** A receptionist that cannot book while the caller is on the line is not a receptionist, so (b) would unship the product. Blank-fills are the machine's judgement about a record, and the tray already has a proposal kind for them, so (c) widens the exception for nothing. Write (a) into the rules with a date. The owner is also asked to confirm §3.2 rule 4's definition: a live reply inside a call or chat the customer started, and a labelled summary or description shown only to the business's own people (F-028's descriptions, F-100's paragraph), are not AI writes. *Blocks:* F-022's item 1 (first release). The links Sofía and the chat text (F-199, F-058, S-29). Chain step 5's hold once its detection uses a model (F-133). The chat's updates after filing (F-023, F-036). F-024's memory writes. Machine-created holds (F-051). F-028's descriptions and F-100's paragraph, if the owner reads them as AI writes.
+- **Today.** Sofía creates contacts, fills blank fields, and books, reschedules and cancels
+  appointments directly, with no person approving; only her post-call suggestions wait for a person,
+  and her acts carry no author stamp of their own (voice, CRM and booking inventories). The web chat
+  also creates or matches a contact, opens a thread and files a submission with no person approving
+  (web-chat inventory). The skeptic marks this reading the most consequential in the canonical list.
+- **Options.** (a) A narrow reading. Acts the caller or visitor asks for and confirms (aloud on a
+  call, in the chat for a visitor) run live: book, reschedule or cancel their own appointment, leave
+  their own name and number, receive by text a link they ask for (F-199's reservation or ordering
+  link; the pay link of F-058 and S-29), and, once they agree, receive by text the one-time code
+  that proves who they are (F-116's later part). The exception is meant to cover only the caller's
+  or visitor's own booking or record, and a link they ask for or a code, texted to their own number,
+  and it relies on S-47's identity checks (F-116) to establish which booking, record and number are
+  theirs. Each live act is stamped as AI, visible on the record and undoable. Everything else,
+  filling blank fields on an existing contact included, goes through the review tray. (b) The strict
+  reading. Every such act becomes a proposal, bookings included. (c) F-022 as written, with
+  blank-fills live as well.
+- **Recommendation: (a).** A receptionist that cannot book while the caller is on the line is not a
+  receptionist, so (b) would unship the product. Blank-fills are the machine's judgement about a
+  record, and the tray already has a proposal kind for them, so (c) widens the exception for
+  nothing. Write (a) into the rules with a date. The owner is also asked to confirm §3.2 rule 4's
+  definition: a live reply inside a call or chat the customer started, a labelled summary or
+  description shown only to the business's own people (F-028's descriptions, F-100's paragraph), and
+  a hold on sends from stop detection, which only stops messages and waits for a person to confirm
+  or undo it (chain step 5), are not AI writes. The hold runs live whichever option is chosen,
+  keyword or model alike, because the study requires a revocation to stop sends the moment it is
+  detected (study §9.6 item 9). *Blocks:* F-022's item 1 (first release). The links Sofía and the
+  chat text (F-199, F-058, S-29). F-116's one-time codes (later). The chat's updates after filing
+  (F-023, F-036). F-024's memory writes. Machine-created holds (F-051). F-028's descriptions and
+  F-100's paragraph, if the owner reads them as AI writes.
 
 #### 20. Should every assistant say it is an AI, up front? (F-034)
 
-- **Today.** The V1 voice spec lists AI disclosure in the greeting among the demo lessons it ports (spec §3.3), but its implementation plan and the shipped prompt tell Sofía not to volunteer it and to admit it only when asked (`apps/web/src/lib/voice/system-prompt.ts:63`). The chat shares that line and carries no AI label.
-- **Options.** Keep "only when asked". Disclose by default on every account, with the owner choosing the phrasing from approved variants but unable to remove it. Disclose only where a pack or a law requires.
-- **Recommendation: disclose by default, measured first on one account for four weeks** (booking rate and hang-ups; hypothesis H22). The recommendation rests on trust and on H22's measurement, not on legal pressure: TRAIGA's disclosure duty binds government agencies and health-care providers, which BIS's current segments are not. Going first makes it a trust claim, and one behaviour everywhere is cheaper to test. It is not a revisit of a recorded spec position: it brings the code back to the V1 spec's, reversing a choice the implementation plan made. Counsel reads the wording and names any state rule that binds a client outside Texas. *Blocks:* F-034 (parallel work, now). The statutory lines in F-174's modules. F-127's recording notice.
+- **Today.** The V1 voice spec lists AI disclosure in the greeting among the demo lessons it ports
+  (spec §3.3), but its implementation plan and the shipped prompt tell Sofía not to volunteer it and
+  to admit it only when asked (`apps/web/src/lib/voice/system-prompt.ts:63`). The chat shares that
+  line and carries no AI label.
+- **Options.** Keep "only when asked". Disclose by default on every account, with the owner choosing
+  the phrasing from approved variants but unable to remove it. Disclose only where a pack or a law
+  requires.
+- **Recommendation: disclose by default, measured first on one account for four weeks** (booking
+  rate and hang-ups; hypothesis H22). The recommendation rests on trust and on H22's measurement,
+  not on legal pressure: TRAIGA's disclosure duty binds government agencies and health-care
+  providers, which BIS's current segments are not. Going first makes it a trust claim, and one
+  behaviour everywhere is cheaper to test. It is not a revisit of a recorded spec position: it
+  brings the code back to the V1 spec's, reversing a choice the implementation plan made. Counsel
+  reads the wording and names any state rule that binds a client outside Texas. *Blocks:* F-034
+  (parallel work, now). The statutory lines in F-174's modules. F-127's recording notice.
 
 #### 21. May Sofía hand a call to a person on a rule, rather than on the caller's request? (F-133, F-084; the call-handoff spec)
 
-- **Today.** The handoff spec says "the caller asks. Nothing else". Transfer is off for each company until the agency sets a number. The study goes the other way: its guardrail packs carry "hot-transfer rules" (study §9.6 item 1), and for law firms Sofía "hot-transfers detention, same-week-hearing and ICE-encounter calls to a person" (study §9.5).
-- **Options.** Keep the spec: every emergency path becomes an offer the caller accepts ("¿Quiere que le comunique con alguien ahora?"). Or follow the study: rule-based hot transfers inside the guardrail packs, on detected emergencies and fraud.
-- **Recommendation: keep the spec, which moves the study's position (decision 34).** An automatic transfer that rings a phone nobody answers is worse than an offer plus an urgent task. The handling for failed transfers (F-035) is not built. Reword F-084's storm mode to "a caller who asks for a person is still transferred". *Blocks:* F-084's wording (parallel work, now). F-133 part 2. F-174's urgency offers. F-035.
+- **Today.** The handoff spec says "the caller asks. Nothing else". Transfer is off for each company
+  until the agency sets a number. The study goes the other way: its guardrail packs carry
+  "hot-transfer rules" (study §9.6 item 1), and for law firms Sofía "hot-transfers detention,
+  same-week-hearing and ICE-encounter calls to a person" (study §9.5).
+- **Options.** Keep the spec: every emergency path becomes an offer the caller accepts ("¿Quiere que
+  le comunique con alguien ahora?"). Or follow the study: rule-based hot transfers inside the
+  guardrail packs, on detected emergencies and fraud.
+- **Recommendation: keep the spec, which moves the study's position (decision 34).** An automatic
+  transfer that rings a phone nobody answers is worse than an offer plus an urgent task. The
+  handling for failed transfers (F-035) is not built. Reword F-084's storm mode to "a caller who
+  asks for a person is still transferred". *Blocks:* F-084's wording (parallel work, now). F-133
+  part 2. F-174's urgency offers. F-035.
 
 #### 22. Rooms as bookable resources, and one calendar per account (F-051, F-183; study decision 4)
 
-- **Today.** Exactly one bookable calendar per company, enforced by the schema, and the database refuses overlapping bookings on it.
-- **Options.** Rooms as resources now, reversing one-calendar-per-account before per-staff calendars exist. Rooms after per-staff calendars, as the study orders them (study §11.3 step 7). Never.
-- **Recommendation: after per-staff calendars.** F-051 ships the `held` status on today's single calendar, which is all the events receptionist needs. Reversing the constraint twice is the costly path. *Blocks:* Rooms in F-051, F-183 and F-185. S-49.
+- **Today.** Exactly one bookable calendar per company, enforced by the schema, and the database
+  refuses overlapping bookings on it.
+- **Options.** Rooms as resources now, reversing one-calendar-per-account before per-staff calendars
+  exist. Rooms after per-staff calendars, as the study orders them (study §11.3 step 7). Never.
+- **Recommendation: after per-staff calendars.** F-051 ships the `held` status on today's single
+  calendar, which is all the events receptionist needs. Reversing the constraint twice is the costly
+  path. *Blocks:* Rooms in F-051, F-183 and F-185. S-49.
 
 #### 23. WhatsApp: the next channel after the ledger, or only once measured demand (H7) justifies it? (F-070; study decision 11)
 
-- **Today.** No WhatsApp in the product. Decision 11 recommends it as the next channel after the consent ledger, with the provider researched first.
-- **Options.** Keep decision 11's order. Or F-070's order: phase 0 (a `wa.me` link whose clicks measure demand, and a one-week spike) in next; inbound threads later; templates BIS starts only after the ledger. The difference from decision 11 is not the order relative to the ledger (phase 0 runs in next, after the ledger goes live on 1 December 2026) but the demand gate and the horizon: inbound threads wait in later for hypothesis H7.
-- **Recommendation: F-070's order.** Phase 0's link costs about a day and its spike about a week (0.5–1 ew), and they produce the demand data decision 11 lacks, while the ledger-first rule for anything BIS starts is kept. Meta becomes a new processor (study decision 2) and would be a fourth meter in M7a's allowances. Meter nothing in phase 1, and list Meta as a subprocessor first. *Needed by:* the January 2027 sitting, before next starts. *Blocks:* F-070's phase 0 (next) and part 2, F-028, F-043, F-193's direct messages, and F-031's WhatsApp leg.
+- **Today.** No WhatsApp in the product. Decision 11 recommends it as the next channel after the
+  consent ledger, with the provider researched first.
+- **Options.** Keep decision 11's order. Or F-070's order: phase 0 (a `wa.me` link whose clicks
+  measure demand, and a one-week spike) in next; inbound threads later; templates BIS starts only
+  after the ledger. The difference from decision 11 is not the order relative to the ledger (phase 0
+  runs in next, after the ledger goes live on 1 December 2026) but the demand gate and the horizon:
+  inbound threads wait in later for hypothesis H7.
+- **Recommendation: F-070's order.** Phase 0's link costs about a day and its spike about a week
+  (0.5–1 ew), and they produce the demand data decision 11 lacks, while the ledger-first rule for
+  anything BIS starts is kept. Meta becomes a new processor (study decision 2) and would be a fourth
+  meter in M7a's allowances. Meter nothing in phase 1, and list Meta as a subprocessor
+  first. *Needed by:* the January 2027 sitting, before next starts. *Blocks:* F-070's phase 0 (next) and
+  part 2, F-028, F-043, F-193's direct messages, and F-031's WhatsApp leg.
 
 #### 24. What the Monday report may carry (DESIGN.md's weekly-report pattern; F-100)
 
-- **Today.** The pattern fixes four numbers (calls answered, leads captured, bookings, website visitors) and three rules. About twelve features propose a line of their own: F-017, F-018, F-029, F-042, F-078, F-141, F-143, F-154, F-156, F-157, F-162 and F-178.
-- **Options.** Keep four fixed numbers. Choose them by plan and pack from one catalogue, under a budget. Let features add lines freely.
-- **Recommendation: amend the pattern to "up to four headline numbers and at most two lines, chosen by plan and pack from the metrics catalogue (F-100)".** The three rules stand (a delta in words, omit what was not measured, a quiet week still sends). Recipients stay on the account, and the field stays the switch. One owner and a budget stop the email from accreting, and a CRM-only plan's report should not lead with calls it does not take. *Blocks:* F-100, and through it F-029, F-082 and F-178. Every feature that wants a line.
+- **Today.** The pattern fixes four numbers (calls answered, leads captured, bookings, website
+  visitors) and three rules. About twelve features propose a line of their own: F-017, F-018, F-029,
+  F-042, F-078, F-141, F-143, F-154, F-156, F-157, F-162 and F-178.
+- **Options.** Keep four fixed numbers. Choose them by plan and pack from one catalogue, under a
+  budget. Let features add lines freely.
+- **Recommendation: amend the pattern to "up to four headline numbers and at most two lines, chosen
+  by plan and pack from the metrics catalogue (F-100)".** The three rules stand (a delta in words,
+  omit what was not measured, a quiet week still sends). Recipients stay on the account, and the
+  field stays the switch. One owner and a budget stop the email from accreting, and a CRM-only
+  plan's report should not lead with calls it does not take. *Blocks:* F-100, and through it F-029,
+  F-082 and F-178. Every feature that wants a line.
 
 #### 25. What may higher plans hold besides Sofía and the web chat? (study decision 14's scope; binding constraint 3)
 
-- **Today.** A plan's features accept exactly two keys (the voice receptionist and the web chat), and its allowances exactly three meters. Nothing on the call or chat path reads either yet.
-- **Features that propose more.** F-062's Stage 2, F-135's link domains, F-143's footer removal, F-130's AI record and F-164's storefront would all gate on higher plans. The study's §10 puts the portal and per-staff calendars there too.
-- **Also here.** One narrow exception is proposed: a tax preparer gets the CRM with the vault's uploads switched off (S-61); until that switch lands, S-53's vetting holds tax preparers (§5.14), so that BIS keeps study decision 18's "stores no tax documents" and the lighter Safeguards Rule and IRC §7216 duties that buys. The alternative is to accept tax documents in the vault, with those added duties; the owner rules. The value judge asks how F-160's generated business page sits beside the websites BIS builds and hosts for clients. Under the strict shape it is a CRM feature on every plan, and the website work stays a separate service.
-- **Options.** Gate each as proposed. Or the strict shape: higher plans add Sofía, the web chat and bigger allowances (minutes, chats, storage, staff logins, connected calendars), and nothing else.
-- **Recommendation: the strict shape.** Every plan gets every CRM feature, the portal included, and per-staff calendars become an allowance. Constraint 3 reads that way. Each extra gate is a migration, a Stripe price and an enforcement point. And "everything but the receptionist, on every plan" is a sentence an owner can repeat. *Blocks:* S-13's scope (next). F-062, F-143, F-135, F-160, F-164, F-189, the plan line of F-130, and S-61's vault switch.
+- **Today.** A plan's features accept exactly two keys (the voice receptionist and the web chat),
+  and its allowances exactly three meters. Nothing on the call or chat path reads either yet.
+- **Features that propose more.** F-062's Stage 2, F-135's link domains, F-143's footer removal,
+  F-130's AI record and F-164's storefront would all gate on higher plans. The study's §10 puts the
+  portal and per-staff calendars there too.
+- **Also here.** One narrow exception is proposed: a tax preparer gets the CRM with the vault's
+  uploads switched off (S-61); until that switch lands, S-53's vetting holds tax preparers (§5.14),
+  so that BIS keeps study decision 18's "stores no tax documents" and the lighter Safeguards Rule
+  and IRC §7216 duties that buys. The alternative is to accept tax documents in the vault, with
+  those added duties; the owner rules. The value judge asks how F-160's generated business page sits
+  beside the websites BIS builds and hosts for clients. Under the strict shape it is a CRM feature
+  on every plan, and the website work stays a separate service.
+- **Options.** Gate each as proposed. Or the strict shape: higher plans add Sofía, the web chat and
+  bigger allowances (minutes, chats, storage, staff logins, connected calendars), and nothing else.
+- **Recommendation: the strict shape.** Every plan gets every CRM feature, the portal included, and
+  per-staff calendars become an allowance. Constraint 3 reads that way. Each extra gate is a
+  migration, a Stripe price and an enforcement point. And "everything but the receptionist, on every
+  plan" is a sentence an owner can repeat. *Blocks:* S-13's scope (next). F-062, F-143, F-135,
+  F-160, F-164, F-189, the plan line of F-130, and S-61's vault switch.
 
 #### 26. May a test-only tool use the MPL-2.0 licence? (axe-core; F-102, F-103)
 
-- **Today.** The platform spec allows MIT, BSD or Apache libraries only. axe-core, the standard automated accessibility checker, is MPL-2.0.
-- **Options.** Allow MPL-2.0 for development dependencies that never ship to customers. Or keep the rule and check accessibility by hand or with a weaker permissive tool.
-- **Recommendation: allow it for test-only development dependencies, and write that into the platform spec.** MPL-2.0's obligations attach to modified MPL files that are distributed, and a test runner is not distributed with the product. Without it, automated WCAG checks are much weaker. *Blocks:* The accessibility gates in F-102 part 2 and F-103, and the WCAG amendment in decision 35.
+- **Today.** The platform spec allows MIT, BSD or Apache libraries only. axe-core, the standard
+  automated accessibility checker, is MPL-2.0.
+- **Options.** Allow MPL-2.0 for development dependencies that never ship to customers. Or keep the
+  rule and check accessibility by hand or with a weaker permissive tool.
+- **Recommendation: allow it for test-only development dependencies, and write that into the
+  platform spec.** MPL-2.0's obligations attach to modified MPL files that are distributed, and a
+  test runner is not distributed with the product. Without it, automated WCAG checks are much
+  weaker. *Blocks:* The accessibility gates in F-102 part 2 and F-103, and the WCAG amendment in
+  decision 35.
 
 #### 27. Should BIS designate an exclusive opt-out method under the FCC's revised order?
 
-- **Today.** The rule in force forbids designating an exclusive means of revocation (47 CFR 64.1200(a)(10)), and nothing is designated. The draft order released on 9 September 2026, for a vote on 30 September, would let a sender name one or more of three methods (a key-press opt-out, standard text keywords, or a website or number) as the exclusive means of revocation, if the method is disclosed clearly in every call or text. Its keyword method is defined by English words, so an exclusive keyword list would not cover "ALTO" or a sentence in Spanish.
-- **Options.** Designate text keywords as the exclusive method. Or keep honouring any reasonable method, in either language.
-- **Recommendation: keep honouring any reasonable method.** Valley customers will write "ya no me manden mensajes", not a keyword. Honouring them is the bilingual promise BIS sells (F-065, F-133). And a method disclosed in every text costs segments on every send. Revisit only if counsel finds that the free-text path adds more risk than it removes. *Blocks:* The keyword list and the stop confirmation in the legal chain (step 4), and F-133's scope.
+- **Today.** The rule in force forbids designating an exclusive means of revocation (47
+  CFR 64.1200(a)(10)), and nothing is designated. The draft order released on 9 September 2026, for a
+  vote on 30 September, would let a sender name one or more of three methods (a key-press opt-out,
+  standard text keywords, or a website or number) as the exclusive means of revocation, if the
+  method is disclosed clearly in every call or text. Its keyword method is defined by English words,
+  so an exclusive keyword list would not cover "ALTO" or a sentence in Spanish.
+- **Options.** Designate text keywords as the exclusive method. Or keep honouring any reasonable
+  method, in either language.
+- **Recommendation: keep honouring any reasonable method.** Valley customers will write "ya no me
+  manden mensajes", not a keyword. Honouring them is the bilingual promise BIS sells (F-065, F-133).
+  And a method disclosed in every text costs segments on every send. Revisit only if counsel finds
+  that the free-text path adds more risk than it removes. *Blocks:* The keyword list and the stop
+  confirmation in the legal chain (step 4), and F-133's scope.
 
 #### 28. May owners edit what Sofía knows? (F-084, F-037)
 
 - **Today.** Every change to Sofía goes through the agency.
-- **Options.** Keep it agency-only. The middle option: owners edit the business status and closures now, and facts later, versioned; the greeting changes through a request to BIS until rehearsal exists; guardrails never. Full owner control.
-- **Recommendation: the middle option.** The one switch (F-084) in the now horizon needs a narrow owner grant for status and closures, and facts follow in F-037's second part. Guardrails never become owner-editable, because they are what makes law and insurance sales safe. *Blocks:* F-084's owner grant (parallel work, now). F-037 part 2, F-096 part 2, F-040.
+- **Options.** Keep it agency-only. The middle option: owners edit the business status and closures
+  now, and facts later, versioned; the greeting changes through a request to BIS until rehearsal
+  exists; guardrails never. Full owner control.
+- **Recommendation: the middle option.** The one switch (F-084) in the now horizon needs a narrow
+  owner grant for status and closures, and facts follow in F-037's second part. Guardrails never
+  become owner-editable, because they are what makes law and insurance sales safe. *Blocks:* F-084's
+  owner grant (parallel work, now). F-037 part 2, F-096 part 2, F-040.
 
 #### 29. May owners edit automations? (F-071, F-049, F-072)
 
-- **Today.** Every recipe starts switched off, and only the agency can configure one. The one exception is the booking follow-up email, whose switch and wording sit in the calendar settings a client can already edit.
-- **Options.** Keep it agency-only. The middle option: owners toggle, reword (as English and Spanish twins) and re-time transactional instances within bounds the pack sets; marketing instances stay agency-set; nobody composes a new instance in version 1. Full owner control.
-- **Recommendation: the middle option.** Reminders and the after-job check-in are the business's own voice. Marketing is where the legal exposure lies (SB 140), so it stays with the agency. The State's position in *Ecommerce Marketers Alliance v. Texas* (W.D. Tex., dismissed in 2025) is that SB 140's registration does not reach consent-based programmes ([Consumer Financial Services Law Monitor](https://www.consumerfinancialserviceslawmonitor.com/2025/11/texas-attorney-general-confirms-opt-in-sms-is-outside-registration-under-sb-140/)), and the Secretary of State's registration FAQ now says a business texting with prior consent need not register ([Secretary of State](https://www.sos.state.tx.us/statdoc/faqs3400.shtml); commentary: [K&L Gates, 14 September 2026](https://www.klgates.com/thought-leadership/Litigation-Minute-Text-Message-Marketing-in-Texas-One-Year-After-SB-140-9-14-2026)). The FAQ is not binding; the Secretary of State requested an Attorney General opinion on 17 December 2025 (RQ-0626-KP), still pending; and no court has decided the question in a contested case, since the November 2025 dismissal order, entered on a joint motion, records the State's position. That lowers the exposure where the ledger proves consent but does not remove it; counsel confirms. *Blocks:* the owner switches, not the features, which ship agency-configured: in F-049's text legs, F-071 and F-072, and the automations section of F-096 part 2.
+- **Today.** Every recipe starts switched off, and only the agency can configure one. The one
+  exception is the booking follow-up email, whose switch and wording sit in the calendar settings a
+  client can already edit.
+- **Options.** Keep it agency-only. The middle option: owners toggle, reword (as English and Spanish
+  twins) and re-time transactional instances within bounds the pack sets; marketing instances stay
+  agency-set; nobody composes a new instance in version 1. Full owner control.
+- **Recommendation: the middle option.** Reminders and the after-job check-in are the business's own
+  voice. Marketing is where the legal exposure lies (SB 140), so it stays with the agency. The
+  State's position in *Ecommerce Marketers Alliance v. Texas* (W.D. Tex., dismissed in 2025) is that
+  SB 140's registration does not reach consent-based programmes ([Consumer Financial Services Law
+  Monitor](https://www.consumerfinancialserviceslawmonitor.com/2025/11/texas-attorney-general-confirms-opt-in-sms-is-outside-registration-under-sb-140/)),
+  and the Secretary of State's registration FAQ now says a business texting with prior consent need
+  not register ([Secretary of State](https://www.sos.state.tx.us/statdoc/faqs3400.shtml);
+  commentary: [K&L Gates, 14 September
+  2026](https://www.klgates.com/thought-leadership/Litigation-Minute-Text-Message-Marketing-in-Texas-One-Year-After-SB-140-9-14-2026)).
+  The FAQ is not binding; the Secretary of State requested an Attorney General opinion on 17
+  December 2025 (RQ-0626-KP), still pending; and no court has decided the question in a contested
+  case, since the November 2025 dismissal order, entered on a joint motion, records the State's
+  position. That lowers the exposure where the ledger proves consent but does not remove it; counsel
+  confirms. *Blocks:* the owner switches, not the features, which ship agency-configured: in F-049's
+  text legs, F-071 and F-072, and the automations section of F-096 part 2.
 
 #### 30. Four trigger primitives instead of a rule builder? (F-071; study decision 12)
 
 - **Today.** Eight fixed recipes. The rule builder is deferred by decision.
-- **Options.** Keep deferring everything. Four fixed primitives, declared per pack and never composed by users: a date offset, a stage entered, a document expiring or missing, a visit completed. A rule builder.
-- **Recommendation: the four primitives, agency-configured first.** Every pack's value runs on date clocks (events T-30, insurance X-60, law deadlines, child-care expiries), and fixed primitives answer them without a builder's support cost. They revisit decision 12 in part, so the choice is the owner's. *Blocks:* F-071, and through it the pack clocks beyond S-21's (S-40 onward). S-21, the study's own date triggers, goes ahead either way; if the answer is no, S-40 ships its clocks as agency-set recipes on S-21, as the study plans.
+- **Options.** Keep deferring everything. Four fixed primitives, declared per pack and never
+  composed by users: a date offset, a stage entered, a document expiring or missing, a visit
+  completed. A rule builder.
+- **Recommendation: the four primitives, agency-configured first.** Every pack's value runs on date
+  clocks (events T-30, insurance X-60, law deadlines, child-care expiries), and fixed primitives
+  answer them without a builder's support cost. They revisit decision 12 in part, so the choice is
+  the owner's. *Blocks:* F-071, and through it the pack clocks beyond S-21's (S-40 onward). S-21,
+  the study's own date triggers, goes ahead either way; if the answer is no, S-40 ships its clocks
+  as agency-set recipes on S-21, as the study plans.
 
 #### 31. Test calls to a prospect's own line (F-147; study §5.3)
 
 - **Today.** Sofía is inbound only, and the study's §5.3 says no outbound AI agents yet.
-- **Options.** Allow consented AI test calls to a requester's own business line, as a prospect audit and a monthly check for clients. Or keep the study's §5.3 as it stands.
-- **Recommendation: keep the study's §5.3.** A person from BIS places prospect audits by hand, with vendors met at the Expo and in sales calls (H21). An automated runner waits for counsel's reading of the TCPA and Texas chapter 302, and for F-173's vetting of the prospect's industry. F-045 (callbacks placed by Sofía) is dropped for the same reason. *Blocks:* F-147 (future).
+- **Options.** Allow consented AI test calls to a requester's own business line, as a prospect audit
+  and a monthly check for clients. Or keep the study's §5.3 as it stands.
+- **Recommendation: keep the study's §5.3.** A person from BIS places prospect audits by hand, with
+  vendors met at the Expo and in sales calls (H21). An automated runner waits for counsel's reading
+  of the TCPA and Texas chapter 302, and for F-173's vetting of the prospect's industry. F-045
+  (callbacks placed by Sofía) is dropped for the same reason. *Blocks:* F-147 (future).
 
 #### 32. Keep Google's business profile in step with BIS? (F-161; the platform spec's §8a non-adoption of listings)
 
-- **Today.** No listings sync. The Google profile is a manual checklist tick, and the platform spec records online listings as not adopted.
-- **Options.** No listings. A narrow revisit: the Google profile's hours and special hours only, from F-084's record, after API approval. Full listings, Apple and Bing included.
-- **Recommendation: the narrow revisit.** One holiday prompt that updates Sofía, the booking page and Google is a real benefit to owners. Apple and Bing need new partner routes (study decision 2) for little reach in the Valley. *Blocks:* F-161 (later).
+- **Today.** No listings sync. The Google profile is a manual checklist tick, and the platform spec
+  records online listings as not adopted.
+- **Options.** No listings. A narrow revisit: the Google profile's hours and special hours only,
+  from F-084's record, after API approval. Full listings, Apple and Bing included.
+- **Recommendation: the narrow revisit.** One holiday prompt that updates Sofía, the booking page
+  and Google is a real benefit to owners. Apple and Bing need new partner routes (study decision 2)
+  for little reach in the Valley. *Blocks:* F-161 (later).
 
 #### 33. Ratify the recorded spec positions this plan changes
 
-- **Needed now:** the M2 client-access spec's "no member sync", because staff and roles (S-01) must populate users and memberships (F-117 too); raising the same spec's five-membership cap for any company that needs a fifth login, as the spec itself allows, until F-117's later part prices logins (§4.3); the same spec's agency-only settings, in part, for the owner's Mis preferencias (F-096 part 1); the booking spec's "reschedule as cancel plus rebook, and no calendar file" (F-048, a rider); the booking spec's fixed reminder timing (F-049 part 1, reminders however late they booked); the call-proposals spec's "no editing before accept" (F-019); phase 6's "fuzzy search deferred" (F-092 part 1) and its "no keyboard-shortcuts help surface" (F-095 part 1's bilingual "?" sheet, Surface 4), and, narrowly, the dedupe spec's "no fuzzy name matching" (F-092 part 1, F-006); automations spec B's "no second scheduler" (F-196).
-- **Needed when the feature starts:** the concierge spec's "no booking from the widget" (F-036 part 2); the work-queue spec's "no dismissals table" (F-077 part 2); the SMS spec's exclusion of inbound auto-replies (F-069); M1b's "templates as a non-goal" (F-068 part 2); engine B's single quote follow-up (F-056); the A2P and onboarding specs' "no in-app registration, no number purchase" (F-067); phase 4's saved filters (F-093); the weekly-report spec's "no reporting screen with a date range" (F-100's Números); phase 5's client-facing setup view (F-099 part 2); M7a's out-of-scope annual plans and coupons (F-142, F-145); M1d's "no version history" for blueprints (F-176) and its "no hand-authored JSON" (F-171); engine B's "no text back after YES/NO" (F-049's text legs); engine B21's reply-only opt-out footer (F-065 part 2); the call-handoff spec's exclusion of warm transfer, and the shipped rule that answering-machine detection on a transfer is recorded but never acted on (F-035); the voice-core spec's deferral of recording (F-127), and the V1 voice spec's "outbound calling of any kind" (F-073's bridged calls from the business number); the booking spec's deferral of waitlists (F-050), and its "month-grid calendar UI" (F-183's events month view); phase 6's decision 3, cross-account search deferred (F-136); pricing logins into the plans (F-117's later part), once the cap has been raised by hand where needed; engine B's "no link" in the referral ask, which stays in force because F-018's referral link is cut, and comes back here only if H6 says yes.
-- **Kept, not revisited:** the teardown boundary (company deletion stays out of reach of app code; F-121 adds one guarded worker); the platform spec's marketplace (F-148 and F-164 are not one); its affiliate manager (F-143 is an attributed footer, not one); and its website builder (F-160 is a generated page, not an editor).
-- **Recommendation: ratify the first group now, in one dated sitting.** Each was deferred for scope, not principle, and the features that need them are small. Decide the second group as each feature starts, because the argument depends on what the first release teaches. *Blocks:* The features listed.
+- **Needed now:** the M2 client-access spec's "no member sync", because staff and roles (S-01) must
+  populate users and memberships (F-117 too); raising the same spec's five-membership cap for any
+  company that needs a fifth login, as the spec itself allows, until F-117's later part prices
+  logins (§4.3); the same spec's agency-only settings, in part, for the owner's Mis preferencias
+  (F-096 part 1); the booking spec's "reschedule as cancel plus rebook, and no calendar file"
+  (F-048, a rider); the booking spec's fixed reminder timing (F-049 part 1, reminders however late
+  they booked); the call-proposals spec's "no editing before accept" (F-019); phase 6's "fuzzy
+  search deferred" (F-092 part 1) and its "no keyboard-shortcuts help surface" (F-095 part 1's
+  bilingual "?" sheet, Surface 4), and, narrowly, the dedupe spec's "no fuzzy name matching" (F-092
+  part 1, F-006); automations spec B's "no second scheduler" (F-196).
+- **Needed when the feature starts:** the concierge spec's "no booking from the widget" (F-036
+  part 2); the work-queue spec's "no dismissals table" (F-077 part 2); the SMS spec's exclusion of
+  inbound auto-replies (F-069); M1b's "templates as a non-goal" (F-068 part 2); engine B's single
+  quote follow-up (F-056); the A2P and onboarding specs' "no in-app registration, no number
+  purchase" (F-067); phase 4's saved filters (F-093); the weekly-report spec's "no reporting screen
+  with a date range" (F-100's Números); phase 5's client-facing setup view (F-099 part 2); M7a's
+  out-of-scope annual plans and coupons (F-142, F-145); M1d's "no version history" for blueprints
+  (F-176) and its "no hand-authored JSON" (F-171); engine B's "no text back after YES/NO" (F-049's
+  text legs); engine B21's reply-only opt-out footer (F-065 part 2); the call-handoff spec's
+  exclusion of warm transfer, and the shipped rule that answering-machine detection on a transfer is
+  recorded but never acted on (F-035); the voice-core spec's deferral of recording (F-127), and the
+  V1 voice spec's "outbound calling of any kind" (F-073's bridged calls from the business number);
+  the booking spec's deferral of waitlists (F-050), and its "month-grid calendar UI" (F-183's events
+  month view); phase 6's decision 3, cross-account search deferred (F-136); pricing logins into the
+  plans (F-117's later part), once the cap has been raised by hand where needed; engine B's "no
+  link" in the referral ask, which stays in force because F-018's referral link is cut, and comes
+  back here only if H6 says yes.
+- **Kept, not revisited:** the teardown boundary (company deletion stays out of reach of app code;
+  F-121 adds one guarded worker); the platform spec's marketplace (F-148 and F-164 are not one); its
+  affiliate manager (F-143 is an attributed footer, not one); and its website builder (F-160 is a
+  generated page, not an editor).
+- **Recommendation: ratify the first group now, in one dated sitting.** Each was deferred for scope,
+  not principle, and the features that need them are small. Decide the second group as each feature
+  starts, because the argument depends on what the first release teaches. *Blocks:* The features
+  listed.
 
 #### 34. Study positions this plan moves (study §6, §7.2, §9.5–9.6, §11.3 and decisions 5, 10 and 15)
 
-- **Moved later, or changed, needed now:** the regulated-tenant mode (S-39, 1–2 ew), which study decision 5 recommends building now and §11.3 step 1 lists with no prerequisites, is placed in later. The argument: no clinic can sign while decision 5 holds, F-173's vetting holds HIPAA verticals at onboarding meanwhile (only adult day care and home health are turned away), and the now horizon has no real room for it: at five a week it is already 7–9 ew over after its cut order (§4.1), and at six a week S-39 would leave as little as 0.2 ew. Google's single sensitive-scope submission (study §6.2 step 3) becomes two reviews, so that Google calendar users are not held in Testing mode until later (§7.1).
-- **Changed, needed now:** the study's hot-transfer rules in the guardrail packs (study §9.5–9.6) become offers the caller accepts, because a transfer nobody answers is worse than an offer plus an urgent task (decision 21).
-- **Changed, needed now:** the study lets texting run under an interim staff routine until the consent ledger ships (study §9.6). This plan keeps the routine (chain step 0) but lets no account text before the send gate is live on 1 December (§3.2 rule 1), whatever the carrier says, because only the ledger proves consent and a missed revocation is a per-message liability. The cost: a live client whose registration clears in October keeps email-only reminders, and no missed-call text-back, until then.
-- **Moved later, when the feature starts:** the studios pilot, from the study's months 9–12 to 2029–2030 (F-191), because home services, law, insurance and events fill later; the offline read of a child's emergency file, part of study decision 10's recommendation, waits for the child-care pack, roles and a legal check (§6.7 row 16); and Sofía for seasonal tax preparers, which the study sells while the foundation is built, starts with the January–April 2028 season (S-61), because MFA per business, the security contract and U.S.-only processing (F-117, F-124, F-134) land in later, so the 2027 season is skipped. Until then, S-53's vetting holds tax preparers, CRM included, because the first release's vault has no per-tenant off switch; the owner may instead pull S-61's switch forward and admit them CRM-only (proposal; §5.14). Its seasonal price rests on F-142's levers, which sit in later's named tail; if they slide, the season is sold on the ordinary Sofía plan. The offer's shape changes too: the study's receptionist-only offer becomes the Sofía plan with the CRM included (binding constraint 3), and its "stores no tax documents" is kept by switching the vault's uploads off for those tenants (decisions 14, 18 and 25).
-- **Pulled forward.** HubSpot #22, with study §11.1's NPS: F-072's two-question check-in. Scheduled AI prompts: F-029 and F-082, now inside F-100. monday #14, sequences: F-079's second phase. HubSpot #17 and monday #15, a staff business number: F-073. Multi-currency: F-060, folded to a labelling rule.
-- **Recommendation.** Keep S-39 in later unless a clinic asks before decision 5 is ruled, and rule the two-review Google path now; binding constraint 2 is unaffected either way. Rule the hot-transfer change with decision 21. Accept the wait for the send gate. Accept the three later moves, and name the tax season in S-61's row if the prerequisites land sooner. Accept F-072's check-in and F-100's written paragraph, under decision 24's budget, because both are small and extend things owners already receive. Keep sequences behind their own decision when F-079's second phase starts. Cost the staff number in future (F-073, 3–4 ew), not earlier. Take only the US$ and MX$ labels from multi-currency. *Blocks:* S-39, S-22's Google review, F-084's storm wording and F-174's urgency offers (the "needed now" group), F-191, the emergency file and S-61, F-072 and F-100 (later), F-079's second phase, F-073.
+- **Moved later, or changed, needed now:** the regulated-tenant mode (S-39, 1–2 ew), which study
+  decision 5 recommends building now and §11.3 step 1 lists with no prerequisites, is placed in
+  later. The argument: no clinic can sign while decision 5 holds, F-173's vetting holds HIPAA
+  verticals at onboarding meanwhile (only adult day care and home health are turned away), and the
+  now horizon has no real room for it: at five a week it is already 7–9 ew over after its cut order
+  (§4.1), and at six a week S-39 would leave as little as 0.2 ew. Google's single sensitive-scope
+  submission (study §6.2 step 3) becomes two reviews, so that Google calendar users are not held in
+  Testing mode until later (§7.1). The study's legal guardrail pack (study §9.6 item 1), which its
+  §11.3 step 1 builds with the other packs and sells to law firms once the 680/705 sheet exists,
+  moves to next as F-174's law module, because the plan builds it after the sheet (F-124 part 1),
+  which §4.1's cut order may itself move to next, and now has no room for a third module beside
+  insurance and events (§4.1); Sofía's sales to law firms move with it, while the CRM is sold to
+  them once the sheet exists (decision 15; §5.14).
+- **Changed, needed now:** the study's hot-transfer rules in the guardrail packs (study §9.5–9.6)
+  become offers the caller accepts, because a transfer nobody answers is worse than an offer plus an
+  urgent task (decision 21).
+- **Changed, needed now:** the study lets texting run under an interim staff routine until the
+  consent ledger ships (study §9.6). This plan keeps the routine (chain step 0) but lets no account
+  text before the send gate is live on 1 December (§3.2 rule 1), whatever the carrier says, because
+  only the ledger proves consent and a missed revocation is a per-message liability. The cost: a
+  live client whose registration clears in October keeps email-only reminders, and no missed-call
+  text-back, until then.
+- **Moved later, when the feature starts:** the studios pilot, from the study's months 9–12 to
+  2029–2030 (F-191), because home services, law, insurance and events fill later; the offline read
+  of a child's emergency file, part of study decision 10's recommendation, waits for the child-care
+  pack, roles and a legal check (§6.7 row 16); and Sofía for seasonal tax preparers, which the study
+  sells while the foundation is built, starts with the January–April 2028 season (S-61), because MFA
+  per business, the security contract and U.S.-only processing (F-117, F-124, F-134) land in later,
+  so the 2027 season is skipped. Until then, S-53's vetting holds tax preparers, CRM included,
+  because the first release's vault has no per-tenant off switch; the owner may instead pull S-61's
+  switch forward and admit them CRM-only (proposal; §5.14). That interim hold applies from now, so
+  it is ruled in October with decision 25, whose "Also here" carries it. Its seasonal price rests on
+  F-142's levers, which sit in later's named tail; if they slide, the season is sold on the ordinary
+  Sofía plan. The offer's shape changes too: the study's receptionist-only offer becomes the Sofía
+  plan with the CRM included (binding constraint 3), and its "stores no tax documents" is kept by
+  switching the vault's uploads off for those tenants (decisions 14, 18 and 25).
+- **Pulled forward.** HubSpot #22, with study §11.1's NPS: F-072's two-question check-in. Scheduled
+  AI prompts: F-029 and F-082, now inside F-100. monday #14, sequences: F-079's second phase.
+  HubSpot #17 and monday #15, a staff business number: F-073. Multi-currency: F-060, folded to a
+  labelling rule.
+- **Recommendation.** Keep S-39 in later unless a clinic asks before decision 5 is ruled; binding
+  constraint 2 is unaffected either way. Rule the two-review Google path now, and the law module's
+  move to next with decision 15. Rule the hot-transfer change with decision 21. Accept the wait for
+  the send gate. Accept the three later moves, and name the tax season in S-61's row if the
+  prerequisites land sooner. Accept F-072's check-in and F-100's written paragraph, under decision
+  24's budget, because both are small and extend things owners already receive. Keep sequences
+  behind their own decision when F-079's second phase starts. Cost the staff number in future
+  (F-073, 3–4 ew), not earlier. Take only the US$ and MX$ labels from multi-currency. *Blocks:*
+  S-39, S-22's Google review, F-174's law module and Sofía's sales to law firms (both in next),
+  F-084's storm wording and F-174's urgency offers (the "needed now" group), F-191, the emergency
+  file and S-61, F-072 and F-100 (later), F-079's second phase, F-073.
 
 #### 35. DESIGN.md amendments, in two sittings (F-101)
 
-- **Today.** DESIGN.md says to stop and flag rather than improvise. Section 6.5 tables the amendments the features need.
-- **First sitting, October 2026, for the first release:** new v2 sections for the record page, documents and provenance, each provisional until a real client uses it (row 20); the module contract (row 10); "at most one hero", on which the first record page relies (row 11); bilingual in the definition of done (row 18); the operator's default theme ("dark-first" on paper, light in the code), because F-096 part 1 stores each person's choice (row 1).
-- **Second sitting, January 2027, for next:** the phone amendments for F-107 part 2: rule 10 on a phone, blur on the bottom bar, the "+" as chrome, AI presence on a phone, record views on a phone (rows 2 to 6; until then the first release's record page and vault follow today's drawer rule on a phone, and the record page's and vault's phone sheet ships inside F-107 part 2, in next); the sidebar spine for F-089 (row 7); the palette as the one box (row 9); the weekly report (row 13, decision 24).
-- **When their features start:** one launch plan replacing the Checklist entry (F-099, row 8); a delta names its window (F-076 and F-100, row 12); WCAG 2.2 AA in the definition of done, and the look it changes (F-103, with decision 26; rows 16 and 17); the booking card and calm customer surfaces (F-102 part 2, rows 14 and 15); "Powered by BIS" (decision 25, row 21); agency sign-in branding (F-138, row 22); the partner line on the signed-out shell (F-145, row 23); the person overrides, larger text and more contrast, when F-096's later part starts, and the lite ground with F-110 (row 19).
-- **Recommendation: rule in two dated sittings, October 2026 and January 2027**, so that no feature ships nouns or patterns the contract does not yet allow. Until an amendment is dated, new modules go into today's sidebar groups. Fix the chart that gives the hovered bar the `bar-hot` treatment in code rather than amending the Charts rule: the rule is right, and the code drifted from it. *Blocks:* F-101 (first release), F-107 part 2, F-089, F-088, F-092 part 1, F-095 part 1, F-100, F-099 part 2, F-103, F-102 part 2, F-062 (row 15), F-160 (row 11), F-143 (row 21), F-138 (row 22), F-145 (row 23).
+- **Today.** DESIGN.md says to stop and flag rather than improvise. Section 6.5 tables the
+  amendments the features need.
+- **First sitting, October 2026, for the first release:** new v2 sections for the record page,
+  documents and provenance, each provisional until a real client uses it (row 20); the module
+  contract (row 10); "at most one hero", on which the first record page relies (row 11); bilingual
+  in the definition of done (row 18); the operator's default theme ("dark-first" on paper, light in
+  the code), because F-096 part 1 stores each person's choice (row 1).
+- **Second sitting, January 2027, for next:** the phone amendments for F-107 part 2: rule 10 on a
+  phone, blur on the bottom bar, the "+" as chrome, AI presence on a phone, record views on a phone
+  (rows 2 to 6; until then the first release's record page and vault follow today's drawer rule on a
+  phone, and the record page's and vault's phone sheet ships inside F-107 part 2, in next); the
+  sidebar spine for F-089 (row 7); the palette as the one box (row 9); the weekly report (row 13,
+  decision 24).
+- **When their features start:** one launch plan replacing the Checklist entry (F-099, row 8); a
+  delta names its window (F-076 and F-100, row 12); WCAG 2.2 AA in the definition of done, and the
+  look it changes (F-103, with decision 26; rows 16 and 17); the booking card and calm customer
+  surfaces (F-102 part 2, rows 14 and 15); "Powered by BIS" (decision 25, row 21); agency sign-in
+  branding (F-138, row 22); the partner line on the signed-out shell (F-145, row 23); the person
+  overrides, larger text and more contrast, when F-096's later part starts, and the lite ground with
+  F-110 (row 19).
+- **Recommendation: rule in two dated sittings, October 2026 and January 2027**, so that no feature
+  ships nouns or patterns the contract does not yet allow. Until an amendment is dated, new modules
+  go into today's sidebar groups. Fix the chart that gives the hovered bar the `bar-hot` treatment
+  in code rather than amending the Charts rule: the rule is right, and the code drifted from
+  it. *Blocks:* F-101 (first release), F-107 part 2, F-089, F-088, F-092 part 1, F-095 part 1, F-100,
+  F-099 part 2, F-103, F-102 part 2, F-062 (row 15), F-160 (row 11), F-143 (row 21), F-138 (row 22),
+  F-145 (row 23).
 
 ---
 
 ## 10. What to validate first
 
-The value judge flagged 26 features FLAG-M: each rests on a Valley pattern nobody has checked, or revisits a recorded decision. The table maps each to a hypothesis, a question, and the people to ask. Features whose flag is really an owner decision point to it instead:
+The value judge flagged 26 features FLAG-M: each rests on a Valley pattern nobody has checked, or
+revisits a recorded decision. The table maps each to a hypothesis, a question, and the people to
+ask. Features whose flag is really an owner decision point to it instead:
 - F-034 (decision 20, and H22 measures it);
 - F-062 (decision 25);
 - F-089 (decision 35);
@@ -2202,7 +3433,11 @@ The value judge flagged 26 features FLAG-M: each rests on a Valley pattern nobod
 - F-147 (decision 31, and H21);
 - F-161 (decision 32, and H20).
 
-F-032, the last of the 26, is dropped. None of the others is built beyond its cheapest part until its answer is in: F-003's relationship labels and F-018's source question ship now because they cost almost nothing, and F-034's disclosure runs first as a measured one-account trial (H22). **The Expo on 27 September starts H1 to H4, part of H7 and H21; the October and November calls finish them** before any events work is built.
+F-032, the last of the 26, is dropped. None of the others is built beyond its cheapest part until
+its answer is in: F-003's relationship labels and F-018's source question ship now because they cost
+almost nothing, and F-034's disclosure runs first as a measured one-account trial (H22). **The Expo
+on 27 September starts H1 to H4, part of H7 and H21; the October and November calls finish them**
+before any events work is built.
 
 | # | Hypothesis | The question to ask | Whom, and where | What waits on the answer |
 |---|---|---|---|---|
@@ -2222,7 +3457,7 @@ F-032, the last of the 26, is dropped. None of the others is built beyond its ch
 | H14 | Winter Texans are a large share of some trades' customers | "What share of your customers live here only in winter?" | HVAC and pest-control prospects | F-016 (dropped unless the answer is yes) |
 | H15 | Chambers, UTRGV and bookkeepers would refer clients or help set them up | To a chamber: "Would you offer members a discount page?" To UTRGV and bookkeepers: "Would your students or staff help set up a business, for pay?" | Two chambers of commerce, UTRGV, two bookkeepers | F-145, F-137 |
 | H16 | Small owners would use a written security programme scaled to their size to gain Texas's safe harbour from exemplary damages (below 20 employees, password rules and staff training within a recognised framework such as the CIS Controls; 20 to 99 employees add CIS IG1) | "Do you have a written policy for customer data? Would you use one we write with you?" | The live client and two prospects, as a content pilot (three clients once there are three) | F-125 |
-| H17 | Valley owners keep their calendar in Outlook more than in Google | "Which calendar do you and your staff use: Outlook, Google, the phone's own, or paper?" | Every discovery call | S-22's order (Outlook first is the study's default); S-23. The feed (F-048 part 2) ships regardless; the answer sizes its value, which is highest for owners on the phone's own calendar, Apple's in particular, where it refreshes fastest |
+| H17 | Valley owners keep their calendar in Outlook more than in Google | "Which calendar do you and your staff use: Outlook, Google, the phone's own, or paper?" | Every discovery call | S-22's order (Outlook first is the study's default); S-23. The feed (F-048 part 2) ships regardless; the answer sizes its value, which is highest for owners on the phone's own calendar, Apple's in particular, where it can refresh fastest |
 | H18 | New clients arrive with years of paper files they want on the record | "Where are your customers' papers today, and how many are there?" | Child-care centres, insurance agencies, trades | F-197 |
 | H19 | Many prospects have no website | "Do you have a website? Who keeps it up to date?" | Every discovery call | F-160 |
 | H20 | Valley businesses' Google profiles show wrong hours | No question: compare the live client's and prospects' Google hours with what they tell us | The agency, as desk research | F-161, F-170 |
@@ -2240,22 +3475,35 @@ F-032, the last of the 26, is dropped. None of the others is built beyond its ch
 
 **The order to ask them in.**
 - The Expo starts H1 to H4, the first half of H7, and H21 with the vendors met there.
-- The October and November calls cover H6, H7, H17, H19 and H23 on every call; H5 with the two insurance agencies and an HVAC prospect's office; H8 with the live client and receptionist-first prospects; H9 with the centres; H18 with the centres, the two insurance agencies and the trades; H10 with the restaurants; H11 with tax preparers, HVAC shops and event vendors; H12 and H14 with HVAC prospects and other trades.
-- H15 and H16 run as named pilots: two chambers, UTRGV and two bookkeepers for H15, the live client and two prospects for H16.
+- The October and November calls cover H6, H7, H17, H19 and H23 on every call; H5 with the two
+  insurance agencies and an HVAC prospect's office; H8 with the live client and receptionist-first
+  prospects; H9 with the centres; H18 with the centres, the two insurance agencies and the trades;
+  H10 with the restaurants; H11 with tax preparers, HVAC shops and event vendors; H12 and H14 with
+  HVAC prospects and other trades.
+- H15 and H16 run as named pilots: two chambers, UTRGV and two bookkeepers for H15, the live client
+  and two prospects for H16.
 - H13 and H20 are measurements that can start now. H22 starts when decision 20 allows the trial.
-- Record each answer against its hypothesis. A feature whose hypothesis comes back "no" moves to dropped at the next planning pass.
+- Record each answer against its hypothesis. A feature whose hypothesis comes back "no" moves to
+  dropped at the next planning pass.
 
 ---
 
 ## Appendix A. The full feature catalogue
 
-One row per feature, in ID order: the 192 canonical features (F-001 to F-192) and the seven additions (F-193 to F-199).
-- **V, F and D** (value, feasibility, differentiation, 1–5, with each judge's flag) and **Skeptic** are copied exactly from the judges' merged scores. The additions have no judged scores; theirs are provisional, marked "prov.".
-- **Effort** is the canonical band and figure, or this plan's revision marked with an asterisk (*). "Beyond S-NN" means an increment on the study's own line, and the band describes the increment.
-- **Final horizon** lists every horizon the feature touches, first to last. **Disposition** says where its first part lands and how it splits. "—" means folded or dropped.
+One row per feature, in ID order: the 192 canonical features (F-001 to F-192) and the seven
+additions (F-193 to F-199).
+- **V, F and D** (value, feasibility, differentiation, 1–5, with each judge's flag) and **Skeptic**
+  are copied exactly from the judges' merged scores. The additions have no judged scores; theirs are
+  provisional, marked "prov.".
+- **Effort** is the canonical band and figure, or this plan's revision marked with an asterisk (*).
+  "Beyond S-NN" means an increment on the study's own line, and the band describes the increment.
+- **Final horizon** lists every horizon the feature touches, first to last. **Disposition** says
+  where its first part lands and how it splits. "—" means folded or dropped.
 - The reasons, the effort sums and the dependencies are in section 4.
 
-**Dispositions:** before the first release 16; first release 16; the study's parallel work 7; riders 6; next 13; later 68; future 42; folded 13; dropped 18. That is **199** features, each placed exactly once.
+**Dispositions:** before the first release 16; first release 16; the study's parallel work 7; riders
+6; next 13; later 68; future 42; folded 13; dropped 18. That is **199** features, each placed
+exactly once.
 
 | ID | Feature | Area | Effort | Final horizon | V | F | D | Skeptic | Disposition |
 |---|---|---|---|---|---|---|---|---|---|
@@ -2383,7 +3631,7 @@ One row per feature, in ID order: the 192 canonical features (F-001 to F-192) an
 | F-122 | Honour "delete me" and "what do you have on me" | Trust | M (3–4) | future | 2 · FLAG-L | 3 | 2 |  | Future |
 | F-123 | One retention engine | Trust | M (3) | later | 3 · FLAG-L | 4 · low | 2 |  | Later |
 | F-124 | The due-diligence pack and a public Trust Center | Trust | M (2–3) | now → later | 4 · FLAG-L | 4 | 4 |  | Parallel work (before law sales); split: Trust Center Later |
-| F-125 | A safe-harbour kit for the client's own business (SB 2610) | Trust | S (1–2)* | later | 3 · FLAG-M | 4 · low | 4 · FLAG-M |  | Later (a content pilot with three clients before any kit) |
+| F-125 | A safe-harbour kit for the client's own business (SB 2610) | Trust | S (1–2)* | later | 3 · FLAG-M | 4 · low | 4 · FLAG-M |  | Later (a content pilot with the live client and two prospects before any kit) |
 | F-126 | Children and minors: sensitive by default | Trust | M (2–3) | later | 3 · FLAG-L | 3 | 3 · FLAG-L |  | Later |
 | F-127 | Call recording done right | Trust | M (2–3) | future | 3 | 3 · med | 2 | minor | Future |
 | F-128 | SOC 2: aligned now, attested when customers pay for it | Trust | M (3–4) | future | 1 | 3 | 2 · FLAG-L |  | Future (only on two written requests) |
@@ -2463,7 +3711,11 @@ One row per feature, in ID order: the 192 canonical features (F-001 to F-192) an
 
 ## Appendix B. The study's foundation items
 
-S-01 to S-62 are the rows of the study's §11.1 table, in table order; where the study wrote two items in one phrase, each has its own row. The last column lists the canonical features whose relation line says they detail or extend that item; "related" names features that depend on the item without detailing it. Effort is as the study gives it; section 4 shows where this plan re-costs an item. In this appendix, § references are to the study.
+S-01 to S-62 are the rows of the study's §11.1 table, in table order; where the study wrote two
+items in one phrase, each has its own row. The last column lists the canonical features whose
+relation line says they detail or extend that item; "related" names features that depend on the item
+without detailing it. Effort is as the study gives it; section 4 shows where this plan re-costs an
+item. In this appendix, § references are to the study.
 
 | S-ID | Item | Track | Effort (ew, as the study gives it) | In the study's first release (11.2)? | Canonical features that detail or extend it (F-IDs) |
 |---|---|---|---|---|---|
@@ -2544,11 +3796,23 @@ S-01 to S-62 are the rows of the study's §11.1 table, in table order; where the
 | In flight | 1 | 3–4 | 3–4 | yes |
 | **Total** | **62** | **147–207** | **about 147–207** | **yes** |
 
-- **Every track sums to the study's own total, and so does the whole.** The study's arithmetic holds.
-- **The first release also checks.** The nine items marked "Yes" (S-01, S-02, S-03, S-05, S-06, S-07, S-09, S-14 and S-15) sum to exactly 27–36 ew, the figure in §11.2. The parallel work (S-27, S-28, S-47 and S-62, plus the Business Profile API application, which has no effort line) sits outside that figure, as the study says. This plan adds tenant vetting (S-53) and Microsoft sign-in from §11.3 step 1 to it, so section 4 counts five study items there.
-- **S-62 is kept as audited.** The study's own note of 2026-09-26 says M7a step 2 shipped in #144, so "steps 2–4" should read "steps 3–4". The study leaves the effort as audited, and so does this table.
-- **The figures are optimistic for one engineer.** The study says Appendix D's estimates assume a team of two or three. The feasibility judge re-estimates S-01 at 6–9 ew rather than 3–4. If the judge is right, the Foundation track becomes 42–59 ew and the first release 30–41 ew.
-- **Eleven S-items have no canonical feature that details them.** They are the whole Google and Microsoft track (S-22 to S-28, 15.5–22 ew), spreadsheet import (S-35), the regulated-tenant mode (S-39), the seasonal tax offer (S-61) and M7a (S-62). They are costed in the study; section 7 schedules the Google and Microsoft track.
+- **Every track sums to the study's own total, and so does the whole.** The study's arithmetic
+  holds.
+- **The first release also checks.** The nine items marked "Yes" (S-01, S-02, S-03, S-05, S-06,
+  S-07, S-09, S-14 and S-15) sum to exactly 27–36 ew, the figure in §11.2. The parallel work (S-27,
+  S-28, S-47 and S-62, plus the Business Profile API application, which has no effort line) sits
+  outside that figure, as the study says. This plan adds tenant vetting (S-53) and Microsoft sign-in
+  from §11.3 step 1 to it, so section 4 counts five study items there.
+- **S-62 is kept as audited.** The study's own note of 2026-09-26 says M7a step 2 shipped in #144,
+  so "steps 2–4" should read "steps 3–4". The study leaves the effort as audited, and so does this
+  table.
+- **The figures are optimistic for one engineer.** The study says Appendix D's estimates assume a
+  team of two or three. The feasibility judge re-estimates S-01 at 6–9 ew rather than 3–4. If the
+  judge is right, the Foundation track becomes 42–59 ew and the first release 30–41 ew.
+- **Eleven S-items have no canonical feature that details them.** They are the whole Google and
+  Microsoft track (S-22 to S-28, 15.5–22 ew), spreadsheet import (S-35), the regulated-tenant mode
+  (S-39), the seasonal tax offer (S-61) and M7a (S-62). They are costed in the study; section 7
+  schedules the Google and Microsoft track.
 
 **Not in the total (S-N list).**
 
@@ -2577,8 +3841,10 @@ The study lists these as outside the 147–207 ew "because each waits on a decis
 
 ## Appendix C. Sources
 
-**The study and its appendices** (on the working branch; landing them on `main` is an operational step in §4.2):
-- `docs/research/2026-09-25-crm-feature-research.md`: the CRM study. Sections 1–15; §11 is the plan, §12 the 18 owner decisions, §13 the risks.
+**The study and its appendices** (on the working branch; landing them on `main` is an operational
+step in §4.2):
+- `docs/research/2026-09-25-crm-feature-research.md`: the CRM study. Sections 1–15; §11 is the plan,
+  §12 the 18 owner decisions, §13 the risks.
 - `docs/research/2026-09-25-appendix-a-hubspot.md`
 - `docs/research/2026-09-25-appendix-b-monday.md`
 - `docs/research/2026-09-25-appendix-c-smb-crm-landscape.md`
@@ -2589,7 +3855,8 @@ The study lists these as outside the 147–207 ew "because each waits on a decis
 - `docs/research/2026-09-25-appendix-h-consumer-services.md`
 - `docs/research/2026-09-21-pricing-and-packaging.md`: the pricing study.
 
-**The design contract:** `DESIGN.md`; the tokens in `apps/web/src/styles/tokens.css`; the reference mockup `docs/design/northern-lights.html`.
+**The design contract:** `DESIGN.md`; the tokens in `apps/web/src/styles/tokens.css`; the reference
+mockup `docs/design/northern-lights.html`.
 
 **The main specs cited:**
 - `docs/superpowers/specs/2026-07-25-bis-platform-design.md` (the platform spec and its §8a tracker)
@@ -2605,16 +3872,36 @@ The study lists these as outside the 147–207 ew "because each waits on a decis
 - The runbooks in `docs/runbooks/` (CI database, Clerk, voice, website, A2P registration).
 
 **Legal texts** (primary sources; commentary is linked where it is cited in §4.2 and §9):
-- 47 CFR 64.1200, today's (a)(10) to (a)(12): [eCFR](https://www.ecfr.gov/current/title-47/chapter-I/subchapter-B/part-64/subpart-L/section-64.1200)
-- The FCC's draft Report and Order and Further Notice, FCC-CIRC 2609-05, 9 September 2026, with its fact sheet: [DOC-424844A1](https://docs.fcc.gov/public/attachments/DOC-424844A1.pdf)
-- The Bureau's order of 6 January 2026, DA 26-12, delaying "revoke all" to 31 January 2027: [FCC](https://www.fcc.gov/document/cgb-extends-effective-date-tcpas-consent-revocation-rule)
-- 47 CFR 64.1200(c)(1), the federal calling hours (8 a.m. to 9 p.m. at the called party's location): [eCFR](https://www.ecfr.gov/current/title-47/chapter-I/subchapter-B/part-64/subpart-L/section-64.1200)
-- Texas Business and Commerce Code chapter 301, telephone solicitation hours (§301.051): [statutes](https://tcss.legis.texas.gov/resources/bc/htm/bc.301.htm)
-- Texas Business and Commerce Code chapter 302, telephone solicitation, as SB 140 amended it: [statutes](https://statutes.capitol.texas.gov/Docs/BC/htm/BC.302.htm); the Attorney General opinion request RQ-0626-KP: [request](https://www.texasattorneygeneral.gov/sites/default/files/request-files/request/2025/RQ0626KP_0.pdf); the Secretary of State's registration FAQ: [FAQ](https://www.sos.state.tx.us/statdoc/faqs3400.shtml), with commentary by [K&L Gates](https://www.klgates.com/thought-leadership/Litigation-Minute-Text-Message-Marketing-in-Texas-One-Year-After-SB-140-9-14-2026)
-- Chapter 541, the TDPSA, including §541.002(b)(2): [statutes](https://tcss.legis.texas.gov/resources/bc/htm/bc.541.htm)
-- The CAN-SPAM Act, the FTC's compliance guide for business: [FTC](https://www.ftc.gov/business-guidance/resources/can-spam-act-compliance-guide-business)
-- Chapter 542, the cybersecurity safe harbour (SB 2610): [statutes](https://tcss.legis.texas.gov/resources/bc/htm/bc.542.htm); [enrolled bill](https://capitol.texas.gov/tlodocs/89R/billtext/html/SB02610F.htm)
-- TRAIGA (HB 149), chapters 551–554; the disclosure duty is §552.051: [statutes](https://tcss.legis.texas.gov/resources/bc/htm/bc.552.htm)
-- Texas Insurance Code §4001.051, subsections (b) and (d): [statutes](https://tcss.legis.texas.gov/resources/in/htm/in.4001.htm)
+- 47 CFR 64.1200, today's (a)(10) to (a)(12):
+  [eCFR](https://www.ecfr.gov/current/title-47/chapter-I/subchapter-B/part-64/subpart-L/section-64.1200)
+- The FCC's draft Report and Order and Further Notice, FCC-CIRC 2609-05, 9 September 2026, with its
+  fact sheet: [DOC-424844A1](https://docs.fcc.gov/public/attachments/DOC-424844A1.pdf)
+- The Bureau's order of 6 January 2026, DA 26-12, delaying "revoke all" to 31 January 2027:
+  [FCC](https://www.fcc.gov/document/cgb-extends-effective-date-tcpas-consent-revocation-rule)
+- 47 CFR 64.1200(c)(1), the federal calling hours (8 a.m. to 9 p.m. at the called party's location):
+  [eCFR](https://www.ecfr.gov/current/title-47/chapter-I/subchapter-B/part-64/subpart-L/section-64.1200)
+- Texas Business and Commerce Code chapter 301, telephone solicitation hours (§301.051):
+  [statutes](https://tcss.legis.texas.gov/resources/bc/htm/bc.301.htm)
+- Texas Business and Commerce Code chapter 302, telephone solicitation, as SB 140 amended it:
+  [statutes](https://statutes.capitol.texas.gov/Docs/BC/htm/BC.302.htm); the Attorney General
+  opinion request RQ-0626-KP:
+  [request](https://www.texasattorneygeneral.gov/sites/default/files/request-files/request/2025/RQ0626KP_0.pdf);
+  the Secretary of State's registration FAQ:
+  [FAQ](https://www.sos.state.tx.us/statdoc/faqs3400.shtml), with commentary by [K&L
+  Gates](https://www.klgates.com/thought-leadership/Litigation-Minute-Text-Message-Marketing-in-Texas-One-Year-After-SB-140-9-14-2026)
+- Chapter 541, the TDPSA, including §541.002(b)(2):
+  [statutes](https://tcss.legis.texas.gov/resources/bc/htm/bc.541.htm)
+- The CAN-SPAM Act, the FTC's compliance guide for business:
+  [FTC](https://www.ftc.gov/business-guidance/resources/can-spam-act-compliance-guide-business)
+- Chapter 542, the cybersecurity safe harbour (SB 2610):
+  [statutes](https://tcss.legis.texas.gov/resources/bc/htm/bc.542.htm); [enrolled
+  bill](https://capitol.texas.gov/tlodocs/89R/billtext/html/SB02610F.htm)
+- TRAIGA (HB 149), chapters 551–554; the disclosure duty is §552.051:
+  [statutes](https://tcss.legis.texas.gov/resources/bc/htm/bc.552.htm)
+- Texas Insurance Code §4001.051, subsections (b) and (d):
+  [statutes](https://tcss.legis.texas.gov/resources/in/htm/in.4001.htm)
 
-**Working files.** The twelve subsystem inventories and their adversarial checks, the ten lens files with their 230 proposals, the canonical list of 192 features, and the four judges' scores were planning material. They are not in the repository; everything this plan relies on from them is stated here, and security-sensitive findings are tracked privately.
+**Working files.** The twelve subsystem inventories and their adversarial checks, the ten lens files
+with their 230 proposals, the canonical list of 192 features, and the four judges' scores were
+planning material. They are not in the repository; everything this plan relies on from them is
+stated here, and security-sensitive findings are tracked privately.
