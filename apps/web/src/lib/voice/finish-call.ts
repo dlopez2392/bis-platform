@@ -15,7 +15,7 @@ import { voiceMinutes, recordUsageSafely } from "@/lib/billing/usage";
 import { detectSpokenLanguage } from "./language";
 import { generateSummary } from "./summary-service";
 import { summaryFactLine } from "./summarize";
-import { toE164 } from "./phone-number";
+import { toE164, isCallerIdNumber } from "./phone-number";
 // STATIC, not the lazy `await import(...)` this repo otherwise reaches for
 // near route handlers: the documented page-data trap (a module-scope DB
 // import breaking `next build`'s page-data collection) doesn't apply to a
@@ -287,12 +287,21 @@ async function resolveContactId(state: CallState, ctx: FinishContext): Promise<s
       email: fields.email,
       source: "voice",
     }, ACTOR_ID, ACTOR_TYPE);
-    if (created.existing) {
+    // Backfill ONLY the caller's own contact. The lead's email or callback
+    // number is what the caller said, and the dedupe (email first, then
+    // phone) can land it on someone else's record: the lead still goes
+    // there, but nothing of this caller's is written onto it unless its
+    // stored phone is the caller ID. `phone` is never passed — on the
+    // caller's own contact it already is the caller ID. A withheld caller ID
+    // fills nothing.
+    if (created.existing && ctx.callerNumber) {
       try {
-        await fillContactBlanks(ctx.db, ctx.accountId, created.id,
-          { firstName: firstName || undefined, lastName, email: fields.email,
-            phone: toE164(fields.callbackNumber) ?? ctx.callerNumber ?? undefined },
-          ACTOR_ID, ACTOR_TYPE);
+        const existing = (await getContact(ctx.db, ctx.accountId, created.id)) as { phone?: string | null } | null;
+        if (isCallerIdNumber(existing?.phone, ctx.callerNumber)) {
+          await fillContactBlanks(ctx.db, ctx.accountId, created.id,
+            { firstName: firstName || undefined, lastName, email: fields.email },
+            ACTOR_ID, ACTOR_TYPE);
+        }
       } catch (e) {
         console.error(`finishCall fillContactBlanks failed for ${created.id}: ${String(e)}`);
       }
@@ -301,6 +310,9 @@ async function resolveContactId(state: CallState, ctx: FinishContext): Promise<s
   }
 
   if (ctx.callerNumber) {
+    // Safe as it stands: this dedupes on the caller ID ALONE, so a match IS
+    // the caller's own contact and the phone fill is a no-op. Do not add the
+    // lead path's email/name here without its caller-ID check.
     const created = await createContact(ctx.db, ctx.accountId, {
       firstName: "Caller",
       phone: ctx.callerNumber,

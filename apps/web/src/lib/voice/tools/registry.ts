@@ -9,7 +9,7 @@ import {
   type CalendarRow, type VoiceProfileRow, type Branding,
 } from "@bis/db";
 import { computeAllSlots, dayKeyInZone } from "@/lib/booking/availability";
-import { toE164 } from "../phone-number";
+import { toE164, isCallerIdNumber } from "../phone-number";
 import { getEmailProvider } from "@/lib/email";
 import { getMeetingProvider } from "@/lib/meetings/provider";
 import { emailBrand } from "@/lib/email/templates/shell";
@@ -111,7 +111,7 @@ async function checkCallerOwnsBooking(
       + `Apologize, then ${nextStep(ctx)} so the team can help.` };
   }
   const bookedThisCall = state.bookings.some((b) => b.id === bookingId);
-  const callerIdMatches = !!ctx.callerNumber && toE164(contact?.phone) === ctx.callerNumber;
+  const callerIdMatches = isCallerIdNumber(contact?.phone, ctx.callerNumber);
   if (!bookedThisCall && !callerIdMatches) {
     return { owned: false, error:
       "This appointment isn't under the number they're calling from, so it can't be changed on this call. "
@@ -394,14 +394,23 @@ export async function runTool(
           { firstName, lastName, phone: phone ?? undefined, email: email ?? undefined, source: "voice" },
           "voice", "ai");
         contactId = created.id;
-        if (created.existing) {
-          // Dedupe returns the existing row untouched — backfill blanks so a
-          // repeat caller stops being "Caller" with no email (the unsendable-
-          // reminder casualty). Failure here must NEVER fail the booking.
+        // Dedupe returns the existing row untouched — backfill blanks so a
+        // repeat caller stops being "Caller" with no email (the unsendable-
+        // reminder casualty). ONLY on the caller's own contact: the dedupe
+        // matches email first, then phone, and either can be something the
+        // caller merely said, so the match may be someone else's record. The
+        // booking still lands on it; nothing of this caller's is written
+        // onto it. `phone` is never passed — on the caller's own contact it
+        // already is the caller ID. A withheld caller ID fills nothing.
+        // Failure here (the read or the fill) must NEVER fail the booking.
+        if (created.existing && ctx.callerNumber) {
           try {
-            await fillContactBlanks(ctx.db, ctx.accountId, contactId,
-              { firstName, lastName, email: email ?? undefined, phone: phone ?? undefined },
-              "voice", "ai");
+            const existing = (await getContact(ctx.db, ctx.accountId, contactId)) as BookingContact | null;
+            if (isCallerIdNumber(existing?.phone, ctx.callerNumber)) {
+              await fillContactBlanks(ctx.db, ctx.accountId, contactId,
+                { firstName, lastName, email: email ?? undefined },
+                "voice", "ai");
+            }
           } catch (e) {
             console.error(`voice fillContactBlanks failed for ${contactId}: ${String(e)}`);
           }

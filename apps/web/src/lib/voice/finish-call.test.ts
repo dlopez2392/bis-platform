@@ -248,16 +248,19 @@ describe("finishCall", () => {
     expect(dbMocks.finishCallRow).toHaveBeenCalled();
     errSpy.mockRestore();
   });
-  it("lead path dedupe onto an existing contact backfills blanks (rejection still stores + alerts)", async () => {
+  it("lead path dedupe onto the caller's own contact backfills blanks, never the phone (rejection still stores + alerts)", async () => {
     dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+    // beforeEach's contact has phone +19562921696 — the caller ID: their own.
     dbMocks.fillContactBlanks.mockRejectedValue(new Error("db down"));
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const s = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
       { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
     const r = await finishCall(s, ctx, meta);
     errSpy.mockRestore();
+    expect(dbMocks.getContact).toHaveBeenCalledWith({}, "a1", "ct1");
     expect(dbMocks.fillContactBlanks).toHaveBeenCalledWith({}, "a1", "ct1",
-      { firstName: "Ana", lastName: "Ruiz", email: undefined, phone: "+19562921696" }, "voice", "ai");
+      { firstName: "Ana", lastName: "Ruiz", email: undefined }, "voice", "ai");
+    expect(dbMocks.fillContactBlanks.mock.calls[0]![3]).not.toHaveProperty("phone");
     expect(r).toMatchObject({ stored: true, notified: true, outcome: "lead" });
     // Pins the LOCAL try/catch around fillContactBlanks: without it, the
     // rejection propagates to the outer per-leg catch and silently skips
@@ -267,6 +270,59 @@ describe("finishCall", () => {
     expect(dbMocks.ensureConversation).toHaveBeenCalled();
     expect(dbMocks.createMessage).toHaveBeenCalled();
   });
+  // The lead's email or callback number can match SOMEONE ELSE's contact
+  // (the dedupe matches email first, then phone). The lead still lands on
+  // that contact, but nothing of this caller's is written onto it unless its
+  // stored phone is the caller ID.
+  describe("lead path backfill is only for the caller's own contact", () => {
+    const leadWithEmail = () => withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
+      { fields: { fullName: "Ana Ruiz", need: "roof quote", email: "ana@example.com", callbackNumber: "(956) 555-0100" } });
+
+    it("stored \"(956) 292-1696\" is the caller ID +19562921696 — the fill runs (name + email only)", async () => {
+      dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+      dbMocks.getContact.mockResolvedValue({ id: "ct1", first_name: "Caller", last_name: null, email: null, phone: "(956) 292-1696" });
+      await finishCall(leadWithEmail(), ctx, meta);
+      expect(dbMocks.fillContactBlanks).toHaveBeenCalledWith({}, "a1", "ct1",
+        { firstName: "Ana", lastName: "Ruiz", email: "ana@example.com" }, "voice", "ai");
+    });
+
+    it.each([
+      ["a different number (the recited callback number matched someone else)", "+19565550100"],
+      ["no phone at all (an email-only match)", null],
+    ])("an existing contact with %s gets NOTHING filled — the lead still lands on it", async (_label, storedPhone) => {
+      dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+      dbMocks.getContact.mockResolvedValue({ id: "ct1", first_name: "Bea", last_name: null, email: null, phone: storedPhone });
+      const r = await finishCall(leadWithEmail(), ctx, meta);
+      expect(dbMocks.fillContactBlanks).not.toHaveBeenCalled();
+      expect(r).toMatchObject({ stored: true, outcome: "lead" });
+      expect(dbMocks.finishCallRow).toHaveBeenCalledWith({}, "a1", "call1",
+        expect.objectContaining({ outcome: "lead", contactId: "ct1" }));
+    });
+
+    it("caller ID withheld: an existing contact gets NOTHING filled — the lead still lands on it", async () => {
+      dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+      dbMocks.getContact.mockResolvedValue({ id: "ct1", first_name: "Bea", last_name: null, email: null, phone: null });
+      const r = await finishCall(leadWithEmail(), { ...ctx, callerNumber: null }, meta);
+      expect(dbMocks.fillContactBlanks).not.toHaveBeenCalled();
+      expect(r).toMatchObject({ stored: true, outcome: "lead" });
+      expect(dbMocks.finishCallRow).toHaveBeenCalledWith({}, "a1", "call1",
+        expect.objectContaining({ contactId: "ct1" }));
+    });
+
+    it("a failing contact read fills nothing, is logged by contact id, and the lead treatment carries on", async () => {
+      dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+      dbMocks.getContact.mockRejectedValue(new Error("db blip"));
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const r = await finishCall(leadWithEmail(), ctx, meta);
+      const logs = errSpy.mock.calls.map((c) => String(c[0] ?? ""));
+      errSpy.mockRestore();
+      expect(dbMocks.fillContactBlanks).not.toHaveBeenCalled();
+      expect(logs.some((l) => /finishCall fillContactBlanks failed for ct1/.test(l))).toBe(true);
+      expect(r).toMatchObject({ stored: true, notified: true, outcome: "lead" });
+      expect(dbMocks.createMessage).toHaveBeenCalled();
+    });
+  });
+
   it("caller-ID-only path (no lead) backfills the bare phone on dedupe, symmetric shape", async () => {
     dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
     const s = withMessage(emptyCallState(), { body: "call me", at: "t" });

@@ -323,18 +323,77 @@ describe("book_appointment", () => {
     expect(state.contactId).toBe("ct1");
   });
 
-  it("dedupe onto an existing contact backfills blanks with the split name + email + phone", async () => {
+  // The dedupe matches on email first, then phone — and either can be
+  // something the caller merely SAID. Blanks are filled only on the caller's
+  // OWN contact (stored phone = caller ID); on anyone else's the booking still
+  // lands there, but nothing of this caller's is written onto that record.
+  const CALLERS_OWN = { id: "ct1", first_name: "Caller", last_name: null, email: null, phone: "+19562921696" };
+
+  it("dedupe onto the caller's own contact backfills blanks with the split name + email, never the phone", async () => {
     dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+    dbMocks.getContact.mockResolvedValue(CALLERS_OWN);
+    const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
+    expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
+    expect(dbMocks.getContact).toHaveBeenCalledWith({}, "a1", "ct1");
+    expect(dbMocks.fillContactBlanks).toHaveBeenCalledWith({}, "a1", "ct1",
+      { firstName: "Ana", lastName: "Ruiz", email: "ana@example.com" },
+      "voice", "ai");
+    expect(dbMocks.fillContactBlanks.mock.calls[0]![3]).not.toHaveProperty("phone");
+  });
+
+  it("the stored phone is compared as E.164: \"(956) 292-1696\" on file is the caller's own — the fill runs", async () => {
+    dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+    dbMocks.getContact.mockResolvedValue({ ...CALLERS_OWN, phone: "(956) 292-1696" });
     const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
       { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
     expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
     expect(dbMocks.fillContactBlanks).toHaveBeenCalledWith({}, "a1", "ct1",
-      { firstName: "Ana", lastName: "Ruiz", email: "ana@example.com", phone: "+19562921696" },
-      "voice", "ai");
+      { firstName: "Ana", lastName: "Ruiz", email: "ana@example.com" }, "voice", "ai");
+  });
+
+  it.each([
+    ["a different number (a recited phone that matched someone else)", "+19565550100"],
+    ["no phone at all (an email-only match)", null],
+  ])("an existing contact with %s gets NOTHING filled — the booking still lands on it", async (_label, storedPhone) => {
+    dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+    dbMocks.getContact.mockResolvedValue({ ...CALLERS_OWN, phone: storedPhone });
+    const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com", phone: "(956) 555-0100" });
+    expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
+    expect(dbMocks.fillContactBlanks).not.toHaveBeenCalled();
+    expect(dbMocks.createBooking).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ contactId: "ct1" }), "voice", "ai");
+  });
+
+  it("caller ID withheld: an existing contact gets NOTHING filled, and the booking still lands", async () => {
+    dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+    // Even a contact with no phone on file: an absent number is not a match.
+    dbMocks.getContact.mockResolvedValue({ ...CALLERS_OWN, phone: null });
+    const { result } = await runTool(emptyCallState(), { ...ctx, callerNumber: null }, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
+    expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
+    expect(dbMocks.fillContactBlanks).not.toHaveBeenCalled();
+    expect(dbMocks.createBooking).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ contactId: "ct1" }), "voice", "ai");
+  });
+
+  it("a failing contact read during the backfill fills nothing and never fails the booking", async () => {
+    dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+    dbMocks.getContact.mockRejectedValue(new Error("db blip"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
+    const logs = errSpy.mock.calls.map((c) => String(c[0] ?? ""));
+    errSpy.mockRestore();
+    expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
+    expect(dbMocks.fillContactBlanks).not.toHaveBeenCalled();
+    expect(logs.some((l) => l.includes("ct1"))).toBe(true);
   });
 
   it("never-break pin: fillContactBlanks rejecting still yields a successful booking", async () => {
     dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+    dbMocks.getContact.mockResolvedValue(CALLERS_OWN);
     dbMocks.fillContactBlanks.mockRejectedValue(new Error("db down"));
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
