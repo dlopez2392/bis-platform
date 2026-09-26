@@ -104,6 +104,14 @@ describe("BillingSection", () => {
     expect(log.mock.calls.flat().join(" ")).toContain("timeout");
     log.mockRestore();
   });
+
+  it("logs the failed read through loggableError, so an address in the error never reaches the logs (the rest of billing's rule; found while closing final review m3) (mutation: log e.message raw → FAILS)", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbm.getAccountBilling.mockRejectedValue(new Error("read failed near owner@example.com"));
+    await BillingSection({ accountId: "a" });
+    expect(log.mock.calls.flat().join(" ")).toBe("settings: billing card unavailable for account a: Error: read failed near [email]");
+    log.mockRestore();
+  });
 });
 
 describe("BillingSection: what the card may offer is read from THIS deployment's env (final review I1, m2)", () => {

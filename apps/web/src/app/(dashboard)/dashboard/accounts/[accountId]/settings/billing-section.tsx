@@ -1,6 +1,7 @@
 import { getBillingLink, listPlans, serviceDb, sumUsageSince } from "@bis/db";
 import { requireAgency } from "@/lib/auth";
 import { readAccountBilling } from "@/lib/billing/account-billing-read";
+import { loggableError } from "@/lib/billing/billing-link";
 import { billingCardView, safeZone, usagePeriodStart, type BillingCardView } from "@/lib/billing/billing-view";
 import { stripeKeyVerdict, webhookSecretFromEnv, type StripeEnv } from "@/lib/billing/stripe-gateway";
 import { changePlanAction, markComplimentaryAction, removeComplimentaryAction, sendBillingLinkAction } from "./billing-actions";
@@ -56,7 +57,7 @@ export async function BillingSection({ accountId }: { accountId: string }) {
   try {
     view = await loadBillingCardView(accountId, new Date());
   } catch (e) {
-    console.error(`settings: billing card unavailable for account ${accountId}: ${e instanceof Error ? e.message : String(e)}`);
+    console.error(`settings: billing card unavailable for account ${accountId}: ${loggableError(e)}`);
     return <BillingCardError />;
   }
   // accountId is bound here, server-side. It never travels as a form field.
