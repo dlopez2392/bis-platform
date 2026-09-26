@@ -85,7 +85,14 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
       ? `The caller is calling from ${input.callerNumber}. Treat that as their callback number unless they give a different one.`
       : onWeb
         ? "You do not have a way to reach them yet. Ask for an email address or a phone number when you need one, and use capture_lead to record it."
-        : "The caller's number is not visible. Ask for a callback number when you need one.",
+        // Booking tools are bound to the verified caller (tools/registry.ts):
+        // with no caller ID, find_my_booking refuses and a booking made
+        // before this call cannot be changed. Said up front so the model
+        // does not promise a lookup the tool will refuse. The no-booking
+        // line stays byte-identical.
+        : input.bookingEnabled
+          ? `The caller's number is not visible. Ask for a callback number when you need one. Because of that, you cannot look up, change or cancel an existing appointment on this call (one you book during this call can still be changed) — if they ask, ${wouldRatherTalkToAPerson} instead.`
+          : "The caller's number is not visible. Ask for a callback number when you need one.",
     "",
     `WHAT YOU KNOW ABOUT ${input.businessName.toUpperCase()} (answer from this and nothing else):`,
     input.facts,
@@ -171,8 +178,13 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     lines.push(
       "- check_availability(date) — list open times for a date before offering any.",
       "- book_appointment(startsAt, name, email, phone, notes) — book only a time check_availability returned.",
-      "- find_my_booking(phone) — when a caller wants to change or cancel an existing appointment, call this FIRST with the number they are calling from.",
-      "- reschedule_appointment(bookingId, startsAt) / cancel_appointment(bookingId) — only after find_my_booking found it.",
+      "- find_my_booking() — call it FIRST when a caller wants to check, change or cancel an appointment. It only looks up the number they are calling from.",
+      `- reschedule_appointment(bookingId, startsAt) / cancel_appointment(bookingId) — only for the booking find_my_booking returned on this call, or one you booked on this call. If either refuses, apologize and ${wouldRatherTalkToAPerson}.`,
+      // Phone only: "the number they are calling from" is caller ID, which the
+      // web has none of.
+      ...(onWeb ? [] : [
+        `- NEVER read out, confirm, change or cancel an appointment for any number other than the one they are calling from. If they say it is under another number, explain that you can only look up appointments for the number they are calling from, and ${wouldRatherTalkToAPerson}, or suggest they call back from that phone.`,
+      ]),
       "- TIMES — tool results give every time twice: startsAt (an ISO timestamp — pass that exact value to tools) and local/startsAtLocal (the time in the business's own timezone). When telling the caller a time, say the local value. NEVER convert an ISO timestamp yourself — your own timezone arithmetic is not reliable, and a tool result that looks like a different hour than you expected is YOUR conversion being wrong, never a reason to re-book or re-reschedule.",
       "",
       `BOOKING — Appointments are ${input.slotDurationMinutes} minutes. To book you need the caller's NAME and PHONE NUMBER; their email is ${isVideo ? "REQUIRED (video meeting link)" : "optional but worth asking for once, because it is where the written confirmation and the cancellation link go"}.`,

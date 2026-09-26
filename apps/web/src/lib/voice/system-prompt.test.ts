@@ -155,6 +155,56 @@ describe("buildSystemPrompt", () => {
   });
 });
 
+// Booking tools are bound to the verified caller (tools/registry.ts). The
+// prompt says the same thing the tools enforce, so the model does not promise
+// a lookup the tool will refuse. Pinned on phrases that appear ONLY in the new
+// lines — "number they are calling from" alone is also in the read-back rule.
+describe("buildSystemPrompt — appointments are the caller's own", () => {
+  const NEVER_ANOTHER = "for any number other than the one they are calling from";
+  const WITHHELD = "you cannot look up, change or cancel an existing appointment on this call";
+
+  it("find_my_booking takes no number and is called first; reschedule/cancel only for what it returned or what was booked on this call", () => {
+    const p = buildSystemPrompt(base, now);
+    expect(p).toContain("- find_my_booking() — call it FIRST");
+    expect(p).not.toContain("find_my_booking(phone)");
+    expect(p).toMatch(/only for the booking find_my_booking returned on this call, or one you booked on this call/);
+  });
+
+  it("a refused lookup or change ends in the offer this account can keep — a transfer, or a message", () => {
+    const withTransfer = buildSystemPrompt(baseInput({ handoffAvailable: true }), now);
+    expect(withTransfer).toMatch(/If either refuses, apologize and offer to put them through to someone on the team/);
+    const without = buildSystemPrompt(base, now);
+    expect(without).toMatch(/If either refuses, apologize and offer to take a message/);
+  });
+
+  it("the never-another-number rule is on a phone booking prompt", () => {
+    const p = buildSystemPrompt(base, now);
+    expect(p).toContain(NEVER_ANOTHER);
+    expect(p).toMatch(/call back from that phone/);
+  });
+
+  it("the never-another-number rule is absent from the web prompt and from a no-booking phone prompt", () => {
+    expect(buildSystemPrompt(baseInput({ medium: "web" }), now)).not.toContain(NEVER_ANOTHER);
+    expect(buildSystemPrompt(baseInput({ medium: "web", bookingEnabled: false, callerNumber: null }), now))
+      .not.toContain(NEVER_ANOTHER);
+    expect(buildSystemPrompt(baseInput({ bookingEnabled: false }), now)).not.toContain(NEVER_ANOTHER);
+  });
+
+  it("the withheld-number line gains the no-lookup sentence only when the number is withheld AND booking is on", () => {
+    const withheld = buildSystemPrompt(baseInput({ callerNumber: null }), now);
+    expect(withheld).toContain("The caller's number is not visible.");
+    expect(withheld).toContain(WITHHELD);
+    expect(buildSystemPrompt(base, now)).not.toContain(WITHHELD);
+    expect(buildSystemPrompt(baseInput({ callerNumber: null, bookingEnabled: false }), now)).not.toContain(WITHHELD);
+    expect(buildSystemPrompt(baseInput({ callerNumber: null, medium: "web" }), now)).not.toContain(WITHHELD);
+  });
+
+  it("the no-booking withheld line is unchanged, to the byte", () => {
+    const p = buildSystemPrompt(baseInput({ callerNumber: null, bookingEnabled: false }), now);
+    expect(p).toContain("\nThe caller's number is not visible. Ask for a callback number when you need one.\n");
+  });
+});
+
 describe("buildSystemPrompt medium", () => {
   // THE PROPERTY THAT MATTERS MOST: every existing caller passes no `medium`
   // at all, and their prompt must not move by one byte. A prompt change is a
