@@ -477,6 +477,7 @@ describe("idempotencyKey", () => {
     expect(idempotencyKey("bis-checkout", "req_2", CHECKOUT)).not.toBe(k);
     const reordered = Object.fromEntries(Object.entries(CHECKOUT).reverse());
     expect(idempotencyKey("bis-checkout", "req_1", reordered)).toBe(k);
+    expect(idempotencyKey("bis-checkout", "req_1", { ...CHECKOUT, priceIds: Object.fromEntries(Object.entries(PRICES).reverse()) })).toBe(k);
     expect(k).toMatch(/^bis-checkout-req_1-[0-9a-f]{24}$/);
   });
 });
@@ -526,6 +527,7 @@ describe("the new gateway surface", () => {
 
   it("billingGatewayFromEnv says which MODE its key is, for the webhook's livemode check (mutation: always false → a live endpoint's every event is refused, FAILS)", () => {
     const test = billingGatewayFromEnv({ STRIPE_SECRET_KEY: "sk_test_x", NEXT_PUBLIC_SUPABASE_URL: "https://ci.supabase.co" });
+    expect(test.ok).toBe(true);
     expect(test.ok && test.live).toBe(false);
     const live = billingGatewayFromEnv({ STRIPE_SECRET_KEY: "sk_live_x", VERCEL_ENV: "production", NEXT_PUBLIC_SUPABASE_URL: "https://tlbkbmlrfafquucsmsmm.supabase.co" });
     expect(live.ok && live.live).toBe(true);

@@ -17,7 +17,7 @@ describe("verifyWebhookEvent (the real SDK, signed fixtures)", () => {
 
   it("accepts a correctly signed payload and returns the id, type, mode and the ONE subscription id to re-read (mutation: return the payload's status or any other field → the shape FAILS)", () => {
     const header = Stripe.webhooks.generateTestHeaderString({ payload, secret: SECRET });
-    expect(verifyWebhookEvent(payload, header, SECRET)).toEqual({
+    expect(verifyWebhookEvent(payload, header, SECRET)).toStrictEqual({
       id: "evt_1", type: "invoice.payment_failed", livemode: false, subscriptionId: "sub_9",
     });
   });
@@ -38,7 +38,7 @@ describe("verifyWebhookEvent (the real SDK, signed fixtures)", () => {
       return verifyWebhookEvent(p, Stripe.webhooks.generateTestHeaderString({ payload: p, secret: SECRET }), SECRET).subscriptionId;
     };
     expect(signed({ object: "checkout.session", mode: "subscription", subscription: "sub_c" }, "checkout.session.completed")).toBe("sub_c");
-    expect(signed({ object: "checkout.session", mode: "payment", subscription: null }, "checkout.session.completed")).toBeNull();
+    expect(signed({ object: "checkout.session", mode: "payment", subscription: "sub_p" }, "checkout.session.completed")).toBeNull();
     for (const t of ["customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"]) {
       expect(signed({ id: "sub_s", object: "subscription" }, t)).toBe("sub_s");
     }
