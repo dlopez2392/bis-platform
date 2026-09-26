@@ -110,6 +110,18 @@ describe("POST /api/webhooks/stripe", () => {
     log.mockRestore();
   });
 
+  it("a processing failure is logged through loggableError (the error's type and code, emails masked, bounded), and a SyntaxError by its type only, never its message, which quotes the text it failed on (final review m3) (mutation: log e.message raw → FAILS; log a SyntaxError through loggableError → FAILS)", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    processMock.mockRejectedValueOnce(Object.assign(new Error("connection reset while reading jane@example.com"), { type: "StripeConnectionError", code: "ECONNRESET" }));
+    expect((await POST(signed(RAW))).status).toBe(500);
+    expect(log.mock.calls.flat().join(" "))
+      .toBe("stripe webhook: invoice.paid evt_r1 failed; Stripe will retry: StripeConnectionError code=ECONNRESET: connection reset while reading [email]");
+    log.mockClear();
+    processMock.mockRejectedValueOnce(new SyntaxError('Unexpected token in {"email":"jane@example.com"}'));
+    expect((await POST(signed(RAW))).status).toBe(500);
+    expect(log.mock.calls.flat().join(" ")).toBe("stripe webhook: invoice.paid evt_r1 failed; Stripe will retry: SyntaxError");
+  });
+
   it("answers 503 when the Stripe key is refused here (a test key on production's data), without processing (mutation: skip the verdict → a test key re-reads against production's database, FAILS)", async () => {
     process.env.NEXT_PUBLIC_SUPABASE_URL = "https://tlbkbmlrfafquucsmsmm.supabase.co";
     const log = vi.spyOn(console, "error").mockImplementation(() => {});

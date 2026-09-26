@@ -3,6 +3,7 @@ import {
   billingGatewayFromEnv, isSignatureError, verifyWebhookEvent, webhookSecretFromEnv, type StripeEnv,
   type VerifiedWebhookEvent,
 } from "@/lib/billing/stripe-gateway";
+import { loggableError } from "@/lib/billing/billing-link";
 import { processStripeEvent } from "@/lib/billing/webhook";
 
 /**
@@ -57,8 +58,7 @@ export async function POST(request: Request): Promise<Response> {
     // reduction does not expect). A 500, so Stripe retries and the fault
     // stays visible. A SyntaxError's message quotes the body, which can hold
     // a customer's details, so it is named by its type only.
-    const why = e instanceof SyntaxError ? "SyntaxError (the body is not JSON)"
-      : e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    const why = e instanceof SyntaxError ? "SyntaxError (the body is not JSON)" : loggableError(e);
     console.error(`stripe webhook: verified but unreadable: ${why}`);
     return new Response("unreadable event", { status: 500 });
   }
@@ -76,7 +76,10 @@ export async function POST(request: Request): Promise<Response> {
     if (outcome.status === "mode_mismatch") return new Response("wrong mode", { status: 400 });
     return Response.json({ received: true, outcome: outcome.status });
   } catch (e) {
-    console.error(`stripe webhook: ${event.type} ${event.id} failed; Stripe will retry: ${e instanceof Error ? e.message : String(e)}`);
+    // loggableError: the type and code, emails masked, bounded (final review
+    // m3). A SyntaxError by its type only, as above: its message quotes the
+    // text it failed on.
+    console.error(`stripe webhook: ${event.type} ${event.id} failed; Stripe will retry: ${e instanceof SyntaxError ? "SyntaxError" : loggableError(e)}`);
     return new Response("processing failed", { status: 500 });
   }
 }
