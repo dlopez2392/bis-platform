@@ -29,6 +29,7 @@ import { LogStatusPill } from "../accounts/[accountId]/activity/log-status-pill"
 import { CONFIRM_REPLY_TREATMENTS } from "../accounts/[accountId]/calendar/confirm-reply";
 import { DotPill } from "@/components/dot-pill";
 import { BillingBanner } from "@/components/billing-banner";
+import { ManageBillingButton } from "../accounts/[accountId]/billing/manage-billing-button";
 import { BILLING_STATUS_TREATMENTS, type BillingStatus } from "@/lib/billing/billing-view";
 import { SmsPreview } from "@/components/sms-preview";
 import { withOptOut } from "@/lib/sms/opt-out";
@@ -50,6 +51,14 @@ export const dynamic = "force-dynamic";
 /** All three of `STATUS_TREATMENT`'s own keys, in the order a reader meets
  *  them: still open, then the two decided outcomes. */
 const PROPOSAL_STATUSES: ProposalStatus[] = ["pending", "accepted", "dismissed"];
+
+/** The Manage billing specimen's action: it answers with the page's own
+ *  failure sentence and touches nothing (no read, no Stripe), so pressing it
+ *  here shows the button's error state without a real portal. */
+async function styleguidePortalFailed(): Promise<{ ok: false; error: string }> {
+  "use server";
+  return { ok: false, error: m["billing.page.portalFailed"] };
+}
 
 /**
  * The working index DESIGN.md's definition-of-done refers to ("`/styleguide`
@@ -552,6 +561,12 @@ export default async function StyleguidePage() {
               <BillingBanner audience="agency" accountId="styleguide" />
             </div>
           </div>
+        </Section>
+
+        <Section title="Manage billing" file="…/accounts/[accountId]/billing/manage-billing-button.tsx">
+          {/* The client Billing page's one primary (DESIGN rule 8). Pressing it
+              here shows its failure state: the sentence, said inline. */}
+          <ManageBillingButton open={styleguidePortalFailed} />
         </Section>
 
         <Section title="Empty state" file="components/empty-state.tsx">

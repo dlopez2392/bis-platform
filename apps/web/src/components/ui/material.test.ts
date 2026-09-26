@@ -627,6 +627,10 @@ describe("wave 2 — styleguide carries this pass's variants (DESIGN.md DoD)", (
     // renders them.
     expect(s).toContain('(["yes", "no"] as const).map((a) => <DotPill key={a} {...CONFIRM_REPLY_TREATMENTS[a]} dense />)');
   });
+  it("indexes the client Billing page's Manage billing button (M7a PR-3 Task 10) (mutation: drop the specimen → FAILS)", () => {
+    expect(s).toContain('import { ManageBillingButton } from "../accounts/[accountId]/billing/manage-billing-button";');
+    expect(s).toContain("<ManageBillingButton open={styleguidePortalFailed} />");
+  });
 });
 
 // DESIGN.md Shape: radii are 8px (controls, `--radius-ctl`), 12px (cards),

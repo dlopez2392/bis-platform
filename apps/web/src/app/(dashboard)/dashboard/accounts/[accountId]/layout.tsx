@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
-import { getAccountBilling } from "@bis/db";
 import { BillingBanner } from "@/components/billing-banner";
 import { requireAccountAccess } from "@/lib/auth";
+import { readAccountBilling } from "@/lib/billing/account-billing-read";
 import { showsPaymentFailedBanner } from "@/lib/billing/billing-view";
 import { dbForRequest } from "@/lib/db";
 
@@ -37,9 +37,11 @@ export default async function AccountWorkspaceLayout({
   // the account's own client may read it). Fails SOFT: a billing read must
   // never take the account's pages down with it. past_due/unpaid only, never
   // incomplete (showsPaymentFailedBanner says why).
+  // Through the cached seam: the Billing page reads the same row on the
+  // same navigation, and this must stay one query.
   let paymentFailed = false;
   try {
-    paymentFailed = showsPaymentFailedBanner(await getAccountBilling(db, accountId));
+    paymentFailed = showsPaymentFailedBanner(await readAccountBilling(accountId));
   } catch (e) {
     console.error(`account layout: billing read failed for ${accountId}: ${e instanceof Error ? e.message : String(e)}`);
   }

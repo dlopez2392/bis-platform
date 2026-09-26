@@ -83,6 +83,13 @@ describe("buildPaletteEntries", () => {
     }
   });
 
+  it("finds a client's Billing page by the words a business owner types for it (mutation: drop its NAV_KEYWORDS entry → FAILS)", () => {
+    const entries = buildPaletteEntries(BASE, false);
+    for (const word of ["invoice", "card", "receipt"]) {
+      expect(filterEntries(entries, word).map((e) => e.id)).toContain(`nav:${BASE}/billing`);
+    }
+  });
+
   it("offers no action that writes tenant data", () => {
     // The safety line the spec draws: navigation and safe actions only. If a
     // future action id appears here, it has to be justified against that rule.
