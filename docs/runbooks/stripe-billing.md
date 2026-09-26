@@ -27,7 +27,7 @@ written.
 | API version | `2026-08-26.dahlia` (`STRIPE_API_VERSION`, `apps/web/src/lib/billing/stripe-gateway.ts`) |
 | Events | exactly the six in `HANDLED_WEBHOOK_EVENTS` (same file) |
 | What it does with an event | verifies the signature, records the event id once (`stripe_webhook_events`), RE-READS the subscription from Stripe, and stores it on `account_billing` (`apps/web/src/lib/billing/webhook.ts`, `packages/db/src/account-billing.ts`) |
-| Signing secret | `STRIPE_WEBHOOK_SECRET`, Vercel **Production only**, Sensitive |
+| Signing secret | `STRIPE_WEBHOOK_SECRET`, Vercel **Production only**, Sensitive. Unset or blank on a deployment, that deployment turns billing links OFF (section 1) |
 | Stripe key | `STRIPE_SECRET_KEY`, the LIVE key, on Vercel Production only (`.env.example`; the app refuses a live key anywhere else) |
 | Reply-to on the billing-link email | `AGENCY_SUPPORT_EMAIL`, falling back to `hello@bis-rgv.com` in code |
 | CI | signs its fixture events with the public literal `whsec_bis_ci_e2e_fixture_only` in `ci.yml`'s e2e job. It verifies nothing anywhere else. **Never put it on Vercel.** Nothing in the code refuses it next to a live key. |
@@ -38,6 +38,16 @@ Do these in order, after migration 0052 is on production and before (or right
 after) PR-3 merges. Until the route is deployed and steps 2 and 4 are done,
 every delivery fails (404 before the merge, 503 after it) and Stripe keeps
 retrying, for up to three days **(assumption, B6)**.
+
+**Billing links stay off until the signing secret is set.** While
+`STRIPE_WEBHOOK_SECRET` is unset or blank on the running deployment, every
+account's Billing card says "Stripe's webhook isn't set up on this site yet, so
+billing links are off", offers no Send billing link, and the send action
+refuses with the same reason (`webhookSecretFromEnv`,
+`apps/web/src/lib/billing/stripe-gateway.ts`). So nobody can be sent a link,
+and so nobody can pay, before the webhook is able to hear about the payment.
+Mark complimentary and Change plan are not affected. The secret counts as set
+only on a deployment made AFTER it was added (step 4).
 
 1. **The endpoint.** Stripe dashboard, LIVE mode → Developers → Webhooks → Add
    endpoint:
@@ -100,6 +110,15 @@ retrying, for up to three days **(assumption, B6)**.
    If the button does not exist, the first real event is the check. Watch
    the endpoint's deliveries in Stripe and the Vercel logs when the first
    billing link is paid.
+
+   **What the order of these steps can and cannot cost.** A MISSING secret
+   can no longer leave a payer unbilled: links are off until it is set and
+   deployed (above). A WRONG secret still can. The app only knows the
+   variable is set, not that it matches the endpoint, so the card offers
+   Send, and a client who pays is shown as Unbilled while every event
+   answers 400. This step is what catches a wrong secret: do it before the
+   first live billing link goes out, and if it cannot be done, watch that
+   first payment's deliveries as above.
 6. **Failed payments** (DECISION 7, danlo 2026-09-25). Stripe dashboard, LIVE
    mode → Billing settings: the subscription retry settings and the customer
    emails. Set exactly these:
@@ -147,7 +166,7 @@ them the same day.
 | 400 | `stripe webhook: <type> <evt> is test mode but …` | The event's mode does not match the key's. | On a live endpoint, only ever a dashboard test event. Anything else means a test endpoint points at production: delete that endpoint. |
 | 500 | `stripe webhook: verified but unreadable: …` | Signed by Stripe, but BIS could not read it (not JSON, or a shape the code does not expect, for example after an API version change). | Check the endpoint's API version (section 1, step 1). Otherwise, a code fix. |
 | 500 | `stripe webhook: <type> <evt> failed; Stripe will retry: …` | Something failed part-way (Stripe, the database). Nothing was stamped, so the retry redoes it. | Once or twice on a first checkout: normal (below). Repeating for the same event: read the message. |
-| 503 | `… STRIPE_WEBHOOK_SECRET is not set …` or `… Stripe key refused here …` | Not configured. | Section 1, steps 2 and 4. |
+| 503 | `… STRIPE_WEBHOOK_SECRET is not set …` or `… Stripe key refused here …` | Not configured. With no secret, billing links are also off on every Billing card. | Section 1, steps 2 and 4. |
 
 **A client's first checkout sends a burst of events at once.** One or two of
 them may answer 500 with `… kept changing (3 attempts); Stripe will retry`:
@@ -204,8 +223,8 @@ What each reason means (`MirrorRefusal`, `packages/db/src/account-billing.ts`):
 | `unknown_account` | `bis_account_id` names no account: the account was deleted, or the id was typed by hand. | Possibly. | If the account was deleted on purpose, cancel the subscription in Stripe. |
 | `customer_mismatch` | The account has no billed row yet, and the subscription is not on the customer of the account's pending billing link. For example, a subscription made by hand with a guessed `bis_account_id`, or a link row deleted by hand before the client paid. | Yes, if it is active. | Usually cancel and refund it, then send a new billing link. Do not hand-write `billing_links` or `account_billing` rows to force it through. If it must be kept, ask the orchestrator. |
 | `customer_changed` | The account is billed on customer A, and this subscription is on customer B. An account's customer never changes (section 5.1). | Yes, if it is active. | A mistake: cancel and refund. If the customer genuinely has to change, follow section 5.1 first, then make BIS read it again. |
-| `another_live_subscription` | The account already has a subscription that has not ended, and this is a different one. **The client may be paying twice.** | Yes: both. | Decide which subscription is right, and cancel and refund the other in Stripe. If the NEW one is right: cancel the old one first (its cancellation is stored), then make BIS read the new one again. |
-| `ended_other_subscription` | A late event for an OLD subscription that has already ended (canceled, or expired before its first payment), older than the one stored. | No: it has ended. | Confirm in Stripe that it really is canceled or expired. Nothing else. |
+| `another_live_subscription` | The account already has a subscription that has not ended, and this is a different one: live, or one that started after the stored one. It is NEVER an old subscription that has ended (that is `ended_other_subscription`, next row). **The client may be paying twice.** | Yes: both. | Decide which subscription is right, and cancel and refund the other in Stripe. If the NEW one is right: cancel the old one first (its cancellation is stored), then make BIS read the new one again. |
+| `ended_other_subscription` | A late event for an OLD subscription that has already ended (canceled, or expired before its first payment), older than the one stored, whether the stored one is live or has ended too. | No: it has ended. | Nothing. It is a stale event. BIS decided it from Stripe's own re-read of the subscription, so the subscription really has ended. Do not refund anything because of this line: its last invoice may be a legitimate final one. |
 | `unknown_plan` | The subscription's base price does not name a BIS plan (`bis_plan_id` in the price's metadata). Someone changed its prices in Stripe to prices BIS did not make. | Yes, at those prices. | Put the plan's own prices back in Stripe, or cancel. The edit itself fires a new `customer.subscription.updated` **(assumption)**, so no reset is needed. |
 | `plan_other_agency` | The plan belongs to another agency. That cannot happen with one agency. | Possibly. | Stop and ask the orchestrator. |
 | `unknown_status` | Stripe returned a subscription status BIS does not know (a new one). | Possibly. | A code change (`SUBSCRIPTION_STATUSES`). Ask the orchestrator. |
@@ -400,6 +419,20 @@ exactly card updates and invoice history (DECISION 3).
 - If the very first creation in a mode fails with a Stripe 500, Stripe may
   replay that 500 for 24 hours, so Manage billing fails for everyone until
   then **(assumption, same source)**.
+
+### 5.8 Before creating a subscription by hand, expire the account's open billing link
+
+Prefer Send billing link. If a subscription must be made in the Stripe
+dashboard instead, first expire any open billing link for that account
+(5.3, steps 1 and 2: look up the session, and expire it if it is open).
+
+Why: when BIS stores a subscription on the link's customer that started after
+the link was sent, it CONSUMES the link. That only deletes the `billing_links`
+row (`mirrorSubscription`, `packages/db/src/account-billing.ts`); it never
+expires the Checkout session at Stripe. So a subscription made by hand would
+make the link disappear from the card while the emailed session stays
+payable. If the client then pays it, they hold two subscriptions, the second
+is refused as `another_live_subscription`, and **the client pays twice**.
 
 ## 6. Changing plan on a paid account
 
