@@ -88,7 +88,7 @@ export function usagePeriodStart(billing: AccountBilling, zone: string, now: Dat
  *  build might, and it would be invisible in a browser while breaking an
  *  exact-string copy assertion or an email client's wrapping. Normalises
  *  that character and an ordinary no-break space to a plain one either way. */
-const plainSpaces = (s: string): string => s.replace(/[  ]/g, " ");
+const plainSpaces = (s: string): string => s.replace(/[\u00A0\u202F]/g, " ");
 
 export function formatDay(d: Date, zone: string): string {
   return plainSpaces(new Intl.DateTimeFormat("en-US", { timeZone: zone, month: "short", day: "numeric" }).format(d));
