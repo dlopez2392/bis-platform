@@ -30,8 +30,10 @@ function sameInput(a: unknown, b: unknown): boolean {
  *   created  only calls that made something new (id minted)
  *   failOn   throw on the (after + 1)th call of `op`, and every one after;
  *            `error` when given (a Stripe-shaped error), else a plain Error
- *   meterEvents  the meter events Stripe would hold: one per accepted key,
- *            even when two keys carry one identifier (A11 is not assumed)
+ *   meterEvents  the meter events Stripe would hold: one per identifier; a
+ *            new key carrying a held identifier is refused, FOREVER (A11:
+ *            observed only for the same customer, a fresh key, within
+ *            seconds; see reportMeterEvent for where the fake departs)
  */
 export class FakeGateway implements BillingGateway {
   meters: StripeMeter[] = [];
@@ -106,12 +108,22 @@ export class FakeGateway implements BillingGateway {
   /**
    * A meter event. Same idempotency strictness as the creates above (A4):
    * the same key with the same event replays and records nothing; the same
-   * key with a different event throws. A NEW key records a NEW event, even
-   * when its identifier is one already held: whether Stripe dedupes an
-   * identifier across keys is assumption A11, which only Task 10's e2e
-   * observes, so this fake assumes the costlier answer (the rule in the
-   * class doc: never looser than what it fakes). A test that passes here
-   * cannot be relying on a dedupe Stripe may not do.
+   * key with a different event throws. A NEW key carrying an identifier
+   * already held is REFUSED with the invalid request Stripe test mode
+   * returned to e2e/usage-meter.spec.ts's A11 probe ("An event already
+   * exists with identifier <id>.") and records nothing. That probe resent
+   * for the SAME customer under a fresh key within seconds; nothing more was
+   * observed. The refusal here is keyed on the identifier alone, whatever
+   * customer the new event names (assumption, unobserved: Stripe holds
+   * identifiers per Stripe account), and it never lapses. Stripe's docs (an
+   * external claim) promise identifier uniqueness only "within a rolling
+   * period of at least 24 hours". Within that window the fake refuses as
+   * Stripe was seen to (and, unobserved, across customers too). After it the
+   * fake is possibly LOOSER than Stripe on the one hazard that costs money:
+   * a real resend after about a day might be ACCEPTED and counted twice,
+   * where the fake refuses it, so a test on this fake can never see that
+   * double count. No test moves time today; PR-4's nightly reconciliation is
+   * the backstop.
    */
   async reportMeterEvent(input: MeterEventInput, key: string): Promise<void> {
     meterEventParams(input);
@@ -125,6 +137,11 @@ export class FakeGateway implements BillingGateway {
         );
       }
       return;
+    }
+    if (this.meterEvents.some((e) => e.identifier === input.identifier)) {
+      throw Object.assign(new Error(`An event already exists with identifier ${input.identifier}.`), {
+        type: "StripeInvalidRequestError", rawType: "invalid_request_error", statusCode: 400,
+      });
     }
     this.replay.set(key, { op: "reportMeterEvent", input, value: undefined });
     this.meterEvents.push({ ...input });

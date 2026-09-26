@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { config as loadEnv } from "dotenv";
 import Stripe from "stripe";
 import {
-  STRIPE_API_VERSION, meterEventParams, stripeGateway, type MeterEventInput,
+  STRIPE_API_VERSION, meterEventFailureKind, meterEventParams, stripeGateway, type MeterEventInput,
 } from "../src/lib/billing/stripe-gateway";
 import { ensureMeters, METERS } from "../src/lib/billing/stripe-catalog";
 
@@ -20,8 +20,16 @@ loadEnv({ path: ".env.local" });
 // correct dedupe implies:
 //   phase 1: event 1 (2), the same request replayed under the same key, a
 //            distinct event 2 (3)                       → 5    (A9, A10)
-//   phase 2: event 1's identifier under a NEW key, then a sentinel (7)
-//            → 12 if Stripe deduplicated it, 14 if it counted it again (A11)
+//   phase 2: event 1's identifier under a NEW key (A11). Stripe may refuse
+//            it outright ("An event already exists with identifier <id>.")
+//            — the spec asserts `meterEventFailureKind` reads that refusal
+//            as "duplicate", the class the usage report stamps a row on
+//            instead of retrying it forever; a mismatch here means Stripe
+//            reworded the message and ALREADY_EXISTS in stripe-gateway.ts
+//            is silently falling back to "row" in production. Or Stripe may
+//            accept it silently, in which case a sentinel (7) follows and
+//            the aggregate must land on 12 (deduplicated) or 14 (counted
+//            again).
 //
 // No database and no account: a throwaway Stripe TEST customer, deleted at
 // the end. STRIPE TEST MODE ONLY: CI's target guard refuses a live key before
@@ -121,9 +129,21 @@ test.describe("usage reaches Stripe as meter events, counted once", () => {
       }
       let a11: string;
       if (refusal) {
-        a11 = `refused: ${refusal.type ?? "?"} ${refusal.code ?? ""} ${refusal.message ?? ""}`.trim();
+        const detail = `${refusal.type ?? "?"} ${refusal.code ?? ""} ${refusal.message ?? ""}`.trim();
         expect(refusal.type, "a reused identifier may be refused only as an invalid request (the reporter's row-specific class)")
           .toBe("StripeInvalidRequestError");
+        // Not just that Stripe refused — that the report's OWN classifier
+        // reads this exact refusal as "duplicate". If Stripe rewords the
+        // message, ALREADY_EXISTS in stripe-gateway.ts stops matching,
+        // meterEventFailureKind silently falls back to "row", and a billed
+        // account's usage row is retried (never stamped) every tick instead
+        // of being recognized as already-reported.
+        expect(
+          meterEventFailureKind(refusal, first.identifier),
+          "meterEventFailureKind must classify Stripe's real A11 refusal as \"duplicate\"; a \"row\" result here means "
+            + "ALREADY_EXISTS in stripe-gateway.ts no longer matches Stripe's wording and the usage report will wedge",
+        ).toBe("duplicate");
+        a11 = `refused, handled: ${detail} (classified duplicate → stamped)`;
       } else {
         // A sentinel AFTER the probe (A17): once it shows, the probe has
         // been counted or deduplicated.
@@ -142,7 +162,12 @@ test.describe("usage reaches Stripe as meter events, counted once", () => {
           ? `unproven: accepted, and the summary showed ${value} of 12 after ${SUMMARY_WAIT_MS / 1000} s`
           : value === 12 ? "deduplicated as expected (12)" : "accepted but double-counted (14)";
       }
-      report("A11 same identifier, new idempotency key", a11, a11.startsWith("deduplicated") ? "notice" : "warning");
+      // "deduplicated as expected" (accepted silently, deduped by Stripe) and
+      // "refused, handled" (refused, classified duplicate, stamped) are both
+      // understood, handled outcomes; "unproven" and "accepted but
+      // double-counted" stay warnings.
+      const a11Handled = a11.startsWith("deduplicated") || a11.startsWith("refused, handled");
+      report("A11 same identifier, new idempotency key", a11, a11Handled ? "notice" : "warning");
       bodyOk = true;
     } finally {
       try {
