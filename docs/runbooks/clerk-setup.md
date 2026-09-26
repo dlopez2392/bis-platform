@@ -169,10 +169,19 @@ curl -s https://clerk.app.bis-rgv.com/.well-known/openid-configuration
 The `issuer` field is the value Supabase wants, and a 200 here also proves the
 SSL certificate has finished issuing.
 
-**Leave the development entry in place.** Settled 2026-09-14: **Supabase holds
-two Clerk providers at once** — both show ENABLED side by side. That is what
-lets e2e stay on the development instance (Part H), and removing the dev entry
-before the key swap would take production down immediately.
+**Leave the development entry in place — during this migration only.** On
+2026-09-14 Supabase held two Clerk providers at once, both ENABLED side by
+side, so e2e could stay on the development instance (Part H); removing the dev
+entry before the key swap would have taken production down immediately.
+
+**Superseded, 2026-09-26: the development entry is now the thing to remove.**
+While it stays, the development instance's secret key alone can mint a
+session token that production's RLS treats as agency, because
+`app.is_agency()` reads nothing but the `app_role` claim. CI stopped needing
+it when it moved to its own Supabase project (#133). The removal, the few
+consumers that still depend on it and how to verify and roll it back are in
+`docs/runbooks/production-isolation.md`, Part D. It is an owner action and is
+**not done** as of 2026-09-26.
 
 ## Part F — your user, and the two accounts
 
@@ -222,6 +231,11 @@ Set both on **Production ONLY**:
 preview deployments run on `*.vercel.app`, where the session cookie does not
 apply. Leave Preview on the `pk_test_` pair. `NEXT_PUBLIC_CLERK_SIGN_IN_URL`
 stays `/sign-in`.
+
+The development pair on Preview is only safe while Preview's Supabase values
+name the CI project, never production's: production must not trust the
+development instance (Part E's superseded note). Preview's full contract is in
+`docs/runbooks/production-isolation.md`, "What may live on Preview".
 
 `NEXT_PUBLIC_` variables cannot be Vercel "Secret" type — Vercel rejects them
 with *"Environment variables with a public framework prefix cannot use
@@ -299,7 +313,9 @@ Auth provider is the Clerk **development** instance
 (`topical-redfish-40.clerk.accounts.dev`) — so the first option above is no
 longer a recommendation but the only one CI's database will accept. This
 does not change what a LOCAL run does until that machine's env files are
-switched (that runbook's section 9).
+switched (that runbook's section 9). It also means Part E's reason for keeping
+the development entry on PRODUCTION's project is gone; see
+`docs/runbooks/production-isolation.md`.
 
 ## Part I — verify, in this order, and stop at the first failure
 
@@ -351,8 +367,13 @@ everything up to here is undone by putting the old keys back and redeploying.
 Every step is reversible until **Part H2**. Put the old `pk_test_` /
 `sk_test_` pair back in Vercel, redeploy, and the app is on the development
 instance again. Nothing else needs undoing: the production instance, its DNS
-records and the second Supabase provider are all additive and harmless while
-unused.
+records and the second Supabase provider are all additive while the migration
+is in flight. (The development provider is not harmless once the migration is
+done; see Part E's superseded note.) Once `production-isolation.md` Part D
+has removed that provider, putting the `pk_test_` pair back on Production
+fails quietly (the second of "The two failures that are silent", above)
+unless the development provider is re-added first (that runbook's Part D
+rollback).
 
 After Part H2 it is no longer reversible by env alone: the account rows now
 hold production org ids, so a rollback also means running the two `update`
