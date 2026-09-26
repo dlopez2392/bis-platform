@@ -920,7 +920,12 @@ describe("reschedule / cancel", () => {
       // Every leg was tried.
       expect(sendMock).toHaveBeenCalledTimes(3);
       expect(dbMocks.ensureConversation).toHaveBeenCalled();
-      expect(logs.length).toBeGreaterThan(0);
+      // Each failure is logged by its own leg, by booking id — the staff
+      // alert naming every recipient it could not reach, like the public
+      // cancel path's notify loop.
+      expect(logs.some((l) => /staff alert failed for/.test(l) && l.includes("b1")
+        && l.includes("owner@biz.example") && l.includes("desk@biz.example"))).toBe(true);
+      expect(logs.some((l) => /conversation trail failed/.test(l) && l.includes("b1"))).toBe(true);
       for (const l of logs) {
         expect(l).not.toContain("9562921696");
         expect(l).not.toContain("Ana");
@@ -974,7 +979,10 @@ describe("reschedule / cancel", () => {
       const cancel = await runTool(emptyCallState(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
       const move = await runTool(emptyCallState(), notifyCtx, "reschedule_appointment",
         { bookingId: "b1", startsAt: NEW_ISO });
+      const logs = errSpy.mock.calls.map((c) => String(c[0] ?? ""));
       errSpy.mockRestore();
+      // Caught and named by the staff leg itself, not left to escape.
+      expect(logs.some((l) => /staff alert setup failed/.test(l) && l.includes("b1"))).toBe(true);
       expect(cancel.result).toEqual({ ok: true });
       // The contact HAS an email and it could not be sent: that is the flag.
       expect(move.result).toMatchObject({ ok: true, bookingId: "new1", emailFailed: true });
