@@ -2221,7 +2221,7 @@ export const m = {
   "billing.includes.minutes": "{n} minutes of calls",
   "billing.includes.sms": "{n} texts",
   "billing.includes.chats": "{n} website chats",
-  "billing.includes.none": "Calls, texts and website chats are charged as you use them.",
+  "billing.includes.none": "This plan doesn't include any calls, texts or website chats up front.",
   "billing.usage.minutes": "{used} of {included} minutes",
   "billing.usage.sms": "{used} of {included} texts",
   "billing.usage.chats": "{used} of {included} website chats",

@@ -3,6 +3,7 @@ import type { AccountBilling, BillingLink, Plan } from "@bis/db";
 import { m } from "@/lib/messages";
 import {
   billingStatusOf, BILLING_STATUS_TREATMENTS, usageLines, includedLine, monthStartInZone, usagePeriodStart, billingCardView,
+  showsPaymentFailedBanner, formatDay,
   type BillingStatus,
 } from "./billing-view";
 
@@ -61,6 +62,17 @@ describe("billingStatusOf (G13)", () => {
   });
 });
 
+describe("showsPaymentFailedBanner (G21)", () => {
+  it("is true only for past_due/unpaid, never incomplete, complimentary or paused (mutation: include incomplete → FAILS; ignore complimentary → FAILS; ignore billingPausedAt → FAILS)", () => {
+    expect(showsPaymentFailedBanner(null)).toBe(false);
+    expect(showsPaymentFailedBanner(row({ subscriptionStatus: "past_due" }))).toBe(true);
+    expect(showsPaymentFailedBanner(row({ subscriptionStatus: "unpaid" }))).toBe(true);
+    expect(showsPaymentFailedBanner(row({ subscriptionStatus: "incomplete" }))).toBe(false);
+    expect(showsPaymentFailedBanner(row({ subscriptionStatus: "past_due", complimentary: true }))).toBe(false);
+    expect(showsPaymentFailedBanner(row({ subscriptionStatus: "past_due", billingPausedAt: "2026-10-10T00:00:00Z" }))).toBe(false);
+  });
+});
+
 describe("usage", () => {
   it("reads '312 of 500 minutes', flags use over the allowance, and says 'none included' instead of 'of 0'; the plan's included line leaves a zero allowance OUT instead of saying '0 minutes of calls' (mutation: swap used and included → FAILS; list every meter in the included line → FAILS)", () => {
     const lines = usageLines({ voice_minutes: 500, sms: 1000, ai_chats: 0 }, { voice_minutes: 312, sms: 1200, ai_chats: 4 });
@@ -75,9 +87,17 @@ describe("usage", () => {
     expect(includedLine({ voice_minutes: 0, sms: 0, ai_chats: 0 })).toBe(m["billing.includes.none"]);
   });
 
+  it("use exactly at the allowance is not over (mutation: over uses >= → FAILS) (R2)", () => {
+    expect(usageLines({ voice_minutes: 500, sms: 1000, ai_chats: 0 }, { voice_minutes: 500, sms: 0, ai_chats: 0 })[0]!.over).toBe(false);
+  });
+
   it("monthStartInZone is local midnight on the 1st, in the account's zone: Chicago's October starts 05:00 UTC, and 03:00 UTC on Oct 1 is still September there (mutation: use the UTC month → FAILS)", () => {
     expect(monthStartInZone(NOW, ZONE).toISOString()).toBe("2026-10-01T05:00:00.000Z");
     expect(monthStartInZone(new Date("2026-10-01T03:00:00Z"), ZONE).toISOString()).toBe("2026-09-01T05:00:00.000Z");
+  });
+
+  it("formatDay reads the date in the account's own zone, not UTC: 02:00 UTC on the 12th is still the 11th in Chicago (mutation: format in UTC → FAILS) (R3)", () => {
+    expect(formatDay(new Date("2026-10-12T02:00:00Z"), ZONE)).toBe("Oct 11");
   });
 
   it("a live subscription counts from Stripe's period start; complimentary and canceled accounts from the calendar month (G12) (mutation: always use the calendar month → a subscriber's allowance resets on the 1st, FAILS)", () => {
@@ -103,6 +123,22 @@ describe("billingCardView", () => {
     expect(can(row({ subscriptionStatus: "canceled" }))).toEqual({ send: true, changePlan: false, markComplimentary: false, stopComplimentary: false, copyLink: false });
     expect(can(row({ complimentary: true, subscriptionStatus: null, stripeSubscriptionId: null }))).toEqual({ send: true, changePlan: true, markComplimentary: false, stopComplimentary: true, copyLink: false });
     expect(can(row({ subscriptionStatus: "incomplete" })).changePlan).toBe(false);
+    // With no OTHER plan to move to, Change plan is never offered, even where
+    // the status alone would allow it (mutation: drop otherPlan → FAILS) (R5).
+    expect(view(row(), null, { activePlans: [plan("p1")] }).can.changePlan).toBe(false);
+    expect(view(row({ complimentary: true, subscriptionStatus: null, stripeSubscriptionId: null }), null, { activePlans: [plan("p1")] }).can.changePlan).toBe(false);
+    // With no plans at all, Send and Mark complimentary have nothing to offer
+    // (mutation: drop the plan-count check from send → FAILS) (R6) (mutation:
+    // drop the plan-count check from markComplimentary → FAILS) (R7).
+    expect(view(null, null, { activePlans: [] }).can).toMatchObject({ send: false, markComplimentary: false });
+    // A complimentary row (G1's complimentary→paid) can still hold a LIVE
+    // link (Send is offered on complimentary): the status word stays
+    // `complimentary`, but the link and Copy link must not disappear, or
+    // billing.error.emailFailed's "Use Copy link" has nothing to click (G18)
+    // (mutation: gate link/copyLink on status === "link_sent" only → FAILS).
+    const compWithLink = view(row({ complimentary: true, subscriptionStatus: null, stripeSubscriptionId: null }), link("2026-10-16T20:30:00Z"));
+    expect(compWithLink.can).toEqual({ send: true, changePlan: true, markComplimentary: false, stopComplimentary: true, copyLink: true });
+    expect(compWithLink.link).toEqual({ sentTo: "owner@example.com", expires: "Oct 16, 3:30 PM", url: "https://checkout.stripe.com/c/pay/cs_1" });
   });
 
   it("without a usable Stripe key nothing that calls Stripe is offered, but complimentary changes still are (mutation: ignore stripeReady → FAILS)", () => {
@@ -116,6 +152,10 @@ describe("billingCardView", () => {
       m["billing.nextInvoice"].replace("{date}", "Nov 12"), m["billing.usage.since"].replace("{date}", "Oct 12"),
     ]);
     expect(view(row({ subscriptionStatus: "canceled" }), null).nextInvoice).toBeNull();
+    // Not while `incomplete`: the first payment hasn't gone through, so a
+    // next invoice date would be a guess (mutation: drop the incomplete
+    // check → FAILS).
+    expect(view(row({ subscriptionStatus: "incomplete" }), null).nextInvoice).toBeNull();
     expect(view(null, link("2026-10-16T20:30:00Z")).link).toEqual({
       sentTo: "owner@example.com", expires: "Oct 16, 3:30 PM", url: "https://checkout.stripe.com/c/pay/cs_1",
     });

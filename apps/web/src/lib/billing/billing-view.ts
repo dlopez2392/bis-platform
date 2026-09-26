@@ -83,9 +83,11 @@ export function usagePeriodStart(billing: AccountBilling, zone: string, now: Dat
   return { start: monthStartInZone(now, zone), kind: "calendar_month" };
 }
 
-/** Newer ICU (Node 20+) puts a NARROW no-break space (U+202F) before
- *  AM/PM. It is invisible in a browser but breaks exact-string copy
- *  assertions and some email clients' wrapping, so it becomes a plain space. */
+/** Defence, not a fix for something seen here: neither Node 22 (CI) nor 24
+ *  puts a narrow no-break space before AM/PM today (measured) — but some ICU
+ *  build might, and it would be invisible in a browser while breaking an
+ *  exact-string copy assertion or an email client's wrapping. Normalises
+ *  that character and an ordinary no-break space to a plain one either way. */
 const plainSpaces = (s: string): string => s.replace(/[  ]/g, " ");
 
 export function formatDay(d: Date, zone: string): string {
@@ -170,6 +172,12 @@ export function billingCardView(input: {
   const status = billingStatusOf(billing, link, now);
   const option = (p: Plan): PlanOption => ({ id: p.id, name: p.name, price: priceLine(p.monthlyPriceCents) });
   const live = billing !== null && liveSubscription(billing);
+  // A live link can coexist with a `complimentary` row (Send is offered on
+  // complimentary, G1's complimentary→paid): the status word is `complimentary`,
+  // not `link_sent`, so the link is surfaced by ITS OWN liveness, not the
+  // status. Only a live Stripe subscription hides it — nothing else can, in
+  // that case, still be waiting on this link.
+  const linkLive = link !== null && Date.parse(link.expiresAt) > now.getTime();
   const period = billing ? usagePeriodStart(billing, zone, now) : null;
   const otherPlan = activePlans.some((p) => p.id !== billing?.planId);
   return {
@@ -177,10 +185,12 @@ export function billingCardView(input: {
     plan: plan ? option(plan) : null,
     usage: plan && used ? usageLines(plan.allowances, used) : [],
     since: period ? m["billing.usage.since"].replace("{date}", formatDay(period.start, zone)) : null,
-    nextInvoice: live && billing?.currentPeriodEnd
+    // Not while `incomplete`: the first payment hasn't gone through, so
+    // promising a next invoice date would be a guess (G21's same reasoning).
+    nextInvoice: live && billing?.subscriptionStatus !== "incomplete" && billing?.currentPeriodEnd
       ? m["billing.nextInvoice"].replace("{date}", formatDay(new Date(billing.currentPeriodEnd), zone))
       : null,
-    link: status === "link_sent" && link
+    link: linkLive && !live && link
       ? { sentTo: link.sentTo, expires: formatMoment(new Date(link.expiresAt), zone), url: link.checkoutUrl }
       : null,
     planOptions: activePlans.map(option),
@@ -192,7 +202,7 @@ export function billingCardView(input: {
         || (stripeReady && live && billing?.subscriptionStatus !== "incomplete")),
       markComplimentary: status === "unbilled" && activePlans.length > 0,
       stopComplimentary: status === "complimentary",
-      copyLink: status === "link_sent",
+      copyLink: linkLive && !live,
     },
     stripeReady,
   };
