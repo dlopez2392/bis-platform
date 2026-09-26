@@ -419,8 +419,8 @@ describe("sendSmsAction — usage (client billing)", () => {
   });
 });
 
-describe("0053 — with no service client the action refuses before anything is written or sent", () => {
-  it("no row is written and no text is sent (mutation: build the writer after the send -> FAILS)", async () => {
+describe("sendSmsAction — with no service client, the action refuses up front", () => {
+  it("with no service client the action refuses before any row is written or any text is sent (mutation: build the writer after the send -> FAILS)", async () => {
     svc.throws = true;
     await expect(sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }))).rejects.toThrow();
     expect(createMessageMock).not.toHaveBeenCalled();
