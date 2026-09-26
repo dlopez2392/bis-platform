@@ -382,18 +382,25 @@ describe("stripeGateway.reportMeterEvent", () => {
 describe("meterEventFailureKind (does one row's failure stop the tick?)", () => {
   it("an invalid request or an idempotency mismatch is that row's problem; anything else stops the tick (mutation: 'row' for everything → FAILS; 'systemic' for everything → FAILS)", () => {
     const typed = (type: string) => Object.assign(new Error(type), { type });
-    expect(meterEventFailureKind(typed("StripeInvalidRequestError"))).toBe("row");
-    expect(meterEventFailureKind(typed("StripeIdempotencyError"))).toBe("row");
+    expect(meterEventFailureKind(typed("StripeInvalidRequestError"), "u_1")).toBe("row");
+    expect(meterEventFailureKind(typed("StripeIdempotencyError"), "u_1")).toBe("row");
     for (const t of ["StripeRateLimitError", "StripeAuthenticationError", "StripePermissionError", "StripeConnectionError", "StripeAPIError"]) {
-      expect(meterEventFailureKind(typed(t))).toBe("systemic");
+      expect(meterEventFailureKind(typed(t), "u_1")).toBe("systemic");
     }
-    expect(meterEventFailureKind(new Error("socket hang up"))).toBe("systemic");
-    expect(meterEventFailureKind("not an error")).toBe("systemic");
-    expect(meterEventFailureKind(null)).toBe("systemic");
+    expect(meterEventFailureKind(new Error("socket hang up"), "u_1")).toBe("systemic");
+    expect(meterEventFailureKind("not an error", "u_1")).toBe("systemic");
+    expect(meterEventFailureKind(null, "u_1")).toBe("systemic");
+  });
+
+  it("an invalid request saying Stripe already holds the identifier SENT is a duplicate, not a refusal (mutation: no duplicate class → 'row', FAILS; ignore the identifier → the u_2 case is 'duplicate', FAILS)", () => {
+    const already = (id: string) =>
+      Object.assign(new Error(`An event already exists with identifier ${id}.`), { type: "StripeInvalidRequestError" });
+    expect(meterEventFailureKind(already("u_1"), "u_1")).toBe("duplicate");
+    expect(meterEventFailureKind(already("u_2"), "u_1")).toBe("row");
   });
 });
 
-describe("FakeGateway meter events (at least as strict as Stripe: replay is A10; identifier dedupe, A11, is NOT assumed)", () => {
+describe("FakeGateway meter events (as Stripe does: replay is A10; a held identifier under a new key is REFUSED, A11 as observed)", () => {
   it("the same key with the same event replays: no second event (mutation: record on replay → FAILS)", async () => {
     const g = new FakeGateway();
     await g.reportMeterEvent(EVENT, "k1");
@@ -402,11 +409,20 @@ describe("FakeGateway meter events (at least as strict as Stripe: replay is A10;
     expect(g.calls.filter((c) => c.op === "reportMeterEvent")).toHaveLength(2);
   });
 
-  it("the same identifier under a NEW key records a SECOND event: A11 is unproven, so the fake assumes the costlier answer and a test can never lean on a dedupe Stripe may not do (mutation: dedupe by identifier → one event, FAILS)", async () => {
+  it("the same identifier under a NEW key is refused with the invalid request real Stripe test mode returned (A11, observed by e2e/usage-meter.spec.ts), and records nothing (mutation: record a second event → two events, FAILS; throw a plain Error → the classifier reads 'systemic', FAILS)", async () => {
     const g = new FakeGateway();
     await g.reportMeterEvent(EVENT, "k1");
-    await g.reportMeterEvent(EVENT, "k2");
-    expect(g.meterEvents).toEqual([EVENT, EVENT]);
+    const refusal = await g.reportMeterEvent(EVENT, "k2").then(() => null, (e: unknown) => e);
+    expect(refusal).toMatchObject({ type: "StripeInvalidRequestError", message: "An event already exists with identifier u_1." });
+    expect(meterEventFailureKind(refusal, "u_1")).toBe("duplicate");
+    expect(g.meterEvents).toEqual([EVENT]);
+  });
+
+  it("the refusal is by identifier alone, whatever else the new key's event carries (a changed customer id is the other way BIS resends a row) (assumption, unobserved: Stripe holds identifiers per Stripe account, not per customer; mutation: key the dedupe on identifier + customer → a second event, FAILS)", async () => {
+    const g = new FakeGateway();
+    await g.reportMeterEvent(EVENT, "k1");
+    await expect(g.reportMeterEvent({ ...EVENT, customerId: "cus_2" }, "k2")).rejects.toMatchObject({ type: "StripeInvalidRequestError" });
+    expect(g.meterEvents).toEqual([EVENT]);
   });
 
   it("the same key with a different event throws, as Stripe's 400 does (mutation: replay without comparing → FAILS)", async () => {

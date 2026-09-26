@@ -29,8 +29,9 @@ export type MeterEventInput = {
   /** Whole units. Sent as a string (Stripe's payload values are strings). */
   value: number;
   /** The usage row's id. Stripe documents uniqueness "within a rolling
-   *  period of at least 24 hours"; whether a SECOND key carrying it is
-   *  deduplicated is assumption A11, unproven until the e2e observes it. */
+   *  period of at least 24 hours". A SECOND key carrying it is REFUSED with
+   *  "An event already exists with identifier <id>." (A11, observed in test
+   *  mode); meterEventFailureKind calls that refusal "duplicate". */
   identifier: string;
   timestampSeconds: number;
 };
@@ -150,13 +151,35 @@ export function meterEventParams(input: MeterEventInput): Stripe.Billing.MeterEv
 const ROW_SPECIFIC_ERRORS = new Set(["StripeInvalidRequestError", "StripeIdempotencyError"]);
 
 /**
- * Does one meter event's failure stop the report for this tick? Read from
+ * Stripe's refusal of an identifier it already holds (A11, observed in test
+ * mode by e2e/usage-meter.spec.ts: the same identifier under a NEW
+ * idempotency key). Matched on the MESSAGE, because the observation recorded
+ * no error code for it and the installed SDK's types name none for meter
+ * events (assumption: the wording is stable; if Stripe rewords it, the
+ * refusal falls back to "row", the pre-fix behaviour, noisy but never wrong).
+ * The capture is the identifier Stripe names, compared whole against the one
+ * sent, so a refusal about any other event can never be taken for ours.
+ */
+const ALREADY_EXISTS = /^an event already exists with identifier (.+?)\.?$/i;
+
+/**
+ * What one meter event's failure means for the report this tick. Read from
  * the SDK error's `.type` (each class sets it to its own name), not from
  * `instanceof`, so a test double and the real SDK classify alike.
+ *
+ *   duplicate  Stripe already holds an event with the identifier SENT: the
+ *              usage is at Stripe, so the row is stamped, not retried
+ *   row        this request's problem; the account waits for the next tick
+ *   systemic   anything else; the next row would fail the same way
  */
-export function meterEventFailureKind(e: unknown): "row" | "systemic" {
-  const type = typeof e === "object" && e !== null ? (e as { type?: unknown }).type : undefined;
-  return typeof type === "string" && ROW_SPECIFIC_ERRORS.has(type) ? "row" : "systemic";
+export function meterEventFailureKind(e: unknown, sentIdentifier: string): "duplicate" | "row" | "systemic" {
+  const err = typeof e === "object" && e !== null ? (e as { type?: unknown; message?: unknown }) : {};
+  if (typeof err.type !== "string" || !ROW_SPECIFIC_ERRORS.has(err.type)) return "systemic";
+  if (err.type === "StripeInvalidRequestError" && typeof err.message === "string") {
+    const named = ALREADY_EXISTS.exec(err.message.trim())?.[1];
+    if (named !== undefined && named === sentIdentifier) return "duplicate";
+  }
+  return "row";
 }
 
 export function stripeGateway(stripe: Stripe): BillingGateway {

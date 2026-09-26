@@ -31,7 +31,9 @@ export function usageIdempotencyKey(rowId: string, customerId: string): string {
  *      Not an error.
  *   3. The OLDEST unreported rows across every billed account, one meter
  *      event each, identifier = row id; reported_at stamped only after
- *      Stripe accepted. A refusal that is the row's (A13) is `failed`, and
+ *      Stripe accepted, or after Stripe refused the identifier as one it
+ *      already holds (`alreadyAtStripe`, below: the usage IS at Stripe, so it
+ *      is not a failure). Any other refusal that is the row's (A13) is `failed`, and
  *      that ACCOUNT's other rows wait for the next tick; if the read was
  *      full, the pass reads again without the refused accounts, so their
  *      rows never fill the cap ahead of everyone else's. Any other failure
@@ -47,8 +49,12 @@ export function usageIdempotencyKey(rowId: string, customerId: string): string {
  *
  * A stamp that fails after Stripe accepted is `unstamped`: the next tick
  * resends the same row under the same identifier AND the same key, and
- * Stripe's idempotent replay keeps one event (A10). Identifier dedupe
- * across keys (A11) is NOT relied on. "reported" means Stripe RECEIVED the
+ * Stripe's idempotent replay keeps one event (A10). When the key is no
+ * longer the one Stripe saw (it expired after 24 hours, or the account's
+ * customer id changed), Stripe REFUSES the row's identifier as already held
+ * (A11, observed in test mode): that refusal is `alreadyAtStripe`, the row is
+ * stamped and the account's other rows go on, never a refusal that would
+ * hold the account back every tick. "reported" means Stripe RECEIVED the
  * event: it validates asynchronously (A12), and PR-4's nightly
  * reconciliation is the backstop.
  *
@@ -59,7 +65,7 @@ export const usageReportPass: Pass = {
   key: "usageReport",
   async run(ctx) {
     const c = {
-      reported: 0, unstamped: 0, alreadyStamped: 0, failed: 0, expired: 0, staleAccounts: 0,
+      reported: 0, alreadyAtStripe: 0, unstamped: 0, alreadyStamped: 0, failed: 0, expired: 0, staleAccounts: 0,
       skippedNoStripe: 0, stoppedOnCap: 0, stoppedOnError: 0, stoppedOnBudget: 0,
     };
     const accounts = await listBilledUsageAccounts(ctx.db);
@@ -114,6 +120,7 @@ export const usageReportPass: Pass = {
         }
         attempts++;
         const customerId = customerOf.get(row.accountId)!;
+        let alreadyAtStripe = false;
         try {
           await gateway.reportMeterEvent({
             eventName: METERS[row.meter].eventName, customerId,
@@ -121,8 +128,9 @@ export const usageReportPass: Pass = {
             timestampSeconds: Math.floor(Date.parse(row.occurredAt) / 1000),
           }, usageIdempotencyKey(row.id, customerId));
         } catch (e) {
-          c.failed++;
-          if (meterEventFailureKind(e) === "row") {
+          const kind = meterEventFailureKind(e, row.id);
+          if (kind === "row") {
+            c.failed++;
             refused.add(row.accountId);
             refusedHere = true;
             console.error(
@@ -130,14 +138,27 @@ export const usageReportPass: Pass = {
             );
             continue;
           }
-          c.stoppedOnError = 1;
-          console.error(`usage report: stopped for this tick after a Stripe failure on usage row ${row.id}: ${String(e)}`);
-          stop = true;
-          break;
+          if (kind === "systemic") {
+            c.failed++;
+            c.stoppedOnError = 1;
+            console.error(`usage report: stopped for this tick after a Stripe failure on usage row ${row.id}: ${String(e)}`);
+            stop = true;
+            break;
+          }
+          // "duplicate": Stripe already holds this row's event (A11: its
+          // identifier, resent under a new key after the old one expired or
+          // the customer changed). Stamped like an accepted send; the
+          // account's other rows go on.
+          alreadyAtStripe = true;
         }
         try {
           if (await markUsageReported(ctx.db, row.id, ctx.now)) {
-            c.reported++;
+            if (alreadyAtStripe) {
+              c.alreadyAtStripe++;
+              console.error(`usage report: Stripe already held usage row ${row.id} (refused its identifier under a new key); marked reported, not sent twice`);
+            } else {
+              c.reported++;
+            }
           } else {
             c.alreadyStamped++;
             console.error(`usage report: usage row ${row.id} was already marked reported (a concurrent tick); not counted here`);

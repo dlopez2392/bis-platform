@@ -277,7 +277,7 @@ const EMPTY_QUOTE_FOLLOWUPS = {
   waitingForMorning: 0, unresolvableTimezone: 0,
 };
 const EMPTY_USAGE_REPORT = {
-  reported: 0, unstamped: 0, alreadyStamped: 0, failed: 0, expired: 0, staleAccounts: 0,
+  reported: 0, alreadyAtStripe: 0, unstamped: 0, alreadyStamped: 0, failed: 0, expired: 0, staleAccounts: 0,
   skippedNoStripe: 0, stoppedOnCap: 0, stoppedOnError: 0, stoppedOnBudget: 0,
 };
 
