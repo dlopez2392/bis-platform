@@ -243,6 +243,25 @@ function dbWithServerWrittenProposals(real: Db): Db {
   } as unknown as Db;
 }
 
+/**
+ * `dbWithServerWrittenProposals`, plus a contacts READ that throws. In
+ * `acceptProposal` that read is `getContact`, the first call after the
+ * compare-and-swap on a `contact_field` proposal and outside the write
+ * helper's own try, so its failure reaches the outer catch with the proposal
+ * decided and nothing written: the one path to that catch's revert.
+ */
+function dbWithFailingContactRead(real: Db): Db {
+  const base = dbWithServerWrittenProposals(real);
+  return {
+    from: (table: string) => {
+      if (table === "contacts") {
+        return { select: () => { throw new Error("injected: contacts read failed"); } };
+      }
+      return base.from(table as never);
+    },
+  } as unknown as Db;
+}
+
 async function seedCall(db: Db, accountId: string): Promise<string> {
   const num = await db.from("phone_numbers")
     .insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
@@ -1080,6 +1099,45 @@ describe("0053: call_proposals is written by server code; the request client onl
 
         const contact = await getContact(db, accountId, contactId);
         expect(contact!.email).toBe("hand-typed@example.com");
+      });
+    },
+  );
+
+  it(
+    "a failure after the decision and before any CRM write gives the proposal back to pending through the " +
+    "service client (mutation: run the outer catch's revertToPending on the request client -> FAILS)",
+    async () => {
+      await withTestAccount(async (db, accountId) => {
+        const callId = await seedCall(db, accountId);
+        const { id: contactId } = await createContact(db, accountId, { firstName: "Lead" }, "user_test");
+        const proposal = await insertProposal(db, accountId, {
+          callId, contactId, kind: "contact_field",
+          evidence: "the caller spelled her email out loud",
+          payload: { field: "email", value: "lead@example.com" },
+        });
+        expect(proposal).not.toBeNull();
+
+        dbForRequestMock.mockImplementationOnce(async () => dbWithFailingContactRead(realServiceDb()));
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        try {
+          const r = await acceptProposal(accountId, callId, proposal!.id);
+          expect(r).toEqual({ ok: false, error: m["proposals.failed"] });
+          // The outer catch's own line. Its `decided=true` is what shows the
+          // compare-and-swap DID land before the failure, so the pending row
+          // below was put back by the revert, not simply never decided.
+          expect(logged.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("decided=true, written=false")))
+            .toHaveLength(1);
+        } finally {
+          logged.mockRestore();
+        }
+
+        const after = await getProposal(db, accountId, proposal!.id);
+        expect(after!.status).toBe("pending");
+        expect(after!.decidedAt).toBeNull();
+        expect(after!.decidedBy).toBeNull();
+
+        const contact = await getContact(db, accountId, contactId);
+        expect(contact!.email).toBeNull();
       });
     },
   );
