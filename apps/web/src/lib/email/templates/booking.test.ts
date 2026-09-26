@@ -3,6 +3,7 @@ import type { Branding } from "@bis/db";
 import { emailBrand } from "./shell";
 import {
   bookingAlertEmail, bookingConfirmationEmail, bookingReminderEmail, bookingRescheduledEmail,
+  bookingPhoneChangeAlertEmail, bookingCancelledEmail, bookingCancelledSubject,
 } from "./booking";
 
 const UNBRANDED: Branding = {
@@ -330,5 +331,127 @@ describe("bookingConfirmationEmail — Spanish", () => {
     const input = { brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY, cancelUrl: CANCEL_URL };
     expect(bookingConfirmationEmail(input)).toEqual(bookingConfirmationEmail({ ...input, locale: "en" }));
     expect(bookingConfirmationEmail(input).text).toContain("You're booked in.");
+  });
+});
+
+// The staff alert for a booking the phone receptionist cancelled or moved.
+// Operator-facing (English, like every staff alert), but the contact's name
+// on it is customer-supplied: typed into a booking page or spoken on a call.
+describe("bookingPhoneChangeAlertEmail", () => {
+  const WHEN_NEW = "Wed, Aug 27 · 10:00 AM CDT";
+
+  it("a cancellation names the kind, the old time, the contact and the calling number in both parts", () => {
+    const { subject, html, text } = bookingPhoneChangeAlertEmail({
+      brand, kind: "cancelled", whenCompanyZone: WHEN_COMPANY, contactName: "Jane Doe",
+      callerNumber: "+19562921696", contactUrl: CONTACT_URL,
+    });
+    expect(subject).toBe(`Booking cancelled by phone: ${WHEN_COMPANY} — Jane Doe`);
+    for (const part of [html, text]) {
+      expect(part).toContain("Booking cancelled by phone");
+      expect(part).toContain(WHEN_COMPANY);
+      expect(part).toContain("Jane Doe");
+      expect(part).toContain("+19562921696");
+    }
+    expect(html).toContain(`href="${CONTACT_URL}"`);
+    expect(html).toContain("Open this contact");
+    expect(text).toContain(`Open this contact: ${CONTACT_URL}`);
+  });
+
+  it("a move carries BOTH times, old and new, in the subject and both parts", () => {
+    const { subject, html, text } = bookingPhoneChangeAlertEmail({
+      brand, kind: "moved", whenCompanyZone: WHEN_COMPANY, newWhenCompanyZone: WHEN_NEW,
+      contactName: "Jane Doe", callerNumber: "+19562921696", contactUrl: CONTACT_URL,
+    });
+    expect(subject).toContain("Booking moved by phone");
+    expect(subject).toContain(WHEN_COMPANY);
+    expect(subject).toContain(WHEN_NEW);
+    // Old before new: the subject reads as the change it reports.
+    expect(subject.indexOf(WHEN_COMPANY)).toBeLessThan(subject.indexOf(WHEN_NEW));
+    for (const part of [html, text]) {
+      expect(part).toContain("Booking moved by phone");
+      expect(part).toContain(WHEN_COMPANY);
+      expect(part).toContain(WHEN_NEW);
+    }
+  });
+
+  it("escapes a hostile contact name in html", () => {
+    const { html } = bookingPhoneChangeAlertEmail({
+      brand, kind: "cancelled", whenCompanyZone: WHEN_COMPANY,
+      contactName: "<script>alert(1)</script>", callerNumber: null, contactUrl: null,
+    });
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("&lt;script&gt;");
+  });
+
+  it("strips CR/LF from the subject — a name cannot add a header line", () => {
+    const { subject } = bookingPhoneChangeAlertEmail({
+      brand, kind: "moved", whenCompanyZone: WHEN_COMPANY, newWhenCompanyZone: WHEN_NEW,
+      contactName: "Jane\r\nBcc: someone@example.com", callerNumber: null, contactUrl: null,
+    });
+    expect(subject).not.toMatch(/[\r\n]/);
+    expect(subject).toContain("Jane Bcc: someone@example.com");
+  });
+
+  it("says the number was not shown when the call had no caller ID, and omits the button with no url", () => {
+    const { html, text } = bookingPhoneChangeAlertEmail({
+      brand, kind: "cancelled", whenCompanyZone: WHEN_COMPANY, contactName: "Jane Doe",
+      callerNumber: null, contactUrl: null,
+    });
+    expect(text).toContain("Number not shown");
+    expect(html).toContain("Number not shown");
+    expect(html).not.toContain("<a href");
+    expect(text).not.toContain("http");
+  });
+
+  it("never returns an empty text part and carries no template syntax", () => {
+    const { subject, html, text } = bookingPhoneChangeAlertEmail({
+      brand, kind: "moved", whenCompanyZone: WHEN_COMPANY, newWhenCompanyZone: WHEN_NEW,
+      contactName: "Jane Doe", callerNumber: "+19562921696", contactUrl: CONTACT_URL,
+    });
+    expect(text.trim().length).toBeGreaterThan(0);
+    for (const part of [subject, html, text]) expect(part).not.toContain("{{");
+  });
+});
+
+// The customer-facing cancellation notice. Its one job beyond confirming the
+// news is the "if you didn't ask for this" line: a phone cancellation is the
+// one change a customer may learn about only from this email.
+describe("bookingCancelledEmail", () => {
+  const WHEN_COMPANY_ES = "mar, 26 ago, 2:00 p. m. CDT";
+
+  it("English: says the booking was cancelled, carries the time and the didn't-ask-for-this line", () => {
+    const { html, text } = bookingCancelledEmail({ brand, locale: "en", whenCompanyZone: WHEN_COMPANY });
+    expect(bookingCancelledSubject("en")).toBe("Your booking has been cancelled");
+    for (const part of [html, text]) {
+      expect(part).toContain("Your booking has been cancelled.");
+      expect(part).toContain(WHEN_COMPANY);
+      expect(part).toContain("If you didn't ask for this, please contact us right away.");
+    }
+  });
+
+  it("Spanish: speaks Spanish throughout", () => {
+    const { html, text } = bookingCancelledEmail({ brand, locale: "es", whenCompanyZone: WHEN_COMPANY_ES });
+    expect(bookingCancelledSubject("es")).toBe("Tu cita fue cancelada");
+    for (const part of [html, text]) {
+      expect(part).toContain("Tu cita fue cancelada.");
+      expect(part).toContain(WHEN_COMPANY_ES);
+      expect(part).toContain("Si no pediste esta cancelación, comunícate con nosotros cuanto antes.");
+      expect(part).not.toContain("cancelled");
+      expect(part).not.toContain("contact us");
+    }
+  });
+
+  it("defaults to English, carries no button and no template syntax in either language", () => {
+    const input = { brand, whenCompanyZone: WHEN_COMPANY };
+    expect(bookingCancelledEmail(input)).toEqual(bookingCancelledEmail({ ...input, locale: "en" }));
+    expect(bookingCancelledSubject()).toBe(bookingCancelledSubject("en"));
+    for (const locale of ["en", "es"] as const) {
+      const { html, text } = bookingCancelledEmail({ ...input, locale });
+      for (const part of [html, text, bookingCancelledSubject(locale)]) expect(part).not.toContain("{{");
+      // Customer-facing restraint, same as the confirmation: plain paragraphs,
+      // nothing to click.
+      expect(html).not.toContain("<a href");
+      expect(text.trim().length).toBeGreaterThan(0);
+    }
   });
 });
