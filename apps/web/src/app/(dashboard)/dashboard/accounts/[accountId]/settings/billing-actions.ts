@@ -24,7 +24,7 @@ import { requireAgency } from "@/lib/auth";
 import { loggableError, sendBillingLink, type SendBillingLinkResult } from "@/lib/billing/billing-link";
 import { safeZone } from "@/lib/billing/billing-view";
 import { planChangeItems } from "@/lib/billing/change-plan";
-import { billingGatewayFromEnv, idempotencyKey } from "@/lib/billing/stripe-gateway";
+import { billingGatewayFromEnv, idempotencyKey, webhookSecretFromEnv } from "@/lib/billing/stripe-gateway";
 import { getEmailProvider } from "@/lib/email";
 import { configuredOrigin, originFrom } from "@/lib/email/origin";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
@@ -92,6 +92,11 @@ export async function sendBillingLinkAction(accountId: string, formData: FormDat
   if (email.length > 254 || !EMAIL.test(email)) return fail("billing.error.email");
   const gateway = billingGatewayFromEnv();
   if (!gateway.ok) return fail("billing.error.noStripe");
+  // Without the signing secret every event that would mirror the payment is
+  // answered 503: a client who paid would show as Unbilled until an event
+  // could land (final review I1). The card hides Send then; this is the check
+  // a stale card cannot skip.
+  if (webhookSecretFromEnv() === null) return fail("billing.error.noWebhook");
   const origin = configuredOrigin() ?? originFrom(await headers());
   if (!origin) return fail("billing.error.noOrigin");
   const db = serviceDb();

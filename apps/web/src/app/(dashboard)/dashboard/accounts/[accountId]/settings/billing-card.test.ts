@@ -25,6 +25,7 @@ const base: BillingCardView = {
   defaultEmail: "owner@example.com",
   can: { send: true, changePlan: false, markComplimentary: true, stopComplimentary: false, copyLink: false },
   stripeReady: true,
+  webhookReady: true,
 };
 type Actions = Pick<Parameters<typeof BillingCard>[0], "send" | "markComplimentary" | "stopComplimentary" | "changePlan">;
 const props = (view: BillingCardView, actions: Partial<Actions> = {}) => ({
@@ -180,6 +181,17 @@ describe("BillingCard", () => {
     // it must say billing can't change, not that a link can't go (review M-4).
     expect(renderedText(render({ ...active, stripeReady: false }))).toContain(m["billing.card.noStripe"]);
     expect(m["billing.card.noStripe"]).not.toMatch(/billing link/i);
+  });
+
+  it("with the key but no webhook secret it says billing links are off, not that Stripe is disconnected, and never promises a link it cannot send; with neither, only the key is named, because it is the first thing to fix (final review I1) (mutation: drop the webhookReady notice → FAILS; show noStripe for it → FAILS; keep the empty line → FAILS)", () => {
+    const noHook = renderedText(render({ ...base, webhookReady: false, can: { ...base.can, send: false } }));
+    expect(noHook).toContain(m["billing.card.noWebhook"]);
+    expect(noHook).not.toContain(m["billing.card.noStripe"]);
+    expect(noHook).not.toContain(m["billing.card.empty"]);
+    expect(renderedText(render(base))).not.toContain(m["billing.card.noWebhook"]);
+    const neither = renderedText(render({ ...base, stripeReady: false, webhookReady: false, can: { ...base.can, send: false } }));
+    expect(neither).toContain(m["billing.card.noStripe"]);
+    expect(neither).not.toContain(m["billing.card.noWebhook"]);
   });
 
   it("the loading skeleton and the error card are the card's own shape on the SAME #billing anchor, so the banner's link and ⌘K land even before it loads or when it fails (rule 5, rule 7) (mutation: drop id=billing from the skeleton → FAILS)", () => {

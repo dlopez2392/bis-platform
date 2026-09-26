@@ -1,6 +1,7 @@
 import { serviceDb } from "@bis/db";
 import {
-  billingGatewayFromEnv, isSignatureError, verifyWebhookEvent, type StripeEnv, type VerifiedWebhookEvent,
+  billingGatewayFromEnv, isSignatureError, verifyWebhookEvent, webhookSecretFromEnv, type StripeEnv,
+  type VerifiedWebhookEvent,
 } from "@/lib/billing/stripe-gateway";
 import { processStripeEvent } from "@/lib/billing/webhook";
 
@@ -28,7 +29,9 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 export async function POST(request: Request): Promise<Response> {
-  const secret = (process.env.STRIPE_WEBHOOK_SECRET ?? "").trim();
+  // The same trimmed reading the Billing card and Send use, so "set" means
+  // one thing everywhere (final review I1).
+  const secret = webhookSecretFromEnv();
   if (!secret) {
     console.error("stripe webhook: STRIPE_WEBHOOK_SECRET is not set; answering 503 so Stripe retries");
     return new Response("not configured", { status: 503 });

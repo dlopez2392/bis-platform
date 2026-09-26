@@ -118,6 +118,9 @@ beforeEach(() => {
   gw.value = { ok: true, gateway: fake, live: false };
   vi.stubEnv("APP_ORIGIN", "https://app.example");
   vi.stubEnv("AGENCY_SUPPORT_EMAIL", "");
+  // Send refuses without it (final review I1); set here so every other Send
+  // test reaches the path it is about.
+  vi.stubEnv("STRIPE_WEBHOOK_SECRET", "whsec_actions_fixture");
 });
 
 afterEach(() => {
@@ -234,6 +237,17 @@ describe("the agency's billing actions", () => {
     gw.value = { ok: false, reason: "missing" };
     expect(await actions.sendBillingLinkAction(ACCOUNT, form({ planId: P1, email: "a@b.co" }))).toEqual({ ok: false, error: m["billing.error.noStripe"] });
     expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("send: no webhook signing secret (unset, or whitespace only, trimmed as the route trims it) → the no-webhook copy, and nothing is sent, so no client can pay into a site that would leave them Unbilled until an event could land (final review I1) (mutation: drop the check → FAILS; drop the trim → the blank secret sends, FAILS)", async () => {
+    // Were the check missing, Send would go through: the red is this answer.
+    sendMock.mockResolvedValue({ ok: true });
+    for (const secret of [undefined, " \n "]) {
+      vi.stubEnv("STRIPE_WEBHOOK_SECRET", secret);
+      expect(await actions.sendBillingLinkAction(ACCOUNT, form({ planId: P1, email: "a@b.co" }))).toEqual({ ok: false, error: m["billing.error.noWebhook"] });
+    }
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(fake.calls).toEqual([]);
   });
 
   it("mark complimentary is refused while a live billing link is out, and 'already on a plan' is said in words (G16) (mutation: drop the link check → a paid checkout could later overwrite it, FAILS)", async () => {

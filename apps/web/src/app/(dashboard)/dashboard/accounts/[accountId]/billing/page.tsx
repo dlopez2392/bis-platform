@@ -59,7 +59,9 @@ export default async function BillingPage({ params }: { params: Promise<{ accoun
   const zone = safeZone(account?.timezone);
   const now = new Date();
   const used = await sumUsageSince(db, accountId, usagePeriodStart(billing, zone, now).start.toISOString());
-  const view = billingCardView({ billing, link: null, plan, activePlans: [], used, zone, now, defaultEmail: "", stripeReady: true });
+  const view = billingCardView({ billing, link: null, plan, activePlans: [], used, zone, now, defaultEmail: "",
+    // Inert here: no plans are passed, so no action is offered on this page.
+    stripeReady: true, webhookReady: true });
   // A first payment still going through: the client's word, shown to whoever
   // opens this page, the agency included (it sees the client's page as the
   // client does). The agency's own card on Settings keeps "Payment failed".

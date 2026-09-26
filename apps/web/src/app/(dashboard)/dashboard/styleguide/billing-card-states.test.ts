@@ -23,6 +23,7 @@ describe("styleguide: the agency Billing card", () => {
     expect(renderedText(html)).toContain(m["billing.card.error"]);
     expect(renderedText(html)).toContain(m["billing.card.noPlans"]);
     expect(renderedText(html)).toContain(m["billing.card.noStripe"]);
+    expect(renderedText(html)).toContain(m["billing.card.noWebhook"]);
     expect(readFileSync(path.join(here, "page.tsx"), "utf8")).toMatch(/<BillingCardStates\s*\/>/);
   });
 });

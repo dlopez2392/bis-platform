@@ -2,7 +2,7 @@ import { getBillingLink, listPlans, serviceDb, sumUsageSince } from "@bis/db";
 import { requireAgency } from "@/lib/auth";
 import { readAccountBilling } from "@/lib/billing/account-billing-read";
 import { billingCardView, safeZone, usagePeriodStart, type BillingCardView } from "@/lib/billing/billing-view";
-import { stripeKeyVerdict, type StripeEnv } from "@/lib/billing/stripe-gateway";
+import { stripeKeyVerdict, webhookSecretFromEnv, type StripeEnv } from "@/lib/billing/stripe-gateway";
 import { changePlanAction, markComplimentaryAction, removeComplimentaryAction, sendBillingLinkAction } from "./billing-actions";
 import { BillingCard, BillingCardError } from "./billing-card";
 
@@ -42,6 +42,8 @@ async function loadBillingCardView(accountId: string, now: Date): Promise<Billin
     // G18: the reply-to address, else the first weekly-report address.
     defaultEmail: account.reply_to_email ?? account.report_emails?.[0] ?? "",
     stripeReady: stripeKeyVerdict(process.env as StripeEnv).ok,
+    // Send only with the webhook's signing secret set too (final review I1).
+    webhookReady: webhookSecretFromEnv() !== null,
   });
 }
 

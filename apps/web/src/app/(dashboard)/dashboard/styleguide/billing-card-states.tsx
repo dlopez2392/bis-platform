@@ -43,12 +43,12 @@ const LINK: BillingLink = {
 };
 const USED: MeterAmounts = { voice_minutes: 312, sms: 1043, ai_chats: 3 };
 
-function view(billing: AccountBilling | null, opts: { link?: BillingLink; plans?: Plan[]; stripeReady?: boolean } = {}) {
+function view(billing: AccountBilling | null, opts: { link?: BillingLink; plans?: Plan[]; stripeReady?: boolean; webhookReady?: boolean } = {}) {
   const plans = opts.plans ?? PLANS;
   return billingCardView({
     billing, link: opts.link ?? null, plan: billing ? plans.find((p) => p.id === billing.planId) ?? null : null,
     activePlans: plans, used: billing ? USED : null, zone: ZONE, now: NOW,
-    defaultEmail: "owner@rioroofing.test", stripeReady: opts.stripeReady ?? true,
+    defaultEmail: "owner@rioroofing.test", stripeReady: opts.stripeReady ?? true, webhookReady: opts.webhookReady ?? true,
   });
 }
 
@@ -65,6 +65,7 @@ const DEMOS: { label: string; view: ReturnType<typeof view> }[] = [
   },
   { label: "No plans yet", view: view(null, { plans: [] }) },
   { label: "Stripe not connected", view: view(null, { stripeReady: false }) },
+  { label: "Webhook not set up — billing links off", view: view(null, { webhookReady: false }) },
 ];
 
 function Demo({ label, children }: { label: string; children: React.ReactNode }) {

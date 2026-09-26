@@ -152,6 +152,7 @@ export type BillingCardView = {
   defaultEmail: string;
   can: { send: boolean; changePlan: boolean; markComplimentary: boolean; stopComplimentary: boolean; copyLink: boolean };
   stripeReady: boolean;
+  webhookReady: boolean;
 };
 
 export function billingCardView(input: {
@@ -166,9 +167,13 @@ export function billingCardView(input: {
   zone: string;
   now: Date;
   defaultEmail: string;
+  /** A usable Stripe key here (stripeKeyVerdict). */
   stripeReady: boolean;
+  /** STRIPE_WEBHOOK_SECRET is set here (webhookSecretFromEnv). Gates Send
+   *  ONLY: without it a client could pay and stay Unbilled (final review I1). */
+  webhookReady: boolean;
 }): BillingCardView {
-  const { billing, link, plan, activePlans, used, zone, now, stripeReady } = input;
+  const { billing, link, plan, activePlans, used, zone, now, stripeReady, webhookReady } = input;
   const status = billingStatusOf(billing, link, now);
   const option = (p: Plan): PlanOption => ({ id: p.id, name: p.name, price: priceLine(p.monthlyPriceCents) });
   const live = billing !== null && liveSubscription(billing);
@@ -196,7 +201,7 @@ export function billingCardView(input: {
     planOptions: activePlans.map(option),
     defaultEmail: input.defaultEmail,
     can: {
-      send: stripeReady && activePlans.length > 0 && ["unbilled", "link_sent", "canceled", "complimentary"].includes(status),
+      send: stripeReady && webhookReady && activePlans.length > 0 && ["unbilled", "link_sent", "canceled", "complimentary"].includes(status),
       // Not on `incomplete`: before the first payment, Stripe may refuse item updates (G15).
       changePlan: otherPlan && (status === "complimentary"
         || (stripeReady && live && billing?.subscriptionStatus !== "incomplete")),
@@ -205,5 +210,6 @@ export function billingCardView(input: {
       copyLink: linkLive && !live,
     },
     stripeReady,
+    webhookReady,
   };
 }

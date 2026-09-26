@@ -112,7 +112,7 @@ describe("billingCardView", () => {
     billingCardView({
       billing, link: l, plan: billing ? plan("p1") : null, activePlans: [plan("p1"), plan("p2")],
       used: { voice_minutes: 312, sms: 0, ai_chats: 0 }, zone: ZONE, now: NOW, defaultEmail: "owner@example.com",
-      stripeReady: true, ...over,
+      stripeReady: true, webhookReady: true, ...over,
     });
 
   it("offers exactly the actions each status allows (G16, G15): Send only when not subscribed, Mark complimentary only when unbilled, Stop only when complimentary, Change plan only on a plan with another plan to go to, and never on an incomplete first payment (mutation: offer Mark complimentary on a canceled row → 0051's CHECK would refuse it, FAILS; offer Change plan on incomplete → FAILS)", () => {
@@ -144,6 +144,13 @@ describe("billingCardView", () => {
   it("without a usable Stripe key nothing that calls Stripe is offered, but complimentary changes still are (mutation: ignore stripeReady → FAILS)", () => {
     expect(view(null, null, { stripeReady: false }).can).toMatchObject({ send: false, markComplimentary: true });
     expect(view(row(), null, { stripeReady: false }).can.changePlan).toBe(false);
+  });
+
+  it("without the webhook signing secret Send is not offered (a client who paid would show as Unbilled until an event could land), but paid Change plan and Mark complimentary still are: a live subscription means the webhook already worked, and complimentary never touches Stripe (final review I1) (mutation: ignore webhookReady → FAILS; gate Change plan on it too → FAILS)", () => {
+    expect(view(null, null, { webhookReady: false }).can).toMatchObject({ send: false, markComplimentary: true });
+    expect(view(row({ subscriptionStatus: "canceled" }), null, { webhookReady: false }).can.send).toBe(false);
+    expect(view(row(), null, { webhookReady: false }).can.changePlan).toBe(true);
+    expect(view(null, null, { webhookReady: false }).webhookReady).toBe(false);
   });
 
   it("shows the next invoice only for a live subscription, the period it counts from, and the link's recipient and expiry in the account's zone (mutation: show a canceled subscription's old period end as its next invoice → FAILS)", () => {

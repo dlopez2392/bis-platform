@@ -1,9 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isValidElement, type ReactElement } from "react";
 import type { AccountBilling, Plan } from "@bis/db";
+import type { BillingCardView } from "@/lib/billing/billing-view";
 
 const dbm = vi.hoisted(() => ({
   getAccountBilling: vi.fn(), getBillingLink: vi.fn(), listPlans: vi.fn(), sumUsageSince: vi.fn(),
@@ -102,5 +103,44 @@ describe("BillingSection", () => {
     expect(isValidElement(el) && el.type).toBe(BillingCardError);
     expect(log.mock.calls.flat().join(" ")).toContain("timeout");
     log.mockRestore();
+  });
+});
+
+describe("BillingSection: what the card may offer is read from THIS deployment's env (final review I1, m2)", () => {
+  // A usable TEST key on the CI project's database (stripeKeyVerdict), and a
+  // webhook signing secret. Each test below takes one of them away.
+  const usable = () => {
+    vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_section_fixture");
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://odnobiodsftffphuuosz.supabase.co");
+    vi.stubEnv("VERCEL_ENV", undefined);
+    vi.stubEnv("STRIPE_WEBHOOK_SECRET", "whsec_section_fixture");
+  };
+  const viewOf = async () => ((await BillingSection({ accountId: "a" })) as ReactElement<{ view: BillingCardView }>).props.view;
+  beforeEach(() => { dbm.getAccountBilling.mockResolvedValue(null); usable(); });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it("with a usable key AND the webhook secret, an unbilled account is offered Send (mutation: hard-code webhookReady: false → FAILS)", async () => {
+    const view = await viewOf();
+    expect({ stripeReady: view.stripeReady, webhookReady: view.webhookReady, send: view.can.send })
+      .toEqual({ stripeReady: true, webhookReady: true, send: true });
+  });
+
+  it("without STRIPE_WEBHOOK_SECRET the card is not ready to send, though the key is fine (mutation: read only the key → FAILS; hard-code webhookReady: true → FAILS)", async () => {
+    vi.stubEnv("STRIPE_WEBHOOK_SECRET", undefined);
+    const view = await viewOf();
+    expect({ stripeReady: view.stripeReady, webhookReady: view.webhookReady, send: view.can.send })
+      .toEqual({ stripeReady: true, webhookReady: false, send: false });
+  });
+
+  it("a whitespace-only STRIPE_WEBHOOK_SECRET counts as unset, trimmed exactly as the webhook route trims it (mutation: drop the trim in webhookSecretFromEnv → FAILS)", async () => {
+    vi.stubEnv("STRIPE_WEBHOOK_SECRET", " \n ");
+    const view = await viewOf();
+    expect({ webhookReady: view.webhookReady, send: view.can.send }).toEqual({ webhookReady: false, send: false });
+  });
+
+  it("without a usable Stripe key the card is not stripeReady and offers no Send (probe M14: hard-code stripeReady: true → FAILS)", async () => {
+    vi.stubEnv("STRIPE_SECRET_KEY", undefined);
+    const view = await viewOf();
+    expect({ stripeReady: view.stripeReady, send: view.can.send }).toEqual({ stripeReady: false, send: false });
   });
 });

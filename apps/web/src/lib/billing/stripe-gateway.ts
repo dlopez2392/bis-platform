@@ -576,6 +576,24 @@ export function stripeKeyVerdict(env: StripeEnv): StripeKeyVerdict {
   return { ok: true, key };
 }
 
+/** What webhookSecretFromEnv reads. */
+export type WebhookEnv = { STRIPE_WEBHOOK_SECRET?: string };
+
+/**
+ * The webhook signing secret, trimmed, or null when unset or blank. The ONE
+ * reading of STRIPE_WEBHOOK_SECRET: the webhook route verifies with it, and
+ * billing links are offered (the card) and sent (the action) only when it is
+ * set (final review I1). A key without it lets a client pay while every event
+ * that would mirror the payment is answered 503, so the account shows as
+ * Unbilled until an event can land. Only Send needs it: a complimentary
+ * change never touches Stripe, and a paid Change plan needs a live
+ * subscription, which the webhook already mirrored.
+ */
+export function webhookSecretFromEnv(env: WebhookEnv = process.env as WebhookEnv): string | null {
+  const secret = (env.STRIPE_WEBHOOK_SECRET ?? "").trim();
+  return secret || null;
+}
+
 export function billingGatewayFromEnv(
   // `process.env` (NodeJS.ProcessEnv) satisfies this shape structurally at
   // runtime, but its properties come from an index signature, which TS's

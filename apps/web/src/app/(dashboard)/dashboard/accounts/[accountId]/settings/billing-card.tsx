@@ -151,13 +151,17 @@ export function BillingCard({ view, send, markComplimentary, stopComplimentary, 
           </p>
         ) : view.planOptions.length === 0 ? (
           <p className="text-sm text-muted-foreground">{m["billing.card.noPlans"]}</p>
-        ) : view.status === "unbilled" && view.stripeReady ? (
+        ) : view.status === "unbilled" && view.stripeReady && view.webhookReady ? (
           <p className="text-sm text-muted-foreground">{m["billing.card.empty"]}</p>
         ) : null}
 
-        {view.stripeReady ? null : (
+        {/* The key first: without it nothing works, and the webhook secret
+            is the next thing to set only once it does. */}
+        {!view.stripeReady ? (
           <Notice tone="warn" className="text-foreground">{m["billing.card.noStripe"]}</Notice>
-        )}
+        ) : !view.webhookReady ? (
+          <Notice tone="warn" className="text-foreground">{m["billing.card.noWebhook"]}</Notice>
+        ) : null}
 
         {view.usage.length > 0 ? (
           <div className="flex flex-col gap-2">
