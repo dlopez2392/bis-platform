@@ -190,6 +190,13 @@ describe("ci.yml points the gates at the CI Supabase project, never production's
     expect(jobEnv(job("e2e")).STRIPE_SECRET_KEY).toBe("${{ secrets.CI_STRIPE_SECRET_KEY }}");
   });
 
+  it("gives the e2e job — and only it — the fixture webhook signing secret as a LITERAL, never a secrets reference: the e2e signs its own fixture events with it, and it signs nothing anywhere else (mutation: move it to the top-level env, or read it from secrets → FAILS)", () => {
+    expect(jobEnv(job("e2e")).STRIPE_WEBHOOK_SECRET).toBe("whsec_bis_ci_e2e_fixture_only");
+    expect(jobEnv(job("verify")).STRIPE_WEBHOOK_SECRET).toBeUndefined();
+    expect(ciEnv.STRIPE_WEBHOOK_SECRET).toBeUndefined();
+    expect(ciLines.filter((l) => l.includes("STRIPE_WEBHOOK_SECRET") && !l.trim().startsWith("#"))).toHaveLength(1);
+  });
+
   it("names the same CI project as the setup workflow that builds it, as a literal URL", () => {
     // The project ci-project-setup.yml bootstraps, pushes and seeds is the one
     // the gates must run on. A rebuilt project changes both files together.
