@@ -16,7 +16,7 @@
 - **The webhook trusts only the signature and Stripe itself.** It never reads an unverified payload: it verifies `stripe-signature` on the RAW body (`request.text()`), and it never mirrors a field from the event payload. It takes one subscription id from the verified event and re-reads that subscription from Stripe (spec flow 4), so duplicate and out-of-order events converge on Stripe's current state. The write is conditional on the stored row being unchanged since BEFORE that re-read (B5), so an earlier read of Stripe can never overwrite a later one.
 - **An event is recorded once.** `stripe_webhook_events.processed_at` is stamped only after the mirror finishes or is refused for good. A failure leaves the event unstamped and answers 500, so Stripe's retry processes it again, and the re-read makes a repeat harmless.
 - **The account_billing row is created when the subscription EXISTS** (PR-2 G12, binding). A sent link writes only `billing_links`. Usage reporting starts at `account_billing.billing_started_at`, the subscription's own `start_date` (G1).
-- Writers set `updated_at` themselves (0051 has no trigger). All writes to the billing tables go through `serviceDb()`, after `requireAgency()` (agency actions), `requireAccountAccess()` (the client's portal action), or a verified signature (webhook).
+- Writers set `updated_at` themselves (0051 has no trigger), and every `account_billing` writer must MOVE it (it is the mirror's compare-and-set version, B5): the mirror writes at least 1 ms past the stored value (`nextVersion`); the complimentary writers write `now`, which can equal the stored value only in a same-millisecond collision with another write to that row (accepted; noted for PR-4, whose pause writer must use `nextVersion`). All writes to the billing tables go through `serviceDb()`, after `requireAgency()` (agency actions), `requireAccountAccess()` (the client's portal action), or a verified signature (webhook).
 - **Stripe:** every idempotency key covers every parameter the request sends (`idempotencyKey(prefix, id, params)`, a hash of the canonical params; Task 3). Money is integer cents, USD. The app refuses a TEST key whenever `NEXT_PUBLIC_SUPABASE_URL` names production, and a LIVE key outside Vercel Production (`stripeKeyVerdict`, unchanged). The webhook also refuses an event whose `livemode` differs from the key's mode.
 - **Usage screens read `usage_events`** (`sumUsageSince`), never the Activity page's counts. The Activity page counts a chat when it starts, billing counts it at Sofía's first reply, and the page says so (PR-2 binding).
 - **DB tests (`packages/db`) run only in CI.** Implementers never apply migrations. 0052 goes to the CI project first (`ci-project-setup.yml`, Checkpoint A), then to production through MCP before merge, then parity (Task 13). It is additive only, so applying it to the shared CI project cannot break any other branch's CI run (G10 explains why the composite FK is NOT in it).
@@ -29,7 +29,7 @@
 
 1. **The A11 fix is merged first** (branch `fix/usage-report-already-exists`, in flight; not re-planned here). PR-2's e2e observed that Stripe REFUSES a reused meter-event identifier under a new idempotency key ("An event already exists with identifier ..."). Until the reporter treats that refusal as already reported, such a row is never stamped and its whole account is skipped every tick. This PR creates the first billed accounts, so **PR-3 does not merge before that fix is on `main`**. The orchestrator checks this in Task 13.
 
-   The A11 fix does NOT cover a row resent MORE than 24 hours after a send Stripe accepted (say, the send landed but the stamp failed): Stripe documents identifier uniqueness only "within a rolling period of at least 24 hours" (assumption B10), so such a row can be counted twice. PR-2's stale-usage banner flags any row unreported for 24 hours; PR-4's reconciliation is the only automatic backstop. Whether to bill a live client before PR-4 exists is **QUESTION 6**, and the rule is carried into Next plans.
+   The A11 fix does NOT cover a row resent MORE than 24 hours after a send Stripe accepted (say, the send landed but the stamp failed): Stripe documents identifier uniqueness only "within a rolling period of at least 24 hours" (assumption B10), so such a row can be counted twice. PR-2's stale-usage banner flags any row unreported for 24 hours; PR-4's reconciliation is the only automatic backstop. Billing a live client before PR-4 exists is **decided (danlo, 2026-09-25): yes** (DECISION 6), and the rule is carried into Next plans.
 2. `CI_STRIPE_SECRET_KEY` (a Stripe TEST key) is a repository secret already, exposed to the e2e job as `STRIPE_SECRET_KEY`. Nothing to add.
 3. `STRIPE_WEBHOOK_SECRET`:
    - **CI:** a fixed literal (`whsec_bis_ci_e2e_fixture_only`), added to the e2e job's env by Task 5. It is not a secret. It lets the e2e spec sign fixture events that the e2e server accepts, and it signs nothing anywhere else.
@@ -75,14 +75,14 @@ Assumptions (not verified; each names what settles it):
 - **B1.** Checkout accepts one licensed price plus three metered prices (without quantity) in one subscription-mode session (spec section 8). **Task 12's e2e retrieves the real test-mode session with `line_items` and asserts four.**
 - **B2.** A Checkout session lives 24 hours by default. The code never assumes this: it stores Stripe's own `expires_at`.
 - **B3.** A portal configuration created by API with only `features` + `metadata` is usable in test and live mode. **Task 12's e2e clicks Manage billing and lands on `billing.stripe.com`.**
-- **B4.** Swapping each subscription item's price in place mid-period (Change plan) prorates the base price and prices the WHOLE period's meter usage at the new metered prices at period end, because a meter aggregates per customer per meter, not per price. Unverified. It decides what QUESTION 2 means in money. The e2e does not settle it.
-- **B5. Stripe's delivery order is not relied on, and neither is timing between two deliveries.** Two deliveries for one account processed at once each re-read Stripe, and the one that reads EARLIER can reach the database LATER. The first draft accepted that as "a window of milliseconds". The plan review showed it is not: the stale write STICKS until the next event for that subscription, possibly next month's invoice. Example: `customer.subscription.created` reads `incomplete`, `invoice.paid` reads `active` and writes, then the first writes `incomplete`; the card and the client then say Payment failed for a month, and PR-4 would pause a paying client on that state. The same shape lets a late delivery for an old subscription overwrite a just-stored new one. **Engineered around, not accepted:** the mirror is compare-and-set (G5, Task 2). It reads the stored row BEFORE asking Stripe and writes only while the row still carries that `updated_at`. With no row it inserts, and a 23505 is the same conflict. On a conflict it re-reads the row, then Stripe, and tries again, at most `MIRROR_ATTEMPTS` (3) times, then throws (500, Stripe retries). Task 2's unit test pins the order and the condition, and its live replay test proves the `updated_at` round trip through PostgREST. Still unverified (external): whether a Checkout-created subscription passes through `incomplete` at all. The `past_due`↔`active` race exists either way.
+- **B4.** Swapping each subscription item's price in place mid-period (Change plan) prorates the base price and prices the WHOLE period's meter usage at the new metered prices at period end, because a meter aggregates per customer per meter, not per price. Unverified. It decides what DECISION 2 means in money, and the e2e does not settle it. **Decided on it anyway (danlo, 2026-09-25): danlo accepted the risk** of Change plan "now" resting on this unverified assumption. It is settled on a Stripe test clock before the first live mid-month Change plan (Next plans).
+- **B5. Stripe's delivery order is not relied on, and neither is timing between two deliveries.** Two deliveries for one account processed at once each re-read Stripe, and the one that reads EARLIER can reach the database LATER. The first draft accepted that as "a window of milliseconds". The plan review showed it is not: the stale write STICKS until the next event for that subscription, possibly next month's invoice. Example: `customer.subscription.created` reads `incomplete`, `invoice.paid` reads `active` and writes, then the first writes `incomplete`; the card and the client then say Payment failed for a month, and PR-4 would pause a paying client on that state. The same shape lets a late delivery for an old subscription overwrite a just-stored new one. **Engineered around, not accepted:** the mirror is compare-and-set (G5, Task 2). It reads the stored row BEFORE asking Stripe and writes only while the row still carries that `updated_at`. With no row it inserts, and a 23505 is the same conflict. On a conflict it re-reads the row, then Stripe, and tries again, at most `MIRROR_ATTEMPTS` (3) times, then throws (500, Stripe retries). A REFUSAL is returned only if the row is still the one read before Stripe was asked; otherwise it is a conflict too (the second review's first-checkout burst: another delivery inserts the row and consumes the link in between, and the stale attempt would have refused `customer_mismatch` over an `incomplete` row). **What is guaranteed is the ROW** (its status, plan, customer, periods): the permissions write and the link cleanup follow it outside the compare-and-set, so two racing deliveries can leave `accounts.permissions` from the older one. That is rare and harmless in PR-3 (nothing reads permissions yet, G9); PR-4 closes it before enforcing them (Next plans (b)). The first checkout's burst may therefore answer one or two 500s that succeed on Stripe's retry (runbook). Task 2's unit tests pin the order and the condition, the refusal re-check, the 23505 path and the give-up, and its live replay test proves the `updated_at` round trip through PostgREST. Still unverified (external): whether a Checkout-created subscription passes through `incomplete` at all. The `past_due`↔`active` race exists either way.
 - **B6.** Stripe retries a non-2xx delivery with backoff for up to three days in live mode (Stripe docs, not re-read today).
 - **B7.** The live endpoint is created pinned to `2026-08-26.dahlia` (Task 13, Step 5). The code ALSO reads a legacy top-level `invoice.subscription`, so an endpoint on an older version still maps invoices.
 - **B8.** A subscription's `items` list holds all four items in one page. The code throws on `has_more` rather than guess.
 - **B9.** `redirect()` to an absolute external URL from a server action works in Next 16 (documented behaviour). **Task 12's portal click proves it.**
-- **B10.** Stripe documents a meter event's `identifier` as unique only "within a rolling period of at least 24 hours" (Stripe docs, not re-read today). A usage row resent more than 24 hours after a send Stripe accepted may be counted twice. Nothing in PR-3 settles it. PR-4's reconciliation is the backstop, and QUESTION 6 decides whether a live client is billed before then.
-- **B11.** Stripe's failed-payment behaviour is a dashboard setting, not code. It covers the retry schedule ("Smart Retries" is Stripe's default), what happens after the last retry (cancel the subscription, mark it unpaid, or leave it past due), and whether Stripe emails the customer receipts and failed-payment notices. The menu names and the default schedule are from Stripe's docs, not re-read today. The chosen values decide which statuses the mirror sees (`past_due` → `unpaid` or `canceled`), so QUESTION 7 decides them before the first live client pays (Task 13, Step 5).
+- **B10.** Stripe documents a meter event's `identifier` as unique only "within a rolling period of at least 24 hours" (Stripe docs, not re-read today). A usage row resent more than 24 hours after a send Stripe accepted may be counted twice. Nothing in PR-3 settles it. PR-4's reconciliation is the backstop. **Decided (danlo, 2026-09-25, DECISION 6): a live client IS billed before then**, with the manual invoice check while the stale-usage banner shows (runbook rule 2).
+- **B11.** Stripe's failed-payment behaviour is a dashboard setting, not code. It covers the retry schedule ("Smart Retries" is Stripe's default), what happens after the last retry (cancel the subscription, mark it unpaid, or leave it past due), and whether Stripe emails the customer receipts and failed-payment notices. The menu names and the default schedule are from Stripe's docs, not re-read today. The chosen values decide which statuses the mirror sees (`past_due` → `unpaid` or `canceled`), so they are set before the first live client pays (Task 13, Step 5). **Decided (danlo, 2026-09-25, DECISION 7): Smart Retries, then mark the subscription unpaid (never auto-cancel), Stripe's receipts and failed-payment emails on.**
 
 ## Spec gaps resolved here (the reviewer should confirm or overrule)
 
@@ -121,7 +121,7 @@ Assumptions (not verified; each names what settles it):
   7. No subscription in the event (an unhandled type, or a payment-mode checkout) → stamp → 200 "ignored".
   8. `mirrorSubscription` → stamp → 200 "processed" or "refused". The mirror reads Stripe once to learn the account. Then, per attempt, it reads the stored row, re-reads the subscription from Stripe, and writes only if the row is unchanged (G5, B5).
   9. A throw anywhere in 5-8 → NOT stamped → 500, and Stripe retries. This includes a mirror that lost `MIRROR_ATTEMPTS` races in a row.
-- **G5. Duplicates and out-of-order events** need no ordering logic: nothing from the payload is mirrored. An `updated` arriving after `deleted` re-reads the subscription, which is `canceled`, and writes `canceled`. **Concurrent deliveries** are handled by compare-and-set (B5). The row's `updated_at` is the version: read before Stripe is asked, and required unchanged at the write. `decideMirror` moves `updated_at` at least 1 ms past the stored value, so two writes in one millisecond can never look like no write. A delivery that loses re-reads the row and Stripe and tries again. So the state stored last is always from the LATEST read of Stripe.
+- **G5. Duplicates and out-of-order events** need no ordering logic: nothing from the payload is mirrored. An `updated` arriving after `deleted` re-reads the subscription, which is `canceled`, and writes `canceled`. **Concurrent deliveries** are handled by compare-and-set (B5). The row's `updated_at` is the version: read before Stripe is asked, and required unchanged at the write. `decideMirror` moves `updated_at` at least 1 ms past the stored value, so two writes in one millisecond can never look like no write. A delivery that loses re-reads the row and Stripe and tries again, and a refusal counts only while the row is unchanged. So the ROW stored last is always from the LATEST read of Stripe. The permissions write and the link cleanup are outside that guarantee (B5): rare, harmless in PR-3, closed by PR-4 before it enforces permissions.
 - **G6. The plan comes from the subscription's BASE PRICE metadata** (`bis_plan_id`, set on every price by PR-1's `priceCreateParams`). It does not come from `plans.stripe_price_ids`, because a price change rewrites those ids while existing subscriptions keep their old prices (spec section 2), and a lookup by price id would lose them.
 - **G7. Three mirror guards, each a named refusal** (stamped, logged, 200, never retried, because retrying cannot fix it):
   - `customer_changed`: the account's billed row already holds a customer, and the subscription is on a DIFFERENT one, the pending link's included. The stored customer is the account's for good (G3).
@@ -163,21 +163,21 @@ Assumptions (not verified; each names what settles it):
   - Complimentary: a database change, applied immediately with an undo toast.
   - Subscribed: each item's price is swapped in place (`planChangeItems` maps base→base and each meter→its meter, and refuses anything else) with `proration_behavior: "create_prorations"` (Stripe's default, stated explicitly). Then the fresh subscription is mirrored at once, so the card is right before the webhook arrives. The key is `idempotencyKey("bis-subchange", requestId, change)`, where `requestId` is minted when the dialog opens, so a double click replays and an A→B→A sequence does not. No undo toast here: undoing is another prorated change, so the dialog is the decision.
   - Offered, and accepted by the action, only on a live subscription that is NOT `incomplete`: before the first payment is through, Stripe may refuse item updates.
-  - **QUESTION 2** may change this (see the end).
+  - Change plan applies NOW, with proration: **decided (danlo, 2026-09-25, DECISION 2)**, on the unverified B4.
 - **G16. Mark complimentary** appears only when the account is Unbilled (no row, no live link): 0051's CHECK forbids complimentary with a subscription, and an open link could otherwise convert it back to paid behind the agency's back. It is a dialog to pick the plan, then immediate + Undo (the undo is Stop complimentary). **Stop complimentary** deletes the row and resets permissions, with Undo re-marking the same plan.
 - **G17. Checkout's success and cancel pages** are one public page, `/billing-done?result=success|cancelled`. It uses `AuthShell` and the platform's mark: the payer is not signed in, so no tenant can be identified (DESIGN rule 9's sign-in exception, same reason).
-- **G18. The billing-link email** is sent from BIS in BIS's own branding (`BIS_BRANDING`, the weekly agency report's precedent), with reply-to `AGENCY_SUPPORT_EMAIL`, pending **QUESTION 1**.
+- **G18. The billing-link email** is sent from BIS in BIS's own branding (`BIS_BRANDING`, the weekly agency report's precedent), with reply-to `AGENCY_SUPPORT_EMAIL`: **decided (danlo, 2026-09-25, DECISION 1)**.
   - The agency types the recipient; the dialog pre-fills `reply_to_email`, else the first `report_emails`.
   - The URL is in both the HTML and the text part.
   - If the email fails, the link is still saved and the card shows **Copy link**, so the agency can send it another way.
-- **G19. The Customer Portal configuration is created by code on first use** (`ensurePortalConfiguration`: find an active configuration with metadata `bis_portal = v1`, else create one under a params-hash key). No dashboard step is needed in either mode. Its features are **update card + invoice history only**; no self-cancel and no plan switching (**QUESTION 3**).
-- **G20. The client's Billing page** is a client-only nav item (like Branding: the agency reaches billing through Settings). Before the account is billed it shows an empty state, pending **QUESTION 4**. A complimentary account sees its plan and usage, with no Manage billing.
+- **G19. The Customer Portal configuration is created by code on first use** (`ensurePortalConfiguration`: find an active configuration with metadata `bis_portal = v1`, else create one under a params-hash key). No dashboard step is needed in either mode. Its features are **update card + invoice history only**; no self-cancel and no plan switching: **decided (danlo, 2026-09-25, DECISION 3)**.
+- **G20. The client's Billing page** is a client-only nav item (like Branding: the agency reaches billing through Settings). Before the account is billed it shows an empty state: **decided (danlo, 2026-09-25, DECISION 4)**. A complimentary account sees its plan and usage, with no Manage billing.
 - **G21. The payment-failed banner** is mounted in the account layout, so it is on every page of that account. It shows only for `past_due` and `unpaid` (`showsPaymentFailedBanner`). It never shows for `incomplete`: a first payment still in progress has not failed, and "Your payment didn't go through" would be false. Its two audiences:
   - the client copy is the spec's ("Your payment didn't go through. Update your card to keep automations running." + a link to the Billing page);
   - the agency, inside the same account, sees "This client's last payment didn't go through." + a link to the Billing card.
 
   A failed billing read logs and renders no banner: the layout must never go down with billing.
-- **G22. Trials: none** (QUESTION 5). Checkout charges the first month's base price at signup.
+- **G22. Trials: none**, **decided (danlo, 2026-09-25, DECISION 5)**. Checkout charges the first month's base price at signup.
 - **G23. Cancellation** is mirrored as Canceled; features are unchanged. The soft pause that follows cancellation, and whether usage after it reaches Stripe, are PR-4's (binding 8). The reporter is untouched here.
 - **G24. The CI webhook secret is a literal, in the e2e job only.** It is pinned by a `ci-workflow.test.ts` case, like `STRIPE_SECRET_KEY`.
 
@@ -190,7 +190,7 @@ Assumptions (not verified; each names what settles it):
 Created:
 - `supabase/migrations/0052_billing_checkout.sql`: `billing_started_at`, `current_period_start`, and `billing_links`.
 - `src/account-billing.ts`: the only writer of `account_billing`, `billing_links` and `stripe_webhook_events`. Pure `decideMirror`.
-- `src/account-billing.test.ts` (14, no database).
+- `src/account-billing.test.ts` (17, no database).
 - `src/test/account-billing.test.ts` (4, live).
 - `src/test/billing-checkout-schema.test.ts` (7, live).
 - `src/billing.test.ts` (1, no database).
@@ -254,7 +254,7 @@ Created:
 - `apps/web/e2e/billing.spec.ts` (2).
 - `docs/runbooks/stripe-billing.md`: the live setup, the failed-payment settings, the customer invariant and the >24 h resend rule (Task 13, Step 8).
 
-**New test count: 112** = db 11 live + 16 unit, web 83, e2e 2 (itemised in Task 13, Step 1). `it.each` is not used; each `it` is one test.
+**New test count: 115** = db 11 live + 19 unit, web 83, e2e 2 (itemised in Task 13, Step 1). `it.each` is not used; each `it` is one test.
 
 ## Task order and checkpoints
 
@@ -883,6 +883,104 @@ describe("mirrorSubscription: the writes", () => {
   });
 });
 
+/**
+ * A small stateful "database" for the first-checkout races: one
+ * account_billing row (or none), one billing link (or none), and a log of
+ * every row read and every write attempt. `concurrent` is what ANOTHER
+ * delivery writes; the tests call it from inside the Stripe reader, i.e.
+ * between this delivery's row read and its write.
+ */
+function world(opts: { row?: Record<string, unknown> | null; updatesNeverMatch?: boolean } = {}) {
+  const state: { row: Record<string, unknown> | null; link: Record<string, unknown> | null } = {
+    row: opts.row ?? null,
+    link: {
+      account_id: ACCOUNT, plan_id: PLAN, stripe_customer_id: "cus_1", checkout_session_id: "cs_1",
+      checkout_url: "https://checkout.stripe.com/x", sent_to: "a@b.co", expires_at: "2026-10-02T00:00:00+00:00",
+      sent_at: "2026-10-01T00:00:00+00:00", updated_at: "2026-10-01T00:00:00+00:00",
+    },
+  };
+  const log: string[] = [];
+  const db = {
+    from: (table: string) => {
+      const filters: [string, unknown][] = [];
+      let patch: Record<string, unknown> | null = null;
+      let del = false;
+      const chain: Record<string, unknown> = {
+        select: () => chain,
+        delete: () => { del = true; return chain; },
+        eq: (c: string, v: unknown) => { filters.push([c, v]); return chain; },
+        update: (p: Record<string, unknown>) => { patch = p; return chain; },
+        insert: async (r: Record<string, unknown>) => {
+          log.push("insert");
+          if (state.row) return { error: { code: "23505", message: "duplicate key value" } };
+          state.row = { ...r };
+          return { error: null };
+        },
+        maybeSingle: async () => {
+          if (table === "account_billing") { log.push("row"); return { data: state.row ? { ...state.row } : null, error: null }; }
+          if (table === "billing_links") return { data: state.link ? { ...state.link } : null, error: null };
+          if (table === "accounts") return { data: { id: ACCOUNT, agency_id: AGENCY }, error: null };
+          if (table === "plans") {
+            return { data: { id: PLAN, agency_id: AGENCY, features: { voice_receptionist: true, web_concierge: false }, archived_at: null }, error: null };
+          }
+          return { data: null, error: null };
+        },
+        then: (ok: (v: unknown) => unknown) => {
+          let result: { data: unknown[]; error: null } = { data: [], error: null };
+          if (table === "account_billing" && patch) {
+            const version = filters.find(([c]) => c === "updated_at")?.[1];
+            log.push(`update@${String(version)}`);
+            if (!opts.updatesNeverMatch && state.row && (version === undefined || version === state.row.updated_at)) {
+              state.row = { ...state.row, ...patch };
+              result = { data: [{ account_id: ACCOUNT }], error: null };
+            }
+          }
+          if (table === "billing_links" && del) state.link = null;
+          return Promise.resolve(result).then(ok);
+        },
+      };
+      return chain;
+    },
+  } as unknown as SupabaseClient;
+  /** Another delivery's first write: it read Stripe EARLIER ("incomplete"). */
+  const concurrent = (consumeLink: boolean) => {
+    state.row = {
+      account_id: ACCOUNT, plan_id: PLAN, complimentary: false, stripe_customer_id: "cus_1", stripe_subscription_id: "sub_1",
+      subscription_status: "incomplete", current_period_start: null, current_period_end: null, past_due_since: null,
+      billing_paused_at: null, billing_started_at: "2026-09-01T00:00:00+00:00", created_at: "2026-10-01T11:59:59+00:00",
+      updated_at: "2026-10-01T11:59:59.9+00:00",
+    };
+    if (consumeLink) state.link = null;
+  };
+  return { db, state, log, concurrent };
+}
+
+describe("mirrorSubscription: the first checkout's event burst (B5)", () => {
+  it("a REFUSAL decided on a row that changed meanwhile is a conflict, not final: another delivery inserted the row AND consumed the link after this one's row read, so this attempt sees no customer anywhere; it re-reads and writes Stripe's newer state (mutation: return the refusal without re-reading the row → customer_mismatch is stamped and the row stays 'incomplete', FAILS)", async () => {
+    const w = world();
+    let n = 0;
+    const read = async () => { n += 1; if (n === 2) w.concurrent(true); return snap({ status: "active" }); };
+    expect(await mirrorSubscription(w.db, read, () => NOW)).toEqual({ kind: "written", accountId: ACCOUNT, planId: PLAN, status: "active" });
+    expect(w.state.row?.subscription_status).toBe("active");
+  });
+
+  it("an insert that hits 23505 (another delivery inserted first) is a conflict: the next attempt reads THAT row and updates it on its version (mutation: throw on 23505 → FAILS; report the lost insert as written → the row stays 'incomplete', FAILS)", async () => {
+    const w = world();
+    let n = 0;
+    const read = async () => { n += 1; if (n === 2) w.concurrent(false); return snap({ status: "active" }); };
+    expect(await mirrorSubscription(w.db, read, () => NOW)).toEqual({ kind: "written", accountId: ACCOUNT, planId: PLAN, status: "active" });
+    expect(w.log).toEqual(["row", "insert", "row", "update@2026-10-01T11:59:59.9+00:00"]);
+    expect(w.state.row?.subscription_status).toBe("active");
+  });
+
+  it("a row that keeps changing is given up on after EXACTLY MIRROR_ATTEMPTS (3) row reads, by THROWING (so the event stays unstamped and Stripe retries), never by a refusal (mutation: return a refusal when the attempts run out → it would be stamped and lost, FAILS; MIRROR_ATTEMPTS = 100 → FAILS)", async () => {
+    const w = world({ updatesNeverMatch: true });
+    w.concurrent(false);
+    await expect(mirrorSubscription(w.db, async () => snap({ status: "active" }), () => NOW)).rejects.toThrow(/kept changing/);
+    expect(w.log.filter((e) => e === "row")).toHaveLength(3);
+  });
+});
+
 describe("markComplimentary: the agency check comes first (G10)", () => {
   it("refuses a plan of another agency and an archived plan WITHOUT writing (mutation: drop either check → an insert is attempted, FAILS)", async () => {
     const other = recorder({ accounts: { id: ACCOUNT, agency_id: AGENCY }, plans: { id: PLAN, agency_id: "x", features: {}, archived_at: null } });
@@ -1407,10 +1505,16 @@ export const MIRROR_ATTEMPTS = 3;
  * updated_at, or an insert when there was none (a 23505 is the same signal).
  * A delivery that read Stripe earlier but reaches the database later
  * therefore loses, reads the row and Stripe again, and writes the NEWER
- * state instead of overwriting it with an older one. The first read only
- * names the account; its values are never written. Throws on any database
- * error, and after MIRROR_ATTEMPTS lost races, so the webhook answers 500
- * and Stripe retries.
+ * state instead of overwriting it with an older one. A REFUSAL is returned
+ * only while the row is still that row too (it is final: the event gets
+ * stamped). The first read only names the account; its values are never
+ * written. Throws on any database error, and after MIRROR_ATTEMPTS lost
+ * races, so the webhook answers 500 and Stripe retries.
+ *
+ * What is guaranteed is the ROW. The permissions write and the link cleanup
+ * follow it outside the compare-and-set, so two racing deliveries can leave
+ * `accounts.permissions` from the older one. Harmless in PR-3 (nothing reads
+ * permissions yet, G9); PR-4 closes it before it enforces them (Next plans).
  */
 export async function mirrorSubscription(
   db: SupabaseClient, read: () => Promise<SubscriptionSnapshot>, now: () => Date,
@@ -1439,7 +1543,17 @@ async function writeMirror(
     readAccount(db, accountId), getBillingLink(db, accountId), planId ? readPlan(db, planId) : Promise.resolve(null),
   ]);
   const decision = decideMirror({ snapshot, account, plan, existing, link, now });
-  if (decision.kind === "refused") return decision;
+  if (decision.kind === "refused") {
+    // A refusal is FINAL (the event is stamped), so it must rest on the row as
+    // it is now, not as it was before Stripe was asked. The link is read AFTER
+    // the Stripe read: on a first checkout, a concurrent delivery can insert
+    // the row AND consume the link in between, and this attempt then sees no
+    // stored customer and no link (customer_mismatch) while the row it would
+    // correct sits `incomplete`. If the row moved (or appeared, or went), it
+    // is a conflict: start again on the new row.
+    const current = await getAccountBilling(db, accountId);
+    return (current?.updatedAt ?? null) === (existing?.updatedAt ?? null) ? decision : "conflict";
+  }
   if (existing === null) {
     const { error } = await db.from("account_billing").insert(decision.row);
     if (error?.code === "23505") return "conflict";
@@ -1964,7 +2078,7 @@ export function subscriptionSnapshot(sub: Stripe.Subscription): SubscriptionSnap
 export const PORTAL_VERSION = "v1";
 
 /** Update a card and see invoices. No self-cancel, no plan switching, no
- *  profile edits: the agency manages plans (QUESTION 3). */
+ *  profile edits: the agency manages plans (decided, danlo 2026-09-25). */
 export function portalConfigurationParams(): Stripe.BillingPortal.ConfigurationCreateParams {
   return {
     features: {
@@ -3471,7 +3585,7 @@ import { formatMoment, includedLine, priceLine } from "./billing-view";
 import { idempotencyKey, type BillingGateway, type CheckoutInput, type CheckoutSession } from "./stripe-gateway";
 
 /** Every visual field null: the platform's own unthemed identity, as the
- *  agency's weekly roll-up uses (weekly-agency-report.ts). G18 / QUESTION 1. */
+ *  agency's weekly roll-up uses (weekly-agency-report.ts). G18; decided, danlo 2026-09-25. */
 const BIS_BRANDING: Branding = {
   brandName: null, brandLogoPath: null, brandColor: null, brandNeutral: null,
   brandCorners: null, brandType: null, brandMode: null, replyToEmail: null,
@@ -5535,7 +5649,7 @@ git commit -m "test(e2e): a real test-mode Checkout holds four prices; a signed 
 | Scope | New tests |
 |---|---|
 | db, live: `billing-checkout-schema` / `account-billing` | 7 / 4 |
-| db, unit: `account-billing` / `billing` / `usage` | 14 / 1 / +1 |
+| db, unit: `account-billing` / `billing` / `usage` | 17 / 1 / +1 |
 | `stripe-gateway` / `stripe-webhook` / `webhook` / webhook `route` / `ci-workflow` | +8 / 3 / 7 / 6 / +1 |
 | `billing-view` / `billing-link` email / `billing-link` / `change-plan` / `portal` | 9 / 3 / 9 / 2 / 3 |
 | `billing-actions` / `billing-card` / `billing-section` / `registry` | 8 / 5 / 3 / +1 |
@@ -5543,7 +5657,7 @@ git commit -m "test(e2e): a real test-mode Checkout holds four prices; a signed 
 | `billing-banner` / account `layout` / `billing-done` | 3 / 2 / 2 |
 | e2e | 2 |
 
-**Total 112.** Edited, not new:
+**Total 115.** Edited, not new:
 - `usage.test.ts`: the paging fixture;
 - `test/usage.test.ts`: the `bill()` helper plus that test's title.
 
@@ -5585,12 +5699,12 @@ Push. Read the check runs for the HEAD SHA (`gh api repos/{owner}/{repo}/commits
    - A test event for one of the six carries a fake subscription id, so the re-read fails and the answer is 500. That is by design, not a fault.
    - Never point the TEST-mode endpoint at production: the key-mode check answers 400 to every test event there.
 5. The portal configuration needs no dashboard step (G19). Checkout needs none.
-6. **Failed payments (QUESTION 7), set BEFORE the first live client pays.** These settings decide which statuses the mirror sees and PR-4 pauses on (B11). Stripe dashboard (LIVE mode) → Billing settings (the retry and customer-email settings; the menu names are Stripe's, not re-read today). Use danlo's answer to QUESTION 7. The default below is the recommendation:
-   - **Retry schedule:** Smart Retries on Stripe's default schedule. Default: Smart Retries.
-   - **After the last retry:** mark the subscription UNPAID. Default: unpaid. Never "cancel the subscription": cancelling stays danlo's call, and PR-4's pause handles access. BIS mirrors `unpaid` as Payment failed and keeps the earlier `past_due_since` (G8). If danlo chooses "leave it past due", nothing in BIS changes. If danlo chooses "cancel", the card shows Canceled after the last retry, and PR-4's plan must know it.
-   - **Customer emails:** Stripe emails the client a receipt for each successful payment, and a notice for each failed one. Default: both ON.
+6. **Failed payments, set BEFORE the first live client pays: decided (danlo, 2026-09-25, DECISION 7).** These settings decide which statuses the mirror sees and PR-4 pauses on (B11). Stripe dashboard (LIVE mode) → Billing settings (the retry and customer-email settings; the menu names are Stripe's, not re-read today). Set exactly:
+   - **Retry schedule:** Smart Retries, on Stripe's default schedule.
+   - **After the last retry:** mark the subscription UNPAID. Never "cancel the subscription": cancelling stays danlo's call, and PR-4's pause handles access. BIS mirrors `unpaid` as Payment failed and keeps the earlier `past_due_since` (G8).
+   - **Customer emails:** Stripe emails the client a receipt for each successful payment, and a notice for each failed one: both ON.
 
-   Record the chosen values in the ledger and in the runbook (Step 8).
+   Record the values as set in the ledger and in the runbook (Step 8).
 
 - [ ] **Step 6: The A11 prerequisite, checked, not assumed**
 
@@ -5609,7 +5723,7 @@ Confirm one primary per card and per dialog, and that no raw colour appears in t
 
 - [ ] **Step 8: The billing runbook (orchestrator; commit on the branch before the PR)**
 
-Create `docs/runbooks/stripe-billing.md`. Fill the bracketed values from Step 5 as actually set:
+Create `docs/runbooks/stripe-billing.md` (the Step 5 values are the decided ones; correct them if the dashboard was set otherwise):
 
 ```markdown
 # Stripe billing: live operations
@@ -5629,13 +5743,26 @@ it by hand. Plan: docs/superpowers/plans/2026-09-25-m7a-pr3-checkout-webhooks-bi
   answers 500 by design (its subscription id is fake).
 - CI signs fixture events with a public literal in ci.yml's e2e job. It
   verifies nothing anywhere else.
+- **A client's first checkout sends a burst of events at once.** One or two
+  of them may answer 500 (the mirror lost a race with its sibling three
+  times); Stripe retries them and they succeed. That is normal. A 500 that
+  keeps repeating for the same event is not.
+- **A `refused` line in the logs needs a person.** `stripe webhook: ...
+  refused: <reason>` means Stripe holds a subscription BIS did not store, so
+  Stripe may be CHARGING a client BIS does not bill (or bills on another
+  subscription). Open that subscription in Stripe the same day: if it is a
+  mistake (hand-made, or a second payment), cancel and refund it there; if
+  it is legitimate, fix the account (for example the customer, rule 1) and
+  re-send the event from the dashboard.
 
 ## Failed payments (set in the Stripe dashboard, LIVE)
 
-- Retries: [Smart Retries, Stripe's default schedule].
-- After the last retry: [mark the subscription unpaid]. Never auto-cancel:
+Decided by danlo, 2026-09-25:
+
+- Retries: Smart Retries, Stripe's default schedule.
+- After the last retry: mark the subscription unpaid. Never auto-cancel:
   cancelling is a person's decision.
-- Stripe's customer emails: receipts [on], failed-payment notices [on].
+- Stripe's customer emails: receipts on, failed-payment notices on.
 
 ## Rules for changing billing by hand
 
@@ -5649,8 +5776,11 @@ it by hand. Plan: docs/superpowers/plans/2026-09-25-m7a-pr3-checkout-webhooks-bi
    - rows Stripe already holds under the old customer stay there, including
      those stamped as duplicates.
 
-   Then change `account_billing.stripe_customer_id` by SQL, delete the
-   account's `billing_links` row, and send a new billing link.
+   Then change `account_billing.stripe_customer_id` by SQL. Before deleting
+   the account's `billing_links` row, EXPIRE its Checkout session if it is
+   still open (Stripe dashboard, or `checkout.sessions.expire`): a deleted
+   row with a live session leaves a payable link nobody can see. Then delete
+   the row and send a new billing link.
 2. **A usage row unreported for more than 24 hours** may be counted twice if
    it is resent: Stripe dedupes a meter event's identifier only for at least
    24 hours. While the Work page's stale-usage banner shows, check the
@@ -5669,7 +5799,8 @@ git commit -m "docs(runbook): Stripe billing live operations — webhook, failed
 
 The PR body lists:
 - the spec gaps G1-G24;
-- the assumptions B1-B11, with B1/B3/B9 marked proven by `billing.spec.ts` and the job log cited, B5 marked "engineered around (compare-and-set mirror)", and B10/B11 marked as settled by QUESTIONS 6 and 7;
+- the assumptions B1-B11, with B1/B3/B9 marked proven by `billing.spec.ts` and the job log cited, B5 marked "engineered around (compare-and-set mirror; the row is guaranteed, the permissions write is not)", B4 marked "decided on unverified (DECISION 2, danlo accepted the risk)", and B10/B11 marked as decided (DECISIONS 6 and 7);
+- the eight DECISIONS (danlo, 2026-09-25), as a list;
 - **"one migration, 0052, additive, applied to bis-ci (run id) and production (before merge)"**;
 - the Stripe live setup steps (Step 5, the failed-payment settings included) as a checklist for danlo, and the runbook (Step 8);
 - the prerequisite (Step 6);
@@ -5698,7 +5829,7 @@ Orchestrator: ledger lines for Checkpoint A, the production apply, parity, and t
 3. Usage screens read `usage_events` through `sumUsageSince`, with the chats note (G12).
 4. `countBilledAccountsByPlan` pages (Task 2).
 5. The composite FK is decided: deferred, with the writers checked (G10) and the reason (the shared CI project) in the migration header.
-6. Every writer sets `updated_at` (`decideMirror`, `saveBillingLink`, `markBillingLinkExpired`, the complimentary writers). `markWebhookEventProcessed` stamps `processed_at`; the table has no `updated_at`.
+6. Every writer sets `updated_at` (`decideMirror`, `saveBillingLink`, `markBillingLinkExpired`, the complimentary writers). `markWebhookEventProcessed` stamps `processed_at`; the table has no `updated_at`. On `account_billing`, `updated_at` is also the mirror's compare-and-set version (B5), so every writer must MOVE it forward. The mirror writes strictly past the stored value (`nextVersion`). `markComplimentary`, `changeComplimentaryPlan` and `unmarkComplimentary` (a delete) write `now` or remove the row, which collides with a stored value only when two writes to one row share a millisecond (accepted). PR-4's pause writer must use `nextVersion` (Next plans (b)).
 7. Idempotency:
    - Every key is `idempotencyKey(prefix, id, params)` over the full params: customer, checkout (plus the previous session), subscription change (plus the request id), portal configuration.
    - Money is integer cents throughout.
@@ -5706,7 +5837,7 @@ Orchestrator: ledger lines for Checkpoint A, the production apply, parity, and t
 8. Usage after cancel is left to PR-4 (G23).
 9. DB tests run in CI only, and the migration path is CI project → production → parity (Checkpoint A, Task 13 Step 2). House rules: RLS on, revoke-all, no grant, ASCII only, no backslash (checked by grep in Task 1 Step 3).
 
-**Placeholders:** none. Every code step carries its code. Four decisions are delegated to danlo and marked where they bite: QUESTION 2 in `updateSubscriptionPrices` (proration), QUESTION 3 in `portalConfigurationParams`, QUESTION 6 at Task 13's live setup, and QUESTION 7 in Task 13 Step 5 item 6 (dashboard settings, parameterised on the answer).
+**Placeholders:** none. Every code step carries its code. Nothing waits on danlo: all eight questions were decided on 2026-09-25 ("go with your recommendations"), and the plan ships those decisions (see DECISIONS). The code that carries them: `updateSubscriptionPrices` (DECISION 2, proration now), `portalConfigurationParams` (DECISION 3), `BIS_BRANDING` in `billing-link.ts` (DECISION 1), the client nav item (DECISION 4), `checkoutSessionParams` without a trial (DECISION 5); DECISIONS 6 and 7 are Task 13's live setup, with no code.
 
 **Type consistency**
 - `SubscriptionSnapshot`/`SubscriptionItemSnapshot` are defined once, in `@bis/db`. They are built by `subscriptionSnapshot` (Task 3) and consumed by `decideMirror`, `mirrorSubscription` (through its `read: () => Promise<SubscriptionSnapshot>`, never a finished snapshot), `planChangeItems`, the fake and `processStripeEvent`. Both callers of the mirror, the webhook and the paid Change plan, hand it `() => gateway.retrieveSubscription(id)`.
@@ -5720,7 +5851,7 @@ Orchestrator: ledger lines for Checkpoint A, the production apply, parity, and t
 | File | Tests |
 |---|---|
 | `billing-checkout-schema` | 7 (grants 2, shape 3, account_billing 1, live cascade 1) |
-| `account-billing` unit | 14 (decide 3 + past-due 1 + refusals 4 + writes 3 + complimentary 1 + claim/save 2) |
+| `account-billing` unit | 17 (decide 3 + past-due 1 + refusals 4 + writes 3 + first-checkout burst 3 + complimentary 1 + claim/save 2) |
 | `account-billing` live | 4 |
 | `billing` unit | 1 |
 | `usage` | +1 |
@@ -5746,7 +5877,7 @@ Orchestrator: ledger lines for Checkpoint A, the production apply, parity, and t
 | `billing-done` | 2 |
 | e2e | 2 |
 
-**Total 112** (db 11 live + 16 unit, web 83, e2e 2). Files: 40 created, 22 modified. Tasks: 13, plus Checkpoint A.
+**Total 115** (db 11 live + 19 unit, web 83, e2e 2). Files: 40 created, 22 modified. Tasks: 13, plus Checkpoint A.
 
 **Existing tests this plan must not break (each named in its task)**
 - The whole db suite's `account_billing` fixtures. 0052 is additive, and `billing_started_at` has a default, so none changes except the one that must: `usage.test`'s `bill()`.
@@ -5761,8 +5892,8 @@ Orchestrator: ledger lines for Checkpoint A, the production apply, parity, and t
 
 **Not verified here (CI, the e2e job, or the reviewer settles them)**
 - B1, B3 and B9 (the e2e proves them).
-- B4 (proration semantics; QUESTION 2).
-- B10 and B11 (Stripe's 24-hour identifier window and its failed-payment settings; QUESTIONS 6 and 7).
+- B4 (proration semantics). DECISION 2 was taken on it unverified; danlo accepted the risk, and it is settled on a Stripe test clock before the first live mid-month Change plan (Next plans).
+- B10 and B11 (Stripe's 24-hour identifier window and its failed-payment settings; DECISIONS 6 and 7 act on them).
 - That `.eq("updated_at", existing.updatedAt)` matches PostgREST's own timestamp text exactly, which the compare-and-set mirror depends on (B5). Task 2's live replay test proves it: a filter that never matched would throw after `MIRROR_ATTEMPTS`.
 - That PostgREST's `upsert(..., { onConflict: "event_id", ignoreDuplicates: true }).select()` returns `[]` for a stored event (the PR-2 A15 idiom, proven again by Task 2's live claim test).
 - That Radix `Select` with `name` posts its value in a plain `FormData` (the Plans dialog's precedent uses Checkbox/Input; the e2e's first test is the proof).
@@ -5770,13 +5901,13 @@ Orchestrator: ledger lines for Checkpoint A, the production apply, parity, and t
 **Correction round 1 (2026-09-25): the opus plan review of 0a8fff9 said EXECUTE AFTER CORRECTIONS.** Each finding was checked against this plan and the repo before it was applied. None was rejected.
 1. B5 was not a millisecond window: a stale state could stick for a billing period. Fixed by the compare-and-set mirror (B5, G4 point 8, G5, Task 2). `mirrorSubscription` now takes a READER and reads the row before Stripe. Its callers changed (Task 4's webhook, Task 8's paid Change plan). New tests: the B5 compare-and-set unit test, and the same-millisecond version bump folded into the billing-start test. Separately, the banner no longer shows for `incomplete` (`showsPaymentFailedBanner`, G21, the layout test).
 2. The customer invariant is enforced, not implied. `decideMirror` refuses `customer_changed` (G3, G7, new unit test). `billing-link.test.ts`'s reuse test now pins that the stored customer beats a link that names another. The manual-change settle-first rule is in G3 and the runbook (Task 13, Step 8).
-3. The >24 h resend risk is carried: Prerequisites 1, assumption B10, QUESTION 6, Next plans (g), and runbook rule 2.
+3. The >24 h resend risk is carried: Prerequisites 1, assumption B10, QUESTION 6 (now DECISION 6), Next plans (g), and runbook rule 2.
 4. `getCheckoutSessionStatus` widens `s.status` to `string | null` before narrowing. The External-facts claim is corrected. Task 3 no longer adds a second `Stripe` import to the gateway test file.
 5. The three verification tests moved to a new `stripe-webhook.test.ts`, which does not mock `stripe`. `stripe-gateway.test.ts` is +8.
 6. The layout test's `beforeEach` has a block body.
 7. The "requireAgency FIRST" test also checks `getBillingLink` and `getBranding`.
 8. A new `billing-link.test.ts` case pins the checkout key's `previous`: a deliberate resend gets a NEW, OPEN session.
-9. The failed-payment settings are Task 13, Step 5, item 6, parameterised on QUESTION 7 (B11).
+9. The failed-payment settings are Task 13, Step 5, item 6, parameterised on QUESTION 7 (B11); since decided, DECISION 7.
 
 Minors applied:
 - the retry comments (G4 point 4, the route's doc comment);
@@ -5812,6 +5943,39 @@ Verification, in a scratch copy OUTSIDE the worktree (`git archive 0a8fff9`, eve
 
 The live db tests (11) and the e2e (2) still run only in CI.
 
+**Correction round 2 (2026-09-25): the opus re-review of 21aecb3 said FIX FIRST.** It confirmed round 1's nine findings closed. Each new item was checked against the plan, and against the reviewer's probe (`rv-probe.test.ts`), before it was applied. None was rejected.
+1. **A refusal could still leave a stale state.** `writeMirror` reads the billing link AFTER the Stripe read. On a first checkout, a concurrent delivery can insert the row and consume the link in between, so this attempt refused `customer_mismatch` over an `incomplete` row. The reviewer's probe confirmed it on 21aecb3 (`expected 'incomplete' to be 'active'`). Fix: a refusal re-reads the row, and if its `updated_at` differs from the one read before Stripe (a row that appeared or went included), it is a conflict and the mirror retries. The B5 and G5 claims now say so. New test: the refusal-on-a-moved-row case, shaped like the probe. The reviewer's probe itself passes against the fixed code.
+2. **Untested give-up and insert paths.** Two new tests:
+   - an insert that hits 23505 makes the next attempt update the other delivery's row, on that row's version;
+   - a row whose updates never match makes the mirror THROW `/kept changing/` after exactly 3 row reads.
+3. **B5, G5, the mirror's doc comment and the Global Constraints now say what is guaranteed.** It is the ROW. The permissions write is outside the compare-and-set: rare, and harmless in PR-3. Next plans (b) carries the fix to PR-4 (derive permissions from `plan_id`, or one RPC under the version check). It also carries the rule that every `account_billing` writer moves `updated_at` forward (Global Constraints, Bindings item 6).
+4. **All eight questions are DECISIONS (danlo, 2026-09-25, "go with your recommendations").**
+   - The questions section became DECISIONS, with each chosen option marked.
+   - Every "pending QUESTION n" is now "decided", and the code comments that cited a QUESTION now say decided.
+   - Task 13 Step 5 item 6 states the decided failed-payment values, and Step 9 lists the decisions.
+   - Next plans item 3 is replaced by settling B4 on a Stripe test clock before the first live mid-month Change plan. DECISION 2 rests on the unverified B4, and danlo accepted that risk (B4, DECISION 2, "Not verified here").
+5. **Runbook (Task 13 Step 8).** Three additions:
+   - a `refused` log line means Stripe may be charging a client BIS does not bill: act on it the same day;
+   - rule 1 expires any open Checkout session before a `billing_links` row is deleted;
+   - the first checkout's burst may answer one or two 500s that succeed on Stripe's retry, and that is normal.
+
+Verification, in a fresh scratch copy OUTSIDE the worktree (`git archive` of 21aecb3, blocks assembled from this edited plan, `node_modules` junctioned from the main checkout, no install; junctions removed after):
+- `tsc --noEmit`: exit 0 for `packages/db` and for `apps/web`.
+- eslint on the web files: exit 0.
+- db unit: `account-billing` 17 passed, and 34 passed across the three db unit files.
+- web: 23 files and 213 tests passed (unchanged by this round).
+- Mutation probes, each red on the named test:
+  - refusal returned without re-reading the row → the refusal test;
+  - 23505 thrown (e) → the 23505 test;
+  - 23505 reported as written (e2) → the 23505 test;
+  - a refusal after the attempts run out (f) → the give-up test;
+  - `MIRROR_ATTEMPTS = 100` (g) → the give-up test;
+  - the update without its version filter → the B5 test and the 23505 test;
+  - the row read after Stripe → the B5 test and the 23505 test;
+  - a 0-row update not detected → the B5 test and the give-up test;
+  - `nextVersion` without the +1 → the billing-start test;
+  - `customer_changed` dropped → the customer test.
+
 ## Deferred to whole-branch review
 
 Minor findings from the plan review of 0a8fff9, not applied in the correction round. The whole-branch reviewer decides each one:
@@ -5820,7 +5984,6 @@ Minor findings from the plan review of 0a8fff9, not applied in the correction ro
 - `sumUsageSince` pages by offset over a table that is being written, one round trip per 1,000 rows per page view. Consider a per-meter `SUM` SQL function (it would have to ride in 0052, before Checkpoint A).
 - The complimentary writes are not atomic. A `permissions` write that fails after the row write never heals, which matters once PR-4 reads permissions.
 - If the mirror REFUSES a completed checkout, `checkout_finished` blocks Send for that account permanently (`billing-link.ts`).
-- A mirror refusal decided on a row that changed during that attempt is still final and stamped. Example: `another_live_subscription` against a stored subscription canceled a moment earlier. The next event for that subscription decides again. Found while applying B5; not in the review.
 - `monthStartInZone` is tested only for Chicago. Add a zone whose DST change falls at midnight, or document the limit.
 - Nothing refuses the public CI webhook literal when a LIVE key is present.
 - The A11 prerequisite check (Task 13 Step 6) greps commit titles. Check by PR number or commit instead.
@@ -5829,29 +5992,29 @@ Minor findings from the plan review of 0a8fff9, not applied in the correction ro
 - The Plans page's "N clients" now counts canceled rows too.
 - Weak tests: the webhook "out of order" test repeats the first test's shape, since the real ordering guard is now Task 2's compare-and-set test. `saveBillingLink`'s insert race (23505 → false) is untested.
 
-## QUESTIONS FOR DANLO
+## DECISIONS (danlo, 2026-09-25)
 
-Recommendation first. Each has a default the plan already ships, so nothing blocks on an answer. An answer other than the default changes only the task named.
+These were the plan's eight questions. On 2026-09-25 danlo answered "go with your recommendations" to all eight, so each recommendation below is now a DECISION and the plan ships it. Each item keeps its original text; the chosen option is marked **CHOSEN**, and every alternative was not chosen.
 
-1. **Who does the billing-link email come from?** Recommend: **from BIS, in BIS's look** (it is BIS billing the business; the weekly agency report is the precedent). Alternative: in the client's own logo and colour. (Task 7, one constant.)
-2. **Change plan in the middle of a month: now or next billing date?** Recommend: **now, with Stripe's proration** (the base price is credited or charged on the next invoice, and the whole month's usage counts against the new plan's allowances). **This recommendation rests on assumption B4, which is UNVERIFIED:** it is how Stripe is expected to price a meter after an in-place price swap. Nothing in PR-3 proves it, and if B4 is wrong, the money outcome of "now" differs from the one described. Alternative: switch on the next billing date (needs Stripe subscription schedules, a follow-up; until then Change plan is complimentary-only). (Task 3's `updateSubscriptionPrices`, Task 8.)
-3. **What may a client do on Stripe's billing page?** Recommend: **update their card and see or download invoices only**. No self-cancel and no self plan-switch; those go through you. Alternative: allow self-cancel at period end. (Task 3's `portalConfigurationParams`, one flag.)
-4. **Before a client is billed, do they see "Billing" in their menu?** Recommend: **yes**, with "Billing isn't set up yet. When your plan starts, your usage and next invoice show here." Alternative: hide it until they are on a plan. (Task 10, the nav item reads billing state.)
-5. **Free trials?** Recommend: **none**: the first month is charged at checkout. Alternative: an N-day trial on every plan. (Task 3's `checkoutSessionParams` gains `subscription_data.trial_period_days`.)
-6. **Bill a live client before PR-4's nightly reconciliation exists?** Recommend: **yes** (the only double-count path is a usage row left unstamped for more than 24 hours and then resent (B10), and PR-2's stale-usage banner already flags any row unreported for 24 hours; if it ever shows before PR-4 lands, you check that client's Stripe invoice by hand before it finalises). Alternative: hold the first live client until PR-4 merges. (No code: Task 13's live setup and the first live billing link wait, or not.)
-7. **What should Stripe do when a client's card keeps failing?** Recommend: **Stripe's Smart Retries, then MARK THE SUBSCRIPTION UNPAID, never auto-cancel; Stripe's receipts and failed-payment emails to the client ON** (cancelling stays your call, and BIS's own 7-day soft pause in PR-4 handles access). Smart Retries' schedule is Stripe's own default, an external assumption (B11), not re-read. Alternative: cancel after the last retry, or leave it past due; emails off. (Task 13 Step 5 item 6: dashboard settings only, no code.)
-8. **May a canceled client later be made complimentary?** Recommend: **no, not in PR-3; G16 stays** (a canceled client comes back through a new billing link, and a complimentary row over a canceled subscription is a new state nothing needs yet; revisit if a real case appears). Alternative: allow it (a row rewrite that drops the old subscription, in a follow-up plan). (Task 6's `billingCardView` and Task 8's `markComplimentaryAction`.)
+1. **Who does the billing-link email come from?** Recommended, **CHOSEN**: **from BIS, in BIS's look** (it is BIS billing the business; the weekly agency report is the precedent). Alternative (not chosen): in the client's own logo and colour. (Task 7, one constant.)
+2. **Change plan in the middle of a month: now or next billing date?** Recommended, **CHOSEN**: **now, with Stripe's proration** (the base price is credited or charged on the next invoice, and the whole month's usage counts against the new plan's allowances). **This recommendation rests on assumption B4, which is UNVERIFIED:** it is how Stripe is expected to price a meter after an in-place price swap. Nothing in PR-3 proves it, and if B4 is wrong, the money outcome of "now" differs from the one described. **danlo accepted that risk** when deciding; B4 is settled on a Stripe test clock before the first live mid-month Change plan (Next plans). Alternative (not chosen): switch on the next billing date (needs Stripe subscription schedules, a follow-up; until then Change plan is complimentary-only). (Task 3's `updateSubscriptionPrices`, Task 8.)
+3. **What may a client do on Stripe's billing page?** Recommended, **CHOSEN**: **update their card and see or download invoices only**. No self-cancel and no self plan-switch; those go through you. Alternative (not chosen): allow self-cancel at period end. (Task 3's `portalConfigurationParams`, one flag.)
+4. **Before a client is billed, do they see "Billing" in their menu?** Recommended, **CHOSEN**: **yes**, with "Billing isn't set up yet. When your plan starts, your usage and next invoice show here." Alternative (not chosen): hide it until they are on a plan. (Task 10, the nav item reads billing state.)
+5. **Free trials?** Recommended, **CHOSEN**: **none**: the first month is charged at checkout. Alternative (not chosen): an N-day trial on every plan. (Task 3's `checkoutSessionParams` gains `subscription_data.trial_period_days`.)
+6. **Bill a live client before PR-4's nightly reconciliation exists?** Recommended, **CHOSEN**: **yes** (the only double-count path is a usage row left unstamped for more than 24 hours and then resent (B10), and PR-2's stale-usage banner already flags any row unreported for 24 hours; if it ever shows before PR-4 lands, you check that client's Stripe invoice by hand before it finalises). Alternative (not chosen): hold the first live client until PR-4 merges. (No code: Task 13's live setup and the first live billing link wait, or not.)
+7. **What should Stripe do when a client's card keeps failing?** Recommended, **CHOSEN**: **Stripe's Smart Retries, then MARK THE SUBSCRIPTION UNPAID, never auto-cancel; Stripe's receipts and failed-payment emails to the client ON** (cancelling stays your call, and BIS's own 7-day soft pause in PR-4 handles access). Smart Retries' schedule is Stripe's own default, an external assumption (B11), not re-read. Alternative (not chosen): cancel after the last retry, or leave it past due; emails off. (Task 13 Step 5 item 6: dashboard settings only, no code.)
+8. **May a canceled client later be made complimentary?** Recommended, **CHOSEN**: **no, not in PR-3; G16 stays** (a canceled client comes back through a new billing link, and a complimentary row over a canceled subscription is a new state nothing needs yet; revisit if a real case appears). Alternative (not chosen): allow it (a row rewrite that drops the old subscription, in a follow-up plan). (Task 6's `billingCardView` and Task 8's `markComplimentaryAction`.)
 
 ## Next plans
 
 1. **PR-4: the non-payment pause and nightly reconciliation.** Binding from this plan:
    - (a) `past_due_since` is already stamped by the mirror (G8), and the pause reads it.
-   - (b) The permissions READER ships here with the voice route's three-way choice (G9): a plan without the receptionist, and a paused account, are one decision in one place.
+   - (b) The permissions READER ships here with the voice route's three-way choice (G9): a plan without the receptionist, and a paused account, are one decision in one place. **Before it reads `accounts.permissions`, close the gap B5 leaves:** the mirror guarantees the `account_billing` ROW, but its permissions write is outside the compare-and-set, so racing deliveries can leave permissions from the older one. Either derive permissions from `account_billing.plan_id` at read time (no second copy to drift), or write the row and the permissions in ONE RPC under the same version check. And the rule every `account_billing` writer follows (Global Constraints): it moves `updated_at` strictly forward; the pause writer uses `nextVersion`, like the mirror.
    - (c) Lift pause goes on the Billing card, and the paused banner in the account layout beside the payment-failed one (G14, G21).
    - (d) B5 is closed IN PR-3 (the compare-and-set mirror, G5), so the pause may trust the stored status. A nightly re-mirror of every subscription is NEW scope: the spec's reconciliation compares meter totals only. Add it only as the backstop for a MISSED webhook, and say so in PR-4's plan.
    - (e) Decide whether usage after cancellation reaches Stripe (binding 8, G23).
    - (f) The agency's non-payment alert (spec flow 5): a derived work-queue banner, `LineDownBanner` pattern.
-   - (g) **The >24 h resend rule (B10, QUESTION 6).** Stripe dedupes a meter event's identifier only for at least 24 hours. So a usage row still unstamped more than 24 hours after a send Stripe may have ACCEPTED must not be blindly resent. Reconciliation compares Stripe's meter totals with `usage_events` per account and billing period, and reports any gap BEFORE the invoice finalises. The reporter holds such a row for that comparison instead of resending it. Until PR-4 lands, the runbook's rule 2 (a manual invoice check while the stale-usage banner shows) stands in for it.
-   - (h) The failed-payment settings chosen for QUESTION 7 (Task 13 Step 5) decide which statuses the pause sees. With "mark unpaid", a paused account is `unpaid`, never auto-`canceled`.
+   - (g) **The >24 h resend rule (B10; DECISION 6 bills live clients before PR-4).** Stripe dedupes a meter event's identifier only for at least 24 hours. So a usage row still unstamped more than 24 hours after a send Stripe may have ACCEPTED must not be blindly resent. Reconciliation compares Stripe's meter totals with `usage_events` per account and billing period, and reports any gap BEFORE the invoice finalises. The reporter holds such a row for that comparison instead of resending it. Until PR-4 lands, the runbook's rule 2 (a manual invoice check while the stale-usage banner shows) stands in for it.
+   - (h) The failed-payment settings (DECISION 7, Task 13 Step 5) decide which statuses the pause sees: after the last retry Stripe marks the subscription `unpaid`, never auto-`canceled`.
 2. **M7 #3 (multi-agency):** the composite FK `account_billing (plan_id, agency_id)` with 0050's pattern (G10). The writers' agency checks stay as defence in depth.
-3. **If QUESTION 2 is answered "next billing date":** a small plan for Stripe subscription schedules. Change plan is complimentary-only until it lands.
+3. **Settle B4 before the first live mid-month Change plan** (DECISION 2 was taken on it unverified, and danlo accepted the risk). On a Stripe TEST clock: a subscription on plan A with metered usage, an in-place price swap to plan B mid-period (`updateSubscriptionPrices`), then advance the clock past the period end and read the invoice. If the meters are not priced as B4 says, write a small follow-up plan (Stripe subscription schedules, or a switch at the next billing date) before any live Change plan.
