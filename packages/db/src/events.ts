@@ -32,9 +32,9 @@ export async function emit(
       { p_account_id: accountId, p_type: type, p_payload: payload });
     if (!error) return;
     // TEMPORARY - remove once 0053 is on production. Until then production
-    // has no record_event and still grants the client INSERT, so this build
-    // falls back there. PGRST202 is PostgREST's "no such function"; every
-    // other error is real and throws.
+    // has no record_event, so this build falls back to the direct insert
+    // there. PGRST202 is PostgREST's "no such function"; every other error
+    // is real and throws.
     if (error.code !== "PGRST202") throw new Error(`event emit failed: ${error.message}`);
   }
   const { error } = await db.from("events").insert({

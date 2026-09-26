@@ -50,9 +50,10 @@ describe("emit", () => {
       { account_id: "acct_1", type: "call.recorded", actor_type: "system", actor_id: "system", payload: { callId: "k1" } });
   });
 
-  it("TEMPORARY: a user client on a database without record_event (PGRST202) falls back to the direct insert (mutation: remove the fallback -> FAILS)", async () => {
+  it("TEMPORARY: a user client on a database without record_event (PGRST202) falls back to the direct insert (mutation: remove the fallback -> FAILS; mutation: skip the rpc and insert directly -> FAILS)", async () => {
     const f = fakeClient({ user: true, rpcError: { code: "PGRST202", message: "Could not find the function" } });
     await emit(f.db, "acct_1", "note.added", "user_1", {});
+    expect(f.rpc).toHaveBeenCalledTimes(1);
     expect(f.insert).toHaveBeenCalledWith(
       { account_id: "acct_1", type: "note.added", actor_type: "user", actor_id: "user_1", payload: {} });
   });
@@ -69,6 +70,20 @@ describe("emit", () => {
     const f = fakeClient({ user: true, rpcError: { code: "42501", message: "record_event: not a member of this account" } });
     await expect(emit(f.db, "acct_1", "note.added", "user_1", {}))
       .rejects.toThrow("event emit failed: record_event: not a member of this account");
+    expect(f.from).not.toHaveBeenCalled();
+  });
+
+  it("record_event's own type-length error (22023) throws and inserts nothing (mutation: fall back on every error except 42501 -> FAILS)", async () => {
+    const f = fakeClient({ user: true, rpcError: { code: "22023", message: "record_event: type must be 1 to 100 characters" } });
+    await expect(emit(f.db, "acct_1", "", "user_1", {}))
+      .rejects.toThrow("event emit failed: record_event: type must be 1 to 100 characters");
+    expect(f.from).not.toHaveBeenCalled();
+  });
+
+  it("an rpc error with an empty code (a fetch failure) throws and inserts nothing (mutation: fall back when the code is empty -> FAILS)", async () => {
+    const f = fakeClient({ user: true, rpcError: { code: "", message: "TypeError: fetch failed" } });
+    await expect(emit(f.db, "acct_1", "note.added", "user_1", {}))
+      .rejects.toThrow("event emit failed: TypeError: fetch failed");
     expect(f.from).not.toHaveBeenCalled();
   });
 });
