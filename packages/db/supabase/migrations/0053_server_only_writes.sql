@@ -30,7 +30,11 @@
 --
 -- APPLY ORDER: this file removes privileges the previous app build used. On
 -- production it is applied AFTER the build that no longer uses them is live;
--- the CI project gets it first, as always.
+-- the CI project gets it first, as always. Once this file is applied, the app
+-- build that preceded it can no longer run against the database: its
+-- request-client writes to these tables are refused. Rolling the app back
+-- past this migration's merge therefore needs the ROLLBACK below applied
+-- first.
 --
 -- ROLLBACK, section by section:
 --   1  grant insert on public.events to authenticated; recreate events_insert
